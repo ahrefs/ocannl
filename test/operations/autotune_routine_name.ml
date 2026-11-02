@@ -117,8 +117,30 @@ let () =
   p_close "the overridingly named search still computes correct values"
     (Context.get_values ectx e.Tensor.value)
     expected ~tol:approx_tol;
+  (* --- The derived half (gh-ocannl-1754): a search given no [~name] labels its rows with the name
+     its compiles derive -- the autotuner's driver [program_name], the one place it reads the
+     program's block comment. --- *)
+  let a3 = TDSL.ndarray av ~label:[ "gh669_a3" ] ~output_dims:[ dim; dim ] () in
+  let b3 = TDSL.ndarray bv ~label:[ "gh669_b3" ] ~output_dims:[ dim; dim ] () in
+  let%op f = a3 + b3 in
+  Train.set_materialized f.Tensor.value;
+  let derived_name = "gh1754_derived_name" in
+  let derived =
+    let comp = Tensor.consume_forward_code f in
+    { comp with Asgns.asgns = Asgns.Block_comment (derived_name, comp.Asgns.asgns) }
+  in
+  let dreport = ref None in
+  let dctx = Context.auto () in
+  let _dctx, droutine =
+    Autotune.tune ~beam_width:1 ~rounds:0 ~repeats:1 ~cache_dir:""
+      ~report:(fun r -> dreport := Some r)
+      dctx derived Ir.Indexing.Empty
+  in
+  p "a search given no name ships a routine named by its block comment"
+    (String.equal droutine.Context.name derived_name);
   let r = Option.value_exn ~here:[%here] !ereport in
   let tr = Option.value_exn ~here:[%here] !treport in
+  let dr = Option.value_exn ~here:[%here] !dreport in
 
   (* --- The rows both searches appended. --- *)
   let rows =
@@ -128,7 +150,7 @@ let () =
   in
   let named name = List.filter rows ~f:(fun row -> String.equal row.Cal.routine name) in
   let contributed name = not (List.is_empty (named name)) in
-  let searches = [ (tuned_name, tr); (passed_name, r) ] in
+  let searches = [ (tuned_name, tr); (passed_name, r); (derived_name, dr) ] in
   List.iter searches ~f:(fun (name, rep) ->
       Stdio.eprintf
         "%s (not part of the golden): %d candidate(s) timed, %d timing(s) refused, %d candidate(s) \

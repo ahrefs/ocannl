@@ -264,7 +264,7 @@ let field_reads ~fields (source : string) : string list =
         super#pattern p
     end
   in
-  iter#structure (Ppxlib.Parse.implementation (Lexing.from_string source));
+  iter#structure (Test_utils.Config_key_scan.structure_of source);
   List.rev !found
 
 (* Whether a source names [name] as a value (bare or qualified). *)
@@ -281,7 +281,7 @@ let references ~name (source : string) : bool =
         super#expression e
     end
   in
-  iter#structure (Ppxlib.Parse.implementation (Lexing.from_string source));
+  iter#structure (Test_utils.Config_key_scan.structure_of source);
   !found
 
 let offset (loc : Ppxlib.Location.t) = loc.loc_start.pos_cnum
@@ -292,7 +292,7 @@ let offset (loc : Ppxlib.Location.t) = loc.loc_start.pos_cnum
    way the reach over-approximates. [drop] lists the start offsets of bare identifiers that are not
    references: the sanctioned spellings of {!searchless_fallback}, and nothing else. *)
 let top_level_graph ?(drop = []) (source : string) : (string * string list) list =
-  let structure = Ppxlib.Parse.implementation (Lexing.from_string source) in
+  let structure = Test_utils.Config_key_scan.structure_of source in
   let refs_of visit =
     let acc = ref [] in
     let iter =
@@ -584,7 +584,7 @@ let marked_head (e : expression) =
 (* [flag_holders]: the start offsets of the top-level bindings whose search parameter is the flag --
    [tune]'s and the tied ones'. *)
 let walk_fallback ~flag_holders (source : string) : fallback_walk =
-  let structure = Ppxlib.Parse.implementation (Lexing.from_string source) in
+  let structure = Test_utils.Config_key_scan.structure_of source in
   let branches = ref [] and sites = ref [] and locals = ref (Set.empty (module Int)) in
   let local_names = ref (Map.empty (module Int)) in
   let references = ref [] and qualified = ref [] and markers = ref [] in
@@ -781,9 +781,7 @@ let walk_fallback ~flag_holders (source : string) : fallback_walk =
    them. *)
 let top_level_spans (source : string) : (string * int * int) list =
   let span name (loc : Ppxlib.Location.t) = (name, offset loc, loc.loc_end.pos_cnum) in
-  List.concat_map
-    (Ppxlib.Parse.implementation (Lexing.from_string source))
-    ~f:(fun item ->
+  List.concat_map (Test_utils.Config_key_scan.structure_of source) ~f:(fun item ->
       match item.pstr_desc with
       | Pstr_value (_, bindings) ->
           List.filter_map bindings ~f:(fun vb ->
@@ -806,9 +804,7 @@ type fallback = {
 
 (* The top-level functions with a parameter labelled [search]. *)
 let flag_candidates (source : string) : (string * int) list =
-  List.concat_map
-    (Ppxlib.Parse.implementation (Lexing.from_string source))
-    ~f:(fun item ->
+  List.concat_map (Test_utils.Config_key_scan.structure_of source) ~f:(fun item ->
       match item.pstr_desc with
       | Pstr_value (_, bindings) ->
           List.filter_map bindings ~f:(fun vb ->
@@ -1234,9 +1230,7 @@ let () =
       p "tune is a top-level definition of autotune.ml"
         (List.Assoc.mem (top_level_graph source) "tune" ~equal:String.equal);
       p "tune takes the ?search flag its search-less branches test"
-        (List.exists
-           (Ppxlib.Parse.implementation (Lexing.from_string source))
-           ~f:(fun item ->
+        (List.exists (Test_utils.Config_key_scan.structure_of source) ~f:(fun item ->
              match item.pstr_desc with
              | Pstr_value (_, bindings) ->
                  List.exists bindings ~f:(fun vb ->

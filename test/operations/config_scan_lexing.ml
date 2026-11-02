@@ -405,6 +405,22 @@ let reach_alias_cases =
       "module W = Widths\nmodule W = struct let f () = W.v end",
       "W.f",
       [ "k_widths" ] );
+    (* gh-ocannl-1754: [Autotune]'s shape -- a functor's body, included once at top level -- reads
+       as top-level values ([Scan.inline_instantiation]); any other functor stays opaque. *)
+    ( "a functor included once at top level reads as its body",
+      "module Make (D : sig end) = struct let tune () = Widths.v end\ninclude Make (Arg)",
+      "tune",
+      [ "k_widths" ] );
+    ( "a functor no top-level include applies stays opaque",
+      "module Make (D : sig end) = struct let tune () = Widths.v end\nmodule M = Make (Arg)",
+      "tune",
+      [] );
+    ( "a functor included twice is not read as one body",
+      "module Make (D : sig end) = struct let tune () = Widths.v end\n\
+       include Make (A)\n\
+       include Make (B)",
+      "tune",
+      [] );
   ]
 
 let reach_alias_external = function

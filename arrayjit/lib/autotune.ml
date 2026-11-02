@@ -845,24 +845,6 @@ let budget_floor_unmeasured ~budget_cut ~auto_sched ~baseline_dispatched ~floor_
    winner tests first ([nothing_timed]). *)
 let timed_winner_exists = "Autotune.tune: a finite best time without a compiled candidate"
 
-(** {2 Timing} *)
-
-let set_test_bindings routine =
-  List.iter routine.Context.bindings ~f:(fun (ss, r) ->
-      match ss.Idx.static_range with
-      | Some range when range > 0 && ss.Idx.used_as_extent ->
-          (* gh-490 symbolic extents: tune at the upper bound. The schedule digest is
-             extent-value-independent (the extent is a kernel parameter), so one tuned entry serves
-             every extent; measuring at the maximum makes the tuned schedule's cost model
-             conservative for smaller runtime extents. *)
-          r := range
-      | Some range when range > 0 -> r := range / 2
-      | _ ->
-          (* No range to pick from. Time a value the caller assigned at the caller's value, and
-             otherwise at 0, written explicitly: linking leaves the parameter unassigned
-             (gh-ocannl-940), and a compile-time search runs before the caller could assign it. *)
-          if not (Idx.launch_param_assigned r) then r := 0)
-
 (* Fast routines get extra timed runs beyond [repeats], until this much accumulated PER-SAMPLE time
    (or [max_timing_runs]); every routine gets [min_timing_samples]. A caller's larger [repeats]
    floor still wins over that top-up limit. On sub-millisecond kernels a min-of-3 is dominated by
@@ -2291,69 +2273,6 @@ let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch
    batch. *)
 exception Timing_stopped
 
-(* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex P2
-   on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
-let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false) ?phase
-    ?(stop = fun () -> false) ?hopeless_against ?(hopeless_ratio = hopeless_ratio) ?window_bound_ms
-    ~timing ~repeats cctx routine =
-  let check_stop () = if stop () then raise Timing_stopped in
-  (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
-     calibration. *)
-  let started = Mtime_clock.counter () in
-  let saved_bindings = List.map routine.Context.bindings ~f:(fun (_ss, r) -> (r, !r)) in
-  let run ctx =
-    (* [~timing]: a gradient the routine accumulates into without zeroing is not refused for the
-       repeats (gh-ocannl-1781); the search restores the lineage around its windows
-       (gh-ocannl-1621). *)
-    if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ~timing:true ctx routine)
-    else Context.run ~timing:true ctx routine
-  in
-  let sync ctx =
-    if tag_failures then Outcome.tag Outcome.Sync (fun () -> Context.sync ctx) else Context.sync ctx
-  in
-  Exn.protect
-    ~finally:(fun () -> List.iter saved_bindings ~f:(fun (r, v) -> r := v))
-    ~f:(fun () ->
-      set_test_bindings routine;
-      (* The runs' pre-dispatch validation, in its own phase so an unattributed failure of it is
-         contained rather than condemning the lineage (gh-ocannl-564). Here and once: what it checks
-         (lineage, initialized nodes, dependencies, the bindings just written) is settled before the
-         warmup and only becomes more satisfied as the loop dispatches. [Context.run] re-validates
-         per iteration inside the [Launch] tag, where it can no longer fail. *)
-      (* Only the PER-CANDIDATE half of the pre-dispatch validation is contained here. The
-         lineage-wide half ({!Context.check_lineage_runnable}) is run by the callers below, outside
-         their failure boundaries, because it fails every candidate of every arm identically —
-         see the comments at those two sites (gh-ocannl-569). *)
-      if tag_failures then
-        Outcome.tag Outcome.Preflight (fun () ->
-            Seam.get on_candidate_preflight routine.Context.name;
-            Context.check_launch_bindings routine);
-      (* Warmup run: absorbs lazy initialization and fills caches like a steady-state iteration. *)
-      check_stop ();
-      let ctx = ref (run cctx) in
-      sync !ctx;
-      (* Monotonic high-resolution clock: on Windows, [Unix.gettimeofday] ticks at ~1 ms, which
-         makes sub-millisecond candidates indistinguishable (they all measure 0). *)
-      let ordinal = ref 0 in
-      let batch depth =
-        check_stop ();
-        let c0 = Mtime_clock.counter () in
-        for _ = 1 to depth do
-          ctx := run !ctx
-        done;
-        sync !ctx;
-        let wall = Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6 in
-        let wall = Seam.get on_batch_wall ~depth ~ordinal:!ordinal wall in
-        Int.incr ordinal;
-        wall
-      in
-      calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio ~started
-        ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing ~repeats
-        ~retry_contended:(retry_contended_window_for_backend (Context.backend_facts cctx))
-        ~dispersion:(dispersion_policy_for_backend (Context.backend_facts cctx))
-        ~queue_depth_cap:(queue_depth_cap_for_backend (Context.backend_facts cctx))
-        ~batch)
-
 (* gh-ocannl-532: on a GPU backend, code that binds no hardware dimension runs the whole routine in
    a single work-item — every nest a serial scalar loop, at one lane's throughput. Such a candidate
    cannot win a search whose other candidates are parallel, so dispatching it is pure cost, and the
@@ -3590,17 +3509,6 @@ type unit_gen = {
   u_opt : LL.optimized;  (** The transformed unit, for menu generation. *)
 }
 
-type compiled = {
-  form : form;
-  cctx : Context.t;
-  routine : Context.routine;
-  units : unit_gen list;
-  all_opts : LL.optimized list;
-      (** Every compiled segment ([`Zeros] and [`Solo] segments included, unlike [units]) — the code
-          the timing runs actually execute, for calibration analysis. *)
-  digest_after : string;
-}
-
 (* Log tag for a (possibly '+'-concatenated, fissioned) digest: a plain prefix only reflects the
    first segment — two fissioned programs identical in segment 1 would read as "the same digest"
    (misled the CUDA round-4 analysis on PR #140) — so fold the whole string into the tag. *)
@@ -3609,46 +3517,6 @@ let dshort d =
 
 let digest_tag = dshort
 let bs_label = function None -> "cfg" | Some b -> Int.to_string b
-
-(* The two forms' segment lists side by side when they segment alike -- the same form, and every
-   segment of the same kind, length and pre-schedule digest, the identity a replay checks -- with
-   the split-reduce preludes for a [Split_saved] pair; [None] when no unit-by-unit comparison exists
-   (different forms, a different segmentation, or two whole-routine forms). *)
-let aligned_segments (a : compiled) (b : compiled) =
-  let same_cut (x : SC.saved_segment) (y : SC.saved_segment) =
-    Poly.equal x.seg_kind y.seg_kind && x.seg_units = y.seg_units
-    && String.equal x.seg_digest y.seg_digest
-  in
-  let aligned xs ys = List.length xs = List.length ys && List.for_all2_exn xs ys ~f:same_cut in
-  match (a.form, b.form) with
-  | Fiss_saved xs, Fiss_saved ys when aligned xs ys -> Some (None, List.zip_exn xs ys)
-  | Split_saved (px, xs), Split_saved (py, ys) when aligned xs ys ->
-      Some (Some (px, py), List.zip_exn xs ys)
-  | _ -> None
-
-(* The positions of the segments of [b] whose saved schedule differs from the same segment of [a],
-   in the indexing [unit_gen.u_segment] uses; [None] when the two do not segment alike
-   ([aligned_segments]). *)
-let segments_differing (a : compiled) (b : compiled) =
-  Option.map (aligned_segments a b) ~f:(fun (_, pairs) ->
-      List.filter_mapi pairs ~f:(fun i ((x : SC.saved_segment), (y : SC.saved_segment)) ->
-          if Poly.equal x.seg_saved y.seg_saved then None else Some i))
-
-(* How many units of [b] carry a different saved schedule than the same unit of [a] (a split-reduce
-   prelude counting as one); [None] when the two forms do not segment alike, so no unit-by-unit
-   comparison exists. *)
-let units_differing (a : compiled) (b : compiled) =
-  let differ x y = if Poly.equal x y then 0 else 1 in
-  match (a.form, b.form) with
-  | Whole_saved x, Whole_saved y -> Some (differ x y)
-  | _ ->
-      Option.map (aligned_segments a b) ~f:(fun (preludes, pairs) ->
-          List.sum
-            (module Int)
-            pairs
-            ~f:(fun ((x : SC.saved_segment), (y : SC.saved_segment)) ->
-              differ x.seg_saved y.seg_saved)
-          + Option.value_map preludes ~default:0 ~f:(fun (px, py) -> differ px py))
 
 (* Calibration output (gh-ocannl-491 task 4) and the bound-agreement invariant (gh-ocannl-514 phase
    0): the model score next to the measured time — every tuning run is free calibration data for the
@@ -4259,51 +4127,6 @@ let seeded_replay ?(fallback = true) ~limits ~accum_prec ~admit_narrow ~static_i
             (Outcome.detail_of_cause cause);
           (default (), false))
 
-(* Every candidate derives its CODE from the ONE base lowering ([base_opt] with [canon] its
-   canonical form, captured together in [tune]) rather than from the compile's own fresh lowering,
-   whose llc the transform ignores. Re-lowering per candidate was subtly unsound: timing runs settle
-   tensor-node value bounds, so later fresh lowerings can fold guards (and even re-segment fission)
-   differently from the base — failing digest checks at best (the CUDA rounds on PR #140: whole arms
-   degenerating to their serial baselines) and silently replaying the winner with empty per-segment
-   schedules at worst (a 296 ms winner returning as a 2614 ms routine). Deriving from the base makes
-   candidates and the winner replay drift-immune and byte-comparable by construction; the
-   fresh-lowering digest check survives only in spirit via the disk cache's [source_digest] guard
-   (cross-process compatibility).
-
-   The rebased code keeps the fresh compile's OWN [optimize_ctx] (the per-compile fork of the
-   context's lineage): link-time buffer allocation consults that fork, so placement mutations by
-   schedule ops — fission's Local promotions above all — must land there or the allocator would miss
-   buffers the kernels reference. Candidate hermeticity is unchanged: each compile forks the lineage
-   table anew. The traced store is record-copied from the base (schedule ops register their tiles in
-   it, and write through its records).
-
-   gh-ocannl-1526: that "fresh" lowering is no longer one. The search's compiles share one
-   [Ir.Lowering_reuse] cell: the base compile lowers and keeps a snapshot, and every later compile
-   from [search_ctx] takes a private copy of it. So the fork a candidate keeps is the very one the
-   base code was decided under, where a re-lowering after a link had proposed node bounds would have
-   handed it a fork decided under drifted code. A compile into another lineage never gets the cell.
-
-   gh-ocannl-1421: that is sound only while the fresh lowering is the base's program up to that
-   drift. Within the lineage the base was lowered in it is. A compile into ANOTHER lineage -- the
-   caller's, after a search on a [timing_ctx] -- can lower to another program: a node the timing
-   lineage materialized and the caller's leaves virtual is inlined there, so the base's code reads a
-   buffer the caller's placements never allocate. [tune] refuses that case up front
-   ([Lineage_refused]), comparing the two lineages' lowerings taken together, so both see the same
-   value bounds ([lineage_identity]); a comparison here, with a lowering taken after the timing
-   runs, could not tell drift from a lineage difference.
-
-   gh-ocannl-1340: two verdicts are decided inside the transform, on the forms it is about to hand
-   to codegen, so a candidate they refuse costs no codegen, no device compile and no link — on HIP a
-   serial whole-routine form is minutes of hiprtc (303 s per arm on a gfx1102). A form [seen]
-   already holds is a [`Duplicate] (the search's dedup, which used to be decided after the compile
-   it made redundant); on a GPU backend a form that binds no hardware dimension is refused with the
-   typed [Not_dispatched] cause of {!dispatchable} (gh-ocannl-532), which every caller already
-   rejected after its compile. The order is the search's: a duplicate of a refused form dedups
-   rather than counting a second refusal, which is why a refused digest joins [seen]. The verdicts
-   read the transform's forms, not what codegen shipped (zero-only segments can be elided after the
-   transform), so the callers keep their post-codegen check, on [routine.segments]. *)
-type gated_compile = Compiled of compiled | Duplicate of string | Failed of Outcome.failure
-
 let not_dispatched_origin = function
   | Outcome.Cache_replay -> "cache_replay"
   | Outcome.Candidate | Outcome.Advisory | Outcome.User_schedule -> "candidate"
@@ -4424,282 +4247,6 @@ let strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~(base_opt : LL
       with
       | (_ : Sched.segmentation * _) -> None
       | exception Outcome.Cause_at (_, cause) -> Some (Outcome.detail_of_cause cause))
-
-let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ?retain ?reuse
-    ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec :
-    gated_compile =
-  let candidate = match label with Some l -> l | None -> spec_label spec in
-  let duplicate = ref None in
-  let gate ~digest_after opts =
-    if Option.exists seen ~f:(fun seen -> Hash_set.mem seen digest_after) then (
-      duplicate := Some digest_after;
-      (* Unwinds out of the backend's compile before codegen; the [duplicate] cell, not this cause,
-         is what the result reports. *)
-      raise
-        (Outcome.Cause_at
-           ( Outcome.Transform,
-             Outcome.Not_dispatched { origin = "dedup"; detail = candidate ^ " is a duplicate" } )));
-    if not (dispatchable ~is_gpu opts) then (
-      Option.iter seen ~f:(fun seen -> Hash_set.add seen digest_after);
-      raise
-        (Outcome.Cause_at
-           ( Outcome.Transform,
-             Outcome.Not_dispatched
-               {
-                 origin = not_dispatched_origin provenance;
-                 detail =
-                   Printf.sprintf
-                     "%s binds no hardware dimension (gh-ocannl-532), refused before codegen \
-                      (digest %s)"
-                     candidate (dshort digest_after);
-               } )))
-  in
-  let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
-  let rebase (fresh : LL.optimized) =
-    {
-      base_opt with
-      (* Record copies, not a table copy sharing [traced_array]s: the schedule writes through this
-         store, and no candidate's writes may reach the base or a sibling (gh-ocannl-1526). *)
-      LL.traced_store = LL.copy_traced_store base_opt.LL.traced_store;
-      LL.optimize_ctx = fresh.LL.optimize_ctx;
-    }
-  in
-  let preset_sched ?block_size ?(config_thresholds = false) opt =
-    segment_preset ?block_size
-      ~presets:(if config_thresholds then `Config else `Search)
-      ~is_gpu ~is_cpu ~limits opt
-  in
-  let captured = ref None in
-  (* gh-ocannl-1560: under [autotune_strict_replay], a searched candidate's compile-fork placements
-     as its transform received them, for {!strict_replay_refusal}. *)
-  let strict_replay =
-    match provenance with
-    | Outcome.Candidate -> strict_replay_enabled ()
-    | Outcome.Cache_replay | Outcome.Advisory | Outcome.User_schedule -> false
-  in
-  let pristine = ref None in
-  let compile_ctx () =
-    match spec with
-    | Whole flavor ->
-        let transform fresh =
-          let opt = rebase fresh in
-          let sched, saved, registry =
-            match flavor with
-            | W_saved (saved, _) ->
-                let sched, registry = SC.of_saved canon saved in
-                (sched, saved, registry)
-            | W_preset { block_size } ->
-                let sched = preset_sched ?block_size opt in
-                let saved, registry = SC.to_saved (SC.base_registry canon) sched in
-                (sched, saved, registry)
-            | W_sketch p ->
-                let sched = sketch_schedule ~accum_prec ~p opt in
-                let saved, registry = SC.to_saved (SC.base_registry canon) sched in
-                (sched, saved, registry)
-          in
-          let opt' = Sched.apply_classified ~static_indices sched opt in
-          let digest_after = SC.digest (SC.canonicalize ~static_indices opt') in
-          captured :=
-            Some
-              ( Whole_saved saved,
-                [ { u_segment = None; u_saved = saved; u_registry = registry; u_opt = opt' } ],
-                [ opt' ],
-                digest_after );
-          gate ~digest_after [ opt' ];
-          [ opt' ]
-        in
-        Context.compile_outcome ?name ~lowered_transform:transform ?reuse ~provenance ~candidate
-          ?retain ctx comp bindings
-    | Fiss flavor ->
-        let transforms fresh =
-          if strict_replay then pristine := Some (LL.copy_optimize_ctx fresh.LL.optimize_ctx);
-          let opt = rebase fresh in
-          (* The split-reduce prelude (gh-ocannl-484 task 3) applies whole-routine BEFORE fission:
-             the partials edge it mints is what fission cuts at, giving the two passes separate
-             kernels and the event-chain synchronization the combine needs. *)
-          let prelude, prelude_saved =
-            match flavor with
-            | F_preset _ | F_saved _ | F_sketch _ -> ([], [])
-            | F_split { sites; staff } ->
-                let sched = split_reduce_prelude (sites @ staff) in
-                let saved, _ = SC.to_saved (SC.base_registry canon) sched in
-                (sched, saved)
-            | F_seeded { sp_split = _ :: _ as sites; _ } ->
-                let sched = split_reduce_prelude sites in
-                let saved, _ = SC.to_saved (SC.base_registry canon) sched in
-                (sched, saved)
-            | F_seeded { sp_split = []; _ } -> ([], [])
-            | F_swap { plan = { sp_split = _ :: _ as sites; _ }; _ } ->
-                let sched = split_reduce_prelude sites in
-                let saved, _ = SC.to_saved (SC.base_registry canon) sched in
-                (sched, saved)
-            | F_swap { plan = { sp_split = []; _ }; _ } -> ([], [])
-            | F_resplit { plan = { sp_split = _ :: _ as sites; _ }; _ } ->
-                let sched = split_reduce_prelude sites in
-                let saved, _ = SC.to_saved (SC.base_registry canon) sched in
-                (sched, saved)
-            | F_resplit { plan = { sp_split = []; _ }; _ } -> ([], [])
-            | F_split_saved (psaved, _, _) ->
-                let sched, _ = SC.of_saved canon psaved in
-                (sched, psaved)
-          in
-          let opt = apply_before_fission ~static_indices prelude opt in
-          (* A replay cuts where its saved segments say ({!saved_fission_replay}); the sketch
-             candidates replay the segmentation their seeds were enumerated under the same way
-             ({!sketch_replay}). *)
-          let replay =
-            match flavor with
-            | F_preset _ | F_split _ | F_seeded _ | F_swap _ | F_resplit _ -> None
-            | F_sketch { plan; entries; staff; _ } ->
-                Some
-                  (sketch_replay ~static_indices
-                     ~sketch:(fun p seg -> sketch_schedule ~accum_prec ~p seg)
-                     plan (entries @ staff))
-            | F_saved (saved, _) | F_split_saved (_, saved, _) ->
-                Some (saved_fission_replay ~static_indices saved)
-          in
-          let preset seg =
-            match flavor with
-            | F_preset { block_size; privatize; config_thresholds } ->
-                let sched = preset_sched ?block_size ~config_thresholds seg in
-                if privatize then (
-                  (* gh-ocannl-1438: what the extension dropped reaches the search's report. *)
-                  let sched, drops = privatize_extension ~accum_prec ~static_indices sched seg in
-                  on_privatize_drops drops;
-                  sched)
-                else sched
-            | F_saved _ | F_split_saved _ | F_seeded _ | F_swap _ | F_resplit _ ->
-                [] (* Never consulted: a replay brings its own. *)
-            | F_sketch _ | F_split _ -> preset_sched seg
-          in
-          (* Neither the [arity_cuts] (finer) segmentation (gh-ocannl-574) nor the zero fold
-             (gh-ocannl-1175) reaches a replay: the sketches' recorded segmentation was enumerated
-             under both, and carries them as data. The preset flavors keep the untuned pipeline's
-             coarse cuts and separate zero. *)
-          let segmentation, tuples =
-            match flavor with
-            | F_seeded plan ->
-                (* The untuned compile's own replay, so the candidate is the step it ships, its
-                   fallback to the default segments included. *)
-                let segmented, applied =
-                  seeded_replay ~limits ~accum_prec ~admit_narrow:plan.sp_admit_narrow
-                    ~static_indices plan.sp_segments opt
-                in
-                if Option.is_some plan.sp_segments && not applied then
-                  logf "%s: the plan's segments did not apply; compiled the default segments"
-                    candidate;
-                segmented
-            | F_swap { plan; entries; staff } ->
-                (* gh-ocannl-1664: the same replay of the swapped plan, without its fallback: a swap
-                   that does not apply is this single's decline. *)
-                fst
-                  (seeded_replay ~fallback:false ~limits ~accum_prec
-                     ~admit_narrow:plan.sp_admit_narrow ~static_indices
-                     (seeded_swap plan (entries @ staff)).sp_segments opt)
-            | F_resplit { plan; _ } ->
-                (* gh-ocannl-1697: the re-derived plan's replay, likewise without the fallback. *)
-                fst
-                  (seeded_replay ~fallback:false ~limits ~accum_prec
-                     ~admit_narrow:plan.sp_admit_narrow ~static_indices plan.sp_segments opt)
-            | F_preset _ | F_saved _ | F_sketch _ | F_split _ | F_split_saved _ ->
-                (* Match the default pipeline's placements (statement-crossing [Local]s promoted on
-                   GPU), so fissioned candidates and the untuned baseline schedule the same code. *)
-                tuner_fission ~is_gpu ~limits ?replay ~preset ~static_indices opt
-          in
-          let saved_with_registries = SC.save_segments ~static_indices segmentation tuples in
-          let posts = List.map tuples ~f:(fun (_, _, _, post) -> post) in
-          let units =
-            List.filter_mapi (List.zip_exn saved_with_registries posts)
-              ~f:(fun i ((s, registry), post) ->
-                match Sched.segment_class s.SC.seg_kind with
-                | `Zeros | `Solo -> None
-                | `Normal ->
-                    Some
-                      {
-                        u_segment = Some i;
-                        u_saved = s.SC.seg_saved;
-                        u_registry = registry;
-                        u_opt = post;
-                      })
-          in
-          let digest_after =
-            String.concat ~sep:"+"
-              (List.map posts ~f:(fun post -> SC.digest (SC.canonicalize ~static_indices post)))
-          in
-          let segs = List.map saved_with_registries ~f:fst in
-          let form =
-            if List.is_empty prelude_saved then Fiss_saved segs
-            else Split_saved (prelude_saved, segs)
-          in
-          captured := Some (form, units, posts, digest_after);
-          gate ~digest_after posts;
-          posts
-        in
-        Context.compile_outcome ?name ~lowered_transform:transforms ?reuse ~provenance ~candidate
-          ?retain ctx comp bindings
-  in
-  (* The [Tile_mma] rendering census travels on the routine ([Context.routine.mma], gh-ocannl-626):
-     [Context.compile] collects it around this candidate's kernel compiles, fissioned segments
-     included, so no bracket is needed here and a candidate cannot be timed without it. *)
-  match compile_ctx () with
-  | Error _ when Option.is_some !duplicate -> Duplicate (Option.value_exn !duplicate)
-  | Error failure -> Failed failure
-  | Ok (cctx, routine) -> (
-      match !captured with
-      | Some (form, units, all_opts, digest_after) -> (
-          let refusal =
-            match !pristine with
-            | Some pristine when strict_replay ->
-                strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~base_opt ~pristine
-                  form
-            | Some _ | None -> None
-          in
-          match refusal with
-          | None -> Compiled { form; cctx; routine; units; all_opts; digest_after }
-          | Some detail -> (
-              (* Fatal whatever [strict_failure_classification] says: the check was asked for, and a
-                 form the search timed that its own replay refuses is what it exists to stop. *)
-              Context.release cctx;
-              match
-                Outcome.protect ~strict:true
-                  ~classify_backend:(fun _ _ -> None)
-                  ~provenance ~phase:Outcome.Transform ~candidate
-                  (fun () ->
-                    failwith
-                      (Printf.sprintf
-                         "Autotune: autotune_strict_replay: candidate %s does not replay from its \
-                          saved form (gh-ocannl-1560): %s"
-                         candidate detail))
-              with
-              | Ok (_ : compiled) -> assert false
-              | Error failure -> Failed failure))
-      | None -> (
-          match
-            Outcome.protect
-              ~classify_backend:(fun _ _ -> None)
-              ~provenance ~phase:Outcome.Transform ~candidate
-              (fun () -> failwith "Autotune: the transform was not invoked")
-          with
-          | Ok (_ : compiled) -> assert false
-          | Error failure -> Failed failure))
-
-(* The callers that do not deduplicate: a refused form arrives as the typed [Not_dispatched]
-   failure, which each of them already handles as a failed or degenerate compile. *)
-let compile_candidate ?name ?label ?on_privatize_drops ?retain ?reuse ~static_indices ~base_opt
-    ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
-  match
-    compile_candidate_gated ?name ?label ?on_privatize_drops ?retain ?reuse ~static_indices
-      ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec
-  with
-  | Compiled c -> Ok c
-  | Failed failure -> Error failure
-  | Duplicate _ -> assert false (* No [seen], no duplicate. *)
-
-(* The post-codegen check behind the gate: whether the kernels codegen SHIPPED ([routine.segments],
-   gh-ocannl-1006) bind a hardware dimension -- the artifact, not the transform's forms the gate
-   judged. A routine that recorded no segments is judged by its forms. *)
-let shipped_dispatchable ~is_gpu (c : compiled) =
-  dispatchable ~is_gpu (match c.routine.Context.segments with [] -> c.all_opts | segs -> segs)
 
 (* Whether a failure is the gate's pre-codegen refusal above. *)
 let is_not_dispatched = function
@@ -5050,22 +4597,6 @@ let menu ?(admits = fun (_ : SC.saved_optop) -> true) ~is_cpu ~is_gpu
       (String.concat ~sep:", "
          (List.map dropped ~f:(fun (name, d) -> Printf.sprintf "%d %s" d name)));
   kept
-
-(* Extend one unit of a compiled candidate with a menu action: a segment's unit extends that segment
-   alone, by position — a structurally identical segment elsewhere can differ in placements and
-   keeps its own schedule. *)
-let extend_spec (elem : compiled) (u : unit_gen) (op : SC.saved_optop) : spec option =
-  let extend segs i =
-    List.mapi segs ~f:(fun j (s : SC.saved_segment) ->
-        if i = j then { s with seg_saved = u.u_saved @ [ op ] } else s)
-  in
-  let move mv_segment = { mv_parent = dshort elem.digest_after; mv_segment; mv_op = op } in
-  match (elem.form, u.u_segment) with
-  | Whole_saved _, None -> Some (Whole (W_saved (u.u_saved @ [ op ], Some (move None))))
-  | Fiss_saved segs, Some i -> Some (Fiss (F_saved (extend segs i, Some (move (Some i)))))
-  | Split_saved (prelude, segs), Some i ->
-      Some (Fiss (F_split_saved (prelude, extend segs i, Some (move (Some i)))))
-  | _ -> None
 
 (** {2 The placement decision surface (gh-ocannl-514, the placement-space search)}
 
@@ -5448,63 +4979,6 @@ let flip_twin_identity ~static_indices ~lineage ~inherited ~enablement ~disablem
              (LL.reading_to_string fa.LL.fa_flip)
              fa.LL.fa_recompute_cost fa.LL.fa_modeled))
 
-let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
-  let ordering = match ordering with Some o -> o | None -> flip_ordering () in
-  (* The evidence is derived only on the path that consults it, so an unconditional ordering does
-     not depend on [tune_flip_profit_margin] at all — it is not merely ignored: a malformed or
-     out-of-range margin must not abort a run pinned to a baseline the term plays no part in. *)
-  let profit =
-    match ordering with
-    | `Profitable -> Some (family_profit_of_reports evidence)
-    | `Cost | `Enablement -> None
-  in
-  let limits = Context.hardware_limits ctx in
-  let static_indices = Idx.bound_symbols bindings in
-  let base = Context.lowered_for_decisions ?name ctx comp bindings in
-  let candidates = base.LL.flip_candidates in
-  (* The all-materialized specialization of the decision surface: the [`Materialize] flips are the
-     default-virtual candidates, so deciding exactly those materialized makes every open node's work
-     sit in its own producer statement — the form [completion_floor]'s [open_placement] contract
-     asks for. *)
-  let to_materialize =
-    List.filter_map candidates ~f:(fun fc -> Option.some_if (offers_materialize fc) fc.LL.fc_tn)
-  in
-  let allmat = Context.lowered_for_decisions ?name ~materialized:to_materialize ctx comp bindings in
-  let enablement, disablement =
-    placement_enablement
-      ~is_gpu:(Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx))
-      ~limits ~static_indices ~base ~allmat
-  in
-  let ps_candidates = rank_flip_candidates ~ordering ?profit ~enablement ~disablement candidates in
-  let candidate_set =
-    Set.of_list (module Ir.Tnode) (List.map ps_candidates ~f:(fun fc -> fc.LL.fc_tn))
-  in
-  let peak_flops, peak_memory_bandwidth = envelope ~limits in
-  let floor_withheld = placement_floor_withheld candidates in
-  let ps_floor_ms ~materialized =
-    if floor_withheld then None
-    else
-      let mat = Set.of_list (module Ir.Tnode) materialized in
-      let open_placement tn = Set.mem candidate_set tn && not (Set.mem mat tn) in
-      let f = CM.completion_floor ~open_placement allmat.LL.llc in
-      CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:f.CM.fr_flops
-        ~bytes:f.CM.fr_bytes ()
-      |> Option.map ~f:(fun s -> s *. 1e3)
-  in
-  {
-    ps_candidates;
-    ps_ordering =
-      effective_flip_ordering ~ordering ~profit:(Option.value profit ~default:Unmeasured);
-    ps_profit = profit;
-    ps_enablement = enablement;
-    ps_disablement = disablement;
-    ps_floor_ms;
-    ps_twin_identity =
-      flip_twin_identity ~static_indices ~lineage:(Context.placements ctx)
-        ~inherited:(Context.inherits_computation ctx)
-        ~enablement ~disablement base;
-  }
-
 (** {2 Model-picked untuned defaults (gh-ocannl-491 task 3)}
 
     A drop-in for [Context.compile] that raises the untuned floor: with no measurement at all, the
@@ -5545,37 +5019,6 @@ let model_default_enabled =
    bounds instead of the curated menus alone. Never affects [tune]'s seed lists. *)
 let geometry_lattice_enabled =
   lazy (Utils.get_global_flag ~default:false ~arg_name:"model_default_geometry_lattice")
-
-let compile_advisory ?name ?on_fallback ?fallback_if ?on_unrecovered lowered_transform ctx comp
-    bindings =
-  match
-    Context.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp bindings
-  with
-  | Ok result -> result
-  | Error (Outcome.Fatal _ as failure) -> Outcome.raise_failure failure
-  | Error (Outcome.Classified classified as failure)
-    when not (Option.value_map fallback_if ~default:true ~f:(fun f -> f ())) -> (
-      (* [fallback_if] is what keeps the retry from duplicating a genuine failure: a transform that
-         already degraded to the default pipeline has nothing to fall back TO, so recompiling would
-         just repeat the same failing compile (and, on a resource failure, aggravate it) before
-         raising the same exception. Such callers say [false] here and the original exception
-         propagates through the public exception contract -- or, given [on_unrecovered], the
-         classified cause goes to the caller, which may know a fallback of its own (gh-ocannl-1390:
-         [model_default]'s placement pick). A fatal failure never reaches it. *)
-      match on_unrecovered with
-      | Some f -> f classified
-      | None -> Outcome.raise_failure failure)
-  | Error (Outcome.Classified classified) -> (
-      (* Typed compiler rejection is the advisory fallback boundary. Fatal failures are propagated
-         above without paying for a second compile. *)
-      Option.iter on_fallback ~f:(fun f -> f (Outcome.exception_of_cause classified.cause));
-      (* [Context.compile], spelled out so that a classified failure of the fallback itself also
-         reaches [on_unrecovered]: there is then nothing left to fall back to here either. *)
-      match Context.compile_outcome ?name ~provenance:Outcome.User_schedule ctx comp bindings with
-      | Ok result -> result
-      | Error (Outcome.Classified classified) when Option.is_some on_unrecovered ->
-          (Option.value_exn on_unrecovered) classified
-      | Error failure -> Outcome.raise_failure failure)
 
 (* gh-ocannl-1254: a candidate's tile-MMA operand loads under the backend's own description of its
    arms: their load rule and fragment structure. *)
@@ -6473,83 +5916,9 @@ let seeded_apply ?(on_choice = fun (_ : seeded_choice) -> ()) ~capabilities ~fac
     on_choice choice);
   List.map tuples ~f:(fun (_, _, _, post) -> post)
 
-let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
-    ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
-  let facts = Context.backend_facts ctx in
-  match
-    seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow ~facts
-      ~configured_gate:(fun () -> seeded_default_gate ~limits:(Context.hardware_limits ctx))
-      ()
-  with
-  | None -> None
-  | Some (gate, min_serial, sink_enabled, admit_narrow) ->
-      let limits = Context.hardware_limits ctx in
-      let capabilities = Context.codegen_capabilities ctx in
-      let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
-      let static_indices = Idx.bound_symbols bindings in
-      Some
-        (seeded_apply ~on_choice ~capabilities ~facts ~limits ~accum_prec ~static_indices ~gate
-           ~min_serial ~sink_enabled ~admit_narrow)
-
-(* gh-ocannl-1479: the launch sweep's pinned sketch -- one whole-routine scalar blocktile leaf of
-   the matmul family, whatever the seeding would pick at the size, so every timed point of a fit
-   runs the same geometry. Applied and validated as [model_default] applies a whole-routine pick. *)
-let pinned_sketch_transform ~select ?(on_leaf = fun (_ : sketch_params) -> ()) ctx bindings =
-  if not (Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx)) then
-    raise
-      (Utils.User_error
-         (Printf.sprintf "Autotune.pinned_sketch_transform: backend %s has no GPU sketch family"
-            (Context.backend_name ctx)));
-  let limits = Context.hardware_limits ctx in
-  let capabilities = Context.codegen_capabilities ctx in
-  let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
-  let static_indices = Idx.bound_symbols bindings in
-  fun (opt : LL.optimized) ->
-    match matmul_sketch_tree ~capabilities ~is_gpu:true ~is_cpu:false ~limits opt with
-    | None -> raise (Utils.User_error "Autotune.pinned_sketch_transform: no matmul site")
-    | Some tree -> (
-        match List.find (Sspace.leaves tree) ~f:(fun p -> scalar_blocktile p && select p) with
-        | None ->
-            raise
-              (Utils.User_error
-                 "Autotune.pinned_sketch_transform: no scalar blocktile leaf of the family matches")
-        | Some p ->
-            on_leaf p;
-            validate_segments_for_model ~limits
-              [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ])
-
 let ranking_multiprocessors ~limits =
   let (u : Ir.Backend_intf.untimed_limits) = Ir.Backend_intf.untimed_limits limits in
   resolve multiprocessors_override u.core_count
-
-let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow ?report
-    ctx comp bindings =
-  let choice = ref no_seeded_choice in
-  let emit () = Option.iter report ~f:(fun f -> f !choice) in
-  match
-    seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
-      ~on_choice:(fun c -> choice := c)
-      ctx bindings
-  with
-  | None ->
-      emit ();
-      Context.compile ?name ctx comp bindings
-  | Some transform ->
-      let on_fallback exn =
-        logf "seeded_default: compiling the seeded pipeline FAILED (%s); recompiling the default"
-          (Exn.to_string exn);
-        choice := { no_seeded_choice with sd_fell_back = true }
-      in
-      let result =
-        compile_advisory ?name ~on_fallback
-          ~fallback_if:(fun () ->
-            not
-              (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
-             && List.is_empty !choice.sd_sunk))
-          transform ctx comp bindings
-      in
-      emit ();
-      result
 
 (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
    ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
@@ -6654,580 +6023,6 @@ let seeded_record_for_key ~(plan : Sched.segmentation) ~record (key : seg_key) =
              List.mem key.key_units start ~equal:Int.equal && start <= u && u < start + n))
         p)
 
-let model_default ?name ?report ctx comp bindings =
-  let facts = Context.backend_facts ctx in
-  let is_gpu = Ir.Backend_intf.binds_hardware_grid facts
-  and is_cpu = Ir.Backend_intf.renders_on_host_pool facts in
-  let limits = Context.hardware_limits ctx in
-  let accum_prec = (Context.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
-  let static_indices = Idx.bound_symbols bindings in
-  let peak_flops, peak_memory_bandwidth = envelope ~limits in
-  let emit r = Option.iter report ~f:(fun f -> f r) in
-  let no_selection =
-    {
-      mc_label = "default";
-      mc_model_ms = None;
-      mc_rank_ms = None;
-      mc_scored = 0;
-      mc_skipped = 0;
-      mc_rejected = 0;
-      mc_excluded = 0;
-    }
-  in
-  if
-    (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
-    || not (Sched.automatic_schedule_active ~facts)
-  then (
-    emit no_selection;
-    Context.compile ?name ctx comp bindings)
-  else
-    let choice = ref no_selection in
-    (* Whether the segments the compile actually received came from a model pick rather than the
-       default pipeline — the condition for the compile-level fallback below to have anywhere to
-       fall back to. *)
-    let applied_pick = ref false in
-    (* Counters and scoring helpers at [model_default] scope rather than per-compile: the placement
-       pre-search (config [model_default_placements]) scores hermetic lowerings before any compile
-       runs, and its work accumulates into the same reported totals as the in-compile selection. *)
-    let n_scored = ref 0 and n_skipped = ref 0 and n_rejected = ref 0 and n_excluded = ref 0 in
-    (* Candidates rank by the ranking score (gh-ocannl-1253), which charges operand re-reads once
-       the working set leaves the cache — under [analyze]'s distinct-cell roofline an untiled
-       contraction scores at the family's floor and no sketch can win. The family search's bound
-       below stays [completion_floor]'s roofline: the ranking score is never below [analyze]'s, so
-       it is never below the bound, and fathoming stays sound. *)
-    let score opts =
-      match
-        segments_ranking
-          ~capabilities:(Context.codegen_capabilities ctx)
-          ~peak_flops ~peak_memory_bandwidth ~limits opts
-      with
-      | Some (rank, _bound) ->
-          Int.incr n_scored;
-          Some rank
-      | None ->
-          Int.incr n_skipped;
-          None
-    in
-    (* The model must rank the best viable schedule, not crown an invalid argmin and fall all the
-       way back to default. The validator is typed, so only an expected schedule rejection is
-       excluded; compiler assertions and other failures still escape. *)
-    let score_valid opts =
-      match validate_segments_for_model ~fork_join:is_cpu ~limits opts with
-      | opts -> score opts
-      | exception Outcome.Cause_at _ ->
-          Int.incr n_rejected;
-          None
-    in
-    (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
-       ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is the
-       incumbent, and the action taken when no candidate strictly beats it (and its own sketch,
-       [anchored] below). [None] where the untuned compile is the plain default (another backend,
-       seeding off). *)
-    let seeding_here = lazy (model_seeding ~facts ~limits) in
-    (* Where the model starts from the seeded plan, the family is restricted to the
-       numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
-       accumulating at its storage precision), so a model pick never changes a result the seeded
-       plan would not: tensorized forms reround, the conv family reorders the reduction (see
-       [model_admits] on the coalesced branch). Other leaves are kept out of the ranking, counted as
-       not numerics-preserving ([n_excluded]), never an error. Metal, the CPU backends and an
-       unseeded CUDA/HIP compile keep the whole family. *)
-    (* gh-ocannl-1600: the coalesced layouts compete only where the memory-transaction term prices
-       what tells them from their twins -- a rate resolved and a lane width stated. Elsewhere the
-       candidate set is exactly as before. *)
-    let coalesced = model_ranks_coalesced ~limits in
-    let admits base_opt =
-      model_admits ~coalesced ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt
-    in
-    let capabilities = Context.codegen_capabilities ctx in
-    (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
-       searched program, scored as its leaves are ({!model_seeded_anchors}), where it is below the
-       incumbent: a leaf that only ties the seeded geometry never displaces the seeded plan, while
-       one the score separates from it (a memory leg past the cache, say) still can. Placement
-       leaves reuse [select], so they are anchored too. Returns the walk's threshold on [prog] and
-       the anchor setting it: the lower of [incumbent] and the best-scoring of the seeded plan's own
-       sketches that apply to [prog] ([seeded], the plan's record for the units [prog] covers). *)
-    let anchored ~seeded ~incumbent prog =
-      List.fold (model_seeded_anchors ~limits ~accum_prec ~static_indices ~seeded prog)
-        ~init:(incumbent, None) ~f:(fun ((threshold, best) as acc) (p, segs) ->
-          match score segs with
-          | Some a ->
-              logf
-                "model_default: anchored at the seeded sketch %s (rank %.6f ms, incumbent %.6f ms)"
-                (sketch_params_label p) (a *. 1e3) (incumbent *. 1e3);
-              let best =
-                match best with Some (_, b) when Float.(b <= a) -> best | _ -> Some (p, a)
-              in
-              (Float.min threshold a, best)
-          | None -> acc)
-    in
-    (* [model_family_search] with the default as incumbent, logging its ledger; under the
-       numerics-preserving restriction, a leaf outside it is excluded before it is scheduled.
-       Returns the first leaf strictly better than [incumbent] (exact ties broken by operand loads,
-       gh-ocannl-1254). *)
-    let tree_search ~incumbent base_opt =
-      (* Snapshot the caller-side counters so the log can split the driver's unscored leaves into
-         compiler rejections vs genuine no-coverage — st_unscored alone would misclassify rejections
-         as cost-model gaps in the phase-6 ledger. *)
-      let r0 = !n_rejected and k0 = !n_skipped and e0 = !n_excluded in
-      match
-        model_family_search
-          ~on_rejected:(fun () -> Int.incr n_rejected)
-          ~admit:(admits base_opt)
-          ~on_excluded:(fun () -> Int.incr n_excluded)
-          ~coalesced ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
-          ~peak_memory_bandwidth ~score:score_valid ~incumbent base_opt
-      with
-      | None -> None
-      | Some (best, stats, fb) ->
-          logf
-            "model_default: family search: %d expanded, %d scored, %d unscored (%d rejected, %d \
-             without coverage, %d not numerics-preserving), %d fathomed (bound %s), %d refuted, %d \
-             excluded"
-            stats.Sspace.st_expanded stats.Sspace.st_scored stats.Sspace.st_unscored
-            (!n_rejected - r0) (!n_skipped - k0) (!n_excluded - e0) stats.Sspace.st_fathomed
-            (match fb with Some b -> Printf.sprintf "%.6f ms" (b *. 1e3) | None -> "n/a")
-            stats.Sspace.st_refuted stats.Sspace.st_excluded;
-          Some best
-    in
-    (* A per-segment substitution, as [tune]'s [F_sketch] candidates apply one: [plan] replayed,
-       each keyed segment found by position (gh-ocannl-1243), the others on their kind's CONFIGURED
-       preset (gh-ocannl-1512) -- what the incumbent ships, not the search's [min_parallel:1] one
-       its segments were ranked against ({!model_segments}). The model times nothing: on GPU the
-       search's preset can give a small segment a lane reduction, which reorders its sums, where the
-       configured one keeps it serial -- under seeding, a result the seeded plan would not compute;
-       on cc it would fan a tiny segment out over the pool, an overhead the score does not see. So a
-       pick labeled [F_sketch[...]] is the search's candidate of that label up to the presets of the
-       segments it leaves unsketched; the substituted pipeline is scored whole and must still
-       strictly beat the incumbent. *)
-    let preset = segment_preset ~presets:`Config ~is_gpu ~is_cpu ~limits in
-    let apply_fiss ~plan ~entries opt =
-      let replay =
-        sketch_replay ~static_indices
-          ~sketch:(fun p seg -> sketch_schedule ~accum_prec ~p seg)
-          plan entries
-      in
-      List.map
-        (snd (tuner_fission ~is_gpu ~limits ~replay ~preset ~static_indices opt))
-        ~f:(fun (_, _, _, post) -> post)
-    in
-    (* The model-argmin pipeline choice for one lowering — label, roofline score (seconds), and the
-       action reproducing it. Shared between the in-compile transform seam and the placement
-       pre-search's leaf scoring (hermetic lowerings of decided placement vectors). *)
-    let seeded_segs ?on_choice seeding opt =
-      let gate, min_serial, sink_enabled, admit_narrow = seeding in
-      seeded_apply ?on_choice ~capabilities ~facts ~limits ~accum_prec ~static_indices ~gate
-        ~min_serial ~sink_enabled ~admit_narrow opt
-    in
-    (* Whether the applied seeded plan differs from the default pipeline, as [seeded_default] judges
-       it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a compilation
-       failure of it is the default's and is not retried. *)
-    let seeded_changed = ref false in
-    (* The seeded plan's split prelude (CUDA, gh-ocannl-1325); the program itself where the model
-       does not start from the seeded plan. On a hermetic copy for scoring; in place for the pick's
-       application, as the [`Seeded] action's [seeded_apply] splits the compile's own lowering: a
-       pick applied to a copy registers the nodes its transforms create (a fissioned segment's
-       promoted locals) in the copy's placements, not the compiling context's, and the compile then
-       fails on an undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
-    let prelude ?(hermetic = true) (opt : LL.optimized) =
-      match Lazy.force seeding_here with
-      | Some (_, min_serial, _, _) ->
-          fst
-            (seeded_split ~facts ~min_serial ~static_indices
-               (if hermetic then scratch_of opt else opt))
-      | None -> opt
-    in
-    let select (opt : LL.optimized) =
-      let seeded_record = ref [] in
-      try
-        (* The incumbent -- the seeded plan where there is one, else the untuned default pipeline --
-           scored on a hermetic copy: both the anchor candidate and the fallback. *)
-        let incumbent_label, incumbent_action, incumbent_scratch =
-          match Lazy.force seeding_here with
-          | Some seeding ->
-              ( "seeded",
-                `Seeded seeding,
-                seeded_segs
-                  ~on_choice:(fun c -> seeded_record := c.sd_seeded)
-                  seeding (scratch_of opt) )
-          | None ->
-              ( "default",
-                `Default,
-                Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt) )
-        in
-        (* gh-ocannl-1477: what the incumbent plan seeded, by first unit -- the anchors' source. *)
-        let seeded_record = !seeded_record in
-        let default_score = score incumbent_scratch in
-        (* The candidates compete on the program the seeded plan starts from, its split prelude
-           included, so a winner keeps the reductions the untuned compile splits. *)
-        let base = prelude opt in
-        match default_score with
-        | None ->
-            (* No coverage of the incumbent itself: nothing to honestly compare against. *)
-            (incumbent_label, None, incumbent_action)
-        | Some ds -> (
-            (* Whole-routine sketch candidates. A candidate without coverage is skipped — it is
-               never picked over the default without a measured run ({!tune} covers that). *)
-            let capabilities = Context.codegen_capabilities ctx in
-            log_seeding ~capabilities ~where:"model_default whole-routine" ~is_gpu ~is_cpu ~limits
-              base;
-            (* The claiming family's tree (matmul or conv), twins included, searched with the
-               default as incumbent. *)
-            let whole_best =
-              Option.join
-                (tree_search
-                   ~incumbent:
-                     (fst (anchored ~seeded:(List.map seeded_record ~f:snd) ~incumbent:ds base))
-                   base)
-            in
-            let contenders =
-              match whole_best with
-              | Some (p, sc) -> [ (spec_label (Whole (W_sketch p)), sc, `Whole p) ]
-              | None -> []
-            in
-            (* Per-segment sketch substitution when the search's segmentation splits the routine or
-               exposes a new lowering (a covering GPU zero companion) for sketching
-               ({!model_segments}, gh-ocannl-1512). Mirrors [tune]'s [F_sketch] flavor: the derived
-               segmentation replayed, keyed segments found in it by position (gh-ocannl-1243), a
-               digest mismatch degrading to the configured preset. *)
-            let fiss =
-              match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
-              | exception Outcome.Cause_at _ ->
-                  Int.incr n_rejected;
-                  None
-              | None -> None
-              | Some (plan, keyed) -> (
-                  let decided =
-                    List.filter_map keyed ~f:(fun (key, pre, post) ->
-                        match score [ post ] with
-                        | None -> None
-                        | Some bs -> (
-                            log_seeding ~capabilities
-                              ~where:("model_default segment " ^ seg_key_tag key)
-                              ~is_gpu ~is_cpu ~limits pre;
-                            (* gh-ocannl-1687: the segment under its configured preset -- what the
-                               substitution ships if it leaves the segment unsketched -- scored
-                               beside the search's. A sketch enters only by strictly beating the
-                               lower of the two; where the configured one has no score, the segment
-                               forms no strict entry: an unpriced alternative must not lower the
-                               bar. *)
-                            let configured =
-                              Option.bind
-                                (configured_segment ~is_gpu ~is_cpu ~limits ~static_indices pre)
-                                ~f:(fun c -> score [ c ])
-                            in
-                            Option.iter configured ~f:(fun cs ->
-                                if Float.(cs < bs) then
-                                  logf
-                                    "model_default: segment %s priced at its configured \
-                                     preset                                      (%.6f ms, search \
-                                     preset %.6f ms)"
-                                    (seg_key_tag key) (cs *. 1e3) (bs *. 1e3));
-                            (* The segment's family tree searched with that price as incumbent,
-                               anchored at the seeded plan's own sketch on the segment under seeding
-                               (gh-ocannl-1477). *)
-                            let threshold, anchor =
-                              anchored
-                                ~seeded:(seeded_record_for_key ~plan ~record:seeded_record key)
-                                ~incumbent:
-                                  (Option.value_map configured ~default:bs ~f:(Float.min bs))
-                                pre
-                            in
-                            let strict =
-                              match configured with
-                              | None -> None
-                              | Some _ -> Option.join (tree_search ~incumbent:threshold pre)
-                            in
-                            match strict with
-                            | Some (p, _s) -> Some (`Strict (key, p))
-                            | None -> Option.map anchor ~f:(fun (p, _) -> `Anchor (key, p))))
-                  in
-                  (* A substitution only where some segment strictly improves on its anchor; every
-                     other segment the seeded plan seeds keeps its seeded sketch (round 1 of
-                     staging#1332), so the contender is the seeded plan with strict improvements,
-                     not those improvements over default presets. *)
-                  let entries =
-                    if List.exists decided ~f:(function `Strict _ -> true | `Anchor _ -> false)
-                    then List.map decided ~f:(function `Strict e | `Anchor e -> e)
-                    else []
-                  in
-                  if List.is_empty entries then None
-                  else
-                    (* Score the substituted pipeline whole, so it competes on the same footing as
-                       the other candidates. *)
-                    match apply_fiss ~plan ~entries (scratch_of base) with
-                    | exception Outcome.Cause_at _ ->
-                        Int.incr n_rejected;
-                        None
-                    | posts -> Option.map (score_valid posts) ~f:(fun s -> (plan, entries, s)))
-            in
-            let contenders =
-              contenders
-              @
-              match fiss with
-              | Some (plan, entries, s) ->
-                  [
-                    ( spec_label (Fiss (F_sketch { plan; entries; staff = []; fine = false })),
-                      s,
-                      `Fiss (plan, entries) );
-                  ]
-              | None -> []
-            in
-            (* Argmin with ties to the default: the model only displaces the honest default on a
-               strict improvement. *)
-            let best =
-              List.min_elt contenders ~compare:(fun (_, a, _) (_, b, _) -> Float.compare a b)
-            in
-            match best with
-            | Some (lbl, s, act) when Float.(s < ds) -> (lbl, Some s, act)
-            | _ -> (incumbent_label, Some ds, incumbent_action))
-      with Outcome.Cause_at (_, cause) ->
-        logf "model_default: scoring declined (%s); using the default pipeline"
-          (Outcome.detail_of_cause cause);
-        ("default", None, `Default)
-    in
-    let transforms (opt : LL.optimized) : LL.optimized list =
-      let default_segs () = Sched.maybe_default_schedules ~facts ~limits ~static_indices opt in
-      let label, model_s, action = select opt in
-      choice :=
-        {
-          mc_label = label;
-          mc_model_ms = None;
-          mc_rank_ms = Option.map model_s ~f:(fun s -> s *. 1e3);
-          mc_scored = !n_scored;
-          mc_skipped = !n_skipped;
-          mc_rejected = !n_rejected;
-          mc_excluded = !n_excluded;
-        };
-      let apply_action () =
-        (* Schedule application uses the typed seam. Backend validation is deliberately left to
-           [compile_advisory], which now receives its classified cause directly from codegen. *)
-        match action with
-        | `Default -> default_segs ()
-        | `Seeded seeding ->
-            seeded_changed := false;
-            validate_segments_for_model ~fork_join:is_cpu ~limits
-              (seeded_segs
-                 ~on_choice:(fun c ->
-                   seeded_changed :=
-                     not
-                       (List.is_empty c.sd_seeded && List.is_empty c.sd_split
-                      && List.is_empty c.sd_sunk))
-                 seeding opt)
-        | `Whole p ->
-            let opt = prelude ~hermetic:false opt in
-            validate_segments_for_model ~fork_join:is_cpu ~limits
-              [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
-        | `Fiss (plan, entries) ->
-            let opt = prelude ~hermetic:false opt in
-            validate_segments_for_model ~fork_join:is_cpu ~limits (apply_fiss ~plan ~entries opt)
-      in
-      match apply_action () with
-      | segs ->
-          (* The lower bound of what is applied, beside the rank the pick minimized. *)
-          (if Option.is_some model_s then
-             let bound =
-               summaries_roofline ~peak_flops ~peak_memory_bandwidth
-                 (List.map segs ~f:(fun o -> CM.analyze o.LL.llc))
-             in
-             choice :=
-               {
-                 !choice with
-                 mc_model_ms = Option.map bound ~f:(fun s -> s *. 1e3);
-                 mc_rank_ms = Option.bind bound ~f:(fun _ -> !choice.mc_rank_ms);
-               });
-          logf
-            "model_default: chose %s (rank %s; %d scored, %d without coverage, %d unbuildable, %d \
-             not numerics-preserving)"
-            label
-            (match model_s with Some s -> Printf.sprintf "%.6f ms" (s *. 1e3) | None -> "n/a")
-            !n_scored !n_skipped !n_rejected !n_excluded;
-          (applied_pick :=
-             match action with
-             | `Default -> false
-             | `Seeded _ -> !seeded_changed
-             | `Whole _ | `Fiss _ -> true);
-          segs
-      | exception Outcome.Cause_at (_, cause) ->
-          logf
-            "model_default: winner %s FAILED to apply or validate (%s); using the default pipeline"
-            label (Outcome.detail_of_cause cause);
-          choice :=
-            {
-              no_selection with
-              mc_scored = !n_scored;
-              mc_skipped = !n_skipped;
-              mc_rejected = !n_rejected;
-              mc_excluded = !n_excluded;
-            };
-          applied_pick := false;
-          default_segs ()
-    in
-    let on_fallback exn =
-      logf "model_default: compiling the pick %s FAILED (%s); recompiling the default pipeline"
-        !choice.mc_label (Exn.to_string exn);
-      choice := { !choice with mc_label = "default"; mc_model_ms = None; mc_rank_ms = None }
-    in
-    (* gh-ocannl-514, the placement levels of the untuned regime (config [model_default_placements]
-       = N > 0): before the compile, branch-and-bound over the top-N ranked flip candidates of the
-       decision surface — one node per level, kept at its default reading or flipped to one of its
-       alternatives, the all-keep leaf visited first so the default placements' own selection score
-       is the running incumbent (ties stay with the default placements), [select] pricing each
-       leaf's hermetic lowering ([Context.lowered_for_decisions]), and the partial-vector roofline
-       floor ([placement_surface.ps_floor_ms], monotone in the committed materializations) fathoming
-       subtrees that cannot beat it. This is where the bound differentiates {e within} the tree: the
-       family levels' floor is schedule-invariant, the placement levels' is not (phase 3). *)
-    let placement_budget =
-      Int.of_string
-        (String.strip (Utils.get_global_arg ~arg_name:"model_default_placements" ~default:"0"))
-    in
-    let placement_pick =
-      if placement_budget <= 0 then None
-      else
-        match
-          let surface = placement_surface ?name ctx comp bindings in
-          (* The cut counts nodes (gh-ocannl-1017): a candidate is the whole node, so a level always
-             decides every reading it has. *)
-          let cands = List.take surface.ps_candidates placement_budget in
-          if List.is_empty cands then None
-          else
-            let level_name (fc : LL.flip_candidate) =
-              Printf.sprintf "placement#%d %s %s" fc.LL.fc_tn.Ir.Tnode.uid
-                (Ir.Tnode.debug_name fc.LL.fc_tn)
-                (String.concat ~sep:"/"
-                   (List.map fc.LL.fc_alternatives ~f:(fun fa -> LL.reading_to_string fa.LL.fa_flip)))
-            in
-            (* The placement levels commit to DATA like the family levels do (gh-ocannl-591): each
-               child carries the candidate it decides and which way, so the bound below reads the
-               path instead of finding the candidate back through the level name and the commitment
-               back through the label. [level_name] is the display name only. A leaf is the vector
-               of the flips taken, one per flipped node. *)
-            let rec build vector = function
-              | [] -> Sspace.Leaf (List.rev vector)
-              | (fc : LL.flip_candidate) :: rest ->
-                  (* One MULTIWAY level per node (gh-ocannl-616): its alternatives are mutually
-                     exclusive readings, so a level keeps the default or takes exactly one. *)
-                  Sspace.Choice
-                    {
-                      level = level_name fc;
-                      children =
-                        ((fc, `Keep), Sspace.Child (lazy (build vector rest)))
-                        :: List.map fc.LL.fc_alternatives ~f:(fun (fa : LL.flip_alternative) ->
-                            ( (fc, `Flip fa.LL.fa_flip),
-                              Sspace.Child
-                                (lazy (build ((fc.LL.fc_tn, fa.LL.fa_flip) :: vector) rest)) ));
-                    }
-            in
-            let score vector =
-              let mat, inl, fp = LL.partition_readings vector in
-              match
-                Context.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp ctx
-                  comp bindings
-              with
-              | opt_v ->
-                  let _lbl, s, _act = select opt_v in
-                  s
-              | exception Outcome.Cause_at _ -> None
-            in
-            let bound ~path _sub =
-              let mat =
-                List.filter_map path ~f:(fun (_level, ((fc : LL.flip_candidate), commitment)) ->
-                    (* Certainly materialized below this node: a committed [`Materialize] flip, or a
-                       kept node whose default reading is [`Materialize] — the candidate's own field
-                       (gh-ocannl-1017), not an inference from which alternatives it offers. A level
-                       decides its whole node, so a kept level is the whole node kept. The other
-                       commitments (and every open level) contribute zero. *)
-                    match commitment with
-                    | `Flip `Materialize -> Some fc.LL.fc_tn
-                    | `Keep ->
-                        Option.some_if (LL.equal_reading fc.LL.fc_default `Materialize) fc.LL.fc_tn
-                    | `Flip (`Inline | `Footprint) -> None)
-              in
-              (* [ps_floor_ms] is milliseconds; [select]'s scores are roofline seconds. *)
-              Option.map (surface.ps_floor_ms ~materialized:mat) ~f:(fun ms -> ms /. 1e3)
-            in
-            let best, stats = Sspace.search ~bound ~score (build [] cands) in
-            logf
-              "model_default: placement search over %d level(s): %d expanded, %d scored, %d \
-               unscored, %d fathomed"
-              (List.length cands) stats.Sspace.st_expanded stats.Sspace.st_scored
-              stats.Sspace.st_unscored stats.Sspace.st_fathomed;
-            match best with
-            | Some (vector, s) when not (List.is_empty vector) ->
-                let mat, inl, fp = LL.partition_readings vector in
-                let names tns =
-                  String.concat ~sep:","
-                    (List.map tns ~f:Ir.Tnode.debug_name
-                     [@message_only "names the placement pick in the logf line below"])
-                in
-                logf
-                  "model_default: placement pick: materialize [%s], inline [%s], footprint [%s] \
-                   (model %.6f ms)"
-                  (names mat) (names inl) (names fp) (s *. 1e3);
-                Some (mat, inl, fp)
-            | _ -> None
-        with
-        | pick -> pick
-        | exception Outcome.Cause_at (_, cause) ->
-            logf
-              "model_default: placement search declined (%s); selecting from the default placements"
-              (Outcome.detail_of_cause cause);
-            None
-    in
-    (* With the model on the default pipeline (no sketch strictly improved on it, or the pick failed
-       validation above), the compile that just failed IS the fallback: retrying it would duplicate
-       an expensive failure and delay the honest error, so the exception propagates instead. *)
-    let compile_from ?on_unrecovered base_ctx =
-      compile_advisory ?name ~on_fallback ?on_unrecovered
-        ~fallback_if:(fun () -> !applied_pick)
-        transforms base_ctx comp bindings
-    in
-    let result =
-      match placement_pick with
-      | None -> compile_from ctx
-      | Some (mat, inl, fp) ->
-          (* Every reading gets its call, empty or not — the historical context lineage of this
-             path, kept as is; skipping would change only context identity, not the decisions. *)
-          let ctx' = Context.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
-          let picked = ref true in
-          (* A CLASSIFIED rejection that [compile_advisory] had nothing to fall back to under the
-             picked placements: [applied_pick] was false (the pick's win was the placement move
-             itself, so the failing compile was already the default pipeline — under [ctx'], not
-             under [ctx]), or its fallback to the default pipeline under [ctx'] failed classified
-             too. The pick is advisory, so abandon it and rerun the ordinary selection from the
-             caller's own placements. Only the classified cause comes here (gh-ocannl-1390): a fatal
-             failure — an untyped exception a transform or the builder raised, under
-             [strict_failure_classification] — propagates, rather than being retried from the
-             default placements as one more decline. *)
-          let on_unrecovered (classified : Outcome.classified_cause) =
-            logf
-              "model_default: compiling under the picked placements FAILED (%s); recompiling \
-               from                the default placements"
-              (Exn.to_string (Outcome.exception_of_cause classified.cause));
-            picked := false;
-            applied_pick := false;
-            compile_from ctx
-          in
-          let result = compile_from ~on_unrecovered ctx' in
-          (if !picked then
-             (* The emitted label carries the placement decision: the in-compile selection only
-                names the pipeline it chose under those placements. *)
-             let names tns =
-               String.concat ~sep:","
-                 (List.map tns ~f:Ir.Tnode.debug_name
-                  [@message_only "spells the placements in the choice's report label"])
-             in
-             choice :=
-               {
-                 !choice with
-                 mc_label =
-                   Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl)
-                     (names fp) !choice.mc_label;
-               });
-          result
-    in
-    emit !choice;
-    result
-
 (* gh-ocannl-1254, the #1269 interface: what the model sees of each candidate [model_default] ranks
    for one computation — its incumbent (the seeded plan where it starts from one, else the default
    pipeline) and every whole-routine sketch leaf of the program it searches (the seeded plan's split
@@ -7266,216 +6061,6 @@ type segment_explain = {
 }
 
 type explanation = { x_routine : (string * explain) list; x_segments : segment_explain list }
-
-let model_explain ?name ?(coalesced = false) ctx comp bindings =
-  let facts = Context.backend_facts ctx in
-  let is_gpu = Ir.Backend_intf.binds_hardware_grid facts
-  and is_cpu = Ir.Backend_intf.renders_on_host_pool facts in
-  let limits = Context.hardware_limits ctx in
-  let caps = Context.codegen_capabilities ctx in
-  let accum_prec = caps.Ir.Backend_intf.accum_prec in
-  let static_indices = Idx.bound_symbols bindings in
-  let peak_flops, peak_memory_bandwidth = envelope ~limits in
-  let opt = Context.lowered_for_decisions ?name ctx comp bindings in
-  let ms = Option.map ~f:(fun s -> s *. 1e3) in
-  let explain ?(ex_admitted = true) ?(ex_anchor = false) segs =
-    let ex_operand_loads =
-      CM.combine_load_counts (List.map segs ~f:(model_operand_loads ~capabilities:caps))
-    in
-    match
-      segments_legs ~capabilities:caps ~count_transactions:true ~peak_flops ~peak_memory_bandwidth
-        ~limits segs
-    with
-    | None ->
-        {
-          ex_kernels = None;
-          ex_floor_ms = None;
-          ex_rank_ms = None;
-          ex_compute_ms = None;
-          ex_memory_ms = None;
-          ex_spilled = None;
-          ex_fills = None;
-          ex_mma_work = None;
-          ex_device_gathers = None;
-          ex_operand_loads;
-          ex_admitted;
-          ex_anchor;
-        }
-    | Some (bound, legs) ->
-        (* A leg is present on every kernel or on none: its peak is one constant. *)
-        let total leg =
-          List.fold legs ~init:(Some 0.) ~f:(fun acc l -> Option.map2 acc (leg l) ~f:Float.( + ))
-        in
-        {
-          ex_floor_ms = Some (bound *. 1e3);
-          ex_rank_ms = Some (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l) *. 1e3);
-          ex_compute_ms = ms (total (fun l -> l.kl_compute));
-          ex_memory_ms = ms (total (fun l -> l.kl_memory));
-          ex_spilled = Some (List.exists legs ~f:(fun l -> l.kl_spilled));
-          ex_fills = Some (List.map legs ~f:(fun l -> l.kl_fill));
-          ex_mma_work = Some (List.map legs ~f:(fun l -> l.kl_mma_work));
-          ex_device_gathers = Some (List.map legs ~f:(fun l -> l.kl_device_gathers));
-          ex_kernels =
-            Some
-              (List.map legs ~f:(fun l ->
-                   {
-                     ek_compute_ms = ms l.kl_compute;
-                     ek_memory_ms = ms l.kl_memory;
-                     ek_transactions = l.kl_transactions;
-                     ek_transactions_uncovered = l.kl_transactions_uncovered;
-                     ek_transactions_by_sector = l.kl_transactions_by_sector;
-                     ek_workgroup_bytes = l.kl_workgroup_bytes;
-                     ek_block_threads = l.kl_block_threads;
-                     ek_occupancy = l.kl_occupancy;
-                   }));
-          ex_operand_loads;
-          ex_admitted;
-          ex_anchor;
-        }
-  in
-  (* [model_default]'s early exits: without envelope constants, or with the default annotator off,
-     it ranks nothing and compiles the default pipeline. *)
-  if
-    (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
-    || not (Sched.automatic_schedule_active ~facts)
-  then
-    {
-      x_routine =
-        [
-          ( "default",
-            explain (Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt))
-          );
-        ];
-      x_segments = [];
-    }
-  else
-    (* [model_default]'s incumbent and searched program, as it derives them. *)
-    let seeding = model_seeding ~facts ~limits in
-    let record = ref [] in
-    let incumbent_label, incumbent =
-      match seeding with
-      | Some (gate, min_serial, sink_enabled, admit_narrow) ->
-          ( "seeded",
-            seeded_apply
-              ~on_choice:(fun c -> record := c.sd_seeded)
-              ~capabilities:caps ~facts ~limits ~accum_prec ~static_indices ~gate ~min_serial
-              ~sink_enabled ~admit_narrow (scratch_of opt) )
-      | None ->
-          ("default", Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt))
-    in
-    let base =
-      match seeding with
-      | Some (_, min_serial, _, _) ->
-          fst (seeded_split ~facts ~min_serial ~static_indices (scratch_of opt))
-      | None -> opt
-    in
-    (* The sketch leaves [model_default]'s family search visits on [prog] (a whole routine or one
-       segment), in its visiting order. Exactly the leaves it can score: a schedule that fails to
-       apply, or whose scheduled form fails validation, is excluded from its ranking too. *)
-    let explain_leaves ~label ~admits prog leaves =
-      List.filter_map leaves ~f:(fun p ->
-          match
-            validate_segments_for_model ~fork_join:is_cpu ~limits
-              [
-                Sched.apply_classified ~static_indices
-                  (sketch_schedule ~accum_prec ~p prog)
-                  (scratch_of prog);
-              ]
-          with
-          | exception Outcome.Cause_at _ -> None
-          | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
-    in
-    let record = !record in
-    (* gh-ocannl-1477: the leaf [model_default] anchors the walk on [prog] at -- the best-ranked of
-       the seeded plan's own sketches there ({!model_seeded_anchors}, from [seeded], the plan's
-       record for the units [prog] covers) -- marked [ex_anchor]; listed after the leaves when the
-       walk's leaves do not include it. *)
-    let leaf_explains ~seeded ~label prog =
-      let leaves =
-        match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
-        | Some tree ->
-            Sspace.leaves
-              (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
-        | None -> []
-      in
-      let listed =
-        explain_leaves ~label ~admits:(model_admits ~seeding ~accum_prec prog) prog leaves
-      in
-      let rank (_, ex) = Option.value ex.ex_rank_ms ~default:Float.infinity in
-      let anchors =
-        List.map (model_seeded_anchors ~limits ~accum_prec ~static_indices ~seeded prog)
-          ~f:(fun (p, segs) -> (label p, explain ~ex_anchor:true segs))
-      in
-      match
-        List.min_elt
-          (List.filter anchors ~f:(fun (_, ex) -> Option.is_some ex.ex_rank_ms))
-          ~compare:(fun a b -> Float.compare (rank a) (rank b))
-      with
-      | None -> listed
-      | Some ((anchor, _) as row) ->
-          if List.exists listed ~f:(fun (l, _) -> String.equal l anchor) then
-            List.map listed ~f:(fun (l, ex) ->
-                if String.equal l anchor then (l, { ex with ex_anchor = true }) else (l, ex))
-          else listed @ [ row ]
-    in
-    (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, listed on request to check
-       the score's ranking of them against timings, and always where [model_default] ranks them
-       (gh-ocannl-1600, {!model_ranks_coalesced}), so its pick is among the listed rows. A leaf is
-       marked admitted when its uncoalesced form is: the set [model_default] ranks where it ranks
-       them (neither layout reorders a cell's summation). *)
-    let coalesced_explains ?(label = fun p -> spec_label (Whole (W_sketch p))) prog =
-      if not (coalesced || model_ranks_coalesced ~limits) then []
-      else
-        let admits = model_admits ~seeding ~accum_prec prog in
-        explain_leaves ~label
-          ~admits:(fun p -> admits { p with sk_coalesce = None })
-          prog
-          (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
-    in
-    (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it
-       ({!model_segments}: the search's fold-zeros segmentation of the searched program, when it
-       splits the routine or exposes a changed lowering, gh-ocannl-1512) -- one entry per keyed
-       segment: the segment under the search's preset, then the sketch leaves it searches there, and
-       the segment under the configured preset; its sketches must strictly beat the lower of the two
-       presets (gh-ocannl-1687). *)
-    let x_segments =
-      match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
-      | exception Outcome.Cause_at _ -> []
-      | None -> []
-      | Some (plan, keyed) ->
-          List.map keyed ~f:(fun (key, pre, post) ->
-              let tag = seg_key_tag key in
-              {
-                xs_segment = tag;
-                xs_candidates =
-                  ("preset", explain [ post ])
-                  :: (leaf_explains
-                        ~seeded:(seeded_record_for_key ~plan ~record key)
-                        ~label:(fun p -> sketch_params_label p ^ " @" ^ tag)
-                        pre
-                     (* gh-ocannl-1600: the segment's coalesced menu, which [model_default]'s walk
-                        on the segment searches too where it ranks them. *)
-                     @ coalesced_explains ~label:(fun p -> sketch_params_label p ^ " @" ^ tag) pre);
-                (* gh-ocannl-1633: the segment under the configured preset -- what a substitution
-                   ships where it leaves the segment unsketched ([model_default]'s [apply_fiss]). *)
-                xs_configured =
-                  Option.map (configured_segment ~is_gpu ~is_cpu ~limits ~static_indices pre)
-                    ~f:(fun configured -> explain [ configured ]);
-              })
-    in
-    {
-      x_routine =
-        (incumbent_label, explain incumbent)
-        :: (leaf_explains ~seeded:(List.map record ~f:snd)
-              ~label:(fun p -> spec_label (Whole (W_sketch p)))
-              base
-           @ coalesced_explains base);
-      x_segments;
-    }
-
-let untuned_compile ?name ctx comp bindings =
-  if Lazy.force model_default_enabled then model_default ?name ctx comp bindings
-  else seeded_default ?name ctx comp bindings
 
 (** {2 The search} *)
 
@@ -7607,57 +6192,6 @@ let lineage_identity ~static_indices (opt : LL.optimized) =
   SC.digest
     (SC.canonicalize_code ~static_indices ~node_tag:(fun tn -> "#" ^ Ir.Tnode.id tn) opt.LL.llc)
 
-(* gh-ocannl-1621: the search lineage's training state, restored before every timing window. Every
-   candidate compiles from the search lineage, so a node that lineage already holds a buffer for is
-   ONE buffer every candidate's runs write -- parameters, optimizer state, counters -- while a node
-   it lacks is allocated afresh in each candidate's own compile (its link-time initialization
-   re-runs), so it cannot carry one candidate's runs into the next. The state that drifts across a
-   search is therefore exactly what the computation writes among the buffers the lineage holds: the
-   base lowering's written nodes ([has_assignment] or [zeroed_out]; a hosted constant's writes are
-   gone from the code) present in [search_ctx], a written slice ALIAS standing for its parent, whose
-   buffer it writes and which host access goes through. A node the lineage placed [Local] has no
-   observable buffer and holds no state between runs. Read-only nodes (the data batch, an uploaded
-   dataset) are never written, so they are not copied. *)
-let timing_state_nodes search_ctx (opt : LL.optimized) =
-  let placements = Context.placements search_ctx in
-  Hashtbl.fold opt.LL.traced_store
-    ~init:(Set.empty (module Ir.Tnode))
-    ~f:(fun ~key:_ ~data:(traced : LL.traced_array) acc ->
-      if not (traced.has_assignment || traced.zeroed_out) then acc
-      else
-        (* A confirmed slice alias owns no buffer: its writes land in its parent's. An ineligible
-           (copy) slice owns its own buffer, recomputed from its parent on every run -- no state,
-           and host access refuses it -- so it stands for nothing here; mapping it to its parent
-           would copy a read-only dataset in and out per window. *)
-        let tn =
-          match (Ir.Tnode.alias_of traced.tn, Ir.Tnode.slice_of traced.tn) with
-          | Some (parent, _), _ -> Some parent
-          | None, Some _ -> None
-          | None, None -> Some traced.tn
-        in
-        Option.fold tn ~init:acc ~f:(fun acc tn ->
-            let local =
-              match Ir.Tnode.Placements.get placements tn with
-              | Some (Ir.Tnode.Local, _) -> true
-              | _ -> false
-            in
-            if local || not (Context.mem search_ctx tn) then acc else Set.add acc tn))
-
-(* Host copies, not a second device buffer per node: a device snapshot would keep a second working
-   set of the state resident through the search, against the one-live-candidate memory bound
-   (gh-ocannl-1326), while a copy per candidate is noise beside the candidate's compile. *)
-let snapshot_timing_state search_ctx opt =
-  List.map
-    (Set.to_list (timing_state_nodes search_ctx opt))
-    ~f:(fun tn -> (tn, Context.to_host search_ctx tn))
-
-(* Through the lineage's own handle: the bytes land in the buffer every candidate binds, and the
-   ledger records an external write, as a caller's [Context.set_values] before a run would. The
-   returned context is dropped -- the search keeps compiling from [search_ctx], whose nodes are all
-   initialized already. *)
-let restore_timing_state search_ctx snapshot =
-  List.iter snapshot ~f:(fun (tn, nd) -> ignore (Context.from_host search_ctx tn nd : Context.t))
-
 (* How a search's end restores its lineage (gh-ocannl-1621): [settle] is set once the search has
    taken its snapshot, and [with_timing_state_restored] calls it on the way out of the call. *)
 type timing_state = { mutable settle : (after_exn:bool -> unit) option }
@@ -7681,609 +6215,2213 @@ let with_timing_state_restored f =
       Option.iter state.settle ~f:(fun settle -> settle ~after_exn:true);
       Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-(* What a search hands back: the compile of what it ships, as a thunk. Without [defer] the thunk is
-   already forced (it returns the routine [tune] compiled before reporting); with it
-   (gh-ocannl-1408, {!tune_deferred}) the search has reported, released everything it compiled, and
-   the thunk compiles the shipped schedule on first call. [substituted] is set when that compile
-   ships the untuned default in place of the schedule the report named (a winner or cache replay
-   that failed or degenerated), which a deferred caller ranking by the report must hear about. *)
-let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_width ?rounds
-    ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites ?timing_ctx
-    ?abandon ?call_budget ?report ctx comp bindings : unit -> Context.t * Context.routine =
-  (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
-     pinned schedule is deterministic, and committing one is how a reproducible run keeps a tuned
-     schedule -- but never times candidates, whose crowning is the largest cross-machine determinism
-     leak. A miss compiles the untuned default pipeline, exactly like the nothing-was-timed fallback
-     below. *)
-  let search = Option.value_or_thunk search ~default:search_setting in
-  let beam_width =
-    max 1
-      (Option.value_or_thunk beam_width ~default:(fun () ->
-           Utils.registered_int ~arg_name:"autotune_beam_width"))
-  in
-  let rounds =
-    Option.value_or_thunk rounds ~default:(fun () ->
-        Utils.registered_int ~arg_name:"autotune_rounds")
-  in
-  let repeats =
-    Option.value_or_thunk repeats ~default:(fun () ->
-        Utils.registered_int ~arg_name:"autotune_repeats")
-  in
-  (* Not [Option.value ~default:…] (Codex P2 on PR #512): that evaluates the default eagerly, so an
-     unparsable ambient [autotune_timing] would be rejected even for a caller that passed its own
-     mode — and for a [~search:false] call, which times nothing at all. The settings above read in
-     [Option.value_or_thunk] for the same reason: each refuses a value that does not parse
-     (gh-ocannl-1332), so the read has to be in the branch that needs it. *)
-  let timing =
-    match timing with
-    | Some t -> t
+(** {2 The context driver (gh-ocannl-1754)} *)
+
+module type Driver = sig
+  type ctx
+  type routine
+  type program
+  type retained
+  type reuse
+
+  val routine_name : routine -> string
+  val routine_id : routine -> int
+  val routine_bindings : routine -> Ir.Indexing.lowered_bindings
+  val routine_grid : routine -> Ir.C_syntax.grid_summary
+  val routine_segments : routine -> Ir.Low_level.optimized list
+  val routine_mma : routine -> Ir.C_syntax.mma_summary
+  val program_name : program -> string option
+  val program_nodes : program -> Set.M(Ir.Tnode).t
+  val reuse_create : unit -> reuse
+  val reuse_reseed : reuse -> Ir.Low_level.optimized -> unit
+
+  val compile :
+    ?name:string ->
+    ?lowered_transform:(Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
+    ?prelowered:Ir.Low_level.optimized ->
+    ?reuse:reuse ->
+    ctx ->
+    program ->
+    Ir.Indexing.unit_bindings ->
+    ctx * routine
+
+  val compile_outcome :
+    ?name:string ->
+    ?lowered_transform:(Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
+    ?prelowered:Ir.Low_level.optimized ->
+    ?reuse:reuse ->
+    provenance:Ir.Schedule_outcome.provenance ->
+    ?candidate:string ->
+    ?retain:(retained -> unit) ->
+    ctx ->
+    program ->
+    Ir.Indexing.unit_bindings ->
+    (ctx * routine) Ir.Schedule_outcome.outcome
+
+  val relink_outcome : retained -> (ctx * routine) Ir.Schedule_outcome.outcome
+  val backend_compiles : unit -> int
+
+  val lowered_for_decisions :
+    ?name:string ->
+    ?materialized:Ir.Tnode.t list ->
+    ?inline:Ir.Tnode.t list ->
+    ?footprint:Ir.Tnode.t list ->
+    ctx ->
+    program ->
+    Ir.Indexing.unit_bindings ->
+    Ir.Low_level.optimized
+
+  val probe_link_floor :
+    ?name:string -> ?prelowered:bool -> ctx -> Ir.Low_level.optimized -> Ir.Backend_intf.link_floor
+
+  val run : ?timing:bool -> ctx -> routine -> ctx
+  val sync : ctx -> unit
+  val release : ctx -> unit
+  val check_lineage_runnable : ctx -> routine -> unit
+  val check_launch_bindings : routine -> unit
+
+  val failure_classifier :
+    ctx -> Ir.Schedule_outcome.phase -> exn -> Ir.Schedule_outcome.classified_cause option
+
+  val rollback_execution : ctx -> int -> unit
+  val poison_lineage : ctx -> routine_name:string -> exn -> unit
+  val poisoned_failure : ctx -> exn option
+  val save_accumulation_history : ctx -> unit -> unit
+  val timing_identity : ctx -> Ir.Backend_intf.timing_identity option
+  val hardware_limits : ctx -> Ir.Backend_intf.hardware_limits
+  val codegen_capabilities : ctx -> Ir.Backend_intf.codegen_capabilities
+  val backend_facts : ctx -> Ir.Backend_intf.backend_facts
+  val same_backend : ctx -> ctx -> bool
+  val backend_name : ctx -> string
+  val ordinal : ctx -> int
+  val get_used_memory : ctx -> int
+  val placements : ctx -> Ir.Tnode.Placements.t
+  val inherits_computation : ctx -> Ir.Tnode.t -> bool
+
+  val decide_readings :
+    ?skip_empty:bool -> ctx -> Ir.Tnode.t list * Ir.Tnode.t list * Ir.Tnode.t list -> ctx
+
+  val mem : ctx -> Ir.Tnode.t -> bool
+  val to_host : ctx -> Ir.Tnode.t -> Ir.Ndarray.t
+  val from_host : ctx -> Ir.Tnode.t -> Ir.Ndarray.t -> ctx
+end
+
+module Make (D : Driver) = struct
+  (** {2 Timing} *)
+
+  let set_test_bindings routine =
+    List.iter (D.routine_bindings routine) ~f:(fun (ss, r) ->
+        match ss.Idx.static_range with
+        | Some range when range > 0 && ss.Idx.used_as_extent ->
+            (* gh-490 symbolic extents: tune at the upper bound. The schedule digest is
+               extent-value-independent (the extent is a kernel parameter), so one tuned entry
+               serves every extent; measuring at the maximum makes the tuned schedule's cost model
+               conservative for smaller runtime extents. *)
+            r := range
+        | Some range when range > 0 -> r := range / 2
+        | _ ->
+            (* No range to pick from. Time a value the caller assigned at the caller's value, and
+               otherwise at 0, written explicitly: linking leaves the parameter unassigned
+               (gh-ocannl-940), and a compile-time search runs before the caller could assign it. *)
+            if not (Idx.launch_param_assigned r) then r := 0)
+
+  (* [routine.bindings] exposes the routine's live binding refs — restore them after timing (Codex
+     P2 on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
+  let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false)
+      ?phase ?(stop = fun () -> false) ?hopeless_against ?(hopeless_ratio = hopeless_ratio)
+      ?window_bound_ms ~timing ~repeats cctx routine =
+    let check_stop () = if stop () then raise Timing_stopped in
+    (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
+       calibration. *)
+    let started = Mtime_clock.counter () in
+    let saved_bindings = List.map (D.routine_bindings routine) ~f:(fun (_ss, r) -> (r, !r)) in
+    let run ctx =
+      (* [~timing]: a gradient the routine accumulates into without zeroing is not refused for the
+         repeats (gh-ocannl-1781); the search restores the lineage around its windows
+         (gh-ocannl-1621). *)
+      if tag_failures then Outcome.tag Outcome.Launch (fun () -> D.run ~timing:true ctx routine)
+      else D.run ~timing:true ctx routine
+    in
+    let sync ctx =
+      if tag_failures then Outcome.tag Outcome.Sync (fun () -> D.sync ctx) else D.sync ctx
+    in
+    Exn.protect
+      ~finally:(fun () -> List.iter saved_bindings ~f:(fun (r, v) -> r := v))
+      ~f:(fun () ->
+        set_test_bindings routine;
+        (* The runs' pre-dispatch validation, in its own phase so an unattributed failure of it is
+         contained rather than condemning the lineage (gh-ocannl-564). Here and once: what it checks
+         (lineage, initialized nodes, dependencies, the bindings just written) is settled before the
+         warmup and only becomes more satisfied as the loop dispatches. [Context.run] re-validates
+         per iteration inside the [Launch] tag, where it can no longer fail. *)
+        (* Only the PER-CANDIDATE half of the pre-dispatch validation is contained here. The
+         lineage-wide half ({!Context.check_lineage_runnable}) is run by the callers below, outside
+         their failure boundaries, because it fails every candidate of every arm identically —
+         see the comments at those two sites (gh-ocannl-569). *)
+        if tag_failures then
+          Outcome.tag Outcome.Preflight (fun () ->
+              Seam.get on_candidate_preflight (D.routine_name routine);
+              D.check_launch_bindings routine);
+        (* Warmup run: absorbs lazy initialization and fills caches like a steady-state
+           iteration. *)
+        check_stop ();
+        let ctx = ref (run cctx) in
+        sync !ctx;
+        (* Monotonic high-resolution clock: on Windows, [Unix.gettimeofday] ticks at ~1 ms, which
+           makes sub-millisecond candidates indistinguishable (they all measure 0). *)
+        let ordinal = ref 0 in
+        let batch depth =
+          check_stop ();
+          let c0 = Mtime_clock.counter () in
+          for _ = 1 to depth do
+            ctx := run !ctx
+          done;
+          sync !ctx;
+          let wall = Mtime.Span.to_float_ns (Mtime_clock.count c0) /. 1e6 in
+          let wall = Seam.get on_batch_wall ~depth ~ordinal:!ordinal wall in
+          Int.incr ordinal;
+          wall
+        in
+        calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio ~started
+          ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing ~repeats
+          ~retry_contended:(retry_contended_window_for_backend (D.backend_facts cctx))
+          ~dispersion:(dispersion_policy_for_backend (D.backend_facts cctx))
+          ~queue_depth_cap:(queue_depth_cap_for_backend (D.backend_facts cctx))
+          ~batch)
+
+  type compiled = {
+    form : form;
+    cctx : D.ctx;
+    routine : D.routine;
+    units : unit_gen list;
+    all_opts : LL.optimized list;
+        (** Every compiled segment ([`Zeros] and [`Solo] segments included, unlike [units]) — the
+            code the timing runs actually execute, for calibration analysis. *)
+    digest_after : string;
+  }
+
+  (* The two forms' segment lists side by side when they segment alike -- the same form, and every
+     segment of the same kind, length and pre-schedule digest, the identity a replay checks -- with
+     the split-reduce preludes for a [Split_saved] pair; [None] when no unit-by-unit comparison
+     exists (different forms, a different segmentation, or two whole-routine forms). *)
+  let aligned_segments (a : compiled) (b : compiled) =
+    let same_cut (x : SC.saved_segment) (y : SC.saved_segment) =
+      Poly.equal x.seg_kind y.seg_kind && x.seg_units = y.seg_units
+      && String.equal x.seg_digest y.seg_digest
+    in
+    let aligned xs ys = List.length xs = List.length ys && List.for_all2_exn xs ys ~f:same_cut in
+    match (a.form, b.form) with
+    | Fiss_saved xs, Fiss_saved ys when aligned xs ys -> Some (None, List.zip_exn xs ys)
+    | Split_saved (px, xs), Split_saved (py, ys) when aligned xs ys ->
+        Some (Some (px, py), List.zip_exn xs ys)
+    | _ -> None
+
+  (* The positions of the segments of [b] whose saved schedule differs from the same segment of [a],
+     in the indexing [unit_gen.u_segment] uses; [None] when the two do not segment alike
+     ([aligned_segments]). *)
+  let segments_differing (a : compiled) (b : compiled) =
+    Option.map (aligned_segments a b) ~f:(fun (_, pairs) ->
+        List.filter_mapi pairs ~f:(fun i ((x : SC.saved_segment), (y : SC.saved_segment)) ->
+            if Poly.equal x.seg_saved y.seg_saved then None else Some i))
+
+  (* How many units of [b] carry a different saved schedule than the same unit of [a] (a
+     split-reduce prelude counting as one); [None] when the two forms do not segment alike, so no
+     unit-by-unit comparison exists. *)
+  let units_differing (a : compiled) (b : compiled) =
+    let differ x y = if Poly.equal x y then 0 else 1 in
+    match (a.form, b.form) with
+    | Whole_saved x, Whole_saved y -> Some (differ x y)
+    | _ ->
+        Option.map (aligned_segments a b) ~f:(fun (preludes, pairs) ->
+            List.sum
+              (module Int)
+              pairs
+              ~f:(fun ((x : SC.saved_segment), (y : SC.saved_segment)) ->
+                differ x.seg_saved y.seg_saved)
+            + Option.value_map preludes ~default:0 ~f:(fun (px, py) -> differ px py))
+
+  (* Every candidate derives its CODE from the ONE base lowering ([base_opt] with [canon] its
+     canonical form, captured together in [tune]) rather than from the compile's own fresh lowering,
+     whose llc the transform ignores. Re-lowering per candidate was subtly unsound: timing runs
+     settle tensor-node value bounds, so later fresh lowerings can fold guards (and even re-segment
+     fission) differently from the base — failing digest checks at best (the CUDA rounds on PR #140:
+     whole arms degenerating to their serial baselines) and silently replaying the winner with empty
+     per-segment schedules at worst (a 296 ms winner returning as a 2614 ms routine). Deriving from
+     the base makes candidates and the winner replay drift-immune and byte-comparable by
+     construction; the fresh-lowering digest check survives only in spirit via the disk cache's
+     [source_digest] guard (cross-process compatibility).
+
+     The rebased code keeps the fresh compile's OWN [optimize_ctx] (the per-compile fork of the
+     context's lineage): link-time buffer allocation consults that fork, so placement mutations by
+     schedule ops — fission's Local promotions above all — must land there or the allocator would
+     miss buffers the kernels reference. Candidate hermeticity is unchanged: each compile forks the
+     lineage table anew. The traced store is record-copied from the base (schedule ops register
+     their tiles in it, and write through its records).
+
+     gh-ocannl-1526: that "fresh" lowering is no longer one. The search's compiles share one
+     [Ir.Lowering_reuse] cell: the base compile lowers and keeps a snapshot, and every later compile
+     from [search_ctx] takes a private copy of it. So the fork a candidate keeps is the very one the
+     base code was decided under, where a re-lowering after a link had proposed node bounds would
+     have handed it a fork decided under drifted code. A compile into another lineage never gets the
+     cell.
+
+     gh-ocannl-1421: that is sound only while the fresh lowering is the base's program up to that
+     drift. Within the lineage the base was lowered in it is. A compile into ANOTHER lineage -- the
+     caller's, after a search on a [timing_ctx] -- can lower to another program: a node the timing
+     lineage materialized and the caller's leaves virtual is inlined there, so the base's code reads
+     a buffer the caller's placements never allocate. [tune] refuses that case up front
+     ([Lineage_refused]), comparing the two lineages' lowerings taken together, so both see the same
+     value bounds ([lineage_identity]); a comparison here, with a lowering taken after the timing
+     runs, could not tell drift from a lineage difference.
+
+     gh-ocannl-1340: two verdicts are decided inside the transform, on the forms it is about to hand
+     to codegen, so a candidate they refuse costs no codegen, no device compile and no link — on HIP
+     a serial whole-routine form is minutes of hiprtc (303 s per arm on a gfx1102). A form [seen]
+     already holds is a [`Duplicate] (the search's dedup, which used to be decided after the compile
+     it made redundant); on a GPU backend a form that binds no hardware dimension is refused with
+     the typed [Not_dispatched] cause of {!dispatchable} (gh-ocannl-532), which every caller already
+     rejected after its compile. The order is the search's: a duplicate of a refused form dedups
+     rather than counting a second refusal, which is why a refused digest joins [seen]. The verdicts
+     read the transform's forms, not what codegen shipped (zero-only segments can be elided after
+     the transform), so the callers keep their post-codegen check, on [routine.segments]. *)
+  type gated_compile = Compiled of compiled | Duplicate of string | Failed of Outcome.failure
+
+  let compile_candidate_gated ?name ?label ?seen ?(on_privatize_drops = fun _ -> ()) ?retain ?reuse
+      ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec :
+      gated_compile =
+    let candidate = match label with Some l -> l | None -> spec_label spec in
+    let duplicate = ref None in
+    let gate ~digest_after opts =
+      if Option.exists seen ~f:(fun seen -> Hash_set.mem seen digest_after) then (
+        duplicate := Some digest_after;
+        (* Unwinds out of the backend's compile before codegen; the [duplicate] cell, not this
+           cause, is what the result reports. *)
+        raise
+          (Outcome.Cause_at
+             ( Outcome.Transform,
+               Outcome.Not_dispatched { origin = "dedup"; detail = candidate ^ " is a duplicate" }
+             )));
+      if not (dispatchable ~is_gpu opts) then (
+        Option.iter seen ~f:(fun seen -> Hash_set.add seen digest_after);
+        raise
+          (Outcome.Cause_at
+             ( Outcome.Transform,
+               Outcome.Not_dispatched
+                 {
+                   origin = not_dispatched_origin provenance;
+                   detail =
+                     Printf.sprintf
+                       "%s binds no hardware dimension (gh-ocannl-532), refused before codegen \
+                        (digest %s)"
+                       candidate (dshort digest_after);
+                 } )))
+    in
+    let accum_prec = (D.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
+    let rebase (fresh : LL.optimized) =
+      {
+        base_opt with
+        (* Record copies, not a table copy sharing [traced_array]s: the schedule writes through this
+           store, and no candidate's writes may reach the base or a sibling (gh-ocannl-1526). *)
+        LL.traced_store = LL.copy_traced_store base_opt.LL.traced_store;
+        LL.optimize_ctx = fresh.LL.optimize_ctx;
+      }
+    in
+    let preset_sched ?block_size ?(config_thresholds = false) opt =
+      segment_preset ?block_size
+        ~presets:(if config_thresholds then `Config else `Search)
+        ~is_gpu ~is_cpu ~limits opt
+    in
+    let captured = ref None in
+    (* gh-ocannl-1560: under [autotune_strict_replay], a searched candidate's compile-fork
+       placements as its transform received them, for {!strict_replay_refusal}. *)
+    let strict_replay =
+      match provenance with
+      | Outcome.Candidate -> strict_replay_enabled ()
+      | Outcome.Cache_replay | Outcome.Advisory | Outcome.User_schedule -> false
+    in
+    let pristine = ref None in
+    let compile_ctx () =
+      match spec with
+      | Whole flavor ->
+          let transform fresh =
+            let opt = rebase fresh in
+            let sched, saved, registry =
+              match flavor with
+              | W_saved (saved, _) ->
+                  let sched, registry = SC.of_saved canon saved in
+                  (sched, saved, registry)
+              | W_preset { block_size } ->
+                  let sched = preset_sched ?block_size opt in
+                  let saved, registry = SC.to_saved (SC.base_registry canon) sched in
+                  (sched, saved, registry)
+              | W_sketch p ->
+                  let sched = sketch_schedule ~accum_prec ~p opt in
+                  let saved, registry = SC.to_saved (SC.base_registry canon) sched in
+                  (sched, saved, registry)
+            in
+            let opt' = Sched.apply_classified ~static_indices sched opt in
+            let digest_after = SC.digest (SC.canonicalize ~static_indices opt') in
+            captured :=
+              Some
+                ( Whole_saved saved,
+                  [ { u_segment = None; u_saved = saved; u_registry = registry; u_opt = opt' } ],
+                  [ opt' ],
+                  digest_after );
+            gate ~digest_after [ opt' ];
+            [ opt' ]
+          in
+          D.compile_outcome ?name ~lowered_transform:transform ?reuse ~provenance ~candidate ?retain
+            ctx comp bindings
+      | Fiss flavor ->
+          let transforms fresh =
+            if strict_replay then pristine := Some (LL.copy_optimize_ctx fresh.LL.optimize_ctx);
+            let opt = rebase fresh in
+            (* The split-reduce prelude (gh-ocannl-484 task 3) applies whole-routine BEFORE fission:
+               the partials edge it mints is what fission cuts at, giving the two passes separate
+               kernels and the event-chain synchronization the combine needs. *)
+            let prelude, prelude_saved =
+              match flavor with
+              | F_preset _ | F_saved _ | F_sketch _ -> ([], [])
+              | F_split { sites; staff } ->
+                  let sched = split_reduce_prelude (sites @ staff) in
+                  let saved, _ = SC.to_saved (SC.base_registry canon) sched in
+                  (sched, saved)
+              | F_seeded { sp_split = _ :: _ as sites; _ } ->
+                  let sched = split_reduce_prelude sites in
+                  let saved, _ = SC.to_saved (SC.base_registry canon) sched in
+                  (sched, saved)
+              | F_seeded { sp_split = []; _ } -> ([], [])
+              | F_swap { plan = { sp_split = _ :: _ as sites; _ }; _ } ->
+                  let sched = split_reduce_prelude sites in
+                  let saved, _ = SC.to_saved (SC.base_registry canon) sched in
+                  (sched, saved)
+              | F_swap { plan = { sp_split = []; _ }; _ } -> ([], [])
+              | F_resplit { plan = { sp_split = _ :: _ as sites; _ }; _ } ->
+                  let sched = split_reduce_prelude sites in
+                  let saved, _ = SC.to_saved (SC.base_registry canon) sched in
+                  (sched, saved)
+              | F_resplit { plan = { sp_split = []; _ }; _ } -> ([], [])
+              | F_split_saved (psaved, _, _) ->
+                  let sched, _ = SC.of_saved canon psaved in
+                  (sched, psaved)
+            in
+            let opt = apply_before_fission ~static_indices prelude opt in
+            (* A replay cuts where its saved segments say ({!saved_fission_replay}); the sketch
+               candidates replay the segmentation their seeds were enumerated under the same way
+               ({!sketch_replay}). *)
+            let replay =
+              match flavor with
+              | F_preset _ | F_split _ | F_seeded _ | F_swap _ | F_resplit _ -> None
+              | F_sketch { plan; entries; staff; _ } ->
+                  Some
+                    (sketch_replay ~static_indices
+                       ~sketch:(fun p seg -> sketch_schedule ~accum_prec ~p seg)
+                       plan (entries @ staff))
+              | F_saved (saved, _) | F_split_saved (_, saved, _) ->
+                  Some (saved_fission_replay ~static_indices saved)
+            in
+            let preset seg =
+              match flavor with
+              | F_preset { block_size; privatize; config_thresholds } ->
+                  let sched = preset_sched ?block_size ~config_thresholds seg in
+                  if privatize then (
+                    (* gh-ocannl-1438: what the extension dropped reaches the search's report. *)
+                    let sched, drops = privatize_extension ~accum_prec ~static_indices sched seg in
+                    on_privatize_drops drops;
+                    sched)
+                  else sched
+              | F_saved _ | F_split_saved _ | F_seeded _ | F_swap _ | F_resplit _ ->
+                  [] (* Never consulted: a replay brings its own. *)
+              | F_sketch _ | F_split _ -> preset_sched seg
+            in
+            (* Neither the [arity_cuts] (finer) segmentation (gh-ocannl-574) nor the zero fold
+               (gh-ocannl-1175) reaches a replay: the sketches' recorded segmentation was enumerated
+               under both, and carries them as data. The preset flavors keep the untuned pipeline's
+               coarse cuts and separate zero. *)
+            let segmentation, tuples =
+              match flavor with
+              | F_seeded plan ->
+                  (* The untuned compile's own replay, so the candidate is the step it ships, its
+                     fallback to the default segments included. *)
+                  let segmented, applied =
+                    seeded_replay ~limits ~accum_prec ~admit_narrow:plan.sp_admit_narrow
+                      ~static_indices plan.sp_segments opt
+                  in
+                  if Option.is_some plan.sp_segments && not applied then
+                    logf "%s: the plan's segments did not apply; compiled the default segments"
+                      candidate;
+                  segmented
+              | F_swap { plan; entries; staff } ->
+                  (* gh-ocannl-1664: the same replay of the swapped plan, without its fallback: a
+                     swap that does not apply is this single's decline. *)
+                  fst
+                    (seeded_replay ~fallback:false ~limits ~accum_prec
+                       ~admit_narrow:plan.sp_admit_narrow ~static_indices
+                       (seeded_swap plan (entries @ staff)).sp_segments opt)
+              | F_resplit { plan; _ } ->
+                  (* gh-ocannl-1697: the re-derived plan's replay, likewise without the fallback. *)
+                  fst
+                    (seeded_replay ~fallback:false ~limits ~accum_prec
+                       ~admit_narrow:plan.sp_admit_narrow ~static_indices plan.sp_segments opt)
+              | F_preset _ | F_saved _ | F_sketch _ | F_split _ | F_split_saved _ ->
+                  (* Match the default pipeline's placements (statement-crossing [Local]s promoted
+                     on GPU), so fissioned candidates and the untuned baseline schedule the same
+                     code. *)
+                  tuner_fission ~is_gpu ~limits ?replay ~preset ~static_indices opt
+            in
+            let saved_with_registries = SC.save_segments ~static_indices segmentation tuples in
+            let posts = List.map tuples ~f:(fun (_, _, _, post) -> post) in
+            let units =
+              List.filter_mapi (List.zip_exn saved_with_registries posts)
+                ~f:(fun i ((s, registry), post) ->
+                  match Sched.segment_class s.SC.seg_kind with
+                  | `Zeros | `Solo -> None
+                  | `Normal ->
+                      Some
+                        {
+                          u_segment = Some i;
+                          u_saved = s.SC.seg_saved;
+                          u_registry = registry;
+                          u_opt = post;
+                        })
+            in
+            let digest_after =
+              String.concat ~sep:"+"
+                (List.map posts ~f:(fun post -> SC.digest (SC.canonicalize ~static_indices post)))
+            in
+            let segs = List.map saved_with_registries ~f:fst in
+            let form =
+              if List.is_empty prelude_saved then Fiss_saved segs
+              else Split_saved (prelude_saved, segs)
+            in
+            captured := Some (form, units, posts, digest_after);
+            gate ~digest_after posts;
+            posts
+          in
+          D.compile_outcome ?name ~lowered_transform:transforms ?reuse ~provenance ~candidate
+            ?retain ctx comp bindings
+    in
+    (* The [Tile_mma] rendering census travels on the routine ([Context.routine.mma],
+       gh-ocannl-626): [Context.compile] collects it around this candidate's kernel compiles,
+       fissioned segments included, so no bracket is needed here and a candidate cannot be timed
+       without it. *)
+    match compile_ctx () with
+    | Error _ when Option.is_some !duplicate -> Duplicate (Option.value_exn !duplicate)
+    | Error failure -> Failed failure
+    | Ok (cctx, routine) -> (
+        match !captured with
+        | Some (form, units, all_opts, digest_after) -> (
+            let refusal =
+              match !pristine with
+              | Some pristine when strict_replay ->
+                  strict_replay_refusal ~static_indices ~canon ~limits ~is_gpu ~base_opt ~pristine
+                    form
+              | Some _ | None -> None
+            in
+            match refusal with
+            | None -> Compiled { form; cctx; routine; units; all_opts; digest_after }
+            | Some detail -> (
+                (* Fatal whatever [strict_failure_classification] says: the check was asked for, and
+                   a form the search timed that its own replay refuses is what it exists to stop. *)
+                D.release cctx;
+                match
+                  Outcome.protect ~strict:true
+                    ~classify_backend:(fun _ _ -> None)
+                    ~provenance ~phase:Outcome.Transform ~candidate
+                    (fun () ->
+                      failwith
+                        (Printf.sprintf
+                           "Autotune: autotune_strict_replay: candidate %s does not replay from \
+                            its saved form (gh-ocannl-1560): %s"
+                           candidate detail))
+                with
+                | Ok (_ : compiled) -> assert false
+                | Error failure -> Failed failure))
+        | None -> (
+            match
+              Outcome.protect
+                ~classify_backend:(fun _ _ -> None)
+                ~provenance ~phase:Outcome.Transform ~candidate
+                (fun () -> failwith "Autotune: the transform was not invoked")
+            with
+            | Ok (_ : compiled) -> assert false
+            | Error failure -> Failed failure))
+
+  (* The callers that do not deduplicate: a refused form arrives as the typed [Not_dispatched]
+     failure, which each of them already handles as a failed or degenerate compile. *)
+  let compile_candidate ?name ?label ?on_privatize_drops ?retain ?reuse ~static_indices ~base_opt
+      ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec : compiled Outcome.outcome =
+    match
+      compile_candidate_gated ?name ?label ?on_privatize_drops ?retain ?reuse ~static_indices
+        ~base_opt ~canon ~limits ~is_gpu ~is_cpu ~provenance ctx comp bindings spec
+    with
+    | Compiled c -> Ok c
+    | Failed failure -> Error failure
+    | Duplicate _ -> assert false (* No [seen], no duplicate. *)
+
+  (* The post-codegen check behind the gate: whether the kernels codegen SHIPPED
+     ([routine.segments], gh-ocannl-1006) bind a hardware dimension -- the artifact, not the
+     transform's forms the gate judged. A routine that recorded no segments is judged by its
+     forms. *)
+  let shipped_dispatchable ~is_gpu (c : compiled) =
+    dispatchable ~is_gpu (match D.routine_segments c.routine with [] -> c.all_opts | segs -> segs)
+
+  (* Extend one unit of a compiled candidate with a menu action: a segment's unit extends that
+     segment alone, by position — a structurally identical segment elsewhere can differ in
+     placements and keeps its own schedule. *)
+  let extend_spec (elem : compiled) (u : unit_gen) (op : SC.saved_optop) : spec option =
+    let extend segs i =
+      List.mapi segs ~f:(fun j (s : SC.saved_segment) ->
+          if i = j then { s with seg_saved = u.u_saved @ [ op ] } else s)
+    in
+    let move mv_segment = { mv_parent = dshort elem.digest_after; mv_segment; mv_op = op } in
+    match (elem.form, u.u_segment) with
+    | Whole_saved _, None -> Some (Whole (W_saved (u.u_saved @ [ op ], Some (move None))))
+    | Fiss_saved segs, Some i -> Some (Fiss (F_saved (extend segs i, Some (move (Some i)))))
+    | Split_saved (prelude, segs), Some i ->
+        Some (Fiss (F_split_saved (prelude, extend segs i, Some (move (Some i)))))
+    | _ -> None
+
+  let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
+    let ordering = match ordering with Some o -> o | None -> flip_ordering () in
+    (* The evidence is derived only on the path that consults it, so an unconditional ordering does
+       not depend on [tune_flip_profit_margin] at all — it is not merely ignored: a malformed or
+       out-of-range margin must not abort a run pinned to a baseline the term plays no part in. *)
+    let profit =
+      match ordering with
+      | `Profitable -> Some (family_profit_of_reports evidence)
+      | `Cost | `Enablement -> None
+    in
+    let limits = D.hardware_limits ctx in
+    let static_indices = Idx.bound_symbols bindings in
+    let base = D.lowered_for_decisions ?name ctx comp bindings in
+    let candidates = base.LL.flip_candidates in
+    (* The all-materialized specialization of the decision surface: the [`Materialize] flips are the
+       default-virtual candidates, so deciding exactly those materialized makes every open node's
+       work sit in its own producer statement — the form [completion_floor]'s [open_placement]
+       contract asks for. *)
+    let to_materialize =
+      List.filter_map candidates ~f:(fun fc -> Option.some_if (offers_materialize fc) fc.LL.fc_tn)
+    in
+    let allmat = D.lowered_for_decisions ?name ~materialized:to_materialize ctx comp bindings in
+    let enablement, disablement =
+      placement_enablement
+        ~is_gpu:(Ir.Backend_intf.binds_hardware_grid (D.backend_facts ctx))
+        ~limits ~static_indices ~base ~allmat
+    in
+    let ps_candidates =
+      rank_flip_candidates ~ordering ?profit ~enablement ~disablement candidates
+    in
+    let candidate_set =
+      Set.of_list (module Ir.Tnode) (List.map ps_candidates ~f:(fun fc -> fc.LL.fc_tn))
+    in
+    let peak_flops, peak_memory_bandwidth = envelope ~limits in
+    let floor_withheld = placement_floor_withheld candidates in
+    let ps_floor_ms ~materialized =
+      if floor_withheld then None
+      else
+        let mat = Set.of_list (module Ir.Tnode) materialized in
+        let open_placement tn = Set.mem candidate_set tn && not (Set.mem mat tn) in
+        let f = CM.completion_floor ~open_placement allmat.LL.llc in
+        CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:f.CM.fr_flops
+          ~bytes:f.CM.fr_bytes ()
+        |> Option.map ~f:(fun s -> s *. 1e3)
+    in
+    {
+      ps_candidates;
+      ps_ordering =
+        effective_flip_ordering ~ordering ~profit:(Option.value profit ~default:Unmeasured);
+      ps_profit = profit;
+      ps_enablement = enablement;
+      ps_disablement = disablement;
+      ps_floor_ms;
+      ps_twin_identity =
+        flip_twin_identity ~static_indices ~lineage:(D.placements ctx)
+          ~inherited:(D.inherits_computation ctx) ~enablement ~disablement base;
+    }
+
+  let compile_advisory ?name ?on_fallback ?fallback_if ?on_unrecovered lowered_transform ctx comp
+      bindings =
+    match
+      D.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp bindings
+    with
+    | Ok result -> result
+    | Error (Outcome.Fatal _ as failure) -> Outcome.raise_failure failure
+    | Error (Outcome.Classified classified as failure)
+      when not (Option.value_map fallback_if ~default:true ~f:(fun f -> f ())) -> (
+        (* [fallback_if] is what keeps the retry from duplicating a genuine failure: a transform
+           that already degraded to the default pipeline has nothing to fall back TO, so recompiling
+           would just repeat the same failing compile (and, on a resource failure, aggravate it)
+           before raising the same exception. Such callers say [false] here and the original
+           exception propagates through the public exception contract -- or, given [on_unrecovered],
+           the classified cause goes to the caller, which may know a fallback of its own
+           (gh-ocannl-1390: [model_default]'s placement pick). A fatal failure never reaches it. *)
+        match on_unrecovered with
+        | Some f -> f classified
+        | None -> Outcome.raise_failure failure)
+    | Error (Outcome.Classified classified) -> (
+        (* Typed compiler rejection is the advisory fallback boundary. Fatal failures are propagated
+           above without paying for a second compile. *)
+        Option.iter on_fallback ~f:(fun f -> f (Outcome.exception_of_cause classified.cause));
+        (* [Context.compile], spelled out so that a classified failure of the fallback itself also
+           reaches [on_unrecovered]: there is then nothing left to fall back to here either. *)
+        match D.compile_outcome ?name ~provenance:Outcome.User_schedule ctx comp bindings with
+        | Ok result -> result
+        | Error (Outcome.Classified classified) when Option.is_some on_unrecovered ->
+            (Option.value_exn on_unrecovered) classified
+        | Error failure -> Outcome.raise_failure failure)
+
+  let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
+      ?(on_choice = fun (_ : seeded_choice) -> ()) ctx bindings =
+    let facts = D.backend_facts ctx in
+    match
+      seeded_settings ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow ~facts
+        ~configured_gate:(fun () -> seeded_default_gate ~limits:(D.hardware_limits ctx))
+        ()
+    with
+    | None -> None
+    | Some (gate, min_serial, sink_enabled, admit_narrow) ->
+        let limits = D.hardware_limits ctx in
+        let capabilities = D.codegen_capabilities ctx in
+        let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
+        let static_indices = Idx.bound_symbols bindings in
+        Some
+          (seeded_apply ~on_choice ~capabilities ~facts ~limits ~accum_prec ~static_indices ~gate
+             ~min_serial ~sink_enabled ~admit_narrow)
+
+  (* gh-ocannl-1479: the launch sweep's pinned sketch -- one whole-routine scalar blocktile leaf of
+     the matmul family, whatever the seeding would pick at the size, so every timed point of a fit
+     runs the same geometry. Applied and validated as [model_default] applies a whole-routine
+     pick. *)
+  let pinned_sketch_transform ~select ?(on_leaf = fun (_ : sketch_params) -> ()) ctx bindings =
+    if not (Ir.Backend_intf.binds_hardware_grid (D.backend_facts ctx)) then
+      raise
+        (Utils.User_error
+           (Printf.sprintf "Autotune.pinned_sketch_transform: backend %s has no GPU sketch family"
+              (D.backend_name ctx)));
+    let limits = D.hardware_limits ctx in
+    let capabilities = D.codegen_capabilities ctx in
+    let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
+    let static_indices = Idx.bound_symbols bindings in
+    fun (opt : LL.optimized) ->
+      match matmul_sketch_tree ~capabilities ~is_gpu:true ~is_cpu:false ~limits opt with
+      | None -> raise (Utils.User_error "Autotune.pinned_sketch_transform: no matmul site")
+      | Some tree -> (
+          match List.find (Sspace.leaves tree) ~f:(fun p -> scalar_blocktile p && select p) with
+          | None ->
+              raise
+                (Utils.User_error
+                   "Autotune.pinned_sketch_transform: no scalar blocktile leaf of the family \
+                    matches")
+          | Some p ->
+              on_leaf p;
+              validate_segments_for_model ~limits
+                [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ])
+
+  let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
+      ?report ctx comp bindings =
+    let choice = ref no_seeded_choice in
+    let emit () = Option.iter report ~f:(fun f -> f !choice) in
+    match
+      seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
+        ~on_choice:(fun c -> choice := c)
+        ctx bindings
+    with
     | None ->
-        timing_of_setting @@ Utils.get_global_arg ~arg_name:"autotune_timing" ~default:"queued"
-  in
-  (* Every report this call emits starts here, so the objective its times were taken under travels
+        emit ();
+        D.compile ?name ctx comp bindings
+    | Some transform ->
+        let on_fallback exn =
+          logf "seeded_default: compiling the seeded pipeline FAILED (%s); recompiling the default"
+            (Exn.to_string exn);
+          choice := { no_seeded_choice with sd_fell_back = true }
+        in
+        let result =
+          compile_advisory ?name ~on_fallback
+            ~fallback_if:(fun () ->
+              not
+                (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
+               && List.is_empty !choice.sd_sunk))
+            transform ctx comp bindings
+        in
+        emit ();
+        result
+
+  let model_default ?name ?report ctx comp bindings =
+    let facts = D.backend_facts ctx in
+    let is_gpu = Ir.Backend_intf.binds_hardware_grid facts
+    and is_cpu = Ir.Backend_intf.renders_on_host_pool facts in
+    let limits = D.hardware_limits ctx in
+    let accum_prec = (D.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
+    let static_indices = Idx.bound_symbols bindings in
+    let peak_flops, peak_memory_bandwidth = envelope ~limits in
+    let emit r = Option.iter report ~f:(fun f -> f r) in
+    let no_selection =
+      {
+        mc_label = "default";
+        mc_model_ms = None;
+        mc_rank_ms = None;
+        mc_scored = 0;
+        mc_skipped = 0;
+        mc_rejected = 0;
+        mc_excluded = 0;
+      }
+    in
+    if
+      (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
+      || not (Sched.automatic_schedule_active ~facts)
+    then (
+      emit no_selection;
+      D.compile ?name ctx comp bindings)
+    else
+      let choice = ref no_selection in
+      (* Whether the segments the compile actually received came from a model pick rather than the
+         default pipeline — the condition for the compile-level fallback below to have anywhere to
+         fall back to. *)
+      let applied_pick = ref false in
+      (* Counters and scoring helpers at [model_default] scope rather than per-compile: the
+         placement pre-search (config [model_default_placements]) scores hermetic lowerings before
+         any compile runs, and its work accumulates into the same reported totals as the in-compile
+         selection. *)
+      let n_scored = ref 0 and n_skipped = ref 0 and n_rejected = ref 0 and n_excluded = ref 0 in
+      (* Candidates rank by the ranking score (gh-ocannl-1253), which charges operand re-reads once
+         the working set leaves the cache — under [analyze]'s distinct-cell roofline an untiled
+         contraction scores at the family's floor and no sketch can win. The family search's bound
+         below stays [completion_floor]'s roofline: the ranking score is never below [analyze]'s, so
+         it is never below the bound, and fathoming stays sound. *)
+      let score opts =
+        match
+          segments_ranking ~capabilities:(D.codegen_capabilities ctx) ~peak_flops
+            ~peak_memory_bandwidth ~limits opts
+        with
+        | Some (rank, _bound) ->
+            Int.incr n_scored;
+            Some rank
+        | None ->
+            Int.incr n_skipped;
+            None
+      in
+      (* The model must rank the best viable schedule, not crown an invalid argmin and fall all the
+         way back to default. The validator is typed, so only an expected schedule rejection is
+         excluded; compiler assertions and other failures still escape. *)
+      let score_valid opts =
+        match validate_segments_for_model ~fork_join:is_cpu ~limits opts with
+        | opts -> score opts
+        | exception Outcome.Cause_at _ ->
+            Int.incr n_rejected;
+            None
+      in
+      (* gh-ocannl-1253: on CUDA and HIP the model starts from the seeded untuned plan
+         ({!seeded_default}'s, [auto] gate included) rather than the plain default pipeline: it is
+         the incumbent, and the action taken when no candidate strictly beats it (and its own
+         sketch, [anchored] below). [None] where the untuned compile is the plain default (another
+         backend, seeding off). *)
+      let seeding_here = lazy (model_seeding ~facts ~limits) in
+      (* Where the model starts from the seeded plan, the family is restricted to the
+       numerics-preserving candidate set the seeding uses ({!scalar_blocktile}, at a site
+       accumulating at its storage precision), so a model pick never changes a result the seeded
+       plan would not: tensorized forms reround, the conv family reorders the reduction (see
+       [model_admits] on the coalesced branch). Other leaves are kept out of the ranking, counted as
+       not numerics-preserving ([n_excluded]), never an error. Metal, the CPU backends and an
+       unseeded CUDA/HIP compile keep the whole family. *)
+      (* gh-ocannl-1600: the coalesced layouts compete only where the memory-transaction term prices
+       what tells them from their twins -- a rate resolved and a lane width stated. Elsewhere the
+       candidate set is exactly as before. *)
+      let coalesced = model_ranks_coalesced ~limits in
+      let admits base_opt =
+        model_admits ~coalesced ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt
+      in
+      let capabilities = D.codegen_capabilities ctx in
+      (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
+         searched program, scored as its leaves are ({!model_seeded_anchors}), where it is below the
+         incumbent: a leaf that only ties the seeded geometry never displaces the seeded plan, while
+         one the score separates from it (a memory leg past the cache, say) still can. Placement
+         leaves reuse [select], so they are anchored too. Returns the walk's threshold on [prog] and
+         the anchor setting it: the lower of [incumbent] and the best-scoring of the seeded plan's
+         own sketches that apply to [prog] ([seeded], the plan's record for the units [prog]
+         covers). *)
+      let anchored ~seeded ~incumbent prog =
+        List.fold (model_seeded_anchors ~limits ~accum_prec ~static_indices ~seeded prog)
+          ~init:(incumbent, None) ~f:(fun ((threshold, best) as acc) (p, segs) ->
+            match score segs with
+            | Some a ->
+                logf
+                  "model_default: anchored at the seeded sketch %s (rank %.6f ms, incumbent %.6f \
+                   ms)"
+                  (sketch_params_label p) (a *. 1e3) (incumbent *. 1e3);
+                let best =
+                  match best with Some (_, b) when Float.(b <= a) -> best | _ -> Some (p, a)
+                in
+                (Float.min threshold a, best)
+            | None -> acc)
+      in
+      (* [model_family_search] with the default as incumbent, logging its ledger; under the
+         numerics-preserving restriction, a leaf outside it is excluded before it is scheduled.
+         Returns the first leaf strictly better than [incumbent] (exact ties broken by operand
+         loads, gh-ocannl-1254). *)
+      let tree_search ~incumbent base_opt =
+        (* Snapshot the caller-side counters so the log can split the driver's unscored leaves into
+           compiler rejections vs genuine no-coverage — st_unscored alone would misclassify
+           rejections as cost-model gaps in the phase-6 ledger. *)
+        let r0 = !n_rejected and k0 = !n_skipped and e0 = !n_excluded in
+        match
+          model_family_search
+            ~on_rejected:(fun () -> Int.incr n_rejected)
+            ~admit:(admits base_opt)
+            ~on_excluded:(fun () -> Int.incr n_excluded)
+            ~coalesced ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices ~peak_flops
+            ~peak_memory_bandwidth ~score:score_valid ~incumbent base_opt
+        with
+        | None -> None
+        | Some (best, stats, fb) ->
+            logf
+              "model_default: family search: %d expanded, %d scored, %d unscored (%d rejected, %d \
+               without coverage, %d not numerics-preserving), %d fathomed (bound %s), %d refuted, \
+               %d excluded"
+              stats.Sspace.st_expanded stats.Sspace.st_scored stats.Sspace.st_unscored
+              (!n_rejected - r0) (!n_skipped - k0) (!n_excluded - e0) stats.Sspace.st_fathomed
+              (match fb with Some b -> Printf.sprintf "%.6f ms" (b *. 1e3) | None -> "n/a")
+              stats.Sspace.st_refuted stats.Sspace.st_excluded;
+            Some best
+      in
+      (* A per-segment substitution, as [tune]'s [F_sketch] candidates apply one: [plan] replayed,
+         each keyed segment found by position (gh-ocannl-1243), the others on their kind's
+         CONFIGURED preset (gh-ocannl-1512) -- what the incumbent ships, not the search's
+         [min_parallel:1] one its segments were ranked against ({!model_segments}). The model times
+         nothing: on GPU the search's preset can give a small segment a lane reduction, which
+         reorders its sums, where the configured one keeps it serial -- under seeding, a result the
+         seeded plan would not compute; on cc it would fan a tiny segment out over the pool, an
+         overhead the score does not see. So a pick labeled [F_sketch[...]] is the search's
+         candidate of that label up to the presets of the segments it leaves unsketched; the
+         substituted pipeline is scored whole and must still strictly beat the incumbent. *)
+      let preset = segment_preset ~presets:`Config ~is_gpu ~is_cpu ~limits in
+      let apply_fiss ~plan ~entries opt =
+        let replay =
+          sketch_replay ~static_indices
+            ~sketch:(fun p seg -> sketch_schedule ~accum_prec ~p seg)
+            plan entries
+        in
+        List.map
+          (snd (tuner_fission ~is_gpu ~limits ~replay ~preset ~static_indices opt))
+          ~f:(fun (_, _, _, post) -> post)
+      in
+      (* The model-argmin pipeline choice for one lowering — label, roofline score (seconds), and
+         the action reproducing it. Shared between the in-compile transform seam and the placement
+         pre-search's leaf scoring (hermetic lowerings of decided placement vectors). *)
+      let seeded_segs ?on_choice seeding opt =
+        let gate, min_serial, sink_enabled, admit_narrow = seeding in
+        seeded_apply ?on_choice ~capabilities ~facts ~limits ~accum_prec ~static_indices ~gate
+          ~min_serial ~sink_enabled ~admit_narrow opt
+      in
+      (* Whether the applied seeded plan differs from the default pipeline, as [seeded_default]
+         judges it: a plan that seeds, splits and sinks nothing IS the default pipeline, so a
+         compilation failure of it is the default's and is not retried. *)
+      let seeded_changed = ref false in
+      (* The seeded plan's split prelude (CUDA, gh-ocannl-1325); the program itself where the model
+         does not start from the seeded plan. On a hermetic copy for scoring; in place for the
+         pick's application, as the [`Seeded] action's [seeded_apply] splits the compile's own
+         lowering: a pick applied to a copy registers the nodes its transforms create (a fissioned
+         segment's promoted locals) in the copy's placements, not the compiling context's, and the
+         compile then fails on an undecided node (gh-ocannl-1477's fissioned chain, on HIP). *)
+      let prelude ?(hermetic = true) (opt : LL.optimized) =
+        match Lazy.force seeding_here with
+        | Some (_, min_serial, _, _) ->
+            fst
+              (seeded_split ~facts ~min_serial ~static_indices
+                 (if hermetic then scratch_of opt else opt))
+        | None -> opt
+      in
+      let select (opt : LL.optimized) =
+        let seeded_record = ref [] in
+        try
+          (* The incumbent -- the seeded plan where there is one, else the untuned default pipeline
+             -- scored on a hermetic copy: both the anchor candidate and the fallback. *)
+          let incumbent_label, incumbent_action, incumbent_scratch =
+            match Lazy.force seeding_here with
+            | Some seeding ->
+                ( "seeded",
+                  `Seeded seeding,
+                  seeded_segs
+                    ~on_choice:(fun c -> seeded_record := c.sd_seeded)
+                    seeding (scratch_of opt) )
+            | None ->
+                ( "default",
+                  `Default,
+                  Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt) )
+          in
+          (* gh-ocannl-1477: what the incumbent plan seeded, by first unit -- the anchors'
+             source. *)
+          let seeded_record = !seeded_record in
+          let default_score = score incumbent_scratch in
+          (* The candidates compete on the program the seeded plan starts from, its split prelude
+             included, so a winner keeps the reductions the untuned compile splits. *)
+          let base = prelude opt in
+          match default_score with
+          | None ->
+              (* No coverage of the incumbent itself: nothing to honestly compare against. *)
+              (incumbent_label, None, incumbent_action)
+          | Some ds -> (
+              (* Whole-routine sketch candidates. A candidate without coverage is skipped — it is
+                 never picked over the default without a measured run ({!tune} covers that). *)
+              let capabilities = D.codegen_capabilities ctx in
+              log_seeding ~capabilities ~where:"model_default whole-routine" ~is_gpu ~is_cpu ~limits
+                base;
+              (* The claiming family's tree (matmul or conv), twins included, searched with the
+                 default as incumbent. *)
+              let whole_best =
+                Option.join
+                  (tree_search
+                     ~incumbent:
+                       (fst (anchored ~seeded:(List.map seeded_record ~f:snd) ~incumbent:ds base))
+                     base)
+              in
+              let contenders =
+                match whole_best with
+                | Some (p, sc) -> [ (spec_label (Whole (W_sketch p)), sc, `Whole p) ]
+                | None -> []
+              in
+              (* Per-segment sketch substitution when the search's segmentation splits the routine
+                 or exposes a new lowering (a covering GPU zero companion) for sketching
+                 ({!model_segments}, gh-ocannl-1512). Mirrors [tune]'s [F_sketch] flavor: the
+                 derived segmentation replayed, keyed segments found in it by position
+                 (gh-ocannl-1243), a digest mismatch degrading to the configured preset. *)
+              let fiss =
+                match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
+                | exception Outcome.Cause_at _ ->
+                    Int.incr n_rejected;
+                    None
+                | None -> None
+                | Some (plan, keyed) -> (
+                    let decided =
+                      List.filter_map keyed ~f:(fun (key, pre, post) ->
+                          match score [ post ] with
+                          | None -> None
+                          | Some bs -> (
+                              log_seeding ~capabilities
+                                ~where:("model_default segment " ^ seg_key_tag key)
+                                ~is_gpu ~is_cpu ~limits pre;
+                              (* gh-ocannl-1687: the segment under its configured preset -- what the
+                                 substitution ships if it leaves the segment unsketched -- scored
+                                 beside the search's. A sketch enters only by strictly beating the
+                                 lower of the two; where the configured one has no score, the
+                                 segment forms no strict entry: an unpriced alternative must not
+                                 lower the bar. *)
+                              let configured =
+                                Option.bind
+                                  (configured_segment ~is_gpu ~is_cpu ~limits ~static_indices pre)
+                                  ~f:(fun c -> score [ c ])
+                              in
+                              Option.iter configured ~f:(fun cs ->
+                                  if Float.(cs < bs) then
+                                    logf
+                                      "model_default: segment %s priced at its configured \
+                                       preset                                      (%.6f ms, \
+                                       search preset %.6f ms)"
+                                      (seg_key_tag key) (cs *. 1e3) (bs *. 1e3));
+                              (* The segment's family tree searched with that price as incumbent,
+                                 anchored at the seeded plan's own sketch on the segment under
+                                 seeding (gh-ocannl-1477). *)
+                              let threshold, anchor =
+                                anchored
+                                  ~seeded:(seeded_record_for_key ~plan ~record:seeded_record key)
+                                  ~incumbent:
+                                    (Option.value_map configured ~default:bs ~f:(Float.min bs))
+                                  pre
+                              in
+                              let strict =
+                                match configured with
+                                | None -> None
+                                | Some _ -> Option.join (tree_search ~incumbent:threshold pre)
+                              in
+                              match strict with
+                              | Some (p, _s) -> Some (`Strict (key, p))
+                              | None -> Option.map anchor ~f:(fun (p, _) -> `Anchor (key, p))))
+                    in
+                    (* A substitution only where some segment strictly improves on its anchor; every
+                       other segment the seeded plan seeds keeps its seeded sketch (round 1 of
+                       staging#1332), so the contender is the seeded plan with strict improvements,
+                       not those improvements over default presets. *)
+                    let entries =
+                      if List.exists decided ~f:(function `Strict _ -> true | `Anchor _ -> false)
+                      then List.map decided ~f:(function `Strict e | `Anchor e -> e)
+                      else []
+                    in
+                    if List.is_empty entries then None
+                    else
+                      (* Score the substituted pipeline whole, so it competes on the same footing as
+                         the other candidates. *)
+                      match apply_fiss ~plan ~entries (scratch_of base) with
+                      | exception Outcome.Cause_at _ ->
+                          Int.incr n_rejected;
+                          None
+                      | posts -> Option.map (score_valid posts) ~f:(fun s -> (plan, entries, s)))
+              in
+              let contenders =
+                contenders
+                @
+                match fiss with
+                | Some (plan, entries, s) ->
+                    [
+                      ( spec_label (Fiss (F_sketch { plan; entries; staff = []; fine = false })),
+                        s,
+                        `Fiss (plan, entries) );
+                    ]
+                | None -> []
+              in
+              (* Argmin with ties to the default: the model only displaces the honest default on a
+                 strict improvement. *)
+              let best =
+                List.min_elt contenders ~compare:(fun (_, a, _) (_, b, _) -> Float.compare a b)
+              in
+              match best with
+              | Some (lbl, s, act) when Float.(s < ds) -> (lbl, Some s, act)
+              | _ -> (incumbent_label, Some ds, incumbent_action))
+        with Outcome.Cause_at (_, cause) ->
+          logf "model_default: scoring declined (%s); using the default pipeline"
+            (Outcome.detail_of_cause cause);
+          ("default", None, `Default)
+      in
+      let transforms (opt : LL.optimized) : LL.optimized list =
+        let default_segs () = Sched.maybe_default_schedules ~facts ~limits ~static_indices opt in
+        let label, model_s, action = select opt in
+        choice :=
+          {
+            mc_label = label;
+            mc_model_ms = None;
+            mc_rank_ms = Option.map model_s ~f:(fun s -> s *. 1e3);
+            mc_scored = !n_scored;
+            mc_skipped = !n_skipped;
+            mc_rejected = !n_rejected;
+            mc_excluded = !n_excluded;
+          };
+        let apply_action () =
+          (* Schedule application uses the typed seam. Backend validation is deliberately left to
+             [compile_advisory], which now receives its classified cause directly from codegen. *)
+          match action with
+          | `Default -> default_segs ()
+          | `Seeded seeding ->
+              seeded_changed := false;
+              validate_segments_for_model ~fork_join:is_cpu ~limits
+                (seeded_segs
+                   ~on_choice:(fun c ->
+                     seeded_changed :=
+                       not
+                         (List.is_empty c.sd_seeded && List.is_empty c.sd_split
+                        && List.is_empty c.sd_sunk))
+                   seeding opt)
+          | `Whole p ->
+              let opt = prelude ~hermetic:false opt in
+              validate_segments_for_model ~fork_join:is_cpu ~limits
+                [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ]
+          | `Fiss (plan, entries) ->
+              let opt = prelude ~hermetic:false opt in
+              validate_segments_for_model ~fork_join:is_cpu ~limits (apply_fiss ~plan ~entries opt)
+        in
+        match apply_action () with
+        | segs ->
+            (* The lower bound of what is applied, beside the rank the pick minimized. *)
+            (if Option.is_some model_s then
+               let bound =
+                 summaries_roofline ~peak_flops ~peak_memory_bandwidth
+                   (List.map segs ~f:(fun o -> CM.analyze o.LL.llc))
+               in
+               choice :=
+                 {
+                   !choice with
+                   mc_model_ms = Option.map bound ~f:(fun s -> s *. 1e3);
+                   mc_rank_ms = Option.bind bound ~f:(fun _ -> !choice.mc_rank_ms);
+                 });
+            logf
+              "model_default: chose %s (rank %s; %d scored, %d without coverage, %d unbuildable, \
+               %d not numerics-preserving)"
+              label
+              (match model_s with Some s -> Printf.sprintf "%.6f ms" (s *. 1e3) | None -> "n/a")
+              !n_scored !n_skipped !n_rejected !n_excluded;
+            (applied_pick :=
+               match action with
+               | `Default -> false
+               | `Seeded _ -> !seeded_changed
+               | `Whole _ | `Fiss _ -> true);
+            segs
+        | exception Outcome.Cause_at (_, cause) ->
+            logf
+              "model_default: winner %s FAILED to apply or validate (%s); using the default \
+               pipeline"
+              label (Outcome.detail_of_cause cause);
+            choice :=
+              {
+                no_selection with
+                mc_scored = !n_scored;
+                mc_skipped = !n_skipped;
+                mc_rejected = !n_rejected;
+                mc_excluded = !n_excluded;
+              };
+            applied_pick := false;
+            default_segs ()
+      in
+      let on_fallback exn =
+        logf "model_default: compiling the pick %s FAILED (%s); recompiling the default pipeline"
+          !choice.mc_label (Exn.to_string exn);
+        choice := { !choice with mc_label = "default"; mc_model_ms = None; mc_rank_ms = None }
+      in
+      (* gh-ocannl-514, the placement levels of the untuned regime (config
+         [model_default_placements] = N > 0): before the compile, branch-and-bound over the top-N
+         ranked flip candidates of the decision surface — one node per level, kept at its default
+         reading or flipped to one of its alternatives, the all-keep leaf visited first so the
+         default placements' own selection score is the running incumbent (ties stay with the
+         default placements), [select] pricing each leaf's hermetic lowering
+         ([Context.lowered_for_decisions]), and the partial-vector roofline floor
+         ([placement_surface.ps_floor_ms], monotone in the committed materializations) fathoming
+         subtrees that cannot beat it. This is where the bound differentiates {e within} the tree:
+         the family levels' floor is schedule-invariant, the placement levels' is not (phase 3). *)
+      let placement_budget =
+        Int.of_string
+          (String.strip (Utils.get_global_arg ~arg_name:"model_default_placements" ~default:"0"))
+      in
+      let placement_pick =
+        if placement_budget <= 0 then None
+        else
+          match
+            let surface = placement_surface ?name ctx comp bindings in
+            (* The cut counts nodes (gh-ocannl-1017): a candidate is the whole node, so a level
+               always decides every reading it has. *)
+            let cands = List.take surface.ps_candidates placement_budget in
+            if List.is_empty cands then None
+            else
+              let level_name (fc : LL.flip_candidate) =
+                Printf.sprintf "placement#%d %s %s" fc.LL.fc_tn.Ir.Tnode.uid
+                  (Ir.Tnode.debug_name fc.LL.fc_tn)
+                  (String.concat ~sep:"/"
+                     (List.map fc.LL.fc_alternatives ~f:(fun fa ->
+                          LL.reading_to_string fa.LL.fa_flip)))
+              in
+              (* The placement levels commit to DATA like the family levels do (gh-ocannl-591): each
+                 child carries the candidate it decides and which way, so the bound below reads the
+                 path instead of finding the candidate back through the level name and the
+                 commitment back through the label. [level_name] is the display name only. A leaf is
+                 the vector of the flips taken, one per flipped node. *)
+              let rec build vector = function
+                | [] -> Sspace.Leaf (List.rev vector)
+                | (fc : LL.flip_candidate) :: rest ->
+                    (* One MULTIWAY level per node (gh-ocannl-616): its alternatives are mutually
+                       exclusive readings, so a level keeps the default or takes exactly one. *)
+                    Sspace.Choice
+                      {
+                        level = level_name fc;
+                        children =
+                          ((fc, `Keep), Sspace.Child (lazy (build vector rest)))
+                          :: List.map fc.LL.fc_alternatives ~f:(fun (fa : LL.flip_alternative) ->
+                              ( (fc, `Flip fa.LL.fa_flip),
+                                Sspace.Child
+                                  (lazy (build ((fc.LL.fc_tn, fa.LL.fa_flip) :: vector) rest)) ));
+                      }
+              in
+              let score vector =
+                let mat, inl, fp = LL.partition_readings vector in
+                match
+                  D.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp ctx comp
+                    bindings
+                with
+                | opt_v ->
+                    let _lbl, s, _act = select opt_v in
+                    s
+                | exception Outcome.Cause_at _ -> None
+              in
+              let bound ~path _sub =
+                let mat =
+                  List.filter_map path ~f:(fun (_level, ((fc : LL.flip_candidate), commitment)) ->
+                      (* Certainly materialized below this node: a committed [`Materialize] flip, or
+                         a kept node whose default reading is [`Materialize] — the candidate's own
+                         field (gh-ocannl-1017), not an inference from which alternatives it offers.
+                         A level decides its whole node, so a kept level is the whole node kept. The
+                         other commitments (and every open level) contribute zero. *)
+                      match commitment with
+                      | `Flip `Materialize -> Some fc.LL.fc_tn
+                      | `Keep ->
+                          Option.some_if
+                            (LL.equal_reading fc.LL.fc_default `Materialize)
+                            fc.LL.fc_tn
+                      | `Flip (`Inline | `Footprint) -> None)
+                in
+                (* [ps_floor_ms] is milliseconds; [select]'s scores are roofline seconds. *)
+                Option.map (surface.ps_floor_ms ~materialized:mat) ~f:(fun ms -> ms /. 1e3)
+              in
+              let best, stats = Sspace.search ~bound ~score (build [] cands) in
+              logf
+                "model_default: placement search over %d level(s): %d expanded, %d scored, %d \
+                 unscored, %d fathomed"
+                (List.length cands) stats.Sspace.st_expanded stats.Sspace.st_scored
+                stats.Sspace.st_unscored stats.Sspace.st_fathomed;
+              match best with
+              | Some (vector, s) when not (List.is_empty vector) ->
+                  let mat, inl, fp = LL.partition_readings vector in
+                  let names tns =
+                    String.concat ~sep:","
+                      (List.map tns ~f:Ir.Tnode.debug_name
+                       [@message_only "names the placement pick in the logf line below"])
+                  in
+                  logf
+                    "model_default: placement pick: materialize [%s], inline [%s], footprint [%s] \
+                     (model %.6f ms)"
+                    (names mat) (names inl) (names fp) (s *. 1e3);
+                  Some (mat, inl, fp)
+              | _ -> None
+          with
+          | pick -> pick
+          | exception Outcome.Cause_at (_, cause) ->
+              logf
+                "model_default: placement search declined (%s); selecting from the default \
+                 placements"
+                (Outcome.detail_of_cause cause);
+              None
+      in
+      (* With the model on the default pipeline (no sketch strictly improved on it, or the pick
+         failed validation above), the compile that just failed IS the fallback: retrying it would
+         duplicate an expensive failure and delay the honest error, so the exception propagates
+         instead. *)
+      let compile_from ?on_unrecovered base_ctx =
+        compile_advisory ?name ~on_fallback ?on_unrecovered
+          ~fallback_if:(fun () -> !applied_pick)
+          transforms base_ctx comp bindings
+      in
+      let result =
+        match placement_pick with
+        | None -> compile_from ctx
+        | Some (mat, inl, fp) ->
+            (* Every reading gets its call, empty or not — the historical context lineage of this
+               path, kept as is; skipping would change only context identity, not the decisions. *)
+            let ctx' = D.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
+            let picked = ref true in
+            (* A CLASSIFIED rejection that [compile_advisory] had nothing to fall back to under the
+               picked placements: [applied_pick] was false (the pick's win was the placement move
+               itself, so the failing compile was already the default pipeline — under [ctx'], not
+               under [ctx]), or its fallback to the default pipeline under [ctx'] failed classified
+               too. The pick is advisory, so abandon it and rerun the ordinary selection from the
+               caller's own placements. Only the classified cause comes here (gh-ocannl-1390): a
+               fatal failure — an untyped exception a transform or the builder raised, under
+               [strict_failure_classification] — propagates, rather than being retried from the
+               default placements as one more decline. *)
+            let on_unrecovered (classified : Outcome.classified_cause) =
+              logf
+                "model_default: compiling under the picked placements FAILED (%s); recompiling \
+                 from                the default placements"
+                (Exn.to_string (Outcome.exception_of_cause classified.cause));
+              picked := false;
+              applied_pick := false;
+              compile_from ctx
+            in
+            let result = compile_from ~on_unrecovered ctx' in
+            (if !picked then
+               (* The emitted label carries the placement decision: the in-compile selection only
+                  names the pipeline it chose under those placements. *)
+               let names tns =
+                 String.concat ~sep:","
+                   (List.map tns ~f:Ir.Tnode.debug_name
+                    [@message_only "spells the placements in the choice's report label"])
+               in
+               choice :=
+                 {
+                   !choice with
+                   mc_label =
+                     Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl)
+                       (names fp) !choice.mc_label;
+                 });
+            result
+      in
+      emit !choice;
+      result
+
+  let model_explain ?name ?(coalesced = false) ctx comp bindings =
+    let facts = D.backend_facts ctx in
+    let is_gpu = Ir.Backend_intf.binds_hardware_grid facts
+    and is_cpu = Ir.Backend_intf.renders_on_host_pool facts in
+    let limits = D.hardware_limits ctx in
+    let caps = D.codegen_capabilities ctx in
+    let accum_prec = caps.Ir.Backend_intf.accum_prec in
+    let static_indices = Idx.bound_symbols bindings in
+    let peak_flops, peak_memory_bandwidth = envelope ~limits in
+    let opt = D.lowered_for_decisions ?name ctx comp bindings in
+    let ms = Option.map ~f:(fun s -> s *. 1e3) in
+    let explain ?(ex_admitted = true) ?(ex_anchor = false) segs =
+      let ex_operand_loads =
+        CM.combine_load_counts (List.map segs ~f:(model_operand_loads ~capabilities:caps))
+      in
+      match
+        segments_legs ~capabilities:caps ~count_transactions:true ~peak_flops ~peak_memory_bandwidth
+          ~limits segs
+      with
+      | None ->
+          {
+            ex_kernels = None;
+            ex_floor_ms = None;
+            ex_rank_ms = None;
+            ex_compute_ms = None;
+            ex_memory_ms = None;
+            ex_spilled = None;
+            ex_fills = None;
+            ex_mma_work = None;
+            ex_device_gathers = None;
+            ex_operand_loads;
+            ex_admitted;
+            ex_anchor;
+          }
+      | Some (bound, legs) ->
+          (* A leg is present on every kernel or on none: its peak is one constant. *)
+          let total leg =
+            List.fold legs ~init:(Some 0.) ~f:(fun acc l -> Option.map2 acc (leg l) ~f:Float.( + ))
+          in
+          {
+            ex_floor_ms = Some (bound *. 1e3);
+            ex_rank_ms = Some (List.fold legs ~init:0. ~f:(fun acc l -> acc +. kernel_rank l) *. 1e3);
+            ex_compute_ms = ms (total (fun l -> l.kl_compute));
+            ex_memory_ms = ms (total (fun l -> l.kl_memory));
+            ex_spilled = Some (List.exists legs ~f:(fun l -> l.kl_spilled));
+            ex_fills = Some (List.map legs ~f:(fun l -> l.kl_fill));
+            ex_mma_work = Some (List.map legs ~f:(fun l -> l.kl_mma_work));
+            ex_device_gathers = Some (List.map legs ~f:(fun l -> l.kl_device_gathers));
+            ex_kernels =
+              Some
+                (List.map legs ~f:(fun l ->
+                     {
+                       ek_compute_ms = ms l.kl_compute;
+                       ek_memory_ms = ms l.kl_memory;
+                       ek_transactions = l.kl_transactions;
+                       ek_transactions_uncovered = l.kl_transactions_uncovered;
+                       ek_transactions_by_sector = l.kl_transactions_by_sector;
+                       ek_workgroup_bytes = l.kl_workgroup_bytes;
+                       ek_block_threads = l.kl_block_threads;
+                       ek_occupancy = l.kl_occupancy;
+                     }));
+            ex_operand_loads;
+            ex_admitted;
+            ex_anchor;
+          }
+    in
+    (* [model_default]'s early exits: without envelope constants, or with the default annotator off,
+       it ranks nothing and compiles the default pipeline. *)
+    if
+      (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
+      || not (Sched.automatic_schedule_active ~facts)
+    then
+      {
+        x_routine =
+          [
+            ( "default",
+              explain
+                (Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt)) );
+          ];
+        x_segments = [];
+      }
+    else
+      (* [model_default]'s incumbent and searched program, as it derives them. *)
+      let seeding = model_seeding ~facts ~limits in
+      let record = ref [] in
+      let incumbent_label, incumbent =
+        match seeding with
+        | Some (gate, min_serial, sink_enabled, admit_narrow) ->
+            ( "seeded",
+              seeded_apply
+                ~on_choice:(fun c -> record := c.sd_seeded)
+                ~capabilities:caps ~facts ~limits ~accum_prec ~static_indices ~gate ~min_serial
+                ~sink_enabled ~admit_narrow (scratch_of opt) )
+        | None ->
+            ( "default",
+              Sched.maybe_default_schedules ~facts ~limits ~static_indices (scratch_of opt) )
+      in
+      let base =
+        match seeding with
+        | Some (_, min_serial, _, _) ->
+            fst (seeded_split ~facts ~min_serial ~static_indices (scratch_of opt))
+        | None -> opt
+      in
+      (* The sketch leaves [model_default]'s family search visits on [prog] (a whole routine or one
+         segment), in its visiting order. Exactly the leaves it can score: a schedule that fails to
+         apply, or whose scheduled form fails validation, is excluded from its ranking too. *)
+      let explain_leaves ~label ~admits prog leaves =
+        List.filter_map leaves ~f:(fun p ->
+            match
+              validate_segments_for_model ~fork_join:is_cpu ~limits
+                [
+                  Sched.apply_classified ~static_indices
+                    (sketch_schedule ~accum_prec ~p prog)
+                    (scratch_of prog);
+                ]
+            with
+            | exception Outcome.Cause_at _ -> None
+            | segs -> Some (label p, explain ~ex_admitted:(admits p) segs))
+      in
+      let record = !record in
+      (* gh-ocannl-1477: the leaf [model_default] anchors the walk on [prog] at -- the best-ranked
+         of the seeded plan's own sketches there ({!model_seeded_anchors}, from [seeded], the plan's
+         record for the units [prog] covers) -- marked [ex_anchor]; listed after the leaves when the
+         walk's leaves do not include it. *)
+      let leaf_explains ~seeded ~label prog =
+        let leaves =
+          match sketch_family_tree ~capabilities:caps ~is_gpu ~is_cpu ~limits prog with
+          | Some tree ->
+              Sspace.leaves
+                (if Lazy.force geometry_lattice_enabled then lift_geometry_lattice tree else tree)
+          | None -> []
+        in
+        let listed =
+          explain_leaves ~label ~admits:(model_admits ~seeding ~accum_prec prog) prog leaves
+        in
+        let rank (_, ex) = Option.value ex.ex_rank_ms ~default:Float.infinity in
+        let anchors =
+          List.map (model_seeded_anchors ~limits ~accum_prec ~static_indices ~seeded prog)
+            ~f:(fun (p, segs) -> (label p, explain ~ex_anchor:true segs))
+        in
+        match
+          List.min_elt
+            (List.filter anchors ~f:(fun (_, ex) -> Option.is_some ex.ex_rank_ms))
+            ~compare:(fun a b -> Float.compare (rank a) (rank b))
+        with
+        | None -> listed
+        | Some ((anchor, _) as row) ->
+            if List.exists listed ~f:(fun (l, _) -> String.equal l anchor) then
+              List.map listed ~f:(fun (l, ex) ->
+                  if String.equal l anchor then (l, { ex with ex_anchor = true }) else (l, ex))
+            else listed @ [ row ]
+      in
+      (* gh-ocannl-1278: the coalesced tuner branch's whole-routine leaves, listed on request to
+         check the score's ranking of them against timings, and always where [model_default] ranks
+         them (gh-ocannl-1600, {!model_ranks_coalesced}), so its pick is among the listed rows. A
+         leaf is marked admitted when its uncoalesced form is: the set [model_default] ranks where
+         it ranks them (neither layout reorders a cell's summation). *)
+      let coalesced_explains ?(label = fun p -> spec_label (Whole (W_sketch p))) prog =
+        if not (coalesced || model_ranks_coalesced ~limits) then []
+        else
+          let admits = model_admits ~seeding ~accum_prec prog in
+          explain_leaves ~label
+            ~admits:(fun p -> admits { p with sk_coalesce = None })
+            prog
+            (coalesced_seed_params ~capabilities:caps ~is_gpu ~is_cpu ~limits prog)
+      in
+      (* gh-ocannl-1438: [model_default]'s per-segment substitution, as it derives it
+         ({!model_segments}: the search's fold-zeros segmentation of the searched program, when it
+         splits the routine or exposes a changed lowering, gh-ocannl-1512) -- one entry per keyed
+         segment: the segment under the search's preset, then the sketch leaves it searches there,
+         and the segment under the configured preset; its sketches must strictly beat the lower of
+         the two presets (gh-ocannl-1687). *)
+      let x_segments =
+        match model_segments ~is_gpu ~is_cpu ~limits ~static_indices base with
+        | exception Outcome.Cause_at _ -> []
+        | None -> []
+        | Some (plan, keyed) ->
+            List.map keyed ~f:(fun (key, pre, post) ->
+                let tag = seg_key_tag key in
+                {
+                  xs_segment = tag;
+                  xs_candidates =
+                    ("preset", explain [ post ])
+                    :: (leaf_explains
+                          ~seeded:(seeded_record_for_key ~plan ~record key)
+                          ~label:(fun p -> sketch_params_label p ^ " @" ^ tag)
+                          pre
+                       (* gh-ocannl-1600: the segment's coalesced menu, which [model_default]'s walk
+                          on the segment searches too where it ranks them. *)
+                       @ coalesced_explains ~label:(fun p -> sketch_params_label p ^ " @" ^ tag) pre
+                       );
+                  (* gh-ocannl-1633: the segment under the configured preset -- what a substitution
+                     ships where it leaves the segment unsketched ([model_default]'s
+                     [apply_fiss]). *)
+                  xs_configured =
+                    Option.map (configured_segment ~is_gpu ~is_cpu ~limits ~static_indices pre)
+                      ~f:(fun configured -> explain [ configured ]);
+                })
+      in
+      {
+        x_routine =
+          (incumbent_label, explain incumbent)
+          :: (leaf_explains ~seeded:(List.map record ~f:snd)
+                ~label:(fun p -> spec_label (Whole (W_sketch p)))
+                base
+             @ coalesced_explains base);
+        x_segments;
+      }
+
+  let untuned_compile ?name ctx comp bindings =
+    if Lazy.force model_default_enabled then model_default ?name ctx comp bindings
+    else seeded_default ?name ctx comp bindings
+
+  (* gh-ocannl-1621: the search lineage's training state, restored before every timing window. Every
+     candidate compiles from the search lineage, so a node that lineage already holds a buffer for
+     is ONE buffer every candidate's runs write -- parameters, optimizer state, counters -- while a
+     node it lacks is allocated afresh in each candidate's own compile (its link-time initialization
+     re-runs), so it cannot carry one candidate's runs into the next. The state that drifts across a
+     search is therefore exactly what the computation writes among the buffers the lineage holds:
+     the base lowering's written nodes ([has_assignment] or [zeroed_out]; a hosted constant's writes
+     are gone from the code) present in [search_ctx], a written slice ALIAS standing for its parent,
+     whose buffer it writes and which host access goes through. A node the lineage placed [Local]
+     has no observable buffer and holds no state between runs. Read-only nodes (the data batch, an
+     uploaded dataset) are never written, so they are not copied. *)
+  let timing_state_nodes search_ctx (opt : LL.optimized) =
+    let placements = D.placements search_ctx in
+    Hashtbl.fold opt.LL.traced_store
+      ~init:(Set.empty (module Ir.Tnode))
+      ~f:(fun ~key:_ ~data:(traced : LL.traced_array) acc ->
+        if not (traced.has_assignment || traced.zeroed_out) then acc
+        else
+          (* A confirmed slice alias owns no buffer: its writes land in its parent's. An ineligible
+             (copy) slice owns its own buffer, recomputed from its parent on every run -- no state,
+             and host access refuses it -- so it stands for nothing here; mapping it to its parent
+             would copy a read-only dataset in and out per window. *)
+          let tn =
+            match (Ir.Tnode.alias_of traced.tn, Ir.Tnode.slice_of traced.tn) with
+            | Some (parent, _), _ -> Some parent
+            | None, Some _ -> None
+            | None, None -> Some traced.tn
+          in
+          Option.fold tn ~init:acc ~f:(fun acc tn ->
+              let local =
+                match Ir.Tnode.Placements.get placements tn with
+                | Some (Ir.Tnode.Local, _) -> true
+                | _ -> false
+              in
+              if local || not (D.mem search_ctx tn) then acc else Set.add acc tn))
+
+  (* Host copies, not a second device buffer per node: a device snapshot would keep a second working
+     set of the state resident through the search, against the one-live-candidate memory bound
+     (gh-ocannl-1326), while a copy per candidate is noise beside the candidate's compile. *)
+  let snapshot_timing_state search_ctx opt =
+    List.map
+      (Set.to_list (timing_state_nodes search_ctx opt))
+      ~f:(fun tn -> (tn, D.to_host search_ctx tn))
+
+  (* Through the lineage's own handle: the bytes land in the buffer every candidate binds, and the
+     ledger records an external write, as a caller's [Context.set_values] before a run would. The
+     returned context is dropped -- the search keeps compiling from [search_ctx], whose nodes are
+     all initialized already. *)
+  let restore_timing_state search_ctx snapshot =
+    List.iter snapshot ~f:(fun (tn, nd) -> ignore (D.from_host search_ctx tn nd : D.ctx))
+
+  (* What a search hands back: the compile of what it ships, as a thunk. Without [defer] the thunk
+     is already forced (it returns the routine [tune] compiled before reporting); with it
+     (gh-ocannl-1408, {!tune_deferred}) the search has reported, released everything it compiled,
+     and the thunk compiles the shipped schedule on first call. [substituted] is set when that
+     compile ships the untuned default in place of the schedule the report named (a winner or cache
+     replay that failed or degenerated), which a deferred caller ranking by the report must hear
+     about. *)
+  let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_width ?rounds
+      ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction ?max_split_reduce_sites
+      ?timing_ctx ?abandon ?call_budget ?report ctx comp bindings : unit -> D.ctx * D.routine =
+    (* gh-ocannl-559: with the search off, [tune] still replays an explicitly provided cache -- a
+       pinned schedule is deterministic, and committing one is how a reproducible run keeps a tuned
+       schedule -- but never times candidates, whose crowning is the largest cross-machine
+       determinism leak. A miss compiles the untuned default pipeline, exactly like the
+       nothing-was-timed fallback below. *)
+    let search = Option.value_or_thunk search ~default:search_setting in
+    let beam_width =
+      max 1
+        (Option.value_or_thunk beam_width ~default:(fun () ->
+             Utils.registered_int ~arg_name:"autotune_beam_width"))
+    in
+    let rounds =
+      Option.value_or_thunk rounds ~default:(fun () ->
+          Utils.registered_int ~arg_name:"autotune_rounds")
+    in
+    let repeats =
+      Option.value_or_thunk repeats ~default:(fun () ->
+          Utils.registered_int ~arg_name:"autotune_repeats")
+    in
+    (* Not [Option.value ~default:…] (Codex P2 on PR #512): that evaluates the default eagerly, so
+       an unparsable ambient [autotune_timing] would be rejected even for a caller that passed its
+       own mode — and for a [~search:false] call, which times nothing at all. The settings above
+       read in [Option.value_or_thunk] for the same reason: each refuses a value that does not parse
+       (gh-ocannl-1332), so the read has to be in the branch that needs it. *)
+    let timing =
+      match timing with
+      | Some t -> t
+      | None ->
+          timing_of_setting @@ Utils.get_global_arg ~arg_name:"autotune_timing" ~default:"queued"
+    in
+    (* Every report this call emits starts here, so the objective its times were taken under travels
      with them (gh-ocannl-755): a consumer comparing a [best_ms] across processes, or storing one in
      a benchmark artifact, otherwise has to guess it from ambient configuration that a [?timing]
      override may not match. Which is why the objective is resolved above this line and not below
      it. *)
-  (* [budget_s] reports the per-search setting, a fact about the call that a shrinking share must not
+    (* [budget_s] reports the per-search setting, a fact about the call that a shrinking share must not
      replace; [budget] is what the search is cut at: the tighter of the setting and the share of an
      enclosing call's budget (gh-ocannl-1440). *)
-  let budget_s = budget_setting () in
-  let budget =
-    match (budget_s, call_budget) with
-    | b, None -> b
-    | None, Some cb -> Some (Float.max 0. cb.cb_share_s)
-    | Some b, Some cb -> Some (Float.min b (Float.max 0. cb.cb_share_s))
-  in
-  let call_budget_s = Option.map call_budget ~f:(fun cb -> cb.cb_total_s) in
-  let call_share_s = Option.map call_budget ~f:(fun cb -> cb.cb_share_s) in
-  let base_report =
-    { (no_search_report ~timing) with beam_width; budget_s; call_budget_s; call_share_s }
-  in
-  (* gh-ocannl-1440: the backend compiles this call completes, stamped on every report it emits. *)
-  let compiles_at_start = Context.backend_compiles () in
-  let replay_compiles = ref 0 in
-  let max_split_reduce_sites =
-    max 0
-      (Option.value_or_thunk max_split_reduce_sites ~default:(fun () ->
-           Utils.registered_int ~arg_name:"autotune_split_reduce_max_sites"))
-  in
-  let staffed_singles = staffed_singles_setting () in
-  let seeded_singles = seeded_singles_setting () in
-  let playoff_width = max 0 (Utils.registered_int ~arg_name:"autotune_composite_playoff_width") in
-  (* A negative margin admits no single and so means what width 0 says; it is floored at 0 (exact
-     ties only) rather than given a second spelling of off. A malformed value, NaN included, is
-     refused (gh-ocannl-1332). *)
-  let playoff_margin =
-    Float.max 0. (Utils.registered_float ~arg_name:"autotune_composite_playoff_margin")
-  in
-  (* gh-ocannl-1635: the beam finals' margin ([finals_contenders]), and gh-ocannl-1665 the composite
-     playoff's near-tie margin; 0 or less turns both off. A malformed value, NaN included, is
-     refused. *)
-  let finals_margin = Utils.registered_float ~arg_name:"autotune_finals_margin" in
-  (* Read only where a round can run, so a malformed value refuses the searches it would shape and
-     no other call (like [autotune_timing] above). *)
-  let round_expansion =
-    if search && rounds > 0 then
-      Utils.registered_keyword ~arg_name:"autotune_round_expansion"
-        ~expected:"differing, full or head" ~parse:round_expansion_of_setting
-    else Expand_differing
-  in
-  let seed_block_sizes = Option.value seed_block_sizes ~default:[ 64; 128; 256; 512 ] in
-  let cache_dir = resolve_cache_dir ?cache_dir ~search () in
-  let keep_fraction =
-    Option.value_or_thunk keep_fraction ~default:(fun () ->
-        Utils.registered_float ~arg_name:"autotune_keep_fraction")
-  in
-  let static_indices = Idx.bound_symbols bindings in
-  let backend =
-    (Context.backend_name ctx
-     [@label_read
-       "keys calibration rows and log lines, and is compared for equality with the timing \
-        context's; backend capabilities come from the facts below"])
-  in
-  let facts = Context.backend_facts ctx in
-  let device = Context.ordinal ctx in
-  (* The tuned computation's name, for the calibration rows and log lines of every candidate
-     (gh-ocannl-635). READ from [name] rather than re-derived (gh-ocannl-669): every compile below
-     is passed the same [?name], and this is the same [Option.value_or_thunk ... get_name_exn] they
-     resolve it by ([Backends.lower_assignments]), so a row names the code exactly the way its
-     generated sources and debug artifacts are named — by construction now, rather than by the
-     coincidence that no compile here passed a name. Lazy and total on purpose: this is a diagnostic
-     label, while the "a comp must be named" contract belongs to the compiles, and deriving it
-     eagerly would move that failure ahead of them (and impose it on a search that emits
-     nothing). *)
-  let routine_name =
-    lazy
-      (Option.value_or_thunk name ~default:(fun () ->
-           match Ir.Assignments.get_name_exn comp.Ir.Assignments.asgns with
-           | derived -> derived
-           | exception Invalid_argument _ -> ""))
-  in
-  (* gh-ocannl-1061: this call's progress state. [progress_compile_s] and [progress_timing_s]
-     accumulate the candidates' compiles and timing windows, so [elapsed_s] minus the two is what
-     the search spent elsewhere (the base compile, analyses, replays, the winner's recompile). *)
-  let progress_clock = Mtime_clock.counter () in
-  (* gh-ocannl-1409: the clock every budget check reads, from the start of the call -- so the base
-     compile, the cache replay and the baseline's timing window are charged to the budget. *)
-  let budget_clock () = Seam.get budget_elapsed (seconds_since progress_clock) in
-  (* gh-ocannl-1604, gh-ocannl-1667: the budget's compile projection -- what the next compile is
-     expected to cost on [budget_clock] -- from the compiles this call has made: the costliest so
-     far, except that the compiles made before the first one that reused a kernel an earlier compile
-     published ([Ir.Compile_cost.kernels_reused]: a kernel code cache hit) stop counting once there
-     is one. Those are the cold compiles that filled the cache (the base compile's lowering and, on
-     CPU, the serial baseline's; on GPU the first candidate's, which compiles every kernel); every
-     compile from the first reusing one on counts in full, a later one that compiles every kernel
-     afresh included. A backend without the cache, or with it disabled, never reuses one, so there
-     the projection is the costliest compile of all, as it was before. *)
-  let compile_before_reuse_s = ref 0. and compile_since_reuse_s = ref None in
-  let record_compile_evidence ~span_s (cost : Ir.Compile_cost.t) =
-    match !compile_since_reuse_s with
-    | Some s -> compile_since_reuse_s := Some (Float.max s span_s)
-    | None when cost.kernels_reused > 0 -> compile_since_reuse_s := Some span_s
-    | None -> compile_before_reuse_s := Float.max !compile_before_reuse_s span_s
-  in
-  let projected_compile_s () =
-    Option.value !compile_since_reuse_s ~default:!compile_before_reuse_s
-  in
-  (* A compile's span on [budget_clock] and its census, as the projection's evidence; nothing
-     without a budget. A compile that raises is evidence too, as one that reused nothing. *)
-  let budget_compile f =
-    match budget with
-    | None -> f ()
-    | Some _ ->
-        let c0 = budget_clock () in
-        let cost = ref Ir.Compile_cost.empty in
-        Exn.protect
-          ~f:(fun () ->
-            let r, c = Ir.Compile_cost.with_census f in
-            cost := c;
-            r)
-          ~finally:(fun () ->
-            record_compile_evidence ~span_s:(Float.max 0. (budget_clock () -. c0)) !cost)
-  in
-  let progress_compile_s = ref 0. and progress_timing_s = ref 0. in
-  let progress_attempts = ref 0 in
-  let progress_line event fields =
-    if progress_enabled () then
-      let elapsed = seconds_since progress_clock in
-      progressf "event=%s routine=%S elapsed_s=%.1f %s" event (Lazy.force routine_name) elapsed
-        fields
-  in
-  let progress_costs () =
-    Printf.sprintf "attempts=%d compile_s=%.1f timing_s=%.1f" !progress_attempts !progress_compile_s
-      !progress_timing_s
-  in
-  (* A line BEFORE every step outside the candidates that can block for long -- the base compile, a
+    let budget_s = budget_setting () in
+    let budget =
+      match (budget_s, call_budget) with
+      | b, None -> b
+      | None, Some cb -> Some (Float.max 0. cb.cb_share_s)
+      | Some b, Some cb -> Some (Float.min b (Float.max 0. cb.cb_share_s))
+    in
+    let call_budget_s = Option.map call_budget ~f:(fun cb -> cb.cb_total_s) in
+    let call_share_s = Option.map call_budget ~f:(fun cb -> cb.cb_share_s) in
+    let base_report =
+      { (no_search_report ~timing) with beam_width; budget_s; call_budget_s; call_share_s }
+    in
+    (* gh-ocannl-1440: the backend compiles this call completes, stamped on every report it
+       emits. *)
+    let compiles_at_start = D.backend_compiles () in
+    let replay_compiles = ref 0 in
+    let max_split_reduce_sites =
+      max 0
+        (Option.value_or_thunk max_split_reduce_sites ~default:(fun () ->
+             Utils.registered_int ~arg_name:"autotune_split_reduce_max_sites"))
+    in
+    let staffed_singles = staffed_singles_setting () in
+    let seeded_singles = seeded_singles_setting () in
+    let playoff_width = max 0 (Utils.registered_int ~arg_name:"autotune_composite_playoff_width") in
+    (* A negative margin admits no single and so means what width 0 says; it is floored at 0 (exact
+       ties only) rather than given a second spelling of off. A malformed value, NaN included, is
+       refused (gh-ocannl-1332). *)
+    let playoff_margin =
+      Float.max 0. (Utils.registered_float ~arg_name:"autotune_composite_playoff_margin")
+    in
+    (* gh-ocannl-1635: the beam finals' margin ([finals_contenders]), and gh-ocannl-1665 the
+       composite playoff's near-tie margin; 0 or less turns both off. A malformed value, NaN
+       included, is refused. *)
+    let finals_margin = Utils.registered_float ~arg_name:"autotune_finals_margin" in
+    (* Read only where a round can run, so a malformed value refuses the searches it would shape and
+       no other call (like [autotune_timing] above). *)
+    let round_expansion =
+      if search && rounds > 0 then
+        Utils.registered_keyword ~arg_name:"autotune_round_expansion"
+          ~expected:"differing, full or head" ~parse:round_expansion_of_setting
+      else Expand_differing
+    in
+    let seed_block_sizes = Option.value seed_block_sizes ~default:[ 64; 128; 256; 512 ] in
+    let cache_dir = resolve_cache_dir ?cache_dir ~search () in
+    let keep_fraction =
+      Option.value_or_thunk keep_fraction ~default:(fun () ->
+          Utils.registered_float ~arg_name:"autotune_keep_fraction")
+    in
+    let static_indices = Idx.bound_symbols bindings in
+    let backend =
+      (D.backend_name ctx
+       [@label_read
+         "keys calibration rows and log lines, and is compared for equality with the timing \
+          context's; backend capabilities come from the facts below"])
+    in
+    let facts = D.backend_facts ctx in
+    let device = D.ordinal ctx in
+    (* The tuned computation's name, for the calibration rows and log lines of every candidate
+       (gh-ocannl-635). READ from [name] rather than re-derived (gh-ocannl-669): every compile below
+       is passed the same [?name], and this is the same derivation they resolve it by
+       ([D.program_name], for [Context] the [get_name_exn] of [Backends.lower_assignments]), so a
+       row names the code exactly the way its generated sources and debug artifacts are named — by
+       construction now, rather than by the coincidence that no compile here passed a name. Lazy and
+       total on purpose: this is a diagnostic label, while the "a comp must be named" contract
+       belongs to the compiles, and deriving it eagerly would move that failure ahead of them (and
+       impose it on a search that emits nothing). *)
+    let routine_name =
+      lazy
+        (Option.value_or_thunk name ~default:(fun () ->
+             Option.value (D.program_name comp) ~default:""))
+    in
+    (* gh-ocannl-1061: this call's progress state. [progress_compile_s] and [progress_timing_s]
+       accumulate the candidates' compiles and timing windows, so [elapsed_s] minus the two is what
+       the search spent elsewhere (the base compile, analyses, replays, the winner's recompile). *)
+    let progress_clock = Mtime_clock.counter () in
+    (* gh-ocannl-1409: the clock every budget check reads, from the start of the call -- so the base
+       compile, the cache replay and the baseline's timing window are charged to the budget. *)
+    let budget_clock () = Seam.get budget_elapsed (seconds_since progress_clock) in
+    (* gh-ocannl-1604, gh-ocannl-1667: the budget's compile projection -- what the next compile is
+       expected to cost on [budget_clock] -- from the compiles this call has made: the costliest so
+       far, except that the compiles made before the first one that reused a kernel an earlier
+       compile published ([Ir.Compile_cost.kernels_reused]: a kernel code cache hit) stop counting
+       once there is one. Those are the cold compiles that filled the cache (the base compile's
+       lowering and, on CPU, the serial baseline's; on GPU the first candidate's, which compiles
+       every kernel); every compile from the first reusing one on counts in full, a later one that
+       compiles every kernel afresh included. A backend without the cache, or with it disabled,
+       never reuses one, so there the projection is the costliest compile of all, as it was
+       before. *)
+    let compile_before_reuse_s = ref 0. and compile_since_reuse_s = ref None in
+    let record_compile_evidence ~span_s (cost : Ir.Compile_cost.t) =
+      match !compile_since_reuse_s with
+      | Some s -> compile_since_reuse_s := Some (Float.max s span_s)
+      | None when cost.kernels_reused > 0 -> compile_since_reuse_s := Some span_s
+      | None -> compile_before_reuse_s := Float.max !compile_before_reuse_s span_s
+    in
+    let projected_compile_s () =
+      Option.value !compile_since_reuse_s ~default:!compile_before_reuse_s
+    in
+    (* A compile's span on [budget_clock] and its census, as the projection's evidence; nothing
+       without a budget. A compile that raises is evidence too, as one that reused nothing. *)
+    let budget_compile f =
+      match budget with
+      | None -> f ()
+      | Some _ ->
+          let c0 = budget_clock () in
+          let cost = ref Ir.Compile_cost.empty in
+          Exn.protect
+            ~f:(fun () ->
+              let r, c = Ir.Compile_cost.with_census f in
+              cost := c;
+              r)
+            ~finally:(fun () ->
+              record_compile_evidence ~span_s:(Float.max 0. (budget_clock () -. c0)) !cost)
+    in
+    let progress_compile_s = ref 0. and progress_timing_s = ref 0. in
+    let progress_attempts = ref 0 in
+    let progress_line event fields =
+      if progress_enabled () then
+        let elapsed = seconds_since progress_clock in
+        progressf "event=%s routine=%S elapsed_s=%.1f %s" event (Lazy.force routine_name) elapsed
+          fields
+    in
+    let progress_costs () =
+      Printf.sprintf "attempts=%d compile_s=%.1f timing_s=%.1f" !progress_attempts
+        !progress_compile_s !progress_timing_s
+    in
+    (* A line BEFORE every step outside the candidates that can block for long -- the base compile, a
      cache replay, the baseline's timing window, the seed enumeration's lowerings, the winner's
      recompile, an untuned fallback -- for the same reason a candidate's line precedes it: a search
      killed inside the step is inside the one its last line names. *)
-  (* The stage the last [stage] line named: the stage of a compile made outside the candidates. *)
-  let current_stage = ref "base_compile" in
-  let progress_stage stage =
-    current_stage := stage;
-    progress_line "stage" (Printf.sprintf "stage=%s %s" stage (progress_costs ()))
-  in
-  let timed_into acc f =
-    let c = Mtime_clock.counter () in
-    Exn.protect ~f ~finally:(fun () -> acc := !acc +. seconds_since c)
-  in
-  (* gh-ocannl-1314: every compile this call makes, by phase, for [report.compile_cost]; and each
-     one's record as it returns: a [compiled] progress event, an [autotune_log] line and the
-     domain's compile observers. An exception is recorded as [failed] and re-raised unchanged. *)
-  let compile_cost_total = ref Ir.Compile_cost.empty in
-  let costed ?stage ~attempt ~verdict_of f =
-    let stage = Option.value stage ~default:!current_stage in
-    let c = Mtime_clock.counter () in
-    let result, cost =
-      Ir.Compile_cost.with_census (fun () ->
-          match f () with
-          | r -> Ok r
-          | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ()))
+    (* The stage the last [stage] line named: the stage of a compile made outside the candidates. *)
+    let current_stage = ref "base_compile" in
+    let progress_stage stage =
+      current_stage := stage;
+      progress_line "stage" (Printf.sprintf "stage=%s %s" stage (progress_costs ()))
     in
-    let wall_s = seconds_since c in
-    let verdict = match result with Ok r -> verdict_of r | Error _ -> "failed" in
-    compile_cost_total := Ir.Compile_cost.add !compile_cost_total cost;
-    let device = Option.value_map cost.device_s ~default:"none" ~f:(Printf.sprintf "%.3f") in
-    progress_line "compiled"
-      (Printf.sprintf
-         "stage=%s attempt=%S verdict=%s took_s=%.3f lower_s=%.3f transform_s=%.3f codegen_s=%.3f \
-          device_s=%s link_s=%.3f kernels=%d kernels_compiled=%d kernels_reused=%d"
-         stage attempt verdict wall_s cost.lower_s cost.transform_s (Ir.Compile_cost.codegen_s cost)
-         device cost.link_s cost.kernels cost.kernels_compiled cost.kernels_reused);
-    logf
-      "%s: compile %s in %.3f s (lower %.3f, transform %.3f, codegen %.3f, device %s, link %.3f; \
-       %d of %d kernels compiled, %d reused)"
-      attempt verdict wall_s cost.lower_s cost.transform_s (Ir.Compile_cost.codegen_s cost) device
-      cost.link_s cost.kernels_compiled cost.kernels cost.kernels_reused;
-    (* Trace-only: each observer is contained where it is installed ([install_compile_observer]), so
-       an observer that raises cannot fail a compiled candidate nor strand its context. *)
-    Stdlib.Domain.DLS.get compile_observer
-      {
-        compile_routine = Lazy.force routine_name;
-        compile_stage = stage;
-        compile_attempt = attempt;
-        compile_verdict = verdict;
-        compile_wall_s = wall_s;
-        compile_cost = cost;
-      };
-    match result with
-    | Ok r -> r
-    | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
-  in
-  let outcome_verdict = function
-    | Ok _ -> "compiled"
-    | Error failure when is_not_dispatched failure -> "refused"
-    | Error _ -> "failed"
-  in
-  progress_line "search_start"
-    (let opt = Option.value_map ~default:"none" ~f:(Printf.sprintf "%g") in
-     Printf.sprintf
-       "backend=%s device=%d search=%b beam=%d rounds=%d budget_s=%s call_budget_s=%s \
-        call_share_s=%s"
-       backend device search beam_width rounds (opt budget_s) (opt call_budget_s) (opt call_share_s));
-  (* gh-ocannl-1408: set once a deferred call has delivered its report. The deferred compile runs
-     after that, and its failure paths ([raise_pre_search], [emit_partial_and_raise]) would
-     otherwise report a second time. *)
-  let sealed = ref false in
-  (* Every report goes through here, exactly once per call on every path (gh-ocannl-550), so this is
-     where a search's closing progress line is written: before the callback, which may raise. *)
-  let emit_report (r : report) =
-    let r =
-      {
-        r with
-        compiles = Context.backend_compiles () - compiles_at_start;
-        replay_compiles = !replay_compiles;
-        compile_cost = !compile_cost_total;
-      }
+    let timed_into acc f =
+      let c = Mtime_clock.counter () in
+      Exn.protect ~f ~finally:(fun () -> acc := !acc +. seconds_since c)
     in
-    if not !sealed then (
-      progress_line "search_done"
+    (* gh-ocannl-1314: every compile this call makes, by phase, for [report.compile_cost]; and each
+       one's record as it returns: a [compiled] progress event, an [autotune_log] line and the
+       domain's compile observers. An exception is recorded as [failed] and re-raised unchanged. *)
+    let compile_cost_total = ref Ir.Compile_cost.empty in
+    let costed ?stage ~attempt ~verdict_of f =
+      let stage = Option.value stage ~default:!current_stage in
+      let c = Mtime_clock.counter () in
+      let result, cost =
+        Ir.Compile_cost.with_census (fun () ->
+            match f () with
+            | r -> Ok r
+            | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ()))
+      in
+      let wall_s = seconds_since c in
+      let verdict = match result with Ok r -> verdict_of r | Error _ -> "failed" in
+      compile_cost_total := Ir.Compile_cost.add !compile_cost_total cost;
+      let device = Option.value_map cost.device_s ~default:"none" ~f:(Printf.sprintf "%.3f") in
+      progress_line "compiled"
         (Printf.sprintf
-           "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d unreadable=%d \
-            dispersed=%d hopeless=%d retimed=%d failed=%d rounds=%d budget_cut=%b \
-            baseline_refused=%b privatize_dropped=%d %s best_ms=%s best=%S"
-           (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
-           r.timings_unbatched r.timings_unreadable r.timings_dispersed r.timings_hopeless
-           r.timings_retimed r.candidates_failed r.rounds_run r.budget_cut
-           (Option.is_some r.baseline_refusal)
-           (List.sum (module Int) r.privatize_drops ~f:(fun d -> d.count))
-           (progress_costs ()) (progress_ms r.best_ms) r.best_label);
-      log_crown ~routine:(Lazy.force routine_name) r;
-      Option.iter report ~f:(fun f -> f r))
-  in
-  (* [tune] reports exactly once per call, on every path (gh-ocannl-550). The failures that happen
-     before (or instead of) the search proper — the base compile failing before its lowering is
-     captured, a fatal baseline link, a fatal cache replay, a baseline timing failure, and either
-     untuned fallback compile of a search-less call — used to raise with no report at all, which
-     leaves a caller that attributes arms by arrival order (the positional [?report] of
-     [Train.tune_placements]) with no slot for this search. The phase reported is the one the
-     failure itself carries, so the diagnostic names where it actually died — at codegen, at link,
-     at launch, at sync — instead of guessing. Reporting is best-effort here, as on the search's own
-     fatal path: it must not replace the compiler failure. [base] carries whatever the call did
-     learn before failing (e.g. a decline census). *)
-  let n_timings_retried = ref 0 in
-  let on_retry () = Int.incr n_timings_retried in
-  (* gh-ocannl-1263: how the search's timing calls settled and were admitted, from each call's own
-     record through the per-call [on_call] -- the baseline's and every candidate's, never the
-     diagnostic untuned control's -- so the counts belong to this call whatever else observes, and
-     whatever runs in another domain. *)
-  let decision_counts = Hashtbl.Poly.create () in
-  let on_call (c : timing_call) =
-    Hashtbl.incr decision_counts (c.decision.settle, c.decision.admission)
-  in
-  let timing_decisions () =
-    Hashtbl.to_alist decision_counts
-    |> List.sort ~compare:(fun (a, _) (b, _) -> Poly.compare a b)
-    |> List.map ~f:(fun ((settle, admission), calls) -> (settle, admission, calls))
-  in
-  let emit_pre_search_failure ?(base = base_report) ~phase ~candidate ~detail () =
-    let r =
-      {
-        base with
-        outcome = Pre_search_failure { phase; candidate; detail };
-        timings_retried = !n_timings_retried;
-        timing_decisions = timing_decisions ();
-      }
+           "stage=%s attempt=%S verdict=%s took_s=%.3f lower_s=%.3f transform_s=%.3f \
+            codegen_s=%.3f device_s=%s link_s=%.3f kernels=%d kernels_compiled=%d \
+            kernels_reused=%d"
+           stage attempt verdict wall_s cost.lower_s cost.transform_s
+           (Ir.Compile_cost.codegen_s cost) device cost.link_s cost.kernels cost.kernels_compiled
+           cost.kernels_reused);
+      logf
+        "%s: compile %s in %.3f s (lower %.3f, transform %.3f, codegen %.3f, device %s, link %.3f; \
+         %d of %d kernels compiled, %d reused)"
+        attempt verdict wall_s cost.lower_s cost.transform_s (Ir.Compile_cost.codegen_s cost) device
+        cost.link_s cost.kernels_compiled cost.kernels cost.kernels_reused;
+      (* Trace-only: each observer is contained where it is installed ([install_compile_observer]),
+         so an observer that raises cannot fail a compiled candidate nor strand its context. *)
+      Stdlib.Domain.DLS.get compile_observer
+        {
+          compile_routine = Lazy.force routine_name;
+          compile_stage = stage;
+          compile_attempt = attempt;
+          compile_verdict = verdict;
+          compile_wall_s = wall_s;
+          compile_cost = cost;
+        };
+      match result with
+      | Ok r -> r
+      | Error (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
     in
-    try emit_report r
-    with report_exn when not (process_fatal_exn report_exn) ->
-      Stdio.eprintf "autotune: pre-search failure report callback failed: %s\n%!"
-        (Exn.to_string report_exn)
-  in
-  (* gh-ocannl-550: every [raise_pre_search] leaves [tune] without returning a routine, so the base
-     compile's artifact is dead on all of them — but the base is linked further down, after this is
-     defined, so the release action arrives by hook rather than by reference. A hook rather than a
-     call at each raise site on purpose: the previous rounds of this work fixed such sites one at a
-     time and each new one was a fresh leak (the fatal cache replay was the last of them), whereas a
-     family with one member cannot be partially updated. Harmless where nothing is linked yet — the
-     two raises above the base compile invoke the no-op default. *)
-  let release_baseline_hook = ref (fun () -> ()) in
-  (* The ONE way this function releases anything (gh-ocannl-550). Releasing is best-effort
-     everywhere: it runs on failure paths where the device may already be refusing work, and a
-     failure to give memory back must never replace the outcome the caller has to act on.
-     Process-fatal conditions still propagate. A helper rather than the ad-hoc guard this started
-     as, because "is this call wrapped?" produced its own review finding once already. *)
-  let release_quietly ~what ctx =
-    try Context.release ctx
-    with exn when not (process_fatal_exn exn) ->
-      logf "release of %s failed: %s" what (Exn.to_string exn)
-  in
-  (* [emit_report] on a path that then hands a routine back: the callback's exception propagates by
-     design, so the caller never receives [result] and its buffers become unreachable while the pool
-     table goes on rooting them. Every site that reports a compiled routine reports through this. *)
-  let report_or_release r ~result =
-    match emit_report r with
-    | () -> ()
-    | exception exn ->
-        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-        release_quietly ~what:"the routine of a failed completion report" (fst result);
-        Stdlib.Printexc.raise_with_backtrace exn backtrace
-  in
-  (* gh-ocannl-1408: the deferred compile of a {!tune_deferred} call. The report has been delivered
-     and sealed, so the compile's own failure paths raise without a second one; the streams this
-     call ran under are re-entered, since the compile runs after the call's scope has closed; and
-     the compile happens at most once, a second call returning the same routine. *)
-  let deferred_compile compile =
-    sealed := true;
-    let log = log_enabled () and progress = progress_enabled () in
-    let compiled = ref None in
-    let outcome () =
-      match !compiled with
-      | Some (Ok result) -> result
-      | Some (Error (exn, backtrace)) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
-      | None -> invalid_arg "Autotune.compile_deferred: no outcome recorded"
+    let outcome_verdict = function
+      | Ok _ -> "compiled"
+      | Error failure when is_not_dispatched failure -> "refused"
+      | Error _ -> "failed"
     in
-    fun () ->
-      if Option.is_some !compiled then outcome ()
-      else
-        (* The search's own compile, so it holds the search like the search did (gh-ocannl-1352) --
-           only where it runs: a memoized outcome is returned unguarded. A failure is kept too: the
-           compile runs once, and a caller catching its exception and asking again gets the same
-           exception, not a second attempt's side effects. *)
-        match
-          exclusive_search (fun () ->
-              (* Rechecked under the guard: another domain may have compiled between the read above
-                 and the acquisition. *)
-              if Option.is_none !compiled then
-                compiled :=
-                  Some
-                    (match with_streams ~log ~progress compile with
-                    | result -> Ok result
-                    | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())))
-        with
-        | () -> outcome ()
-        (* The guard refused before anything ran: not an outcome, so a later turn compiles. *)
-        | exception (Concurrent_search _ as exn) -> raise exn
-  in
-  (* The end of every path that ships a routine: [compile] produces it. Eagerly, it is compiled
-     first and reported after -- a report is a record of what the call achieved, and a compile that
-     raises reports its own failure instead (gh-ocannl-550). Deferred, the report comes first and
-     the compile is handed back. *)
-  let finish r compile =
-    if defer then (
-      emit_report r;
-      deferred_compile compile)
-    else
-      let result = compile () in
-      report_or_release r ~result;
-      Fn.const result
-  in
-  let raise_pre_search ?base (failure : Outcome.failure) =
-    !release_baseline_hook ();
-    (match failure with
-    | Outcome.Classified c ->
-        emit_pre_search_failure ?base ~phase:c.Outcome.phase ~candidate:None
-          ~detail:(Outcome.detail_of_cause c.Outcome.cause)
-          ()
-    | Outcome.Fatal f ->
-        emit_pre_search_failure ?base ~phase:f.Outcome.phase ~candidate:f.Outcome.candidate
-          ~detail:(Exn.to_string f.Outcome.exn) ());
-    Outcome.raise_failure failure
-  in
-  (* The untuned fallback of a call that does not search (search off, a lineage refusal, a deferred
-     cache replay that failed), through the containment-aware form so a failure reports the phase it
-     carries. It is {!seeded_default}'s compile, the recipes' untuned step, wherever
-     {!seeded_settings} admits the seeded plan (CUDA and HIP; gh-ocannl-1441) -- the plan derived
-     inside this compile's own transform, on [ctx]'s lowering -- and the plain default pipeline
-     elsewhere. As in {!seeded_default}, a classified failure of a compile that seeded, split or
-     sank something recompiles the plain default; any other failure goes to [raise_pre_search].
-     [Context.compile] is the plain form plus [raise_failure], which is what [raise_pre_search] ends
-     with, so the caller sees the same exception either way. Every call lies in a [not search]
-     branch or, on a path that tests no flag, carries [[@searchless "<why it does not search>"]]:
-     [test/operations/limits_field_classes] refuses any other caller, since this compile reads
-     [Untimed] fields the cache key cannot see (gh-ocannl-1570). *)
-  let compile_untuned_default ?base () =
-    progress_stage "untuned_default_compile";
-    let plain () =
-      match
-        costed ~attempt:"untuned default" ~verdict_of:outcome_verdict (fun () ->
-            Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
-              bindings)
-      with
-      | Ok result -> result
-      | Error failure -> raise_pre_search ?base failure
+    progress_line "search_start"
+      (let opt = Option.value_map ~default:"none" ~f:(Printf.sprintf "%g") in
+       Printf.sprintf
+         "backend=%s device=%d search=%b beam=%d rounds=%d budget_s=%s call_budget_s=%s \
+          call_share_s=%s"
+         backend device search beam_width rounds (opt budget_s) (opt call_budget_s)
+         (opt call_share_s));
+    (* gh-ocannl-1408: set once a deferred call has delivered its report. The deferred compile runs
+       after that, and its failure paths ([raise_pre_search], [emit_partial_and_raise]) would
+       otherwise report a second time. *)
+    let sealed = ref false in
+    (* Every report goes through here, exactly once per call on every path (gh-ocannl-550), so this
+       is where a search's closing progress line is written: before the callback, which may
+       raise. *)
+    let emit_report (r : report) =
+      let r =
+        {
+          r with
+          compiles = D.backend_compiles () - compiles_at_start;
+          replay_compiles = !replay_compiles;
+          compile_cost = !compile_cost_total;
+        }
+      in
+      if not !sealed then (
+        progress_line "search_done"
+          (Printf.sprintf
+             "outcome=%s timed=%d contended=%d timings_retried=%d unbatched=%d unreadable=%d \
+              dispersed=%d hopeless=%d retimed=%d failed=%d rounds=%d budget_cut=%b \
+              baseline_refused=%b privatize_dropped=%d %s best_ms=%s best=%S"
+             (outcome_name r.outcome) r.candidates_timed r.timings_contended r.timings_retried
+             r.timings_unbatched r.timings_unreadable r.timings_dispersed r.timings_hopeless
+             r.timings_retimed r.candidates_failed r.rounds_run r.budget_cut
+             (Option.is_some r.baseline_refusal)
+             (List.sum (module Int) r.privatize_drops ~f:(fun d -> d.count))
+             (progress_costs ()) (progress_ms r.best_ms) r.best_label);
+        log_crown ~routine:(Lazy.force routine_name) r;
+        Option.iter report ~f:(fun f -> f r))
     in
-    let choice = ref no_seeded_choice in
-    (* Before the compile, so outside its classification: on CUDA and HIP this reads the device's
-       limits (device work, as the search path's limits query is) and the seeding settings, either
-       of which can raise, and the call must still report once. *)
-    let seeded =
-      match seeded_transform ~on_choice:(fun c -> choice := c) ctx bindings with
-      | transform -> transform
-      | exception exn when not (process_fatal_exn exn) ->
+    (* [tune] reports exactly once per call, on every path (gh-ocannl-550). The failures that happen
+       before (or instead of) the search proper — the base compile failing before its lowering is
+       captured, a fatal baseline link, a fatal cache replay, a baseline timing failure, and either
+       untuned fallback compile of a search-less call — used to raise with no report at all, which
+       leaves a caller that attributes arms by arrival order (the positional [?report] of
+       [Train.tune_placements]) with no slot for this search. The phase reported is the one the
+       failure itself carries, so the diagnostic names where it actually died — at codegen, at link,
+       at launch, at sync — instead of guessing. Reporting is best-effort here, as on the search's
+       own fatal path: it must not replace the compiler failure. [base] carries whatever the call
+       did learn before failing (e.g. a decline census). *)
+    let n_timings_retried = ref 0 in
+    let on_retry () = Int.incr n_timings_retried in
+    (* gh-ocannl-1263: how the search's timing calls settled and were admitted, from each call's own
+       record through the per-call [on_call] -- the baseline's and every candidate's, never the
+       diagnostic untuned control's -- so the counts belong to this call whatever else observes, and
+       whatever runs in another domain. *)
+    let decision_counts = Hashtbl.Poly.create () in
+    let on_call (c : timing_call) =
+      Hashtbl.incr decision_counts (c.decision.settle, c.decision.admission)
+    in
+    let timing_decisions () =
+      Hashtbl.to_alist decision_counts
+      |> List.sort ~compare:(fun (a, _) (b, _) -> Poly.compare a b)
+      |> List.map ~f:(fun ((settle, admission), calls) -> (settle, admission, calls))
+    in
+    let emit_pre_search_failure ?(base = base_report) ~phase ~candidate ~detail () =
+      let r =
+        {
+          base with
+          outcome = Pre_search_failure { phase; candidate; detail };
+          timings_retried = !n_timings_retried;
+          timing_decisions = timing_decisions ();
+        }
+      in
+      try emit_report r
+      with report_exn when not (process_fatal_exn report_exn) ->
+        Stdio.eprintf "autotune: pre-search failure report callback failed: %s\n%!"
+          (Exn.to_string report_exn)
+    in
+    (* gh-ocannl-550: every [raise_pre_search] leaves [tune] without returning a routine, so the
+       base compile's artifact is dead on all of them — but the base is linked further down, after
+       this is defined, so the release action arrives by hook rather than by reference. A hook
+       rather than a call at each raise site on purpose: the previous rounds of this work fixed such
+       sites one at a time and each new one was a fresh leak (the fatal cache replay was the last of
+       them), whereas a family with one member cannot be partially updated. Harmless where nothing
+       is linked yet — the two raises above the base compile invoke the no-op default. *)
+    let release_baseline_hook = ref (fun () -> ()) in
+    (* The ONE way this function releases anything (gh-ocannl-550). Releasing is best-effort
+       everywhere: it runs on failure paths where the device may already be refusing work, and a
+       failure to give memory back must never replace the outcome the caller has to act on.
+       Process-fatal conditions still propagate. A helper rather than the ad-hoc guard this started
+       as, because "is this call wrapped?" produced its own review finding once already. *)
+    let release_quietly ~what ctx =
+      try D.release ctx
+      with exn when not (process_fatal_exn exn) ->
+        logf "release of %s failed: %s" what (Exn.to_string exn)
+    in
+    (* [emit_report] on a path that then hands a routine back: the callback's exception propagates
+       by design, so the caller never receives [result] and its buffers become unreachable while the
+       pool table goes on rooting them. Every site that reports a compiled routine reports through
+       this. *)
+    let report_or_release r ~result =
+      match emit_report r with
+      | () -> ()
+      | exception exn ->
           let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-          !release_baseline_hook ();
-          let phase =
-            match exn with
-            | Utils.Invalid_config_value _ -> Outcome.Transform
-            | _ -> Outcome.Hardware_limits
-          in
-          emit_pre_search_failure ?base ~phase ~candidate:None ~detail:(Exn.to_string exn) ();
+          release_quietly ~what:"the routine of a failed completion report" (fst result);
           Stdlib.Printexc.raise_with_backtrace exn backtrace
     in
-    match seeded with
-    | None -> plain ()
-    | Some lowered_transform -> (
+    (* gh-ocannl-1408: the deferred compile of a {!tune_deferred} call. The report has been
+       delivered and sealed, so the compile's own failure paths raise without a second one; the
+       streams this call ran under are re-entered, since the compile runs after the call's scope has
+       closed; and the compile happens at most once, a second call returning the same routine. *)
+    let deferred_compile compile =
+      sealed := true;
+      let log = log_enabled () and progress = progress_enabled () in
+      let compiled = ref None in
+      let outcome () =
+        match !compiled with
+        | Some (Ok result) -> result
+        | Some (Error (exn, backtrace)) -> Stdlib.Printexc.raise_with_backtrace exn backtrace
+        | None -> invalid_arg "Autotune.compile_deferred: no outcome recorded"
+      in
+      fun () ->
+        if Option.is_some !compiled then outcome ()
+        else
+          (* The search's own compile, so it holds the search like the search did (gh-ocannl-1352)
+             -- only where it runs: a memoized outcome is returned unguarded. A failure is kept too:
+             the compile runs once, and a caller catching its exception and asking again gets the
+             same exception, not a second attempt's side effects. *)
+          match
+            exclusive_search (fun () ->
+                (* Rechecked under the guard: another domain may have compiled between the read
+                   above and the acquisition. *)
+                if Option.is_none !compiled then
+                  compiled :=
+                    Some
+                      (match with_streams ~log ~progress compile with
+                      | result -> Ok result
+                      | exception exn -> Error (exn, Stdlib.Printexc.get_raw_backtrace ())))
+          with
+          | () -> outcome ()
+          (* The guard refused before anything ran: not an outcome, so a later turn compiles. *)
+          | exception (Concurrent_search _ as exn) -> raise exn
+    in
+    (* The end of every path that ships a routine: [compile] produces it. Eagerly, it is compiled
+       first and reported after -- a report is a record of what the call achieved, and a compile
+       that raises reports its own failure instead (gh-ocannl-550). Deferred, the report comes first
+       and the compile is handed back. *)
+    let finish r compile =
+      if defer then (
+        emit_report r;
+        deferred_compile compile)
+      else
+        let result = compile () in
+        report_or_release r ~result;
+        Fn.const result
+    in
+    let raise_pre_search ?base (failure : Outcome.failure) =
+      !release_baseline_hook ();
+      (match failure with
+      | Outcome.Classified c ->
+          emit_pre_search_failure ?base ~phase:c.Outcome.phase ~candidate:None
+            ~detail:(Outcome.detail_of_cause c.Outcome.cause)
+            ()
+      | Outcome.Fatal f ->
+          emit_pre_search_failure ?base ~phase:f.Outcome.phase ~candidate:f.Outcome.candidate
+            ~detail:(Exn.to_string f.Outcome.exn) ());
+      Outcome.raise_failure failure
+    in
+    (* The untuned fallback of a call that does not search (search off, a lineage refusal, a
+       deferred cache replay that failed), through the containment-aware form so a failure reports
+       the phase it carries. It is {!seeded_default}'s compile, the recipes' untuned step, wherever
+       {!seeded_settings} admits the seeded plan (CUDA and HIP; gh-ocannl-1441) -- the plan derived
+       inside this compile's own transform, on [ctx]'s lowering -- and the plain default pipeline
+       elsewhere. As in {!seeded_default}, a classified failure of a compile that seeded, split or
+       sank something recompiles the plain default; any other failure goes to [raise_pre_search].
+       [Context.compile] is the plain form plus [raise_failure], which is what [raise_pre_search]
+       ends with, so the caller sees the same exception either way. Every call lies in a [not
+       search] branch or, on a path that tests no flag, carries [[@searchless "<why it does not
+       search>"]]: [test/operations/limits_field_classes] refuses any other caller, since this
+       compile reads [Untimed] fields the cache key cannot see (gh-ocannl-1570). *)
+    let compile_untuned_default ?base () =
+      progress_stage "untuned_default_compile";
+      let plain () =
         match
-          costed ~attempt:"seeded untuned default" ~verdict_of:outcome_verdict (fun () ->
-              Context.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp
+          costed ~attempt:"untuned default" ~verdict_of:outcome_verdict (fun () ->
+              D.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
                 bindings)
         with
         | Ok result -> result
-        | Error (Outcome.Classified classified)
-          when not
-                 (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
-                && List.is_empty !choice.sd_sunk) ->
-            logf "the seeded untuned default FAILED (%s); compiling the plain default"
-              (Outcome.detail_of_cause classified.cause);
-            plain ()
-        | Error failure -> raise_pre_search ?base failure)
-  in
-  (* Without a cache to replay there is nothing for a search-less [tune] to do, so it does not even
-     take the base compile that computes the cache key: the caller gets the untuned default compile
-     it would have gotten from {!untuned_compile} without [model_default_schedule]. *)
-  if (not search) && String.is_empty cache_dir then (
-    logf
-      "search disabled (autotune_search=false) and no chosen cache: compiling the untuned default";
-    (* Report AFTER the fallback compile ([finish]): a report is a record of what this call
-       achieved, and the base report says the untuned default shipped. Emitting it first would leave
-       a consumer holding a clean, non-partial report for a call that then raised (Codex P2 on PR
-       #291); a compile that raises reports its own failure instead (gh-ocannl-550). *)
-    finish base_report (fun () -> compile_untuned_default ()))
-  else
-    let is_gpu = Ir.Backend_intf.binds_hardware_grid facts
-    and is_cpu = Ir.Backend_intf.renders_on_host_pool facts in
-    (* With [timing_ctx], the search (candidate compiles and timing runs) happens against that
-       scratch lineage's buffers, and only the winner is compiled from [ctx] — so the timing runs
-       never mutate the caller's live state (parameters, accumulators). The scratch context must
-       contain the nodes the computation requires from a prior context (e.g. initialized
-       parameters), typically by repeating the caller's initialization on a fresh root context. It
-       must live on the same backend and device as [ctx] (Codex P2 on PR #109): candidates timed
-       elsewhere do not predict this device, and the winner would be cached under this backend's key
-       without ever having been timed on it. *)
-    Option.iter timing_ctx ~f:(fun tctx ->
-        if (not (Context.same_backend tctx ctx)) || Context.ordinal tctx <> Context.ordinal ctx then
-          invalid_arg
-            (Printf.sprintf
-               "Autotune.tune: timing_ctx must be on the same backend and device as the target \
-                context (timing: %s device %d, target: %s device %d)"
-               (Context.backend_name tctx) (Context.ordinal tctx) backend (Context.ordinal ctx)));
-
-    (* Device work, not a pure query: the GPU backends lazily initialize the device and read driver
-       attributes here, so a driver or enumeration error surfaces at this line — the first thing
-       this call does that can fail, and squarely inside the reporting contract. *)
-    let limits =
-      match Context.hardware_limits ctx with
-      | limits -> limits
-      | exception exn ->
-          let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-          emit_pre_search_failure ~phase:Outcome.Hardware_limits ~candidate:None
-            ~detail:(Exn.to_string exn) ();
-          Stdlib.Printexc.raise_with_backtrace exn backtrace
+        | Error failure -> raise_pre_search ?base failure
+      in
+      let choice = ref no_seeded_choice in
+      (* Before the compile, so outside its classification: on CUDA and HIP this reads the device's
+         limits (device work, as the search path's limits query is) and the seeding settings, either
+         of which can raise, and the call must still report once. *)
+      let seeded =
+        match seeded_transform ~on_choice:(fun c -> choice := c) ctx bindings with
+        | transform -> transform
+        | exception exn when not (process_fatal_exn exn) ->
+            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+            !release_baseline_hook ();
+            let phase =
+              match exn with
+              | Utils.Invalid_config_value _ -> Outcome.Transform
+              | _ -> Outcome.Hardware_limits
+            in
+            emit_pre_search_failure ?base ~phase ~candidate:None ~detail:(Exn.to_string exn) ();
+            Stdlib.Printexc.raise_with_backtrace exn backtrace
+      in
+      match seeded with
+      | None -> plain ()
+      | Some lowered_transform -> (
+          match
+            costed ~attempt:"seeded untuned default" ~verdict_of:outcome_verdict (fun () ->
+                D.compile_outcome ?name ~lowered_transform ~provenance:Outcome.Advisory ctx comp
+                  bindings)
+          with
+          | Ok result -> result
+          | Error (Outcome.Classified classified)
+            when not
+                   (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
+                  && List.is_empty !choice.sd_sunk) ->
+              logf "the seeded untuned default FAILED (%s); compiling the plain default"
+                (Outcome.detail_of_cause classified.cause);
+              plain ()
+          | Error failure -> raise_pre_search ?base failure)
     in
-    (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
-       schedule cache's key does not carry: every [Search_shaping] configuration key (the class the
-       key leaves out by definition), plus every argument of this function that resolves one — each
-       resolved value, whether passed or read. A cached [best_steps] replays only under the same
-       shape: the flip chain compares at equal depth, which presumes the same candidate order and
-       sampling. The keys that steer the placement level above this call ([Utils.Placement_shaping]:
-       the flip budget and ordering, the shipped arm, the placement store) are not in it: no search
-       reads them, and with them in it a warm chain run under [tune_placement_store=false] searched
-       every abandoned flip in full (gh-ocannl-1192). Nor are the keys of the untuned regime's model
-       pick ([Utils.Untimed_model]: [model_default_*]), which only {!model_default} reads
-       (gh-ocannl-1241). A key renders only when its resolved value is not its default, as this
-       device resolves the default (gh-ocannl-1272): stating a key at its default must not cost a
-       warm chain its records. Hence computed here, once [limits] is known: the cache key the
-       trajectory is stored under hashes the limits record's [Key]-class projection, so two
-       processes sharing it resolve every [Key]-derived [auto] alike. The one input an [Untimed]
-       field steers -- the seeded plan's [auto] gate (gh-ocannl-1253) -- joins below as the plan it
-       resolved to, once the base lowering exists ([search_shape]). *)
-    let search_shape_settings =
-      Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
-        search beam_width rounds repeats keep_fraction max_split_reduce_sites
-        (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
-        (search_shaping_identity ~facts ~limits)
-    in
-    (* The accumulator residency the seeded [Privatize] tiles are minted at: the same resolution the
-       backend's code generation widens the serial rendering by (gh-ocannl-1116). *)
-    let capabilities = Context.codegen_capabilities ctx in
-    let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
-    let search_ctx = Option.value timing_ctx ~default:ctx in
-    (* The base compile: identity transform (= the serial baseline candidate), capturing the
-       optimized code every candidate derives from (see [compile_candidate]) and its canonical form.
-       Canonicalize INSIDE the transform: after the transform returns, codegen forces the remaining
-       undecided placements into the very placements table the captured [opt] references, and
-       placement classes enter the digest (Schedule_cache.canonicalize) — the disk-cache key must be
-       the deterministic transform-time form so that storing and replaying processes agree.
+    (* Without a cache to replay there is nothing for a search-less [tune] to do, so it does not
+       even take the base compile that computes the cache key: the caller gets the untuned default
+       compile it would have gotten from {!untuned_compile} without [model_default_schedule]. *)
+    if (not search) && String.is_empty cache_dir then (
+      logf
+        "search disabled (autotune_search=false) and no chosen cache: compiling the untuned default";
+      (* Report AFTER the fallback compile ([finish]): a report is a record of what this call
+         achieved, and the base report says the untuned default shipped. Emitting it first would
+         leave a consumer holding a clean, non-partial report for a call that then raised (Codex P2
+         on PR #291); a compile that raises reports its own failure instead (gh-ocannl-550). *)
+      finish base_report (fun () -> compile_untuned_default ()))
+    else
+      let is_gpu = Ir.Backend_intf.binds_hardware_grid facts
+      and is_cpu = Ir.Backend_intf.renders_on_host_pool facts in
+      (* With [timing_ctx], the search (candidate compiles and timing runs) happens against that
+         scratch lineage's buffers, and only the winner is compiled from [ctx] — so the timing runs
+         never mutate the caller's live state (parameters, accumulators). The scratch context must
+         contain the nodes the computation requires from a prior context (e.g. initialized
+         parameters), typically by repeating the caller's initialization on a fresh root context. It
+         must live on the same backend and device as [ctx] (Codex P2 on PR #109): candidates timed
+         elsewhere do not predict this device, and the winner would be cached under this backend's
+         key without ever having been timed on it. *)
+      Option.iter timing_ctx ~f:(fun tctx ->
+          if (not (D.same_backend tctx ctx)) || D.ordinal tctx <> D.ordinal ctx then
+            invalid_arg
+              (Printf.sprintf
+                 "Autotune.tune: timing_ctx must be on the same backend and device as the target \
+                  context (timing: %s device %d, target: %s device %d)"
+                 (D.backend_name tctx) (D.ordinal tctx) backend (D.ordinal ctx)));
 
-       The baseline is a candidate, so its compile is protected like every other candidate's
-       (gh-ocannl-533): a typed rejection — the HIP scratch validator declining the unscheduled
-       serial form at [Backend_link] is the case that motivated this — declines the baseline and
-       lets the search proceed with the scheduled candidates, instead of killing the run before a
-       single candidate has been tried. This is sound because the capture happens INSIDE the
-       transform, which runs before codegen and link: [base_opt] survives the rejection, so every
-       candidate still derives from the same base lowering. Only the timing of the serial form is
-       lost, and on a GPU backend it was never going to be timed anyway ([dispatchable] below).
-       Unclassified failures stay fatal: provenance [Candidate] under strict classification.
+      (* Device work, not a pure query: the GPU backends lazily initialize the device and read
+         driver attributes here, so a driver or enumeration error surfaces at this line — the first
+         thing this call does that can fail, and squarely inside the reporting contract. *)
+      let limits =
+        match D.hardware_limits ctx with
+        | limits -> limits
+        | exception exn ->
+            let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+            emit_pre_search_failure ~phase:Outcome.Hardware_limits ~candidate:None
+              ~detail:(Exn.to_string exn) ();
+            Stdlib.Printexc.raise_with_backtrace exn backtrace
+      in
+      (* gh-ocannl-1110: what shapes which candidates this search times, and in what order, that the
+         schedule cache's key does not carry: every [Search_shaping] configuration key (the class
+         the key leaves out by definition), plus every argument of this function that resolves one —
+         each resolved value, whether passed or read. A cached [best_steps] replays only under the
+         same shape: the flip chain compares at equal depth, which presumes the same candidate order
+         and sampling. The keys that steer the placement level above this call
+         ([Utils.Placement_shaping]: the flip budget and ordering, the shipped arm, the placement
+         store) are not in it: no search reads them, and with them in it a warm chain run under
+         [tune_placement_store=false] searched every abandoned flip in full (gh-ocannl-1192). Nor
+         are the keys of the untuned regime's model pick ([Utils.Untimed_model]: [model_default_*]),
+         which only {!model_default} reads (gh-ocannl-1241). A key renders only when its resolved
+         value is not its default, as this device resolves the default (gh-ocannl-1272): stating a
+         key at its default must not cost a warm chain its records. Hence computed here, once
+         [limits] is known: the cache key the trajectory is stored under hashes the limits record's
+         [Key]-class projection, so two processes sharing it resolve every [Key]-derived [auto]
+         alike. The one input an [Untimed] field steers -- the seeded plan's [auto] gate
+         (gh-ocannl-1253) -- joins below as the plan it resolved to, once the base lowering exists
+         ([search_shape]). *)
+      let search_shape_settings =
+        Printf.sprintf "search=%b beam=%d rounds=%d repeats=%d keep=%h split_sites=%d blocks=%s|%s"
+          search beam_width rounds repeats keep_fraction max_split_reduce_sites
+          (String.concat ~sep:"," (List.map seed_block_sizes ~f:Int.to_string))
+          (search_shaping_identity ~facts ~limits)
+      in
+      (* The accumulator residency the seeded [Privatize] tiles are minted at: the same resolution
+         the backend's code generation widens the serial rendering by (gh-ocannl-1116). *)
+      let capabilities = D.codegen_capabilities ctx in
+      let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
+      let search_ctx = Option.value timing_ctx ~default:ctx in
+      (* The base compile: identity transform (= the serial baseline candidate), capturing the
+         optimized code every candidate derives from (see [compile_candidate]) and its canonical
+         form. Canonicalize INSIDE the transform: after the transform returns, codegen forces the
+         remaining undecided placements into the very placements table the captured [opt]
+         references, and placement classes enter the digest (Schedule_cache.canonicalize) — the
+         disk-cache key must be the deterministic transform-time form so that storing and replaying
+         processes agree.
 
-       gh-ocannl-552 settled whether this base compile should instead be the default-annotated
-       pipeline (the shared cause behind gh-ocannl-532 and gh-ocannl-533): it cannot be. The default
-       form is [maybe_default_schedules] — fission, then per-segment annotation — so in general it
-       is several kernels, not one [optimized] to rebase candidates on; every candidate family
-       (presets, the sketch detectors, fission enumeration, beam menu moves) assumes the serial zero
-       point; and annotation consults [hardware_limits], which would bake per-device decisions into
-       [source_digest]. The consequences that motivated the question are each handled where they
-       arise: the scratch hazard by this compile's candidate-grade protection (gh-ocannl-533), the
-       GPU dispatch hazard by [dispatchable] (gh-ocannl-532), and the missing "did tuning beat the
-       default?" reference by [report.default_ms] — the [config_thresholds] seed's measurement, not
-       a new baseline.
+         The baseline is a candidate, so its compile is protected like every other candidate's
+         (gh-ocannl-533): a typed rejection — the HIP scratch validator declining the unscheduled
+         serial form at [Backend_link] is the case that motivated this — declines the baseline and
+         lets the search proceed with the scheduled candidates, instead of killing the run before a
+         single candidate has been tried. This is sound because the capture happens INSIDE the
+         transform, which runs before codegen and link: [base_opt] survives the rejection, so every
+         candidate still derives from the same base lowering. Only the timing of the serial form is
+         lost, and on a GPU backend it was never going to be timed anyway ([dispatchable] below).
+         Unclassified failures stay fatal: provenance [Candidate] under strict classification.
 
-       gh-ocannl-1666: the base compile LOWERS ONLY, on every backend. Its transform captures and
-       then unwinds before codegen: on a GPU backend as the gh-ocannl-1340 refusal, on a CPU one as
-       a deferral ([base_deferred]). The serial baseline's own codegen, compile and link happen only
-       where it is timed -- the search below ([baseline_compile]) -- so a cache replay, a refused
-       lineage, a search-less call and a replayed abandonment pay for none of it. A cc cache replay
-       used to compile the whole serial routine (a C compile of ~10 s per [gpt2_mini_train] arm
-       after gh-ocannl-1603's outlining) only to release it unrun. The gh-ocannl-533 protection
-       moves with the compile: a typed rejection there declines the baseline exactly as it did here.
-       What the search pays instead: its baseline compile lowers once more, as every candidate
-       compile does. *)
-    let base_capture = ref None in
-    (* gh-ocannl-1388: the base lowering as the transform received it, for deriving the seeded
-       untuned plan exactly as the untuned compile derives it inside its own transform: codegen
-       later forces the undecided placements into the table the captured [opt] references, and the
-       plan's decisions key on placement-sensitive digests. GPU only: the plan is CUDA/HIP's. *)
-    let base_pristine = ref None in
-    let base_undispatched = ref false in
-    (* gh-ocannl-1666: the base compile unwound before codegen on a dispatchable baseline, which the
-       search compiles where it times it ([baseline_compile]). *)
-    let base_deferred = ref false in
-    (* gh-ocannl-1526: the search's one lowering. The base compile below fills it; every candidate
-       compile from [search_ctx] (and a winner compiled into [search_ctx] itself) takes a private
-       copy instead of lowering again -- the lineage state its rebased code was decided under. *)
-    let reuse = Ir.Lowering_reuse.create () in
-    progress_stage "base_compile";
-    let base_compile_from = ref None in
-    let base_outcome =
-      costed ~stage:"base_compile" ~attempt:"baseline" ~verdict_of:outcome_verdict @@ fun () ->
-      Context.compile_outcome ?name
-        ~lowered_transform:(fun opt ->
-          (* Inside the transform, so an injected fault is classified by the ordinary machinery
-             (phase [Transform], provenance [Candidate]) and reaches [raise_pre_search] below with a
-             real phase and a report — rather than escaping the whole call unreported, which would
-             break the exactly-once contract for direct [tune] callers. *)
-          Seam.get on_candidate_attempt "baseline";
-          if Option.is_some budget && Option.is_none !base_compile_from then
-            base_compile_from := Some (budget_clock ());
-          base_capture := Some (opt, SC.canonicalize ~static_indices opt);
+         gh-ocannl-552 settled whether this base compile should instead be the default-annotated
+         pipeline (the shared cause behind gh-ocannl-532 and gh-ocannl-533): it cannot be. The
+         default form is [maybe_default_schedules] — fission, then per-segment annotation — so in
+         general it is several kernels, not one [optimized] to rebase candidates on; every candidate
+         family (presets, the sketch detectors, fission enumeration, beam menu moves) assumes the
+         serial zero point; and annotation consults [hardware_limits], which would bake per-device
+         decisions into [source_digest]. The consequences that motivated the question are each
+         handled where they arise: the scratch hazard by this compile's candidate-grade protection
+         (gh-ocannl-533), the GPU dispatch hazard by [dispatchable] (gh-ocannl-532), and the missing
+         "did tuning beat the default?" reference by [report.default_ms] — the [config_thresholds]
+         seed's measurement, not a new baseline.
 
-          if is_gpu then base_pristine := Some (scratch_of opt);
-          (* gh-ocannl-1340: an undispatchable baseline is refused here, before codegen, like any
-             candidate ([compile_candidate_gated]): it is never timed, so its codegen, device
-             compile and link were pure cost -- minutes of hiprtc per call on HIP. *)
-          if not (dispatchable ~is_gpu [ opt ]) then (
-            base_undispatched := true;
+         gh-ocannl-1666: the base compile LOWERS ONLY, on every backend. Its transform captures and
+         then unwinds before codegen: on a GPU backend as the gh-ocannl-1340 refusal, on a CPU one
+         as a deferral ([base_deferred]). The serial baseline's own codegen, compile and link happen
+         only where it is timed -- the search below ([baseline_compile]) -- so a cache replay, a
+         refused lineage, a search-less call and a replayed abandonment pay for none of it. A cc
+         cache replay used to compile the whole serial routine (a C compile of ~10 s per
+         [gpt2_mini_train] arm after gh-ocannl-1603's outlining) only to release it unrun. The
+         gh-ocannl-533 protection moves with the compile: a typed rejection there declines the
+         baseline exactly as it did here. What the search pays instead: its baseline compile lowers
+         once more, as every candidate compile does. *)
+      let base_capture = ref None in
+      (* gh-ocannl-1388: the base lowering as the transform received it, for deriving the seeded
+         untuned plan exactly as the untuned compile derives it inside its own transform: codegen
+         later forces the undecided placements into the table the captured [opt] references, and the
+         plan's decisions key on placement-sensitive digests. GPU only: the plan is CUDA/HIP's. *)
+      let base_pristine = ref None in
+      let base_undispatched = ref false in
+      (* gh-ocannl-1666: the base compile unwound before codegen on a dispatchable baseline, which
+         the search compiles where it times it ([baseline_compile]). *)
+      let base_deferred = ref false in
+      (* gh-ocannl-1526: the search's one lowering. The base compile below fills it; every candidate
+         compile from [search_ctx] (and a winner compiled into [search_ctx] itself) takes a private
+         copy instead of lowering again -- the lineage state its rebased code was decided under. *)
+      let reuse = D.reuse_create () in
+      progress_stage "base_compile";
+      let base_compile_from = ref None in
+      let base_outcome =
+        costed ~stage:"base_compile" ~attempt:"baseline" ~verdict_of:outcome_verdict @@ fun () ->
+        D.compile_outcome ?name
+          ~lowered_transform:(fun opt ->
+            (* Inside the transform, so an injected fault is classified by the ordinary machinery
+               (phase [Transform], provenance [Candidate]) and reaches [raise_pre_search] below with
+               a real phase and a report — rather than escaping the whole call unreported, which
+               would break the exactly-once contract for direct [tune] callers. *)
+            Seam.get on_candidate_attempt "baseline";
+            if Option.is_some budget && Option.is_none !base_compile_from then
+              base_compile_from := Some (budget_clock ());
+            base_capture := Some (opt, SC.canonicalize ~static_indices opt);
+
+            if is_gpu then base_pristine := Some (scratch_of opt);
+            (* gh-ocannl-1340: an undispatchable baseline is refused here, before codegen, like any
+               candidate ([compile_candidate_gated]): it is never timed, so its codegen, device
+               compile and link were pure cost -- minutes of hiprtc per call on HIP. *)
+            if not (dispatchable ~is_gpu [ opt ]) then (
+              base_undispatched := true;
+              raise
+                (Outcome.Cause_at
+                   ( Outcome.Transform,
+                     Outcome.Not_dispatched
+                       {
+                         origin = "baseline";
+                         detail =
+                           Printf.sprintf
+                             "the serial baseline binds no hardware dimension on %s (gh-ocannl-532)"
+                             backend;
+                       } )));
+            (* gh-ocannl-1666: a dispatchable baseline is compiled where it is timed, not here. The
+               typed unwind is the gh-ocannl-1340 one, so nothing is counted, rendered or linked;
+               the [Error] arm below drops it by [base_deferred], like the refusal above by
+               [base_undispatched]. *)
+            base_deferred := true;
             raise
               (Outcome.Cause_at
                  ( Outcome.Transform,
@@ -8291,104 +8429,92 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                      {
                        origin = "baseline";
                        detail =
-                         Printf.sprintf
-                           "the serial baseline binds no hardware dimension on %s (gh-ocannl-532)"
-                           backend;
-                     } )));
-          (* gh-ocannl-1666: a dispatchable baseline is compiled where it is timed, not here. The
-             typed unwind is the gh-ocannl-1340 one, so nothing is counted, rendered or linked; the
-             [Error] arm below drops it by [base_deferred], like the refusal above by
-             [base_undispatched]. *)
-          base_deferred := true;
-          raise
-            (Outcome.Cause_at
-               ( Outcome.Transform,
-                 Outcome.Not_dispatched
-                   {
-                     origin = "baseline";
-                     detail =
-                       "the serial baseline is compiled only where it is timed (gh-ocannl-1666)";
-                   } )))
-        ~reuse ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
-    in
-    (* gh-ocannl-1604: the base compile's cost on [budget_clock], from the transform's start (after
-       the baseline's attempt hook, as a candidate's span starts after its own hook) to its return:
-       the search's first compile evidence, so its first candidate compile is projected too. The
-       base compile unwinds before codegen on every backend (gh-ocannl-1340, gh-ocannl-1666), so
-       this is its lowering's transform alone; on a CPU backend the search's [baseline_compile]
-       joins it as evidence, and on a GPU one the first candidate's cold compile is the evidence
-       that counts. Recorded only under a budget. It renders no kernel, so it reuses none: it is
-       evidence only until a compile reuses one ([record_compile_evidence]). *)
-    Option.iter !base_compile_from ~f:(fun c0 ->
-        record_compile_evidence ~span_s:(Float.max 0. (budget_clock () -. c0)) Ir.Compile_cost.empty);
-    let base_opt, canon =
-      match (!base_capture, base_outcome) with
-      | Some oc, _ -> oc
-      (* Failed before reaching the transform: there is no base lowering, hence no search. *)
-      | None, Error failure -> raise_pre_search failure
-      | None, Ok _ -> failwith "Autotune.tune: backend compile did not invoke lowered_transform"
-    in
-    (* gh-ocannl-1621: every timing window starts from the state the search lineage held before the
-       search's first dispatch. The snapshot is taken at the first window -- after the base compile,
-       before any routine of this search has run, since [time_routine] is a search's only dispatch;
-       a call that times nothing (a cache replay, a search that declines everything) copies nothing.
-       Each later window first restores it, outside [time_routine] and so outside its clock and its
-       [setup_ms]: what a candidate is timed on is the routine it ships, optimizer update included,
-       started from the same values as every other candidate. The runs of one window still train
-       from there (the boundary; restoring per batch would put a host transfer before every
-       calibration probe). [with_timing_state_restored] restores once more when the call ends. *)
-    let timing_snapshot =
-      lazy
-        (let snapshot = snapshot_timing_state search_ctx base_opt in
-         (* gh-ocannl-1781: a restore is not a reset -- the gradients get back the values they held
-            before the search, and with them the accumulation history they had then, which the
-            restoring uploads clear and the timing runs extend. *)
-         let restore_history = Context.save_accumulation_history search_ctx in
-         logf
-           "timing state: %d written node(s) of the search lineage, %d bytes, restored before each \
-            timing window"
-           (List.length snapshot)
-           (List.sum (module Int) snapshot ~f:(fun (_, nd) -> Ir.Ndarray.size_in_bytes nd));
-         (snapshot, restore_history))
-    in
-    let timing_state_dirty = ref false in
-    let restore_timing_snapshot () =
-      let snapshot, restore_history = Lazy.force timing_snapshot in
-      if !timing_state_dirty then (
-        restore_timing_state search_ctx snapshot;
-        restore_history ();
-        timing_state_dirty := false)
-    in
-    (* Called right before every [time_routine] of the search, after the lineage-wide preflight (so
-       a restore never vouches for an input nobody initialized) and outside the candidate's failure
-       boundary: a failed restore is the lineage's, not a candidate's decline. *)
-    let before_timing_window () =
-      restore_timing_snapshot ();
-      timing_state_dirty := true
-    in
-    timing_state.settle <-
-      Some
-        (fun ~after_exn ->
-          (* A poisoned lineage is unusable by contract, and a search can still return over one:
-             with a [timing_ctx], a contained candidate failure poisons the scratch lineage while
-             the winner ships from [ctx] -- restoring there would refuse, and raise over a result
-             the caller is owed. *)
-          if !timing_state_dirty && Option.is_none (Context.poisoned_failure search_ctx) then
-            if not after_exn then restore_timing_snapshot ()
-            else
-              match restore_timing_snapshot () with
-              | () -> ()
-              | exception exn when not (process_fatal_exn exn) ->
-                  logf "timing state: restoring the search lineage after a failure FAILED: %s"
-                    (Exn.to_string exn));
-    (* The key this call's schedule entry is stored and looked up under, and (gh-ocannl-1022) the
-       [source_digest] of every report from here on, failures included: they all describe a search
-       of this lowering. Shadowing [base_report] reaches [census] and every [~base] passed below;
-       the report closures defined above keep the empty-digest one, which only the failures that
-       precede the capture use without a [~base]. *)
-    let base_digest = SC.digest canon in
-    let base_report = { base_report with source_digest = base_digest } in
-    (* gh-ocannl-1388 + gh-ocannl-1253: the seeded untuned plan, decided once on the base lowering.
+                         "the serial baseline is compiled only where it is timed (gh-ocannl-1666)";
+                     } )))
+          ~reuse ~provenance:Outcome.Candidate ~candidate:"baseline" search_ctx comp bindings
+      in
+      (* gh-ocannl-1604: the base compile's cost on [budget_clock], from the transform's start
+         (after the baseline's attempt hook, as a candidate's span starts after its own hook) to its
+         return: the search's first compile evidence, so its first candidate compile is projected
+         too. The base compile unwinds before codegen on every backend (gh-ocannl-1340,
+         gh-ocannl-1666), so this is its lowering's transform alone; on a CPU backend the search's
+         [baseline_compile] joins it as evidence, and on a GPU one the first candidate's cold
+         compile is the evidence that counts. Recorded only under a budget. It renders no kernel, so
+         it reuses none: it is evidence only until a compile reuses one
+         ([record_compile_evidence]). *)
+      Option.iter !base_compile_from ~f:(fun c0 ->
+          record_compile_evidence
+            ~span_s:(Float.max 0. (budget_clock () -. c0))
+            Ir.Compile_cost.empty);
+      let base_opt, canon =
+        match (!base_capture, base_outcome) with
+        | Some oc, _ -> oc
+        (* Failed before reaching the transform: there is no base lowering, hence no search. *)
+        | None, Error failure -> raise_pre_search failure
+        | None, Ok _ -> failwith "Autotune.tune: backend compile did not invoke lowered_transform"
+      in
+      (* gh-ocannl-1621: every timing window starts from the state the search lineage held before
+         the search's first dispatch. The snapshot is taken at the first window -- after the base
+         compile, before any routine of this search has run, since [time_routine] is a search's only
+         dispatch; a call that times nothing (a cache replay, a search that declines everything)
+         copies nothing. Each later window first restores it, outside [time_routine] and so outside
+         its clock and its [setup_ms]: what a candidate is timed on is the routine it ships,
+         optimizer update included, started from the same values as every other candidate. The runs
+         of one window still train from there (the boundary; restoring per batch would put a host
+         transfer before every calibration probe). [with_timing_state_restored] restores once more
+         when the call ends. *)
+      let timing_snapshot =
+        lazy
+          (let snapshot = snapshot_timing_state search_ctx base_opt in
+           (* gh-ocannl-1781: a restore is not a reset -- the gradients get back the values they
+              held before the search, and with them the accumulation history they had then, which
+              the restoring uploads clear and the timing runs extend. *)
+           let restore_history = D.save_accumulation_history search_ctx in
+           logf
+             "timing state: %d written node(s) of the search lineage, %d bytes, restored before \
+              each timing window"
+             (List.length snapshot)
+             (List.sum (module Int) snapshot ~f:(fun (_, nd) -> Ir.Ndarray.size_in_bytes nd));
+           (snapshot, restore_history))
+      in
+      let timing_state_dirty = ref false in
+      let restore_timing_snapshot () =
+        let snapshot, restore_history = Lazy.force timing_snapshot in
+        if !timing_state_dirty then (
+          restore_timing_state search_ctx snapshot;
+          restore_history ();
+          timing_state_dirty := false)
+      in
+      (* Called right before every [time_routine] of the search, after the lineage-wide preflight
+         (so a restore never vouches for an input nobody initialized) and outside the candidate's
+         failure boundary: a failed restore is the lineage's, not a candidate's decline. *)
+      let before_timing_window () =
+        restore_timing_snapshot ();
+        timing_state_dirty := true
+      in
+      timing_state.settle <-
+        Some
+          (fun ~after_exn ->
+            (* A poisoned lineage is unusable by contract, and a search can still return over one:
+               with a [timing_ctx], a contained candidate failure poisons the scratch lineage while
+               the winner ships from [ctx] -- restoring there would refuse, and raise over a result
+               the caller is owed. *)
+            if !timing_state_dirty && Option.is_none (D.poisoned_failure search_ctx) then
+              if not after_exn then restore_timing_snapshot ()
+              else
+                match restore_timing_snapshot () with
+                | () -> ()
+                | exception exn when not (process_fatal_exn exn) ->
+                    logf "timing state: restoring the search lineage after a failure FAILED: %s"
+                      (Exn.to_string exn));
+      (* The key this call's schedule entry is stored and looked up under, and (gh-ocannl-1022) the
+         [source_digest] of every report from here on, failures included: they all describe a search
+         of this lowering. Shadowing [base_report] reaches [census] and every [~base] passed below;
+         the report closures defined above keep the empty-digest one, which only the failures that
+         precede the capture use without a [~base]. *)
+      let base_digest = SC.digest canon in
+      let base_report = { base_report with source_digest = base_digest } in
+      (* gh-ocannl-1388 + gh-ocannl-1253: the seeded untuned plan, decided once on the base lowering.
        It is the search's first candidate, and since its [auto] gate reads the device description's
        [Untimed] capacity and cache bandwidth, the RESOLVED plan -- its content digest, never the
        raw constants -- joins the trajectory identity: a crown searched under another seed is not an
@@ -8396,3386 +8522,1191 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
        trajectory recorded before the seed joined the identity -- one whose first step may have been
        a seed -- matches a search without one. Lazy: a warm hit whose entry carries no record never
        derives it. *)
-    (* gh-ocannl-1697: the per-segment decisions every derivation of the search's seeded plans shares
+      (* gh-ocannl-1697: the per-segment decisions every derivation of the search's seeded plans shares
        -- the plan's own, then each seeded split single's ({!seeded_resplit}). *)
-    let seeded_memo_v = seeded_memo () in
-    let seeded_plan_value =
-      lazy
-        (Seam.get on_seeded_plan
-           (Option.bind !base_pristine ~f:(fun opt ->
-                let t0 = Unix.gettimeofday () in
-                let plan =
-                  seeded_plan ~memo:seeded_memo_v ~capabilities ~facts ~limits ~accum_prec
-                    ~static_indices opt
-                in
-                logf "seeded untuned plan derived in %.3f s: %s"
-                  (Unix.gettimeofday () -. t0)
-                  (Option.value_map plan ~default:"none" ~f:seeded_plan_label);
-                plan)))
-    in
-    let search_shape =
-      lazy
-        (match Lazy.force seeded_plan_value with
-        | None -> search_shape_settings ^ "|seed=none"
-        | Some plan ->
-            search_shape_settings ^ "|seed=" ^ seeded_plan_digest plan
-            (* gh-ocannl-1138: the staffed search's start reads the plan's gate on the search's own
-               segments, which the digest does not record. *)
-            ^ Option.value_map plan.sp_start ~default:"" ~f:(fun start ->
-                (* gh-ocannl-1664: unless the seeded sweep replaces the staffed one. *)
-                if staffed_singles && not (seeded_singles && Option.is_some plan.sp_segments) then
-                  "|staffed_start=" ^ start.gate_tag
-                else ""))
-    in
-    (* A stored shape whose settings already differ is decided without deriving the plan. *)
-    let same_search_shape stored =
-      String.is_prefix stored ~prefix:search_shape_settings
-      && String.equal stored (Lazy.force search_shape)
-    in
-    let baseline_linked, baseline_decline =
-      match base_outcome with
-      | Ok (bctx, broutine) -> (Some (bctx, broutine), None)
-      (* Refused before codegen, not declined: the search records the refusal where it always has,
-         as [Not_dispatched_key "baseline"], and the two accounts stay exclusive. *)
-      | Error failure when (!base_undispatched || !base_deferred) && is_not_dispatched failure ->
-          (None, None)
-      | Error (Outcome.Classified classified) -> (None, Some classified)
-      | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:base_report failure
-    in
-    (* gh-ocannl-550: a linked baseline is device memory the pool table roots, invisible to the GC,
-       so whatever path the call takes releases it -- on the search path once it is timed, like any
-       candidate. Since gh-ocannl-1666 only the search links one ([baseline_compile]), and the paths
-       that do not search hold nothing to release; the releases there stay for a base compile that
-       ever links again. Without them, a warm-cache process leaked one full base-candidate pool per
-       [tune] call, permanently, which for a repeatedly-tuning process was the very accumulation
-       gh-ocannl-550 was about. A release empties the ref, so the search compiles a baseline exactly
-       where none is linked. *)
-    let baseline_linked = ref baseline_linked in
-    let release_baseline () =
-      Option.iter !baseline_linked ~f:(fun (bctx, _) ->
-          baseline_linked := None;
-          release_quietly ~what:"the baseline compile" bctx)
-    in
-    release_baseline_hook := release_baseline;
-    let codegen_tag = SC.codegen_tag ~facts ~limits ~capabilities () in
-    let objective = timing_string timing in
-    let key_of canon =
-      SC.cache_key
-        ~timing_identity:(Context.timing_identity search_ctx)
-        ~objective ~limits ~capabilities ~facts canon ~backend
-    in
-    (* Whether a stored winner answers this call, for the base whose digest is [digest]. The
-       numerics and codegen checks are belt-and-braces: the key already carries both tags
-       (gh-ocannl-568, gh-ocannl-572), so a regime-mismatched entry normally lives in a different
-       file and is never looked up. They catch a hand-moved or hand-written entry, which is the
-       shape of the misdirection this guards against — a tf32-vs-default A/B whose cache directories
-       got crossed. An entry from before the codegen field existed carries no claim about its
-       regime, so it is not rejected on that ground. *)
-    let entry_replayable ~digest (entry : SC.entry) =
-      String.equal entry.SC.source_digest digest
-      && String.equal entry.SC.numerics (SC.numerics_tag ())
-      && Option.value_map entry.SC.codegen ~default:true ~f:(String.equal codegen_tag)
-      && Option.value_map entry.SC.objective ~default:true ~f:(String.equal objective)
-      (* gh-ocannl-1409: a budget-cut crown answers only a call that has a budget too. *)
-      && (Option.is_some budget || not entry.SC.budget_cut)
-    in
-    (* gh-ocannl-1614: the base lowering reads node value bounds (gh-ocannl-1560's audit), so a base
-       lowered after a link that proposed some -- a [Host_inits] upload of an index tensor -- folds
-       guards a base lowered before it kept, and digests to another key: a tune after a run missed
-       the entry its cold twin stored and searched again. The base the call keeps is the bounded one
-       (its folds are free speed for a fresh search), but when no winner is stored under its key and
-       one is stored under the key of the same routine lowered blind to node bounds
-       ([LL.without_node_bounds]), the call takes the blind lowering as its base instead. The swap
-       is whole: every candidate, the replay, a re-search on a stale entry (whose baseline relinks
-       from [base_opt]) and the store all derive from the blind base, so the stored entry keeps
-       naming the code it was searched on, and a replay applies a schedule to exactly the code it
-       was saved against -- never the bounded code to a schedule searched on the blind one. A cold
-       base is blind already when nothing has proposed bounds for its nodes, which is when its entry
-       is stored. What it costs a hit: the guard folds of the bounded lowering, which the cold call
-       that stored the winner shipped without too. Neither key is widened: each is still the digest
-       of the code it names, so two bases that differ in anything but those folds keep apart. Gated
-       on a node the routine mentions carrying a bounds candidate (nothing can fold otherwise, so
-       the blind lowering would be the base itself), then on a miss under the bounded key, checked
-       before the blind lowering: a call with no bounds pays nothing, and a warm bounded hit one
-       extra entry read but no second lowering. *)
-    let blind_rebase =
-      let bounds_proposed () =
-        let ins, outs = Ir.Assignments.collect_nodes_guess_output comp.Ir.Assignments.asgns in
-        Set.exists (Set.union ins outs) ~f:(fun tn -> Option.is_some (Ir.Tnode.bounds_candidate tn))
+      let seeded_memo_v = seeded_memo () in
+      let seeded_plan_value =
+        lazy
+          (Seam.get on_seeded_plan
+             (Option.bind !base_pristine ~f:(fun opt ->
+                  let t0 = Unix.gettimeofday () in
+                  let plan =
+                    seeded_plan ~memo:seeded_memo_v ~capabilities ~facts ~limits ~accum_prec
+                      ~static_indices opt
+                  in
+                  logf "seeded untuned plan derived in %.3f s: %s"
+                    (Unix.gettimeofday () -. t0)
+                    (Option.value_map plan ~default:"none" ~f:seeded_plan_label);
+                  plan)))
       in
-      let stored ~digest canon =
-        Option.exists (SC.lookup ~dir:cache_dir ~key:(key_of canon)) ~f:(entry_replayable ~digest)
+      let search_shape =
+        lazy
+          (match Lazy.force seeded_plan_value with
+          | None -> search_shape_settings ^ "|seed=none"
+          | Some plan ->
+              search_shape_settings ^ "|seed=" ^ seeded_plan_digest plan
+              (* gh-ocannl-1138: the staffed search's start reads the plan's gate on the search's
+                 own segments, which the digest does not record. *)
+              ^ Option.value_map plan.sp_start ~default:"" ~f:(fun start ->
+                  (* gh-ocannl-1664: unless the seeded sweep replaces the staffed one. *)
+                  if staffed_singles && not (seeded_singles && Option.is_some plan.sp_segments) then
+                    "|staffed_start=" ^ start.gate_tag
+                  else ""))
       in
-      if
-        String.is_empty cache_dir
-        || (not (SC.complete canon))
-        || Option.is_none (key_of canon)
-        || (not (bounds_proposed ()))
-        || stored ~digest:base_digest canon
-      then None
-      else
-        match
-          LL.without_node_bounds (fun () ->
-              Context.lowered_for_decisions ?name search_ctx comp bindings)
-        with
-        | exception exn when not (process_fatal_exn exn) ->
-            logf "blind base lowering failed, keeping the bounded base: %s" (Exn.to_string exn);
-            None
-        | blind_opt ->
-            let blind_canon = SC.canonicalize ~static_indices blind_opt in
-            let blind_digest = SC.digest blind_canon in
-            if String.equal blind_digest base_digest || not (SC.complete blind_canon) then None
-            else if stored ~digest:blind_digest blind_canon then
-              Some (blind_opt, blind_canon, blind_digest)
-            else None
-    in
-    let base_opt, canon, base_digest, base_report =
-      match blind_rebase with
-      | None -> (base_opt, canon, base_digest, base_report)
-      | Some (blind_opt, blind_canon, blind_digest) ->
-          logf
-            "base lowered after a link (digest %s); a winner is stored for its bounds-blind \
-             lowering (digest %s), which this call rebases on (gh-ocannl-1614)"
-            (dshort base_digest) (dshort blind_digest);
-          if is_gpu then base_pristine := Some (scratch_of blind_opt);
-          (* The candidates' lineage state comes from the code they are rebased on: the blind
-             lowering's, not the bounded base compile's (gh-ocannl-1526). [blind_opt] is
-             [lower_assignments]' result, as the cell's snapshot is. *)
-          Ir.Lowering_reuse.reseed reuse blind_opt;
-          (blind_opt, blind_canon, blind_digest, { base_report with source_digest = blind_digest })
-    in
-    let key = key_of canon in
-    let use_cache = (not (String.is_empty cache_dir)) && SC.complete canon && Option.is_some key in
-    (* gh-ocannl-1384: unconditional, not [logf]. Declining the cache this way is invisible
-       otherwise -- the call searches, returns a good routine and stores nothing, so every later
-       call searches again -- and for weeks it was why no padded-conv cell ever replayed. *)
-    if (not (String.is_empty cache_dir)) && not (SC.complete canon) then
-      Stdio.eprintf
-        "autotune: WARNING: schedule cache not used for routine %S (digest %s): its canonical form \
-         is incomplete (%s), so this search's winner is neither looked up nor stored\n\
-         %!"
-        (Lazy.force routine_name) base_digest
-        (Option.value (SC.incomplete_reason canon) ~default:"no reason recorded");
-    if Option.is_none key then
-      logf "persistent timed cache disabled for %s: concrete device identity unavailable" backend;
-    (* gh-ocannl-1438: the privatized presets' dropped proposals, by the same aggregation, in a
-       table of their own: a drop costs a proposal inside a candidate that still compiles, so
-       counting it in [declines] would break that census's sum to [candidates_failed]. *)
-    let privatize_declines : (Outcome.rejection_key, decline_acc) Hashtbl.Poly.t =
-      Hashtbl.Poly.create ()
-    in
-    let on_privatize_drops drops =
-      List.iter drops ~f:(fun (d : privatize_drop) ->
-          logf "privatize proposal for %s over %s dropped: %s"
-            (Ir.Tnode.debug_name d.pd_target [@message_only "an autotune log line"])
-            (Idx.symbol_ident d.pd_over)
-            (Outcome.detail_of_cause d.pd_cause);
-          record_decline ~warn:false privatize_declines
-            {
-              Outcome.phase = Outcome.Transform;
-              cause = d.pd_cause;
-              execution_effect = Outcome.No_device_writes;
-            })
-    in
-    let compile_spec spec =
-      costed ~attempt:(spec_label spec) ~verdict_of:outcome_verdict (fun () ->
-          compile_candidate ?name ~on_privatize_drops ~reuse ~static_indices ~base_opt ~canon
-            ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings spec)
-    in
-    (* The search's own candidate compiles, deduplicated against [seen] before codegen. *)
-    let compile_spec_deduped ~seen =
-      compile_candidate_gated ?name ~seen ~on_privatize_drops ~reuse ~static_indices ~base_opt
-        ~canon ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings
-    in
-    (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
-       base lowering as the search's candidates, the caller's lineage lowering to it
-       ([Lineage_refused] below). *)
-    let compile_spec_real ?label ?retain provenance spec =
-      costed
-        ~attempt:(Option.value label ~default:(spec_label spec))
-        ~verdict_of:outcome_verdict
-        (fun () ->
-          (* The search's lowering serves a compile into [search_ctx] itself; another lineage (the
-             caller's, after a search on a [timing_ctx]) lowers afresh, behind [Lineage_refused]. *)
-          let reuse = Option.some_if (phys_equal ctx search_ctx) reuse in
-          compile_candidate ?name ?label ?retain ?reuse ~static_indices ~base_opt ~canon ~limits
-            ~is_gpu ~is_cpu ~provenance ctx comp bindings spec)
-    in
-    let flat_schedule = function
-      | Whole_saved saved -> saved
-      | Fiss_saved segs -> List.concat_map segs ~f:(fun s -> s.SC.seg_saved)
-      | Split_saved (prelude, segs) -> prelude @ List.concat_map segs ~f:(fun s -> s.SC.seg_saved)
-    in
-    let is_fissioned = function Whole_saved _ -> false | Fiss_saved _ | Split_saved _ -> true in
-    (* A timed candidate's saved form as the spec that recompiles it: the winner replay's, and the
-       beam finals' re-timings (gh-ocannl-1635). *)
-    let spec_of_form = function
-      | Whole_saved saved -> Whole (W_saved (saved, None))
-      | Fiss_saved segs -> Fiss (F_saved (segs, None))
-      | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
-    in
-    (* Whether the crowned schedule tensorizes is read off the schedule, not off the winning spec's
-       label (gh-ocannl-546): the beam can extend a plainly-labeled incumbent with a [Tensorize]
-       move, and a sketch label promises tensorization the transform may not have kept. *)
-    let saved_is_tensorized (saved : SC.saved_schedule) =
-      List.exists saved ~f:(function SC.Tensorize _ -> true | _ -> false)
-    in
-    (* What the emission actually did, straight off the compiled routine: the schedule-side
-       [saved_is_tensorized] says what was ASKED, [c.routine.mma] says what was DELIVERED, and the
-       gap between the two is exactly the false "tensorized" timing (gh-ocannl-626). *)
-    let mma_summary c = c.routine.Context.mma in
-    let mma_scalar_fallbacks c = (mma_summary c).Ir.C_syntax.scalar_fallbacks in
-    let mma_statements c = (mma_summary c).Ir.C_syntax.statements in
-    (* The decline census outlives the cache branch: the base compile happens before the lookup and
-       can be declined (an injected fault at its [baseline] attempt, gh-ocannl-533) whether or not a
-       cached winner then replays, so a cache-hit report has to carry that rejection too —
-       [baseline_declined] with an empty census would be an internally inconsistent diagnostic
-       (Codex review, PR #271). Since gh-ocannl-1666 a decline of the baseline's own codegen or link
-       arises only in the search ([baseline_compile]), which is where it is recorded. *)
-    let declines : (Outcome.rejection_key, decline_acc) Hashtbl.Poly.t = Hashtbl.Poly.create () in
-    (* A declined baseline is an ordinary entry in the census: it is the same evidence about the
-       same device as any candidate's rejection, and dropping it would report a smaller
-       [candidates_failed] than the work actually attempted. It is recorded HERE and NOT as a
-       [Not_dispatched] refusal below — the two are mutually exclusive accounts of one baseline, and
-       the gh-ocannl-532 refusal asserts a reason ("binds no hardware dimension") that is not why
-       this baseline did not run. *)
-    Option.iter baseline_decline ~f:(record_decline declines);
-    (* What the call has learned by now: everything after this point reports on top of it, success
+      (* A stored shape whose settings already differ is decided without deriving the plan. *)
+      let same_search_shape stored =
+        String.is_prefix stored ~prefix:search_shape_settings
+        && String.equal stored (Lazy.force search_shape)
+      in
+      let baseline_linked, baseline_decline =
+        match base_outcome with
+        | Ok (bctx, broutine) -> (Some (bctx, broutine), None)
+        (* Refused before codegen, not declined: the search records the refusal where it always has,
+           as [Not_dispatched_key "baseline"], and the two accounts stay exclusive. *)
+        | Error failure when (!base_undispatched || !base_deferred) && is_not_dispatched failure ->
+            (None, None)
+        | Error (Outcome.Classified classified) -> (None, Some classified)
+        | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:base_report failure
+      in
+      (* gh-ocannl-550: a linked baseline is device memory the pool table roots, invisible to the
+         GC, so whatever path the call takes releases it -- on the search path once it is timed,
+         like any candidate. Since gh-ocannl-1666 only the search links one ([baseline_compile]),
+         and the paths that do not search hold nothing to release; the releases there stay for a
+         base compile that ever links again. Without them, a warm-cache process leaked one full
+         base-candidate pool per [tune] call, permanently, which for a repeatedly-tuning process was
+         the very accumulation gh-ocannl-550 was about. A release empties the ref, so the search
+         compiles a baseline exactly where none is linked. *)
+      let baseline_linked = ref baseline_linked in
+      let release_baseline () =
+        Option.iter !baseline_linked ~f:(fun (bctx, _) ->
+            baseline_linked := None;
+            release_quietly ~what:"the baseline compile" bctx)
+      in
+      release_baseline_hook := release_baseline;
+      let codegen_tag = SC.codegen_tag ~facts ~limits ~capabilities () in
+      let objective = timing_string timing in
+      let key_of canon =
+        SC.cache_key ~timing_identity:(D.timing_identity search_ctx) ~objective ~limits
+          ~capabilities ~facts canon ~backend
+      in
+      (* Whether a stored winner answers this call, for the base whose digest is [digest]. The
+         numerics and codegen checks are belt-and-braces: the key already carries both tags
+         (gh-ocannl-568, gh-ocannl-572), so a regime-mismatched entry normally lives in a different
+         file and is never looked up. They catch a hand-moved or hand-written entry, which is the
+         shape of the misdirection this guards against — a tf32-vs-default A/B whose cache
+         directories got crossed. An entry from before the codegen field existed carries no claim
+         about its regime, so it is not rejected on that ground. *)
+      let entry_replayable ~digest (entry : SC.entry) =
+        String.equal entry.SC.source_digest digest
+        && String.equal entry.SC.numerics (SC.numerics_tag ())
+        && Option.value_map entry.SC.codegen ~default:true ~f:(String.equal codegen_tag)
+        && Option.value_map entry.SC.objective ~default:true ~f:(String.equal objective)
+        (* gh-ocannl-1409: a budget-cut crown answers only a call that has a budget too. *)
+        && (Option.is_some budget || not entry.SC.budget_cut)
+      in
+      (* gh-ocannl-1614: the base lowering reads node value bounds (gh-ocannl-1560's audit), so a
+         base lowered after a link that proposed some -- a [Host_inits] upload of an index tensor --
+         folds guards a base lowered before it kept, and digests to another key: a tune after a run
+         missed the entry its cold twin stored and searched again. The base the call keeps is the
+         bounded one (its folds are free speed for a fresh search), but when no winner is stored
+         under its key and one is stored under the key of the same routine lowered blind to node
+         bounds ([LL.without_node_bounds]), the call takes the blind lowering as its base instead.
+         The swap is whole: every candidate, the replay, a re-search on a stale entry (whose
+         baseline relinks from [base_opt]) and the store all derive from the blind base, so the
+         stored entry keeps naming the code it was searched on, and a replay applies a schedule to
+         exactly the code it was saved against -- never the bounded code to a schedule searched on
+         the blind one. A cold base is blind already when nothing has proposed bounds for its nodes,
+         which is when its entry is stored. What it costs a hit: the guard folds of the bounded
+         lowering, which the cold call that stored the winner shipped without too. Neither key is
+         widened: each is still the digest of the code it names, so two bases that differ in
+         anything but those folds keep apart. Gated on a node the routine mentions carrying a bounds
+         candidate (nothing can fold otherwise, so the blind lowering would be the base itself),
+         then on a miss under the bounded key, checked before the blind lowering: a call with no
+         bounds pays nothing, and a warm bounded hit one extra entry read but no second lowering. *)
+      let blind_rebase =
+        let bounds_proposed () =
+          Set.exists (D.program_nodes comp) ~f:(fun tn ->
+              Option.is_some (Ir.Tnode.bounds_candidate tn))
+        in
+        let stored ~digest canon =
+          Option.exists (SC.lookup ~dir:cache_dir ~key:(key_of canon)) ~f:(entry_replayable ~digest)
+        in
+        if
+          String.is_empty cache_dir
+          || (not (SC.complete canon))
+          || Option.is_none (key_of canon)
+          || (not (bounds_proposed ()))
+          || stored ~digest:base_digest canon
+        then None
+        else
+          match
+            LL.without_node_bounds (fun () ->
+                D.lowered_for_decisions ?name search_ctx comp bindings)
+          with
+          | exception exn when not (process_fatal_exn exn) ->
+              logf "blind base lowering failed, keeping the bounded base: %s" (Exn.to_string exn);
+              None
+          | blind_opt ->
+              let blind_canon = SC.canonicalize ~static_indices blind_opt in
+              let blind_digest = SC.digest blind_canon in
+              if String.equal blind_digest base_digest || not (SC.complete blind_canon) then None
+              else if stored ~digest:blind_digest blind_canon then
+                Some (blind_opt, blind_canon, blind_digest)
+              else None
+      in
+      let base_opt, canon, base_digest, base_report =
+        match blind_rebase with
+        | None -> (base_opt, canon, base_digest, base_report)
+        | Some (blind_opt, blind_canon, blind_digest) ->
+            logf
+              "base lowered after a link (digest %s); a winner is stored for its bounds-blind \
+               lowering (digest %s), which this call rebases on (gh-ocannl-1614)"
+              (dshort base_digest) (dshort blind_digest);
+            if is_gpu then base_pristine := Some (scratch_of blind_opt);
+            (* The candidates' lineage state comes from the code they are rebased on: the blind
+               lowering's, not the bounded base compile's (gh-ocannl-1526). [blind_opt] is
+               [lower_assignments]' result, as the cell's snapshot is. *)
+            D.reuse_reseed reuse blind_opt;
+            (blind_opt, blind_canon, blind_digest, { base_report with source_digest = blind_digest })
+      in
+      let key = key_of canon in
+      let use_cache =
+        (not (String.is_empty cache_dir)) && SC.complete canon && Option.is_some key
+      in
+      (* gh-ocannl-1384: unconditional, not [logf]. Declining the cache this way is invisible
+         otherwise -- the call searches, returns a good routine and stores nothing, so every later
+         call searches again -- and for weeks it was why no padded-conv cell ever replayed. *)
+      if (not (String.is_empty cache_dir)) && not (SC.complete canon) then
+        Stdio.eprintf
+          "autotune: WARNING: schedule cache not used for routine %S (digest %s): its canonical \
+           form is incomplete (%s), so this search's winner is neither looked up nor stored\n\
+           %!"
+          (Lazy.force routine_name) base_digest
+          (Option.value (SC.incomplete_reason canon) ~default:"no reason recorded");
+      if Option.is_none key then
+        logf "persistent timed cache disabled for %s: concrete device identity unavailable" backend;
+      (* gh-ocannl-1438: the privatized presets' dropped proposals, by the same aggregation, in a
+         table of their own: a drop costs a proposal inside a candidate that still compiles, so
+         counting it in [declines] would break that census's sum to [candidates_failed]. *)
+      let privatize_declines : (Outcome.rejection_key, decline_acc) Hashtbl.Poly.t =
+        Hashtbl.Poly.create ()
+      in
+      let on_privatize_drops drops =
+        List.iter drops ~f:(fun (d : privatize_drop) ->
+            logf "privatize proposal for %s over %s dropped: %s"
+              (Ir.Tnode.debug_name d.pd_target [@message_only "an autotune log line"])
+              (Idx.symbol_ident d.pd_over)
+              (Outcome.detail_of_cause d.pd_cause);
+            record_decline ~warn:false privatize_declines
+              {
+                Outcome.phase = Outcome.Transform;
+                cause = d.pd_cause;
+                execution_effect = Outcome.No_device_writes;
+              })
+      in
+      let compile_spec spec =
+        costed ~attempt:(spec_label spec) ~verdict_of:outcome_verdict (fun () ->
+            compile_candidate ?name ~on_privatize_drops ~reuse ~static_indices ~base_opt ~canon
+              ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings spec)
+      in
+      (* The search's own candidate compiles, deduplicated against [seen] before codegen. *)
+      let compile_spec_deduped ~seen =
+        compile_candidate_gated ?name ~seen ~on_privatize_drops ~reuse ~static_indices ~base_opt
+          ~canon ~limits ~is_gpu ~is_cpu ~provenance:Outcome.Candidate search_ctx comp bindings
+      in
+      (* Winner (and cache-hit) compiles target the caller's context; they replay against the same
+         base lowering as the search's candidates, the caller's lineage lowering to it
+         ([Lineage_refused] below). *)
+      let compile_spec_real ?label ?retain provenance spec =
+        costed
+          ~attempt:(Option.value label ~default:(spec_label spec))
+          ~verdict_of:outcome_verdict
+          (fun () ->
+            (* The search's lowering serves a compile into [search_ctx] itself; another lineage (the
+               caller's, after a search on a [timing_ctx]) lowers afresh, behind
+               [Lineage_refused]. *)
+            let reuse = Option.some_if (phys_equal ctx search_ctx) reuse in
+            compile_candidate ?name ?label ?retain ?reuse ~static_indices ~base_opt ~canon ~limits
+              ~is_gpu ~is_cpu ~provenance ctx comp bindings spec)
+      in
+      let flat_schedule = function
+        | Whole_saved saved -> saved
+        | Fiss_saved segs -> List.concat_map segs ~f:(fun s -> s.SC.seg_saved)
+        | Split_saved (prelude, segs) -> prelude @ List.concat_map segs ~f:(fun s -> s.SC.seg_saved)
+      in
+      let is_fissioned = function Whole_saved _ -> false | Fiss_saved _ | Split_saved _ -> true in
+      (* A timed candidate's saved form as the spec that recompiles it: the winner replay's, and the
+         beam finals' re-timings (gh-ocannl-1635). *)
+      let spec_of_form = function
+        | Whole_saved saved -> Whole (W_saved (saved, None))
+        | Fiss_saved segs -> Fiss (F_saved (segs, None))
+        | Split_saved (prelude, segs) -> Fiss (F_split_saved (prelude, segs, None))
+      in
+      (* Whether the crowned schedule tensorizes is read off the schedule, not off the winning
+         spec's label (gh-ocannl-546): the beam can extend a plainly-labeled incumbent with a
+         [Tensorize] move, and a sketch label promises tensorization the transform may not have
+         kept. *)
+      let saved_is_tensorized (saved : SC.saved_schedule) =
+        List.exists saved ~f:(function SC.Tensorize _ -> true | _ -> false)
+      in
+      (* What the emission actually did, straight off the compiled routine: the schedule-side
+         [saved_is_tensorized] says what was ASKED, [c.routine.mma] says what was DELIVERED, and the
+         gap between the two is exactly the false "tensorized" timing (gh-ocannl-626). *)
+      let mma_summary c = D.routine_mma c.routine in
+      let mma_scalar_fallbacks c = (mma_summary c).Ir.C_syntax.scalar_fallbacks in
+      let mma_statements c = (mma_summary c).Ir.C_syntax.statements in
+      (* The decline census outlives the cache branch: the base compile happens before the lookup
+         and can be declined (an injected fault at its [baseline] attempt, gh-ocannl-533) whether or
+         not a cached winner then replays, so a cache-hit report has to carry that rejection too —
+         [baseline_declined] with an empty census would be an internally inconsistent diagnostic
+         (Codex review, PR #271). Since gh-ocannl-1666 a decline of the baseline's own codegen or
+         link arises only in the search ([baseline_compile]), which is where it is recorded. *)
+      let declines : (Outcome.rejection_key, decline_acc) Hashtbl.Poly.t = Hashtbl.Poly.create () in
+      (* A declined baseline is an ordinary entry in the census: it is the same evidence about the
+         same device as any candidate's rejection, and dropping it would report a smaller
+         [candidates_failed] than the work actually attempted. It is recorded HERE and NOT as a
+         [Not_dispatched] refusal below — the two are mutually exclusive accounts of one baseline,
+         and the gh-ocannl-532 refusal asserts a reason ("binds no hardware dimension") that is not
+         why this baseline did not run. *)
+      Option.iter baseline_decline ~f:(record_decline declines);
+      (* What the call has learned by now: everything after this point reports on top of it, success
        or failure, so a pre-search failure never understates the work already attempted (a declined
        baseline in particular must not read back as [baseline_declined = false], [declines =
        []]). *)
-    (* gh-ocannl-1242: why a cache entry under this key did not replay, when it was refused with a
+      (* gh-ocannl-1242: why a cache entry under this key did not replay, when it was refused with a
        typed cause — set by the lookup below and carried by every report after it. *)
-    let cache_replay_refusal = ref None in
-    (* Whether the baseline was declined, by the base compile or (gh-ocannl-1666) by the search's
-       [baseline_compile], which sets it: every report after a decline says so. *)
-    let baseline_declined_so_far = ref (Option.is_some baseline_decline) in
-    let census () =
-      {
-        base_report with
-        candidates_failed = failed_count declines;
-        baseline_declined = !baseline_declined_so_far;
-        declines = decline_summaries declines;
-        privatize_drops = decline_summaries privatize_declines;
-        cache_replay_refusal = !cache_replay_refusal;
-      }
-    in
-    (* gh-ocannl-1326: a device that refuses what every schedule of the base lowering must allocate
-       has answered for the whole search: every candidate, a cache replay and the untuned fallback.
-       Refused here, typed, rather than by declining every candidate in turn at link (a b256
-       [gpt2_mini_train] arm on a 12 GiB card spent 12 minutes doing that before its fallback
-       compile died of the same cause), and before the cache is consulted, whose replay would be
-       refused alike. A [Pre_search_failure] is no search and no replay, which is how
-       {!Train.tune_placements}' other arm still ships and how a benchmark harness tells this from a
-       search. What "must allocate" means is the floor ({!Context.probe_link_floor}, gh-ocannl-1554,
-       [probe_floor] below): not the base link's delta, which bounds no candidate from below under
-       the liveness planner or on-chip fusion; and not the first search candidate to reach link
-       (gh-ocannl-1493), which can be larger than the base. *)
-    let is_device_memory = function
-      | { Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ } ->
-          true
-      | _ -> false
-    in
-    let refuse_if_device_memory ~probe = function
-      | Some classified when is_device_memory classified ->
-          logf "%s: REFUSED, the search cannot run: the floor under every schedule does not fit: %s"
-            probe
-            (Outcome.detail_of_cause classified.cause);
-          (* The search is refused on a declined baseline -- the floor's refusal stands for it --
-             which [census] reads off the base compile alone; the baseline's one account is in the
-             census already (its own decline, or the floor's in its place). *)
-          raise_pre_search
-            ~base:{ (census ()) with baseline_declined = true }
-            (Outcome.Classified classified)
-      | Some _ | None -> ()
-    in
-    (* gh-ocannl-1421: a timing lineage that lowers the routine to another program than the caller's
-       can tune nothing the caller can take: every candidate, cached entry and winner derives from
-       the timing lineage's base lowering. Decided here, before the cache and the search, so the
-       call reports what it ships -- the untuned default, timed at nothing -- rather than a crown
-       that a refused winner compile would leave a placement A/B ranking (and recording) by. And
-       before the device-memory refusal below: that is the TIMING lineage's base refused, which says
-       nothing about the caller's untuned routine, the one thing a refused lineage ships. *)
-    let lineage_refusal =
-      Option.bind timing_ctx ~f:(fun tctx ->
-          let identity c =
-            lineage_identity ~static_indices (Context.lowered_for_decisions ?name c comp bindings)
-          in
-          match (identity ctx, identity tctx) with
-          | caller_digest, timing_digest when String.equal caller_digest timing_digest -> None
-          | caller_digest, timing_digest -> Some (caller_digest, timing_digest)
-          | exception exn when not (process_fatal_exn exn) ->
-              (* A lineage that cannot lower the routine fails the winner's and the untuned
-                 fallback's compiles alike: said now, not after a search that cannot ship. *)
-              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-              raise_pre_search ~base:(census ())
-                (Outcome.Fatal
-                   {
-                     exn;
-                     backtrace;
-                     phase = Outcome.Transform;
-                     candidate = Some "lineage comparison";
-                     cause = None;
-                   })
-          | exception exn ->
-              (* A process-level failure propagates as it is, but not past the linked baseline. *)
-              let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-              !release_baseline_hook ();
-              Stdlib.Printexc.raise_with_backtrace exn backtrace)
-    in
-    (* gh-ocannl-1554: the footprint question every search-wide device-memory refusal asks -- does
-       the device admit the FLOOR under every schedule of the base lowering
-       ({!Context.probe_link_floor})? Not the base link's own delta, which bounds no candidate from
-       below under the liveness planner (the serial base is one kernel, one GPU planner position, so
-       it overlaps nothing a fissioned candidate's segments separate: 954 KB against 791 KB on
-       [link_delta_parity]'s training step) nor under on-chip fusion (a shared epilogue placement
-       keeps its target off the device), nor on the CPU under aliasing (a [Split_reduce] candidate
-       refines the base's statement-grained spans). Asked in the same place for every path: after
-       the lineage check (a refused timing lineage says nothing of the caller's routine) and before
-       the cache, whose replay would be refused alike. A floor the device admits answers nothing
-       about any candidate, which is that candidate's own decline at link.
-
-       [~account]: where the baseline has no account in the census yet (it was refused before
-       codegen, gh-ocannl-1340), a refused floor is its one account -- declined at [Backend_link]
-       for device memory, as a refused base link's was before gh-ocannl-1340, and not beside its
-       [Not_dispatched] refusal, which the search records only once it runs. Where the baseline's
-       own link (or relink) was declined, that decline is its account already. *)
-    let probe_floor ~account =
-      progress_stage "footprint_probe";
-      let probe = "baseline footprint floor probe" in
-      match
-        Outcome.protect ~classify_backend:(Context.failure_classifier search_ctx)
-          ~provenance:Outcome.Candidate ~phase:Outcome.Backend_link ~candidate:probe (fun () ->
-            Context.probe_link_floor ?name search_ctx base_opt)
-      with
-      | Ok (f : Context.link_floor) ->
-          logf
-            "%s: %s: %d working + %d constant bytes in %d pool(s); left out: %d bytes some \
-             schedule keeps off the device, %d a packed tile can replace, %d the liveness planner \
-             may overlap. It promises nothing about any candidate"
-            probe
-            (if f.lf_pools = 0 then "empty floor, nothing to ask" else "the floor fits")
-            f.lf_working_bytes f.lf_constant_bytes f.lf_pools f.lf_off_device_bytes
-            f.lf_replaceable_bytes f.lf_overlap_bytes
-      | Error (Outcome.Classified classified) when is_device_memory classified ->
-          if account then record_decline declines classified;
-          refuse_if_device_memory ~probe (Some classified)
-      | Error (Outcome.Classified classified) ->
-          (* Not the device's memory: no answer to the footprint question, so the search
-             proceeds. *)
-          logf "%s: no answer, %s %s" probe (phase_label classified.phase)
-            (Outcome.detail_of_cause classified.cause)
-      | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure
-    in
-    (* The base compile's own device-memory decline refuses nothing by itself (it bounds no
-       candidate from below, above): the floor answers. Where the baseline was refused before
-       codegen (every GPU backend's), it allocated nothing, and the floor answers in its place. A
-       CPU baseline, deferred (gh-ocannl-1666), is not probed here: its own link in the search
-       ([baseline_compile]) is the first memory evidence, as the base link was, and a refusal there
-       asks the floor; a cache replay's link answers for a hit. *)
-    if Option.is_none lineage_refusal then
-      if Option.exists baseline_decline ~f:is_device_memory then probe_floor ~account:false
-      else if !base_undispatched then probe_floor ~account:true;
-    let cached =
-      if use_cache && Option.is_none lineage_refusal then
-        match SC.lookup ~dir:cache_dir ~key with
-        | Some entry when entry_replayable ~digest:base_digest entry -> (
-            let spec =
-              match entry.SC.segments with
-              (* A fissioned entry with a non-empty [saved] is a split-reduce winner: [saved] is the
-                 whole-routine prelude, [segments] the post-prelude per-segment schedules. *)
-              | Some segs when not (List.is_empty entry.SC.saved) ->
-                  Fiss (F_split_saved (entry.SC.saved, segs, None))
-              | Some segs -> Fiss (F_saved (segs, None))
-              | None -> Whole (W_saved (entry.SC.saved, None))
-            in
-            (* gh-ocannl-1326: the replay must not find the baseline's working set still resident:
-               on a step that uses over half the device it was refused at link while the baseline
-               held the rest, so every warm process re-searched. Since gh-ocannl-1666 none is linked
-               here (a no-op); the search compiles one if this entry turns out stale. *)
-            release_baseline ();
-            progress_stage "cache_replay";
-            (* An entry written before the gh-ocannl-532 rule can name the serial baseline as the
-               winner: it was timed then, and it won by default whenever every candidate failed to
-               compile — the state gh-ocannl-521 recorded for every GPU backend. Replaying it would
-               reintroduce the single-work-item dispatch through the cache, permanently and without
-               ever timing anything. Rejected like a stale entry: the fresh search below overwrites
-               it. Rejecting the replay (rather than bumping [entry_version]) keeps every sound
-               entry, on this backend and on the CPU backends, where an empty schedule is a
-               legitimate winner. The rejection is decided before codegen
-               ([compile_candidate_gated]) and arrives as the typed [Not_dispatched] failure, which
-               the [Error] arm below records in [cache_replay_refusal] like any other refused replay
-               (gh-ocannl-1340). This arm is the post-codegen check on what was shipped.
-
-               gh-ocannl-1440: a deferred call keeps the compiled code ([retained]), so the routine
-               it ships is this compile's code linked again rather than a second compile. *)
-            let retained = ref None in
-            let retain = if defer then Some (fun rt -> retained := Some rt) else None in
-            (* Counted as the backend compiles the replay completed, a replay whose link then failed
-               included (review round 2). *)
-            let before = Context.backend_compiles () in
-            let replay_compile = compile_spec_real ?retain Outcome.Cache_replay spec in
-            replay_compiles := !replay_compiles + (Context.backend_compiles () - before);
-            match replay_compile with
-            | Ok c when not (shipped_dispatchable ~is_gpu c) ->
-                logf "cache entry replays to an unparallelized routine, re-searching: %s"
-                  (spec_label spec);
-                cache_replay_refusal :=
-                  Some
-                    {
-                      Outcome.phase = Outcome.Backend_codegen;
-                      cause =
-                        Outcome.Not_dispatched
-                          {
-                            origin = "cache_replay";
-                            detail =
-                              Printf.sprintf
-                                "%s shipped kernels binding no hardware dimension (gh-ocannl-532)"
-                                (spec_label spec);
-                          };
-                      execution_effect = Outcome.No_device_writes;
-                    };
-                (* gh-ocannl-550: rejected, so its buffers are dead — and the fresh search below is
-                   about to want them. *)
-                release_quietly ~what:"a rejected cache replay" c.cctx;
-                None
-            | Ok c ->
-                logf "cache hit: %s (best %.4f ms, baseline %.4f ms)" (spec_label spec)
-                  entry.SC.best_ms entry.SC.baseline_ms;
-                (* gh-ocannl-550: the report happens INSIDE the construction of [cached], so a
-                   [report] callback that raises here never reaches the [Some result] arm below that
-                   releases the baseline, and abandons the replayed winner too — two rooted routine
-                   footprints per call, for a caller that retries. Both released before the
-                   callback's exception propagates; the exception and its backtrace are
-                   unchanged. *)
-                let emit_report report =
-                  match emit_report report with
-                  | () -> ()
-                  | exception exn ->
-                      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                      release_quietly ~what:"the replay of a failed cache-hit report" c.cctx;
-                      release_baseline ();
-                      Stdlib.Printexc.raise_with_backtrace exn backtrace
-                in
-                let hit_report =
-                  {
-                    outcome = Cache_replay;
-                    (* The entry's times are the storing search's, but the objective is this call's:
-                       since gh-ocannl-755 the objective is a cache-key component, so an entry under
-                       this key was measured under this objective. *)
-                    timing;
-                    candidates_timed = 0;
-                    timings_contended = 0;
-                    timings_retried = 0;
-                    timings_unbatched = 0;
-                    timings_unreadable = 0;
-                    timings_dispersed = 0;
-                    timings_hopeless = 0;
-                    timings_retimed = 0;
-                    timing_decisions = timing_decisions ();
-                    candidates_contended = 0;
-                    default_refused = false;
-                    (* No search ran, so the only rejection this can carry is the baseline's. *)
-                    candidates_failed = failed_count declines;
-                    baseline_declined = Option.is_some baseline_decline;
-                    (* Nothing is timed on a replay, the baseline included. *)
-                    baseline_refusal = None;
-                    declines = decline_summaries declines;
-                    privatize_drops = [];
-                    cache_replay_refusal = None;
-                    rounds_run = 0;
-                    round_moves = [];
-                    (* gh-ocannl-1725: facts about the crown, like [best_ms], so the replay explains
-                       its own times as the storing search's report did; the finals' window counts
-                       describe this call, which timed none. An entry older than the record replays
-                       as finals that did not run. *)
-                    finals =
-                      Option.value_map entry.SC.finals ~default:[] ~f:(fun f -> f.SC.contenders);
-                    finals_timed = 0;
-                    finals_admitted = 0;
-                    finals_outcome =
-                      Option.value_map entry.SC.finals ~default:Finals_not_run ~f:(fun f ->
-                          f.SC.outcome);
-                    (* A fact about the crown, like [best_ms] (gh-ocannl-1409). *)
-                    budget_cut = entry.SC.budget_cut;
-                    budget_s;
-                    call_budget_s;
-                    call_share_s;
-                    compiles = 0 (* Stamped by [emit_report]. *);
-                    replay_compiles = 0;
-                    beam_width;
-                    sketch_candidates = 0;
-                    epilogue_sketch_candidates = 0;
-                    fiss_sketch_candidates = 0;
-                    fiss_sketch_timed = 0;
-                    fiss_sketch_composite = `Ineligible;
-                    fiss_sketch_playoff_timed = 0;
-                    fiss_sketch_playoff_swaps = 0;
-                    fiss_sketch_playoff_finals = 0;
-                    fiss_sketch_playoff_finals_timed = 0;
-                    fiss_sketch_playoff_finals_admitted = 0;
-                    fiss_sketch_staffed_timed = 0;
-                    fiss_sketch_backdrop_fallbacks = 0;
-                    staffed_finals = 0;
-                    staffed_finals_timed = 0;
-                    staffed_finals_admitted = 0;
-                    seeded_single_candidates = 0;
-                    seeded_single_timed = 0;
-                    seeded_single_joins = 0;
-                    seeded_single_fallbacks = 0;
-                    seeded_split_candidates = 0;
-                    seeded_split_timed = 0;
-                    seeded_split_joins = 0;
-                    seeded_hopeless = 0;
-                    split_reduce_candidates = 0;
-                    split_reduce_timed = 0;
-                    split_reduce_composite_eligible = false;
-                    split_reduce_composite_timed = false;
-                    split_reduce_backdrop_fallbacks = 0;
-                    mma_candidates = 0;
-                    fiss_mma_candidates = 0;
-                    mma_timed = 0;
-                    model_scored = 0;
-                    model_pruned = 0;
-                    bound_pruned = 0;
-                    fissioned = is_fissioned c.form;
-                    baseline_ms = entry.SC.baseline_ms;
-                    default_ms =
-                      (* The entry's [default_ms] describes the default pipeline under the config
-                         that ran the search; the cache key covers neither, so a config change can
-                         redefine the default without missing the cache. Fingerprint mismatch drops
-                         the stale diagnostic — the winner replay itself stays valid (Codex P2 on PR
-                         #279). *)
-                      (match (entry.SC.default_ms, entry.SC.default_fingerprint) with
-                      | (Some _ as d), Some fp
-                        when String.equal fp (Sched.default_schedule_fingerprint ~facts) ->
-                          d
-                      | _ -> None);
-                    (* Not stored: a measurement of one seed, read only next to the search that
-                       timed it. *)
-                    seeded_ms = None;
-                    best_ms = entry.SC.best_ms;
-                    best_label = spec_label spec;
-                    best_tensorized = saved_is_tensorized (flat_schedule c.form);
-                    best_tensorization = Some (mma_summary c).Ir.C_syntax.tensorization;
-                    best_mma_statements = mma_statements c;
-                    best_mma_scalar_fallbacks = mma_scalar_fallbacks c;
-                    (* The replay compile's own census: it is the routine this call returns. No
-                       candidate was ranked in this process, so the per-candidate list is empty,
-                       like every counter here. *)
-                    best_grid = Some c.routine.Context.grid;
-                    grid_serial_timed = [];
-                    (* Nothing was timed in this process — [mma_timed = 0] like every other COUNTER
-                       here, which describes this call. The TIMES describe the program, and are
-                       replayed from the entry exactly as [best_ms] and [baseline_ms] above are:
-                       without that, the flip chain's profitability term (gh-ocannl-579) would rank
-                       the decision surface one way on the cold run that measured the family and the
-                       other way on every warm-cache run after it. [None] for a search that timed
-                       none, and for entries written before the field existed. *)
-                    mma_best_ms = Option.value entry.SC.mma_best_ms ~default:Float.infinity;
-                    (* A time of the program, replayed with [best_ms] (gh-ocannl-1558). *)
-                    best_spread = entry.SC.best_spread;
-                    best_schedule = flat_schedule c.form;
-                    source_digest = base_digest;
-                    (* Replayed for the same reason as [mma_best_ms]: a flip chain whose incumbent
-                       replayed would otherwise have no timed record to abandon a hopeless flip
-                       against (gh-ocannl-1110). Empty for entries older than the field, and when
-                       the storing search had another shape, whose candidate order an equal-depth
-                       comparison cannot assume. *)
-                    best_steps =
-                      (match entry.SC.best_steps with
-                      | Some t when same_search_shape t.SC.search_shape -> t.SC.steps
-                      | Some _ | None -> []);
-                    (* Filled in by [emit_report], like every report's. *)
-                    compile_cost = Ir.Compile_cost.empty;
-                  }
-                in
-                if not defer then (
-                  emit_report hit_report;
-                  Some (Fn.const (c.cctx, c.routine)))
-                else (
-                  (* gh-ocannl-1408: the replay above validated the entry -- a stale one goes on to
-                     search, which only a compile can tell -- and supplied the emission census the
-                     report carries. Its routine is not kept: a deferred call leaves nothing
-                     resident. gh-ocannl-1440: its compiled code is, holding no working pools, and
-                     the routine the caller asks for is that code linked again on [ctx]
-                     ({!Context.relink_outcome}) -- the census the report carries is the shipped
-                     code's, and the schedule compiles once. A link that fails anyway ships the
-                     untuned default rather than a search, which has already been reported as not
-                     needed. *)
-                  release_quietly ~what:"the validating cache replay of a deferred call" c.cctx;
-                  emit_report hit_report;
-                  let retained = !retained in
-                  Some
-                    (deferred_compile (fun () ->
-                         progress_stage "cache_replay_relink";
-                         match
-                           match retained with
-                           | Some rt -> Context.relink_outcome rt
-                           | None ->
-                               failwith
-                                 "Autotune: a deferred cache replay compiled without retaining its \
-                                  code"
-                         with
-                         | Ok result -> result
-                         | Error (Outcome.Classified classified) ->
-                             logf
-                               "the deferred cache replay's link FAILED (%s), compiling the \
-                                untuned default"
-                               (Outcome.detail_of_cause classified.cause);
-                             substituted := true;
-                             compile_untuned_default ~base:(census ()) ()
-                             [@searchless
-                               "a cache hit's relink: no search ran, and nothing is timed or stored"]
-                         | Error (Outcome.Fatal _ as failure) ->
-                             raise_pre_search ~base:(census ()) failure)))
-            | Error (Outcome.Classified classified) ->
-                (* Stale or corrupt entry: fall through to a fresh search, whose store then
-                   overwrites the entry. A reference the canonical form cannot resolve
-                   ([SC.of_saved]), a drifted fission segment and a refused transform all arrive
-                   here typed (gh-ocannl-1242, gh-ocannl-1164); the report carries the cause. *)
-                logf "cache entry replay FAILED, re-searching: %s"
-                  (Outcome.detail_of_cause classified.cause);
-                cache_replay_refusal := Some classified;
-                None
-            | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
-        | Some entry when entry.SC.budget_cut && String.equal entry.SC.source_digest base_digest ->
-            (* Reached only without a budget (the arm above takes it with one): the entry is the
-               best of a prefix of the menu, and this call was not asked to stop early. Its search's
-               store overwrites the entry, so the next budgeted call replays a full crown. *)
+      let cache_replay_refusal = ref None in
+      (* Whether the baseline was declined, by the base compile or (gh-ocannl-1666) by the search's
+         [baseline_compile], which sets it: every report after a decline says so. *)
+      let baseline_declined_so_far = ref (Option.is_some baseline_decline) in
+      let census () =
+        {
+          base_report with
+          candidates_failed = failed_count declines;
+          baseline_declined = !baseline_declined_so_far;
+          declines = decline_summaries declines;
+          privatize_drops = decline_summaries privatize_declines;
+          cache_replay_refusal = !cache_replay_refusal;
+        }
+      in
+      (* gh-ocannl-1326: a device that refuses what every schedule of the base lowering must
+         allocate has answered for the whole search: every candidate, a cache replay and the untuned
+         fallback. Refused here, typed, rather than by declining every candidate in turn at link (a
+         b256 [gpt2_mini_train] arm on a 12 GiB card spent 12 minutes doing that before its fallback
+         compile died of the same cause), and before the cache is consulted, whose replay would be
+         refused alike. A [Pre_search_failure] is no search and no replay, which is how
+         {!Train.tune_placements}' other arm still ships and how a benchmark harness tells this from
+         a search. What "must allocate" means is the floor ({!Context.probe_link_floor},
+         gh-ocannl-1554, [probe_floor] below): not the base link's delta, which bounds no candidate
+         from below under the liveness planner or on-chip fusion; and not the first search candidate
+         to reach link (gh-ocannl-1493), which can be larger than the base. *)
+      let is_device_memory = function
+        | { Outcome.cause = Outcome.Resource_exceeded { resource = Outcome.Device_memory; _ }; _ }
+          ->
+            true
+        | _ -> false
+      in
+      let refuse_if_device_memory ~probe = function
+        | Some classified when is_device_memory classified ->
             logf
-              "cache entry is the crown of a budget-cut search and this call has no budget: \
-               searching in full (gh-ocannl-1409)";
-            None
-        | _ -> None
-      else None
-    in
-    (* A winner takes precedence. Without one, replay an abandoned prefix only under the shape that
-       measured it and a current rule that still rejects it. A weaker incumbent, changed margin,
-       absent rule or changed sampling cannot inherit yesterday's verdict. *)
-    let replayed_abandonment =
-      if use_cache && Option.is_none cached && Option.is_none lineage_refusal then
-        Option.bind abandon ~f:(fun rule ->
-            Option.bind (SC.lookup_abandonment ~dir:cache_dir ~key) ~f:(fun entry ->
-                if
-                  String.equal entry.SC.source_digest base_digest
-                  && same_search_shape entry.SC.trajectory.SC.search_shape
-                then
-                  Option.map
-                    (abandon_verdict rule ~k:beam_width ~steps:entry.SC.trajectory.SC.steps)
-                    ~f:(fun ab -> (ab, entry))
-                else None))
-      else None
-    in
-    match (lineage_refusal, cached, replayed_abandonment) with
-    | Some (caller_digest, timing_digest), _, _ ->
-        Stdio.eprintf
-          "autotune: WARNING: routine %S: the caller's context lowers it differently from the \
-           timing context (structural digest %s vs %s), so no schedule tuned there can ship into \
-           it: not searching, compiling the untuned default (gh-ocannl-1421)\n\
-           %!"
-          (Lazy.force routine_name) caller_digest timing_digest;
-        release_baseline ();
-        let reached =
-          { (census ()) with outcome = Lineage_refused { caller_digest; timing_digest } }
-        in
-        finish reached (fun () ->
-            (compile_untuned_default ~base:reached ()
-             [@searchless "a refused lineage: no search runs, and nothing is timed or stored"]))
-    | None, Some result, _ ->
-        release_baseline ();
-        result
-    | None, None, Some (ab, entry) ->
-        release_baseline ();
-        emit_report
-          {
-            (census ()) with
-            outcome = Abandonment_replay ab;
-            best_ms = ab.ab_best_ms;
-            best_label = "cached-abandonment";
-            best_steps = entry.SC.trajectory.SC.steps;
-          };
-        raise (Search_abandoned ab)
-    | None, None, None when not search ->
-        logf
-          "search disabled (autotune_search=false) and no cache entry: compiling the untuned \
-           default";
-        (* Before the fallback compile, which wants the memory. *)
-        release_baseline ();
-        (* After the compile, as in the no-cache branch above. The census the base compile already
-           produced is carried whether this succeeds or fails. *)
-        let reached = census () in
-        finish reached (fun () -> compile_untuned_default ~base:reached ())
-    | None, None, None ->
-        let seen = Hash_set.create (module String) in
-        Hash_set.add seen base_digest;
-        (* Every gh-ocannl-532 refusal enters the same decline census (gh-ocannl-543). Without it a
-           GPU search that timed a single candidate reports [candidates_timed = 1] with an empty
-           census — the same report a computation with a one-element schedule space would give — and
-           the difference (how many candidates existed and were refused, and why) was only ever
-           visible in the [autotune_log] stderr stream. *)
-        let record_not_dispatched ~origin ~detail =
-          record_decline declines
-            {
-              Outcome.phase = Outcome.Transform;
-              cause = Outcome.Not_dispatched { origin; detail };
-              execution_effect = Outcome.No_device_writes;
-            }
-        in
-        (* gh-ocannl-1666: the serial baseline's compile, here where it is timed and nowhere else --
-           the base compile only lowered. Not where it is not timed: an undispatched baseline is
-           never compiled, and one the base compile declined (gh-ocannl-533) stays declined. Its
-           record is the [baseline_compile] stage's, attempt [baseline]; its cost on [budget_clock]
-           is the budget projection's evidence beside the base compile's ([budget_compile]). *)
-        let baseline_decline =
-          if
-            Option.is_none baseline_decline && Option.is_none !baseline_linked
-            && dispatchable ~is_gpu [ base_opt ]
-          then (
-            progress_stage "baseline_compile";
-            let compiled =
-              budget_compile @@ fun () ->
-              costed ~attempt:"baseline" ~verdict_of:outcome_verdict (fun () ->
-                  compile_candidate ?name ~label:"baseline" ~on_privatize_drops ~reuse
-                    ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
-                    ~provenance:Outcome.Candidate search_ctx comp bindings
-                    (Whole (W_saved ([], None))))
+              "%s: REFUSED, the search cannot run: the floor under every schedule does not fit: %s"
+              probe
+              (Outcome.detail_of_cause classified.cause);
+            (* The search is refused on a declined baseline -- the floor's refusal stands for it --
+               which [census] reads off the base compile alone; the baseline's one account is in the
+               census already (its own decline, or the floor's in its place). *)
+            raise_pre_search
+              ~base:{ (census ()) with baseline_declined = true }
+              (Outcome.Classified classified)
+        | Some _ | None -> ()
+      in
+      (* gh-ocannl-1421: a timing lineage that lowers the routine to another program than the
+         caller's can tune nothing the caller can take: every candidate, cached entry and winner
+         derives from the timing lineage's base lowering. Decided here, before the cache and the
+         search, so the call reports what it ships -- the untuned default, timed at nothing --
+         rather than a crown that a refused winner compile would leave a placement A/B ranking (and
+         recording) by. And before the device-memory refusal below: that is the TIMING lineage's
+         base refused, which says nothing about the caller's untuned routine, the one thing a
+         refused lineage ships. *)
+      let lineage_refusal =
+        Option.bind timing_ctx ~f:(fun tctx ->
+            let identity c =
+              lineage_identity ~static_indices (D.lowered_for_decisions ?name c comp bindings)
             in
-            match compiled with
-            | Ok c ->
-                baseline_linked := Some (c.cctx, c.routine);
-                baseline_decline
-            | Error (Outcome.Classified classified) ->
-                record_decline declines classified;
-                baseline_declined_so_far := true;
-                (* The same footprint question as the base compile's (gh-ocannl-1554): a link the
-                   device refused bounds no candidate from below, the floor does. *)
-                if is_device_memory classified then probe_floor ~account:false;
-                Some classified
-            | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
-          else baseline_decline
-        in
-        (* [None] when the baseline compile was declined (gh-ocannl-533): there is no routine to
-           time and none to return, and the search runs on the scheduled candidates alone. *)
-        let baseline =
-          Option.map !baseline_linked ~f:(fun (bctx, broutine) ->
-              {
-                form = Whole_saved [];
-                cctx = bctx;
-                routine = broutine;
-                units =
-                  [
-                    {
-                      u_segment = None;
-                      u_saved = [];
-                      u_registry = SC.base_registry canon;
-                      u_opt = base_opt;
-                    };
-                  ];
-                all_opts = [ base_opt ];
-                digest_after = base_digest;
-              })
-        in
-        (* Baseline timing failures are the user's bug (e.g. uninitialized inputs) and propagate as
-           the exception [Context.run] would give — reported first, with the phase they carry, so
-           the arm still occupies its slot (gh-ocannl-550). On a GPU backend the baseline is the
-           unscheduled serial form and is not dispatched at all (see [dispatchable]); [infinity] is
-           its rank, so every timed candidate beats it and the search never returns it (see the
-           fallback at the end), and a declined baseline ranks the same way. *)
-        let baseline_dispatched = Option.is_some baseline && dispatchable ~is_gpu [ base_opt ] in
-        (* The baseline's refused window, by its cause (gh-ocannl-1517); [None] when it was
-           admitted, or never ran one. *)
-        let baseline_refusal = ref None in
-        let baseline_timing_result = ref None in
-        let baseline_ms =
-          match baseline with
-          | Some b when baseline_dispatched -> (
-              (* Still uncaught in the sense that matters — the caller sees the same exception
-                 [Context.run] would raise, unwrapped and with its own backtrace. The tagging is
-                 only so the report can name the phase (pre-dispatch validation vs. launch vs. sync)
-                 before it propagates.
+            match (identity ctx, identity tctx) with
+            | caller_digest, timing_digest when String.equal caller_digest timing_digest -> None
+            | caller_digest, timing_digest -> Some (caller_digest, timing_digest)
+            | exception exn when not (process_fatal_exn exn) ->
+                (* A lineage that cannot lower the routine fails the winner's and the untuned
+                   fallback's compiles alike: said now, not after a search that cannot ship. *)
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                raise_pre_search ~base:(census ())
+                  (Outcome.Fatal
+                     {
+                       exn;
+                       backtrace;
+                       phase = Outcome.Transform;
+                       candidate = Some "lineage comparison";
+                       cause = None;
+                     })
+            | exception exn ->
+                (* A process-level failure propagates as it is, but not past the linked baseline. *)
+                let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                !release_baseline_hook ();
+                Stdlib.Printexc.raise_with_backtrace exn backtrace)
+      in
+      (* gh-ocannl-1554: the footprint question every search-wide device-memory refusal asks -- does
+         the device admit the FLOOR under every schedule of the base lowering
+         ({!Context.probe_link_floor})? Not the base link's own delta, which bounds no candidate
+         from below under the liveness planner (the serial base is one kernel, one GPU planner
+         position, so it overlaps nothing a fissioned candidate's segments separate: 954 KB against
+         791 KB on [link_delta_parity]'s training step) nor under on-chip fusion (a shared epilogue
+         placement keeps its target off the device), nor on the CPU under aliasing (a [Split_reduce]
+         candidate refines the base's statement-grained spans). Asked in the same place for every
+         path: after the lineage check (a refused timing lineage says nothing of the caller's
+         routine) and before the cache, whose replay would be refused alike. A floor the device
+         admits answers nothing about any candidate, which is that candidate's own decline at link.
 
-                 The lineage effect is NOT optional, though, and it is why this consults the
-                 backend's classifier like the candidate timing below (gh-ocannl-550): a baseline
-                 launch that may have written buffers leaves the lineage unusable, and a caller that
-                 CONTAINS this failure — [Train.tune_placements] does, per arm — would otherwise go
-                 on to time its other arm against buffers the failed baseline had already modified.
-                 Proven write-free, the routine's execution claim is withdrawn instead;
-                 unattributed, the device's state is unknown and the lineage is condemned, exactly
-                 as an unattributed candidate launch failure condemns it. *)
-              let condemn phase exn =
-                match phase with
-                (* Nothing to judge and nothing to withdraw (gh-ocannl-564): the routine never ran,
-                   and the execution claim is only made after a dispatch. Without this arm an
-                   unsatisfied dependency would fall to [None] below on every C backend and condemn
-                   the lineage the caller is meant to fix and retry in. *)
-                | Outcome.Preflight -> ()
-                | _ -> (
-                    match Context.failure_classifier b.cctx phase exn with
-                    | Some { Ir.Schedule_outcome.execution_effect = Outcome.No_device_writes; _ } ->
-                        Context.rollback_execution b.cctx b.routine.Context.routine_id
-                    | Some _ | None ->
-                        Context.poison_lineage b.cctx ~routine_name:b.routine.Context.name exn)
-              in
-              match
-                (* Lineage-wide validation, tagged so [condemn] above reads it for what it is —
-                   pre-dispatch, nothing to withdraw — and raised here rather than inside the timing
-                   so a baseline failure keeps propagating as the pre-search failure it is. This is
-                   the site that made the containment gap invisible on the C backends: the serial
-                   baseline is dispatched there, hits this first, and takes the search down with the
-                   caller's error, where a GPU backend refuses the baseline outright (gh-ocannl-532)
-                   and never reaches it (gh-ocannl-569). *)
-                Outcome.tag Outcome.Preflight (fun () ->
-                    Context.check_lineage_runnable b.cctx b.routine);
-                (* gh-ocannl-1621: the search's first window, so this takes the snapshot. Tagged
-                   pre-dispatch like the check above: nothing has run, so a failure here withdraws
-                   nothing and condemns nothing, and propagates as the pre-search failure. *)
-                Outcome.tag Outcome.Preflight before_timing_window;
-                progress_stage "baseline_timing";
-                (* gh-ocannl-1666: the one window that is bounded ({!window_bounded}). *)
-                time_routine ~on_retry ~on_call ~tag_failures:true
-                  ~window_bound_ms:baseline_window_ms ~timing ~repeats b.cctx b.routine
-              with
-              | timing_result -> (
-                  let timing_result =
-                    apply_measurement_seam ~label:"baseline" ~digest:base_digest timing_result
-                  in
-                  match admitted_timing_ms timing_result with
-                  | Some ms ->
-                      baseline_timing_result := Some timing_result;
-                      ms
-                  | None ->
-                      let refusal = timing_admission timing_result in
-                      baseline_refusal := Some refusal;
-                      logf "baseline timing refused: %s" (refusal_reason refusal);
-                      Float.infinity)
-              | exception Outcome.Raised_at (phase, exn, backtrace) ->
-                  condemn phase exn;
-                  emit_pre_search_failure ~base:(census ()) ~phase ~candidate:(Some "baseline")
-                    ~detail:(Exn.to_string exn) ();
-                  (* gh-ocannl-550: it never reaches the beam, so nothing downstream can release it
-                     — and a caller that CONTAINS this (a write-free preflight decline, a
-                     backend-classified failure) goes on to another arm or retries. *)
-                  release_baseline ();
-                  Stdlib.Printexc.raise_with_backtrace exn backtrace
-              | exception exn ->
-                  let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                  condemn Outcome.Launch exn;
-                  emit_pre_search_failure ~base:(census ()) ~phase:Outcome.Launch
-                    ~candidate:(Some "baseline") ~detail:(Exn.to_string exn) ();
-                  release_baseline ();
-                  Stdlib.Printexc.raise_with_backtrace exn backtrace)
-          | _ -> Float.infinity
-        in
-        let baseline_timed = baseline_dispatched && Float.is_finite baseline_ms in
-        (* A contended timing established nothing about this digest. Let an identical seed retry it
-           later in the search; successful timing and every definitive structural refusal keep the
-           ordinary dedup ownership. *)
-        if Option.is_some !baseline_refusal then Hash_set.remove seen base_digest;
-        (match baseline_decline with
-        | Some classified ->
-            logf "baseline: DECLINED at %s %s" (phase_label classified.phase)
+         [~account]: where the baseline has no account in the census yet (it was refused before
+         codegen, gh-ocannl-1340), a refused floor is its one account -- declined at [Backend_link]
+         for device memory, as a refused base link's was before gh-ocannl-1340, and not beside its
+         [Not_dispatched] refusal, which the search records only once it runs. Where the baseline's
+         own link (or relink) was declined, that decline is its account already. *)
+      let probe_floor ~account =
+        progress_stage "footprint_probe";
+        let probe = "baseline footprint floor probe" in
+        match
+          Outcome.protect ~classify_backend:(D.failure_classifier search_ctx)
+            ~provenance:Outcome.Candidate ~phase:Outcome.Backend_link ~candidate:probe (fun () ->
+              D.probe_link_floor ?name search_ctx base_opt)
+        with
+        | Ok (f : Ir.Backend_intf.link_floor) ->
+            logf
+              "%s: %s: %d working + %d constant bytes in %d pool(s); left out: %d bytes some \
+               schedule keeps off the device, %d a packed tile can replace, %d the liveness \
+               planner may overlap. It promises nothing about any candidate"
+              probe
+              (if f.lf_pools = 0 then "empty floor, nothing to ask" else "the floor fits")
+              f.lf_working_bytes f.lf_constant_bytes f.lf_pools f.lf_off_device_bytes
+              f.lf_replaceable_bytes f.lf_overlap_bytes
+        | Error (Outcome.Classified classified) when is_device_memory classified ->
+            if account then record_decline declines classified;
+            refuse_if_device_memory ~probe (Some classified)
+        | Error (Outcome.Classified classified) ->
+            (* Not the device's memory: no answer to the footprint question, so the search
+               proceeds. *)
+            logf "%s: no answer, %s %s" probe (phase_label classified.phase)
               (Outcome.detail_of_cause classified.cause)
-        | None ->
-            if baseline_timed then (
-              (* Ranked like any timed candidate, and released like one (gh-ocannl-1326). *)
-              release_baseline ();
-              logf "baseline: %.4f ms (digest %s)" baseline_ms (dshort base_digest);
-              emit_calibration ~backend ~device ~limits ~routine:(Lazy.force routine_name)
-                ~label:"baseline" ~digest:base_digest
-                ~timing_result:(Option.value_exn !baseline_timing_result)
-                [ base_opt ])
-            else if baseline_dispatched then release_baseline ()
-            else (
-              (* Refused before codegen ([base_undispatched], gh-ocannl-1340), so nothing is linked;
-                 the release stays for a baseline this rule ever lets link. *)
-              release_baseline ();
-              (* No calibration row: the model column is only meaningful next to a measurement. *)
-              logf
-                "baseline: NOT DISPATCHED, binds no hardware dimension on %s -- the whole routine \
-                 would run in one work-item (gh-ocannl-532); refused before codegen (digest %s)"
-                backend (dshort base_digest);
-              record_not_dispatched ~origin:"baseline"
-                ~detail:
-                  (Printf.sprintf
-                     "the serial baseline binds no hardware dimension on %s (gh-ocannl-532)" backend)));
-        let n_timed = ref (if baseline_timed then 1 else 0) in
-        (* Fired from the counter itself rather than from the admission match above, so the reported
-           [timed_so_far] is the accounting value and not a restatement of it. *)
-        if baseline_timed then
-          Option.iter baseline ~f:(fun b ->
-              Seam.get on_candidate_timed b.routine.Context.name ~timed_so_far:!n_timed);
-        let n_timings_contended = ref 0 in
-        (* The subset of those windows refused because queued calibration measured no batch within
-           its target (gh-ocannl-1098). Not a diagnosis (a stall on every probe reads the same), but
-           a count that persists across idle reruns is a queue threshold's signature. *)
-        let n_timings_unbatched = ref 0 in
-        (* The subset refused for a degenerate clock reading (gh-ocannl-1517): a clock that resolved
-           nothing is not a loaded host, and a skip excused by one names that cause. *)
-        let n_timings_unreadable = ref 0 in
-        (* Every refused window is counted here, by its cause, so the per-cause counts stay subsets
-           of [n_timings_contended] by construction. *)
-        let count_refusal refusal =
-          Int.incr n_timings_contended;
-          match refusal with
-          | Refused_unbatched -> Int.incr n_timings_unbatched
-          | Refused_unreadable -> Int.incr n_timings_unreadable
-          | Refused_contended | Admitted -> ()
-        in
-        Option.iter !baseline_refusal ~f:count_refusal;
-        (* [n_timings_contended] counts WINDOWS, which is the right shape for "was this search's
-           measurement set complete?" but the wrong one for any claim about WHICH candidate went
-           unmeasured (Codex P2 on PR #608): a refused digest is dropped from [seen] so an
-           equivalent seed can retry it, so one candidate refused twice is two windows. The digests
-           are therefore kept alongside, and the report derives from them a distinct-candidate count
-           and the one per-candidate fact a caller cannot reconstruct — whether the untuned-default
-           seed was the refused one, which is what separates a contention-refused reference from the
-           gh-ocannl-552 regression of never proposing or attributing it. *)
-        let contended_digests = Hash_set.create (module String) in
-        if Option.is_some !baseline_refusal then Hash_set.add contended_digests base_digest;
-        (* gh-ocannl-1632: every digest a window let leave [seen] -- refused, cut as hopeless,
-           stopped by the budget -- and the timing attempts a later equivalent seed then made on one
-           instead of deduplicating. The count is what makes a claim about how many candidates were
-           timed or deduplicated attributable: on a quiet host it is zero, and a departure that
-           nothing re-proposes leaves it zero too. *)
-        let departed_digests = Hash_set.create (module String) and n_timings_retimed = ref 0 in
-        if Option.is_some !baseline_refusal then Hash_set.add departed_digests base_digest;
-        let depart digest =
-          Hash_set.remove seen digest;
-          Hash_set.add departed_digests digest
-        in
-        (* Live search state for an honest partial report. Each counter starts at the amount of work
-           completed so far and is updated at its ordinary accounting site below. [best_so_far] is
-           updated after every successful timing, including midway through seed enumeration. *)
-        let n_mma_proposed = ref 0 and n_fiss_mma_proposed = ref 0 and n_mma_timed = ref 0 in
-        (* gh-ocannl-546: the crowned candidate's identity, and how close tensorization came to it.
-           Labels are keyed by digest rather than carried on the candidate, because the winner is
-           picked from the beam pool (and the beam's own expansions time through the same site), so
-           the timing site is the one place every timed candidate passes exactly once. *)
-        let label_by_digest = Hashtbl.create (module String) in
-        if baseline_timed then Hashtbl.set label_by_digest ~key:base_digest ~data:"baseline";
-        let mma_best_ms = ref Float.infinity in
-        (* gh-ocannl-1702: the ranked candidates a Grid label would misdescribe, newest first. *)
-        let grid_serial_timed = ref [] in
-        let winner_label best_c =
-          Option.value_map best_c ~default:"" ~f:(fun c ->
-              Option.value (Hashtbl.find label_by_digest c.digest_after) ~default:"")
-        in
-        (* gh-ocannl-1558: each admitted window's spread, keyed like the labels, and how many
-           admitted windows were dispersed -- a CPU routine's own variance on a quiet host, which
-           the dispersion rule alone would have refused. *)
-        let spread_by_digest = Hashtbl.create (module String) and n_timings_dispersed = ref 0 in
-        (* gh-ocannl-1527: the windows cut as hopeless, their candidates unranked. *)
-        let n_timings_hopeless = ref 0 in
-        let note_admitted_window ~digest (r : timing_result) =
-          Hashtbl.set spread_by_digest ~key:digest ~data:r.spread;
-          if r.dispersed then Int.incr n_timings_dispersed
-        in
-        if baseline_timed then
-          Option.iter !baseline_timing_result ~f:(note_admitted_window ~digest:base_digest);
-        let winner_spread best_c =
-          Option.bind best_c ~f:(fun c -> Hashtbl.find spread_by_digest c.digest_after)
-        in
-        let winner_tensorized best_c =
-          Option.exists best_c ~f:(fun c -> saved_is_tensorized (flat_schedule c.form))
-        in
-        let n_model_scored = ref 0 and n_model_pruned = ref 0 in
-        let n_bound_pruned = ref 0 in
-        (* The schedule-invariant floor (gh-ocannl-514 phases 3-4): sketch completions share the
-           base program's semantics, so one floor bounds every prunable candidate; computed once,
-           only under the explicit gate. *)
-        let floor_bound_ms =
-          lazy
-            (if not (Lazy.force bound_pruning_enabled) then None
-             else
-               let peak_flops, peak_memory_bandwidth = envelope ~limits in
-               let f = CM.completion_floor base_opt.LL.llc in
-               Option.map
-                 (CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:f.CM.fr_flops
-                    ~bytes:f.CM.fr_bytes ()) ~f:(fun sec -> sec *. 1e3))
-        in
-        let n_fiss_sketch_timed = ref 0
-        and fs_composite = ref `Ineligible
-        (* gh-ocannl-1166: while the composite playoff runs, its F_sketch windows are counted as
-           playoff windows rather than as singles or as the coarse composite's own outcome. *)
-        and in_playoff = ref false
-        and n_playoff_timed = ref 0
-        and n_playoff_swaps = ref 0
-        (* gh-ocannl-1665: the playoff's near ties decided in shared windows, and their windows. *)
-        and n_playoff_finals = ref 0
-        and n_playoff_finals_timed = ref 0
-        and n_playoff_finals_admitted = ref 0
-        (* gh-ocannl-1138: the staffed singles' windows, and the staffed singles retried bare. *)
-        and n_staffed_timed = ref 0
-        and n_backdrop_fallbacks = ref 0
-        (* gh-ocannl-1698: the staffed joins' near ties decided in shared windows, and their
-           windows. *)
-        and n_staffed_finals = ref 0
-        and n_staffed_finals_timed = ref 0
-        and n_staffed_finals_admitted = ref 0
-        (* gh-ocannl-1664: the seeded singles proposed, their windows, the keys whose choice the
-           seeded sweep changed, and the seeded singles retried without their staff. *)
-        and n_seeded_single_candidates = ref 0
-        and n_seeded_single_timed = ref 0
-        and n_seeded_single_joins = ref 0
-        and n_seeded_single_fallbacks = ref 0
-        and n_seeded_split_candidates = ref 0
-        and n_seeded_split_timed = ref 0
-        and n_seeded_split_joins = ref 0
-        and n_seeded_hopeless = ref 0
-        and n_sr_backdrop_fallbacks = ref 0
-        and n_sr_timed = ref 0
-        and sr_composite_eligible = ref false
-        and sr_composite_timed = ref false in
-        let sr_single_results = ref [] in
-        let coarse_single_measured = Hash_set.Poly.create () in
-        let coarse_single_refused = Hash_set.Poly.create () in
-        let rounds_run = ref 0 in
-        (* [report.round_moves], newest first (gh-ocannl-1360). *)
-        let round_moves = ref [] in
-        (* gh-ocannl-1635: the beam finals' accounting, published as each window ends. *)
-        let finals_record = ref []
-        and n_finals_timed = ref 0
-        and n_finals_admitted = ref 0
-        and finals_outcome = ref Finals_not_run in
-        (* gh-ocannl-1409: set once the search's budget has stopped a candidate or a round. *)
-        let budget_cut = ref false in
-        let n_sketch_candidates = ref 0
-        and n_epilogue_sketch_candidates = ref 0
-        and n_fiss_sketch_candidates = ref 0
-        and n_split_reduce_candidates = ref 0 in
-        let best_so_far = ref ((if baseline_timed then baseline else None), baseline_ms) in
-        (* [report.best_steps], newest first: each time [best_so_far] improves, at which admitted
-           timing it did (gh-ocannl-1110). *)
-        let best_steps = ref (if baseline_timed then [ (1, baseline_ms) ] else []) in
-        let by_time (_, a) (_, b) = Float.compare a b in
-        (* [beam] holds the fastest [beam_width] entries seen so far: the incumbents the rounds
-           expand. It starts with the baseline when the baseline is eligible; a declined one
-           contributes no entry, so the beam can be empty and every consumer below takes that as
-           "nothing was timed" (gh-ocannl-533). Keeping the k smallest incrementally keeps the k
-           smallest overall, with one difference from sorting at the end: a tie between exactly
-           equal times resolves by arrival rather than by seed order.
-
-           Its entries are descriptions, not artifacts (gh-ocannl-1326): every candidate's buffers
-           are released as soon as its timing window is over, the incumbent's included, and the
-           winner is recompiled from its saved form once the search ends. A candidate's device
-           buffers are invisible to the OCaml GC (the backends' pool tables root every slab, see
-           {!Context.release}), so whatever the search keeps holds device memory. gh-ocannl-550
-           bounded that at [beam_width + 2] routine footprints, which is still too many for a step
-           that uses over half the device: on a 12 GiB card a b256 [gpt2_mini_train] search timed
-           its first candidate and then declined every later one at link with
-           [CUDA_ERROR_OUT_OF_MEMORY], because the incumbent's 6.6 GiB stayed resident. What a
-           ranked candidate is still read for — its saved form, units, compiled segments and the
-           routine's tensorization census — is host data, and all a round needs is its saved form:
-           every compile derives from [base_opt], never from another candidate's context. *)
-        let beam =
-          ref
-            (Option.to_list
-               (Option.map
-                  (if baseline_timed then baseline else None)
-                  ~f:(fun b -> (b, baseline_ms))))
-        in
-        (* The beam-expansion round's own bounded accumulator. Reset at the top of each round. *)
-        let round = ref [] in
-        (* Owns the just-compiled candidate until its timing window is over and it is released, so
-           that a failure in between (a seam, a fatal timing failure) still frees it. *)
-        let pending = ref None in
-        let release_candidate c =
-          if Option.exists !pending ~f:(phys_equal c) then pending := None;
-          (* Best-effort: a failure to free must not replace the candidate's own outcome, and this
-             runs on failure paths too, where the device may already be refusing work. Process-fatal
-             conditions still propagate. Idempotent ({!Context.release}), so a ranked candidate
-             released at its timing can meet this again harmlessly. A released candidate's digest
-             deliberately STAYS in [seen]: it must keep deduplicating, and dedup cannot resurrect an
-             artifact, since [seen], [timed_ms_by_digest] and [label_by_digest] hold strings and
-             floats and never a [compiled]. *)
-          release_quietly ~what:("candidate " ^ dshort c.digest_after) c.cctx
-        in
-        let admit entry =
-          let kept, _evicted =
-            List.split_n (List.sort (entry :: !beam) ~compare:by_time) beam_width
-          in
-          beam := kept
-        in
-        (* The exit sweep: whatever the search still owns when it stops. Every ranked candidate was
-           released at its timing, so that is the pending one, cut short between its compile and the
-           end of its timing window; the ranked ones are swept too, which costs nothing ([release]
-           is idempotent) and keeps the sweep's meaning independent of where each one was released.
-           It must run BEFORE the compiles that follow a search, which are the two an exhausted
-           device used to defeat (the winner replay and the untuned-default fallback behind it). *)
-        let release_all_candidates () =
-          let live =
-            List.map !beam ~f:fst @ List.map !round ~f:fst
-            @ Option.to_list (fst !best_so_far)
-            @ Option.to_list !pending
-          in
-          beam := [];
-          round := [];
-          pending := None;
-          List.iter live ~f:release_candidate
-        in
-        (* The gh-ocannl-552 reference point. [baseline_ms] is the serial form's time ([infinity] on
-           GPU), so it cannot answer "did tuning beat what the user gets without tuning?". The
-           untuned default pipeline is already in the pool — the [config_thresholds] seed reproduces
-           it exactly — and its measurement is attributed by digest, so a seed that dedups against
-           an identical earlier candidate (the timed baseline included, on CPU backends whose config
-           thresholds leave the code unparallelized) still reports the time of that code.
-
-           The attribution honors the scheduling gates (Codex P1 on PR #279): the seed reproduces
-           [maybe_default_schedules] only on its main path. With automatic scheduling inactive
-           ([automatic_gpu_schedule]/[automatic_cpu_schedule] off, or [debug_log_from_routines] on),
-           the untuned default IS the unscheduled serial form, so the reference is the base digest —
-           timed on CPU, deliberately unmeasured on GPU (gh-ocannl-532). With [schedule_fission]
-           off, the untuned default is the whole-routine config-thresholds annotation, which no
-           candidate reproduces (the whole-routine presets are ungated): no attribution, rather than
-           labeling a differently-scheduled pipeline as the default. *)
-        let auto_sched = Sched.automatic_schedule_active ~facts in
-        (* A candidate label only when scheduling is active: inactive, the default is the base
-           digest attributed right here, never a seed. *)
-        let default_candidate_label = if auto_sched then default_seed_label ~facts else None in
-        let timed_ms_by_digest = Hashtbl.create (module String) in
-        if baseline_timed then Hashtbl.set timed_ms_by_digest ~key:base_digest ~data:baseline_ms;
-        let default_seed_digest = ref (if auto_sched then None else Some base_digest) in
-        let default_ms () = Option.bind !default_seed_digest ~f:(Hashtbl.find timed_ms_by_digest) in
-        (* gh-ocannl-1388: the seeded untuned plan's seed, attributed by digest like the
-           default's. *)
-        let seeded_seed_digest = ref None in
-        let seeded_ms () = Option.bind !seeded_seed_digest ~f:(Hashtbl.find timed_ms_by_digest) in
-        (* A digest that was refused and later timed by an equivalent seed is not an unmeasured
-           candidate, so the count is over the refusals that stuck. *)
-        let candidates_contended () =
-          Hash_set.count contended_digests ~f:(fun d -> not (Hashtbl.mem timed_ms_by_digest d))
-        in
-        let default_refused () =
-          Option.value_map !default_seed_digest ~default:false ~f:(Hash_set.mem contended_digests)
-        in
-        let partial_emitted = ref false in
-        (* The report of a search cut short, from the state it reached: a fatal failure's
-           ([emit_partial_and_raise]) and an abandonment's. *)
-        let partial_report outcome =
-          let summaries = decline_summaries declines in
-          let best_c, best_ms = !best_so_far in
-          {
-            outcome;
-            timing;
-            candidates_timed = !n_timed;
-            timings_contended = !n_timings_contended;
-            timings_retried = !n_timings_retried;
-            timings_unbatched = !n_timings_unbatched;
-            timings_unreadable = !n_timings_unreadable;
-            timings_dispersed = !n_timings_dispersed;
-            timings_hopeless = !n_timings_hopeless;
-            timings_retimed = !n_timings_retimed;
-            timing_decisions = timing_decisions ();
-            candidates_contended = candidates_contended ();
-            default_refused = default_refused ();
-            candidates_failed = failed_count declines;
-            baseline_declined = Option.is_some baseline_decline;
-            baseline_refusal = !baseline_refusal;
-            declines = summaries;
-            privatize_drops = decline_summaries privatize_declines;
-            cache_replay_refusal = !cache_replay_refusal;
-            rounds_run = !rounds_run;
-            round_moves = List.rev !round_moves;
-            finals = !finals_record;
-            finals_timed = !n_finals_timed;
-            finals_admitted = !n_finals_admitted;
-            finals_outcome = !finals_outcome;
-            budget_cut = !budget_cut;
-            budget_s;
-            call_budget_s;
-            call_share_s;
-            compiles = 0 (* Stamped by [emit_report]. *);
-            replay_compiles = 0;
-            beam_width;
-            sketch_candidates = !n_sketch_candidates;
-            epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
-            fiss_sketch_candidates = !n_fiss_sketch_candidates;
-            fiss_sketch_timed = !n_fiss_sketch_timed;
-            fiss_sketch_composite = !fs_composite;
-            fiss_sketch_playoff_timed = !n_playoff_timed;
-            fiss_sketch_playoff_swaps = !n_playoff_swaps;
-            fiss_sketch_playoff_finals = !n_playoff_finals;
-            fiss_sketch_playoff_finals_timed = !n_playoff_finals_timed;
-            fiss_sketch_playoff_finals_admitted = !n_playoff_finals_admitted;
-            fiss_sketch_staffed_timed = !n_staffed_timed;
-            fiss_sketch_backdrop_fallbacks = !n_backdrop_fallbacks;
-            staffed_finals = !n_staffed_finals;
-            staffed_finals_timed = !n_staffed_finals_timed;
-            staffed_finals_admitted = !n_staffed_finals_admitted;
-            seeded_single_candidates = !n_seeded_single_candidates;
-            seeded_single_timed = !n_seeded_single_timed;
-            seeded_single_joins = !n_seeded_single_joins;
-            seeded_single_fallbacks = !n_seeded_single_fallbacks;
-            seeded_split_candidates = !n_seeded_split_candidates;
-            seeded_split_timed = !n_seeded_split_timed;
-            seeded_split_joins = !n_seeded_split_joins;
-            seeded_hopeless = !n_seeded_hopeless;
-            split_reduce_candidates = !n_split_reduce_candidates;
-            split_reduce_timed = !n_sr_timed;
-            split_reduce_composite_eligible = !sr_composite_eligible;
-            split_reduce_composite_timed = !sr_composite_timed;
-            split_reduce_backdrop_fallbacks = !n_sr_backdrop_fallbacks;
-            mma_candidates = !n_mma_proposed;
-            fiss_mma_candidates = !n_fiss_mma_proposed;
-            mma_timed = !n_mma_timed;
-            model_scored = !n_model_scored;
-            model_pruned = !n_model_pruned;
-            bound_pruned = !n_bound_pruned;
-            fissioned = Option.exists best_c ~f:(fun c -> is_fissioned c.form);
-            baseline_ms;
-            default_ms = default_ms ();
-            seeded_ms = seeded_ms ();
-            best_ms;
-            best_label = winner_label best_c;
-            best_tensorized = winner_tensorized best_c;
-            best_tensorization =
-              Option.map best_c ~f:(fun c -> (mma_summary c).Ir.C_syntax.tensorization);
-            best_mma_statements = Option.value_map best_c ~default:0 ~f:mma_statements;
-            best_mma_scalar_fallbacks = Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
-            best_grid = Option.map best_c ~f:(fun c -> c.routine.Context.grid);
-            grid_serial_timed = List.rev !grid_serial_timed;
-            mma_best_ms = !mma_best_ms;
-            best_spread = winner_spread best_c;
-            best_schedule = Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
-            source_digest = base_digest;
-            best_steps = List.rev !best_steps;
-            (* Filled in by [emit_report], like every report's. *)
-            compile_cost = Ir.Compile_cost.empty;
-          }
-        in
-        let emit_partial_and_raise (fatal : Outcome.fatal) =
-          (* Shadowing the projection of the same name would be gratuitous here: this is the failure
-             being constructed, not one being read off a report. *)
-          let failure =
-            { phase = fatal.phase; candidate = fatal.candidate; detail = Exn.to_string fatal.exn }
-          in
-          let partial_report = partial_report (Search_died failure) in
-          (* Reporting is best-effort on the exceptional path and must not replace the compiler
-             failure or its raw backtrace. *)
-          partial_emitted := true;
-          (try emit_report partial_report
-           with report_exn when not (process_fatal_exn report_exn) ->
-             Stdio.eprintf "autotune: partial-report callback failed: %s\n%!"
-               (Exn.to_string report_exn));
-          (* gh-ocannl-550: this arm is over and returns no routine, so every artifact it still
-             holds is dead. It matters most exactly here: a caller that CONTAINS this failure per
-             arm ([Train.tune_placements]) goes on to search its other arm, and used to do so
-             against a device still holding everything this arm had compiled. *)
-          release_all_candidates ();
-          Outcome.raise_failure (Outcome.Fatal fatal)
-        in
-        (* The post-search fallbacks to the untuned default (nothing timed; the winner replay failed
-           or degenerated). Through the containment-aware form, so a failure here reports the phase
-           it carries — the outer catch-all would otherwise record every one of them as [Transform],
-           which for a link failure is simply wrong. The exception the caller sees is unchanged:
-           [emit_partial_and_raise] ends in [raise_failure], exactly as [Context.compile] does. *)
-        let plain_default_or_raise () =
-          match
-            costed ~attempt:"untuned default" ~verdict_of:outcome_verdict (fun () ->
-                Context.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
-                  bindings)
-          with
-          | Ok result -> result
-          | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
-          | Error (Outcome.Classified classified) ->
-              emit_partial_and_raise
-                (Outcome.fatal_of_classified ~candidate:"untuned default fallback" classified)
-        in
-        (* gh-ocannl-1253: where the search derived a seeded plan, the untuned step the caller would
-           have shipped is that plan, so the fallbacks compile it -- replayed as its [F_seeded]
-           candidate is, from the plan already in the trajectory identity -- and keep the seeded
-           floor. A replay that fails or degenerates ends on the plain default. *)
-        let untuned_default_or_raise () =
-          progress_stage "untuned_default_compile";
-          match Lazy.force seeded_plan_value with
-          | None -> plain_default_or_raise ()
-          | Some plan -> (
-              let spec = Fiss (F_seeded plan) in
-              match compile_spec_real ~label:(spec_label spec) Outcome.Candidate spec with
-              | Ok c when shipped_dispatchable ~is_gpu c -> (c.cctx, c.routine)
-              | Ok c ->
-                  release_quietly ~what:"the degenerate seeded fallback" c.cctx;
-                  plain_default_or_raise ()
-              | Error (Outcome.Classified classified) ->
-                  logf "the seeded untuned fallback FAILED (%s); compiling the plain default"
-                    (Outcome.detail_of_cause classified.cause);
-                  plain_default_or_raise ()
-              | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal)
-        in
-        let exception Abandon_now of abandonment in
-        let search () =
-          progress_stage "seed_enumeration";
-          (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream (the rest of its
-             state is defined with [progress_phase_begin] below), and passed to each candidate's
-             timing call for the trace's decisions (gh-ocannl-1199). *)
-          let progress_phase = ref "seeds" in
-          (* gh-ocannl-521: tensorized candidates are counted where they are TIMED, not where they
-         are enumerated — a family can be seeded in bulk and rejected in bulk at candidate
-         compile, and the enumerated count alone reads as coverage it does not have. Both
-         counters are taken HERE rather than off [seed_specs], so they cover the same population
-         by construction: the cross-segment recombination composite and the beam-expansion
-         candidates also reach [try_spec] without appearing in the seed list, and counting only
-         seeds in the denominator would let [mma_timed] exceed [mma_candidates] on a
-         multi-segment routine. *)
-          (* gh-ocannl-1138: how the last attempt that returned no timing ended, for the staffed
-         sweep: a refusal ([`Declined], a compile or run decline that wrote nothing) is retried
-         without its staff, and a dedup carries the time its code was already measured at, if
-         it was. *)
-          let last_attempt = ref `Other in
-          (* gh-ocannl-1409, gh-ocannl-1556, gh-ocannl-1604: the search's wall-clock budget,
-             measured from the start of the call ([budget_clock]), so the base compile and the
-             baseline's timing window are charged to it. Nothing in flight can be cancelled -- a
-             compile runs to its end -- so the budget is kept by three checks against that clock: -
-             as each attempt (and each beam round) starts, it is refused once the budget is spent,
-             or once the elapsed time plus two compiles of the projected cost
-             ([projected_compile_s]: the costliest this search has made, the cold ones that filled
-             the kernel cache aside once a compile reused a kernel, gh-ocannl-1667) would pass it:
-             one for the attempt's own compile, which nothing can stop, and one reserved for the
-             winner's recompile, which runs after every check (a replay of a candidate compiled
-             here, whose kernels the cache, when it is on, already holds); - as each batch of a
-             candidate's timing starts, and before its warmup, the timing is abandoned once the
-             elapsed time plus that reserve passes the budget ([budget_stop]): the candidate is not
-             ranked, its compile is spent, and the search ends as at a refused attempt. The evidence
-             starts at the base compile, so no candidate compile goes unprojected. Once the budget
-             is spent (or projected to be), nothing more is compiled -- the seeds left, the
-             composites, the playoff and the rounds are skipped where they would have been
-             attempted, which costs no compile -- and the search crowns its incumbent exactly as a
-             completed one does. The untuned floors are exempt from all three ([floor]): the seeded
-             untuned plan (gh-ocannl-1388) and the default-pipeline seed, so a cut search has
-             measured what the caller ships without tuning and crowns nothing slower. A skipped spec
-             leaves [last_attempt] at [`Other]: the staffed sweep must neither retry it bare nor
-             rank a stale dedup time for it. *)
-          let budget_spent = ref false in
-          let spend_budget ~b ~elapsed reason =
-            budget_spent := true;
-            logf "budget of %gs %s (%.1f s elapsed, %d timed): crowning the incumbent" b reason
-              elapsed !n_timed;
-            progress_line "budget_spent"
-              (Printf.sprintf "budget_s=%g timed=%d %s" b !n_timed (progress_costs ()))
-          in
-          let budget_allows ~what ~floor =
-            match budget with
-            | None -> true
-            | Some b ->
-                (if not !budget_spent then
-                   let elapsed = budget_clock () in
-                   if Float.(elapsed >= b) then spend_budget ~b ~elapsed "spent"
-                   else
-                     let projected = projected_compile_s () in
-                     if Float.(elapsed + (2. * projected) > b) then
-                       spend_budget ~b ~elapsed
-                         (Printf.sprintf
-                            "would be overrun by a compile of the projected cost (%.1f s) and the \
-                             winner's recompile reserved at the same cost"
-                            projected));
-                if (not !budget_spent) || floor then true
-                else (
-                  if not !budget_cut then
-                    logf "budget spent: skipping %s and every later non-floor candidate" what;
-                  budget_cut := true;
-                  false)
-          in
-          let budget_floor spec =
-            match spec with
-            | Fiss (F_seeded _) -> true
-            | _ -> Option.exists default_candidate_label ~f:(String.equal (spec_label spec))
-          in
-          (* Every candidate compile is the projection's evidence ([budget_compile]). Floors' compiles
-             count -- they are compiles of the same computation. *)
-          (* The timing check, for a non-floor candidate: [time_routine] raises [Timing_stopped]
-             before the first batch it starts past the budget less the winner's reserve. *)
-          let budget_stop spec =
-            match budget with
-            | Some b when not (budget_floor spec) ->
-                fun () ->
-                  let elapsed = budget_clock () in
-                  Float.(elapsed + projected_compile_s () > b)
-                  &&
-                  (if not !budget_spent then
-                     spend_budget ~b ~elapsed
-                       "passed, less the winner's reserve, during a candidate's timing";
-                   budget_cut := true;
-                   true)
-            | Some _ | None -> fun () -> false
-          in
-          (* [hopeless_against] (gh-ocannl-1527) is what the caller ranks this candidate's reading
-             against, asked as its timing starts: [Some ms] lets the window end as soon as it is
-             hopeless against [ms] ({!hopeless_window}); [None], the default, times it in full. *)
-          (* One timing window of the compiled candidate [c], timed under [label] -- a candidate's
-             in [try_spec], a contender's re-timing in the beam finals (gh-ocannl-1635).
-
-             The backend's own classifier decides whether a launch or sync failure is this
-             candidate's fault: the driver error is all the evidence there is, and only the backend
-             can read it. With the always-[None] classifier this used to pass, no backend could ever
-             declare one, so every launch failure was fatal by phase default and there was nowhere
-             for a backend to plug one in (gh-ocannl-536; the HIP scratch-overflow arm of
-             gh-ocannl-533 is what fills this seam). The phase reaching the report is the tagged one
-             inside [time_routine], so a report distinguishes a launch refusal from an asynchronous
-             failure at sync.
-
-             And from the third case, which is not the backend's to judge: [time_routine]'s
-             pre-dispatch validation carries [Preflight] and is contained without asking the
-             classifier (gh-ocannl-564). Tagged [Launch] it was fatal on every C backend, so a
-             scratch context missing one of the caller's initializations condemned the search
-             instead of declining a candidate. *)
-          let timing_window ~label ~stop ?hopeless_against ?hopeless_ratio c =
-            (* The lineage-wide validation is OUTSIDE the boundary (gh-ocannl-569): a poisoned
-               lineage, an uninitialized input and an unexecuted dependency are properties of the
-               context and the computation, so a genuine one fails every candidate of every arm at
-               once. Contained as a decline it is silent — on a backend whose serial baseline is not
-               dispatched (every GPU backend) every candidate declines for the one reason, nothing
-               is timed, and the search ships the untuned default out of an unusable lineage under a
-               report that says it completed. It reaches the caller instead, which is the only party
-               that can fix it.
-
-               Tagged, though not contained: the tag carries no boundary here, it only labels the
-               phase so the fallback handler at the end of [search] reports a pre-dispatch
-               validation failure as [Preflight] rather than as its [Transform] default. *)
-            Outcome.tag Outcome.Preflight (fun () ->
-                Context.check_lineage_runnable c.cctx c.routine);
-            (* gh-ocannl-1621: the state every window starts from, restored outside the boundary for
-               the same reason -- it is the lineage's, not this candidate's. *)
-            Outcome.tag Outcome.Preflight before_timing_window;
-            Outcome.protect ~classify_backend:(Context.failure_classifier c.cctx)
-              ~provenance:Outcome.Candidate ~phase:Outcome.Launch ~candidate:label (fun () ->
-                timed_into progress_timing_s (fun () ->
-                    (* gh-ocannl-1556: [`Stopped] is a timing the budget stopped, and
-                       gh-ocannl-1527: [`Hopeless] a window cut as out of the running -- neither a
-                       failure of the candidate, so caught inside the boundary. *)
-                    match
-                      time_routine ~on_retry ~on_call ~tag_failures:true ~phase:!progress_phase
-                        ~stop ?hopeless_against ?hopeless_ratio ~timing ~repeats c.cctx c.routine
-                    with
-                    | timing_result -> `Timed timing_result
-                    | exception Timing_stopped -> `Stopped
-                    | exception Timing_hopeless h -> `Hopeless h))
-            (* Outside the boundary: the seam is not a candidate failure to classify. *)
-            |> Result.map ~f:(function
-              | `Timed timing_result ->
-                  `Timed (apply_measurement_seam ~label ~digest:c.digest_after timing_result)
-              | (`Stopped | `Hopeless _) as other -> other)
-          in
-          let try_spec ?(hopeless_against = fun () -> None) ?hopeless_ratio:ratio spec =
-            last_attempt := `Other;
-            Seam.get on_candidate_attempt (spec_label spec);
-            let pruned_by_bound =
-              bound_prunable spec
-              && Option.value_map (Lazy.force floor_bound_ms) ~default:false ~f:(fun fb ->
-                  (* Equality prunes: displacing the incumbent needs strict improvement. *)
-                  Float.(fb >= snd !best_so_far))
-            in
-            if pruned_by_bound then (
-              Int.incr n_bound_pruned;
-              logf "%s: BOUND-PRUNED (floor %.4f ms >= best %.4f ms)" (spec_label spec)
-                (Option.value_exn (Lazy.force floor_bound_ms))
-                (snd !best_so_far);
-              None)
-            else (
-              (* Counted only past the pruning gate: [mma_candidates]' contract is candidates put
-                 through candidate compilation, and a bound-pruned sketch never was. *)
-              if spec_expects_mma spec then begin
-                Int.incr n_mma_proposed;
-                match spec with
-                | Fiss (F_sketch _ | F_swap _) -> Int.incr n_fiss_mma_proposed
-                | Whole _
-                | Fiss
-                    (F_preset _ | F_saved _ | F_split _ | F_split_saved _ | F_seeded _ | F_resplit _)
-                  ->
-                    ()
-              end;
-              (* Recorded whether or not this compile goes on to be timed: on dedup the code was (or
-                 will not be) timed under the same digest, and the [default_ms] lookup follows the
-                 digest, not the seed (gh-ocannl-552). Which seed, if any, is [default_seed_label]'s
-                 to say. *)
-              let attribute digest_after =
-                if Option.exists default_candidate_label ~f:(String.equal (spec_label spec)) then
-                  default_seed_digest := Some digest_after;
-                match spec with
-                | Fiss (F_seeded _) -> seeded_seed_digest := Some digest_after
-                | _ -> ()
+        | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure
+      in
+      (* The base compile's own device-memory decline refuses nothing by itself (it bounds no
+         candidate from below, above): the floor answers. Where the baseline was refused before
+         codegen (every GPU backend's), it allocated nothing, and the floor answers in its place. A
+         CPU baseline, deferred (gh-ocannl-1666), is not probed here: its own link in the search
+         ([baseline_compile]) is the first memory evidence, as the base link was, and a refusal
+         there asks the floor; a cache replay's link answers for a hit. *)
+      if Option.is_none lineage_refusal then
+        if Option.exists baseline_decline ~f:is_device_memory then probe_floor ~account:false
+        else if !base_undispatched then probe_floor ~account:true;
+      let cached =
+        if use_cache && Option.is_none lineage_refusal then
+          match SC.lookup ~dir:cache_dir ~key with
+          | Some entry when entry_replayable ~digest:base_digest entry -> (
+              let spec =
+                match entry.SC.segments with
+                (* A fissioned entry with a non-empty [saved] is a split-reduce winner: [saved] is
+                   the whole-routine prelude, [segments] the post-prelude per-segment schedules. *)
+                | Some segs when not (List.is_empty entry.SC.saved) ->
+                    Fiss (F_split_saved (entry.SC.saved, segs, None))
+                | Some segs -> Fiss (F_saved (segs, None))
+                | None -> Whole (W_saved (entry.SC.saved, None))
               in
-              match
-                timed_into progress_compile_s (fun () ->
-                    budget_compile @@ fun () ->
-                    costed ~stage:"candidate" ~attempt:(spec_label spec)
-                      ~verdict_of:(function
-                        | Compiled _ -> "compiled"
-                        | Duplicate _ -> "dedup"
-                        | Failed failure when is_not_dispatched failure -> "refused"
-                        | Failed _ -> "failed")
-                      (fun () -> compile_spec_deduped ~seen spec))
-              with
-              | Duplicate digest_after ->
-                  (* Decided before codegen (gh-ocannl-1340): a duplicate pays for the transform
-                     only, and its identical twin, timed or refused, is the one the search reasons
-                     about. *)
-                  attribute digest_after;
-                  last_attempt := `Dedup (Hashtbl.find timed_ms_by_digest digest_after);
-                  logf "%s: dedup before codegen (digest %s)" (spec_label spec)
-                    (dshort digest_after);
-                  None
-              | Failed (Outcome.Classified classified as failure) when is_not_dispatched failure ->
-                  (* Degenerated to the serial form (gh-ocannl-532), refused before codegen; the
-                     gate recorded the digest as seen, so an equivalent later candidate dedups
-                     rather than re-deriving the same refusal. Never timed, so its seed attribution
-                     ([attribute]) would look up nothing. *)
-                  logf "%s: NOT DISPATCHED, binds no hardware dimension, refused before codegen"
+              (* gh-ocannl-1326: the replay must not find the baseline's working set still resident:
+                 on a step that uses over half the device it was refused at link while the baseline
+                 held the rest, so every warm process re-searched. Since gh-ocannl-1666 none is
+                 linked here (a no-op); the search compiles one if this entry turns out stale. *)
+              release_baseline ();
+              progress_stage "cache_replay";
+              (* An entry written before the gh-ocannl-532 rule can name the serial baseline as the
+                 winner: it was timed then, and it won by default whenever every candidate failed to
+                 compile — the state gh-ocannl-521 recorded for every GPU backend. Replaying it
+                 would reintroduce the single-work-item dispatch through the cache, permanently and
+                 without ever timing anything. Rejected like a stale entry: the fresh search below
+                 overwrites it. Rejecting the replay (rather than bumping [entry_version]) keeps
+                 every sound entry, on this backend and on the CPU backends, where an empty schedule
+                 is a legitimate winner. The rejection is decided before codegen
+                 ([compile_candidate_gated]) and arrives as the typed [Not_dispatched] failure,
+                 which the [Error] arm below records in [cache_replay_refusal] like any other
+                 refused replay (gh-ocannl-1340). This arm is the post-codegen check on what was
+                 shipped.
+
+                 gh-ocannl-1440: a deferred call keeps the compiled code ([retained]), so the
+                 routine it ships is this compile's code linked again rather than a second
+                 compile. *)
+              let retained = ref None in
+              let retain = if defer then Some (fun rt -> retained := Some rt) else None in
+              (* Counted as the backend compiles the replay completed, a replay whose link then
+                 failed included (review round 2). *)
+              let before = D.backend_compiles () in
+              let replay_compile = compile_spec_real ?retain Outcome.Cache_replay spec in
+              replay_compiles := !replay_compiles + (D.backend_compiles () - before);
+              match replay_compile with
+              | Ok c when not (shipped_dispatchable ~is_gpu c) ->
+                  logf "cache entry replays to an unparallelized routine, re-searching: %s"
                     (spec_label spec);
-                  record_decline declines classified;
-                  None
-              | Failed (Outcome.Classified classified) ->
-                  (* A candidate refused for device memory is that candidate's decline: the
-                     footprint question was the baseline's to answer (gh-ocannl-1493). *)
-                  record_decline declines classified;
-                  last_attempt := `Declined;
-                  logf "%s: FAILED at %s %s" (spec_label spec) (phase_label classified.phase)
-                    (Outcome.detail_of_cause classified.cause);
-                  None
-              | Failed (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
-              | Compiled c ->
-                  pending := Some c;
-                  attribute c.digest_after;
-                  if not (shipped_dispatchable ~is_gpu c) then (
-                    (* The post-codegen check: the gate admitted the transform's forms, but the
-                       kernels codegen shipped bind no hardware dimension (zero-only segments are
-                       elided after the transform). *)
-                    Hash_set.add seen c.digest_after;
-                    logf
-                      "%s: NOT DISPATCHED, its shipped kernels bind no hardware dimension (digest \
-                       %s)"
-                      (spec_label spec) (dshort c.digest_after);
-                    record_not_dispatched ~origin:"candidate"
-                      ~detail:
-                        (Printf.sprintf
-                           "%s shipped kernels binding no hardware dimension (gh-ocannl-532)"
-                           (spec_label spec));
-                    release_candidate c;
-                    None)
-                  else (
-                    Hash_set.add seen c.digest_after;
-                    if Hash_set.mem departed_digests c.digest_after then Int.incr n_timings_retimed;
-                    match
-                      timing_window ~label:(spec_label spec) ~stop:(budget_stop spec)
-                        ?hopeless_against:
-                          (if measurement_is_physical () then hopeless_against () else None)
-                        ?hopeless_ratio:ratio c
-                    with
-                    | Ok (`Hopeless h) ->
-                        (* gh-ocannl-1527: not ranked, and not a refusal -- the window proved the
-                           candidate out of the running against what its caller ranks it by, so the
-                           search stays cacheable. Its digest leaves [seen] as a refused one's does:
-                           the reference can move, so an equivalent later proposal is timed against
-                           its own. *)
-                        Int.incr n_timings_hopeless;
-                        (* gh-ocannl-1697: a seeded single reached its window, as a refused one
-                           does. *)
-                        (match spec with
-                        | Fiss (F_swap _) ->
-                            Int.incr n_seeded_single_timed;
-                            Int.incr n_seeded_hopeless
-                        | Fiss (F_resplit _) ->
-                            Int.incr n_seeded_split_timed;
-                            Int.incr n_seeded_hopeless
-                        | _ -> ());
-                        if spec_expects_mma spec then Int.incr n_mma_timed;
-                        depart c.digest_after;
-                        logf
-                          "%s: NOT RANKED, hopeless: its first %d samples read %.4f ms, over \
-                           the                            %.4f ms (%gx what it would have to beat) \
-                           that ends the window (digest                            %s)"
-                          (spec_label spec) h.hopeless_samples h.hopeless_ms h.hopeless_threshold_ms
-                          (Option.value ratio ~default:hopeless_ratio)
-                          (dshort c.digest_after);
-                        release_candidate c;
-                        None
-                    | Ok `Stopped ->
-                        (* The budget passed during this candidate's timing: it is not ranked, and a
-                           later floor of the same digest must compile and time afresh rather than
-                           dedup against a timing that never finished. *)
-                        depart c.digest_after;
-                        logf "%s: NOT TIMED, the budget passed during its timing (digest %s)"
-                          (spec_label spec) (dshort c.digest_after);
-                        release_candidate c;
-                        None
-                    | Ok (`Timed timing_result)
-                      when Option.is_none (admitted_timing_ms timing_result) ->
-                        (* The family counters answer whether a candidate compiled and reached a
-                           timing window, independently of whether that window yielded a usable
-                           verdict. Keep that accounting stable under refusal; the historical
-                           [timings_contended] counter covers every unusable timing result. *)
-                        (match spec with
-                        | Fiss (F_swap _) -> Int.incr n_seeded_single_timed
-                        | Fiss (F_resplit _) -> Int.incr n_seeded_split_timed
-                        | Fiss (F_sketch _) when !in_playoff -> Int.incr n_playoff_timed
-                        | Fiss (F_sketch { entries; staff; fine; _ }) -> (
-                            Int.incr n_fiss_sketch_timed;
-                            if not (List.is_empty staff) then Int.incr n_staffed_timed;
-                            if not fine then
-                              match entries with
-                              | [ (key, _) ] -> Hash_set.add coarse_single_refused key
-                              | _ :: _ :: _ -> fs_composite := `Refused
-                              | [] -> ())
-                        | Fiss (F_split { sites; staff }) ->
-                            Int.incr n_sr_timed;
-                            if List.length sites >= 2 && List.is_empty staff then
-                              sr_composite_timed := true
-                        | _ -> ());
-                        if spec_expects_mma spec then Int.incr n_mma_timed;
-                        let refusal = timing_admission timing_result in
-                        count_refusal refusal;
-                        Hash_set.add contended_digests c.digest_after;
-                        (* Unlike a launch/compile decline, a refused window (contention, a
-                           degenerate reading) is not a property of this schedule. An equivalent
-                           later seed is a useful retry, not a dedup. *)
-                        depart c.digest_after;
-                        logf "%s: NOT TIMED, %s (digest %s)" (spec_label spec)
-                          (refusal_reason refusal) (dshort c.digest_after);
-                        release_candidate c;
-                        None
-                    | Ok (`Timed timing_result) ->
-                        (* gh-ocannl-1326: the timing is all a candidate is for, the incumbent-to-be
-                           included, so its buffers go before anything else happens: the next
-                           compile must not find this one's working set still resident. A winner is
-                           recompiled from its saved form when the search ends. *)
-                        release_candidate c;
-                        let ms = Option.value_exn (admitted_timing_ms timing_result) in
-                        Int.incr n_timed;
-                        note_admitted_window ~digest:c.digest_after timing_result;
-                        (* Publish window accounting before the post-admission injection seam: it
-                           can raise, and the partial report still owns this completed window. *)
-                        (match spec with
-                        | Fiss (F_swap _) -> Int.incr n_seeded_single_timed
-                        | Fiss (F_resplit _) -> Int.incr n_seeded_split_timed
-                        | Fiss (F_sketch _) when !in_playoff -> Int.incr n_playoff_timed
-                        | Fiss (F_sketch { entries; staff; fine; _ }) -> (
-                            Int.incr n_fiss_sketch_timed;
-                            if not (List.is_empty staff) then Int.incr n_staffed_timed;
-                            if not fine then
-                              match (entries, staff) with
-                              | [ (key, _) ], [] -> Hash_set.add coarse_single_measured key
-                              | [ (key, _) ], _ :: _ ->
-                                  (* A staffed single schedules a composite of the coarse keys
-                                     (gh-ocannl-1138): published here, before the callbacks that can
-                                     cut the search, as an explicit composite's window is. *)
-                                  Hash_set.add coarse_single_measured key;
-                                  fs_composite := `Timed
-                              | _ :: _ :: _, _ -> fs_composite := `Timed
-                              | [], _ -> ())
-                        | Fiss (F_split { sites; staff }) -> (
-                            Int.incr n_sr_timed;
-                            match sites with
-                            | _ when not (List.is_empty staff) ->
-                                (* A staffed single, ranked by its sweep in its own backdrop, splits
-                                   several sites: a multi-site composite's window, published before
-                                   the callbacks as an explicit composite's is. *)
-                                sr_composite_eligible := true;
-                                sr_composite_timed := true
-                            | [ (s, b) ] ->
-                                sr_single_results := (s, b, ms) :: !sr_single_results;
-                                sr_composite_eligible :=
-                                  List.exists !sr_single_results ~f:(fun (s2, _, _) ->
-                                      not (Idx.equal_symbol s2.sr_axis s.sr_axis))
-                            | _ :: _ :: _ -> sr_composite_timed := true
-                            | [] -> ())
-                        | _ -> ());
-                        if spec_expects_mma spec then Int.incr n_mma_timed;
-                        Hashtbl.set timed_ms_by_digest ~key:c.digest_after ~data:ms;
-                        Hashtbl.set label_by_digest ~key:c.digest_after ~data:(spec_label spec);
-                        (* Structural, not label-promised, and deliberately a different population
-                           from [n_mma_timed]: with [rounds > 0] the beam menu appends a [Tensorize]
-                           to a saved or preset incumbent, and the resulting [W_saved]/[F_saved]
-                           spec promises nothing in its label — yet it is exactly as tensorized as a
-                           sketch seed, and it can win. Keying this on the label would let the
-                           placement A/B report "no tensorized candidate was timed" about a search
-                           whose winner tensorizes. *)
-                        if saved_is_tensorized (flat_schedule c.form) && Float.(ms < !mma_best_ms)
-                        then mma_best_ms := ms;
-                        if Float.(ms < snd !best_so_far) then (
-                          best_so_far := (Some c, ms);
-                          best_steps := (!n_timed, ms) :: !best_steps);
-                        Seam.get on_candidate_callback `Timed ~candidate_ms:ms
-                          ~incumbent_ms:(snd !best_so_far);
-                        Seam.get on_candidate_timed c.routine.Context.name ~timed_so_far:!n_timed;
-                        logf "%s: %.4f ms (digest %s)" (spec_label spec) ms (dshort c.digest_after);
-                        Seam.get on_candidate_callback `Calibration ~candidate_ms:ms
-                          ~incumbent_ms:(snd !best_so_far);
-                        emit_calibration ~backend ~device ~limits ~routine:(Lazy.force routine_name)
-                          ~label:(spec_label spec) ~digest:c.digest_after ~timing_result c.all_opts;
-                        (* The rendering census next to the timing (gh-ocannl-479): a candidate
-                           labeled tensorized whose [Tile_mma] statements all declined at emission
-                           timed the scalar fallback — report it, or every number off this tuning
-                           run inherits the ambiguity. *)
-                        let summary = mma_summary c in
-                        let scalar = summary.Ir.C_syntax.scalar_fallbacks in
-                        let total = summary.Ir.C_syntax.statements in
-                        if scalar > 0 then
-                          logf
-                            "%s: NOTE %s, %d/%d Tile_mma statement(s) rendered as the lane-0 \
-                             scalar fallback (config schedule_log_declines=true names the failed \
-                             rule)"
-                            (spec_label spec)
-                            (Ir.C_syntax.tensorization_name summary.Ir.C_syntax.tensorization)
-                            scalar total
-                        else if total = 0 && spec_expects_mma spec then
-                          logf
-                            "%s: NOTE not-requested, tensorized candidate emitted no Tile_mma \
-                             statement"
-                            (spec_label spec);
-                        (* The Grid census next to the timing (gh-ocannl-1702), for the reason the
-                           mma census is: a schedule that asks for a Grid loop the renderer kept
-                           serial timed a serial loop under a parallel label. Logged for every
-                           candidate that has a pool-backed Grid loop at all, flagged when the
-                           schedule asked and the renderer declined, and recorded in the report. *)
-                        let grid = c.routine.Context.grid in
-                        if grid_rendered_serially grid && schedule_asks_grid (flat_schedule c.form)
-                        then (
-                          grid_serial_timed :=
-                            { grid_label = spec_label spec; grid_ms = ms; grid_record = grid }
-                            :: !grid_serial_timed;
-                          logf "%s: NOTE grid-serial, the schedule asks for a Grid loop; %s"
-                            (spec_label spec)
-                            (Ir.C_syntax.grid_summary_string grid))
-                        else if grid.Ir.C_syntax.pool && not (List.is_empty grid.Ir.C_syntax.loops)
-                        then logf "%s: %s" (spec_label spec) (Ir.C_syntax.grid_summary_string grid);
-                        Some (c, ms)
-                    | Error (Outcome.Classified classified) -> (
-                        record_decline declines classified;
-                        logf "%s: RUN FAILED at %s %s" (spec_label spec)
-                          (phase_label classified.phase)
-                          (Outcome.detail_of_cause classified.cause);
-                        match classified.execution_effect with
-                        | Outcome.No_device_writes ->
-                            last_attempt := `Declined;
-                            (* [Context.run] marks a routine executed before the later [sync] can
-                               report an asynchronous failure. A rejection the backend proved wrote
-                               nothing withdraws that claim, so the next candidate compiled in this
-                               lineage does not wait on a routine that never completed. A no-op for
-                               a [Preflight] decline, which precedes the dispatch that makes the
-                               claim. *)
-                            Context.rollback_execution c.cctx c.routine.Context.routine_id;
-                            (* gh-ocannl-550: a candidate that failed to run is as dead as one that
-                               lost, and on the failure that motivated all of this it is deader — an
-                               out-of-memory decline is exactly when the freed buffers are worth
-                               most. *)
-                            release_candidate c;
-                            None
-                        | Outcome.Writes_may_have_occurred ->
-                            (* Counted once as a decline (its cause is real evidence about the
-                               candidate) and then escalated: the timing lineage may hold partially
-                               written buffers, and there is no restore API to rebuild its inputs
-                               and parameters, so timing the next candidate on it would score
-                               suspect data. *)
-                            Context.poison_lineage c.cctx ~routine_name:c.routine.Context.name
-                              (Outcome.exception_of_cause classified.cause);
-                            (* gh-ocannl-550: the exit sweep in [emit_partial_and_raise] can only
-                               reach what the beam or [best_so_far] holds, and this candidate is in
-                               neither — it failed before being admitted. Releasing it here is what
-                               keeps the in-flight one from outliving the arm, which matters
-                               precisely because [Train.tune_placements] CONTAINS this failure and
-                               goes on to search its sibling arm on the same device. *)
-                            release_candidate c;
-                            emit_partial_and_raise
-                              (Outcome.fatal_of_classified ~candidate:(spec_label spec) classified))
-                    | Error (Outcome.Fatal fatal) ->
-                        (* An unattributed launch/sync failure says nothing about what the device
-                           did, so the lineage is condemned before the exception unwinds — a caller
-                           that catches it cannot reuse a ledger claiming the failed routine
-                           completed. *)
-                        Context.poison_lineage c.cctx ~routine_name:c.routine.Context.name
-                          fatal.Outcome.exn;
-                        (* Not in the beam either (see above). *)
-                        release_candidate c;
-                        emit_partial_and_raise fatal))
-          in
-          (* gh-ocannl-550: the per-candidate allocation census, on the same [autotune_log] stream
-             as the candidate lines it follows, so a growth curve can be read against the classes
-             that produce it instead of against wall-clock samples from outside the process. One
-             line per attempt, whether the candidate was timed, declined or deduped — a class that
-             grows on the DECLINE path is a different bug from one that grows on the timed path, and
-             only per-attempt lines distinguish them. The device figure is the backend's own
-             accounting, which the census does not replace: it covers pools the shared seam does not
-             allocate (the merge buffer) and, on [cc], counts host allocations whose GC finalizer
-             has not yet run. *)
-          let try_spec ?hopeless_against ?hopeless_ratio spec =
-            let result = try_spec ?hopeless_against ?hopeless_ratio spec in
-            (* Gated explicitly, not just by [logf]: [logf]'s arguments are evaluated whether or not
-               the flag is on, and both readings here fold a hashtable. *)
-            if log_enabled () then
-              logf "census after %s: %s | device %.1f MiB" (spec_label spec)
-                (Ir.Alloc_census.to_string (Ir.Alloc_census.snapshot ()))
-                (Float.of_int (Context.get_used_memory search_ctx) /. 1048576.);
-            result
-          in
-          (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream. A phase is the
-             seed pass, the recombination composites that follow it, the composite playoff
-             (gh-ocannl-1166), or one beam round; its candidate total is known up front except for
-             the composites' and the playoff's. *)
-          let progress_total = ref None in
-          let progress_tried = ref 0 in
-          let progress_best () =
-            let best_c, best_ms = !best_so_far in
-            let label =
-              match best_c with
-              | None -> if Float.is_finite best_ms then "baseline" else ""
-              | Some c ->
-                  Option.value (Hashtbl.find label_by_digest c.digest_after) ~default:"baseline"
-            in
-            Printf.sprintf "best_ms=%s best=%S" (progress_ms best_ms) label
-          in
-          let progress_where () =
-            Printf.sprintf "phase=%s tried=%d/%s timed=%d %s %s" !progress_phase !progress_tried
-              (Option.value_map !progress_total ~default:"?" ~f:Int.to_string)
-              !n_timed (progress_costs ()) (progress_best ())
-          in
-          let progress_phase_begin phase total =
-            progress_phase := phase;
-            progress_total := total;
-            progress_tried := 0;
-            Option.iter total ~f:(fun n ->
-                progress_line "phase"
-                  (Printf.sprintf "phase=%s candidates=%d timed=%d %s %s" phase n !n_timed
-                     (progress_costs ()) (progress_best ())))
-          in
-          (* gh-ocannl-1110: the caller's abandonment rule, decided once, as soon as the search has
-             [beam_width] admitted timings. Checked as the NEXT attempt starts, so every candidate
-             already timed has been admitted (the exit sweep owns it) and none is cut short. *)
-          let abandon_decided = ref false in
-          let check_abandon () =
-            match abandon with
-            | Some rule when (not !abandon_decided) && !n_timed >= beam_width -> (
-                abandon_decided := true;
-                match abandon_verdict rule ~k:beam_width ~steps:!best_steps with
-                | Some ab -> raise (Abandon_now ab)
-                | None -> ())
-            | Some _ | None -> ()
-          in
-          (* Written as an attempt STARTS, naming it: a search killed inside a long candidate then
-             leaves the candidate it was in, and the costs of everything before it. Counted before
-             the attempt too, so a fatal candidate -- which writes [search_done] from inside itself
-             and raises -- is in the closing record's [attempts]. *)
-          let try_spec ?hopeless_against ?hopeless_ratio spec =
-            check_abandon ();
-            if not (budget_allows ~what:(spec_label spec) ~floor:(budget_floor spec)) then (
-              last_attempt := `Other;
-              None)
-            else (
-              Int.incr progress_attempts;
-              Int.incr progress_tried;
-              (* Guarded here, not only inside [progress_line]: its arguments render a label and
-                 read the best-so-far table on every attempt of a search that prints nothing. *)
-              if progress_enabled () then
-                progress_line "candidate"
-                  (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
-              try_spec ?hopeless_against ?hopeless_ratio spec)
-          in
-          (* The search's seeds for each lowering it seeds ({!search_seeding}, gh-ocannl-1490): the
-             family seeds, then the coalesced layout's branch beside them (gh-ocannl-1165) —
-             prepared hermetically from the same lowering, its candidates' schedules carry their
-             structural [Coalesce] prefix. *)
-          let seeding =
-            search_seeding
-              ~capabilities:(Context.codegen_capabilities ctx)
-              ~is_gpu ~is_cpu ~limits ~static_indices base_opt
-          in
-          let block_size_presets mk =
-            mk None
-            :: (if is_gpu then List.map seed_block_sizes ~f:(fun bs -> mk (Some bs)) else [])
-          in
-          (* The model pre-filter of the sketch seeding (gh-ocannl-491 task 3): rank each candidate
-             family (the whole-routine sketches; each fission segment's sketches) with the roofline
-             model and keep the best [keep_fraction] of the scored candidates before any compilation
-             or timing. Only candidates the model fully covers are droppable — a candidate without
-             model coverage (opaque code, a schedule the model cannot apply, missing envelope
-             constants) is always kept, only measured — so the pre-filter never precludes a measured
-             result and its outcome is independent of enumeration order. Presets, saved schedules
-             and the baseline are never pruned. A candidate its builder refuses typed
-             ([Sketch_families.refuse], gh-ocannl-1390) is dropped here as the decline its compile
-             would have been, under the same cause in the census (gh-ocannl-1437): the pre-filter
-             builds outside the candidates' failure boundary, where the refusal used to end the
-             search. An untyped raise is a builder bug and still propagates. *)
-          let model_prefilter_params ~seg_opt ~family params =
-            if Float.(keep_fraction >= 1.) || List.length params <= 1 then params
-            else
-              let scored =
-                List.filter_map params ~f:(fun p ->
-                    match sketch_schedule ~accum_prec ~p seg_opt with
-                    | exception Outcome.Cause_at (phase, cause)
-                      when not (Outcome.uncontainable phase cause) ->
-                        logf "model pre-filter (%s): %s refused by its builder, declined: %s" family
-                          (spec_label (Whole (W_sketch p))) (Outcome.detail_of_cause cause);
-                        record_decline declines
-                          { Outcome.phase; cause; execution_effect = Outcome.No_device_writes };
-                        None
-                    | sched -> Some (p, model_score ~static_indices ~limits seg_opt sched))
-              in
-              n_model_scored :=
-                !n_model_scored + List.count scored ~f:(fun (_, s) -> Option.is_some s);
-              let kept = model_prefilter ~keep_fraction scored in
-              List.iter scored ~f:(fun ((p, s) as entry) ->
-                  if not (List.mem kept entry ~equal:phys_equal) then (
-                    Int.incr n_model_pruned;
-                    logf "model prune (%s, keep %.2f): %s scored %.3e s" family keep_fraction
-                      (spec_label (Whole (W_sketch p))) (Option.value_exn s)));
-              List.map kept ~f:fst
-          in
-          let sketch_params =
-            model_prefilter_params ~seg_opt:base_opt ~family:"whole-routine" seeding.ss_whole
-          in
-          n_sketch_candidates := List.length sketch_params;
-          n_epilogue_sketch_candidates := List.count sketch_params ~f:(fun p -> p.sk_epilogue);
-          (* Per-fission-segment sketch seeds (the [F_sketch] flavor): heavily fissioned graphs tune
-             per segment, where the whole-routine sketches never apply. Enumerate the fission
-             segmentation once, on a hermetic copy of the base lowering with the same pipeline
-             settings the candidate transform uses ([preset_sched]'s defaults), and detect a matmul
-             site per keyed segment ({!keyed_segments}): the candidates replay this segmentation and
-             find their segments in it by position (gh-ocannl-1243). Enumerated in [seeding]
-             above. *)
-          let prefilter_entries ~tag entries =
-            (* Per-segment pre-filtering: each segment's sketches are their own family —
-               cross-segment scores are incomparable (different code volumes), and the singles below
-               are also ranked per segment by the recombination step. *)
-            List.map entries ~f:(fun (key, pre, ps) ->
-                (key, model_prefilter_params ~seg_opt:pre ~family:(tag ^ seg_key_tag key) ps))
-          in
-          (* gh-ocannl-1664: where the seeded plan has a segmentation of its own, the per-segment
-             singles are timed inside it (config [autotune_seeded_singles]): each single is the plan
-             with one segment code's choice swapped for a sketch, over the plan's own segments,
-             whose seeds are enumerated there. Its time is then the plan's own basis, about the
-             incumbent's, where a single around presets reads several times the composite it would
-             join (131-144 ms around an 18 ms plan on gpt2_mini_train/HIP, gh-ocannl-1528) and is
-             comparable only with its key's other singles. Those singles -- coarse and fine, bare or
-             staffed -- are not seeded then: the plan's segmentation already took the finer pieces
-             where more of them seed (gh-ocannl-1413). *)
-          let seeded_singles_plan =
-            if not seeded_singles then None
-            else
-              match Lazy.force seeded_plan_value with
-              | Some ({ sp_segments = Some _; _ } as plan) -> Some plan
-              | Some { sp_segments = None; _ } | None -> None
-          in
-          (* The seeded singles' menu on [plan] -- the running seeded plan once the split sweep
-             below has run (gh-ocannl-1697), whose segmentation a split it joined can have
-             changed. *)
-          let seeded_menu plan =
-            let seeds =
-              seeded_single_seeds ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices plan
-                (Option.value !base_pristine ~default:base_opt)
-            in
-            ( prefilter_entries ~tag:"seeded segment " seeds,
-              List.map seeds ~f:(fun (key, pre, _) -> (key, pre)) )
-          in
-          let seeded_sweep = Option.is_some seeded_singles_plan in
-          let coarse_plan, coarse_entries =
-            if seeded_sweep then (seeding.ss_coarse_plan, [])
-            else (seeding.ss_coarse_plan, seeding.ss_coarse)
-          in
-          (* Each coarse key's pre-schedule segment, which the staffed sweep weighs its key by. *)
-          let coarse_pre = List.map coarse_entries ~f:(fun (key, pre, _) -> (key, pre)) in
-          let fiss_sketch_entries = prefilter_entries ~tag:"segment " coarse_entries in
-          (* The finer ([arity_cuts]) segmentation (gh-ocannl-574): cutting apart a companion that
-             cannot follow its site's full arity — the lm_head's max-logits reduction and that
-             reduction's initialization nest — frees the site's kernel to seed at full arity, where
-             the shared segment's every seed declines on companion coverage. GPU-only: the
-             constraint the cut relieves is the GPU sketches' kernel-global launch geometry. Only
-             segments whose digest is {e new} versus the coarse segmentation seed singles — an
-             unchanged segment's parameters are already timed by its coarse single, and the extra
-             cuts elsewhere in a fine twin could only add launches — but the full fine key list is
-             kept so the fine recombination below can staff unchanged segments from coarse-timed
-             bests. A segment the finer cuts leave unchanged keeps its first unit and its digest, so
-             its key is the coarse one. *)
-          let fine_plan, fine_all_entries, fine_pre =
-            (* Empty off GPU, and when the finer mode cut nothing new: the coarse seeds cover every
-               segment. *)
-            ( seeding.ss_fine_plan,
-              (if seeded_sweep then [] else prefilter_entries ~tag:"fine segment " seeding.ss_fine),
-              List.map seeding.ss_fine ~f:(fun (key, pre, _) -> (key, pre)) )
-          in
-          let plan_of ~fine = if fine then fine_plan else coarse_plan in
-          let fine_new_entries =
-            List.filter fine_all_entries ~f:(fun (k, _) ->
-                List.exists seeding.ss_fine_new ~f:(fun (k', _, _) -> equal_seg_key k k'))
-          in
-          let fiss_sketch_specs =
-            (* Single-segment specs: each parameter set of each keyed segment is proposed alone,
-               every other segment falling back to its default preset (an absent key degrades to the
-               preset in the transform closure). Any zipping of segments' seeds into shared combos —
-               index pairing, or pinning the other segments to their first set — lets one segment's
-               invalid seed mask another segment's seeds from ever being timed (observed on
-               cifar_conv: the fc matmul's invalid packrest-grid seed masked the conv segments'
-               row-block seed; and a segment's FIRST seed can itself be the invalid one, e.g. GPU
-               conv seeds with a companion tail). Cross-segment combination is recovered below by
-               recombining each segment's best-timed single into one composite candidate. *)
-            let singles ~plan ~fine entries =
-              List.concat_map entries ~f:(fun (key, ps) ->
-                  List.map ps ~f:(fun p ->
-                      Fiss (F_sketch { plan; entries = [ (key, p) ]; staff = []; fine })))
-            in
-            ( singles ~plan:coarse_plan ~fine:false fiss_sketch_entries,
-              singles ~plan:fine_plan ~fine:true fine_new_entries )
-          in
-          n_fiss_sketch_candidates :=
-            List.length (fst fiss_sketch_specs) + List.length (snd fiss_sketch_specs);
-          (* Split-reduce seeds (gh-ocannl-484 task 3), detected on the base lowering — the prelude
-             applies whole-routine, so no segment enumeration is needed first — and proposed as
-             single-site candidates over a few [num_blocks] values (the tunable of the family; [2*b
-             <= extent] keeps chunks at least two elements, below which the split is all combine
-             overhead). On GPU the block loop is the bulk of pass 1's launch parallelism at these
-             low-output sites, so the sweep leans larger; the CPU pool saturates at core counts.
-             Multi-site combination is recovered below by recombining the best-timed singles. *)
-          let sr_ranked =
-            if is_gpu || is_cpu then split_reduce_sites ~static_indices base_opt else []
-          in
-          let sr_sites = List.take sr_ranked max_split_reduce_sites in
-          (* The candidate-volume cap binding is an eviction, not a judgement about the site: it was
-             reachable and ranked, and lost only to the cap. Record each evicted site in the decline
-             census — the gh-ocannl-541 blind spot was exactly a previously-seeded site silently
-             dropping out of the proposal set when newly-reachable sites filled the cap. *)
-          List.iter (List.drop sr_ranked max_split_reduce_sites) ~f:(fun s ->
-              let detail =
-                Printf.sprintf
-                  "site %s red%d out%d cost%d%s%s evicted by autotune_split_reduce_max_sites=%d"
-                  (Ir.Tnode.debug_name s.sr_target) s.sr_red s.sr_out s.sr_cost
-                  (match List.length s.sr_swaps with 0 -> "" | n -> Printf.sprintf " swap%d" n)
-                  (if Option.is_some s.sr_coalesce then " coalesced" else "")
-                  max_split_reduce_sites
-              in
-              logf "split_reduce: %s" detail;
-              record_decline declines
-                {
-                  Outcome.phase = Outcome.Transform;
-                  cause = Outcome.Seed_evicted { family = "split_reduce"; detail };
-                  execution_effect = Outcome.No_device_writes;
-                });
-          let sr_num_blocks = if is_gpu then [ 32; 128; 512 ] else [ 8; 32; 128 ] in
-          (* gh-ocannl-1697: with the seeded sweep, the split singles are the seeded plan's own
-             ([F_resplit], the seeded split sweep below), so none is timed around presets. *)
-          let sr_specs =
-            if seeded_sweep then []
-            else
-              List.concat_map sr_sites ~f:(fun s ->
-                  List.filter_map sr_num_blocks ~f:(fun b ->
-                      if 2 * b <= s.sr_red then
-                        Some (Fiss (F_split { sites = [ (s, b) ]; staff = [] }))
-                      else None))
-          in
-          n_split_reduce_candidates := List.length sr_specs;
-          (* gh-ocannl-1388: the seeded untuned plan, the step the recipes' untuned compile ships on
-             CUDA and HIP ({!seeded_default}), seeded FIRST: wherever the search stops after its
-             first timing, or refuses every later window, it crowns that step, so tuned is never
-             worse than untuned by construction. Absent where the plan is the default pipeline (no
-             seed, split or sink; another backend), which the [config_thresholds] preset seed
-             reproduces, so those searches keep their candidate order. *)
-          let seeded_specs =
-            match Lazy.force seeded_plan_value with
-            | None -> []
-            | Some plan -> [ Fiss (F_seeded plan) ]
-          in
-          let coarse_single_specs, fine_single_specs = fiss_sketch_specs in
-          (* gh-ocannl-1138: with staffed singles the coarse singles are not seeded as a list but
-             swept key by key against the running composite (below), where the list would time them:
-             after the whole-routine sketches, before the fine singles. The seeded sweep replaces
-             that sweep with the seeded plan's. *)
-          let staffed = staffed_singles in
-          let pre_sweep_specs =
-            seeded_specs
-            @ block_size_presets (fun block_size -> Whole (W_preset { block_size }))
-            @ (if is_gpu || is_cpu then
-                 (* Each fissioned preset is seeded plain and privatized (the latter dedups away by
-                    digest when no accumulator is eligible). The [config_thresholds] seeds reproduce
-                    the untuned default pipeline exactly (plus its privatized variant), so the
-                    winner is never worse than not tuning — the aggressive ungated presets can all
-                    lose to it on launch-overhead-bound workloads. *)
-                 List.concat_map [ false; true ] ~f:(fun privatize ->
-                     Fiss (F_preset { block_size = None; privatize; config_thresholds = true })
-                     :: block_size_presets (fun block_size ->
-                         Fiss (F_preset { block_size; privatize; config_thresholds = false })))
-               else [])
-            @ List.map sketch_params ~f:(fun p -> Whole (W_sketch p))
-          in
-          let post_sweep_specs = if staffed then [] else fine_single_specs @ sr_specs in
-          let fiss_single_results = ref [] in
-          progress_phase_begin "seeds"
-            (Some
-               (List.length pre_sweep_specs
-               + (if staffed then 0 else List.length coarse_single_specs)
-               + List.length post_sweep_specs));
-          (* gh-ocannl-1527: what a seed's reading is ranked against, for its window's hopeless cut.
-             A whole-routine seed -- a preset, or a sketch applied to the whole routine -- feeds
-             only the beam: with rounds to run every one of its [beam_width] entries is expanded, so
-             once it is full its slowest entry is the reference (a reading over it enters nothing);
-             with none to run, only its head is ever read. A per-segment single feeds its key's
-             ranking instead -- the recombination's per-key minimum and the playoff's near-ties, at
-             the playoff margin -- timed around a backdrop that can be ten times the composite it
-             joins (gh-ocannl-1166), so against the search's best every single would look hopeless
-             while its rank among its key's singles is the very thing it measures: singles,
-             composites and the floors are timed in full. *)
-          let seed_hopeless_against spec () =
-            match spec with
-            | (Whole (W_preset _ | W_sketch _) | Fiss (F_preset _)) when not (budget_floor spec) ->
-                if rounds = 0 then Option.map (List.hd !beam) ~f:snd
-                else if List.length !beam >= beam_width then Option.map (List.last !beam) ~f:snd
-                else None
-            | Whole (W_preset _ | W_sketch _ | W_saved _)
-            | Fiss
-                ( F_preset _ | F_saved _ | F_sketch _ | F_split _ | F_split_saved _ | F_seeded _
-                | F_swap _ | F_resplit _ ) ->
-                None
-          in
-          let run_seed spec =
-            let result = try_spec ~hopeless_against:(seed_hopeless_against spec) spec in
-            (match (spec, result) with
-            | Fiss (F_sketch { entries = [ (key, p) ]; fine; _ }), Some (_, ms) ->
-                fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
-            | _ -> ());
-            Option.iter result ~f:admit
-          in
-          List.iter pre_sweep_specs ~f:run_seed;
-          (* gh-ocannl-1635/1665: the finals' windows, the one mechanism behind every near-tie crown
-             -- the beam finals' (after the rounds), the composite playoff's and the staffed sweeps'
-             joins (below). [contenders], in contender order, each with the label its windows are
-             timed under, the spec it is recompiled from and the digest that recompile must
-             reproduce ([None]: the first finals recompile's, for a contender whose window timed it
-             under another spec -- a staffed single's running composite). The windows follow
-             [finals_order], one compile PER WINDOW and one resident at a time, each under the
-             contender's label and digest and after the timing-state restore every window starts
-             from (gh-ocannl-1621). A compile per window, even for the adjacent pair in the middle
-             of the order, because that restore covers only the nodes [search_ctx] holds: the
-             buffers a compile allocates afresh (an optimizer's state before its first step, say)
-             are reset only by the next compile, so a reused compile's second window would start
-             from state the first one trained -- every window starts as a search candidate's single
-             window does. A refused or failed finals window is the finals' own: it is not a
-             candidate refusal or decline, so it neither enters [timings_contended] nor makes the
-             search uncacheable; the contender is left with fewer readings, none making the finals
-             inconclusive ([finals_crown]). Under a budget, each recompile starts only while the
-             elapsed time plus the projected compile cost ([projected_compile_s]) stays within it --
-             the projection a candidate attempt is held to -- and once one may not start, no later
-             one of this finals does; a window stops once the budget passes. Neither marks the
-             search as cut. Returns each contender's admitted readings, in contender order; [timed]
-             and [admitted] count the windows. *)
-          let finals_stop () =
-            match budget with Some b -> Float.(budget_clock () > b) | None -> false
-          in
-          let budget_allows_finals () =
-            match budget with
-            | None -> true
-            | Some b ->
-                (not !budget_spent) && Float.(budget_clock () +. projected_compile_s () <= b)
-          in
-          let finals_readings ~what ~timed ~admitted contenders =
-            let readings = Array.create ~len:(List.length contenders) [] in
-            let digests = Array.of_list (List.map contenders ~f:(fun (_, _, d) -> d)) in
-            let cut = ref false in
-            List.iter
-              (finals_order (List.mapi contenders ~f:(fun i c -> (i, c))))
-              ~f:(fun (i, (label, spec, _)) ->
-                if !cut || not (budget_allows_finals ()) then (
-                  if not !cut then
-                    logf "%s: the budget allows no further recompile, from %s on" what label;
-                  cut := true)
-                else
-                  match
-                    timed_into progress_compile_s (fun () ->
-                        budget_compile (fun () -> compile_spec spec))
-                  with
-                  | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
-                  | Error (Outcome.Classified classified) ->
-                      logf "%s: %s: recompile FAILED at %s %s" what label
-                        (phase_label classified.phase)
-                        (Outcome.detail_of_cause classified.cause)
-                  | Ok c
-                    when Option.exists digests.(i) ~f:(fun d -> not (String.equal c.digest_after d))
-                    ->
-                      logf "%s: %s: recompiled to digest %s, not %s: not re-timed" what label
-                        (dshort c.digest_after)
-                        (dshort (Option.value_exn digests.(i)));
-                      release_quietly ~what:(what ^ " contender " ^ label) c.cctx
-                  | Ok c -> (
-                      digests.(i) <- Some c.digest_after;
-                      pending := Some c;
-                      Int.incr timed;
-                      match timing_window ~label ~stop:finals_stop c with
-                      | Ok (`Timed timing_result) -> (
-                          match admitted_timing_ms timing_result with
-                          | Some ms ->
-                              Int.incr admitted;
-                              readings.(i) <- ms :: readings.(i);
-                              logf "%s: %s: %.4f ms (digest %s)" what label ms
-                                (dshort c.digest_after);
-                              release_candidate c
-                          | None ->
-                              logf "%s: %s: NOT TIMED, %s (digest %s)" what label
-                                (refusal_reason (timing_admission timing_result))
-                                (dshort c.digest_after);
-                              release_candidate c)
-                      | Ok `Stopped ->
-                          cut := true;
-                          logf "%s: %s: NOT TIMED, the budget passed during its timing" what label;
-                          release_candidate c
-                      | Ok (`Hopeless _) ->
-                          (* Unreachable: a finals window is timed in full. *)
-                          logf "%s: %s: NOT TIMED, cut as hopeless" what label;
-                          release_candidate c
-                      | Error (Outcome.Classified classified) -> (
-                          logf "%s: %s: RUN FAILED at %s %s" what label
-                            (phase_label classified.phase)
-                            (Outcome.detail_of_cause classified.cause);
-                          (* As a candidate's run failure (see [try_spec]): one that wrote nothing
-                             withdraws its executed claim; one that may have written condemns the
-                             lineage. *)
-                          match classified.execution_effect with
-                          | Outcome.No_device_writes ->
-                              Context.rollback_execution c.cctx c.routine.Context.routine_id;
-                              release_candidate c
-                          | Outcome.Writes_may_have_occurred ->
-                              Context.poison_lineage c.cctx ~routine_name:c.routine.Context.name
-                                (Outcome.exception_of_cause classified.cause);
-                              release_candidate c;
-                              emit_partial_and_raise
-                                (Outcome.fatal_of_classified ~candidate:label classified))
-                      | Error (Outcome.Fatal fatal) ->
-                          Context.poison_lineage c.cctx ~routine_name:c.routine.Context.name
-                            fatal.Outcome.exn;
-                          release_candidate c;
-                          emit_partial_and_raise fatal));
-            List.map (Array.to_list readings) ~f:List.rev
-          in
-          (* A finals contender for a schedule [spec] whose window timed [digest] when known: its
-             windows run under the label that digest was admitted under, else the spec's own. *)
-          let finals_contender spec digest =
-            let label =
-              Option.value
-                (Option.bind digest ~f:(Hashtbl.find label_by_digest))
-                ~default:(spec_label spec)
-            in
-            (label, spec, digest)
-          in
-          (* gh-ocannl-1665/1698: whether [challenger] beats [incumbent], each a lazy finals
-             contender with its search reading, the two readings taken in different windows. A pair
-             within [finals_contenders]' margin (config [autotune_finals_margin]) is a near tie,
-             counted in [counted] and decided by a finals of the two -- [finals_readings] re-times
-             both in adjacent windows under [what], and [finals_crown] decides, ties to the faster
-             first reading (the incumbent on equal readings): [`Finals (wins, finals_ms, other_ms)],
-             the winner's finals reading and the loser's. Outside the margin, with the margin off,
-             under a spent budget or after an inconclusive finals (a contender with no admitted
-             reading), the readings decide, the challenger winning only by reading faster:
-             [`Readings (wins, why)], [why] the log's note on why no finals decided. Either way the
-             caller keeps the winner's search reading, as the beam finals' crown does. *)
-          let finals_settle ~what ~counted ~timed ~admitted ~incumbent:(incumbent, incumbent_ms)
-              ~challenger:(challenger, challenger_ms) =
-            let by_readings why = `Readings (Float.(challenger_ms < incumbent_ms), why) in
-            let near =
-              finals_contenders ~margin:finals_margin ~width:2
-                [ (`Incumbent, incumbent_ms); (`Challenger, challenger_ms) ]
-            in
-            if List.is_empty near then by_readings ""
-            else if not (budget_allows_finals ()) then
-              by_readings ", a near tie the budget leaves no finals for"
-            else (
-              Int.incr counted;
-              let contender = function
-                | `Incumbent -> Lazy.force incumbent
-                | `Challenger -> Lazy.force challenger
-              in
-              let readings =
-                finals_readings ~what ~timed ~admitted
-                  (List.map near ~f:(fun (who, _) -> contender who))
-              in
-              let paired = List.zip_exn near readings in
-              match finals_crown paired with
-              | None -> by_readings ", a near tie whose finals were inconclusive"
-              | Some ((who, _), finals_ms) ->
-                  let other_ms =
-                    List.find_map paired ~f:(fun ((w, _), rs) ->
-                        if Poly.equal w who then None else List.min_elt rs ~compare:Float.compare)
-                    |> Option.value ~default:Float.nan
-                  in
-                  `Finals (Poly.equal who `Challenger, finals_ms, other_ms))
-          in
-          (* gh-ocannl-1138: the running composite. A single timed with every other segment on its
-             preset measures the routine around a backdrop that can be ten times the composite it
-             would join (gh-ocannl-1166: 23.2 ms around a 2.4 ms composite on gpt2_mini/CUDA), so
-             the search's best stayed flat until the recombination composites it timed last. Instead
-             the coarse keys are swept one at a time, each single staffed with the running
-             composite's choice for every other key: the composite starts from the seeded untuned
-             plan's sketches (matched to the keys by structural digest) and, after a key's sweep,
-             takes that key's fastest single. Times are compared only within one key's sweep, where
-             the backdrop is the same; the composite's own choice for the key is swept first, at the
-             composite's time when that composite was already timed, so a slower replacement leaves
-             it as it was. A staffed single that is refused, not merely contended, is retried once
-             bare, so one invalid choice in the staff cannot mask the key's seeds; once a key's bare
-             retry is refused too, its seeds fail on their own and its refusals stop being
-             retried. *)
-          let without key choices =
-            List.filter choices ~f:(fun (k, _) -> not (equal_seg_key k key))
-          in
-          (* One running composite over [keys], each with one choice: a segmentation's sketches
-             (coarse, or fine: gh-ocannl-574), or the split-reduce sites' block counts. The
-             composite, its time when a window timed exactly it, per swept key the staff its sweep
-             ran against (for the playoff), and the sweep of one key, which returns that key's
-             results in its own backdrop. [single key staff choice] is the candidate; [describe]
-             names a choice for the log. Keys compare by [equal_key] and choices structurally. *)
-          let sweeper ?seeded_cut ~finals ~equal_key ~keys ~single ~describe ~fallbacks () =
-            let running = ref [] and running_ms = ref None and swept_against = ref [] in
-            (* The schedule whose window took [running_ms], with the digest it timed when known: the
-               incumbent a staffed join's finals re-times. *)
-            let running_src = ref None in
-            (* gh-ocannl-1697: a seeded sweep's singles are whole seeded routines, each cut as
-               hopeless against [seeded_cut] of the running composite's reading. *)
-            let try_single spec =
-              match seeded_cut with
-              | None -> try_spec spec
-              | Some reference ->
-                  try_spec
-                    ~hopeless_against:(fun () -> reference !running_ms)
-                    ~hopeless_ratio:seeded_hopeless_ratio spec
-            in
-            let without key choices =
-              List.filter choices ~f:(fun (k, _) -> not (equal_key k key))
-            in
-            let in_key_order choices =
-              List.filter_map keys ~f:(fun k ->
-                  Option.map (List.Assoc.find choices ~equal:equal_key k) ~f:(fun p -> (k, p)))
-            in
-            let sweep_key (key, ps) =
-              let staff = without key !running in
-              let bare = ref [] in
-              (* A staffed single of this key admitted shows the staff compatible with it, so any
-                 later refusal is the seed's own and is not retried bare (Codex P1 on PR #1215: a
-                 cap on the first refused bare retry stopped the retries of a key whose staff was
-                 the culprit after one seed that was invalid on its own). Until then, every refusal
-                 is retried. *)
-              let staff_admitted = ref false in
-              swept_against := (key, staff) :: !swept_against;
-              let current = List.Assoc.find !running ~equal:equal_key key in
-              let ps =
-                match current with
-                | Some q -> q :: List.filter ps ~f:(fun p -> not (Poly.equal p q))
-                | None -> ps
-              in
-              (* Each result carries the schedule its reading was taken on ([running_src]'s
-                 form). *)
-              let results =
-                List.filter_map ps ~f:(fun p ->
-                    match (current, !running_ms) with
-                    | Some q, Some ms when Poly.equal p q ->
-                        (* The running composite itself, timed already: not compiled again, and
-                           proof the staff is compatible with the key (Codex P2 on PR #1215). *)
-                        staff_admitted := true;
-                        Some (p, ms, !running_src)
-                    | _ -> (
-                        let spec = single key staff p in
-                        match try_single spec with
-                        | Some (((c : compiled), ms) as r) ->
-                            admit r;
-                            staff_admitted := true;
-                            Some (p, ms, Some (spec, Some c.digest_after))
-                        | None -> (
-                            match !last_attempt with
-                            | `Dedup (Some ms) ->
-                                staff_admitted := true;
-                                Some (p, ms, Some (spec, None))
-                            | `Declined when (not (List.is_empty staff)) && not !staff_admitted ->
-                                Int.incr fallbacks;
-                                logf "%s: refused with its staff; retrying it bare"
-                                  (spec_label spec);
-                                let bare_spec = single key [] p in
-                                (match try_single bare_spec with
-                                | Some (((c : compiled), ms) as r) ->
-                                    admit r;
-                                    bare := (p, ms, Some (bare_spec, Some c.digest_after)) :: !bare
-                                | None -> (
-                                    (* A bare twin already timed under its digest still ranks (Codex
-                                       P2 on PR #1215). *)
-                                    match !last_attempt with
-                                    | `Dedup (Some ms) ->
-                                        bare := (p, ms, Some (bare_spec, None)) :: !bare
-                                    | _ -> ()));
-                                None
-                            | _ -> None)))
-              in
-              let by_time (_, a, _) (_, b, _) = Float.compare a b in
-              (* gh-ocannl-1698: whether [challenger] (read [ms] on [src]) beats the incumbent (read
-                 [incumbent_ms] on [incumbent_src]). Their readings come from different windows --
-                 the incumbent's usually from an earlier key's sweep -- so, in a staffed sweep, a
-                 near tie of the two is settled by a finals ([finals_settle]); a seeded sweep's
-                 joins, and a pair whose schedules are unknown, compare the readings. Returns the
-                 verdict and the log's note on how it was reached. *)
-              let beats ~challenger ~ms ~src ~incumbent_ms ~incumbent_src =
-                match (finals, incumbent_src, src) with
-                | true, Some (i_spec, i_digest), Some (c_spec, c_digest) -> (
-                    match
-                      finals_settle ~what:"staffed finals" ~counted:n_staffed_finals
-                        ~timed:n_staffed_finals_timed ~admitted:n_staffed_finals_admitted
-                        ~incumbent:(lazy (finals_contender i_spec i_digest), incumbent_ms)
-                        ~challenger:(lazy (finals_contender c_spec c_digest), ms)
-                    with
-                    | `Readings (wins, why) -> (wins, why)
-                    | `Finals (wins, finals_ms, other_ms) ->
-                        let challenger_finals, incumbent_finals =
-                          if wins then (finals_ms, other_ms) else (other_ms, finals_ms)
-                        in
-                        let note =
-                          Printf.sprintf "; in shared windows %.4f ms against %.4f ms"
-                            challenger_finals incumbent_finals
-                        in
-                        if not wins then
-                          logf "staffed: %s stays out of the running composite (%.4f ms, %.4f ms%s)"
-                            challenger ms incumbent_ms note;
-                        (wins, note))
-                | _ -> (Float.(ms < incumbent_ms), "")
-              in
-              (* The incumbent in this backdrop: the composite's own choice for the key as timed
-                 here, or else the running composite itself, timed whole -- for a key with no
-                 choice, the key on its preset (Codex P1 on PR #1215: a key whose every single was
-                 slower than its preset used to join anyway, and later keys were swept around the
-                 slower composite). *)
-              let current_result =
-                Option.bind current ~f:(fun q ->
-                    List.find results ~f:(fun (p, _, _) -> Poly.equal p q))
-              in
-              let incumbent =
-                match current_result with
-                | Some (_, ms, src) -> Some (ms, src)
-                | None -> Option.map !running_ms ~f:(fun ms -> (ms, !running_src))
-              in
-              (match List.min_elt results ~compare:by_time with
-              | Some (p, ms, src) ->
-                  (* The fastest in this backdrop replaces the incumbent only by beating it: by
-                     being faster, or in a near tie by winning their finals; a tie keeps it. The
-                     incumbent's own choice is no challenger. *)
-                  let joins, note =
-                    if Option.exists current ~f:(Poly.equal p) then (false, "")
-                    else
-                      match incumbent with
-                      | None -> (true, "")
-                      | Some (incumbent_ms, incumbent_src) ->
-                          let wins, note =
-                            beats ~challenger:(describe key p) ~ms ~src ~incumbent_ms ~incumbent_src
-                          in
-                          (wins, Printf.sprintf " against %.4f ms%s" incumbent_ms note)
-                  in
-                  if joins then (
-                    logf "staffed: %s joins the running composite (%.4f ms%s)" (describe key p) ms
-                      note;
-                    running := in_key_order ((key, p) :: without key !running);
-                    running_ms := Some ms;
-                    running_src := src)
-                  else
-                    Option.iter current_result ~f:(fun (_, q_ms, q_src) ->
-                        running_ms := Some q_ms;
-                        running_src := q_src)
-              | None -> (
-                  (* Every staffed single of the key was refused, and some of its bare retries were
-                     admitted (Codex P1 on PR #1215): the key cannot join this staff, since the
-                     composite holding both is exactly the code refused. A bare single IS the
-                     composite of its key alone, a whole routine like the running composite, so the
-                     faster of the two carries on; a running composite never timed as a whole
-                     yields. *)
-                  match List.min_elt !bare ~compare:by_time with
-                  | Some (p, ms, src) -> (
-                      let replaces =
-                        match !running_ms with
-                        | None -> Some ""
-                        | Some incumbent_ms ->
-                            let wins, note =
-                              beats ~challenger:(describe key p) ~ms ~src ~incumbent_ms
-                                ~incumbent_src:!running_src
-                            in
-                            Option.some_if wins
-                              (Printf.sprintf " against %.4f ms%s" incumbent_ms note)
-                      in
-                      match replaces with
-                      | Some note ->
-                          logf
-                            "staffed: %s replaces the running composite, refused with it (%.4f \
-                             ms%s)"
-                            (describe key p) ms note;
-                          running := [ (key, p) ];
-                          running_ms := Some ms;
-                          running_src := src
-                      | None -> ())
-                  | None -> ()));
-              (* What the key's sweep timed in one backdrop: its staffed singles, or failing those
-                 its bare retries. *)
-              List.map
-                (if List.is_empty results then List.rev !bare else results)
-                ~f:(fun (p, ms, _) -> (p, ms))
-            in
-            let start choices = running := in_key_order choices in
-            (running, running_ms, swept_against, start, sweep_key)
-          in
-          (* The order a sweep decides its keys in. Heaviest key first: its weight is its segment
-             count times the roofline score of its best-scored sketch, so the keys whose geometries
-             differ most, whose gaps can absorb a noisy backdrop, are decided first, and the
-             near-tie keys last, in the smallest backdrop. A key the model cannot score keeps its
-             enumeration order, after the scored ones. [what] names the keys in the log. *)
-          let heaviest_first ~pre_of ~what entries =
-            let weighed =
-              List.map entries ~f:(fun ((key, ps) as entry) ->
-                  let weight =
-                    Option.bind (List.Assoc.find pre_of ~equal:equal_seg_key key) ~f:(fun pre ->
-                        (* A sketch that does not construct here is left unscored, as the candidate
-                           compile would decline it. *)
-                        List.filter_map ps ~f:(fun p ->
-                            match sketch_schedule ~accum_prec ~p pre with
-                            | exception Outcome.Cause_at _ -> None
-                            | sched -> model_score ~static_indices ~limits pre sched)
-                        |> List.min_elt ~compare:Float.compare
-                        |> Option.map ~f:(fun s -> Float.of_int (List.length key.key_units) *. s))
-                  in
-                  logf "staffed: %s %s weighs %s" what (seg_key_tag key)
-                    (Option.value_map weight ~default:"unscored" ~f:(Printf.sprintf "%.6e"));
-                  (entry, weight))
-            in
-            let scored, unscored = List.partition_tf weighed ~f:(fun (_, w) -> Option.is_some w) in
-            List.map
-              (List.stable_sort scored ~compare:(fun (_, a) (_, b) ->
-                   Option.compare Float.compare b a)
-              @ unscored)
-              ~f:fst
-          in
-          (* A segmentation's sketch sweeper, its keys in [heaviest_first] order. *)
-          let sketch_sweeper ~plan ~fine ~keys =
-            let running, running_ms, swept_against, start, sweep_key =
-              sweeper ~finals:true ~equal_key:equal_seg_key ~keys ~fallbacks:n_backdrop_fallbacks
-                ~single:(fun key staff p ->
-                  Fiss (F_sketch { plan; entries = [ (key, p) ]; staff; fine }))
-                ~describe:(fun key p ->
-                  Printf.sprintf "%ssegment %s: %s"
-                    (if fine then "fine " else "")
-                    (seg_key_tag key) (spec_label (Whole (W_sketch p))))
-                ()
-            in
-            let sweep ~pre_of ~start:choices entries =
-              start choices;
-              if not (List.is_empty !running) then
-                logf "staffed: the running %scomposite starts from %s"
-                  (if fine then "fine " else "")
-                  (fiss_sketch_label ~fine !running);
-              List.iter
-                (heaviest_first ~pre_of ~what:(if fine then "fine segment" else "segment") entries)
-                ~f:(fun ((key, _) as entry) ->
-                  let results = sweep_key entry in
-                  fiss_single_results :=
-                    List.rev_map results ~f:(fun (p, ms) -> (key, fine, (p, ms)))
-                    @ !fiss_single_results)
-            in
-            (running, running_ms, swept_against, sweep)
-          in
-          (* gh-ocannl-1664: the seeded sweep. Every single is [plan] with the key's choice swapped
-             and the other keys' changed choices as its staff ([F_swap]); a key the sweep has not
-             changed keeps the plan's own decision, so the running composite starts AS the plan, at
-             its timed reading, and a key's incumbent is the running composite whole. Its readings
-             feed no per-key ranking: every one is a whole seeded routine, ranked by the beam with
-             the rest. *)
-          (* gh-ocannl-1697: what a seeded single's reading must undercut to matter, given the
-             running seeded composite's reading [running_ms] -- the window's hopeless reference. A
-             single joins only by reading faster than the running composite, and otherwise it
-             feeds only the beam: with rounds to run, a full beam's slowest entry is the bar (a
-             reading over it enters nothing, as for a whole-routine seed); with none, the beam
-             finals' too -- a reading within [finals_margin] of the head and among the beam's
-             [beam_width] fastest is re-timed beside it ({!finals_contenders}), so the bar is the
-             head over that margin, or the full beam's slowest entry where that is lower. The
-             reference is the larger of the two bars, and [None] -- a window timed in full -- while
-             either is unknown. *)
-          let seeded_cut_on = Seam.get seeded_hopeless_cut in
-          let seeded_cut_reference running_ms =
-            if not seeded_cut_on then None
-            else
-              Option.bind running_ms ~f:(fun running ->
-                  let full = List.length !beam >= beam_width in
-                  let slowest () = Option.map (List.last !beam) ~f:snd in
-                  let beam_bar =
-                    if rounds = 0 then
-                      Option.map (List.hd !beam) ~f:(fun (_, head) ->
-                          let finals =
-                            if Float.(finals_margin > 0.) then head *. (1. +. finals_margin)
-                            else head
-                          in
-                          match slowest () with
-                          | Some last when full -> Float.min finals last
-                          | Some _ | None -> finals)
-                    else if full then slowest ()
-                    else None
-                  in
-                  Option.map beam_bar ~f:(Float.max running))
-          in
-          let seeded_sweep_run ~start_ms plan entries pre =
-            let running, running_ms, _, _, sweep_key =
-              sweeper ~seeded_cut:seeded_cut_reference ~finals:false ~equal_key:equal_seg_key
-                ~keys:(List.map entries ~f:fst) ~fallbacks:n_seeded_single_fallbacks
-                ~single:(fun key staff p -> Fiss (F_swap { plan; entries = [ (key, p) ]; staff }))
-                ~describe:(fun key p ->
-                  Printf.sprintf "seeded segment %s: %s" (seg_key_tag key)
-                    (spec_label (Whole (W_sketch p))))
-                ()
-            in
-            running_ms := start_ms;
-            logf "seeded singles: %d candidate(s) over %d segment key(s) of %s"
-              !n_seeded_single_candidates (List.length entries) (seeded_plan_label plan);
-            List.iter (heaviest_first ~pre_of:pre ~what:"seeded segment" entries)
-              ~f:(fun ((key, _) as entry) ->
-                let before = List.Assoc.find !running ~equal:equal_seg_key key in
-                ignore (sweep_key entry : (sketch_params * float) list);
-                let after = List.Assoc.find !running ~equal:equal_seg_key key in
-                if not (Option.equal Poly.equal before after) then Int.incr n_seeded_single_joins)
-          in
-          (* gh-ocannl-1697: the seeded split sweep, before the segment sweep. Each split single is
-             the running seeded plan with one split-reduce site's choice changed -- another block
-             count of the search's menu, or unsplit, or split where the plan leaves it whole -- and
-             the plan re-derived over that split routine by its own rule ([F_resplit],
-             {!seeded_resplit}), so it reads on the plan's basis rather than around the presets an
-             [F_split] single timed every segment on. The sites are the search's own
-             ([max_split_reduce_sites] of {!split_reduce_sites}, heaviest first), detected on the
-             lowering the plan was derived on, whose split sites are the plan's own. A site's
-             fastest single joins the running plan only by reading faster than it, and the later
-             sites change the joined plan. Before the segment sweep, because a split it joins
-             re-cuts the segments the segment sweep's keys address: that sweep enumerates its menu
-             on the plan this one leaves. Returns that plan and its reading. *)
-          let seeded_split_sweep (plan : seeded_plan) =
-            let pristine = Option.value !base_pristine ~default:base_opt in
-            let sites =
-              List.take (split_reduce_sites ~static_indices pristine) max_split_reduce_sites
-            in
-            let same = same_split_site in
-            let running = ref plan and running_ms = ref (seeded_ms ()) in
-            List.iter sites ~f:(fun site ->
-                let current =
-                  List.find_map !running.sp_split ~f:(fun (t, b) ->
-                      if same t site then Some b else None)
-                in
-                let choices =
-                  None
-                  :: List.filter_map sr_num_blocks ~f:(fun b ->
-                      if 2 * b <= site.sr_red then Some (Some b) else None)
-                  |> List.filter ~f:(fun c -> not (Option.equal Int.equal c current))
-                in
-                let from = seeded_plan_digest !running in
-                let results =
-                  List.filter_map choices ~f:(fun blocks ->
-                      let split =
-                        List.filter_map !running.sp_split ~f:(fun ((t, _) as entry) ->
-                            if same t site then Option.map blocks ~f:(fun b -> (t, b))
-                            else Some entry)
-                        @
-                        match (current, blocks) with
-                        | None, Some b -> [ (site, b) ]
-                        | Some _, _ | None, None -> []
-                      in
-                      let label = seeded_resplit_label ~from site blocks in
-                      let t0 = Unix.gettimeofday () in
-                      (* No derivation once the budget is spent: the attempt would not start. *)
-                      if not (budget_allows ~what:label ~floor:false) then None
-                      else
-                        match seeded_resplit ~memo:seeded_memo_v !running split pristine with
-                        | None ->
-                            logf "seeded split: %s: the plan does not re-derive; not seeded" label;
-                            None
-                        | Some derived when String.equal (seeded_plan_digest derived) from ->
-                            logf "seeded split: %s: re-derives the running plan; not seeded" label;
-                            None
-                        | Some derived -> (
-                            logf "seeded split: %s: re-derived in %.3f s as %s" label
-                              (Unix.gettimeofday () -. t0)
-                              (seeded_plan_label derived);
-                            Int.incr n_seeded_split_candidates;
-                            let spec = Fiss (F_resplit { from; site; blocks; plan = derived }) in
-                            match
-                              try_spec
-                                ~hopeless_against:(fun () -> seeded_cut_reference !running_ms)
-                                ~hopeless_ratio:seeded_hopeless_ratio spec
-                            with
-                            | Some ((_, ms) as r) ->
-                                admit r;
-                                Some (derived, ms)
-                            | None -> (
-                                match !last_attempt with
-                                | `Dedup (Some ms) -> Some (derived, ms)
-                                | _ -> None)))
-                in
-                match List.min_elt results ~compare:(fun (_, a) (_, b) -> Float.compare a b) with
-                | Some (derived, ms)
-                  when Option.for_all !running_ms ~f:(fun running -> Float.(ms < running)) ->
-                    logf "seeded split: %s joins the running seeded plan (%.4f ms%s)"
-                      (seeded_plan_label derived) ms
-                      (Option.value_map !running_ms ~default:"" ~f:(Printf.sprintf " < %.4f ms"));
-                    Int.incr n_seeded_split_joins;
-                    running := derived;
-                    running_ms := Some ms
-                | Some _ | None -> ());
-            (!running, !running_ms)
-          in
-          (* The seeded plan's choice for a key: its decision rule ({!seeded_params}, probed and
-             validated as {!seeded_decisions} does) applied to the key's own segment. The plan's
-             recorded decisions cannot be matched to the keys: they were taken on the split routine,
-             under the untuned pipeline's segmentation without the search's zero fold, so a recorded
-             digest equals no key's (on gpt2_mini/CUDA the composite started empty), and two keys of
-             one structure but different placements would share a digest's decision (Codex P2 on PR
-             #1215). The rule is the plan's whole gate ({!seeded_segment_params}: a threshold, or
-             gh-ocannl-1253's ranked [auto]); where it seeds nothing
-             ([gpu_default_sketch_min_reduction=0], another backend) no key has a start. *)
-          let seeded_choice ~pre_of key =
-            Option.bind (Lazy.force seeded_plan_value) ~f:(fun plan ->
-                Option.bind plan.sp_start ~f:(fun start ->
-                    Option.bind (List.Assoc.find pre_of ~equal:equal_seg_key key) ~f:(fun pre ->
-                        Option.map (start.decide pre) ~f:(fun p -> (key, p)))))
-          in
-          let running, running_ms, swept_against, sweep =
-            sketch_sweeper ~plan:coarse_plan ~fine:false ~keys:(List.map fiss_sketch_entries ~f:fst)
-          in
-          let fine_running, fine_running_ms, fine_swept_against, fine_sweep =
-            sketch_sweeper ~plan:fine_plan ~fine:true ~keys:(List.map fine_all_entries ~f:fst)
-          in
-          (* The split-reduce sites' running composite: each site's block count, swept over the
-             sites in [sr_sites]' cost order (heaviest first already), each single's prelude staffed
-             with the other sites' choices. It starts empty, not from the seeded plan's split: every
-             segment of a split candidate runs its preset whatever the prelude, so the seeded split
-             would not shrink the backdrop the way the seeded sketches do, and its sites, detected
-             on the pristine lowering, would match the search's only by target and extents. *)
-          let same_site a b = Idx.equal_symbol a.sr_axis b.sr_axis in
-          let sr_running, sr_running_ms, _, _, sr_sweep_key =
-            sweeper ~finals:true ~equal_key:same_site ~keys:sr_sites
-              ~fallbacks:n_sr_backdrop_fallbacks
-              ~single:(fun s staff b -> Fiss (F_split { sites = [ (s, b) ]; staff }))
-              ~describe:(fun s b -> "split site " ^ split_site_label (s, b))
-              ()
-          in
-          (* gh-ocannl-1388: a refused window drops its digest from [seen] so that an equivalent
-             later seed can measure it, but no later seed reproduces the seeded plan, so its floor
-             would be lost to one contended window. Retried once, after the seed pass, or before the
-             seeded sweep, whose incumbent is the plan's reading (gh-ocannl-1664). Still unmeasured
-             after that, [seeded_ms] stays [None] and says so. *)
-          let seeded_retried = ref false in
-          let retry_seeded () =
-            List.iter seeded_specs ~f:(fun spec ->
-                if
-                  (not !seeded_retried)
-                  && Option.is_none (seeded_ms ())
-                  && Option.exists !seeded_seed_digest ~f:(Hash_set.mem contended_digests)
-                then (
-                  seeded_retried := true;
-                  logf "%s: its window was refused; retrying the seeded plan once" (spec_label spec);
-                  Option.iter (try_spec spec) ~f:admit))
-          in
-          (* Its own phase, with no total announced: a bare retry or a start choice outside the menu
-             adds an attempt, and a start choice already timed takes one away (Codex P2 on PR
-             #1215). The seeded sweep likewise. *)
-          (match seeded_singles_plan with
-          | Some plan ->
-              retry_seeded ();
-              progress_phase_begin "seeded" None;
-              let plan, start_ms = seeded_split_sweep plan in
-              let entries, pre = seeded_menu plan in
-              n_seeded_single_candidates :=
-                List.sum (module Int) entries ~f:(fun (_, ps) -> List.length ps);
-              seeded_sweep_run ~start_ms plan entries pre
-          | None when staffed ->
-              progress_phase_begin "staffed" None;
-              sweep ~pre_of:coarse_pre
-                ~start:
-                  (Seam.get on_staffed_start ~menu:fiss_sketch_entries
-                     (List.filter_map fiss_sketch_entries ~f:(fun (key, _) ->
-                          seeded_choice ~pre_of:coarse_pre key)))
-                fiss_sketch_entries;
-              (* The fine segmentation's own composite (gh-ocannl-574), swept over the keys the
-                 finer cuts made new. A key the cuts left unchanged keeps its digest and first unit,
-                 so it is the coarse key and carries the coarse composite's choice; a new one starts
-                 from the seeded plan's, where its refinement cut the same segment. *)
-              if not (List.is_empty fine_new_entries) then
-                fine_sweep ~pre_of:fine_pre
-                  ~start:
-                    (List.filter_map fine_all_entries ~f:(fun (key, _) ->
-                         (* An unchanged key is the coarse key: its coarse sweep decided it, a key
-                            left on its preset included, and the fine sweep does not revisit it
-                            (Codex P2 on PR #1215). Only a new key takes the seeded rule's start. *)
-                         if List.Assoc.mem fine_new_entries key ~equal:equal_seg_key then
-                           seeded_choice ~pre_of:fine_pre key
-                         else
-                           Option.map (List.Assoc.find !running ~equal:equal_seg_key key)
-                             ~f:(fun p -> (key, p))))
-                  fine_new_entries
-          | None -> List.iter coarse_single_specs ~f:run_seed);
-          List.iter post_sweep_specs ~f:run_seed;
-          if staffed && not (List.is_empty sr_specs) then
-            List.iter sr_sites ~f:(fun s ->
-                match List.filter sr_num_blocks ~f:(fun b -> 2 * b <= s.sr_red) with
-                | [] -> ()
-                | blocks -> ignore (sr_sweep_key (s, blocks) : (int * float) list));
-          retry_seeded ();
-          (* At most three composites, each proposed only if its singles justify it: no total to
-             announce, so no phase line either; a composite's attempt still counts and can print. *)
-          progress_phase_begin "recombine" None;
-          Option.iter (seeded_ms ()) ~f:(fun ms ->
-              logf "seeded untuned plan: %.4f ms (gh-ocannl-1388 floor)" ms);
-          (match default_ms () with
-          | Some ms -> logf "untuned-default pipeline: %.4f ms (gh-ocannl-552 reference)" ms
-          | None ->
-              logf
-                "untuned-default pipeline: not timed (gated to a form outside the pool, not \
-                 seeded, failed, or not dispatched)");
-          (* Cross-segment recombination: the singles time every parameter set unmasked, but the
-             best full routine may sketch several segments at once. One extra composite candidate
-             applies each keyed segment's best-timed single simultaneously — informed by the
-             singles' own timings, where the full cartesian product would be exponential. *)
-          let best_single_for ~fine_ok key =
-            List.filter !fiss_single_results ~f:(fun (k, fine, _) ->
-                equal_seg_key k key && (fine_ok || not fine))
-            |> List.min_elt ~compare:(fun (_, _, (_, a)) (_, _, (_, b)) -> Float.compare a b)
-            |> Option.map ~f:(fun (_, _, (p, _)) -> (key, p))
-          in
-          (* Staffed, the running composite is the recombination: each key's choice is its fastest
-             single in its own sweep's backdrop, where per-key minima over every backdrop would
-             compare times taken around different composites. *)
-          let recombined =
-            if staffed then !running
-            else
-              List.filter_map fiss_sketch_entries ~f:(fun (key, _) ->
-                  best_single_for ~fine_ok:false key)
-          in
-          (* A staffed composite window admitted during the sweep stays the outcome, published there
-             (Codex P2 on PR #1215): the running composite can shrink back to one key after it, when
-             a later key's bare single replaced it, and the window still completed. *)
-          let composite_window_timed = staffed && Poly.equal !fs_composite `Timed in
-          (* Missing singles justify undecided only when every missing coarse key had a viable
-             window refused and no later equivalent single supplied a measurement. A refusal from an
-             unrelated segment or family cannot excuse a missing proposal. *)
-          fs_composite :=
-            if List.length recombined >= 2 then `Proposed
-            else if
-              List.length fiss_sketch_entries >= 2
-              && List.for_all fiss_sketch_entries ~f:(fun (key, _) ->
-                  List.Assoc.mem recombined key ~equal:equal_seg_key
-                  || Hash_set.mem coarse_single_refused key
-                     && not (Hash_set.mem coarse_single_measured key))
-            then `Singles_refused
-            else `Ineligible;
-          (* A timed composite, as the playoff's starting incumbent: its entries, its segmentation,
-             its time and the digest its window timed (gh-ocannl-1665: what a playoff finals
-             recompile must reproduce). *)
-          let composite_spec ~fine entries =
-            Fiss (F_sketch { plan = plan_of ~fine; entries; staff = []; fine })
-          in
-          let try_composite ~fine entries =
-            Option.map
-              (try_spec (composite_spec ~fine entries))
-              ~f:(fun (((c : compiled), ms) as r) ->
-                admit r;
-                (entries, fine, ms, Some c.digest_after))
-          in
-          (* Staffed, the last accepted window already timed the running composite -- the last key's
-             winning staffed single schedules every key's choice -- so it is the coarse composite's
-             outcome, stated here rather than re-derived from a label. Only a composite no window
-             has timed yet (the seeded plan's choices, every sweep refused) is tried. *)
-          let coarse_composite =
-            if not (Poly.equal !fs_composite `Proposed) then None
-            else
-              match (staffed, !running_ms) with
-              | true, Some ms ->
-                  fs_composite := `Timed;
-                  Some (recombined, false, ms, None)
-              | true, None | false, _ -> try_composite ~fine:false recombined
-          in
-          if composite_window_timed then fs_composite := `Timed;
-          (* The fine composite (gh-ocannl-574): the fine winner in a multi-segment routine needs
-             the freed site's best AND the other segments' bests in one candidate. Keys address the
-             fine segmentation; segments unchanged by the finer cuts share their digest with the
-             coarse segmentation, so their coarse-timed bests staff the composite directly (the
-             segment code behind a digest is identical, hence the parameters transfer). Proposed
-             only when a fine single was actually timed — otherwise the composite is the coarse one
-             plus extra launches. *)
-          let fine_recombined =
-            if List.exists !fiss_single_results ~f:(fun (_, fine, _) -> fine) then
-              List.filter_map fine_all_entries ~f:(fun (key, _) ->
-                  best_single_for ~fine_ok:true key)
-            else []
-          in
-          (* Staffed, the fine sweep's composite: timed by its last accepted window, which a fine
-             single's acceptance is the only way to set, so a fine single was timed. *)
-          let fine_composite =
-            match (staffed, !fine_running_ms) with
-            | true, Some ms when List.length !fine_running >= 2 ->
-                Some (!fine_running, true, ms, None)
-            | true, _ -> None
-            | false, _ ->
-                if List.length fine_recombined >= 2 then try_composite ~fine:true fine_recombined
-                else None
-          in
-          (* Multi-site split-reduce recombination: apply each detected site's best-timed
-             [num_blocks] simultaneously — the sites are distinct statements, so their preludes
-             compose. Same rationale as the sketch recombination above: singles keep every value
-             unmasked, one composite recovers the combination. *)
-          let recombined =
-            List.filter_map sr_sites ~f:(fun s ->
-                List.filter !sr_single_results ~f:(fun (s2, _, _) ->
-                    Idx.equal_symbol s2.sr_axis s.sr_axis)
-                |> List.min_elt ~compare:(fun (_, _, a) (_, _, b) -> Float.compare a b)
-                |> Option.map ~f:(fun (s2, b, _) -> (s2, b)))
-          in
-          (* Staffed, the running split composite, timed by its last accepted window when that
-             schedules every site. *)
-          let recombined = if staffed then !sr_running else recombined in
-          (* As for the sketch composite above, a staffed multi-site window admitted during the
-             sweep keeps the outcome eligible and timed, whatever the running composite ended as. *)
-          let eligible_now = List.length recombined >= 2 in
-          sr_composite_eligible := (staffed && !sr_composite_eligible) || eligible_now;
-          if eligible_now then
-            if staffed && Option.is_some !sr_running_ms then sr_composite_timed := true
-            else Option.iter (try_spec (Fiss (F_split { sites = recombined; staff = [] }))) ~f:admit;
-          (* The composite playoff (gh-ocannl-1166), after every recombination composite so the
-             [playoff] progress phase holds only its windows: starting from the faster timed
-             composite, each key in turn tries its near-tie singles in the composite's place, and an
-             alternate that beats the incumbent becomes the incumbent the later keys build on.
-             Coordinate descent over the keys, at most [playoff_width] alternates each, so the cost
-             is linear in the keyed segments rather than the cartesian product the recombination
-             avoids.
-
-             gh-ocannl-1665: the alternate's window and the incumbent's are different windows, the
-             incumbent's taken earlier -- the comparison the beam finals replaced for the crown
-             (gh-ocannl-1635), and one segment's swap is a difference of the size a window's offset
-             makes. So an alternate whose reading is within [finals_contenders]' margin of the
-             incumbent's (config [autotune_finals_margin]) is decided by a finals of the two:
-             [finals_readings] re-times both in adjacent windows, and [finals_crown] decides, ties
-             to the faster first reading (the incumbent on equal readings). Outside the margin, or
-             with the margin off, the readings decide as before: a gap wider than the offsets the
-             margin allows for. A finals that cannot decide -- the budget allows no recompile, or a
-             contender has no admitted finals reading -- falls back to the readings too. The
-             incumbent keeps its search reading either way, as the beam finals' crown does, so the
-             next alternate's near-tie test reads the same numbers the beam ranks. The finals'
-             windows count in [fiss_sketch_playoff_finals_timed], not in
-             [fiss_sketch_playoff_timed], and run in the [playoff] progress phase. *)
-          let playoff_contenders ~fine_ok ~current key =
-            let singles =
-              List.filter_map !fiss_single_results ~f:(fun (k, fine, (p, ms)) ->
-                  if equal_seg_key k key && (fine_ok || not fine) then Some (p, ms) else None)
-              |> List.sort ~compare:(fun (_, a) (_, b) -> Float.compare a b)
-            in
-            match singles with
-            | [] -> []
-            | (_, best_ms) :: _ ->
-                List.fold singles ~init:[] ~f:(fun acc (p, ms) ->
-                    if
-                      Float.(ms <= best_ms *. (1. +. playoff_margin))
-                      && (not (Poly.equal p current))
-                      && not (List.mem acc p ~equal:Poly.equal)
-                    then p :: acc
-                    else acc)
-                |> List.rev |> Fn.flip List.take playoff_width
-          in
-          (* gh-ocannl-1665: whether [alternate] (read [alt_ms]) replaces [incumbent] (read
-             [incumbent_ms]), each with the digest its window timed when known. *)
-          let playoff_swaps ~fine ~key ~incumbent ~incumbent_ms ~incumbent_digest ~alternate ~alt_ms
-              ~alt_digest =
-            let contender entries digest =
-              lazy (finals_contender (composite_spec ~fine entries) digest)
-            in
-            match
-              finals_settle ~what:"playoff finals" ~counted:n_playoff_finals
-                ~timed:n_playoff_finals_timed ~admitted:n_playoff_finals_admitted
-                ~incumbent:(contender incumbent incumbent_digest, incumbent_ms)
-                ~challenger:(contender alternate alt_digest, alt_ms)
-            with
-            | `Readings (swap, why) ->
-                logf "playoff: segment %s: %s (%.4f ms %s %.4f ms%s)" (seg_key_tag key)
-                  (if swap then "the alternate replaces the incumbent" else "the incumbent stays")
-                  alt_ms
-                  (if swap then "<" else ">=")
-                  incumbent_ms why;
-                swap
-            | `Finals (swap, finals_ms, other_ms) ->
-                logf
-                  "playoff: segment %s: %s in shared windows (%.4f ms against %.4f ms; %.4f ms and \
-                   %.4f ms in the search)"
-                  (seg_key_tag key)
-                  (if swap then "the alternate replaces the incumbent" else "the incumbent stays")
-                  finals_ms other_ms alt_ms incumbent_ms;
-                swap
-          in
-          (* With width 0 the playoff, its progress phase included, is skipped outright: the search
-             times exactly what it timed before the playoff existed (gh-ocannl-1259). *)
-          (match
-             List.min_elt
-               (List.filter_opt [ coarse_composite; fine_composite ])
-               ~compare:(fun (_, _, a, _) (_, _, b, _) -> Float.compare a b)
-           with
-          | _ when playoff_width = 0 -> ()
-          | None -> ()
-          | Some (entries, fine, ms, digest) ->
-              progress_phase_begin "playoff" None;
-              in_playoff := true;
-              Exn.protect
-                ~finally:(fun () -> in_playoff := false)
-                ~f:(fun () ->
-                  ignore
-                    (List.fold entries ~init:(entries, ms, digest)
-                       ~f:(fun ((incumbent, _, _) as state) (key, _) ->
-                         let current = List.Assoc.find_exn incumbent ~equal:equal_seg_key key in
-                         (* gh-ocannl-1138: a key whose staffed sweep ran against exactly this
-                            incumbent's other choices timed its contenders inside it already;
-                            re-timing them would compile the same code again. *)
-                         let swept_here =
-                           Option.exists
-                             (List.Assoc.find
-                                (if fine then !fine_swept_against else !swept_against)
-                                ~equal:equal_seg_key key)
-                             ~f:(fun staff -> List.equal Poly.equal staff (without key incumbent))
-                         in
-                         List.fold
-                           (if swept_here then [] else playoff_contenders ~fine_ok:fine ~current key)
-                           ~init:state
-                           ~f:(fun ((incumbent, incumbent_ms, incumbent_digest) as state) p ->
-                             (* What [p] would replace: [current] until an earlier alternate of this
-                                key swapped in. *)
-                             let replaced =
-                               List.Assoc.find_exn incumbent ~equal:equal_seg_key key
-                             in
-                             let alternate =
-                               List.map incumbent ~f:(fun (k, q) ->
-                                   if equal_seg_key k key then (k, p) else (k, q))
-                             in
-                             match try_composite ~fine alternate with
-                             | None -> state
-                             | Some (_, _, alt_ms, alt_digest) ->
-                                 if
-                                   playoff_swaps ~fine ~key ~incumbent ~incumbent_ms
-                                     ~incumbent_digest ~alternate ~alt_ms ~alt_digest
-                                 then (
-                                   Int.incr n_playoff_swaps;
-                                   logf "playoff: segment %s: %s replaces %s" (seg_key_tag key)
-                                     (spec_label (Whole (W_sketch p)))
-                                     (spec_label (Whole (W_sketch replaced)));
-                                   (alternate, alt_ms, alt_digest))
-                                 else state))
-                      : (seg_key * sketch_params) list * float * string option)));
-          (* [None] iff the beam is empty: no candidate timed and the baseline was not eligible (an
-             undispatched GPU baseline never enters the beam with a finite rank; a declined one does
-             not enter it at all). *)
-          let best = ref (List.hd !beam) in
-          (* gh-ocannl-1635: the entries a round's decision set aside -- the beam an accepted round
-             replaced, the round a rejected one discarded -- oldest first. That decision compares
-             the round's readings with the incumbent's, taken in earlier windows, so the beam finals
-             below re-time the near-ties among them beside the final beam. *)
-          let displaced = ref [] in
-          let continue_ = ref true in
-          while
-            !continue_ && !rounds_run < rounds
-            && budget_allows ~what:(Printf.sprintf "round %d" (!rounds_run + 1)) ~floor:false
-          do
-            Int.incr rounds_run;
-            let head = Option.map (List.hd !beam) ~f:fst in
-            let per_entry =
-              List.mapi !beam ~f:(fun i (elem, ms) ->
-                  (* On a GPU backend the beam can hold an incumbent that was never dispatched — the
-                     serial baseline, whose [infinity] rank keeps it in the pool when fewer than
-                     [beam_width] candidates were timed. Expanding it is worthwhile only through the
-                     moves that can bind a hardware dimension (the [Tensorize] path the sketch
-                     comments describe); every other move provably yields another undispatchable
-                     candidate, which [try_spec]'s dispatchability skip drops after paying for its
-                     transform, codegen, compile and link (16 such compiles per round on the
-                     gh-ocannl-543 chain). Pruned moves are still counted in the census, so the
-                     refusal stays visible where it was before. *)
-                  let elem_dispatchable = dispatchable ~is_gpu elem.all_opts in
-                  (* Passed INTO [menu] so the refusal precedes its per-unit cap (gh-ocannl-685
-                     review): applied afterwards, the cap would first share its 48 slots across
-                     categories whose moves this predicate is about to reject, and a tensorize-rich
-                     unit would lose the very proposals that are the beam's only route out of an
-                     undispatchable incumbent. The census recording is unchanged and still happens
-                     per refused move, so the refusal stays as visible as it was. *)
-                  let admits op =
-                    if elem_dispatchable || optop_can_bind_hardware op then true
-                    else (
-                      logf "menu prune (cannot parallelize an undispatched incumbent): %s"
-                        (optop_family op);
-                      record_not_dispatched ~origin:"beam_move"
-                        ~detail:
-                          (Printf.sprintf
-                             "%s on an incumbent binding no hardware dimension cannot bind one \
-                              either"
-                             (optop_family op));
-                      false)
-                  in
-                  (* gh-ocannl-1229 (see [round_expansion]): the units this entry's moves extend.
-                     The head always expands in full. Units outside the scope are not even offered
-                     to [menu], so they cost no legality check and leave no census record. *)
-                  let differing =
-                    match (round_expansion, head) with
-                    | Expand_differing, Some head when i > 0 -> segments_differing head elem
-                    | _ -> None
-                  in
-                  let expanded (u : unit_gen) =
-                    match (round_expansion, differing) with
-                    | _ when i = 0 -> true
-                    | Expand_full, _ | Expand_differing, None -> true
-                    | Expand_head, _ -> false
-                    | Expand_differing, Some segs ->
-                        Option.exists u.u_segment ~f:(List.mem segs ~equal:Int.equal)
-                  in
-                  (* Per unit, in [elem.units]' order: whether the rule offered it to [menu], and
-                     the round candidates its moves became (gh-ocannl-1360). *)
-                  let per_unit =
-                    List.map elem.units ~f:(fun u ->
-                        if expanded u then
-                          ( u,
-                            true,
-                            List.filter_map
-                              (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
-                              ~f:(fun op -> extend_spec elem u op) )
-                        else (u, false, []))
-                  in
-                  let entry =
-                    {
-                      entry_digest_tag = dshort elem.digest_after;
-                      entry_ms = ms;
-                      entry_segments_differing =
-                        Option.bind head ~f:(fun head -> segments_differing head elem);
-                      entry_units =
-                        List.map per_unit ~f:(fun ((u : unit_gen), unit_expanded, c) ->
+                  cache_replay_refusal :=
+                    Some
+                      {
+                        Outcome.phase = Outcome.Backend_codegen;
+                        cause =
+                          Outcome.Not_dispatched
                             {
-                              unit_segment = u.u_segment;
-                              unit_expanded;
-                              unit_moves = List.length c;
-                            });
+                              origin = "cache_replay";
+                              detail =
+                                Printf.sprintf
+                                  "%s shipped kernels binding no hardware dimension (gh-ocannl-532)"
+                                  (spec_label spec);
+                            };
+                        execution_effect = Outcome.No_device_writes;
+                      };
+                  (* gh-ocannl-550: rejected, so its buffers are dead — and the fresh search below
+                     is about to want them. *)
+                  release_quietly ~what:"a rejected cache replay" c.cctx;
+                  None
+              | Ok c ->
+                  logf "cache hit: %s (best %.4f ms, baseline %.4f ms)" (spec_label spec)
+                    entry.SC.best_ms entry.SC.baseline_ms;
+                  (* gh-ocannl-550: the report happens INSIDE the construction of [cached], so a
+                     [report] callback that raises here never reaches the [Some result] arm below
+                     that releases the baseline, and abandons the replayed winner too — two rooted
+                     routine footprints per call, for a caller that retries. Both released before
+                     the callback's exception propagates; the exception and its backtrace are
+                     unchanged. *)
+                  let emit_report report =
+                    match emit_report report with
+                    | () -> ()
+                    | exception exn ->
+                        let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                        release_quietly ~what:"the replay of a failed cache-hit report" c.cctx;
+                        release_baseline ();
+                        Stdlib.Printexc.raise_with_backtrace exn backtrace
+                  in
+                  let hit_report =
+                    {
+                      outcome = Cache_replay;
+                      (* The entry's times are the storing search's, but the objective is this
+                         call's: since gh-ocannl-755 the objective is a cache-key component, so an
+                         entry under this key was measured under this objective. *)
+                      timing;
+                      candidates_timed = 0;
+                      timings_contended = 0;
+                      timings_retried = 0;
+                      timings_unbatched = 0;
+                      timings_unreadable = 0;
+                      timings_dispersed = 0;
+                      timings_hopeless = 0;
+                      timings_retimed = 0;
+                      timing_decisions = timing_decisions ();
+                      candidates_contended = 0;
+                      default_refused = false;
+                      (* No search ran, so the only rejection this can carry is the baseline's. *)
+                      candidates_failed = failed_count declines;
+                      baseline_declined = Option.is_some baseline_decline;
+                      (* Nothing is timed on a replay, the baseline included. *)
+                      baseline_refusal = None;
+                      declines = decline_summaries declines;
+                      privatize_drops = [];
+                      cache_replay_refusal = None;
+                      rounds_run = 0;
+                      round_moves = [];
+                      (* gh-ocannl-1725: facts about the crown, like [best_ms], so the replay
+                         explains its own times as the storing search's report did; the finals'
+                         window counts describe this call, which timed none. An entry older than the
+                         record replays as finals that did not run. *)
+                      finals =
+                        Option.value_map entry.SC.finals ~default:[] ~f:(fun f -> f.SC.contenders);
+                      finals_timed = 0;
+                      finals_admitted = 0;
+                      finals_outcome =
+                        Option.value_map entry.SC.finals ~default:Finals_not_run ~f:(fun f ->
+                            f.SC.outcome);
+                      (* A fact about the crown, like [best_ms] (gh-ocannl-1409). *)
+                      budget_cut = entry.SC.budget_cut;
+                      budget_s;
+                      call_budget_s;
+                      call_share_s;
+                      compiles = 0 (* Stamped by [emit_report]. *);
+                      replay_compiles = 0;
+                      beam_width;
+                      sketch_candidates = 0;
+                      epilogue_sketch_candidates = 0;
+                      fiss_sketch_candidates = 0;
+                      fiss_sketch_timed = 0;
+                      fiss_sketch_composite = `Ineligible;
+                      fiss_sketch_playoff_timed = 0;
+                      fiss_sketch_playoff_swaps = 0;
+                      fiss_sketch_playoff_finals = 0;
+                      fiss_sketch_playoff_finals_timed = 0;
+                      fiss_sketch_playoff_finals_admitted = 0;
+                      fiss_sketch_staffed_timed = 0;
+                      fiss_sketch_backdrop_fallbacks = 0;
+                      staffed_finals = 0;
+                      staffed_finals_timed = 0;
+                      staffed_finals_admitted = 0;
+                      seeded_single_candidates = 0;
+                      seeded_single_timed = 0;
+                      seeded_single_joins = 0;
+                      seeded_single_fallbacks = 0;
+                      seeded_split_candidates = 0;
+                      seeded_split_timed = 0;
+                      seeded_split_joins = 0;
+                      seeded_hopeless = 0;
+                      split_reduce_candidates = 0;
+                      split_reduce_timed = 0;
+                      split_reduce_composite_eligible = false;
+                      split_reduce_composite_timed = false;
+                      split_reduce_backdrop_fallbacks = 0;
+                      mma_candidates = 0;
+                      fiss_mma_candidates = 0;
+                      mma_timed = 0;
+                      model_scored = 0;
+                      model_pruned = 0;
+                      bound_pruned = 0;
+                      fissioned = is_fissioned c.form;
+                      baseline_ms = entry.SC.baseline_ms;
+                      default_ms =
+                        (* The entry's [default_ms] describes the default pipeline under the config
+                           that ran the search; the cache key covers neither, so a config change can
+                           redefine the default without missing the cache. Fingerprint mismatch
+                           drops the stale diagnostic — the winner replay itself stays valid (Codex
+                           P2 on PR #279). *)
+                        (match (entry.SC.default_ms, entry.SC.default_fingerprint) with
+                        | (Some _ as d), Some fp
+                          when String.equal fp (Sched.default_schedule_fingerprint ~facts) ->
+                            d
+                        | _ -> None);
+                      (* Not stored: a measurement of one seed, read only next to the search that
+                         timed it. *)
+                      seeded_ms = None;
+                      best_ms = entry.SC.best_ms;
+                      best_label = spec_label spec;
+                      best_tensorized = saved_is_tensorized (flat_schedule c.form);
+                      best_tensorization = Some (mma_summary c).Ir.C_syntax.tensorization;
+                      best_mma_statements = mma_statements c;
+                      best_mma_scalar_fallbacks = mma_scalar_fallbacks c;
+                      (* The replay compile's own census: it is the routine this call returns. No
+                         candidate was ranked in this process, so the per-candidate list is empty,
+                         like every counter here. *)
+                      best_grid = Some (D.routine_grid c.routine);
+                      grid_serial_timed = [];
+                      (* Nothing was timed in this process — [mma_timed = 0] like every other
+                         COUNTER here, which describes this call. The TIMES describe the program,
+                         and are replayed from the entry exactly as [best_ms] and [baseline_ms]
+                         above are: without that, the flip chain's profitability term
+                         (gh-ocannl-579) would rank the decision surface one way on the cold run
+                         that measured the family and the other way on every warm-cache run after
+                         it. [None] for a search that timed none, and for entries written before the
+                         field existed. *)
+                      mma_best_ms = Option.value entry.SC.mma_best_ms ~default:Float.infinity;
+                      (* A time of the program, replayed with [best_ms] (gh-ocannl-1558). *)
+                      best_spread = entry.SC.best_spread;
+                      best_schedule = flat_schedule c.form;
+                      source_digest = base_digest;
+                      (* Replayed for the same reason as [mma_best_ms]: a flip chain whose incumbent
+                         replayed would otherwise have no timed record to abandon a hopeless flip
+                         against (gh-ocannl-1110). Empty for entries older than the field, and when
+                         the storing search had another shape, whose candidate order an equal-depth
+                         comparison cannot assume. *)
+                      best_steps =
+                        (match entry.SC.best_steps with
+                        | Some t when same_search_shape t.SC.search_shape -> t.SC.steps
+                        | Some _ | None -> []);
+                      (* Filled in by [emit_report], like every report's. *)
+                      compile_cost = Ir.Compile_cost.empty;
                     }
                   in
-                  ( elem,
-                    ms,
-                    List.count per_unit ~f:(fun (_, e, _) -> e),
-                    List.concat_map per_unit ~f:(fun (_, _, c) -> c),
-                    entry ))
-            in
-            let cands = List.concat_map per_entry ~f:(fun (_, _, _, c, _) -> c) in
-            (* Recorded before any candidate is attempted, so a report emitted while the round is in
-               flight -- a fatal failure's, an abandonment's -- already carries it. *)
-            round_moves :=
-              {
-                round_index = !rounds_run;
-                round_expansion_rule = round_expansion_name round_expansion;
-                round_entries = List.map per_entry ~f:(fun (_, _, _, _, e) -> e);
-              }
-              :: !round_moves;
-            (* gh-ocannl-1137: what the round expands. The beam is the [beam_width] fastest timed
-               candidates, and a near-tie sweep (the gh-ocannl-1166 composite playoff, a block-size
-               ladder) can fill it with variants of one schedule; [units differing] counts each
-               entry's units whose saved schedule differs from the incumbent's, so a beam of
-               near-copies reads as a column of small numbers, and [units expanded] says how many of
-               its units the round's [round_expansion] rule offered to the menu (gh-ocannl-1229). *)
-            (match per_entry with
-            | [] -> ()
-            | (head, _, _, _, _) :: _ ->
-                logf "round %d: %d candidate(s) from a beam of %d, expansion %s: %s" !rounds_run
-                  (List.length cands) (List.length per_entry)
-                  (round_expansion_name round_expansion)
-                  (String.concat ~sep:"; "
-                     (List.map per_entry ~f:(fun (elem, ms, n_units, c, _) ->
-                          Printf.sprintf
-                            "%s %.4f ms, %s units differing, %d of %d units expanded, %d move(s)"
-                            (dshort elem.digest_after) ms
-                            (Option.value_map (units_differing head elem) ~default:"resegmented"
-                               ~f:Int.to_string)
-                            n_units (List.length elem.units) (List.length c)))));
-            (* Ranked like the seed pass, but in a SECOND accumulator, because a round's decision
-               compares its own best against the incumbent and, if it wins, replaces the beam
-               wholesale. Its entries were released at their timings, like every candidate's. *)
-            round := [];
-            let round_admit entry =
-              let kept, _evicted =
-                List.split_n (List.sort (entry :: !round) ~compare:by_time) beam_width
-              in
-              round := kept
-            in
-            progress_phase_begin (Printf.sprintf "round%d" !rounds_run) (Some (List.length cands));
-            (* gh-ocannl-1527: a round candidate feeds only the round's own accumulator, which keeps
-               its [beam_width] fastest; once that is full, a reading over its slowest enters
-               nothing, so that is its window's hopeless reference. *)
-            let round_hopeless_against () =
-              if List.length !round >= beam_width then Option.map (List.last !round) ~f:snd
-              else None
-            in
-            List.iter cands ~f:(fun spec ->
-                Option.iter (try_spec ~hopeless_against:round_hopeless_against spec) ~f:round_admit);
-            match !round with
-            | [] -> continue_ := false
-            | (_, round_best_ms) :: _ ->
-                let incumbent_ms = Option.value_map !best ~default:Float.infinity ~f:snd in
-                if Float.(round_best_ms < incumbent_ms *. (1. -. min_progress)) then (
-                  displaced := !displaced @ !beam;
-                  beam := !round;
-                  best := List.hd !beam)
-                else (
-                  (* The round did not beat the incumbent by enough: the beam is unchanged, and the
-                     search stops. *)
-                  displaced := !displaced @ !round;
-                  continue_ := false;
-                  round := [])
-          done;
-          (* gh-ocannl-1635: the beam finals ([finals_contenders]). The pool is every entry the
-             search ranked as an incumbent: the final beam first, then [displaced], each entry once.
-             Its contenders are recompiled from their saved forms -- every candidate's buffers went
-             at its timing (gh-ocannl-1326) -- and re-timed by [finals_readings], each under its own
-             label and digest. The crown then follows the finals' readings alone; [best_ms] stays
-             the crown's search reading, the number its label, spread and digest were recorded with.
-             A contender left with no reading makes the finals inconclusive, and the crown is then
-             the first readings' head, as without finals. Neither a refused window nor the budget
-             marks the search as cut: every candidate the menu proposed was already timed. *)
-          (let finals_pool =
-             let seen_digests = Hash_set.create (module String) in
-             List.filter (!beam @ !displaced) ~f:(fun ((c : compiled), _) ->
-                 if Hash_set.mem seen_digests c.digest_after then false
-                 else (
-                   Hash_set.add seen_digests c.digest_after;
-                   true))
-           in
-           let contenders = finals_contenders ~margin:finals_margin ~width:beam_width finals_pool in
-           let label_of (c : compiled) =
-             Option.value
-               (Hashtbl.find label_by_digest c.digest_after)
-               ~default:(dshort c.digest_after)
-           in
-           if not (List.is_empty contenders) then
-             if not (budget_allows_finals ()) then
-               logf "finals: skipped, the budget is spent (%d contender(s))"
-                 (List.length contenders)
-             else (
-               logf "finals: %d contender(s) re-timed together: %s" (List.length contenders)
-                 (String.concat ~sep:"; "
-                    (List.map contenders ~f:(fun (c, ms) ->
-                         Printf.sprintf "%s %.4f ms (digest %s)" (label_of c) ms
-                           (dshort c.digest_after))));
-               (* No total, like the playoff's: a finals window is no attempt, so no candidate line
-                  follows the phase. *)
-               progress_phase_begin "finals" None;
-               let readings =
-                 finals_readings ~what:"finals" ~timed:n_finals_timed ~admitted:n_finals_admitted
-                   (List.map contenders ~f:(fun ((c : compiled), _) ->
-                        (label_of c, spec_of_form c.form, Some c.digest_after)))
-               in
-               let scored = List.zip_exn contenders readings in
-               finals_record :=
-                 List.map scored ~f:(fun ((c, ms), rs) ->
-                     {
-                       contender_label = label_of c;
-                       contender_search_ms = ms;
-                       contender_finals_ms = List.min_elt rs ~compare:Float.compare;
-                     });
-               let incumbent_digest =
-                 Option.map !best ~f:(fun ((c : compiled), _) -> c.digest_after)
-               in
-               match finals_crown scored with
-               | None ->
-                   finals_outcome := Finals_inconclusive;
-                   logf
-                     "finals: inconclusive, a contender has no admitted reading: the crown stays %s"
-                     (Option.value_map !best ~default:"none" ~f:(fun (c, _) -> label_of c))
-               | Some ((((crown : compiled), first_ms) as e), finals_ms) ->
-                   let kept = Option.exists incumbent_digest ~f:(String.equal crown.digest_after) in
-                   finals_outcome := if kept then Finals_kept else Finals_swapped;
-                   logf "finals: %s %s (%.4f ms in the finals, %.4f ms in the search)"
-                     (if kept then "kept" else "crowned")
-                     (label_of crown) finals_ms first_ms;
-                   best := Some e));
-          let best_c, best_ms =
-            match !best with Some (c, ms) -> (Some c, ms) | None -> (None, Float.infinity)
+                  if not defer then (
+                    emit_report hit_report;
+                    Some (Fn.const (c.cctx, c.routine)))
+                  else (
+                    (* gh-ocannl-1408: the replay above validated the entry -- a stale one goes on
+                       to search, which only a compile can tell -- and supplied the emission census
+                       the report carries. Its routine is not kept: a deferred call leaves nothing
+                       resident. gh-ocannl-1440: its compiled code is, holding no working pools, and
+                       the routine the caller asks for is that code linked again on [ctx]
+                       ({!Context.relink_outcome}) -- the census the report carries is the shipped
+                       code's, and the schedule compiles once. A link that fails anyway ships the
+                       untuned default rather than a search, which has already been reported as not
+                       needed. *)
+                    release_quietly ~what:"the validating cache replay of a deferred call" c.cctx;
+                    emit_report hit_report;
+                    let retained = !retained in
+                    Some
+                      (deferred_compile (fun () ->
+                           progress_stage "cache_replay_relink";
+                           match
+                             match retained with
+                             | Some rt -> D.relink_outcome rt
+                             | None ->
+                                 failwith
+                                   "Autotune: a deferred cache replay compiled without retaining \
+                                    its code"
+                           with
+                           | Ok result -> result
+                           | Error (Outcome.Classified classified) ->
+                               logf
+                                 "the deferred cache replay's link FAILED (%s), compiling the \
+                                  untuned default"
+                                 (Outcome.detail_of_cause classified.cause);
+                               substituted := true;
+                               compile_untuned_default ~base:(census ()) ()
+                               [@searchless
+                                 "a cache hit's relink: no search ran, and nothing is timed or \
+                                  stored"]
+                           | Error (Outcome.Fatal _ as failure) ->
+                               raise_pre_search ~base:(census ()) failure)))
+              | Error (Outcome.Classified classified) ->
+                  (* Stale or corrupt entry: fall through to a fresh search, whose store then
+                     overwrites the entry. A reference the canonical form cannot resolve
+                     ([SC.of_saved]), a drifted fission segment and a refused transform all arrive
+                     here typed (gh-ocannl-1242, gh-ocannl-1164); the report carries the cause. *)
+                  logf "cache entry replay FAILED, re-searching: %s"
+                    (Outcome.detail_of_cause classified.cause);
+                  cache_replay_refusal := Some classified;
+                  None
+              | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
+          | Some entry when entry.SC.budget_cut && String.equal entry.SC.source_digest base_digest
+            ->
+              (* Reached only without a budget (the arm above takes it with one): the entry is the
+                 best of a prefix of the menu, and this call was not asked to stop early. Its
+                 search's store overwrites the entry, so the next budgeted call replays a full
+                 crown. *)
+              logf
+                "cache entry is the crown of a budget-cut search and this call has no budget: \
+                 searching in full (gh-ocannl-1409)";
+              None
+          | _ -> None
+        else None
+      in
+      (* A winner takes precedence. Without one, replay an abandoned prefix only under the shape
+         that measured it and a current rule that still rejects it. A weaker incumbent, changed
+         margin, absent rule or changed sampling cannot inherit yesterday's verdict. *)
+      let replayed_abandonment =
+        if use_cache && Option.is_none cached && Option.is_none lineage_refusal then
+          Option.bind abandon ~f:(fun rule ->
+              Option.bind (SC.lookup_abandonment ~dir:cache_dir ~key) ~f:(fun entry ->
+                  if
+                    String.equal entry.SC.source_digest base_digest
+                    && same_search_shape entry.SC.trajectory.SC.search_shape
+                  then
+                    Option.map
+                      (abandon_verdict rule ~k:beam_width ~steps:entry.SC.trajectory.SC.steps)
+                      ~f:(fun ab -> (ab, entry))
+                  else None))
+        else None
+      in
+      match (lineage_refusal, cached, replayed_abandonment) with
+      | Some (caller_digest, timing_digest), _, _ ->
+          Stdio.eprintf
+            "autotune: WARNING: routine %S: the caller's context lowers it differently from the \
+             timing context (structural digest %s vs %s), so no schedule tuned there can ship into \
+             it: not searching, compiling the untuned default (gh-ocannl-1421)\n\
+             %!"
+            (Lazy.force routine_name) caller_digest timing_digest;
+          release_baseline ();
+          let reached =
+            { (census ()) with outcome = Lineage_refused { caller_digest; timing_digest } }
           in
-          (* Nothing was timed exactly when every candidate failed and (on GPU) the serial baseline
-             was never run — or, since gh-ocannl-533, was itself declined. Nothing measured means
-             nothing to cache: a stored entry would pin future processes to a never-timed
-             schedule. *)
-          let nothing_timed = Float.is_inf best_ms in
-          (* gh-ocannl-1409: see [budget_floor_unmeasured]. *)
-          let floor_unmeasured =
-            budget_floor_unmeasured ~budget_cut:!budget_cut ~auto_sched ~baseline_dispatched
-              ~floor_measured:(Option.is_some (default_ms ()) || Option.is_some (seeded_ms ()))
-          in
-          (if use_cache then
-             if floor_unmeasured then
-               logf
-                 "the budget cut the search before it measured the untuned default: storing no \
-                  cache entry (gh-ocannl-1409)"
-             else if
-               not
-                 (search_measurements_cacheable ~nothing_timed
-                    ~timings_contended:!n_timings_contended)
-             then
-               if nothing_timed then
-                 logf "nothing was timed: storing no cache entry (gh-ocannl-532)"
-               else
-                 logf "%d timing window(s) were refused as unusable: storing no cache entry"
-                   !n_timings_contended
-             else
-               let saved, segments =
-                 let best_c = Option.value_exn best_c ~message:timed_winner_exists in
-                 match best_c.form with
-                 | Whole_saved saved -> (saved, None)
-                 | Fiss_saved segs -> ([], Some segs)
-                 | Split_saved (prelude, segs) -> (prelude, Some segs)
-               in
-               SC.store ~dir:cache_dir ~key
-                 {
-                   SC.version = SC.entry_version;
-                   backend;
-                   numerics = SC.numerics_tag ();
-                   codegen = Some codegen_tag;
-                   objective = Some objective;
-                   source_digest = base_digest;
-                   saved;
-                   segments;
-                   best_ms;
-                   baseline_ms;
-                   (* gh-ocannl-579: a measurement of the program, stored like the two above so the
-                      flip chain's profitability term reads the same evidence on a warm cache as on
-                      the cold run that measured it. Absent when nothing tensorized was timed. *)
-                   mma_best_ms = (if Float.is_finite !mma_best_ms then Some !mma_best_ms else None);
-                   best_spread = winner_spread best_c;
-                   default_ms = default_ms ();
-                   default_fingerprint =
-                     Option.map (default_ms ()) ~f:(fun _ ->
-                         Sched.default_schedule_fingerprint ~facts);
-                   best_steps =
-                     Some
-                       { SC.search_shape = Lazy.force search_shape; steps = List.rev !best_steps };
-                   budget_cut = !budget_cut;
-                   (* gh-ocannl-1725: what explains [best_ms] against the other readings above, so
-                      the replay can explain it too. *)
-                   finals = Some { SC.outcome = !finals_outcome; contenders = !finals_record };
-                 });
-          (* Diagnostic control (config [autotune_log], or [tune]'s [?log]): compile and time the
-             UNTUNED default pipeline in this very process, on the search context — discriminates a
-             genuinely slow winner from process-state effects when the winner's code nominally
-             equals the untuned program yet a separately-run untuned process measures faster (PR
-             #140 round 6: same digest, 3.4x runtime difference across processes on cuda). *)
-          (if log_enabled () then
-             match
-               progress_stage "untuned_control";
-               costed ~attempt:"untuned control"
-                 ~verdict_of:(fun _ -> "compiled")
-                 (fun () -> Context.compile ?name search_ctx comp bindings)
-             with
-             | cctx, croutine ->
-                 (match
-                    before_timing_window ();
-                    time_routine ~timing ~repeats cctx croutine
-                  with
-                 | timing_result -> (
-                     match admitted_timing_ms timing_result with
-                     | Some ms -> logf "untuned-default in-process control: %.4f ms" ms
-                     | None ->
-                         logf "untuned-default in-process control: refused (%s)"
-                           (refusal_reason (timing_admission timing_result)))
-                 | exception exn ->
-                     logf "untuned-default control run failed: %s" (Exn.to_string exn));
-                 (* A diagnostic's artifacts are dead the moment it has printed its number
-                    (gh-ocannl-550) — and the diagnostic is on exactly when the memory question is
-                    being measured, so leaving them behind would show up in the very census that
-                    reads it. Best-effort, like [release_candidate]: this runs after a timing
-                    failure the control deliberately swallowed, and [release] awaits the device, so
-                    a backend still reporting that failure must not be allowed to turn a completed
-                    search with a valid winner into a fatal one. *)
-                 release_quietly ~what:"the untuned-default control" cctx
-             | exception exn ->
-                 logf "untuned-default control compile failed: %s" (Exn.to_string exn));
-          let completed_report =
+          finish reached (fun () ->
+              (compile_untuned_default ~base:reached ()
+               [@searchless "a refused lineage: no search runs, and nothing is timed or stored"]))
+      | None, Some result, _ ->
+          release_baseline ();
+          result
+      | None, None, Some (ab, entry) ->
+          release_baseline ();
+          emit_report
             {
-              outcome = Searched;
+              (census ()) with
+              outcome = Abandonment_replay ab;
+              best_ms = ab.ab_best_ms;
+              best_label = "cached-abandonment";
+              best_steps = entry.SC.trajectory.SC.steps;
+            };
+          raise (Search_abandoned ab)
+      | None, None, None when not search ->
+          logf
+            "search disabled (autotune_search=false) and no cache entry: compiling the untuned \
+             default";
+          (* Before the fallback compile, which wants the memory. *)
+          release_baseline ();
+          (* After the compile, as in the no-cache branch above. The census the base compile already
+             produced is carried whether this succeeds or fails. *)
+          let reached = census () in
+          finish reached (fun () -> compile_untuned_default ~base:reached ())
+      | None, None, None ->
+          let seen = Hash_set.create (module String) in
+          Hash_set.add seen base_digest;
+          (* Every gh-ocannl-532 refusal enters the same decline census (gh-ocannl-543). Without it
+             a GPU search that timed a single candidate reports [candidates_timed = 1] with an empty
+             census — the same report a computation with a one-element schedule space would give —
+             and the difference (how many candidates existed and were refused, and why) was only
+             ever visible in the [autotune_log] stderr stream. *)
+          let record_not_dispatched ~origin ~detail =
+            record_decline declines
+              {
+                Outcome.phase = Outcome.Transform;
+                cause = Outcome.Not_dispatched { origin; detail };
+                execution_effect = Outcome.No_device_writes;
+              }
+          in
+          (* gh-ocannl-1666: the serial baseline's compile, here where it is timed and nowhere else
+             -- the base compile only lowered. Not where it is not timed: an undispatched baseline
+             is never compiled, and one the base compile declined (gh-ocannl-533) stays declined.
+             Its record is the [baseline_compile] stage's, attempt [baseline]; its cost on
+             [budget_clock] is the budget projection's evidence beside the base compile's
+             ([budget_compile]). *)
+          let baseline_decline =
+            if
+              Option.is_none baseline_decline && Option.is_none !baseline_linked
+              && dispatchable ~is_gpu [ base_opt ]
+            then (
+              progress_stage "baseline_compile";
+              let compiled =
+                budget_compile @@ fun () ->
+                costed ~attempt:"baseline" ~verdict_of:outcome_verdict (fun () ->
+                    compile_candidate ?name ~label:"baseline" ~on_privatize_drops ~reuse
+                      ~static_indices ~base_opt ~canon ~limits ~is_gpu ~is_cpu
+                      ~provenance:Outcome.Candidate search_ctx comp bindings
+                      (Whole (W_saved ([], None))))
+              in
+              match compiled with
+              | Ok c ->
+                  baseline_linked := Some (c.cctx, c.routine);
+                  baseline_decline
+              | Error (Outcome.Classified classified) ->
+                  record_decline declines classified;
+                  baseline_declined_so_far := true;
+                  (* The same footprint question as the base compile's (gh-ocannl-1554): a link the
+                     device refused bounds no candidate from below, the floor does. *)
+                  if is_device_memory classified then probe_floor ~account:false;
+                  Some classified
+              | Error (Outcome.Fatal _ as failure) -> raise_pre_search ~base:(census ()) failure)
+            else baseline_decline
+          in
+          (* [None] when the baseline compile was declined (gh-ocannl-533): there is no routine to
+             time and none to return, and the search runs on the scheduled candidates alone. *)
+          let baseline =
+            Option.map !baseline_linked ~f:(fun (bctx, broutine) ->
+                {
+                  form = Whole_saved [];
+                  cctx = bctx;
+                  routine = broutine;
+                  units =
+                    [
+                      {
+                        u_segment = None;
+                        u_saved = [];
+                        u_registry = SC.base_registry canon;
+                        u_opt = base_opt;
+                      };
+                    ];
+                  all_opts = [ base_opt ];
+                  digest_after = base_digest;
+                })
+          in
+          (* Baseline timing failures are the user's bug (e.g. uninitialized inputs) and propagate
+             as the exception [Context.run] would give — reported first, with the phase they carry,
+             so the arm still occupies its slot (gh-ocannl-550). On a GPU backend the baseline is
+             the unscheduled serial form and is not dispatched at all (see [dispatchable]);
+             [infinity] is its rank, so every timed candidate beats it and the search never returns
+             it (see the fallback at the end), and a declined baseline ranks the same way. *)
+          let baseline_dispatched = Option.is_some baseline && dispatchable ~is_gpu [ base_opt ] in
+          (* The baseline's refused window, by its cause (gh-ocannl-1517); [None] when it was
+             admitted, or never ran one. *)
+          let baseline_refusal = ref None in
+          let baseline_timing_result = ref None in
+          let baseline_ms =
+            match baseline with
+            | Some b when baseline_dispatched -> (
+                (* Still uncaught in the sense that matters — the caller sees the same exception
+                   [Context.run] would raise, unwrapped and with its own backtrace. The tagging is
+                   only so the report can name the phase (pre-dispatch validation vs. launch vs.
+                   sync) before it propagates.
+
+                   The lineage effect is NOT optional, though, and it is why this consults the
+                   backend's classifier like the candidate timing below (gh-ocannl-550): a baseline
+                   launch that may have written buffers leaves the lineage unusable, and a caller
+                   that CONTAINS this failure — [Train.tune_placements] does, per arm — would
+                   otherwise go on to time its other arm against buffers the failed baseline had
+                   already modified. Proven write-free, the routine's execution claim is withdrawn
+                   instead; unattributed, the device's state is unknown and the lineage is
+                   condemned, exactly as an unattributed candidate launch failure condemns it. *)
+                let condemn phase exn =
+                  match phase with
+                  (* Nothing to judge and nothing to withdraw (gh-ocannl-564): the routine never
+                     ran, and the execution claim is only made after a dispatch. Without this arm an
+                     unsatisfied dependency would fall to [None] below on every C backend and
+                     condemn the lineage the caller is meant to fix and retry in. *)
+                  | Outcome.Preflight -> ()
+                  | _ -> (
+                      match D.failure_classifier b.cctx phase exn with
+                      | Some { Ir.Schedule_outcome.execution_effect = Outcome.No_device_writes; _ }
+                        ->
+                          D.rollback_execution b.cctx (D.routine_id b.routine)
+                      | Some _ | None ->
+                          D.poison_lineage b.cctx ~routine_name:(D.routine_name b.routine) exn)
+                in
+                match
+                  (* Lineage-wide validation, tagged so [condemn] above reads it for what it is —
+                     pre-dispatch, nothing to withdraw — and raised here rather than inside the
+                     timing so a baseline failure keeps propagating as the pre-search failure it is.
+                     This is the site that made the containment gap invisible on the C backends: the
+                     serial baseline is dispatched there, hits this first, and takes the search down
+                     with the caller's error, where a GPU backend refuses the baseline outright
+                     (gh-ocannl-532) and never reaches it (gh-ocannl-569). *)
+                  Outcome.tag Outcome.Preflight (fun () ->
+                      D.check_lineage_runnable b.cctx b.routine);
+                  (* gh-ocannl-1621: the search's first window, so this takes the snapshot. Tagged
+                     pre-dispatch like the check above: nothing has run, so a failure here withdraws
+                     nothing and condemns nothing, and propagates as the pre-search failure. *)
+                  Outcome.tag Outcome.Preflight before_timing_window;
+                  progress_stage "baseline_timing";
+                  (* gh-ocannl-1666: the one window that is bounded ({!window_bounded}). *)
+                  time_routine ~on_retry ~on_call ~tag_failures:true
+                    ~window_bound_ms:baseline_window_ms ~timing ~repeats b.cctx b.routine
+                with
+                | timing_result -> (
+                    let timing_result =
+                      apply_measurement_seam ~label:"baseline" ~digest:base_digest timing_result
+                    in
+                    match admitted_timing_ms timing_result with
+                    | Some ms ->
+                        baseline_timing_result := Some timing_result;
+                        ms
+                    | None ->
+                        let refusal = timing_admission timing_result in
+                        baseline_refusal := Some refusal;
+                        logf "baseline timing refused: %s" (refusal_reason refusal);
+                        Float.infinity)
+                | exception Outcome.Raised_at (phase, exn, backtrace) ->
+                    condemn phase exn;
+                    emit_pre_search_failure ~base:(census ()) ~phase ~candidate:(Some "baseline")
+                      ~detail:(Exn.to_string exn) ();
+                    (* gh-ocannl-550: it never reaches the beam, so nothing downstream can release
+                       it — and a caller that CONTAINS this (a write-free preflight decline, a
+                       backend-classified failure) goes on to another arm or retries. *)
+                    release_baseline ();
+                    Stdlib.Printexc.raise_with_backtrace exn backtrace
+                | exception exn ->
+                    let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                    condemn Outcome.Launch exn;
+                    emit_pre_search_failure ~base:(census ()) ~phase:Outcome.Launch
+                      ~candidate:(Some "baseline") ~detail:(Exn.to_string exn) ();
+                    release_baseline ();
+                    Stdlib.Printexc.raise_with_backtrace exn backtrace)
+            | _ -> Float.infinity
+          in
+          let baseline_timed = baseline_dispatched && Float.is_finite baseline_ms in
+          (* A contended timing established nothing about this digest. Let an identical seed retry
+             it later in the search; successful timing and every definitive structural refusal keep
+             the ordinary dedup ownership. *)
+          if Option.is_some !baseline_refusal then Hash_set.remove seen base_digest;
+          (match baseline_decline with
+          | Some classified ->
+              logf "baseline: DECLINED at %s %s" (phase_label classified.phase)
+                (Outcome.detail_of_cause classified.cause)
+          | None ->
+              if baseline_timed then (
+                (* Ranked like any timed candidate, and released like one (gh-ocannl-1326). *)
+                release_baseline ();
+                logf "baseline: %.4f ms (digest %s)" baseline_ms (dshort base_digest);
+                emit_calibration ~backend ~device ~limits ~routine:(Lazy.force routine_name)
+                  ~label:"baseline" ~digest:base_digest
+                  ~timing_result:(Option.value_exn !baseline_timing_result)
+                  [ base_opt ])
+              else if baseline_dispatched then release_baseline ()
+              else (
+                (* Refused before codegen ([base_undispatched], gh-ocannl-1340), so nothing is
+                   linked; the release stays for a baseline this rule ever lets link. *)
+                release_baseline ();
+                (* No calibration row: the model column is only meaningful next to a measurement. *)
+                logf
+                  "baseline: NOT DISPATCHED, binds no hardware dimension on %s -- the whole \
+                   routine would run in one work-item (gh-ocannl-532); refused before codegen \
+                   (digest %s)"
+                  backend (dshort base_digest);
+                record_not_dispatched ~origin:"baseline"
+                  ~detail:
+                    (Printf.sprintf
+                       "the serial baseline binds no hardware dimension on %s (gh-ocannl-532)"
+                       backend)));
+          let n_timed = ref (if baseline_timed then 1 else 0) in
+          (* Fired from the counter itself rather than from the admission match above, so the
+             reported [timed_so_far] is the accounting value and not a restatement of it. *)
+          if baseline_timed then
+            Option.iter baseline ~f:(fun b ->
+                Seam.get on_candidate_timed (D.routine_name b.routine) ~timed_so_far:!n_timed);
+          let n_timings_contended = ref 0 in
+          (* The subset of those windows refused because queued calibration measured no batch within
+             its target (gh-ocannl-1098). Not a diagnosis (a stall on every probe reads the same),
+             but a count that persists across idle reruns is a queue threshold's signature. *)
+          let n_timings_unbatched = ref 0 in
+          (* The subset refused for a degenerate clock reading (gh-ocannl-1517): a clock that
+             resolved nothing is not a loaded host, and a skip excused by one names that cause. *)
+          let n_timings_unreadable = ref 0 in
+          (* Every refused window is counted here, by its cause, so the per-cause counts stay
+             subsets of [n_timings_contended] by construction. *)
+          let count_refusal refusal =
+            Int.incr n_timings_contended;
+            match refusal with
+            | Refused_unbatched -> Int.incr n_timings_unbatched
+            | Refused_unreadable -> Int.incr n_timings_unreadable
+            | Refused_contended | Admitted -> ()
+          in
+          Option.iter !baseline_refusal ~f:count_refusal;
+          (* [n_timings_contended] counts WINDOWS, which is the right shape for "was this search's
+             measurement set complete?" but the wrong one for any claim about WHICH candidate went
+             unmeasured (Codex P2 on PR #608): a refused digest is dropped from [seen] so an
+             equivalent seed can retry it, so one candidate refused twice is two windows. The
+             digests are therefore kept alongside, and the report derives from them a
+             distinct-candidate count and the one per-candidate fact a caller cannot reconstruct —
+             whether the untuned-default seed was the refused one, which is what separates a
+             contention-refused reference from the gh-ocannl-552 regression of never proposing or
+             attributing it. *)
+          let contended_digests = Hash_set.create (module String) in
+          if Option.is_some !baseline_refusal then Hash_set.add contended_digests base_digest;
+          (* gh-ocannl-1632: every digest a window let leave [seen] -- refused, cut as hopeless,
+             stopped by the budget -- and the timing attempts a later equivalent seed then made on
+             one instead of deduplicating. The count is what makes a claim about how many candidates
+             were timed or deduplicated attributable: on a quiet host it is zero, and a departure
+             that nothing re-proposes leaves it zero too. *)
+          let departed_digests = Hash_set.create (module String) and n_timings_retimed = ref 0 in
+          if Option.is_some !baseline_refusal then Hash_set.add departed_digests base_digest;
+          let depart digest =
+            Hash_set.remove seen digest;
+            Hash_set.add departed_digests digest
+          in
+          (* Live search state for an honest partial report. Each counter starts at the amount of
+             work completed so far and is updated at its ordinary accounting site below.
+             [best_so_far] is updated after every successful timing, including midway through seed
+             enumeration. *)
+          let n_mma_proposed = ref 0 and n_fiss_mma_proposed = ref 0 and n_mma_timed = ref 0 in
+          (* gh-ocannl-546: the crowned candidate's identity, and how close tensorization came to
+             it. Labels are keyed by digest rather than carried on the candidate, because the winner
+             is picked from the beam pool (and the beam's own expansions time through the same
+             site), so the timing site is the one place every timed candidate passes exactly
+             once. *)
+          let label_by_digest = Hashtbl.create (module String) in
+          if baseline_timed then Hashtbl.set label_by_digest ~key:base_digest ~data:"baseline";
+          let mma_best_ms = ref Float.infinity in
+          (* gh-ocannl-1702: the ranked candidates a Grid label would misdescribe, newest first. *)
+          let grid_serial_timed = ref [] in
+          let winner_label best_c =
+            Option.value_map best_c ~default:"" ~f:(fun c ->
+                Option.value (Hashtbl.find label_by_digest c.digest_after) ~default:"")
+          in
+          (* gh-ocannl-1558: each admitted window's spread, keyed like the labels, and how many
+             admitted windows were dispersed -- a CPU routine's own variance on a quiet host, which
+             the dispersion rule alone would have refused. *)
+          let spread_by_digest = Hashtbl.create (module String) and n_timings_dispersed = ref 0 in
+          (* gh-ocannl-1527: the windows cut as hopeless, their candidates unranked. *)
+          let n_timings_hopeless = ref 0 in
+          let note_admitted_window ~digest (r : timing_result) =
+            Hashtbl.set spread_by_digest ~key:digest ~data:r.spread;
+            if r.dispersed then Int.incr n_timings_dispersed
+          in
+          if baseline_timed then
+            Option.iter !baseline_timing_result ~f:(note_admitted_window ~digest:base_digest);
+          let winner_spread best_c =
+            Option.bind best_c ~f:(fun c -> Hashtbl.find spread_by_digest c.digest_after)
+          in
+          let winner_tensorized best_c =
+            Option.exists best_c ~f:(fun c -> saved_is_tensorized (flat_schedule c.form))
+          in
+          let n_model_scored = ref 0 and n_model_pruned = ref 0 in
+          let n_bound_pruned = ref 0 in
+          (* The schedule-invariant floor (gh-ocannl-514 phases 3-4): sketch completions share the
+             base program's semantics, so one floor bounds every prunable candidate; computed once,
+             only under the explicit gate. *)
+          let floor_bound_ms =
+            lazy
+              (if not (Lazy.force bound_pruning_enabled) then None
+               else
+                 let peak_flops, peak_memory_bandwidth = envelope ~limits in
+                 let f = CM.completion_floor base_opt.LL.llc in
+                 Option.map
+                   (CM.roofline_seconds ?peak_flops ?peak_memory_bandwidth ~flops:f.CM.fr_flops
+                      ~bytes:f.CM.fr_bytes ()) ~f:(fun sec -> sec *. 1e3))
+          in
+          let n_fiss_sketch_timed = ref 0
+          and fs_composite = ref `Ineligible
+          (* gh-ocannl-1166: while the composite playoff runs, its F_sketch windows are counted as
+             playoff windows rather than as singles or as the coarse composite's own outcome. *)
+          and in_playoff = ref false
+          and n_playoff_timed = ref 0
+          and n_playoff_swaps = ref 0
+          (* gh-ocannl-1665: the playoff's near ties decided in shared windows, and their
+             windows. *)
+          and n_playoff_finals = ref 0
+          and n_playoff_finals_timed = ref 0
+          and n_playoff_finals_admitted = ref 0
+          (* gh-ocannl-1138: the staffed singles' windows, and the staffed singles retried bare. *)
+          and n_staffed_timed = ref 0
+          and n_backdrop_fallbacks = ref 0
+          (* gh-ocannl-1698: the staffed joins' near ties decided in shared windows, and their
+             windows. *)
+          and n_staffed_finals = ref 0
+          and n_staffed_finals_timed = ref 0
+          and n_staffed_finals_admitted = ref 0
+          (* gh-ocannl-1664: the seeded singles proposed, their windows, the keys whose choice the
+             seeded sweep changed, and the seeded singles retried without their staff. *)
+          and n_seeded_single_candidates = ref 0
+          and n_seeded_single_timed = ref 0
+          and n_seeded_single_joins = ref 0
+          and n_seeded_single_fallbacks = ref 0
+          and n_seeded_split_candidates = ref 0
+          and n_seeded_split_timed = ref 0
+          and n_seeded_split_joins = ref 0
+          and n_seeded_hopeless = ref 0
+          and n_sr_backdrop_fallbacks = ref 0
+          and n_sr_timed = ref 0
+          and sr_composite_eligible = ref false
+          and sr_composite_timed = ref false in
+          let sr_single_results = ref [] in
+          let coarse_single_measured = Hash_set.Poly.create () in
+          let coarse_single_refused = Hash_set.Poly.create () in
+          let rounds_run = ref 0 in
+          (* [report.round_moves], newest first (gh-ocannl-1360). *)
+          let round_moves = ref [] in
+          (* gh-ocannl-1635: the beam finals' accounting, published as each window ends. *)
+          let finals_record = ref []
+          and n_finals_timed = ref 0
+          and n_finals_admitted = ref 0
+          and finals_outcome = ref Finals_not_run in
+          (* gh-ocannl-1409: set once the search's budget has stopped a candidate or a round. *)
+          let budget_cut = ref false in
+          let n_sketch_candidates = ref 0
+          and n_epilogue_sketch_candidates = ref 0
+          and n_fiss_sketch_candidates = ref 0
+          and n_split_reduce_candidates = ref 0 in
+          let best_so_far = ref ((if baseline_timed then baseline else None), baseline_ms) in
+          (* [report.best_steps], newest first: each time [best_so_far] improves, at which admitted
+             timing it did (gh-ocannl-1110). *)
+          let best_steps = ref (if baseline_timed then [ (1, baseline_ms) ] else []) in
+          let by_time (_, a) (_, b) = Float.compare a b in
+          (* [beam] holds the fastest [beam_width] entries seen so far: the incumbents the rounds
+             expand. It starts with the baseline when the baseline is eligible; a declined one
+             contributes no entry, so the beam can be empty and every consumer below takes that as
+             "nothing was timed" (gh-ocannl-533). Keeping the k smallest incrementally keeps the k
+             smallest overall, with one difference from sorting at the end: a tie between exactly
+             equal times resolves by arrival rather than by seed order.
+
+             Its entries are descriptions, not artifacts (gh-ocannl-1326): every candidate's buffers
+             are released as soon as its timing window is over, the incumbent's included, and the
+             winner is recompiled from its saved form once the search ends. A candidate's device
+             buffers are invisible to the OCaml GC (the backends' pool tables root every slab, see
+             {!Context.release}), so whatever the search keeps holds device memory. gh-ocannl-550
+             bounded that at [beam_width + 2] routine footprints, which is still too many for a step
+             that uses over half the device: on a 12 GiB card a b256 [gpt2_mini_train] search timed
+             its first candidate and then declined every later one at link with
+             [CUDA_ERROR_OUT_OF_MEMORY], because the incumbent's 6.6 GiB stayed resident. What a
+             ranked candidate is still read for — its saved form, units, compiled segments and the
+             routine's tensorization census — is host data, and all a round needs is its saved form:
+             every compile derives from [base_opt], never from another candidate's context. *)
+          let beam =
+            ref
+              (Option.to_list
+                 (Option.map
+                    (if baseline_timed then baseline else None)
+                    ~f:(fun b -> (b, baseline_ms))))
+          in
+          (* The beam-expansion round's own bounded accumulator. Reset at the top of each round. *)
+          let round = ref [] in
+          (* Owns the just-compiled candidate until its timing window is over and it is released, so
+             that a failure in between (a seam, a fatal timing failure) still frees it. *)
+          let pending = ref None in
+          let release_candidate c =
+            if Option.exists !pending ~f:(phys_equal c) then pending := None;
+            (* Best-effort: a failure to free must not replace the candidate's own outcome, and this
+               runs on failure paths too, where the device may already be refusing work.
+               Process-fatal conditions still propagate. Idempotent ({!Context.release}), so a
+               ranked candidate released at its timing can meet this again harmlessly. A released
+               candidate's digest deliberately STAYS in [seen]: it must keep deduplicating, and
+               dedup cannot resurrect an artifact, since [seen], [timed_ms_by_digest] and
+               [label_by_digest] hold strings and floats and never a [compiled]. *)
+            release_quietly ~what:("candidate " ^ dshort c.digest_after) c.cctx
+          in
+          let admit entry =
+            let kept, _evicted =
+              List.split_n (List.sort (entry :: !beam) ~compare:by_time) beam_width
+            in
+            beam := kept
+          in
+          (* The exit sweep: whatever the search still owns when it stops. Every ranked candidate
+             was released at its timing, so that is the pending one, cut short between its compile
+             and the end of its timing window; the ranked ones are swept too, which costs nothing
+             ([release] is idempotent) and keeps the sweep's meaning independent of where each one
+             was released. It must run BEFORE the compiles that follow a search, which are the two
+             an exhausted device used to defeat (the winner replay and the untuned-default fallback
+             behind it). *)
+          let release_all_candidates () =
+            let live =
+              List.map !beam ~f:fst @ List.map !round ~f:fst
+              @ Option.to_list (fst !best_so_far)
+              @ Option.to_list !pending
+            in
+            beam := [];
+            round := [];
+            pending := None;
+            List.iter live ~f:release_candidate
+          in
+          (* The gh-ocannl-552 reference point. [baseline_ms] is the serial form's time ([infinity]
+             on GPU), so it cannot answer "did tuning beat what the user gets without tuning?". The
+             untuned default pipeline is already in the pool — the [config_thresholds] seed
+             reproduces it exactly — and its measurement is attributed by digest, so a seed that
+             dedups against an identical earlier candidate (the timed baseline included, on CPU
+             backends whose config thresholds leave the code unparallelized) still reports the time
+             of that code.
+
+             The attribution honors the scheduling gates (Codex P1 on PR #279): the seed reproduces
+             [maybe_default_schedules] only on its main path. With automatic scheduling inactive
+             ([automatic_gpu_schedule]/[automatic_cpu_schedule] off, or [debug_log_from_routines]
+             on), the untuned default IS the unscheduled serial form, so the reference is the base
+             digest — timed on CPU, deliberately unmeasured on GPU (gh-ocannl-532). With
+             [schedule_fission] off, the untuned default is the whole-routine config-thresholds
+             annotation, which no candidate reproduces (the whole-routine presets are ungated): no
+             attribution, rather than labeling a differently-scheduled pipeline as the default. *)
+          let auto_sched = Sched.automatic_schedule_active ~facts in
+          (* A candidate label only when scheduling is active: inactive, the default is the base
+             digest attributed right here, never a seed. *)
+          let default_candidate_label = if auto_sched then default_seed_label ~facts else None in
+          let timed_ms_by_digest = Hashtbl.create (module String) in
+          if baseline_timed then Hashtbl.set timed_ms_by_digest ~key:base_digest ~data:baseline_ms;
+          let default_seed_digest = ref (if auto_sched then None else Some base_digest) in
+          let default_ms () =
+            Option.bind !default_seed_digest ~f:(Hashtbl.find timed_ms_by_digest)
+          in
+          (* gh-ocannl-1388: the seeded untuned plan's seed, attributed by digest like the
+             default's. *)
+          let seeded_seed_digest = ref None in
+          let seeded_ms () = Option.bind !seeded_seed_digest ~f:(Hashtbl.find timed_ms_by_digest) in
+          (* A digest that was refused and later timed by an equivalent seed is not an unmeasured
+             candidate, so the count is over the refusals that stuck. *)
+          let candidates_contended () =
+            Hash_set.count contended_digests ~f:(fun d -> not (Hashtbl.mem timed_ms_by_digest d))
+          in
+          let default_refused () =
+            Option.value_map !default_seed_digest ~default:false ~f:(Hash_set.mem contended_digests)
+          in
+          let partial_emitted = ref false in
+          (* The report of a search cut short, from the state it reached: a fatal failure's
+             ([emit_partial_and_raise]) and an abandonment's. *)
+          let partial_report outcome =
+            let summaries = decline_summaries declines in
+            let best_c, best_ms = !best_so_far in
+            {
+              outcome;
               timing;
               candidates_timed = !n_timed;
               timings_contended = !n_timings_contended;
@@ -11791,7 +9722,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
               candidates_failed = failed_count declines;
               baseline_declined = Option.is_some baseline_decline;
               baseline_refusal = !baseline_refusal;
-              declines = decline_summaries declines;
+              declines = summaries;
               privatize_drops = decline_summaries privatize_declines;
               cache_replay_refusal = !cache_replay_refusal;
               rounds_run = !rounds_run;
@@ -11807,8 +9738,8 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
               compiles = 0 (* Stamped by [emit_report]. *);
               replay_compiles = 0;
               beam_width;
-              sketch_candidates = List.length sketch_params;
-              epilogue_sketch_candidates = List.count sketch_params ~f:(fun p -> p.sk_epilogue);
+              sketch_candidates = !n_sketch_candidates;
+              epilogue_sketch_candidates = !n_epilogue_sketch_candidates;
               fiss_sketch_candidates = !n_fiss_sketch_candidates;
               fiss_sketch_timed = !n_fiss_sketch_timed;
               fiss_sketch_composite = !fs_composite;
@@ -11830,7 +9761,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
               seeded_split_timed = !n_seeded_split_timed;
               seeded_split_joins = !n_seeded_split_joins;
               seeded_hopeless = !n_seeded_hopeless;
-              split_reduce_candidates = List.length sr_specs;
+              split_reduce_candidates = !n_split_reduce_candidates;
               split_reduce_timed = !n_sr_timed;
               split_reduce_composite_eligible = !sr_composite_eligible;
               split_reduce_composite_timed = !sr_composite_timed;
@@ -11852,7 +9783,7 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
                 Option.map best_c ~f:(fun c -> (mma_summary c).Ir.C_syntax.tensorization);
               best_mma_statements = Option.value_map best_c ~default:0 ~f:mma_statements;
               best_mma_scalar_fallbacks = Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
-              best_grid = Option.map best_c ~f:(fun c -> c.routine.Context.grid);
+              best_grid = Option.map best_c ~f:(fun c -> D.routine_grid c.routine);
               grid_serial_timed = List.rev !grid_serial_timed;
               mma_best_ms = !mma_best_ms;
               best_spread = winner_spread best_c;
@@ -11863,199 +9794,2514 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
               compile_cost = Ir.Compile_cost.empty;
             }
           in
-          (* What ships, as the compile that produces it: run here unless the call is deferred
-             (gh-ocannl-1408). Every branch sweeps the candidates first, so a deferred call leaves
-             nothing of its search resident. *)
-          let ship =
-            if floor_unmeasured && not nothing_timed then (
-              logf
-                "the budget cut the search before it measured the untuned default: shipping the \
-                 untuned default compile (gh-ocannl-1409)";
-              release_all_candidates ();
-              untuned_default_or_raise)
-            else if nothing_timed then (
-              (* Returning the incumbent here would hand the caller the very serial routine this
-                 search refused to dispatch (gh-ocannl-532) — slower than not tuning at all, and on
-                 GPU unbounded. The untuned compile is the honest fallback: the same code the caller
-                 would have compiled without the tuner, the seeded plan where there is one. *)
-              logf "nothing was timed: falling back to the untuned default compile (gh-ocannl-532)";
-              release_all_candidates ();
-              untuned_default_or_raise)
-            else
-              (* [nothing_timed] is false, so the beam holds a timed winner. *)
-              let best_c = Option.value_exn best_c ~message:timed_winner_exists in
-              (* Compile the winner from the caller's context out of its saved schedule, as the
-                 cache-hit path does: every candidate's buffers were released at its timing
-                 (gh-ocannl-1326), and with [timing_ctx] the search ran against the scratch lineage
-                 anyway. Digest mismatch or replay failure falls back to the production default
-                 schedule. *)
-              let spec = spec_of_form best_c.form in
-              (* The rebuilt spec has lost what the winner was timed as: a round candidate's parent
-                 and move, a sketch's or preset's parameters -- its saved form alone would print as
-                 the bare [F_saved[N segs]] every round candidate of one parent shares. So the
-                 replay, and a failure it reports, carry the label the winner was timed under, which
-                 is also the report's [best_label]. *)
-              let label = match winner_label (Some best_c) with "" -> spec_label spec | l -> l in
-              (* Nothing the replay needs is an artifact — [spec] above is the winner's saved
-                 schedule — so whatever the search still owns goes before the compile that
-                 reproduces it (gh-ocannl-550). *)
-              release_all_candidates ();
-              fun () ->
-                progress_stage "winner_compile";
-                match compile_spec_real ~label Outcome.Candidate spec with
-                | Ok c when not (shipped_dispatchable ~is_gpu c) ->
-                    (* Completes the invariant rather than fixing an observed bug: the winner was
-                       timed, so it was dispatchable when measured, and the replay is
-                       digest-guarded. But this is the last of the three ways [tune] hands back a
-                       routine, and none of them may return an unparallelized GPU routine
-                       (gh-ocannl-532). The default compile is the same fallback a failed replay
-                       takes. *)
-                    logf "winner replay produced an unparallelized routine, falling back: %s" label;
-                    (* gh-ocannl-550: rejected, so dead — and the fallback compile below wants the
-                       memory. Same one-liner as the rejected cache replay above; the pre-replay
-                       sweep could not cover this context, which did not exist yet. *)
-                    release_quietly ~what:"the rejected winner replay" c.cctx;
-                    substituted := true;
-                    untuned_default_or_raise ()
+          let emit_partial_and_raise (fatal : Outcome.fatal) =
+            (* Shadowing the projection of the same name would be gratuitous here: this is the
+               failure being constructed, not one being read off a report. *)
+            let failure =
+              { phase = fatal.phase; candidate = fatal.candidate; detail = Exn.to_string fatal.exn }
+            in
+            let partial_report = partial_report (Search_died failure) in
+            (* Reporting is best-effort on the exceptional path and must not replace the compiler
+               failure or its raw backtrace. *)
+            partial_emitted := true;
+            (try emit_report partial_report
+             with report_exn when not (process_fatal_exn report_exn) ->
+               Stdio.eprintf "autotune: partial-report callback failed: %s\n%!"
+                 (Exn.to_string report_exn));
+            (* gh-ocannl-550: this arm is over and returns no routine, so every artifact it still
+               holds is dead. It matters most exactly here: a caller that CONTAINS this failure per
+               arm ([Train.tune_placements]) goes on to search its other arm, and used to do so
+               against a device still holding everything this arm had compiled. *)
+            release_all_candidates ();
+            Outcome.raise_failure (Outcome.Fatal fatal)
+          in
+          (* The post-search fallbacks to the untuned default (nothing timed; the winner replay
+             failed or degenerated). Through the containment-aware form, so a failure here reports
+             the phase it carries — the outer catch-all would otherwise record every one of them as
+             [Transform], which for a link failure is simply wrong. The exception the caller sees is
+             unchanged: [emit_partial_and_raise] ends in [raise_failure], exactly as
+             [Context.compile] does. *)
+          let plain_default_or_raise () =
+            match
+              costed ~attempt:"untuned default" ~verdict_of:outcome_verdict (fun () ->
+                  D.compile_outcome ?name ~provenance:Ir.Schedule_outcome.User_schedule ctx comp
+                    bindings)
+            with
+            | Ok result -> result
+            | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+            | Error (Outcome.Classified classified) ->
+                emit_partial_and_raise
+                  (Outcome.fatal_of_classified ~candidate:"untuned default fallback" classified)
+          in
+          (* gh-ocannl-1253: where the search derived a seeded plan, the untuned step the caller
+             would have shipped is that plan, so the fallbacks compile it -- replayed as its
+             [F_seeded] candidate is, from the plan already in the trajectory identity -- and keep
+             the seeded floor. A replay that fails or degenerates ends on the plain default. *)
+          let untuned_default_or_raise () =
+            progress_stage "untuned_default_compile";
+            match Lazy.force seeded_plan_value with
+            | None -> plain_default_or_raise ()
+            | Some plan -> (
+                let spec = Fiss (F_seeded plan) in
+                match compile_spec_real ~label:(spec_label spec) Outcome.Candidate spec with
+                | Ok c when shipped_dispatchable ~is_gpu c -> (c.cctx, c.routine)
                 | Ok c ->
-                    logf "winner replay ok: %s" label;
-                    (c.cctx, c.routine)
+                    release_quietly ~what:"the degenerate seeded fallback" c.cctx;
+                    plain_default_or_raise ()
                 | Error (Outcome.Classified classified) ->
-                    logf "winner replay FAILED (%s), falling back to the default compile: %s" label
+                    logf "the seeded untuned fallback FAILED (%s); compiling the plain default"
                       (Outcome.detail_of_cause classified.cause);
-                    (* gh-ocannl-1480: unconditional, not [logf]. The saved form of a candidate this
-                       very search timed must replay; when it does not, the search's work is
-                       discarded and the untuned default ships, which a caller otherwise learns only
-                       from [Train.shipped.ship_substituted] or an [autotune_log] trace. *)
-                    Stdio.eprintf
-                      "autotune: WARNING: routine %S: the searched winner %s did not replay (%s); \
-                       shipping the untuned default in its place\n\
-                       %!"
-                      (Lazy.force routine_name) label
+                    plain_default_or_raise ()
+                | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal)
+          in
+          let exception Abandon_now of abandonment in
+          let search () =
+            progress_stage "seed_enumeration";
+            (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream (the rest of
+               its state is defined with [progress_phase_begin] below), and passed to each
+               candidate's timing call for the trace's decisions (gh-ocannl-1199). *)
+            let progress_phase = ref "seeds" in
+            (* gh-ocannl-521: tensorized candidates are counted where they are TIMED, not where they
+         are enumerated — a family can be seeded in bulk and rejected in bulk at candidate
+         compile, and the enumerated count alone reads as coverage it does not have. Both
+         counters are taken HERE rather than off [seed_specs], so they cover the same population
+         by construction: the cross-segment recombination composite and the beam-expansion
+         candidates also reach [try_spec] without appearing in the seed list, and counting only
+         seeds in the denominator would let [mma_timed] exceed [mma_candidates] on a
+         multi-segment routine. *)
+            (* gh-ocannl-1138: how the last attempt that returned no timing ended, for the staffed
+         sweep: a refusal ([`Declined], a compile or run decline that wrote nothing) is retried
+         without its staff, and a dedup carries the time its code was already measured at, if
+         it was. *)
+            let last_attempt = ref `Other in
+            (* gh-ocannl-1409, gh-ocannl-1556, gh-ocannl-1604: the search's wall-clock budget,
+               measured from the start of the call ([budget_clock]), so the base compile and the
+               baseline's timing window are charged to it. Nothing in flight can be cancelled -- a
+               compile runs to its end -- so the budget is kept by three checks against that clock:
+               - as each attempt (and each beam round) starts, it is refused once the budget is
+               spent, or once the elapsed time plus two compiles of the projected cost
+               ([projected_compile_s]: the costliest this search has made, the cold ones that filled
+               the kernel cache aside once a compile reused a kernel, gh-ocannl-1667) would pass it:
+               one for the attempt's own compile, which nothing can stop, and one reserved for the
+               winner's recompile, which runs after every check (a replay of a candidate compiled
+               here, whose kernels the cache, when it is on, already holds); - as each batch of a
+               candidate's timing starts, and before its warmup, the timing is abandoned once the
+               elapsed time plus that reserve passes the budget ([budget_stop]): the candidate is
+               not ranked, its compile is spent, and the search ends as at a refused attempt. The
+               evidence starts at the base compile, so no candidate compile goes unprojected. Once
+               the budget is spent (or projected to be), nothing more is compiled -- the seeds left,
+               the composites, the playoff and the rounds are skipped where they would have been
+               attempted, which costs no compile -- and the search crowns its incumbent exactly as a
+               completed one does. The untuned floors are exempt from all three ([floor]): the
+               seeded untuned plan (gh-ocannl-1388) and the default-pipeline seed, so a cut search
+               has measured what the caller ships without tuning and crowns nothing slower. A
+               skipped spec leaves [last_attempt] at [`Other]: the staffed sweep must neither retry
+               it bare nor rank a stale dedup time for it. *)
+            let budget_spent = ref false in
+            let spend_budget ~b ~elapsed reason =
+              budget_spent := true;
+              logf "budget of %gs %s (%.1f s elapsed, %d timed): crowning the incumbent" b reason
+                elapsed !n_timed;
+              progress_line "budget_spent"
+                (Printf.sprintf "budget_s=%g timed=%d %s" b !n_timed (progress_costs ()))
+            in
+            let budget_allows ~what ~floor =
+              match budget with
+              | None -> true
+              | Some b ->
+                  (if not !budget_spent then
+                     let elapsed = budget_clock () in
+                     if Float.(elapsed >= b) then spend_budget ~b ~elapsed "spent"
+                     else
+                       let projected = projected_compile_s () in
+                       if Float.(elapsed + (2. * projected) > b) then
+                         spend_budget ~b ~elapsed
+                           (Printf.sprintf
+                              "would be overrun by a compile of the projected cost (%.1f s) and \
+                               the winner's recompile reserved at the same cost"
+                              projected));
+                  if (not !budget_spent) || floor then true
+                  else (
+                    if not !budget_cut then
+                      logf "budget spent: skipping %s and every later non-floor candidate" what;
+                    budget_cut := true;
+                    false)
+            in
+            let budget_floor spec =
+              match spec with
+              | Fiss (F_seeded _) -> true
+              | _ -> Option.exists default_candidate_label ~f:(String.equal (spec_label spec))
+            in
+            (* Every candidate compile is the projection's evidence ([budget_compile]). Floors' compiles
+             count -- they are compiles of the same computation. *)
+            (* The timing check, for a non-floor candidate: [time_routine] raises [Timing_stopped]
+             before the first batch it starts past the budget less the winner's reserve. *)
+            let budget_stop spec =
+              match budget with
+              | Some b when not (budget_floor spec) ->
+                  fun () ->
+                    let elapsed = budget_clock () in
+                    Float.(elapsed + projected_compile_s () > b)
+                    &&
+                    (if not !budget_spent then
+                       spend_budget ~b ~elapsed
+                         "passed, less the winner's reserve, during a candidate's timing";
+                     budget_cut := true;
+                     true)
+              | Some _ | None -> fun () -> false
+            in
+            (* [hopeless_against] (gh-ocannl-1527) is what the caller ranks this candidate's reading
+             against, asked as its timing starts: [Some ms] lets the window end as soon as it is
+             hopeless against [ms] ({!hopeless_window}); [None], the default, times it in full. *)
+            (* One timing window of the compiled candidate [c], timed under [label] -- a candidate's
+             in [try_spec], a contender's re-timing in the beam finals (gh-ocannl-1635).
+
+             The backend's own classifier decides whether a launch or sync failure is this
+             candidate's fault: the driver error is all the evidence there is, and only the backend
+             can read it. With the always-[None] classifier this used to pass, no backend could ever
+             declare one, so every launch failure was fatal by phase default and there was nowhere
+             for a backend to plug one in (gh-ocannl-536; the HIP scratch-overflow arm of
+             gh-ocannl-533 is what fills this seam). The phase reaching the report is the tagged one
+             inside [time_routine], so a report distinguishes a launch refusal from an asynchronous
+             failure at sync.
+
+             And from the third case, which is not the backend's to judge: [time_routine]'s
+             pre-dispatch validation carries [Preflight] and is contained without asking the
+             classifier (gh-ocannl-564). Tagged [Launch] it was fatal on every C backend, so a
+             scratch context missing one of the caller's initializations condemned the search
+             instead of declining a candidate. *)
+            let timing_window ~label ~stop ?hopeless_against ?hopeless_ratio c =
+              (* The lineage-wide validation is OUTSIDE the boundary (gh-ocannl-569): a poisoned
+                 lineage, an uninitialized input and an unexecuted dependency are properties of the
+                 context and the computation, so a genuine one fails every candidate of every arm at
+                 once. Contained as a decline it is silent — on a backend whose serial baseline is
+                 not dispatched (every GPU backend) every candidate declines for the one reason,
+                 nothing is timed, and the search ships the untuned default out of an unusable
+                 lineage under a report that says it completed. It reaches the caller instead, which
+                 is the only party that can fix it.
+
+                 Tagged, though not contained: the tag carries no boundary here, it only labels the
+                 phase so the fallback handler at the end of [search] reports a pre-dispatch
+                 validation failure as [Preflight] rather than as its [Transform] default. *)
+              Outcome.tag Outcome.Preflight (fun () -> D.check_lineage_runnable c.cctx c.routine);
+              (* gh-ocannl-1621: the state every window starts from, restored outside the boundary
+                 for the same reason -- it is the lineage's, not this candidate's. *)
+              Outcome.tag Outcome.Preflight before_timing_window;
+              Outcome.protect ~classify_backend:(D.failure_classifier c.cctx)
+                ~provenance:Outcome.Candidate ~phase:Outcome.Launch ~candidate:label (fun () ->
+                  timed_into progress_timing_s (fun () ->
+                      (* gh-ocannl-1556: [`Stopped] is a timing the budget stopped, and
+                         gh-ocannl-1527: [`Hopeless] a window cut as out of the running -- neither a
+                         failure of the candidate, so caught inside the boundary. *)
+                      match
+                        time_routine ~on_retry ~on_call ~tag_failures:true ~phase:!progress_phase
+                          ~stop ?hopeless_against ?hopeless_ratio ~timing ~repeats c.cctx c.routine
+                      with
+                      | timing_result -> `Timed timing_result
+                      | exception Timing_stopped -> `Stopped
+                      | exception Timing_hopeless h -> `Hopeless h))
+              (* Outside the boundary: the seam is not a candidate failure to classify. *)
+              |> Result.map ~f:(function
+                | `Timed timing_result ->
+                    `Timed (apply_measurement_seam ~label ~digest:c.digest_after timing_result)
+                | (`Stopped | `Hopeless _) as other -> other)
+            in
+            let try_spec ?(hopeless_against = fun () -> None) ?hopeless_ratio:ratio spec =
+              last_attempt := `Other;
+              Seam.get on_candidate_attempt (spec_label spec);
+              let pruned_by_bound =
+                bound_prunable spec
+                && Option.value_map (Lazy.force floor_bound_ms) ~default:false ~f:(fun fb ->
+                    (* Equality prunes: displacing the incumbent needs strict improvement. *)
+                    Float.(fb >= snd !best_so_far))
+              in
+              if pruned_by_bound then (
+                Int.incr n_bound_pruned;
+                logf "%s: BOUND-PRUNED (floor %.4f ms >= best %.4f ms)" (spec_label spec)
+                  (Option.value_exn (Lazy.force floor_bound_ms))
+                  (snd !best_so_far);
+                None)
+              else (
+                (* Counted only past the pruning gate: [mma_candidates]' contract is candidates put
+                   through candidate compilation, and a bound-pruned sketch never was. *)
+                if spec_expects_mma spec then begin
+                  Int.incr n_mma_proposed;
+                  match spec with
+                  | Fiss (F_sketch _ | F_swap _) -> Int.incr n_fiss_mma_proposed
+                  | Whole _
+                  | Fiss
+                      ( F_preset _ | F_saved _ | F_split _ | F_split_saved _ | F_seeded _
+                      | F_resplit _ ) ->
+                      ()
+                end;
+                (* Recorded whether or not this compile goes on to be timed: on dedup the code was
+                   (or will not be) timed under the same digest, and the [default_ms] lookup follows
+                   the digest, not the seed (gh-ocannl-552). Which seed, if any, is
+                   [default_seed_label]'s to say. *)
+                let attribute digest_after =
+                  if Option.exists default_candidate_label ~f:(String.equal (spec_label spec)) then
+                    default_seed_digest := Some digest_after;
+                  match spec with
+                  | Fiss (F_seeded _) -> seeded_seed_digest := Some digest_after
+                  | _ -> ()
+                in
+                match
+                  timed_into progress_compile_s (fun () ->
+                      budget_compile @@ fun () ->
+                      costed ~stage:"candidate" ~attempt:(spec_label spec)
+                        ~verdict_of:(function
+                          | Compiled _ -> "compiled"
+                          | Duplicate _ -> "dedup"
+                          | Failed failure when is_not_dispatched failure -> "refused"
+                          | Failed _ -> "failed")
+                        (fun () -> compile_spec_deduped ~seen spec))
+                with
+                | Duplicate digest_after ->
+                    (* Decided before codegen (gh-ocannl-1340): a duplicate pays for the transform
+                       only, and its identical twin, timed or refused, is the one the search reasons
+                       about. *)
+                    attribute digest_after;
+                    last_attempt := `Dedup (Hashtbl.find timed_ms_by_digest digest_after);
+                    logf "%s: dedup before codegen (digest %s)" (spec_label spec)
+                      (dshort digest_after);
+                    None
+                | Failed (Outcome.Classified classified as failure) when is_not_dispatched failure
+                  ->
+                    (* Degenerated to the serial form (gh-ocannl-532), refused before codegen; the
+                       gate recorded the digest as seen, so an equivalent later candidate dedups
+                       rather than re-deriving the same refusal. Never timed, so its seed
+                       attribution ([attribute]) would look up nothing. *)
+                    logf "%s: NOT DISPATCHED, binds no hardware dimension, refused before codegen"
+                      (spec_label spec);
+                    record_decline declines classified;
+                    None
+                | Failed (Outcome.Classified classified) ->
+                    (* A candidate refused for device memory is that candidate's decline: the
+                       footprint question was the baseline's to answer (gh-ocannl-1493). *)
+                    record_decline declines classified;
+                    last_attempt := `Declined;
+                    logf "%s: FAILED at %s %s" (spec_label spec) (phase_label classified.phase)
                       (Outcome.detail_of_cause classified.cause);
-                    substituted := true;
-                    untuned_default_or_raise ()
-                | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
-          in
-          let result = if defer then ship else Fn.const (ship ()) in
-          (* The report describes the routine returned (Codex P1 on PR #1234): a caller ranking arms
-             by [best_ms] must not credit this one with a candidate it discarded, and the untuned
-             default it ships was never timed -- the nothing-timed report's shape. *)
-          let completed_report =
-            if floor_unmeasured && not nothing_timed then
-              {
-                completed_report with
-                best_ms = Float.infinity;
-                best_label = "";
-                best_tensorized = false;
-                best_tensorization = None;
-                best_mma_statements = 0;
-                best_mma_scalar_fallbacks = 0;
-                best_grid = None;
-                best_schedule = [];
-                fissioned = false;
-                best_steps = [];
-              }
-            else completed_report
-          in
-          (result, completed_report)
-        in
-        let result, completed_report =
-          let escaped ~phase exn backtrace =
-            if !partial_emitted then Stdlib.Printexc.raise_with_backtrace exn backtrace
-            else emit_partial_and_raise { exn; backtrace; phase; candidate = None; cause = None }
-          in
-          try search () with
-          | Abandon_now ab ->
-              logf
-                "abandoned after %d timed candidates: best %.4f ms trails the incumbent's %.4f ms \
-                 at the same depth by more than %.4gx"
-                ab.ab_timed ab.ab_best_ms ab.ab_incumbent_ms ab.ab_ratio;
-              (* Built before the sweep, which the report's winner label outlives (see
-                 [release_all_candidates]). No winner is crowned, but the clean measured prefix can
-                 spare a replay this same search (gh-ocannl-1136). *)
-              let r = partial_report (Abandoned ab) in
-              release_all_candidates ();
-              if
-                use_cache
-                && search_measurements_cacheable ~nothing_timed:false
-                     ~timings_contended:r.timings_contended
-              then
-                SC.store_abandonment ~dir:cache_dir ~key
+                    None
+                | Failed (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+                | Compiled c ->
+                    pending := Some c;
+                    attribute c.digest_after;
+                    if not (shipped_dispatchable ~is_gpu c) then (
+                      (* The post-codegen check: the gate admitted the transform's forms, but the
+                         kernels codegen shipped bind no hardware dimension (zero-only segments are
+                         elided after the transform). *)
+                      Hash_set.add seen c.digest_after;
+                      logf
+                        "%s: NOT DISPATCHED, its shipped kernels bind no hardware dimension \
+                         (digest %s)"
+                        (spec_label spec) (dshort c.digest_after);
+                      record_not_dispatched ~origin:"candidate"
+                        ~detail:
+                          (Printf.sprintf
+                             "%s shipped kernels binding no hardware dimension (gh-ocannl-532)"
+                             (spec_label spec));
+                      release_candidate c;
+                      None)
+                    else (
+                      Hash_set.add seen c.digest_after;
+                      if Hash_set.mem departed_digests c.digest_after then
+                        Int.incr n_timings_retimed;
+                      match
+                        timing_window ~label:(spec_label spec) ~stop:(budget_stop spec)
+                          ?hopeless_against:
+                            (if measurement_is_physical () then hopeless_against () else None)
+                          ?hopeless_ratio:ratio c
+                      with
+                      | Ok (`Hopeless h) ->
+                          (* gh-ocannl-1527: not ranked, and not a refusal -- the window proved the
+                             candidate out of the running against what its caller ranks it by, so
+                             the search stays cacheable. Its digest leaves [seen] as a refused one's
+                             does: the reference can move, so an equivalent later proposal is timed
+                             against its own. *)
+                          Int.incr n_timings_hopeless;
+                          (* gh-ocannl-1697: a seeded single reached its window, as a refused one
+                             does. *)
+                          (match spec with
+                          | Fiss (F_swap _) ->
+                              Int.incr n_seeded_single_timed;
+                              Int.incr n_seeded_hopeless
+                          | Fiss (F_resplit _) ->
+                              Int.incr n_seeded_split_timed;
+                              Int.incr n_seeded_hopeless
+                          | _ -> ());
+                          if spec_expects_mma spec then Int.incr n_mma_timed;
+                          depart c.digest_after;
+                          logf
+                            "%s: NOT RANKED, hopeless: its first %d samples read %.4f ms, over \
+                             the                            %.4f ms (%gx what it would have to \
+                             beat) that ends the window (digest                            %s)"
+                            (spec_label spec) h.hopeless_samples h.hopeless_ms
+                            h.hopeless_threshold_ms
+                            (Option.value ratio ~default:hopeless_ratio)
+                            (dshort c.digest_after);
+                          release_candidate c;
+                          None
+                      | Ok `Stopped ->
+                          (* The budget passed during this candidate's timing: it is not ranked, and
+                             a later floor of the same digest must compile and time afresh rather
+                             than dedup against a timing that never finished. *)
+                          depart c.digest_after;
+                          logf "%s: NOT TIMED, the budget passed during its timing (digest %s)"
+                            (spec_label spec) (dshort c.digest_after);
+                          release_candidate c;
+                          None
+                      | Ok (`Timed timing_result)
+                        when Option.is_none (admitted_timing_ms timing_result) ->
+                          (* The family counters answer whether a candidate compiled and reached a
+                             timing window, independently of whether that window yielded a usable
+                             verdict. Keep that accounting stable under refusal; the historical
+                             [timings_contended] counter covers every unusable timing result. *)
+                          (match spec with
+                          | Fiss (F_swap _) -> Int.incr n_seeded_single_timed
+                          | Fiss (F_resplit _) -> Int.incr n_seeded_split_timed
+                          | Fiss (F_sketch _) when !in_playoff -> Int.incr n_playoff_timed
+                          | Fiss (F_sketch { entries; staff; fine; _ }) -> (
+                              Int.incr n_fiss_sketch_timed;
+                              if not (List.is_empty staff) then Int.incr n_staffed_timed;
+                              if not fine then
+                                match entries with
+                                | [ (key, _) ] -> Hash_set.add coarse_single_refused key
+                                | _ :: _ :: _ -> fs_composite := `Refused
+                                | [] -> ())
+                          | Fiss (F_split { sites; staff }) ->
+                              Int.incr n_sr_timed;
+                              if List.length sites >= 2 && List.is_empty staff then
+                                sr_composite_timed := true
+                          | _ -> ());
+                          if spec_expects_mma spec then Int.incr n_mma_timed;
+                          let refusal = timing_admission timing_result in
+                          count_refusal refusal;
+                          Hash_set.add contended_digests c.digest_after;
+                          (* Unlike a launch/compile decline, a refused window (contention, a
+                             degenerate reading) is not a property of this schedule. An equivalent
+                             later seed is a useful retry, not a dedup. *)
+                          depart c.digest_after;
+                          logf "%s: NOT TIMED, %s (digest %s)" (spec_label spec)
+                            (refusal_reason refusal) (dshort c.digest_after);
+                          release_candidate c;
+                          None
+                      | Ok (`Timed timing_result) ->
+                          (* gh-ocannl-1326: the timing is all a candidate is for, the
+                             incumbent-to-be included, so its buffers go before anything else
+                             happens: the next compile must not find this one's working set still
+                             resident. A winner is recompiled from its saved form when the search
+                             ends. *)
+                          release_candidate c;
+                          let ms = Option.value_exn (admitted_timing_ms timing_result) in
+                          Int.incr n_timed;
+                          note_admitted_window ~digest:c.digest_after timing_result;
+                          (* Publish window accounting before the post-admission injection seam: it
+                             can raise, and the partial report still owns this completed window. *)
+                          (match spec with
+                          | Fiss (F_swap _) -> Int.incr n_seeded_single_timed
+                          | Fiss (F_resplit _) -> Int.incr n_seeded_split_timed
+                          | Fiss (F_sketch _) when !in_playoff -> Int.incr n_playoff_timed
+                          | Fiss (F_sketch { entries; staff; fine; _ }) -> (
+                              Int.incr n_fiss_sketch_timed;
+                              if not (List.is_empty staff) then Int.incr n_staffed_timed;
+                              if not fine then
+                                match (entries, staff) with
+                                | [ (key, _) ], [] -> Hash_set.add coarse_single_measured key
+                                | [ (key, _) ], _ :: _ ->
+                                    (* A staffed single schedules a composite of the coarse keys
+                                       (gh-ocannl-1138): published here, before the callbacks that
+                                       can cut the search, as an explicit composite's window is. *)
+                                    Hash_set.add coarse_single_measured key;
+                                    fs_composite := `Timed
+                                | _ :: _ :: _, _ -> fs_composite := `Timed
+                                | [], _ -> ())
+                          | Fiss (F_split { sites; staff }) -> (
+                              Int.incr n_sr_timed;
+                              match sites with
+                              | _ when not (List.is_empty staff) ->
+                                  (* A staffed single, ranked by its sweep in its own backdrop,
+                                     splits several sites: a multi-site composite's window,
+                                     published before the callbacks as an explicit composite's
+                                     is. *)
+                                  sr_composite_eligible := true;
+                                  sr_composite_timed := true
+                              | [ (s, b) ] ->
+                                  sr_single_results := (s, b, ms) :: !sr_single_results;
+                                  sr_composite_eligible :=
+                                    List.exists !sr_single_results ~f:(fun (s2, _, _) ->
+                                        not (Idx.equal_symbol s2.sr_axis s.sr_axis))
+                              | _ :: _ :: _ -> sr_composite_timed := true
+                              | [] -> ())
+                          | _ -> ());
+                          if spec_expects_mma spec then Int.incr n_mma_timed;
+                          Hashtbl.set timed_ms_by_digest ~key:c.digest_after ~data:ms;
+                          Hashtbl.set label_by_digest ~key:c.digest_after ~data:(spec_label spec);
+                          (* Structural, not label-promised, and deliberately a different population
+                             from [n_mma_timed]: with [rounds > 0] the beam menu appends a
+                             [Tensorize] to a saved or preset incumbent, and the resulting
+                             [W_saved]/[F_saved] spec promises nothing in its label — yet it is
+                             exactly as tensorized as a sketch seed, and it can win. Keying this on
+                             the label would let the placement A/B report "no tensorized candidate
+                             was timed" about a search whose winner tensorizes. *)
+                          if saved_is_tensorized (flat_schedule c.form) && Float.(ms < !mma_best_ms)
+                          then mma_best_ms := ms;
+                          if Float.(ms < snd !best_so_far) then (
+                            best_so_far := (Some c, ms);
+                            best_steps := (!n_timed, ms) :: !best_steps);
+                          Seam.get on_candidate_callback `Timed ~candidate_ms:ms
+                            ~incumbent_ms:(snd !best_so_far);
+                          Seam.get on_candidate_timed (D.routine_name c.routine)
+                            ~timed_so_far:!n_timed;
+                          logf "%s: %.4f ms (digest %s)" (spec_label spec) ms
+                            (dshort c.digest_after);
+                          Seam.get on_candidate_callback `Calibration ~candidate_ms:ms
+                            ~incumbent_ms:(snd !best_so_far);
+                          emit_calibration ~backend ~device ~limits
+                            ~routine:(Lazy.force routine_name) ~label:(spec_label spec)
+                            ~digest:c.digest_after ~timing_result c.all_opts;
+                          (* The rendering census next to the timing (gh-ocannl-479): a candidate
+                             labeled tensorized whose [Tile_mma] statements all declined at emission
+                             timed the scalar fallback — report it, or every number off this tuning
+                             run inherits the ambiguity. *)
+                          let summary = mma_summary c in
+                          let scalar = summary.Ir.C_syntax.scalar_fallbacks in
+                          let total = summary.Ir.C_syntax.statements in
+                          if scalar > 0 then
+                            logf
+                              "%s: NOTE %s, %d/%d Tile_mma statement(s) rendered as the lane-0 \
+                               scalar fallback (config schedule_log_declines=true names the failed \
+                               rule)"
+                              (spec_label spec)
+                              (Ir.C_syntax.tensorization_name summary.Ir.C_syntax.tensorization)
+                              scalar total
+                          else if total = 0 && spec_expects_mma spec then
+                            logf
+                              "%s: NOTE not-requested, tensorized candidate emitted no Tile_mma \
+                               statement"
+                              (spec_label spec);
+                          (* The Grid census next to the timing (gh-ocannl-1702), for the reason the
+                             mma census is: a schedule that asks for a Grid loop the renderer kept
+                             serial timed a serial loop under a parallel label. Logged for every
+                             candidate that has a pool-backed Grid loop at all, flagged when the
+                             schedule asked and the renderer declined, and recorded in the
+                             report. *)
+                          let grid = D.routine_grid c.routine in
+                          if
+                            grid_rendered_serially grid && schedule_asks_grid (flat_schedule c.form)
+                          then (
+                            grid_serial_timed :=
+                              { grid_label = spec_label spec; grid_ms = ms; grid_record = grid }
+                              :: !grid_serial_timed;
+                            logf "%s: NOTE grid-serial, the schedule asks for a Grid loop; %s"
+                              (spec_label spec)
+                              (Ir.C_syntax.grid_summary_string grid))
+                          else if
+                            grid.Ir.C_syntax.pool && not (List.is_empty grid.Ir.C_syntax.loops)
+                          then
+                            logf "%s: %s" (spec_label spec) (Ir.C_syntax.grid_summary_string grid);
+                          Some (c, ms)
+                      | Error (Outcome.Classified classified) -> (
+                          record_decline declines classified;
+                          logf "%s: RUN FAILED at %s %s" (spec_label spec)
+                            (phase_label classified.phase)
+                            (Outcome.detail_of_cause classified.cause);
+                          match classified.execution_effect with
+                          | Outcome.No_device_writes ->
+                              last_attempt := `Declined;
+                              (* [Context.run] marks a routine executed before the later [sync] can
+                                 report an asynchronous failure. A rejection the backend proved
+                                 wrote nothing withdraws that claim, so the next candidate compiled
+                                 in this lineage does not wait on a routine that never completed. A
+                                 no-op for a [Preflight] decline, which precedes the dispatch that
+                                 makes the claim. *)
+                              D.rollback_execution c.cctx (D.routine_id c.routine);
+                              (* gh-ocannl-550: a candidate that failed to run is as dead as one
+                                 that lost, and on the failure that motivated all of this it is
+                                 deader — an out-of-memory decline is exactly when the freed buffers
+                                 are worth most. *)
+                              release_candidate c;
+                              None
+                          | Outcome.Writes_may_have_occurred ->
+                              (* Counted once as a decline (its cause is real evidence about the
+                                 candidate) and then escalated: the timing lineage may hold
+                                 partially written buffers, and there is no restore API to rebuild
+                                 its inputs and parameters, so timing the next candidate on it would
+                                 score suspect data. *)
+                              D.poison_lineage c.cctx ~routine_name:(D.routine_name c.routine)
+                                (Outcome.exception_of_cause classified.cause);
+                              (* gh-ocannl-550: the exit sweep in [emit_partial_and_raise] can only
+                                 reach what the beam or [best_so_far] holds, and this candidate is
+                                 in neither — it failed before being admitted. Releasing it here is
+                                 what keeps the in-flight one from outliving the arm, which matters
+                                 precisely because [Train.tune_placements] CONTAINS this failure and
+                                 goes on to search its sibling arm on the same device. *)
+                              release_candidate c;
+                              emit_partial_and_raise
+                                (Outcome.fatal_of_classified ~candidate:(spec_label spec) classified)
+                          )
+                      | Error (Outcome.Fatal fatal) ->
+                          (* An unattributed launch/sync failure says nothing about what the device
+                             did, so the lineage is condemned before the exception unwinds — a
+                             caller that catches it cannot reuse a ledger claiming the failed
+                             routine completed. *)
+                          D.poison_lineage c.cctx ~routine_name:(D.routine_name c.routine)
+                            fatal.Outcome.exn;
+                          (* Not in the beam either (see above). *)
+                          release_candidate c;
+                          emit_partial_and_raise fatal))
+            in
+            (* gh-ocannl-550: the per-candidate allocation census, on the same [autotune_log] stream
+               as the candidate lines it follows, so a growth curve can be read against the classes
+               that produce it instead of against wall-clock samples from outside the process. One
+               line per attempt, whether the candidate was timed, declined or deduped — a class that
+               grows on the DECLINE path is a different bug from one that grows on the timed path,
+               and only per-attempt lines distinguish them. The device figure is the backend's own
+               accounting, which the census does not replace: it covers pools the shared seam does
+               not allocate (the merge buffer) and, on [cc], counts host allocations whose GC
+               finalizer has not yet run. *)
+            let try_spec ?hopeless_against ?hopeless_ratio spec =
+              let result = try_spec ?hopeless_against ?hopeless_ratio spec in
+              (* Gated explicitly, not just by [logf]: [logf]'s arguments are evaluated whether or
+                 not the flag is on, and both readings here fold a hashtable. *)
+              if log_enabled () then
+                logf "census after %s: %s | device %.1f MiB" (spec_label spec)
+                  (Ir.Alloc_census.to_string (Ir.Alloc_census.snapshot ()))
+                  (Float.of_int (D.get_used_memory search_ctx) /. 1048576.);
+              result
+            in
+            (* gh-ocannl-1061: where the search is, on the [autotune_progress] stream. A phase is
+               the seed pass, the recombination composites that follow it, the composite playoff
+               (gh-ocannl-1166), or one beam round; its candidate total is known up front except for
+               the composites' and the playoff's. *)
+            let progress_total = ref None in
+            let progress_tried = ref 0 in
+            let progress_best () =
+              let best_c, best_ms = !best_so_far in
+              let label =
+                match best_c with
+                | None -> if Float.is_finite best_ms then "baseline" else ""
+                | Some c ->
+                    Option.value (Hashtbl.find label_by_digest c.digest_after) ~default:"baseline"
+              in
+              Printf.sprintf "best_ms=%s best=%S" (progress_ms best_ms) label
+            in
+            let progress_where () =
+              Printf.sprintf "phase=%s tried=%d/%s timed=%d %s %s" !progress_phase !progress_tried
+                (Option.value_map !progress_total ~default:"?" ~f:Int.to_string)
+                !n_timed (progress_costs ()) (progress_best ())
+            in
+            let progress_phase_begin phase total =
+              progress_phase := phase;
+              progress_total := total;
+              progress_tried := 0;
+              Option.iter total ~f:(fun n ->
+                  progress_line "phase"
+                    (Printf.sprintf "phase=%s candidates=%d timed=%d %s %s" phase n !n_timed
+                       (progress_costs ()) (progress_best ())))
+            in
+            (* gh-ocannl-1110: the caller's abandonment rule, decided once, as soon as the search
+               has [beam_width] admitted timings. Checked as the NEXT attempt starts, so every
+               candidate already timed has been admitted (the exit sweep owns it) and none is cut
+               short. *)
+            let abandon_decided = ref false in
+            let check_abandon () =
+              match abandon with
+              | Some rule when (not !abandon_decided) && !n_timed >= beam_width -> (
+                  abandon_decided := true;
+                  match abandon_verdict rule ~k:beam_width ~steps:!best_steps with
+                  | Some ab -> raise (Abandon_now ab)
+                  | None -> ())
+              | Some _ | None -> ()
+            in
+            (* Written as an attempt STARTS, naming it: a search killed inside a long candidate then
+               leaves the candidate it was in, and the costs of everything before it. Counted before
+               the attempt too, so a fatal candidate -- which writes [search_done] from inside
+               itself and raises -- is in the closing record's [attempts]. *)
+            let try_spec ?hopeless_against ?hopeless_ratio spec =
+              check_abandon ();
+              if not (budget_allows ~what:(spec_label spec) ~floor:(budget_floor spec)) then (
+                last_attempt := `Other;
+                None)
+              else (
+                Int.incr progress_attempts;
+                Int.incr progress_tried;
+                (* Guarded here, not only inside [progress_line]: its arguments render a label and
+                   read the best-so-far table on every attempt of a search that prints nothing. *)
+                if progress_enabled () then
+                  progress_line "candidate"
+                    (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
+                try_spec ?hopeless_against ?hopeless_ratio spec)
+            in
+            (* The search's seeds for each lowering it seeds ({!search_seeding}, gh-ocannl-1490):
+               the family seeds, then the coalesced layout's branch beside them (gh-ocannl-1165) —
+               prepared hermetically from the same lowering, its candidates' schedules carry their
+               structural [Coalesce] prefix. *)
+            let seeding =
+              search_seeding ~capabilities:(D.codegen_capabilities ctx) ~is_gpu ~is_cpu ~limits
+                ~static_indices base_opt
+            in
+            let block_size_presets mk =
+              mk None
+              :: (if is_gpu then List.map seed_block_sizes ~f:(fun bs -> mk (Some bs)) else [])
+            in
+            (* The model pre-filter of the sketch seeding (gh-ocannl-491 task 3): rank each
+               candidate family (the whole-routine sketches; each fission segment's sketches) with
+               the roofline model and keep the best [keep_fraction] of the scored candidates before
+               any compilation or timing. Only candidates the model fully covers are droppable — a
+               candidate without model coverage (opaque code, a schedule the model cannot apply,
+               missing envelope constants) is always kept, only measured — so the pre-filter never
+               precludes a measured result and its outcome is independent of enumeration order.
+               Presets, saved schedules and the baseline are never pruned. A candidate its builder
+               refuses typed ([Sketch_families.refuse], gh-ocannl-1390) is dropped here as the
+               decline its compile would have been, under the same cause in the census
+               (gh-ocannl-1437): the pre-filter builds outside the candidates' failure boundary,
+               where the refusal used to end the search. An untyped raise is a builder bug and still
+               propagates. *)
+            let model_prefilter_params ~seg_opt ~family params =
+              if Float.(keep_fraction >= 1.) || List.length params <= 1 then params
+              else
+                let scored =
+                  List.filter_map params ~f:(fun p ->
+                      match sketch_schedule ~accum_prec ~p seg_opt with
+                      | exception Outcome.Cause_at (phase, cause)
+                        when not (Outcome.uncontainable phase cause) ->
+                          logf "model pre-filter (%s): %s refused by its builder, declined: %s"
+                            family (spec_label (Whole (W_sketch p))) (Outcome.detail_of_cause cause);
+                          record_decline declines
+                            { Outcome.phase; cause; execution_effect = Outcome.No_device_writes };
+                          None
+                      | sched -> Some (p, model_score ~static_indices ~limits seg_opt sched))
+                in
+                n_model_scored :=
+                  !n_model_scored + List.count scored ~f:(fun (_, s) -> Option.is_some s);
+                let kept = model_prefilter ~keep_fraction scored in
+                List.iter scored ~f:(fun ((p, s) as entry) ->
+                    if not (List.mem kept entry ~equal:phys_equal) then (
+                      Int.incr n_model_pruned;
+                      logf "model prune (%s, keep %.2f): %s scored %.3e s" family keep_fraction
+                        (spec_label (Whole (W_sketch p))) (Option.value_exn s)));
+                List.map kept ~f:fst
+            in
+            let sketch_params =
+              model_prefilter_params ~seg_opt:base_opt ~family:"whole-routine" seeding.ss_whole
+            in
+            n_sketch_candidates := List.length sketch_params;
+            n_epilogue_sketch_candidates := List.count sketch_params ~f:(fun p -> p.sk_epilogue);
+            (* Per-fission-segment sketch seeds (the [F_sketch] flavor): heavily fissioned graphs
+               tune per segment, where the whole-routine sketches never apply. Enumerate the fission
+               segmentation once, on a hermetic copy of the base lowering with the same pipeline
+               settings the candidate transform uses ([preset_sched]'s defaults), and detect a
+               matmul site per keyed segment ({!keyed_segments}): the candidates replay this
+               segmentation and find their segments in it by position (gh-ocannl-1243). Enumerated
+               in [seeding] above. *)
+            let prefilter_entries ~tag entries =
+              (* Per-segment pre-filtering: each segment's sketches are their own family —
+                 cross-segment scores are incomparable (different code volumes), and the singles
+                 below are also ranked per segment by the recombination step. *)
+              List.map entries ~f:(fun (key, pre, ps) ->
+                  (key, model_prefilter_params ~seg_opt:pre ~family:(tag ^ seg_key_tag key) ps))
+            in
+            (* gh-ocannl-1664: where the seeded plan has a segmentation of its own, the per-segment
+               singles are timed inside it (config [autotune_seeded_singles]): each single is the
+               plan with one segment code's choice swapped for a sketch, over the plan's own
+               segments, whose seeds are enumerated there. Its time is then the plan's own basis,
+               about the incumbent's, where a single around presets reads several times the
+               composite it would join (131-144 ms around an 18 ms plan on gpt2_mini_train/HIP,
+               gh-ocannl-1528) and is comparable only with its key's other singles. Those singles --
+               coarse and fine, bare or staffed -- are not seeded then: the plan's segmentation
+               already took the finer pieces where more of them seed (gh-ocannl-1413). *)
+            let seeded_singles_plan =
+              if not seeded_singles then None
+              else
+                match Lazy.force seeded_plan_value with
+                | Some ({ sp_segments = Some _; _ } as plan) -> Some plan
+                | Some { sp_segments = None; _ } | None -> None
+            in
+            (* The seeded singles' menu on [plan] -- the running seeded plan once the split sweep
+               below has run (gh-ocannl-1697), whose segmentation a split it joined can have
+               changed. *)
+            let seeded_menu plan =
+              let seeds =
+                seeded_single_seeds ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices plan
+                  (Option.value !base_pristine ~default:base_opt)
+              in
+              ( prefilter_entries ~tag:"seeded segment " seeds,
+                List.map seeds ~f:(fun (key, pre, _) -> (key, pre)) )
+            in
+            let seeded_sweep = Option.is_some seeded_singles_plan in
+            let coarse_plan, coarse_entries =
+              if seeded_sweep then (seeding.ss_coarse_plan, [])
+              else (seeding.ss_coarse_plan, seeding.ss_coarse)
+            in
+            (* Each coarse key's pre-schedule segment, which the staffed sweep weighs its key by. *)
+            let coarse_pre = List.map coarse_entries ~f:(fun (key, pre, _) -> (key, pre)) in
+            let fiss_sketch_entries = prefilter_entries ~tag:"segment " coarse_entries in
+            (* The finer ([arity_cuts]) segmentation (gh-ocannl-574): cutting apart a companion that
+               cannot follow its site's full arity — the lm_head's max-logits reduction and that
+               reduction's initialization nest — frees the site's kernel to seed at full arity,
+               where the shared segment's every seed declines on companion coverage. GPU-only: the
+               constraint the cut relieves is the GPU sketches' kernel-global launch geometry. Only
+               segments whose digest is {e new} versus the coarse segmentation seed singles — an
+               unchanged segment's parameters are already timed by its coarse single, and the extra
+               cuts elsewhere in a fine twin could only add launches — but the full fine key list is
+               kept so the fine recombination below can staff unchanged segments from coarse-timed
+               bests. A segment the finer cuts leave unchanged keeps its first unit and its digest,
+               so its key is the coarse one. *)
+            let fine_plan, fine_all_entries, fine_pre =
+              (* Empty off GPU, and when the finer mode cut nothing new: the coarse seeds cover
+                 every segment. *)
+              ( seeding.ss_fine_plan,
+                (if seeded_sweep then [] else prefilter_entries ~tag:"fine segment " seeding.ss_fine),
+                List.map seeding.ss_fine ~f:(fun (key, pre, _) -> (key, pre)) )
+            in
+            let plan_of ~fine = if fine then fine_plan else coarse_plan in
+            let fine_new_entries =
+              List.filter fine_all_entries ~f:(fun (k, _) ->
+                  List.exists seeding.ss_fine_new ~f:(fun (k', _, _) -> equal_seg_key k k'))
+            in
+            let fiss_sketch_specs =
+              (* Single-segment specs: each parameter set of each keyed segment is proposed alone,
+                 every other segment falling back to its default preset (an absent key degrades to
+                 the preset in the transform closure). Any zipping of segments' seeds into shared
+                 combos — index pairing, or pinning the other segments to their first set — lets one
+                 segment's invalid seed mask another segment's seeds from ever being timed (observed
+                 on cifar_conv: the fc matmul's invalid packrest-grid seed masked the conv segments'
+                 row-block seed; and a segment's FIRST seed can itself be the invalid one, e.g. GPU
+                 conv seeds with a companion tail). Cross-segment combination is recovered below by
+                 recombining each segment's best-timed single into one composite candidate. *)
+              let singles ~plan ~fine entries =
+                List.concat_map entries ~f:(fun (key, ps) ->
+                    List.map ps ~f:(fun p ->
+                        Fiss (F_sketch { plan; entries = [ (key, p) ]; staff = []; fine })))
+              in
+              ( singles ~plan:coarse_plan ~fine:false fiss_sketch_entries,
+                singles ~plan:fine_plan ~fine:true fine_new_entries )
+            in
+            n_fiss_sketch_candidates :=
+              List.length (fst fiss_sketch_specs) + List.length (snd fiss_sketch_specs);
+            (* Split-reduce seeds (gh-ocannl-484 task 3), detected on the base lowering — the
+               prelude applies whole-routine, so no segment enumeration is needed first — and
+               proposed as single-site candidates over a few [num_blocks] values (the tunable of the
+               family; [2*b <= extent] keeps chunks at least two elements, below which the split is
+               all combine overhead). On GPU the block loop is the bulk of pass 1's launch
+               parallelism at these low-output sites, so the sweep leans larger; the CPU pool
+               saturates at core counts. Multi-site combination is recovered below by recombining
+               the best-timed singles. *)
+            let sr_ranked =
+              if is_gpu || is_cpu then split_reduce_sites ~static_indices base_opt else []
+            in
+            let sr_sites = List.take sr_ranked max_split_reduce_sites in
+            (* The candidate-volume cap binding is an eviction, not a judgement about the site: it
+               was reachable and ranked, and lost only to the cap. Record each evicted site in the
+               decline census — the gh-ocannl-541 blind spot was exactly a previously-seeded site
+               silently dropping out of the proposal set when newly-reachable sites filled the
+               cap. *)
+            List.iter (List.drop sr_ranked max_split_reduce_sites) ~f:(fun s ->
+                let detail =
+                  Printf.sprintf
+                    "site %s red%d out%d cost%d%s%s evicted by autotune_split_reduce_max_sites=%d"
+                    (Ir.Tnode.debug_name s.sr_target) s.sr_red s.sr_out s.sr_cost
+                    (match List.length s.sr_swaps with 0 -> "" | n -> Printf.sprintf " swap%d" n)
+                    (if Option.is_some s.sr_coalesce then " coalesced" else "")
+                    max_split_reduce_sites
+                in
+                logf "split_reduce: %s" detail;
+                record_decline declines
                   {
-                    SC.version = SC.entry_version;
-                    source_digest = base_digest;
-                    trajectory = { SC.search_shape = Lazy.force search_shape; steps = r.best_steps };
-                  };
-              (* The callback's own exception propagates, as on the completion path. *)
-              emit_report r;
-              raise (Search_abandoned ab)
-          (* A raise that carries its phase keeps it: the lineage-wide pre-dispatch validation is
-             deliberately raised outside the candidate loop's failure boundary (gh-ocannl-569), so
-             it arrives here rather than at a classifier, and reporting it under the [Transform]
-             default below would tell the caller a validation error was a transform failure. The
-             original exception is re-raised, not the wrapper, so the caller still sees its
-             message. *)
-          | Outcome.Raised_at (phase, exn, backtrace) -> escaped ~phase exn backtrace
-          | exn -> escaped ~phase:Outcome.Transform exn (Stdlib.Printexc.get_raw_backtrace ())
-        in
-        (* A callback failure on the ordinary completion path is the callback's own exception and
-           propagates normally; only fatal-path callbacks are best-effort. But propagating means the
-           caller never receives [result], so its buffers become unreachable while the pool table
-           keeps rooting them (gh-ocannl-550) — one full winner's footprint per aborted report,
-           which for a caller that retries would accumulate exactly like the candidates used to. The
-           exit sweep above deliberately kept this one; nothing is keeping it now. *)
-        if defer then (
-          emit_report completed_report;
-          deferred_compile result)
-        else (
-          report_or_release completed_report ~result:(result ());
-          result)
+                    Outcome.phase = Outcome.Transform;
+                    cause = Outcome.Seed_evicted { family = "split_reduce"; detail };
+                    execution_effect = Outcome.No_device_writes;
+                  });
+            let sr_num_blocks = if is_gpu then [ 32; 128; 512 ] else [ 8; 32; 128 ] in
+            (* gh-ocannl-1697: with the seeded sweep, the split singles are the seeded plan's own
+               ([F_resplit], the seeded split sweep below), so none is timed around presets. *)
+            let sr_specs =
+              if seeded_sweep then []
+              else
+                List.concat_map sr_sites ~f:(fun s ->
+                    List.filter_map sr_num_blocks ~f:(fun b ->
+                        if 2 * b <= s.sr_red then
+                          Some (Fiss (F_split { sites = [ (s, b) ]; staff = [] }))
+                        else None))
+            in
+            n_split_reduce_candidates := List.length sr_specs;
+            (* gh-ocannl-1388: the seeded untuned plan, the step the recipes' untuned compile ships
+               on CUDA and HIP ({!seeded_default}), seeded FIRST: wherever the search stops after
+               its first timing, or refuses every later window, it crowns that step, so tuned is
+               never worse than untuned by construction. Absent where the plan is the default
+               pipeline (no seed, split or sink; another backend), which the [config_thresholds]
+               preset seed reproduces, so those searches keep their candidate order. *)
+            let seeded_specs =
+              match Lazy.force seeded_plan_value with
+              | None -> []
+              | Some plan -> [ Fiss (F_seeded plan) ]
+            in
+            let coarse_single_specs, fine_single_specs = fiss_sketch_specs in
+            (* gh-ocannl-1138: with staffed singles the coarse singles are not seeded as a list but
+               swept key by key against the running composite (below), where the list would time
+               them: after the whole-routine sketches, before the fine singles. The seeded sweep
+               replaces that sweep with the seeded plan's. *)
+            let staffed = staffed_singles in
+            let pre_sweep_specs =
+              seeded_specs
+              @ block_size_presets (fun block_size -> Whole (W_preset { block_size }))
+              @ (if is_gpu || is_cpu then
+                   (* Each fissioned preset is seeded plain and privatized (the latter dedups away
+                      by digest when no accumulator is eligible). The [config_thresholds] seeds
+                      reproduce the untuned default pipeline exactly (plus its privatized variant),
+                      so the winner is never worse than not tuning — the aggressive ungated presets
+                      can all lose to it on launch-overhead-bound workloads. *)
+                   List.concat_map [ false; true ] ~f:(fun privatize ->
+                       Fiss (F_preset { block_size = None; privatize; config_thresholds = true })
+                       :: block_size_presets (fun block_size ->
+                           Fiss (F_preset { block_size; privatize; config_thresholds = false })))
+                 else [])
+              @ List.map sketch_params ~f:(fun p -> Whole (W_sketch p))
+            in
+            let post_sweep_specs = if staffed then [] else fine_single_specs @ sr_specs in
+            let fiss_single_results = ref [] in
+            progress_phase_begin "seeds"
+              (Some
+                 (List.length pre_sweep_specs
+                 + (if staffed then 0 else List.length coarse_single_specs)
+                 + List.length post_sweep_specs));
+            (* gh-ocannl-1527: what a seed's reading is ranked against, for its window's hopeless
+               cut. A whole-routine seed -- a preset, or a sketch applied to the whole routine --
+               feeds only the beam: with rounds to run every one of its [beam_width] entries is
+               expanded, so once it is full its slowest entry is the reference (a reading over it
+               enters nothing); with none to run, only its head is ever read. A per-segment single
+               feeds its key's ranking instead -- the recombination's per-key minimum and the
+               playoff's near-ties, at the playoff margin -- timed around a backdrop that can be ten
+               times the composite it joins (gh-ocannl-1166), so against the search's best every
+               single would look hopeless while its rank among its key's singles is the very thing
+               it measures: singles, composites and the floors are timed in full. *)
+            let seed_hopeless_against spec () =
+              match spec with
+              | (Whole (W_preset _ | W_sketch _) | Fiss (F_preset _)) when not (budget_floor spec)
+                ->
+                  if rounds = 0 then Option.map (List.hd !beam) ~f:snd
+                  else if List.length !beam >= beam_width then Option.map (List.last !beam) ~f:snd
+                  else None
+              | Whole (W_preset _ | W_sketch _ | W_saved _)
+              | Fiss
+                  ( F_preset _ | F_saved _ | F_sketch _ | F_split _ | F_split_saved _ | F_seeded _
+                  | F_swap _ | F_resplit _ ) ->
+                  None
+            in
+            let run_seed spec =
+              let result = try_spec ~hopeless_against:(seed_hopeless_against spec) spec in
+              (match (spec, result) with
+              | Fiss (F_sketch { entries = [ (key, p) ]; fine; _ }), Some (_, ms) ->
+                  fiss_single_results := (key, fine, (p, ms)) :: !fiss_single_results
+              | _ -> ());
+              Option.iter result ~f:admit
+            in
+            List.iter pre_sweep_specs ~f:run_seed;
+            (* gh-ocannl-1635/1665: the finals' windows, the one mechanism behind every near-tie
+               crown -- the beam finals' (after the rounds), the composite playoff's and the staffed
+               sweeps' joins (below). [contenders], in contender order, each with the label its
+               windows are timed under, the spec it is recompiled from and the digest that recompile
+               must reproduce ([None]: the first finals recompile's, for a contender whose window
+               timed it under another spec -- a staffed single's running composite). The windows
+               follow [finals_order], one compile PER WINDOW and one resident at a time, each under
+               the contender's label and digest and after the timing-state restore every window
+               starts from (gh-ocannl-1621). A compile per window, even for the adjacent pair in the
+               middle of the order, because that restore covers only the nodes [search_ctx] holds:
+               the buffers a compile allocates afresh (an optimizer's state before its first step,
+               say) are reset only by the next compile, so a reused compile's second window would
+               start from state the first one trained -- every window starts as a search candidate's
+               single window does. A refused or failed finals window is the finals' own: it is not a
+               candidate refusal or decline, so it neither enters [timings_contended] nor makes the
+               search uncacheable; the contender is left with fewer readings, none making the finals
+               inconclusive ([finals_crown]). Under a budget, each recompile starts only while the
+               elapsed time plus the projected compile cost ([projected_compile_s]) stays within it
+               -- the projection a candidate attempt is held to -- and once one may not start, no
+               later one of this finals does; a window stops once the budget passes. Neither marks
+               the search as cut. Returns each contender's admitted readings, in contender order;
+               [timed] and [admitted] count the windows. *)
+            let finals_stop () =
+              match budget with Some b -> Float.(budget_clock () > b) | None -> false
+            in
+            let budget_allows_finals () =
+              match budget with
+              | None -> true
+              | Some b ->
+                  (not !budget_spent) && Float.(budget_clock () +. projected_compile_s () <= b)
+            in
+            let finals_readings ~what ~timed ~admitted contenders =
+              let readings = Array.create ~len:(List.length contenders) [] in
+              let digests = Array.of_list (List.map contenders ~f:(fun (_, _, d) -> d)) in
+              let cut = ref false in
+              List.iter
+                (finals_order (List.mapi contenders ~f:(fun i c -> (i, c))))
+                ~f:(fun (i, (label, spec, _)) ->
+                  if !cut || not (budget_allows_finals ()) then (
+                    if not !cut then
+                      logf "%s: the budget allows no further recompile, from %s on" what label;
+                    cut := true)
+                  else
+                    match
+                      timed_into progress_compile_s (fun () ->
+                          budget_compile (fun () -> compile_spec spec))
+                    with
+                    | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+                    | Error (Outcome.Classified classified) ->
+                        logf "%s: %s: recompile FAILED at %s %s" what label
+                          (phase_label classified.phase)
+                          (Outcome.detail_of_cause classified.cause)
+                    | Ok c
+                      when Option.exists digests.(i) ~f:(fun d ->
+                               not (String.equal c.digest_after d)) ->
+                        logf "%s: %s: recompiled to digest %s, not %s: not re-timed" what label
+                          (dshort c.digest_after)
+                          (dshort (Option.value_exn digests.(i)));
+                        release_quietly ~what:(what ^ " contender " ^ label) c.cctx
+                    | Ok c -> (
+                        digests.(i) <- Some c.digest_after;
+                        pending := Some c;
+                        Int.incr timed;
+                        match timing_window ~label ~stop:finals_stop c with
+                        | Ok (`Timed timing_result) -> (
+                            match admitted_timing_ms timing_result with
+                            | Some ms ->
+                                Int.incr admitted;
+                                readings.(i) <- ms :: readings.(i);
+                                logf "%s: %s: %.4f ms (digest %s)" what label ms
+                                  (dshort c.digest_after);
+                                release_candidate c
+                            | None ->
+                                logf "%s: %s: NOT TIMED, %s (digest %s)" what label
+                                  (refusal_reason (timing_admission timing_result))
+                                  (dshort c.digest_after);
+                                release_candidate c)
+                        | Ok `Stopped ->
+                            cut := true;
+                            logf "%s: %s: NOT TIMED, the budget passed during its timing" what label;
+                            release_candidate c
+                        | Ok (`Hopeless _) ->
+                            (* Unreachable: a finals window is timed in full. *)
+                            logf "%s: %s: NOT TIMED, cut as hopeless" what label;
+                            release_candidate c
+                        | Error (Outcome.Classified classified) -> (
+                            logf "%s: %s: RUN FAILED at %s %s" what label
+                              (phase_label classified.phase)
+                              (Outcome.detail_of_cause classified.cause);
+                            (* As a candidate's run failure (see [try_spec]): one that wrote nothing
+                               withdraws its executed claim; one that may have written condemns the
+                               lineage. *)
+                            match classified.execution_effect with
+                            | Outcome.No_device_writes ->
+                                D.rollback_execution c.cctx (D.routine_id c.routine);
+                                release_candidate c
+                            | Outcome.Writes_may_have_occurred ->
+                                D.poison_lineage c.cctx ~routine_name:(D.routine_name c.routine)
+                                  (Outcome.exception_of_cause classified.cause);
+                                release_candidate c;
+                                emit_partial_and_raise
+                                  (Outcome.fatal_of_classified ~candidate:label classified))
+                        | Error (Outcome.Fatal fatal) ->
+                            D.poison_lineage c.cctx ~routine_name:(D.routine_name c.routine)
+                              fatal.Outcome.exn;
+                            release_candidate c;
+                            emit_partial_and_raise fatal));
+              List.map (Array.to_list readings) ~f:List.rev
+            in
+            (* A finals contender for a schedule [spec] whose window timed [digest] when known: its
+               windows run under the label that digest was admitted under, else the spec's own. *)
+            let finals_contender spec digest =
+              let label =
+                Option.value
+                  (Option.bind digest ~f:(Hashtbl.find label_by_digest))
+                  ~default:(spec_label spec)
+              in
+              (label, spec, digest)
+            in
+            (* gh-ocannl-1665/1698: whether [challenger] beats [incumbent], each a lazy finals
+               contender with its search reading, the two readings taken in different windows. A
+               pair within [finals_contenders]' margin (config [autotune_finals_margin]) is a near
+               tie, counted in [counted] and decided by a finals of the two -- [finals_readings]
+               re-times both in adjacent windows under [what], and [finals_crown] decides, ties to
+               the faster first reading (the incumbent on equal readings): [`Finals (wins,
+               finals_ms, other_ms)], the winner's finals reading and the loser's. Outside the
+               margin, with the margin off, under a spent budget or after an inconclusive finals (a
+               contender with no admitted reading), the readings decide, the challenger winning only
+               by reading faster: [`Readings (wins, why)], [why] the log's note on why no finals
+               decided. Either way the caller keeps the winner's search reading, as the beam finals'
+               crown does. *)
+            let finals_settle ~what ~counted ~timed ~admitted ~incumbent:(incumbent, incumbent_ms)
+                ~challenger:(challenger, challenger_ms) =
+              let by_readings why = `Readings (Float.(challenger_ms < incumbent_ms), why) in
+              let near =
+                finals_contenders ~margin:finals_margin ~width:2
+                  [ (`Incumbent, incumbent_ms); (`Challenger, challenger_ms) ]
+              in
+              if List.is_empty near then by_readings ""
+              else if not (budget_allows_finals ()) then
+                by_readings ", a near tie the budget leaves no finals for"
+              else (
+                Int.incr counted;
+                let contender = function
+                  | `Incumbent -> Lazy.force incumbent
+                  | `Challenger -> Lazy.force challenger
+                in
+                let readings =
+                  finals_readings ~what ~timed ~admitted
+                    (List.map near ~f:(fun (who, _) -> contender who))
+                in
+                let paired = List.zip_exn near readings in
+                match finals_crown paired with
+                | None -> by_readings ", a near tie whose finals were inconclusive"
+                | Some ((who, _), finals_ms) ->
+                    let other_ms =
+                      List.find_map paired ~f:(fun ((w, _), rs) ->
+                          if Poly.equal w who then None else List.min_elt rs ~compare:Float.compare)
+                      |> Option.value ~default:Float.nan
+                    in
+                    `Finals (Poly.equal who `Challenger, finals_ms, other_ms))
+            in
+            (* gh-ocannl-1138: the running composite. A single timed with every other segment on its
+               preset measures the routine around a backdrop that can be ten times the composite it
+               would join (gh-ocannl-1166: 23.2 ms around a 2.4 ms composite on gpt2_mini/CUDA), so
+               the search's best stayed flat until the recombination composites it timed last.
+               Instead the coarse keys are swept one at a time, each single staffed with the running
+               composite's choice for every other key: the composite starts from the seeded untuned
+               plan's sketches (matched to the keys by structural digest) and, after a key's sweep,
+               takes that key's fastest single. Times are compared only within one key's sweep,
+               where the backdrop is the same; the composite's own choice for the key is swept
+               first, at the composite's time when that composite was already timed, so a slower
+               replacement leaves it as it was. A staffed single that is refused, not merely
+               contended, is retried once bare, so one invalid choice in the staff cannot mask the
+               key's seeds; once a key's bare retry is refused too, its seeds fail on their own and
+               its refusals stop being retried. *)
+            let without key choices =
+              List.filter choices ~f:(fun (k, _) -> not (equal_seg_key k key))
+            in
+            (* One running composite over [keys], each with one choice: a segmentation's sketches
+               (coarse, or fine: gh-ocannl-574), or the split-reduce sites' block counts. The
+               composite, its time when a window timed exactly it, per swept key the staff its sweep
+               ran against (for the playoff), and the sweep of one key, which returns that key's
+               results in its own backdrop. [single key staff choice] is the candidate; [describe]
+               names a choice for the log. Keys compare by [equal_key] and choices structurally. *)
+            let sweeper ?seeded_cut ~finals ~equal_key ~keys ~single ~describe ~fallbacks () =
+              let running = ref [] and running_ms = ref None and swept_against = ref [] in
+              (* The schedule whose window took [running_ms], with the digest it timed when known:
+                 the incumbent a staffed join's finals re-times. *)
+              let running_src = ref None in
+              (* gh-ocannl-1697: a seeded sweep's singles are whole seeded routines, each cut as
+                 hopeless against [seeded_cut] of the running composite's reading. *)
+              let try_single spec =
+                match seeded_cut with
+                | None -> try_spec spec
+                | Some reference ->
+                    try_spec
+                      ~hopeless_against:(fun () -> reference !running_ms)
+                      ~hopeless_ratio:seeded_hopeless_ratio spec
+              in
+              let without key choices =
+                List.filter choices ~f:(fun (k, _) -> not (equal_key k key))
+              in
+              let in_key_order choices =
+                List.filter_map keys ~f:(fun k ->
+                    Option.map (List.Assoc.find choices ~equal:equal_key k) ~f:(fun p -> (k, p)))
+              in
+              let sweep_key (key, ps) =
+                let staff = without key !running in
+                let bare = ref [] in
+                (* A staffed single of this key admitted shows the staff compatible with it, so any
+                   later refusal is the seed's own and is not retried bare (Codex P1 on PR #1215: a
+                   cap on the first refused bare retry stopped the retries of a key whose staff was
+                   the culprit after one seed that was invalid on its own). Until then, every
+                   refusal is retried. *)
+                let staff_admitted = ref false in
+                swept_against := (key, staff) :: !swept_against;
+                let current = List.Assoc.find !running ~equal:equal_key key in
+                let ps =
+                  match current with
+                  | Some q -> q :: List.filter ps ~f:(fun p -> not (Poly.equal p q))
+                  | None -> ps
+                in
+                (* Each result carries the schedule its reading was taken on ([running_src]'s
+                   form). *)
+                let results =
+                  List.filter_map ps ~f:(fun p ->
+                      match (current, !running_ms) with
+                      | Some q, Some ms when Poly.equal p q ->
+                          (* The running composite itself, timed already: not compiled again, and
+                             proof the staff is compatible with the key (Codex P2 on PR #1215). *)
+                          staff_admitted := true;
+                          Some (p, ms, !running_src)
+                      | _ -> (
+                          let spec = single key staff p in
+                          match try_single spec with
+                          | Some (((c : compiled), ms) as r) ->
+                              admit r;
+                              staff_admitted := true;
+                              Some (p, ms, Some (spec, Some c.digest_after))
+                          | None -> (
+                              match !last_attempt with
+                              | `Dedup (Some ms) ->
+                                  staff_admitted := true;
+                                  Some (p, ms, Some (spec, None))
+                              | `Declined when (not (List.is_empty staff)) && not !staff_admitted ->
+                                  Int.incr fallbacks;
+                                  logf "%s: refused with its staff; retrying it bare"
+                                    (spec_label spec);
+                                  let bare_spec = single key [] p in
+                                  (match try_single bare_spec with
+                                  | Some (((c : compiled), ms) as r) ->
+                                      admit r;
+                                      bare :=
+                                        (p, ms, Some (bare_spec, Some c.digest_after)) :: !bare
+                                  | None -> (
+                                      (* A bare twin already timed under its digest still ranks
+                                         (Codex P2 on PR #1215). *)
+                                      match !last_attempt with
+                                      | `Dedup (Some ms) ->
+                                          bare := (p, ms, Some (bare_spec, None)) :: !bare
+                                      | _ -> ()));
+                                  None
+                              | _ -> None)))
+                in
+                let by_time (_, a, _) (_, b, _) = Float.compare a b in
+                (* gh-ocannl-1698: whether [challenger] (read [ms] on [src]) beats the incumbent
+                   (read [incumbent_ms] on [incumbent_src]). Their readings come from different
+                   windows -- the incumbent's usually from an earlier key's sweep -- so, in a
+                   staffed sweep, a near tie of the two is settled by a finals ([finals_settle]); a
+                   seeded sweep's joins, and a pair whose schedules are unknown, compare the
+                   readings. Returns the verdict and the log's note on how it was reached. *)
+                let beats ~challenger ~ms ~src ~incumbent_ms ~incumbent_src =
+                  match (finals, incumbent_src, src) with
+                  | true, Some (i_spec, i_digest), Some (c_spec, c_digest) -> (
+                      match
+                        finals_settle ~what:"staffed finals" ~counted:n_staffed_finals
+                          ~timed:n_staffed_finals_timed ~admitted:n_staffed_finals_admitted
+                          ~incumbent:(lazy (finals_contender i_spec i_digest), incumbent_ms)
+                          ~challenger:(lazy (finals_contender c_spec c_digest), ms)
+                      with
+                      | `Readings (wins, why) -> (wins, why)
+                      | `Finals (wins, finals_ms, other_ms) ->
+                          let challenger_finals, incumbent_finals =
+                            if wins then (finals_ms, other_ms) else (other_ms, finals_ms)
+                          in
+                          let note =
+                            Printf.sprintf "; in shared windows %.4f ms against %.4f ms"
+                              challenger_finals incumbent_finals
+                          in
+                          if not wins then
+                            logf
+                              "staffed: %s stays out of the running composite (%.4f ms, %.4f ms%s)"
+                              challenger ms incumbent_ms note;
+                          (wins, note))
+                  | _ -> (Float.(ms < incumbent_ms), "")
+                in
+                (* The incumbent in this backdrop: the composite's own choice for the key as timed
+                   here, or else the running composite itself, timed whole -- for a key with no
+                   choice, the key on its preset (Codex P1 on PR #1215: a key whose every single was
+                   slower than its preset used to join anyway, and later keys were swept around the
+                   slower composite). *)
+                let current_result =
+                  Option.bind current ~f:(fun q ->
+                      List.find results ~f:(fun (p, _, _) -> Poly.equal p q))
+                in
+                let incumbent =
+                  match current_result with
+                  | Some (_, ms, src) -> Some (ms, src)
+                  | None -> Option.map !running_ms ~f:(fun ms -> (ms, !running_src))
+                in
+                (match List.min_elt results ~compare:by_time with
+                | Some (p, ms, src) ->
+                    (* The fastest in this backdrop replaces the incumbent only by beating it: by
+                       being faster, or in a near tie by winning their finals; a tie keeps it. The
+                       incumbent's own choice is no challenger. *)
+                    let joins, note =
+                      if Option.exists current ~f:(Poly.equal p) then (false, "")
+                      else
+                        match incumbent with
+                        | None -> (true, "")
+                        | Some (incumbent_ms, incumbent_src) ->
+                            let wins, note =
+                              beats ~challenger:(describe key p) ~ms ~src ~incumbent_ms
+                                ~incumbent_src
+                            in
+                            (wins, Printf.sprintf " against %.4f ms%s" incumbent_ms note)
+                    in
+                    if joins then (
+                      logf "staffed: %s joins the running composite (%.4f ms%s)" (describe key p) ms
+                        note;
+                      running := in_key_order ((key, p) :: without key !running);
+                      running_ms := Some ms;
+                      running_src := src)
+                    else
+                      Option.iter current_result ~f:(fun (_, q_ms, q_src) ->
+                          running_ms := Some q_ms;
+                          running_src := q_src)
+                | None -> (
+                    (* Every staffed single of the key was refused, and some of its bare retries
+                       were admitted (Codex P1 on PR #1215): the key cannot join this staff, since
+                       the composite holding both is exactly the code refused. A bare single IS the
+                       composite of its key alone, a whole routine like the running composite, so
+                       the faster of the two carries on; a running composite never timed as a whole
+                       yields. *)
+                    match List.min_elt !bare ~compare:by_time with
+                    | Some (p, ms, src) -> (
+                        let replaces =
+                          match !running_ms with
+                          | None -> Some ""
+                          | Some incumbent_ms ->
+                              let wins, note =
+                                beats ~challenger:(describe key p) ~ms ~src ~incumbent_ms
+                                  ~incumbent_src:!running_src
+                              in
+                              Option.some_if wins
+                                (Printf.sprintf " against %.4f ms%s" incumbent_ms note)
+                        in
+                        match replaces with
+                        | Some note ->
+                            logf
+                              "staffed: %s replaces the running composite, refused with it (%.4f \
+                               ms%s)"
+                              (describe key p) ms note;
+                            running := [ (key, p) ];
+                            running_ms := Some ms;
+                            running_src := src
+                        | None -> ())
+                    | None -> ()));
+                (* What the key's sweep timed in one backdrop: its staffed singles, or failing those
+                   its bare retries. *)
+                List.map
+                  (if List.is_empty results then List.rev !bare else results)
+                  ~f:(fun (p, ms, _) -> (p, ms))
+              in
+              let start choices = running := in_key_order choices in
+              (running, running_ms, swept_against, start, sweep_key)
+            in
+            (* The order a sweep decides its keys in. Heaviest key first: its weight is its segment
+               count times the roofline score of its best-scored sketch, so the keys whose
+               geometries differ most, whose gaps can absorb a noisy backdrop, are decided first,
+               and the near-tie keys last, in the smallest backdrop. A key the model cannot score
+               keeps its enumeration order, after the scored ones. [what] names the keys in the
+               log. *)
+            let heaviest_first ~pre_of ~what entries =
+              let weighed =
+                List.map entries ~f:(fun ((key, ps) as entry) ->
+                    let weight =
+                      Option.bind (List.Assoc.find pre_of ~equal:equal_seg_key key) ~f:(fun pre ->
+                          (* A sketch that does not construct here is left unscored, as the
+                             candidate compile would decline it. *)
+                          List.filter_map ps ~f:(fun p ->
+                              match sketch_schedule ~accum_prec ~p pre with
+                              | exception Outcome.Cause_at _ -> None
+                              | sched -> model_score ~static_indices ~limits pre sched)
+                          |> List.min_elt ~compare:Float.compare
+                          |> Option.map ~f:(fun s -> Float.of_int (List.length key.key_units) *. s))
+                    in
+                    logf "staffed: %s %s weighs %s" what (seg_key_tag key)
+                      (Option.value_map weight ~default:"unscored" ~f:(Printf.sprintf "%.6e"));
+                    (entry, weight))
+              in
+              let scored, unscored =
+                List.partition_tf weighed ~f:(fun (_, w) -> Option.is_some w)
+              in
+              List.map
+                (List.stable_sort scored ~compare:(fun (_, a) (_, b) ->
+                     Option.compare Float.compare b a)
+                @ unscored)
+                ~f:fst
+            in
+            (* A segmentation's sketch sweeper, its keys in [heaviest_first] order. *)
+            let sketch_sweeper ~plan ~fine ~keys =
+              let running, running_ms, swept_against, start, sweep_key =
+                sweeper ~finals:true ~equal_key:equal_seg_key ~keys ~fallbacks:n_backdrop_fallbacks
+                  ~single:(fun key staff p ->
+                    Fiss (F_sketch { plan; entries = [ (key, p) ]; staff; fine }))
+                  ~describe:(fun key p ->
+                    Printf.sprintf "%ssegment %s: %s"
+                      (if fine then "fine " else "")
+                      (seg_key_tag key) (spec_label (Whole (W_sketch p))))
+                  ()
+              in
+              let sweep ~pre_of ~start:choices entries =
+                start choices;
+                if not (List.is_empty !running) then
+                  logf "staffed: the running %scomposite starts from %s"
+                    (if fine then "fine " else "")
+                    (fiss_sketch_label ~fine !running);
+                List.iter
+                  (heaviest_first ~pre_of
+                     ~what:(if fine then "fine segment" else "segment")
+                     entries)
+                  ~f:(fun ((key, _) as entry) ->
+                    let results = sweep_key entry in
+                    fiss_single_results :=
+                      List.rev_map results ~f:(fun (p, ms) -> (key, fine, (p, ms)))
+                      @ !fiss_single_results)
+              in
+              (running, running_ms, swept_against, sweep)
+            in
+            (* gh-ocannl-1664: the seeded sweep. Every single is [plan] with the key's choice swapped
+             and the other keys' changed choices as its staff ([F_swap]); a key the sweep has not
+             changed keeps the plan's own decision, so the running composite starts AS the plan, at
+             its timed reading, and a key's incumbent is the running composite whole. Its readings
+             feed no per-key ranking: every one is a whole seeded routine, ranked by the beam with
+             the rest. *)
+            (* gh-ocannl-1697: what a seeded single's reading must undercut to matter, given the
+             running seeded composite's reading [running_ms] -- the window's hopeless reference. A
+             single joins only by reading faster than the running composite, and otherwise it
+             feeds only the beam: with rounds to run, a full beam's slowest entry is the bar (a
+             reading over it enters nothing, as for a whole-routine seed); with none, the beam
+             finals' too -- a reading within [finals_margin] of the head and among the beam's
+             [beam_width] fastest is re-timed beside it ({!finals_contenders}), so the bar is the
+             head over that margin, or the full beam's slowest entry where that is lower. The
+             reference is the larger of the two bars, and [None] -- a window timed in full -- while
+             either is unknown. *)
+            let seeded_cut_on = Seam.get seeded_hopeless_cut in
+            let seeded_cut_reference running_ms =
+              if not seeded_cut_on then None
+              else
+                Option.bind running_ms ~f:(fun running ->
+                    let full = List.length !beam >= beam_width in
+                    let slowest () = Option.map (List.last !beam) ~f:snd in
+                    let beam_bar =
+                      if rounds = 0 then
+                        Option.map (List.hd !beam) ~f:(fun (_, head) ->
+                            let finals =
+                              if Float.(finals_margin > 0.) then head *. (1. +. finals_margin)
+                              else head
+                            in
+                            match slowest () with
+                            | Some last when full -> Float.min finals last
+                            | Some _ | None -> finals)
+                      else if full then slowest ()
+                      else None
+                    in
+                    Option.map beam_bar ~f:(Float.max running))
+            in
+            let seeded_sweep_run ~start_ms plan entries pre =
+              let running, running_ms, _, _, sweep_key =
+                sweeper ~seeded_cut:seeded_cut_reference ~finals:false ~equal_key:equal_seg_key
+                  ~keys:(List.map entries ~f:fst) ~fallbacks:n_seeded_single_fallbacks
+                  ~single:(fun key staff p -> Fiss (F_swap { plan; entries = [ (key, p) ]; staff }))
+                  ~describe:(fun key p ->
+                    Printf.sprintf "seeded segment %s: %s" (seg_key_tag key)
+                      (spec_label (Whole (W_sketch p))))
+                  ()
+              in
+              running_ms := start_ms;
+              logf "seeded singles: %d candidate(s) over %d segment key(s) of %s"
+                !n_seeded_single_candidates (List.length entries) (seeded_plan_label plan);
+              List.iter (heaviest_first ~pre_of:pre ~what:"seeded segment" entries)
+                ~f:(fun ((key, _) as entry) ->
+                  let before = List.Assoc.find !running ~equal:equal_seg_key key in
+                  ignore (sweep_key entry : (sketch_params * float) list);
+                  let after = List.Assoc.find !running ~equal:equal_seg_key key in
+                  if not (Option.equal Poly.equal before after) then Int.incr n_seeded_single_joins)
+            in
+            (* gh-ocannl-1697: the seeded split sweep, before the segment sweep. Each split single
+               is the running seeded plan with one split-reduce site's choice changed -- another
+               block count of the search's menu, or unsplit, or split where the plan leaves it whole
+               -- and the plan re-derived over that split routine by its own rule ([F_resplit],
+               {!seeded_resplit}), so it reads on the plan's basis rather than around the presets an
+               [F_split] single timed every segment on. The sites are the search's own
+               ([max_split_reduce_sites] of {!split_reduce_sites}, heaviest first), detected on the
+               lowering the plan was derived on, whose split sites are the plan's own. A site's
+               fastest single joins the running plan only by reading faster than it, and the later
+               sites change the joined plan. Before the segment sweep, because a split it joins
+               re-cuts the segments the segment sweep's keys address: that sweep enumerates its menu
+               on the plan this one leaves. Returns that plan and its reading. *)
+            let seeded_split_sweep (plan : seeded_plan) =
+              let pristine = Option.value !base_pristine ~default:base_opt in
+              let sites =
+                List.take (split_reduce_sites ~static_indices pristine) max_split_reduce_sites
+              in
+              let same = same_split_site in
+              let running = ref plan and running_ms = ref (seeded_ms ()) in
+              List.iter sites ~f:(fun site ->
+                  let current =
+                    List.find_map !running.sp_split ~f:(fun (t, b) ->
+                        if same t site then Some b else None)
+                  in
+                  let choices =
+                    None
+                    :: List.filter_map sr_num_blocks ~f:(fun b ->
+                        if 2 * b <= site.sr_red then Some (Some b) else None)
+                    |> List.filter ~f:(fun c -> not (Option.equal Int.equal c current))
+                  in
+                  let from = seeded_plan_digest !running in
+                  let results =
+                    List.filter_map choices ~f:(fun blocks ->
+                        let split =
+                          List.filter_map !running.sp_split ~f:(fun ((t, _) as entry) ->
+                              if same t site then Option.map blocks ~f:(fun b -> (t, b))
+                              else Some entry)
+                          @
+                          match (current, blocks) with
+                          | None, Some b -> [ (site, b) ]
+                          | Some _, _ | None, None -> []
+                        in
+                        let label = seeded_resplit_label ~from site blocks in
+                        let t0 = Unix.gettimeofday () in
+                        (* No derivation once the budget is spent: the attempt would not start. *)
+                        if not (budget_allows ~what:label ~floor:false) then None
+                        else
+                          match seeded_resplit ~memo:seeded_memo_v !running split pristine with
+                          | None ->
+                              logf "seeded split: %s: the plan does not re-derive; not seeded" label;
+                              None
+                          | Some derived when String.equal (seeded_plan_digest derived) from ->
+                              logf "seeded split: %s: re-derives the running plan; not seeded" label;
+                              None
+                          | Some derived -> (
+                              logf "seeded split: %s: re-derived in %.3f s as %s" label
+                                (Unix.gettimeofday () -. t0)
+                                (seeded_plan_label derived);
+                              Int.incr n_seeded_split_candidates;
+                              let spec = Fiss (F_resplit { from; site; blocks; plan = derived }) in
+                              match
+                                try_spec
+                                  ~hopeless_against:(fun () -> seeded_cut_reference !running_ms)
+                                  ~hopeless_ratio:seeded_hopeless_ratio spec
+                              with
+                              | Some ((_, ms) as r) ->
+                                  admit r;
+                                  Some (derived, ms)
+                              | None -> (
+                                  match !last_attempt with
+                                  | `Dedup (Some ms) -> Some (derived, ms)
+                                  | _ -> None)))
+                  in
+                  match List.min_elt results ~compare:(fun (_, a) (_, b) -> Float.compare a b) with
+                  | Some (derived, ms)
+                    when Option.for_all !running_ms ~f:(fun running -> Float.(ms < running)) ->
+                      logf "seeded split: %s joins the running seeded plan (%.4f ms%s)"
+                        (seeded_plan_label derived) ms
+                        (Option.value_map !running_ms ~default:"" ~f:(Printf.sprintf " < %.4f ms"));
+                      Int.incr n_seeded_split_joins;
+                      running := derived;
+                      running_ms := Some ms
+                  | Some _ | None -> ());
+              (!running, !running_ms)
+            in
+            (* The seeded plan's choice for a key: its decision rule ({!seeded_params}, probed and
+               validated as {!seeded_decisions} does) applied to the key's own segment. The plan's
+               recorded decisions cannot be matched to the keys: they were taken on the split
+               routine, under the untuned pipeline's segmentation without the search's zero fold, so
+               a recorded digest equals no key's (on gpt2_mini/CUDA the composite started empty),
+               and two keys of one structure but different placements would share a digest's
+               decision (Codex P2 on PR #1215). The rule is the plan's whole gate
+               ({!seeded_segment_params}: a threshold, or gh-ocannl-1253's ranked [auto]); where it
+               seeds nothing ([gpu_default_sketch_min_reduction=0], another backend) no key has a
+               start. *)
+            let seeded_choice ~pre_of key =
+              Option.bind (Lazy.force seeded_plan_value) ~f:(fun plan ->
+                  Option.bind plan.sp_start ~f:(fun start ->
+                      Option.bind (List.Assoc.find pre_of ~equal:equal_seg_key key) ~f:(fun pre ->
+                          Option.map (start.decide pre) ~f:(fun p -> (key, p)))))
+            in
+            let running, running_ms, swept_against, sweep =
+              sketch_sweeper ~plan:coarse_plan ~fine:false
+                ~keys:(List.map fiss_sketch_entries ~f:fst)
+            in
+            let fine_running, fine_running_ms, fine_swept_against, fine_sweep =
+              sketch_sweeper ~plan:fine_plan ~fine:true ~keys:(List.map fine_all_entries ~f:fst)
+            in
+            (* The split-reduce sites' running composite: each site's block count, swept over the
+               sites in [sr_sites]' cost order (heaviest first already), each single's prelude
+               staffed with the other sites' choices. It starts empty, not from the seeded plan's
+               split: every segment of a split candidate runs its preset whatever the prelude, so
+               the seeded split would not shrink the backdrop the way the seeded sketches do, and
+               its sites, detected on the pristine lowering, would match the search's only by target
+               and extents. *)
+            let same_site a b = Idx.equal_symbol a.sr_axis b.sr_axis in
+            let sr_running, sr_running_ms, _, _, sr_sweep_key =
+              sweeper ~finals:true ~equal_key:same_site ~keys:sr_sites
+                ~fallbacks:n_sr_backdrop_fallbacks
+                ~single:(fun s staff b -> Fiss (F_split { sites = [ (s, b) ]; staff }))
+                ~describe:(fun s b -> "split site " ^ split_site_label (s, b))
+                ()
+            in
+            (* gh-ocannl-1388: a refused window drops its digest from [seen] so that an equivalent
+               later seed can measure it, but no later seed reproduces the seeded plan, so its floor
+               would be lost to one contended window. Retried once, after the seed pass, or before
+               the seeded sweep, whose incumbent is the plan's reading (gh-ocannl-1664). Still
+               unmeasured after that, [seeded_ms] stays [None] and says so. *)
+            let seeded_retried = ref false in
+            let retry_seeded () =
+              List.iter seeded_specs ~f:(fun spec ->
+                  if
+                    (not !seeded_retried)
+                    && Option.is_none (seeded_ms ())
+                    && Option.exists !seeded_seed_digest ~f:(Hash_set.mem contended_digests)
+                  then (
+                    seeded_retried := true;
+                    logf "%s: its window was refused; retrying the seeded plan once"
+                      (spec_label spec);
+                    Option.iter (try_spec spec) ~f:admit))
+            in
+            (* Its own phase, with no total announced: a bare retry or a start choice outside the
+               menu adds an attempt, and a start choice already timed takes one away (Codex P2 on PR
+               #1215). The seeded sweep likewise. *)
+            (match seeded_singles_plan with
+            | Some plan ->
+                retry_seeded ();
+                progress_phase_begin "seeded" None;
+                let plan, start_ms = seeded_split_sweep plan in
+                let entries, pre = seeded_menu plan in
+                n_seeded_single_candidates :=
+                  List.sum (module Int) entries ~f:(fun (_, ps) -> List.length ps);
+                seeded_sweep_run ~start_ms plan entries pre
+            | None when staffed ->
+                progress_phase_begin "staffed" None;
+                sweep ~pre_of:coarse_pre
+                  ~start:
+                    (Seam.get on_staffed_start ~menu:fiss_sketch_entries
+                       (List.filter_map fiss_sketch_entries ~f:(fun (key, _) ->
+                            seeded_choice ~pre_of:coarse_pre key)))
+                  fiss_sketch_entries;
+                (* The fine segmentation's own composite (gh-ocannl-574), swept over the keys the
+                   finer cuts made new. A key the cuts left unchanged keeps its digest and first
+                   unit, so it is the coarse key and carries the coarse composite's choice; a new
+                   one starts from the seeded plan's, where its refinement cut the same segment. *)
+                if not (List.is_empty fine_new_entries) then
+                  fine_sweep ~pre_of:fine_pre
+                    ~start:
+                      (List.filter_map fine_all_entries ~f:(fun (key, _) ->
+                           (* An unchanged key is the coarse key: its coarse sweep decided it, a key
+                              left on its preset included, and the fine sweep does not revisit it
+                              (Codex P2 on PR #1215). Only a new key takes the seeded rule's
+                              start. *)
+                           if List.Assoc.mem fine_new_entries key ~equal:equal_seg_key then
+                             seeded_choice ~pre_of:fine_pre key
+                           else
+                             Option.map (List.Assoc.find !running ~equal:equal_seg_key key)
+                               ~f:(fun p -> (key, p))))
+                    fine_new_entries
+            | None -> List.iter coarse_single_specs ~f:run_seed);
+            List.iter post_sweep_specs ~f:run_seed;
+            if staffed && not (List.is_empty sr_specs) then
+              List.iter sr_sites ~f:(fun s ->
+                  match List.filter sr_num_blocks ~f:(fun b -> 2 * b <= s.sr_red) with
+                  | [] -> ()
+                  | blocks -> ignore (sr_sweep_key (s, blocks) : (int * float) list));
+            retry_seeded ();
+            (* At most three composites, each proposed only if its singles justify it: no total to
+               announce, so no phase line either; a composite's attempt still counts and can
+               print. *)
+            progress_phase_begin "recombine" None;
+            Option.iter (seeded_ms ()) ~f:(fun ms ->
+                logf "seeded untuned plan: %.4f ms (gh-ocannl-1388 floor)" ms);
+            (match default_ms () with
+            | Some ms -> logf "untuned-default pipeline: %.4f ms (gh-ocannl-552 reference)" ms
+            | None ->
+                logf
+                  "untuned-default pipeline: not timed (gated to a form outside the pool, not \
+                   seeded, failed, or not dispatched)");
+            (* Cross-segment recombination: the singles time every parameter set unmasked, but the
+               best full routine may sketch several segments at once. One extra composite candidate
+               applies each keyed segment's best-timed single simultaneously — informed by the
+               singles' own timings, where the full cartesian product would be exponential. *)
+            let best_single_for ~fine_ok key =
+              List.filter !fiss_single_results ~f:(fun (k, fine, _) ->
+                  equal_seg_key k key && (fine_ok || not fine))
+              |> List.min_elt ~compare:(fun (_, _, (_, a)) (_, _, (_, b)) -> Float.compare a b)
+              |> Option.map ~f:(fun (_, _, (p, _)) -> (key, p))
+            in
+            (* Staffed, the running composite is the recombination: each key's choice is its fastest
+               single in its own sweep's backdrop, where per-key minima over every backdrop would
+               compare times taken around different composites. *)
+            let recombined =
+              if staffed then !running
+              else
+                List.filter_map fiss_sketch_entries ~f:(fun (key, _) ->
+                    best_single_for ~fine_ok:false key)
+            in
+            (* A staffed composite window admitted during the sweep stays the outcome, published
+               there (Codex P2 on PR #1215): the running composite can shrink back to one key after
+               it, when a later key's bare single replaced it, and the window still completed. *)
+            let composite_window_timed = staffed && Poly.equal !fs_composite `Timed in
+            (* Missing singles justify undecided only when every missing coarse key had a viable
+               window refused and no later equivalent single supplied a measurement. A refusal from
+               an unrelated segment or family cannot excuse a missing proposal. *)
+            fs_composite :=
+              if List.length recombined >= 2 then `Proposed
+              else if
+                List.length fiss_sketch_entries >= 2
+                && List.for_all fiss_sketch_entries ~f:(fun (key, _) ->
+                    List.Assoc.mem recombined key ~equal:equal_seg_key
+                    || Hash_set.mem coarse_single_refused key
+                       && not (Hash_set.mem coarse_single_measured key))
+              then `Singles_refused
+              else `Ineligible;
+            (* A timed composite, as the playoff's starting incumbent: its entries, its
+               segmentation, its time and the digest its window timed (gh-ocannl-1665: what a
+               playoff finals recompile must reproduce). *)
+            let composite_spec ~fine entries =
+              Fiss (F_sketch { plan = plan_of ~fine; entries; staff = []; fine })
+            in
+            let try_composite ~fine entries =
+              Option.map
+                (try_spec (composite_spec ~fine entries))
+                ~f:(fun (((c : compiled), ms) as r) ->
+                  admit r;
+                  (entries, fine, ms, Some c.digest_after))
+            in
+            (* Staffed, the last accepted window already timed the running composite -- the last
+               key's winning staffed single schedules every key's choice -- so it is the coarse
+               composite's outcome, stated here rather than re-derived from a label. Only a
+               composite no window has timed yet (the seeded plan's choices, every sweep refused) is
+               tried. *)
+            let coarse_composite =
+              if not (Poly.equal !fs_composite `Proposed) then None
+              else
+                match (staffed, !running_ms) with
+                | true, Some ms ->
+                    fs_composite := `Timed;
+                    Some (recombined, false, ms, None)
+                | true, None | false, _ -> try_composite ~fine:false recombined
+            in
+            if composite_window_timed then fs_composite := `Timed;
+            (* The fine composite (gh-ocannl-574): the fine winner in a multi-segment routine needs
+               the freed site's best AND the other segments' bests in one candidate. Keys address
+               the fine segmentation; segments unchanged by the finer cuts share their digest with
+               the coarse segmentation, so their coarse-timed bests staff the composite directly
+               (the segment code behind a digest is identical, hence the parameters transfer).
+               Proposed only when a fine single was actually timed — otherwise the composite is the
+               coarse one plus extra launches. *)
+            let fine_recombined =
+              if List.exists !fiss_single_results ~f:(fun (_, fine, _) -> fine) then
+                List.filter_map fine_all_entries ~f:(fun (key, _) ->
+                    best_single_for ~fine_ok:true key)
+              else []
+            in
+            (* Staffed, the fine sweep's composite: timed by its last accepted window, which a fine
+               single's acceptance is the only way to set, so a fine single was timed. *)
+            let fine_composite =
+              match (staffed, !fine_running_ms) with
+              | true, Some ms when List.length !fine_running >= 2 ->
+                  Some (!fine_running, true, ms, None)
+              | true, _ -> None
+              | false, _ ->
+                  if List.length fine_recombined >= 2 then try_composite ~fine:true fine_recombined
+                  else None
+            in
+            (* Multi-site split-reduce recombination: apply each detected site's best-timed
+               [num_blocks] simultaneously — the sites are distinct statements, so their preludes
+               compose. Same rationale as the sketch recombination above: singles keep every value
+               unmasked, one composite recovers the combination. *)
+            let recombined =
+              List.filter_map sr_sites ~f:(fun s ->
+                  List.filter !sr_single_results ~f:(fun (s2, _, _) ->
+                      Idx.equal_symbol s2.sr_axis s.sr_axis)
+                  |> List.min_elt ~compare:(fun (_, _, a) (_, _, b) -> Float.compare a b)
+                  |> Option.map ~f:(fun (s2, b, _) -> (s2, b)))
+            in
+            (* Staffed, the running split composite, timed by its last accepted window when that
+               schedules every site. *)
+            let recombined = if staffed then !sr_running else recombined in
+            (* As for the sketch composite above, a staffed multi-site window admitted during the
+               sweep keeps the outcome eligible and timed, whatever the running composite ended
+               as. *)
+            let eligible_now = List.length recombined >= 2 in
+            sr_composite_eligible := (staffed && !sr_composite_eligible) || eligible_now;
+            if eligible_now then
+              if staffed && Option.is_some !sr_running_ms then sr_composite_timed := true
+              else
+                Option.iter (try_spec (Fiss (F_split { sites = recombined; staff = [] }))) ~f:admit;
+            (* The composite playoff (gh-ocannl-1166), after every recombination composite so the
+               [playoff] progress phase holds only its windows: starting from the faster timed
+               composite, each key in turn tries its near-tie singles in the composite's place, and
+               an alternate that beats the incumbent becomes the incumbent the later keys build on.
+               Coordinate descent over the keys, at most [playoff_width] alternates each, so the
+               cost is linear in the keyed segments rather than the cartesian product the
+               recombination avoids.
 
-(* [?log] and [?progress] scope [autotune_log] and [autotune_progress] to this call: every
-   diagnostic the search emits, the untuned control it gates, the cache-hit and fallback lines, and
-   every progress line read {!log_enabled} and {!progress_enabled} inside the scope. *)
-let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
-    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
-    bindings =
-  exclusive_search @@ fun () ->
-  with_streams ?log ?progress (fun () ->
-      with_timing_state_restored (fun timing_state ->
-          tune_in_stream_scope ~timing_state ~defer:false ~substituted:(ref false) ?name ?search
-            ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction
-            ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings ()))
+               gh-ocannl-1665: the alternate's window and the incumbent's are different windows, the
+               incumbent's taken earlier -- the comparison the beam finals replaced for the crown
+               (gh-ocannl-1635), and one segment's swap is a difference of the size a window's
+               offset makes. So an alternate whose reading is within [finals_contenders]' margin of
+               the incumbent's (config [autotune_finals_margin]) is decided by a finals of the two:
+               [finals_readings] re-times both in adjacent windows, and [finals_crown] decides, ties
+               to the faster first reading (the incumbent on equal readings). Outside the margin, or
+               with the margin off, the readings decide as before: a gap wider than the offsets the
+               margin allows for. A finals that cannot decide -- the budget allows no recompile, or
+               a contender has no admitted finals reading -- falls back to the readings too. The
+               incumbent keeps its search reading either way, as the beam finals' crown does, so the
+               next alternate's near-tie test reads the same numbers the beam ranks. The finals'
+               windows count in [fiss_sketch_playoff_finals_timed], not in
+               [fiss_sketch_playoff_timed], and run in the [playoff] progress phase. *)
+            let playoff_contenders ~fine_ok ~current key =
+              let singles =
+                List.filter_map !fiss_single_results ~f:(fun (k, fine, (p, ms)) ->
+                    if equal_seg_key k key && (fine_ok || not fine) then Some (p, ms) else None)
+                |> List.sort ~compare:(fun (_, a) (_, b) -> Float.compare a b)
+              in
+              match singles with
+              | [] -> []
+              | (_, best_ms) :: _ ->
+                  List.fold singles ~init:[] ~f:(fun acc (p, ms) ->
+                      if
+                        Float.(ms <= best_ms *. (1. +. playoff_margin))
+                        && (not (Poly.equal p current))
+                        && not (List.mem acc p ~equal:Poly.equal)
+                      then p :: acc
+                      else acc)
+                  |> List.rev |> Fn.flip List.take playoff_width
+            in
+            (* gh-ocannl-1665: whether [alternate] (read [alt_ms]) replaces [incumbent] (read
+               [incumbent_ms]), each with the digest its window timed when known. *)
+            let playoff_swaps ~fine ~key ~incumbent ~incumbent_ms ~incumbent_digest ~alternate
+                ~alt_ms ~alt_digest =
+              let contender entries digest =
+                lazy (finals_contender (composite_spec ~fine entries) digest)
+              in
+              match
+                finals_settle ~what:"playoff finals" ~counted:n_playoff_finals
+                  ~timed:n_playoff_finals_timed ~admitted:n_playoff_finals_admitted
+                  ~incumbent:(contender incumbent incumbent_digest, incumbent_ms)
+                  ~challenger:(contender alternate alt_digest, alt_ms)
+              with
+              | `Readings (swap, why) ->
+                  logf "playoff: segment %s: %s (%.4f ms %s %.4f ms%s)" (seg_key_tag key)
+                    (if swap then "the alternate replaces the incumbent" else "the incumbent stays")
+                    alt_ms
+                    (if swap then "<" else ">=")
+                    incumbent_ms why;
+                  swap
+              | `Finals (swap, finals_ms, other_ms) ->
+                  logf
+                    "playoff: segment %s: %s in shared windows (%.4f ms against %.4f ms; %.4f ms \
+                     and %.4f ms in the search)"
+                    (seg_key_tag key)
+                    (if swap then "the alternate replaces the incumbent" else "the incumbent stays")
+                    finals_ms other_ms alt_ms incumbent_ms;
+                  swap
+            in
+            (* With width 0 the playoff, its progress phase included, is skipped outright: the
+               search times exactly what it timed before the playoff existed (gh-ocannl-1259). *)
+            (match
+               List.min_elt
+                 (List.filter_opt [ coarse_composite; fine_composite ])
+                 ~compare:(fun (_, _, a, _) (_, _, b, _) -> Float.compare a b)
+             with
+            | _ when playoff_width = 0 -> ()
+            | None -> ()
+            | Some (entries, fine, ms, digest) ->
+                progress_phase_begin "playoff" None;
+                in_playoff := true;
+                Exn.protect
+                  ~finally:(fun () -> in_playoff := false)
+                  ~f:(fun () ->
+                    ignore
+                      (List.fold entries ~init:(entries, ms, digest)
+                         ~f:(fun ((incumbent, _, _) as state) (key, _) ->
+                           let current = List.Assoc.find_exn incumbent ~equal:equal_seg_key key in
+                           (* gh-ocannl-1138: a key whose staffed sweep ran against exactly this
+                              incumbent's other choices timed its contenders inside it already;
+                              re-timing them would compile the same code again. *)
+                           let swept_here =
+                             Option.exists
+                               (List.Assoc.find
+                                  (if fine then !fine_swept_against else !swept_against)
+                                  ~equal:equal_seg_key key)
+                               ~f:(fun staff -> List.equal Poly.equal staff (without key incumbent))
+                           in
+                           List.fold
+                             (if swept_here then []
+                              else playoff_contenders ~fine_ok:fine ~current key)
+                             ~init:state
+                             ~f:(fun ((incumbent, incumbent_ms, incumbent_digest) as state) p ->
+                               (* What [p] would replace: [current] until an earlier alternate of
+                                  this key swapped in. *)
+                               let replaced =
+                                 List.Assoc.find_exn incumbent ~equal:equal_seg_key key
+                               in
+                               let alternate =
+                                 List.map incumbent ~f:(fun (k, q) ->
+                                     if equal_seg_key k key then (k, p) else (k, q))
+                               in
+                               match try_composite ~fine alternate with
+                               | None -> state
+                               | Some (_, _, alt_ms, alt_digest) ->
+                                   if
+                                     playoff_swaps ~fine ~key ~incumbent ~incumbent_ms
+                                       ~incumbent_digest ~alternate ~alt_ms ~alt_digest
+                                   then (
+                                     Int.incr n_playoff_swaps;
+                                     logf "playoff: segment %s: %s replaces %s" (seg_key_tag key)
+                                       (spec_label (Whole (W_sketch p)))
+                                       (spec_label (Whole (W_sketch replaced)));
+                                     (alternate, alt_ms, alt_digest))
+                                   else state))
+                        : (seg_key * sketch_params) list * float * string option)));
+            (* [None] iff the beam is empty: no candidate timed and the baseline was not eligible
+               (an undispatched GPU baseline never enters the beam with a finite rank; a declined
+               one does not enter it at all). *)
+            let best = ref (List.hd !beam) in
+            (* gh-ocannl-1635: the entries a round's decision set aside -- the beam an accepted
+               round replaced, the round a rejected one discarded -- oldest first. That decision
+               compares the round's readings with the incumbent's, taken in earlier windows, so the
+               beam finals below re-time the near-ties among them beside the final beam. *)
+            let displaced = ref [] in
+            let continue_ = ref true in
+            while
+              !continue_ && !rounds_run < rounds
+              && budget_allows ~what:(Printf.sprintf "round %d" (!rounds_run + 1)) ~floor:false
+            do
+              Int.incr rounds_run;
+              let head = Option.map (List.hd !beam) ~f:fst in
+              let per_entry =
+                List.mapi !beam ~f:(fun i (elem, ms) ->
+                    (* On a GPU backend the beam can hold an incumbent that was never dispatched —
+                       the serial baseline, whose [infinity] rank keeps it in the pool when fewer
+                       than [beam_width] candidates were timed. Expanding it is worthwhile only
+                       through the moves that can bind a hardware dimension (the [Tensorize] path
+                       the sketch comments describe); every other move provably yields another
+                       undispatchable candidate, which [try_spec]'s dispatchability skip drops after
+                       paying for its transform, codegen, compile and link (16 such compiles per
+                       round on the gh-ocannl-543 chain). Pruned moves are still counted in the
+                       census, so the refusal stays visible where it was before. *)
+                    let elem_dispatchable = dispatchable ~is_gpu elem.all_opts in
+                    (* Passed INTO [menu] so the refusal precedes its per-unit cap (gh-ocannl-685
+                       review): applied afterwards, the cap would first share its 48 slots across
+                       categories whose moves this predicate is about to reject, and a
+                       tensorize-rich unit would lose the very proposals that are the beam's only
+                       route out of an undispatchable incumbent. The census recording is unchanged
+                       and still happens per refused move, so the refusal stays as visible as it
+                       was. *)
+                    let admits op =
+                      if elem_dispatchable || optop_can_bind_hardware op then true
+                      else (
+                        logf "menu prune (cannot parallelize an undispatched incumbent): %s"
+                          (optop_family op);
+                        record_not_dispatched ~origin:"beam_move"
+                          ~detail:
+                            (Printf.sprintf
+                               "%s on an incumbent binding no hardware dimension cannot bind one \
+                                either"
+                               (optop_family op));
+                        false)
+                    in
+                    (* gh-ocannl-1229 (see [round_expansion]): the units this entry's moves extend.
+                       The head always expands in full. Units outside the scope are not even offered
+                       to [menu], so they cost no legality check and leave no census record. *)
+                    let differing =
+                      match (round_expansion, head) with
+                      | Expand_differing, Some head when i > 0 -> segments_differing head elem
+                      | _ -> None
+                    in
+                    let expanded (u : unit_gen) =
+                      match (round_expansion, differing) with
+                      | _ when i = 0 -> true
+                      | Expand_full, _ | Expand_differing, None -> true
+                      | Expand_head, _ -> false
+                      | Expand_differing, Some segs ->
+                          Option.exists u.u_segment ~f:(List.mem segs ~equal:Int.equal)
+                    in
+                    (* Per unit, in [elem.units]' order: whether the rule offered it to [menu], and
+                       the round candidates its moves became (gh-ocannl-1360). *)
+                    let per_unit =
+                      List.map elem.units ~f:(fun u ->
+                          if expanded u then
+                            ( u,
+                              true,
+                              List.filter_map
+                                (menu ~admits ~is_cpu ~is_gpu ~limits ~registry:u.u_registry u.u_opt)
+                                ~f:(fun op -> extend_spec elem u op) )
+                          else (u, false, []))
+                    in
+                    let entry =
+                      {
+                        entry_digest_tag = dshort elem.digest_after;
+                        entry_ms = ms;
+                        entry_segments_differing =
+                          Option.bind head ~f:(fun head -> segments_differing head elem);
+                        entry_units =
+                          List.map per_unit ~f:(fun ((u : unit_gen), unit_expanded, c) ->
+                              {
+                                unit_segment = u.u_segment;
+                                unit_expanded;
+                                unit_moves = List.length c;
+                              });
+                      }
+                    in
+                    ( elem,
+                      ms,
+                      List.count per_unit ~f:(fun (_, e, _) -> e),
+                      List.concat_map per_unit ~f:(fun (_, _, c) -> c),
+                      entry ))
+              in
+              let cands = List.concat_map per_entry ~f:(fun (_, _, _, c, _) -> c) in
+              (* Recorded before any candidate is attempted, so a report emitted while the round is
+                 in flight -- a fatal failure's, an abandonment's -- already carries it. *)
+              round_moves :=
+                {
+                  round_index = !rounds_run;
+                  round_expansion_rule = round_expansion_name round_expansion;
+                  round_entries = List.map per_entry ~f:(fun (_, _, _, _, e) -> e);
+                }
+                :: !round_moves;
+              (* gh-ocannl-1137: what the round expands. The beam is the [beam_width] fastest timed
+                 candidates, and a near-tie sweep (the gh-ocannl-1166 composite playoff, a
+                 block-size ladder) can fill it with variants of one schedule; [units differing]
+                 counts each entry's units whose saved schedule differs from the incumbent's, so a
+                 beam of near-copies reads as a column of small numbers, and [units expanded] says
+                 how many of its units the round's [round_expansion] rule offered to the menu
+                 (gh-ocannl-1229). *)
+              (match per_entry with
+              | [] -> ()
+              | (head, _, _, _, _) :: _ ->
+                  logf "round %d: %d candidate(s) from a beam of %d, expansion %s: %s" !rounds_run
+                    (List.length cands) (List.length per_entry)
+                    (round_expansion_name round_expansion)
+                    (String.concat ~sep:"; "
+                       (List.map per_entry ~f:(fun (elem, ms, n_units, c, _) ->
+                            Printf.sprintf
+                              "%s %.4f ms, %s units differing, %d of %d units expanded, %d move(s)"
+                              (dshort elem.digest_after) ms
+                              (Option.value_map (units_differing head elem) ~default:"resegmented"
+                                 ~f:Int.to_string)
+                              n_units (List.length elem.units) (List.length c)))));
+              (* Ranked like the seed pass, but in a SECOND accumulator, because a round's decision
+                 compares its own best against the incumbent and, if it wins, replaces the beam
+                 wholesale. Its entries were released at their timings, like every candidate's. *)
+              round := [];
+              let round_admit entry =
+                let kept, _evicted =
+                  List.split_n (List.sort (entry :: !round) ~compare:by_time) beam_width
+                in
+                round := kept
+              in
+              progress_phase_begin (Printf.sprintf "round%d" !rounds_run) (Some (List.length cands));
+              (* gh-ocannl-1527: a round candidate feeds only the round's own accumulator, which
+                 keeps its [beam_width] fastest; once that is full, a reading over its slowest
+                 enters nothing, so that is its window's hopeless reference. *)
+              let round_hopeless_against () =
+                if List.length !round >= beam_width then Option.map (List.last !round) ~f:snd
+                else None
+              in
+              List.iter cands ~f:(fun spec ->
+                  Option.iter
+                    (try_spec ~hopeless_against:round_hopeless_against spec)
+                    ~f:round_admit);
+              match !round with
+              | [] -> continue_ := false
+              | (_, round_best_ms) :: _ ->
+                  let incumbent_ms = Option.value_map !best ~default:Float.infinity ~f:snd in
+                  if Float.(round_best_ms < incumbent_ms *. (1. -. min_progress)) then (
+                    displaced := !displaced @ !beam;
+                    beam := !round;
+                    best := List.hd !beam)
+                  else (
+                    (* The round did not beat the incumbent by enough: the beam is unchanged, and
+                       the search stops. *)
+                    displaced := !displaced @ !round;
+                    continue_ := false;
+                    round := [])
+            done;
+            (* gh-ocannl-1635: the beam finals ([finals_contenders]). The pool is every entry the
+               search ranked as an incumbent: the final beam first, then [displaced], each entry
+               once. Its contenders are recompiled from their saved forms -- every candidate's
+               buffers went at its timing (gh-ocannl-1326) -- and re-timed by [finals_readings],
+               each under its own label and digest. The crown then follows the finals' readings
+               alone; [best_ms] stays the crown's search reading, the number its label, spread and
+               digest were recorded with. A contender left with no reading makes the finals
+               inconclusive, and the crown is then the first readings' head, as without finals.
+               Neither a refused window nor the budget marks the search as cut: every candidate the
+               menu proposed was already timed. *)
+            (let finals_pool =
+               let seen_digests = Hash_set.create (module String) in
+               List.filter (!beam @ !displaced) ~f:(fun ((c : compiled), _) ->
+                   if Hash_set.mem seen_digests c.digest_after then false
+                   else (
+                     Hash_set.add seen_digests c.digest_after;
+                     true))
+             in
+             let contenders =
+               finals_contenders ~margin:finals_margin ~width:beam_width finals_pool
+             in
+             let label_of (c : compiled) =
+               Option.value
+                 (Hashtbl.find label_by_digest c.digest_after)
+                 ~default:(dshort c.digest_after)
+             in
+             if not (List.is_empty contenders) then
+               if not (budget_allows_finals ()) then
+                 logf "finals: skipped, the budget is spent (%d contender(s))"
+                   (List.length contenders)
+               else (
+                 logf "finals: %d contender(s) re-timed together: %s" (List.length contenders)
+                   (String.concat ~sep:"; "
+                      (List.map contenders ~f:(fun (c, ms) ->
+                           Printf.sprintf "%s %.4f ms (digest %s)" (label_of c) ms
+                             (dshort c.digest_after))));
+                 (* No total, like the playoff's: a finals window is no attempt, so no candidate
+                    line follows the phase. *)
+                 progress_phase_begin "finals" None;
+                 let readings =
+                   finals_readings ~what:"finals" ~timed:n_finals_timed ~admitted:n_finals_admitted
+                     (List.map contenders ~f:(fun ((c : compiled), _) ->
+                          (label_of c, spec_of_form c.form, Some c.digest_after)))
+                 in
+                 let scored = List.zip_exn contenders readings in
+                 finals_record :=
+                   List.map scored ~f:(fun ((c, ms), rs) ->
+                       {
+                         contender_label = label_of c;
+                         contender_search_ms = ms;
+                         contender_finals_ms = List.min_elt rs ~compare:Float.compare;
+                       });
+                 let incumbent_digest =
+                   Option.map !best ~f:(fun ((c : compiled), _) -> c.digest_after)
+                 in
+                 match finals_crown scored with
+                 | None ->
+                     finals_outcome := Finals_inconclusive;
+                     logf
+                       "finals: inconclusive, a contender has no admitted reading: the crown stays \
+                        %s"
+                       (Option.value_map !best ~default:"none" ~f:(fun (c, _) -> label_of c))
+                 | Some ((((crown : compiled), first_ms) as e), finals_ms) ->
+                     let kept =
+                       Option.exists incumbent_digest ~f:(String.equal crown.digest_after)
+                     in
+                     finals_outcome := if kept then Finals_kept else Finals_swapped;
+                     logf "finals: %s %s (%.4f ms in the finals, %.4f ms in the search)"
+                       (if kept then "kept" else "crowned")
+                       (label_of crown) finals_ms first_ms;
+                     best := Some e));
+            let best_c, best_ms =
+              match !best with Some (c, ms) -> (Some c, ms) | None -> (None, Float.infinity)
+            in
+            (* Nothing was timed exactly when every candidate failed and (on GPU) the serial
+               baseline was never run — or, since gh-ocannl-533, was itself declined. Nothing
+               measured means nothing to cache: a stored entry would pin future processes to a
+               never-timed schedule. *)
+            let nothing_timed = Float.is_inf best_ms in
+            (* gh-ocannl-1409: see [budget_floor_unmeasured]. *)
+            let floor_unmeasured =
+              budget_floor_unmeasured ~budget_cut:!budget_cut ~auto_sched ~baseline_dispatched
+                ~floor_measured:(Option.is_some (default_ms ()) || Option.is_some (seeded_ms ()))
+            in
+            (if use_cache then
+               if floor_unmeasured then
+                 logf
+                   "the budget cut the search before it measured the untuned default: storing no \
+                    cache entry (gh-ocannl-1409)"
+               else if
+                 not
+                   (search_measurements_cacheable ~nothing_timed
+                      ~timings_contended:!n_timings_contended)
+               then
+                 if nothing_timed then
+                   logf "nothing was timed: storing no cache entry (gh-ocannl-532)"
+                 else
+                   logf "%d timing window(s) were refused as unusable: storing no cache entry"
+                     !n_timings_contended
+               else
+                 let saved, segments =
+                   let best_c = Option.value_exn best_c ~message:timed_winner_exists in
+                   match best_c.form with
+                   | Whole_saved saved -> (saved, None)
+                   | Fiss_saved segs -> ([], Some segs)
+                   | Split_saved (prelude, segs) -> (prelude, Some segs)
+                 in
+                 SC.store ~dir:cache_dir ~key
+                   {
+                     SC.version = SC.entry_version;
+                     backend;
+                     numerics = SC.numerics_tag ();
+                     codegen = Some codegen_tag;
+                     objective = Some objective;
+                     source_digest = base_digest;
+                     saved;
+                     segments;
+                     best_ms;
+                     baseline_ms;
+                     (* gh-ocannl-579: a measurement of the program, stored like the two above so
+                        the flip chain's profitability term reads the same evidence on a warm cache
+                        as on the cold run that measured it. Absent when nothing tensorized was
+                        timed. *)
+                     mma_best_ms =
+                       (if Float.is_finite !mma_best_ms then Some !mma_best_ms else None);
+                     best_spread = winner_spread best_c;
+                     default_ms = default_ms ();
+                     default_fingerprint =
+                       Option.map (default_ms ()) ~f:(fun _ ->
+                           Sched.default_schedule_fingerprint ~facts);
+                     best_steps =
+                       Some
+                         { SC.search_shape = Lazy.force search_shape; steps = List.rev !best_steps };
+                     budget_cut = !budget_cut;
+                     (* gh-ocannl-1725: what explains [best_ms] against the other readings above, so
+                        the replay can explain it too. *)
+                     finals = Some { SC.outcome = !finals_outcome; contenders = !finals_record };
+                   });
+            (* Diagnostic control (config [autotune_log], or [tune]'s [?log]): compile and time the
+               UNTUNED default pipeline in this very process, on the search context — discriminates
+               a genuinely slow winner from process-state effects when the winner's code nominally
+               equals the untuned program yet a separately-run untuned process measures faster (PR
+               #140 round 6: same digest, 3.4x runtime difference across processes on cuda). *)
+            (if log_enabled () then
+               match
+                 progress_stage "untuned_control";
+                 costed ~attempt:"untuned control"
+                   ~verdict_of:(fun _ -> "compiled")
+                   (fun () -> D.compile ?name search_ctx comp bindings)
+               with
+               | cctx, croutine ->
+                   (match
+                      before_timing_window ();
+                      time_routine ~timing ~repeats cctx croutine
+                    with
+                   | timing_result -> (
+                       match admitted_timing_ms timing_result with
+                       | Some ms -> logf "untuned-default in-process control: %.4f ms" ms
+                       | None ->
+                           logf "untuned-default in-process control: refused (%s)"
+                             (refusal_reason (timing_admission timing_result)))
+                   | exception exn ->
+                       logf "untuned-default control run failed: %s" (Exn.to_string exn));
+                   (* A diagnostic's artifacts are dead the moment it has printed its number
+                      (gh-ocannl-550) — and the diagnostic is on exactly when the memory question is
+                      being measured, so leaving them behind would show up in the very census that
+                      reads it. Best-effort, like [release_candidate]: this runs after a timing
+                      failure the control deliberately swallowed, and [release] awaits the device,
+                      so a backend still reporting that failure must not be allowed to turn a
+                      completed search with a valid winner into a fatal one. *)
+                   release_quietly ~what:"the untuned-default control" cctx
+               | exception exn ->
+                   logf "untuned-default control compile failed: %s" (Exn.to_string exn));
+            let completed_report =
+              {
+                outcome = Searched;
+                timing;
+                candidates_timed = !n_timed;
+                timings_contended = !n_timings_contended;
+                timings_retried = !n_timings_retried;
+                timings_unbatched = !n_timings_unbatched;
+                timings_unreadable = !n_timings_unreadable;
+                timings_dispersed = !n_timings_dispersed;
+                timings_hopeless = !n_timings_hopeless;
+                timings_retimed = !n_timings_retimed;
+                timing_decisions = timing_decisions ();
+                candidates_contended = candidates_contended ();
+                default_refused = default_refused ();
+                candidates_failed = failed_count declines;
+                baseline_declined = Option.is_some baseline_decline;
+                baseline_refusal = !baseline_refusal;
+                declines = decline_summaries declines;
+                privatize_drops = decline_summaries privatize_declines;
+                cache_replay_refusal = !cache_replay_refusal;
+                rounds_run = !rounds_run;
+                round_moves = List.rev !round_moves;
+                finals = !finals_record;
+                finals_timed = !n_finals_timed;
+                finals_admitted = !n_finals_admitted;
+                finals_outcome = !finals_outcome;
+                budget_cut = !budget_cut;
+                budget_s;
+                call_budget_s;
+                call_share_s;
+                compiles = 0 (* Stamped by [emit_report]. *);
+                replay_compiles = 0;
+                beam_width;
+                sketch_candidates = List.length sketch_params;
+                epilogue_sketch_candidates = List.count sketch_params ~f:(fun p -> p.sk_epilogue);
+                fiss_sketch_candidates = !n_fiss_sketch_candidates;
+                fiss_sketch_timed = !n_fiss_sketch_timed;
+                fiss_sketch_composite = !fs_composite;
+                fiss_sketch_playoff_timed = !n_playoff_timed;
+                fiss_sketch_playoff_swaps = !n_playoff_swaps;
+                fiss_sketch_playoff_finals = !n_playoff_finals;
+                fiss_sketch_playoff_finals_timed = !n_playoff_finals_timed;
+                fiss_sketch_playoff_finals_admitted = !n_playoff_finals_admitted;
+                fiss_sketch_staffed_timed = !n_staffed_timed;
+                fiss_sketch_backdrop_fallbacks = !n_backdrop_fallbacks;
+                staffed_finals = !n_staffed_finals;
+                staffed_finals_timed = !n_staffed_finals_timed;
+                staffed_finals_admitted = !n_staffed_finals_admitted;
+                seeded_single_candidates = !n_seeded_single_candidates;
+                seeded_single_timed = !n_seeded_single_timed;
+                seeded_single_joins = !n_seeded_single_joins;
+                seeded_single_fallbacks = !n_seeded_single_fallbacks;
+                seeded_split_candidates = !n_seeded_split_candidates;
+                seeded_split_timed = !n_seeded_split_timed;
+                seeded_split_joins = !n_seeded_split_joins;
+                seeded_hopeless = !n_seeded_hopeless;
+                split_reduce_candidates = List.length sr_specs;
+                split_reduce_timed = !n_sr_timed;
+                split_reduce_composite_eligible = !sr_composite_eligible;
+                split_reduce_composite_timed = !sr_composite_timed;
+                split_reduce_backdrop_fallbacks = !n_sr_backdrop_fallbacks;
+                mma_candidates = !n_mma_proposed;
+                fiss_mma_candidates = !n_fiss_mma_proposed;
+                mma_timed = !n_mma_timed;
+                model_scored = !n_model_scored;
+                model_pruned = !n_model_pruned;
+                bound_pruned = !n_bound_pruned;
+                fissioned = Option.exists best_c ~f:(fun c -> is_fissioned c.form);
+                baseline_ms;
+                default_ms = default_ms ();
+                seeded_ms = seeded_ms ();
+                best_ms;
+                best_label = winner_label best_c;
+                best_tensorized = winner_tensorized best_c;
+                best_tensorization =
+                  Option.map best_c ~f:(fun c -> (mma_summary c).Ir.C_syntax.tensorization);
+                best_mma_statements = Option.value_map best_c ~default:0 ~f:mma_statements;
+                best_mma_scalar_fallbacks =
+                  Option.value_map best_c ~default:0 ~f:mma_scalar_fallbacks;
+                best_grid = Option.map best_c ~f:(fun c -> D.routine_grid c.routine);
+                grid_serial_timed = List.rev !grid_serial_timed;
+                mma_best_ms = !mma_best_ms;
+                best_spread = winner_spread best_c;
+                best_schedule =
+                  Option.value_map best_c ~default:[] ~f:(fun c -> flat_schedule c.form);
+                source_digest = base_digest;
+                best_steps = List.rev !best_steps;
+                (* Filled in by [emit_report], like every report's. *)
+                compile_cost = Ir.Compile_cost.empty;
+              }
+            in
+            (* What ships, as the compile that produces it: run here unless the call is deferred
+               (gh-ocannl-1408). Every branch sweeps the candidates first, so a deferred call leaves
+               nothing of its search resident. *)
+            let ship =
+              if floor_unmeasured && not nothing_timed then (
+                logf
+                  "the budget cut the search before it measured the untuned default: shipping the \
+                   untuned default compile (gh-ocannl-1409)";
+                release_all_candidates ();
+                untuned_default_or_raise)
+              else if nothing_timed then (
+                (* Returning the incumbent here would hand the caller the very serial routine this
+                   search refused to dispatch (gh-ocannl-532) — slower than not tuning at all, and
+                   on GPU unbounded. The untuned compile is the honest fallback: the same code the
+                   caller would have compiled without the tuner, the seeded plan where there is
+                   one. *)
+                logf
+                  "nothing was timed: falling back to the untuned default compile (gh-ocannl-532)";
+                release_all_candidates ();
+                untuned_default_or_raise)
+              else
+                (* [nothing_timed] is false, so the beam holds a timed winner. *)
+                let best_c = Option.value_exn best_c ~message:timed_winner_exists in
+                (* Compile the winner from the caller's context out of its saved schedule, as the
+                   cache-hit path does: every candidate's buffers were released at its timing
+                   (gh-ocannl-1326), and with [timing_ctx] the search ran against the scratch
+                   lineage anyway. Digest mismatch or replay failure falls back to the production
+                   default schedule. *)
+                let spec = spec_of_form best_c.form in
+                (* The rebuilt spec has lost what the winner was timed as: a round candidate's
+                   parent and move, a sketch's or preset's parameters -- its saved form alone would
+                   print as the bare [F_saved[N segs]] every round candidate of one parent shares.
+                   So the replay, and a failure it reports, carry the label the winner was timed
+                   under, which is also the report's [best_label]. *)
+                let label =
+                  match winner_label (Some best_c) with "" -> spec_label spec | l -> l
+                in
+                (* Nothing the replay needs is an artifact — [spec] above is the winner's saved
+                   schedule — so whatever the search still owns goes before the compile that
+                   reproduces it (gh-ocannl-550). *)
+                release_all_candidates ();
+                fun () ->
+                  progress_stage "winner_compile";
+                  match compile_spec_real ~label Outcome.Candidate spec with
+                  | Ok c when not (shipped_dispatchable ~is_gpu c) ->
+                      (* Completes the invariant rather than fixing an observed bug: the winner was
+                         timed, so it was dispatchable when measured, and the replay is
+                         digest-guarded. But this is the last of the three ways [tune] hands back a
+                         routine, and none of them may return an unparallelized GPU routine
+                         (gh-ocannl-532). The default compile is the same fallback a failed replay
+                         takes. *)
+                      logf "winner replay produced an unparallelized routine, falling back: %s"
+                        label;
+                      (* gh-ocannl-550: rejected, so dead — and the fallback compile below wants the
+                         memory. Same one-liner as the rejected cache replay above; the pre-replay
+                         sweep could not cover this context, which did not exist yet. *)
+                      release_quietly ~what:"the rejected winner replay" c.cctx;
+                      substituted := true;
+                      untuned_default_or_raise ()
+                  | Ok c ->
+                      logf "winner replay ok: %s" label;
+                      (c.cctx, c.routine)
+                  | Error (Outcome.Classified classified) ->
+                      logf "winner replay FAILED (%s), falling back to the default compile: %s"
+                        label
+                        (Outcome.detail_of_cause classified.cause);
+                      (* gh-ocannl-1480: unconditional, not [logf]. The saved form of a candidate
+                         this very search timed must replay; when it does not, the search's work is
+                         discarded and the untuned default ships, which a caller otherwise learns
+                         only from [Train.shipped.ship_substituted] or an [autotune_log] trace. *)
+                      Stdio.eprintf
+                        "autotune: WARNING: routine %S: the searched winner %s did not replay \
+                         (%s); shipping the untuned default in its place\n\
+                         %!"
+                        (Lazy.force routine_name) label
+                        (Outcome.detail_of_cause classified.cause);
+                      substituted := true;
+                      untuned_default_or_raise ()
+                  | Error (Outcome.Fatal fatal) -> emit_partial_and_raise fatal
+            in
+            let result = if defer then ship else Fn.const (ship ()) in
+            (* The report describes the routine returned (Codex P1 on PR #1234): a caller ranking
+               arms by [best_ms] must not credit this one with a candidate it discarded, and the
+               untuned default it ships was never timed -- the nothing-timed report's shape. *)
+            let completed_report =
+              if floor_unmeasured && not nothing_timed then
+                {
+                  completed_report with
+                  best_ms = Float.infinity;
+                  best_label = "";
+                  best_tensorized = false;
+                  best_tensorization = None;
+                  best_mma_statements = 0;
+                  best_mma_scalar_fallbacks = 0;
+                  best_grid = None;
+                  best_schedule = [];
+                  fissioned = false;
+                  best_steps = [];
+                }
+              else completed_report
+            in
+            (result, completed_report)
+          in
+          let result, completed_report =
+            let escaped ~phase exn backtrace =
+              if !partial_emitted then Stdlib.Printexc.raise_with_backtrace exn backtrace
+              else emit_partial_and_raise { exn; backtrace; phase; candidate = None; cause = None }
+            in
+            try search () with
+            | Abandon_now ab ->
+                logf
+                  "abandoned after %d timed candidates: best %.4f ms trails the incumbent's %.4f \
+                   ms at the same depth by more than %.4gx"
+                  ab.ab_timed ab.ab_best_ms ab.ab_incumbent_ms ab.ab_ratio;
+                (* Built before the sweep, which the report's winner label outlives (see
+                   [release_all_candidates]). No winner is crowned, but the clean measured prefix
+                   can spare a replay this same search (gh-ocannl-1136). *)
+                let r = partial_report (Abandoned ab) in
+                release_all_candidates ();
+                if
+                  use_cache
+                  && search_measurements_cacheable ~nothing_timed:false
+                       ~timings_contended:r.timings_contended
+                then
+                  SC.store_abandonment ~dir:cache_dir ~key
+                    {
+                      SC.version = SC.entry_version;
+                      source_digest = base_digest;
+                      trajectory =
+                        { SC.search_shape = Lazy.force search_shape; steps = r.best_steps };
+                    };
+                (* The callback's own exception propagates, as on the completion path. *)
+                emit_report r;
+                raise (Search_abandoned ab)
+            (* A raise that carries its phase keeps it: the lineage-wide pre-dispatch validation is
+               deliberately raised outside the candidate loop's failure boundary (gh-ocannl-569), so
+               it arrives here rather than at a classifier, and reporting it under the [Transform]
+               default below would tell the caller a validation error was a transform failure. The
+               original exception is re-raised, not the wrapper, so the caller still sees its
+               message. *)
+            | Outcome.Raised_at (phase, exn, backtrace) -> escaped ~phase exn backtrace
+            | exn -> escaped ~phase:Outcome.Transform exn (Stdlib.Printexc.get_raw_backtrace ())
+          in
+          (* A callback failure on the ordinary completion path is the callback's own exception and
+             propagates normally; only fatal-path callbacks are best-effort. But propagating means
+             the caller never receives [result], so its buffers become unreachable while the pool
+             table keeps rooting them (gh-ocannl-550) — one full winner's footprint per aborted
+             report, which for a caller that retries would accumulate exactly like the candidates
+             used to. The exit sweep above deliberately kept this one; nothing is keeping it now. *)
+          if defer then (
+            emit_report completed_report;
+            deferred_compile result)
+          else (
+            report_or_release completed_report ~result:(result ());
+            result)
 
-type deferred = {
-  compile : unit -> Context.t * Context.routine;
-  substituted : bool ref;
-  compiles : int Atomic.t;
-}
+  (* [?log] and [?progress] scope [autotune_log] and [autotune_progress] to this call: every
+     diagnostic the search emits, the untuned control it gates, the cache-hit and fallback lines,
+     and every progress line read {!log_enabled} and {!progress_enabled} inside the scope. *)
+  let tune ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
+      ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?log ?progress ?report ctx comp
+      bindings =
+    exclusive_search @@ fun () ->
+    with_streams ?log ?progress (fun () ->
+        with_timing_state_restored (fun timing_state ->
+            tune_in_stream_scope ~timing_state ~defer:false ~substituted:(ref false) ?name ?search
+              ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction
+              ?max_split_reduce_sites ?timing_ctx ?abandon ?report ctx comp bindings ()))
 
-let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
-    ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?call_budget ?log ?progress ?report
-    ctx comp bindings =
-  let substituted = ref false in
-  exclusive_search @@ fun () ->
-  with_streams ?log ?progress (fun () ->
-      {
-        substituted;
-        compiles = Atomic.make 0;
-        compile =
-          (* The search runs here, so its lineage is restored here, before the thunk is handed
-             back. *)
-          with_timing_state_restored (fun timing_state ->
-              tune_in_stream_scope ~timing_state ~defer:true ~substituted ?name ?search ?beam_width
-                ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction
-                ?max_split_reduce_sites ?timing_ctx ?abandon ?call_budget ?report ctx comp bindings);
-      })
+  type deferred = {
+    compile : unit -> D.ctx * D.routine;
+    substituted : bool ref;
+    compiles : int Atomic.t;
+  }
 
-let compile_deferred d =
-  let before = Context.backend_compiles () in
-  (* Atomic (review round 3): a memoized call on another domain adds its zero concurrently with the
-     compiling call's count. The counter itself is per domain, and the compile runs on the
-     caller's. *)
-  Exn.protect ~f:d.compile ~finally:(fun () ->
-      ignore (Atomic.fetch_and_add d.compiles (Context.backend_compiles () - before) : int))
+  let tune_deferred ?name ?search ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir
+      ?keep_fraction ?max_split_reduce_sites ?timing_ctx ?abandon ?call_budget ?log ?progress
+      ?report ctx comp bindings =
+    let substituted = ref false in
+    exclusive_search @@ fun () ->
+    with_streams ?log ?progress (fun () ->
+        {
+          substituted;
+          compiles = Atomic.make 0;
+          compile =
+            (* The search runs here, so its lineage is restored here, before the thunk is handed
+               back. *)
+            with_timing_state_restored (fun timing_state ->
+                tune_in_stream_scope ~timing_state ~defer:true ~substituted ?name ?search
+                  ?beam_width ?rounds ?repeats ?timing ?seed_block_sizes ?cache_dir ?keep_fraction
+                  ?max_split_reduce_sites ?timing_ctx ?abandon ?call_budget ?report ctx comp
+                  bindings);
+        })
 
-let deferred_compiles d = Atomic.get d.compiles
-let shipped_substitute d = !(d.substituted)
+  let compile_deferred d =
+    let before = D.backend_compiles () in
+    (* Atomic (review round 3): a memoized call on another domain adds its zero concurrently with
+       the compiling call's count. The counter itself is per domain, and the compile runs on the
+       caller's. *)
+    Exn.protect ~f:d.compile ~finally:(fun () ->
+        ignore (Atomic.fetch_and_add d.compiles (D.backend_compiles () - before) : int))
+
+  let deferred_compiles d = Atomic.get d.compiles
+  let shipped_substitute d = !(d.substituted)
+end
+
+(** {2 The production instantiation}
+
+    The only code in this file naming [Context] or [Ir.Assignments] (gh-ocannl-1754): the adapter
+    presenting {!Context} as a {!Driver}, and the [include] that makes [Autotune.tune] and its
+    siblings the autotuner over it. gh-ocannl-852's move carries this section with [Context]. *)
+
+module Context_driver = struct
+  include Context
+
+  type ctx = Context.t
+  type program = Ir.Assignments.comp
+  type reuse = Ir.Lowering_reuse.t
+
+  let routine_name (r : routine) = r.name
+  let routine_id (r : routine) = r.routine_id
+  let routine_bindings (r : routine) = r.bindings
+  let routine_grid (r : routine) = r.grid
+  let routine_segments (r : routine) = r.segments
+  let routine_mma (r : routine) = r.mma
+
+  (* The name a compile given no [?name] derives ([Backends.lower_assignments]); [None] where that
+     derivation raises, for the compile itself to refuse. *)
+  let program_name (comp : program) =
+    match Ir.Assignments.get_name_exn comp.asgns with
+    | derived -> Some derived
+    | exception Invalid_argument _ -> None
+
+  let program_nodes (comp : program) =
+    let ins, outs = Ir.Assignments.collect_nodes_guess_output comp.asgns in
+    Set.union ins outs
+
+  let reuse_create = Ir.Lowering_reuse.create
+  let reuse_reseed = Ir.Lowering_reuse.reseed
+end
+
+include Make (Context_driver)

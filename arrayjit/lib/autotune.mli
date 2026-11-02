@@ -1,3 +1,4 @@
+open Base
 (** {1 Empirical schedule search (autotuning)}
 
     tinygrad-style beam search over {!Ir.Schedule} transforms, timed on the real device
@@ -156,9 +157,8 @@
     {!matmul_sketch_tree}, {!sketch_schedule}, {!sketch_path_traffic_floor}, …) are defined there,
     and {!sketch_seed_params} is the composition the search enumerates. *)
 
-open Base
-
 (** Which pair a coalesced seed merges; see {!Sketch_families.coalesce_layout}. *)
+
 type coalesce_layout = Sketch_families.coalesce_layout = Coalesce_columns | Coalesce_contraction
 [@@deriving sexp]
 
@@ -784,6 +784,7 @@ val seeding_census_lines : where:string -> seeding_census -> string list
 (** A GEMM role a GPU tensorized seed pads (gh-ocannl-1736): a row or column pad masks the
     accumulator's fragment transfers, a reduction pad masks nothing ([Tensorize] discharges its
     guard against the zero-fringe staged tiles). *)
+
 type pad_role = Pad_row | Pad_column | Pad_reduction
 
 type seed_pad = { pad_role : pad_role; pad_extent : int; pad_block : int }
@@ -1133,6 +1134,7 @@ type abandonment = {
     searched" is two — a deliberate no-search that ships the untuned default and returns, and a
     failure before the search that reports and then raises. The old encoding could not tell them
     apart either, it just did not say so. *)
+
 type outcome =
   | Searched
       (** A search ran and completed: candidates were proposed and compiled or timed, leaving the
@@ -1274,6 +1276,7 @@ val admitted_timing_ms : timing_result -> float option
 
 (** Which exit of the calibration chose the depth, before the post-calibration bounds
     ({!batch_decision}'s [bounded_from], [fallback_from], [rescue]) adjusted it. *)
+
 type batch_settle =
   | Isolated_objective  (** {!Isolated}: no calibration, depth 1. *)
   | Single_estimate  (** The cc/Metal policy: the synchronized singles' estimate alone. *)
@@ -1292,6 +1295,7 @@ type batch_settle =
 
 (** The call's admission verdict, in {!admitted_timing_ms}'s terms; a refusal names the first of
     [unbatched], an unreadable reading, [contended] that holds ({!timing_admission}). *)
+
 type batch_admission = Admitted | Refused_unbatched | Refused_contended | Refused_unreadable
 
 val timing_admission : timing_result -> batch_admission
@@ -1364,6 +1368,7 @@ type round_moves = {
     the finals crowned the entry the search's own readings put first. [Finals_swapped]: they crowned
     another. [Finals_inconclusive]: some contender has no admitted finals reading (a refused, failed
     or budget-stopped window), so the crown is the search's readings' head, as without finals. *)
+
 type finals_outcome = Ir.Schedule_cache.finals_outcome =
   | Finals_not_run
   | Finals_kept
@@ -2552,26 +2557,6 @@ type placement_surface = {
 (** The placement decision surface prepared for search (gh-ocannl-514): the per-node
     inline/materialize levels of the joint placement x sketch x fission space. *)
 
-val placement_surface :
-  ?name:string ->
-  ?ordering:[ `Cost | `Enablement | `Profitable ] ->
-  ?evidence:report list ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  placement_surface
-(** Read and rank the decision surface from [ctx] (analyze-only — two hermetic lowerings via
-    {!Context.lowered_for_decisions}, sharing the gh-560 analysis cache; no backend codegen, no
-    effect on [ctx]). [name] names the computation for those lowerings exactly as
-    {!Context.compile}'s does, and is what makes this work for a comp carrying no
-    {!Ir.Assignments.Block_comment} (gh-ocannl-669). [ordering] defaults from config
-    [tune_flip_ordering] ([profitable]). [evidence] is the completed searches [`Profitable] weighs
-    the enablement prior against ({!family_profit_of_reports}, reported as [ps_profit]):
-    [Train.tune_placements]' flip refinement passes the placement A/B arms' reports, while
-    {!model_default}'s placement search (config [model_default_placements]) passes none — it
-    measures nothing, so the prior stands there. Under an unconditional ordering the evidence is not
-    derived at all, so such a run never reads [tune_flip_profit_margin]. *)
-
 val flip_twin_identity :
   static_indices:Ir.Indexing.static_symbol list ->
   lineage:Ir.Tnode.Placements.t ->
@@ -2624,76 +2609,6 @@ val model_default_enabled : bool Lazy.t
 (** Config [model_default_schedule]: recipe-level untuned compiles ({!Train.to_routine},
     {!Train.run_once}, the benchmark runners) route through {!model_default} instead of
     {!Context.compile}. *)
-
-val compile_advisory :
-  ?name:string ->
-  ?on_fallback:(exn -> unit) ->
-  ?fallback_if:(unit -> bool) ->
-  ?on_unrecovered:(Ir.Schedule_outcome.classified_cause -> Context.t * Context.routine) ->
-  (Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  Context.t * Context.routine
-(** {!Context.compile_outcome} with advisory provenance and the given [lowered_transform], falling
-    back to a plain {!Context.compile} — the ordinary default pipeline — for a classified compiler
-    rejection, including validation in backend codegen. Fatal failures propagate without retrying.
-    [on_fallback] is called with the public rendering of the cause when fallback fires.
-    [fallback_if] (default: always) is consulted first, for transforms that may themselves have
-    degraded to the default pipeline — [false] re-raises the original exception, backtrace included,
-    instead of duplicating a compile that has nothing to fall back to; given [on_unrecovered], that
-    classified cause is handed to it instead of raised — as is a classified failure of the fallback
-    compile itself — so a caller with a fallback of its own acts on a classified rejection alone,
-    never on a fatal failure (gh-ocannl-1390). For advisory transforms only: a failure of the
-    default pipeline itself propagates. [name] names the routine, exactly as {!Context.compile}'s
-    does, and reaches the fallback compile too. See {!model_default} (gh-ocannl-519). *)
-
-val model_default :
-  ?name:string ->
-  ?report:(model_choice -> unit) ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  Context.t * Context.routine
-(** A drop-in for {!Context.compile} that raises the untuned floor (gh-ocannl-491 task 3): inside
-    the compile's own transform seam, the untuned default pipeline and the sketch families
-    (whole-routine, and per-fission-segment substitutions where the search's segmentation splits the
-    routine, their unsketched segments on the configured presets, gh-ocannl-1512) are scored with
-    the cost model's ranking score ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253: the roofline,
-    with operand re-reads requested per block and charged at DRAM bandwidth once the working set
-    exceeds the cache capacity, at the cache bandwidth within it — {!ranking_capacity},
-    {!ranking_cache_bandwidth}), and the argmin schedule is applied — zero measurement, one backend
-    compile. The family search's bound stays the distinct-cell floor, below every ranking score.
-    Sketch leaves whose scores tie exactly are ordered by their tile-MMA operand loads under the
-    backend's [mma_operand_loads] capability ({!model_family_search}, gh-ocannl-1254). Advisory by
-    construction: a candidate without model coverage is never picked over the default, ties go to
-    the default, and missing envelope constants, a disabled default annotator
-    ({!Ir.Schedule.automatic_schedule_active}), or any classified scoring, application, backend
-    validation, or compilation failure fall back to the ordinary default pipeline — the reported
-    {!model_choice} then says ["default"]. On CUDA and HIP with the seeding on (as for
-    {!seeded_default}), the model starts from the seeded untuned plan instead (gh-ocannl-1253,
-    {!seeded_plan} under the configured gate, [auto] included): it is the incumbent and the pick
-    when no candidate strictly beats it ([mc_label] ["seeded"], even where no segment seeds and the
-    plan is the default pipeline -- a plan the compile then does not retry on a backend failure, as
-    for the default). Each family walk -- the whole routine's, and each keyed segment's of the
-    per-segment substitution -- is anchored at the seeded plan's own sketch on that program (the
-    parameters its record says it applied there, never its gate re-run on that program), scored as
-    the walk's leaves are (gh-ocannl-1477): the plan runs its zero-fill as a kernel of its own,
-    which the per-kernel score charges separately while a leaf hides it under its compute leg, so
-    without the anchor a leaf that only ties the seeded geometry beat the plan. A leaf the score
-    separates from it still can; a per-segment substitution keeps the seeded sketch on every segment
-    no leaf strictly improves. The candidates compete on the program after the plan's split prelude,
-    and the sketch candidates are restricted to the seeding's numerics-preserving forms — scalar
-    block tiles at a site accumulating at its storage precision — so the pick never changes a value
-    the untuned compile computes. Fatal failures propagate without retrying. Once the compile is on
-    that pipeline there is nothing left to fall back to, so its failures propagate as they would
-    from {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed and no
-    cache is involved — results depend only on the computation, backend, and envelope constants.
-
-    Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the routine
-    and every artifact of this compile — the model pick's, the fallback's, and the hermetic
-    lowerings of the placement search alike — and, as there, a comp carrying no
-    {!Ir.Assignments.Block_comment} requires it. *)
 
 val model_operand_loads :
   capabilities:Ir.Backend_intf.codegen_capabilities ->
@@ -2863,6 +2778,7 @@ val seeded_split_sites :
     where CUDA gained 1.39x. Exposed for tests. *)
 
 (** Which segments {!seeded_default} seeds (gh-ocannl-1253). *)
+
 type seed_gate =
   | Min_reduction of int
       (** gh-ocannl-1324's threshold: a site whose {!site_reduction_extent} is at least this; [0]
@@ -2910,6 +2826,7 @@ val model_seeding :
     them; [None] where the incumbent is the default pipeline. *)
 
 (** What the seeded plan does with one segment (gh-ocannl-1388). *)
+
 type seeded_segment =
   | Seeded_preset  (** The default preset, as the default pipeline schedules the segment. *)
   | Seeded_sketch of { digest : string; params : sketch_params }
@@ -3063,103 +2980,10 @@ val refine_segments :
     coarse segments otherwise. Returns the result with each segment's seed, and the number of coarse
     segments replaced. *)
 
-val seeded_transform :
-  ?min_reduction:int ->
-  ?seed_gate:seed_gate ->
-  ?min_serial:int ->
-  ?reduction_sink:bool ->
-  ?seed_narrow:bool ->
-  ?on_choice:(seeded_choice -> unit) ->
-  Context.t ->
-  Ir.Indexing.unit_bindings ->
-  (Ir.Low_level.optimized -> Ir.Low_level.optimized list) option
-(** The [lowered_transform] {!seeded_default} compiles through, for a caller that drives
-    {!Context.compile_outcome} itself (a benchmark keeping its own failure classification): [None]
-    where {!seeded_default} would compile the plain default (another backend, automatic scheduling
-    inactive, fission off, a threshold of 0 with the reduction sink off). The transform calls
-    [on_choice] with what it seeded and sank, and falls back to the default segments itself when the
-    seeded pipeline does not apply; a failure in backend compilation is the caller's, as
-    {!seeded_default}'s fallback is not part of it. *)
-
-val pinned_sketch_transform :
-  select:(sketch_params -> bool) ->
-  ?on_leaf:(sketch_params -> unit) ->
-  Context.t ->
-  Ir.Indexing.unit_bindings ->
-  Ir.Low_level.optimized ->
-  Ir.Low_level.optimized list
-(** A [lowered_transform] applying, to a routine with one matmul site, the first whole-routine
-    scalar blocktile leaf ({!scalar_blocktile}) of {!matmul_sketch_tree} that [select] accepts —
-    reported to [on_leaf] — as {!model_default} applies a whole-routine pick (gh-ocannl-1479: the
-    launch sweep of [Calibrate] pins one geometry across sizes). Raises [Utils.User_error] on a
-    backend without the GPU sketch family (checked at partial application), and when no site is
-    detected or no leaf matches. *)
-
 val ranking_multiprocessors : limits:Ir.Backend_intf.hardware_limits -> int option
 (** The launch fill's multiprocessor count alone (gh-ocannl-1479): config [model_multiprocessors]
     over the backend's advisory [multiprocessors]; the calibration's input, which needs it before a
     saturating thread count exists. An [Untimed] reading, like {!ranking_capacity}. *)
-
-val seeded_default :
-  ?name:string ->
-  ?min_reduction:int ->
-  ?seed_gate:seed_gate ->
-  ?min_serial:int ->
-  ?reduction_sink:bool ->
-  ?seed_narrow:bool ->
-  ?report:(seeded_choice -> unit) ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  Context.t * Context.routine
-(** A drop-in for {!Context.compile} that gives the untuned GPU default operand reuse on its large
-    contractions (gh-ocannl-1324), without timing or scoring anything: the default pipeline's own
-    fission segmentation, with each segment {!seeded_params} admits scheduled by that sketch instead
-    of the default preset. The default segmentation is compared with the finer [arity_cuts] one
-    ({!Ir.Schedule.fission_segmented}) block by block ({!refine_segments}, gh-ocannl-1413): where a
-    run of default segments, between boundaries the two share, holds fewer seeding segments than the
-    finer segments covering the same units, the finer ones replace it — a weight gradient cut away
-    from the bias gradient over the same rows, a projection's data gradients cut away from its
-    weight gradient, attention's score product cut away from the row maximum's initialization (a
-    moved boundary). Such a replacement can change the launch count; every segment outside those
-    runs is exactly the default's. On CUDA and HIP only, with automatic scheduling active and
-    fission on; [seed_gate] (default: {!seeded_default_gate}, config
-    [gpu_default_sketch_min_reduction], [auto]: the ranked gate, or 32 on a device publishing no
-    cache constants) decides which segments seed, and [min_reduction] is
-    [~seed_gate:(Min_reduction n)] (passing both is an [Invalid_argument]). Every seeded segment is
-    probed alone first (the sketch must apply and pass {!Ir.Low_level.validate_parallel}); a segment
-    that fails keeps the preset, and a classified failure of the whole seeded compile recompiles the
-    default pipeline ({!compile_advisory}). The scalar blocktile pipeline keeps each output's
-    summation order, and only sites whose accumulator is at their storage precision are seeded, so
-    the seeded sketches leave the routine's results bitwise the default's.
-
-    [seed_narrow] (default: config [gpu_default_seed_narrow_storage], false; true in the
-    [approximate] profile, pinned false in [reproducible]; gh-ocannl-1405) also seeds and sinks the
-    sites whose accumulator precision widens their storage precision under the backend's
-    [accum_prec] -- a bf16 weight gradient on CUDA (and on HIP unless [bf16_arithmetic=true]), fp8
-    on both, f16 under [fp16_arithmetic=false]. A seeded one keeps its result bitwise: the sketch's
-    [Privatize] tile stays at storage precision wherever the default narrows inside the reduction
-    (gh-ocannl-1151). A sunk one does not: localized below its write loops, the accumulator is held
-    wide across the whole reduction and rounds to storage once where the default rounds after every
-    step, so the result changes, towards the exact sum -- which is why the admission is a numerics
-    gate. {!model_default}'s numerics-preserving set follows the same admission.
-
-    Before segmenting (on CUDA and HIP), the reductions {!seeded_split_sites} admits at [min_serial]
-    (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are split
-    whole-routine, as the search's [F_split] seeds split them (gh-ocannl-1325): a bias or layer-norm
-    parameter gradient, which the default runs as one thread per output cell walking every batch row
-    in sequence, becomes a parallel pass over blocks of rows and a combine. That DOES change the
-    summation order of those reductions -- a deterministic balanced tree over the blocks, chosen
-    from the routine alone -- as the default plan's cooperative all-reduces (gh-ocannl-1124) do.
-
-    Every [`Normal] segment no sketch takes gets {!reduction_sink}'s interchange, then the default
-    preset of the interchanged code (gh-ocannl-1348), probed alone like a seed, and covered by the
-    same fallback to the default pipeline when the compile fails classified: a batch reduction into
-    a bias or layer-norm parameter gradient then keeps its accumulator in a register instead of
-    reading and writing its device cell every step under the preset's in-loop guard — which HIP's
-    compiler does not promote, though NVRTC does. Values stay bitwise the default's.
-    [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
-    with the seeding disabled too. Reads and writes no schedule cache. *)
 
 type explain_kernel = {
   ek_compute_ms : float option;
@@ -3265,46 +3089,6 @@ type explanation = {
           {!model_default} makes no per-segment substitution: fission splits nothing and exposes no
           changed lowering, or the segmentation declines. *)
 }
-
-val model_explain :
-  ?name:string ->
-  ?coalesced:bool ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  explanation
-(** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
-    compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): the whole-routine candidates
-    and, per segment, the per-segment ones (gh-ocannl-1438), each with whether the numerics
-    restriction admits it. The lowering is {!Context.lowered_for_decisions}', so the context is
-    untouched. The placement pre-search is not listed. Candidates whose scheduled form fails to
-    apply or validate are omitted, as {!model_default} excludes them; a segment whose preset has no
-    score is listed with its unscored entries, where {!model_default} skips it. Where
-    {!model_default} ranks nothing — no envelope constants, or the default annotator off —
-    [x_routine] is the default pipeline alone and [x_segments] is empty.
-
-    [~coalesced:true] (default [false]) appends to [x_routine] the whole-routine leaves of the
-    coalesced tuner branch ({!coalesced_seed_params}), so the score's ranking of them can be checked
-    against timings (gh-ocannl-1278); they are appended regardless where {!model_default} ranks them
-    ({!model_ranks_coalesced}, gh-ocannl-1600), so its pick is a listed row -- on each segment's
-    candidates too, labeled as the segment's leaves are. Each is marked admitted exactly when its
-    uncoalesced form would be. *)
-
-val untuned_compile :
-  ?name:string ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  Context.t * Context.routine
-(** The recipes' untuned compile ({!Train.to_routine}, {!Train.run_once} and the benchmark runners'
-    untuned arms): {!model_default} under config [model_default_schedule=true], {!seeded_default}
-    otherwise. *)
-
-val set_test_bindings : Context.routine -> unit
-(** Binds representative values for timing runs: ranged static indices at [range / 2], and gh-490
-    symbolic extents at their upper bound [range] (the schedule-cache identity is
-    extent-value-independent, so the single tuned entry is measured at the maximum). Unranged
-    bindings are left at their current values. Exposed for tests and custom timing harnesses. *)
 
 val queued_batch_ms : float
 (** The wall time, in milliseconds, one {!Queued} batch aims for (10 ms). Exposed so a test can
@@ -3511,6 +3295,7 @@ val hopeless_window :
 (** How a timing call turns a dispersed window into a verdict (gh-ocannl-1558). [Refuse_dispersed]
     is the dispersion-only rule. [Attribute_dispersion] refuses a dispersed window only when the
     host-load signal ({!host_load_reading}) over it shows a co-tenant. *)
+
 type dispersion_policy = Refuse_dispersed | Attribute_dispersion
 
 val dispersion_policy_for_backend : Ir.Backend_intf.backend_facts -> dispersion_policy
@@ -3544,6 +3329,7 @@ val timing_of_setting : string -> timing_mode
 (** The branch of a CUDA/HIP {!Queued} calibration that started a batch probe. The longest path
     {!queue_calibration_max_probes} counts is one provisional probe, four validations, a
     confirmation, its stall retry, a sampled shallower crossing and the rescue. *)
+
 type calibration_probe_role =
   | Provisional_probe  (** At the depth the synchronized singles' estimate provisionally picks. *)
   | Validation_probe  (** At a depth an affine fit projected, checked against its base. *)
@@ -3569,6 +3355,7 @@ type calibration_probe = {
 
 (** What one affine fit of a CUDA/HIP {!Queued} calibration concluded about its pair of batch
     minima: which branch of the refinement produced the depth it returned. *)
+
 type fit_verdict =
   | Fit_unordered  (** The probe was not deeper than the base: no slope, a doubled retry. *)
   | Fit_unreadable  (** A reading was not finite and positive: a doubled retry. *)
@@ -3732,118 +3519,6 @@ val with_timing_call_observer : (timing_call -> unit) -> (unit -> 'a) -> 'a
 
 exception Timing_stopped
 (** Raised by {!time_routine} when its [stop] answers [true] (gh-ocannl-1556). *)
-
-val time_routine :
-  ?on_retry:(unit -> unit) ->
-  ?on_call:(timing_call -> unit) ->
-  ?tag_failures:bool ->
-  ?phase:string ->
-  ?stop:(unit -> bool) ->
-  ?hopeless_against:float ->
-  ?hopeless_ratio:float ->
-  ?window_bound_ms:float ->
-  timing:timing_mode ->
-  repeats:int ->
-  Context.t ->
-  Context.routine ->
-  timing_result
-(** [on_retry] defaults to a no-op and observes each fresh contention retry as it starts; [on_call]
-    (also a no-op by default) receives the call's {!timing_call} record as it returns, before the
-    domain's {!with_timing_call_observer} observers. Both are per call, which is how a search's
-    accounting stays its own (gh-ocannl-1263). The tuner's own instrument, exposed so a harness can
-    rank candidates by exactly what a search ranks them by (gh-ocannl-755) rather than by a
-    re-derivation of it. Binds test values ({!set_test_bindings}) and restores the routine's
-    bindings afterwards, runs one warmup, then minimizes the per-launch time over at least 16 and
-    [repeats] timed runs, topping up until ~25 ms of per-launch samples has accumulated (up to 64
-    runs unless the [repeats] floor is larger) so that a host stall cannot collapse the min-of-N.
-    [window_bound_ms] (default: none) ends the window, admitted, as soon as {!window_bounded} holds
-    of it at that bound (gh-ocannl-1666: the serial baseline's window). Under [~timing:Queued] a
-    "run" is a whole batch of dispatches whose depth is calibrated per candidate to ~10 ms of wall,
-    capped at 2048 on CUDA/HIP and at the historical 200 on cc/Metal, and floored at 1. cc/Metal
-    retain the historical synchronized-single estimate. On CUDA/HIP that estimate instead seeds a
-    provisional depth; when that is above 1, a provisional queued probe separates fixed
-    synchronization from marginal launch cost and selects the depth whose affine wall estimate
-    reaches the target. The batch probes take the minimum of twelve runs: unlike ranked timing, they
-    only choose scale and are already milliseconds long. Since gh-ocannl-1098 both are
-    wall-budgeted: a probe stops at three minima once its own wall passes two target-sized probes',
-    and once the probes' summed wall reaches {!queue_calibration_wall_ms} no further probe starts
-    and the calibration ends unresolved. Up to four further probes validate the depth; a resolved
-    crossing shallower than the batches it was fitted from is sampled and checked like an
-    interpolation. The first target-sized batch is confirmed at a 25% deeper depth (clamped to and
-    measured at the cap) and retained only when the pair's inferred fixed component is below the
-    target. A confirmation over 2x its supported base is retried once before an unresolved pair
-    selects the cap. Such a no-verdict fallback is then wall-bounded (gh-ocannl-1096): it never goes
-    deeper than the deepest depth any calibration batch was measured at within the ~10 ms target,
-    and is depth 1 when none was -- the only bound sound for any cost that grows with depth, since
-    the readings that left the fits unresolved cannot tell a host stall from a queue threshold. So a
-    slow candidate whose fits never resolve is timed at depth 1, not in 2048-launch batches, while a
-    fast one whose deeper probes stalled still batches; one that measured no batch within the target
-    at all first takes one rescue probe below its shallowest over-target batch, projected linearly
-    to the target (gh-ocannl-1098) -- where a queue-threshold or superlinear cost reads within the
-    target -- and is refused as [unbatched] only when that also reads over it, rather than timed as
-    an isolated depth-1 reading. An unresolved single/probe pair retries at double depth, and the
-    next affine fit uses the two batch observations so an inflated single window cannot force the
-    cap. If the bounded loop first reaches the target on its last probe, the interpolated target
-    depth is still sampled and checked against the measured overshoot. A non-monotone confirmation
-    scales from the deeper measured batch, never the earlier suspect crossing. When a clean pair's
-    fixed component already fills the target, its marginal slope selects a depth carrying ~10 ms of
-    launch work instead of accepting a shallow stalled window or jumping to the cap. After four
-    noisy but resolved underestimates, calibration keeps the latest affine projection rather than
-    jumping to a 20--30 ms cap batch that would blunt the 2x contention threshold. None of these
-    projections settles deeper than {!queue_depth_projection_factor} times the deepest batch the
-    calibration probed (gh-ocannl-1100): past it a queue cost can jump where nothing measured. A
-    CUDA/HIP routine slower than the target stays at depth 1 and is measured identically in both
-    modes; it is confirmed by a depth-2 probe only while its singles read under
-    {!slow_singles_ratio} times the target (gh-ocannl-1627). When singles below the target owe
-    batching, a resolved pair starting at depth 2 whose marginal launch cost fits the target and
-    whose fixed term is below it retains that measured batch even if its fixed term puts the fitted
-    depth-1 wall above the target (gh-ocannl-1184). It neither returns to the isolated singles nor
-    refuses an ordinary integer-depth boundary; unresolved or over-target marginal fits keep their
-    refusal. Whenever a queued call settles at depth 1 its timed window resumes the calibration's
-    synchronized singles ({!sample_window}'s [prior]) rather than timing a fresh one
-    (gh-ocannl-1074): at depth 1 they are samples of the very quantity the window measures, taken
-    under the same stopping rule, so the loop dispatches only what the caller's [repeats] floor asks
-    beyond the calibration's sixteen. The calibration always yields a depth; the result of the timed
-    loop reports when most of ITS samples were stalled, and the tuner refuses such a candidate
-    measurement rather than ranking and caching it (gh-ocannl-888). Since the budget is per-launch
-    rather than batch wall, queued timing can spend up to [max 64 repeats] batches on a fast
-    candidate; [max_timing_runs] bounds the top-up beyond the caller's requested floor. Metal queued
-    timing retries a contention-refused window once at the same depth with fresh samples
-    (gh-ocannl-1060). The retry faces the same admission rule; only its outcome reaches the search's
-    refusal accounting. Other backends and isolated timing take no retry.
-
-    [phase] labels the call's {!batch_decision} (gh-ocannl-1199); none by default.
-
-    With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization are
-    wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
-    {!Ir.Schedule_outcome.protect} attribute a failure to the phase it happened in; without it they
-    propagate raw. Timing dispatches the routine repeatedly against live buffers, and this function
-    restores nothing, so an accumulating routine timed here leaves its state advanced by every
-    dispatch; {!tune} restores its lineage's state around each window (gh-ocannl-1621). [Queued]
-    raises how many such dispatches happen. For [repeats <= 64], the maxima are 65 under [Isolated]
-    and, under [Queued], 352321 on CUDA/HIP, 12865 on cc or 25665 on Metal. The CUDA/HIP bound
-    includes warmup, 64 single-launch calibration runs, at most {!queue_calibration_max_probes}
-    (nine) {!queue_batch_probe_runs}-sample calibration probes (the provisional probe, four
-    validations, a confirmation, its stall retry, a sampled shallower crossing, and the rescue) and
-    64 timed batches at the cap; cc/Metal have no batch probes. In general the queued bounds are
-    [65 + 2048 * (108 + max 64 repeats)] on CUDA/HIP and [65 + 200 * max 64 repeats] on cc, twice
-    the timed part on Metal for its one retry. Thus a routine whose values grow per run reaches
-    larger ones. That is a fact about the scratch buffers, not about the measurement: the cap bounds
-    each in-memory queue while the ~25 ms budget accumulates per-launch samples, and a candidate's
-    time is not what it accumulated.
-
-    [stop] (default: never) is asked before the warmup and before every batch -- each calibration
-    probe's and each timed window's -- and when it answers [true] the call raises {!Timing_stopped}
-    at once, with every batch it dispatched synchronized and the bindings restored: a caller can
-    abandon a timing within one batch of deciding to (gh-ocannl-1556; {!tune}'s budget is the
-    caller).
-
-    [hopeless_against] (default: none) is the reading the caller will rank this one against
-    (gh-ocannl-1527): the calibration's synchronized singles, gated at {!queued_batch_ms}, and every
-    timed window (a Metal retry's included) end as soon as {!hopeless_window} cuts them, and the
-    call raises {!Timing_hopeless} with every batch it dispatched synchronized and the bindings
-    restored. Neither [on_call] nor the domain's observers see a cut call. [hopeless_ratio] (default
-    {!hopeless_ratio}) is the cut's [ratio] (gh-ocannl-1697). *)
 
 val calibrate_and_time :
   retry_contended:bool ->
@@ -4016,233 +3691,10 @@ val exclusive_search : (unit -> 'a) -> 'a
     that must not interleave with another domain's (as [Train.tune_placements] does) takes it for
     the whole span. *)
 
-val tune :
-  ?name:string ->
-  (* Names the computation, exactly as {!Context.compile}'s [name] names its single routine
-     (gh-ocannl-669): every compile of this search -- each candidate, the baseline, the cache
-     replay, the winner, the untuned fallbacks, the [autotune_log] control -- is named alike, and so
-     is the [routine] column of the calibration rows this search emits. Required, as there, for a
-     comp carrying no {!Ir.Assignments.Block_comment}; omitted, the name is derived per compile via
-     {!Ir.Assignments.get_name_exn}. *)
-  ?search:bool ->
-  (* Whether to search at all; default from config [autotune_search] (true). With [false]
-     (gh-ocannl-559: the [reproducible] profile) a committed cache entry still replays -- a pinned
-     schedule is deterministic -- but nothing is timed, and a cache miss compiles the untuned
-     default pipeline and reports {!no_search_report} under the resolved objective. Only a CHOSEN
-     cache replays: [cache_dir] passed here, or [autotune_cache_dir] set at some config source. The
-     built-in default counts as no cache, so a search-less run cannot silently pin itself to
-     whatever an earlier local search left in ./autotune_cache. *)
-  ?beam_width:int ->
-  (* Default from config [autotune_beam_width] (2). *)
-  ?rounds:int ->
-  (* Maximum beam-expansion rounds beyond the seeds; default from config [autotune_rounds] (2). The
-     search also stops when a round improves the incumbent by less than 1%. A round expands the
-     beam's head in full and, on a fissioned routine, every other entry only on the segments where
-     it differs from the head (config [autotune_round_expansion], gh-ocannl-1229). *)
-  ?repeats:int ->
-  (* Timed runs per candidate (after one warmup), min taken; default from config [autotune_repeats]
-     (3). In [Queued] timing each such run is a whole batch of dispatches, so this is a floor on
-     batches rather than on launches. *)
-  ?timing:timing_mode ->
-  (* What a candidate's time is a measurement of; default from config [autotune_timing] ([queued]).
-     See {!timing_mode}. *)
-  ?seed_block_sizes:int list ->
-  (* Workgroup sizes swept through {!Ir.Schedule.default_gpu} as seed candidates on GPU backends
-     (default [[64; 128; 256; 512]]), both whole-routine and per-fission-segment, in addition to the
-     config-default preset and the serial baseline. *)
-  ?cache_dir:string ->
-  (* Directory of the schedule disk cache; [""] disables caching. Default from config
-     [autotune_cache_dir] ([autotune_cache]). *)
-  ?keep_fraction:float ->
-  (* The model pre-filter of the sketch seeding (gh-ocannl-491): per candidate family (the
-     whole-routine sketches; each fission segment's sketches), rank with {!model_score} and keep the
-     best [keep_fraction] of the scored candidates before compiling or timing anything. Default from
-     config [autotune_keep_fraction] (1 = pre-filter off). Candidates without model coverage are
-     always kept — never dropped, only measured — so the pre-filter never overrides (or precludes) a
-     measured result; presets, saved schedules and the baseline are never pruned. *)
-  ?max_split_reduce_sites:int ->
-  (* Candidate-volume cap on the split-reduce seed family: the top so-many {!split_reduce_sites}
-     (ranked by estimated segment cost) are seeded; evicted sites are recorded in the decline census
-     under [Seed_evicted_key "split_reduce"] (gh-ocannl-541). Default from config
-     [autotune_split_reduce_max_sites] (8); [0] disables the family. *)
-  ?timing_ctx:Context.t ->
-  (* A scratch context lineage against which candidates are compiled and timed, so the timing runs
-     never touch [ctx]'s live buffers (parameters, accumulators) and a timing failure that condemns
-     its lineage condemns the scratch one, not [ctx]'s. It must contain the nodes the computation
-     requires from a prior context, e.g. by repeating parameter initialization on a fresh root
-     context, and must live on the same backend and device as the target context (raises
-     [Invalid_argument] otherwise — candidates timed elsewhere do not predict this device). The
-     winning schedule is compiled from [ctx], exactly like a cache hit, with or without it. Without
-     it, the search times on [ctx]'s own buffers; either way the search lineage's training state is
-     restored before every timing window and when the call ends (gh-ocannl-1621; the Caveats above).
-     Its VALUES are part of what is timed: code that branches on data (the ReLU and max-pool
-     backward selects an inlined placement recomputes in its nests) runs at a speed set by the
-     activations, so a scratch lineage holding the init draw crowns a time the routine does not keep
-     on other weights — 23% on cifar_resnet/cc's default-placements arm (gh-ocannl-1557). Give it
-     the weights [ctx] will run with ([Context.set_values]) when they are known. *)
-  ?abandon:abandon_rule ->
-  (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
-     report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the
-     default), a search always runs to completion. [Train.tune_placements] passes it for flips only,
-     against the incumbent they refine. A clean abandoned prefix is saved under the unchanged
-     schedule key in a separate filename space. With the same search shape, a later call
-     re-evaluates this rule on that prefix and may raise without searching, reporting
-     {!Abandonment_replay}; without a rule, it always searches or replays a winner. *)
-  ?log:bool ->
-  (* Whether this call writes the [autotune:] diagnostic lines to stderr and, after a search,
-     compiles and times the untuned-default in-process control. Omitted, it inherits the [?log] of
-     an enclosing [tune] or [Train.tune_placements] call in the same domain, and only without one
-     falls back to config [autotune_log] (false), which is read once per process. Scoped to this
-     call and to the calling domain, and restored on return or exception, so a test can turn the
-     diagnostics on for one search. It decides the call's [autotune-crown:] line too (see
-     {!crown_fields}): [true] prints it with the rest, [false] silences it even under
-     [autotune_log=crown]. *)
-  ?progress:bool ->
-  (* Whether this call writes the [autotune-progress:] lines (see {!progressf}); inherited and
-     scoped exactly as [?log] is, falling back to config [autotune_progress] (false). *)
-  ?report:(report -> unit) ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  Context.t * Context.routine
-(** Like {!Context.compile}, but returns the empirically fastest of the searched schedule
-    candidates. The returned context/routine come from an ordinary sibling compile of [ctx], so
-    execution-dependency tracking behaves as if the winning compile were the only one. Raises like
-    {!Context.run} would (e.g. uninitialized inputs) — tune in the same state you would run in.
-
-    "Like {!Context.compile}" includes its [name] (gh-ocannl-669) — without which a comp that
-    carries no {!Ir.Assignments.Block_comment} but that {!Context.compile} can name (as [Parallel]'s
-    collective routines are named) could be compiled but not tuned. The schedule cache deliberately
-    does not see it: a cache key is [Ir.Schedule_cache.cache_key] over the canonical lowering, the
-    backend, the numerics and codegen tags, and the worker pool — and the name reaches only
-    codegen's artifact and kernel naming, never the lowering. Two identical computations under
-    different names therefore share one tuned entry, which is what the cache is for; naming a
-    routine neither invalidates a crown nor mints a private one.
-
-    Memory (gh-ocannl-550, gh-ocannl-1326): every candidate this searches is {!Context.release}d as
-    soon as its timing window is over — the incumbents the beam ranks included, which are kept as
-    descriptions (saved schedules), not artifacts — so at most one candidate's {e working} pools are
-    live at a time, and a step that uses over half the device can be tuned. The winner is then
-    compiled from [ctx] out of its saved schedule, the one compile this costs over keeping it, and
-    the returned routine is the only artifact left when [tune] returns. The bound holds across
-    contained failures and across dedups — a deduplicated candidate has still paid for a compile and
-    a link. A cache replay is not co-resident with a baseline either: since gh-ocannl-1666 the base
-    compile only lowers, and the baseline is compiled by the search that times it.
-
-    A device that refuses what every schedule of the base lowering must allocate — the floor of
-    {!Context.probe_link_floor} (gh-ocannl-1554) — has answered for every candidate, a replay and
-    the untuned fallback: the call reports {!Pre_search_failure} at [Backend_link] with
-    [baseline_declined] and one device-memory decline as the baseline's account, and raises, instead
-    of declining every candidate in turn. The floor is asked before the cache is consulted where the
-    baseline is refused before codegen (every GPU backend, gh-ocannl-1340), and in the search where
-    the baseline's own link (on a CPU backend, gh-ocannl-1666) is refused for device memory: the
-    base link's own delta bounds no candidate from below under the liveness planner (config
-    [buffer_aliasing]: one kernel overlaps no buffers a fissioned candidate can, and a CPU
-    [Split_reduce] candidate refines its statement-grained spans) or on-chip fusion (a shared
-    epilogue placement keeps its target off the device). The floor's refusal is decisive under a
-    page-granular allocator that admits by the total of page-rounded requests, not against a
-    contiguous-block or fragmentation limit. A device that admits the floor answers nothing about
-    any candidate, which is declined on its own at link.
-
-    The bound is on working pools, and that qualifier is load-bearing: {!Context.release} cannot
-    free per-device constants, and a hoisted [Stage] candidate mints a fresh packed constant per
-    application. A search that seeds those (the CPU [hoist] sketches) therefore still grows one
-    constant pool per such candidate — measured on [cc] at 1 -> 109 constant pools over 181
-    candidates, against working pools held within 2-6. Bounding it needs an eviction rule inside the
-    shared constant cache, which is gh-ocannl-565's subject; pinned as far as it can be by
-    [test/operations/autotune_candidate_release].
-
-    Budget (gh-ocannl-1409, config [autotune_budget_seconds], default none): a search whose
-    wall-clock time since the call started has reached the budget attempts no further candidate, and
-    crowns its incumbent as a completed search does. A compile cannot be cancelled, so the budget is
-    kept by checks against one clock (gh-ocannl-1556, gh-ocannl-1604): an attempt (or beam round)
-    starts only while the elapsed time is below the budget and the elapsed time plus two compiles of
-    the projected cost -- the attempt's own and a reserve for the winner's recompile -- is within
-    it; and a non-floor candidate's timing is abandoned before its first batch past the budget less
-    that reserve ([time_routine]'s [stop]), the candidate unranked. The projection is the costliest
-    compile the call has made, the base compile's included, except that once a compile has reused a
-    kernel an earlier one published ({!Ir.Compile_cost.t}'s [kernels_reused]), the cold compiles
-    before it, which filled the kernel code cache, stop counting (gh-ocannl-1667). A search
-    therefore overruns its budget by at most the excess of the compile in flight, or of the winner's
-    recompile, over the projection before it, one timing batch, and the exempt floors; the untuned
-    floors (the seeded untuned plan and the default-pipeline seed, {!default_seed_label}) are
-    attempted regardless, so the crown is no slower than what the caller ships untuned. Where the
-    cut left the untuned default unmeasured -- no candidate reproduces it (automatic scheduling with
-    [schedule_fission=false] and no seeded plan), or its windows were refused -- the call ships the
-    untuned default compile, stores nothing and reports as a search that timed nothing
-    ({!budget_floor_unmeasured}). The report's [budget_cut] says the budget stopped something. A cut
-    search with clean timings stores its crown marked as cut ({!Ir.Schedule_cache.entry}'s
-    [budget_cut]); a later call with a budget replays it, and one without a budget searches in full
-    and overwrites it. The budget's value is part of the search trajectory's identity, so a cut
-    search's [best_steps] serve early stopping only under the same budget.
-
-    Untuned fallback (gh-ocannl-1441): every path on which {!tune} ships "the untuned default
-    compile" -- search disabled with nothing to replay, a refused lineage, a deferred cache replay
-    that failed, a search that timed nothing, a budget cut that left the floor unmeasured, a winner
-    replay that failed -- compiles the step the recipes ship untuned without
-    [model_default_schedule]: {!seeded_default}'s seeded plan wherever its settings admit one (CUDA
-    and HIP, seeding on), the plain default pipeline elsewhere. After a search the plan is the one
-    the search seeded, replayed as its [F_seeded] candidate; without one it is derived inside the
-    fallback's own compile, as {!seeded_default} derives it. Under [model_default_schedule=true] the
-    fallback is still the seeded plan, not {!model_default}'s pick: the floor the search measured. A
-    seeded fallback that fails classified recompiles the plain default. *)
-
 type call_budget = { cb_total_s : float; cb_share_s : float }
 (** A search's share of an enclosing call's wall-clock budget (gh-ocannl-1440): [cb_total_s] the
     call's budget, [cb_share_s] what the search may spend, which may be zero or less once the call's
     budget is spent. *)
-
-type deferred
-(** The outcome of a {!tune_deferred} search: the compile of what it ships, not yet run. Holds no
-    device resources. *)
-
-val tune_deferred :
-  ?name:string ->
-  ?search:bool ->
-  ?beam_width:int ->
-  ?rounds:int ->
-  ?repeats:int ->
-  ?timing:timing_mode ->
-  ?seed_block_sizes:int list ->
-  ?cache_dir:string ->
-  ?keep_fraction:float ->
-  ?max_split_reduce_sites:int ->
-  ?timing_ctx:Context.t ->
-  ?abandon:abandon_rule ->
-  ?call_budget:call_budget ->
-  ?log:bool ->
-  ?progress:bool ->
-  ?report:(report -> unit) ->
-  Context.t ->
-  Ir.Assignments.comp ->
-  Ir.Indexing.unit_bindings ->
-  deferred
-(** {!tune}, except that the routine it ships is not compiled: {!compile_deferred} compiles it
-    (gh-ocannl-1408). The search, its cache store and its report happen here, with {!tune}'s
-    arguments, failures and reporting contract; then nothing the call compiled is left resident --
-    every candidate, the baseline and a validating cache replay are released -- so a caller running
-    several searches before choosing one, as [Train.tune_placements] does with its placement arms
-    and flips, holds no searched routine while the next one searches, and compiles only the one that
-    ships.
-
-    The difference from {!tune} is the order of the report and the compile: the report is delivered
-    before the compile, so a failure of {!compile_deferred} raises without a report of its own -- it
-    comes after the search has reported its outcome. What the compile runs is what {!tune} would
-    have: the winner's saved schedule replayed from [ctx] (falling back to the untuned default where
-    {!tune}'s winner replay would), the untuned default where the search shipped that, and for a
-    cache hit the entry's replay. A cache hit compiles that replay once (gh-ocannl-1440): the replay
-    that tells a stale entry from a sound one, and supplies the report's emission census, is
-    released but its compiled code is kept, and {!compile_deferred} links it again on [ctx]
-    ({!Context.relink_outcome}) -- a link, not a compile. A searched winner is still compiled again
-    from its saved form, since its candidate was compiled in the search lineage.
-
-    [call_budget] (gh-ocannl-1440) is this search's share of an enclosing call's wall-clock budget,
-    [Train.tune_placements]' [tune_call_budget_seconds]: the search is cut at the tighter of that
-    share and its own [autotune_budget_seconds], by the same rule as the latter (see {!tune}'s
-    Budget), and a search the share cut reports [budget_cut] like one its own budget cut. A share of
-    zero or less attempts only the untuned floors when the call searches; a schedule-cache hit
-    replays regardless, as under [autotune_budget_seconds] -- its compile is the one that ships
-    (linked again), and skipping it would compile the untuned default in its place. *)
 
 val lineage_identity :
   static_indices:Ir.Indexing.static_symbol list -> Ir.Low_level.optimized -> string
@@ -4259,27 +3711,6 @@ val lineage_accesses : Ir.Low_level.optimized -> Ir.Tnode.t -> string
 (** How the lowering's code accesses the node: ["r"], ["w"], ["rw"], or ["-"] for not at all. Stable
     under the bounds drift, and per node, so [Train.placement_problem] tags each node with it inside
     its canonically numbered (process-independent) key. *)
-
-val compile_deferred : deferred -> Context.t * Context.routine
-(** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]
-    that call ran under, and like {!tune_deferred} itself inside {!exclusive_search} -- the first
-    call only, which compiles; a later one returns the memoized outcome unguarded. At most once: a
-    second call returns the same context and routine, or raises the same exception. A [deferred]
-    dropped without this call costs nothing on the device. *)
-
-val deferred_compiles : deferred -> int
-(** The backend compiles ({!Context.backend_compiles}) {!compile_deferred} has performed for this
-    call so far (gh-ocannl-1440): 0 before it, and after it 0 for a cache hit, whose routine is the
-    validating replay's code linked again, one compile's count (1, or 2 on Metal, whose device
-    compile is counted at link) for a searched winner recompiled from its saved form, and the
-    untuned default's compiles where the call ships that. A memoized second call adds nothing. *)
-
-val shipped_substitute : deferred -> bool
-(** Whether {!compile_deferred} shipped the untuned default IN PLACE of the schedule the call's
-    report named -- the winner's or the cache entry's replay failed or degenerated, the fallbacks
-    {!tune} takes too. The report, delivered before the compile, still describes that schedule, so a
-    caller that ranked or recorded by it reads this before relying on the routine: what it got was
-    never measured. [false] before the compile. *)
 
 val budget_setting : unit -> float option
 (** Config [autotune_budget_seconds] as {!tune} resolves it (gh-ocannl-1409): [Some] seconds when
@@ -4393,3 +3824,733 @@ val default_seed_label : facts:Ir.Backend_intf.backend_facts -> string option
     {!tune}'s own attribution reads this, so the two cannot disagree. One case it cannot foresee: a
     default seed whose code equals the serial baseline's dedups against it, and is timed only under
     the label ["baseline"]. *)
+
+(** {2 The context driver (gh-ocannl-1754)}
+
+    The autotuner reaches an execution context only through a {!Driver}: everything above this point
+    is driver-independent, and {!Make} is the part of the autotuner that compiles, runs and times.
+    The top-level [tune], [time_routine], [model_default] and their siblings are [Make]'s
+    instantiation over {!Context}. Types {!Make} declares are generative per instantiation; types,
+    exceptions and process-wide state declared above (reports, outcomes, {!Concurrent_search}, the
+    {!Seam} hooks) are shared by every instantiation. *)
+
+module type Driver = sig
+  type ctx
+  (** An execution context: a device stream with its compilation lineage ({!Context.t}). *)
+
+  type routine
+  (** A linked routine of a [ctx] ({!Context.routine}). *)
+
+  type program
+  (** What a compile compiles ({!Ir.Assignments.comp}). The autotuner never inspects one: it hands
+      it to the compiles and asks the two questions below. *)
+
+  type retained
+  (** Compiled code kept for a later {!relink_outcome} ({!Context.retained}). *)
+
+  type reuse
+  (** A lowering cell shared by one search's compiles ({!Ir.Lowering_reuse.t}): the cell itself is
+      the driver's, since what it is keyed on is the driver's program. *)
+
+  val routine_name : routine -> string
+  val routine_id : routine -> int
+
+  val routine_bindings : routine -> Ir.Indexing.lowered_bindings
+  (** The routine's live launch-parameter cells, not copies: timing assigns and restores them. *)
+
+  val routine_grid : routine -> Ir.C_syntax.grid_summary
+  val routine_segments : routine -> Ir.Low_level.optimized list
+
+  val routine_mma : routine -> Ir.C_syntax.mma_summary
+  (** The routine accessors: the [name], [routine_id], [bindings], [grid], [segments] and [mma]
+      fields of {!Context.routine}. *)
+
+  val program_name : program -> string option
+  (** The name a compile given no [?name] derives for the program's routine, or [None] where that
+      derivation fails (the compile then refuses the program itself). Read lazily, as a diagnostic
+      label only. *)
+
+  val program_nodes : program -> Set.M(Ir.Tnode).t
+  (** Every node the program reads or writes; gates the bounds-blind cache rebase (gh-ocannl-1614),
+      so it is cache-replay behaviour, not a diagnostic. *)
+
+  val reuse_create : unit -> reuse
+
+  val reuse_reseed : reuse -> Ir.Low_level.optimized -> unit
+  (** {!Ir.Lowering_reuse.create} and {!Ir.Lowering_reuse.reseed}. *)
+
+  val compile :
+    ?name:string ->
+    ?lowered_transform:(Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
+    ?prelowered:Ir.Low_level.optimized ->
+    ?reuse:reuse ->
+    ctx ->
+    program ->
+    Ir.Indexing.unit_bindings ->
+    ctx * routine
+
+  val compile_outcome :
+    ?name:string ->
+    ?lowered_transform:(Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
+    ?prelowered:Ir.Low_level.optimized ->
+    ?reuse:reuse ->
+    provenance:Ir.Schedule_outcome.provenance ->
+    ?candidate:string ->
+    ?retain:(retained -> unit) ->
+    ctx ->
+    program ->
+    Ir.Indexing.unit_bindings ->
+    (ctx * routine) Ir.Schedule_outcome.outcome
+
+  val relink_outcome : retained -> (ctx * routine) Ir.Schedule_outcome.outcome
+  val backend_compiles : unit -> int
+
+  val lowered_for_decisions :
+    ?name:string ->
+    ?materialized:Ir.Tnode.t list ->
+    ?inline:Ir.Tnode.t list ->
+    ?footprint:Ir.Tnode.t list ->
+    ctx ->
+    program ->
+    Ir.Indexing.unit_bindings ->
+    Ir.Low_level.optimized
+
+  val probe_link_floor :
+    ?name:string -> ?prelowered:bool -> ctx -> Ir.Low_level.optimized -> Ir.Backend_intf.link_floor
+
+  val run : ?timing:bool -> ctx -> routine -> ctx
+  val sync : ctx -> unit
+  val release : ctx -> unit
+  val check_lineage_runnable : ctx -> routine -> unit
+  val check_launch_bindings : routine -> unit
+
+  val failure_classifier :
+    ctx -> Ir.Schedule_outcome.phase -> exn -> Ir.Schedule_outcome.classified_cause option
+
+  val rollback_execution : ctx -> int -> unit
+  val poison_lineage : ctx -> routine_name:string -> exn -> unit
+  val poisoned_failure : ctx -> exn option
+  val save_accumulation_history : ctx -> unit -> unit
+  val timing_identity : ctx -> Ir.Backend_intf.timing_identity option
+  val hardware_limits : ctx -> Ir.Backend_intf.hardware_limits
+  val codegen_capabilities : ctx -> Ir.Backend_intf.codegen_capabilities
+  val backend_facts : ctx -> Ir.Backend_intf.backend_facts
+  val same_backend : ctx -> ctx -> bool
+  val backend_name : ctx -> string
+  val ordinal : ctx -> int
+  val get_used_memory : ctx -> int
+  val placements : ctx -> Ir.Tnode.Placements.t
+  val inherits_computation : ctx -> Ir.Tnode.t -> bool
+
+  val decide_readings :
+    ?skip_empty:bool -> ctx -> Ir.Tnode.t list * Ir.Tnode.t list * Ir.Tnode.t list -> ctx
+
+  val mem : ctx -> Ir.Tnode.t -> bool
+  val to_host : ctx -> Ir.Tnode.t -> Ir.Ndarray.t
+
+  val from_host : ctx -> Ir.Tnode.t -> Ir.Ndarray.t -> ctx
+  (** The remaining members are {!Context}'s same-named functions, with the same contracts. *)
+end
+
+(** The autotuner's entry points over a driver: what compiles, runs and times. *)
+module Make (D : Driver) : sig
+  val placement_surface :
+    ?name:string ->
+    ?ordering:[ `Cost | `Enablement | `Profitable ] ->
+    ?evidence:report list ->
+    D.ctx ->
+    D.program ->
+    Ir.Indexing.unit_bindings ->
+    placement_surface
+  (** Read and rank the decision surface from [ctx] (analyze-only — two hermetic lowerings via
+      {!Context.lowered_for_decisions}, sharing the gh-560 analysis cache; no backend codegen, no
+      effect on [ctx]). [name] names the computation for those lowerings exactly as
+      {!Context.compile}'s does, and is what makes this work for a comp carrying no
+      {!Ir.Assignments.Block_comment} (gh-ocannl-669). [ordering] defaults from config
+      [tune_flip_ordering] ([profitable]). [evidence] is the completed searches [`Profitable] weighs
+      the enablement prior against ({!family_profit_of_reports}, reported as [ps_profit]):
+      [Train.tune_placements]' flip refinement passes the placement A/B arms' reports, while
+      {!model_default}'s placement search (config [model_default_placements]) passes none — it
+      measures nothing, so the prior stands there. Under an unconditional ordering the evidence is
+      not derived at all, so such a run never reads [tune_flip_profit_margin]. *)
+
+  val compile_advisory :
+    ?name:string ->
+    ?on_fallback:(exn -> unit) ->
+    ?fallback_if:(unit -> bool) ->
+    ?on_unrecovered:(Ir.Schedule_outcome.classified_cause -> D.ctx * D.routine) ->
+    (Ir.Low_level.optimized -> Ir.Low_level.optimized list) ->
+    D.ctx ->
+    D.program ->
+    Ir.Indexing.unit_bindings ->
+    D.ctx * D.routine
+  (** {!Context.compile_outcome} with advisory provenance and the given [lowered_transform], falling
+      back to a plain {!Context.compile} — the ordinary default pipeline — for a classified compiler
+      rejection, including validation in backend codegen. Fatal failures propagate without retrying.
+      [on_fallback] is called with the public rendering of the cause when fallback fires.
+      [fallback_if] (default: always) is consulted first, for transforms that may themselves have
+      degraded to the default pipeline — [false] re-raises the original exception, backtrace
+      included, instead of duplicating a compile that has nothing to fall back to; given
+      [on_unrecovered], that classified cause is handed to it instead of raised — as is a classified
+      failure of the fallback compile itself — so a caller with a fallback of its own acts on a
+      classified rejection alone, never on a fatal failure (gh-ocannl-1390). For advisory transforms
+      only: a failure of the default pipeline itself propagates. [name] names the routine, exactly
+      as {!Context.compile}'s does, and reaches the fallback compile too. See {!model_default}
+      (gh-ocannl-519). *)
+
+  val model_default :
+    ?name:string ->
+    ?report:(model_choice -> unit) ->
+    D.ctx ->
+    D.program ->
+    Ir.Indexing.unit_bindings ->
+    D.ctx * D.routine
+  (** A drop-in for {!Context.compile} that raises the untuned floor (gh-ocannl-491 task 3): inside
+      the compile's own transform seam, the untuned default pipeline and the sketch families
+      (whole-routine, and per-fission-segment substitutions where the search's segmentation splits
+      the routine, their unsketched segments on the configured presets, gh-ocannl-1512) are scored
+      with the cost model's ranking score ({!Ir.Cost_model.ranking_seconds}, gh-ocannl-1253: the
+      roofline, with operand re-reads requested per block and charged at DRAM bandwidth once the
+      working set exceeds the cache capacity, at the cache bandwidth within it —
+      {!ranking_capacity}, {!ranking_cache_bandwidth}), and the argmin schedule is applied — zero
+      measurement, one backend compile. The family search's bound stays the distinct-cell floor,
+      below every ranking score. Sketch leaves whose scores tie exactly are ordered by their
+      tile-MMA operand loads under the backend's [mma_operand_loads] capability
+      ({!model_family_search}, gh-ocannl-1254). Advisory by construction: a candidate without model
+      coverage is never picked over the default, ties go to the default, and missing envelope
+      constants, a disabled default annotator ({!Ir.Schedule.automatic_schedule_active}), or any
+      classified scoring, application, backend validation, or compilation failure fall back to the
+      ordinary default pipeline — the reported {!model_choice} then says ["default"]. On CUDA and
+      HIP with the seeding on (as for {!seeded_default}), the model starts from the seeded untuned
+      plan instead (gh-ocannl-1253, {!seeded_plan} under the configured gate, [auto] included): it
+      is the incumbent and the pick when no candidate strictly beats it ([mc_label] ["seeded"], even
+      where no segment seeds and the plan is the default pipeline -- a plan the compile then does
+      not retry on a backend failure, as for the default). Each family walk -- the whole routine's,
+      and each keyed segment's of the per-segment substitution -- is anchored at the seeded plan's
+      own sketch on that program (the parameters its record says it applied there, never its gate
+      re-run on that program), scored as the walk's leaves are (gh-ocannl-1477): the plan runs its
+      zero-fill as a kernel of its own, which the per-kernel score charges separately while a leaf
+      hides it under its compute leg, so without the anchor a leaf that only ties the seeded
+      geometry beat the plan. A leaf the score separates from it still can; a per-segment
+      substitution keeps the seeded sketch on every segment no leaf strictly improves. The
+      candidates compete on the program after the plan's split prelude, and the sketch candidates
+      are restricted to the seeding's numerics-preserving forms — scalar block tiles at a site
+      accumulating at its storage precision — so the pick never changes a value the untuned compile
+      computes. Fatal failures propagate without retrying. Once the compile is on that pipeline
+      there is nothing left to fall back to, so its failures propagate as they would from
+      {!Context.compile}, without a duplicate attempt. Unlike {!tune}, nothing is executed and no
+      cache is involved — results depend only on the computation, backend, and envelope constants.
+
+      Being a drop-in for {!Context.compile} includes its [name] (gh-ocannl-669): it names the
+      routine and every artifact of this compile — the model pick's, the fallback's, and the
+      hermetic lowerings of the placement search alike — and, as there, a comp carrying no
+      {!Ir.Assignments.Block_comment} requires it. *)
+
+  val seeded_transform :
+    ?min_reduction:int ->
+    ?seed_gate:seed_gate ->
+    ?min_serial:int ->
+    ?reduction_sink:bool ->
+    ?seed_narrow:bool ->
+    ?on_choice:(seeded_choice -> unit) ->
+    D.ctx ->
+    Ir.Indexing.unit_bindings ->
+    (Ir.Low_level.optimized -> Ir.Low_level.optimized list) option
+  (** The [lowered_transform] {!seeded_default} compiles through, for a caller that drives
+      {!Context.compile_outcome} itself (a benchmark keeping its own failure classification): [None]
+      where {!seeded_default} would compile the plain default (another backend, automatic scheduling
+      inactive, fission off, a threshold of 0 with the reduction sink off). The transform calls
+      [on_choice] with what it seeded and sank, and falls back to the default segments itself when
+      the seeded pipeline does not apply; a failure in backend compilation is the caller's, as
+      {!seeded_default}'s fallback is not part of it. *)
+
+  val pinned_sketch_transform :
+    select:(sketch_params -> bool) ->
+    ?on_leaf:(sketch_params -> unit) ->
+    D.ctx ->
+    Ir.Indexing.unit_bindings ->
+    Ir.Low_level.optimized ->
+    Ir.Low_level.optimized list
+  (** A [lowered_transform] applying, to a routine with one matmul site, the first whole-routine
+      scalar blocktile leaf ({!scalar_blocktile}) of {!matmul_sketch_tree} that [select] accepts —
+      reported to [on_leaf] — as {!model_default} applies a whole-routine pick (gh-ocannl-1479: the
+      launch sweep of [Calibrate] pins one geometry across sizes). Raises [Utils.User_error] on a
+      backend without the GPU sketch family (checked at partial application), and when no site is
+      detected or no leaf matches. *)
+
+  val seeded_default :
+    ?name:string ->
+    ?min_reduction:int ->
+    ?seed_gate:seed_gate ->
+    ?min_serial:int ->
+    ?reduction_sink:bool ->
+    ?seed_narrow:bool ->
+    ?report:(seeded_choice -> unit) ->
+    D.ctx ->
+    D.program ->
+    Ir.Indexing.unit_bindings ->
+    D.ctx * D.routine
+  (** A drop-in for {!Context.compile} that gives the untuned GPU default operand reuse on its large
+      contractions (gh-ocannl-1324), without timing or scoring anything: the default pipeline's own
+      fission segmentation, with each segment {!seeded_params} admits scheduled by that sketch
+      instead of the default preset. The default segmentation is compared with the finer
+      [arity_cuts] one ({!Ir.Schedule.fission_segmented}) block by block ({!refine_segments},
+      gh-ocannl-1413): where a run of default segments, between boundaries the two share, holds
+      fewer seeding segments than the finer segments covering the same units, the finer ones replace
+      it — a weight gradient cut away from the bias gradient over the same rows, a projection's data
+      gradients cut away from its weight gradient, attention's score product cut away from the row
+      maximum's initialization (a moved boundary). Such a replacement can change the launch count;
+      every segment outside those runs is exactly the default's. On CUDA and HIP only, with
+      automatic scheduling active and fission on; [seed_gate] (default: {!seeded_default_gate},
+      config [gpu_default_sketch_min_reduction], [auto]: the ranked gate, or 32 on a device
+      publishing no cache constants) decides which segments seed, and [min_reduction] is
+      [~seed_gate:(Min_reduction n)] (passing both is an [Invalid_argument]). Every seeded segment
+      is probed alone first (the sketch must apply and pass {!Ir.Low_level.validate_parallel}); a
+      segment that fails keeps the preset, and a classified failure of the whole seeded compile
+      recompiles the default pipeline ({!compile_advisory}). The scalar blocktile pipeline keeps
+      each output's summation order, and only sites whose accumulator is at their storage precision
+      are seeded, so the seeded sketches leave the routine's results bitwise the default's.
+
+      [seed_narrow] (default: config [gpu_default_seed_narrow_storage], false; true in the
+      [approximate] profile, pinned false in [reproducible]; gh-ocannl-1405) also seeds and sinks
+      the sites whose accumulator precision widens their storage precision under the backend's
+      [accum_prec] -- a bf16 weight gradient on CUDA (and on HIP unless [bf16_arithmetic=true]), fp8
+      on both, f16 under [fp16_arithmetic=false]. A seeded one keeps its result bitwise: the
+      sketch's [Privatize] tile stays at storage precision wherever the default narrows inside the
+      reduction (gh-ocannl-1151). A sunk one does not: localized below its write loops, the
+      accumulator is held wide across the whole reduction and rounds to storage once where the
+      default rounds after every step, so the result changes, towards the exact sum -- which is why
+      the admission is a numerics gate. {!model_default}'s numerics-preserving set follows the same
+      admission.
+
+      Before segmenting (on CUDA and HIP), the reductions {!seeded_split_sites} admits at
+      [min_serial] (default: config [gpu_default_split_reduce_min_serial], 1024; 0 disables) are
+      split whole-routine, as the search's [F_split] seeds split them (gh-ocannl-1325): a bias or
+      layer-norm parameter gradient, which the default runs as one thread per output cell walking
+      every batch row in sequence, becomes a parallel pass over blocks of rows and a combine. That
+      DOES change the summation order of those reductions -- a deterministic balanced tree over the
+      blocks, chosen from the routine alone -- as the default plan's cooperative all-reduces
+      (gh-ocannl-1124) do.
+
+      Every [`Normal] segment no sketch takes gets {!reduction_sink}'s interchange, then the default
+      preset of the interchanged code (gh-ocannl-1348), probed alone like a seed, and covered by the
+      same fallback to the default pipeline when the compile fails classified: a batch reduction
+      into a bias or layer-norm parameter gradient then keeps its accumulator in a register instead
+      of reading and writing its device cell every step under the preset's in-loop guard — which
+      HIP's compiler does not promote, though NVRTC does. Values stay bitwise the default's.
+      [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
+      with the seeding disabled too. Reads and writes no schedule cache. *)
+
+  val model_explain :
+    ?name:string ->
+    ?coalesced:bool ->
+    D.ctx ->
+    D.program ->
+    Ir.Indexing.unit_bindings ->
+    explanation
+  (** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
+      compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): the whole-routine candidates
+      and, per segment, the per-segment ones (gh-ocannl-1438), each with whether the numerics
+      restriction admits it. The lowering is {!Context.lowered_for_decisions}', so the context is
+      untouched. The placement pre-search is not listed. Candidates whose scheduled form fails to
+      apply or validate are omitted, as {!model_default} excludes them; a segment whose preset has
+      no score is listed with its unscored entries, where {!model_default} skips it. Where
+      {!model_default} ranks nothing — no envelope constants, or the default annotator off —
+      [x_routine] is the default pipeline alone and [x_segments] is empty.
+
+      [~coalesced:true] (default [false]) appends to [x_routine] the whole-routine leaves of the
+      coalesced tuner branch ({!coalesced_seed_params}), so the score's ranking of them can be
+      checked against timings (gh-ocannl-1278); they are appended regardless where {!model_default}
+      ranks them ({!model_ranks_coalesced}, gh-ocannl-1600), so its pick is a listed row -- on each
+      segment's candidates too, labeled as the segment's leaves are. Each is marked admitted exactly
+      when its uncoalesced form would be. *)
+
+  val untuned_compile :
+    ?name:string -> D.ctx -> D.program -> Ir.Indexing.unit_bindings -> D.ctx * D.routine
+  (** The recipes' untuned compile ({!Train.to_routine}, {!Train.run_once} and the benchmark
+      runners' untuned arms): {!model_default} under config [model_default_schedule=true],
+      {!seeded_default} otherwise. *)
+
+  val set_test_bindings : D.routine -> unit
+  (** Binds representative values for timing runs: ranged static indices at [range / 2], and gh-490
+      symbolic extents at their upper bound [range] (the schedule-cache identity is
+      extent-value-independent, so the single tuned entry is measured at the maximum). Unranged
+      bindings are left at their current values. Exposed for tests and custom timing harnesses. *)
+
+  val time_routine :
+    ?on_retry:(unit -> unit) ->
+    ?on_call:(timing_call -> unit) ->
+    ?tag_failures:bool ->
+    ?phase:string ->
+    ?stop:(unit -> bool) ->
+    ?hopeless_against:float ->
+    ?hopeless_ratio:float ->
+    ?window_bound_ms:float ->
+    timing:timing_mode ->
+    repeats:int ->
+    D.ctx ->
+    D.routine ->
+    timing_result
+  (** [on_retry] defaults to a no-op and observes each fresh contention retry as it starts;
+      [on_call] (also a no-op by default) receives the call's {!timing_call} record as it returns,
+      before the domain's {!with_timing_call_observer} observers. Both are per call, which is how a
+      search's accounting stays its own (gh-ocannl-1263). The tuner's own instrument, exposed so a
+      harness can rank candidates by exactly what a search ranks them by (gh-ocannl-755) rather than
+      by a re-derivation of it. Binds test values ({!set_test_bindings}) and restores the routine's
+      bindings afterwards, runs one warmup, then minimizes the per-launch time over at least 16 and
+      [repeats] timed runs, topping up until ~25 ms of per-launch samples has accumulated (up to 64
+      runs unless the [repeats] floor is larger) so that a host stall cannot collapse the min-of-N.
+      [window_bound_ms] (default: none) ends the window, admitted, as soon as {!window_bounded}
+      holds of it at that bound (gh-ocannl-1666: the serial baseline's window). Under
+      [~timing:Queued] a "run" is a whole batch of dispatches whose depth is calibrated per
+      candidate to ~10 ms of wall, capped at 2048 on CUDA/HIP and at the historical 200 on cc/Metal,
+      and floored at 1. cc/Metal retain the historical synchronized-single estimate. On CUDA/HIP
+      that estimate instead seeds a provisional depth; when that is above 1, a provisional queued
+      probe separates fixed synchronization from marginal launch cost and selects the depth whose
+      affine wall estimate reaches the target. The batch probes take the minimum of twelve runs:
+      unlike ranked timing, they only choose scale and are already milliseconds long. Since
+      gh-ocannl-1098 both are wall-budgeted: a probe stops at three minima once its own wall passes
+      two target-sized probes', and once the probes' summed wall reaches
+      {!queue_calibration_wall_ms} no further probe starts and the calibration ends unresolved. Up
+      to four further probes validate the depth; a resolved crossing shallower than the batches it
+      was fitted from is sampled and checked like an interpolation. The first target-sized batch is
+      confirmed at a 25% deeper depth (clamped to and measured at the cap) and retained only when
+      the pair's inferred fixed component is below the target. A confirmation over 2x its supported
+      base is retried once before an unresolved pair selects the cap. Such a no-verdict fallback is
+      then wall-bounded (gh-ocannl-1096): it never goes deeper than the deepest depth any
+      calibration batch was measured at within the ~10 ms target, and is depth 1 when none was --
+      the only bound sound for any cost that grows with depth, since the readings that left the fits
+      unresolved cannot tell a host stall from a queue threshold. So a slow candidate whose fits
+      never resolve is timed at depth 1, not in 2048-launch batches, while a fast one whose deeper
+      probes stalled still batches; one that measured no batch within the target at all first takes
+      one rescue probe below its shallowest over-target batch, projected linearly to the target
+      (gh-ocannl-1098) -- where a queue-threshold or superlinear cost reads within the target -- and
+      is refused as [unbatched] only when that also reads over it, rather than timed as an isolated
+      depth-1 reading. An unresolved single/probe pair retries at double depth, and the next affine
+      fit uses the two batch observations so an inflated single window cannot force the cap. If the
+      bounded loop first reaches the target on its last probe, the interpolated target depth is
+      still sampled and checked against the measured overshoot. A non-monotone confirmation scales
+      from the deeper measured batch, never the earlier suspect crossing. When a clean pair's fixed
+      component already fills the target, its marginal slope selects a depth carrying ~10 ms of
+      launch work instead of accepting a shallow stalled window or jumping to the cap. After four
+      noisy but resolved underestimates, calibration keeps the latest affine projection rather than
+      jumping to a 20--30 ms cap batch that would blunt the 2x contention threshold. None of these
+      projections settles deeper than {!queue_depth_projection_factor} times the deepest batch the
+      calibration probed (gh-ocannl-1100): past it a queue cost can jump where nothing measured. A
+      CUDA/HIP routine slower than the target stays at depth 1 and is measured identically in both
+      modes; it is confirmed by a depth-2 probe only while its singles read under
+      {!slow_singles_ratio} times the target (gh-ocannl-1627). When singles below the target owe
+      batching, a resolved pair starting at depth 2 whose marginal launch cost fits the target and
+      whose fixed term is below it retains that measured batch even if its fixed term puts the
+      fitted depth-1 wall above the target (gh-ocannl-1184). It neither returns to the isolated
+      singles nor refuses an ordinary integer-depth boundary; unresolved or over-target marginal
+      fits keep their refusal. Whenever a queued call settles at depth 1 its timed window resumes
+      the calibration's synchronized singles ({!sample_window}'s [prior]) rather than timing a fresh
+      one (gh-ocannl-1074): at depth 1 they are samples of the very quantity the window measures,
+      taken under the same stopping rule, so the loop dispatches only what the caller's [repeats]
+      floor asks beyond the calibration's sixteen. The calibration always yields a depth; the result
+      of the timed loop reports when most of ITS samples were stalled, and the tuner refuses such a
+      candidate measurement rather than ranking and caching it (gh-ocannl-888). Since the budget is
+      per-launch rather than batch wall, queued timing can spend up to [max 64 repeats] batches on a
+      fast candidate; [max_timing_runs] bounds the top-up beyond the caller's requested floor. Metal
+      queued timing retries a contention-refused window once at the same depth with fresh samples
+      (gh-ocannl-1060). The retry faces the same admission rule; only its outcome reaches the
+      search's refusal accounting. Other backends and isolated timing take no retry.
+
+      [phase] labels the call's {!batch_decision} (gh-ocannl-1199); none by default.
+
+      With [~tag_failures:true] the pre-dispatch validation, the launches and the synchronization
+      are wrapped in their {!Ir.Schedule_outcome} phases, which is what lets a caller's
+      {!Ir.Schedule_outcome.protect} attribute a failure to the phase it happened in; without it
+      they propagate raw. Timing dispatches the routine repeatedly against live buffers, and this
+      function restores nothing, so an accumulating routine timed here leaves its state advanced by
+      every dispatch; {!tune} restores its lineage's state around each window (gh-ocannl-1621).
+      [Queued] raises how many such dispatches happen. For [repeats <= 64], the maxima are 65 under
+      [Isolated] and, under [Queued], 352321 on CUDA/HIP, 12865 on cc or 25665 on Metal. The
+      CUDA/HIP bound includes warmup, 64 single-launch calibration runs, at most
+      {!queue_calibration_max_probes} (nine) {!queue_batch_probe_runs}-sample calibration probes
+      (the provisional probe, four validations, a confirmation, its stall retry, a sampled shallower
+      crossing, and the rescue) and 64 timed batches at the cap; cc/Metal have no batch probes. In
+      general the queued bounds are [65 + 2048 * (108 + max 64 repeats)] on CUDA/HIP and
+      [65 + 200 * max 64 repeats] on cc, twice the timed part on Metal for its one retry. Thus a
+      routine whose values grow per run reaches larger ones. That is a fact about the scratch
+      buffers, not about the measurement: the cap bounds each in-memory queue while the ~25 ms
+      budget accumulates per-launch samples, and a candidate's time is not what it accumulated.
+
+      [stop] (default: never) is asked before the warmup and before every batch -- each calibration
+      probe's and each timed window's -- and when it answers [true] the call raises
+      {!Timing_stopped} at once, with every batch it dispatched synchronized and the bindings
+      restored: a caller can abandon a timing within one batch of deciding to (gh-ocannl-1556;
+      {!tune}'s budget is the caller).
+
+      [hopeless_against] (default: none) is the reading the caller will rank this one against
+      (gh-ocannl-1527): the calibration's synchronized singles, gated at {!queued_batch_ms}, and
+      every timed window (a Metal retry's included) end as soon as {!hopeless_window} cuts them, and
+      the call raises {!Timing_hopeless} with every batch it dispatched synchronized and the
+      bindings restored. Neither [on_call] nor the domain's observers see a cut call.
+      [hopeless_ratio] (default {!hopeless_ratio}) is the cut's [ratio] (gh-ocannl-1697). *)
+
+  val tune :
+    ?name:string ->
+    (* Names the computation, exactly as {!Context.compile}'s [name] names its single routine
+       (gh-ocannl-669): every compile of this search -- each candidate, the baseline, the cache
+       replay, the winner, the untuned fallbacks, the [autotune_log] control -- is named alike, and
+       so is the [routine] column of the calibration rows this search emits. Required, as there, for
+       a comp carrying no {!Ir.Assignments.Block_comment}; omitted, the name is derived per compile
+       via {!Ir.Assignments.get_name_exn}. *)
+    ?search:bool ->
+    (* Whether to search at all; default from config [autotune_search] (true). With [false]
+       (gh-ocannl-559: the [reproducible] profile) a committed cache entry still replays -- a pinned
+       schedule is deterministic -- but nothing is timed, and a cache miss compiles the untuned
+       default pipeline and reports {!no_search_report} under the resolved objective. Only a CHOSEN
+       cache replays: [cache_dir] passed here, or [autotune_cache_dir] set at some config source.
+       The built-in default counts as no cache, so a search-less run cannot silently pin itself to
+       whatever an earlier local search left in ./autotune_cache. *)
+    ?beam_width:int ->
+    (* Default from config [autotune_beam_width] (2). *)
+    ?rounds:int ->
+    (* Maximum beam-expansion rounds beyond the seeds; default from config [autotune_rounds] (2).
+       The search also stops when a round improves the incumbent by less than 1%. A round expands
+       the beam's head in full and, on a fissioned routine, every other entry only on the segments
+       where it differs from the head (config [autotune_round_expansion], gh-ocannl-1229). *)
+    ?repeats:int ->
+    (* Timed runs per candidate (after one warmup), min taken; default from config
+       [autotune_repeats] (3). In [Queued] timing each such run is a whole batch of dispatches, so
+       this is a floor on batches rather than on launches. *)
+    ?timing:timing_mode ->
+    (* What a candidate's time is a measurement of; default from config [autotune_timing]
+       ([queued]). See {!timing_mode}. *)
+    ?seed_block_sizes:int list ->
+    (* Workgroup sizes swept through {!Ir.Schedule.default_gpu} as seed candidates on GPU backends
+       (default [[64; 128; 256; 512]]), both whole-routine and per-fission-segment, in addition to
+       the config-default preset and the serial baseline. *)
+    ?cache_dir:string ->
+    (* Directory of the schedule disk cache; [""] disables caching. Default from config
+       [autotune_cache_dir] ([autotune_cache]). *)
+    ?keep_fraction:float ->
+    (* The model pre-filter of the sketch seeding (gh-ocannl-491): per candidate family (the
+       whole-routine sketches; each fission segment's sketches), rank with {!model_score} and keep
+       the best [keep_fraction] of the scored candidates before compiling or timing anything.
+       Default from config [autotune_keep_fraction] (1 = pre-filter off). Candidates without model
+       coverage are always kept — never dropped, only measured — so the pre-filter never overrides
+       (or precludes) a measured result; presets, saved schedules and the baseline are never
+       pruned. *)
+    ?max_split_reduce_sites:int ->
+    (* Candidate-volume cap on the split-reduce seed family: the top so-many {!split_reduce_sites}
+       (ranked by estimated segment cost) are seeded; evicted sites are recorded in the decline
+       census under [Seed_evicted_key "split_reduce"] (gh-ocannl-541). Default from config
+       [autotune_split_reduce_max_sites] (8); [0] disables the family. *)
+    ?timing_ctx:D.ctx ->
+    (* A scratch context lineage against which candidates are compiled and timed, so the timing runs
+       never touch [ctx]'s live buffers (parameters, accumulators) and a timing failure that
+       condemns its lineage condemns the scratch one, not [ctx]'s. It must contain the nodes the
+       computation requires from a prior context, e.g. by repeating parameter initialization on a
+       fresh root context, and must live on the same backend and device as the target context
+       (raises [Invalid_argument] otherwise — candidates timed elsewhere do not predict this
+       device). The winning schedule is compiled from [ctx], exactly like a cache hit, with or
+       without it. Without it, the search times on [ctx]'s own buffers; either way the search
+       lineage's training state is restored before every timing window and when the call ends
+       (gh-ocannl-1621; the Caveats above). Its VALUES are part of what is timed: code that branches
+       on data (the ReLU and max-pool backward selects an inlined placement recomputes in its nests)
+       runs at a speed set by the activations, so a scratch lineage holding the init draw crowns a
+       time the routine does not keep on other weights — 23% on cifar_resnet/cc's default-placements
+       arm (gh-ocannl-1557). Give it the weights [ctx] will run with ([Context.set_values]) when
+       they are known. *)
+    ?abandon:abandon_rule ->
+    (* gh-ocannl-1110: stop the search, raising {!Search_abandoned} after delivering an {!Abandoned}
+       report, when {!abandon_verdict} decides at [k = beam_width] admitted timings. Absent (the
+       default), a search always runs to completion. [Train.tune_placements] passes it for flips
+       only, against the incumbent they refine. A clean abandoned prefix is saved under the
+       unchanged schedule key in a separate filename space. With the same search shape, a later call
+       re-evaluates this rule on that prefix and may raise without searching, reporting
+       {!Abandonment_replay}; without a rule, it always searches or replays a winner. *)
+    ?log:bool ->
+    (* Whether this call writes the [autotune:] diagnostic lines to stderr and, after a search,
+       compiles and times the untuned-default in-process control. Omitted, it inherits the [?log] of
+       an enclosing [tune] or [Train.tune_placements] call in the same domain, and only without one
+       falls back to config [autotune_log] (false), which is read once per process. Scoped to this
+       call and to the calling domain, and restored on return or exception, so a test can turn the
+       diagnostics on for one search. It decides the call's [autotune-crown:] line too (see
+       {!crown_fields}): [true] prints it with the rest, [false] silences it even under
+       [autotune_log=crown]. *)
+    ?progress:bool ->
+    (* Whether this call writes the [autotune-progress:] lines (see {!progressf}); inherited and
+       scoped exactly as [?log] is, falling back to config [autotune_progress] (false). *)
+    ?report:(report -> unit) ->
+    D.ctx ->
+    D.program ->
+    Ir.Indexing.unit_bindings ->
+    D.ctx * D.routine
+  (** Like {!Context.compile}, but returns the empirically fastest of the searched schedule
+      candidates. The returned context/routine come from an ordinary sibling compile of [ctx], so
+      execution-dependency tracking behaves as if the winning compile were the only one. Raises like
+      {!Context.run} would (e.g. uninitialized inputs) — tune in the same state you would run in.
+
+      "Like {!Context.compile}" includes its [name] (gh-ocannl-669) — without which a comp that
+      carries no {!Ir.Assignments.Block_comment} but that {!Context.compile} can name (as
+      [Parallel]'s collective routines are named) could be compiled but not tuned. The schedule
+      cache deliberately does not see it: a cache key is [Ir.Schedule_cache.cache_key] over the
+      canonical lowering, the backend, the numerics and codegen tags, and the worker pool — and the
+      name reaches only codegen's artifact and kernel naming, never the lowering. Two identical
+      computations under different names therefore share one tuned entry, which is what the cache is
+      for; naming a routine neither invalidates a crown nor mints a private one.
+
+      Memory (gh-ocannl-550, gh-ocannl-1326): every candidate this searches is {!Context.release}d
+      as soon as its timing window is over — the incumbents the beam ranks included, which are kept
+      as descriptions (saved schedules), not artifacts — so at most one candidate's {e working}
+      pools are live at a time, and a step that uses over half the device can be tuned. The winner
+      is then compiled from [ctx] out of its saved schedule, the one compile this costs over keeping
+      it, and the returned routine is the only artifact left when [tune] returns. The bound holds
+      across contained failures and across dedups — a deduplicated candidate has still paid for a
+      compile and a link. A cache replay is not co-resident with a baseline either: since
+      gh-ocannl-1666 the base compile only lowers, and the baseline is compiled by the search that
+      times it.
+
+      A device that refuses what every schedule of the base lowering must allocate — the floor of
+      {!Context.probe_link_floor} (gh-ocannl-1554) — has answered for every candidate, a replay and
+      the untuned fallback: the call reports {!Pre_search_failure} at [Backend_link] with
+      [baseline_declined] and one device-memory decline as the baseline's account, and raises,
+      instead of declining every candidate in turn. The floor is asked before the cache is consulted
+      where the baseline is refused before codegen (every GPU backend, gh-ocannl-1340), and in the
+      search where the baseline's own link (on a CPU backend, gh-ocannl-1666) is refused for device
+      memory: the base link's own delta bounds no candidate from below under the liveness planner
+      (config [buffer_aliasing]: one kernel overlaps no buffers a fissioned candidate can, and a CPU
+      [Split_reduce] candidate refines its statement-grained spans) or on-chip fusion (a shared
+      epilogue placement keeps its target off the device). The floor's refusal is decisive under a
+      page-granular allocator that admits by the total of page-rounded requests, not against a
+      contiguous-block or fragmentation limit. A device that admits the floor answers nothing about
+      any candidate, which is declined on its own at link.
+
+      The bound is on working pools, and that qualifier is load-bearing: {!Context.release} cannot
+      free per-device constants, and a hoisted [Stage] candidate mints a fresh packed constant per
+      application. A search that seeds those (the CPU [hoist] sketches) therefore still grows one
+      constant pool per such candidate — measured on [cc] at 1 -> 109 constant pools over 181
+      candidates, against working pools held within 2-6. Bounding it needs an eviction rule inside
+      the shared constant cache, which is gh-ocannl-565's subject; pinned as far as it can be by
+      [test/operations/autotune_candidate_release].
+
+      Budget (gh-ocannl-1409, config [autotune_budget_seconds], default none): a search whose
+      wall-clock time since the call started has reached the budget attempts no further candidate,
+      and crowns its incumbent as a completed search does. A compile cannot be cancelled, so the
+      budget is kept by checks against one clock (gh-ocannl-1556, gh-ocannl-1604): an attempt (or
+      beam round) starts only while the elapsed time is below the budget and the elapsed time plus
+      two compiles of the projected cost -- the attempt's own and a reserve for the winner's
+      recompile -- is within it; and a non-floor candidate's timing is abandoned before its first
+      batch past the budget less that reserve ([time_routine]'s [stop]), the candidate unranked. The
+      projection is the costliest compile the call has made, the base compile's included, except
+      that once a compile has reused a kernel an earlier one published ({!Ir.Compile_cost.t}'s
+      [kernels_reused]), the cold compiles before it, which filled the kernel code cache, stop
+      counting (gh-ocannl-1667). A search therefore overruns its budget by at most the excess of the
+      compile in flight, or of the winner's recompile, over the projection before it, one timing
+      batch, and the exempt floors; the untuned floors (the seeded untuned plan and the
+      default-pipeline seed, {!default_seed_label}) are attempted regardless, so the crown is no
+      slower than what the caller ships untuned. Where the cut left the untuned default unmeasured
+      -- no candidate reproduces it (automatic scheduling with [schedule_fission=false] and no
+      seeded plan), or its windows were refused -- the call ships the untuned default compile,
+      stores nothing and reports as a search that timed nothing ({!budget_floor_unmeasured}). The
+      report's [budget_cut] says the budget stopped something. A cut search with clean timings
+      stores its crown marked as cut ({!Ir.Schedule_cache.entry}'s [budget_cut]); a later call with
+      a budget replays it, and one without a budget searches in full and overwrites it. The budget's
+      value is part of the search trajectory's identity, so a cut search's [best_steps] serve early
+      stopping only under the same budget.
+
+      Untuned fallback (gh-ocannl-1441): every path on which {!tune} ships "the untuned default
+      compile" -- search disabled with nothing to replay, a refused lineage, a deferred cache replay
+      that failed, a search that timed nothing, a budget cut that left the floor unmeasured, a
+      winner replay that failed -- compiles the step the recipes ship untuned without
+      [model_default_schedule]: {!seeded_default}'s seeded plan wherever its settings admit one
+      (CUDA and HIP, seeding on), the plain default pipeline elsewhere. After a search the plan is
+      the one the search seeded, replayed as its [F_seeded] candidate; without one it is derived
+      inside the fallback's own compile, as {!seeded_default} derives it. Under
+      [model_default_schedule=true] the fallback is still the seeded plan, not {!model_default}'s
+      pick: the floor the search measured. A seeded fallback that fails classified recompiles the
+      plain default. *)
+
+  type deferred
+  (** The outcome of a {!tune_deferred} search: the compile of what it ships, not yet run. Holds no
+      device resources. *)
+
+  val tune_deferred :
+    ?name:string ->
+    ?search:bool ->
+    ?beam_width:int ->
+    ?rounds:int ->
+    ?repeats:int ->
+    ?timing:timing_mode ->
+    ?seed_block_sizes:int list ->
+    ?cache_dir:string ->
+    ?keep_fraction:float ->
+    ?max_split_reduce_sites:int ->
+    ?timing_ctx:D.ctx ->
+    ?abandon:abandon_rule ->
+    ?call_budget:call_budget ->
+    ?log:bool ->
+    ?progress:bool ->
+    ?report:(report -> unit) ->
+    D.ctx ->
+    D.program ->
+    Ir.Indexing.unit_bindings ->
+    deferred
+  (** {!tune}, except that the routine it ships is not compiled: {!compile_deferred} compiles it
+      (gh-ocannl-1408). The search, its cache store and its report happen here, with {!tune}'s
+      arguments, failures and reporting contract; then nothing the call compiled is left resident --
+      every candidate, the baseline and a validating cache replay are released -- so a caller
+      running several searches before choosing one, as [Train.tune_placements] does with its
+      placement arms and flips, holds no searched routine while the next one searches, and compiles
+      only the one that ships.
+
+      The difference from {!tune} is the order of the report and the compile: the report is
+      delivered before the compile, so a failure of {!compile_deferred} raises without a report of
+      its own -- it comes after the search has reported its outcome. What the compile runs is what
+      {!tune} would have: the winner's saved schedule replayed from [ctx] (falling back to the
+      untuned default where {!tune}'s winner replay would), the untuned default where the search
+      shipped that, and for a cache hit the entry's replay. A cache hit compiles that replay once
+      (gh-ocannl-1440): the replay that tells a stale entry from a sound one, and supplies the
+      report's emission census, is released but its compiled code is kept, and {!compile_deferred}
+      links it again on [ctx] ({!Context.relink_outcome}) -- a link, not a compile. A searched
+      winner is still compiled again from its saved form, since its candidate was compiled in the
+      search lineage.
+
+      [call_budget] (gh-ocannl-1440) is this search's share of an enclosing call's wall-clock
+      budget, [Train.tune_placements]' [tune_call_budget_seconds]: the search is cut at the tighter
+      of that share and its own [autotune_budget_seconds], by the same rule as the latter (see
+      {!tune}'s Budget), and a search the share cut reports [budget_cut] like one its own budget
+      cut. A share of zero or less attempts only the untuned floors when the call searches; a
+      schedule-cache hit replays regardless, as under [autotune_budget_seconds] -- its compile is
+      the one that ships (linked again), and skipping it would compile the untuned default in its
+      place. *)
+
+  val compile_deferred : deferred -> D.ctx * D.routine
+  (** Compiles what a {!tune_deferred} call ships, from its [ctx], under the [?log] and [?progress]
+      that call ran under, and like {!tune_deferred} itself inside {!exclusive_search} -- the first
+      call only, which compiles; a later one returns the memoized outcome unguarded. At most once: a
+      second call returns the same context and routine, or raises the same exception. A [deferred]
+      dropped without this call costs nothing on the device. *)
+
+  val deferred_compiles : deferred -> int
+  (** The backend compiles ({!Context.backend_compiles}) {!compile_deferred} has performed for this
+      call so far (gh-ocannl-1440): 0 before it, and after it 0 for a cache hit, whose routine is
+      the validating replay's code linked again, one compile's count (1, or 2 on Metal, whose device
+      compile is counted at link) for a searched winner recompiled from its saved form, and the
+      untuned default's compiles where the call ships that. A memoized second call adds nothing. *)
+
+  val shipped_substitute : deferred -> bool
+  (** Whether {!compile_deferred} shipped the untuned default IN PLACE of the schedule the call's
+      report named -- the winner's or the cache entry's replay failed or degenerated, the fallbacks
+      {!tune} takes too. The report, delivered before the compile, still describes that schedule, so
+      a caller that ranked or recorded by it reads this before relying on the routine: what it got
+      was never measured. [false] before the compile. *)
+end
+
+(** {!Context} as a {!Driver}: the only declarations of this interface naming [Context] or
+    [Ir.Assignments] (gh-ocannl-852's move carries it with [Context]). *)
+module Context_driver :
+  Driver
+    with type ctx = Context.t
+     and type routine = Context.routine
+     and type program = Ir.Assignments.comp
+     and type retained = Context.retained
+     and type reuse = Ir.Lowering_reuse.t
+
+include module type of Make (Context_driver)
+(** The autotuner over {!Context}. *)
