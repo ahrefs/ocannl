@@ -2084,13 +2084,15 @@ val min_progress : float
 
 val finals_outranked : report -> search_ms:float -> bool
 (** Whether the beam finals crowned the report's winner over a contender that read [search_ms] in
-    the search (gh-ocannl-1635): [finals_outcome] is [Finals_swapped], and a contender of that
-    search reading has an admitted finals reading no faster than the crown's. Outside a rejected
-    round's {!min_progress} band, the one way [best_ms], the crown's search reading, can exceed the
-    search reading of another entry the beam ranked -- the untuned default's [default_ms] among them
-    ({!finals_contenders}) -- and by up to the finals' margin, config [autotune_finals_margin]: a
-    claim that another entry's reading undercuts [best_ms] only inside the round band reads
-    [|| finals_outranked r ~search_ms] (gh-ocannl-1716). *)
+    the search (gh-ocannl-1635): [finals_outcome] is [Finals_swapped], the fastest admitted finals
+    reading belongs to a contender whose search reading is [best_ms] -- the reported winner's, so a
+    report whose finals crowned another entry explains nothing (gh-ocannl-1741) -- and a contender
+    of that search reading has an admitted finals reading no faster than the crown's. Outside a
+    rejected round's {!min_progress} band, the one way [best_ms], the crown's search reading, can
+    exceed the search reading of another entry the beam ranked -- the untuned default's [default_ms]
+    among them ({!finals_contenders}) -- and by up to the finals' margin, config
+    [autotune_finals_margin]: a claim that another entry's reading undercuts [best_ms] only inside
+    the round band reads [|| finals_outranked r ~search_ms] (gh-ocannl-1716). *)
 
 val no_search_report : timing:timing_mode -> report
 (** The report of a {!tune} call that never searched (config [autotune_search=false], gh-ocannl-559,
