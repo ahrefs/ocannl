@@ -270,6 +270,7 @@ type error_trace +=
   | Row_mismatch of t list
   | Dim_mismatch of dim list
   | Index_mismatch of Ir.Indexing.axis_index list
+  | Rows_constr_failed of { constr : row_constraint }
   | Constraint_failed of constraint_
 
 val sexp_of_error_trace : error_trace -> Sexp.t

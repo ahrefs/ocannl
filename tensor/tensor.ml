@@ -315,7 +315,7 @@ let discarded_nodes : (int, string) Hashtbl.t = Hashtbl.create (module Int)
    node is reachable: a long session tracing a scheme per closure does not accumulate them. Only the
    nodes the frontend allocated are entered, as in [discarded_nodes] (a node made with [Tn.create]
    directly, whatever its id, is not the frontend's). *)
-let reserved_id_base = 1 lsl 40
+let reserved_id_base = Shape.reserved_id_base
 
 module Weak_discards = Stdlib.Ephemeron.K1.Make (struct
   type t = Tn.t

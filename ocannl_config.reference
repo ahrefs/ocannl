@@ -2076,6 +2076,13 @@
 # in shape error exceptions.
 #max_shape_error_origins=20
 
+# Whether a shape error prints as the full constraint sexp (raw variable and tensor ids, every
+# constraint field) instead of its readable rendering, `Shape.error_to_string_hum` (gh-ocannl-1799):
+# the message, the conflicting sizes, the failed constraint and the tensors it relates, with
+# variables named by first appearance. Applies to both `Printexc.to_string` (what the toplevel
+# prints) and the exception's sexp (`Exn.to_string`). Read at each printing.
+#shape_error_full_sexp=false
+
 # Automatic shape schemes of `%op` functions (gh-ocannl-1751). The scheme of a `%op` function whose
 # returned function takes only tensors is traced when its closure is built (at its `()`
 # application, or at the first application without a `()` stage); an application error that

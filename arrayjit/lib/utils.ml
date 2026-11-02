@@ -247,6 +247,7 @@ let known_config_keys =
       "default_prec";
       "limit_constant_fill_size";
       "max_shape_error_origins";
+      "shape_error_full_sexp";
       "op_shape_schemes";
       "checkpoint_load_mmap";
     ]
@@ -613,6 +614,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "cc_backend_verify_codesign";
         "cc_backend_post_compile_timeout";
         "max_shape_error_origins";
+        "shape_error_full_sexp";
         "device_init_deadline";
       ] );
     ( Execution_neutral,
