@@ -478,7 +478,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   diagnostic gained, lost or reworded -- it writes the added/removed markers and the replacement row
   there instead, and names the `<source>:<md5>` key of each new direct failure with no entry and
   no in-process `observe_failure` (a separate `--control` run's observations are invisible there),
-  whose `raw_direct_evidence` or `raw_catalogue_only` entry stays hand-written. After a rewording,
+  whose `raw_direct_evidence` or `raw_catalogue_only` entry stays hand-written -- but offered: once
+  the row lists such a failure, its run writes an offer line on stderr naming each passed claim
+  whose own refused runs printed it (`Refusal_control_manifest.answering_claims`, the test
+  `standing` applies to an entry's claim), or saying none did, and the sync tool prints the entry
+  ready to paste (gh-ocannl-1571; it never writes one: which claim answers is a judgment). After a rewording,
   one `tools/refusal-manifest-sync.sh` does the rest (gh-ocannl-1429; `--dry-run` shows the plan):
   it rewrites each stale row, re-keys the `raw_direct_evidence`/`raw_catalogue_only` entry of a
   reworded direct failure, relabels an evidence entry whose control claim was reworded in its
@@ -486,7 +490,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is reported with its new text, never relabeled: the label may back another scanner's evidence),
   swaps the replaced markers and
   reworded claim rows in the goldens holding them, and runs the touched sources' catalogued
-  goldens plus the audit -- promoting and re-running only when a diff remains. It follows a
+  goldens plus the audit, the first run forced so every one prints its offers, then promotes and
+  re-runs to a fixpoint (gh-ocannl-1571): the audit reads the scanners' goldens, so its correction
+  can surface only after theirs is promoted. It stops on a pass, on a failure with nothing to
+  promote (a failed check, said so), or STALE (exit 3) past `--rounds` runs (default 5); a
+  correction outside its goldens is named, never promoted (harness:
+  `tools/test-refusal-manifest-sync.sh`). It follows a
   diagnostic only where the registered row and the extraction pair it one for one (a rewording
   keeps its place; a rewording beside an insertion pairs nothing), and prints anything else
   `UNRESOLVED` for a hand edit -- then it writes and runs nothing, so a rerun once they are settled

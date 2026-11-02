@@ -2,13 +2,15 @@
    labels of test/support/refusal_control_manifest.ml from the scanners' current diagnostics, and
    names the goldens to re-run. Run from the repository root; the wrapper does that, reformats the
    manifest and runs the goldens. Usage: refusal_manifest_sync.exe [--dry-run] [--base REV]
-   [SOURCE.ml ...] *)
+   [SOURCE.ml ...], or refusal_manifest_sync.exe --offers LOG... to print the evidence entries the
+   golden runs logged in LOG... offer (gh-ocannl-1571). *)
 
 open Base
 open Stdio
 module Sync = Test_utils.Refusal_manifest_sync
 module Scan = Test_utils.Refusal_control_scan
 module Stanza = Test_utils.Dune_stanza_scan
+module Manifest = Test_utils.Refusal_control_manifest
 
 let manifest_path = "test/support/refusal_control_manifest.ml"
 let operations = "test/operations"
@@ -94,7 +96,33 @@ let catalogue () =
   in
   pairs arguments
 
+(* The entries the direct failures the audit would refuse need, with the claims the runs logged in
+   [logs] offer for them ({!Sync.needing_entries}, {!Sync.render_offers}): read after the runs and
+   their promotions, from the goldens as they now stand. *)
+let offers logs =
+  let offered =
+    List.concat_map logs ~f:(fun log ->
+        if not (Stdlib.Sys.file_exists log) then refuse "no run log %s" log;
+        In_channel.read_lines log |> List.filter_map ~f:Manifest.parse_offer)
+  in
+  let catalogue = catalogue () in
+  let goldens_of source =
+    Option.value (List.Assoc.find catalogue source ~equal:String.equal) ~default:[]
+    |> List.filter_map ~f:(fun golden ->
+        let path = Stdlib.Filename.concat operations golden in
+        Option.some_if (Stdlib.Sys.file_exists path) (In_channel.read_all path))
+  in
+  let needing =
+    Sync.needing_entries ~text:(In_channel.read_all manifest_path) ~diagnostics_of ~goldens_of
+  in
+  print_string (Sync.render_offers ~manifest_path ~needing offered)
+
 let () =
+  (match List.tl_exn (Array.to_list (Sys.get_argv ())) with
+  | "--offers" :: logs ->
+      offers logs;
+      Stdlib.exit 0
+  | _ -> ());
   let dry_run = ref false and base = ref "HEAD" and named = ref [] in
   let rec parse = function
     | "--dry-run" :: rest ->

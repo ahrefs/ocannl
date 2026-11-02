@@ -209,6 +209,38 @@ let dynamic reason = Verdict.fail reason
     (Poly.equal
        (standing ~direct_evidence:[] ~catalogue_only ~refused:[] ~observed:true ())
        Manifest.Executed_yet_catalogue_only);
+  (* gh-ocannl-1571: the claims a new direct failure's entry can name are the ones [standing] would
+     accept under it -- passed, with a run of their own printing the refusal's own line. *)
+  let answering ?(passed_labels = [ control; "a sibling claim" ]) claim_runs =
+    Manifest.answering_claims ~passed_labels
+      ~claim_lines:(fun label ->
+        Option.value (List.Assoc.find claim_runs label ~equal:String.equal) ~default:[])
+      ~rivals:[ new_fail.Scan.format ] new_fail
+  in
+  Verdict.p "the passed claim whose own run printed the refusal answers for it, and no sibling"
+    (List.equal String.equal
+       (answering [ (control, [ refusing_line ]); ("a sibling claim", [ "an unrelated refusal" ]) ])
+       [ control ]);
+  Verdict.p_empty "a claim that printed the refusal but did not pass does not answer for it"
+    ~over:[ control ]
+    (answering ~passed_labels:[ "a sibling claim" ] [ (control, [ refusing_line ]) ]);
+  Verdict.p
+    "two passed claims that both printed it both answer, each once, in the order they passed"
+    (List.equal String.equal
+       (answering
+          ~passed_labels:[ "a sibling claim"; control; "a sibling claim" ]
+          [ (control, [ refusing_line ]); ("a sibling claim", [ refusing_line ]) ])
+       [ "a sibling claim"; control ]);
+  Verdict.p_all ~min:2 "and each claim it offers is one [standing] counts under an entry naming it"
+    (answering [ (control, [ refusing_line ]); ("a sibling claim", [ refusing_line ]) ])
+    ~f:(fun label ->
+      Poly.equal
+        (standing
+           ~direct_evidence:[ (key, label ^ ": true") ]
+           ~passed_labels:[ control; "a sibling claim" ]
+           ~claim_runs:[ (control, [ refusing_line ]); ("a sibling claim", [ refusing_line ]) ]
+           ())
+        Manifest.Exercised);
   (* gh-ocannl-1499: the failed claim behind a marker that did not print, or none -- its claim or
      refusal did not run. A claim's marker stands for the claim its format matches, a direct
      failure's for the control claim mapped to it; one its caught branch records has none. *)

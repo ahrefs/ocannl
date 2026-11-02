@@ -47,3 +47,14 @@ the text reader reads the real manifest's rows as compiled: true
 and its direct-evidence entries: true
 and its catalogue-only entries: true
 every row's marker list spans a bracketed list of the manifest text: true
+a listed direct failure no table classifies and no golden prints needs an entry, alone: true
+one a golden of its source prints -- a control observing it elsewhere -- needs none: true
+nor does one an evidence or a catalogue-only entry classifies: a synced manifest: true
+nor one its row does not list yet: that is the row's sync, not an entry's: true
+an offer line is read back as it was written, and no other line is: true
+a line carrying an offer only after other text is no offer: offers start their line: true
+a label spanning lines is never offered on a line: true
+a failure one claim answers for is offered as the entry naming that claim, under one heading: true
+several claims, from one run or several, are offered once each, as alternatives: true
+a failure no run's claim answers for is named with what settles it, with no entry: true
+an offer for a key needing no entry renders nothing: a synced manifest is quiet: true
