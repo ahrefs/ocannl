@@ -1635,11 +1635,17 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
       budget_s
   in
   let release_held () =
-    (* One at a time, each dropped from [held] only once released: what an interrupted release
-       leaves is still released here, and [Context.release] is idempotent. *)
-    List.iter !held ~f:(fun (j, kctx, _, _) ->
-        Context.release kctx;
-        held := List.filter !held ~f:(fun (k, _, _, _) -> k <> j))
+    (* Every held context is attempted, each dropped from [held] only once released, and a failure
+       (an asynchronous device error surfacing at the release's synchronization) is contained: the
+       first one is returned, for the instrument to report as it reports a failure of its own,
+       rather than escaping the cell. [Context.release] is idempotent, so a context an interrupted
+       release left in [held] is safely released again. *)
+    List.fold !held ~init:None ~f:(fun first (j, kctx, _, _) ->
+        match Context.release kctx with
+        | () ->
+            held := List.filter !held ~f:(fun (k, _, _, _) -> k <> j);
+            first
+        | exception exn -> Option.first_some first (Some exn))
   in
   let screen ~i ~bind compile =
     with_hermetic ~bind compile ~f:(fun kctx routine ~run_once ->
@@ -1698,7 +1704,9 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
     | measured -> Ok measured
     | exception exn -> Error exn
   in
-  release_held ();
+  let outcome =
+    match (release_held (), outcome) with Some exn, Ok _ -> Error exn | _, outcome -> outcome
+  in
   match outcome with
   | Error Instrument_over_budget -> no_kernel (over_budget_note ())
   | Error exn -> no_kernel ("instrument failed: " ^ Exn.to_string exn)
