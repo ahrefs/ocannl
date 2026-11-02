@@ -19,6 +19,8 @@ a refused run printing a different refusal does not either: true
 the refusal's line alone, with the mapped claim not passed, does not: true
 the refusal's line from a run ANOTHER passed claim made does not, beside the mapped claim's runs: true
 while the same line from the mapped claim's own run does: true
+a later entry under the key whose claim answers exercises it past a first that does not: true
+while neither of two entries whose claims do not answer does: true
 an observation from the caught branch exercises it with no mapping: true
 a line a more specific sibling format also matches does not exercise the general one: true
 the general refusal's own line still exercises it beside the specific sibling: true
@@ -34,6 +36,8 @@ a claim's marker whose claim failed names that claim: true
 a claim's marker whose claim is not among the failed checks names none: true
 a direct failure's marker whose control claim failed names that claim: true
 a direct failure's marker whose control claim did not fail, or with no control claim, names none: true
+a direct failure's marker names a later entry's failed claim past a first that passed: true
+and names every entry's failed claim, in table order: true
 a claim's marker consumes the failure it names, so a second identical claim's marker names none: true
 while two identical claims' markers both name a failure when both claims failed: true
 a direct failure's marker leaves its control claim's failure for the next refusal: true

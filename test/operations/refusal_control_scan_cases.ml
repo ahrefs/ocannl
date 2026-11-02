@@ -173,6 +173,29 @@ let dynamic reason = Verdict.fail reason
             [ (control, [ refusing_line ]); ("a sibling claim", [ "an unrelated refusal" ]) ]
           ())
        Manifest.Exercised);
+  (* gh-ocannl-1572: a key may carry several entries, and each is consulted -- a first entry whose
+     claim does not answer leaves the decision to the later ones. *)
+  Verdict.p
+    "a later entry under the key whose claim answers exercises it past a first that does not"
+    (Poly.equal
+       (standing
+          ~direct_evidence:[ (key, "a sibling claim: true"); (key, control ^ ": true") ]
+          ~passed_labels:[ control; "a sibling claim" ]
+          ~claim_runs:
+            [ (control, [ refusing_line ]); ("a sibling claim", [ "an unrelated refusal" ]) ]
+          ())
+       Manifest.Exercised);
+  Verdict.p "while neither of two entries whose claims do not answer does"
+    (Poly.equal
+       (standing
+          ~direct_evidence:[ (key, "a sibling claim: true"); (key, control ^ ": true") ]
+          ~passed_labels:[ control; "a sibling claim" ]
+          ~claim_runs:
+            [
+              (control, [ "an unrelated refusal" ]); ("a sibling claim", [ "an unrelated refusal" ]);
+            ]
+          ())
+       Manifest.Unexercised);
   Verdict.p "an observation from the caught branch exercises it with no mapping"
     (Poly.equal (standing ~direct_evidence:[] ~refused:[] ~observed:true ()) Manifest.Exercised);
   (* A line belongs to the most specific format that matches it: a general refusal does not live on
@@ -266,6 +289,19 @@ let dynamic reason = Verdict.fail reason
      none"
     (Option.is_none (why [ "a sibling claim"; claim_label ])
     && Option.is_none (why ~direct_evidence:[] [ control; claim_label ]));
+  Verdict.p "a direct failure's marker names a later entry's failed claim past a first that passed"
+    (Option.equal String.equal
+       (why
+          ~direct_evidence:[ (key, "a sibling claim: true"); (key, control ^ ": true") ]
+          [ control ])
+       (Some (Printf.sprintf "the claim answering for it failed: \"%s\"" control)));
+  Verdict.p "and names every entry's failed claim, in table order"
+    (Option.equal String.equal
+       (why
+          ~direct_evidence:[ (key, "a sibling claim: true"); (key, control ^ ": true") ]
+          [ control; "a sibling claim" ])
+       (Some
+          (Printf.sprintf "the claims answering for it failed: \"a sibling claim\", \"%s\"" control)));
   (* Consumed as a multiset, as passing executions are: one failure stands behind one claim marker
      of two identical formats, while a control claim's failure stands behind every refusal it
      answers for. *)
