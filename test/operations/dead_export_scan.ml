@@ -176,13 +176,16 @@ let exempt_zero_reference_exports =
     "Ppx_op.translate_block_tensor";
     "Ppx_op.translate_tdsl";
     (* gh-ocannl-1751's automatic-scheme expansion: the classification and wrapping helpers the
-       translation arms share. Ppx_op has no .mli, like the helpers above. *)
+       translation arms share (gh-ocannl-1792 added the annotation readers). Ppx_op has no .mli,
+       like the helpers above. *)
+    "Ppx_op.annotated_kind";
     "Ppx_op.default_scheme_name";
     "Ppx_op.drop_attr_named";
     "Ppx_op.eligible_function";
     "Ppx_op.first_operand_ops";
     "Ppx_op.has_attr_named";
     "Ppx_op.is_ident";
+    "Ppx_op.is_tensor_type";
     "Ppx_op.mark_schemed";
     "Ppx_op.mark_tail";
     "Ppx_op.no_scheme_attr";
@@ -365,6 +368,9 @@ let exempt_unmentioned_types =
     "Nn_blocks.position_embedding";
     "Ops.apply_prec";
     "Ops.prec_family";
+    (* gh-ocannl-1792: a scheme parameter's classification, read by the translation arms of the same
+       .mli-less module. *)
+    "Ppx_op.param_kind";
     "Utils.env_var_class";
     "Utils.requirement";
   ]

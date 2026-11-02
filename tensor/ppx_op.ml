@@ -127,12 +127,15 @@ let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
    and each application checks it before the body runs. The ppx has no types, so which parameters
    are tensors is decided syntactically: - an unlabelled variable parameter is a tensor: the
    convention [docs/syntax_extensions.md] states for the parameters to the right of [()] and of a
-   function directly under [%op]; - a labelled [~x] (no default) is a tensor only with evidence: it
-   occurs directly as an operand of a tensor operation below, and its name is never rebound in the
-   body; - optional and defaulted parameters, and any other pattern, are not. A function with any
-   other parameter stays unschemed, its expansion unchanged. A wrong classification -- an unlabelled
-   non-tensor parameter, a shadowed operator -- is a compile error, which [[@@ocannl.no_scheme]]
-   escapes. The result needs no classification: the trace ignores it. *)
+   function directly under [%op]; - a parameter annotated [(x : Tensor.t)] is a tensor, and one
+   annotated [(x : Tensor.t option)] -- labelled, optional ([?(x : Tensor.t option)]) or not -- an
+   option-valued tensor (gh-ocannl-1792), whose presence patterns get one scheme each; - an
+   unannotated labelled [~x] (no default) is a tensor only with evidence: it occurs directly as an
+   operand of a tensor operation below, and its name is never rebound in the body; - other optional
+   and defaulted parameters, and any other pattern, are not. A function with any other parameter
+   stays unschemed, its expansion unchanged. A wrong classification -- an unlabelled non-tensor
+   parameter, a shadowed operator -- is a compile error, which [[@@ocannl.no_scheme]] escapes. The
+   result needs no classification: the trace ignores it. *)
 
 let no_scheme_attr = "ocannl.no_scheme"
 let scheme_attr = "ocannl.scheme"
@@ -253,15 +256,49 @@ let rebinds name body =
   visitor#expression body;
   !found
 
+(* A tensor parameter's kind: a tensor, or an option-valued tensor (gh-ocannl-1792), whose presence
+   patterns get one scheme each. *)
+type param_kind = Required | Option_valued
+
+(* Syntactically [Tensor.t] (any qualification ending in [Tensor.t]). *)
+let is_tensor_type (t : core_type) =
+  match t.ptyp_desc with
+  | Ptyp_constr ({ txt = Ldot ((Lident "Tensor" | Ldot (_, "Tensor")), "t"); _ }, []) -> true
+  | _ -> false
+
+(* The kind an annotation [(p : T)] states, if [T] is [Tensor.t] or [Tensor.t option]. *)
+let annotated_kind (t : core_type) =
+  match t.ptyp_desc with
+  | _ when is_tensor_type t -> Some Required
+  | Ptyp_constr ({ txt = Lident "option"; _ }, [ arg ]) when is_tensor_type arg ->
+      Some Option_valued
+  | _ -> None
+
 (* The tensor parameters of a function, or [None] when one parameter is not a tensor. *)
 let tensor_params params body =
   Option.all
   @@ List.map params ~f:(fun param ->
       match param.pparam_desc with
-      | Pparam_val (Nolabel, None, { ppat_desc = Ppat_var { txt; _ }; _ }) -> Some (Nolabel, txt)
+      | Pparam_val (Nolabel, None, { ppat_desc = Ppat_var { txt; _ }; _ }) ->
+          Some (Nolabel, txt, Required)
+      (* An annotation is type-checked evidence: by OCaml at the parameter, and again by the
+         expansion's argument list. *)
+      | Pparam_val
+          ( ((Nolabel | Labelled _) as l),
+            None,
+            { ppat_desc = Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, t); _ } ) ->
+          Option.map (annotated_kind t) ~f:(fun kind -> (l, txt, kind))
+      (* An un-defaulted [?p] binds the option itself: only [Tensor.t option] type-checks. *)
+      | Pparam_val
+          ( (Optional _ as l),
+            None,
+            { ppat_desc = Ppat_constraint ({ ppat_desc = Ppat_var { txt; _ }; _ }, t); _ } ) -> (
+          match annotated_kind t with
+          | Some Option_valued -> Some (l, txt, Option_valued)
+          | _ -> None)
       | Pparam_val (Labelled l, None, { ppat_desc = Ppat_var { txt; _ }; _ })
         when tensor_operand_evidence txt body && not (rebinds txt body) ->
-          Some (Labelled l, txt)
+          Some (Labelled l, txt, Required)
       | _ -> None)
 
 (* Marks a function eligible for a scheme, carrying its name expression. *)
@@ -301,35 +338,74 @@ let rec mark_tail ~name (e : expression) =
 
 (* The schemed form of a translated function [fn] with tensor parameters [params]: [let
    __ocannl_body = fn in let __ocannl_scheme = make ~name ~arity trace in fun params -> apply
-   __ocannl_scheme [args] (fun () -> __ocannl_body params)]. *)
-let wrap_schemed ~loc ~make ~name ~params (fn : expression) =
+   __ocannl_scheme [args] (fun () -> __ocannl_body params)]. With an option-valued parameter, the
+   [_variants] entry points, over [Tensor.t option] lists: a required tensor [x] is passed as [Some
+   x], an option-valued one as it is. [at_unit]: traced at the [()] stage ([closure]), otherwise at
+   the first application ([deferred]). *)
+let wrap_schemed ~loc ~at_unit ~name ~params (fn : expression) =
   let open Ast_builder.Default in
   let fn = { fn with pexp_attributes = drop_attr_named scheme_attr fn.pexp_attributes } in
-  let vars = List.map params ~f:(fun (_, v) -> evar ~loc v) in
+  let variants =
+    List.exists params ~f:(fun (_, _, kind) -> match kind with Option_valued -> true | _ -> false)
+  in
+  let vars = List.map params ~f:(fun (_, v, _) -> evar ~loc v) in
   let call =
     pexp_apply ~loc (evar ~loc "__ocannl_body")
-      (List.map2_exn params vars ~f:(fun (l, _) v -> (l, v)))
+      (List.map2_exn params vars ~f:(fun (l, _, _) v -> (l, v)))
   in
-  let tensors = elist ~loc vars in
-  let tracer_pat = plist ~loc (List.map params ~f:(fun (_, v) -> pvar ~loc v)) in
-  let arity = eint ~loc (List.length params) in
+  let arg_exprs, arg_pats =
+    if not variants then (vars, List.map params ~f:(fun (_, v, _) -> pvar ~loc v))
+    else
+      List.unzip
+      @@ List.map params ~f:(fun (_, v, kind) ->
+          match kind with
+          | Required -> ([%expr Some [%e evar ~loc v]], [%pat? Some [%p pvar ~loc v]])
+          | Option_valued -> (evar ~loc v, pvar ~loc v))
+  in
+  let tensors = elist ~loc arg_exprs in
+  let tracer_pat = plist ~loc arg_pats in
+  let make, apply =
+    match (at_unit, variants) with
+    | true, false -> ([%expr Tensor.Scheme.For_ppx.closure], [%expr Tensor.Scheme.For_ppx.apply])
+    | false, false -> ([%expr Tensor.Scheme.For_ppx.deferred], [%expr Tensor.Scheme.For_ppx.apply])
+    | true, true ->
+        ( [%expr Tensor.Scheme.For_ppx.closure_variants],
+          [%expr Tensor.Scheme.For_ppx.apply_variants] )
+    | false, true ->
+        ( [%expr Tensor.Scheme.For_ppx.deferred_variants],
+          [%expr Tensor.Scheme.For_ppx.apply_variants] )
+  in
+  let shape_arg =
+    if not variants then (Labelled "arity", eint ~loc (List.length params))
+    else
+      ( Labelled "optional",
+        elist ~loc
+          (List.map params ~f:(fun (l, v, kind) ->
+               match kind with
+               | Required -> [%expr None]
+               | Option_valued ->
+                   let n = match l with Nolabel -> v | Labelled n | Optional n -> n in
+                   [%expr Some [%e estring ~loc n]])) )
+  in
+  let tracer =
+    [%expr
+      function
+      | [%p tracer_pat] ->
+          let (_ : _) = [%e call] in
+          ()
+      | _ -> assert false]
+  in
+  let make_call = pexp_apply ~loc make [ (Labelled "name", name); shape_arg; (Nolabel, tracer) ] in
   let returned =
     pexp_function ~loc
-      (List.map params ~f:(fun (l, v) ->
+      (List.map params ~f:(fun (l, v, _) ->
            { pparam_desc = Pparam_val (l, None, pvar ~loc v); pparam_loc = loc }))
       None
-      (Pfunction_body
-         [%expr Tensor.Scheme.For_ppx.apply __ocannl_scheme [%e tensors] (fun () -> [%e call])])
+      (Pfunction_body [%expr [%e apply] __ocannl_scheme [%e tensors] (fun () -> [%e call])])
   in
   [%expr
     let __ocannl_body = [%e fn] in
-    let __ocannl_scheme =
-      [%e make] ~name:[%e name] ~arity:[%e arity] (function
-        | [%p tracer_pat] ->
-            let (_ : _) = [%e call] in
-            ()
-        | _ -> assert false)
-    in
+    let __ocannl_scheme = [%e make_call] in
     [%e returned]]
 
 let default_scheme_name ~loc ?name () =
@@ -781,6 +857,11 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             Option.to_list label
             @ List.filter_map args ~f:(function
               | { pparam_desc = Pparam_val (Optional _, _, _); _ } -> None
+              (* An annotation other than [Tensor.t]: an option-valued tensor, which may be absent,
+                 or a non-tensor (gh-ocannl-1792) -- not a label source. *)
+              | { pparam_desc = Pparam_val (_, _, { ppat_desc = Ppat_constraint (_, t); _ }); _ }
+                when match annotated_kind t with Some Required -> false | _ -> true ->
+                  None
               | { pparam_desc = Pparam_val (_, _, pat); _ } ->
                   let loc = pat.ppat_loc in
                   Some [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]
@@ -825,7 +906,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             | Pexp_function (_ :: _, _, Pfunction_body orig_body), true -> (
                 match tensor_params args orig_body with
                 | Some params ->
-                    wrap_schemed ~loc ~make:[%expr Tensor.Scheme.For_ppx.deferred]
+                    wrap_schemed ~loc ~at_unit:false
                       ~name:(default_scheme_name ~loc ?name:scheme_name ())
                       ~params
                       {
@@ -869,8 +950,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       in
       ( vbs,
         match scheme with
-        | Some (name, params) ->
-            wrap_schemed ~loc ~make:[%expr Tensor.Scheme.For_ppx.closure] ~name ~params fn
+        | Some (name, params) -> wrap_schemed ~loc ~at_unit:true ~name ~params fn
         | None -> fn ))
   | [%expr
       while [%e? test_expr] do
@@ -1046,10 +1126,12 @@ let schemed_definitions (str : structure) =
                 _;
               },
               args )
-          when String.equal kind "closure" || String.equal kind "deferred" ->
+          when List.mem
+                 [ "closure"; "deferred"; "closure_variants"; "deferred_variants" ]
+                 kind ~equal:String.equal ->
             List.iter args ~f:(function
               | Labelled "name", { pexp_desc = Pexp_constant (Pconst_string (name, _, _)); _ } ->
-                  found := (name, String.equal kind "closure") :: !found
+                  found := (name, String.is_prefix kind ~prefix:"closure") :: !found
               | _ -> ())
         | _ -> ());
         super#expression e

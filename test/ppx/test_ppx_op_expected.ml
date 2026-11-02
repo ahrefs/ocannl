@@ -373,6 +373,78 @@ let _scheme_mask =
         match mask with
         | None -> x
         | Some m -> ( *. ) ?label:(Some ["_scheme_mask"]) x m
+let _scheme_variants =
+  let open! TDSL.O in
+    fun () ->
+      let __ocannl_body ~train_step:(train_step : Tensor.t option)
+        ?mask:(mask : Tensor.t option) x =
+        let x =
+          match train_step with
+          | Some s -> (+) ?label:(Some ["x"]) x s
+          | None -> x in
+        match mask with
+        | Some m -> ( *. ) ?label:(Some ["_scheme_variants"]) x m
+        | None -> x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure_variants ~name:"_scheme_variants"
+          ~optional:[Some "train_step"; Some "mask"; None]
+          (function
+           | train_step::mask::(Some x)::[] ->
+               let (_ : _) = __ocannl_body ~train_step ?mask x in ()
+           | _ -> assert false) in
+      fun ~train_step ?mask x ->
+        Tensor.Scheme.For_ppx.apply_variants __ocannl_scheme
+          [train_step; mask; Some x]
+          (fun () -> __ocannl_body ~train_step ?mask x)
+let _scheme_forwarded =
+  let open! TDSL.O in
+    fun () ->
+      let __ocannl_body ~gamma:(gamma : Tensor.t) x =
+        _scheme_labelled () ~gamma ~beta:gamma x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"_scheme_forwarded" ~arity:2
+          (function
+           | gamma::x::[] -> let (_ : _) = __ocannl_body ~gamma x in ()
+           | _ -> assert false) in
+      fun ~gamma x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [gamma; x]
+          (fun () -> __ocannl_body ~gamma x)
+let _scheme_late =
+  let open! TDSL.O in
+    let __ocannl_body ?mask:(mask : Tensor.t option) x =
+      match mask with
+      | Some m ->
+          ( *.
+            ) ?label:(Some
+                        (List.concat
+                           [["_scheme_late"];
+                           (x.Tensor.value).Ir.Tnode.label]))
+            x m
+      | None -> x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred_variants ~name:"_scheme_late"
+        ~optional:[Some "mask"; None]
+        (function
+         | mask::(Some x)::[] -> let (_ : _) = __ocannl_body ?mask x in ()
+         | _ -> assert false) in
+    fun ?mask x ->
+      Tensor.Scheme.For_ppx.apply_variants __ocannl_scheme [mask; Some x]
+        (fun () -> __ocannl_body ?mask x)
+let _late_config =
+  let open! TDSL.O in
+    fun ~scale:(scale : float) x ->
+      ( *.
+        ) ?label:(Some
+                    (List.concat
+                       [["_late_config"]; (x.Tensor.value).Ir.Tnode.label]))
+        x (TDSL.O.(!.) scale)
+let _scheme_defaulted =
+  let open! TDSL.O in
+    fun () ->
+      fun ?scale:((scale : Tensor.t option)= None) x ->
+        match scale with
+        | Some s -> ( *. ) ?label:(Some ["_scheme_defaulted"]) x s
+        | None -> x
 let _scheme_opted_out =
   let open! TDSL.O in
     fun () ->

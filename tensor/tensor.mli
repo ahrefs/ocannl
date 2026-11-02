@@ -475,18 +475,27 @@ module Scheme : sig
       scheme cannot carry (random number generation, an external capture reference, forcing dims, or
       a body that cannot run on tracers) leaves the function unschemed, as it was before, once its
       rewind succeeded. Ids are unaffected: traces and checks allocate tensor ids, node uids and
-      shape-variable ids from reserved ranges. *)
+      shape-variable ids from reserved ranges.
+
+      Option-valued tensor parameters (gh-ocannl-1792), annotated [~(p : Tensor.t option)] or
+      [?(p : Tensor.t option)]: the function gets one scheme per presence pattern -- which of them
+      are [Some] -- each traced, checked and refused on its own, under the label
+      [<function> [p, no q]] (just [<function>] without such parameters). The closure built at [()]
+      traces every pattern; a function without a [()] stage traces every pattern at its first
+      application; afterwards each pattern re-traces on its own when stale. *)
 
   type handle
-  (** A function's scheme slot: one per closure. *)
+  (** A function's scheme slots: one handle per closure, one slot per presence pattern. *)
 
   val status : handle -> string
-  (** ["pending"], ["schemed"], or ["unschemed: <reason>"]. *)
+  (** ["pending"], ["schemed"], or ["unschemed: <reason>"]; with option-valued parameters, one
+      ["<label>: <status>"] per pattern, separated by ["; "]. *)
 
   type event =
-    | Traced of string  (** A function's scheme was traced. *)
-    | Unschemed of string * string  (** A function was left unschemed, with the reason. *)
-    | Checked of string  (** An application was checked against its function's scheme. *)
+    | Traced of string  (** A function's scheme (a pattern's, by its label) was traced. *)
+    | Unschemed of string * string
+        (** A function (a pattern, by its label) was left unschemed, with the reason. *)
+    | Checked of string  (** An application was checked against its pattern's scheme. *)
 
   val registration_counts : unit -> Shape.registration_counts
   (** Process-wide registration statistics since the last reset (gh-ocannl-1752's attribution): see
@@ -505,10 +514,12 @@ module Scheme : sig
       [%op] block definition inside a window that is always rewound and allocates no session ids, so
       the [()] traces of the block and of the sub-blocks it builds run, and with them any shape
       error that does not depend on the arguments, prefixed ["checking the definition <name>: "].
-      Returns the labels of the schemes traced, innermost first; the session is unchanged
-      afterwards. It catches errors that hold for every configuration and those of the trial
-      configuration only; it costs the trial's construction and traces. Prefer it to a bare
-      [block conf ()], which leaves the trial's parameters in the session. *)
+      Returns the labels of the schemes traced (every presence pattern of a closure built at [()] in
+      the trial: see above), innermost first; the session is unchanged afterwards. A function
+      without a [()] stage that the trial only builds is not traced. It catches errors that hold for
+      every configuration and those of the trial configuration only; it costs the trial's
+      construction and traces. Prefer it to a bare [block conf ()], which leaves the trial's
+      parameters in the session. *)
 
   (** The runtime the [%op] expansion calls. Not for direct use. *)
   module For_ppx : sig
@@ -521,6 +532,20 @@ module Scheme : sig
     val apply : handle -> tensor list -> (unit -> 'a) -> 'a
     (** [apply h args body] (tracing [h]'s scheme first when pending or stale) checks the scheme
         against [args], then runs [body]. Inside a trace, and when unschemed, only runs [body]. *)
+
+    val closure_variants :
+      name:string -> optional:string option list -> (tensor option list -> unit) -> handle
+    (** {!closure} for a function with option-valued tensor parameters: [optional] names each
+        position's option-valued parameter ([None]: a required tensor, passed as [Some]). Traces
+        every presence pattern now. *)
+
+    val deferred_variants :
+      name:string -> optional:string option list -> (tensor option list -> unit) -> handle
+    (** {!deferred} likewise: every presence pattern is traced at the first application. *)
+
+    val apply_variants : handle -> tensor option list -> (unit -> 'a) -> 'a
+    (** {!apply} for the variant handles: the arguments' presence selects the scheme checked against
+        the present arguments. *)
   end
 end
 

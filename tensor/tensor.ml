@@ -1821,17 +1821,20 @@ module Scheme = struct
     | Schemed of { scheme : t; generation : int }
     | Unschemed of string  (** The reason. *)
 
-  type handle = { name : string; arity : int; body : tensor list -> unit; mutable state : state }
+  (* One scheme per presence pattern (gh-ocannl-1792): which of the function's option-valued tensor
+     parameters are [Some]. [pattern] covers every position, a required one always present. *)
+  type slot = { pattern : bool list; label : string; mutable state : state }
+  type handle = { body : tensor option list -> unit; slots : slot list }
 
-  let unscheme h reason =
-    h.state <- Unschemed reason;
-    emit (Unschemed (h.name, reason))
+  let unscheme s reason =
+    s.state <- Unschemed reason;
+    emit (Unschemed (s.label, reason))
 
   (* A rewind that must succeed for the fallback to be safe. When it is refused -- the trace read a
      pre-existing open shape's committed state (forcing its dims), and a lazy over that read may
      hold the failure, which no rewind can reset -- the function cannot degrade silently: loud,
      naming the function and the remedy. *)
-  let rewind_or_reraise h ck exn bt =
+  let rewind_or_reraise s ck exn bt =
     match rewind ck with
     | () -> ()
     | exception Session_error (why, _) ->
@@ -1839,30 +1842,38 @@ module Scheme = struct
           (Row.Shape_error
              ( [%string
                  "%{Shape.exn_summary exn}; and the rewind of the trace of the shape scheme \
-                  %{h.name} was refused (%{why}), so the function cannot be left unschemed -- opt \
+                  %{s.label} was refused (%{why}), so the function cannot be left unschemed -- opt \
                   it out of its scheme with [@@ocannl.no_scheme]"],
                [] ))
           bt
 
-  let trace_handle h =
+  (* The body's arguments for a pattern: the tracers in the present positions, in order. *)
+  let rec spread pattern tracers =
+    match (pattern, tracers) with
+    | [], _ -> []
+    | true :: pattern, t :: tracers -> Some t :: spread pattern tracers
+    | true :: _, [] -> assert false
+    | false :: pattern, tracers -> None :: spread pattern tracers
+
+  let trace_slot h s =
     if not (Shape.can_checkpoint ()) then
       (* Tainted, or mid-construction: the body itself reports what it reports, as without a scheme.
          Left pending, to trace when a checkpoint is possible. *)
       ()
     else
-      let label = [%string "the trace of the shape scheme %{h.name}"] in
+      let label = [%string "the trace of the shape scheme %{s.label}"] in
       Shape.timed `Tracing @@ fun () ->
       with_id_neutral ~label (fun () ->
           let ck = checkpoint ~label () in
           match
-            trace_core ~label:h.name h.arity (fun ts ->
-                h.body ts;
+            trace_core ~label:s.label (List.count s.pattern ~f:Fn.id) (fun ts ->
+                h.body (spread s.pattern ts);
                 [])
           with
           | scheme ->
               rewind ck;
-              h.state <- Schemed { scheme; generation = !generation };
-              emit (Traced h.name)
+              s.state <- Schemed { scheme; generation = !generation };
+              emit (Traced s.label)
           | exception (Row.Shape_error _ as exn) ->
               (* A contradiction that does not depend on the arguments: loud, naming the
                  function. *)
@@ -1871,31 +1882,75 @@ module Scheme = struct
               Stdlib.Printexc.raise_with_backtrace exn bt
           | exception (Shape.Untraceable_scheme msg as exn) ->
               let bt = Stdlib.Printexc.get_raw_backtrace () in
-              rewind_or_reraise h ck exn bt;
-              unscheme h msg
+              rewind_or_reraise s ck exn bt;
+              unscheme s msg
           | exception exn ->
               (* The body cannot run on tracers (it reads concrete dims, say): degrade only once the
                  session is verifiably back where it was. *)
               let bt = Stdlib.Printexc.get_raw_backtrace () in
-              rewind_or_reraise h ck exn bt;
-              unscheme h
+              rewind_or_reraise s ck exn bt;
+              unscheme s
                 [%string
-                  "tracing the shape scheme %{h.name}: the function raised %{Shape.exn_summary exn}"])
+                  "tracing the shape scheme %{s.label}: the function raised %{Shape.exn_summary \
+                   exn}"])
 
-  let make ~name ~arity body = { name; arity; body; state = Pending }
+  (* Every presence pattern of the positions: an option-valued one ([Some name]) present first, then
+     absent; a required one ([None]) always present. The all-present pattern comes first. *)
+  let rec patterns = function
+    | [] -> [ [] ]
+    | None :: rest -> List.map (patterns rest) ~f:(fun p -> true :: p)
+    | Some _ :: rest ->
+        let ps = patterns rest in
+        List.map ps ~f:(fun p -> true :: p) @ List.map ps ~f:(fun p -> false :: p)
+
+  (* [name] when every parameter is required; otherwise [name [train_step, no mask]]. *)
+  let slot_label ~name optional pattern =
+    match List.filter_opt optional with
+    | [] -> name
+    | _ ->
+        let parts =
+          List.filter_map (List.zip_exn optional pattern) ~f:(function
+            | None, _ -> None
+            | Some n, true -> Some n
+            | Some n, false -> Some ("no " ^ n))
+        in
+        let parts = String.concat ~sep:", " parts in
+        [%string "%{name} [%{parts}]"]
+
+  let make ~name ~optional body =
+    {
+      body;
+      slots =
+        List.map (patterns optional) ~f:(fun pattern ->
+            { pattern; label = slot_label ~name optional pattern; state = Pending });
+    }
 
   module For_ppx = struct
-    let closure ~name ~arity body =
-      let h = make ~name ~arity body in
-      if not (enabled ()) then h.state <- Unschemed "automatic shape schemes are off"
-      else if Shape.tracing_in_progress () then unscheme h "created inside a shape-scheme trace"
-      else trace_handle h;
+    let closure_variants ~name ~optional body =
+      let h = make ~name ~optional body in
+      if not (enabled ()) then
+        List.iter h.slots ~f:(fun s -> s.state <- Unschemed "automatic shape schemes are off")
+      else if Shape.tracing_in_progress () then
+        List.iter h.slots ~f:(fun s -> unscheme s "created inside a shape-scheme trace")
+      else List.iter h.slots ~f:(trace_slot h);
       h
 
-    let deferred ~name ~arity body =
-      let h = make ~name ~arity body in
-      if Shape.tracing_in_progress () then unscheme h "created inside a shape-scheme trace";
+    let deferred_variants ~name ~optional body =
+      let h = make ~name ~optional body in
+      if Shape.tracing_in_progress () then
+        List.iter h.slots ~f:(fun s -> unscheme s "created inside a shape-scheme trace");
       h
+
+    let all_required arity = List.init arity ~f:(fun _ -> None)
+
+    let present_all body args =
+      body (List.map args ~f:(function Some t -> t | None -> assert false))
+
+    let closure ~name ~arity body =
+      closure_variants ~name ~optional:(all_required arity) (present_all body)
+
+    let deferred ~name ~arity body =
+      deferred_variants ~name ~optional:(all_required arity) (present_all body)
 
     let application_name args =
       match args with
@@ -1904,32 +1959,54 @@ module Scheme = struct
 
     (* The check of one application: the scheme's constraints against the arguments, solved, and
        then put back -- the session afterwards is what the body alone makes. *)
-    let check h scheme args =
+    let check s scheme args =
       if Shape.can_checkpoint () then (
         (* Its renamed variables die with it: minted from the reserved range. *)
         Row.with_reserved_vars (fun () ->
             Shape.Scheme.check scheme ~application:(application_name args)
               ~args:(List.map args ~f:(fun t -> t.shape)));
         Shape.note_checked_application ();
-        emit (Checked h.name))
+        emit (Checked s.label))
 
-    let apply h args body =
+    let due s =
+      match s.state with
+      | Pending -> true
+      | Schemed { scheme; generation = g } -> g <> !generation || Shape.Scheme.stale scheme
+      | Unschemed _ -> false
+
+    let apply_variants h args body =
       if (not (enabled ())) || Shape.tracing_in_progress () then body ()
-      else (
-        (match h.state with
-        | Pending -> trace_handle h
-        | Schemed { scheme; generation = g } when g <> !generation || Shape.Scheme.stale scheme ->
-            trace_handle h
-        | Schemed _ | Unschemed _ -> ());
-        (match h.state with Schemed { scheme; _ } -> check h scheme args | _ -> ());
-        body ())
+      else
+        let pattern = List.map args ~f:Option.is_some in
+        match List.find h.slots ~f:(fun s -> List.equal Bool.equal s.pattern pattern) with
+        | None -> body ()
+        | Some s ->
+            (* Tracing begins with every pattern (a function without a [()] stage, or a closure
+               built when no checkpoint was possible); afterwards, each slot re-traces on its
+               own. *)
+            if List.for_all h.slots ~f:(fun s -> match s.state with Pending -> true | _ -> false)
+            then List.iter h.slots ~f:(trace_slot h)
+            else if due s then trace_slot h s;
+            (match s.state with
+            | Schemed { scheme; _ } -> check s scheme (List.filter_opt args)
+            | _ -> ());
+            body ()
+
+    let apply h args body = apply_variants h (List.map args ~f:Option.some) body
   end
 
-  let status h =
-    match h.state with
+  let slot_status s =
+    match s.state with
     | Pending -> "pending"
     | Schemed _ -> "schemed"
     | Unschemed reason -> "unschemed: " ^ reason
+
+  let status h =
+    match h.slots with
+    | [ s ] -> slot_status s
+    | slots ->
+        String.concat ~sep:"; "
+          (List.map slots ~f:(fun s -> [%string "%{s.label}: %{slot_status s}"]))
 
   let check_definition ~name f =
     let traced = ref [] in
