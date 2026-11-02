@@ -902,11 +902,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   a fail-fast twin that must lose the all-members oracle. Setup-hook fixtures derive their
   helper files from the hook's source directives and refuse unknown forms; an injected helper
   passes through this derivation and fails against the former fixed-list fixture.
-- On a fleet box a harness run is a test batch like any other, though unlike `tools/test-run.sh`
-  it takes no slot itself, so wrap it:
-  `fleet-worker.sh execution slot --cpu -- tools/test-harnesses.sh --shell`, in the foreground or
-  detached. Under `bg-run.sh spawn`, `execution slot --bg` or `nohup` it inherits SIGHUP ignored
-  (and a background `&` SIGINT), which a non-interactive bash cannot trap: before gh-ocannl-1236
+- On a fleet box a harness run is a test batch like any other, and like `tools/test-run.sh` and
+  `tools/fmt-check.sh` it takes one of the box's correctness slots itself, as `--cpu`
+  (gh-ocannl-1576): after its arguments and skip lists pass, it runs itself again under `fleet-worker.sh execution
+  slot --wait <OCANNL_TOOL_SLOT_WAIT, 600> --cpu`; `--list` takes none, a refused slot exits 75
+  (`harnesses: SLOT REFUSED`, no member run), and an enclosing slot is reused (the nested-slot
+  rule). The three tools find the fleet-worker.sh through ONE probe,
+  `tools/fleet-worker-candidates.sh`'s `fleet_slot_probe`, so a change to the probe (its bound,
+  the capability check, the answer's fields) lands in all three at once; before it each carried a
+  copy of the loop, and the harness runner carried none and had to be wrapped by hand.
+  `tools/test-test-harnesses.sh` drives the slot with a fake fleet-worker.sh (one answering no
+  probe is the negative control) and checks no slot-taker asks `execution slot --probe` itself.
+  It runs in the foreground or detached. Under `bg-run.sh spawn`, `execution slot --bg` or
+  `nohup` it inherits SIGHUP ignored (and a background `&` SIGINT), which a non-interactive bash cannot trap: before gh-ocannl-1236
   `tools/test-test-run.sh`'s HUP lifecycle legs failed there, on master too, and the harness
   aborted before its later legs (three workers of the 2026-10-05 wave and two of its post-waves
   paid a base comparison or a rerun). Now the signal legs launch their fixture through a perl

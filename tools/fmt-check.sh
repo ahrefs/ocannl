@@ -75,8 +75,9 @@ EOF
 }
 
 # The fleet's run-time correctness slot, taken as tools/test-run.sh takes it
-# (plan_slot there, gh-ocannl-1004): the first of tools/fleet-worker-candidates.sh's
-# fleet-worker.sh that answers `execution slot --probe` runs this script again,
+# (plan_slot there, gh-ocannl-1004): the fleet-worker.sh that
+# tools/fleet-worker-candidates.sh's fleet_slot_probe finds -- the one probe
+# the slot-takers share (gh-ocannl-1576) -- runs this script again,
 # under `execution slot --wait <OCANNL_TOOL_SLOT_WAIT, 600> --cpu`. `--cpu`
 # because neither build holds a device: `@test/operations/scans` is on
 # `Slot_kind.config_free_aliases` (test/support/slot_kind.ml), whose closure the
@@ -90,22 +91,14 @@ EOF
 # or the registry unreachable) is told apart from a check that failed: exit 75,
 # `SLOT REFUSED`, as tools/test-run.sh reports it, and nothing ran.
 take_fleet_slot() {
-  local candidates fw= cand tag box slots tokens wait status recorded self
+  local candidates wait status recorded self
   candidates=$(dirname "$0")/fleet-worker-candidates.sh
   [ -r "$candidates" ] || verdict 2 "cannot read $candidates"
   # shellcheck source=fleet-worker-candidates.sh
   . "$candidates"
   slot_dir=$(mktemp -d "${TMPDIR:-/tmp}/ocannl-fmt-check-slot.XXXXXX") || verdict 2 "cannot make a scratch directory"
   trap 'rm -rf "$slot_dir"' EXIT
-  while IFS= read -r cand; do
-    [ -x "$cand" ] || continue
-    # Bounded, and answered through a file, as tools/test-run.sh asks it.
-    perl -e 'alarm shift; exec @ARGV or exit 127' 30 "$cand" execution slot --probe \
-      </dev/null >"$slot_dir/probe" 2>/dev/null || continue
-    read -r tag _ _ box slots tokens _ <"$slot_dir/probe"
-    [ "$tag" = EXECUTION ] && [ -n "$tokens" ] && { fw=$cand; break; }
-  done < <(fleet_worker_candidates)
-  if [ -z "$fw" ]; then
+  if ! fleet_slot_probe "$slot_dir/probe"; then
     rm -rf "$slot_dir"
     trap - EXIT
     return 0
@@ -114,8 +107,8 @@ take_fleet_slot() {
   case $wait in '' | *[!0-9]*) wait=600 ;; esac
   # CDPATH cleared: a `cd` it resolves prints the directory, which would join the path.
   self=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0") || verdict 2 "cannot resolve $0"
-  echo "fmt-check: taking one of $box's $slots fleet correctness slots for both builds, as --cpu (gh-ocannl-1519); waiting at most ${wait}s, an enclosing slot reused"
-  OCANNL_TOOL_FMT_CHECK_IN_SLOT=$slot_dir/record "$fw" execution slot --wait "$wait" --cpu -- \
+  echo "fmt-check: taking one of $fleet_slot_box's $fleet_slot_slots fleet correctness slots for both builds, as --cpu (gh-ocannl-1519); waiting at most ${wait}s, an enclosing slot reused"
+  OCANNL_TOOL_FMT_CHECK_IN_SLOT=$slot_dir/record "$fleet_slot_fw" execution slot --wait "$wait" --cpu -- \
     "${BASH:-bash}" "$self"
   status=$?
   [ -e "$slot_dir/record" ] ||

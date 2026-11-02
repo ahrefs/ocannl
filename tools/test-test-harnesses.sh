@@ -4,7 +4,8 @@
 # skips, run the CI shell job's own check (--ci-shell) with that job's
 # absences, hold its hidden-dune list to the skips the hidden dune caused,
 # run the real-dune job's check (--ci-real-dune) on the selected legs alone,
-# and refuse arguments (or a malformed list) before executing work.
+# refuse arguments (or a malformed list) before executing work, and take the
+# fleet's run-time slot through the shared probe (gh-ocannl-1576).
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
 set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -12,10 +13,13 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 harness_args "$@"
 harness_require python3 perl
 harness_scratch test-harnesses
+# No run reaches this host's fleet: the subject's slot (gh-ocannl-1576) is
+# driven by the fake fleet-worker.sh below, in the slot legs alone.
+export OCANNL_TOOL_FLEET_WORKER=none
 fixture="$TMP/repository with spaces"
 mkdir -p "$fixture/tools"
 fixture=$(CDPATH= cd -- "$fixture" && pwd)
-cp "$here/test-harnesses.sh" "$fixture/tools/test-harnesses.sh"
+cp "$here/test-harnesses.sh" "$here/fleet-worker-candidates.sh" "$fixture/tools/"
 subject="$fixture/tools/test-harnesses.sh"
 # Derive fixture membership through the public interface, rather than keeping
 # another list that would go stale as CI gains a harness.
@@ -37,6 +41,7 @@ while IFS= read -r script; do
 name=${0#"$FIXTURE/"}
 printf '%s\n' "$name" >>"$RECORD"
 [ "$PWD" = "$FIXTURE" ] || exit 90
+[ -z "${SLOT_RECORD:-}" ] || printf '%s slot=%s\n' "$name" "${FAKE_SLOT_HELD-none}" >>"$SLOT_RECORD"
 if [ -n "${ENV_RECORD:-}" ]; then
   wake=unset
   [ -z "${OCANNL_TOOL_SWEEP_WAKE_LAB+x}" ] || { wake=present; [ -e "$OCANNL_TOOL_SWEEP_WAKE_LAB" ] || wake=absent; }
@@ -386,4 +391,116 @@ run --list
 if [ "$got" = 0 ] && [ ! -s "$RECORD" ] && cmp -s "$TMP/all" "$TMP/out"; then
   report 0 'listing membership executes no harness'
 else report 1 'listing membership executes no harness'; fi
+# The fleet's run-time slot (gh-ocannl-1576): on a box whose fleet-worker.sh
+# answers the probe, the whole run happens inside ONE `execution slot --cpu`,
+# taken after every refusal and never for --list; a refused slot is SLOT
+# REFUSED (exit 75) with no member run; the run's own status wins over the
+# wrapper's. The fake records each call and, holding the slot, marks the
+# command's environment (FAKE_SLOT_HELD) for the member stubs to record.
+fake_fw=$TMP/fake-fleet-worker.sh
+cat >"$fake_fw" <<'FAKE_FW'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_FW_CALLS"
+if [ "$1 $2 $3" = "execution slot --probe" ]; then
+  [ "${FAKE_FW_MODE:-}" = noprobe ] && { echo "fleet-worker.sh: execution slot [--wait <seconds>] ..." >&2; exit 2; }
+  echo "EXECUTION SLOT PROBE fakebox 4 1"
+  exit 0
+fi
+while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done
+shift
+case ${FAKE_FW_MODE:-} in
+  refuse) echo "EXECUTION SLOT REFUSED fakebox: all 4 slots busy after 0s"; exit 1 ;;
+  unreachable) echo "EXECUTION SLOT UNREACHABLE anchor: registry unread, no slot taken"; exit 4 ;;
+  # The command started, then was killed before it could record its status.
+  killed) : >"$OCANNL_TOOL_HARNESSES_IN_SLOT"; exit 137 ;;
+esac
+rc=0
+FLEET_SLOT_HELD=1 FAKE_SLOT_HELD=1 "$@" || rc=$?
+[ "${FAKE_FW_MODE:-}" != wrapfail ] || exit 3
+exit "$rc"
+FAKE_FW
+chmod +x "$fake_fw"
+export SLOT_RECORD=$TMP/slot-record FAKE_FW_CALLS=$TMP/fw-calls
+unset FAIL_MEMBER FAIL_SIGNAL SKIP_MEMBER
+slot_run() { # [VAR=VALUE...] -- SUBJECT_ARG...
+  local env_args=()
+  while [ "$1" != -- ]; do env_args+=("$1"); shift; done
+  shift
+  : >"$SLOT_RECORD"
+  : >"$FAKE_FW_CALLS"
+  : >"$RECORD"
+  got=0
+  (cd "$TMP" && env OCANNL_TOOL_FLEET_WORKER="$fake_fw" ${env_args[@]+"${env_args[@]}"} \
+    "$subject" "$@") >"$TMP/out" 2>&1 || got=$?
+  slot_calls=$(grep -v -- '--probe' "$FAKE_FW_CALLS" | sed 's/ -- .*//')
+  probes=$(grep -c -- '--probe' "$FAKE_FW_CALLS")
+}
+# Every member of the group ran, each with the slot held (WANT: 1) or not (none).
+members_ran_in() { # GROUP WANT
+  [ -s "$TMP/$1" ] && cmp -s "$TMP/$1" "$RECORD" &&
+    [ "$(sed "s/\$/ slot=$2/" "$TMP/$1")" = "$(cat "$SLOT_RECORD")" ]
+}
+slot_run -- --shell
+if [ "$got" = 0 ] && [ "$probes" = 1 ] && [ "$slot_calls" = "execution slot --wait 600 --cpu" ] &&
+   grep -qxF -- "execution slot --wait 600 --cpu -- ${BASH:-bash} $subject --shell" "$FAKE_FW_CALLS" &&
+   members_ran_in shell 1 &&
+   grep -Fq "harnesses: taking one of fakebox's 4 fleet correctness slots" "$TMP/out"; then
+  report 0 'on a fleet box the run takes one --cpu slot, probed once, every member inside it'
+else report 1 'on a fleet box the run takes one --cpu slot, probed once, every member inside it' \
+  "exit $got; probes $probes; calls: $(tr '\n' '|' <"$FAKE_FW_CALLS"); members: $(tr '\n' '|' <"$SLOT_RECORD")"; fi
+slot_run OCANNL_TOOL_SLOT_WAIT=7 -- --promotion
+if [ "$got" = 0 ] && [ "$slot_calls" = "execution slot --wait 7 --cpu" ] && members_ran_in promotion 1; then
+  report 0 "OCANNL_TOOL_SLOT_WAIT bounds the slot's wait"
+else report 1 "OCANNL_TOOL_SLOT_WAIT bounds the slot's wait" "exit $got; calls: $(tr '\n' '|' <"$FAKE_FW_CALLS")"; fi
+slot_run FAIL_MEMBER="$(head -n 1 "$TMP/shell")" -- --shell
+if [ "$got" = 1 ] && [ -n "$slot_calls" ] && members_ran_in shell 1 && grep -q '1 failed$' "$TMP/out"; then
+  report 0 'a failing member in the slot keeps the run red, every member run'
+else report 1 'a failing member in the slot keeps the run red, every member run' "exit $got; $(tail -n 3 "$TMP/out")"; fi
+for mode in refused unreachable; do
+  slot_run FAKE_FW_MODE=${mode%d} -- --shell
+  if [ "$got" = 75 ] && [ ! -s "$RECORD" ] && grep -q '^harnesses: SLOT REFUSED (exit 75)' "$TMP/out"; then
+    report 0 "a slot $mode is SLOT REFUSED (exit 75), and no member ran"
+  else report 1 "a slot $mode is SLOT REFUSED (exit 75), and no member ran" "exit $got; $(tail -n 3 "$TMP/out")"; fi
+done
+slot_run FAKE_FW_MODE=killed -- --shell
+if [ "$got" = 137 ] && grep -q '^harnesses: the run under the fleet slot ended without a status (exit 137)' "$TMP/out"; then
+  report 0 'a run killed in the slot is told apart from a refused slot'
+else report 1 'a run killed in the slot is told apart from a refused slot' "exit $got; $(tail -n 3 "$TMP/out")"; fi
+slot_run FAKE_FW_MODE=wrapfail -- --shell
+if [ "$got" = 0 ] && members_ran_in shell 1; then
+  report 0 "the run's recorded status wins over the wrapper's own failure after it"
+else report 1 "the run's recorded status wins over the wrapper's own failure after it" "exit $got"; fi
+# The negative control of the slot oracle: a fleet-worker.sh without the
+# probe (or the slot turned off) runs the members directly, outside any slot.
+slot_run FAKE_FW_MODE=noprobe -- --shell
+if [ "$got" = 0 ] && [ "$probes" = 1 ] && [ -z "$slot_calls" ] && members_ran_in shell none &&
+   ! grep -qi 'slot' "$TMP/out"; then
+  report 0 'a fleet-worker.sh without the probe runs the members directly, silently'
+else report 1 'a fleet-worker.sh without the probe runs the members directly, silently' \
+  "exit $got; calls: $(tr '\n' '|' <"$FAKE_FW_CALLS"); members: $(tr '\n' '|' <"$SLOT_RECORD")"; fi
+for args in --list --unknown expected-skips; do
+  case $args in
+    expected-skips)
+      printf 'not a list line\n' >"$TMP/malformed-list"
+      slot_run -- --shell --expected-skips "$TMP/malformed-list" ;;
+    *) slot_run -- "$args" ;;
+  esac
+  want=2
+  [ "$args" != --list ] || want=0
+  if [ "$got" = "$want" ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ]; then
+    report 0 "$args asks the fleet nothing and runs no member"
+  else report 1 "$args asks the fleet nothing and runs no member" "exit $got; calls: $(tr '\n' '|' <"$FAKE_FW_CALLS")"; fi
+done
+unset SLOT_RECORD FAKE_FW_CALLS
+# One probe for the three slot-takers (gh-ocannl-1576): each calls
+# fleet_slot_probe, and no code line of theirs asks `execution slot --probe`
+# itself (their comments may name it).
+probe_copies=
+for taker in test-run.sh fmt-check.sh test-harnesses.sh; do
+  grep -q 'fleet_slot_probe ' "$here/$taker" || probe_copies="$probe_copies $taker:no-call"
+  ! grep -v '^[[:space:]]*#' "$here/$taker" | grep -q 'slot --probe' || probe_copies="$probe_copies $taker:own-probe"
+done
+if [ -z "$probe_copies" ] && grep -q 'slot --probe' "$here/fleet-worker-candidates.sh"; then
+  report 0 'the slot-takers share one probe, fleet_slot_probe'
+else report 1 'the slot-takers share one probe, fleet_slot_probe' "${probe_copies# }"; fi
 finish

@@ -51,9 +51,29 @@
 # every check the dune list names printed PASS. A check whose leg the selector
 # misses is red there, never a skip nobody runs per PR. It takes no group and
 # no --expected-skips.
+#
+# On a fleet box a run takes one of the box's run-time correctness slots
+# itself, as --cpu (no member holds a device), as tools/test-run.sh and
+# tools/fmt-check.sh take theirs and through the same probe,
+# tools/fleet-worker-candidates.sh's fleet_slot_probe (gh-ocannl-1576): this
+# script runs again under `fleet-worker.sh execution slot --wait
+# <OCANNL_TOOL_SLOT_WAIT, 600> --cpu`, after its arguments and lists are
+# checked and before any member starts; a caller's own enclosing slot is
+# reused, not doubled. A slot that never ran it (refused, or the registry
+# unreachable) exits 75 with `harnesses: SLOT REFUSED` and no member run;
+# otherwise the run's own status is the exit status. --list takes no slot, and
+# no probe answer (CI, a machine outside the fleet,
+# OCANNL_TOOL_FLEET_WORKER=none) runs the members directly, silently.
 set -u
+# Set only by this script, for the copy of itself it runs inside the fleet
+# slot (take_fleet_slot): the file that says it started and, at its exit, its
+# status. Cleared, so no member's own run of this script inherits it.
+slot_record=${OCANNL_TOOL_HARNESSES_IN_SLOT-}
+unset OCANNL_TOOL_HARNESSES_IN_SLOT
+[ -z "$slot_record" ] || : >"$slot_record" || exit 2
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 group=all list=0 expected= ci_shell=0 ci_real_dune=0
+original_args=("$@")
 while [ $# -gt 0 ]; do
   arg=$1
   case $arg in
@@ -130,7 +150,7 @@ members() {
 unset OCANNL_TOOL_HARNESS_EXPECTED_SKIPS OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_NO_DUNE \
   OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
 scratch=()
-trap 'rm -rf ${scratch[@]+"${scratch[@]}"}' EXIT
+trap 'status=$?; rm -rf ${scratch[@]+"${scratch[@]}"}; [ -z "$slot_record" ] || echo "$status" >"$slot_record"' EXIT
 # Refuse a list (exit 2, before any member runs) holding any line but the
 # three forms the header names, or an entry naming a harness this run does not
 # select, or one listed twice.
@@ -205,6 +225,47 @@ if [ -n "$expected" ]; then
   [ -f "$expected" ] && [ -r "$expected" ] ||
     { echo "test-harnesses.sh: --expected-skips: cannot read $expected" >&2; exit 2; }
   validate_list "$expected" --expected-skips
+fi
+# The fleet's run-time correctness slot (see the header): the whole run, this
+# script again, inside one `execution slot --cpu`. Taken here, after every
+# refusal above and before anything below is exported -- the fleet-worker.sh
+# runs with the caller's environment, FLEET_BOXES included.
+take_fleet_slot() {
+  local candidates wait rc recorded self slot_dir
+  candidates=$root/tools/fleet-worker-candidates.sh
+  [ -r "$candidates" ] || { echo "test-harnesses.sh: cannot read $candidates" >&2; exit 2; }
+  # shellcheck source=fleet-worker-candidates.sh
+  . "$candidates"
+  slot_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-slot.XXXXXX") ||
+    { echo "test-harnesses.sh: cannot create the slot's scratch directory" >&2; exit 2; }
+  scratch+=("$slot_dir")
+  fleet_slot_probe "$slot_dir/probe" || return 0
+  wait=${OCANNL_TOOL_SLOT_WAIT:-600}
+  case $wait in '' | *[!0-9]*) wait=600 ;; esac
+  # The script by its absolute path: the copy runs from wherever the caller is.
+  self=$root/tools/$(basename -- "$0")
+  echo "harnesses: taking one of $fleet_slot_box's $fleet_slot_slots fleet correctness slots for the run, as --cpu (gh-ocannl-1576); waiting at most ${wait}s, an enclosing slot reused"
+  rc=0
+  OCANNL_TOOL_HARNESSES_IN_SLOT=$slot_dir/record "$fleet_slot_fw" execution slot --wait "$wait" --cpu -- \
+    "${BASH:-bash}" "$self" "${original_args[@]+"${original_args[@]}"}" || rc=$?
+  if [ ! -e "$slot_dir/record" ]; then
+    echo "harnesses: SLOT REFUSED (exit 75): fleet-worker.sh exited $rc without running the harnesses; nothing ran" >&2
+    exit 75
+  fi
+  recorded=
+  read -r recorded <"$slot_dir/record"
+  case $recorded in
+    '' | *[!0-9]*)
+      # The run under the slot ended without recording its status: killed.
+      [ "$rc" -ne 0 ] || rc=1
+      echo "harnesses: the run under the fleet slot ended without a status (exit $rc)" >&2
+      exit "$rc" ;;
+  esac
+  # The run's own status, whatever fleet-worker.sh's after it.
+  exit "$recorded"
+}
+[ "$list" = 1 ] || [ -n "$slot_record" ] || take_fleet_slot
+if [ -n "$expected" ]; then
   record=$(mktemp "${TMPDIR:-/tmp}/test-harnesses-skips.XXXXXX") ||
     { echo "test-harnesses.sh: cannot create the skip record" >&2; exit 2; }
   scratch+=("$record")
