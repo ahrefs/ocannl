@@ -56,6 +56,8 @@ one-operand padded max 2*o=+1+k, kernel 3: extent: true
 one-operand padded max 2*o=+1+k, kernel 3: values: true
 one-operand valid max 2*o<+k, kernel 2: extent: true
 one-operand valid max 2*o<+k, kernel 2: values: true
+one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8: extent: true
+one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8: values: true
 one-operand padded 2-D max pool 2*a=+k, 2*b=+l, window 3: extent: true
 one-operand padded 2-D max pool 2*a=+k, 2*b=+l, window 3: values: true
 gradient of one-operand padded sum 2*o=+1+2*k: d/dx: true

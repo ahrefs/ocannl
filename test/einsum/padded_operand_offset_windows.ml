@@ -364,6 +364,15 @@ let run_unary_forms () =
       let%op r = x @^^ "s, 2*o<+k => s, o" [ "k" ] in
       Shape.set_dim k 2;
       r);
+  (* gh-ocannl-1741: an unpadded window whose kernel nothing sizes is not refused -- its extent
+     equation determines the kernel once the output is known, and least commitment closes the output
+     at 1, so the kernel spans the whole input: a full reduction, not a pool. The trap
+     docs/syntax_extensions.md describes. *)
+  executes "one-operand valid sum 2*o<+k, kernel uncaptured: o = 1, k = 8" ~dims:[| 1; 1 |]
+    ~want:(valid_window ~stride:2 ~dilation:1 (ramp 8) ~kk:8)
+    (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      [%op x ++ "s, 2*o<+k => s, o"]);
   (* [Nn_blocks.max_pool2d ~use_padding:true]'s window without its constant kernel: two padded axes,
      window 3, stride 2. The values are not monotone along either axis, so the argmax moves within
      the window. *)
