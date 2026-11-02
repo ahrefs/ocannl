@@ -164,7 +164,6 @@ let exempt_zero_reference_exports =
     "Ops.is_binop_infix";
     "Ops.precision_to_string";
     "Ops.ptr_to_string_hum";
-    "Ppx_extend_dsls.transform_dsl_binding";
     "Ppx_ocannl.rules";
     "Schedulers.cpu_mma_limits";
     "Tnode.bounds_scan_worthwhile";
