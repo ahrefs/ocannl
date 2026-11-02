@@ -257,6 +257,7 @@
   (alias runtest-kernel_attribution)
   (alias runtest-gpu_cotenants)
   (alias runtest-gh1002_kernels)
+  (alias runtest-bench_line_readers)
   (alias runtest-bin_cells)
   (alias runtest-online_softmax_fast_math)
   (alias runtest-online_softmax_fp_licences)
@@ -11737,6 +11738,119 @@
       %{dep:gh1002_kernels.py}
       %{dep:../../benchmarks/gh1002_cells.py}))
     (diff gh1002_kernels.expected gh1002_kernels.optimized.actual)))))
+
+; gh-ocannl-1767: every reader of a bench text line (benchmarks/bench_output.py, the one home of
+; them) run over lines the producers print, captured here on cc and cheaply (a few seconds each):
+; bin/schedule_bench and bin/narrow_gebp_bench at small extents (the timing line with its two
+; censuses, narrow_gebp_bench's header), bench_rank_site at a small site (the rank-site lines), and
+; bench_line_samples.exe driving Bench_harness's own emitters (the per-kernel table, the
+; launch-geometry trace, the timing trace). bench_line_readers checks each reader's fields, and the
+; drivers' functions that consume them, against what the same run states another way; the scan
+; refusing a bench-line reader anywhere else in benchmarks/ is benchmarks/test/test_bench_line_scan.py.
+
+(executable
+ ; cc-vector-width: independent -- its trace's claims relate the trace's lines to one another
+ ; (attempts and calls to the summary's totals), never to what the search seeds or keeps.
+ (name bench_line_samples)
+ (modules bench_line_samples)
+ (libraries base ocannl unix bench_harness bench_retime)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- every OCANNL run below is pinned to cc on its command line; the reader is
+ ; Python, reading what they printed.
+ (alias runtest-bench_line_readers)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  bench_line_readers.py
+  bench_line_readers.expected
+  ../../benchmarks/bench_output.py
+  ../../benchmarks/strict_json.py
+  ../../benchmarks/display_safe.py
+  ../../benchmarks/cells.py
+  ../../benchmarks/config_records.py
+  ../../benchmarks/box_gate.py
+  ../../benchmarks/cell_group.py
+  ../../benchmarks/gpu_cotenants.py
+  ../../benchmarks/gh1051_cells.py
+  ../../benchmarks/gh1002_cells.py
+  ../../benchmarks/kernel_attribution.py
+  ../../benchmarks/gh1161_sites.py
+  ../../benchmarks/gh1442_agreement.py
+  ../../benchmarks/gh1600_txn_fit.py
+  (sandbox always preserve_file_kind))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     bench_lines_schedule.out
+     (with-stderr-to
+      bench_lines_schedule.log
+      (run
+       %{dep:../../bin/schedule_bench.exe}
+       40
+       1
+       64
+       64
+       0
+       --ocannl_backend=cc)))
+    (with-stdout-to
+     bench_lines_gebp.out
+     (with-stderr-to
+      bench_lines_gebp.log
+      (run
+       %{dep:../../bin/narrow_gebp_bench.exe}
+       f32
+       76
+       1
+       16
+       32
+       --rn=2
+       --ocannl_backend=cc)))
+    (with-stdout-to
+     bench_lines_rank_site.out
+     (with-stderr-to
+      bench_lines_rank_site.log
+      (setenv
+       BENCH_SITE
+       wgrad
+       (setenv
+        BENCH_SITE_DIMS
+        1,8,16,16
+        (setenv
+         BENCH_PICK
+         1
+         (run
+          %{dep:../../benchmarks/runners/ocannl/bench_rank_site.exe}
+          --ocannl_backend=cc
+          --ocannl_model_peak_flops=1e11
+          --ocannl_model_peak_memory_bandwidth=5e10))))))
+    (with-stdout-to
+     bench_lines_harness.out
+     (with-stderr-to
+      bench_lines_harness.log
+      (setenv
+       BENCH_KERNEL_TABLE
+       1
+       (run
+        %{dep:bench_line_samples.exe}
+        harness
+        --ocannl_backend=cc
+        --ocannl_schedule_log_launches=true))))
+    (with-stdout-to
+     bench_lines_trace.out
+     (with-stderr-to
+      bench_lines_trace.log
+      (setenv
+       BENCH_TIMING_TRACE
+       1
+       (run %{dep:bench_line_samples.exe} trace --ocannl_backend=cc))))
+    (with-stdout-to
+     bench_line_readers.actual
+     (run python3 %{dep:bench_line_readers.py} ../..))
+    (diff bench_line_readers.expected bench_line_readers.actual)))))
 
 ; gh-ocannl-743: the hermetic bin/ bench driver, benchmarks/bin_cells.py, end to end against a
 ; stand-in bench whose configuration records and result lines are the library's own (see
