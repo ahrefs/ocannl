@@ -1,0 +1,121 @@
+--- with the floating-point licences: fp_contract off, fp_reassociate off, fp_finite_math off ---
+--- leg 0: the oracles discriminate ---
+the four cumulative sums of the integer input differ pairwise: true
+the integer input's partial sums are exact in f32: true
+the gradient's partial sums are exact in f32: true
+the suffix sums of the weights differ from their prefix sums: true
+--- leg 1: puzzle 7 under a training step ---
+composed: no scan in the step: true
+composed: the step writes the n x n selector: true
+rewritten: one forward scan (the cumsum) in the step: true
+rewritten: one backward scan (its adjoint, a suffix sum) in the step: true
+rewritten: the step writes no n x n node: true
+the raw step, ahead of the tier, holds no scan: true
+rewritten y equals the composed y bitwise: true
+rewritten y equals the host prefix sums: true
+rewritten x.grad equals the composed x.grad bitwise: true
+rewritten x.grad equals the host suffix sums plus the second contribution: true
+a sibling lowering of the rewritten step hits the analysis cache: true
+non-dyadic: rewritten y matches the composed y within 1e-6 relative: true
+non-dyadic: rewritten x.grad matches the composed x.grad within 1e-5 relative: true
+--- leg 2: frontend variants ---
+rows: cumsum along the last axis of a [3, n] input: composed has no scan: true
+rows: cumsum along the last axis of a [3, n] input: rewritten has the expected scan: true
+rows: cumsum along the last axis of a [3, n] input: rewritten writes no n x n node: true
+rows: cumsum along the last axis of a [3, n] input: rewritten equals the composed result bitwise: true
+rows: cumsum along the last axis of a [3, n] input: rewritten equals the host oracle: true
+strict: an exclusive prefix sum (i < o): composed has no scan: true
+strict: an exclusive prefix sum (i < o): rewritten has the expected scan: true
+strict: an exclusive prefix sum (i < o): rewritten writes no n x n node: true
+strict: an exclusive prefix sum (i < o): rewritten equals the composed result bitwise: true
+strict: an exclusive prefix sum (i < o): rewritten equals the host oracle: true
+reversed: a suffix sum (i >= o): composed has no scan: true
+reversed: a suffix sum (i >= o): rewritten has the expected scan: true
+reversed: a suffix sum (i >= o): rewritten writes no n x n node: true
+reversed: a suffix sum (i >= o): rewritten equals the composed result bitwise: true
+reversed: a suffix sum (i >= o): rewritten equals the host oracle: true
+where: the selected sum: composed has no scan: true
+where: the selected sum: rewritten has the expected scan: true
+where: the selected sum: rewritten writes no n x n node: true
+where: the selected sum: rewritten equals the composed result bitwise: true
+where: the selected sum: rewritten equals the host oracle: true
+cummax: where and @^^ over negative values with repeated maxima: composed has no scan: true
+cummax: where and @^^ over negative values with repeated maxima: rewritten has the expected scan: true
+cummax: where and @^^ over negative values with repeated maxima: rewritten writes no n x n node: true
+cummax: where and @^^ over negative values with repeated maxima: rewritten equals the composed result bitwise: true
+cummax: where and @^^ over negative values with repeated maxima: rewritten equals the host oracle: true
+cummax, strict: the first prefix is empty: composed has no scan: true
+cummax, strict: the first prefix is empty: rewritten has the expected scan: true
+cummax, strict: the first prefix is empty: rewritten writes no n x n node: true
+cummax, strict: the first prefix is empty: rewritten equals the composed result bitwise: true
+cummax, strict: the first prefix is empty: rewritten equals the host oracle: true
+tropical: @^+ against a 0 / -inf log-mask: composed has no scan: true
+tropical: @^+ against a 0 / -inf log-mask: rewritten has the expected scan: true
+tropical: @^+ against a 0 / -inf log-mask: rewritten writes no n x n node: true
+tropical: @^+ against a 0 / -inf log-mask: rewritten equals the composed result bitwise: true
+tropical: @^+ against a 0 / -inf log-mask: rewritten equals the host oracle: true
+--- leg 3: hand-built raw lowerings, executed ---
+the hand-built payloads' partial sums are exact in f32: true
+ps_min: the rewrite emits one scan: true
+ps_min: no step is guarded: true
+ps_min: the scan survives optimization: true
+ps_min: rewritten equals the composed execution bitwise: true
+ps_min: rewritten equals the host oracle: true
+ps_min: the rewrite is idempotent: true
+ps_min_order: the rewrite emits one scan: true
+ps_min_order: no step is guarded: true
+ps_min_order: the scan survives optimization: true
+ps_min_order: rewritten equals the composed execution bitwise: true
+ps_min_order: rewritten equals the host oracle: true
+ps_min_order: the rewrite is idempotent: true
+ps_complement: the rewrite emits one scan: true
+ps_complement: no step is guarded: true
+ps_complement: the scan survives optimization: true
+ps_complement: rewritten equals the composed execution bitwise: true
+ps_complement: rewritten equals the host oracle: true
+ps_complement: the rewrite is idempotent: true
+ps_suffix: the rewrite emits one scan: true
+ps_suffix: no step is guarded: true
+ps_suffix: the scan survives optimization: true
+ps_suffix: rewritten equals the composed execution bitwise: true
+ps_suffix: rewritten equals the host oracle: true
+ps_suffix: the rewrite is idempotent: true
+ps_exclusive_shifted: the rewrite emits one scan: true
+ps_exclusive_shifted: the step is guarded at the scan's end: true
+ps_exclusive_shifted: the scan survives optimization: true
+ps_exclusive_shifted: rewritten equals the composed execution bitwise: true
+ps_exclusive_shifted: rewritten equals the host oracle: true
+ps_exclusive_shifted: the rewrite is idempotent: true
+a payload factor with a huge affine coefficient is scanned, not refused: true
+ps_infinite_cond: the rewrite emits one scan: true
+ps_infinite_cond: no step is guarded: true
+ps_infinite_cond: the scan survives optimization: true
+ps_infinite_cond: rewritten equals the composed execution bitwise: true
+ps_infinite_cond: rewritten equals the host oracle: true
+ps_infinite_cond: the rewrite is idempotent: true
+ps_pair: the rewrite emits one scan: true
+ps_pair: no step is guarded: true
+ps_pair: the scan survives optimization: true
+ps_pair: rewritten equals the composed execution bitwise: true
+ps_pair: rewritten equals the host oracle: true
+ps_pair: the rewrite is idempotent: true
+--- leg 4: near misses are left alone ---
+a shifted triangle (r <= q + 1): left alone: true
+a band (r <= q and q - r < 3): left alone: true
+an anti-triangle (r + q <= n - 1): left alone: true
+a mask varying with the row: left alone: true
+a singleton extent: left alone: true
+mismatched extents: left alone: true
+a payload that reads the output position: left alone: true
+two reduced loops: left alone: true
+a selector with a second writer: left alone: true
+an f16 index grid past 2048: left alone: true
+a max over a multiplicative 0/1 mask (its zeros are not neutral): left alone: true
+an integer target (an f32 state would round its sums): left alone: true
+a rejected arm that is zero only before f32 rounding: left alone: true
+staged code ahead of the reduction (it may write what the proof read): left alone: true
+a copy unfolded through a definition written after the copy: left alone: true
+a min whose rejected cells are 0, not +inf: left alone: true
+--- leg 5: an infinite payload ---
+rewritten: the prefix before the infinity is the finite cumulative sum: true
+rewritten: every sum from the infinity on is +inf: true

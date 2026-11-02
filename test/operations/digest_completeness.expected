@@ -18,6 +18,7 @@ code-borne (digest) -- an optimizer decision: it changes the code that comes out
   online_softmax
   online_softmax_backward
   online_softmax_block
+  prefix_scan
   virtualize_footprint_materialization
   virtualize_max_inline_fanin
   virtualize_max_inline_reduction

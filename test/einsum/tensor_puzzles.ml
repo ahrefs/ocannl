@@ -46,9 +46,11 @@
    ONLY fundamental gap; unlocks compress(12), bincount(15), scatter_add(16); needed for embedding
    lookup, variable-length masking, and many real ML ops. Related: gh-ocannl-293 (sharding &
    slicing). 2. Scan / prefix-sum -- not needed for EXPRESSIBILITY (cumsum is the
-   triangular-selector matmul above), but the O(n) streaming way; the selector matmul is O(n^2). 3.
-   Native reshape/view, reverse, and modular/affine indexing -- ergonomic/efficient replacements for
-   the O(size^2) selector-matrix workarounds for flatten/flip/roll.
+   triangular-selector matmul above), but the O(n) streaming way; the selector matmul is O(n^2) --
+   under the config key [prefix_scan] (gh-ocannl-1758) the selector form itself is recognized and
+   lowered to that O(n) scan. 3. Native reshape/view, reverse, and modular/affine indexing --
+   ergonomic/efficient replacements for the O(size^2) selector-matrix workarounds for
+   flatten/flip/roll.
 
    DISCOVERED LIMITATION (diff): the valid-convolution einsum [a +* "o<+k; k => o" kernel] hangs
    OCANNL's shape inference even on a length-5 vector with a length-2 kernel (no error, just spins).
