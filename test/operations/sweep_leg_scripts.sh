@@ -78,6 +78,10 @@ parity (seeds as proposed): backend cuda, 32 seeds, 0 failed at tolerance 0.001'
 [ "$(leg_verdict)" = 'cuda-tf32-parity: verdict: holds ((seeds as proposed): backend cuda, 32 seeds, 0 failed at tolerance 0.001)' ]
 grep -qx "exec --no-build --no-print-directory benchmarks/runners/ocannl/bench_conv_diag.exe | backend=cuda ptx= tf32=true parity=1 materialize=1 fixture=$leg_fixtures/cifar_resnet.safetensors credentials=" \
   "$leg_calls"
+LEG_DUNE_OUT='autotune-seeding: census only' LEG_DUNE_RC=0 \
+  run_leg cuda-tf32-parity.sh --fixture-dir "$leg_fixtures"
+[ "$leg_rc" -eq 1 ]
+[ "$(leg_verdict)" = 'cuda-tf32-parity: verdict: NO PARITY SUMMARY (bench_conv_diag exited 0 without a `parity (` line)' ]
 LEG_DUNE_OUT='parity seed 1 F_sketch[x]: MISMATCH worst 0.7
 parity (seeds as proposed): backend cuda, 32 seeds, 1 failed at tolerance 0.001' LEG_DUNE_RC=4 \
   run_leg cuda-tf32-parity.sh --fixture-dir "$leg_fixtures"

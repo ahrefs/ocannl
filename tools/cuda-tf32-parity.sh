@@ -18,6 +18,7 @@
 #   cuda-tf32-parity: verdict: holds (...)               0  every seed matched (its summary line)
 #   cuda-tf32-parity: verdict: SEED PARITY FAILED (...)  1  a seed mismatched or was unjudged
 #   cuda-tf32-parity: verdict: NO SEED EXECUTED          1  the step seeded no conv candidate
+#   cuda-tf32-parity: verdict: NO PARITY SUMMARY         1  status 0 with no summary: nothing judged
 #   cuda-tf32-parity: verdict: STEP BROKE (...)          1  bench_conv_diag stopped before a verdict:
 #                                                           the model did not build or run
 #   cuda-tf32-parity: verdict: unavailable: ...          2  no fixture, or the build failed
@@ -58,17 +59,20 @@ echo "=== cuda-tf32-parity: build ==="
 dune build --no-print-directory benchmarks/runners/ocannl/bench_conv_diag.exe 2>&1 ||
   verdict 2 "unavailable: bench_conv_diag.exe did not build"
 echo "=== cuda-tf32-parity: $fixture ==="
-OCANNL_BACKEND=cuda OCANNL_TF32_MATMULS=true BENCH_FIXTURE=$fixture BENCH_MATERIALIZE=1 \
-  BENCH_PARITY=1 dune exec --no-build --no-print-directory \
+# BENCH_CENSUS_ONLY replaces the parity run with the census, which exits 0 judging nothing.
+env -u BENCH_CENSUS_ONLY OCANNL_BACKEND=cuda OCANNL_TF32_MATMULS=true BENCH_FIXTURE="$fixture" \
+  BENCH_MATERIALIZE=1 BENCH_PARITY=1 dune exec --no-build --no-print-directory \
   benchmarks/runners/ocannl/bench_conv_diag.exe >"$work/out" 2>&1
 rc=$?
 cat "$work/out"
 summary=$(grep '^parity (' "$work/out" | tail -n 1)
 summary=${summary#parity }
 fatal=$(grep -m 1 '^Fatal error: ' "$work/out")
-case $rc in
-  0) verdict 0 "holds (${summary:-no summary line})" ;;
-  4) verdict 1 "SEED PARITY FAILED (${summary:-no summary line})" ;;
-  5) verdict 1 "NO SEED EXECUTED (${summary:-no summary line})" ;;
+# A success is the summary's: a status 0 with none judged no seed (Codex P2 on PR #1645).
+case $rc:${summary:+summary} in
+  0:summary) verdict 0 "holds ($summary)" ;;
+  0:) verdict 1 "NO PARITY SUMMARY (bench_conv_diag exited 0 without a \`parity (\` line)" ;;
+  4:*) verdict 1 "SEED PARITY FAILED (${summary:-no summary line})" ;;
+  5:*) verdict 1 "NO SEED EXECUTED (${summary:-no summary line})" ;;
   *) verdict 1 "STEP BROKE (bench_conv_diag exited $rc: ${fatal:-no Fatal error line})" ;;
 esac
