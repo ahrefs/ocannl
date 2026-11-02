@@ -520,6 +520,15 @@ configuration.
   shared holders; unknown on Windows). It overrides the lock's gate only: the lock file stays
   (unlinking it would let later processes lock different inodes) and so do a running owner's
   owner-named artifacts.
+- A debug-artifact writer holds no descriptor past its write: the per-path lock above is the only
+  descriptor `build_files/` keeps. `Utils.output_to_build_file` used to open its channel at the
+  call and never close it, three descriptors (`-unoptimized.ll`, `.ll`, `.cd`) per lowered routine,
+  so a long test died with `Too many open files` -- first reported at `Artifacts_lock.path`'s
+  `getcwd`, which is merely the next descriptor asked for -- under macOS's 256 default in a
+  non-interactive ssh shell (gh-ocannl-1784). It now truncates at the call and appends per print,
+  closing each time; `test/operations/build_file_descriptors` pins it by counting `/dev/fd` across
+  compiles, with a leaking negative control. Suspect a leak first by `lsof -p` over a run: a
+  growing column of open-for-write artifact files names the writer.
 
 - A failed cc kernel compile blames the generated code only after a trivial kernel compiles under
   the same command, flags and link flags (gh-ocannl-1350, `Cc_backend.toolchain_fault`,

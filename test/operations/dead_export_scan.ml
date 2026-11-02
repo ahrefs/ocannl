@@ -276,7 +276,6 @@ let exempt_zero_reference_exports =
     "Utils.filename_concat";
     "Utils.filename_of_parts";
     "Utils.filename_parts";
-    "Utils.get_debug_output_channel";
     "Utils.header_sep";
     "Utils.input_line";
     "Utils.input_scan_line";

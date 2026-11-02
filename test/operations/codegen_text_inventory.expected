@@ -165,6 +165,7 @@ test/operations/branchless_select.ml [run by @test/operations/runtest-branchless
     "bs_pool_inlined"
     ... ^ "("
     ... ^ "_v["
+test/operations/build_file_descriptors.ml [run by @test/operations/runtest-build_file_descriptors; also pins text this scan cannot name: untraced callback]
 test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement]
 test/operations/canonical_render.ml [renders generated text in memory; run by @test/operations/runtest-canonical_render; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
@@ -608,6 +609,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/einsum/runtest-test_cse-cse_d_fwd
 @test/operations/runtest-accum_width
 @test/operations/runtest-branchless_select
+@test/operations/runtest-build_file_descriptors
 @test/operations/runtest-cache_key_agreement
 @test/operations/runtest-canonical_render
 @test/operations/runtest-cc_kernel_outline
