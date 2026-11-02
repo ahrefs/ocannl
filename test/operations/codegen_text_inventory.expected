@@ -235,7 +235,7 @@ test/operations/integer_power_domain.ml [run by @test/operations/runtest-integer
     "powf("
 test/operations/ll_printer_constants.ml [renders generated text in memory; run by @test/operations/runtest-ll_printer_constants; also pins text this scan cannot name: mutation or unseen buffer write]
     " := "
-test/operations/masked_persistent_fragment.ml [run by @test/operations/runtest-masked_persistent_fragment]
+test/operations/masked_persistent_fragment.ml [pins through Ll_test.resident_regions, haystack unvalidated; run by @test/operations/runtest-masked_persistent_fragment; also pins text this scan cannot name: untraced callback, opaque aggregate component]
 test/operations/mma_operand_loads.ml [run by @test/operations/runtest-mma_operand_loads]
     "ldmatrix.sync.aligned.m8n8.x2"
     "ldmatrix.sync.aligned.m8n8.x4"
@@ -323,7 +323,7 @@ test/operations/schedule_ldmatrix_matmul.ml [run by @test/operations/runtest-sch
     ... ^ " e5m2 ldmatrix a"
     ... ^ " e5m2 ldmatrix b"
     ... ^ " ldmatrix a,b"
-test/operations/schedule_mma_matmul.ml [run by @test/operations/runtest-schedule_mma_matmul; also pins text this scan cannot name: computed fragment, untraced callback, forwarded parameter, opaque aggregate component, unsupplied application, mutation or unseen buffer write, rebound parameter]
+test/operations/schedule_mma_matmul.ml [pins through Ll_test.residency_holds; run by @test/operations/runtest-schedule_mma_matmul; also pins text this scan cannot name: computed fragment, untraced callback, forwarded parameter, opaque aggregate component, unsupplied application, mutation or unseen buffer write, rebound parameter]
     "#elif "
     "/* mma.sync fragment reduction body begins */"
     "/* mma.sync fragment reduction body ends */"
@@ -550,6 +550,57 @@ test/operations/vec_signed_zero.ml [run by @test/operations/runtest-vec_signed_z
     "vector_size"
     "vunif"
 test/operations/workgroup_memory_accounting.ml [run by @test/operations/runtest-workgroup_memory_accounting; also pins text this scan cannot name: untraced callback]
+
+== support helpers pinning emitted text for their callers ==
+A test/support value testing the text a test hands it (gh-ocannl-1772), with the fragments it
+spells itself -- a field of a record it is handed is itemised as every fragment its module
+builds that field with -- and the tests calling it, each run by its aliases above. A caller
+whose haystack the scan could not show to be generated text is listed all the same.
+roots scanned: test
+test/support/ll_test.ml: Ll_test.residency_holds [called by test/operations/schedule_mma_matmul.ml]
+    "(__rc & 7)] = ("
+    ".thread_elements()[__ei] = (float)(__mma_dp"
+    ".x[__ei] = (float)__mma_dp["
+    ".x[__t] = __half2float(__mma_dp["
+    "/* rocwmma fragment reduction body begins */"
+    "/* rocwmma fragment reduction body ends */"
+    "/* simdgroup fragment reduction body begins */"
+    "/* simdgroup fragment reduction body ends */"
+    "/* tile_mma fragment update"
+    "/* wmma fragment reduction body begins */"
+    "/* wmma fragment reduction body ends */"
+    "= __float2half(__mma_fragment_"
+    "] = (rocwmma::"
+    "__syncthreads();"
+    "nvcuda::wmma::load_matrix_sync(__mma_fragment_"
+    "nvcuda::wmma::store_matrix_sync(__mma_dp"
+    "rocwmma::load_matrix_sync(__mma_fragment_"
+    "rocwmma::store_matrix_sync(__mma_dp"
+    "simdgroup_load(__mma_fragment_"
+    "simdgroup_store(__mma_fragment_"
+    "threadgroup_barrier(mem_flags::mem_threadgroup);"
+test/support/ll_test.ml: Ll_test.resident_regions [called by test/operations/masked_persistent_fragment.ml (haystack unvalidated)]
+    "(__rc & 7)] = ("
+    ".thread_elements()[__ei] = (float)(__mma_dp"
+    ".x[__ei] = (float)__mma_dp["
+    ".x[__t] = __half2float(__mma_dp["
+    "/* rocwmma fragment reduction body begins */"
+    "/* rocwmma fragment reduction body ends */"
+    "/* simdgroup fragment reduction body begins */"
+    "/* simdgroup fragment reduction body ends */"
+    "/* tile_mma fragment update"
+    "/* wmma fragment reduction body begins */"
+    "/* wmma fragment reduction body ends */"
+    "= __float2half(__mma_fragment_"
+    "] = (rocwmma::"
+    "__syncthreads();"
+    "nvcuda::wmma::load_matrix_sync(__mma_fragment_"
+    "nvcuda::wmma::store_matrix_sync(__mma_dp"
+    "rocwmma::load_matrix_sync(__mma_fragment_"
+    "rocwmma::store_matrix_sync(__mma_dp"
+    "simdgroup_load(__mma_fragment_"
+    "simdgroup_store(__mma_fragment_"
+    "threadgroup_barrier(mem_flags::mem_threadgroup);"
 
 == the aliases a codegen change runs ==
 Every alias named above, once. Hand them to `tools/test-run.sh run build`; an alias re-running
@@ -940,9 +991,78 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-zero_out_local_decl-unoptimized
 @test/operations/runtest-zero_run_reorder
 
+== tests calling a backend's compiler with source of their own ==
+They pin nothing and build no kernel through the pipeline, and a change to a backend's
+builtins prelude, its compiler flags or how its compiler is resolved breaks them all the same
+(gh-ocannl-1772): test_shared_builtins compiles Builtins_cc.source and a probe of its own with
+Cc_backend.compiler_command. Run a backend's list, at the end, on a box with OCANNL_BACKEND set
+to it. The rules are stated in test/support/kernel_exec_scan.ml.
+compiler entries, each still spelled by a source handed over:
+Cc_backend.compiler_command [cc]
+Cc_backend.kernel_compiler_flags [cc]
+Cc_backend.kernel_link_flags [cc]
+Nvrtc.compile_to_ptx [cuda]
+Hip_backend.Impl.hip_to_code [hip]
+Library.on_device [metal]
+
+support values reaching them, derived from the sources:
+
+roots scanned: arrayjit/test, test
+arrayjit/test/test_cuda_classify_failure.real.ml [calls cuda's compiler; run by @arrayjit/test/runtest-test_cuda_classify_failure]
+arrayjit/test/test_hip_compile_failure_options.real.ml [calls hip's compiler; run by @arrayjit/test/runtest-test_hip_compile_failure_options]
+arrayjit/test/test_hip_driver_init_deadline.real.ml [calls hip's compiler; run by @arrayjit/test/runtest-test_hip_driver_init_deadline]
+arrayjit/test/test_shared_builtins.ml [calls cc's compiler; run by @arrayjit/test/runtest-test_shared_builtins]
+test/operations/branchless_select.ml [calls cc's compiler; run by @test/operations/runtest-branchless_select, @test/operations/runtest-branchless_select-no_hip_fast_math, @test/operations/runtest-branchless_select-outlined]
+test/operations/bridge_arm_coverage.ml [calls cc's compiler; run by @test/operations/runtest-bridge_arm_coverage]
+test/operations/cc_load_refusal_classes.ml [calls cc's compiler; run by @test/operations/runtest-cc_load_refusal_classes]
+test/operations/cc_march_census.ml [calls cc's compiler; run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-emission-outlined, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host]
+test/operations/cuda_like_builtins_emulation.ml [calls cc's compiler; run by @test/operations/runtest-cuda_like_builtins_emulation]
+test/operations/metal_builtins_emulation.ml [calls cc's compiler; run by @test/operations/runtest-metal_builtins_emulation]
+test/operations/runtime_power_fast_math_emulation.ml [calls cc's compiler; run by @test/operations/runtest-runtime_power_fast_math_emulation]
+test/operations/schedule_pad.ml [calls cc's compiler; run by @test/operations/runtest-schedule_pad, @test/operations/runtest-schedule_pad-contract_off]
+
+== of those, the aliases by the backend whose compiler they call ==
+cc:
+  @arrayjit/test/runtest-test_shared_builtins
+  @test/operations/runtest-branchless_select
+  @test/operations/runtest-branchless_select-no_hip_fast_math
+  @test/operations/runtest-branchless_select-outlined
+  @test/operations/runtest-bridge_arm_coverage
+  @test/operations/runtest-cc_load_refusal_classes
+  @test/operations/runtest-cc_march_census-emission
+  @test/operations/runtest-cc_march_census-emission-outlined
+  @test/operations/runtest-cc_march_census-w16_native_foreign
+  @test/operations/runtest-cc_march_census-w16_native_host
+  @test/operations/runtest-cc_march_census-w16_wide_foreign
+  @test/operations/runtest-cc_march_census-w16_wide_host
+  @test/operations/runtest-cc_march_census-w32_native_foreign
+  @test/operations/runtest-cc_march_census-w32_native_host
+  @test/operations/runtest-cc_march_census-w32_wide_foreign
+  @test/operations/runtest-cc_march_census-w32_wide_host
+  @test/operations/runtest-cc_march_census-w64_native_foreign
+  @test/operations/runtest-cc_march_census-w64_native_host
+  @test/operations/runtest-cc_march_census-w64_wide_foreign
+  @test/operations/runtest-cc_march_census-w64_wide_host
+  @test/operations/runtest-cuda_like_builtins_emulation
+  @test/operations/runtest-metal_builtins_emulation
+  @test/operations/runtest-runtime_power_fast_math_emulation
+  @test/operations/runtest-schedule_pad
+  @test/operations/runtest-schedule_pad-contract_off
+cuda:
+  @arrayjit/test/runtest-test_cuda_classify_failure
+hip:
+  @arrayjit/test/runtest-test_hip_compile_failure_options
+  @arrayjit/test/runtest-test_hip_driver_init_deadline
+metal:
+  (none)
+
 every scanned root meets its golden floor: true
 every scanned root meets its source-site floor: true
 every scanned root meets its floor of tests building their own kernel text: true
+every scanned root meets its floor of tests calling a backend's compiler: true
+every scanned root meets its floor of support helpers pinning emitted text: true
+every compiler entry is still spelled by some source handed over: true
+every compiler entry names a backend the configuration reader writes: true
 every source handed over parsed as OCaml: true
 every condition a golden is re-run under names the backend whose build meets it: true
 every member has an alias that re-runs it: true
@@ -959,6 +1079,10 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root
   [scanner-refusal:c995ea0a058a228bf654449befcccb4b] meets its source-site
   [scanner-refusal:1b40c8a4f6d202c5b6563c1565f86060] tests building their
+  [scanner-refusal:9daca1e74abb76588d6d48344619233f] a backend's compiler
+  [scanner-refusal:be259785a66474faf20368ccde6692c0] support helpers pinning
+  [scanner-refusal:6e6bfc66aed4b3a13a8be04373cff907] every compiler entry
+  [scanner-refusal:c278c7bc3f7af4c303d597336e94a1cc] configuration reader writes
   [scanner-refusal:d246f03ca5c483db40b94796658cf426] every source handed
   [scanner-refusal:87e46487d17e609858f4af46f001e1c3] backend whose build
   [scanner-refusal:73a439e337c34309cf51b52176da80ad] alias that re-runs

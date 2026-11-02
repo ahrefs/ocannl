@@ -163,7 +163,7 @@ let emitters =
 
 let render_site = function
   | None -> "none"
-  | Some (s : Scan.site) ->
+  | Some (s : Scan.site) -> (
       Printf.sprintf "%s%s%s%s%s"
         (String.concat ~sep:" " s.Scan.pins)
         (match s.Scan.partial with
@@ -173,6 +173,111 @@ let render_site = function
         (if s.Scan.direct then " +direct" else "")
         (if s.Scan.after_marker then " +after_marker" else "")
         (if s.Scan.rendered then " +rendered" else "")
+      ^
+      match s.Scan.through with
+      | [] -> ""
+      | through ->
+          " +through("
+          ^ String.concat ~sep:", "
+              (List.map through ~f:(fun (helper, validated) ->
+                   if validated then helper else helper ^ "?"))
+          ^ ")")
+
+(** The support helpers the source cases are classified with (gh-ocannl-1772): derived by the scan's
+    own reader from a module built to hold each shape it follows -- a literal, a fragment the caller
+    supplies, a record field built in two branches and once computed, a nested function closing over
+    the haystack, another helper lending its fragments, a field no record builds -- and a predicate
+    over a name rather than a text, which a caller handing it ordinary text does not use. *)
+let helper_module =
+  {|type markers = { load : string; store : string }
+
+let markers ~metal =
+  if metal then { load = "simdgroup_load("; store = "simdgroup_store(" }
+  else { load = "wmma::load_matrix_sync("; store = store_spelling () }
+
+let has_barrier src = String.is_substring src ~substring:"__syncthreads()"
+let stores src m = String.is_substring src ~substring:m.store
+
+let resident src m =
+  let all pattern = String.substr_index_all src ~may_overlap:false ~pattern in
+  List.length (all m.load) = 1 && stores src m
+
+let contains src fragment = String.is_substring src ~substring:fragment
+let absent src m = not (String.is_substring (String.lowercase src) ~substring:m.missing)
+let lines src = String.split_lines src
+let names_metal backend = String.is_substring backend ~substring:"metal"|}
+
+let helpers =
+  Scan.helper_predicates ~emitters ~module_name:"Kit" ~path:"t/kit.ml" ~contents:helper_module
+
+let render_destination = function
+  | Scan.At_label label -> "~" ^ label
+  | Scan.At_position position -> Int.to_string position
+
+let render_helper (h : Scan.helper) =
+  Printf.sprintf "%s [%s]%s%s source %s" h.Scan.helper_key
+    (String.concat ~sep:" " h.Scan.helper_pins)
+    (match h.Scan.helper_partial with
+    | [] -> ""
+    | boundaries ->
+        " +partial(" ^ String.concat ~sep:", " (List.map boundaries ~f:Scan.boundary_tag) ^ ")")
+    (match h.Scan.helper_text with
+    | [] -> ""
+    | texts ->
+        " text "
+        ^ String.concat ~sep:","
+            (List.map texts ~f:(fun t -> render_destination t.Scan.destination)))
+    (render_destination h.Scan.helper_source.Scan.destination)
+
+(* In the module's order; [markers] and [lines] test no text and are not helpers. *)
+let helper_frontier_expected =
+  [
+    {|Kit.has_barrier ["__syncthreads()"] source 0|};
+    {|Kit.stores ["simdgroup_store("] +partial(computed) source 0|};
+    {|Kit.resident ["simdgroup_load(" "simdgroup_store(" "wmma::load_matrix_sync("] +partial(computed) source 0|};
+    {|Kit.contains [] text 1 source 0|};
+    {|Kit.absent [] +partial(forwarded) source 0|};
+    {|Kit.names_metal ["metal"] source 0|};
+  ]
+
+(** Calls of the [Kit] helpers, each judged by the caller's provenance (gh-ocannl-1772). *)
+let helper_cases =
+  [
+    ( "a helper handed generated source is a pin through it",
+      {ocaml|let () = p "b" (Kit.has_barrier (Generated.read "r"))|ocaml},
+      "+through(Kit.has_barrier)" );
+    ( "a caller's fragment through a helper's text parameter is the caller's pin",
+      {ocaml|let () =
+  let src = Generated.read "r" in
+  p "s" (Kit.contains src "__shared__")|ocaml},
+      {|"__shared__" +through(Kit.contains)|} );
+    ( "ordinary text handed to a helper is no use of it",
+      {ocaml|let () =
+  let src = Generated.read "r" in
+  p "m" (Kit.names_metal backend_name && Kit.has_barrier src)|ocaml},
+      "+through(Kit.has_barrier)" );
+    ( "a haystack the model cannot decide lists the call, unvalidated",
+      {ocaml|let cell = ref ""
+let () =
+  cell := Generated.read "r";
+  p "b" (Kit.has_barrier !cell)|ocaml},
+      "+partial(mutation) +through(Kit.has_barrier?)" );
+    ( "a helper passed as a callback is listed, unvalidated",
+      {ocaml|let () = p "b" (List.for_all [ Generated.read "r" ] ~f:Kit.has_barrier)|ocaml},
+      "+partial(callback) +through(Kit.has_barrier?)" );
+    ( "a helper's bare name under an open of its module",
+      {ocaml|open Kit
+let () = p "b" (has_barrier (Generated.read "r"))|ocaml},
+      "+through(Kit.has_barrier)" );
+    ( "a helper reached through an alias of a library's qualifier",
+      {ocaml|module K = Test_utils.Kit
+let () = p "b" (K.has_barrier (Generated.read "r"))|ocaml},
+      "+through(Kit.has_barrier)" );
+    ( "a test's own value of a helper's name, nothing opened, is not",
+      {ocaml|let has_barrier s = String.length s > 0
+let () = p "b" (has_barrier (Generated.read "r"))|ocaml},
+      "" );
+  ]
 
 let source_cases =
   [
@@ -1626,13 +1731,16 @@ let time_shipped_kernels routines = List.map routines ~f:(fun r -> compile_shipp
 let writes_of llc = llc|}
       );
       ("Pure", {|let delta ctx o = Context.link_delta ~prelowered:true ctx o [ o ]|});
+      ( "Asm_kit",
+        {|let compile ~src = Sys.command (Context.Cc_backend.compiler_command () ^ " " ^ src)|} );
     ]
 
 let exec_frontier_expected =
-  "Bench_harness.compile_shipped_kernel [prelowered compile]; Bench_harness.time_shipped_kernels \
-   [through Bench_harness.compile_shipped_kernel]; Ll_test.execute [through Ll_test.run]; \
-   Ll_test.link [prelowered compile]; Ll_test.run [through Ll_test.link]; Ll_wrap.execute [through \
-   Ll_test.execute]; Ll_wrap.link [through Ll_test.link]; Ll_wrap.run [through Ll_test.run]"
+  "Asm_kit.compile [calls cc's compiler]; Bench_harness.compile_shipped_kernel [prelowered \
+   compile]; Bench_harness.time_shipped_kernels [through Bench_harness.compile_shipped_kernel]; \
+   Ll_test.execute [through Ll_test.run]; Ll_test.link [prelowered compile]; Ll_test.run [through \
+   Ll_test.link]; Ll_wrap.execute [through Ll_test.execute]; Ll_wrap.link [through Ll_test.link]; \
+   Ll_wrap.run [through Ll_test.run]"
 
 let exec_cases =
   [
@@ -1681,6 +1789,62 @@ let got = execute 1|},
       {|(* Context.compile ~prelowered:o *)
 let note = "LL.Staged_compilation"|},
       "none" );
+    (* gh-ocannl-1772's negative control: a test compiling a literal source through cc's compiler
+       command, under the alias every such test binds. *)
+    ( "a literal source compiled with cc's compiler command is a member",
+      {|module Cc = Context.Cc_backend
+let () = ignore (Sys.command (Cc.compiler_command () ^ " -O0 -c probe.c -o probe.o"))|},
+      "calls cc's compiler" );
+    ( "a compiler entry by its bare name under an open",
+      {|open Context.Cc_backend
+let flags = kernel_compiler_flags ()|},
+      "calls cc's compiler" );
+    ( "a test's own compiler_command, nothing opened, is not",
+      {|let compiler_command () = "cc"
+let c = compiler_command ()|},
+      "none" );
+    ( "a backend value that compiles nothing is not",
+      {|let id = Context.Cc_backend.compiler_executable_identity "cc"|},
+      "none" );
+    ( "nvrtc on a literal source",
+      {|let _ = Cudajit.Nvrtc.compile_to_ptx ~cu_src:"bad" ~name:"t.cu" ~options:[] ~with_debug:false|},
+      "calls cuda's compiler" );
+    ( "HIP's seam through its implementation module",
+      {|let _ = Hip_backend.Impl.hip_to_code ~name:"p" "extern \"C\" __global__ void p() {}"|},
+      "calls hip's compiler" );
+    ( "Metal's library from source under an alias of the bindings",
+      {|module Me = Metal
+let library = Me.Library.on_device device ~source options|},
+      "calls metal's compiler" );
+    ( "a harness value calling a compiler",
+      {|let _ = Asm_kit.compile ~src:"x.c"|},
+      "through Asm_kit.compile" );
+  ]
+
+(** How the two populations the harness routes reach are told apart, and the evidence a compiler
+    entry is still spelled (gh-ocannl-1772). *)
+let population_cases =
+  [
+    ( "a value reaching the seam reaches a prelowered compile",
+      (fun () -> Exec.base_routes exec_harness [ Exec.Through "Ll_wrap.execute" ]),
+      "prelowered compile" );
+    ( "a value calling a compiler reaches that compiler alone",
+      (fun () -> Exec.base_routes exec_harness [ Exec.Through "Asm_kit.compile" ]),
+      "calls cc's compiler" );
+    ( "the kernel-text population keeps only the routes reaching a built kernel",
+      (fun () ->
+        Exec.restrict exec_harness ~keep:Exec.builds_kernel_text
+          [ Exec.Through "Asm_kit.compile"; Exec.Through "Ll_test.run"; Exec.Compiles "cc" ]),
+      "through Ll_test.run" );
+  ]
+
+let entry_cases =
+  [
+    ( "an entry spelled through an alias",
+      {|module Cc = Context.Cc_backend
+let c = Cc.compiler_command|},
+      "Cc_backend.compiler_command" );
+    ("an entry in a comment is not spelled", {|(* Nvrtc.compile_to_ptx *) let x = 1|}, "none");
   ]
 
 let render_exec = function
@@ -1727,7 +1891,7 @@ let () =
   List.iter source_cases ~f:(fun (name, source, expected) ->
       let found =
         Attempt.attempted ~what:"source" ~name ~default:"<unscanned>" (fun () ->
-            render_site (Scan.classify_source ~emitters ~path:"case.ml" ~contents:source))
+            render_site (Scan.classify_source ~emitters ~helpers ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) (String.strip expected) then
         printf "ok: source -- %s\n" name
@@ -1736,7 +1900,7 @@ let () =
       let expected = String.strip (pins ^ " +partial(" ^ Scan.boundary_tag boundary ^ ")") in
       let found =
         Attempt.attempted ~what:"boundary" ~name ~default:"<unscanned>" (fun () ->
-            render_site (Scan.classify_source ~emitters ~path:"case.ml" ~contents:source))
+            render_site (Scan.classify_source ~emitters ~helpers ~path:"case.ml" ~contents:source))
       in
       if String.equal (String.strip found) expected then printf "ok: boundary -- %s\n" name
       else fail "boundary -- %s: expected [%s], found [%s]" name expected found);
@@ -1755,6 +1919,36 @@ let () =
   if String.equal frontier exec_frontier_expected then
     printf "ok: harness -- the frontier closes under reference and include, and nothing else\n"
   else fail "harness: expected [%s], found [%s]" exec_frontier_expected frontier;
+  let helper_frontier = List.map helpers ~f:render_helper in
+  if List.equal String.equal helper_frontier helper_frontier_expected then
+    printf
+      "ok: helpers -- a support module's helpers are derived with the fragments each spells, and \
+       nothing else\n"
+  else
+    fail "helpers: expected [%s], found [%s]"
+      (String.concat ~sep:"; " helper_frontier_expected)
+      (String.concat ~sep:"; " helper_frontier);
+  List.iter helper_cases ~f:(fun (name, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"helper" ~name ~default:"<unscanned>" (fun () ->
+            render_site (Scan.classify_source ~emitters ~helpers ~path:"case.ml" ~contents:source))
+      in
+      if String.equal (String.strip found) (String.strip expected) then
+        printf "ok: helper -- %s\n" name
+      else fail "helper -- %s: expected [%s], found [%s]" name expected found);
+  List.iter population_cases ~f:(fun (name, f, expected) ->
+      let found = render_exec (f ()) in
+      if String.equal found expected then printf "ok: population -- %s\n" name
+      else fail "population -- %s: expected [%s], found [%s]" name expected found);
+  List.iter entry_cases ~f:(fun (name, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"entry" ~name ~default:"<unscanned>" (fun () ->
+            match Exec.entries_named ~contents:source with
+            | [] -> "none"
+            | entries -> String.concat ~sep:", " (List.map entries ~f:Exec.entry_name))
+      in
+      if String.equal found expected then printf "ok: entry -- %s\n" name
+      else fail "entry -- %s: expected [%s], found [%s]" name expected found);
   List.iter exec_cases ~f:(fun (name, source, expected) ->
       let found =
         Attempt.attempted ~what:"executing" ~name ~default:"<unscanned>" (fun () ->
