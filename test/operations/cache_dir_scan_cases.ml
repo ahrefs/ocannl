@@ -444,8 +444,8 @@ Ir.Schedule_cache.store ~dir:cache_dir k v|ocaml},
   ]
 
 (* The other half of what the check reads: the built-in default, which no source names and which is
-   therefore read out of the library that defines it. Its second read asks merely whether the key
-   was set and defaults to the empty string, so an empty default is not a directory. *)
+   therefore read out of the library that defines it. An empty default is not a directory: a read
+   under one names none. *)
 let default_cases =
   [
     ( "the default a search falls back to",
