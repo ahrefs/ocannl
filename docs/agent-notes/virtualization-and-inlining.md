@@ -94,20 +94,23 @@ files.
   validate — they are the probes that must stay conservative on IR they may not trust
   (`test/operations/affine_extraction.ml`); everything past them does.
 - **A scope's collapse is exact, or it does not happen** (gh-ocannl-1788). A `Local_scope` rounds
-  its value to its own precision (codegen declares its local at the backend's `compute_prec` of
-  it), so `simplify_llc` collapses one into its reader only when the slot evaluates at the scope's
-  precision, or when the value is a load whose storage the scope's precision widens exactly
+  its value to its own precision (codegen declares its local at the backend's `compute_prec` of it),
+  so `simplify_llc` collapses a float scope into a float slot only when the slot evaluates at the
+  scope's precision, or when the value is a load whose storage the scope's precision widens exactly
   (`Ops.widens_exactly`). The slot's precision is `loop_scalar`'s `~eval`, threaded as
   `walk_operand_precisions` threads it: a homogeneous operand keeps its parent's, a heterogeneous
-  one takes its own annotation (the annotation alone cannot tell, since a scope operand is
-  annotated at its own precision). The collapse used to be unconditional for float scopes, so a
-  virtualized bf16 cast read in an f32 sum lost its rounding wherever the local is declared bf16:
-  Metal, CUDA and HIP by default, cc under `narrow_compute_f32=false`. cc's default declares it
-  f32, which is why nothing on the default CPU path noticed. A wide scope over arithmetic collapsed
-  into a narrow slot computed the arithmetic narrow. `test/operations/scope_collapse_rounding`
-  executes each shape against the uncollapsed `?prelowered` form under both policies. A kept scope
-  is what the pattern-matching passes then see: the explicit-SIMD renderings decline a loop
-  holding one (`scalar_mentions`).
+  one takes its own annotation (the annotation alone cannot tell, since a scope operand is annotated
+  at its own precision). The collapse used to be unconditional, so a virtualized bf16 cast read in
+  an f32 sum lost its rounding wherever the local is declared bf16: Metal, CUDA and HIP by default,
+  cc under `narrow_compute_f32=false`. cc's default declares it f32, which is why nothing on the
+  default CPU path noticed. A wide scope over arithmetic collapsed into a narrow slot computed the
+  arithmetic narrow. `test/operations/scope_collapse_rounding` executes each shape against the
+  uncollapsed `?prelowered` form under both policies; `top_down_prec`'s goldens show it end to end
+  (a half sum read in a bfloat16 product was computed at bfloat16 on Metal). A scope or slot of an
+  integer precision still collapses unconditionally: the gh-343 gather rewrite recognizes a one-hot
+  comparison only once its scope has collapsed into the float product (`test_bounds_folded_gather`
+  and the tune-cache tests went red when it did not). A kept scope is what the pattern-matching
+  passes then see: the explicit-SIMD renderings decline a loop holding one (`scalar_mentions`).
 - The scope-TARGET contract, companion of the body contract above (gh-ocannl-681): a `Local_scope`
   over X denotes THE INLINED COMPUTATION OF X, so `LL.optimize` accepts one only while X is virtual,
   and REJECTS it over a materialized X (`scope_target_rejection` in `low_level.ml`, raised from

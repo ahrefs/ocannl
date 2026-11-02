@@ -5626,8 +5626,11 @@ let simplify_llc static_indices llc =
          Otherwise a narrow scope collapsed into a wider slot would skip its rounding (a bfloat16
          cast read in a single sum, wherever the scope's local is declared narrow: the GPU backends,
          and cc under [narrow_compute_f32=false]), and a wide scope collapsed into a narrower slot
-         would evaluate its arithmetic narrow. *)
-      && (Ops.equal_prec scope_prec eval
+         would evaluate its arithmetic narrow. The rule covers a float scope in a float slot; a
+         scope or slot of an integer precision collapses as before (a one-hot comparison scope read
+         in a float product is what the gh-343 gather rewrite then recognizes). *)
+      && ((not (Ops.is_float scope_prec && Ops.is_float eval))
+         || Ops.equal_prec scope_prec eval
          ||
          match v with
          | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } ->
