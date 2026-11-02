@@ -768,20 +768,27 @@ let () =
   p "numbering: pricing draws no symbol and no scope id"
     (symbols = symbols_off && scopes = scopes_off)
 
-(* An [`Inline] flip a READER refuses (review round 4): over a zeroed F, F[0] = 2 X[0], read at F[0]
-   and at F[1] by every cell of out[x] (the visit cap materializes F). The synthetic read at the
-   written slice would be served, but replaying the flip meets the read at F[1], which the inliner
-   cannot serve (13): the pricer instantiates at every read site the routine has, and prices the
-   flip by the proxy. *)
+(* An [`Inline] flip a READER refuses (review round 4): over a zeroed [1; 2] F, F[0; 0] = 2 X[0],
+   read at F[0; 0] and at its flat cell 1 through a [Sub_axis] read by every cell of out[x] (the
+   visit cap materializes F). The synthetic read at the written slice would be served, but replaying
+   the flip meets the flattened read, whose layout differs from the producer's, which the inliner
+   cannot serve (13, gh-ocannl-1795; a plain read of F[0; 1] is served by the [Zero_out] since
+   then): the pricer instantiates at every read site the routine has, and prices the flip by the
+   proxy. *)
 let () =
   Stdio.printf "== an Inline flip a read site refuses ==\n";
-  let f = mk ~dims:[| 2 |] "Fr" and x = mk ~dims:[| 1 |] "Xr" and out = mk ~dims:[| 2 |] "outF" in
+  let f = mk ~dims:[| 1; 2 |] "Fr"
+  and x = mk ~dims:[| 1 |] "Xr"
+  and out = mk ~dims:[| 2 |] "outF" in
   let j = sym () in
   let llc =
     seq (zero f)
       (seq
-         (set f [| fixed 0 |] (mul (get x [| fixed 0 |]) (c 2.)))
-         (loop_n j 2 (set out [| iter j |] (add (get f [| fixed 0 |]) (get f [| fixed 1 |])))))
+         (set f [| fixed 0; fixed 0 |] (mul (get x [| fixed 0 |]) (c 2.)))
+         (loop_n j 2
+            (set out
+               [| iter j |]
+               (add (get f [| fixed 0; fixed 0 |]) (get f [| Idx.Sub_axis; fixed 1 |])))))
   in
   let o = optimize ~materialized:[ x; out ] ~name:"cmt_reader_refused" llc in
   p "reader-refused flip: a cap materialized the node" (known_non_virtual o f);
@@ -900,15 +907,18 @@ let () =
       p "changed producer placement agrees with a cold specialization"
         (equal (surface changed) (surface cold)))
     code;
-  let f = mk ~dims:[| 2 |] "memo_refused"
+  let f = mk ~dims:[| 1; 2 |] "memo_refused"
   and input = mk ~dims:[| 1 |] "memo_refused_input"
   and output = mk ~dims:[| 2 |] "memo_refused_out" in
   let j = sym () in
   let code =
     seq (zero f)
       (seq
-         (set f [| fixed 0 |] (mul (get input [| fixed 0 |]) (c 2.)))
-         (loop_n j 2 (set output [| iter j |] (add (get f [| fixed 0 |]) (get f [| fixed 1 |])))))
+         (set f [| fixed 0; fixed 0 |] (mul (get input [| fixed 0 |]) (c 2.)))
+         (loop_n j 2
+            (set output
+               [| iter j |]
+               (add (get f [| fixed 0; fixed 0 |]) (get f [| Idx.Sub_axis; fixed 1 |])))))
   in
   price_replay ~name:"refused read" ~self:f ~materialized:[ input; output ]
     ~extra:(fun _ _ surface first _ ->

@@ -2843,8 +2843,8 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
   (* gh-133 Stage A: a guard's else-branch reads [Get_local id] -- the zero/init local produced by a
      [Zero_out] computation. Without one, the guarded update starts from an explicit [0.] init
      ([needs_init] below), which the Stage B guards may rely on only because their maps are
-     surjective, and a fixed-index guard only where another component covers the node
-     ([covered_by_other]). *)
+     surjective, and a fixed-index guard only where the components together cover the node
+     ([union_covers]). *)
   let has_zero_init =
     let rec contains = function
       | Zero_out tn -> Tn.equal tn self
@@ -2862,28 +2862,69 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
     List.count computations ~f:(fun (def_args, _) -> Option.is_some def_args)
   in
   let global_needs_init = ref false in
-  (* gh-ocannl-1735: whether a component other than [def] writes every cell of the node,
-     unconditionally: a setter of [self] whose write view {!Affine.covers_box} over its enclosing
-     loops, none of them dead. A component holds no guard ([check_and_store_virtual] refuses an [If]
-     as [142]) and no scan ([148]), so a setter reached through loops alone executes once per
-     iteration of them. Static symbols have no range here and so cover nothing -- the conservative
-     direction. Such a component defines every cell the replay's shared local falls back on, in
-     either order: replayed before a fixed-index component it supplies the cells that component does
-     not write, replayed after it rewrites every cell, as the materialized program does. *)
-  let covered_by_other def =
-    let dims = lazy (Lazy.force self.Tn.dims) in
-    let rec covers ranges = function
-      | For_loop { from_; to_; _ } when to_ < from_ -> false
-      | For_loop { index; from_; to_; body; _ } -> covers ((index, (from_, to_)) :: ranges) body
-      | Seq (a, b) -> covers ranges a || covers ranges b
-      | Set { tn; idcs; _ } when Tn.equal tn self ->
-          let range s = List.Assoc.find ranges s ~equal:Indexing.equal_symbol in
-          Affine.covers_box ~range (Affine.view ~dims:(Lazy.force dims) idcs)
-      | _ -> false
+  (* gh-ocannl-1735, gh-ocannl-1795: whether the components' writes TOGETHER define every cell of
+     the node ({!Affine.union_covers_box}): each setter of [self] reached through loops alone, none
+     of them dead, writes the box its view spans over those loops. A component holds no guard
+     ([check_and_store_virtual] refuses an [If] as [142]) and no scan ([148]), so such a setter
+     executes once per iteration of its loops. Static symbols have no range here and so prove
+     nothing -- the conservative direction. The union includes the component a guard is built for:
+     cell-by-cell writers cover the node only together.
+
+     Why this defines the replay's fallback, in any component order: at an in-bounds read cell [r]
+     some component writes [r], every component's guard is exact, and the replay applies the
+     components oldest first over one shared local -- so it applies exactly the writes the
+     materialized program applies to [r], in its order, and a component that does not write [r]
+     leaves the local as it was. The init a guard falls back on before the first write to [r] is
+     overwritten by that write; a first write that ACCUMULATES reads the cell's entry value, which
+     the read-before-write rule already makes an input for a node not declared virtual.
+
+     A literal table is excluded, here and from the omission below: a host-constant node
+     ([Tn.known_host_constant]), or one every setter of which stores a constant -- the in-kernel
+     spelling of a [Tensor.ndarray] / [Tensor.term_init] literal ([Constant_fill], gh-ocannl-633),
+     one component per cell. Replaying a table at a symbolic read costs a guard per cell, and
+     dissolving its buffer would hide a later host write ([Context.set_values]) from the reads it
+     feeds, or turn a parameter's initial values into code; a multi-cell table read off its own cell
+     stays a buffer read, refused as [13] as before. *)
+  let literal_table =
+    Tn.known_host_constant self
+    ||
+    let rec constant_stores = function
+      | For_loop { body; _ } -> constant_stores body
+      | Seq (a, b) -> constant_stores a && constant_stores b
+      | Set { tn; llsc = Constant _ | Constant_bits _; _ } when Tn.equal tn self -> true
+      | Set { tn; _ } when Tn.equal tn self -> false
+      | _ -> true
     in
-    List.exists computations ~f:(fun (def_args, other) ->
-        Option.is_some def_args && (not (phys_equal other def)) && covers [] other)
+    List.count computations ~f:(fun (def_args, _) -> Option.is_some def_args) > 1
+    && List.for_all computations ~f:(fun (def_args, def) ->
+        Option.is_none def_args || constant_stores def)
   in
+  let union_covers =
+    lazy
+      ((not literal_table)
+      &&
+      let dims = Lazy.force self.Tn.dims in
+      let rec writes ranges acc = function
+        | For_loop { from_; to_; _ } when to_ < from_ -> acc
+        | For_loop { index; from_; to_; body; _ } ->
+            writes ((index, (from_, to_)) :: ranges) acc body
+        | Seq (a, b) -> writes ranges (writes ranges acc a) b
+        | Set { tn; idcs; _ } when Tn.equal tn self ->
+            let range s = List.Assoc.find ranges s ~equal:Indexing.equal_symbol in
+            (range, Affine.view ~dims idcs) :: acc
+        | _ -> acc
+      in
+      Affine.union_covers_box
+        (List.fold computations ~init:[] ~f:(fun acc (def_args, def) ->
+             if Option.is_some def_args then writes [] acc def else acc)))
+  in
+  let omitted_any = ref false in
+  let fallback_defined = lazy (has_zero_init || Lazy.force union_covers) in
+  (* gh-ocannl-1795: a component that never writes the read cell -- some position of it fixed at a
+     cell other than the read's -- contributes nothing at this read site: omitting it is the same as
+     its guard being always false, which needs no fallback proof. A read every component is omitted
+     from is one no write reaches: [13], the call-site index mismatch it always was. *)
+  let exception Omitted in
   (* In the order of computation. *)
   let loop_proc ((def_args : Indexing.axis_index array option), (def : t)) : t option =
     (* One substitution step: replace env-bound symbols, folding nested affine/fixed
@@ -2937,17 +2978,19 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       | Indexing.Fixed_idx i -> Some ([], i)
       | Indexing.Sub_axis | Indexing.Concat _ -> None
     in
-    (* Per-symbol loop width of this producer computation, for range guards on solved symbols. *)
+    (* Per-symbol loop bounds of this producer computation, as [(from_, width)], for range guards on
+       solved symbols. A loop need not start at 0 (gh-ocannl-1795): a guard over [0, width) would
+       admit [0] and refuse [to_] of a [from_ = 1] loop. *)
     let def_loop_ranges =
       let rec scan acc = function
         | For_loop { index; from_; to_; body; _ } | Scan_loop { index; from_; to_; body; _ } ->
-            scan (Map.set acc ~key:index ~data:(to_ - from_ + 1)) body
+            scan (Map.set acc ~key:index ~data:(from_, to_ - from_ + 1)) body
         | Seq (a, b) -> scan (scan acc a) b
         | _ -> acc
       in
       scan (Map.empty (module Indexing.Symbol)) def
     in
-    let symbol_range s = Map.find def_loop_ranges s |> Option.value ~default:1 in
+    let symbol_range s = Map.find def_loop_ranges s |> Option.value ~default:(0, 1) in
     (* gh-133 Stage A/B: build the substitution environment and guards in several passes, so a
        producer index vector that repeats a non-static symbol (diagonal [i;i] / partially-diagonal
        [i;j;i]) does not crash on duplicate keys, and so multi-symbol affine positions (Stage B) can
@@ -2959,15 +3002,33 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
         [%string
           "inline_computation: call_args too short, maybe stale optimization context? Tnode: \
            %{Tn.debug_name self} #%{self.Tn.id#Int} n: %{n#Int}"];
+    (* gh-ocannl-1795: the producer and the read must index the node in the same coordinate layout
+       -- a [Sub_axis] at the same positions on both sides. Every step below solves RAW positions
+       pairwise, which is sound only when position [i] names the same coordinate on both sides
+       ({!Affine.view}): after a [Sub_axis] run the next component is a flattened index over the
+       run's extent product, not its own axis's. A one-sided [Sub_axis] bound a producer symbol to
+       the run placeholder, which the substitution then carried into the replay's other reads (a
+       transposed operand read [a[t; Sub_axis]]), into an affine read (where it silently counts as
+       0), and into guards ([Embed_index Sub_axis], which renders as nothing) -- each measured to
+       miscompute. Such a read site is refused; normalizing both sides into common coordinates is
+       separate work. With the layouts agreeing, no symbol is ever bound to [Sub_axis]: pass 1 binds
+       to a call index that is not one, and the solving rounds bind to [Iterator]s and affine forms
+       of the call's symbols. *)
+    if
+      not
+        (Array.for_alli def_args_arr ~f:(fun i lhs ->
+             let is_sub = function Indexing.Sub_axis -> true | _ -> false in
+             Bool.equal (is_sub lhs) (is_sub call_args.(i))))
+    then raise @@ Non_virtual "13:call-site-index-mismatch";
     (* [bound_pos.(i)] marks positions that DEFINE bindings (no consistency guard for them).
-       [range_guards] collects [(solved_symbol, range)] pairs whose value must fall in [0,
-       range). *)
+       [range_guards] collects [(uc, rest, rhs, (lo, width))] tuples: the solved symbol's value must
+       fall in [lo, lo + width), its producer loop's bounds. *)
     let bound_pos = Array.create ~len:n false in
     let env = ref (Map.empty (module Indexing.Symbol)) in
     let range_guards = ref [] in
     (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. For Block/Concat
        virtual nodes with multiple Set computations, also emit a range guard: the producer's loop
-       covers [0, range) while the consumer iterates a wider range, so out-of-range consumer
+       covers [lo, lo + width) while the consumer iterates a wider range, so out-of-range consumer
        iterations must fall back to [Get_local id]. *)
     Array.iteri def_args_arr ~f:(fun i lhs_ind ->
         match lhs_ind with
@@ -2994,8 +3055,15 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
               List.length (List.dedup_and_sort ~compare:Int.compare l) = List.length l
             in
             let unbound (_, s) = (not (Set.mem static_indices s)) && not (Map.mem !env s) in
+            (* gh-ocannl-1795: in a multi-component replay a matched symbol is range-guarded below,
+               and with several terms the read's symbols need not decompose a cell the way the
+               producer's loops do ([x[2u + v]] for [v] in 0..3 reads cells the producer writes as
+               [x[2s + t]] with [t] in 0..1): the guard would suppress a cell the component does
+               write. Such a position is left to unit-coefficient solving, which keeps a producer
+               loop and guards the decomposition that holds (Codex review of the PR). *)
             if
               (not (List.is_empty pterms))
+              && (set_computation_count <= 1 || List.length pterms = 1)
               && List.for_all pterms ~f:unbound && distinct pcoeffs
               && List.equal Int.equal
                    (List.sort ~compare:Int.compare pcoeffs)
@@ -3003,7 +3071,16 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
             then (
               List.iter pterms ~f:(fun (c, ps) ->
                   let _, cs = List.find_exn cterms ~f:(fun (cc, _) -> cc = c) in
-                  env := Map.set !env ~key:ps ~data:(Indexing.Iterator cs));
+                  env := Map.set !env ~key:ps ~data:(Indexing.Iterator cs);
+                  (* As for a pass-1 binding: in a multi-component replay the call-site symbol
+                     ranges over the whole node, the producer's over its own loop, so the component
+                     replays only where [cs] falls in that loop (Codex review of gh-ocannl-1795's
+                     PR: [x[s + 1]] for [s] in 0..1, read at [x[t + 1]], wrote cell 3 at [t =
+                     2]). *)
+                  if set_computation_count > 1 then
+                    range_guards :=
+                      (1, Indexing.Fixed_idx 0, Indexing.Iterator cs, symbol_range ps)
+                      :: !range_guards);
               bound_pos.(i) <- true;
               true)
             else false
@@ -3040,10 +3117,11 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                       Indexing.affine ~symbols:value_terms ~offset:(uc * (roff - offset))
                     in
                     env := Map.set !env ~key:us ~data:value;
-                    (* Range guard [0 <= us < range], reformulated with NON-NEGATIVE operands so it
-                       is correct under unsigned index precision (a negative [rhs - rest] would
-                       underflow): [rest := Σ_{s≠us} c·s + offset], [rhs := call index]. uc=+1 needs
-                       [rest <= rhs < rest+range]; uc=-1 needs [rhs <= rest < rhs+range]. *)
+                    (* Range guard [lo <= us < lo + width], reformulated with NON-NEGATIVE operands
+                       so it is correct under unsigned index precision (a negative [rhs - rest]
+                       would underflow): [rest := Σ_{s≠us} c·s + offset], [rhs := call index]. uc=+1
+                       needs [rest + lo <= rhs < rest + lo + width]; uc=-1 needs [rhs + lo <= rest <
+                       rhs + lo + width]. *)
                     let rest_axis =
                       Indexing.affine
                         ~symbols:
@@ -3066,11 +3144,29 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
           then progress := true)
     done;
     let env = !env in
+    (* gh-ocannl-1795: the disjointness test runs before the guard fold, so a position of an omitted
+       component that would refuse cannot refuse the read site. The layouts agree (the gate above),
+       so position [i] is the same coordinate on both sides and two different fixed values there are
+       two different cells. A position resolving to a fixed value through a repeated symbol counts
+       too. If every component is omitted, the read site is refused as [13] below: no write reaches
+       the cell it reads. *)
+    if
+      (not literal_table)
+      && Array.existsi def_args_arr ~f:(fun i lhs_ind ->
+          (not bound_pos.(i))
+          &&
+          match (subst env lhs_ind, call_args.(i)) with
+          | Indexing.Fixed_idx a, Indexing.Fixed_idx b -> a <> b
+          | _ -> false)
+    then (
+      omitted_any := true;
+      raise Omitted);
     (* Remaining non-binding positions become consistency guards: [subst(producer_pos) = call_site].
        [Fixed_idx]/[Sub_axis] carry no symbol: a [Fixed_idx] position read at a symbolic index is
        guarded too, under a fallback proof ([fixed_guardable], gh-ocannl-1735); a static mismatch
-       between two fixed cells, or any [Sub_axis] position, stays materialized via [Non_virtual 13].
-       Guards are materialized at the [Set] node with the live (freshened) env. *)
+       between two fixed cells omitted the component above, and a [Sub_axis] position equals its
+       counterpart (the layout gate above). Guards are materialized at the [Set] node with the live
+       (freshened) env. *)
     let depends_on_symbol (idx : Indexing.axis_index) =
       match idx with
       | Indexing.Iterator s -> not (Set.mem static_indices s)
@@ -3105,10 +3201,9 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
        index, writes the read cell exactly when [k = index] -- the guard (index precision on the
        condition). Where it is false the component contributes nothing and the replay's shared local
        carries on, which is the materialized value only if that local is defined at the cell: a
-       [Zero_out] of the node ([has_zero_init]) or another component covering it
-       ([covered_by_other]). Without either proof the position refuses as before -- it is not the
-       guard's job to invent a value for a cell no write of the replay reaches. *)
-    let fallback_defined = lazy (has_zero_init || covered_by_other def) in
+       [Zero_out] of the node ([has_zero_init]) or the components together covering it
+       ([union_covers], gh-ocannl-1795). Without either proof the position refuses as before -- it
+       is not the guard's job to invent a value for a cell no write of the replay reaches. *)
     let fixed_guardable (lhs_ind : Indexing.axis_index) (rhs_ind : Indexing.axis_index) =
       (match lhs_ind with Indexing.Fixed_idx _ -> true | _ -> false)
       && (match rhs_ind with
@@ -3181,10 +3276,11 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                     (Embed_index rhs_ind, index_prec) ))
           in
           (* gh-133 Stage B: range guards -- a unit-solved symbol's value must fall within its
-             producer loop range [0, range). Compare [rest] and [rhs] without subtracting them
-             (either can be negative after substitution). uc=+1: [rest <= rhs] & [rhs < rest+range];
-             uc=-1: [rhs <= rest] & [rest < rhs+range] -- one canonical shape per role, a direct
-             [Cmple] lower bound and a strict [Cmplt] upper bound. *)
+             producer loop range [lo, lo + width). Compare [rest] and [rhs] without subtracting them
+             (either can be negative after substitution); the loop's [lo] is added on the side that
+             keeps every operand non-negative. uc=+1: [rest+lo <= rhs] & [rhs < rest+lo+width];
+             uc=-1: [rhs+lo <= rest] & [rest < rhs+lo+width] -- one canonical shape per role, a
+             direct [Cmple] lower bound and a strict [Cmplt] upper bound. *)
           let add_offset (idx : Indexing.axis_index) d : Indexing.axis_index =
             if d = 0 then idx
             else
@@ -3197,11 +3293,12 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
           let cmp op a b = Binop (op, (Embed_index a, index_prec), (Embed_index b, index_prec)) in
           let le = cmp Ops.Cmple and lt = cmp Ops.Cmplt in
           let range_conds =
-            List.map range_guards ~f:(fun (uc, rest_axis, rhs_axis, range) ->
+            List.map range_guards ~f:(fun (uc, rest_axis, rhs_axis, (lo, width)) ->
                 let rest = subst env rest_axis and rhs = subst env rhs_axis in
                 let lower, upper =
-                  if uc >= 0 then (le rest rhs, lt rhs (add_offset rest range))
-                  else (le rhs rest, lt rest (add_offset rhs range))
+                  if uc >= 0 then
+                    (le (add_offset rest lo) rhs, lt rhs (add_offset rest (lo + width)))
+                  else (le (add_offset rhs lo) rest, lt rest (add_offset rhs (lo + width)))
                 in
                 (* The scoped simplifier can make this pure 0/1 conjunction eager when the active
                    index domain proves every comparison intermediate total. Otherwise retain
@@ -3215,8 +3312,8 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
              injective+surjective scatter that skipped neutral init -- Stage B), so every read cell
              IS written by exactly one iteration (injectivity) and the init value is always
              overwritten -- 0. is a safe neutral. A fixed-index guard is admitted without a
-             [Zero_out] only when another component covers the node ([fixed_guardable]), which
-             overwrites that init at every cell. *)
+             [Zero_out] only when the components together cover the node ([fixed_guardable]), so
+             some component overwrites that init at every cell. *)
           if (not (List.is_empty conds)) && not has_zero_init then needs_init := true;
           (* task-9658aac9: the then-arm [acc] structurally contains the producer read at the
              unit-solved index, so for a non-matching kept-loop iteration that index (hence the flat
@@ -3297,8 +3394,12 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
     match set_from_vec_def with
     | Some def -> Ok (lane_extract_body def)
     | None ->
-        let body = List.rev_filter_map ~f:loop_proc computations in
-        if List.is_empty body then raise @@ Non_virtual "14:empty-inlined-body"
+        let body =
+          List.rev_filter_map computations ~f:(fun c -> try loop_proc c with Omitted -> None)
+        in
+        if List.is_empty body && !omitted_any then
+          raise @@ Non_virtual "13:call-site-index-mismatch"
+        else if List.is_empty body then raise @@ Non_virtual "14:empty-inlined-body"
         else
           (* Prepend a single init local when any component computation has guards but the producer
              has no [Zero_out] to supply the initial value. For multi-computation nodes

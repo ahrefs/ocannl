@@ -555,9 +555,11 @@ let merge_lineage =
 
 (* gh-ocannl-1551: routine A places [v] as routine-local scratch AFTER storing its computation: [v]
    is written cell by cell, each component stored, and A's own loop-varying read cannot instantiate
-   a fixed-cell component ([13:call-site-index-mismatch]: no single component covers [v], so the
-   fixed position's guard has no proved fallback, gh-ocannl-1735), which commits [v] [Never_virtual]
-   there; backend finalization resolves it to [Local], so routine A is linked.
+   a fixed-cell component ([13:call-site-index-mismatch]: [v] has one cell more than A writes and
+   reads, so the components' union does not cover it and the fixed positions' guards have no proved
+   fallback, gh-ocannl-1735 / gh-ocannl-1795 -- the cells A reads are covered, so the coverage rule
+   admits it), which commits [v] [Never_virtual] there; backend finalization resolves it to [Local],
+   so routine A is linked.
 
    gh-ocannl-1620: with [~stored:false], routine A writes [v] under a guard instead, a computation
    the virtualizer refuses to store ([142:guarded-computation]): the same [Local] scratch with no
@@ -567,7 +569,7 @@ let merge_lineage =
    code evaluates (gh-ocannl-1620), so a read in an arm only the emit walk decides dead reaches the
    capture walk, whose hit is the refusal under test. *)
 let local_scratch ?(stored = true) ~label ~tag () =
-  let a = mk (tag ^ "a") and outa = mk (tag ^ "outa") and v = mk (tag ^ "v") in
+  let a = mk (tag ^ "a") and outa = mk (tag ^ "outa") and v = mk ~dims:[| dim + 1 |] (tag ^ "v") in
   List.iter [ a; outa ] ~f:materialize;
   let ctx = LL.empty_optimize_ctx () in
   let llc_a =
@@ -603,9 +605,9 @@ let local_lineage =
   }
 
 (* gh-ocannl-1551: routine A defers a fixed-cell producer [v[0] := ell[0] + 100], which cannot be
-   instantiated at a loop-varying read ([13:call-site-index-mismatch]: nothing else writes [v], so
-   the fixed position's guard has no proved fallback, gh-ocannl-1735); the deferring routine dropped
-   its setter, so no materialized read can serve it either. *)
+   instantiated at a loop-varying read ([13:call-site-index-mismatch]: nothing writes [v]'s other
+   cells, so the fixed position's guard has no proved fallback, gh-ocannl-1735); the deferring
+   routine dropped its setter, so no materialized read can serve it either. *)
 let uninlinable_lineage =
   let lineage ~label ~tag =
     let ell = mk (tag ^ "ell") and v = mk (tag ^ "v") in
@@ -1031,7 +1033,9 @@ let case_local_reads () =
    [v] its own writes cover: admitted, because the lineage's template of [w] already carries it.
    [w_code ~w ~x ~v] is [w]'s setter, the same in A and B; [out := w] reads it. [v_code ~a ~v] is
    A's write of [v]: per cell by default; [guarded_v] is the issue's reproducer of gh-ocannl-1646, a
-   guarded write the virtualizer refuses to capture ([142]). Both give [v[i] = a[i] + 1000]. *)
+   guarded write the virtualizer refuses to capture ([142]). Both give [v[i] = a[i] + 1000]. [v] has
+   one cell more than anything writes or reads, so the cell-by-cell components do not cover it and
+   stay unservable at A's loop-varying read (gh-ocannl-1795), as [local_scratch]'s do. *)
 let cells_v ~a ~v =
   List.reduce_exn ~f:seq
     (List.init dim ~f:(fun k -> set v [| fixed k |] (add (get a [| fixed k |]) (c 1000.))))
@@ -1043,7 +1047,7 @@ let guarded_v ~a ~v =
 
 let carried_scratch ?(v_code = cells_v) ~label ~tag ~w_code ~read_w () =
   let a = mk (tag ^ "a") and outa = mk (tag ^ "outa") and outw = mk (tag ^ "outw") in
-  let v = mk (tag ^ "v") and w = mk (tag ^ "w") and x = mk (tag ^ "x") in
+  let v = mk ~dims:[| dim + 1 |] (tag ^ "v") and w = mk (tag ^ "w") and x = mk (tag ^ "x") in
   List.iter [ a; outa; outw; x ] ~f:materialize;
   let ctx = LL.empty_optimize_ctx () in
   let llc_a =

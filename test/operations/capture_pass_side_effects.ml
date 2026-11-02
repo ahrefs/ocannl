@@ -169,16 +169,22 @@ let case_nested_under_width1 () =
     ~f:Float.equal
 
 (* A local producer written cell by cell, [r[0] := ell[0] + 100; r[1] := ell[1] + 100] -- covered,
-   so the raw analysis demands nothing of it, but its fixed-cell components cannot be served at a
-   loop-varying read ([13:call-site-index-mismatch]: they cover [r] only together, which the fixed
-   positions' guards do not prove, gh-ocannl-1735) -- read only in the sibling's dead arm. *)
-let case_dead_arm_placement () =
-  let label = "dead sibling arm, local producer" and tag = "dp" in
+   so the raw analysis demands nothing of it -- read only in the sibling's dead arm. With
+   [~extra_cell] [r] has a third cell nothing writes, so its fixed-cell components cannot be served
+   at a loop-varying read ([13:call-site-index-mismatch]: their union does not cover [r], so the
+   fixed positions' guards have no proved fallback, gh-ocannl-1735 / gh-ocannl-1795): the hazard, a
+   capture walk committing [r] [Never_virtual] for a read that never executes. Without it the two
+   components cover [r] together and it is servable (gh-ocannl-1795), the ordinary reading. *)
+let case_dead_arm_placement ~extra_cell =
+  let label =
+    "dead sibling arm, local producer" ^ if extra_cell then ", unservable" else ", servable"
+  and tag = if extra_cell then "dq" else "dp" in
   let n = 2 in
-  let mk2 = node_factory ~first_id:15600 ~dims:[| n |] () in
+  let mk2 = node_factory ~first_id:(if extra_cell then 15650 else 15600) ~dims:[| n |] () in
   let x_vals = Array.sub x_vals ~pos:0 ~len:n in
   let build ~sfx ~materialize_r =
-    let ell = mk2 (tag ^ "ell" ^ sfx) and r = mk2 (tag ^ "r" ^ sfx) and x = mk2 (tag ^ "x" ^ sfx) in
+    let ell = mk2 (tag ^ "ell" ^ sfx) and x = mk2 (tag ^ "x" ^ sfx) in
+    let r = mk2 ~dims:[| (if extra_cell then n + 1 else n) |] (tag ^ "r" ^ sfx) in
     let w = mk2 (tag ^ "w" ^ sfx) and o2 = mk2 (tag ^ "o2" ^ sfx) in
     let out = mk2 (tag ^ "out" ^ sfx) in
     List.iter [ ell; x; o2; out ] ~f:materialize;
@@ -302,6 +308,7 @@ let () =
   case_duplicate ~label:"duplicate store, three candidates" ~tag:"d3" ~candidates:3
     ~with_reader:false;
   case_duplicate ~label:"duplicate store, later reader" ~tag:"dr" ~candidates:1 ~with_reader:true;
-  case_dead_arm_placement ();
+  case_dead_arm_placement ~extra_cell:false;
+  case_dead_arm_placement ~extra_cell:true;
   case_dead_arm_splice ();
   case_nested_under_width1 ()

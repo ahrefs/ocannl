@@ -1446,6 +1446,39 @@ let vec_runs_disjoint ~dims (a : 'tn access) : bool =
           let g = List.fold cts ~init:0 ~f:(fun g (c, _) -> gcd g c) in
           lo >= 0 && hi + a.a_vec_len <= size && (g = 0 || g >= a.a_vec_len))
 
+(* Exact box-union coverage of the lattice box [target] (inclusive per-axis bounds) by [boxes] (each
+   one inclusive bound pair per axis), by coordinate-compression sweep: the first axis is cut at
+   every box boundary, and the boxes spanning an elementary strip recurse on the remaining axes.
+   [?budget] bounds the number of strips visited; exhausting it answers [false] (no proof). *)
+let boxes_cover ?budget (target : (int * int) list) (boxes : (int * int) list list) : bool =
+  let exception Exhausted in
+  let spend () =
+    Option.iter budget ~f:(fun b ->
+        Int.decr b;
+        if !b < 0 then raise Exhausted)
+  in
+  let rec go (target : (int * int) list) (boxes : (int * int) list list) =
+    spend ();
+    match target with
+    | [] -> not (List.is_empty boxes)
+    | (lo, hi) :: rest_t ->
+        if lo > hi then true
+        else
+          let cuts =
+            lo :: List.concat_map boxes ~f:(function (bl, bh) :: _ -> [ bl; bh + 1 ] | [] -> [])
+            |> List.filter ~f:(fun x -> x >= lo && x <= hi)
+            |> List.dedup_and_sort ~compare:Int.compare
+          in
+          List.for_all cuts ~f:(fun x ->
+              let spanning =
+                List.filter_map boxes ~f:(function
+                  | (bl, bh) :: rest when bl <= x && x <= bh -> Some rest
+                  | _ -> None)
+              in
+              go rest_t spanning)
+  in
+  try go target boxes with Exhausted -> false
+
 let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> None) ~dims
     ~(read : 'tn access) ~(writes : 'tn access list) () : [ `Covered | `Unknown of string ] =
   let exception Fail of string in
@@ -1654,28 +1687,6 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
            (pointwise writes tile it). *)
         let by_sig = Hashtbl.create (module String) in
         List.iter analyzed ~f:(fun ((s, _, _) as a) -> Hashtbl.add_multi by_sig ~key:s ~data:a);
-        let rec boxes_cover (target : (int * int) list) (boxes : (int * int) list list) =
-          match target with
-          | [] -> not (List.is_empty boxes)
-          | (lo, hi) :: rest_t ->
-              if lo > hi then true
-              else
-                let cuts =
-                  lo
-                  :: List.concat_map boxes ~f:(function
-                    | (bl, bh) :: _ -> [ bl; bh + 1 ]
-                    | [] -> [])
-                  |> List.filter ~f:(fun x -> x >= lo && x <= hi)
-                  |> List.dedup_and_sort ~compare:Int.compare
-                in
-                List.for_all cuts ~f:(fun x ->
-                    let spanning =
-                      List.filter_map boxes ~f:(function
-                        | (bl, bh) :: rest when bl <= x && x <= bh -> Some rest
-                        | _ -> None)
-                    in
-                    boxes_cover rest_t spanning)
-        in
         let union_covers group =
           match group with
           | [] -> false
@@ -1703,6 +1714,75 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
       end
     end
   with Fail witness -> `Unknown witness
+
+(** {2 The union-covering query}
+
+    [union_covers_box writes]: whether the accesses together touch every cell of their node, each as
+    its symbols range over its own bounds ([range], [None] for a symbol with no known range) — the
+    definite-coverage companion of {!covers_box} for a node written piecewise (gh-ocannl-1795), with
+    no exactly-once promise. Sound and conservative: an access is evidence only where its written
+    set is proved to be a box, and [false] means "not proved".
+
+    The views are re-coarsened to their common frame ({!common_frame}); maps of different ranks
+    answer [false]. Each coordinate's image is the exact progression of its linear form
+    ([ap_of_form ~exact:true]; width-1 symbols fold into the offset), admitted when it is a single
+    cell or a contiguous run, and clipped to the coordinate's extent. The product of those images is
+    the access's written set only when no varying symbol occurs in two coordinates — a diagonal
+    [x[i; i]] has a full-sized bounding box and an off-diagonal hole — so such an access proves
+    nothing, as does one with an [Unknown] coordinate, an unranged symbol, a strided image, an empty
+    range (a dead loop) or a magnitude beyond [2^30]. The admitted boxes are decided by
+    {!boxes_cover} with a strip budget; exhausting it, or more than [max_boxes] accesses, answers
+    [false]. *)
+let union_covers_box ?(max_boxes = 4096) ?(budget = 1_000_000)
+    (writes : ((Idx.symbol -> (int * int) option) * coord array) list) : bool =
+  if List.is_empty writes || List.length writes > max_boxes then false
+  else
+    match common_frame (List.map writes ~f:snd) with
+    | None -> false
+    | Some views ->
+        let limit = 1 lsl 30 in
+        let small x = x >= -limit && x <= limit in
+        let box_of (range, view) : (int * int) list option =
+          let exception Decline in
+          try
+            let varying = ref [] in
+            let interval = function
+              | Unknown _ -> raise Decline
+              | Known { size; terms; offset; _ } -> (
+                  if not (small offset && small size) then raise Decline;
+                  let offset = ref offset in
+                  let terms =
+                    List.filter_map terms ~f:(fun (c, s) ->
+                        match range s with
+                        | None -> raise Decline
+                        | Some (lo, hi) ->
+                            if lo > hi || not (small c && small lo && small hi) then raise Decline;
+                            if lo = hi then (
+                              offset := !offset + (c * lo);
+                              None)
+                            else (
+                              if List.mem !varying s ~equal:Idx.equal_symbol then raise Decline;
+                              varying := s :: !varying;
+                              Some (c, (lo, hi))))
+                  in
+                  match ap_of_form ~exact:true terms !offset with
+                  | Some { ap_lo; ap_hi; ap_step } when ap_step <= 1 ->
+                      let lo = max ap_lo 0 and hi = min ap_hi (size - 1) in
+                      if lo > hi then raise Decline else (lo, hi)
+                  | _ -> raise Decline)
+            in
+            Some (Array.to_list (Array.map view ~f:interval))
+          with Decline -> None
+        in
+        let boxes = List.filter_map (List.zip_exn (List.map writes ~f:fst) views) ~f:box_of in
+        let target =
+          match views with
+          | [] -> []
+          | v :: _ ->
+              Array.to_list
+                (Array.map v ~f:(function Known { size; _ } | Unknown { size; _ } -> (0, size - 1)))
+        in
+        boxes_cover ~budget:(ref budget) target boxes
 
 (** {2 Crosscheck}
 

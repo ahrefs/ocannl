@@ -323,7 +323,8 @@ let () =
      that writes a FIXED cell can be inlined at a read of that cell and cannot be inlined at a read
      of the same cell spelled through a (width-one) iterator -- [inline_computation] has no symbol
      to bind, and the equality guard a fixed position gets there (gh-ocannl-1735) needs a defined
-     fallback this lone producer cannot prove (no [Zero_out], no covering component), which is
+     fallback this lone producer cannot prove (no [Zero_out], and the components' union -- cell 0
+     alone -- does not cover the node: cell 1 is never written, gh-ocannl-1795), which is
      [Non_virtual 13]. Put the matching read first and the mismatching one second, and the second
      read materializes a node the first has already inlined into a minted scope.
 

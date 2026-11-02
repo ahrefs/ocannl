@@ -85,6 +85,10 @@ dead-taint: routine A defers v16: true
 dead-taint: consuming is legal, the live component's values splice: true
 failed-inline: routine A defers v17: true
 failed-inline: consuming at an un-inlinable site fails actionably: true
+inherited cell union: routine A defers v_cu: true
+inherited cell union: the consumer splices the replay, cell by cell: true
+inherited all-disjoint: routine A defers v_cd: true
+inherited all-disjoint: consuming a cell no component writes fails actionably: true
 dynamic-table: routine A defers v18: true
 dynamic-table: inherited table is rejected actionably: true
 dead-consumer splice: tainted reference in dead code is legal, live values flow: true
