@@ -4011,6 +4011,7 @@ type registration_counts = {
   inline_constraints : int;
   closures : int;
   closure_constraints : int;
+  rank_search_visits : int;
 }
 [@@deriving sexp_of]
 
@@ -4024,13 +4025,17 @@ let zero_counts =
     inline_constraints = 0;
     closures = 0;
     closure_constraints = 0;
+    rank_search_visits = 0;
   }
 
 let counts = ref zero_counts
 [@@mutation_serial.exempt "registration statistics, not inference state"]
 
-let registration_counts () = !counts
-let reset_registration_counts () = counts := zero_counts
+let registration_counts () = { !counts with rank_search_visits = Row.rank_search_visits () }
+
+let reset_registration_counts () =
+  counts := zero_counts;
+  Row.reset_rank_search_visits ()
 
 (* Where shape-registration time goes (gh-ocannl-1752), process-wide since the last reset. *)
 type registration_times = {

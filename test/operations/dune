@@ -12519,7 +12519,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules scheme_payoff)
- (libraries base ocannl stdio mtime mtime.clock.os arrayjit.verdict)
+ (libraries
+  base
+  ocannl
+  stdio
+  mtime
+  mtime.clock.os
+  arrayjit.verdict
+  bench_out)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

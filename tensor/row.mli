@@ -122,6 +122,16 @@ val restore_globals : globals -> unit
 val globals_differences : globals -> globals -> string list
 (** The components that differ between two captures (physically), by name: a diagnostic. *)
 
+val rank_search_visits : unit -> int
+(** The states the rank-cycle search visited since the last reset (gh-ocannl-1802): its work
+    counter, process-wide. *)
+
+val reset_rank_search_visits : unit -> unit
+
+val with_unbounded_rank_search : (unit -> 'a) -> 'a
+(** Runs the function with the rank-cycle search walking everything the new edge's target reaches,
+    as it did before gh-ocannl-1802 bounded it by the endpoints' levels: a test's reference. *)
+
 val sym_dim_extent_exn : sym_dim -> int
 
 (** The maximum extent of a symbolic dimension: the declared range of its static symbol. *)

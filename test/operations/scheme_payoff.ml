@@ -5,7 +5,8 @@
 
    The deterministic counts are claimed (stdout); the full count and timing tables go to stderr,
    which is not part of the golden. [--bench REPS N...] times the workloads instead: the measurement
-   behind docs/shape_inference.md's numbers. *)
+   behind docs/shape_inference.md's numbers; [--bench-result N...] is its form for the A/B
+   driver. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -80,15 +81,22 @@ type run = {
 
 let seconds started = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9
 
-let run_one (mode : mode) w n =
+(* [~unbounded]: with the rank-cycle search walking everything a new edge's target reaches, as
+   before gh-ocannl-1802 bounded it by the edge's endpoints: the reference for its work counter. *)
+let run_one ?(unbounded = false) (mode : mode) w n =
   Tensor.For_testing.set_op_shape_schemes (Some mode);
   Tensor.unsafe_reinitialize ();
   Tensor.Scheme.reset_registration_counts ();
   Tensor.Scheme.reset_registration_times ();
   let started = Mtime_clock.counter () in
-  let y = w.build n in
-  let construction_s = seconds started in
-  let result_dims = Array.to_list (Shape.to_dims y.Tensor.shape) in
+  let infer () =
+    let y = w.build n in
+    let construction_s = seconds started in
+    (y, construction_s, Array.to_list (Shape.to_dims y.Tensor.shape))
+  in
+  let y, construction_s, result_dims =
+    if unbounded then Ocannl.Row.with_unbounded_rank_search infer else infer ()
+  in
   let total_s = seconds started in
   let params =
     Set.to_list y.Tensor.params
@@ -103,12 +111,14 @@ let run_one (mode : mode) w n =
   }
 
 let row_header =
-  "workload depth mode | checked inline | C' E' boundary inline_c | closure_constraints"
+  "workload depth mode | checked inline | C' E' boundary inline_c | closure_constraints | \
+   rank_search_visits"
 
 let count_row w n mode (c : Shape.registration_counts) =
-  Printf.sprintf "%s %d %s | %d %d | %d %d %d %d | %d" w n (mode_name mode) c.checked_applications
-    c.inline_registrations c.instantiated_constraints c.instantiated_solutions
-    c.instantiated_boundary c.inline_constraints c.closure_constraints
+  Printf.sprintf "%s %d %s | %d %d | %d %d %d %d | %d | %d" w n (mode_name mode)
+    c.checked_applications c.inline_registrations c.instantiated_constraints
+    c.instantiated_solutions c.instantiated_boundary c.inline_constraints c.closure_constraints
+    c.rank_search_visits
 
 let ms x = Printf.sprintf "%.2f" (x *. 1000.)
 
@@ -174,8 +184,35 @@ let bench reps cells =
   Stdio.printf "%s\n" row_header;
   List.iter (List.rev !counts) ~f:(Stdio.printf "%s\n")
 
+(* The A/B driver's form of the measurement (benchmarks/ab.py, bin_cells.py): per workload and
+   depth, one warm-up and one timed build with schemes off, as a [bench-result] line. *)
+let bench_result cells =
+  (* Nothing here is compiled, but the A/B driver checks the backend the cell resolved: read it. *)
+  Stdio.eprintf "scheme_payoff: backend %s\n%!" (Context.backend_name (Context.auto ()));
+  List.iter cells ~f:(fun (w, ns) ->
+      List.iter ns ~f:(fun n ->
+          ignore (run_one `Off w n : run);
+          let r = run_one `Off w n in
+          Stdio.printf "%s\n" (time_row w.w_name n `Off r);
+          Bench_out.result
+            ~variant:(Printf.sprintf "%s-%d-off" w.w_name n)
+            ~check:(Unchecked "an inference timing: the test claims the shapes it closes")
+            ~seconds:r.total_s))
+
+let parse_cells =
+  List.map ~f:(fun cell ->
+      match String.lsplit2 cell ~on:'=' with
+      | Some (w, ns) -> (find_workload w, List.map (String.split ns ~on:',') ~f:Int.of_string)
+      | None -> failwith ("scheme_payoff: expected workload=depths, got " ^ cell))
+
 let () =
-  match Array.to_list (Sys.get_argv ()) with
+  (* The A/B driver's cells lead with their [--ocannl_*] pins: settings, not this program's mode. *)
+  let argv =
+    List.filter
+      (Array.to_list (Sys.get_argv ()))
+      ~f:(fun a -> not (String.is_prefix a ~prefix:"--ocannl_"))
+  in
+  match argv with
   | [ _; "--one"; w; n; mode ] ->
       (* One run, for profiling. *)
       let w = find_workload w and n = Int.of_string n in
@@ -184,21 +221,25 @@ let () =
       Stdio.printf "%s\n%s\n" (count_row w.w_name n mode r.counts) (time_row w.w_name n mode r)
   | _ :: "--bench" :: reps :: cells ->
       (* [--bench REPS distinct=1,4,16 shared=1,4,16 decoder=1,4,8] *)
-      bench (Int.of_string reps)
-        (List.map cells ~f:(fun cell ->
-             match String.lsplit2 cell ~on:'=' with
-             | Some (w, ns) -> (find_workload w, List.map (String.split ns ~on:',') ~f:Int.of_string)
-             | None -> failwith ("scheme_payoff --bench: expected workload=depths, got " ^ cell)))
+      bench (Int.of_string reps) (parse_cells cells)
+  | _ :: "--bench-result" :: cells -> bench_result (parse_cells cells)
   | _ ->
       let results =
         List.concat_map workloads ~f:(fun w ->
             List.concat_map depths ~f:(fun n ->
                 List.map modes ~f:(fun mode -> ((w.w_name, n, mode), run_one mode w n))))
       in
+      let unbounded =
+        List.concat_map workloads ~f:(fun w ->
+            List.map depths ~f:(fun n -> ((w.w_name, n), run_one ~unbounded:true `Off w n)))
+      in
       Tensor.For_testing.set_op_shape_schemes None;
       Stdio.eprintf "(not part of the golden) %s\n" row_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
           Stdio.eprintf "(not part of the golden) %s\n" (count_row w n mode r.counts));
+      List.iter unbounded ~f:(fun ((w, n), r) ->
+          Stdio.eprintf "(not part of the golden) unbounded rank search: %s\n"
+            (count_row w n `Off r.counts));
       Stdio.eprintf "(not part of the golden) %s\n" time_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
           Stdio.eprintf "(not part of the golden) %s\n" (time_row w n mode r));
@@ -217,4 +258,21 @@ let () =
               && c.inline_constraints = off.counts.inline_constraints);
           p_all "checking instantiates a scheme at every depth" cells ~f:(fun ((w, n, _), _) ->
               let c = (get w n `Check).counts in
-              c.checked_applications > 0 && c.instantiated_constraints > 0))
+              c.checked_applications > 0 && c.instantiated_constraints > 0));
+      (* gh-ocannl-1802: the rank-cycle search bounded by the new edge's endpoints' levels, against
+         the unbounded walk it replaced. *)
+      let unbounded_visits w n =
+        (List.Assoc.find_exn unbounded (w, n) ~equal:Poly.equal).counts.rank_search_visits
+      in
+      let saving w n = unbounded_visits w n - (get w n `Off).counts.rank_search_visits in
+      Verdict.case "the rank-cycle search, bounded by the new edge's endpoints" (fun () ->
+          p_all "the bounded search closes the shapes the unbounded one closes" unbounded
+            ~f:(fun ((w, n), r) -> List.equal (List.equal Int.equal) r.dims (get w n `Off).dims);
+          p_all "the bounded search visits fewer states than the unbounded one" unbounded
+            ~f:(fun ((w, n), _) -> saving w n > 0);
+          let deeper =
+            List.cartesian_product workloads
+              (List.zip_exn (List.drop_last_exn depths) (List.tl_exn depths))
+          in
+          p_all "the bounded search's saving grows with depth" deeper ~f:(fun (w, (n, n')) ->
+              saving w.w_name n < saving w.w_name n'))

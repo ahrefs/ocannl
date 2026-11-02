@@ -295,8 +295,14 @@ files.
   a scheme only checks; it cannot stand in for the body's registration. An instantiation carries
   about as many constraints as the body's inline registration produces (C' + E' vs the steps'
   inequalities) and costs about as long, and constraints left pending beside later ties are
-  re-solved by every tie solve, each re-solve running `Row.closes_positive_rank_cycle`'s DFS over
-  the persistent rank graph -- quadratic in depth, and a superlinear term even for `off`
-  (gh-ocannl-1802). Count before claiming a solver win: `registration_counts` splits the store by
+  re-solved by every tie solve. Count before claiming a solver win: `registration_counts` splits the store by
   source, and `closure_constraints` is the store at closure. Error locality is the payoff that
   holds (`scheme_error_locality` is the catalogue).
+- Where `off` inference time goes (gh-ocannl-1802): profile before blaming the rank-cycle search.
+  `Row.add_rank_edge` searches only the levels between the new edge's endpoints
+  (`global_rank_levels`, checkpointed with the edges; `Row.with_unbounded_rank_search` is the old
+  walk, for tests), and its work is `registration_counts.rank_search_visits`, still about 4x per
+  depth doubling but a few percent of the run. The superlinear term is eager substitution: every
+  solution maps over the whole environment (`Utils.Tree_map.map` in `unify_row`/`unify_dim`), so
+  anything per-entry there (the `from_` provenance of `s_dim_one_in_entry`, now lazy) multiplies.
+  Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy.
