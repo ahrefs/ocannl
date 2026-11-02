@@ -388,3 +388,16 @@ let rec _scheme_rec =
         then _scheme_rec () x
         else
           (+) ?label:(Some ["_scheme_rec"]) x (TDSL.number ?label:None 1.0)
+let _no_unit_optional =
+  let open! TDSL.O in
+    fun ?(stride= 2) ?scale x ->
+      let y =
+        match scale with
+        | None -> x
+        | Some s -> ( *. ) ?label:(Some ["y"]) x s in
+      ignore (stride : int);
+      (+) ?label:(Some
+                    (List.concat
+                       [["_no_unit_optional"];
+                       (x.Tensor.value).Ir.Tnode.label]))
+        y (TDSL.number ?label:None 1.0)

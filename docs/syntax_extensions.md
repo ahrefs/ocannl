@@ -246,7 +246,7 @@ Using [inline declarations](#inline-declarations), this becomes more concise:
   ...
 ```
 
-When there is a function directly under the `%op` extension point, like in the example above, or directly under a function taking a unit parameter `()`, the function parameter (to the right of `()`) should be a tensor. That's because `%op` uses this tensor's (value's) label to enrich the label of the resulting tensor, and because automatic shape schemes take such an unlabelled parameter to be a tensor (see [Automatic shape schemes](#automatic-shape-schemes)). A labelled or optional parameter there may be anything.
+When there is a function directly under the `%op` extension point, like in the example above, or directly under a function taking a unit parameter `()`, the function parameter (to the right of `()`) should be a tensor. That's because automatic shape schemes take such an unlabelled parameter to be a tensor (see [Automatic shape schemes](#automatic-shape-schemes)), and because, in a function without `()`, `%op` uses this tensor's (value's) label to enrich the label of the resulting tensor (see [Label from function argument](#label-from-function-argument)). A labelled parameter of a function without `()` must be a tensor for the same reason; an optional parameter may be anything, and so may a labelled one after `()`.
 
 When the declaration is followed by a literal float, the float provides the initial value to initialize the tensor. Otherwise, the tensor value cells are initialized with the default parameter initialization: a centered, scaled packed `uniform ()` over `[-0.25, 0.25)` (`Operation.centered_uniform_param_init` with `scale = 0.5`), configurable by setting the reference `TDSL.default_param_init`.
 
@@ -782,7 +782,7 @@ The example `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = 
 
 ### Label from function argument
 
-The resulting (primary) tensor's label will also have incorporated the label of the input argument, if any. In our example, the resulting `mlp_layer` tensor will also include the label of the actually applied `x`. If the function has a unit parameter `()`, like `mlp_layer` above, only parameters to the right of `()` are considered for label extraction.
+When the function directly under `%op` has no unit parameter `()`, the resulting (primary) tensor's label also incorporates the labels of its arguments: in `let%op scaled ~gamma x = gamma *. x`, the result's label includes the labels of the applied `gamma` and `x`. Every parameter except an optional one is such a label source, so a labelled non-tensor parameter there is a type error at the parameter: give the function a `()` and put the parameter before it. An optional parameter (`?scale`, `?(stride = 2)`) is not a label source and may be anything (gh-ocannl-1787). If the function has a unit parameter `()`, like `mlp_layer` above, no parameter is a label source: the label comes from the binding's name and the `~label` parameter.
 
 When there is the unit parameter, and a `~label` parameter (specifically a parameter with label `label`), this label is also incorporated.
 

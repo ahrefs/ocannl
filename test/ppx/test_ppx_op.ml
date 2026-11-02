@@ -89,3 +89,11 @@ let%op _scheme_step () ~train_step x = match train_step with Some () -> x + 1.0 
 let%op _scheme_mask () ?mask x = match mask with None -> x | Some m -> x *. m
 let%op _scheme_opted_out () x = { ow } * x [@@ocannl.no_scheme]
 let%op rec _scheme_rec () x = if false then _scheme_rec () x else x + 1.0
+
+(* Without a [()] stage every parameter is a label source -- its tensor's label enriches the
+   result's -- except an optional one (gh-ocannl-1787): [stride] stays an int and [scale] an option,
+   neither read as a tensor. *)
+let%op _no_unit_optional ?(stride = 2) ?scale x =
+  let y = match scale with None -> x | Some s -> x *. s in
+  ignore (stride : int);
+  y + 1.0
