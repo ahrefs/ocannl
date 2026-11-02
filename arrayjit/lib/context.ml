@@ -395,7 +395,7 @@ type routine = {
 let can_run ctx routine = Set.is_subset routine.execution_deps ~of_:ctx.ledger.executed
 
 (** Create a context from a backend name *)
-let create_from_backend_name ~ordinal backend_name =
+let create_from_backend_name ~ordinal ~backend_name =
   let backend = Backends.get_backend ~backend_name () in
   let ledger = create_ledger () in
   {
@@ -407,16 +407,21 @@ let create_from_backend_name ~ordinal backend_name =
     ledger;
   }
 
-let cuda ?ordinal () = create_from_backend_name ~ordinal:(Option.value ordinal ~default:0) "cuda"
-let hip ?ordinal () = create_from_backend_name ~ordinal:(Option.value ordinal ~default:0) "hip"
-let metal ?ordinal () = create_from_backend_name ~ordinal:(Option.value ordinal ~default:0) "metal"
+let cuda ?ordinal () =
+  create_from_backend_name ~ordinal:(Option.value ordinal ~default:0) ~backend_name:"cuda"
+
+let hip ?ordinal () =
+  create_from_backend_name ~ordinal:(Option.value ordinal ~default:0) ~backend_name:"hip"
+
+let metal ?ordinal () =
+  create_from_backend_name ~ordinal:(Option.value ordinal ~default:0) ~backend_name:"metal"
 
 let cpu ?threads () =
   (* Kernel-level CPU parallelism is automatic on both cc backends (pool-rendered Grid loops, see
      [automatic_cpu_schedule]); [threads] > 1 selects the multidev_cc debugging backend, which
      exposes multiple worker-domain devices. *)
   let backend_name = match threads with None | Some 1 -> "cc" | Some _ -> "multidev_cc" in
-  create_from_backend_name ~ordinal:0 backend_name
+  create_from_backend_name ~ordinal:0 ~backend_name
 
 (* gh-ocannl-536 landing step 5: backend selection is not candidate compilation, so it does not use
    the compile-phase policy — but it used to catch everything, which turned a broken driver, an
@@ -438,7 +443,7 @@ let auto () =
               ("Context.auto: no backend available; tried "
               ^ String.concat ~sep:", " (List.rev unavailable))
         | name :: rest -> (
-            match create_from_backend_name ~ordinal:0 name with
+            match create_from_backend_name ~ordinal:0 ~backend_name:name with
             | ctx -> ctx
             | exception exn when advances_to_next_backend exn ->
                 try_backends (Exn.to_string exn :: unavailable) rest)
@@ -448,7 +453,7 @@ let auto () =
       (* Use the configured backend. An unknown name already raises a message naming it
          ([Backends.get_backend]); an unusable one keeps its own failure rather than being relabeled
          as a spelling mistake. *)
-      create_from_backend_name ~ordinal:0 backend_name
+      create_from_backend_name ~ordinal:0 ~backend_name
 
 (* What a backend link hands back, minus the backend-typed context (already rewrapped). *)
 type link_payload = {
@@ -1122,7 +1127,9 @@ let check_lineage_runnable ctx routine =
   in
   (if not (Set.is_empty stale_inputs) then
      let stale_names =
-       Set.to_list stale_inputs |> List.map ~f:Tn.debug_name |> String.concat ~sep:", "
+       String.concat ~sep:", "
+         (List.map (Set.to_list stale_inputs) ~f:Tn.debug_name
+          [@message_only "names the stale inputs in the User_error below"])
      in
      raise
      @@ Utils.User_error
@@ -1510,7 +1517,9 @@ let observability ctx (tn : Tn.t) : observability =
               ->
                 Not_computed))
 
-let path_to_string path = String.concat ~sep:" -> " (List.map path ~f:Tn.debug_name)
+let path_to_string path =
+  String.concat ~sep:" -> "
+    (List.map path ~f:Tn.debug_name [@message_only "spells a dependency path for the messages"])
 
 let observability_tag = function
   | Stored | Host_init | Recomputable -> None
@@ -1535,7 +1544,7 @@ let observability_tag = function
   | Not_computed -> Some "<not-computed>"
 
 let explain_observability ctx (tn : Tn.t) (obs : observability) : string option =
-  let name = Tn.debug_name tn in
+  let name = (Tn.debug_name tn [@message_only "names the node in the explanation"]) in
   match obs with
   | Stored | Host_init | Recomputable -> None
   | Needs_context [ leaf ] when Tn.equal leaf tn ->
@@ -1717,7 +1726,12 @@ let identity_copy ~(lhs : Tn.t) ~(rhs : Tn.t) : Asgns.t =
       project_rhs = [| idcs |];
       extent_syms = [];
       debug_info =
-        { spec = "recompute-on-read"; derived_for = Sexp.Atom (Tn.debug_name rhs); trace = [] };
+        {
+          spec = "recompute-on-read";
+          derived_for =
+            Sexp.Atom (Tn.debug_name rhs [@message_only "the projection's debug provenance"]);
+          trace = [];
+        };
     }
   in
   Asgns.Accum_op
@@ -1793,8 +1807,11 @@ let recompute_all_to_host ctx (reads : (Tn.t * Nd.t) list) : Nd.t list =
   in
   let describe =
     match reads with
-    | [ (tn, _, _) ] -> Tn.debug_name tn
-    | _ -> String.concat ~sep:", " (List.map reads ~f:(fun (tn, _, _) -> Tn.debug_name tn))
+    | [ (tn, _, _) ] -> Tn.debug_name tn [@message_only "describes the recomputed read"]
+    | _ ->
+        String.concat ~sep:", "
+          (List.map reads ~f:(fun (tn, _, _) ->
+               (Tn.debug_name tn [@message_only "describes the recomputed reads"])))
   in
   let name =
     match reads with

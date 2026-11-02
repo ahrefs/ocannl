@@ -5095,6 +5095,24 @@ box.
   node as the code emitted so far does; one the scan cannot follow to its sink (a refusal a
   function returns, a local `logf`) is marked `[@message_only "<reason>"]`, on the application or
   on its `[%string]` (post-wave task post-1-task-6).
+- In the compiler (`arrayjit/lib`) a node's `label` and `namespace`, the names spelled from them
+  (`debug_name`, `label_name`) and a backend's name are display, never identity: all of them are
+  public inputs a user's tensor or a backend can forge. One wave fixed the same defect three times
+  (`Online_softmax`'s tile roles by namespace and label head, gh-ocannl-1722; `Schedule`'s masked
+  fragment by a `"fragment"` label head, which a user's `{ fragment }` tensor also has,
+  gh-ocannl-1721; backend kind by substrings of the backend name, gh-ocannl-1723), each by
+  replacing the spelling with a uid membership the compiler fills or with the `Backend_intf`
+  capability facts. `label_dispatch_scan` (gh-ocannl-1783, in `@test/operations/scans`) reuses
+  `debug_name_scan`'s walker under a second rule and reads fail-closed: a read sits in a display
+  position (printed or raised, composed into a message by `^`/`sprintf`/`[%string]`, a `[%log...]`
+  payload), is copied onto a node the pass mints (`Tn.create ~label:("tile" :: like.Tn.label)`), is
+  a `~backend_name` forwarded under its own label, or is marked at the site -- `[@message_only
+  "<reason>"]` for a message the walker cannot follow, `[@label_read "<reason>"]` for a read that
+  decides nothing a forged name could steer (`Tnode` spelling its own names and its debug
+  registry's key, `Backends.get_backend` selecting the backend the user named, a calibration row's
+  backend key). Everything else -- a `match`, an `if`, an equality, a prefix test, a table key, a
+  `let` -- is refused. A new decision on a node's role takes a set the pass fills, keyed by uid; one
+  on a backend's kind reads `Context.backend_facts`.
 
 - Insert a new stanza in `test/operations/dune` beside its topical neighbours, never at the end of
   the file. The file is grouped by subsystem rather than alphabetized, and the end is where every

@@ -1,0 +1,34 @@
+let namespace = "schedule"
+
+(* Refused: the pre-gh-ocannl-1721 masked-fragment test, by the label head a user's { fragment }
+   tensor also has. *)
+let is_fragment opt frag =
+  Set.mem opt.simdgroup_fragments frag
+  || match frag.Tn.label with "fragment" :: _ -> true | _ -> false
+
+(* Refused: the same test through the display name, and through the joined label. *)
+let is_fragment_by_name frag = String.is_prefix (Tn.debug_name frag) ~prefix:"fragment"
+let is_fragment_joined frag = match String.concat ~sep:"_" frag.Tn.label with "fragment" -> true | _ -> false
+
+(* Refused: a label bound by a let, a label name as a table key, a destructured label. *)
+let head_of frag = let l = frag.Tn.label in List.hd l
+let remember table tn = Hashtbl.set table ~key:(Tn.label_name tn) ~data:tn
+let label_of { Tn.label; _ } = label
+
+(* Refused: a bare label an open brings in, through a local open. *)
+let is_tile tn = String.equal Tn.(label tn) "tile"
+
+(* Accepted, the nearest honest uses: a label copied onto a node this pass mints, a label shown in a
+   refusal, a log payload, a parameter that happens to be named label, a marked identity read. *)
+let fragment_node ~like = Tn.create ~namespace prec ~id:(fresh ()) ~label:("fragment" :: like.Tn.label) ()
+let refuse tn = failwith ("Schedule: cannot tile " ^ Tn.debug_name tn)
+let trace tn = [%log "tiling", Tn.debug_name tn]
+let named ~label = String.equal label "tile"
+let key tn = (tn.Tn.namespace [@label_read "the registry's presentational key, for debug lookup"])
+
+(* Refused: a marker whose reason is one word, and a marker on something that is not a label read. *)
+let short tn = (tn.Tn.label [@label_read "identity"])
+let stray x = (List.length x [@label_read "a stray marker on nothing"])
+
+(* Refused: a [%string] whose interpolation does not parse, mentioning a label reference. *)
+let unreadable tn = [%string "tile %{Tn.label_name (tn}"]

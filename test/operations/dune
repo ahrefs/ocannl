@@ -170,6 +170,9 @@
   (alias runtest-debug_name_scan)
   (alias runtest-debug_name_scan_control)
   (alias runtest-debug_name_scan_refusal_control)
+  (alias runtest-label_dispatch_scan)
+  (alias runtest-label_dispatch_scan_control)
+  (alias runtest-label_dispatch_scan_refusal_control)
   (alias runtest-census_total_ratchet)
   (alias runtest-workflow_job_timeouts)
   (alias runtest-shell_scripts_parse)
@@ -371,6 +374,9 @@
   (alias runtest-debug_name_scan)
   (alias runtest-debug_name_scan_control)
   (alias runtest-debug_name_scan_refusal_control)
+  (alias runtest-label_dispatch_scan)
+  (alias runtest-label_dispatch_scan_control)
+  (alias runtest-label_dispatch_scan_refusal_control)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-provenance_tag_inventory)
   (alias runtest-census_total_ratchet)
@@ -4066,6 +4072,10 @@
   debug_name_scan.expected
   debug_name_scan_control.expected
   debug_name_scan_refusal_control.expected
+  label_dispatch_scan.ml
+  label_dispatch_scan.expected
+  label_dispatch_scan_control.expected
+  label_dispatch_scan_refusal_control.expected
   render_decline_inventory.ml
   render_decline_inventory.expected
   ocamlformat_ignore_scan.ml
@@ -4137,6 +4147,8 @@
    open_node_scan.expected,open_node_scan_control.expected,open_node_scan_refusal_control.expected,open_node_scan_cases.expected
    debug_name_scan.ml
    debug_name_scan.expected,debug_name_scan_control.expected,debug_name_scan_refusal_control.expected
+   label_dispatch_scan.ml
+   label_dispatch_scan.expected,label_dispatch_scan_control.expected,label_dispatch_scan_refusal_control.expected
    render_decline_inventory.ml
    render_decline_inventory.expected
    ocamlformat_ignore_scan.ml
@@ -10428,6 +10440,96 @@
   (diff
    debug_name_scan_refusal_control.expected
    debug_name_scan_refusal_control.actual)))
+
+; gh-ocannl-1783: the compiler under arrayjit/lib/ reads a node's label or namespace, and a
+; backend's name, only to show them, to copy a label onto a node it mints, or at a marked site --
+; never to decide (gh-ocannl-1721, gh-ocannl-1722, gh-ocannl-1723). The reading states its closed
+; list of accepted forms in test/support/label_dispatch_scan.ml; the walker is debug_name_scan's.
+
+(executable
+ (name label_dispatch_scan)
+ (modules label_dispatch_scan)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses compiler sources without running a backend.
+ (target label_dispatch_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  label_dispatch_scan.ml
+  (source_tree ../../arrayjit/lib))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:label_dispatch_scan.exe}
+    %{workspace_root}
+    %{dep:label_dispatch_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-label_dispatch_scan)
+ (package neural_nets_lib)
+ (action
+  (diff label_dispatch_scan.expected label_dispatch_scan.actual)))
+
+; The shipping scanner on a committed tree: each refused form beside the nearest accepted one,
+; the pre-gh-ocannl-1721 and pre-gh-ocannl-1722 dispatches among them. Its golden is the refusals, so
+; a scanner that stopped reading cannot pass.
+
+(rule
+ ; ocannl-backend: none -- parses a committed fixture tree without running a backend.
+ (target label_dispatch_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (source_tree label_dispatch_scan_fixture))
+ (action
+  (with-stdout-to
+   %{target}
+   (ignore-stderr
+    (with-accepted-exit-codes
+     1
+     (run
+      %{dep:label_dispatch_scan.exe}
+      --fixture
+      label_dispatch_scan_fixture))))))
+
+(rule
+ (alias runtest-label_dispatch_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   label_dispatch_scan_control.expected
+   label_dispatch_scan_control.actual)))
+
+; Each of the scanner's own refusals, reached through a synthetic input (gh-ocannl-800).
+
+(rule
+ ; ocannl-backend: none -- feeds synthetic sources to the scanner without running a backend.
+ (target label_dispatch_scan_refusal_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  label_dispatch_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:label_dispatch_scan.exe} --refusal-control))))
+
+(rule
+ (alias runtest-label_dispatch_scan_refusal_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   label_dispatch_scan_refusal_control.expected
+   label_dispatch_scan_refusal_control.actual)))
 
 ; gh-ocannl-1309: an executed claim about a tensorized routine whose item judges no mma census --
 ; parity alone also passes for a Tile_mma that declined to the scalar fallback (gh-ocannl-1283).

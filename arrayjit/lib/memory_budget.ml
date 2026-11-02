@@ -180,7 +180,8 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
                   let fp = score [ (tn, dir) ] in
                   let relief = bp_baseline.LL.fp_total - fp.LL.fp_total in
                   logf "candidate %s (%s): recompute cost %d, solo relief %d bytes"
-                    (Tn.debug_name tn) (direction_name dir) fa.LL.fa_recompute_cost relief;
+                    (Tn.debug_name tn [@message_only "a memory-budget log line"])
+                    (direction_name dir) fa.LL.fa_recompute_cost relief;
                   (dir, fa.LL.fa_recompute_cost, relief)) ))
       in
       (* Descending by relief per unit of recompute cost, then by relief. *)
@@ -225,7 +226,9 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       (* Held (node, recompute cost) pairs, most recently held first. *)
       let speculative = ref [] in
       let names l =
-        String.concat ~sep:", " (List.map l ~f:(fun ((tn, _), _) -> Tn.debug_name tn))
+        String.concat ~sep:", "
+          (List.map l ~f:(fun ((tn, _), _) ->
+               (Tn.debug_name tn [@message_only "a memory-budget log line"])))
       in
       (* One node, one group (gh-ocannl-616 review round 6): a node offering both directions has
          them scored against the same incumbent — each alone and jointly with the held group — and
@@ -273,7 +276,8 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
             in
             if marginal > 0 then (
               logf "accept %s (%s)%s: %d bytes (solo %d), cost %d%s, footprint now %d"
-                (Tn.debug_name tn) dir sibling_note marginal solo cost
+                (Tn.debug_name tn [@message_only "a memory-budget log line"])
+                dir sibling_note marginal solo cost
                 (match (verdict, held) with
                 | _, [] -> ""
                 | `Load_bearing, _ -> Printf.sprintf " jointly with %s" (names held)
@@ -299,7 +303,7 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
                  the cheaper recompute on a tie. The solo relief was measured against the original
                  baseline, which earlier accepted flips can have made stale. *)
               logf "hold %s (%s)%s: no marginal relief yet (solo was %d); speculative"
-                (Tn.debug_name tn)
+                (Tn.debug_name tn [@message_only "a memory-budget log line"])
                 (direction_name (snd dec))
                 sibling_note solo;
               speculative := (dec, cost) :: held)

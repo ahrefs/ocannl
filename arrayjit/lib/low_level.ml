@@ -1721,7 +1721,7 @@ let inherited_local_read_rejection (tn : Tn.t) : string =
    elsewhere: an intent, or an earlier routine. *)
 let missing_computation_rejection (plc : Tn.Placements.t) (traced : traced_array) : string =
   let tn = traced.tn in
-  let name = Tn.debug_name tn in
+  let name = (Tn.debug_name tn [@message_only "names the node in the returned rejection"]) in
   let cause =
     if traced.has_assignment || traced.zeroed_out then
       [%string
@@ -4358,7 +4358,11 @@ let validate_virtualization_decision_coverage (plc : Tn.Placements.t) (llc : t) 
   in
   ignore (proc llc : bool);
   if not (Set.is_empty !undecided) then
-    let names = List.map (Set.to_list !undecided) ~f:Tn.debug_name |> String.concat ~sep:", " in
+    let names =
+      (List.map (Set.to_list !undecided) ~f:Tn.debug_name
+       [@message_only "names the undecided nodes in the invalid_arg below"])
+      |> String.concat ~sep:", "
+    in
     invalid_arg
       [%string
         "Low_level.virtual_llc decision-coverage seam: the post-pass code retains a tensor read \
@@ -11464,7 +11468,10 @@ let get_ident_within_code ?no_dots ?(blacklist = []) ?(reserved_prefixes = [])
       Hashtbl.set nograd_idents ~key:b_ident ~data:(Set.singleton (module Int) (-1));
       Hashtbl.set grad_idents ~key:b_ident ~data:(Set.singleton (module Int) (-1)));
   let visit tn =
-    let is_grad, ident = Tn.no_grad_ident_label tn.Tn.label in
+    let is_grad, ident =
+      Tn.no_grad_ident_label
+        (tn.Tn.label [@label_read "minting display identifiers for the generated code"])
+    in
     let idents = if is_grad then grad_idents else nograd_idents in
     Option.iter ident ~f:(fun ident ->
         (* A reserved prefix, or a name [reserved] holds, is seen as a repeat, like a blacklisted

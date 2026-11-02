@@ -1817,7 +1817,9 @@ module Calibration = struct
 
   let to_line r =
     Printf.sprintf "%s\t%s\t%s\t%s\t%.6f\t%s\t%d\t%d\t%d\t%b\t%b\t%b" r.backend r.digest
-      (cell r.routine) (cell r.label) (floor6 r.measured_ms)
+      (cell r.routine)
+      (cell (r.label [@label_read "a calibration row's own candidate label, not a node's"]))
+      (floor6 r.measured_ms)
       (match r.model_ms with Some m -> Printf.sprintf "%.6f" (floor6 m) | None -> "")
       r.kernels r.flops r.bytes r.flops_approx r.bytes_approx r.opaque
 
@@ -1881,7 +1883,10 @@ module Calibration = struct
 
   (* How a row names itself in a report: the tuned computation, then the candidate within it. *)
   let qualified ~routine ~label = if String.is_empty routine then label else routine ^ "/" ^ label
-  let row_name r = qualified ~routine:r.routine ~label:r.label
+
+  let row_name r =
+    qualified ~routine:r.routine
+      ~label:(r.label [@label_read "a calibration row's own candidate label, not a node's"])
 
   type fit = {
     fit_backend : string;

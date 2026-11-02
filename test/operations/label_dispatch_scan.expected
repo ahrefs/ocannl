@@ -1,0 +1,23 @@
+accepted position in use: printed or raised
+accepted position in use: marked [@message_only]
+accepted position in use: marked [@label_read]
+accepted position in use: a debug-name alias
+accepted position in use: composed into a message
+accepted position in use: a log payload
+accepted position in use: copied onto a new node
+accepted position in use: forwarded under its own label
+the scan reads online_softmax's tile labels copied onto new nodes: true
+the scan reads backends' [%log] payloads: true
+the scan reads context's ~backend_name forwarding: true
+the scan reads tnode's [@label_read] markers: true
+the scan reads memory_budget's [@message_only] log lines: true
+the scan reads low_level's composed refusal messages: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:298ad457cb53221b4d5bf26c57db10cb] online_softmax's
+  [scanner-refusal:a134c194b11e19f42951ac9ae0496f39] scan reads backends'
+  [scanner-refusal:5478be505fa459772de23c278bbd2980] ~backend_name
+  [scanner-refusal:1953375f4f82df9f942fae5674bb2e4d] @label_read
+  [scanner-refusal:753c4e61524edee33f56c2a0183bca9f] memory_budget's
+  [scanner-refusal:17bc0c94b9ab448cbc75a7f5df828695] low_level's
+End of synthetic controls.

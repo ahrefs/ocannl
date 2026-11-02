@@ -1943,7 +1943,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
     in
     let sym_extents = Array.map syms ~f:snd in
     let src_dims = Lazy.force source.Tn.dims in
-    let debug = Tn.debug_name tile in
+    let debug = (Tn.debug_name tile [@message_only "the packed tile's ndarray description"]) in
     Host_inits.register tile
       (lazy
         (let src_nd =
@@ -6723,7 +6723,9 @@ let nest_hazards ~plc (n : nest_info) (syms : Indexing.symbol list) : unit =
                they used to bail first), so the crosscheck compares only static nodes. *)
             if not has_dynamic then
               Affine.crosscheck ~site:"schedule per-nest hazard"
-                ~context:(Tn.debug_name (List.hd_exn accs).a_tn)
+                ~context:
+                  (Tn.debug_name (List.hd_exn accs).a_tn
+                   [@message_only "the crosscheck's disagreement report"])
                 ~procedural_safe:(fun () -> agreement_ok accs)
                 ~query_safe ~witness:!witness;
             if not query_safe then raise Bail)
@@ -6889,7 +6891,8 @@ let analyze_parallel_chains ?(max_chain = 2) ?(select_chain = Fn.id) ?(lanes = f
           ~right:(query_view ~range:(range gj) b)
       in
       let query_safe = match verdict with Affine.Cross_thread _ -> false | _ -> true in
-      Affine.crosscheck ~site:"schedule cross-nest alignment" ~context:(Tn.debug_name a.a_tn)
+      Affine.crosscheck ~site:"schedule cross-nest alignment"
+        ~context:(Tn.debug_name a.a_tn [@message_only "the crosscheck's disagreement report"])
         ~procedural_safe:(fun () -> pair_aligned_procedural ~l gi gj a b)
         ~query_safe
         ~witness:(match verdict with Affine.Cross_thread w -> w | _ -> "");
@@ -7070,7 +7073,7 @@ let crosscheck_scratch_containment (opt : Low_level.optimized) (chains : Low_lev
                     false)
           in
           Affine.crosscheck ~site:"schedule per-thread scratch containment"
-            ~context:(Tn.debug_name tn)
+            ~context:(Tn.debug_name tn [@message_only "the crosscheck's disagreement report"])
             ~procedural_safe:(fun () -> true)
             ~query_safe ~witness:!witness))
 

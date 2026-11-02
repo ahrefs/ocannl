@@ -4024,7 +4024,8 @@ let search_seeding ?census ~capabilities ~is_gpu ~is_cpu ~limits ~static_indices
    s-expression, so a new field fails there until it is rendered here. No token contains [','], the
    entries' separator. *)
 let split_site_label (s, num_blocks) =
-  let name = Ir.Tnode.debug_name s.sr_target and id = Ir.Tnode.id s.sr_target in
+  let name = (Ir.Tnode.debug_name s.sr_target [@message_only "spells the split site's row label"])
+  and id = Ir.Tnode.id s.sr_target in
   Printf.sprintf "%s %s red%d out%d cost%d b%d%s%s%s%s"
     (if String.equal name id then name else name ^ "#" ^ id)
     (Idx.symbol_ident s.sr_axis) s.sr_red s.sr_out s.sr_cost num_blocks
@@ -6482,12 +6483,11 @@ let seeded_transform ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed
    the matmul family, whatever the seeding would pick at the size, so every timed point of a fit
    runs the same geometry. Applied and validated as [model_default] applies a whole-routine pick. *)
 let pinned_sketch_transform ~select ?(on_leaf = fun (_ : sketch_params) -> ()) ctx bindings =
-  let backend = Context.backend_name ctx in
   if not (Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx)) then
     raise
       (Utils.User_error
          (Printf.sprintf "Autotune.pinned_sketch_transform: backend %s has no GPU sketch family"
-            backend));
+            (Context.backend_name ctx)));
   let limits = Context.hardware_limits ctx in
   let capabilities = Context.codegen_capabilities ctx in
   let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
@@ -7117,7 +7117,11 @@ let model_default ?name ?report ctx comp bindings =
             match best with
             | Some (vector, s) when not (List.is_empty vector) ->
                 let mat, inl, fp = LL.partition_readings vector in
-                let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
+                let names tns =
+                  String.concat ~sep:","
+                    (List.map tns ~f:Ir.Tnode.debug_name
+                     [@message_only "names the placement pick in the logf line below"])
+                in
                 logf
                   "model_default: placement pick: materialize [%s], inline [%s], footprint [%s] \
                    (model %.6f ms)"
@@ -7170,7 +7174,11 @@ let model_default ?name ?report ctx comp bindings =
           (if !picked then
              (* The emitted label carries the placement decision: the in-compile selection only
                 names the pipeline it chose under those placements. *)
-             let names tns = String.concat ~sep:"," (List.map tns ~f:Ir.Tnode.debug_name) in
+             let names tns =
+               String.concat ~sep:","
+                 (List.map tns ~f:Ir.Tnode.debug_name
+                  [@message_only "spells the placements in the choice's report label"])
+             in
              choice :=
                {
                  !choice with
@@ -7734,7 +7742,12 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
         Utils.registered_float ~arg_name:"autotune_keep_fraction")
   in
   let static_indices = Idx.bound_symbols bindings in
-  let backend = Context.backend_name ctx in
+  let backend =
+    (Context.backend_name ctx
+     [@label_read
+       "keys calibration rows and log lines, and is compared for equality with the timing \
+        context's; backend capabilities come from the facts below"])
+  in
   let facts = Context.backend_facts ctx in
   let device = Context.ordinal ctx in
   (* The tuned computation's name, for the calibration rows and log lines of every candidate
@@ -8514,7 +8527,8 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     in
     let on_privatize_drops drops =
       List.iter drops ~f:(fun (d : privatize_drop) ->
-          logf "privatize proposal for %s over %s dropped: %s" (Ir.Tnode.debug_name d.pd_target)
+          logf "privatize proposal for %s over %s dropped: %s"
+            (Ir.Tnode.debug_name d.pd_target [@message_only "an autotune log line"])
             (Idx.symbol_ident d.pd_over)
             (Outcome.detail_of_cause d.pd_cause);
           record_decline ~warn:false privatize_declines
