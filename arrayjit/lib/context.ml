@@ -638,7 +638,8 @@ let finish_link ctx comp wrapped
              {
                ua_key;
                ua_uid = tn.Tn.uid;
-               ua_name = Tn.debug_name tn;
+               ua_name =
+                 Tn.debug_name tn [@message_only "the refusal shows it as the gradient's name"];
                ua_runs =
                  Option.value (Map.find comp.Asgns.accumulation_runs tn) ~default:1 |> Int.max 1;
              }))
