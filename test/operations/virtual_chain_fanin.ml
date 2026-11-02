@@ -1105,10 +1105,10 @@ let phase5 () =
   p "dead-taint: consuming is legal, the live component's values splice"
     (same got15 [ Array.map ell17_vals ~f:(fun x -> x +. 100.) ]);
   (* Review round 11, P2: when an INHERITED computation cannot be inlined at the consumer's read
-     site (a lone fixed-cell producer read across a loop trips Non_virtual 13: its fixed position's
-     guard has no proved fallback), the local-producer fallback — a materialized Get — is
-     unavailable: the deferring routine already dropped the setters, so no routine writes the
-     buffer. The consumer fails actionably instead. *)
+     site (a lone fixed-cell producer read across a loop trips Non_virtual 13: nothing writes the
+     node's other cells, so its fixed position's guard has no proved fallback), the local-producer
+     fallback — a materialized Get — is unavailable: the deferring routine already dropped the
+     setters, so no routine writes the buffer. The consumer fails actionably instead. *)
   let ell18 = mk "ell18" in
   materialize ell18;
   let v17 = mk "v17" and out21 = mk "flout" in
@@ -1128,6 +1128,60 @@ let phase5 () =
     with Utils.User_error msg -> String.is_substring msg ~substring:"could not be inlined"
   in
   p "failed-inline: consuming at an un-inlinable site fails actionably" rejected_fail;
+  (* gh-ocannl-1795: an inherited node written cell by cell is servable at a loop-varying read once
+     its components' union covers it -- the consumer splices the guarded replay. Each cell's value
+     is distinct ([ell] + 100 + 10k). *)
+  let ell_cu = mk "ell_cu" in
+  materialize ell_cu;
+  let v_cu = mk "v_cu" and out_cu = mk "cuout" in
+  materialize out_cu;
+  let ctx_cu = LL.empty_optimize_ctx () in
+  let llc_a_cu =
+    List.reduce_exn ~f:seq
+      (List.init dim ~f:(fun k ->
+           set v_cu
+             [| fixed k |]
+             (add (get ell_cu [| fixed k |]) (c (100. +. (10. *. Float.of_int k))))))
+  in
+  let o_a_cu = optimize_in ctx_cu ~name:"vcf_cunion_a" llc_a_cu in
+  p "inherited cell union: routine A defers v_cu" (known_virtual o_a_cu v_cu);
+  let o_b_cu =
+    let s = sym () in
+    optimize_in ctx_cu ~name:"vcf_cunion_b"
+      (loop_n s dim (set out_cu [| iter s |] (get v_cu [| iter s |])))
+  in
+  let ell_cu_vals = Array.init dim ~f:(fun i -> 70. +. Float.of_int i) in
+  let got_cu =
+    execute ~name:"vcf_cunion_b" o_b_cu
+      ~seed:[ (ell_cu, ell_cu_vals); (out_cu, blank dim) ]
+      ~read:[ out_cu ]
+  in
+  p "inherited cell union: the consumer splices the replay, cell by cell"
+    (same got_cu [ Array.mapi ell_cu_vals ~f:(fun k x -> x +. 100. +. (10. *. Float.of_int k)) ]);
+  (* ... and an inherited node none of whose components writes the cell read has nothing to replay
+     there ([13:call-site-index-mismatch]): with no materialization fallback, the consumer fails
+     actionably rather than reading a zero. *)
+  let ell_cd = mk "ell_cd" in
+  materialize ell_cd;
+  let v_cd = mk "v_cd" and out_cd = mk ~dims:[| 1 |] "cdout" in
+  materialize out_cd;
+  let ctx_cd = LL.empty_optimize_ctx () in
+  let o_a_cd =
+    optimize_in ctx_cd ~name:"vcf_cdisj_a"
+      (seq
+         (set v_cd [| fixed 0 |] (add (get ell_cd [| fixed 0 |]) (c 100.)))
+         (set v_cd [| fixed 1 |] (add (get ell_cd [| fixed 1 |]) (c 110.))))
+  in
+  p "inherited all-disjoint: routine A defers v_cd" (known_virtual o_a_cd v_cd);
+  p "inherited all-disjoint: consuming a cell no component writes fails actionably"
+    (try
+       ignore
+         (optimize_in ctx_cd ~name:"vcf_cdisj_b" (set out_cd [| fixed 0 |] (get v_cd [| fixed 3 |]))
+           : LL.optimized);
+       false
+     with Utils.User_error msg ->
+       String.is_substring msg ~substring:"could not be inlined"
+       && String.is_substring msg ~substring:"13:call-site-index-mismatch");
   (* Review round 12, P2: an INHERITED node read as a dynamic-gather table — the Get_dynamic path
      never routes through inline_computation, and a dynamic read cannot be served by recomputation;
      pre-fix this died in cleanup's cryptic already-virtual collision. *)

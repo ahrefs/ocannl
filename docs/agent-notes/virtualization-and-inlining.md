@@ -211,17 +211,30 @@ files.
   split. Pinned by the `constexpr_*` rows of `test/operations/virtual_rejection_boundary.ml` (a
   guarded setter refused as 142, a flattened read refused as 13, the cap exemption), with
   executed parity.
-- **A fixed-index producer position is guarded only over a proved fallback** (gh-ocannl-1735). On an
-  extent-1 coordinate a producer `Fixed_idx 0` read at a symbolic index is the same cell
-  (`same_unit_cell`, no guard). On a wider one `instantiate_computations` guards `k == index`, and
-  where the guard is false the replay's shared local carries on, which is the materialized value
-  only if that local is defined: `fixed_guardable` requires a `Zero_out` of the node or another
-  component that `Affine.covers_box` proves covers it (`covered_by_other`). Without the proof the
-  site still refuses as 13 — declared-virtual nodes skip the coverage rule, and a guard would read a
-  zero no write put there. Unions of partial covers (cell-by-cell writers) prove nothing, which is
-  why the 13 vehicles of `scope_over_materialized`, `stored_template_elision` and
-  `capture_pass_side_effects` still refuse; Fixed-vs-Fixed and `Sub_axis` mismatches are 13
-  outright. Rows: `fixed_component_*` in `virtual_rejection_boundary.ml`.
+- **A fixed-index producer position is guarded only over a proved fallback** (gh-ocannl-1735,
+  gh-ocannl-1795). On an extent-1 coordinate a producer `Fixed_idx 0` read at a symbolic index is
+  the same cell (`same_unit_cell`, no guard). On a wider one `instantiate_computations` guards
+  `k == index`, and where the guard is false the replay's shared local carries on, which is the
+  materialized value only if that local is defined: `fixed_guardable` requires a `Zero_out` of the
+  node or `union_covers` — the components' writes TOGETHER cover the node, the guarded component
+  included (`Affine.union_covers_box`: each write a box over its live loops, a diagonal or strided
+  write proving nothing). The proof is about the node, not the read: a union covering only the
+  cells read still refuses as 13 (`fixed_component_read_covered_only`), since the read's range is
+  unknown where the template is instantiated. Declared-virtual and inherited nodes skip the
+  coverage rule, so for them the proof is all there is. A component fixed at a cell other than a
+  fixed read's is omitted at that read site before any guard is built (`Omitted`; all omitted is
+  still 13). A host-constant literal (`Tn.known_host_constant`) takes neither the union nor the
+  omission: its per-cell `Constant_fill` components would replay as a guard per cell, and a later
+  `Context.set_values` must reach its readers, so a multi-cell literal read off its own cell stays
+  a buffer read (`recompute_on_read`, `test_one_hot_embedding_lookup` pin what that keeps). Rows: `fixed_component_*` and `declared_virtual_union` in
+  `virtual_rejection_boundary.ml`. Equality guards from repeated symbols and range guards carry no
+  such proof — they rely on the coverage rule, so a declared-virtual node read where no write
+  reaches falls back on the init.
+- **The inliner solves raw index positions pairwise, so both sides must share one coordinate
+  layout** (gh-ocannl-1795): a `Sub_axis` on one side only refuses the read site as 13 — it bound a
+  producer symbol to the run placeholder, which then miscomputed in guards, affine reads and
+  transposed operand reads (`flattened_read_*` rows). Range guards bound a solved symbol by its
+  loop's `[from_, from_ + width)`, not `[0, width)` (`block_components_offset_*`).
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps

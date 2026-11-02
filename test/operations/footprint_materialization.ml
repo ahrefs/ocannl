@@ -633,17 +633,24 @@ let case_input_written_between_setters () =
     (same got [ expected; doubled ])
 
 (* === A consumption-time rejection AFTER a scratch was minted: a fixed-index producer read once at
-   the matching column (footprinted) and once at another (rejected, [Non_virtual 13]). The node
-   materializes; the stranded prologue is a scope over a now-materialized node, which cleanup's
-   scope-target retraction (gh-ocannl-681) rewrites into a read of the buffer — an [n]-cell gather,
-   not a recomputation — so the outcome is the materialized placement plus that copy. === *)
+   the matching column (footprinted) and once at another (rejected, [Non_virtual 13]). Since
+   gh-ocannl-1795 a read of another column is served wherever the components' fallback is proved --
+   by a [Zero_out], or by writes covering the node together -- so [a] is opened by a zero store over
+   columns 0..1 alone, and column 1 is read through a one-iteration loop: the accumulating
+   component's fixed column then needs a guard ([0 == u + 1]) whose fallback nothing proves (columns
+   2..3 are never written), while every cell read is covered. The node materializes; the stranded
+   prologue is a scope over a now-materialized node, which cleanup's scope-target retraction
+   (gh-ocannl-681) rewrites into a read of the buffer — an [n]-cell gather, not a recomputation — so
+   the outcome is the materialized placement plus that copy. === *)
 let case_rejection_after_footprint () =
   let a = mk "arj" and o1 = mk ~dims:[| n |] "orj1" and o2 = mk ~dims:[| n |] "orj2" in
   materialize o1;
   materialize o2;
   let i = sym () and k = sym () and i1 = sym () and i2 = sym () in
+  let i0 = sym () and j0 = sym () and u = sym () in
   let producer =
-    seq (zero a)
+    seq
+      (loop i0 (loop_n j0 2 (set a [| iter i0; iter j0 |] (c 0.))))
       (loop i
          (loop_n k kk
             (set a
@@ -654,7 +661,7 @@ let case_rejection_after_footprint () =
     seq producer
       (seq
          (loop i1 (set o1 [| iter i1 |] (get a [| iter i1; fixed 0 |])))
-         (loop i2 (set o2 [| iter i2 |] (get a [| iter i2; fixed 1 |]))))
+         (loop i2 (loop_n u 1 (set o2 [| iter i2 |] (get a [| iter i2; aff [ (1, u) ] 1 |])))))
   in
   let opt = optimize ~name:"fp_rejection" llc in
   p "rejection: the mismatched read commits the producer materialized"
@@ -681,16 +688,19 @@ let case_rejection_after_footprint () =
 
 (* gh-ocannl-1152: the first read footprints the template; the second belongs to a virtual consumer,
    so its storage pass retracts the footprint to the cap before checking the mismatched column. The
-   default ends materialized, with stored computations retained: the pricing world must validate the
-   inline alternative at BOTH reads even though no setter re-walk is needed. *)
+   default ends materialized, with stored computations retained (the producer opened and the
+   mismatched column read as in the case above): the pricing world must validate the inline
+   alternative at BOTH reads even though no setter re-walk is needed. *)
 let case_stored_template_refusal () =
   let a = mk "asr" and x = mk ~dims:[| n |] "xsr" in
   let o1 = mk ~dims:[| n |] "osr1" and o2 = mk ~dims:[| n |] "osr2" in
   let cc = mk ~dims:[| n |] "csr" in
   List.iter [ x; o1; o2 ] ~f:materialize;
   let i = sym () and j = sym () and i1 = sym () and i2 = sym () and i3 = sym () in
+  let i0 = sym () and j0 = sym () and u = sym () in
   let producer =
-    seq (zero a)
+    seq
+      (loop i0 (loop_n j0 2 (set a [| iter i0; iter j0 |] (c 0.))))
       (loop i
          (loop_n j kk
             (set a
@@ -704,7 +714,7 @@ let case_stored_template_refusal () =
       (seq
          (loop i1 (set o1 [| iter i1 |] (get a [| iter i1; fixed 0 |])))
          (seq
-            (loop i2 (set cc [| iter i2 |] (get a [| iter i2; fixed 1 |])))
+            (loop i2 (loop_n u 1 (set cc [| iter i2 |] (get a [| iter i2; aff [ (1, u) ] 1 |]))))
             (loop i3 (set o2 [| iter i3 |] (get cc [| iter i3 |])))))
   in
   let opt = optimize ~name:"fp_stored_refused" llc in

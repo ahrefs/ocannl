@@ -49,15 +49,42 @@ fixed_component_zero_init: the two placements agree: true
 fixed_component_uninitialized: rejected by the coverage rule as 36:read-before-write: true
 fixed_component_uninitialized: executed values are the reference: true
 fixed_component_uninitialized: the two placements agree: true
-fixed_component_fixed_read: rejected at consumption time as 13:call-site-index-mismatch: true
-fixed_component_fixed_read: executed values are the reference: true
-fixed_component_fixed_read: the two placements agree: true
-fixed_component_partial_cover: rejected at consumption time as 13:call-site-index-mismatch: true
-fixed_component_partial_cover: executed values are the reference: true
-fixed_component_partial_cover: the two placements agree: true
 declared_virtual_zeroed: inlined: true
 declared_virtual_zeroed: executed values are the reference: true
 declared_virtual_uninitialized: the fixed component refuses rather than reading a zero: true
+fixed_component_fixed_read: inlined: true
+fixed_component_fixed_read: executed values are the reference: true
+fixed_component_fixed_read: the two placements agree: true
+fixed_component_partial_cover: inlined: true
+fixed_component_partial_cover: executed values are the reference: true
+fixed_component_partial_cover: the two placements agree: true
+fixed_component_cells: inlined: true
+fixed_component_cells: executed values are the reference: true
+fixed_component_cells: the two placements agree: true
+fixed_component_literal_table: rejected at consumption time as 13:call-site-index-mismatch: true
+fixed_component_literal_table: executed values are the reference: true
+fixed_component_literal_table: the two placements agree: true
+fixed_component_overlaps: inlined: true
+fixed_component_overlaps: executed values are the reference: true
+fixed_component_overlaps: the two placements agree: true
+fixed_component_rows_read0: inlined: true
+fixed_component_rows_read0: executed values are the reference: true
+fixed_component_rows_read0: the two placements agree: true
+fixed_component_rows_read1: inlined: true
+fixed_component_rows_read1: executed values are the reference: true
+fixed_component_rows_read1: the two placements agree: true
+fixed_component_disjoint_first: inlined: true
+fixed_component_disjoint_first: executed values are the reference: true
+fixed_component_disjoint_first: the two placements agree: true
+fixed_component_read_covered_only: rejected at consumption time as 13:call-site-index-mismatch: true
+fixed_component_read_covered_only: executed values are the reference: true
+fixed_component_read_covered_only: the two placements agree: true
+dvu_cells: inlined: true
+dvu_cells: executed values are the reference: true
+dvu_duplicate: refused as 13:call-site-index-mismatch: true
+dvu_dead_loop: refused as 13:call-site-index-mismatch: true
+dvu_diagonal: refused as 13:call-site-index-mismatch: true
+dvu_all_disjoint: refused as 13:call-site-index-mismatch: true
 block_components: inlined: true
 block_components: executed values are the reference: true
 block_components: the two placements agree: true
