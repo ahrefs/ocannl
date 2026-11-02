@@ -1005,8 +1005,14 @@ let claim_tile_mma_refused =
 let () =
   let n = 32 in
   let gv = Array.init n ~f:(fun k -> (Float.of_int (k % 9) *. 0.5) -. 2.) in
+  (* One forward computation per tensor: a tensor's forward code is consumed once, and both the
+     device run and the host query below read it. *)
+  let comps = Hashtbl.create (module Tn) in
+  let comp_of ~name t =
+    Hashtbl.find_or_add comps t.Tensor.value ~default:(fun () -> named name (Train.forward t))
+  in
   let run_values ~name ~transform t =
-    let comp = named name (Train.forward t) in
+    let comp = comp_of ~name t in
     let ctx = Context.auto () in
     let ctx, routine =
       Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
@@ -1024,7 +1030,29 @@ let () =
   (* A refusal is the typed [hardware_binding_race] cause, [Invalid_argument] at the compile
      boundary; the phrase is the rule's own statement of what went wrong. *)
   let refusal_phrase = "from more than one thread" in
+  (* gh-ocannl-1780: the same bodies, rendered for CUDA on this host
+     ([Ll_test.cuda_like_binding_race]), whatever the backend: the binding-race premise of the
+     device legs, which per-PR CI (cc) can otherwise not check -- no register binds a Workgroup loop
+     there. Each body is recorded with the device verdict its claim states, and judged at the end of
+     this block in two directions: a query that always refused would fail the rendering bodies, one
+     that never did the racing ones. A render failing for any other reason is recorded as
+     neither. *)
+  let host_refused = ref [] and host_renders = ref [] in
+  let host_query ~into ~name ~transform t =
+    let verdict =
+      match
+        Ll_test.cuda_like_binding_race ~name
+          (transform
+             (Context.lowered_for_decisions (Context.auto ()) (comp_of ~name t) Ir.Indexing.Empty))
+      with
+      | Some detail -> `Race detail
+      | None -> `Renders
+      | exception e -> `Failed (Exn.to_string e)
+    in
+    into := (name, verdict) :: !into
+  in
   let refused_leg ?(index = 0) claim ~name ~transform t ~cpu_value =
+    host_query ~into:host_refused ~name ~transform t;
     if on_gpu then
       match refused ~name ~transform t with
       | Some msg -> p claim (String.is_substring msg ~substring:refusal_phrase)
@@ -1033,6 +1061,7 @@ let () =
     else skipped claim
   in
   let renders_leg ?(index = 0) claim ~name ~transform t ~value =
+    host_query ~into:host_renders ~name ~transform t;
     if on_gpu || on_cpu then p claim (approx (run_values ~name ~transform t).(index) value)
     else skipped claim
   in
@@ -1108,6 +1137,7 @@ let () =
   if on_cpu then
     Stdio.eprintf "cc pool-parallel grid: %b (not part of the golden)\n%!"
       (Context.Cc_backend.pool_parallel_grid ());
+  host_query ~into:host_refused ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform pgs;
   if on_gpu || (on_cpu && Context.Cc_backend.pool_parallel_grid ()) then (
     (* The pool-launch work floor ([cc_grid_min_updates], gh-ocannl-1564) would keep this two-chunk
        launch serial, and then nothing binds the grid to judge: the leg pins the binding rule, so
@@ -1226,6 +1256,7 @@ let () =
     in
     { opt with workgroup_shared = Set.add opt.workgroup_shared tile }
   in
+  host_query ~into:host_renders ~name:"race_staged_wshfl" ~transform:staged_transform hs;
   if on_gpu then
     p claim_staged_form_renders
       (approx
@@ -1422,6 +1453,7 @@ let () =
     reduce_transform ~n vs.Tensor.value ~body_of:(fun i ->
         vec_store ~target:vs ~base:(L.aff [ (4, i) ] 0))
   in
+  host_query ~into:host_renders ~name:"race_vec_aligned_wshfl" ~transform:vec_aligned_transform vs;
   if on_gpu || on_cpu then
     let v = run_values ~name:"race_vec_aligned_wshfl" ~transform:vec_aligned_transform vs in
     p claim_vec_aligned_runs_render (in_unit v.(1) && Float.equal v.(1) v.(5))
@@ -1429,6 +1461,8 @@ let () =
   let vec_invariant_transform =
     reduce_transform ~n vs2.Tensor.value ~body_of:(fun _i -> vec_store ~target:vs2 ~base:f0)
   in
+  host_query ~into:host_refused ~name:"race_vec_invariant_wshfl" ~transform:vec_invariant_transform
+    vs2;
   if on_gpu then
     match refused ~name:"race_vec_invariant_wshfl" ~transform:vec_invariant_transform vs2 with
     | Some msg ->
@@ -1477,4 +1511,27 @@ let () =
     List.fold (List.init t ~f:Fn.id) ~init:0. ~f:(fun acc l -> acc +. (mav.(l) *. mbv.(l * t)))
   in
   refused_leg claim_tile_mma_refused ~name:"race_tile_mma_wshfl" ~transform:tile_mma_transform md
-    ~cpu_value:(Float.of_int n *. ab00)
+    ~cpu_value:(Float.of_int n *. ab00);
+  let judged ~want (name, verdict) =
+    let ok =
+      match (verdict, want) with
+      | `Race detail, `Race -> String.is_substring detail ~substring:refusal_phrase
+      | `Renders, `Renders -> true
+      | (`Race _ | `Renders | `Failed _), _ -> false
+    in
+    if not ok then
+      Stdio.eprintf "%s: rendered for CUDA on the host, %s (not part of the golden)\n%!" name
+        (match verdict with
+        | `Race _ -> "refused as a binding race"
+        | `Renders -> "renders"
+        | `Failed e -> "failed otherwise: " ^ e);
+    ok
+  in
+  p_all ~min:9
+    "structural: rendered for CUDA on this host, every body a binding-register leg refuses is \
+     refused as a binding race (gh-ocannl-1780)"
+    (List.rev !host_refused) ~f:(judged ~want:`Race);
+  p_all ~min:12
+    "structural control: rendered for CUDA on this host, every body a binding-register leg renders \
+     renders, no binding race"
+    (List.rev !host_renders) ~f:(judged ~want:`Renders)

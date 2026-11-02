@@ -1227,7 +1227,9 @@ files.
   forces placements at render. The backend-independent shadow of the fact, a hardware retype whose
   threads the affine queries prove share a written cell, is already `access_legality`'s
   `Op_illegal`; everything else it answers `Op_unknown`, compile and see. Pairing the rest needs a
-  backend binding descriptor in the oracle's signature.
+  backend binding descriptor in the oracle's signature. Without a device the full answer is
+  `C_syntax.Compile_driver.binding_race`, the render of one routine in a given dialect
+  (gh-ocannl-1780).
 - `Low_level.validate_parallel` (`Low_level.validate_parallel_classified`, the first check in
   `C_syntax.compile_proc`): render-only, because it is a fact about the finished schedule, not
   about one op. Its coverage rule (a materialized write sits under bound loops of every active

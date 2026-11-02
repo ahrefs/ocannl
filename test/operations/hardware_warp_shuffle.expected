@@ -66,3 +66,5 @@ a dynamic scatter whose static slots are lane-invariant (a[dyn 0, 0] = x[i, 0]) 
 a vector store whose base is a multiple of its length (s[4 i .. 4 i + 3] = uniform(bits)) writes aligned per-lane blocks: it renders, every lane's block holding the same draw, on every backend: true
 a vector store at a lane-invariant base (s[0 .. 3] = uniform(bits)) is every lane's store of the same four cells: refused where a lane index is bound (GPU) or the serial draw (CPU): true
 a Tile_mma under a bound Workgroup_reduce whose accumulator tile omits the reduce lane is judged through its fallback's stores and refused where the lane binds (GPU: every simdgroup would accumulate into the one tile) or accumulates once per serial iteration (CPU): true
+structural: rendered for CUDA on this host, every body a binding-register leg refuses is refused as a binding race (gh-ocannl-1780): true
+structural control: rendered for CUDA on this host, every body a binding-register leg renders renders, no binding race: true
