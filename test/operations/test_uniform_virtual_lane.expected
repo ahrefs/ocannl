@@ -9,3 +9,6 @@ uint32 n=5: 5 values, bitwise parity true | materialized: vec store true, lane f
 uint64 n=3: 3 values, bitwise parity true | materialized: vec store true, lane false | virtual: lane true, vec store false
 double n=3: 3 values, bitwise parity true | materialized: vec store true, lane false | virtual: lane true, vec store false
 fp8 n=17: 17 values, bitwise parity true | materialized: vec store true, lane false | virtual: lane true, vec store false
+half draw into single n=9: 9 values, bitwise parity true | materialized: vec store true, lane false | virtual: lane true, vec store false
+fp8 draw into single n=17: 17 values, bitwise parity true | materialized: vec store true, lane false | virtual: lane true, vec store false
+single draw into half n=9: 9 values, bitwise parity true | materialized: vec store true, lane false | virtual: lane true, vec store false

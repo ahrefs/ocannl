@@ -1045,6 +1045,19 @@ files.
   development selector `simplify_fp_algebra` (six arm families) is retired with no alias;
   `benchmarks/gh998_cells.py` ablates the three keys, and a result line records each under
   `fp_licences` with its source.
+- **A virtualized uniform keeps its own precision's scope wherever its reader's differs**
+  (gh-ocannl-1769). The lane-extract form sizes its lane index for the DRAW's precision (8 lanes per
+  block at f16), while a conversion renders at the precision of the store holding it, so
+  `simplify_llc`'s scope collapse (`rng_collapsible`, keyed on the store precision it threads as
+  `~render`) keeps an RNG-carrying scope of another precision. Collapsed, an f16 draw in an f32
+  master's initializer read lanes 4..7 of a 4-lane f32 block: undefined behavior that x86/gcc read
+  as zeros and `1.4e27` (an infinite loss from step 0) and arm64/clang as other, finite garbage, so
+  byte-identical C diverged by platform. `Precision_policy`'s walk reaches that draw because it
+  treats a parameter's initializer as an activation. `test_uniform_virtual_lane`'s `draw into` rows
+  pin the parity; diagnosis recipe: break on the kernel under gdb and read its argument buffers.
+  The collapse still drops a narrow NON-RNG scope's conversion, so a virtual cast twin reads its f32
+  master unrounded (`mixed_prec_twin_rounding`: `Twin_virtual` and `Twin_auto` give `1 + 2^-12`
+  where `Twin_materialized` gives `1`).
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
