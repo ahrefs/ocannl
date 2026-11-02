@@ -192,7 +192,11 @@ val sgd_update :
 (** Maps {!sgd_one} over the parameters [loss] trains ({!trainable_params}, or [?params]): a
     parameter frozen behind {!Operation.stop_gradient} takes no step — in particular no weight decay
     (gh-ocannl-673). A [~grad_spec:Require_grad] leaf (input optimization) takes a step only when
-    passed in [?params]; raises when the default set is empty, as for a loss with no parameters. *)
+    passed in [?params]; raises when the default set is empty, as for a loss with no parameters.
+    Such a leaf must be data-backed ([Operation.init ~grad_spec:Require_grad]): a stepped tensor
+    whose value [loss]'s forward code re-establishes with a fetch on every run -- a
+    [Tensor.term_init] or literal with at most [limit_constant_fill_size] values -- raises
+    [Session_error] naming it, since the next forward pass would undo each step (gh-ocannl-1776). *)
 
 val sequential_loop : f:(unit -> unit) -> (Ir.Indexing.static_symbol * int ref) list -> unit
 (** All and only bindings with associated ranges are iterated, with the binding's initial value

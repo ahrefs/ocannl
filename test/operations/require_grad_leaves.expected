@@ -17,3 +17,13 @@ the default reset zeroes x's gradient: true
 the default reset zeroes w's gradient: true
 cycle 2: x's gradient starts clean: true
 cycle 2: w's gradient starts clean: true
+=== 3. Fetch-defined leaf ===
+sgd_update ~params:{x} refuses the fetch-defined leaf: true
+the refusal names the leaf: true
+the refusal names Operation.init as the fix: true
+the refusal carries the leaf: true
+bypassed: step 1 moves x by lr * 2 w x: true
+bypassed: step 2 lands where step 1 did -- the forward re-fetched x: true
+the data-backed twin is accepted: true
+data-backed: step 1 moves x by lr * 2 w x: true
+data-backed: step 2 moves x by the gradient taken at the updated x: true

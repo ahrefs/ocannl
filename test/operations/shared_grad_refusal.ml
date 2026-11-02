@@ -51,11 +51,18 @@ let upload ctx x = Context.set_values ctx x.Tensor.value [| 1.; 2.; 3. |]
 let run_all ctx routines = List.fold routines ~init:ctx ~f:Context.run
 
 (* A fresh image and its two objectives, [content] constructed first: it carries [x]'s zeroing. *)
-let objectives prefix =
+let objectives ?(data_backed = false) prefix =
   let x =
-    Tensor.term_init [| 1.; 2.; 3. |]
-      ~label:[ prefix ^ "_x" ]
-      ~output_dims:[ 3 ] ~grad_spec:Require_grad ()
+    if data_backed then
+      (* An image the optimizer steps must be data-backed: [term_init]'s values are a fetch the
+         forward re-establishes every run, which [Train.sgd_update] refuses (gh-ocannl-1776). *)
+      Operation.init ~l:(prefix ^ "_x") ~prec:Ir.Ops.single ~o:[ 3 ]
+        ~f:(function [| i |] -> Float.of_int (i + 1) | _ -> assert false)
+        ~grad_spec:Require_grad ()
+    else
+      Tensor.term_init [| 1.; 2.; 3. |]
+        ~label:[ prefix ^ "_x" ]
+        ~output_dims:[ 3 ] ~grad_spec:Require_grad ()
   in
   let%op content = x *. x in
   let%op style = x *. 3. in
@@ -122,7 +129,7 @@ let () =
       p "content compiled after style is refused: it zeroes the gradient itself"
         (names_grad msg x && has msg "style" && has msg "content" && has msg "zeroes it itself"));
   case "shared input, one routine over the sum" (fun () ->
-      let x, content, style = objectives "sg_sum" in
+      let x, content, style = objectives ~data_backed:true "sg_sum" in
       let%op total = content + style in
       let ctx, update = compile (Context.auto ()) (Train.grad_update total) in
       let ctx = run_all ctx [ update; update ] in

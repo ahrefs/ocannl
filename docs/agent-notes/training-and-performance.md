@@ -27,7 +27,10 @@ files.
   carry observation intent like a parameter's. Optimizing an input therefore takes `?params` on the
   step and needs a DATA-BACKED leaf (`Operation.init`): a `term_init` below
   `limit_constant_fill_size` is a fetch op its forward code re-establishes every run, undoing the
-  step. Executed: `require_grad_leaves.ml`; the saliency host read, `observable_grads.ml` leg 4.
+  step. `sgd_update` refuses any stepped node a `Fetch` in the loss's forward writes, naming
+  `Operation.init` (gh-ocannl-1776); the per-tensor `sgd_one` sees no loss and does not check.
+  Executed: `require_grad_leaves.ml` (section 3 runs the trap through `sgd_one`); the saliency
+  host read, `observable_grads.ml` leg 4.
 - Training-loop utilities (gh-465, `lib/train.ml`): `Lr_schedule` (host floats; feed via
   `scheduled_learning_rate`'s data-backed `host_scalar` — a fetch-defined constant would be
   re-fetched each step, undoing `set_values`), `grad_l2_norm`/`clip_by_global_norm` +
