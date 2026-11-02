@@ -120,10 +120,12 @@ module Slab = struct
     Hashtbl.fold pools ~init:0 ~f:(fun ~key:(dev_id, _) ~data:(_, size) acc ->
         if dev_id = device.device_id then acc + size else acc)
 
-  let memset_zero (device : device) ~pool_id ~offset ~size_in_bytes =
-    let base = resolve_pool device { pool_id; offset } in
-    if size_in_bytes > 0 then
-      H.Stream.memset_d8 ~offset base Unsigned.UChar.zero ~length:size_in_bytes device.runner
+  let zero_ranges (device : device) ranges =
+    List.iter ranges ~f:(fun (loc, size_in_bytes) ->
+        let base = resolve_pool device loc in
+        if size_in_bytes > 0 then
+          H.Stream.memset_d8 ~offset:loc.offset base Unsigned.UChar.zero ~length:size_in_bytes
+            device.runner)
 end
 
 (* The HIP SDK include dir (no-spaces junction on Windows / HIP_PATH / /opt/rocm / /usr),

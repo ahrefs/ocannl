@@ -37,7 +37,7 @@ struct
 
   let free_pool = None
 
-  let memset_zero _device ~pool_id:_ ~offset:_ ~size_in_bytes:_ =
+  let zero_ranges _device _ranges =
     failwith @@ "Backend " ^ Config.name ^ " missing -- install the corresponding library"
 
   let make_device _dev _runner ~ordinal:_ =

@@ -4,11 +4,13 @@
    regardless of the tnode memory mode.
 
    It then drives data through a *multi-tenant* pool (two 4-element regions in one slab) end to end:
-   [from_host] in and [to_host] back out of the region at byte offset > 0, plus a [memset_zero] at
+   [from_host] in and [to_host] back out of the region at byte offset > 0, plus a [zero_ranges] at
    that same non-zero offset. This pins the offset-aware blit paths ([from_host]/[to_host] honoring
-   [buffer_loc.offset], [memset_zero] filling at [offset]) that pooling depends on: a path that
+   [buffer_loc.offset], [zero_ranges] filling at [offset]) that pooling depends on: a path that
    ignored the offset (the pre-pooling behavior) would read/write the wrong region and flip the
-   [true] verdicts below to [false]. *)
+   [true] verdicts below to [false]. The one [zero_ranges] call also fills a region of a second
+   pool, seeded non-zero like the first, so a batch that filled only some of its ranges -- they
+   share one command buffer since gh-ocannl-1675 -- reads back a seed. *)
 
 open Base
 module Tn = Ir.Tnode
@@ -59,7 +61,7 @@ let () =
   let loc_a = { BI.pool_id = pool; offset = 0 } in
   let loc_b = { BI.pool_id = pool; offset = region_bytes } in
 
-  (* memset_zero at the non-zero offset must not touch region A. Seed A with non-zero data first. *)
+  (* zero_ranges at the non-zero offset must not touch region A. Seed A with non-zero data first. *)
   let a_src = Nd.create_array ~debug:"a" prec ~dims ~padding:None in
   for i = 0 to 3 do
     Nd.set_from_float a_src [| i |] (Float.of_int (i + 1))
@@ -78,8 +80,18 @@ let () =
   Verdict.p_all "from_host/to_host at offset>0 preserves values" [ 0; 1; 2; 3 ] ~f:(fun i ->
       Float.equal (Nd.get_as_float b_dst [| i |]) (Float.of_int (10 + i)));
 
-  (* memset_zero region B at offset>0, then confirm B reads back zeros AND A is untouched. *)
-  B.memset_zero device ~pool_id:pool ~offset:region_bytes ~size_in_bytes:region_bytes;
+  (* A second pool's region C, seeded non-zero: filled in the same [zero_ranges] call as B. *)
+  let pool_c = fresh_pool ~mode:Tn.On_device ~size_in_bytes:region_bytes () in
+  let loc_c = { BI.pool_id = pool_c; offset = 0 } in
+  let c_src = Nd.create_array ~debug:"c" prec ~dims ~padding:None in
+  for i = 0 to 3 do
+    Nd.set_from_float c_src [| i |] (Float.of_int (20 + i))
+  done;
+  B.from_host ~dst:ctx ~dst_loc:loc_c c_src;
+
+  (* zero_ranges of region B at offset>0 and region C, then confirm both read back zeros AND A is
+     untouched. *)
+  B.zero_ranges device [ (loc_b, region_bytes); (loc_c, region_bytes) ];
   let b_after = Nd.create_array ~debug:"b_after" prec ~dims ~padding:None in
   for i = 0 to 3 do
     Nd.set_from_float b_after [| i |] 99.0
@@ -87,8 +99,15 @@ let () =
   B.to_host ~src:ctx ~src_loc:loc_b b_after;
   let a_check = Nd.create_array ~debug:"a_check" prec ~dims ~padding:None in
   B.to_host ~src:ctx ~src_loc:loc_a a_check;
+  let c_after = Nd.create_array ~debug:"c_after" prec ~dims ~padding:None in
+  for i = 0 to 3 do
+    Nd.set_from_float c_after [| i |] 99.0
+  done;
+  B.to_host ~src:ctx ~src_loc:loc_c c_after;
   B.await device;
-  Verdict.p_all "memset_zero at offset>0 reads back zeros" [ 0; 1; 2; 3 ] ~f:(fun i ->
+  Verdict.p_all "zero_ranges at offset>0 reads back zeros" [ 0; 1; 2; 3 ] ~f:(fun i ->
       Float.equal (Nd.get_as_float b_after [| i |]) 0.0);
+  Verdict.p_all "zero_ranges fills the second pool's range in the same call" [ 0; 1; 2; 3 ]
+    ~f:(fun i -> Float.equal (Nd.get_as_float c_after [| i |]) 0.0);
   Verdict.p_all "offset>0 ops leave region A (offset 0) intact" [ 0; 1; 2; 3 ] ~f:(fun i ->
       Float.equal (Nd.get_as_float a_check [| i |]) (Float.of_int (i + 1)))

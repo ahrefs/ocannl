@@ -673,6 +673,20 @@ files.
   0.50 s (0 kernels compiled). The tuned step was unchanged (64-66 ms). The base arm's library
   compiles may have been warmed by macOS's own Metal compiler cache; its link time is read from the
   trace as measured.
+- **What an all-hit Metal link still pays is key building, not pipelines** (gh-ocannl-1675). Read
+  it with `bench_gpt`'s `BENCH_RECOMPILE=K` (fresh all-hit compiles of the step, each census on
+  stderr) and `Compile_cost.link_delta_s` (the `allocate_delta` share of `link_s`, which every
+  backend pays); `sample` attributes OCaml frames poorly here (broken stacks, GC frames), so time
+  phases rather than trust its tree. On gpt2_mini_train b8's default step (179 kernels,
+  mac-studio, correctness-grade): link 0.117 s, of which the per-kernel `link_proc` work (pipeline
+  lookup, launch checks, slot-table buffer) was about 0.003 s, the zero fills 0.026 s, and
+  `key_text` about 0.089 s -- two thirds of it `prepend_builtins_to_text` scanning each kernel's
+  whole assembled source a second time for conditional includes. Two fixes: the prelude reads its
+  conditional includes off the joined scans of its parts (`Source_tokens.joined`, `scan_static`,
+  `mentions_indexed`; codegen on every backend got cheaper too), and `allocate_delta` hands all
+  of a delta's zero ranges to one `zero_ranges` call -- Metal's `memset_zero` waited a GPU round
+  trip (~0.5 ms) per node. Together: link 0.117 -> 0.080 s, delta 0.023 -> 0.013 s. The rest is
+  `canonical_kernel` (~0.025 s), paid at compile on the other backends.
 
 ## Host transfers and page-locked memory
 - **A pinned staging pool does not pay; page-locked host arrays do, on rog only** (gh-ocannl-170,

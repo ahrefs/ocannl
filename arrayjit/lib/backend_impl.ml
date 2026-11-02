@@ -184,9 +184,10 @@ module Make_slab (Device_types : Device_types) (Raw : No_device_buffer_and_copyi
                 Option.iter Raw.free_pool_raw ~f:(fun memfree -> memfree ptr));
             Hashtbl.remove pools key))
 
-  let memset_zero device ~pool_id ~offset ~size_in_bytes =
-    let ptr = with_pools (fun () -> Hashtbl.find_exn pools (device.device_id, pool_id)) in
-    Raw.memset_zero_raw ptr ~offset ~size_in_bytes
+  let zero_ranges device ranges =
+    List.iter ranges ~f:(fun ({ pool_id; offset }, size_in_bytes) ->
+        let ptr = with_pools (fun () -> Hashtbl.find_exn pools (device.device_id, pool_id)) in
+        Raw.memset_zero_raw ptr ~offset ~size_in_bytes)
 
   let resolve_pool device { pool_id; offset } =
     (* Pooled policy: many tnodes share a pool at distinct byte offsets. Resolve to the slab base
