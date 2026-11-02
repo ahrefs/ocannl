@@ -1464,6 +1464,30 @@ let f32_mma_limits =
         };
   }
 
+(** The CUDA dialect without a device: {!Ir.Cuda_like_config}'s CUDA syntax, with no builtins and no
+    extra identifier blacklist. It binds [blockIdx]/[threadIdx] registers and shuffles 32-lane
+    warps, which is what makes a hardware-binding question answerable on a host. *)
+module Cuda_like_syntax (Input : sig
+  val procs : LL.t array
+end) =
+  Ir.Cuda_like_config.Make
+    (struct
+      include Ir.Cuda_like_config.Cuda
+
+      let builtins = []
+      let extra_blacklist = []
+    end)
+    (Input)
+
+module Cuda_like_driver = Ir.C_syntax.Compile_driver (Cuda_like_syntax)
+
+(** [cuda_like_binding_race ~name o]: the binding-race refusal rendering [o] for CUDA raises
+    ({!Ir.C_syntax.Compile_driver.binding_race}), on any host -- the cc-runnable premise of a
+    GPU-gated binding-race claim (gh-ocannl-1780). [None] where the CUDA render succeeds; any other
+    refusal propagates. *)
+let cuda_like_binding_race ?(bindings = Idx.Empty) ~name (o : LL.optimized) =
+  Cuda_like_driver.binding_race ~name bindings o
+
 (** {1 Cross-reduction accumulator residency in emitted source}
 
     The persistent-fragment scopes a backend's fragment hook emits mark their reduction body with a

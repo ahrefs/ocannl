@@ -1207,6 +1207,15 @@ module Compile_driver
     (string * Backend_intf.kparam_source) list rendered
   (** Render a batch with one syntax instance over all of it, without compiling. *)
 
+  val binding_race : name:string -> 'a Indexing.bindings -> Low_level.optimized -> string option
+  (** [binding_race ~name bindings lowered]: the detail of the [hardware_binding_race] refusal
+      (gh-ocannl-959) that rendering [lowered] in this dialect raises, as {!compile} would render
+      it, or [None] where the render succeeds. Nothing is compiled and no text is returned. Any
+      other refusal or exception of the render propagates, so a premise judged through this query
+      cannot pass on an unrelated failure. The host-side seam of the GPU-gated binding-race premises
+      (gh-ocannl-1780): a dialect that binds hardware registers, such as {!Cuda_like_config},
+      answers the question on any host. *)
+
   val drive :
     batch:bool ->
     names:string array ->

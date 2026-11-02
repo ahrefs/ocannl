@@ -9589,6 +9589,28 @@ struct
             symbol. *)
   }
 
+  (* gh-ocannl-1780: the binding-race refusal of one routine, asked of the render [compile] would
+     run, with nothing compiled and no text kept. The refusal is raised twice over in rendering (at
+     the kernel's Grid/Workgroup bindings in [compile_proc_units], and at a [Workgroup_reduce] level
+     the warp shuffle declines, inside [pp_ll]), so the query is the render itself. *)
+  let binding_race ~name bindings lowered =
+    (* The check name [refuse_unseparated_thread_write] raises, spelled there as a literal because
+       [render_decline_inventory] keys the renderer's declines by it. A rename there lets the
+       refusal propagate from here, which [hardware_warp_shuffle]'s structural claims fail on. *)
+    let binding_race_check = "hardware_binding_race" in
+    let module Syntax = C_syntax (Config (struct
+      let procs = [| lowered.Low_level.llc |]
+    end))
+    in
+    let name = Syntax.kernel_ident name in
+    match
+      Syntax.compile_proc_units ~avoid:[ name ] ~name (Indexing.bound_symbols bindings) lowered
+    with
+    | _ -> None
+    | exception Schedule_outcome.Cause_at (_, Schedule_outcome.Illegal_schedule { check; detail })
+      when String.equal check binding_race_check ->
+        Some detail
+
   (** Renders a batch without compiling it: the kernels are rendered by one syntax instance over the
       whole batch, exactly as {!compile_batch} renders them, so a kernel's text is the same
       whichever subset of the batch is later assembled into a translation unit. *)

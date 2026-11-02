@@ -5261,10 +5261,13 @@ box.
   `C_syntax.codegen_capabilities` derives for a shuffle-capable dialect. Each leg is labelled
   `structural` and carries a control in the same leg (the host's backend, a threshold above the
   fixture, no matrix unit, the unfolded pipeline) under which the premise must be absent. What stays
-  GPU-only is what needs the device: emitted dialect text, execution, device numerics, timing,
-  driver refusals, and the renderer's binding-race check, whose thread and storage environment
-  is renderer state. The inventory and each skipped entry's reason are in the issue's closing
-  comment.
+  GPU-only is what needs the device: emitted dialect text, execution, device numerics, timing and
+  driver refusals. The renderer's binding-race check, whose thread and storage environment is
+  renderer state, is asked through the render itself: `C_syntax.Compile_driver.binding_race`
+  renders a routine in a dialect without compiling and answers the refusal's detail, and
+  `Ll_test.cuda_like_binding_race` asks it of `Cuda_like_config`'s CUDA syntax on any host
+  (gh-ocannl-1780; `hardware_warp_shuffle` judges every racing body and every rendering one).
+  The inventory and each skipped entry's reason are in gh-ocannl-1626's closing comment.
 
 - `refused_action_streams` (gh-ocannl-1005) holds accepted-failure Dune actions to the same
   stream contract as fresh-child controls: a run whose owning executable directly declares
