@@ -6137,6 +6137,20 @@
  (modules bridge_arm_coverage)
  (libraries base ocannl stdio unix arrayjit.verdict))
 
+; gh-ocannl-1630: the untuned CPU default's per-channel vector accumulators for direct convs,
+; bitwise against the scalar chain under two contraction modes, with reordering and contraction
+; controls on the fixtures, declines and a training step.
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu ().
+ (name cpu_channel_vectors)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cpu_channel_vectors)
+ (libraries base ocannl stdio unix arrayjit.verdict test_utils ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name cpu_simd_reduction)
  (package neural_nets_lib)

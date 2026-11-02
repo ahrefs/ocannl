@@ -1020,7 +1020,7 @@ let print_census ?promote_locals ~backend ~limits ~static_indices opt =
   in
   let gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend) in
   let promote_locals = Option.value promote_locals ~default:gpu in
-  let preset o = if gpu then Sched.default_gpu ~limits o else Sched.default_cpu o in
+  let preset o = if gpu then Sched.default_gpu ~limits o else Sched.cpu_preset o in
   let zero_sched tns = if gpu then Sched.zero_expansion ~limits tns else [] in
   (* The default pipeline's own merge rule (gh-ocannl-1126), or this reconstructs another one. *)
   let keep_mapping = Sched.fission_keep_mapping ~is_gpu:gpu ~limits in
@@ -1241,7 +1241,7 @@ let time_segments ?promote_locals ?calls ~backend ~limits ~static_indices ~ctx ~
   let module Sched = Ir.Schedule in
   let gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend) in
   let promote_locals = Option.value promote_locals ~default:gpu in
-  let preset o = if gpu then Sched.default_gpu ~limits o else Sched.default_cpu o in
+  let preset o = if gpu then Sched.default_gpu ~limits o else Sched.cpu_preset o in
   let zero_sched tns = if gpu then Sched.zero_expansion ~limits tns else [] in
   (* The default pipeline's own merge rule (gh-ocannl-1126), or this reconstructs another one. *)
   let keep_mapping = Sched.fission_keep_mapping ~is_gpu:gpu ~limits in

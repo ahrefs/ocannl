@@ -466,7 +466,10 @@ files.
   fewer multiplies, each about 4x cheaper, less the transforms. Standalone C on the s1c1 nest: `ic` innermost buys 8% (48 -> 45 ms); an
   `oc`-innermost vector accumulator 3x (16 ms) under the default contraction, but it loses under
   `cc_backend_fp_contract=off`, where the `[oc,kh,kw,ic]` layout makes its loads strided. The
-  existing cure is tuning (`cpu_conv_sketch_schedule`'s register tiles) or `winograd_conv`.
+  untuned default now takes that form with the kernel packed channel-minor, which wins under `off`
+  too (gh-ocannl-1630; `cpu_preset` in the scheduling note). On a diagnostic mac-studio probe
+  (serial, b64, conv-relu-conv forward) it ran 2.7-5x faster under both contraction modes, bitwise
+  equal.
 - **HIP in-step attribution: `BACKEND=hip gh1133_cells.sh ... kprof`** (gh-ocannl-1392) traces
   with `rocprofv3 --kernel-trace`, which sees the replayed hipGraph's nodes without a flag, and
   states each cell's memory model (unified on minix's gfx1151, discrete on tuf's gfx1102) from the

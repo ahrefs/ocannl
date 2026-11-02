@@ -1029,6 +1029,24 @@ val default_cpu : ?min_work:int -> Low_level.optimized -> schedule
     [cpu_schedule_min_work] = 16384; a non-positive value disables the gate (the tuner's ungated
     presets pass [~min_work:0]). *)
 
+val channel_vectors : base:schedule -> Low_level.optimized -> schedule
+(** Per-channel vector accumulators for direct conv nests (gh-ocannl-1630): per top-level statement
+    that is a perfect [Serial] accumulation nest of write loops then reduction loops, whose
+    destination's minor axis is the innermost write loop [oc], with one operand reading [oc] (and
+    otherwise only reduction loops, not written in the routine) and some operand reading a sliding
+    window, at single or double storage throughout: [Swap]s sinking [oc] below every reduction loop
+    (each cell keeps its terms in order), a packing [Stage] of the [oc] operand channel-minor at the
+    routine root (skipped when it is channel-minor already), a [Privatize] of the destination over
+    the outermost reduction loop at its storage precision, and [oc] retyped [Vectorized]. Bitwise
+    identical to the scalar-chain rendering. A site whose ops do not apply after [base] (on a
+    scratch copy of the store) is left out, and so is everything when the sites do not apply
+    together. *)
+
+val cpu_preset : ?min_work:int -> Low_level.optimized -> schedule
+(** The default CPU preset: {!default_cpu}, followed, under config [cpu_schedule_channel_vectors]
+    (default true), by {!channel_vectors} over it. What {!maybe_default_schedule} and
+    {!maybe_default_schedules} apply on CPU backends, and the tuner's segment presets. *)
+
 val log_launches : bool Lazy.t
 (** Config [schedule_log_launches]: backend [compile] logs one stderr line per compiled segment with
     its launch grid/block dims and statement count — for diffing what two compiles of nominally

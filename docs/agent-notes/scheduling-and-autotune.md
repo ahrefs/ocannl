@@ -113,6 +113,22 @@ files.
   ungated preset. `Cost_model.reuse_traffic` reads each iteration of a cc `Grid` loop as a resident
   GPU block, so a parallel default's modeled working set can pass a cache capacity its serial twin
   fits (`cost_model_selection`'s rank legs pin a serial default for that reason).
+- **The CPU default preset is `cpu_preset`, not `default_cpu`** (gh-ocannl-1630): under
+  `cpu_schedule_channel_vectors` (default true) it appends `channel_vectors`, which gives each
+  direct conv nest per-channel vector accumulators. The conv's IR is a PERFECT materialized nest
+  (`zero_out d; for w.., oc, r..: d += x * k`); the scalar `acc` seen in the C is
+  `try_localize_serial_reduce`'s localization, so `Swap`s do reach it. The chain: `Swap`s sinking
+  `oc` below the reduction loops (per-cell term order kept), a non-shared `Stage` of the kernel with
+  `tile_loops = [reduction loops; oc]` (tile axes follow `tile_loops`, so the pack is channel-minor;
+  no outer-part symbol, so it lands at the segment root, once per invocation), `Privatize d over r1`
+  at storage precision, and `Retype oc Vectorized` (explicit SIMD via `try_vectorize`, whose
+  `Add`/`Mul` keep the scalar chain's `acc + x * k` shape). Bitwise against the scalar chain under
+  every contraction mode (`cpu_channel_vectors`). Each site is trial-applied on a scratch store copy
+  (a `Stage` registers its tile) and dropped where it raises. `default_cpu` stays the bare Grid
+  annotator because `conv_aligned_grid` and many tests read its Retypes; callers rebuilding the
+  untuned pipeline (`Autotune.segment_preset`, `bench_harness`) use `cpu_preset`. Declined: narrow
+  storage, virtual (`Local_scope`-inlined) convs, depthwise (two operands read `oc`), a kernel
+  written in the routine, no sliding window (matmuls, 1x1 convs).
   `test/operations/cpu_fork_join_chains` (direct and pipeline legs, each against the serial
   compile), `cost_model_fork_join_updates`.
 - A parallel loop under a serial loop is reachable only past lane-uniform scalar work
