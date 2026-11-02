@@ -1846,9 +1846,9 @@ let position_searches = [ "substr_index"; "substr_index_exn"; "substr_index_all"
     {!position_searches} call whose [~pattern] is a literal carrying {!main_logic_banner} -- spelled
     at the call site, or reached through a [let] in scope, or the literal part of a concatenation or
     format -- or names the renderer's [main_logic_marker] value. A line-by-line test of the banner
-    ([String.is_substring line ~substring:"Main logic"], which [thread_private_gate] stops a
-    declarations section at) slices nothing and is not one. A pattern computed some other way is not
-    followed: the reading this tags is the one tests spelled, not every way to spell one. *)
+    ([String.is_substring line ~substring:"Main logic"], as a declarations section once stopped at)
+    slices nothing and is not one. A pattern computed some other way is not followed: the reading
+    this tags is the one tests spelled, not every way to spell one. *)
 let reads_after_marker scope e =
   let names_banner arg =
     (match pin_of_expr scope arg with

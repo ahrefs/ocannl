@@ -2539,6 +2539,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   since a one-statement kernel stays whole at any weight. And `codegen_text_inventory` refuses a
   `substr_index` on the banner (`Codegen_text_scan.reads_after_marker`), exempting by name only
   `cc_kernel_outline`'s negative control.
+- A test asserting on the ARRAYS a kernel declares reads them through `Generated.declared_arrays`
+  (gh-ocannl-1778), never by scanning lines after `/* Local declarations and initialization. */`:
+  each kernel's body ahead of its main logic, then the arrays its statements declare over
+  `main_logic_lines`, stack and heap forms, each with its scope. Outlining
+  splits them: the function-scope arrays stay in the kernel's frame (its parts take them as
+  pointer parameters), while a block-scope one -- a pool `Grid` chunk's privatized tile -- moves into
+  the part its loop went to (`Block_scope { part = Some _ }`). Two forced reruns pin the reading:
+  `thread_private_gate-outlined` (the function-scope count against the estimate) and
+  `heap_local_arrays-outlined`, whose Grid routines lead with a second statement so they outline
+  at all, and which claims each Grid tile was read from a part.
 - **Before changing code generation, read the inventory**: `dune build
   @test/operations/runtest-codegen_text_inventory` prints, as its golden, every file in the tree
   that pins the TEXT of emitted code (gh-ocannl-712). Two populations, and no single search finds
@@ -4029,25 +4039,6 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   box's row — from the first native boot on (gh-ocannl-1030). Only a selected remote unit is
   resolved, so a local-only run needs no table; the header's `destinations:` line names the boot
   each GPU lane addressed.
-  Each machine's units form a lane — sequential within the box, which shares one worktree, lock and
-  device, concurrent with the other boxes' lanes (gh-ocannl-976) — so wall-clock is the longest lane
-  (the local one, metal's suite), and the remote units start while the routine's freshly woken WSL
-  VMs are still up. The CPU pair is split across boxes on purpose: it takes a unit off that longest
-  lane, and runs a CPU backend's goldens under Linux as well as macOS every day. Rows reach the
-  history in completion order, each appended under a lock. multidev_cc needs no hardware
-  and is there anyway: it keeps its own `micrograd_demo_logging` debug-log golden, which
-  `dune runtest` diffs only under `OCANNL_BACKEND=multidev_cc` — a spelling neither test/config's
-  pinned `backend=cc` nor CI ever sets. gh-ocannl-700 is the cost of that gap: `eefa827e`
-  (gh-ocannl-461) reordered backprop fragments, re-promoted the cc golden, and left multidev's
-  stale and master red under that backend for six weeks. **A backend with its own goldens and no
-  leg here is a silent regression channel, hardware or not** — add the leg when you add the
-  goldens. That multidev_cc's leg lives here rather than in CI is a decision, recorded at the
-  runtest step in `ci.yml` (gh-ocannl-756): a second per-PR runtest leg would roughly double the
-  ubuntu job's ~28min test time, while the daily sweep gates the backend at a ~30-commit bisect
-  window without taxing any merge. The sweep records a row per unit in
-  `~/.ocannl-sweep/history.tsv` and never
-  exits non-zero for test failures — its exit code is not a verdict, the history file is. A daily
-  scheduled task drives it.
 - **hip runs twice, once on each side of the unified/discrete line** (gh-ocannl-1035): minix's
   gfx1151 is an iGPU whose device memory IS host memory, so a missing or misplaced host↔device
   transfer can read the right bytes there, and only tuf-amd-linux's discrete RX 7700S (gfx1102)

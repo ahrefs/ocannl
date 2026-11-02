@@ -37,6 +37,22 @@ module Generated = Test_utils.Generated
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let () = Generated.init ~backend_name
+
+(* gh-ocannl-1778: the [outlined] mode is this test run with every kernel forced outlined
+   ([cc_kernel_part_weight=1], [cc_compile_unit_min_bytes=0] on its rule), under the plain run's
+   golden: the declarations reading below must find the same arrays whether or not the kernel's
+   statements moved into parts. The mode claims the outlining itself, so a threshold change leaving
+   the kernel whole cannot turn the variant into a second copy of the plain run. *)
+let outlined =
+  match
+    List.filter
+      (List.tl_exn (Array.to_list Stdlib.Sys.argv))
+      ~f:(fun arg -> not (String.is_prefix arg ~prefix:"--"))
+  with
+  | [] -> false
+  | [ "outlined" ] -> true
+  | _ -> failwith "usage: thread_private_gate.exe [outlined] [--ocannl_<key>=<value>...]"
+
 let mk = node_factory ~first_id:13130 ~dims:[| 64 |] ()
 let never_virtual tn = Tn.update_memory_mode tn Tn.Never_virtual (Site "99:test-setup")
 
@@ -103,29 +119,11 @@ let accepts ~limits opt =
 
 let private_cap n = { BI.no_hardware_limits with max_thread_private_bytes = Some n }
 
-(* The arrays a generated kernel declares at function scope, as (count, bytes): the lines between
-   codegen's [Local declarations] and [Main logic] markers, each [<type> <ident>[<n>]]. Every node
-   here is single precision. *)
+(* The arrays a generated kernel declares, as (count, bytes), read by [Generated.declared_arrays]:
+   every scope, an outlined kernel's parts included. Every node here is single precision. *)
 let declared_arrays src =
-  let lines = String.split_lines src in
-  let rec after_marker = function
-    | [] -> []
-    | l :: rest ->
-        if String.is_substring l ~substring:"Local declarations and initialization" then rest
-        else after_marker rest
-  in
-  let section =
-    List.take_while (after_marker lines) ~f:(fun l ->
-        not (String.is_substring l ~substring:"Main logic"))
-  in
-  List.fold section ~init:(0, 0) ~f:(fun (count, bytes) l ->
-      match String.lsplit2 (String.strip l) ~on:'[' with
-      | Some (decl, rest) when String.contains decl ' ' -> (
-          match String.lsplit2 rest ~on:']' with
-          | Some (n, _) when (not (String.is_empty n)) && String.for_all n ~f:Char.is_digit ->
-              (count + 1, bytes + (4 * Int.of_string n))
-          | _ -> (count, bytes))
-      | _ -> (count, bytes))
+  let arrays = Generated.declared_arrays src in
+  (List.length arrays, List.sum (module Int) arrays ~f:(fun a -> 4 * a.Generated.elems))
 
 let () =
   let opt, declared, small, big, observed = kernel () in
@@ -192,7 +190,11 @@ let () =
   (* The relationship: what codegen actually declares. A real link settles the placements by the
      forcing family, so the arrays in the emitted source are its verdict, read beside the peek's. *)
   let _ctx, _routine = link ~name:"tpg_kernel" opt in
-  let count, bytes = declared_arrays (Generated.read "tpg_kernel") in
+  let source = Generated.read "tpg_kernel" in
+  let count, bytes = declared_arrays source in
+  if outlined then
+    Verdict.claim "the forced run rendered the kernel outlined"
+      (not (List.is_empty (Generated.outlined_parts source)));
   p "codegen: the declared arrays add up to the estimate" (bytes = estimate);
   p "codegen: one array per counted node" (count = 2);
   p "codegen: the forcing family settled the peek's two as Local and the other two On_device"

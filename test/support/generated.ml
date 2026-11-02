@@ -515,21 +515,9 @@ let part_bodies lines intervals =
                       ~data:(opening + 1, closing - 1))));
   parts
 
-(** [main_logic_lines source] is the 1-based numbers of the lines of a generated source that hold
-    its kernels' statements, in program order: each kernel's lines after its
-    {!Ir.C_syntax.main_logic_marker}, up to the closing brace of its definition -- with, where the
-    kernel was rendered OUTLINED (gh-ocannl-1603), each call to one of its parts replaced by that
-    part's body lines. So a reading of a kernel's statements does not depend on whether a size
-    threshold moved them into parts: the parts are found from what the renderer emitted -- the
-    definitions carrying {!Ir.Kernel_outline.part_attribute}, and the calls the main logic makes to
-    them -- not from how they are named. The kernel's signature, its local declarations and the
-    prepended builtins are none of these lines.
-
-    A source with no marker, a marker outside any definition, or a part definition no kernel's main
-    logic calls (a reading that would silently miss its statements) fails the run through
-    {!Verdict}. The empty source -- what {!read} answers after already failing -- reads as no lines.
-*)
-let main_logic_lines source =
+(* The 0-based numbers of the lines {!main_logic_lines} reads, each with the outlined part whose
+   body holds it ([None]: the kernel's own main logic). *)
+let statement_lines source =
   let lines = Array.of_list (String.split_lines source) in
   let intervals = brace_intervals lines in
   let parts = part_bodies lines intervals in
@@ -566,8 +554,8 @@ let main_logic_lines source =
                 with
                 | Some (f, (first, last)) ->
                     Hash_set.add reached f;
-                    List.range first (last + 1)
-                | None -> [ k ]))
+                    List.map (List.range first (last + 1)) ~f:(fun l -> (l, Some f))
+                | None -> [ (k, None) ]))
   in
   Hashtbl.iter_keys parts ~f:(fun f ->
       if not (Hash_set.mem reached f) then
@@ -576,7 +564,23 @@ let main_logic_lines source =
              "Generated.main_logic_lines: the outlined part %s is called from no kernel's main \
               logic, so a reading of the kernels' statements would miss its body"
              f));
-  List.map numbered ~f:(fun k -> k + 1)
+  numbered
+
+(** [main_logic_lines source] is the 1-based numbers of the lines of a generated source that hold
+    its kernels' statements, in program order: each kernel's lines after its
+    {!Ir.C_syntax.main_logic_marker}, up to the closing brace of its definition -- with, where the
+    kernel was rendered OUTLINED (gh-ocannl-1603), each call to one of its parts replaced by that
+    part's body lines. So a reading of a kernel's statements does not depend on whether a size
+    threshold moved them into parts: the parts are found from what the renderer emitted -- the
+    definitions carrying {!Ir.Kernel_outline.part_attribute}, and the calls the main logic makes to
+    them -- not from how they are named. The kernel's signature, its local declarations and the
+    prepended builtins are none of these lines.
+
+    A source with no marker, a marker outside any definition, or a part definition no kernel's main
+    logic calls (a reading that would silently miss its statements) fails the run through
+    {!Verdict}. The empty source -- what {!read} answers after already failing -- reads as no lines.
+*)
+let main_logic_lines source = List.map (statement_lines source) ~f:(fun (k, _part) -> k + 1)
 
 (** [main_logic source] is the text of {!main_logic_lines}: the kernels' statements, an outlined
     kernel's parts spliced in at their calls, one line per line. *)
@@ -592,3 +596,137 @@ let main_logic source =
 let outlined_parts source =
   let lines = Array.of_list (String.split_lines source) in
   Hashtbl.keys (part_bodies lines (brace_intervals lines)) |> List.sort ~compare:String.compare
+
+(** Where a {!declared_array} is declared. *)
+type declaration_scope =
+  | Function_scope
+      (** In a kernel's body ahead of its {!Ir.C_syntax.main_logic_marker}: its function-scope
+          declarations, which stay in the kernel's own frame when it is outlined -- its parts take
+          them as pointers. *)
+  | Block_scope of { part : string option }
+      (** Among its statements ({!main_logic_lines}) -- a pool-parallel [Grid] chunk's privatized
+          tile, say -- with the outlined part whose body holds it ([None]: the kernel's own main
+          logic). *)
+
+type declared_array = {
+  line : int;  (** 1-based; for a heap array, the line of its allocation. *)
+  typ : string;  (** The element type as spelled, qualifiers included ([__shared__ float]). *)
+  ident : string;  (** The identifier the declaration binds. *)
+  elems : int;
+  heap : bool;
+      (** Declared as a pointer into a heap allocation ([C_syntax.heap_local_lines], gh-ocannl-1669)
+          rather than as a stack array. *)
+  scope : declaration_scope;
+}
+
+let c_keywords = [ "return"; "else"; "case"; "goto"; "do"; "if"; "for"; "while"; "sizeof" ]
+
+let is_ident s =
+  (not (String.is_empty s)) && String.for_all s ~f:(fun c -> Char.is_alphanum c || Char.equal c '_')
+
+(* [<type words> <ident>[<n>]<attributes>< = {0}>;], the stack form of [C_syntax.local_array_decl]
+   and of a workgroup-shared tile; a leading [__attribute__((...))] is dropped. As [(typ, ident,
+   elems)]. *)
+let stack_array_decl line =
+  let line = String.strip line in
+  let line =
+    if String.is_prefix line ~prefix:"__attribute__((" then
+      match String.substr_index line ~pattern:")) " with
+      | Some i -> String.drop_prefix line (i + 3)
+      | None -> line
+    else line
+  in
+  match String.lsplit2 line ~on:'[' with
+  | None -> None
+  | Some (decl, rest) -> (
+      let words = String.split decl ~on:' ' |> List.filter ~f:(Fn.non String.is_empty) in
+      match (List.rev words, String.lsplit2 rest ~on:']') with
+      | ident :: (_ :: _ as typ_rev), Some (n, after)
+        when List.for_all words ~f:is_ident
+             && (not (List.mem c_keywords (List.last_exn typ_rev) ~equal:String.equal))
+             && (not (String.is_empty n))
+             && String.for_all n ~f:Char.is_digit
+             && String.is_suffix after ~suffix:";"
+             && (String.equal after ";"
+                || String.is_prefix after ~prefix:" __attribute__"
+                || String.is_prefix after ~prefix:" = {0}") ->
+          Some (String.concat ~sep:" " (List.rev typ_rev), ident, Int.of_string n)
+      | _ -> None)
+
+(* The heap form ([C_syntax.heap_local_lines]): the [<typ> * const <ident> = ...] line naming the
+   node, whose allocation -- [void * const <raw> = malloc((size_t)<n> * sizeof(<typ>) ...] or
+   [calloc(1, ...)], [<raw>] the renderer's derivation of [<ident>] -- is among [scope_lines]. As
+   [(alloc_line, typ, ident, elems)]. *)
+let heap_array_decl ~lines ~scope_lines line =
+  let line = String.strip line in
+  match String.substr_index line ~pattern:" * const " with
+  | None -> None
+  | Some i -> (
+      let typ = String.prefix line i in
+      let rest = String.drop_prefix line (i + String.length " * const ") in
+      match String.lsplit2 rest ~on:' ' with
+      | Some (ident, init)
+        when is_ident ident && String.is_prefix init ~prefix:("= (" ^ typ ^ " *)(((uintptr_t)") ->
+          let raw = Ir.C_syntax.derived_name Ir.C_syntax.heap_local_derivation ident in
+          let alloc = "void * const " ^ raw ^ " = " in
+          let size = "(size_t)" in
+          List.find_map scope_lines ~f:(fun k ->
+              let l = String.strip lines.(k) in
+              if String.is_prefix l ~prefix:alloc then
+                match String.substr_index l ~pattern:size with
+                | None -> None
+                | Some j -> (
+                    let after = String.drop_prefix l (j + String.length size) in
+                    match String.lsplit2 after ~on:' ' with
+                    | Some (n, tail)
+                      when String.for_all n ~f:Char.is_digit
+                           && (not (String.is_empty n))
+                           && String.is_prefix tail ~prefix:("* sizeof(" ^ typ ^ ")") ->
+                        Some (k, typ, ident, Int.of_string n)
+                    | _ -> None)
+              else None)
+      | _ -> None)
+
+(** [declared_arrays source] is every array a generated source's kernels declare: first every
+    kernel's function-scope arrays -- its body ahead of its {!Ir.C_syntax.main_logic_marker} -- then
+    the arrays its statements declare, read over {!main_logic_lines}, each group in program order.
+    So an OUTLINED kernel's block-scope arrays (a pool-parallel [Grid] chunk's privatized tiles,
+    which move into a part with their loop) are read from its parts' bodies, and its function-scope
+    ones from the kernel, where outlining leaves them (gh-ocannl-1778). Both the stack form and the
+    heap form (gh-ocannl-1669) are read; a [const] pointer alias of a stack array is not a second
+    array. The sources {!main_logic_lines} refuses fail the run through {!Verdict} here too. *)
+let declared_arrays source =
+  let lines = Array.of_list (String.split_lines source) in
+  let intervals = brace_intervals lines in
+  let in_scope ~scope scope_lines =
+    List.filter_map scope_lines ~f:(fun k ->
+        match stack_array_decl lines.(k) with
+        | Some (typ, ident, elems) -> Some { line = k + 1; typ; ident; elems; heap = false; scope }
+        | None ->
+            Option.map
+              (heap_array_decl ~lines ~scope_lines lines.(k))
+              ~f:(fun (alloc, typ, ident, elems) ->
+                { line = alloc + 1; typ; ident; elems; heap = true; scope }))
+  in
+  let function_scope =
+    Array.to_list lines
+    |> List.filter_mapi ~f:(fun i line ->
+        Option.some_if (String.is_substring line ~substring:Ir.C_syntax.main_logic_marker) i)
+    |> List.concat_map ~f:(fun marker ->
+        let enclosing =
+          List.filter intervals ~f:(fun (opening, closing) -> opening < marker && marker < closing)
+          |> List.min_elt ~compare:(fun (o1, c1) (o2, c2) -> Int.compare (c1 - o1) (c2 - o2))
+        in
+        match enclosing with
+        | Some (opening, _) -> in_scope ~scope:Function_scope (List.range (opening + 1) marker)
+        (* A marker in no definition is [statement_lines]' failure, reported there. *)
+        | None -> [])
+  in
+  let block_scope =
+    List.group (statement_lines source) ~break:(fun (_, p1) (_, p2) ->
+        not (Option.equal String.equal p1 p2))
+    |> List.concat_map ~f:(fun group ->
+        let part = snd (List.hd_exn group) in
+        in_scope ~scope:(Block_scope { part }) (List.map group ~f:fst))
+  in
+  function_scope @ block_scope
