@@ -7,11 +7,11 @@
    the accumulation); split i and j of the accumulation by 8 into Grid x Workgroup, split k by 8
    into Serial x Serial; then [Stage ma [i_i; k_i] ~shared] and [Stage mb [k_i; j_i] ~shared]. Stage
    inserts cooperative loads (reusing the Workgroup axis of each tile, iterating the serial k_i
-   under a fresh symbol, restricting the redundant workgroup axis to thread 0) and barriers inside
-   k_o; the 8x8 tiles become [threadgroup] / [__shared__] declarations via
-   [optimized.workgroup_shared]. Tile sizes divide the extents, so Split's remainder guards and
-   Stage's edge guards all fold away -- required: surviving whole-body guards would place the
-   barriers under divergent control flow ([validate_parallel] rejects).
+   under a fresh symbol, partitioned across the workgroup axis the tile does not use,
+   gh-ocannl-1661) and barriers inside k_o; the 8x8 tiles become [threadgroup] / [__shared__]
+   declarations via [optimized.workgroup_shared]. Tile sizes divide the extents, so Split's
+   remainder guards and Stage's edge guards all fold away -- required: surviving whole-body guards
+   would place the barriers under divergent control flow ([validate_parallel] rejects).
 
    On GPU backends (Metal locally, CUDA in CI) the kernel executes with a 4x4 grid of 8x8 workgroups
    and must match the serial twin. The C backends cannot express shared placement; they must reject
@@ -62,8 +62,6 @@ let bm, bn, bk = (8, 8, 8)
    -- the shared tiles, the barriers, which guards survive and where -- is the scheduled IR, which
    [Sched.apply] builds on the host: each schedule is applied here to the lowering this host
    captures ([Ll_test.captured_lowering]), and the IR is read. *)
-let under_workgroup axes = List.exists axes ~f:(LL.equal_axis_type LL.Workgroup)
-
 let () =
   let mav =
     Array.init (n * n) ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:13 ~offset:0. ~stride:0.25)
@@ -168,10 +166,11 @@ let () =
         && has "__syncthreads()"
     in
     (* All tile sizes divide the extents: Split remainder guards and Stage/Privatize edge guards
-       fold; the only Ifs left are the two thread-0 load restrictions. The k loop accumulates into
-       the privatized scalar [acc_mc1] instead of round-tripping mc1 through global memory. *)
+       fold, and each copy is partitioned across its unused workgroup axis, so no If is left. The k
+       loop accumulates into the privatized scalar [acc_mc1] instead of round-tripping mc1 through
+       global memory. *)
     p "shared tiles, barriers, no edge guards (GPU) or rejected (CPU)"
-      (shared_ok && count_sub "if (" = 2 && has "acc_mc1"))
+      (shared_ok && count_sub "if (" = 0 && has "acc_mc1"))
   else (
     (match
        try
@@ -193,17 +192,17 @@ let () =
    p "structural: the SMEM schedule places two tiles in workgroup-shared memory"
      (Set.length post.LL.workgroup_shared = 2);
    p "structural: it inserts barriers" (barriers > 0);
-   p
-     "structural: no edge guard survives: exactly the two load restrictions, each under a \
-      Workgroup loop"
-     (List.length guards = 2 && List.for_all guards ~f:under_workgroup));
+   let stores = Ll_test.tile_store_partitions ~tiles:post.LL.workgroup_shared post.LL.llc in
+   p_empty "structural: no guard survives over the tile copies" ~over:stores guards;
+   p_all "structural: every tile store is partitioned across both Workgroup loops" stores
+     ~f:(fun (n_wg, partitioned) -> n_wg = 2 && partitioned));
 
   (* --- Broadcast-vector staging (PR #90 review regression): a shared Stage with no anchor — the
      source access has no outer-part symbols and no reused workgroup axis. The load nest must NOT go
      to the routine top level (every hardware thread executes top-level statements, and no workgroup
-     index symbol is bound there to restrict the writers): Stage wraps the outermost tile loop
-     instead, where the enclosing Workgroup axis guards the cooperative load down to one
-     representative thread. --- *)
+     index symbol is bound there to partition the writers): Stage wraps the outermost tile loop
+     instead, where the enclosing Workgroup axis partitions the cooperative load across its threads
+     (gh-ocannl-1661; before, it restricted the load to one representative thread). --- *)
   let a2v =
     Array.init (n * 32) ~f:(Ll_test.cycle_flat ~dims:[| n; 32 |] ~modulus:19 ~offset:0. ~stride:0.5)
   in
@@ -254,11 +253,11 @@ let () =
     let count_sub sub =
       String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
     in
-    (* One shared tile; the single If is the thread-0 restriction of the cooperative load — its
-       presence is exactly what the review fix guarantees (previously the load sat unguarded at
-       routine top level). *)
-    p "broadcast load is thread-0 guarded under the workgroup axis"
-      (count_sub "if (" = 1
+    (* One shared tile, and no If: the cooperative load is partitioned across the workgroup axis
+       (the structural claims below pin that it sits under it, which is what the review fix
+       guarantees -- previously the load sat at routine top level). *)
+    p "broadcast load is partitioned under the workgroup axis"
+      (count_sub "if (" = 0
       &&
       (* This is intentionally dialect identity: the assertion counts the literal shared-memory
          declaration token emitted by each language. *)
@@ -280,12 +279,15 @@ let () =
         p "broadcast staging values correct (GPU) or clean rejection (CPU)"
           (String.is_substring msg ~substring:"not supported")
     | None -> p "broadcast staging values correct (GPU) or clean rejection (CPU)" false);
-    skipped "broadcast load is thread-0 guarded under the workgroup axis");
-  (* The review regression this section pins put the load at the routine's top level, unguarded: no
-     guard at all, or one enclosed by no Workgroup loop, fails here. *)
+    skipped "broadcast load is partitioned under the workgroup axis");
+  (* The review regression this section pins put the load at the routine's top level, under no
+     Workgroup loop and indexed by none: a store outside the axis, or one every thread of it
+     repeats, fails here. *)
   let post = bcast_transform (Ll_test.captured_lowering ~name:"bcast_capture" bcast_comp) in
   let guards, _ = Ll_test.guards_and_barriers post.LL.llc in
   p "structural: the broadcast schedule places one tile in workgroup-shared memory"
     (Set.length post.LL.workgroup_shared = 1);
-  p "structural: the broadcast load is guarded once, under the Workgroup axis"
-    (match guards with [ axes ] -> under_workgroup axes | _ -> false)
+  let stores = Ll_test.tile_store_partitions ~tiles:post.LL.workgroup_shared post.LL.llc in
+  p_empty "structural: the broadcast load is not guarded" ~over:stores guards;
+  p_all "structural: the broadcast load is partitioned across the Workgroup axis" stores
+    ~f:(fun (n_wg, partitioned) -> n_wg = 1 && partitioned)

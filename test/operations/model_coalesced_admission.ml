@@ -12,10 +12,18 @@
    Here, at that outproj site (b8), lowered on the CPU and scheduled hermetically under a
    minix-shaped stand-in record (nothing compiles, so the claims run on every backend):
    [model_ranks_coalesced] holds exactly where both the transaction rate and the workgroup capacity
-   resolve; [model_family_search] with [~coalesced:true] returns a coal-k leaf that strictly beats
-   every leaf of the uncoalesced walk, which [~coalesced:false] returns. (Without the capacity the
-   menu's best would be a 256-deep tile measured 3.6x slower, ahead by a sub-1% op count: hence the
-   gate.) Ranks go to stderr: device constants' quotients. *)
+   resolve; [model_family_search] with [~coalesced:true] never returns a leaf ranked above the
+   uncoalesced walk's pick, which [~coalesced:false] returns. (Without the capacity the menu's best
+   would be a 256-deep tile measured 3.6x slower, ahead by a sub-1% op count: hence the gate.)
+
+   Since gh-ocannl-1661 partitions a staged copy across the block's threads, the leaves near this
+   site's argmin score within 0.1% of each other, and the uncoalesced pick holds by that margin: the
+   score has no term that prices a staged k-step, which is what made the deep-K leaves measure
+   slower before that change (one row of threads copied each tile) and faster after it. So the
+   walk's admission is pinned under a stand-in score that does prefer deep staged tiles -- the real
+   score divided by one plus the staged cells per thousand: there a coal-k leaf must strictly beat
+   the uncoalesced walk's pick, which only a walk that searches the coalesced menu finds. Ranks go
+   to stderr: device constants' quotients. *)
 
 open Base
 open Ocannl
@@ -72,8 +80,20 @@ let () =
     Context.lowered_for_decisions ~name:"mca_outproj" ctx (Train.forward d) Ir.Indexing.Empty
   in
   let capabilities = BI.no_codegen_capabilities in
-  let search ~limits ~coalesced =
-    let score segs = Option.map (Autotune.ranking_ms ~capabilities ~limits segs) ~f:fst in
+  let ranked ~limits segs = Option.map (Autotune.ranking_ms ~capabilities ~limits segs) ~f:fst in
+  (* The deep-K stand-in: the score divided by one plus the routine's staged cells per thousand. *)
+  let deep_k ~limits segs =
+    let staged =
+      List.sum
+        (module Int)
+        segs
+        ~f:(fun (o : LL.optimized) ->
+          Set.sum (module Int) o.LL.workgroup_shared ~f:Ir.Tnode.num_elems)
+    in
+    Option.map (ranked ~limits segs) ~f:(fun r -> r /. (1. +. (Float.of_int staged /. 1000.)))
+  in
+  let search ?(score = ranked) ~limits ~coalesced () =
+    let score = score ~limits in
     match
       Autotune.model_family_search ~coalesced ~capabilities ~is_gpu:true ~is_cpu:false ~limits
         ~static_indices:[] ~peak_flops:limits.peak_flops
@@ -112,11 +132,16 @@ let () =
       in
       Stdio.eprintf "model_coalesced_admission: %s rank %s (not part of the golden)\n"
         (Autotune.sketch_params_label p) rank);
-  let plain = search ~limits:minix_like ~coalesced:false in
-  let with_coal = search ~limits:minix_like ~coalesced:true in
+  let plain = search ~limits:minix_like ~coalesced:false () in
+  let with_coal = search ~limits:minix_like ~coalesced:true () in
   p "the uncoalesced walk returns an uncoalesced leaf"
     (Option.exists plain ~f:(fun (p, _) -> Option.is_none p.Autotune.sk_coalesce));
-  p "with the coalesced menu, a coal-k leaf strictly beats the uncoalesced walk's pick"
+  p "with the coalesced menu, the pick ranks no higher than the uncoalesced walk's"
+    (match (plain, with_coal) with Some (_, r0), Some (_, r1) -> Float.(r1 <= r0) | _ -> false);
+  let plain = search ~score:deep_k ~limits:minix_like ~coalesced:false () in
+  let with_coal = search ~score:deep_k ~limits:minix_like ~coalesced:true () in
+  p "under the deep-K stand-in, a coal-k leaf strictly beats the uncoalesced walk's pick"
     (match (plain, with_coal) with
-    | Some (_, r0), Some (p, r1) -> is_coal_k p && Float.(r1 < r0)
+    | Some (p0, r0), Some (p, r1) ->
+        Option.is_none p0.Autotune.sk_coalesce && is_coal_k p && Float.(r1 < r0)
     | _ -> false)

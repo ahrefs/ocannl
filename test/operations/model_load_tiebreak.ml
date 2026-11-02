@@ -515,15 +515,19 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
       | Some (_, _, a), Some (_, _, b) -> Float.equal a b
       | _ -> false));
   (* Without a device-gather rate the argmin at this site is an unstaged leaf, which has no twin
-     (with one, {!gather_claims}). Restricted to the staged leaves — the others left unscored, which
-     the walk never crowns — the argmin is a tied twin pair, and the loads decide it: the swizzled
-     twin under CUDA's rule, the first-listed plain twin under a rule without ldmatrix. *)
+     (with one, {!gather_claims}). Restricted to the staged tensorized leaves — the others left
+     unscored, which the walk never crowns; the staged blocktile leaves have no twin, and since
+     their copies are partitioned across the block (gh-ocannl-1661) they score below the twins — the
+     argmin is a tied twin pair, and the loads decide it: the swizzled twin under CUDA's rule, the
+     first-listed plain twin under a rule without ldmatrix. *)
   let staged_pick rule =
     if not evaluated then None
     else
       let staged segs =
-        if List.for_all segs ~f:(fun (o : LL.optimized) -> Set.is_empty o.LL.workgroup_shared) then
-          None
+        if
+          List.for_all segs ~f:(fun (o : LL.optimized) ->
+              Set.is_empty o.LL.workgroup_shared || Set.is_empty o.LL.simdgroup_fragments)
+        then None
         else score limits segs
       in
       match
@@ -536,9 +540,10 @@ let site_claims ~tag ~(limits : BI.hardware_limits) ~(capabilities : BI.codegen_
       | Some (None, _, _) | None -> None
   in
   let swizzled (p : Autotune.sketch_params) = Option.is_some p.Autotune.sk_swizzle in
-  claim "among the staged leaves, under CUDA's rule the family search picks a swizzled twin"
+  claim
+    "among the staged tensorized leaves, under CUDA's rule the family search picks a swizzled twin"
     (lazy (Option.exists (staged_pick rule) ~f:swizzled));
-  claim "among the staged leaves, without ldmatrix it keeps the first-listed plain twin"
+  claim "among the staged tensorized leaves, without ldmatrix it keeps the first-listed plain twin"
     (lazy (Option.exists (staged_pick no_ldmatrix) ~f:(fun p -> not (swizzled p))))
 
 (* gh-ocannl-1495: the gh-ocannl-1190 clause. With a device-gather rate the score sees what staging

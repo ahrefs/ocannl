@@ -3,8 +3,10 @@ SMEM matmul parity (GPU) or clean rejection (CPU): true
 shared tiles, barriers, no edge guards (GPU) or rejected (CPU): true
 structural: the SMEM schedule places two tiles in workgroup-shared memory: true
 structural: it inserts barriers: true
-structural: no edge guard survives: exactly the two load restrictions, each under a Workgroup loop: true
+structural: no guard survives over the tile copies: true
+structural: every tile store is partitioned across both Workgroup loops: true
 broadcast staging values correct (GPU) or clean rejection (CPU): true
-broadcast load is thread-0 guarded under the workgroup axis: true
+broadcast load is partitioned under the workgroup axis: true
 structural: the broadcast schedule places one tile in workgroup-shared memory: true
-structural: the broadcast load is guarded once, under the Workgroup axis: true
+structural: the broadcast load is not guarded: true
+structural: the broadcast load is partitioned across the Workgroup axis: true

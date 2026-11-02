@@ -969,6 +969,14 @@ files.
   deep-K 256×256×2048 = 0.92 with all 9 replicates in 0.906–0.946 against ≤4.4% arm spread — the
   overlap genuinely pays where the k_o loop dominates, reversing the portable form's Metal
   ~1.4–1.5× cost and HIP's null.
+- A staged copy is partitioned across the workgroup axis its tile does not use (gh-ocannl-1661,
+  `Schedule.apply_stage`; `stage_copy_partition` pins divide, drop and the restrict fallback).
+  Before, one row of threads (`threadIdx.y == 0`) copied the whole tile serially, and nvcc unrolls
+  a copy of 128 loads per lane only partly (about 8 in flight), so the deep-K blocktile leaves
+  measured 1.2-2.9x slower at equal transactions, legs and occupancy; the cost model, charging
+  guards as taken, never saw it. Partitioned, the deep-K `coal-k` leaves are the FASTEST at
+  rog's outproj b8 (0.0215 ms against 0.0474 for the old crown), and the score, with no term for
+  a staged k-step, ranks the leaves near the argmin within 0.1%.
 ## Renderer failures and fault injection
 - A schedule can pass `Schedule.apply`'s validation and still be one the RENDERER cannot express:
   the pipelined-tile checks in `c_syntax.ml` (a read reached outside its rotor loop; a rotor loop no

@@ -8,8 +8,9 @@
 
    Kernel geometry: 64x64 times 64x64, BM = BN = 16, BK = 8, TM = TN = 4 -- a 4x4 grid of 4x4
    workgroups, each thread computing a 4x4 register tile of outputs; the unrolled body carries TM *
-   TN = 16 fma statements. All tile sizes divide the extents so every constructed guard folds; the
-   only surviving Ifs are the two thread-0 load restrictions.
+   TN = 16 fma statements. All tile sizes divide the extents so every constructed guard folds, and
+   each copy is partitioned across the workgroup axis its tile does not use (gh-ocannl-1661), so no
+   If survives.
 
    On the C backends shared placement is rejected cleanly (as in schedule_smem_matmul). *)
 
@@ -152,15 +153,16 @@ let () =
     let count_sub sub =
       String.substr_index_all src ~may_overlap:false ~pattern:sub |> List.length
     in
-    (* TM * TN accumulation statements from the materialized unrolls, two shared tiles, and only the
-       two thread-0 load guards survive. An update is the plain [acc + a * b] -- contraction is a
-       licence, off by default (gh-ocannl-998) -- or, with [fp_contract] on, an FMA: Metal spells it
-       [fma(], CUDA and HIP [fmaf(]. The three patterns are disjoint, so the counts add. *)
+    (* TM * TN accumulation statements from the materialized unrolls, two shared tiles, and no guard
+       survives: each copy is partitioned across its tile's unused workgroup axis. An update is the
+       plain [acc + a * b] -- contraction is a licence, off by default (gh-ocannl-998) -- or, with
+       [fp_contract] on, an FMA: Metal spells it [fma(], CUDA and HIP [fmaf(]. The three patterns
+       are disjoint, so the counts add. *)
     p "unrolled register tile structure (GPU) or rejected (CPU)"
       (count_sub ("(" ^ Generated.node_ident ~facts "acc_mc1" ^ "[")
        + count_sub "fma(" + count_sub "fmaf("
        = tm * tn
-      && count_sub "if (" = 2
+      && count_sub "if (" = 0
       && String.is_substring src ~substring:"acc_mc1"
       &&
       (* This is intentionally dialect identity: the assertion counts the language's literal
@@ -188,8 +190,8 @@ let () =
      claim above that reads the emitted kernel is skipped there. What it pins up to the dialect's
      spelling is the scheduled IR, which [Sched.apply] builds on the host: the schedule is applied
      here to the lowering this host captures, and the IR is read -- TM * TN accumulation statements
-     reading both operand tiles, two shared tiles, and only the two load restrictions, each under a
-     Workgroup loop. *)
+     reading both operand tiles, two shared tiles, no guard, and every tile store under both
+     Workgroup loops and indexed by both: each thread copies cells of its own (gh-ocannl-1661). *)
   let post = transform (Ll_test.captured_lowering ~name:"mmr_capture" reg_comp) in
   let guards, _ = Ll_test.guards_and_barriers post.LL.llc in
   let tiles = post.LL.workgroup_shared in
@@ -202,6 +204,7 @@ let () =
     | _ -> ());
   p "structural: the unrolled register tile carries TM * TN accumulations over the two shared tiles"
     (Set.length tiles = 2 && !accumulations = tm * tn);
-  p "structural: only the two load restrictions survive, each under a Workgroup loop"
-    (List.length guards = 2
-    && List.for_all guards ~f:(List.exists ~f:(LL.equal_axis_type LL.Workgroup)))
+  let stores = Ll_test.tile_store_partitions ~tiles post.LL.llc in
+  p_empty "structural: no guard survives over the tile copies" ~over:stores guards;
+  p_all "structural: every tile store is partitioned across both Workgroup loops" stores
+    ~f:(fun (n_wg, partitioned) -> n_wg = 2 && partitioned)

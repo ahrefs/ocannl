@@ -5,4 +5,5 @@ not without the launch fill's multiprocessor count, which the occupancy factor r
 not without the device residency: true
 not without a lane width: true
 the uncoalesced walk returns an uncoalesced leaf: true
-with the coalesced menu, a coal-k leaf strictly beats the uncoalesced walk's pick: true
+with the coalesced menu, the pick ranks no higher than the uncoalesced walk's: true
+under the deep-K stand-in, a coal-k leaf strictly beats the uncoalesced walk's pick: true

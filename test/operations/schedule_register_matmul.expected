@@ -2,4 +2,5 @@ the prefill of the accumulator differs from the serial twin's result in every ce
 register-tiled matmul parity (GPU) or clean rejection (CPU): true
 unrolled register tile structure (GPU) or rejected (CPU): true
 structural: the unrolled register tile carries TM * TN accumulations over the two shared tiles: true
-structural: only the two load restrictions survive, each under a Workgroup loop: true
+structural: no guard survives over the tile copies: true
+structural: every tile store is partitioned across both Workgroup loops: true

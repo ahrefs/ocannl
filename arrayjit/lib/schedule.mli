@@ -133,32 +133,35 @@ type optop =
           constructed then folded — in [Where] form storing 0 (the add-reduce accumulation identity)
           to out-of-range slots, so edge tiles of a non-dividing or padded staging are safe to read
           over their whole index space; every minted tile is recorded in
-          {!Low_level.optimized.zero_fringe} accordingly (gh-ocannl-485) — and redundant loading
-          along non-participating workgroup axes is restricted to one representative thread. Shared
-          stages sharing an anchor compose into ONE phase per iteration of it: a later stage's load
-          nest is grouped in front of the phase barrier the earlier one left, back to back with its
-          loads (gh-ocannl-567 — the loads write distinct tiles and depend on nothing of each
-          other's, so a barrier between them would only serialize two independent copies), and the
-          phase closer is shared rather than duplicated. Grouping requires that the phase already in
-          place read nothing this stage's remap turns into a read of its tile. A shared stage with
-          no anchor (no outer-part symbol, no reused workgroup axis — e.g. staging a broadcast
-          vector) wraps the outermost tile loop instead of the routine root, so enclosing workgroup
-          axes can guard the loads; every workgroup slot active in the kernel's launch must be
-          reused or bound by a loop enclosing the staging point, otherwise threads differing in the
-          uncovered slot would race on the shared tile and the op raises. A [Local_scope] body (the
-          accumulator scope a materializing [Unroll] or [Partition] mints) is hoisted out of its
-          position and may hold neither loads nor barriers (gh-ocannl-1467), so the staging point
-          never lies inside one (gh-ocannl-1534): an anchor bound inside a scope body is refused,
-          naming the anchor and the scope -- the tile holds the cells of one anchor value, so ahead
-          of the scope its loads could not see the anchor, and the tile is sized by [tile_loops]
-          alone, never grown to the scope's footprint behind the caller's back (adding the
-          scope-bound loops of the staged index to [tile_loops] is that larger stage); an unanchored
-          shared stage whose outermost tile loop is bound inside a scope body wraps the statement
-          holding the scope instead of that loop. Note that [Split]'s whole-body remainder guards
-          would place the inserted barriers under divergent control flow (rejected by
-          [validate_parallel]), so v1 shared staging requires tile sizes dividing the extents. With
-          [shared = false] (CPU operand packing) all tile loops must be [Serial] and a plain serial
-          copy nest is inserted, no barriers. The source must not be written in the routine.
+          {!Low_level.optimized.zero_fringe} accordingly (gh-ocannl-485) — and each in-scope
+          workgroup axis the tile does not use is folded into a serial copy loop of its own
+          (gh-ocannl-1661): over [e / w] steps of [w * s + t] where its extent [w] divides the
+          loop's [e], else replacing a loop with [e <= w] under [t < e]; only an axis no remaining
+          loop admits restricts the copy to one representative thread ([t == 0]). Shared stages
+          sharing an anchor compose into ONE phase per iteration of it: a later stage's load nest is
+          grouped in front of the phase barrier the earlier one left, back to back with its loads
+          (gh-ocannl-567 — the loads write distinct tiles and depend on nothing of each other's, so
+          a barrier between them would only serialize two independent copies), and the phase closer
+          is shared rather than duplicated. Grouping requires that the phase already in place read
+          nothing this stage's remap turns into a read of its tile. A shared stage with no anchor
+          (no outer-part symbol, no reused workgroup axis — e.g. staging a broadcast vector) wraps
+          the outermost tile loop instead of the routine root, so enclosing workgroup axes can guard
+          the loads; every workgroup slot active in the kernel's launch must be reused or bound by a
+          loop enclosing the staging point, otherwise threads differing in the uncovered slot would
+          race on the shared tile and the op raises. A [Local_scope] body (the accumulator scope a
+          materializing [Unroll] or [Partition] mints) is hoisted out of its position and may hold
+          neither loads nor barriers (gh-ocannl-1467), so the staging point never lies inside one
+          (gh-ocannl-1534): an anchor bound inside a scope body is refused, naming the anchor and
+          the scope -- the tile holds the cells of one anchor value, so ahead of the scope its loads
+          could not see the anchor, and the tile is sized by [tile_loops] alone, never grown to the
+          scope's footprint behind the caller's back (adding the scope-bound loops of the staged
+          index to [tile_loops] is that larger stage); an unanchored shared stage whose outermost
+          tile loop is bound inside a scope body wraps the statement holding the scope instead of
+          that loop. Note that [Split]'s whole-body remainder guards would place the inserted
+          barriers under divergent control flow (rejected by [validate_parallel]), so v1 shared
+          staging requires tile sizes dividing the extents. With [shared = false] (CPU operand
+          packing) all tile loops must be [Serial] and a plain serial copy nest is inserted, no
+          barriers. The source must not be written in the routine.
 
           [cooperative = Some w] is the lane-aware mode for composing with {!constructor-Tensorize}
           (docs/proposals/tensorize-mma.md, "Lane-aware Stage"): shared staging with all-[Serial]
