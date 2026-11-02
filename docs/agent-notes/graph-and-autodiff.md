@@ -64,6 +64,17 @@ files.
   update) accumulates into a gradient it neither zeroes nor embeds, so no routine allocates it: the
   LINK fails before this check sees anything, and `Context.lacks_node_error` names the missing reset
   and `zero_params_grads` (`lacks_grad_reset_hint.ml`).
+- Past the link, a gradient a routine accumulates into without zeroing is a RUN-history question
+  (gh-ocannl-1781): the ledger's `accumulated` counts, per gradient buffer and per routine, the runs
+  since the buffer's last reset (a run of a routine whose `zeroes` holds it, or
+  `record_external_writes`, zero or not), and `run` refuses the run past the comp's
+  `accumulation_runs` (default 1; `grad_update ~accum_steps:k` states k), naming any lineage zeroer
+  that did not run. A static "no zeroer in the lineage" rule would miss the usual bug (a reset
+  compiled and skipped) and refuse a `set_values` reset. Per routine, so `Z; A1; A2` cycles stay
+  legal; the autotuner's `time_routine` passes `run ~timing:true` (its repeats count, are not
+  refused), and its gh-1621 state restore puts back the history saved with the snapshot
+  (`save_accumulation_history`), since restoring uploads are no reset; a hand-written `%cd` zeroing
+  is no reset (`never_zeroed_grad.ml`).
 - Within ONE comp, `owned` is a set, so a fragment carried twice merged unseen while `asgns` ran
   it twice: `Asgns.sequence` refuses members sharing a fragment, naming it (gh-ocannl-1746,
   `fragment_sequenced_twice.ml`). A comp built past `sequence` (a hand-made `Seq`) owes the same

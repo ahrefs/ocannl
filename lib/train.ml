@@ -208,21 +208,37 @@ let grad_update ?(setup_for_parallel = false) ?accum_steps ?accum_loss ?loss_sca
   in
   let inv_accum = 1. /. Float.of_int (Option.value accum_steps ~default:1) in
   (* Note: the %cd syntax for [loss.grad] does not modify roots. *)
-  [%cd
-    ~~(loss "forward and gradient update";
-       (* In the accumulating branch, referencing [loss] embeds its forward code (the single
-          consumption of it), so the one statement computes the loss and accumulates it. *)
-       (match accum_loss with
-       | Some acc -> acc =+ loss
-       | None -> loss.forward);
-       ~~(loss "zero grads and backprop";
-          zero_grads;
-          (match (loss_scale, accum_steps) with
-          | Some scale, None -> loss.grad =: scale
-          | Some scale, Some _ -> loss.grad =: scale * !.inv_accum ~logic:"."
-          | None, Some _ -> loss.grad =: !.inv_accum
-          | None, None -> loss.grad =: 1);
-          loss.backprop))]
+  let comp =
+    [%cd
+      ~~(loss "forward and gradient update";
+         (* In the accumulating branch, referencing [loss] embeds its forward code (the single
+            consumption of it), so the one statement computes the loss and accumulates it. *)
+         (match accum_loss with
+         | Some acc -> acc =+ loss
+         | None -> loss.forward);
+         ~~(loss "zero grads and backprop";
+            zero_grads;
+            (match (loss_scale, accum_steps) with
+            | Some scale, None -> loss.grad =: scale
+            | Some scale, Some _ -> loss.grad =: scale * !.inv_accum ~logic:"."
+            | None, Some _ -> loss.grad =: !.inv_accum
+            | None, None -> loss.grad =: 1);
+            loss.backprop))]
+  in
+  match accum_steps with
+  | None -> comp
+  | Some k ->
+      (* gh-ocannl-1781: the explicit opt-in -- every gradient this micro-step accumulates into
+         without zeroing (the stripped leaves, and a shared leaf another loss carries the zeroing
+         of) may take [k] runs per reset. *)
+      {
+        comp with
+        accumulation_runs =
+          Set.fold
+            (Set.diff comp.Asgns.accumulates comp.Asgns.zeroes)
+            ~init:(Map.empty (module Tn))
+            ~f:(fun runs g -> Map.set runs ~key:g ~data:k);
+      }
 
 let zero_params_grads ?params loss =
   let one_param p =

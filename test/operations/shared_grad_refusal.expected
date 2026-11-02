@@ -17,7 +17,8 @@ one input-optimization step: x - 0.5 (2x + 3): true
 a reset compiled before both, carried by neither: true
 reset, content, style: x.grad = 2x + 3: true
 a second cycle: the same: true
-a cycle without the reset carries over (the control): true
+a cycle without the reset is refused at its first contribution: true
+the refusal dispatched nothing: true
 a zeroing compiled after the first accumulation is no common reset: true
 two accumulations with no reset at all are refused: true
 a reset compiled in a sibling does not count: true

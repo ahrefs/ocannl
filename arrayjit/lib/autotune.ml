@@ -2302,8 +2302,11 @@ let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failu
   let started = Mtime_clock.counter () in
   let saved_bindings = List.map routine.Context.bindings ~f:(fun (_ss, r) -> (r, !r)) in
   let run ctx =
-    if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ctx routine)
-    else Context.run ctx routine
+    (* [~timing]: a gradient the routine accumulates into without zeroing is not refused for the
+       repeats (gh-ocannl-1781); the search restores the lineage around its windows
+       (gh-ocannl-1621). *)
+    if tag_failures then Outcome.tag Outcome.Launch (fun () -> Context.run ~timing:true ctx routine)
+    else Context.run ~timing:true ctx routine
   in
   let sync ctx =
     if tag_failures then Outcome.tag Outcome.Sync (fun () -> Context.sync ctx) else Context.sync ctx
@@ -8304,18 +8307,23 @@ let tune_in_stream_scope ~timing_state ~defer ~substituted ?name ?search ?beam_w
     let timing_snapshot =
       lazy
         (let snapshot = snapshot_timing_state search_ctx base_opt in
+         (* gh-ocannl-1781: a restore is not a reset -- the gradients get back the values they held
+            before the search, and with them the accumulation history they had then, which the
+            restoring uploads clear and the timing runs extend. *)
+         let restore_history = Context.save_accumulation_history search_ctx in
          logf
            "timing state: %d written node(s) of the search lineage, %d bytes, restored before each \
             timing window"
            (List.length snapshot)
            (List.sum (module Int) snapshot ~f:(fun (_, nd) -> Ir.Ndarray.size_in_bytes nd));
-         snapshot)
+         (snapshot, restore_history))
     in
     let timing_state_dirty = ref false in
     let restore_timing_snapshot () =
-      let snapshot = Lazy.force timing_snapshot in
+      let snapshot, restore_history = Lazy.force timing_snapshot in
       if !timing_state_dirty then (
         restore_timing_state search_ctx snapshot;
+        restore_history ();
         timing_state_dirty := false)
     in
     (* Called right before every [time_routine] of the search, after the lineage-wide preflight (so

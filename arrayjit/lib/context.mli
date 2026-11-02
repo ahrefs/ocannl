@@ -328,7 +328,7 @@ val decision_surface :
     specialization replay. Used by [Train.tune_placements]' flip refinement to read the decision
     surface. *)
 
-val run : t -> routine -> t
+val run : ?timing:bool -> t -> routine -> t
 (** Execute a compiled routine. Mutates buffers in-place. Returns updated context with newly
     initialized nodes tracked. Raises [Failure] if execution dependencies are not satisfied, and
     {!Ir.Utils.User_error} if [t] was {!release}d (or a lifecycle ancestor of it was), or the
@@ -366,17 +366,37 @@ val run : t -> routine -> t
     the moment this returns, without syncing, on every backend. That is what makes the bind/run/
     rebind loop — {!Train.sequential_loop}, and every training loop — mean the same thing under an
     asynchronous scheduler as under a synchronous one. Execution itself may still be asynchronous;
-    {!sync}, or a host read, is what waits for it. *)
+    {!sync}, or a host read, is what waits for it.
+
+    Last, a gradient that accumulates across runs with no reset (gh-ocannl-1781). A routine whose
+    computation accumulates into a gradient's context buffer without zeroing it
+    ({!Ir.Assignments.field-accumulates} but not {!Ir.Assignments.field-zeroes}) is refused, with
+    {!Ir.Utils.User_error} naming the gradient and any routine of the lineage that zeroes it, once
+    it has run as many times as the computation's {!Ir.Assignments.field-accumulation_runs} allows
+    (one by default) since the buffer's last reset: a run of a routine zeroing it, or a write from
+    outside a run ({!from_host}, {!set_values}, {!copy}) -- zero or not, a deliberate value. Each
+    further run would add another step's gradient to the sum of the previous ones. Counted per
+    routine and per concrete buffer, so routines contributing once each per reset stay legal; the
+    opt-in for deliberate accumulation over [k] micro-steps is [Train.grad_update ~accum_steps:k].
+    [~timing:true] (the autotuner's repeated timing dispatches) waives the refusal; its runs still
+    count. *)
+
+val save_accumulation_history : t -> unit -> unit
+(** [save_accumulation_history ctx] captures the gradient-accumulation history {!run} keeps for
+    [ctx]'s lineage (gh-ocannl-1781), and returns the function setting it back. For a caller that
+    restores buffers it saved itself -- the autotuner's timing-state restore (gh-ocannl-1621) -- so
+    that the restoring uploads, and the runs they undo, are not taken for a reset. *)
 
 val check_runnable : t -> routine -> unit
 (** {!run}'s pre-dispatch validation on its own — poisoned lineage, uninitialized inputs,
-    unsatisfied execution dependencies, out-of-range bindings — raising exactly what [run] would.
-    All of it precedes the dispatch, so a failure here proves nothing was executed and no device
-    buffer was written. That is the point (gh-ocannl-550): a caller running a routine inside a
-    launch-tagged failure boundary validates through this rather than letting an unattributable
-    failure at [Launch] condemn the lineage for a mistake nothing had yet acted on (gh-ocannl-564).
-    Equivalent to {!check_lineage_runnable} followed by {!check_launch_bindings}; a caller that must
-    treat the two halves differently calls them directly. *)
+    unsatisfied execution dependencies, out-of-range bindings — raising exactly what [run] would,
+    short of its gradient-reset refusal (gh-ocannl-1781), which depends on the run history. All of
+    it precedes the dispatch, so a failure here proves nothing was executed and no device buffer was
+    written. That is the point (gh-ocannl-550): a caller running a routine inside a launch-tagged
+    failure boundary validates through this rather than letting an unattributable failure at
+    [Launch] condemn the lineage for a mistake nothing had yet acted on (gh-ocannl-564). Equivalent
+    to {!check_lineage_runnable} followed by {!check_launch_bindings}; a caller that must treat the
+    two halves differently calls them directly. *)
 
 val check_lineage_runnable : t -> routine -> unit
 (** The lineage-wide half of {!check_runnable}: poisoned lineage, uninitialized inputs, unsatisfied

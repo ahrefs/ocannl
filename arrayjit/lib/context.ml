@@ -132,9 +132,35 @@ type execution_ledger = {
           (gh-ocannl-1724). Diagnostic only: it lets a requirement refusal name an owner compiled in
           a sibling lineage. Ownership itself is the frontier's [owners] -- a sibling never
           satisfies a requirement. *)
+  grad_buffers : grad_buffers Hashtbl.M(Int).t;
+      (** Per routine id, the gradient buffers its computation resets and the ones it accumulates
+          into without resetting (gh-ocannl-1781), resolved at link -- buffer keys and names, so the
+          ledger keeps no node alive. Absent for a routine with neither. *)
+  mutable accumulated : int Map.M(Int).t Map.M(Buffer_key).t;
+      (** For each gradient buffer, the runs since its last reset of each routine that accumulates
+          into it without zeroing it, by routine id (gh-ocannl-1781). A run of a routine zeroing the
+          gradient, and a write from outside a run ([record_external_writes]), reset it. Keyed by
+          the concrete buffer, like [written_buffers]: a sibling's buffer for the same node is
+          another history. Counted per routine, so two routines contributing once each per reset
+          (gh-ocannl-1744's common reset) stay legal. *)
+  accumulation_undo : accumulation_undo list Hashtbl.M(Int).t;
+      (** Per routine id, the [accumulated] entries the routine's latest {!run} changed — what
+          [rollback_execution] restores, unless something changed them since. *)
 }
 (** Shared mutable state for execution tracking, allocated once per root context. Shared by
     reference across all contexts derived from the same root. *)
+
+(* gh-ocannl-1781: a gradient a routine accumulates into without zeroing it, as the ledger records
+   it at link: its buffer, its node's uid (for the lineage's [grad_roles]) and name, and the runs
+   one reset of it spans ([Asgns.field-accumulation_runs], one by default). *)
+and unreset_accumulation = { ua_key : Buffer_key.t; ua_uid : int; ua_name : string; ua_runs : int }
+and grad_buffers = { gb_resets : Buffer_key.t list; gb_accumulates : unreset_accumulation list }
+
+and accumulation_undo = {
+  au_key : Buffer_key.t;
+  au_before : int Map.M(Int).t option;
+  au_after : int Map.M(Int).t option;
+}
 
 (* gh-ocannl-1623: write tokens for the buffers independently created roots SHARE. A node every
    routine of a compile only reads (and that is not [context_owned]) is laid out in its device's
@@ -218,6 +244,9 @@ let create_ledger () =
     observed_tokens = Map.empty (module Buffer_key);
     token_undo = Hashtbl.create (module Int);
     fragment_registry = Map.empty (module Fragment_key);
+    grad_buffers = Hashtbl.create (module Int);
+    accumulated = Map.empty (module Buffer_key);
+    accumulation_undo = Hashtbl.create (module Int);
   }
 
 type t = {
@@ -598,6 +627,24 @@ let finish_link ctx comp wrapped
   (* Register in shared ledger *)
   Hashtbl.set ctx.ledger.routine_names ~key:id ~data:name;
   let updated_ctx = derive ~frontier:new_frontier ctx wrapped in
+  (* gh-ocannl-1781: the gradient buffers this routine resets and accumulates into without zeroing
+     -- the ones its context holds; a gradient left [Local] or virtual lives within one run. *)
+  (let key tn = buffer_key updated_ctx tn in
+   let gb_resets = List.filter_map (Set.to_list comp.Asgns.zeroes) ~f:key in
+   let gb_accumulates =
+     Set.to_list (Set.diff comp.Asgns.accumulates comp.Asgns.zeroes)
+     |> List.filter_map ~f:(fun tn ->
+         Option.map (key tn) ~f:(fun ua_key ->
+             {
+               ua_key;
+               ua_uid = tn.Tn.uid;
+               ua_name = Tn.debug_name tn;
+               ua_runs =
+                 Option.value (Map.find comp.Asgns.accumulation_runs tn) ~default:1 |> Int.max 1;
+             }))
+   in
+   if not (List.is_empty gb_resets && List.is_empty gb_accumulates) then
+     Hashtbl.set ctx.ledger.grad_buffers ~key:id ~data:{ gb_resets; gb_accumulates });
   Option.iter merge_buffer_input ~f:(fun _ ->
       let _, transfer_id = Option.value_exn ~here:[%here] frontier.merge_buffer_writer in
       Hashtbl.update ctx.ledger.merge_buffer_readers transfer_id ~f:(fun readers ->
@@ -1040,7 +1087,15 @@ let rollback_execution ctx routine_id =
   Option.iter (Hashtbl.find_and_remove ctx.ledger.fresh_writes routine_id) ~f:(fun keys ->
       ctx.ledger.written_buffers <- List.fold keys ~init:ctx.ledger.written_buffers ~f:Set.remove);
   Option.iter (Hashtbl.find_and_remove ctx.ledger.token_undo routine_id) ~f:(fun undos ->
-      List.iter undos ~f:(undo_write_token ctx.ledger))
+      List.iter undos ~f:(undo_write_token ctx.ledger));
+  (* gh-ocannl-1781: the accumulation counts and resets this run recorded, each only while its entry
+     is still the one the run left -- a later reset or run is not undone with it. *)
+  Option.iter (Hashtbl.find_and_remove ctx.ledger.accumulation_undo routine_id) ~f:(fun undos ->
+      List.iter undos ~f:(fun { au_key; au_before; au_after } ->
+          if Option.equal (Map.equal Int.equal) (Map.find ctx.ledger.accumulated au_key) au_after
+          then
+            ctx.ledger.accumulated <-
+              Map.change ctx.ledger.accumulated au_key ~f:(fun _ -> au_before)))
 
 let poison_lineage ctx ~routine_name exn =
   if Option.is_none ctx.ledger.poisoned then ctx.ledger.poisoned <- Some (routine_name, exn)
@@ -1180,11 +1235,88 @@ let check_runnable ctx routine =
   check_lineage_runnable ctx routine;
   check_launch_bindings routine
 
-let run ctx routine =
+(* gh-ocannl-1781: a routine accumulating into a gradient without zeroing it must not run once more
+   than its declared span (one, unless [Train.grad_update ~accum_steps:k] states [k]) since the
+   gradient's buffer was last reset: each further run adds another step's gradient to the sum of the
+   previous ones, the classic silent divergence. Counted per routine, so routines contributing once
+   each per reset (gh-ocannl-1744's common reset) stay legal. Read-only: [run] records. *)
+let check_accumulation_resets ctx routine gb =
+  let runs_since_reset ua =
+    Option.bind (Map.find ctx.ledger.accumulated ua.ua_key) ~f:(fun counts ->
+        Map.find counts routine.routine_id)
+    |> Option.value ~default:0
+  in
+  let exhausted =
+    List.filter_map gb.gb_accumulates ~f:(fun ua ->
+        let runs = runs_since_reset ua in
+        Option.some_if (runs >= ua.ua_runs) (ua, runs))
+  in
+  if not (List.is_empty exhausted) then
+    let frontier = lineage_frontier ctx routine in
+    let describe (ua, runs) =
+      let zeroers =
+        Map.find_multi frontier.grad_roles ua.ua_uid
+        |> List.filter ~f:(fun r -> r.gr_zeroes)
+        |> List.rev
+        |> List.map ~f:(fun r -> Printf.sprintf "%s (id=%d)" r.gr_name r.gr_id)
+      in
+      Printf.sprintf "%s (%d run(s) of this routine since its last reset, %d allowed; %s)"
+        ua.ua_name runs ua.ua_runs
+        (match zeroers with
+        | [] ->
+            "no routine of this lineage zeroes it -- compile a zeroing of it in this lineage \
+             (Train.zero_params_grads ~params for a parameter's or a Require_grad leaf's) and run \
+             it before each step, or reset it with Context.set_values"
+        | zs ->
+            "routine " ^ String.concat ~sep:", " zs
+            ^ " of this lineage zeroes it, and has not run since -- run it before each step")
+    in
+    raise
+    @@ Utils.User_error
+         (Printf.sprintf
+            "Context.run: routine %s (id=%d) accumulates into gradients without zeroing them, and \
+             has already done so as many times as it may since their last reset (gh-ocannl-1781): \
+             %s. Running it again would add this step's gradient to the sum of the previous ones. \
+             A gradient is reset by a run of a routine zeroing it, or by a write from outside a \
+             run (Context.set_values, Context.from_host, Context.copy). To accumulate deliberately \
+             over k micro-steps per reset, build the update with Train.grad_update ~accum_steps:k, \
+             which allows k runs between resets."
+            routine.name routine.routine_id
+            (String.concat ~sep:"; " (List.map exhausted ~f:describe)))
+
+let save_accumulation_history ctx =
+  let ledger = ctx.ledger in
+  let saved = ledger.accumulated in
+  fun () -> ledger.accumulated <- saved
+
+(* [run]'s record of a routine's resets and accumulations, with the undo [rollback_execution]
+   applies. *)
+let record_accumulations ledger routine_id gb =
+  let undo = ref [] in
+  let set au_key au_after =
+    let au_before = Map.find ledger.accumulated au_key in
+    undo := { au_key; au_before; au_after } :: !undo;
+    ledger.accumulated <- Map.change ledger.accumulated au_key ~f:(fun _ -> au_after)
+  in
+  List.iter gb.gb_resets ~f:(fun key -> if Map.mem ledger.accumulated key then set key None);
+  List.iter gb.gb_accumulates ~f:(fun ua ->
+      let counts =
+        Option.value (Map.find ledger.accumulated ua.ua_key) ~default:(Map.empty (module Int))
+      in
+      set ua.ua_key
+        (Some (Map.update counts routine_id ~f:(fun n -> 1 + Option.value n ~default:0))));
+  Hashtbl.set ledger.accumulation_undo ~key:routine_id ~data:!undo
+
+let run ?(timing = false) ctx routine =
   check_runnable ctx routine;
+  let grad_buffers = Hashtbl.find routine.context.ledger.grad_buffers routine.routine_id in
+  (* The autotuner's timing loop dispatches one routine repeatedly by design (and restores the
+     lineage's state around its windows, gh-ocannl-1621): its runs count, but are not refused. *)
+  if not timing then Option.iter grad_buffers ~f:(check_accumulation_resets ctx routine);
 
   (* Run the routine's task/schedule *)
   Ir.Task.run routine.task;
+  Option.iter grad_buffers ~f:(record_accumulations ctx.ledger routine.routine_id);
 
   (* Mark executed in shared ledger *)
   ctx.ledger.executed <- Set.add ctx.ledger.executed routine.routine_id;
@@ -1264,6 +1396,9 @@ let record_external_writes ctx nodes =
   Set.iter nodes ~f:(fun tn ->
       Option.iter (buffer_key ctx tn) ~f:(fun key ->
           ctx.ledger.current_writers <- Map.remove ctx.ledger.current_writers key;
+          (* gh-ocannl-1781: a deliberate new value -- a reset of a gradient's accumulation, zero or
+             not (nothing reads it to check). *)
+          ctx.ledger.accumulated <- Map.remove ctx.ledger.accumulated key;
           ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key);
       Option.iter (shared_constant_key ctx tn) ~f:(fun key ->
           ignore (mint_write_token ctx.ledger key : token_undo)));
@@ -1654,6 +1789,7 @@ let retire_written ledger ~device_id retired =
   in
   if not (List.is_empty retired) then (
     ledger.written_buffers <- Set.filter ledger.written_buffers ~f:(fun key -> not (gone key));
+    ledger.accumulated <- Map.filter_keys ledger.accumulated ~f:(fun key -> not (gone key));
     Hashtbl.map_inplace ledger.fresh_writes ~f:(List.filter ~f:(fun key -> not (gone key))))
 
 let release ctx =

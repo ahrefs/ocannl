@@ -38,7 +38,8 @@ files.
   can be recomputed on the host from the buffers to cross-check), `grad_update ~accum_steps` +
   `zero_params_grads` (leaf-gradient zeroing is filtered OUT of the micro-step's `zero_grads` tree
   by matching the leaves' grad `Fetch`es; intermediate grads must keep their per-micro-step zeroing
-  since backprop `=+` relies on it), `Outlier_detector` (z-score vs sliding window; nan during
+  since backprop `=+` relies on it; the micro-step states its span, so the caller's cycle reset is
+  still owed and `Context.run` refuses run k+1 without it, gh-ocannl-1781), `Outlier_detector` (z-score vs sliding window; nan during
   warmup, and a constant window gives std 0 → infinite z). Executed parity: `loop_utils.ml`.
 - Plots (`PrintBox_utils.plot`, gh-ocannl-103) draw their tick labels and legend AROUND the upstream
   `printbox-ext-plot` canvas (its `axes = false` rendering, through an extension of our own with a

@@ -10787,6 +10787,26 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1781: a gradient accumulated into without zeroing is refused once its routine has run
+; as many times as its computation allows (one, or k under Train.grad_update ~accum_steps:k) since
+; the gradient's last reset -- a zeroing routine's run or an upload; the timing loop's repeats are
+; not refused. Executed values, every backend.
+
+(test
+ ; cc-vector-width: independent -- the one search is there to restore a gradient buffer; the claims
+ ; read the ledger's accumulation history and the restored values, never what the search seeds,
+ ; keeps or crowns.
+ (name never_zeroed_grad)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules never_zeroed_grad)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name fragment_sequenced_twice)
  (package neural_nets_lib)
