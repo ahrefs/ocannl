@@ -130,6 +130,8 @@
   (alias runtest-generated_lock_scan_control)
   (alias runtest-vendor_stub_arms_scan)
   (alias runtest-vendor_stub_arms_scan_control)
+  (alias runtest-gc_witness_scan)
+  (alias runtest-gc_witness_scan_control)
   (alias runtest-atomic_file_rename_scan)
   (alias runtest-atomic_file_rename_scan_control)
   (alias runtest-dead_export_scan)
@@ -343,6 +345,8 @@
   (alias runtest-generated_lock_scan_control)
   (alias runtest-vendor_stub_arms_scan)
   (alias runtest-vendor_stub_arms_scan_control)
+  (alias runtest-gc_witness_scan)
+  (alias runtest-gc_witness_scan_control)
   (alias runtest-atomic_file_rename_scan)
   (alias runtest-atomic_file_rename_scan_control)
   (alias runtest-dead_export_scan)
@@ -4195,6 +4199,9 @@
   vendor_stub_arms_scan.ml
   vendor_stub_arms_scan.expected
   vendor_stub_arms_scan_control.expected
+  gc_witness_scan.ml
+  gc_witness_scan.expected
+  gc_witness_scan_control.expected
   census_total_ratchet.ml
   census_total_ratchet.expected
   codegen_text_inventory.ml
@@ -4292,6 +4299,8 @@
    generated_lock_scan.expected,generated_lock_scan_control.expected
    vendor_stub_arms_scan.ml
    vendor_stub_arms_scan.expected,vendor_stub_arms_scan_control.expected
+   gc_witness_scan.ml
+   gc_witness_scan.expected,gc_witness_scan_control.expected
    census_total_ratchet.ml
    census_total_ratchet.expected
    codegen_text_inventory.ml
@@ -4709,6 +4718,61 @@
   (diff
    vendor_stub_arms_scan_control.expected
    vendor_stub_arms_scan_control.actual)))
+
+; Post-wave task post-1-task-12 follow-up (lukstafi/ocannl-staging#1581): a test reads the GC
+; through Gc_witness. Every .ml under test/ is parsed, and a forced major collection or a weak
+; observer outside test/support/gc_witness.ml is refused; the reader's closed list of forms, and
+; what it does not read (arrayjit/test/ is another package), are in the scan's header. `--control`
+; holds the rule to synthetic sources.
+
+(executable
+ (name gc_witness_scan)
+ (modules gc_witness_scan)
+ (libraries base stdio ppxlib test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources without running a backend.
+ (target gc_witness_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../../test))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:gc_witness_scan.exe}
+    %{workspace_root}
+    %{dep:gc_witness_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-gc_witness_scan)
+ (package neural_nets_lib)
+ (action
+  (diff gc_witness_scan.expected gc_witness_scan.actual)))
+
+(rule
+ ; ocannl-backend: none -- runs the scan over synthetic sources held in its own source.
+ (target gc_witness_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  gc_witness_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:gc_witness_scan.exe} --control))))
+
+(rule
+ (alias runtest-gc_witness_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff gc_witness_scan_control.expected gc_witness_scan_control.actual)))
 
 ; gh-ocannl-803/862: raw OCaml rename publication belongs in Utils.Atomic_file. The source glob is
 ; recursive over the whole repository, so a new top-level directory joins the scan without another
@@ -11224,7 +11288,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules lacks_grad_reset_hint)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -13089,7 +13153,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules op_schemes)
- (libraries base ocannl stdio arrayjit.verdict stderr_capture)
+ (libraries base ocannl stdio arrayjit.verdict gc_witness stderr_capture)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -13119,7 +13183,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules rewind_registries_bounded)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

@@ -227,6 +227,17 @@ let raw_entries =
         "[scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/";
         "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
       ] );
+    ( "gc_witness_scan.ml",
+      [
+        "[scanner-refusal:bb492e73ce6ee9658023c7166722ae26] does not parse";
+        "[scanner-refusal:a141110d8dafdb095f38e629e190938e] GC-read reader raised";
+        "[scanner-refusal:cfb5bf5a45572766fd5b7e992f5def00] tree matches nothing";
+        "[scanner-refusal:cc1c10dcb5499a78d5036fdb6d119347] test/support/gc_witness.ml";
+        "[scanner-refusal:ca35f91c4bd8f24f92904bf594065571] test/support/gc_witness.ml";
+        "[scanner-refusal:9f04461988176709dae4ee0369affcf2] test/support/gc_witness.ml";
+        "[scanner-refusal:36666810510239397bacb5a2cf2ba433] test/support/gc_witness.ml";
+        "[scanner-refusal:e5296137466c1af2ac14a5d6fa9717fb] still forces collections";
+      ] );
     ( "cache_dir_ignores.ml",
       [
         "[scanner-refusal:e2e9d19ffe2ad7688396847bd1ee643a] the repository-root gitignore";

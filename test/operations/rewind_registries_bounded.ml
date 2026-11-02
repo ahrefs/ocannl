@@ -79,8 +79,7 @@ let rounds =
   ]
 
 let sizes () =
-  Stdlib.Gc.full_major ();
-  Stdlib.Gc.full_major ();
+  Gc_witness.settle ();
   Tensor.For_testing.discarded_registry_sizes ()
 
 let show sizes =

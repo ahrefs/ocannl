@@ -174,6 +174,15 @@ vendor_stub_arms_scan.ml: [scanner-refusal:b079d32e59c7b93562738e4061682b90] arr
 vendor_stub_arms_scan.ml: [scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into (direct failure) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
 vendor_stub_arms_scan.ml: [scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/ (direct failure) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
 vendor_stub_arms_scan.ml: [scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select (claim) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
+gc_witness_scan.ml has exactly the explicitly assigned refusal controls: true
+gc_witness_scan.ml: [scanner-refusal:bb492e73ce6ee9658023c7166722ae26] does not parse (direct failure) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
+gc_witness_scan.ml: [scanner-refusal:a141110d8dafdb095f38e629e190938e] GC-read reader raised (direct failure) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
+gc_witness_scan.ml: [scanner-refusal:cfb5bf5a45572766fd5b7e992f5def00] tree matches nothing (direct failure) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
+gc_witness_scan.ml: [scanner-refusal:cc1c10dcb5499a78d5036fdb6d119347] test/support/gc_witness.ml (direct failure) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
+gc_witness_scan.ml: [scanner-refusal:ca35f91c4bd8f24f92904bf594065571] test/support/gc_witness.ml (direct failure) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
+gc_witness_scan.ml: [scanner-refusal:9f04461988176709dae4ee0369affcf2] test/support/gc_witness.ml (direct failure) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
+gc_witness_scan.ml: [scanner-refusal:36666810510239397bacb5a2cf2ba433] test/support/gc_witness.ml (claim) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
+gc_witness_scan.ml: [scanner-refusal:e5296137466c1af2ac14a5d6fa9717fb] still forces collections (claim) is catalogued beside gc_witness_scan.expected, gc_witness_scan_control.expected: true
 census_total_ratchet.ml has exactly the explicitly assigned refusal controls: true
 census_total_ratchet.ml: [scanner-refusal:6d5b4fe654d3592b327d32a16ca1fa2a] checked-in file this (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:571968c7f074e29e60dddf8d93d23f34] number the allow-list (claim) is catalogued beside census_total_ratchet.expected: true

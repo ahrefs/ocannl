@@ -23,21 +23,6 @@ let compile ctx comp = Train.to_routine ctx IDX.empty comp
 let run_all ctx routines = List.fold routines ~init:ctx ~f:Context.run
 let reset_hint = "without zeroing it, and no routine of its lineage zeroes it"
 
-(* A [Weak] observer on a record, read with [Weak.check] after up to three collections. *)
-let witness (t : Tensor.t) =
-  let w = Stdlib.Weak.create 1 in
-  Stdlib.Weak.set w 0 (Some t);
-  w
-
-let reclaimed w =
-  let rec go rounds =
-    Stdlib.Gc.full_major ();
-    Stdlib.Gc.full_major ();
-    Stdlib.Gc.compact ();
-    (not (Stdlib.Weak.check w 0)) || (rounds > 1 && go (rounds - 1))
-  in
-  go 3
-
 (* The text of the [User_error] [f] raises; a failed claim when it raises none. *)
 let refusal name f =
   match f () with
@@ -52,13 +37,15 @@ let param prefix = TDSL.param ~values:[| 1.; 2.; 3. |] (prefix ^ "_w") ~output_d
    Returns the context and an observer on the consumer. *)
 let[@inline never] forward_only_consumer ctx w =
   let%op c = w *. 2. in
-  (Train.forward_once ctx c, witness c)
+  (Train.forward_once ctx c, Gc_witness.witness c)
 
 let () =
   case "a parameter whose first consumer was evaluated forward-only and dropped" (fun () ->
       let w = param "lh" in
       let ctx, c = forward_only_consumer (Context.auto ()) w in
-      p "the forward-only first consumer is dropped and reclaimed" (reclaimed c);
+      p "the forward-only first consumer is dropped and reclaimed" (Gc_witness.reclaimed c);
+      claim "control: the parameter the case still holds is kept"
+        (Gc_witness.kept (Gc_witness.witness w));
       let%op l = w *. w in
       let msg = refusal "a loss over the parameter" (fun () -> Train.update_once ctx l) in
       Stdio.printf "The refusal:\n%s\n%!" msg;

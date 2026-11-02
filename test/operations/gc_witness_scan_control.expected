@@ -1,0 +1,26 @@
+the sanctioned site's own collections and weak observer are inventoried, not refused: true
+a stray collection in a comment is not refused: true
+a stray collection and weak observer in string literals are not refused: true
+the GC entry points outside the closed list are not refused: true
+a local full_major with no open of Gc is not refused: true
+a source outside test/ is outside the corpus: true
+a stray Stdlib.Gc.full_major is refused, naming its file and line: true
+a stray Gc.compact is refused: true
+a stray Weak.create is refused: true
+a collection through a module alias chain is refused: true
+a weak observer through a let-module alias is refused: true
+a bare full_major under a local open of Gc is refused: true
+a bare create under an open of an alias of Weak is refused: true
+an invalid OCaml source reaches the parse refusal: true
+a reader exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
+a run without corpus sources reaches the empty-corpus refusal: true
+a corpus without the sanctioned site reaches the moved-exemption refusal: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:bb492e73ce6ee9658023c7166722ae26] does not parse
+  [scanner-refusal:a141110d8dafdb095f38e629e190938e] GC-read reader raised
+  [scanner-refusal:cfb5bf5a45572766fd5b7e992f5def00] tree matches nothing
+  [scanner-refusal:cc1c10dcb5499a78d5036fdb6d119347] test/support/gc_witness.ml
+  [scanner-refusal:ca35f91c4bd8f24f92904bf594065571] test/support/gc_witness.ml
+  [scanner-refusal:9f04461988176709dae4ee0369affcf2] test/support/gc_witness.ml
+End of synthetic controls.

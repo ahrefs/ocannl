@@ -5436,7 +5436,10 @@ box.
   (or `window_sees_allocation`) that must read alive, since a witness observing nothing makes
   every "reclaimed" and every upper bound true. A control that is not already a golden row is a
   silent `Verdict.claim`. Its own library, stdlib only, so an edit reaches the GC-reading tests
-  and not every `test_utils` dependant.
+  and not every `test_utils` dependant. `gc_witness_scan` holds every `.ml` under `test/` to it:
+  a `Gc.full_major`, `Gc.major`, `Gc.compact` or `Weak.create` outside `gc_witness.ml`, qualified,
+  through a module alias or under an open, is refused, so a collection a test needs is
+  `Gc_witness.settle` (`arrayjit/test/` is another package, outside the corpus).
 
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
   from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm
