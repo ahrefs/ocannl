@@ -12854,6 +12854,7 @@
 
 ; op_table_compile (gh-ocannl-1731): every in-domain (operator, precision) arm of the selected
 ; backend's operator tables renders and compiles, under every numerics policy's compute precision.
+; gh-ocannl-1768: its explicit-SIMD and select-blend renderings too, under builtin parameter guards.
 
 (test
  (name op_table_compile)
@@ -12862,7 +12863,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules op_table_compile)
- (libraries base ocannl stdio arrayjit.verdict test_utils ll_test))
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.builtins_metal
+  arrayjit.verdict
+  test_utils
+  ll_test))
 
 ; gh-ocannl-1747: a released lineage gives its buffers back (pool table, used-memory gauge, driver
 ; free bytes where there is a reading) and its nodes and host-init data to the GC; an unreleased one

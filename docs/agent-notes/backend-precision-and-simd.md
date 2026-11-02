@@ -2290,6 +2290,15 @@ files.
   The shared half RNG function returns `HALF_T`, while its OCaml wrapper explicitly extracts bits
   with `HALF_TO_UINT16`. `test_shared_builtins` executes separately compiled default and emulated
   half variants against the shipped stubs, with inlining disabled to exercise the C ABI.
+- What a builtin's parameter type is and what its call site passes are compared by the
+  parameter guards (`C_syntax.Param_guards`, gh-ocannl-1768), a test seam `op_table_compile` runs
+  its whole cc and Metal sweep under: each function a kernel's prelude defines is shadowed by a
+  macro whose guard fails the compile when the operand's type narrows into the parameter's (C++'s
+  narrowing rule; in C a `_Static_assert` over `__typeof__`). Their first run found the store
+  conversions into bf16 and fp8 passing `int` (a comparison) and `double` (a `0.0` or `1.0 /`
+  literal) to `float` parameters; the C and Metal conversions now cast to `float` first, which is
+  value-neutral. A guarded argument loses a literal's constant exemption, so a guarded kernel
+  calling `ocannl_shfl_xor(v, 16)` would fail: extend the seam to warp kernels with that in mind.
 
 - Known integral `ToPowOf` constants render through `ocannl_powi_f32` or `ocannl_powi_f64`
   independently of the optional power simplifier (gh-ocannl-1185): CUDA fast-math `powf` loses

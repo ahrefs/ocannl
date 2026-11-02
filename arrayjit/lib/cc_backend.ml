@@ -1752,6 +1752,14 @@ struct
     | _ -> false
 
   (* Override operation syntax to handle special precision types *)
+  (* An operator's result computed in [float] for bf16 or fp8 arithmetic, narrowed back by the C
+     reference's own conversion, which casts it to [float] first: the operator's C type can be [int]
+     (a comparison) or [double] (a [0.0] or [1.0 /] literal), which the conversion builtin's
+     [float] parameter would narrow implicitly (gh-ocannl-1768). *)
+  let narrow_from_single prec float_result =
+    let opening, closing = Ops.c_convert_precision ~from:Ops.single ~to_:prec in
+    PPrint.(string opening ^^ float_result ^^ string closing)
+
   let ternop_syntax prec op v1 v2 v3 =
     match (prec, op) with
     (* gh-ocannl-516: at fp16 compute precision the FMA goes through the shared macro, so the scalar
@@ -1782,7 +1790,7 @@ struct
                 ^^ ifflat (space ^^ float_v3) (nest 2 (break 1 ^^ float_v3))
                 ^^ string op_suffix)
             in
-            string "single_to_bfloat16(" ^^ float_result ^^ string ")"
+            narrow_from_single prec float_result
         | Ops.Half_prec _ ->
             (* For Half, perform operations in float precision on non-native systems *)
             let open PPrint in
@@ -1823,7 +1831,7 @@ struct
                 ^^ ifflat (space ^^ float_v3) (nest 2 (break 1 ^^ float_v3))
                 ^^ string op_suffix)
             in
-            string "single_to_fp8(" ^^ float_result ^^ string ")"
+            narrow_from_single prec float_result
         | _ ->
             let op_prefix, op_infix1, op_infix2, op_suffix = Ops.ternop_c_syntax prec op in
             let open PPrint in
@@ -1857,7 +1865,7 @@ struct
                 ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
                 ^^ string op_suffix)
             in
-            string "single_to_bfloat16(" ^^ float_result ^^ string ")"
+            narrow_from_single prec float_result
         | Ops.Fp8_prec _ ->
             (* For FP8, perform all operations in float precision *)
             let open PPrint in
@@ -1870,7 +1878,7 @@ struct
                 ^^ ifflat (space ^^ float_v2) (nest 2 (break 1 ^^ float_v2))
                 ^^ string op_suffix)
             in
-            string "single_to_fp8(" ^^ float_result ^^ string ")"
+            narrow_from_single prec float_result
         | Ops.Half_prec _ ->
             (* For Half, perform all operations in float precision on non-native systems *)
             let open PPrint in
@@ -1905,6 +1913,8 @@ struct
      by a mask: NaN, infinities and signed zeros pass unchanged. Inner blends shadow the names in
      their own block, and no arm can mention them. Only at the two compute precisions whose [?:]
      spellings above are the plain [Ops] ones; the bridged narrow precisions keep [?:]. *)
+  let builtin_param_guards = Some C_syntax.C_guards
+
   let select_blend_syntax prec =
     let blend truth a b =
       let open PPrint in
@@ -1939,14 +1949,14 @@ struct
             let float_v = string "bfloat16_to_single(" ^^ v ^^ string ")" in
             let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
             let float_result = group (string op_prefix ^^ float_v ^^ string op_suffix) in
-            string "single_to_bfloat16(" ^^ float_result ^^ string ")"
+            narrow_from_single prec float_result
         | Ops.Fp8_prec _ ->
             (* For FP8, perform operations in float precision *)
             let open PPrint in
             let float_v = string "fp8_to_single(" ^^ v ^^ string ")" in
             let op_prefix, op_suffix = Ops.unop_c_syntax Ops.single op in
             let float_result = group (string op_prefix ^^ float_v ^^ string op_suffix) in
-            string "single_to_fp8(" ^^ float_result ^^ string ")"
+            narrow_from_single prec float_result
         | Ops.Half_prec _ ->
             (* For Half, perform operations in float precision on non-native systems *)
             let open PPrint in

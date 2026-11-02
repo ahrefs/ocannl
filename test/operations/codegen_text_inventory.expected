@@ -153,9 +153,9 @@ arrayjit/test/test_stage_b_where_debug.ml [renders generated text in memory; run
 arrayjit/test/test_vectorized_codegen.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_vectorized_codegen]
 arrayjit/test/test_zero_out_codegen.ml [renders generated text in memory; run by @arrayjit/test/runtest-test_zero_out_codegen]
 test/operations/accum_width.ml [run by @test/operations/runtest-accum_width]
-    "= single_to_bfloat16(v"
+    "= " ^ ... ^ "v"
     "Vectorized reduction rendering"
-    "single_to_bfloat16((bfloat16_to_single("
+    ... ^ "(bfloat16_to_single("
 test/operations/branchless_select.ml [run by @test/operations/runtest-branchless_select; also pins text this scan cannot name: computed fragment, untraced callback, forwarded parameter, opaque aggregate component, unsupplied application, mutation or unseen buffer write]
     ") != 0.0 ? ("
     "bs_gather_guard"
@@ -302,6 +302,7 @@ test/operations/narrow_storage_compute.ml [run by @test/operations/runtest-narro
     "vector_size"
 test/operations/online_softmax_block_mma.ml [run by @test/operations/runtest-online_softmax_block_mma]
     "simdgroup_multiply_accumulate"
+test/operations/op_table_compile.ml [run by @test/operations/runtest-op_table_compile; also pins text this scan cannot name: untraced callback]
 test/operations/reduction_accumulator_residency.ml [run by @test/operations/runtest-reduction_accumulator_residency; also pins text this scan cannot name: untraced callback]
     " " ^ ...
     "["
@@ -660,6 +661,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-n3_fwd_with_prec-unoptimized
 @test/operations/runtest-narrow_storage_compute
 @test/operations/runtest-online_softmax_block_mma
+@test/operations/runtest-op_table_compile
 @test/operations/runtest-reduction_accumulator_residency
 @test/operations/runtest-reduction_forms
 @test/operations/runtest-reserved_routine_names
