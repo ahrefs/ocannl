@@ -229,82 +229,6 @@ let exempt_zero_reference_exports =
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";
     "Tnode.validate_padded_numel_contract";
-    "Utils.artifacts_subdir";
-    "Utils.captured_log_processors";
-    (* gh-ocannl-1636: the capture window's body and the count of open windows that
-       [Utils.routine_log_window] reads; internal to the capture, not consumer API. *)
-    "Utils.capture_stdout_logs_window";
-    "Utils.stdout_capture_depth";
-    "Utils.config_table_of_lines";
-    (* gh-ocannl-604: bootstrap resolution and the sourced values carried from startup to its
-       deferred trace are intentionally internal, replacing the old unsourced bootstrap reader.
-       Utils has no .mli; publishing these staging details is not part of its consumer API. *)
-    "Utils.resolve_bootstrap_config";
-    "Utils.no_config_file_resolution";
-    "Utils.early_log_config_sourcing_resolution";
-    "Utils.log_config_sourcing_resolution";
-    "Utils.suppress_welcome_message_resolution";
-    "Utils.profile_selection";
-    (* gh-ocannl-1566: the same carried bootstrap resolution for the JSON stream's switch, and the
-       switch itself, published as [Utils.log_config_sourcing] is so that a program can turn the
-       stream on for what it reads after startup; nothing in the tree does. *)
-    "Utils.log_config_json_resolution";
-    "Utils.log_config_json";
-    (* Not pre-existing (gh-ocannl-1332): the lookup the typed getters share and the unchecked one
-       beneath [Utils.get_global_arg_with_source]. Utils has no .mli; every read of a registered key
-       goes through a getter, and of any other key through [get_global_arg], so nothing outside
-       should call either. *)
-    "Utils.registered_canonical";
-    "Utils.unchecked_global_arg_with_source";
-    (* Not pre-existing (gh-ocannl-1566): the recorder the getters and the bootstrap feed, beneath
-       [Utils.resolved_config]. Recording is the getters' job; a caller outside would forge a
-       resolution the process never made. *)
-    "Utils.record_config_resolution";
-    (* Not pre-existing. The C stub behind [Utils.c_stderr_detached] (gh-ocannl-1031): the module
-       calls it once at its own initialization, and what the rest of the tree reads is the resulting
-       boolean, not the stub. Publishing the stub is still right -- a caller that has taken fd 2
-       over for its own reasons can redo the detachment -- but nothing in the tree needs to. *)
-    "Utils.detach_c_stderr";
-    (* Not pre-existing, and the same shape (gh-ocannl-1370): the stub behind
-       [Utils.c_stderr_noise_collapsed], which the HIP backend forces; nothing else calls the
-       stub. *)
-    "Utils.collapse_c_stderr_noise";
-    "Utils.default_indent";
-    "Utils.doc_of_sexp";
-    "Utils.enable_runtime_debug";
-    "Utils.ensure_artifacts_dir";
-    "Utils.env_var_reserved_prefixes";
-    "Utils.equal_config_level";
-    "Utils.filename_concat";
-    "Utils.filename_of_parts";
-    "Utils.filename_parts";
-    "Utils.header_sep";
-    "Utils.input_line";
-    "Utils.input_scan_line";
-    "Utils.!@";
-    "Utils.log_config_sourcing";
-    "Utils.log_trace_tree";
-    "Utils.never_capture_stdout";
-    "Utils.original_log_level";
-    "Utils.pair";
-    "Utils.parallel_merge";
-    (* Not pre-existing: the third profile payload (gh-ocannl-719), listed like the two before it --
-       named only through [Utils.profile_payloads]. *)
-    "Utils.approximate_profile_payload";
-    "Utils.performance_profile_payload";
-    "Utils.profile_ineligible_keys";
-    "Utils.profile_lookup";
-    "Utils.reproducible_profile_payload";
-    "Utils.same_env_name";
-    "Utils.sexp_deep_mem";
-    "Utils.split_with_seps";
-    "Utils.str_nonempty";
-    (* Not pre-existing (gh-ocannl-1335). The artifact-naming layer's internals, consumed inside
-       Utils by the artifact paths and the startup cleanup: the tree outside names artifacts through
-       [build_file], [kept_library_name], [library_kernel_name] and the parsers of the two library
-       shapes. Utils has no .mli to hide them in. *)
-    "Utils.clean_filename";
-    "Utils.owned_artifact_name";
     (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library. gh-ocannl-1010
        then gave its recipe modules (Train, Parallel, Calibrate, Mixed_prec, Precision_policy)
        explicit interfaces, which took them out of this census, and decided that [Nn_blocks] gets
@@ -367,8 +291,6 @@ let exempt_unmentioned_types =
     (* gh-ocannl-1792: a scheme parameter's classification, read by the translation arms of the same
        .mli-less module. *)
     "Ppx_op.param_kind";
-    "Utils.env_var_class";
-    "Utils.requirement";
   ]
 
 let require_implementations ~fail implementations =

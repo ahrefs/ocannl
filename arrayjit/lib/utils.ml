@@ -3055,10 +3055,6 @@ let with_device_init_deadline ~backend_name f =
       f ())
     ~finally:(fun () -> if generation > 0 then Stub.disarm generation)
 
-let enable_runtime_debug () =
-  settings.output_debug_files_in_build_directory <- true;
-  set_log_level @@ max 2 settings.log_level
-
 (** A fresh non-negative integer per call, wrapping to 0 on overflow. Backends use it to tell one
     run of a kernel from the next: cc names each dynamically loaded library by it (there can be only
     one library of a given name in a process), and the GPU backends prefix a launch's routine logs
@@ -3117,26 +3113,6 @@ let remove_elem ~equal elem l =
   in
   loop [] l
 
-(** [parallel_merge merge num_devices] progressively invokes the pairwise [merge] callback,
-    converging on the 0th position, with [from] ranging from [1] to [num_devices - 1], and
-    [to_ < from]. *)
-let parallel_merge merge (num_devices : int) =
-  let rec loop (upper : int) : unit =
-    let is_even = (upper + 1) % 2 = 0 in
-    let lower = if is_even then 0 else 1 in
-    let half : int = (upper - (lower - 1)) / 2 in
-    if half > 0 then (
-      let midpoint : int = half + lower - 1 in
-      for i = lower to midpoint do
-        (* Maximal [from] is [2 * half + lower - 1 = upper]. *)
-        merge ~from:(half + i) ~to_:i
-      done;
-      loop midpoint)
-  in
-  loop (num_devices - 1)
-
-let ( !@ ) = Atomic.get
-
 type atomic_bool = bool Atomic.t
 
 let sexp_of_atomic_bool flag = sexp_of_bool @@ Atomic.get flag
@@ -3152,14 +3128,6 @@ let sexp_append ~elem = function
 let sexp_mem ~elem = function
   | Sexp.Atom _ as e2 -> Sexp.equal elem e2
   | Sexp.List l -> Sexp.(List.mem ~equal l elem)
-
-let rec sexp_deep_mem ~elem = function
-  | Sexp.Atom _ as e2 -> Sexp.equal elem e2
-  | Sexp.List l -> Sexp.(List.mem ~equal l elem) || List.exists ~f:(sexp_deep_mem ~elem) l
-
-let split_with_seps sep s =
-  let tokens = Re.split_full sep s in
-  List.map tokens ~f:(function `Text tok -> tok | `Delim sep -> Re.Group.get sep 0)
 
 (** {2 Rendering a double as text (gh-ocannl-623, gh-ocannl-713)} *)
 
@@ -3237,140 +3205,6 @@ type requirement =
   | Optional of { callback_if_missing : unit -> unit [@sexp.opaque] }
 [@@deriving sexp_of]
 
-let default_indent = ref 2
-
-let doc_of_sexp sexp =
-  let open Sexp in
-  let open Int in
-  let module Bytes = Stdlib.Bytes in
-  let must_escape str =
-    let len = String.length str in
-    len = 0
-    ||
-    let rec loop str ix =
-      match str.[ix] with
-      | '"' | '(' | ')' | ';' | '\\' -> true
-      | '|' ->
-          ix > 0
-          &&
-          let next = ix - 1 in
-          Char.equal str.[next] '#' || loop str next
-      | '#' ->
-          ix > 0
-          &&
-          let next = ix - 1 in
-          Char.equal str.[next] '|' || loop str next
-      | '\000' .. '\032' | '\127' .. '\255' -> true
-      | _ -> ix > 0 && loop str (ix - 1)
-    in
-    loop str (len - 1)
-  in
-
-  let escaped s =
-    let n = ref 0 in
-    for i = 0 to String.length s - 1 do
-      n :=
-        !n
-        +
-        match String.unsafe_get s i with
-        | '\"' | '\\' | '\n' | '\t' | '\r' | '\b' -> 2
-        | ' ' .. '~' -> 1
-        | _ -> 4
-    done;
-    if !n = String.length s then s
-    else
-      let s' = Bytes.create !n in
-      n := 0;
-      for i = 0 to String.length s - 1 do
-        (match String.unsafe_get s i with
-        | ('\"' | '\\') as c ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n c
-        | '\n' ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n 'n'
-        | '\t' ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n 't'
-        | '\r' ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n 'r'
-        | '\b' ->
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n 'b'
-        | ' ' .. '~' as c -> Bytes.unsafe_set s' !n c
-        | c ->
-            let a = Stdlib.Char.code c in
-            Bytes.unsafe_set s' !n '\\';
-            incr n;
-            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a / 100)));
-            incr n;
-            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a / 10 % 10)));
-            incr n;
-            Bytes.unsafe_set s' !n (Stdlib.Char.chr (48 + (a % 10))));
-        incr n
-      done;
-      Bytes.unsafe_to_string s'
-  in
-
-  let esc_str str =
-    let estr = escaped str in
-    let elen = String.length estr in
-    let res = Bytes.create (elen + 2) in
-    Bytes.blit_string estr 0 res 1 elen;
-    Bytes.unsafe_set res 0 '"';
-    Bytes.unsafe_set res (elen + 1) '"';
-    Bytes.unsafe_to_string res
-  in
-
-  let index_of_newline str start = Stdlib.String.index_from_opt str start '\n' in
-
-  let get_substring str index end_pos_opt =
-    let end_pos = match end_pos_opt with None -> String.length str | Some end_pos -> end_pos in
-    String.sub str ~pos:index ~len:(end_pos - index)
-  in
-
-  let is_one_line str =
-    match index_of_newline str 0 with
-    | None -> true
-    | Some index -> Int.(index + 1 = String.length str)
-  in
-
-  let open PPrint in
-  let doc_maybe_esc_str str =
-    if not (must_escape str) then string str
-    else if is_one_line str then string (esc_str str)
-    else
-      let rec loop index acc =
-        let next_newline = index_of_newline str index in
-        let next_line = get_substring str index next_newline in
-        let acc = acc ^^ string (escaped next_line) in
-        match next_newline with
-        | None -> acc
-        | Some newline_index ->
-            loop (newline_index + 1) (acc ^^ string "\\" ^^ hardline ^^ string "\\n")
-      in
-      (* the leading space is to line up the lines *)
-      string " \"" ^^ loop 0 empty ^^ string "\""
-  in
-
-  let rec doc_of_sexp_indent indent = function
-    | Atom str -> doc_maybe_esc_str str
-    | List (h :: t) ->
-        group (string "(" ^^ nest indent (doc_of_sexp_indent indent h ^^ doc_of_sexp_rest indent t))
-    | List [] -> string "()"
-  and doc_of_sexp_rest indent = function
-    | h :: t -> space ^^ doc_of_sexp_indent indent h ^^ doc_of_sexp_rest indent t
-    | [] -> string ")"
-  in
-
-  doc_of_sexp_indent !default_indent sexp
-
 (* The file is truncated at once, as before, but no descriptor outlives a call: the printer is
    dropped without a close, so a channel kept open across calls leaked one descriptor per artifact
    per compile -- three per lowered routine -- until a long test ran out of them
@@ -3388,13 +3222,17 @@ let output_to_build_file ~fname =
 
 exception User_error of string
 
-let header_sep =
-  let open Re in
-  compile (seq [ str " "; opt any; str "="; str " " ])
-
 let%diagn_sexp log_trace_tree _logs =
   [%log_block
     "trace tree";
+    let split_with_seps sep s =
+      let tokens = Re.split_full sep s in
+      List.map tokens ~f:(function `Text tok -> tok | `Delim sep -> Re.Group.get sep 0)
+    in
+    let header_sep =
+      let open Re in
+      compile (seq [ str " "; opt any; str "="; str " " ])
+    in
     let sep s = String.concat ~sep:"\n" @@ String.split ~on:'$' s in
     let rec loop = function
       | [] -> []
