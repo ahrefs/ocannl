@@ -451,7 +451,8 @@ files.
   whole-triple seed's code. These flavors are `Excluded` beside companions
   (`cpu_companion_exclusion`, witness prefix `cpu_companion_witness_prefix`), never `Refuted`: a
   witness must not claim a legality failure that does not happen, and companion-free sites keep
-  their leaves unchanged. `Autotune.lift_cpu_companions` re-proposes them. The history: gh-ocannl-1561
+  their leaves unchanged. `Autotune.lift_cpu_companions` re-proposes them; measured: no win (M4 Pro,
+  see ahrefs/ocannl#1609). The history: gh-ocannl-1561
   refuted them against the hardware-thread rule about three hours before gh-ocannl-1458's fork-join
   validator landed, so the refutation was stale from the day it merged -- and its test validated
   without `~fork_join`, which is why nothing noticed. A label's `0x0x0` is the whole-triple form

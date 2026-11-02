@@ -1920,7 +1920,7 @@ let cpu_companion_exclusion ~what companions (child : unit -> ('l, 'a) Sspace.ch
       Sspace.Excluded
         ( Printf.sprintf
             "%s %s binds a hardware dimension beside %s; valid on the fork-join model, excluded as \
-             search economy until a measurement shows it winning"
+             search economy -- measured: no win (M4 Pro, see ahrefs/ocannl#1609)"
             cpu_companion_witness_prefix what c,
           lazy (child ()) )
 

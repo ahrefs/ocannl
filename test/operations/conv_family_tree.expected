@@ -110,7 +110,7 @@ dividing: a pipelined depth-2 twin is a leaf: true
     conv-leg = cpu
       conv-shape = serial
         * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:false epi:false depth:1
-      conv-shape = grid  [excluded: CPU companions (gh-ocannl-1609): the conv nest's own Grid loop binds a hardware dimension beside 1 companion nest(s) writing materialized relu_z; valid on the fork-join model, excluded as search economy until a measurement shows it winning]
+      conv-shape = grid  [excluded: CPU companions (gh-ocannl-1609): the conv nest's own Grid loop binds a hardware dimension beside 1 companion nest(s) writing materialized relu_z; valid on the fork-join model, excluded as search economy -- measured: no win (M4 Pro, see ahrefs/ocannl#1609)]
       conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
