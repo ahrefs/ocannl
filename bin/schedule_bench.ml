@@ -259,7 +259,9 @@ let () =
     let bound = Float.of_int k *. Float.of_int (a_levels * b_max) in
     Float.(bound <= 2. ** Float.of_int significand_bits)
   in
-  let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
+  (* The backend the cells run on, which [Context.auto] chose: with the key unset that is its probe
+     order's pick, not [cc]. *)
+  let backend = String.lowercase (Context.backend_name (Context.auto ())) in
   (* The bound is half of what makes a tensorized cell exact on HIP. gfx11's WMMA returns the exact
      sum only when every product of a dot product shares a sign (gh-ocannl-1420): on mixed-sign
      products it misses by ulps even where every partial sum is exact. So a computation whose census

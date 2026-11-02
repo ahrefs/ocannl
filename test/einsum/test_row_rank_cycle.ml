@@ -87,3 +87,49 @@ let () =
       Row.Row_ineq { res = r1; opnd = { r2 with dims = [ dim 2; dim 3 ] }; origin };
       Row.Row_ineq { res = { r2 with dims = [ dim 4 ] }; opnd = r1; origin };
     ]
+
+(* gh-ocannl-1802: the rank-cycle search is bounded by the levels of the new edge's endpoints. On
+   random constraint sets it must reach the verdicts of the unbounded walk it replaced. Each solve
+   mints its own row variables: the rank graph is persistent, so a set solved twice over the same
+   variables would meet its own earlier edges. *)
+let () =
+  let open Verdict.Claims in
+  let rng = Random.State.make [| 1802 |] in
+  let n_vars = 8 in
+  let side () = (Random.State.int rng n_vars, Random.State.int rng 3, Random.State.int rng 2) in
+  let cases =
+    List.init 400 ~f:(fun _ ->
+        List.init (4 + Random.State.int rng 10) ~f:(fun _ -> (side (), side ())))
+  in
+  let solve case =
+    let vars = Array.init n_vars ~f:(fun _ -> Row.get_row_var ()) in
+    let row (i, n_dims, n_beg) : Row.t =
+      {
+        (Row.get_row_for_var (Row.provenance ~sh_id:(100 + i) ~kind:`Output) vars.(i)) with
+        dims = List.init n_dims ~f:(fun _ -> dim 2);
+        beg_dims = List.init n_beg ~f:(fun _ -> dim 2);
+      }
+    in
+    let ineqs =
+      List.map case ~f:(fun (res, opnd) -> Row.Row_ineq { res = row res; opnd = row opnd; origin })
+    in
+    match Row.solve_inequalities ~stage:Stage1 ineqs Row.empty_env with
+    | _ -> "solved"
+    | exception Row.Shape_error (msg, _) -> msg
+  in
+  let run () =
+    Row.reset_rank_search_visits ();
+    let verdicts = List.map cases ~f:solve in
+    (verdicts, Row.rank_search_visits ())
+  in
+  let bounded, bounded_visits = run () in
+  let unbounded, unbounded_visits = Row.with_unbounded_rank_search run in
+  Stdio.eprintf "(not part of the golden) rank-search visits: bounded %d, unbounded %d\n"
+    bounded_visits unbounded_visits;
+  p_all2 "on random constraint sets, the bounded search reaches the unbounded one's verdicts"
+    (Array.of_list bounded) (Array.of_list unbounded) ~f:String.equal;
+  p_exists "some random set closes a rank cycle" bounded
+    ~f:(String.equal "Infinite number of axes by rank cycle among row variables");
+  p_exists "some random set solves" bounded ~f:(String.equal "solved");
+  p "the bounded search visits fewer states than the unbounded one"
+    (bounded_visits < unbounded_visits)

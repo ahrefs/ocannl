@@ -148,9 +148,9 @@ val accepted_names : (string * backend) list
 
 val get_backend : ?backend_name:string -> unit -> backend
 (** The backend corresponding to [backend_name] (case-insensitively, through {!accepted_names}), or
-    if omitted, selected via the global [backend] setting. Raises [Invalid_argument] on a name it
-    does not accept. Non-generative: the same backend value (hence the same singleton state) each
-    call. *)
+    if omitted, selected via the global [backend] setting, [cc] when that is unset or empty. Raises
+    [Invalid_argument] on a name it does not accept. Non-generative: the same backend value (hence
+    the same singleton state) each call. *)
 
 val backend_name : backend -> string
 (** Inverse of {!get_backend}'s name parsing. *)

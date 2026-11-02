@@ -57,22 +57,18 @@ let print_scheme ~label f =
   let s = Tensor.Scheme.trace ~label 1 (function [ x ] -> [ f x ] | _ -> assert false) in
   Stdio.print_endline (Tensor.Scheme.to_string s)
 
-(* A shape error's message, and the dimensions it found in conflict. (Printing the whole exception
-   shows the solver's raw constraints, whose variables inside a trace come from a reserved id range:
-   correct, but not readable.) *)
-let print_shape_error msg trace =
-  Stdio.print_endline msg;
-  List.iter trace ~f:(function
-    | Row.Dim_mismatch dims ->
-        let dim = function Row.Var _ -> "?" | d -> Row.dim_to_string Row.Axis_size d in
-        Stdio.print_endline
-          ("  conflicting sizes: " ^ String.concat ~sep:" vs " (List.map dims ~f:dim))
-    | _ -> ())
+(* A shape error, printed as the toplevel prints it ([Printexc.to_string]): the message, the sizes
+   in conflict, the constraint that failed, and the tensors it relates with their axis kinds.
+   Variables are named by first appearance (['a], ..['b]..), and so is a tensor of a trace or a
+   check ([n'1]): their ids come from a reserved range. [Shape.error_to_string_hum] gives the same
+   text, and the setting [shape_error_full_sexp=true] prints the solver's raw constraints
+   instead. *)
+let print_shape_error exn = Stdio.print_endline (Stdlib.Printexc.to_string exn)
 
 let attempt f =
   match f () with
   | (_ : Tensor.t) -> Stdio.print_endline "built"
-  | exception Row.Shape_error (msg, trace) -> print_shape_error ("Shape_error: " ^ msg) trace
+  | exception (Row.Shape_error _ as exn) -> print_shape_error exn
   | exception Tensor.Session_error (msg, _) -> Stdio.print_endline ("Session_error: " ^ msg)
 
 let shape t = Shape.to_string_hum t.Tensor.shape
@@ -132,6 +128,8 @@ let%expect_test "a shape mistake reported at the definition or the first use" =
     {|
     Shape_error: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
       conflicting sizes: 2 vs 8
+      failed constraint: 'a = 8
+        from two_layer (output) with b2 (output): pointwise_binary
     |}];
   (* To find it at the definition, at program start, check the definition against a trial
      configuration: [Tensor.Scheme.check_definition] builds it in a window that is always rewound,
@@ -140,20 +138,22 @@ let%expect_test "a shape mistake reported at the definition or the first use" =
   let check name f =
     match Tensor.Scheme.check_definition ~name f with
     | traced -> Stdio.printf "%s: ok, traced %s\n" name (String.concat ~sep:", " traced)
-    | exception Row.Shape_error (msg, trace) -> print_shape_error msg trace
+    | exception (Row.Shape_error _ as exn) -> print_shape_error exn
   in
   check "residual_block" (fun () -> ignore (residual_block ~hid:4 () : Tensor.t -> Tensor.t));
   check "two_layer" (fun () -> ignore (two_layer ~hid:8 ~out:2 () : Tensor.t -> Tensor.t));
   [%expect
     {|
     residual_block: ok, traced mlp_layer, residual_block
-    checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
+    Shape_error: checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
       conflicting sizes: 2 vs 8
+      failed constraint: 'a = 8
+        from two_layer (output) with b2 (output): pointwise_binary
     |}];
   (* For contrast: without its scheme, the same typo is found only when the body runs at the first
-     application, and the message names neither the function nor the argument. The failure happened
-     inside the construction, so it also taints the session (step 3 shows the recovery; here we just
-     rewind to the last closure). *)
+     application, and the message names neither the function nor the argument (only the label of the
+     tensor computing its result does). The failure happened inside the construction, so it also
+     taints the session (step 3 shows the recovery; here we just rewind to the last closure). *)
   attempt (fun () ->
       let net = two_layer_unchecked ~hid:8 ~out:2 () in
       net (input "x" [ 3 ]));
@@ -162,6 +162,8 @@ let%expect_test "a shape mistake reported at the definition or the first use" =
     {|
     Shape_error: solved dimensions for axis: mismatch
       conflicting sizes: 2 vs 8
+      failed constraint: 'a = 8
+        from two_layer_unchecked (output) with b2 (output): pointwise_binary
     |}];
   (* A mistake that depends on the argument is found at the application, before the body runs: the
      residual connection needs 4 features, the argument has 3. *)
@@ -171,6 +173,14 @@ let%expect_test "a shape mistake reported at the definition or the first use" =
     {|
     Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
       conflicting sizes: 4 vs 3
+      failed constraint: 4 ⊑ 3
+        from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
+        from n64 (batch) with threefry4x32_light (output): Uint4x32_to_prec RESULT total elements
+        from residual_block (output) with x (output): the shape scheme residual_block applied to x
+        from n66 (input) with n64 (input): pointwise_binary
+        from residual_block (output) with n'1 (output): pointwise_binary
+        from w (input) with n'1 (output): compose
+        from w (input) with n66 (input): pointwise_binary
     |}];
   (* So is an application that contradicts what an earlier one fixed: [layer]'s first application
      made [w]'s input size 3. *)
@@ -182,6 +192,9 @@ let%expect_test "a shape mistake reported at the definition or the first use" =
     built
     Shape_error: applying the shape scheme mlp_layer to x6: dimension comparison for axis: mismatch
       conflicting sizes: 3 vs 6
+      failed constraint: 3 ⊑ 6
+        from mlp_layer (output) with x6 (output): the shape scheme mlp_layer applied to x6
+        from w (input) with n'1 (output): compose
     |}]
 
 (* {1 Step 3: a REPL session that recovers from a failed construction} *)
@@ -204,6 +217,14 @@ let%expect_test "a failed construction rewound to a checkpoint, and the session 
     {|
     Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
       conflicting sizes: 4 vs 3
+      failed constraint: 4 ⊑ 3
+        from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
+        from n6 (batch) with threefry4x32_light (output): Uint4x32_to_prec RESULT total elements
+        from residual_block (output) with x (output): the shape scheme residual_block applied to x
+        from n8 (input) with n6 (input): pointwise_binary
+        from residual_block (output) with n'1 (output): pointwise_binary
+        from w (input) with n'1 (output): compose
+        from w (input) with n8 (input): pointwise_binary
     |}];
   (* A second try, written without a tensor function, fails inside the construction: that leaves the
      session tainted, and every later construction is refused, naming the first failure. *)
@@ -213,6 +234,8 @@ let%expect_test "a failed construction rewound to a checkpoint, and the session 
     {|
     Shape_error: solved dimensions for axis: mismatch
       conflicting sizes: 3 vs 5
+      failed constraint: 'a = 5
+        from n16 (output) with bias (output): pointwise_binary
     Shape_error: the session is inconsistent after an earlier shape error at shape propagation for #16 n16: solved dimensions for axis: mismatch; call Tensor.rewind_to_last_closure () or Tensor.unsafe_reinitialize ()
     |}];
   (* Rewinding to the checkpoint discards everything created since -- the unused parameters and the
@@ -224,6 +247,8 @@ let%expect_test "a failed construction rewound to a checkpoint, and the session 
     {|
     Shape_error: solved dimensions for axis: mismatch
       conflicting sizes: 3 vs 5
+      failed constraint: 'a = 5
+        from n19 (output) with bias (output): pointwise_binary
     |}];
   (* The session continues: the right model builds, compiles and runs. *)
   let block = residual_block ~hid:3 () in

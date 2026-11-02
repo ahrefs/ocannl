@@ -569,16 +569,27 @@ let%op two_layer ~hid ~out () x =
 ```
 
 ```text doc-excerpt=test/operations/reusable_tensor_programs.ml
-checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
+Shape_error: checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
   conflicting sizes: 2 vs 8
+  failed constraint: 'a = 8
+    from two_layer (output) with b2 (output): pointwise_binary
 ```
 
+That is what the toplevel prints for the exception (`Printexc.to_string`): the message, the
+sizes in conflict, the constraint that failed, and the tensors it relates with their axis kinds
+and the operation that related them. Variables are named by first appearance (`'a`, `..'b..`),
+and so is a tensor of a trace or a check (`n'1`), whose id comes from a reserved range;
+`Shape.error_to_string_hum` gives the same text, and the setting `shape_error_full_sexp=true`
+restores the solver's raw constraint sexp.
+
 One that depends on the argument fails at the application, before the body runs: a residual
-block whose layer is 4 wide, applied to 3 features, reads
+block whose layer is 4 wide, applied to 3 features, reads (the first lines)
 
 ```text doc-excerpt=test/operations/reusable_tensor_programs.ml
 Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
   conflicting sizes: 4 vs 3
+  failed constraint: 4 ⊑ 3
+    from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
 ```
 
 With the scheme opted out (`[@@ocannl.no_scheme]`), the same mistakes surface only inside the

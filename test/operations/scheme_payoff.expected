@@ -2,3 +2,6 @@ every mode closes the shapes it closes without schemes: true
 checking leaves the closure the constraint store it has without schemes: true
 checking leaves the body's inline registrations those it has without schemes: true
 checking instantiates a scheme at every depth: true
+the bounded search closes the shapes the unbounded one closes: true
+the bounded search visits fewer states than the unbounded one: true
+the bounded search's saving grows with depth: true

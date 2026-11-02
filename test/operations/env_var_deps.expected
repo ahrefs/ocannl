@@ -162,6 +162,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-atomic_file_rename_scan
   test/operations/dune                     @runtest-atomic_file_rename_scan_control
   test/operations/dune                     @runtest-autotune_bound_pruning
+  test/operations/dune                     @runtest-autotune_cache_dir_records
   test/operations/dune                     @runtest-autotune_routine_name
   test/operations/dune                     @runtest-backend_golden_family_scan
   test/operations/dune                     @runtest-bandwidth_calibration
