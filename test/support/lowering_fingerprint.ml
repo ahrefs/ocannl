@@ -59,7 +59,9 @@ let traced ~uids
     zeroed_out read_before_write read_only is_scalar_constexpr is_accessing is_complex
     prefers_virtual_one_hot has_non_one_hot_setter is_range_producer read_by_other
     inline_reduction_extent inline_fanin
-    (String.concat ~sep:";" (List.map setter_reads ~f:(fun s -> uids (Set.to_list s))))
+    (String.concat ~sep:";"
+       (List.map setter_reads ~f:(fun { LL.reads_branching; reads_blended } ->
+            uids (Set.to_list reads_branching) ^ "|" ^ uids (Set.to_list reads_blended))))
 
 (* A stored computation: its index tuple's symbols are free in its code, so they are registered
    first, in tuple order, and the tuple renders positionally. *)

@@ -778,7 +778,7 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
     { r with schedule = Task.(append ~work:post r.schedule) }
 end
 
-let%track6_sexp lower_assignments ~limits optim_ctx ?name bindings asgns =
+let%track6_sexp lower_assignments ~(facts : backend_facts) ~limits optim_ctx ?name bindings asgns =
   (* Fork the lineage state (computations and placements) so this compile's decisions do not leak
      into the incoming context or into sibling compiles from the same context
      (docs/proposals/context-scoped-memory-modes.md). The forked state travels with the code and
@@ -793,8 +793,8 @@ let%track6_sexp lower_assignments ~limits optim_ctx ?name bindings asgns =
   ( name,
     Assignments.lower
       ~rewrite_target:{ online_softmax_auto_block = limits.online_softmax_auto_block }
-      optim_ctx ~unoptim_ll_source ~ll_source ~cd_source ~name (Indexing.bound_symbols bindings)
-      asgns )
+      ~blends_value_selects:facts.blends_value_selects optim_ctx ~unoptim_ll_source ~ll_source
+      ~cd_source ~name (Indexing.bound_symbols bindings) asgns )
 
 (* A node the code needs from a prior context that the linked context does not hold. Structured, so
    that [Context] -- the one caller of [link] -- can name the node in its lineage's terms
@@ -1042,8 +1042,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       | None ->
           Compile_cost.time_lower (fun () ->
               let lower () =
-                lower_assignments ~limits:(Device.hardware_limits ()) optim_ctx ?name bindings
-                  comp.asgns
+                lower_assignments ~facts:Device.backend_facts ~limits:(Device.hardware_limits ())
+                  optim_ctx ?name bindings comp.asgns
               in
               (* gh-ocannl-1526: a search's later compiles take a private copy of its first
                  compile's lowering instead of lowering again (see [Lowering_reuse]); the copy is

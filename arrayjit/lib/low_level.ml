@@ -321,10 +321,10 @@ module Access_fold = struct
     scalar : context -> 'a -> scalar_t -> 'a descent;
     after_statement : context -> 'a -> t -> 'a;
     after_scalar : context -> 'a -> scalar_t -> 'a;
-    branches : context -> 'a -> ('a -> 'a) list -> 'a;
+    branches : context -> 'a -> select:scalar_t -> ('a -> 'a) list -> 'a;
   }
 
-  let in_order _ acc arms = List.fold arms ~init:acc ~f:(fun acc arm -> arm acc)
+  let in_order _ acc ~select:_ arms = List.fold arms ~init:acc ~f:(fun acc arm -> arm acc)
 
   let hooks () =
     {
@@ -429,7 +429,7 @@ module Access_fold = struct
                     | Skip -> acc
                     | Visit ->
                         let ctx = { ctx with gated = true } in
-                        hooks.branches ctx acc
+                        hooks.branches ctx acc ~select:code
                           [
                             (fun acc -> scalar ctx acc (fst b)); (fun acc -> scalar ctx acc (fst c));
                           ]))
@@ -878,6 +878,17 @@ let virtualize_settings =
     footprint_materialization;
   }
 
+type setter_read_sets = {
+  reads_branching : Set.M(Tnode).t;
+      (** A select charges its wider arm (it short-circuits: CUDA, Metal). *)
+  reads_blended : Set.M(Tnode).t;
+      (** A select {!speculable_select} admits charges the union of its arms (cc, HIP). *)
+}
+[@@deriving sexp_of]
+(** One setter's fan-in contributors under both renderings of a value select (gh-ocannl-1775): the
+    analysis is cached across backends, so it keeps both and the guard picks by the backend's
+    [blends_value_selects] fact. *)
+
 type traced_array = {
   tn : Tn.t;
   mutable has_assignment : bool;
@@ -905,18 +916,19 @@ type traced_array = {
           own read-modify-write does not. A node never read in the routine has no inlining cost, so
           the recompute-cost guard must not materialize it (it may instead be dropped as a committed
           virtual computation, or inlined by a later routine in the lineage). *)
-  mutable setter_reads : Set.M(Tnode).t list;
-      (** Per setter statement ([Set]/[Set_from_vec]), the tensor nodes its right-hand side reads —
-          including reads inside [Local_scope] bodies in the right-hand side (their loads execute
-          per evaluation of the setter), and excluding the node's own read-modify-write self-reads
-          (when inlined they become the local accumulator, not a load). Decision-independent
-          analysis fact behind the transitive inline-fanin guard (gh-573): a read of a cell executes
-          one setter's computation, so the guard takes the per-setter maximum, not the union — a
-          Block/concat node written by one range-guarded setter per component costs one component
-          per read. The per-setter maximum is chosen before downstream unions, so a consumer
-          overlapping one alternative but not another can be undercounted — accepted: an exact
-          treatment is combinatorial across multi-setter dependencies, and both error directions of
-          this heuristic prior are benign (a miss reproduces the pre-guard placement, which stays a
+  mutable setter_reads : setter_read_sets list;
+      (** Per setter statement ([Set]/[Set_from_vec]), the tensor nodes its right-hand side reads,
+          under each rendering of a value select ({!setter_read_sets}) — including reads inside
+          [Local_scope] bodies in the right-hand side (their loads execute per evaluation of the
+          setter), and excluding the node's own read-modify-write self-reads (when inlined they
+          become the local accumulator, not a load). Decision-independent analysis fact behind the
+          transitive inline-fanin guard (gh-573): a read of a cell executes one setter's
+          computation, so the guard takes the per-setter maximum, not the union — a Block/concat
+          node written by one range-guarded setter per component costs one component per read. The
+          per-setter maximum is chosen before downstream unions, so a consumer overlapping one
+          alternative but not another can be undercounted — accepted: an exact treatment is
+          combinatorial across multi-setter dependencies, and both error directions of this
+          heuristic prior are benign (a miss reproduces the pre-guard placement, which stays a
           [`Materialize] flip candidate with a fanin-charged cost). *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in the guard computed for this node under the current
@@ -1418,6 +1430,58 @@ let same_position ?dyn_axis ~statics_set (m : Indexing.axis_index array)
       | Some fa, Some fb -> [%equal: (int * Indexing.symbol) list * int] fa fb
       | _ -> false)
 
+(* See the interface: the select a backend may render as a branchless blend (gh-ocannl-1622). Ahead
+   of the read collector, which charges such a select's arms by their union on a blending backend
+   (gh-ocannl-1775). *)
+let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
+  (* The condition, read syntactically: [Local_scope] bodies are not descended into, because a
+     lowering guard is never routed through one — its builders splice the comparison in place, and
+     the only pass minting [Get_local] for an expression ([hoist_cross_statement_cse]) replaces
+     [Local_scope]s, never a guard. *)
+  let rec mentions_index (s : scalar_t) =
+    match s with
+    | Embed_index _ -> true
+    | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _ ->
+        false
+    | Get_dynamic { dyn_value = v, _; _ } -> mentions_index v
+    | Ternop (_, (a, _), (b, _), (c, _)) -> mentions_index a || mentions_index b || mentions_index c
+    | Binop (_, (a, _), (b, _)) -> mentions_index a || mentions_index b
+    | Unop (_, (a, _)) -> mentions_index a
+  in
+  (* Whether evaluating [s] RENDERED AT [prec] is safe whatever the select's condition is. The
+     precision is the one [C_syntax.pp_scalar_op] renders each operand at -- the operator's own for
+     a homogeneous operator, the operand's for a heterogeneous one, and for a [Where] its own
+     precision for the condition and the operator's for the arms -- never the operand's stored
+     annotation, which a homogeneous operator overrides: an integer division the annotation calls
+     f32 renders as C integer division, and traps on a zero divisor (review round 1). *)
+  let rec safe prec (s : scalar_t) =
+    match s with
+    | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _
+    | Embed_index _ ->
+        true
+    | Get_dynamic _ -> false
+    | Ternop (op, (a, pa), (b, pb), (c, pc)) -> (
+        let pa, pb, pc =
+          if Ops.is_homogeneous_prec_ternop op then (prec, prec, prec)
+          else match op with Ops.Where -> (pa, prec, prec) | _ -> (pa, pb, pc)
+        in
+        (* A nested select is walked whole: once the enclosing arm evaluates eagerly, its condition
+           can hold where the enclosing one did not, so everything its arms evaluate is reachable
+           (review round 2) -- even while it keeps short-circuiting itself. *)
+        match Ops.ternop_conditionality op with
+        | Ops.All_three | Ops.Cond_and_one_arm -> safe pa a && safe pb b && safe pc c)
+    | Binop ((Ops.Div | Ops.Mod), _, _) when not (Ops.is_float prec) -> false
+    | Binop (op, (a, pa), (b, pb)) -> (
+        let pa, pb = if Ops.is_homogeneous_prec_binop op then (prec, prec) else (pa, pb) in
+        match Ops.binop_conditionality op with
+        (* A gated operand is reachable, as a nested select's arms are. *)
+        | Ops.Both_operands | Ops.Gated_second -> safe pa a && safe pb b
+        | Ops.Only_first -> safe pa a
+        | Ops.Only_second -> safe pb b)
+    | Unop (op, (a, pa)) -> safe (if Ops.is_homogeneous_prec_unop op then prec else pa) a
+  in
+  (not (mentions_index cond)) && List.for_all arms ~f:(fun (s, prec) -> safe prec s)
+
 (* gh-ocannl-1451: the one read collector -- the tensor nodes one evaluation of a setter of [self]
    loads, as the transitive inline-fanin guard (gh-573) charges them. Shared by [trace_node_facts]'
    per-setter [setter_reads] and the guard's replay of a computation an earlier routine stored, so
@@ -1426,15 +1490,22 @@ let same_position ?dyn_axis ~statics_set (m : Indexing.axis_index array)
    evaluates first; gh-ocannl-1327); - a projection's discarded operand is not evaluated, a gated
    binary operand is charged (its worst case evaluates both), and merge-buffer reads are not
    contributors: a merge-buffer read loads a materialized copy, never inlining the source's
-   computation; - exactly one arm of a [Cond_and_one_arm] ternary evaluates per visit, so the wider
-   arm is charged, not the union -- two arms each within the cap must not jointly trip it -- and on
-   a tie the first; - [Local_scope] bodies hoist to statement level and execute unconditionally
+   computation; - exactly one arm of a [Cond_and_one_arm] ternary evaluates per visit where the
+   select short-circuits, so the wider arm is charged, not the union -- two arms each within the cap
+   must not jointly trip it -- and on a tie the first; but with [~blends] (the backend's
+   [blends_value_selects] fact, gh-ocannl-1775) a select {!speculable_select} admits renders as a
+   blend that evaluates every arm, and is charged the union of its arms. The admission is judged
+   here, before inlining and at the arms' own annotations, while the renderer judges it after
+   virtualization at the select's compute precision (and HIP keeps [?:] over a NaN literal): the
+   difference errs only toward the union -- inlining can add an index to a condition or a gather to
+   an arm, never remove one -- the materializing direction the guard takes for undecided
+   dependencies too; - [Local_scope] bodies hoist to statement level and execute unconditionally
    (both [Where] arms' bodies really run), so their reads join the STATEMENT sink, never an arm's; -
    a dead loop's body replays zero times, and a [Tile_mma] (constructed after the analyses) is
    opaque. *)
 type eval_reads = { e_stmt : Set.M(Tn).t; e_cur : Set.M(Tn).t; e_saved : Set.M(Tn).t list }
 
-let eval_reads_traversal ~self =
+let eval_reads_traversal ~blends ~self =
   let open Access_fold in
   let empty = Set.empty (module Tn) in
   let policy =
@@ -1470,18 +1541,26 @@ let eval_reads_traversal ~self =
               | [] -> assert false)
           | _ -> acc);
       branches =
-        (fun _ acc arms ->
-          let acc', wider =
-            List.fold arms ~init:(acc, None) ~f:(fun (acc', wider) arm ->
+        (fun _ acc ~select arms ->
+          let blended =
+            blends
+            &&
+            match select with
+            | Ternop (_, (cond, _), b, c) -> speculable_select ~cond ~arms:[ b; c ]
+            | _ -> false
+          in
+          let acc', charged =
+            List.fold arms ~init:(acc, None) ~f:(fun (acc', charged) arm ->
                 let r = arm { acc' with e_cur = empty } in
-                let wider =
-                  match wider with
-                  | Some w when Set.length r.e_cur <= Set.length w -> wider
+                let charged =
+                  match charged with
+                  | Some w when blended -> Some (Set.union w r.e_cur)
+                  | Some w when Set.length r.e_cur <= Set.length w -> charged
                   | _ -> Some r.e_cur
                 in
-                ({ r with e_cur = acc.e_cur }, wider))
+                ({ r with e_cur = acc.e_cur }, charged))
           in
-          { acc' with e_cur = Set.union acc.e_cur (Option.value wider ~default:empty) });
+          { acc' with e_cur = Set.union acc.e_cur (Option.value charged ~default:empty) });
     }
   in
   (policy, hooks, { e_stmt = empty; e_cur = empty; e_saved = [] })
@@ -1490,14 +1569,14 @@ let eval_reads_result r = Set.union r.e_stmt r.e_cur
 
 (** See the comment above {!eval_reads}: the contributors of one evaluation of [llsc], the
     right-hand side of a setter of [self]. *)
-let evaluation_reads ~(self : Tn.t) (llsc : scalar_t) : Set.M(Tn).t =
-  let policy, hooks, init = eval_reads_traversal ~self in
+let evaluation_reads ~blends ~(self : Tn.t) (llsc : scalar_t) : Set.M(Tn).t =
+  let policy, hooks, init = eval_reads_traversal ~blends ~self in
   eval_reads_result (Access_fold.fold_scalar ~policy ~hooks ~init llsc)
 
 (** {!evaluation_reads} of a statement: the contributors of one replay of [code], a stored
     computation of [self]. *)
-let evaluation_reads_of_proc ~(self : Tn.t) (code : t) : Set.M(Tn).t =
-  let policy, hooks, init = eval_reads_traversal ~self in
+let evaluation_reads_of_proc ~blends ~(self : Tn.t) (code : t) : Set.M(Tn).t =
+  let policy, hooks, init = eval_reads_traversal ~blends ~self in
   eval_reads_result (Access_fold.fold ~policy ~hooks ~init code)
 
 (* Structural facts pass (gh-554): a single non-enumerating program-order traversal computing the
@@ -1553,7 +1632,12 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   let current_lhs () = match !lhs with top :: _ -> top | [] -> None in
   let setter_facts ctx ~tn ~idcs ~(rhs : scalar_t) =
     let traced : traced_array = get_node traced_store tn in
-    traced.setter_reads <- evaluation_reads ~self:tn rhs :: traced.setter_reads;
+    traced.setter_reads <-
+      {
+        reads_branching = evaluation_reads ~blends:false ~self:tn rhs;
+        reads_blended = evaluation_reads ~blends:true ~self:tn rhs;
+      }
+      :: traced.setter_reads;
     let loop_ranges = loop_ranges ctx in
     traced.inline_reduction_extent <-
       max traced.inline_reduction_extent (reduction_extent loop_ranges idcs);
@@ -7458,55 +7542,6 @@ let rec index_only_scalar (llsc : scalar_t) =
   | Binop (_, (a, _), (b, _)) -> index_only_scalar a && index_only_scalar b
   | Unop (_, (a, _)) -> index_only_scalar a
 
-let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
-  (* The condition, read syntactically: [Local_scope] bodies are not descended into, because a
-     lowering guard is never routed through one — its builders splice the comparison in place, and
-     the only pass minting [Get_local] for an expression ([hoist_cross_statement_cse]) replaces
-     [Local_scope]s, never a guard. *)
-  let rec mentions_index (s : scalar_t) =
-    match s with
-    | Embed_index _ -> true
-    | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _ ->
-        false
-    | Get_dynamic { dyn_value = v, _; _ } -> mentions_index v
-    | Ternop (_, (a, _), (b, _), (c, _)) -> mentions_index a || mentions_index b || mentions_index c
-    | Binop (_, (a, _), (b, _)) -> mentions_index a || mentions_index b
-    | Unop (_, (a, _)) -> mentions_index a
-  in
-  (* Whether evaluating [s] RENDERED AT [prec] is safe whatever the select's condition is. The
-     precision is the one [C_syntax.pp_scalar_op] renders each operand at -- the operator's own for
-     a homogeneous operator, the operand's for a heterogeneous one, and for a [Where] its own
-     precision for the condition and the operator's for the arms -- never the operand's stored
-     annotation, which a homogeneous operator overrides: an integer division the annotation calls
-     f32 renders as C integer division, and traps on a zero divisor (review round 1). *)
-  let rec safe prec (s : scalar_t) =
-    match s with
-    | Get _ | Get_local _ | Get_merge_buffer _ | Local_scope _ | Constant _ | Constant_bits _
-    | Embed_index _ ->
-        true
-    | Get_dynamic _ -> false
-    | Ternop (op, (a, pa), (b, pb), (c, pc)) -> (
-        let pa, pb, pc =
-          if Ops.is_homogeneous_prec_ternop op then (prec, prec, prec)
-          else match op with Ops.Where -> (pa, prec, prec) | _ -> (pa, pb, pc)
-        in
-        (* A nested select is walked whole: once the enclosing arm evaluates eagerly, its condition
-           can hold where the enclosing one did not, so everything its arms evaluate is reachable
-           (review round 2) -- even while it keeps short-circuiting itself. *)
-        match Ops.ternop_conditionality op with
-        | Ops.All_three | Ops.Cond_and_one_arm -> safe pa a && safe pb b && safe pc c)
-    | Binop ((Ops.Div | Ops.Mod), _, _) when not (Ops.is_float prec) -> false
-    | Binop (op, (a, pa), (b, pb)) -> (
-        let pa, pb = if Ops.is_homogeneous_prec_binop op then (prec, prec) else (pa, pb) in
-        match Ops.binop_conditionality op with
-        (* A gated operand is reachable, as a nested select's arms are. *)
-        | Ops.Both_operands | Ops.Gated_second -> safe pa a && safe pb b
-        | Ops.Only_first -> safe pa a
-        | Ops.Only_second -> safe pb b)
-    | Unop (op, (a, pa)) -> safe (if Ops.is_homogeneous_prec_unop op then prec else pa) a
-  in
-  (not (mentions_index cond)) && List.for_all arms ~f:(fun (s, prec) -> safe prec s)
-
 (* The reduction operator of a scope-local update in EITHER spelling: the plain
    [accum_local_update_parts] form, or virtualization's guarded-read form — [Set_local (id, Where
    (index-only cond, update, Get_local id))], possibly nested per condition ([inline_computation]
@@ -9680,8 +9715,9 @@ let template_leaves (optim_ctx : optimize_ctx) (tn : Tn.t) : Set.M(Tnode).t =
   in
   go (Set.empty (module Tnode)) tn
 
-let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads_covered
-    ~read_multiplicity ~footprint ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
+let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_store ~max_visits
+    ~reads_covered ~read_multiplicity ~footprint
+    ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
     ~(tentative_constexpr : Tn.t Hash_set.t)
     ~(live_local : Tn.t -> [ `Unread | `Covered | `Uncovered ]) =
   let plc = optim_ctx.placements in
@@ -9887,13 +9923,21 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
      41 — a heuristic policy decision, [`Inline]-flippable like the other caps), which resets the
      fan-in of everything downstream: the chain materializes once per ~cap contributors instead of
      once per consumer. Per-setter maximum, not union across setters — a read of one cell executes
-     one setter's computation (Block/concat range-guarded setters). *)
+     one setter's computation (Block/concat range-guarded setters, each component under an
+     index-only guard no backend blends). Within a setter a value select is charged as the backend
+     renders it (gh-ocannl-1775, [setter_charge] below): the union of its arms where it blends, its
+     wider arm where it short-circuits. *)
   if virtualize_settings.max_inline_fanin >= 0 then
     (* The reads a stored computation replays when [inline_computation] inlines it: the one read
        collector ({!evaluation_reads_of_proc}, gh-ocannl-1451) that [trace_node_facts] uses for this
        routine's own setters. Used for a dependency this routine only READS whose definition an
        earlier routine in the lineage committed [Virtual] — its traced entry here has no setters,
        but its computation will be replayed all the same. *)
+    (* gh-ocannl-1775: a setter's contributors under the backend's rendering of a value select --
+       the union of a speculable select's arms where the backend blends it, else its wider arm. *)
+    let setter_charge (r : setter_read_sets) =
+      if blends_value_selects then r.reads_blended else r.reads_branching
+    in
     let memo = Hashtbl.create (module Tnode) in
     let rec fanin tn : Set.M(Tnode).t =
       match Hashtbl.find memo tn with
@@ -9946,7 +9990,8 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
             else
               match Hashtbl.find optim_ctx.computations tn with
               | Some comps ->
-                  List.map comps ~f:(fun (_, code) -> evaluation_reads_of_proc ~self:tn code)
+                  List.map comps ~f:(fun (_, code) ->
+                      evaluation_reads_of_proc ~blends:blends_value_selects ~self:tn code)
               | None -> []
           in
           let s =
@@ -9957,7 +10002,9 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
                 | read_sets -> max_expansion read_sets)
             | Some traced ->
                 let s =
-                  Set.union (max_expansion traced.setter_reads) (max_expansion (inherited_reads ()))
+                  Set.union
+                    (max_expansion (List.map traced.setter_reads ~f:setter_charge))
+                    (max_expansion (inherited_reads ()))
                 in
                 traced.inline_fanin <- max 1 (Set.length s);
                 if
@@ -10827,7 +10874,8 @@ let compare_program_order positions a b =
   | None, Some _ -> 1
   | None, None -> Tn.compare a b
 
-let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
+let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : optimize_ctx)
+    (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
   let llc = an.an_llc in
   let traced_store = copy_traced_store an.an_traced_store in
@@ -10854,9 +10902,10 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
     else if local_read_covered tn then `Covered
     else `Uncovered
   in
-  decide_placements input_ctx traced_store ~max_visits:virtualize_settings.max_visits
-    ~reads_covered:an.an_reads_covered ~read_multiplicity:an.an_read_multiplicity
-    ~footprint:an.an_footprint ~footprint_scoped ~tentative_constexpr ~live_local;
+  decide_placements ~blends_value_selects input_ctx traced_store
+    ~max_visits:virtualize_settings.max_visits ~reads_covered:an.an_reads_covered
+    ~read_multiplicity:an.an_read_multiplicity ~footprint:an.an_footprint ~footprint_scoped
+    ~tentative_constexpr ~live_local;
   [%log "optimizing"];
   (* gh-ocannl-681: taken BEFORE virtualization, so cleanup can tell the scopes this pass was handed
      from the ones it mints and only retracts its own. *)
@@ -11610,7 +11659,7 @@ let slice_alias_violation (root : t) : string option =
 let validate_no_slice_aliases ?(site = "Low_level.validate_no_slice_aliases") (llc : t) : unit =
   Option.iter (slice_alias_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
 
-let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
+let optimize_proc ~blends_value_selects (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-584: the pipeline's entry gate for scope purity, ahead of the analysis cache so a
      digest hit cannot skip it. Codegen's gate alone would not do: [hoist_cross_statement_cse] lifts
      a body shared by sibling statements to a top-level [Declare_local] + body, which moves an
@@ -11628,7 +11677,7 @@ let optimize_proc (input_ctx : optimize_ctx) static_indices llc =
   (* gh-ocannl-1709: an operand annotation a homogeneous operator would ignore is a request, not a
      description, refused while it is still the builder's shape. *)
   validate_operand_precisions ~site:"Low_level.optimize_proc" llc;
-  specialize_proc input_ctx (cached_analyze_proc static_indices llc)
+  specialize_proc ~blends_value_selects input_ctx (cached_analyze_proc static_indices llc)
 
 let code_hum_margin = ref 100
 
@@ -12048,10 +12097,11 @@ let to_doc ?name ?static_indices () llc =
 
   hardline ^^ nest 2 (function_header_doc ?name ?static_indices () ^^ doc_of_code llc)
 
-let%diagn2_sexp optimize (input_ctx : optimize_ctx) ~unoptim_ll_source ~ll_source ~(name : string)
-    (static_indices : Indexing.static_symbol list) (llc : t) : optimized =
+let%diagn2_sexp optimize ?(blends_value_selects = false) (input_ctx : optimize_ctx)
+    ~unoptim_ll_source ~ll_source ~(name : string) (static_indices : Indexing.static_symbol list)
+    (llc : t) : optimized =
   Option.iter unoptim_ll_source ~f:(fun callback -> callback (to_doc ~name ~static_indices () llc));
-  let result = optimize_proc input_ctx static_indices llc in
+  let result = optimize_proc ~blends_value_selects input_ctx static_indices llc in
   Option.iter ll_source ~f:(fun callback -> callback (to_doc ~name ~static_indices () result.llc));
   result
 

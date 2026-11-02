@@ -218,10 +218,38 @@ let () =
         && same_loops (Some rot_loops) [ (j, None); (i, Some LL.Serial) ]
     | _ -> false);
   let set_eq got want = Set.equal got (Set.of_list (module Tn) want) in
-  let ev sc = LL.evaluation_reads ~self:out sc in
+  let ev sc = LL.evaluation_reads ~blends:false ~self:out sc in
   p "a Where charges its condition and its wider arm, not the union"
     (set_eq (ev (where_ (at a) (add (at b) (at c_)) (at d_))) [ a; b; c_ ]);
   p "a Where whose arms tie charges the first" (set_eq (ev (where_ (at a) (at b) (at c_))) [ a; b ]);
+  (* gh-ocannl-1775: on a backend that blends value selects, a select [LL.speculable_select] admits
+     evaluates both arms, so it is charged their union; one it does not admit still short-circuits
+     there and keeps the wider arm. *)
+  let evb sc = LL.evaluation_reads ~blends:true ~self:out sc in
+  p "a blended speculable Where charges the union of its arms"
+    (set_eq (evb (where_ (at a) (add (at b) (at c_)) (at d_))) [ a; b; c_; d_ ]);
+  p "a blended Where whose arms read the same node charges it once"
+    (set_eq (evb (where_ (at a) (add (at b) (at c_)) (add (at c_) (at b)))) [ a; b; c_ ]);
+  p "a blended Where over an index condition (an inliner guard) keeps the wider arm"
+    (set_eq (evb (where_ (lt (embed i) (ic 2)) (add (at b) (at c_)) (at d_))) [ b; c_ ]);
+  p "a blended Where with a gather arm keeps the wider arm"
+    (set_eq
+       (evb
+          (where_ (at a)
+             (add (at b) (at c_))
+             (gather ~tn:d_ ~idcs:[| fixed 0 |] ~dyn_axis:0 ~dyn_value:(at e_, single))))
+       [ a; b; c_ ]);
+  p "a blended Where with an integer-division arm keeps the wider arm"
+    (set_eq
+       (evb
+          (LL.Ternop
+             ( Ops.Where,
+               (at a, single),
+               (add (at b) (at c_), Ops.int32),
+               (LL.Binop (Ops.Div, (at d_, Ops.int32), (at e_, Ops.int32)), Ops.int32) )))
+       [ a; b; c_ ]);
+  p "nested blended selects charge every arm"
+    (set_eq (evb (where_ (at a) (where_ (at b) (at c_) (at d_)) (at e_))) [ a; b; c_; d_; e_ ]);
   p "a scope body inside an arm charges the statement, not the arm"
     (set_eq
        (ev (where_ (at a) (scope (LL.Set_local (scope_id, add (at d_) (at e_)))) (at b)))
@@ -238,11 +266,12 @@ let () =
     (set_eq (ev (binop Ops.Arg2 (at a) (at b))) [ b ]);
   p "a stored computation's dead loop replays nothing"
     (set_eq
-       (LL.evaluation_reads_of_proc ~self:out (seq (loop ~upto:(-1) i (put (at a))) (put (at b))))
+       (LL.evaluation_reads_of_proc ~blends:false ~self:out
+          (seq (loop ~upto:(-1) i (put (at a))) (put (at b))))
        [ b ]);
   p "a stored computation's Tile_mma is opaque"
     (set_eq
-       (LL.evaluation_reads_of_proc ~self:out
+       (LL.evaluation_reads_of_proc ~blends:false ~self:out
           (tile_mma
              ~d:(d_, [| fixed 0 |])
              ~a:(a, [| fixed 0 |])

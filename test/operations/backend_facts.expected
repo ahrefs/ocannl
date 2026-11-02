@@ -6,3 +6,4 @@ seeds_untuned_default alone moves whether the seeded plan's keys are read: true
 queued_timing alone moves the queued batch depth cap: true
 retries_contended_window alone moves the contended-window retry: true
 host_load_attributable alone moves the dispersion policy: true
+blends_value_selects alone moves the inline fan-in cap's decision on a select: true
