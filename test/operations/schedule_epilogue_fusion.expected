@@ -19,3 +19,9 @@ fragment identity: a look-alike of the fragment is not recognized as the fragmen
 fragment identity control: the same program with the node enrolled fuses: true
 fragment identity: the transform ran: true
 fragment identity: fused through the real masked fragment, values match two-kernel: true
+epf_partition_unbatched: the tail is relocated into the last k segment, and only there: true
+epf_partition_unbatched (fused at the last segment) fused values match two-kernel: true
+epf_partition_multitrip (a later k segment of two trips) rejected with a targeted error: true
+epf_partition_rowedge (a later row-block segment) rejected with a targeted error: true
+epf_partition_surgery: a later segment under a batch loop, after an unrecognized writer, is not fused: true
+epf_partition_surgery control: the same surgery on the unbatched program fuses: true

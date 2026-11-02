@@ -2176,8 +2176,9 @@ files.
   accumulator unindexed) on a `Serial` block loop whose symbol is every mask's one outer term, with
   no GPU shared fragment. A whole-K site keeps the single contraction ON PURPOSE: its store-back
   runs once per output tile, which is what `Fuse_epilogue` relocates a tail to, and
-  `fuse_at_fragment` neither descends a segment starting above 0 nor fuses two sites; under a
-  k-block loop it refuses either form on exactly-once, so splitting there costs nothing. The
+  `fuse_at_fragment` fuses at one site only (a row-block split's later segment covers only the edge
+  rows and is refused on cover); under a k-block loop it refuses either form on exactly-once, so
+  splitting there costs nothing. The
   `Grid` flavors are untouched (a `Grid` loop is not split; `Grid_outermost` contracts at `k_o`).
   The census then reports two register-tiled `Tile_mma`s for one padded serial GEBP;
   `gebp_padded_parity` pins where each row block accumulates.
@@ -2227,13 +2228,23 @@ files.
   whole-routine seed (`search_seeding`'s `ss_whole`, flag-flipped) on nine single-trip sites
   (k-splits, k of one block and below one, row and column edges, 3x3 and 1x1 convs) BITWISE
   against the unfused run, exact because every input is a small dyadic; none admitted differed on
-  cc or Metal, and on cc all but one Partition-carrying twin is refused (the one admitted, on
-  four full k blocks, is equal). `schedule_epilogue_fusion` pins the seeds' geometry by hand both
+  cc or Metal. `schedule_epilogue_fusion` pins the seeds' geometry by hand both
   ways: k-block loop under the row block (the contraction spans both segments; fuses, equal) and
-  above it (a store-back per segment; refused). The pin
-  needs a loop enclosing both segments (the batch loop, as in transformer_names): unbatched, the
-  edge segment is the last top-level writer, `fuse_at_fragment` never descends a segment starting
-  above 0, and the refusal comes from the plain-write path ("guarded writes") instead. The
+  above it (a store-back per segment; refused). The refusal
+  needs a loop enclosing both segments (the batch loop, as in transformer_names). **Unbatched, the
+  last segment fuses** (gh-ocannl-1733): the edge segment, a `Serial` loop starting above 0, is the
+  last top-level writer, and `fuse_at_fragment` descends it and judges its store-back, which
+  follows the whole reduction. Three rules keep that exactly-once. The segment counts its real
+  trip count, so a later segment of several trips is a surplus loop. Its symbol is left out of the
+  cover env, since `covers_bijectively` assumes zero-based loops, so a site it indexes (a row-block
+  edge) is refused on cover; the cover arithmetic alone already refuses a strict sub-range of
+  blocks, so this is defense in depth. And it is descended only where every enclosing loop is
+  single-trip: under the batch loop, an earlier segment that was not recognized as a site would
+  write again in a later iteration, after the store-back, and the written-again check reads only
+  what follows textually. `schedule_epilogue_fusion`'s `epf_partition_*` legs pin all four
+  (fused and equal, multi-trip, row edge, and a surgered batched program), and the sweep's
+  `ksplit1` claims a Partition-carrying twin is admitted. The batched case stays refused: fusing
+  at its last segment needs a dependence check over the batch loop. The
   whole-K residual (16x76 vs 19x76: 1.095x against 1.053x row waste, block shapes differing too)
   is what two-site `Fuse_epilogue` fusion could at most recover, so it was not built.
   `Grid_outermost` B~ packing is a size call, not a fix: re-packing a panel per row block runs

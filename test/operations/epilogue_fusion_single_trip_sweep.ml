@@ -9,12 +9,15 @@
    [Partition] with ONE full k block leaves both segments' k-block loops single-trip, the twin fused
    after the first segment's store-back, and its tail read the first k block alone
    (transformer_names dropped half its vocabulary, with every loss claim still holding). That PR
-   made [fuse_at_fragment] refuse any write of the accumulator after the fused site. This sweep pins
-   the class, not the instance: on each site below, the fused twin of EVERY whole-routine seed the
-   search would propose ([Autotune.search_seeding]'s [ss_whole], sketch and coalesced, each seed's
-   flag-flipped twin, which is how the family tree mints its fused flavor) is compiled and run, and
-   every twin that is admitted must equal the untuned two-kernel run; every other one must be
-   refused typed (a crash is not a quiet exclusion from the population).
+   made [fuse_at_fragment] refuse any write of the accumulator after the fused site. Since
+   gh-ocannl-1733 an unbatched split's last segment (a loop starting above 0, the last top-level
+   writer) is descended and its store-back judged, so those twins are admitted where they used to be
+   refused, and their values are held to the same bitwise check. This sweep pins the class, not the
+   instance: on each site below, the fused twin of EVERY whole-routine seed the search would propose
+   ([Autotune.search_seeding]'s [ss_whole], sketch and coalesced, each seed's flag-flipped twin,
+   which is how the family tree mints its fused flavor) is compiled and run, and every twin that is
+   admitted must equal the untuned two-kernel run; every other one must be refused typed (a crash is
+   not a quiet exclusion from the population).
 
    The sites are chosen for their single-trip producers: one full k block and an edge (the k-split,
    batched as in transformer_names and not), four full blocks and an edge, k exactly one block (a
@@ -79,7 +82,7 @@ let all_twins : twin list ref = ref []
 
 (* One site: [build ()] makes the graph and returns the reduction output (materialized, the fusion
    target) and the tail's output. *)
-let sweep tag build =
+let sweep ?(admits_partitioned = false) tag build =
   Tensor.unsafe_reinitialize ();
   let z, y = build () in
   Train.set_materialized z.Tensor.value;
@@ -173,7 +176,14 @@ let sweep tag build =
   claim (tag ^ ": every fused twin swept runs or is refused typed") twins ~f:(fun t ->
       match t.outcome with Ran _ | Refused _ -> true | Crashed _ -> false);
   claim (tag ^ ": every admitted fused twin equals the unfused reference bitwise") ran
-    ~f:(fun got -> Array.equal Float.equal got want)
+    ~f:(fun got -> Array.equal Float.equal got want);
+  (* gh-ocannl-1733: an unbatched k-split's last segment, a loop starting above 0 that nothing
+     re-executes, is the last writer of the accumulator; its store-back is judged, and the twin
+     fuses there instead of being refused. The CPU packed seeds are the ones that partition. *)
+  if admits_partitioned then
+    gated_exists ~when_:is_cpu ~on:backend_name
+      (tag ^ ": a Partition-carrying fused twin is admitted") twins ~f:(fun t ->
+        t.partitioned && match t.outcome with Ran _ -> true | Refused _ | Crashed _ -> false)
 
 (* A GEMM [z = x . w] over [b] batch rows ([b = 0]: unbatched) with an elementwise tail [z + pos],
    [pos] broadcast along the rows. Values: x in [0, 3] by quarters, w and pos small integers. *)
@@ -238,8 +248,9 @@ let () =
   (* One full 16-deep k block and an edge, batched with 15 rows: transformer_names' one-hot
      embedding site, where the gh-ocannl-1670 split met the exactly-once check. *)
   sweep "ksplit1b" (gemm ~b:4 ~m:15 ~k:28 ~n:16 "ksplit1b");
-  (* The same split unbatched, at a dividing row count. *)
-  sweep "ksplit1" (gemm ~m:16 ~k:20 ~n:32 "ksplit1");
+  (* The same split unbatched, at a dividing row count: the edge segment is the last top-level
+     writer, and its store-back is where the fused twins put the tail. *)
+  sweep ~admits_partitioned:true "ksplit1" (gemm ~m:16 ~k:20 ~n:32 "ksplit1");
   (* Four full k blocks and an edge: the partitioned segments are not single-trip. *)
   sweep "ksplit4" (gemm ~m:24 ~k:70 ~n:40 "ksplit4");
   (* k exactly one block: a single-trip k-block loop and no Partition. *)

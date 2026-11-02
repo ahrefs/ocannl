@@ -429,30 +429,47 @@ let () =
      inside the batch loop that encloses both, and no enclosing loop of extent > 1 betrays the first
      store-back as partial. That fusion must be refused for the second segment's write. *)
   let b_pad = 2 and m_pad = 15 and k_pad = 28 in
-  let make_padded_graph tag =
+  (* [batched:false] drops the batch axis (gh-ocannl-1733): the k-block segments are then top-level
+     statements, the last one the last writer of the accumulator. *)
+  let make_padded_graph ?(batched = true) ?(m = m_pad) ?(k = k_pad) tag =
+    let rows = (if batched then b_pad else 1) * m in
     let mav =
-      Array.init
-        (b_pad * m_pad * k_pad)
-        ~f:(Ll_test.cycle_flat ~dims:[| b_pad * m_pad; k_pad |] ~modulus:13 ~offset:0. ~stride:0.25)
+      Array.init (rows * k)
+        ~f:(Ll_test.cycle_flat ~dims:[| rows; k |] ~modulus:13 ~offset:0. ~stride:0.25)
     in
     let mbv =
-      Array.init (k_pad * n)
-        ~f:(Ll_test.cycle_flat ~dims:[| k_pad; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
+      Array.init (k * n)
+        ~f:(Ll_test.cycle_flat ~dims:[| k; n |] ~modulus:17 ~offset:(-8.) ~stride:1.)
     in
-    let ma =
-      TDSL.ndarray mav ~label:[ "ma" ^ tag ] ~batch_dims:[ b_pad ] ~output_dims:[ m_pad; k_pad ] ()
-    in
-    let mb = TDSL.ndarray mbv ~label:[ "mb" ^ tag ] ~output_dims:[ k_pad; n ] () in
+    let mb = TDSL.ndarray mbv ~label:[ "mb" ^ tag ] ~output_dims:[ k; n ] () in
     let bias = TDSL.ndarray bv ~label:[ "bias" ^ tag ] ~output_dims:[ n ] () in
-    let%op prod = ma +* "b|ik;kj=>b|ij" mb in
+    let ma, prod =
+      if batched then
+        let ma =
+          TDSL.ndarray mav ~label:[ "ma" ^ tag ] ~batch_dims:[ b_pad ] ~output_dims:[ m; k ] ()
+        in
+        let%op prod = ma +* "b|ik;kj=>b|ij" mb in
+        (ma, prod)
+      else
+        let ma = TDSL.ndarray mav ~label:[ "ma" ^ tag ] ~output_dims:[ m; k ] () in
+        let%op prod = ma +* "ik;kj=>ij" mb in
+        (ma, prod)
+    in
     let%op mc = prod + bias in
     (ma, mb, prod, mc)
   in
-  let padded_pipeline ~k_outermost (ma : Tensor.t) (mb : Tensor.t) (opt : LL.optimized) =
+  (* [partition] builds the Partition ops from the row-block and k-block loops; the default is the
+     packed seeds' own k-block split. *)
+  let padded_pipeline
+      ?(partition =
+        fun ~i_o:_ ~k_o -> Sched.pad_edge_partition ~block_loop:k_o ~extent:k_pad ~block:bm)
+      ~k_outermost (ma : Tensor.t) (mb : Tensor.t) (opt : LL.optimized) =
     let paths = Ll_test.nest_paths opt.LL.llc in
     let i, j, k =
-      match List.find_exn paths ~f:(fun p -> List.length p = 4) with
-      | [ _b; i; j; k ] -> (i, j, k)
+      (* The matmul nest: the deepest one (the batched graph's tail nest is three deep too). *)
+      let depth = List.fold paths ~init:0 ~f:(fun d p -> Int.max d (List.length p)) in
+      match List.find_exn paths ~f:(fun p -> List.length p = depth) with
+      | [ _; i; j; k ] | [ i; j; k ] -> (i, j, k)
       | _ -> assert false
     in
     let sp_i, i_o, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Serial ~inner:LL.Serial in
@@ -484,7 +501,7 @@ let () =
        ]
       @ (if k_outermost then [ Sched.Swap { outer = i_o; inner = k_o } ] else [])
       @ [ stage ma.Tensor.value [ i_i; k_i ]; stage mb.Tensor.value [ k_i; j ]; tz ]
-      @ Sched.pad_edge_partition ~block_loop:k_o ~extent:k_pad ~block:bm)
+      @ partition ~i_o ~k_o)
       opt
   in
   let fuse (prod : Tensor.t) opt =
@@ -580,4 +597,166 @@ let () =
    p "fragment identity: the transform ran" !checked;
    p_all2 "fragment identity: fused through the real masked fragment, values match two-kernel" got
      want_padded ~f:Float.equal);
+  (* gh-ocannl-1733: an UNBATCHED k-split. With the k-block loop above the row blocks, each segment
+     stores its own partial accumulation back, as in [epf_partition_outermost]; but with no batch
+     loop the two segments are top-level statements, and the last one -- a loop starting above 0,
+     which nothing re-executes -- is the last writer of the accumulator. Its store-back follows the
+     whole reduction, so the tail is fused there: the relocated tail lands inside that segment and
+     nowhere else, and its values equal the two-kernel run bitwise (every operand varies with each
+     of its axes, so a tail reading the first k block alone differs). *)
+  let refusal_of name (mc : Tensor.t) transform =
+    match
+      ignore
+        (Context.compile
+           ~lowered_transform:(fun o -> [ transform o ])
+           (Context.auto ())
+           (named name (Train.forward mc))
+           Ir.Indexing.Empty
+          : Context.t * Context.routine)
+    with
+    | () -> None
+    | exception Invalid_argument msg ->
+        Stdio.eprintf "%s: %s (not part of the golden)\n%!" name msg;
+        Some msg
+  in
+  let fuse_refusal prod opt =
+    match fuse prod opt with
+    | (_ : LL.optimized) -> None
+    | exception Invalid_argument msg -> Some msg
+  in
+  let sets_of (tn : Tn.t) = function LL.Set { tn = t; _ } -> Tn.equal t tn | _ -> false in
+  (let want_unbatched =
+     let _, _, _, mc = make_padded_graph ~batched:false "8r" in
+     nonzero "epf_unbatched_ref" (run_with "epf_unbatched_ref" (fun opt -> opt) mc)
+   in
+   let ma, mb, prod, mc = make_padded_graph ~batched:false "8s" in
+   let placed = ref None in
+   let transform opt =
+     let fused = partitioned_k ~k_outermost:true ma mb prod opt in
+     let tail_writes = Ll_test.count_stmt fused.LL.llc ~f:(sets_of mc.Tensor.value) in
+     let in_later_segment =
+       List.sum
+         (module Int)
+         (Ll_test.loop_sites fused.LL.llc)
+         ~f:(fun site ->
+           match site.Ll_test.ls_stmt with
+           | LL.For_loop { from_; body; _ } when from_ > 0 ->
+               Ll_test.count_stmt body ~f:(sets_of mc.Tensor.value)
+           | _ -> 0)
+     in
+     placed := Some (tail_writes > 0 && tail_writes = in_later_segment);
+     fused
+   in
+   let got = run_with "epf_partition_unbatched" transform mc in
+   p "epf_partition_unbatched: the tail is relocated into the last k segment, and only there"
+     (Option.value ~default:false !placed);
+   p_all2 "epf_partition_unbatched (fused at the last segment) fused values match two-kernel" got
+     want_unbatched ~f:Float.equal);
+  (* A later segment of more than one trip that does not index the store-back re-executes it with
+     partial accumulations: k = 70 is five 16-deep blocks, partitioned after the third, so the last
+     segment runs blocks 3 and 4. Descended, it is refused by the surplus-loop check. *)
+  (let ma, mb, prod, mc = make_padded_graph ~batched:false ~k:70 "8m" in
+   let partition ~i_o:_ ~k_o = [ fst (Sched.partition ~axis:k_o ~breakpoints:[ 3 ]) ] in
+   let label =
+     "epf_partition_multitrip (a later k segment of two trips) rejected with a targeted error"
+   in
+   match
+     refusal_of "epf_partition_multitrip" mc (fun o ->
+         fuse prod (padded_pipeline ~partition ~k_outermost:true ma mb o))
+   with
+   | Some msg ->
+       p label
+         (String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
+         && String.is_substring msg ~substring:"does not index it")
+   | None -> p label false);
+  (* A later segment of the ROW-block loop covers only the edge rows: its store-back is indexed by
+     the segment's own symbol, which starts above 0, and is refused by the cover check (fusing at
+     each segment is two-site fusion, not built). 20 rows are two 16-row blocks, partitioned after
+     the first; the k-block loop sits under the row block, so each row block has one store-back. *)
+  (let ma, mb, prod, mc = make_padded_graph ~batched:false ~m:20 "8e" in
+   let partition ~i_o ~k_o:_ = [ fst (Sched.partition ~axis:i_o ~breakpoints:[ 1 ]) ] in
+   let label = "epf_partition_rowedge (a later row-block segment) rejected with a targeted error" in
+   match
+     refusal_of "epf_partition_rowedge" mc (fun o ->
+         fuse prod (padded_pipeline ~partition ~k_outermost:false ma mb o))
+   with
+   | Some msg ->
+       p label
+         (String.is_substring msg ~substring:"Schedule.Fuse_epilogue"
+         && String.is_substring msg ~substring:"do not cover the output space bijectively")
+   | None -> p label false);
+  (* A later segment is judged only where nothing re-executes the statements before it. Under the
+     batch loop, the first segment's write of a later batch iteration would follow the last
+     segment's store-back, unseen by the written-again check (which reads only what follows the site
+     textually). In real schedules the first segment matches first and is refused as written again
+     ([epf_partition_outermost]); here its intrinsic and store-back are made unrecognizable (their
+     [Workgroup] lane loops turned [Serial]) while it still writes the accumulator, so the last
+     segment must not be descended. The control: the same surgery on the unbatched program, where
+     the segments are top-level, fuses. Neither surgered program is run (the unfused pipeline
+     is). *)
+  let serialize_segment seg (llc : LL.t) =
+    let rec serial (llc : LL.t) : LL.t =
+      match llc with
+      | LL.For_loop fc ->
+          LL.For_loop
+            {
+              fc with
+              axis = (match fc.axis with LL.Workgroup -> LL.Serial | a -> a);
+              body = serial fc.body;
+            }
+      | LL.Seq (a, b) ->
+          let a = serial a in
+          LL.Seq (a, serial b)
+      | LL.If x -> LL.If { x with body = serial x.body }
+      | other -> other
+    in
+    let found = ref false in
+    let rec find (llc : LL.t) : LL.t =
+      match llc with
+      | LL.For_loop fc when Ir.Indexing.equal_symbol fc.index seg ->
+          found := true;
+          serial llc
+      | LL.For_loop fc -> LL.For_loop { fc with body = find fc.body }
+      | LL.Seq (a, b) ->
+          let a = find a in
+          LL.Seq (a, find b)
+      | LL.If x -> LL.If { x with body = find x.body }
+      | other -> other
+    in
+    let res = find llc in
+    assert !found;
+    res
+  in
+  let surgered ~batched tag =
+    let ma, mb, prod, mc = make_padded_graph ~batched tag in
+    let verdict = ref None in
+    let transform opt =
+      let first = ref None in
+      let partition ~i_o:_ ~k_o =
+        let op, segs = Sched.partition ~axis:k_o ~breakpoints:[ 1 ] in
+        first := Some (List.hd_exn segs);
+        [ op ]
+      in
+      let opt = padded_pipeline ~partition ~k_outermost:true ma mb opt in
+      let seg = Option.value_exn ~here:[%here] !first in
+      verdict := Some (fuse_refusal prod { opt with LL.llc = serialize_segment seg opt.LL.llc });
+      opt
+    in
+    ignore (run_with ("epf_partition_surgery_" ^ tag) transform mc : float array);
+    Option.value_exn ~here:[%here] !verdict
+  in
+  (match surgered ~batched:true "8g" with
+  | Some msg ->
+      Stdio.eprintf "epf_partition_surgery batched: %s (not part of the golden)\n%!" msg;
+      p
+        "epf_partition_surgery: a later segment under a batch loop, after an unrecognized writer, \
+         is not fused"
+        (String.is_substring msg ~substring:"Schedule.Fuse_epilogue")
+  | None ->
+      p
+        "epf_partition_surgery: a later segment under a batch loop, after an unrecognized writer, \
+         is not fused"
+        false);
+  p "epf_partition_surgery control: the same surgery on the unbatched program fuses"
+    (Option.is_none (surgered ~batched:false "8c"));
   ignore prod4

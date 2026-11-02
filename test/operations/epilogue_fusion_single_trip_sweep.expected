@@ -2,6 +2,7 @@ ksplit1b: every fused twin swept runs or is refused typed: true
 ksplit1b: every admitted fused twin equals the unfused reference bitwise: true
 ksplit1: every fused twin swept runs or is refused typed: true
 ksplit1: every admitted fused twin equals the unfused reference bitwise: true
+ksplit1: a Partition-carrying fused twin is admitted: true
 ksplit4: every fused twin swept runs or is refused typed: true
 ksplit4: every admitted fused twin equals the unfused reference bitwise: true
 kone: every fused twin swept runs or is refused typed: true

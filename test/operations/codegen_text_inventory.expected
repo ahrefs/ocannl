@@ -349,7 +349,7 @@ test/operations/schedule_cpu_pack_matmul.ml [run by @test/operations/runtest-sch
     "float " ^ ...
     "if ("
     "threadgroup float " ^ ...
-test/operations/schedule_epilogue_fusion.ml [run by @test/operations/runtest-schedule_epilogue_fusion]
+test/operations/schedule_epilogue_fusion.ml [run by @test/operations/runtest-schedule_epilogue_fusion; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write, rebound parameter]
     "relu_mc["
     "simdgroup_store(__mma_fragment_"
     "threadgroup float"
