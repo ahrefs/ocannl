@@ -28,3 +28,17 @@ a sibling setter's read and launch symbol are not the replay's: true
 self's own launch symbol is free: true
 a merge-buffer read in self's setter is reported: true
 a dead loop replays nothing: true
+cc: the merge reader mv is virtual: true
+cc: the consumer read the transferred values: true
+cc: mv, whose stored computation reads a merge buffer, is unobservable: true
+cc mv: <unobservable: mv reads a merge buffer>
+  node mv is virtual, and recomputing it replays a read of a merge buffer (in the stored computation of mv, dependency path mv): merge-buffer contents are transient to the routine receiving the transfer, so mv cannot be observed by recomputation. Materialize mv to observe it.
+multidev_cc: the merge reader mv is virtual: true
+multidev_cc: the consumer read the transferred values: true
+multidev_cc: mv, whose stored computation reads a merge buffer, is unobservable: true
+multidev_cc mv: <unobservable: mv reads a merge buffer>
+  node mv is virtual, and recomputing it replays a read of a merge buffer (in the stored computation of mv, dependency path mv): merge-buffer contents are transient to the routine receiving the transfer, so mv cannot be observed by recomputation. Materialize mv to observe it.
+the hand-built v is virtual: true
+before the replacement, v's query answers: true
+a stored computation reading an undecided node is an internal error: true
+a virtual node with an empty stored computation is an internal error: true
