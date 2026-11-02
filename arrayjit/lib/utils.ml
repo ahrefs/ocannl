@@ -130,6 +130,7 @@ let known_config_keys =
       "cuda_compile_program_min_kernels";
       "cuda_fast_math";
       "hip_fast_math";
+      "cuda_ptx_target";
       "cc_kernel_cache_mib";
       "cc_kernel_part_weight";
       "cc_compile_jobs";
@@ -395,6 +396,11 @@ let config_key_classification : (config_key_class * string * string list) list =
        rendered and compiled, after the lowered code the digest names; the backend's tag carries \
        the precise regime as a component derived from those switches",
       [ "cuda_fast_math"; "hip_fast_math" ] );
+    ( Keyed "codegen",
+      "a CUDA compile knob (gh-ocannl-1705): it picks the nvrtc target arch, the floor that ships \
+       or the device's own, when a kernel is compiled, after the lowered code the digest names; \
+       the CUDA tag carries the native target as a component",
+      [ "cuda_ptx_target" ] );
     ( Keyed "codegen",
       "it changes the emitted code or the mechanics a search measures in, without being a property \
        of the lowered code: an aliasing candidate's kernel parameter drops its [restrict] \

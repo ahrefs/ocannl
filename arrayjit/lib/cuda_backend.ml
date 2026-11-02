@@ -1960,13 +1960,16 @@ end = struct
          [profile=reproducible]. *)
       ^
       let fast_math = Cuda_like_config.cuda_fast_math () in
-      if fast_math then ""
-      else
-        "/nvrtc-math:"
-        ^ Compiler_options.render (Compiler_options.nvrtc_math_options ~fast_math)
-        (* gh-ocannl-1457: a contraction-off compile renders a [Tile_mma] fallback unfused, so a
-           crown timed with the fused one does not replay. Derived from the dialect's own pin. *)
-        ^ if Cuda_like_config.Cuda.compiler_contraction_off () then "/mma-fallback-unfused" else ""
+      (if fast_math then ""
+       else
+         "/nvrtc-math:"
+         ^ Compiler_options.render (Compiler_options.nvrtc_math_options ~fast_math)
+         (* gh-ocannl-1457: a contraction-off compile renders a [Tile_mma] fallback unfused, so a
+            crown timed with the fused one does not replay. Derived from the dialect's own pin. *)
+         ^ if Cuda_like_config.Cuda.compiler_contraction_off () then "/mma-fallback-unfused" else "")
+      (* gh-ocannl-1705: the PTX target, the [cuda_ptx_target] key or a [with_ptx_target] extent.
+         Only the native target adds a component, so every floor-crowned key stays valid. *)
+      ^ match Cuda_mma.current_ptx_target () with Floor -> "" | Native -> "/ptx-target:native"
     in
     fun () -> { (Lazy.force limits) with Backend_intf.codegen_tag = Some (codegen_tag ()) }
 

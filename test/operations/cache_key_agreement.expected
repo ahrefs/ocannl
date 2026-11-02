@@ -51,5 +51,6 @@ Keyed keys hashed only on some backends:
   gpu_graph_capture -- CUDA and HIP
   cuda_fast_math -- CUDA
   hip_fast_math -- HIP
+  cuda_ptx_target -- CUDA
   gpu_elide_covered_zeros -- GPU backends
   gpu_default_seed_narrow_storage -- CUDA and HIP
