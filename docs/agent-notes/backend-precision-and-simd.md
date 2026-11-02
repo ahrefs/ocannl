@@ -2125,6 +2125,22 @@ files.
   and `x - x = 0` fold to a constant, silently disabling an overflow gate (the shape
   `Mixed_prec.gated_scaled_update` needs). It is the same reason `Builtins_metal`'s fp8 codec is
   written in integer/bitcast form rather than float arithmetic.
+- **HIP's f64 division is a builtin expansion, because no hiprtc lever reaches f64 alone**
+  (gh-ocannl-1782). Under `-ffast-math`, hiprtc rendered f64 `x / y` as a Newton-refined reciprocal
+  estimate: NaN for every `x / 0`, `x / inf` and `inf / y`, measured on gfx1151.
+  `-fapprox-func` makes the estimate and `-freciprocal-math` the `x * (1 / y)` rounding; dropping
+  both makes every precision exact, at the cost of every f32 division. The approximation follows
+  the kernel's `"approx-func-fp-math"` function attribute, so an instruction-level pragma cannot
+  undo it, and hiprtc ignores `#pragma float_control` anyway ("not supported on this target").
+  ROCm's `__ocml_div_rte_f64` is declared in `math_fwd.h` but absent from the device library.
+  `Builtins_hip.ocannl_div_f64` writes out LLVM's own `LowerFDIV64` in `__builtin_amdgcn_div_scale`
+  / `rcp` / `__builtin_fma` / `div_fmas` / `div_fixup`, and `Cuda_like_config`'s `div_f64` routes
+  f64 `Div` and `Recip` through it. HIP's f32, half and bfloat16 division stay the estimate,
+  as CUDA's f32 does under `--use_fast_math`. That is a recorded boundary of the fast policy:
+  1-ulp quotients (`3 / 3 = 1 - 2^-24`), subnormal divisors overflowing, and f32 divisors from
+  2^126 flushing their reciprocal (`inf / FLT_MAX` NaN). A `hip_fast_math` key (gh-ocannl-1779)
+  that drops the umbrella is what lifts it. The helper is correct under either policy. Pinned by
+  `division_special_values`, whose HIP f32 leg is the on-device negative control.
 - **gfx1102 compiles without `real-true16`, and HIPRTC never gets `-amdgpu-waitcnt-*`**
   (`Compiler_options.hip_target_options`, gh-ocannl-1182/1222). In true16 mode, 16-bit values live
   in VGPR halves, and a pending D16 high-half load raced a low-half update of the same register,

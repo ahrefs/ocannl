@@ -116,6 +116,30 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
           : __double_as_longlong(fmod(x, y)));
 }|},
       [] );
+    (* gh-ocannl-1782: under [-ffast-math]'s [-fapprox-func], hiprtc lowers an f64 [x / y] to a
+       reciprocal estimate refined by Newton steps -- NaN for every [x / +-0], [x / +-inf], [+-inf /
+       y] and overflowing quotient on gfx1151 -- and under [-freciprocal-math] to [x * (1 / y)],
+       which misrounds and overflows at a subnormal divisor. Neither flag can be dropped for f64
+       alone: the approximation follows the function's ["approx-func-fp-math"] attribute, and hiprtc
+       ignores [#pragma float_control] ("not supported on this target"). So this is LLVM's own
+       correctly rounded f64 expansion ([SITargetLowering::LowerFDIV64]) written out in the target
+       builtins, which no fast-math flag rewrites: both operands scaled clear of overflow and
+       underflow, the reciprocal refined twice, the quotient corrected once, then unscaled, and the
+       special cases (zeros, infinities, NaN) fixed up by [div_fixup]. Every f32 and half division
+       keeps fast math's estimate. *)
+    ( "ocannl_div_f64",
+      {|__device__ __forceinline__ double ocannl_div_f64(double x, double y) {
+  bool unused, scaled;
+  double d = __builtin_amdgcn_div_scale(x, y, false, &unused);
+  double n = __builtin_amdgcn_div_scale(x, y, true, &scaled);
+  double r = __builtin_amdgcn_rcp(d);
+  r = __builtin_fma(r, __builtin_fma(-d, r, 1.0), r);
+  r = __builtin_fma(r, __builtin_fma(-d, r, 1.0), r);
+  double q = n * r;
+  double e = __builtin_fma(-d, q, n);
+  return __builtin_amdgcn_div_fixup(__builtin_amdgcn_div_fmas(e, r, q, scaled), y, x);
+}|},
+      [] );
     ( "uint32_to_single_uniform",
       {|__device__ __forceinline__ float uint32_to_single_uniform(unsigned int x) {
   /* Use __uint2float_rn for correct rounding */
