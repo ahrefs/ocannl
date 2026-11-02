@@ -320,6 +320,10 @@ let () =
   let domain box = List.map box ~f:(fun (sy, (lo, hi)) -> (sy, hi - lo + 1)) in
   let cases = ref [] in
   let record name bound image = cases := (name, bound, image) :: !cases in
+  (* gh-ocannl-1706: the upper companion over the same views, judged against the same
+     enumeration. *)
+  let ubs = ref [] in
+  let record_ub name ub image = ubs := (name, ub, image) :: !ubs in
   (* gh-ocannl-1676: the upper side. [analyze]'s count of one access, run over the same box as a
      program, against the true count — for a dynamic gather the WORST case over the data, which may
      pick the dynamic coordinate per point independently. [exact] is [analyze]'s own verdict. *)
@@ -340,7 +344,8 @@ let () =
     let bound = Affine.image_cardinality_lb ~domain:(domain box) v in
     let cells = List.map (points box) ~f:(fun env -> Array.map idcs ~f:(eval env)) in
     let image = List.length (List.dedup_and_sort cells ~compare:(Array.compare Int.compare)) in
-    record name bound image
+    record name bound image;
+    record_ub name (Affine.image_cardinality_ub ~domain:(domain box) v) image
   in
   let random_box () =
     Array.to_list s
@@ -404,7 +409,8 @@ let () =
         (List.dedup_and_sort ~compare:Int.compare
            (List.map (points box) ~f:(fun env -> eval env idx)))
     in
-    record "flattened Sub_axis" bound image
+    record "flattened Sub_axis" bound image;
+    record_ub "flattened Sub_axis" (Affine.image_cardinality_ub ~domain:(domain box) v) image
   done;
   (* Dynamic gathers over a rank-2 node: the data picks the dynamic axis's coordinate per point. *)
   for _ = 1 to 200 do
@@ -429,10 +435,13 @@ let () =
               let k = eval env known and d = choose env in
               if dyn_axis = 0 then (d, k) else (k, d))
         in
-        record "dynamic gather" bound
-          (List.length
-             (List.dedup_and_sort cells ~compare:(fun (a1, b1) (a2, b2) ->
-                  match Int.compare a1 a2 with 0 -> Int.compare b1 b2 | c -> c))));
+        let image =
+          List.length
+            (List.dedup_and_sort cells ~compare:(fun (a1, b1) (a2, b2) ->
+                 match Int.compare a1 a2 with 0 -> Int.compare b1 b2 | c -> c))
+        in
+        record "dynamic gather" bound image;
+        record_ub "dynamic gather" (Affine.image_cardinality_ub ~domain:(domain box) v) image);
     (* The worst case: each known value reached by [f] points pairs with at most [min f dsize]
        distinct values of the data-chosen coordinate. *)
     let fibers =
@@ -469,6 +478,9 @@ let () =
     in
     let truth = List.length (List.dedup_and_sort cells ~compare:Int.compare) in
     record "vector run" bound truth;
+    record_ub "vector run"
+      (Affine.image_cardinality_ub ~range ~run:len ~domain:(domain box) v)
+      truth;
     let tn = fresh_tn "VR" dims in
     let count, exact =
       analyzed tn
@@ -502,8 +514,12 @@ let () =
     in
     let truth = List.length (List.dedup_and_sort cells ~compare:Int.compare) in
     let range sy = List.Assoc.find box sy ~equal:Idx.equal_symbol in
+    let v = Affine.view ~dims idcs in
     record "vector run (windowed)"
-      (Affine.image_cardinality_lb ~range ~run:len ~domain:(domain box) (Affine.view ~dims idcs))
+      (Affine.image_cardinality_lb ~range ~run:len ~domain:(domain box) v)
+      truth;
+    record_ub "vector run (windowed)"
+      (Affine.image_cardinality_ub ~range ~run:len ~domain:(domain box) v)
       truth;
     let tn = fresh_tn "VW" dims in
     let count, exact =
@@ -524,6 +540,18 @@ let () =
         (List.count of_kind ~f:(fun (_, b, i) -> b = i)));
   Verdict.p_all ~min:2000 "  the bound never exceeds the enumerated image" cases
     ~f:(fun (_, bound, image) -> bound <= image);
+  (* gh-ocannl-1706: the sumset upper bound over the same views. *)
+  let ubs = List.rev !ubs in
+  Stdio.printf "  -- the upper bound (Affine.image_cardinality_ub) vs the enumerated image --\n";
+  List.iter kinds ~f:(fun kind ->
+      let of_kind = List.filter ubs ~f:(fun (n, _, _) -> String.equal n kind) in
+      Stdio.printf "  %-20s %4d cases, %4d bounded exactly\n" kind (List.length of_kind)
+        (List.count of_kind ~f:(fun (_, b, i) -> b = i)));
+  Verdict.p_all ~min:2000 "  the upper bound never falls below the enumerated image" ubs
+    ~f:(fun (_, ub, image) -> ub >= image);
+  Verdict.p_all "  every strided vector run's upper bound is its image"
+    ~f:(fun (_, ub, image) -> ub = image)
+    (List.filter ubs ~f:(fun (n, _, _) -> String.equal n "vector run"));
   (* The upper side's census counts [analyze]'s count meeting the true (worst-case) count — a
      different tightness from the lower bound's above. *)
   let upper = List.rev !upper in
@@ -542,6 +570,9 @@ let () =
     ~f:(fun (_, count, exact, truth) -> (not exact) || count = truth);
   Verdict.p_none "  no dynamic gather is claimed exact" upper ~f:(fun (n, _, e, _) ->
       e && String.equal n "dynamic gather");
+  Verdict.p_all "  analyze counts every strided vector run exactly, and says so"
+    (List.filter upper ~f:(fun (n, _, _, _) -> String.equal n "vector run"))
+    ~f:(fun (_, count, exact, truth) -> exact && count = truth);
   (* Tightness: overlapping and strided windows count their whole image. *)
   let window ~stride ~o ~k =
     let box = [ (s.(0), (0, o - 1)); (s.(1), (0, k - 1)) ] in
@@ -557,6 +588,23 @@ let () =
     Affine.image_cardinality_lb ~domain:(domain box) (Affine.view ~dims:[| size |] [| idx |])
   in
   Verdict.p "  2*x + 4*y over 3x3 counts its 7 values (the gcd normalization)" (gcd_case = 7);
+  (* gh-ocannl-1706: the upper side's tightness on holes — the value range would count them. *)
+  let gcd_case_ub =
+    let box = [ (s.(0), (0, 2)); (s.(1), (0, 2)) ] in
+    let idx, size = component box [ (2, s.(0)); (4, s.(1)) ] ~slack:0 in
+    Affine.image_cardinality_ub ~domain:(domain box) (Affine.view ~dims:[| size |] [| idx |])
+  in
+  Verdict.p "  2*x + 4*y over 3x3 is bounded above by its 7 values (the range holds 13)"
+    (gcd_case_ub = 7);
+  let strided_runs =
+    let box = [ (s.(0), (0, 2)) ] in
+    let range sy = List.Assoc.find box sy ~equal:Idx.equal_symbol in
+    Affine.image_cardinality_ub ~range ~run:3 ~domain:(domain box)
+      (Affine.view ~dims:[| 11 |] [| Idx.affine ~symbols:[ (4, s.(0)) ] ~offset:0 |])
+  in
+  Verdict.p
+    "  runs of 3 from bases 4*x, x < 3, are bounded above by their 9 cells (the range holds 11)"
+    (strided_runs = 9);
   (* The floor of window programs: B[o] += A[s*o + k] reads A's whole image. *)
   let window_program ~stride ~o ~k =
     let oi = Idx.get_symbol () and ki = Idx.get_symbol () in
@@ -580,7 +628,39 @@ let () =
   Verdict.p "  the unit-stride window's input read floors at its whole image" (f1.CM.fr_bytes = 72);
   let f2 = window_program ~stride:2 ~o:8 ~k:3 in
   (* A 68 B, B wr 32 B. *)
-  Verdict.p "  the stride-2 window's input read floors at its whole image" (f2.CM.fr_bytes = 100)
+  Verdict.p "  the stride-2 window's input read floors at its whole image" (f2.CM.fr_bytes = 100);
+  (* gh-ocannl-1706: a vector store whose runs overlap along the row (bases [i < 4], runs of 4: one
+     7-cell interval) on every other row ([2*r], [r < 3]) writes 3 * 7 = 21 cells of its 5x7 node.
+     The value ranges count the skipped rows (5 * 7 = 35, the whole node) and the base image times
+     the run length over-counts the overlaps (12 * 4 = 48); the sumset counts the row's 3 values and
+     the column's interval, and meets the lower bound. *)
+  let r = Idx.get_symbol () and i = Idx.get_symbol () in
+  let x = fresh_tn "X" [| 5; 7 |] in
+  let strided_store =
+    Ll_test.loop_n r 3
+      (Ll_test.loop_n i 4
+         (Ll_test.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform x
+            [| Idx.affine ~symbols:[ (2, r) ] ~offset:0; it i |]
+            (LL.Constant 0., sp)))
+  in
+  let count, exact =
+    let fp = List.Assoc.find_exn (CM.analyze strided_store).CM.per_node x ~equal:Tn.equal in
+    ((fp.CM.fp_read_bytes + fp.CM.fp_write_bytes) / 4, not fp.CM.fp_approx)
+  in
+  Stdio.printf "  row-strided overlapping vector store: %d cells, %s\n" count
+    (if exact then "exact" else "approximate");
+  Verdict.p "  the row-strided overlapping vector store counts its 21 cells, exactly"
+    (count = 21 && exact);
+  (* The count reaches the ranking: against a plain store of 28 cells, the strided store moves fewer
+     bytes, and a memory-bound envelope ranks it first (counted at 35 cells, it ranked second). *)
+  let y = fresh_tn "Y" [| 28 |] in
+  let plain_store = Ll_test.loop_n i 28 (set y [| it i |] (LL.Constant 0.)) in
+  let rank code = CM.ranking_seconds ~peak_memory_bandwidth:1e11 ~is_global:(fun _ -> true) code in
+  Verdict.p
+    "  a memory-bound ranking puts the 21-cell strided store ahead of the 28-cell plain store"
+    (match (rank strided_store, rank plain_store) with
+    | Some a, Some b -> Float.(a < b)
+    | _ -> false)
 
 (* gh-ocannl-582: the classifier the cases above read from. The table is printed over [Ops]' derived
    enumeration, so adding an operator is a visible promotion diff here whether or not anyone
