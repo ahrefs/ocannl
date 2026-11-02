@@ -11698,6 +11698,20 @@
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio arrayjit.verdict ll_test test_utils))
 
+; gh-ocannl-1782: every backend's f64, f32 and half division and reciprocal over +-0, +-inf, NaN,
+; subnormal operands and overflowing and underflowing quotients, held to C's correctly rounded
+; quotient -- HIP's -ffast-math reciprocal estimate had made every f64 x / 0, x / inf and
+; overflowing quotient NaN.
+
+(test
+ (name division_special_values)
+ (package neural_nets_lib)
+ (modules division_special_values)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 ; gh-ocannl-1336: every backend's f32, half and bfloat16 sin, cos, tanh, exp, log, exp2 and log2
 ; over the fast-math risk domains -- cc and HIP within the stated ulps, CUDA's fast intrinsics within
 ; their documented contracts, special values IEEE everywhere (HIP's sin/cos of +-inf fixed), and log
