@@ -257,10 +257,11 @@ let () =
 
      The dead candidates here were the CPU tensorized flavors binding a hardware dimension (the
      whole-triple form's [Workgroup] lane, the packed Grid shapes' row-block loop) beside the relu
-     tail, a companion they left uncovered. Since gh-ocannl-1561 the family tree refutes them at
-     seeding, so the filter's population on this routine is empty: the claim is now that the search
-     never meets an unbuildable candidate here, and the argmin claim below is the property the
-     filter existed for. *)
+     tail, a companion they left uncovered under the hardware-thread rule. gh-ocannl-1561 refuted
+     them at seeding, and since gh-ocannl-1609 the family tree excludes them as search economy (they
+     are valid on the fork-join model the C backends validate under), so the filter's population on
+     this routine is empty: the claim is now that the search never meets an unbuildable candidate
+     here, and the argmin claim below is the property the filter existed for. *)
   let m = 128 in
   let av =
     Array.init (m * m) ~f:(Ll_test.cycle_flat ~dims:[| m; m |] ~modulus:7 ~offset:0. ~stride:0.5)

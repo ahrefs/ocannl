@@ -15,11 +15,13 @@
    and depth vs [sk_grid], [sk_bm] and [sk_depth]).
 
    Each fusion flavor is judged by its own preconditions. A site with no fusable tail refutes the
-   fused flavor with the recognizer's own reason. On a conv with a bias/relu tail, the unfused CPU
-   Grid flavor (its Grid loop would leave the tail's materialized write uncovered) and the unfused
-   GPU flavor (the tail cannot follow the accumulation nest's chain) are refuted with their
-   witnesses, while the fused flavor, whose tail the fusion relocates into the conv nest, keeps its
-   leaves. Before, both unfused flavors were proposed and failed at every compile.
+   fused flavor with the recognizer's own reason. On a conv with a bias/relu tail, the unfused GPU
+   flavor (the tail cannot follow the accumulation nest's chain) is refuted with its witness, while
+   the fused flavor, whose tail the fusion relocates into the conv nest, keeps its leaves. The
+   unfused CPU Grid flavor is valid on cc's fork-join model (gh-ocannl-1609: the tail is its own
+   dispatch, on its own Grid loop) and excluded as search economy, not refuted;
+   [Autotune.lift_cpu_companions] recovers it, priced by the traffic floor like every leaf, and
+   every recovered leaf, compiled and run on cc, computes the output bit for bit.
 
    The launch caps refute at the leaf with the gate's sentence: at the cap the geometry is admitted,
    one below it refused.
@@ -95,7 +97,7 @@ let gpu_limits =
   }
 
 (* A 2-D valid conv, [b] images of [h x h x ic] into [oc] channels through a 3x3 window. *)
-let make_conv ?(tail = false) tag ~b ~h ~ic ~oc =
+let make_conv ?(tail = false) ?(bias_shift = 0.) tag ~b ~h ~ic ~oc =
   let x =
     NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ b ] ~o:[ h; h; ic ]
       ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
@@ -113,7 +115,7 @@ let make_conv ?(tail = false) tag ~b ~h ~ic ~oc =
   else
     let bias =
       NTDSL.init ~l:(tag ^ "b") ~prec:Ir.Ops.single ~o:[ oc ]
-        ~f:(fun idcs -> Float.of_int (idcs.(0) % 3) -. 1.)
+        ~f:(fun idcs -> Float.of_int (idcs.(0) % 3) -. 1. +. bias_shift)
         ()
     in
     let%op z = relu (y + bias) in
@@ -282,11 +284,18 @@ let () =
   (match section "9x9 conv + bias/relu tail, CPU" ~is_gpu:false ~limits:cpu_limits tailed with
   | None -> ()
   | Some tree ->
-      p_exists "tail, CPU: the unfused Grid flavor is refuted on its uncovered companion"
-        (Sspace.refutations tree) ~f:(fun (path, w) ->
+      p_exists "tail, CPU: the unfused Grid flavor is excluded beside its companion, not refuted"
+        (Sspace.exclusions tree) ~f:(fun (path, w) ->
           on_path (FD.Fusion `Unfused) path
           && on_path (FD.Conv_shape `Grid) path
-          && String.is_substring w ~substring:"which validate_parallel rejects");
+          && String.is_substring w ~substring:"gh-ocannl-1609");
+      p_none "tail, CPU: no refutation claims validate_parallel rejects a companion"
+        (Sspace.refutations tree) ~f:(fun (_, w) ->
+          String.is_substring w ~substring:"which validate_parallel rejects");
+      p_exists "tail, CPU: the lift recovers the unfused Grid flavor"
+        (Sspace.enumerate (Autotune.lift_cpu_companions tree))
+        ~f:(fun (path, _) ->
+          on_path (FD.Fusion `Unfused) path && on_path (FD.Conv_shape `Grid) path);
       p_exists "tail, CPU: the fused Grid flavor is a leaf" (Sspace.enumerate tree)
         ~f:(fun (path, _) -> on_path (FD.Fusion `Fused) path && on_path (FD.Conv_shape `Grid) path));
   (match section "9x9 conv + bias/relu tail, GPU" ~is_gpu:true ~limits:gpu_limits tailed with
@@ -531,13 +540,14 @@ let apply_leaf base p =
 
 let bytes_of (s : CM.summary) = s.CM.read_bytes + s.CM.write_bytes
 
-let traffic_floor_pins name ~is_gpu ~limits base =
+let traffic_floor_pins ?(lift = Fn.id) name ~is_gpu ~limits base =
   let limits = envelope limits ~peak_flops:1e12 ~bandwidth:1e11 in
   match
     ( Autotune.detect_conv base.LL.llc,
       Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits base )
   with
   | Some site, Some tree ->
+      let tree = lift tree in
       let inc = Autotune.sketch_path_traffic_floor ~limits base in
       let paths = Sspace.enumerate tree in
       let leg = if is_gpu then FD.Conv_leg `Gpu else FD.Conv_leg `Cpu in
@@ -604,6 +614,10 @@ let () =
   traffic_floor_pins "floor, dividing 16-row, cpu" ~is_gpu:false ~limits:cpu_limits dividing;
   traffic_floor_pins "floor, dividing 16-row, gpu" ~is_gpu:true ~limits:gpu_limits dividing;
   traffic_floor_pins "floor, bias/relu tail, cpu" ~is_gpu:false ~limits:cpu_limits tailed;
+  (* gh-ocannl-1609: the recovered unfused direct flavors, their tail on its own Grid loop, are
+     priced like every leaf. *)
+  traffic_floor_pins ~lift:Autotune.lift_cpu_companions "floor, bias/relu tail, cpu, lifted"
+    ~is_gpu:false ~limits:cpu_limits tailed;
   traffic_floor_pins "floor, bias/relu tail, gpu" ~is_gpu:true ~limits:gpu_limits tailed;
   traffic_floor_pins "floor, stride 2, cpu" ~is_gpu:false ~limits:cpu_limits strided;
   traffic_floor_pins "floor, stride 2, gpu" ~is_gpu:true ~limits:gpu_limits strided;
@@ -830,3 +844,91 @@ let () =
     ~target:{ Ll_test.is_gpu = false; is_cpu = true; limits = cpu_limits };
   real_site_pins "cifar_resnet stage-1 conv, gpu" ~is_gpu:true ~limits:gpu_limits
     ~target:(Ll_test.synthetic_gpu ~limits:gpu_limits ())
+
+(* gh-ocannl-1609: executed parity of the recovered CPU direct flavors. A conv + bias/relu tail,
+   compiled and run on cc: every leaf the companion lift recovers (the unfused direct Grid flavor
+   and its register-tile twins) validates in fork-join mode, puts the tail on its own Grid loop, and
+   computes the output bit for bit as the untuned compile does, across two runs (the second catches
+   a missed zeroing). Integer operands keep every sum exact; the bias lifts every cell above zero,
+   so the relu passes all of them and the output stays discriminating. *)
+let () =
+  let tag = "conv_tail_exec" in
+  let out = make_conv ~tail:true ~bias_shift:1000. "cte" ~b:2 ~h:11 ~ic:4 ~oc:8 in
+  let comp = Train.forward out in
+  let recovered opt =
+    match Autotune.conv_sketch_tree ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt with
+    | None -> []
+    | Some tree ->
+        let offered = Sspace.leaves tree in
+        List.filter
+          (Sspace.leaves (Autotune.lift_cpu_companions tree))
+          ~f:(fun q -> not (List.mem offered q ~equal:Poly.equal))
+  in
+  let run ?transform () =
+    let ctx, routine =
+      match transform with
+      | None -> Context.compile (Context.cpu ()) comp Ir.Indexing.Empty
+      | Some f -> Context.compile ~lowered_transform:f (Context.cpu ()) comp Ir.Indexing.Empty
+    in
+    let ctx = Context.run ctx routine in
+    let ctx = Context.run ctx routine in
+    let v = Context.get_values ctx out.Tensor.value in
+    Context.release ctx;
+    v
+  in
+  let expected = run () in
+  p
+    (tag ^ ": premise: the reference output varies and has no zero cell")
+    (Array.length expected > 1
+    && (not (Array.for_all expected ~f:(fun x -> Float.equal x expected.(0))))
+    && Array.for_all expected ~f:(fun x -> not (Float.equal x 0.)));
+  let opt = Context.lowered_for_decisions (Context.cpu ()) comp Ir.Indexing.Empty in
+  let back = recovered opt in
+  p_exists (tag ^ ": the lift recovers an unfused Grid flavor") back ~f:(fun q ->
+      q.Autotune.sk_grid && not q.Autotune.sk_epilogue);
+  let tail_on_grid (post : LL.optimized) =
+    List.exists (LL.flat_lines [ post.LL.llc ]) ~f:(function
+      | LL.For_loop { axis; _ } as nest ->
+          LL.equal_axis_type axis LL.Grid
+          &&
+          let w = ref false in
+          Ll_test.walk nest ~on_set:(fun tn -> if Ir.Tnode.equal tn out.Tensor.value then w := true);
+          !w
+      | _ -> false)
+  in
+  p_all (tag ^ ": every recovered leaf validates in fork-join mode and gives the tail a Grid loop")
+    back ~f:(fun q ->
+      match apply_leaf opt q with
+      | None -> false
+      | Some post -> (
+          tail_on_grid post
+          &&
+          match
+            LL.validate_parallel ~fork_join:true post.LL.optimize_ctx.LL.placements post.LL.llc
+          with
+          | () -> true
+          | exception exn ->
+              Stdio.eprintf "%s: %s: %s\n%!" tag (show q) (Exn.to_string exn);
+              false));
+  p_all
+    (tag ^ ": every recovered leaf computes the output bit for bit")
+    (List.mapi back ~f:(fun i q -> (i, q)))
+    ~f:(fun (idx, q) ->
+      let transform opt =
+        match List.nth (recovered opt) idx with
+        | Some q' when Poly.equal q' q ->
+            [
+              Sched.apply
+                (Autotune.sketch_schedule ~accum_prec:Ll_test.backend_accum_prec ~p:q' opt)
+                opt;
+            ]
+        | _ -> failwith (Printf.sprintf "leaf %d is gone from the compile's lowering" idx)
+      in
+      match run ~transform () with
+      | got ->
+          Array.length got = Array.length expected
+          && Array.for_all2_exn got expected ~f:(fun g r ->
+              Int64.equal (Int64.bits_of_float g) (Int64.bits_of_float r))
+      | exception exn ->
+          Stdio.eprintf "%s: leaf %d (%s) FAILED %s\n%!" tag idx (show q) (Exn.to_string exn);
+          false)

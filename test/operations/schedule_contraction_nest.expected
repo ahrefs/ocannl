@@ -55,7 +55,7 @@ three_axis_companion: CPU seeds are proposed: true
 three_axis_companion: every CPU seed's schedule constructs: true
 three_axis_companion: every CPU seed binding no hardware dimension validates: true
 three_axis_companion: every CPU seed validates: true
-three_axis_companion: the seeding refutes the hardware-binding CPU shapes on the companion: true
+three_axis_companion: the seeding excludes the hardware-binding CPU shapes beside the companion: true
 three_axis_companion: every GPU blocktile seed compiles and runs: true
 three_axis_companion: every GPU blocktile candidate matches the serial reference bitwise: true
 three_axis_companion: the blocktiled kernel stages operands through workgroup-shared tiles: true

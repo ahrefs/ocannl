@@ -110,7 +110,7 @@ dividing: a pipelined depth-2 twin is a leaf: true
     conv-leg = cpu
       conv-shape = serial
         * gpu:false simd:0 bm:0  bn:0 bk:0 tm:0 grid:false epi:false depth:1
-      conv-shape = grid  [refuted: the conv nest's own Grid loop leaves 1 companion nest(s) writing materialized relu_z outside it, which validate_parallel rejects]
+      conv-shape = grid  [excluded: CPU companions (gh-ocannl-1609): the conv nest's own Grid loop binds a hardware dimension beside 1 companion nest(s) writing materialized relu_z; valid on the fork-join model, excluded as search economy until a measurement shows it winning]
       conv-shape = bm8  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm16  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
       conv-shape = bm32  [refuted: the conv output's whole-node Zero_out is in this lowering (c_zeroed)]
@@ -134,7 +134,9 @@ dividing: a pipelined depth-2 twin is a leaf: true
 9x9 conv + bias/relu tail, CPU: the refutations are the matmul family's no-site witness, then the conv family's: true
 9x9 conv + bias/relu tail, CPU: the register-tile twins are the alternatives at each leaf's extents: true
 9x9 conv + bias/relu tail, CPU: every leaf's path agrees with its parameters: true
-tail, CPU: the unfused Grid flavor is refuted on its uncovered companion: true
+tail, CPU: the unfused Grid flavor is excluded beside its companion, not refuted: true
+tail, CPU: no refutation claims validate_parallel rejects a companion: true
+tail, CPU: the lift recovers the unfused Grid flavor: true
 tail, CPU: the fused Grid flavor is a leaf: true
 == 9x9 conv + bias/relu tail, GPU ==
   fusion = unfused
@@ -264,6 +266,14 @@ floor, bias/relu tail, cpu: every leaf's schedule applies: true
 floor, bias/relu tail, cpu: the freshly minted nodes are charged at least the increment: true
 floor, bias/relu tail, cpu: at every prefix the composed floor is within the leaf's analyzed bytes: true
 floor, bias/relu tail, cpu: every leaf's bound is within its ranking score: true
+== floor, bias/relu tail, cpu, lifted: 4 leaf paths (4 on the cpu leg), 4 applied; floor 20608 bytes; increments 1120 ==
+floor, bias/relu tail, cpu, lifted: every leaf's increment is the traffic its own parameters imply: true
+floor, bias/relu tail, cpu, lifted: a leaf on the target's leg prices above the floor: true
+floor, bias/relu tail, cpu, lifted: the increment is monotone along every path's prefixes: true
+floor, bias/relu tail, cpu, lifted: every leaf's schedule applies: true
+floor, bias/relu tail, cpu, lifted: the freshly minted nodes are charged at least the increment: true
+floor, bias/relu tail, cpu, lifted: at every prefix the composed floor is within the leaf's analyzed bytes: true
+floor, bias/relu tail, cpu, lifted: every leaf's bound is within its ranking score: true
 == floor, bias/relu tail, gpu: 2 leaf paths (2 on the gpu leg), 2 applied; floor 20608 bytes; increments 1536 2560 ==
 floor, bias/relu tail, gpu: every leaf's increment is the traffic its own parameters imply: true
 floor, bias/relu tail, gpu: a leaf on the target's leg prices above the floor: true
@@ -324,3 +334,7 @@ cifar_resnet stage-1 conv, gpu, from an infinite incumbent: the pick is the exha
   from the best leaf's score: 0 scored, 12 fathomed, 0 admitted of 12 leaves
 cifar_resnet stage-1 conv, gpu, from the best leaf's score: a subtree below the root fathoms unscored: true
 cifar_resnet stage-1 conv, gpu, from the best leaf's score: the pick is the exhaustive answer: true
+conv_tail_exec: premise: the reference output varies and has no zero cell: true
+conv_tail_exec: the lift recovers an unfused Grid flavor: true
+conv_tail_exec: every recovered leaf validates in fork-join mode and gives the tail a Grid loop: true
+conv_tail_exec: every recovered leaf computes the output bit for bit: true

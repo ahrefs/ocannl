@@ -52,6 +52,7 @@ test/operations/cache_key_agreement.expected [derived] beside test/operations/ca
 test/operations/canonical_render.expected [ll] markers ll-assign; re-run by @test/operations/runtest-canonical_render
 test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml; re-run by @test/operations/runtest-concat_loop_symbols
 test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml; re-run by @test/operations/runtest-cost_model_floor
+test/operations/cpu_mma_companion_coverage.expected [derived] beside test/operations/cpu_mma_companion_coverage.ml; re-run by @test/operations/runtest-cpu_mma_companion_coverage
 test/operations/gpu_lane_reduction.expected [derived] beside test/operations/gpu_lane_reduction.ml; re-run by @test/operations/runtest-gpu_lane_reduction
 test/operations/gpu_serial_lanes.expected [derived] beside test/operations/gpu_serial_lanes.ml; re-run by @test/operations/runtest-gpu_serial_lanes
 test/operations/half_unary_math.expected [derived] beside test/operations/half_unary_math.ml; re-run by @test/operations/runtest-half_unary_math
@@ -142,6 +143,8 @@ test/operations/cpu_channel_vectors.ml [run by @test/operations/runtest-cpu_chan
     "tile_" ^ ... ^ "k"
 test/operations/cpu_fork_join_chains.ml [run by @test/operations/runtest-cpu_fork_join_chains; also pins text this scan cannot name: opaque aggregate component, rebound parameter]
     "Pool-backed Grid rendering"
+test/operations/cpu_mma_companion_coverage.ml [run by @test/operations/runtest-cpu_mma_companion_coverage; also pins text this scan cannot name: untraced callback]
+    sprintf "%s < %s;"
 test/operations/cpu_parallel.ml [run by @test/operations/runtest-cpu_parallel]
     "#pragma omp parallel for"
     "Pool-backed Grid rendering"
@@ -593,6 +596,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-cost_model_floor
 @test/operations/runtest-cpu_channel_vectors
 @test/operations/runtest-cpu_fork_join_chains
+@test/operations/runtest-cpu_mma_companion_coverage
 @test/operations/runtest-cpu_parallel
 @test/operations/runtest-cpu_scratch_matmul_grid
 @test/operations/runtest-cpu_simd_reduction

@@ -97,8 +97,8 @@ files.
   statements are ordered by the joins; a `Local` is privatized only when all its kernel accesses
   sit in one loop body; within a dispatch the hazard proof, `parallel_grid_safe` and
   `refuse_unseparated_thread_write` decide. Fission is unchanged (it still cuts at GPU-unaligned
-  materialized edges on CPU, harmless but no longer needed), and so is `conv_direct_grid_witness`,
-  whose refutation of companion-writing conv flavors is now conservative on cc.
+  materialized edges on CPU, harmless but no longer needed). The sketch families' CPU companion
+  rule follows this model (gh-ocannl-1609, next section).
 - **The CPU threshold is work per dispatch** (gh-ocannl-1458): `cpu_schedule_min_work` (16384)
   against `Cost_model.fork_join_updates` of the candidate loop alone -- the SAME count the
   renderer's launch floor (`cc_grid_min_updates`, gh-ocannl-1564) applies to every pool launch, so
@@ -436,18 +436,27 @@ files.
   same outer barriers in the IR (`contract_tensorized_accumulator`, gh-ocannl-1598), and its
   target drops `restrict` (backend-dialects-and-idents.md). `conv_merged_gpu_seeds`' 64-channel
   legs and its `-tf32` rule execute that flavor on CUDA.
-- **The same rule binds the CPU tensorized flavors that bind a hardware dimension** (gh-ocannl-1561):
-  the whole-triple `Tile_mma` form's `Workgroup` lane (its zeroing's column loop at the full column
-  extent, so always active; plus a `Grid` row split at `sk_bm > 0`) and the packed Grid shapes'
-  row-block loop. No CPU builder gives a companion geometry, so the tree refutes those flavors
-  wherever the companion demand (`companion_demand`, fused tail skipped) is non-empty
-  (`cpu_mma_companion_writes`), and the all-serial shapes -- packed Serial/Hoisted, the scalar
-  pipeline -- carry the search there. A label's `0x0x0` is the whole-triple form (unsplit row), not
-  a zero-size tile: it builds wherever fission leaves the matmul alone (`F_sketch`), and failed
-  only in whole-routine searches beside a materialized companion (tune_footprint_default's
-  materialize-all arm). Untried alternatives that would keep the form: aligned companion geometry
-  as on GPU, or a unit lane (`simd_width:1`, as the packed and conv forms use) for `bm = 0`.
-  `test/operations/cpu_mma_companion_coverage`.
+- **CPU companions need no alignment: they take the fork-join per-nest geometry** (gh-ocannl-1609).
+  The CPU flavors whose site binds a hardware dimension -- the whole-triple `Tile_mma` form's
+  `Workgroup` lane (the zeroing's column loop at the full column extent, so always active; plus a
+  `Grid` row split at `sk_bm > 0`), the packed Grid shapes' row-block loop, and the conv direct
+  Grid / row-panel shapes -- are valid beside a materialized companion on cc: each `Grid` loop is a
+  joined dispatch and a serial companion runs once (`validate_parallel ~fork_join`, which both the
+  cc compile path and the tuner pass). `cpu_companion_geometry` gives a companion the default
+  preset's own per-nest choice (`Sched.default_cpu ~min_work:0` filtered to the companion demand;
+  the renderer's launch floor still decides at run time) where the site binds `Grid` slot 0 alone
+  with a unit lane (the packed Grid and conv direct shapes). The whole-triple form's active
+  `Workgroup` lane is a slot no companion loop covers, so its companions stay serial -- a unit lane
+  (`simd_width:1`) there would let them take Grid too, untried because it changes every
+  whole-triple seed's code. These flavors are `Excluded` beside companions
+  (`cpu_companion_exclusion`, witness prefix `cpu_companion_witness_prefix`), never `Refuted`: a
+  witness must not claim a legality failure that does not happen, and companion-free sites keep
+  their leaves unchanged. `Autotune.lift_cpu_companions` re-proposes them. The history: gh-ocannl-1561
+  refuted them against the hardware-thread rule about three hours before gh-ocannl-1458's fork-join
+  validator landed, so the refutation was stale from the day it merged -- and its test validated
+  without `~fork_join`, which is why nothing noticed. A label's `0x0x0` is the whole-triple form
+  (unsplit row), not a zero-size tile. `test/operations/cpu_mma_companion_coverage`, the
+  `conv_tail_exec` leg of `conv_family_tree`.
 ## Family decisions and launch geometry
 - **The family tree's decisions are DATA, and reading one back means matching on it — never
   re-parsing a label** (gh-ocannl-591). `Ir.Schedule_space` is parameterized over the decision type

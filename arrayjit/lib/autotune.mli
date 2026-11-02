@@ -842,6 +842,14 @@ val lift_pad_waste :
     subject to legality, other policies' exclusions kept. Its {!Ir.Schedule_space.leaves} are what
     the menus may propose with the pad-waste economy off. *)
 
+val lift_cpu_companions :
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
+  (Family_decision.t, sketch_params) Ir.Schedule_space.tree
+(** Lift every CPU-companion exclusion (gh-ocannl-1609) — the flavors whose site binds a hardware
+    dimension beside a materialized companion, valid on the C backends' fork-join model and excluded
+    as search economy — as {!lift_pad_waste} lifts pad waste: laziness preserved, lifted branches
+    still subject to legality, other policies' exclusions kept. Matmul and conv trees alike. *)
+
 val lift_geometry_lattice :
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree ->
   (Family_decision.t, sketch_params) Ir.Schedule_space.tree
