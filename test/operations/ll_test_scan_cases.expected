@@ -1,3 +1,13 @@
+the constructors recursive in Assignments.t are derived from its declaration: true
+a finder naming Seq alone is missed by the Low_level rule and counted as an Assignments.t traversal: true
+a finder naming Block_comment alone is an Assignments.t traversal: true
+a non-recursive fold over a leaf constructor is no traversal: true
+a Low_level traversal stays in its own column and is not counted again: true
+a finder with Noop and Seq arms stays the Low_level rule's, its column unchanged: true
+constructors of a nested t and of another recursive type do not widen the Assignments census: true
+a Seq qualified by Low_level or an alias of it is Low_level's, in neither column: true
+a Seq qualified by Assignments or an alias of it is an Assignments.t traversal: true
+nested Assignments.t finders are counted once each: true
 zero records stay below the adoption floor: true
 the first record requires harness adoption: true
 two records also require harness adoption: true
@@ -84,6 +94,8 @@ new builders in an exempt file exceed its migration cap: true
 an intentional permanent exception is not a migration quota: true
 new private traversals in an exempt file exceed their independent cap: true
 permanent exemptions also become stale after harness adoption: true
+an unlinked Assignments.t finder is reported in its census column without refusal: true
+an Assignments.t declaring no nesting constructor is refused, not read as an empty census: true
 new arrayjit debt requires explicit adoption: true
 public arrayjit builders satisfy adoption and retain the remaining record census: true
 private builder spelling does not satisfy package adoption: true

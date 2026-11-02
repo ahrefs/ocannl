@@ -26,8 +26,74 @@ let walker =
   "let rec walk = function Alias.Seq (a,b) -> walk a + walk b | Alias.For_loop {body} -> walk body \
    | _ -> 0\n"
 
+(* The Assignments.t fixture: [Noop] and [Seq] share Low_level's names. [Fragment.t] and [other]
+   carry themselves too, but are not [Assignments.t], so their constructors must not join the
+   census. *)
+let assignments_declaration =
+  "type t = Noop | Seq of t * t | Block_comment of string * t | Accum_op of { lhs : int }\n\
+   module Fragment = struct type t = Loop of t | Leaf end\n\
+   type other = Wrap of other | Bare\n"
+
+let recursive = Scan.recursive_constructors assignments_declaration
+
+(* checkpoint_rewind's finder before gh-ocannl-1577 converted it: one constructor of either type. *)
+let seq_finder =
+  "let rec find = function Seq (a, b) -> (match find a with Some x -> Some x | None -> find b) | x \
+   -> Some x\n"
+
 let () =
   let counts source = Scan.census ~constructors source in
+  let assignments source = Scan.assignments_census ~constructors ~recursive source in
+  p "the constructors recursive in Assignments.t are derived from its declaration"
+    (List.equal String.equal (Set.to_list recursive) [ "Block_comment"; "Seq" ]
+    && List.equal String.equal
+         (Set.to_list
+            (Scan.recursive_constructors
+               (String.substr_replace_all assignments_declaration ~pattern:"| Accum_op"
+                  ~with_:"| Nested of t list | Accum_op")))
+         [ "Block_comment"; "Nested"; "Seq" ]);
+  p
+    "a finder naming Seq alone is missed by the Low_level rule and counted as an Assignments.t \
+     traversal"
+    ((counts seq_finder).traversals = 0
+    && (not (Scan.needs_harness (counts seq_finder)))
+    && assignments seq_finder = 1);
+  p "a finder naming Block_comment alone is an Assignments.t traversal"
+    (assignments "let rec strip = function Block_comment (_, c) -> strip c | c -> c\n" = 1);
+  p "a non-recursive fold over a leaf constructor is no traversal"
+    (assignments
+       "let accums = fold_leaves ~init:0 ~f:(fun n -> function Accum_op _ -> n + 1 | _ -> n)\n"
+     = 0
+    && assignments "let rec only = function Accum_op _ -> 1 | _ -> 0\n" = 0);
+  p "a Low_level traversal stays in its own column and is not counted again"
+    ((counts walker).traversals = 1 && assignments walker = 0);
+  p "a finder with Noop and Seq arms stays the Low_level rule's, its column unchanged"
+    (let finder = "let rec find = function Noop -> None | Seq (a, b) -> find b | x -> Some x\n" in
+     (counts finder).traversals = 1 && assignments finder = 0);
+  p "constructors of a nested t and of another recursive type do not widen the Assignments census"
+    (assignments "let rec f = function Loop x -> f x | Wrap y -> f y | z -> z\n" = 0);
+  p_all "a Seq qualified by Low_level or an alias of it is Low_level's, in neither column"
+    [
+      "module LL = Ir.Low_level\n\
+       let rec flat = function LL.Seq (a, b) -> flat a @ flat b | s -> [ s ]\n";
+      "let rec flat = function Ir.Low_level.Seq (a, b) -> flat a @ flat b | s -> [ s ]\n";
+      "module LL = Ir.Low_level\n\
+       module L2 = (LL : S)\n\
+       let rec flat = function L2.Seq (a, b) -> flat a @ flat b | s -> [ s ]\n";
+      "let f x = let module L = Ir.Low_level in let rec flat = function L.Seq (a, b) -> flat a @ \
+       flat b | s -> [ s ] in flat x\n";
+    ] ~f:(fun source -> (counts source).traversals = 0 && assignments source = 0);
+  p "a Seq qualified by Assignments or an alias of it is an Assignments.t traversal"
+    (assignments
+       "let rec flat = function Ir.Assignments.Seq (a, b) -> flat a @ flat b | s -> [ s ]\n"
+     = 1
+    && assignments
+         "module LL = Ir.Low_level\n\
+          module A = Ir.Assignments\n\
+          let rec flat = function A.Seq (a, b) -> flat a @ flat b | s -> [ s ]\n"
+       = 1);
+  p "nested Assignments.t finders are counted once each"
+    (assignments ("let rec outer x = " ^ seq_finder ^ " in find x") = 1);
   p "zero records stay below the adoption floor" (not (Scan.needs_harness (counts "let x = 0")));
   p "the first record requires harness adoption" (Scan.needs_harness (counts record));
   p "two records also require harness adoption" (Scan.needs_harness (counts (record ^ record)));
@@ -201,6 +267,7 @@ let () =
   List.iter [ "test"; "arrayjit"; "arrayjit/test"; "arrayjit/lib" ] ~f:(fun dir ->
       Unix.mkdir (Stdlib.Filename.concat root dir) 0o700);
   write "arrayjit/lib/low_level.ml" declaration;
+  write "arrayjit/lib/assignments.ml" assignments_declaration;
   Unix.mkdir (Stdlib.Filename.concat root "test/support") 0o700;
   write "test/support/ll_builders.ml" builders_source;
   write "test/support/ll_test.ml" harness_source;
@@ -406,6 +473,19 @@ let () =
   check "permanent exemptions also become stale after harness adoption" ~exit:1
     ~message:"test/new.ml: stale ll_test exemption" (run ~permanent:true ());
   write "test/dune" "(test (name new) (modules new))";
+  (* Census only: an unlinked file whose one traversal is of Assignments.t is reported, not
+     refused. *)
+  write "test/new.ml" seq_finder;
+  check "an unlinked Assignments.t finder is reported in its census column without refusal" ~exit:0
+    ~message:
+      "recursive in Assignments.t: Block_comment, Seq):\ntest/new.ml -- assignments_traversals=1\n"
+    (run ());
+  write "arrayjit/lib/assignments.ml" "type t = Noop | Accum_op of { lhs : int }\n";
+  check "an Assignments.t declaring no nesting constructor is refused, not read as an empty census"
+    ~exit:1
+    ~message:"arrayjit/lib/assignments.ml: its type t declares no constructor carrying a t"
+    (run ());
+  write "arrayjit/lib/assignments.ml" assignments_declaration;
   write "test/new.ml" "";
   write "arrayjit/test/new.ml" (record ^ record ^ record ^ "module B = Ll_builders\nlet _ = B.seq\n");
   check "new arrayjit debt requires explicit adoption" ~exit:1
