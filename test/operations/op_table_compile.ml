@@ -594,14 +594,25 @@ let () =
       let arms, seen = blended case in
       seen = 0 || seen = arms);
   (* cc and HIP blend; CUDA's ptxas if-converts the short-circuiting spelling itself, and Metal's
-     compiler no tool here can read, so both keep [?:] (C_syntax's [select_blend_syntax]). *)
-  let blend_leg =
-    Verdict.leg ~when_:(on_cc || String.equal backend_name "hip") ~on:backend_name ()
+     compiler no tool here can read, so both keep [?:] (C_syntax's [select_blend_syntax]). Which of
+     the two a backend does is its [blends_value_selects] fact, which the inline fan-in guard reads
+     before codegen (gh-ocannl-1775): two-sided, on every backend, against the emitted kernels. *)
+  let blends = (Context.backend_facts base_ctx).Ir.Backend_intf.blends_value_selects in
+  (* Non-empty first: a sweep that compiled no select arm would make the short-circuiting reading
+     pass vacuously. *)
+  p_exists "the sweep compiled select arms" cases ~f:(fun case ->
+      let arms, _ = blended case in
+      arms > 0);
+  let renders_blend case =
+    let _, seen = blended case in
+    seen > 0
   in
-  Verdict.in_leg ~leg:blend_leg "some precision's select arms render the select blend" (fun label ->
-      p_exists label cases ~f:(fun case ->
-          let _, seen = blended case in
-          seen > 0));
+  if blends then
+    p_exists "the select blend renders at some precision exactly where the backend's facts say so"
+      cases ~f:renders_blend
+  else
+    p_none "the select blend renders at some precision exactly where the backend's facts say so"
+      cases ~f:renders_blend;
   (* gh-ocannl-1768: the builtin parameter guards were in force over the whole sweep, so the claim
      above that no arm fails to compile includes that no arm passes a builtin an operand its
      parameter narrows. The guards exist on cc and Metal. *)

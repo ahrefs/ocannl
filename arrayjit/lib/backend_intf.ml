@@ -927,6 +927,14 @@ type backend_facts = {
           artifact: what each backend's artifact writer appends, and what
           [test/config/config_reads.ml]'s [code_extension] -- linked by tests that link no backend
           -- is held equal to by [test/operations/marker_backend_vocabulary]. *)
+  blends_value_selects : bool;
+      (** The dialect renders a value select that {!Low_level.speculable_select} admits as a
+          branchless blend, evaluating every arm ([C_syntax_config.select_blend_syntax],
+          gh-ocannl-1622, gh-ocannl-1695): cc and HIP, at the float compute precisions their blends
+          cover. CUDA's ptxas if-converts the short-circuiting spelling itself and Metal keeps [?:].
+          The renderers derive their blend from this fact, and the inline fan-in guard reads it
+          before codegen (gh-ocannl-1775): on a blending backend a speculable [Where] is charged the
+          union of its arms' loads, elsewhere its wider arm. *)
 }
 [@@deriving equal]
 
@@ -965,6 +973,7 @@ let cc_facts =
     host_load_attributable = true;
     node_ident_prefix = "";
     source_extension = ".c";
+    blends_value_selects = true;
   }
 
 let cuda_facts =
@@ -977,6 +986,7 @@ let cuda_facts =
     host_load_attributable = false;
     node_ident_prefix = "t_";
     source_extension = ".cu";
+    blends_value_selects = false;
   }
 
 let hip_facts =
@@ -989,6 +999,7 @@ let hip_facts =
     host_load_attributable = false;
     node_ident_prefix = "t_";
     source_extension = ".hip";
+    blends_value_selects = true;
   }
 
 let metal_facts =
@@ -1001,6 +1012,7 @@ let metal_facts =
     host_load_attributable = false;
     node_ident_prefix = "t_";
     source_extension = ".metal";
+    blends_value_selects = false;
   }
 
 (** {2 Cache identity of the device description (gh-ocannl-1253)}

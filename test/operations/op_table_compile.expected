@@ -5,7 +5,8 @@ every storage precision the backend holds compiled at least one arm: true
 at each precision, the explicit-SIMD rendering takes every vector arm or none: true
 some precision's vector arms take the explicit-SIMD rendering: true
 at each precision, the select blend renders every select arm or none: true
-some precision's select arms render the select blend: true
+the sweep compiled select arms: true
+the select blend renders at some precision exactly where the backend's facts say so: true
 the sweep's kernels carried builtin parameter guards: true
 gh-ocannl-1704 reverted compiles without the guards: true
 gh-ocannl-1704 reverted fails the guards: true
