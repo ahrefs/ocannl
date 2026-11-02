@@ -7246,6 +7246,27 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1777: the flip surface and the planner's choice are invariant under unrelated node
+; minting and construction order. Lowers and plans only; it runs no training step.
+
+(test
+ (name flip_order_minting)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules flip_order_minting)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  arrayjit.memory_budget
+  arrayjit.verdict
+  ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  ; cc-vector-width: independent -- the tune claim is a fused-to-unfused ratio, which the width moves
  ; symmetrically.

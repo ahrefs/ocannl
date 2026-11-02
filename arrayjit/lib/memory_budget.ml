@@ -158,8 +158,11 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
             with
             | [] -> None
             | dirs -> Some (fc.LL.fc_tn, dirs))
-        |> List.sort ~compare:(fun (ta, da) (tb, db) ->
-            match Int.compare (cheapest da) (cheapest db) with 0 -> Tn.compare ta tb | c -> c)
+        (* Stable: equal costs keep the surface's order, which is program order among ties
+           (gh-ocannl-1777) -- a node-id tie-break would let unrelated node minting move the cut and
+           the acceptance order below. *)
+        |> List.stable_sort ~compare:(fun (_, da) (_, db) ->
+            Int.compare (cheapest da) (cheapest db))
       in
       let considered = List.take all max_candidates in
       let bp_dropped = List.length all - List.length considered in
@@ -194,9 +197,10 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
       in
       (* A node ranks where its best direction does. *)
       let ranked =
-        List.sort scored ~compare:(fun (ta, da) (tb, db) ->
+        (* Stable, as above: ties keep the cheapest-first order. *)
+        List.stable_sort scored ~compare:(fun (_, da) (_, db) ->
             let best d = List.min_elt d ~compare:by_ratio |> Option.value_exn in
-            match by_ratio (best da) (best db) with 0 -> Tn.compare ta tb | c -> c)
+            by_ratio (best da) (best db))
       in
       (* Round 2: accept a prefix, re-scoring the CUMULATIVE vector each time. Inlining one node
          moves the others' live spans, so a candidate's solo relief is not what it is worth here. A
@@ -215,9 +219,10 @@ let fit ?name ?max_candidates ~budget ctx comp bindings =
          the group (no group is reconsidered once discarded — this is a bounded planner, not a
          search over subsets). - equal: the group is merely neutral. Commit the candidate alone but
          KEEP holding it: committing it would pay recompute for zero bytes, and discarding it would
-         throw away a flip that may still be half of a later pair. Dropping neutral holds eagerly
-         measurably costs relief (on test/operations/memory_budget_planner's step, 1196164 ->
-         1228932 bytes).
+         throw away a flip that may still be half of a later pair. (The measurement once cited here,
+         1196164 -> 1228932 bytes on test/operations/memory_budget_planner's step, was taken under
+         proxy costs that depended on node uids, gh-ocannl-1777; with those fixed the step reaches
+         1229060 bytes under either policy on cc, so the case rests on the pairing argument.)
 
          Speculatives never joined by a paying flip are discarded at the end, so no recompute is
          ever paid for zero bytes. The relief of a joint commit is reported on the flip that closed

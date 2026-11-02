@@ -1552,10 +1552,12 @@ type optimized = {
           discharge pad guards on the intrinsic path. *)
   flip_candidates : flip_candidate list;
       (** gh-555: the searchable inlining decision dimensions of this compile, one per node, most
-          expensive first by each node's most expensive alternative, as decided at the whole-routine
-          specialization (schedule-transform copies inherit the whole-routine list). Excluded: nodes
-          never assigned or never read, scalar constexprs and pure one-hot selector producers, and
-          nodes placed by legality, intent or observability rather than the heuristic policy. *)
+          expensive first by each node's most expensive alternative, equal costs in program order
+          (the node's first access in the raw lowered code, gh-ocannl-1777; never node id, which
+          follows construction order), as decided at the whole-routine specialization
+          (schedule-transform copies inherit the whole-routine list). Excluded: nodes never assigned
+          or never read, scalar constexprs and pure one-hot selector producers, and nodes placed by
+          legality, intent or observability rather than the heuristic policy. *)
   spliced_rbw : Set.M(Tnode).t;
       (** gh-610 review round 6: the nodes whose [read_before_write] was set by the FINAL-code
           reconciliation (a spliced read preceding, or not definitely covered by, the routine's own

@@ -1,6 +1,6 @@
 decision surface (as lowered):
-  n3       materialize -> inline cost 64 refused 9:sibling-escaping-read-index
   n4       materialize -> inline cost 64 refused 9:sibling-escaping-read-index
+  n3       materialize -> inline cost 64 refused 9:sibling-escaping-read-index
   relu_s1  inline      -> materialize cost 2
   exp_y    inline      -> materialize cost 1
 ranked surface:

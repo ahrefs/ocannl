@@ -625,6 +625,15 @@ files.
   was the same six artifacts replayed in an unbalanced order; three replay sets of them spanned
   5.5-6.5%, so an identical schedule varies ~1pp run to run -- all three non-overlapping), and balancing that order matters: a fixed order
   confounds the cap with session position, which was worth ~1.4pp of an apparent 7.1%.
+- **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
+  step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
+  reads activations that read the parameter), and the cycle guard memoizes whatever it computed under
+  a placeholder, so entering
+  them made `inline_fanin` (the proxy price's multiplier) depend on where the `traced_store`
+  iteration started: on uid hashes, hence on how many nodes the session minted before. Any
+  decision read off a Tnode-keyed table's iteration order has the same trap; equal-cost flip
+  candidates are ordered by first access in the raw code, never by uid, and consumers sort stably.
+  `test/operations/flip_order_minting.ml` is the shift-the-uids pattern for checking a decision.
 - **A candidate whose captured computation contains a `Scan_loop` is refused, and the refusal has
   two doors** (gh-ocannl-696, `test/operations/scan_loop.ml` legs 5 and 5b): `virtual_llc` threads
   `~in_scan` beside `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in
