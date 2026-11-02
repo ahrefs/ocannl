@@ -1,22 +1,21 @@
-case | depends | off | check | guided
-bias of the wrong width | arg | application:body | application:scheme | application:scheme
-contradicting parameters | int | application:body | definition:trace | definition:trace
-residual around a wider layer | arg | application:body | application:scheme | application:scheme
-too few axes for the spec | arg | application:body | application:scheme | application:scheme
-dimension and row variable share a name | int | application:body | definition:trace | definition:trace
-empty concatenation component | int | application:body | definition:trace | definition:trace
-concatenation component exceeds the axis | arg | closure | application:scheme | application:scheme
-undetermined concatenation components | int | closure | closure | closure
-forgotten hidden dimension | int | closure | closure | closure
-parameter sized by a fixed index | int | closure | closure | closure
-set_dim against a fixed width | int | application:body | definition:trace | definition:trace
-set_dim twice, no () stage | int | application:body | application:trace | application:trace
-cyclic row permutation, abstract argument | arg | closure | closure | closure
-cyclic row permutation, concrete argument | arg | accepted | accepted | accepted
-window kernel nothing sizes | int | closure | closure | closure
+case | depends | off | check
+bias of the wrong width | arg | application:body | application:scheme
+contradicting parameters | int | application:body | definition:trace
+residual around a wider layer | arg | application:body | application:scheme
+too few axes for the spec | arg | application:body | application:scheme
+dimension and row variable share a name | int | application:body | definition:trace
+empty concatenation component | int | application:body | definition:trace
+concatenation component exceeds the axis | arg | closure | application:scheme
+undetermined concatenation components | int | closure | closure
+forgotten hidden dimension | int | closure | closure
+parameter sized by a fixed index | int | closure | closure
+set_dim against a fixed width | int | application:body | definition:trace
+set_dim twice, no () stage | int | application:body | application:trace
+cyclic row permutation, abstract argument | arg | closure | closure
+cyclic row permutation, concrete argument | arg | accepted | accepted
+window kernel nothing sizes | int | closure | closure
 every mode accepts and refuses the same programs: true
 no error surfaces later under a scheme than without one: true
-checking and guided registration report at the same place: true
 without schemes, no error surfaces at a definition: true
-some error moves to the definition under guided registration: true
+some error moves to the definition under a scheme: true
 some error moves from the closure to the application: true

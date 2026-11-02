@@ -1,11 +1,11 @@
-(* gh-ocannl-1751: [%op] functions get their shape scheme automatically -- here in checking mode,
-   the default, pinned below (guided registration, gh-ocannl-1761, is [op_schemes_guided]). The
-   closure built at a function's [()] application traces the scheme of the function it returns (a
-   function without a [()] stage: its first application); every application checks the scheme
-   against its arguments' shapes, in a rewound window, before the body runs and registers as it
-   always did. The oracle for "as it always did" is the same function opted out with
-   [[@@ocannl.no_scheme]], or the whole run with the schemes switched off; each claim about the
-   mechanism is paired with such a control, which must come out the other way. *)
+(* gh-ocannl-1751: [%op] functions get their shape scheme automatically, in checking mode (pinned
+   below against an ambient op_shape_schemes=off). The closure built at a function's [()]
+   application traces the scheme of the function it returns (a function without a [()] stage: its
+   first application); every application checks the scheme against its arguments' shapes, in a
+   rewound window, before the body runs and registers as it always did. The oracle for "as it always
+   did" is the same function opted out with [[@@ocannl.no_scheme]], or the whole run with the
+   schemes switched off; each claim about the mechanism is paired with such a control, which must
+   come out the other way. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -37,7 +37,7 @@ let traced name = function Tensor.Scheme.Traced n -> String.equal n name | _ -> 
 let checked name = function Tensor.Scheme.Checked n -> String.equal n name | _ -> false
 
 let about name = function
-  | Tensor.Scheme.Traced n | Checked n | Guided n | Unschemed (n, _) -> String.equal n name
+  | Tensor.Scheme.Traced n | Checked n | Unschemed (n, _) -> String.equal n name
 
 (* This test is about checking mode. *)
 let check_mode = Some `Check

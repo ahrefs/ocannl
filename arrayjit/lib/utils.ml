@@ -616,11 +616,10 @@ let config_key_classification : (config_key_class * string * string list) list =
         "device_init_deadline";
       ] );
     ( Execution_neutral,
-      "shape-only checking and guided registration at graph construction (gh-ocannl-1751, \
-       gh-ocannl-1761): a scheme check is rewound, its traces allocate no session id, and a guided \
-       application closes every shape as inline registration does, so the graph, its tensor ids \
-       and the code it lowers to are the same in every mode; only where a shape error is reported, \
-       and the construction's cost, change",
+      "shape-only checking at graph construction (gh-ocannl-1751): a scheme check is rewound and \
+       its traces allocate no session id, so the graph, its tensor ids and the code it lowers to \
+       are the same either way; only where a shape error is reported, and the construction's cost, \
+       change",
       [ "op_shape_schemes" ] );
     ( Execution_neutral,
       "reuse of compiled kernel code within a process, keyed by the kernel's exact source and \

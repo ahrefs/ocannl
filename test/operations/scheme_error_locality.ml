@@ -1,20 +1,20 @@
 (* gh-ocannl-1752: which shape errors a shape scheme reports earlier. Each case restates a shape
    error from the test suite (test/einsum/test_inference_counterexamples.ml,
    test_param_shape_error.ml, concat_extraction.ml, op_schemes.ml, ...) as a schemed [%op] function
-   applied to an argument, and records, under op_shape_schemes=off|check|guided, where the error
-   surfaces: at the definition (the [()] application, which traces the scheme), at the application
-   (by the scheme's instantiation, or by the body's own registration), or only at the closure that
-   forcing the result's dims runs. The table is the catalogue in docs/shape_inference.md. *)
+   applied to an argument, and records, under op_shape_schemes=off|check, where the error surfaces:
+   at the definition (the [()] application, which traces the scheme), at the application (by the
+   scheme's instantiation, or by the body's own registration), or only at the closure that forcing
+   the result's dims runs. The table is the catalogue in docs/shape_inference.md. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
 open Verdict.Claims
 module Row = Ocannl.Row
 
-type mode = [ `Off | `Check | `Guided ]
+type mode = [ `Off | `Check ]
 
-let modes : mode list = [ `Off; `Check; `Guided ]
-let mode_name = function `Off -> "off" | `Check -> "check" | `Guided -> "guided"
+let modes : mode list = [ `Off; `Check ]
+let mode_name = function `Off -> "off" | `Check -> "check"
 
 let leaf ?(batch = []) ?output name =
   match output with
@@ -210,13 +210,10 @@ let () =
                 (equal_phase (phase_of m row) Accepted)
                 (equal_phase (phase_of `Off row) Accepted)));
       p_all "no error surfaces later under a scheme than without one" table ~f:(fun (_, row) ->
-          List.for_all [ `Check; `Guided ] ~f:(fun m ->
-              compare_phase (phase_of m row) (phase_of `Off row) <= 0));
-      p_all "checking and guided registration report at the same place" table ~f:(fun (_, row) ->
-          equal_phase (phase_of `Check row) (phase_of `Guided row));
+          compare_phase (phase_of `Check row) (phase_of `Off row) <= 0);
       p_none "without schemes, no error surfaces at a definition" table ~f:(fun (_, row) ->
           equal_phase (phase_of `Off row) Definition);
-      p_exists "some error moves to the definition under guided registration" table
-        ~f:(fun (_, row) -> equal_phase (phase_of `Guided row) Definition);
+      p_exists "some error moves to the definition under a scheme" table ~f:(fun (_, row) ->
+          equal_phase (phase_of `Check row) Definition);
       p_exists "some error moves from the closure to the application" table ~f:(fun (_, row) ->
-          equal_phase (phase_of `Off row) Closure && equal_phase (phase_of `Guided row) Application))
+          equal_phase (phase_of `Off row) Closure && equal_phase (phase_of `Check row) Application))

@@ -1052,10 +1052,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* [grad_asn] runs inside the construction window too: the operands' roots are already removed
        and the result's not yet installed, so a closure here would checkpoint an incomplete graph
        (gh-ocannl-1301). *)
-    let own_grad_asn =
-      Shape.with_backward_construction (fun () ->
-          Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections))
-    in
+    let own_grad_asn = Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) in
     let backprop = Asgns.sequence (own_grad_asn :: bcks) in
     let written = Asgns.collect_written own_grad_asn.asgns in
     let requires =
@@ -1773,11 +1770,7 @@ module Scheme = struct
 
   (* {3 Automatic schemes for [%op] functions (gh-ocannl-1751)} *)
 
-  type event =
-    | Traced of string
-    | Unschemed of string * string
-    | Checked of string
-    | Guided of string
+  type event = Traced of string | Unschemed of string * string | Checked of string
 
   (* Observers of the automatic schemes' events, innermost first: [check_definition] collects the
      traces its trial makes, and tests read the log. *)
@@ -1795,30 +1788,25 @@ module Scheme = struct
   let generation = ref 0
   [@@mutation_serial.exempt "a count of session resets, which only retires schemes"]
 
-  type mode = [ `Guided | `Check | `Off ]
+  type mode = [ `Check | `Off ]
 
   let mode : mode Lazy.t =
     lazy
       (match
          String.lowercase (Utils.get_global_arg ~default:"check" ~arg_name:"op_shape_schemes")
        with
-      | "guided" -> `Guided
       | "check" -> `Check
       | "off" -> `Off
       | other ->
           raise
           @@ Utils.User_error
-               [%string "Invalid op_shape_schemes setting %{other}: expected guided, check or off"])
+               [%string "Invalid op_shape_schemes setting %{other}: expected check or off"])
 
   let mode_override : mode option ref = ref None
   [@@mutation_serial.exempt "a test override of a process-lifetime setting"]
 
   let current_mode () = Option.value !mode_override ~default:(Lazy.force mode)
-  let enabled () = match current_mode () with `Guided | `Check -> true | `Off -> false
-
-  let guided_sabotage : Shape.Scheme.sabotage option ref = ref None
-  [@@mutation_serial.exempt "a negative control's switch, set by tests only"]
-
+  let enabled () = match current_mode () with `Check -> true | `Off -> false
   let registration_counts = Shape.registration_counts
   let reset_registration_counts = Shape.reset_registration_counts
   let registration_times = Shape.registration_times
@@ -1921,33 +1909,16 @@ module Scheme = struct
         Shape.note_checked_application ();
         emit (Checked h.name))
 
-    (* Under [guided] (gh-ocannl-1761), one persistent instantiation stands in for the body's own
-       registration, which follows the trace step by step; a scheme that applied a scheme itself, or
-       a session that cannot take a checkpoint, is checked instead. Nested applications under a
-       guide run plain: the outer trace ran them plain too, so their steps are the outer
-       skeleton's. *)
     let apply h args body =
-      if (not (enabled ())) || Shape.tracing_in_progress () || Shape.guide_active () then body ()
+      if (not (enabled ())) || Shape.tracing_in_progress () then body ()
       else (
         (match h.state with
         | Pending -> trace_handle h
         | Schemed { scheme; generation = g } when g <> !generation || Shape.Scheme.stale scheme ->
             trace_handle h
         | Schemed _ | Unschemed _ -> ());
-        match h.state with
-        | Schemed { scheme; _ }
-          when Poly.equal (current_mode ()) `Guided
-               && Shape.can_checkpoint ()
-               && not (Shape.Scheme.has_instances scheme) ->
-            emit (Guided h.name);
-            Shape.Scheme.guided ?sabotage:!guided_sabotage scheme
-              ~application:(application_name args)
-              ~args:(List.map args ~f:(fun t -> t.shape))
-              ~id_mark:session_state.next_id body
-        | Schemed { scheme; _ } ->
-            check h scheme args;
-            body ()
-        | Pending | Unschemed _ -> body ())
+        (match h.state with Schemed { scheme; _ } -> check h scheme args | _ -> ());
+        body ())
   end
 
   let status h =
@@ -1981,10 +1952,6 @@ module For_testing = struct
 
   let observe_schemes f ~on_event = Scheme.observing f ~on_event
   let set_op_shape_schemes v = Scheme.mode_override := v
-
-  let with_guided_sabotage sabotage f =
-    Scheme.guided_sabotage := Some sabotage;
-    Exn.protect ~f ~finally:(fun () -> Scheme.guided_sabotage := None)
 
   let discarded_registry_sizes () =
     Weak_discards.clean (discarded_window_nodes ());

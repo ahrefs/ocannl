@@ -1,5 +1,3 @@
 every mode closes the shapes it closes without schemes: true
 checking leaves the closure the constraint store it has without schemes: true
-a guided application registers as many guided steps at every depth: true
-guided registration skips most of the body's own inequalities: true
-under guided registration the closure holds more constraints than without schemes: true
+checking instantiates a scheme at every depth: true
