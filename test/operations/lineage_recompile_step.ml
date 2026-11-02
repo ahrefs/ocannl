@@ -49,10 +49,8 @@ let () =
   in
   (* gh-ocannl-1724: a lineage refuses a tensor fragment compiled twice. This test's recompiles in
      one lineage exercise lowering the same step again (gh-ocannl-1645/1653), which an unowned copy
-     of the program -- the same assignments, no fragment metadata -- still does. *)
-  let comp =
-    Ir.Assignments.comp ~embedded:comp.Ir.Assignments.embedded_nodes comp.Ir.Assignments.asgns
-  in
+     of the program ([Ll_test.unowned_copy]) still does. *)
+  let comp = Ll_test.unowned_copy comp in
   let grad t = (Option.value_exn ~here:[%here] t.Tensor.diff).grad in
   let y_grad = grad y and w_grad = grad w in
   let read ctx = Context.get_values ctx w.Tensor.value in

@@ -546,6 +546,19 @@ let link_finalized ?ctx ~placements ~name (o : LL.optimized) =
                 (Tn.debug_name tn))));
   linked
 
+(** [unowned_copy ?name c] is [c]'s program without its tensor metadata (gh-ocannl-1741): the same
+    assignments and embedded nodes, no [owned] or [requires] fragments, and with them none of the
+    accumulation records ([zeroes], [accumulates], [accumulation_runs]) the gh-ocannl-1744 checks
+    read. A lineage refuses a tensor fragment compiled twice (gh-ocannl-1724), so a test that
+    compiles one program more than once along one lineage compiles this copy instead, opting out of
+    those checks too. [?name] wraps the assignments in a [Block_comment], which names the routine.
+*)
+let unowned_copy ?name (c : Ir.Assignments.comp) =
+  let asgns =
+    match name with None -> c.asgns | Some n -> Ir.Assignments.Block_comment (n, c.asgns)
+  in
+  Ir.Assignments.comp ~embedded:c.embedded_nodes asgns
+
 (** {2 The default prefill}
 
     A fresh device buffer is already zero, so a routine that wrongly drops a zero — an elided

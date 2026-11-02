@@ -52,10 +52,8 @@ let () =
   in
   (* gh-ocannl-1724: a lineage refuses a tensor fragment compiled twice. This test's recompiles in
      one lineage exercise tuning a step its lineage already compiled and ran, which an unowned copy
-     of the program -- the same assignments, no fragment metadata -- still does. *)
-  let comp =
-    Ir.Assignments.comp ~embedded:comp.Ir.Assignments.embedded_nodes comp.Ir.Assignments.asgns
-  in
+     of the program ([Ll_test.unowned_copy]) still does. *)
+  let comp = Ll_test.unowned_copy comp in
   (* A lineage holding the trained state: [w] from its initialization, the momentum buffer from one
      warm-up step (an embedded node, allocated by the first compile that sees it). *)
   let warm_lineage () =
