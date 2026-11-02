@@ -37,8 +37,9 @@ let () =
           Printf.sprintf "extent=%d: total=%.1f (expected %.1f), y valid prefix all 1.0" extent
             total_v (Float.of_int extent)
         in
-        if extent = 0 then Verdict.p claim Float.(abs total_v < 1e-6)
-        else Verdict.p_all claim (Array.to_list prefix) ~f:(fun v -> Float.(abs (v -. 1.0) < 1e-6));
+        let tol _ = 1e-6 in
+        if extent = 0 then Verdict.p_close claim [| total_v |] [| 0. |] ~tol
+        else Verdict.p_close claim prefix (Array.create ~len:extent 1.0) ~tol;
         ctx)
   in
   (* Out-of-range extents are rejected at bind validation. *)

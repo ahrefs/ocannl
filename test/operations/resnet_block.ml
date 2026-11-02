@@ -58,16 +58,15 @@ let run tag ~stride ?out_channels () =
             let b = i / (side * side) and h = i / side % side and w = i % side in
             input_value b (stride * h) (stride * w) 0 +. input_value b (stride * h) (stride * w) 1)
       in
-      p_alli (tag ^ " executed shortcut matches oracle") (Array.to_list values) ~f:(fun i actual ->
+      let label = tag ^ " executed shortcut matches oracle" in
+      p_alli label (Array.to_list values) ~f:(fun i actual ->
           let cell = i / channels in
           let expected =
             if projected then Float.max 0. (samples.(cell) /. Float.sqrt (1. +. 1e-5))
             else input_value (cell / (side * side)) (cell / side % side) (cell % side) (i % channels)
           in
-          if Float.(abs (actual -. expected) >= 1e-4) then
-            Stdio.eprintf "%s cell %d: actual %f expected %f (not part of the golden)\n" tag i
-              actual expected;
-          Float.is_finite actual && Float.(abs (actual -. expected) < 1e-4));
+          Verdict.within ~what_ran:(Printf.sprintf "cell %d" i) label [| actual |] [| expected |]
+            ~tol:(fun _ -> 1e-4));
       Context.release ctx)
 
 let () =

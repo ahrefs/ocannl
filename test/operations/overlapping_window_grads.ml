@@ -25,13 +25,10 @@ open Ocannl.Operation.DSL_modules
 open Stdio
 open Verdict.Claims
 
-(* Non-empty by construction (gh-ocannl-746): [Array.for_all2_exn] answers [true] on two empty
-   arrays, and a readback and the reference it is compared against go empty TOGETHER -- the
-   reference went through the same path. {!Verdict.p_all2} is the claim-shaped form; the sites
-   reached through this helper keep a boolean, so the guard lives here. *)
-let close a b =
-  (not (Array.is_empty a)) && Array.for_all2_exn a b ~f:(fun x y -> Float.(abs (x - y) < 1e-5))
-
+(* Readbacks against their closed forms, to an absolute 1e-5: single pairs go through
+   {!Verdict.p_close}, conjunctions through {!Verdict.within}, both refusing an empty pair
+   (gh-ocannl-746) and naming the worst cell on a failure (gh-ocannl-1470). *)
+let tol _ = 1e-5
 let fa a = String.concat ~sep:" " (Array.to_list a |> List.map ~f:(fun v -> Printf.sprintf "%g" v))
 let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad
 
@@ -58,8 +55,10 @@ let () =
   let lv = Context.get_values ctx loss.Tensor.value in
   let gx = Context.get_values ctx (grad_of x) in
   printf "tropical overlap: y = [%s], loss = %s, gx = [%s]\n%!" (fa yv) (fa lv) (fa gx);
-  p "tropical overlap forward" (close yv [| 5.; 3.; 2.; 5. |] && close lv [| 15. |]);
-  p "tropical overlap gradient exact" (close gx [| 1.; 1.; 0.; 1.; 1. |]);
+  p "tropical overlap forward"
+    (Verdict.within "tropical overlap forward" yv [| 5.; 3.; 2.; 5. |] ~tol
+    && Verdict.within "tropical overlap forward" lv [| 15. |] ~tol);
+  p_close "tropical overlap gradient exact" gx [| 1.; 1.; 0.; 1.; 1. |] ~tol;
 
   (* === 1b: Unary conv specs — [k] occurs only inside [o<+k], so projection inference must register
      it while processing the compound. Pin both the issue's [++] repro and the [@^^] overlap
@@ -73,7 +72,7 @@ let () =
   let ctx = Train.forward_once ctx y1b in
   let yv1b = Context.get_values ctx y1b.Tensor.value in
   printf "unary conv sum: y = [%s]\n%!" (fa yv1b);
-  p "unary conv sum forward" (close yv1b [| 8.; 4.; 3.; 7. |]);
+  p_close "unary conv sum forward" yv1b [| 8.; 4.; 3.; 7. |] ~tol;
 
   Tensor.unsafe_reinitialize ();
   let x1c =
@@ -92,7 +91,8 @@ let () =
   let gx1c = Context.get_values ctx (grad_of x1c) in
   printf "unary einmax1 overlap: y = [%s], gx = [%s]\n%!" (fa yv1c) (fa gx1c);
   p "unary einmax1 overlap forward and gradient exact"
-    (close yv1c [| 5.; 3.; 2.; 5. |] && close gx1c [| 1.; 1.; 0.; 1.; 1. |]);
+    (Verdict.within "unary einmax1 overlap forward" yv1c [| 5.; 3.; 2.; 5. |] ~tol
+    && Verdict.within "unary einmax1 overlap gradient" gx1c [| 1.; 1.; 0.; 1.; 1. |] ~tol);
 
   (* === 2: einmax1 through the product-space gate — full reduction with ties: y = max x = 7, the
      gradient goes in full to every tying position. === *)
@@ -111,7 +111,8 @@ let () =
   let gx2 = Context.get_values ctx (grad_of x2) in
   printf "einmax1 ties: loss = %s, gx = [%s]\n%!" (fa lv2) (fa gx2);
   p "einmax1 tie gradient gates every achieving position"
-    (close lv2 [| 7. |] && close gx2 [| 1.; 0.; 1. |]);
+    (Verdict.within "einmax1 tie loss" lv2 [| 7. |] ~tol
+    && Verdict.within "einmax1 tie gradient" gx2 [| 1.; 0.; 1. |] ~tol);
 
   (* === 3: Tropical matmul — RHS2 has an index (j) independent of RHS1, the formerly documented g2
      limitation. t[i,j] = max_k (a[i,k] + b[k,j]) with a = [[1,9],[5,1]], b = [[10,20],[3,4]]: t =
@@ -143,9 +144,12 @@ let () =
   let gb = Context.get_values ctx (grad_of b) in
   printf "tropical matmul: t = [%s], loss = %s\n%!" (fa tv) (fa lv3);
   printf "tropical matmul: ga = [%s], gb = [%s]\n%!" (fa ga) (fa gb);
-  p "tropical matmul forward" (close tv [| 12.; 21.; 15.; 25. |] && close lv3 [| 73. |]);
-  p "tropical matmul g1 exact" (close ga [| 1.; 1.; 2.; 0. |]);
-  p "tropical matmul g2 exact (formerly the documented limitation)" (close gb [| 1.; 2.; 1.; 0. |]);
+  p "tropical matmul forward"
+    (Verdict.within "tropical matmul forward" tv [| 12.; 21.; 15.; 25. |] ~tol
+    && Verdict.within "tropical matmul loss" lv3 [| 73. |] ~tol);
+  p_close "tropical matmul g1 exact" ga [| 1.; 1.; 2.; 0. |] ~tol;
+  p_close "tropical matmul g2 exact (formerly the documented limitation)" gb [| 1.; 2.; 1.; 0. |]
+    ~tol;
 
   (* === 4: Ties with overlap — x = [7;7;7], window 2, stride 1. Both windows tie everywhere: each
      achieving pair gets the full gradient, and the shared middle position accumulates from both
@@ -164,7 +168,7 @@ let () =
   let ctx = Train.update_once ~output_cd_file:false ctx loss4 in
   let gx4 = Context.get_values ctx (grad_of x4) in
   printf "ties with overlap: gx = [%s]\n%!" (fa gx4);
-  p "ties gate every achieving pair" (close gx4 [| 1.; 2.; 1. |]);
+  p_close "ties gate every achieving pair" gx4 [| 1.; 2.; 1. |] ~tol;
 
   (* === 5: Clamped padded windows (gh-ocannl-504) with overlap — stride 1, window 3, all-negative
      input [-4;-3;-2;-1]: y_o = max x[o-1..o+1] clamped to the valid range, y = [-3;-2;-1;-1];
@@ -186,8 +190,8 @@ let () =
   let yv5 = Context.get_values ctx y5.Tensor.value in
   let gx5 = Context.get_values ctx (grad_of x5) in
   printf "clamped overlap: y = [%s], gx = [%s]\n%!" (fa yv5) (fa gx5);
-  p "clamped overlap forward" (close yv5 [| -3.; -2.; -1.; -1. |]);
-  p "clamped overlap gradient exact" (close gx5 [| 0.; 1.; 1.; 2. |]);
+  p_close "clamped overlap forward" yv5 [| -3.; -2.; -1.; -1. |] ~tol;
+  p_close "clamped overlap gradient exact" gx5 [| 0.; 1.; 1.; 2. |] ~tol;
 
   (* === 6: AlexNet-style overlapping max_pool2d (window 3, stride 2) on a 5x5 range input. Position
      (2,2)=12 lies in all four windows and wins only the first: the old input-space gate let the
@@ -209,10 +213,10 @@ let () =
   let gx6 = Context.get_values ctx (grad_of x6) in
   printf "overlapping max_pool2d: y = [%s]\n%!" (fa yv6);
   printf "overlapping max_pool2d: gx = [%s]\n%!" (fa gx6);
-  p "overlapping max_pool2d forward" (close yv6 [| 12.; 14.; 22.; 24. |]);
-  p "overlapping max_pool2d gradient exact"
-    (close gx6
-       (Array.init 25 ~f:(fun i -> if i = 12 || i = 14 || i = 22 || i = 24 then 1. else 0.)));
+  p_close "overlapping max_pool2d forward" yv6 [| 12.; 14.; 22.; 24. |] ~tol;
+  p_close "overlapping max_pool2d gradient exact" gx6
+    (Array.init 25 ~f:(fun i -> if i = 12 || i = 14 || i = 22 || i = 24 then 1. else 0.))
+    ~tol;
 
   (* === 7: All-[-inf] input under clamped padded windows with a learnable kernel — the validity
      mask. Every output is -inf, so out-of-range pairs' -inf neutral EQUALS t; without the
@@ -241,8 +245,8 @@ let () =
   let gx7 = Context.get_values ctx (grad_of x7) in
   let gk7 = Context.get_values ctx (grad_of k7) in
   printf "all -inf clamped: gx = [%s], gk = [%s]\n%!" (fa gx7) (fa gk7);
-  p "clamped-out pairs gate no input gradient" (close gx7 [| 2.; 3.; 3.; 2. |]);
-  p "clamped-out pairs gate no kernel gradient (validity mask)" (close gk7 [| 3.; 4.; 3. |]);
+  p_close "clamped-out pairs gate no input gradient" gx7 [| 2.; 3.; 3.; 2. |] ~tol;
+  p_close "clamped-out pairs gate no kernel gradient (validity mask)" gk7 [| 3.; 4.; 3. |] ~tol;
 
   (* === 8: Row-variable reduction keeping nonempty input axes — einmax1 @^^ "...|... => ...|0" on a
      2->3 matrix-shaped tensor. The reduced output row (extent 3) lands after the kept input row
@@ -267,6 +271,7 @@ let () =
   let gp8 = Context.get_values ctx (grad_of p8) in
   printf "row-var reduce with kept input axes: loss = %s, gp = [%s]\n%!" (fa lv8) (fa gp8);
   p "row-var reduction keeping input axes has exact gradients"
-    (close lv8 [| 14. |] && close gp8 [| 0.; 1.; 0.; 1.; 0.; 0. |]);
+    (Verdict.within "row-var reduction loss" lv8 [| 14. |] ~tol
+    && Verdict.within "row-var reduction gradient" gp8 [| 0.; 1.; 0.; 1.; 0.; 0. |] ~tol);
 
   printf "\nDone.\n%!"

@@ -89,12 +89,9 @@ let run_with name transform (t : Tensor.t) =
   let ctx = Context.run ctx routine in
   Context.get_values ctx t.Tensor.value
 
-(* Non-empty by construction (gh-ocannl-746): [Array.for_all2_exn] answers [true] on two empty
-   arrays, and a readback and the reference it is compared against go empty TOGETHER -- the
-   reference went through the same path. {!Verdict.p_all2} is the claim-shaped form; the sites
-   reached through this helper keep a boolean, so the guard lives here. *)
-let close a b =
-  (not (Array.is_empty a)) && Array.for_all2_exn a b ~f:(fun x y -> Float.(abs (x - y) < 1e-5))
+(* Parity to an absolute 1e-5, through {!Verdict.p_close}: it refuses an empty pair (gh-ocannl-746)
+   and names the worst cell on a failure (gh-ocannl-1470). *)
+let tol _ = 1e-5
 
 let () =
   Tensor.unsafe_reinitialize ();
@@ -121,7 +118,7 @@ let () =
   in
   let got_split = run_with "sp_split_guarded" transform_split (make_graph1 ()) in
   p "plain non-dividing split keeps a remainder guard" (!split_ifs > 0);
-  p "guarded split matches reference" (close got_split want1);
+  p_close "guarded split matches reference" got_split want1 ~tol;
 
   let part_census = ref (-1, -1, -1) in
   let transform_part (opt : LL.optimized) =
@@ -137,7 +134,7 @@ let () =
   let ifs, _, loops = !part_census in
   p "partition+split is guard-free" (ifs = 0);
   p "partition+split has main outer+inner and tail loops" (loops = 3);
-  p "partition+split matches reference" (close got_part want1);
+  p_close "partition+split matches reference" got_part want1 ~tol;
 
   (* === 2: Inlined-concat consumer — partition at the component boundaries derived from the
      virtualizer's [Where] range guards; every guard folds. === *)
@@ -155,8 +152,9 @@ let () =
   in
   let want2 = nonzero "sp_ref2" (run_with "sp_ref2" observe (make_graph2 ())) in
   p "inlined concat consumer carries Where range guards" (!ref_wheres > 0);
-  p "concat values are sin of the concatenation"
-    (close want2 (Array.map [| 1.0; 2.0; 3.0; 4.0; 5.0 |] ~f:Float.sin));
+  p_close "concat values are sin of the concatenation" want2
+    (Array.map [| 1.0; 2.0; 3.0; 4.0; 5.0 |] ~f:Float.sin)
+    ~tol;
 
   let bps = ref [] in
   let part2_census = ref (-1, -1, -1) in
@@ -174,7 +172,7 @@ let () =
   let ifs2, wheres2, loops2 = !part2_census in
   p "partitioned concat consumer is guard-free" (ifs2 = 0 && wheres2 = 0);
   p "partitioned concat consumer has one nest per component" (loops2 = 2);
-  p "partitioned concat matches reference" (close got2 want2);
+  p_close "partitioned concat matches reference" got2 want2 ~tol;
 
   (* === 3: Per-segment scheduling — the fresh segment symbols are individually addressable: unroll
      just the tail segment. === *)
@@ -191,7 +189,7 @@ let () =
   let ifs3, wheres3, loops3 = !part3_census in
   p "tail-unrolled partition is guard-free" (ifs3 = 0 && wheres3 = 0);
   p "only the main segment remains a loop" (loops3 = 1);
-  p "tail-unrolled partition matches reference" (close got3 want2);
+  p_close "tail-unrolled partition matches reference" got3 want2 ~tol;
 
   (* === 4: Pattern discipline — targeted errors. === *)
   let expect_error name transform t =
@@ -347,7 +345,7 @@ let () =
     (List.equal Int.equal !bps6 [ ns ]);
   let ifs6, wheres6, _ = !census6 in
   p "partitioning the scope-nested loop folds the pad guard" (ifs6 = 0 && wheres6 = 0);
-  p "scope-nested partition matches reference" (close got6 want6);
+  p_close "scope-nested partition matches reference" got6 want6 ~tol;
 
   (* === 7: MANY bindings of one symbol (gh-ocannl-668, review round 1) — a materializing [Unroll]
      leaves one copy of the inner loop per unrolled step, each carrying the same guard with a
@@ -396,7 +394,7 @@ let () =
   (* Every copy's guard is decided within every segment: the clamp [Where]s are gone. *)
   let ifs7, wheres7, _ = !census7 in
   p "partitioning at the union folds every copy's guard" (ifs7 = 0 && wheres7 = 0);
-  p "partition over many bindings matches reference" (close got7 want7);
+  p_close "partition over many bindings matches reference" got7 want7 ~tol;
 
   (* The two dimensions meet when the copies live inside an accumulator scope — the shape a
      materializing [Unroll] of an outer reduction axis mints. Hand-built so the copies carry visibly

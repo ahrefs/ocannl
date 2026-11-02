@@ -49,7 +49,7 @@ let () =
       Float.(v >= 0. && v < 1.));
   p "the reference holds 18 pairwise distinct values"
     (List.length (List.dedup_and_sort (Array.to_list r_ref) ~compare:Float.compare) = n_cells);
-  let close a b = Float.(abs (a - b) <= 1e-5 * (1. + abs b)) in
+  let tol w = 1e-5 *. (1. +. Float.abs w) in
   (* Two subjects. With [r] routine-local the optimizer turns the reads into lane extracts of the
      random bits (gh-509), so the flat store meets the row-major reads in the analyses over the raw
      code only; with [r] materialized the store and the reads of one node survive together into the
@@ -64,18 +64,17 @@ let () =
     let yv = Context.get_values ctx y.value and zv = Context.get_values ctx z.value in
     pf "%s: the uniform node is 2x9x1 (a trailing unit axis beside the flattened run)" leg
       (Array.equal Int.equal (Lazy.force r.value.dims) [| 2; 9; 1 |]);
-    p_all (leg ^ ": y = r + x in every cell, against the materialized reference")
-      (List.range 0 n_cells) ~f:(fun i ->
-        Array.length yv = n_cells && close yv.(i) (r_ref.(i) +. xv.(i)));
-    p_all (leg ^ ": z = 2r in every cell, against the materialized reference")
-      (List.range 0 n_cells) ~f:(fun i ->
-        Array.length zv = n_cells && close zv.(i) (2. *. r_ref.(i)));
-    p_all (leg ^ ": the tail store's two cells (16, 17) reach both readers") (List.range 16 n_cells)
-      ~f:(fun i ->
-        Array.length yv = n_cells
-        && Array.length zv = n_cells
-        && close yv.(i) (r_ref.(i) +. xv.(i))
-        && close zv.(i) (2. *. r_ref.(i)))
+    let want_y = Array.init n_cells ~f:(fun i -> r_ref.(i) +. xv.(i))
+    and want_z = Array.init n_cells ~f:(fun i -> 2. *. r_ref.(i)) in
+    p_close (leg ^ ": y = r + x in every cell, against the materialized reference") yv want_y ~tol;
+    p_close (leg ^ ": z = 2r in every cell, against the materialized reference") zv want_z ~tol;
+    let tail = leg ^ ": the tail store's two cells (16, 17) reach both readers" in
+    let tail_cells a = Array.sub a ~pos:16 ~len:(n_cells - 16) in
+    p tail
+      (Array.length yv = n_cells
+      && Array.length zv = n_cells
+      && Verdict.within ~what_ran:"y" tail (tail_cells yv) (tail_cells want_y) ~tol
+      && Verdict.within ~what_ran:"z" tail (tail_cells zv) (tail_cells want_z) ~tol)
   in
   subject ~leg:"routine-local r" ~materialize_r:false;
   subject ~leg:"materialized r" ~materialize_r:true

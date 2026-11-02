@@ -67,9 +67,7 @@ let bitwise a b = Int64.equal (Int64.bits_of_float a) (Int64.bits_of_float b)
    prints both errors); 1e-3 leaves a margin of twenty, while one dropped or doubled block of 64
    rows moves a cell by orders of magnitude more. *)
 let tolerance = 1e-3
-
-let within name (got : float array) =
-  p_alli name (Array.to_list got) ~f:(fun o v -> Float.(abs (v - bgrad_exact.(o)) <= tolerance))
+let within name (got : float array) = p_close name got bgrad_exact ~tol:(fun _ -> tolerance)
 
 let max_error (got : float array) =
   Array.foldi got ~init:0. ~f:(fun o m v -> Float.max m (Float.abs (v -. bgrad_exact.(o))))

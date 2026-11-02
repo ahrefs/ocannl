@@ -99,22 +99,23 @@ let () =
     Stdio.printf "\n"
   done;
   let row_sum s = List.sum (module Float) (List.init n ~f:(fun t -> p.((s * n) + t))) ~f:Fn.id in
-  Verdict.p_all "rows sum to 1 (within half's resolution)" (List.init n ~f:Fn.id) ~f:(fun s ->
-      Float.(abs (row_sum s - 1.) < 0.01));
+  Verdict.p_close "rows sum to 1 (within half's resolution)" (Array.init n ~f:row_sum)
+    (Array.create ~len:n 1.) ~tol:(fun _ -> 0.01);
   Verdict.p_all "masked-out entries are exactly zero" (List.init n ~f:Fn.id) ~f:(fun s ->
       List.for_all (List.init n ~f:Fn.id) ~f:(fun t -> s >= t || Float.equal p.((s * n) + t) 0.));
   Verdict.p_all "all entries finite" (Array.to_list p) ~f:Float.is_finite;
   (* Tolerance against the same softmax evaluated in double. Half's resolution below 1 is ~1e-3, so
      5e-4 admits the ulp of backend [exp] disagreement and nothing looser -- a saturated sentinel or
      a lost max-subtraction moves these by far more. *)
-  let worst =
-    List.fold (List.init n ~f:Fn.id) ~init:0. ~f:(fun acc s ->
+  let live_got, live_want =
+    List.concat_map (List.init n ~f:Fn.id) ~f:(fun s ->
         let live = List.init (s + 1) ~f:(fun t -> Float.of_int ((2 * s) + t) *. 0.25) in
         let mx = List.reduce_exn live ~f:Float.max in
         let denom = List.sum (module Float) live ~f:(fun v -> Float.exp (v -. mx)) in
-        List.foldi live ~init:acc ~f:(fun t acc v ->
-            Float.max acc (Float.abs (p.((s * n) + t) -. (Float.exp (v -. mx) /. denom)))))
+        List.mapi live ~f:(fun t v -> (p.((s * n) + t), Float.exp (v -. mx) /. denom)))
+    |> List.unzip
   in
-  Verdict.p "matches a double-precision softmax within 5e-4" Float.(worst < 5e-4);
+  Verdict.p_close "matches a double-precision softmax within 5e-4" (Array.of_list live_got)
+    (Array.of_list live_want) ~tol:(fun _ -> 5e-4);
   Stdio.printf "probs prec: %s\n"
     (Ir.Ops.prec_string (Lazy.force probs.Tensor.value.Tn.storage_prec))
