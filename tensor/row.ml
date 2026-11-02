@@ -5572,7 +5572,17 @@ let get_dim_index proj_env =
         (* Symbolic axes index like their materialized (maximum-extent) dimension. *)
         loop (Dim (solved_dim_of_sym s))
     | Dim { d; _ } when not @@ Idx.iterated d -> Idx.Fixed_idx 0
-    | Dim { proj_id = None; _ } -> assert false
+    | Dim { d; basis; proj_id = None } as dim ->
+        (* gh-ocannl-1790: every route through [Shape] freshens the projection ids of the step's
+           shapes ([Shape.fresh_proj_ids]) before deriving the equations and indexing those dims, so
+           only a direct caller indexing some other dim reaches this. *)
+        raise
+        @@ Shape_error
+             ( [%string
+                 "get_dim_index: an iterated axis (d=%{d#Int}, basis=%{basis}) has no projection \
+                  id, so the projection environment never saw it: index the dims the projection \
+                  equations were derived from (their ids come from Row.fresh_row_proj)"],
+               [ Dim_mismatch [ dim ] ] )
     | Var v when Hashtbl.mem proj_env.v_env v ->
         get_proj_index proj_env @@ Hashtbl.find_exn proj_env.v_env v
     | Var v as dim ->
@@ -5609,6 +5619,27 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
   let p_concat_components = ref @@ Set.empty (module Proj_id) in
   (* proj_ids that are Concat components *)
   let proj_classes = ref @@ Map.empty (module Proj_id) in
+  (* gh-ocannl-1790: the bindings must stay acyclic, since every reader of [v_env] follows them
+     without a visited set ([get_proj_index], [dim_to_proj], the deferred passes below). [resolve]
+     follows the bindings at the head of a projection; [occurrence v p] is the chain of variables
+     through which [v] occurs in [p], a window's [over] and [kernel] included, if it does. Both
+     terminate because the binding arm of [loop] keeps the bindings acyclic. *)
+  let rec resolve = function
+    | Var v as p -> ( match Hashtbl.find v_env v with Some p -> resolve p | None -> p)
+    | p -> p
+  in
+  let rec occurrence v = function
+    | Var w when equal_dim_var v w -> Some []
+    | Var w ->
+        Option.bind (Hashtbl.find v_env w) ~f:(fun p ->
+            Option.map (occurrence v p) ~f:(fun chain -> w :: chain))
+    | Conv_input { over; conv; _ } -> (
+        match occurrence v over with
+        | Some _ as found -> found
+        | None -> Option.bind conv ~f:(fun { kernel; _ } -> occurrence v kernel))
+    | Proj _ | Solved _ | Concat _ -> None
+  in
+  let var_name (v : dim_var) = Option.value v.name ~default:(Dim_var.to_string v) in
   let rec loop (eq : proj_equation) : unit =
     match eq with
     | Proj_eq (Proj (p1, { d; _ }), Proj (p2, _)) when Proj_id.equal p1 p2 ->
@@ -5659,8 +5690,27 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
     | Proj_eq (Var v1, Var v2) when equal_dim_var v1 v2 -> ()
     | Proj_eq (Var v, p) | Proj_eq (p, Var v) -> (
         match Hashtbl.find v_env v with
-        | None -> Hashtbl.add_exn v_env ~key:v ~data:p
-        | Some p2 -> loop (Proj_eq (p, p2)))
+        | Some p2 -> loop (Proj_eq (p, p2))
+        | None -> (
+            match (resolve p, occurrence v p) with
+            | Var w, _ when equal_dim_var v w ->
+                (* The equation already holds through the bindings ([b = a] after [a = b]): binding
+                   [v] would close the chain into a cycle. *)
+                ()
+            | _, None -> Hashtbl.add_exn v_env ~key:v ~data:p
+            | _, Some chain ->
+                (* [v] occurs inside a window of its own projection ([v = 2*v]), directly or through
+                   the variables of [chain]: no binding can index it. *)
+                let through =
+                  if List.is_empty chain then ""
+                  else " (through " ^ String.concat ~sep:", " (List.map chain ~f:var_name) ^ ")"
+                in
+                raise
+                @@ Shape_error
+                     ( [%string
+                         "solve_proj_equations: the projection variable %{var_name v} is equated \
+                          to a window over itself%{through}: the projection equations are cyclic"],
+                       [ Projection_mismatch [ Var v; p ] ] )))
     | Iterated (Solved _) -> ()
     | Iterated (Proj (pid, { d; _ })) -> p_dims := (pid, d) :: !p_dims
     | Iterated (Conv_input { over; conv = None; _ }) ->
@@ -5731,18 +5781,17 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
      segment at all, so every segment read into (wrote from) the one cell. A concatenation proper
      ([a; b => a^b]: every component named) keeps its [Concat] index. *)
   let named_reprs =
-    let rec named depth = function
+    let rec named = function
       | Proj (pid, _) -> [ pid ]
       | Conv_input { over; conv; _ } -> (
-          named depth over @ match conv with Some { kernel; _ } -> named depth kernel | None -> [])
-      | Var v when depth < 8 -> (
-          match Hashtbl.find v_env v with Some p -> named (depth + 1) p | None -> [])
-      | Var _ | Solved _ | Concat _ -> []
+          named over @ match conv with Some { kernel; _ } -> named kernel | None -> [])
+      | Var v -> ( match Hashtbl.find v_env v with Some p -> named p | None -> [])
+      | Solved _ | Concat _ -> []
     in
     let outside =
       List.concat_map eqs ~f:(function
-        | Proj_eq (p1, p2) -> named 0 p1 @ named 0 p2
-        | Iterated p -> named 0 p)
+        | Proj_eq (p1, p2) -> named p1 @ named p2
+        | Iterated p -> named p)
       |> List.map ~f:repr_of
     in
     (* A component another concatenated axis also has is named by that access too: in [1^a; b =>

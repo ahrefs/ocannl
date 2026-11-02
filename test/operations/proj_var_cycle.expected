@@ -1,0 +1,10 @@
+a chain a = b = x: x is iterated: true
+a chain a = b = x: a and b index as x: true
+one equality stated both ways, a = b and b = a, then b = x: x is iterated: true
+one equality stated both ways, a = b and b = a, then b = x: a and b index as x: true
+a variable inside its own window, v = 2*v: Shape_error: solve_proj_equations: the projection variable v is equated to a window over itself: the projection equations are cyclic
+a variable inside its own window, v = 2*v: the refusal names the projection variable v: true
+a variable inside its own window through another, w = 2*v and v = w: Shape_error: solve_proj_equations: the projection variable v is equated to a window over itself (through w): the projection equations are cyclic
+a variable inside its own window through another, w = 2*v and v = w: the refusal names the projection variable v and (through w): true
+an iterated axis without a projection id: Shape_error: get_dim_index: an iterated axis (d=5, basis=default) has no projection id, so the projection environment never saw it: index the dims the projection equations were derived from (their ids come from Row.fresh_row_proj)
+an iterated axis without a projection id: the refusal names projection id and d=5: true

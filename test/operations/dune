@@ -693,6 +693,15 @@
  (libraries base ocannl stdio arrayjit.verdict))
 
 (test
+ ; ocannl-backend: none -- builds Row constraints by hand and solves their projection equations with
+ ; Row.solve_proj_equations; there is no lowering and no context in the run.
+ (name proj_var_cycle)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules proj_var_cycle)
+ (libraries base ocannl stdio unix arrayjit.verdict))
+
+(test
  ; ocannl-backend: none -- hand-built Dim_ineq/Dim_eq through Row.solve_inequalities; the solver
  ; runs before any backend is chosen.
  (name test_concat_dim_solver)
