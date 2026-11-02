@@ -8120,6 +8120,203 @@ let default_cpu ?min_work (opt : Low_level.optimized) : schedule =
         Some (Retype { axis = fc.index; ty = Low_level.Grid })
     | _ -> None)
 
+(* gh-ocannl-1630: per-channel vector accumulators for a direct conv nest. Lowering leaves a conv as
+   the perfect materialized nest [for w.., oc, r..: d[w.., oc] := d[w.., oc] + contrib], which the
+   serial rendering localizes into one scalar chain per output cell -- latency-bound, since without
+   reassociation no C compiler vectorizes the reduction. Sinking [oc] below every reduction loop
+   keeps each cell's terms in their order, and gives the innermost loop independent cells. The ops:
+   the [Swap] chain; a packing [Stage] of the one operand that reads [oc] (the kernel, stored
+   [oc]-major), at the segment root since every symbol it mentions is a tile loop, so the channel
+   loads are unit-stride under every contraction mode; a [Privatize] of [d] over the outermost
+   reduction loop at [d]'s storage precision (the site requires that to be its residency), the
+   per-channel accumulators; and [Vectorized] on [oc], which the C backends render as explicit SIMD
+   whose arithmetic keeps the scalar chain's expression shape. All of it is bitwise-preserving. The
+   site, per top-level statement: a perfect [Serial] nest from 0 of write loops then reduction
+   loops, ending in one accumulating [Set] whose destination is indexed by exactly the write loops
+   as plain iterators, the innermost write loop its minor axis; that loop mentioned by exactly one
+   operand, as a plain iterator on one axis, the operand mentioning nothing but it and reduction
+   loops and written nowhere in the routine; some operand reading a sliding window (a write loop and
+   a reduction loop in one affine index: a direct conv, not a matmul); single or double storage
+   throughout. *)
+let channel_vector_site ~written (stmt : Low_level.t) : schedule option =
+  let open Low_level in
+  let module S = Indexing in
+  let rec descend loops = function
+    | For_loop { index; from_ = 0; to_; body; axis = Serial } when to_ >= 0 ->
+        descend ((index, to_ + 1) :: loops) body
+    | Set { tn; idcs; llsc; _ } -> Some (List.rev loops, tn, idcs, llsc)
+    | _ -> None
+  in
+  let syms_of = function
+    | S.Iterator s -> Some [ s ]
+    | Affine { symbols; _ } -> Some (List.map symbols ~f:snd)
+    | Fixed_idx _ -> Some []
+    | Sub_axis | Concat _ -> None
+  in
+  let float_prec p = Ops.equal_prec p Ops.single || Ops.equal_prec p Ops.double in
+  let ( let* ) o f = Option.bind o ~f in
+  let* loops, d, idcs, llsc = descend [] stmt in
+  let is_self = function
+    | Get (tn, i) -> Tn.equal tn d && Array.equal S.equal_axis_index i idcs
+    | _ -> false
+  in
+  let* contrib =
+    match llsc with
+    | Binop (Ops.Add, (a, _), (b, _)) when is_self a -> Some [ b ]
+    | Binop (Ops.Add, (a, _), (b, _)) when is_self b -> Some [ a ]
+    | Ternop (Ops.FMA, (a, _), (b, _), (c, _)) when is_self c -> Some [ a; b ]
+    | _ -> None
+  in
+  (* The operand reads, refusing anything but plain loads and arithmetic. *)
+  let rec gets acc = function
+    | Get (tn, i) -> Some ((tn, i) :: acc)
+    | Binop (_, (a, _), (b, _)) -> Option.bind (gets acc a) ~f:(fun acc -> gets acc b)
+    | Ternop (_, (a, _), (b, _), (c, _)) ->
+        let* acc = gets acc a in
+        let* acc = gets acc b in
+        gets acc c
+    | Unop (_, (a, _)) -> gets acc a
+    | Constant _ | Constant_bits _ -> Some acc
+    | Local_scope _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Embed_index _ -> None
+  in
+  let* reads =
+    List.fold contrib ~init:(Some []) ~f:(fun acc e -> Option.bind acc ~f:(fun a -> gets a e))
+  in
+  (* A singleton axis lowering removed the loop of (batch 1) reads a fixed index. *)
+  let* write_syms =
+    Array.to_list idcs
+    |> List.filter_map ~f:(function
+      | S.Iterator s -> Some (Some s)
+      | Fixed_idx _ -> None
+      | _ -> Some None)
+    |> Option.all
+  in
+  let mem l s = List.mem l s ~equal:S.equal_symbol in
+  let nw = List.length write_syms in
+  let w_loops = List.take loops nw and r_loops = List.drop loops nw in
+  let* () =
+    Option.some_if
+      (List.length loops > nw
+      && List.length (List.dedup_and_sort write_syms ~compare:S.compare_symbol) = nw
+      && List.for_all w_loops ~f:(fun (s, _) -> mem write_syms s)
+      && List.for_all r_loops ~f:(fun (s, _) -> not (mem write_syms s)))
+      ()
+  in
+  let* oc, n_oc = List.last w_loops in
+  let r_syms = List.map r_loops ~f:fst in
+  let red_extent = List.fold r_loops ~init:1 ~f:(fun a (_, n) -> a * n) in
+  let* last = if Array.is_empty idcs then None else Some (Array.last idcs) in
+  let* () =
+    Option.some_if
+      (S.equal_axis_index last (S.Iterator oc)
+      && n_oc >= 4 && red_extent >= 16
+      && float_prec (Lazy.force d.Tn.storage_prec)
+      && List.for_all reads ~f:(fun (tn, _) ->
+          (not (Tn.equal tn d))
+          && Ops.equal_prec (Lazy.force tn.Tn.storage_prec) (Lazy.force d.Tn.storage_prec)))
+      ()
+  in
+  let* read_syms =
+    List.map reads ~f:(fun (tn, i) ->
+        Option.map (Array.to_list i |> List.map ~f:syms_of |> Option.all) ~f:(fun l -> (tn, i, l)))
+    |> Option.all
+  in
+  (* The channel operand. *)
+  let* k, k_idcs =
+    match List.filter read_syms ~f:(fun (_, _, l) -> List.exists l ~f:(fun ss -> mem ss oc)) with
+    | [ (k, i, l) ] ->
+        let all = List.concat l in
+        let oc_axes = Array.count i ~f:(fun ix -> S.equal_axis_index ix (S.Iterator oc)) in
+        Option.some_if
+          (oc_axes = 1
+          && List.count all ~f:(S.equal_symbol oc) = 1
+          && List.for_all all ~f:(fun s -> S.equal_symbol s oc || mem r_syms s)
+          && not (Set.mem written k))
+          (k, i)
+    | _ -> None
+  in
+  let window =
+    List.exists read_syms ~f:(fun (_, i, _) ->
+        Array.exists i ~f:(function
+          | S.Affine { symbols; _ } ->
+              List.exists symbols ~f:(fun (_, s) -> mem write_syms s)
+              && List.exists symbols ~f:(fun (_, s) -> mem r_syms s)
+          | _ -> false))
+  in
+  let* () = Option.some_if window () in
+  let* r1, _ = List.hd r_loops in
+  let swaps = List.map r_syms ~f:(fun r -> Swap { outer = oc; inner = r }) in
+  (* Already channel-minor (its last index is [oc], no other index mentions it): nothing to pack. *)
+  let contiguous =
+    match if Array.is_empty k_idcs then None else Some (Array.last k_idcs) with
+    | Some (S.Iterator s) -> S.equal_symbol s oc
+    | _ -> false
+  in
+  let stage =
+    if contiguous then []
+    else
+      let k_r =
+        List.filter r_syms ~f:(fun r -> Array.exists k_idcs ~f:(S.axis_index_mentions_symbol r))
+      in
+      [
+        Stage
+          {
+            source = k;
+            tile_loops = k_r @ [ oc ];
+            shared = false;
+            cooperative = None;
+            hoisted = false;
+            swizzle = None;
+            pad_stride = None;
+            pipeline_depth = 1;
+            tile_prec = None;
+          };
+      ]
+  in
+  Some
+    (swaps @ stage
+    @ [
+        privatize ~accum_prec:Fn.id ~target:d ~over:r1;
+        Retype { axis = oc; ty = Low_level.Vectorized };
+      ])
+
+(* The ops {!channel_vector_site} proposes over every top-level statement of [opt], each site's kept
+   only where applying it after [base] succeeds -- a site the ops cannot take keeps the plain
+   preset's code -- and the whole kept only where the sites apply together. A site is declined only
+   by an op's typed refusal. *)
+let channel_vectors ~(base : schedule) (opt : Low_level.optimized) : schedule =
+  let written = written_nodes opt.llc in
+  (* On a scratch copy: [Stage] registers its tile in the traced store. *)
+  let applies sched =
+    let scratch =
+      {
+        opt with
+        Low_level.traced_store = Hashtbl.copy opt.Low_level.traced_store;
+        optimize_ctx = Low_level.copy_optimize_ctx opt.optimize_ctx;
+      }
+    in
+    (* Only an op's typed refusal is a decline; anything else a transform raises is a bug and
+       propagates (gh-ocannl-1323). *)
+    match apply_classified sched scratch with
+    | _ -> true
+    | exception Schedule_outcome.Cause_at (Schedule_outcome.Transform, _) -> false
+  in
+  let sites =
+    List.filter_map (Low_level.flat_lines [ opt.llc ]) ~f:(channel_vector_site ~written)
+    |> List.filter ~f:(fun ops -> applies (base @ ops))
+  in
+  match sites with
+  | [] -> []
+  | _ ->
+      let all = List.concat sites in
+      if applies (base @ all) then all else []
+
+let cpu_preset ?min_work (opt : Low_level.optimized) : schedule =
+  let base = default_cpu ?min_work opt in
+  if Utils.registered_flag ~arg_name:"cpu_schedule_channel_vectors" then
+    base @ channel_vectors ~base opt
+  else base
+
 (** {2 Kernel fission at cross-workgroup edges}
 
     The default annotator's cross-nest interference check (see {!analyze_parallel_chains}) is a fact
@@ -9466,7 +9663,8 @@ let search_shaping_key_read ~facts key =
   | "gpu_schedule_min_parallel" | "gpu_schedule_workgroup_fill" | "gpu_lane_preamble_reduction"
   | "gpu_lane_all_reduce_simdgroups" | "gpu_serial_lanes" ->
       Backend_intf.binds_hardware_grid facts
-  | "automatic_cpu_schedule" | "cpu_schedule_min_work" -> Backend_intf.renders_on_host_pool facts
+  | "automatic_cpu_schedule" | "cpu_schedule_min_work" | "cpu_schedule_channel_vectors" ->
+      Backend_intf.renders_on_host_pool facts
   | _ -> true
 
 let schedule_fission = lazy (Utils.registered_flag ~arg_name:"schedule_fission")
@@ -9525,12 +9723,15 @@ let default_schedule_fingerprint ~facts =
         "gpu:policy=small-leading-v1+lanes-v1+fold-mma-v1+lane-plans-v1+lane-reductions-v1+lane-economics-v1+lane-all-reduce-v1+zero-topology-v1+lane-trade-v1:fission=%{fission#Bool}:keep_mapping=%{keep#Bool}:block_size=%{bs#Int}:min_parallel=%{mp#Int}:workgroup_fill=%{fill#Int}:preamble=%{preamble}:serial_lanes=%{lanes}:all_reduce_simdgroups=%{all_reduce}"]
     else
       let mw = Utils.registered_int ~arg_name:"cpu_schedule_min_work" in
+      (* [channel-vectors-v1] (gh-ocannl-1630): direct conv nests take per-channel vector
+         accumulators ({!cpu_preset}). *)
+      let cv = Utils.registered_flag ~arg_name:"cpu_schedule_channel_vectors" in
       (* [scratch-chains-v1] (gh-ocannl-1343): scratch-writing nests take chains, and a scratch
          node's whole-node zero joins the segment of its accumulation. [fork-join-v1]
          (gh-ocannl-1458): per-nest one-loop proofs with no cross-nest alignment, gated per dispatch
          by [Cost_model.bounded_work] against [cpu_schedule_min_work]. *)
       [%string
-        "cpu:policy=scratch-chains-v1+fork-join-v1:fission=%{fission#Bool}:min_work=%{mw#Int}"]
+        "cpu:policy=scratch-chains-v1+fork-join-v1+channel-vectors-v1:fission=%{fission#Bool}:min_work=%{mw#Int}:channel_vectors=%{cv#Bool}"]
 
 let maybe_default_schedule ~facts ?(limits = Backend_intf.no_hardware_limits) ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized =
@@ -9539,7 +9740,7 @@ let maybe_default_schedule ~facts ?(limits = Backend_intf.no_hardware_limits) ~s
   if not (automatic_schedule_active ~facts) then opt
   else if Backend_intf.binds_hardware_grid facts then
     apply_classified ~static_indices (default_gpu ~limits opt) opt
-  else apply_classified ~static_indices (default_cpu opt) opt
+  else apply_classified ~static_indices (cpu_preset opt) opt
 
 let maybe_default_schedules ~facts ?(limits = Backend_intf.no_hardware_limits) ~static_indices
     (opt : Low_level.optimized) : Low_level.optimized list =
@@ -9549,7 +9750,7 @@ let maybe_default_schedules ~facts ?(limits = Backend_intf.no_hardware_limits) ~
     if not (Lazy.force schedule_fission) then
       [ maybe_default_schedule ~facts ~limits ~static_indices opt ]
     else
-      let preset o = if gpu then default_gpu ~limits o else default_cpu o in
+      let preset o = if gpu then default_gpu ~limits o else cpu_preset o in
       (* CPU zero segments stay whole-node: a serial kernel renders them as [memset], which is hard
          to beat below many-megabyte sizes; parallel zero expansion on CPU is a follow-up. *)
       let zero_sched tns = if gpu then zero_expansion ~limits tns else [] in

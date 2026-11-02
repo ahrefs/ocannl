@@ -315,6 +315,15 @@
 # (gh-ocannl-1458).
 #cpu_schedule_min_work=16384
 
+# If true, the default CPU schedule gives each direct convolution nest per-channel vector
+# accumulators (gh-ocannl-1630): the output-channel loop is moved inside the reduction loops (each
+# output keeps its terms in their order, so results are bitwise unchanged), the kernel is packed
+# channel-minor once per invocation, the accumulators live in a routine-local tile, and the channel
+# loop renders as explicit SIMD. Without it, each output is one scalar multiply-add chain. A nest the
+# transform does not fit (narrow storage, an inlined convolution, a depthwise kernel, ...) keeps the
+# scalar chain either way.
+#cpu_schedule_channel_vectors=true
+
 # If true (and the automatic schedule for the backend is active), routines are split into multiple
 # kernels at cross-workgroup dependency edges — sibling top-level statements whose
 # producer/consumer (or WAW/WAR) pairing over a materialized node the default annotator's race

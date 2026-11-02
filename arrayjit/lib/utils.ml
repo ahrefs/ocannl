@@ -161,6 +161,7 @@ let known_config_keys =
       "gpu_serial_lanes";
       "automatic_cpu_schedule";
       "cpu_schedule_min_work";
+      "cpu_schedule_channel_vectors";
       "schedule_fission";
       "gpu_fission_keep_mapping";
       "gpu_elide_covered_zeros";
@@ -416,6 +417,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "automatic_gpu_schedule";
         "automatic_cpu_schedule";
         "cpu_schedule_min_work";
+        "cpu_schedule_channel_vectors";
         "schedule_fission";
         "gpu_fission_keep_mapping";
         "gpu_schedule_block_size";
@@ -741,6 +743,7 @@ let config_key_defaults : (string * (config_value_kind * string)) list =
     ("automatic_gpu_schedule", (Flag, "true"));
     ("automatic_cpu_schedule", (Flag, "true"));
     ("cpu_schedule_min_work", (Integer, "16384"));
+    ("cpu_schedule_channel_vectors", (Flag, "true"));
     ("schedule_fission", (Flag, "true"));
     ("gpu_fission_keep_mapping", (Flag, "true"));
     ("gpu_schedule_block_size", (Integer, "256"));

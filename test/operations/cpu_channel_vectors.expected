@@ -1,0 +1,44 @@
+pad: the channel-vector conv equals the scalar chain bitwise (contraction off): true
+pad: the default routine renders the channel loop as explicit SIMD over a packed kernel: true
+pad: the key-off routine renders neither: true
+pad: the channel-vector conv equals the scalar chain bitwise (compiler contraction): true
+tail: the channel-vector conv equals the scalar chain bitwise (contraction off): true
+tail: the default routine renders the channel loop as explicit SIMD over a packed kernel: true
+tail: the key-off routine renders neither: true
+tail: the channel-vector conv equals the scalar chain bitwise (compiler contraction): true
+narrow: the channel-vector conv equals the scalar chain bitwise (contraction off): true
+narrow: the default routine renders the channel loop as explicit SIMD over a packed kernel: true
+narrow: the key-off routine renders neither: true
+narrow: the channel-vector conv equals the scalar chain bitwise (compiler contraction): true
+wide: the channel-vector conv equals the scalar chain bitwise (contraction off): true
+wide: the default routine renders the channel loop as explicit SIMD over a packed kernel: true
+wide: the key-off routine renders neither: true
+wide: the channel-vector conv equals the scalar chain bitwise (compiler contraction): true
+s2: the channel-vector conv equals the scalar chain bitwise (contraction off): true
+s2: the default routine renders the channel loop as explicit SIMD over a packed kernel: true
+s2: the key-off routine renders neither: true
+s2: the channel-vector conv equals the scalar chain bitwise (compiler contraction): true
+b1: the channel-vector conv equals the scalar chain bitwise (contraction off): true
+b1: the default routine renders the channel loop as explicit SIMD over a packed kernel: true
+b1: the key-off routine renders neither: true
+b1: the channel-vector conv equals the scalar chain bitwise (compiler contraction): true
+chain: the channel-vector conv equals the scalar chain bitwise (contraction off): true
+chain: the default routine renders the channel loop as explicit SIMD over a packed kernel: true
+chain: the key-off routine renders neither: true
+chain: the channel-vector conv equals the scalar chain bitwise (compiler contraction): true
+pad (pool): the channel-vector conv equals the scalar chain bitwise: true
+tail (pool): the channel-vector conv equals the scalar chain bitwise: true
+pad (serial): the channel-vector conv equals the scalar chain bitwise: true
+tail (serial): the channel-vector conv equals the scalar chain bitwise: true
+control: interchanging two reduction loops changes some cell (the fixture sees the order): true
+control: compiler contraction changes some cell (the fixture sees a fused multiply-add): true
+accumulating into a prefilled destination: channel vectors equal the scalar chain bitwise: true
+the prefilled leg took the transform: true
+a kernel written in the routine declines (the pack would read it mid-routine): true
+an f16 conv declines (narrow storage keeps the scalar chain): true
+a depthwise conv declines (two operands read the output channel): true
+a matmul declines (no sliding window): true
+an op's typed refusal declines the site: true
+an untyped raise inside a transform escapes the probe: true
+training step: both kernels after one SGD step are bitwise equal, key on vs off: true
+training step: the default step took the transform: true

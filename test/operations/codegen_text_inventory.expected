@@ -179,6 +179,10 @@ test/operations/cc_kernel_outline.ml [reads after the Main logic banner, exempte
 test/operations/cc_march_census.ml [run by @test/operations/runtest-cc_march_census-emission, @test/operations/runtest-cc_march_census-emission-outlined, @test/operations/runtest-cc_march_census-w16_native_foreign, @test/operations/runtest-cc_march_census-w16_native_host, @test/operations/runtest-cc_march_census-w16_wide_foreign, @test/operations/runtest-cc_march_census-w16_wide_host, @test/operations/runtest-cc_march_census-w32_native_foreign, @test/operations/runtest-cc_march_census-w32_native_host, @test/operations/runtest-cc_march_census-w32_wide_foreign, @test/operations/runtest-cc_march_census-w32_wide_host, @test/operations/runtest-cc_march_census-w64_native_foreign, @test/operations/runtest-cc_march_census-w64_native_host, @test/operations/runtest-cc_march_census-w64_wide_foreign, @test/operations/runtest-cc_march_census-w64_wide_host; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, unvalidated haystack]
 test/operations/concat_loop_symbols.ml [renders generated text in memory; run by @test/operations/runtest-concat_loop_symbols]
 test/operations/cost_model_floor.ml [renders generated text in memory; run by @test/operations/runtest-cost_model_floor]
+test/operations/cpu_channel_vectors.ml [run by @test/operations/runtest-cpu_channel_vectors]
+    "Vectorized rendering"
+    "tile_"
+    "tile_" ^ ... ^ "k"
 test/operations/cpu_fork_join_chains.ml [run by @test/operations/runtest-cpu_fork_join_chains; also pins text this scan cannot name: opaque aggregate component, rebound parameter]
     "Pool-backed Grid rendering"
 test/operations/cpu_parallel.ml [run by @test/operations/runtest-cpu_parallel]
@@ -630,6 +634,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-cc_march_census-w64_wide_host
 @test/operations/runtest-concat_loop_symbols
 @test/operations/runtest-cost_model_floor
+@test/operations/runtest-cpu_channel_vectors
 @test/operations/runtest-cpu_fork_join_chains
 @test/operations/runtest-cpu_parallel
 @test/operations/runtest-cpu_scratch_matmul_grid
