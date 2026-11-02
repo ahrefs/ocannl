@@ -288,7 +288,7 @@ let () = skipped "same"|ocaml},
         {ocaml|let () = List.iter labels ~f:(Verdict.skipped ~backend:backend_name)|ocaml},
         [ "iterated Verdict.skipped ~backend:backend_name" ] );
       ( "a callback that only skips",
-        {ocaml|let () = Array.iter labels ~f:(fun l -> skipped (tag ^ l))|ocaml},
+        {ocaml|let () = Array.iter names ~f:(fun l -> skipped (tag ^ l))|ocaml},
         [ "iterated tag ^ l" ] );
       ( "a loop body that only skips",
         {ocaml|let () = for i = 0 to 2 do Verdict.skipped ~backend:"cc" names.(i) done|ocaml},
@@ -309,7 +309,7 @@ let () = match cap with `Withheld -> skipped first; skipped second | `Advertised
         [] );
       ( "a loop whose callback evaluates on one side of its gate and skips on the other",
         {ocaml|let () =
-  List.iter cases ~f:(fun c -> if on_gpu then p (label c) (run c) else skipped (label c))|ocaml},
+  List.iter cases ~f:(fun c -> if on_gpu then p (case_label c) (passes c) else skipped (case_label c))|ocaml},
         [] );
       ("one skip per branch", {ocaml|let () = if on_gpu then p "a" x else skipped "a"|ocaml}, []);
       ( "a local function that only shares the name",
@@ -319,7 +319,7 @@ let () = match cap with `Withheld -> skipped first; skipped second | `Advertised
   List.iter xs ~f:(fun x -> ignore (skipped x))|ocaml},
         [] );
       ( "a parameter that only shares the name",
-        {ocaml|let () = List.filter_map skips ~f:(fun skipped -> pair skipped)|ocaml},
+        {ocaml|let () = ignore (List.filter_map skips ~f:(fun skipped -> pair skipped))|ocaml},
         [] );
       ( "a nested branch, judged on its own",
         {ocaml|let () = if a then (skipped "x"; if b then skipped "y" else p "y" ok) else p "x" ok|ocaml},
@@ -329,7 +329,7 @@ let () = match cap with `Withheld -> skipped first; skipped second | `Advertised
 let () = List.iter xs ~f:Other.skipped|ocaml},
         [] );
       ( "an Option iteration, which runs at most once",
-        {ocaml|let () = Option.iter label ~f:skipped|ocaml},
+        {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );
     ]
     ~f:(fun (name, source, expected) ->

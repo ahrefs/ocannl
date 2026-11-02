@@ -27,6 +27,54 @@ val label : string
 (** A [label] bound before the snippet: what the use preceding the snippet's own literal binding ("a
     later literal does not resolve an earlier use") reads in a program a compiler builds. *)
 
+(** The skip-list arms (gh-ocannl-1794): [Base]'s collection iterators, the [Verdict] functions they
+    spell qualified, the leg claim, and the names their gates, labels and populations read. *)
+module List : sig
+  val iter : 'a list -> f:('a -> unit) -> unit
+  val filter_map : 'a list -> f:('a -> 'b option) -> 'b list
+end
+
+module Array : sig
+  val iter : 'a array -> f:('a -> unit) -> unit
+  val get : 'a array -> int -> 'a
+end
+
+module Option : sig
+  val iter : 'a option -> f:('a -> unit) -> unit
+end
+
+module Verdict : sig
+  type leg
+
+  val skipped : backend:string -> string -> unit
+  val leg : when_:bool -> on:string -> unit -> leg
+end
+
+val in_leg : leg:Verdict.leg -> string -> (string -> unit) -> unit
+val p : string -> bool -> unit
+val on_gpu : bool
+val on_cpu : bool
+val a : bool
+val b : bool
+val x : bool
+val y : bool
+val backend_name : string
+val tag : string
+val first : string
+val second : string
+val labels : string list
+val names : string array
+val maybe_label : string option
+val cases : int list
+val case_label : int -> string
+val passes : int -> bool
+val xs : int list
+val skips : int list
+val pair : int -> int option
+val check : unit -> unit
+val run : unit -> unit
+val cap : [ `Withheld | `Advertised ]
+
 (* The project-syntax arm is checked as a top-level item of a test that reports claims, under its
    stanza's preprocessors and libraries. It is a parse shape: it pins the scanner's reading of a
    claim inside an extension's payload, whose name no preprocessor expands -- any [[%name ...]]
