@@ -123,7 +123,7 @@ let () =
   (on_binop :=
      fun () ->
        (on_binop := fun () -> ());
-       Hash_set.clear ctx.Syntax.zero_out_seen);
+       Hash_set.clear (Syntax.zero_out_seen ctx));
   let broken = Syntax.doc_to_string (Syntax.compile_main ctx outer) in
   p "the negative control detects the old shared zero-state reset" (zero_stores broken = 0)
 
@@ -172,9 +172,9 @@ let () =
   let (), _ =
     Cs.with_peel_census (fun () ->
         let outer = Syntax.create_render_ctx ~name:"suspended" outer_proc in
-        outer.Syntax.peel_census_enabled := false;
+        Syntax.peel_census_enabled outer := false;
         let inner = Syntax.create_render_ctx ~name:"inner_collecting" inner_proc in
         p "suspending the outer peel census does not suspend a nested compile"
-          (!(inner.Syntax.peel_census_enabled) && not !(outer.Syntax.peel_census_enabled)))
+          (!(Syntax.peel_census_enabled inner) && not !(Syntax.peel_census_enabled outer)))
   in
   ()

@@ -53,19 +53,6 @@ module Dune = Test_utils.Dune_stanza_scan
 let exempt_zero_reference_exports =
   [
     "Backend_impl.next_global_device_id";
-    "C_syntax.c_float_literal";
-    "C_syntax.c_keywords";
-    "C_syntax.c_stdlib_idents";
-    "C_syntax.c_stdlib_macros";
-    "C_syntax.empty_peel_summary";
-    "C_syntax.empty_volatility_summary";
-    "C_syntax.extract_idents";
-    "C_syntax.is_f32_tie";
-    "C_syntax.log_declines";
-    "C_syntax.mma_census_enabled";
-    "C_syntax.op_syntax_idents";
-    "C_syntax.summarize_peel_census";
-    "C_syntax.summarize_volatility_census";
     "Lexer.multichar_token";
     "Lexer.single_char_token";
     "Ndarray.adjust_idx_for_padding";
@@ -207,25 +194,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";
     "Nn_blocks.xavier_impl";
-    (* gh-ocannl-915: the derived values its triage kept. None of their derivings is removable:
-       [C_syntax.compare_mma_rendering] and [compare_peel_site] sort the census summaries inside
-       C_syntax itself, and [compare_peel_skip] and [compare_peel_verdict] are what
-       [compare_peel_site] calls -- a support reference (gh-ocannl-914) counts only while its caller
-       is live, and [compare_peel_site] has no outside caller. Hiding all four is the job of an
-       interface for C_syntax. *)
-    "C_syntax.compare_mma_rendering";
-    "C_syntax.compare_peel_site";
-    "C_syntax.compare_peel_skip";
-    "C_syntax.compare_peel_verdict";
-    (* gh-ocannl-1668: the Grid census's domain-local cells, which only its bracket and the
-       renderer's collection inside C_syntax touch, and the reason sentence the decline diagnostic
-       and the census line share. Top-level because the cells are domain-local state outside the
-       renderer functor, as the other censuses' are; hiding them is the job of an interface for
-       C_syntax, as for gh-ocannl-915's entries above. *)
-    "C_syntax.grid_census";
-    "C_syntax.grid_census_enabled";
-    "C_syntax.grid_pool_available";
-    "C_syntax.grid_serial_reason_string";
   ]
 
 (* gh-ocannl-1009: the type census, filled from its first run. Every entry is a live type the
