@@ -1453,7 +1453,9 @@ let check_empty_row ~origin r =
       else raise @@ Shape_error ("check_empty_row: row is not empty", [ Row_mismatch [ r ] ])
 
 let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
-  let from_ = [%sexp_of: dim_var * dim_entry] (v, drop_origin in_) in
+  (* Every entry of the environment passes here at each dimension solution: build the provenance
+     only for an entry that yields an inequality (gh-ocannl-1802). *)
+  let from_ = lazy ([%sexp_of: dim_var * dim_entry] (v, drop_origin in_)) in
   match in_ with
   | Solved_dim in_ -> ([], Solved_dim (s_dim_one v ~value ~in_))
   | Bounds_dim { is_in_param; has_uniq_constr_unless; res; opnd; glb; constr; origin } ->
@@ -1462,16 +1464,21 @@ let s_dim_one_in_entry v ~value (in_ : dim_entry) : _ * dim_entry =
       let opnd_v, opnd = find_v opnd in
       let ineqs0 =
         match (opnd_v, glb) with
-        | _ :: _, Some glb -> [ Dim_ineq { res = glb; opnd = value; from_; origin } ]
+        | _ :: _, Some glb ->
+            [ Dim_ineq { res = glb; opnd = value; from_ = Lazy.force from_; origin } ]
         | _ -> []
       in
       let ineqs1 =
         if List.is_empty opnd_v then []
-        else List.map res ~f:(fun res -> Dim_ineq { res = Var res; opnd = value; from_; origin })
+        else
+          List.map res ~f:(fun res ->
+              Dim_ineq { res = Var res; opnd = value; from_ = Lazy.force from_; origin })
       in
       let ineqs2 =
         if List.is_empty res_v then []
-        else List.map opnd ~f:(fun opnd -> Dim_ineq { res = value; opnd = Var opnd; from_; origin })
+        else
+          List.map opnd ~f:(fun opnd ->
+              Dim_ineq { res = value; opnd = Var opnd; from_ = Lazy.force from_; origin })
       in
       ( ineqs0 @ ineqs1 @ ineqs2,
         Bounds_dim
