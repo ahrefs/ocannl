@@ -240,14 +240,17 @@ files.
   `test/operations/ll_builder_precisions` pins each builder under `single`, `half` and `bfloat16`
   stores. `C_syntax.compile_proc` repeats the check on the way out (gh-ocannl-1739), so a
   `?prelowered` routine, which skips `optimize`, meets it there. The optimizer's own rewrites leave
-  stale annotations (a scope of another precision collapsed into its reader keeps the scope's
-  precision on a product of wider loads; `mixed_prec_twin_shape`'s virtualized bf16 cast twin was
-  one), so `post_virtualization_pipeline` ends in `describe_operand_precisions`, which rewrites each
+  stale annotations (a widening scope over a load collapsed into its reader leaves the scope's
+  precision on the load; constant folding; the elided operands), so `post_virtualization_pipeline`
+  ends in `describe_operand_precisions`, which rewrites each
   annotation the gate would refuse to the slot's precision: sound only there, because the entry gate
   already refused every builder's request. `Schedule.apply` re-describes a schedule's result
   (`Privatize`'s widened tile evaluates at `acc_prec`; its trailing simplify collapses scopes too)
   only when the program it started from passes the check, so a prelowered routine's own requests
-  still reach the gate.
+  still reach the gate. A load's request reaches it too: `simplify_llc` keeps every leaf's
+  annotation (gh-ocannl-1788). It used to re-annotate a load at its storage precision, which erased
+  such a request before the gate, and in a heterogeneous slot (a `Where` condition, a guard) changed
+  the precision the renderer evaluates the load at.
 - **Which bits an RNG conversion consumes is fixed per precision, and it is the same on every
   backend** (gh-ocannl-951). The scalar `uint4x32_to_{bfloat16,half}_uniform` take the single draw
   of the key's first 32 bits (`uint32_to_single_uniform`) and narrow it; the `_vec`/`_lane` forms

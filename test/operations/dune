@@ -12948,6 +12948,18 @@
  (preprocess
   (pps ppx_ocannl)))
 
+; gh-ocannl-1788: simplify collapses a scope into its reader only where its rounding is not part of the
+; value; executed against the uncollapsed form under both narrow-compute policies.
+
+(test
+ (name scope_collapse_rounding)
+ (package neural_nets_lib)
+ (modules scope_collapse_rounding)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test))
+
 ;; gh-ocannl-1799: shape errors raised inside a scheme trace or check, printed readably.
 
 (test

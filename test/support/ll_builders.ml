@@ -141,6 +141,15 @@ let scan ?(from_ = 0) ?(direction = LL.Forward) ~upto s ~carried body : LL.t =
 let define_local id v : LL.t list =
   [ LL.Declare_local { id; needs_init = false }; LL.Set_local (id, v) ]
 
+(** [scope tn v] is a [Local_scope] over [tn] whose body assigns [v] once: the inlined computation
+    of [tn] (read at [orig_indices], default none), in the single-assignment form [simplify]
+    collapses into its reader where the collapse is exact (gh-ocannl-1788). Mints a fresh scope id.
+    Over a materialized [tn] the form exists only past the optimizer: build its program with
+    [Ll_test.optimize_scoped]. *)
+let scope ?(orig_indices = [||]) tn v : LL.scalar_t =
+  let id = LL.get_scope tn in
+  LL.Local_scope { id; body = LL.Set_local (id, v); orig_indices; mint = LL.Inlined_computation }
+
 (** {2 Dynamic indexing}
 
     The gather/scatter pair ({!Ir.Low_level.Get_dynamic} / {!Ir.Low_level.Set_dynamic}): a read or

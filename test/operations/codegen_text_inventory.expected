@@ -820,6 +820,7 @@ test/operations/routine_log_stream_files.ml [through Ll_test.run_routine; run by
 test/operations/runtime_integer_power.ml [through Ll_test.execute; run by @test/operations/runtest-runtime_integer_power]
 test/operations/scan_loop.ml [staged callback; through Ll_test.execute; through Ll_test.link; through Ll_test.optimize_and_execute; through Ll_test.run; run by @test/operations/runtest-scan_loop]
 test/operations/schedule_coalesce.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-schedule_coalesce]
+test/operations/scope_collapse_rounding.ml [through Ll_test.execute; run by @test/operations/runtest-scope_collapse_rounding]
 test/operations/scope_over_materialized.ml [through Ll_test.execute; run by @test/operations/runtest-scope_over_materialized]
 test/operations/shipped_kernels_alone.ml [staged callback; through Bench_harness.time_shipped_kernels; through Ll_test.execute; run by @test/operations/runtest-shipped_kernels_alone]
 test/operations/simplify_const_left_sub.ml [through Ll_test.execute; run by @test/operations/runtest-simplify_const_left_sub]
@@ -931,6 +932,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-runtime_integer_power
 @test/operations/runtest-scan_loop
 @test/operations/runtest-schedule_coalesce
+@test/operations/runtest-scope_collapse_rounding
 @test/operations/runtest-scope_over_materialized
 @test/operations/runtest-shipped_kernels_alone
 @test/operations/runtest-simplify_const_left_sub

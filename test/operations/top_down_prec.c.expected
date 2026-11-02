@@ -143,6 +143,10 @@ ARRAYJIT_BUILTIN_LINKAGE uint16_t single_to_bfloat16(float f)
 
   /* Main logic. */
   /* d fwd */
-  d[0] = single_to_bfloat16(((HALF_TO_FLOAT(a[0]) + HALF_TO_FLOAT(b[0])) * bfloat16_to_single(c[0])));
+  {
+    float v1_n6;
+    v1_n6 = (HALF_TO_FLOAT(a[0]) + HALF_TO_FLOAT(b[0]));
+    d[0] = single_to_bfloat16((v1_n6 * bfloat16_to_single(c[0])));
+  }
   /* end */
 }
