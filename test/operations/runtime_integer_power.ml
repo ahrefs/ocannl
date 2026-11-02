@@ -16,6 +16,9 @@
    floor(|1.173 y|) ulps, at most 4 ulps = 2^-21 here) eight times over and nothing a sign or domain
    error could hide in; one ulp at half precision (2^-10) at f16, as in [half_float_power].
    Device-produced digits go to stderr only. *)
+(* cc-fp-contract: not-cc -- the mirror claim runs on CUDA, HIP and Metal; cc's pow is libm and
+   skipped *)
+
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level

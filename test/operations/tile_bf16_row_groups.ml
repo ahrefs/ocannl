@@ -12,6 +12,9 @@
    partial one), B is [1 x 4] of 1.0, and D is f32 seeded with -0.0: each cell is fma(a, 1, -0),
    which is [a] exactly for every code, a signed zero included, and a NaN for a NaN code. *)
 
+(* cc-fp-contract: exact-operands -- an explicit fma by one and minus zero for every bf16 code,
+   exact for every input *)
+
 open Base
 module Tn = Ir.Tnode
 module LL = Ir.Low_level

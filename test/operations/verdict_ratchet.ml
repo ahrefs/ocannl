@@ -80,6 +80,9 @@
    per mechanism with the control labels and the retained `tools/test-run.sh` run ids, is
    `test/operations/verdict_ratchet_controls.md`; renaming or adding a control updates both. *)
 
+(* cc-fp-contract: not-executed -- the bitwise text is a scan's fixture sources and justification
+   prose *)
+
 open Base
 open Stdio
 module Scan = Test_utils.Verdict_scan

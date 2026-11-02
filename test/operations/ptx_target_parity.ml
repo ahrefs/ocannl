@@ -22,6 +22,8 @@
    Negative control: with #1430's [C_syntax.lane_restrict] reverted, the pad-masked seed's floor
    compile differs from its native one on rog-nv-linux (sm_120). *)
 
+(* cc-fp-contract: not-cc -- the floor-versus-native claims need CUDA PTX compiles; cc skips them *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

@@ -156,6 +156,7 @@
   (alias runtest-ll_test_scan_cases)
   (alias runtest-exact_partials_ratchet)
   (alias runtest-exact_partials_scan_cases)
+  (alias runtest-fp_contract_pin_scan)
   (alias runtest-operand_key_ratchet)
   (alias runtest-tensorized_census_ratchet)
   (alias runtest-tensorized_census_scan_cases)
@@ -336,6 +337,7 @@
   (alias runtest-refused_action_streams)
   (alias runtest-verdict_ratchet)
   (alias runtest-exact_partials_ratchet)
+  (alias runtest-fp_contract_pin_scan)
   (alias runtest-autotune_bound_pruning)
   (alias runtest-bandwidth_calibration)
   (alias runtest-autotune_routine_name)
@@ -4048,6 +4050,8 @@
   exact_partials_ratchet.ml
   exact_partials_ratchet.expected
   exact_partials_scan_cases.expected
+  fp_contract_pin_scan.ml
+  fp_contract_pin_scan.expected
   operand_key_ratchet.ml
   operand_key_ratchet.expected
   operand_key_scan_cases.expected
@@ -4127,6 +4131,8 @@
    ll_test_ratchet.expected,ll_test_scan_cases.expected
    exact_partials_ratchet.ml
    exact_partials_ratchet.expected,exact_partials_scan_cases.expected
+   fp_contract_pin_scan.ml
+   fp_contract_pin_scan.expected
    operand_key_ratchet.ml
    operand_key_ratchet.expected,operand_key_scan_cases.expected
    tensorized_census_ratchet.ml
@@ -4916,6 +4922,43 @@
  (modules exact_partials_scan_cases)
  (libraries base prose_lexemes test_utils arrayjit.verdict))
 
+; gh-ocannl-1696: a test source claiming bitwise equality of executed values pins
+; cc_backend_fp_contract=off or carries an in-place marker saying why contraction cannot move a bit;
+; the golden lists every such source with its disposition. Same arrangement as
+; exact_partials_ratchet. The reader's boundary is in fp_contract_pin_scan.ml's header.
+
+(executable
+ (name fp_contract_pin_scan)
+ (modules fp_contract_pin_scan)
+ (libraries base stdio prose_lexemes test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links no backend: it reads test sources as text.
+ (targets fp_contract_pin_scan.actual fp_contract_pin_scan.filelist)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (glob_files_rec ../../test/*.ml)
+  (glob_files_rec ../../arrayjit/test/*.ml))
+ (action
+  (progn
+   (with-stdout-to
+    fp_contract_pin_scan.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    fp_contract_pin_scan.actual
+    (run
+     %{dep:fp_contract_pin_scan.exe}
+     %{workspace_root}
+     @fp_contract_pin_scan.filelist)))))
+
+(rule
+ (alias runtest-fp_contract_pin_scan)
+ (package neural_nets_lib)
+ (action
+  (diff fp_contract_pin_scan.expected fp_contract_pin_scan.actual)))
+
 ; gh-ocannl-712: what in this tree pins the TEXT of generated code, enumerated. The blast radius of
 ; a codegen change is two populations no single search finds -- goldens holding emitted kernel or IR
 ; source, in `test/` and `arrayjit/test/` BOTH, and test sources asserting on emitted text from a
@@ -5371,7 +5414,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules narrow_storage_compute)
- (libraries base ocannl stdio arrayjit.verdict test_utils ll_test)
+ (libraries base ocannl stdio arrayjit.verdict test_utils ll_test unix)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -8133,7 +8176,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules schedule_split_reduce)
- (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (libraries base ocannl stdio arrayjit.verdict ll_test unix)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

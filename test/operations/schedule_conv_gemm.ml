@@ -33,6 +33,9 @@
    tuned stride-2 routine on both legs. - detect_conv's pattern discipline: a plain matmul is not a
    conv site. *)
 
+(* cc-fp-contract: exact-operands -- small integer inputs, kernels and bias make every product and
+   sum exact *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

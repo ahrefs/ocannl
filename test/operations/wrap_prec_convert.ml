@@ -11,6 +11,9 @@
    shape of bench_gpt's BENCH_PRECISION leg. - Same-precision wrap is the identity (values
    bitwise-equal to the plain wrap). *)
 
+(* cc-fp-contract: no-contraction -- a same-precision wrap readback compared with host data is a
+   pure copy *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

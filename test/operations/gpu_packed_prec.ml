@@ -25,6 +25,9 @@
    the narrow pack types were not, so a packed load would have been compiled as a 2-byte-aligned
    access. *)
 
+(* cc-fp-contract: no-contraction -- each lane does one operation, an explicit fma among them; no
+   product meets an add *)
+
 open Base
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims

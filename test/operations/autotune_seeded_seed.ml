@@ -42,6 +42,9 @@
 
    The CUDA/HIP legs need a device that seeds; elsewhere they are skipped. *)
 
+(* cc-fp-contract: not-cc -- the value claims hold only where CUDA or HIP seeds or splits; cc skips
+   them *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

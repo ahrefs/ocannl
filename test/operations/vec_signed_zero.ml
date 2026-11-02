@@ -40,6 +40,9 @@
    CPU-only: the splat is a `Vec_extensions` construct. GPU backends render the fragment intrinsics
    or the scalar fallback and print the legs as skipped, so the golden stays backend-uniform. *)
 
+(* cc-fp-contract: exact-operands -- eighths and signed zeros; the fma leg is an explicit fma in
+   both kernels *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

@@ -16,6 +16,9 @@
    and the routine must be bitwise the default's (the CPU backends and Metal have no seeded
    default). *)
 
+(* cc-fp-contract: same-shape -- on cc seeded_default splits nothing, so both kernels are the
+   default plan *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

@@ -33,6 +33,8 @@
    Elsewhere [model_default] starts from the default pipeline, and no walk is anchored. Ranks go to
    stderr: they are device constants' quotients, not part of the golden. *)
 
+(* cc-fp-contract: not-cc -- the bitwise claim is gated on CUDA or HIP model seeding; cc skips it *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

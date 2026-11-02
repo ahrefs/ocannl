@@ -33,6 +33,8 @@
    runs on the pre-schedule lowering with synthetic limits, so the printed counts are
    backend-independent. *)
 
+(* cc-fp-contract: exact-operands -- quarters times small integers, every sum exact in f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

@@ -21,6 +21,9 @@
    tolerance of an f64 host reference. The inputs are not dyadic, so a hoist that reordered a cell's
    contributions would move bits. *)
 
+(* cc-fp-contract: exact-operands -- the only product multiplies by the unit loss gradient, so
+   fusing it rounds nothing *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

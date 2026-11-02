@@ -15,6 +15,9 @@
    throwaway context's pools; and each refusal names its reason. Runs on the backend [Context.auto]
    picks. *)
 
+(* cc-fp-contract: exact-operands -- inputs are eighths and the elementwise products stay exact in
+   f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

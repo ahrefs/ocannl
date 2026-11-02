@@ -87,6 +87,8 @@
       [Tensorized] constructor, or a census predicate whose result is dropped counts as a judgment.
       Each needs code written against the rule's intent. *)
 
+(* cc-fp-contract: not-executed -- a scan reader matching the word in claim labels *)
+
 open Base
 open Ppxlib
 module Read = Config_key_scan

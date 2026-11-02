@@ -1,3 +1,6 @@
+(* cc-fp-contract: no-contraction -- uniform draws times one, converted with an exact power-of-two
+   scale *)
+
 open Base
 open Ocannl
 open Ocannl.Nn_blocks.DSL_modules

@@ -26,6 +26,26 @@ let raw_entries =
         "[scanner-refusal:392052035d276f11311768815316b580] every sentence claiming";
         "[scanner-refusal:fa85b1960c6367c9216c627d02ede0e7] every exemption row";
       ] );
+    ( "fp_contract_pin_scan.ml",
+      [
+        "[scanner-refusal:106879e8d84d7b106e818ac1ddc61a4f] listed as pinned";
+        "[scanner-refusal:777651b1b86abfe512e2d3a3f485ce6d] marked claim is";
+        "[scanner-refusal:0917e598d504b434f3e3c9567742fcc6] claim with neither";
+        "[scanner-refusal:9d3c109a283ee3d6803e356b583bdff2] claim in capitals";
+        "[scanner-refusal:3ef51a84cfe8ca3b03690fcda8b63c21] to another mode";
+        "[scanner-refusal:19ba2d6c29ec6da6833b4f6102b96167] an unknown kind";
+        "[scanner-refusal:6a15033dd60a8451f9ff4ba97f4280cb] one-word reason is";
+        "[scanner-refusal:be5184012422a01273ca348715955f05] sentinel that does";
+        "[scanner-refusal:b79e2ebc86bfefafc47281afbf5f0550] markers are refused";
+        "[scanner-refusal:3237007207743bc53ec1c1951d1214b7] together are refused";
+        "[scanner-refusal:b52b141cf7d13778997e41d81205de03] claim is refused";
+        "[scanner-refusal:e28d8e210f8906b6927a78032d5a7f50] case the word";
+        "[scanner-refusal:5af7923d754adb0ac1030df866493123] every test source";
+        "[scanner-refusal:b30b6b3be7749ff984d2979f5a8fe292] arrayjit package's test";
+        "[scanner-refusal:3cf4cde03d1a75d1846d0bbad2327014] the mode in-process";
+        "[scanner-refusal:cd11cea99124c2fa6c076ec8734ee25f] listed source carries";
+        "[scanner-refusal:9bedd04370c001da7559696548d4a37b] cc_backend_fp_contract=off";
+      ] );
     ("refused_action_streams.ml", []);
     ("operand_key_ratchet.ml", []);
     ( "tensorized_census_ratchet.ml",

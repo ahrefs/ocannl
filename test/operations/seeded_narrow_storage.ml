@@ -26,6 +26,9 @@
    the admission changes nothing. 4. Configuration: the key reaches the seeded default and
    [model_default] when no override is passed. *)
 
+(* cc-fp-contract: same-shape -- on cc both seeded and model defaults compile the plain default
+   pipeline *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

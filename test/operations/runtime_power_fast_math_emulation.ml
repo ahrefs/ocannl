@@ -11,6 +11,9 @@
    operands the emitter writes. Both sources are the backends' own definitions, never copies. Their
    negative control is a CUDA-like helper whose bit reinterpretation back to a float is a value
    conversion: the comparison must tell it from the C one. *)
+(* cc-fp-contract: no-contraction -- host probes of pow helpers: multiply chains and bit casts, no
+   add *)
+
 open Verdict.Claims
 module B = Context.Builtins_cc
 module Cc = Context.Cc_backend
