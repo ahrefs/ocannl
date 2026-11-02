@@ -3164,7 +3164,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     --targets-file F build -j 4` needs no shell expansion of a 75-alias list (a zsh `${(f)...}` of
     one was refused by an agent harness's safety check and cost a wrapper script). A line that is
     not one `@` operand, or a file naming none (`dune build` with no target builds the default
-    alias), is refused before anything runs. `tools/test-run.sh aliases PATH...` answers the
+    alias), is refused before anything runs. `start`, `plan`, `fresh`, `repeat` (`--direct` too, whose
+    operand check then reads the file's aliases) and `bisect` take the same option (gh-ocannl-1797;
+    a bisect's targets may all come from the file). `tools/test-run.sh aliases PATH...` answers the
     narrower question of a test's OWN aliases, by name from `dune show aliases`, grouped
     `runtest`/`slow`/`train` as `#` comment headers -- itself a valid targets file. It exists because
     a batch built from the test files a change touched asked for `runtest-NAME` where only
