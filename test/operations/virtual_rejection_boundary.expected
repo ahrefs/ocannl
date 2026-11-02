@@ -61,6 +61,12 @@ declared_virtual_uninitialized: the fixed component refuses rather than reading 
 block_components: inlined: true
 block_components: executed values are the reference: true
 block_components: the two placements agree: true
+block_components_offset_loop: inlined: true
+block_components_offset_loop: executed values are the reference: true
+block_components_offset_loop: the two placements agree: true
+block_components_offset_affine: inlined: true
+block_components_offset_affine: executed values are the reference: true
+block_components_offset_affine: the two placements agree: true
 unit_axis_fixed_producer: the candidate is committed virtual as a scalar constexpr: true
 unit_axis_fixed_producer: inlined: true
 unit_axis_fixed_producer: executed values are the reference: true

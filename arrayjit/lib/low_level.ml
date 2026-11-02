@@ -2937,17 +2937,19 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       | Indexing.Fixed_idx i -> Some ([], i)
       | Indexing.Sub_axis | Indexing.Concat _ -> None
     in
-    (* Per-symbol loop width of this producer computation, for range guards on solved symbols. *)
+    (* Per-symbol loop bounds of this producer computation, as [(from_, width)], for range guards on
+       solved symbols. A loop need not start at 0 (gh-ocannl-1795): a guard over [0, width) would
+       admit [0] and refuse [to_] of a [from_ = 1] loop. *)
     let def_loop_ranges =
       let rec scan acc = function
         | For_loop { index; from_; to_; body; _ } | Scan_loop { index; from_; to_; body; _ } ->
-            scan (Map.set acc ~key:index ~data:(to_ - from_ + 1)) body
+            scan (Map.set acc ~key:index ~data:(from_, to_ - from_ + 1)) body
         | Seq (a, b) -> scan (scan acc a) b
         | _ -> acc
       in
       scan (Map.empty (module Indexing.Symbol)) def
     in
-    let symbol_range s = Map.find def_loop_ranges s |> Option.value ~default:1 in
+    let symbol_range s = Map.find def_loop_ranges s |> Option.value ~default:(0, 1) in
     (* gh-133 Stage A/B: build the substitution environment and guards in several passes, so a
        producer index vector that repeats a non-static symbol (diagonal [i;i] / partially-diagonal
        [i;j;i]) does not crash on duplicate keys, and so multi-symbol affine positions (Stage B) can
@@ -2960,14 +2962,14 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
           "inline_computation: call_args too short, maybe stale optimization context? Tnode: \
            %{Tn.debug_name self} #%{self.Tn.id#Int} n: %{n#Int}"];
     (* [bound_pos.(i)] marks positions that DEFINE bindings (no consistency guard for them).
-       [range_guards] collects [(solved_symbol, range)] pairs whose value must fall in [0,
-       range). *)
+       [range_guards] collects [(uc, rest, rhs, (lo, width))] tuples: the solved symbol's value must
+       fall in [lo, lo + width), its producer loop's bounds. *)
     let bound_pos = Array.create ~len:n false in
     let env = ref (Map.empty (module Indexing.Symbol)) in
     let range_guards = ref [] in
     (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. For Block/Concat
        virtual nodes with multiple Set computations, also emit a range guard: the producer's loop
-       covers [0, range) while the consumer iterates a wider range, so out-of-range consumer
+       covers [lo, lo + width) while the consumer iterates a wider range, so out-of-range consumer
        iterations must fall back to [Get_local id]. *)
     Array.iteri def_args_arr ~f:(fun i lhs_ind ->
         match lhs_ind with
@@ -3040,10 +3042,11 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                       Indexing.affine ~symbols:value_terms ~offset:(uc * (roff - offset))
                     in
                     env := Map.set !env ~key:us ~data:value;
-                    (* Range guard [0 <= us < range], reformulated with NON-NEGATIVE operands so it
-                       is correct under unsigned index precision (a negative [rhs - rest] would
-                       underflow): [rest := Σ_{s≠us} c·s + offset], [rhs := call index]. uc=+1 needs
-                       [rest <= rhs < rest+range]; uc=-1 needs [rhs <= rest < rhs+range]. *)
+                    (* Range guard [lo <= us < lo + width], reformulated with NON-NEGATIVE operands
+                       so it is correct under unsigned index precision (a negative [rhs - rest]
+                       would underflow): [rest := Σ_{s≠us} c·s + offset], [rhs := call index]. uc=+1
+                       needs [rest + lo <= rhs < rest + lo + width]; uc=-1 needs [rhs + lo <= rest <
+                       rhs + lo + width]. *)
                     let rest_axis =
                       Indexing.affine
                         ~symbols:
@@ -3181,10 +3184,11 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                     (Embed_index rhs_ind, index_prec) ))
           in
           (* gh-133 Stage B: range guards -- a unit-solved symbol's value must fall within its
-             producer loop range [0, range). Compare [rest] and [rhs] without subtracting them
-             (either can be negative after substitution). uc=+1: [rest <= rhs] & [rhs < rest+range];
-             uc=-1: [rhs <= rest] & [rest < rhs+range] -- one canonical shape per role, a direct
-             [Cmple] lower bound and a strict [Cmplt] upper bound. *)
+             producer loop range [lo, lo + width). Compare [rest] and [rhs] without subtracting them
+             (either can be negative after substitution); the loop's [lo] is added on the side that
+             keeps every operand non-negative. uc=+1: [rest+lo <= rhs] & [rhs < rest+lo+width];
+             uc=-1: [rhs+lo <= rest] & [rest < rhs+lo+width] -- one canonical shape per role, a
+             direct [Cmple] lower bound and a strict [Cmplt] upper bound. *)
           let add_offset (idx : Indexing.axis_index) d : Indexing.axis_index =
             if d = 0 then idx
             else
@@ -3197,11 +3201,12 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
           let cmp op a b = Binop (op, (Embed_index a, index_prec), (Embed_index b, index_prec)) in
           let le = cmp Ops.Cmple and lt = cmp Ops.Cmplt in
           let range_conds =
-            List.map range_guards ~f:(fun (uc, rest_axis, rhs_axis, range) ->
+            List.map range_guards ~f:(fun (uc, rest_axis, rhs_axis, (lo, width)) ->
                 let rest = subst env rest_axis and rhs = subst env rhs_axis in
                 let lower, upper =
-                  if uc >= 0 then (le rest rhs, lt rhs (add_offset rest range))
-                  else (le rhs rest, lt rest (add_offset rhs range))
+                  if uc >= 0 then
+                    (le (add_offset rest lo) rhs, lt rhs (add_offset rest (lo + width)))
+                  else (le (add_offset rhs lo) rest, lt rest (add_offset rhs (lo + width)))
                 in
                 (* The scoped simplifier can make this pure 0/1 conjunction eager when the active
                    index domain proves every comparison intermediate total. Otherwise retain

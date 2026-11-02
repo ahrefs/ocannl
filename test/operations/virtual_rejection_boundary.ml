@@ -529,6 +529,39 @@ let row_block_components () =
   row ~label:"block_components" ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 2.; 20.; 21. |]
     ~verdict:Accepted
 
+(* The same selection when a component's loop does not start at 0 (gh-ocannl-1795): the second
+   component writes cells 1..2 only, so its range guard is [1 <= t < 3]. A guard over the loop's
+   WIDTH from 0 ([0 <= t < 2]) let it overwrite cell 0 with [20] and left cell 2 at [3]. *)
+let row_block_components_offset_loop () =
+  let x = mk "blko_x" and out = mk "blko_out" in
+  materialize out;
+  let s = sym () and s2 = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s n (set x [| iter s |] (tick s)))
+      (seq
+         (loop ~from_:1 ~upto:2 s2 (set x [| iter s2 |] (ramp 20. s2)))
+         (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
+  in
+  row ~label:"block_components_offset_loop" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 21.; 22.; 4. |] ~verdict:Accepted
+
+(* The unit-coefficient solve's range guard, over the same offset loop: [x[s2 + 1]] for [s2] in 1..2
+   writes cells 2..3, so [s2 = t - 1] must fall in [1, 3). *)
+let row_block_components_offset_affine () =
+  let x = mk "blka_x" and out = mk "blka_out" in
+  materialize out;
+  let s = sym () and s2 = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s n (set x [| iter s |] (tick s)))
+      (seq
+         (loop ~from_:1 ~upto:2 s2 (set x [| aff [ (1, s2) ] 1 |] (ramp 20. s2)))
+         (loop_n t n (set out [| iter t |] (get x [| iter t |]))))
+  in
+  row ~label:"block_components_offset_affine" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 2.; 21.; 22. |] ~verdict:Accepted
+
 (* gh-ocannl-1690: one cell, two spellings. On an axis of extent 1 a producer position [Fixed_idx 0]
    and a read through a one-iteration loop address the same cell, so the read site is served with no
    guard and no refusal. The consumer reads the candidate both ways -- [x[u]] under [for u = 0 to 0]
@@ -766,6 +799,8 @@ let () =
   row_fixed_component_partial_cover ();
   declared_virtual_fixed_component ();
   row_block_components ();
+  row_block_components_offset_loop ();
+  row_block_components_offset_affine ();
   row_unit_axis_fixed_producer ();
   row_unit_axis_computed_producer ();
   row_unit_axis_loop_producer ();
