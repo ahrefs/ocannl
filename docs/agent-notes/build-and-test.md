@@ -1239,6 +1239,26 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   every `/proc/<pid>/fdinfo`; trusting the name reported `STILL hold` and reaped nothing. Leg 67
   pins it with a lock whose acquirer exited, against the unfiltered census as negative control
   (skipped on a kernel that names nobody, where no census can trust a name).
+- **A cancelled run settles inside the fleet wrappers' 10 s grace** (gh-ocannl-1808).
+  `fleet-worker.sh execution slot` and `bg-run.sh stop` send KILL 10 s after their TERM, so a
+  supervisor that spent 5 s reaping and then up to 30 s in the slowest-actions reader was KILLed
+  with no `exit:` sentinel (the run reads as died) and with a session-escaped dune descendant still
+  holding the worktree lock (gh-ocannl-1727's incident). On INT/TERM/HUP the supervisor now reaps
+  on a short grace (2 s TERM, 1 s for a KILLed leader, 0.5 s for the corpses). It then KILLs every
+  other holder of the lock, found by a census of its own (Linux fdinfo FLOCK rows, otherwise
+  `lsof` openers bounded to 2 s, never itself or its launcher), and only then writes the verdict.
+  Next it closes fd 9, and last, best-effort, removes a `fresh` run's build directory (renamed to
+  `build.discard` before the verdict) and runs the reader on a 3 s bound. `wait` can digest such a
+  run before its slowest-actions record lands. A cancellation that arrives while a normal finish is
+  under way changes no verdict, but cuts the reader short (`slowest-skipped`: cancelled while the
+  reader ran). The cap's own expiry (142) keeps the long order, since no wrapper is counting down
+  then. Only a `run`/`start` supervisor runs the census (`OCANNL_TOOL_TESTRUN_LOCK`), because a
+  repeat coordinator also holds the lock. `tools/test-test-run.sh` leg 97 TERMs a run during
+  `_resolve`, during a TERM-ignoring dune, and during a `fresh` run, each with an escapee. It has
+  two controls: one cuts the census (the lock stays held) and one restores the reader-first order
+  (no verdict within 10 s). Leg 74's fixture copies cut the census too. It is a second defence
+  against the unmasked fork child, and leaving it in would let that leg's legs pass without the
+  mask.
 - **A run directory says which source it ran, as of the launch** (gh-ocannl-992): beside `cmd`,
   `cap`, `wt`, `runs`, `log` and the verdict, `run`/`start`/`repeat` record `head` (the checkout's
   HEAD commit) and `dirty` (its `git status --porcelain`: empty when clean, else one line per

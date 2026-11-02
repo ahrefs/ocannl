@@ -1464,8 +1464,9 @@ LAST=$RUNS/last-$wt_key   # the run this worktree published most recently
 # Signals: a foreground run gets HUP relayed as TERM by its launcher, and a
 # detached run must survive its session -- so HUP is ignored here whenever
 # OCANNL_TOOL_TESTRUN_BG is set, and defaulted back in dune's child. Once a
-# signal or dune's own exit has started the finish, every later signal is
-# ignored: the verdict write is the one critical section, and KILL remains
+# signal or dune's own exit has started the finish, a later INT/TERM/HUP
+# only hurries it into the cancellation's order (see $finish) and changes no
+# verdict: the verdict write is the one critical section, and KILL remains
 # available. setpgrp is eval-guarded and the group kill falls back to a plain
 # kill, for MSYS perl where process groups are shaky. The child deliberately
 # KEEPS lock fd 9: whatever dune leaves behind -- in its own group or setsid'd
@@ -1501,7 +1502,8 @@ supervisor_perl='
   my $rd = delete $ENV{OCANNL_TOOL_TESTRUN_RD};
   my $own = delete $ENV{OCANNL_TOOL_TESTRUN_OWN};
   my $bg = delete $ENV{OCANNL_TOOL_TESTRUN_BG};
-  my ($pid, $finishing);
+  my $lock = delete $ENV{OCANNL_TOOL_TESTRUN_LOCK};
+  my ($pid, $finishing, $hurry);
   my $code_of = sub { my $st = shift; ($st & 127) ? 128 + ($st & 127) : $st >> 8 };
   # The start token of THIS process, in the rendering ps_token recomputes for
   # any pid: Linux reads /proc/self/stat (clock ticks); elsewhere ps renders
@@ -1538,7 +1540,9 @@ supervisor_perl='
   # own so its python goes with it, holding no descriptor past stdio (the
   # worktree lock is fd 9) and with every check of the trace made there, so
   # nothing here can block on the file system: it is polled for its bound (30
-  # seconds), then KILLed and polled again, five seconds, and abandoned if
+  # seconds; 3 in the tail of a cancellation, and cut short by a cancellation
+  # landing while it reads), then KILLed and polled again, five seconds (one
+  # in those cases), and abandoned if
   # even that does not reap it -- the verdict publishes and the lock clears
   # regardless. A reader that fails or times out leaves `slowest-skipped`,
   # its last diagnostic line (the reader quotes offsets, never trace bytes) or
@@ -1549,9 +1553,11 @@ supervisor_perl='
   # the bound (anything but 1-30 reads as 30), and the reader it names is
   # bounded and KILLed like the real one.
   my $slowest = sub {
+    my $tail = shift;
     my $trace = "$own/trace.csexp";
     my $bound = $ENV{OCANNL_TOOL_SLOWEST_CAP};
     $bound = 30 unless defined $bound && $bound =~ /^[1-9][0-9]?$/ && $bound <= 30;
+    $bound = 3 if $tail && $bound > 3;
     my $reader = $ENV{OCANNL_TOOL_SLOWEST_READER};
     $reader = (defined $runner && length $runner ? "$runner/" : "") . "tools/action-durations.sh"
       unless defined $reader && length $reader;
@@ -1568,14 +1574,15 @@ supervisor_perl='
       exec("bash", $reader, "-n", "5", $trace);
       POSIX::_exit(127);
     }
-    my $st;
+    my ($st, $cut);
     for (1 .. 10 * $bound) {
       if (waitpid($c, POSIX::WNOHANG()) == $c) { $st = $?; last }
+      if ($hurry && !$tail) { $cut = 1; last }
       select undef, undef, undef, 0.1;
     }
     unless (defined $st) {
       kill("KILL", -$c) or kill("KILL", $c);
-      for (1 .. 50) {
+      for (1 .. ($tail || $cut ? 10 : 50)) {
         last if waitpid($c, POSIX::WNOHANG()) != 0;
         select undef, undef, undef, 0.1;
       }
@@ -1585,7 +1592,9 @@ supervisor_perl='
       rename("$own/slowest.tmp", "$own/slowest") or unlink "$own/slowest.tmp";
     } else {
       unlink "$own/slowest.tmp";
-      if (!defined $st) {
+      if ($cut) {
+        $why = "the run was cancelled while the reader ran";
+      } elsif (!defined $st) {
         $why = "the reader did not finish within ${bound}s";
       } elsif (open(my $ef, "<", "$own/slowest.err")) {
         my @lines = grep { /\S/ } <$ef>;
@@ -1605,24 +1614,57 @@ supervisor_perl='
   # never be observable empty. Retried with backoff -- a filesystem that
   # filled up during the run may clear, and giving up silently would
   # downgrade a real verdict into a generic "died without a verdict".
+  #
+  # A cancellation from outside (INT, TERM, HUP: `stop`, a closed terminal, or
+  # a fleet wrapper -- `execution slot`, `bg-run.sh stop` -- whose KILL follows
+  # its TERM after 10 seconds) is finished in the other order (gh-ocannl-1808):
+  # the verdict first, with the leftover holders of the lock reaped before it (see
+  # $reap), then lock fd 9 closed, and only then, best-effort, the slow tail
+  # -- the removal of the fresh build directory (renamed aside before the verdict,
+  # so the digest can tell a removal cut short) and the slowest-actions reader
+  # on a bound of at most 3 seconds. A KILL from a wrapper landing in that tail
+  # costs a record, never the verdict or the lock; and `wait` may digest the
+  # run before the record lands. The expiry of the cap (142) keeps the order
+  # above: no wrapper is counting down then, and the slowest actions of a TIMEOUT
+  # are the record most worth having.
+  my $fresh_build = sub {
+    open(my $mf, "<", "$own/mode") or return 0;
+    my $m = <$mf>;
+    close $mf;
+    defined $m && $m eq "fresh\n";
+  };
+  #
+  # A cancellation landing in a finish already under way the long way (dune
+  # exited on its own, or the cap expired) keeps the verdict of that finish but
+  # takes the short order from there: the reader in flight is KILLed and
+  # records that it was cut short, the build directory goes aside. Only the
+  # flag is set in the handler; every other signal is ignored.
   my $finish = sub {
-    my $code = shift;
+    my ($code, $cancel) = @_;
     $finishing = 1;
-    $SIG{$_} = "IGNORE" for qw(ALRM INT TERM HUP);
+    $hurry = 1 if $cancel;
+    $SIG{ALRM} = "IGNORE";
+    $SIG{$_} = sub { $hurry = 1 } for qw(INT TERM);
+    $SIG{HUP} = $bg ? "IGNORE" : sub { $hurry = 1 };
     alarm 0;
     if ($own) {
-      $slowest->();
+      my $discard;
+      my $read = !$hurry;
+      $slowest->(0) if $read;
       # A `fresh` run builds in a directory of its own, which goes with the
       # run on every path -- the caps and cancellations included -- once dune
       # is gone; the digest reports one that survived.
-      if (open(my $mf, "<", "$own/mode")) {
-        my $m = <$mf>;
-        close $mf;
-        if (defined $m && $m eq "fresh\n" && -d "$own/build" && !-l "$own/build") {
+      if ($fresh_build->() && -d "$own/build" && !-l "$own/build") {
+        if ($hurry) {
+          $discard = "$own/build.discard";
+          undef $discard unless rename("$own/build", $discard);
+        } else {
           require File::Path;
           File::Path::remove_tree("$own/build");
         }
       }
+      $cancel = $hurry;
+      $SIG{$_} = "IGNORE" for qw(INT TERM HUP);
       print STDOUT "exit: $code\n";
       my $ok = 0;
       for my $try (1 .. 3) {
@@ -1630,11 +1672,96 @@ supervisor_perl='
           $ok = 1;
           last;
         }
-        sleep 2 if $try < 3;
+        select undef, undef, undef, ($cancel ? 0.5 : 2) if $try < 3;
       }
       print STDOUT "test-run: FAILED to record verdict $code (filesystem?)\n" unless $ok;
+      if ($cancel) {
+        POSIX::close(9);
+        if (defined $discard) {
+          require File::Path;
+          File::Path::remove_tree($discard);
+        }
+        $slowest->(1) unless $read;
+      }
     }
     exit $code;
+  };
+  # The holders of the run lock other than this process and its launcher, for the
+  # census of a cancellation (gh-ocannl-1808): what dune left behind outside the
+  # group it led -- a setsid escapee, a descendant that changed its group --
+  # still holding lock fd 9. This process holds the lock throughout, so every
+  # holder shares the description of this run: none can belong to another run.
+  # Linux reads the fdinfo of each process for a FLOCK on the device and
+  # inode of the lock file (holders, not openers); elsewhere lsof lists the openers of the file
+  # -- the approximation `stop` accepts -- in a child of its own, bounded to 2
+  # seconds and KILLed past it. Only a run/start supervisor is handed the lock
+  # (OCANNL_TOOL_TESTRUN_LOCK): a repeat coordinator holds it too, and is no
+  # leftover.
+  my $holders = sub {
+    return () unless defined $lock && length $lock;
+    my @st = stat($lock) or return ();
+    my %skip = ($$ => 1, getppid() => 1);
+    my @found;
+    if (-d "/proc/self/fdinfo" && opendir(my $pd, "/proc")) {
+      for my $p (grep { /^\d+$/ && !$skip{$_} } readdir $pd) {
+        opendir(my $fdh, "/proc/$p/fd") or next;
+        FD: for my $fd (grep { /^\d+$/ } readdir $fdh) {
+          my @fs = stat("/proc/$p/fd/$fd") or next;
+          next unless $fs[0] == $st[0] && $fs[1] == $st[1];
+          open(my $fi, "<", "/proc/$p/fdinfo/$fd") or next;
+          while (<$fi>) {
+            if (/^lock:.*FLOCK/) { push @found, $p; last FD }
+          }
+        }
+      }
+      return @found;
+    }
+    return () unless $own;
+    my $out = "$own/holders.tmp";
+    my $c = fork();
+    return () unless defined $c;
+    if (!$c) {
+      $SIG{$_} = "DEFAULT" for qw(ALRM INT TERM HUP);
+      POSIX::close($_) for 3 .. 255;
+      eval { setpgrp(0, 0) };
+      open(STDIN, "<", "/dev/null");
+      open(STDERR, ">", "/dev/null");
+      open(STDOUT, ">", $out) or POSIX::_exit(126);
+      exec("lsof", "-t", "--", $lock);
+      POSIX::_exit(127);
+    }
+    my $done;
+    for (1 .. 20) {
+      if (waitpid($c, POSIX::WNOHANG()) == $c) { $done = 1; last }
+      select undef, undef, undef, 0.1;
+    }
+    unless ($done) {
+      kill("KILL", -$c) or kill("KILL", $c);
+      for (1 .. 5) {
+        last if waitpid($c, POSIX::WNOHANG()) != 0;
+        select undef, undef, undef, 0.1;
+      }
+    }
+    if ($done && open(my $hf, "<", $out)) {
+      @found = grep { /^\d+$/ && !$skip{$_} } map { s/\s+//gr } <$hf>;
+      close $hf;
+    }
+    unlink $out;
+    @found;
+  };
+  # TERM the census, one second of grace, then KILL whoever of it is left.
+  # A survivor is the same process the census named: its pid cannot be
+  # reused while it is alive.
+  my $reap_holders = sub {
+    my @h = $holders->();
+    return unless @h;
+    kill("TERM", @h);
+    for (1 .. 10) {
+      last unless grep { kill(0, $_) } @h;
+      select undef, undef, undef, 0.1;
+    }
+    my @left = grep { kill(0, $_) } @h;
+    kill("KILL", @left) if @left;
   };
   my $blast = sub { my $sig = shift; kill($sig, -$pid) or kill($sig, $pid) };
   my $reap = sub {
@@ -1642,24 +1769,31 @@ supervisor_perl='
     # A signal landing once the finish has begun -- after dune was reaped, or
     # during the verdict write -- must neither blast the stale pid/group (a
     # recycled pid could make that an innocent process) nor replace the real
-    # verdict with the signal code.
-    return if $finishing;
+    # verdict with the signal code. A cancellation (anything but the cap)
+    # still hurries that finish into its short order (see $finish).
+    if ($finishing) { $hurry = 1 if $code != 142; return }
     $finishing = 1;
+    # A cancellation from outside fits the 10-second grace of the fleet wrappers
+    # (gh-ocannl-1808; see $finish): two seconds for the group to go on TERM,
+    # one for a KILLed leader, half for the corpses, about three for the
+    # leftover holders of the lock -- the verdict well inside the grace. The
+    # expiry of the cap keeps the longer waits.
+    my $cancel = $code != 142;
     if ($pid) {
       # The WNOHANG probe covers the statements between the reaping waitpid
       # and the bookkeeping -- there, $? still holds the status the main flow
       # has not yet read (captured before our own waitpid resets it).
       my $saved = $?;
       my $r = waitpid($pid, POSIX::WNOHANG());
-      $finish->($code_of->($saved)) if $r == -1;
-      $finish->($code_of->($?)) if $r == $pid;
+      $finish->($code_of->($saved), $cancel) if $r == -1;
+      $finish->($code_of->($?), $cancel) if $r == $pid;
       $blast->("TERM");
       # Grace for the WHOLE group, not just the leader: a leader that exits
       # fast must not collapse the grace of its descendants to one polling
       # interval. (Where the child has no group of its own, the group probe
       # fails and this degrades to the plain leader wait.)
       my $gone = 0;
-      for (1 .. 50) {
+      for (1 .. ($cancel ? 20 : 50)) {
         $gone = 1 if !$gone && waitpid($pid, POSIX::WNOHANG()) != 0;
         last if $gone && !kill(0, -$pid);
         select undef, undef, undef, 0.1;
@@ -1671,7 +1805,7 @@ supervisor_perl='
         # supervisor -- the cap must report its 142/143 regardless; the
         # stuck process then keeps the worktree lock through its fd 9.
         unless ($gone) {
-          for (1 .. 50) {
+          for (1 .. ($cancel ? 10 : 50)) {
             last if waitpid($pid, POSIX::WNOHANG()) != 0;
             select undef, undef, undef, 0.1;
           }
@@ -1684,19 +1818,20 @@ supervisor_perl='
         # never reaps, the corpses are permanent and this wait ends on its
         # bound; that refusal is then the fail-closed answer it was built
         # to give.
-        for (1 .. 10) {
+        for (1 .. ($cancel ? 5 : 10)) {
           last unless kill(0, -$pid);
           select undef, undef, undef, 0.1;
         }
       }
     }
+    $reap_holders->() if $cancel;
     # Cut short in the first phase: the child was still resolving the
     # batch (it marks the end of that phase with `resolved`), so no dune ran.
     if ($own && !-e "$own/resolved") {
       print STDOUT "test-run: " . ($code == 142 ? "the cap expired" : "cancelled")
         . " while the launch resolved the batch\x27s backends; dune was not started\n";
     }
-    $finish->($code);
+    $finish->($code, $cancel);
   };
   # Armed BEFORE the identity record and the fork: a stop landing in the
   # launch window is honoured -- a pre-fork signal finishes with its code
@@ -2980,6 +3115,9 @@ digest() {
         fi
         [ ! -e "$dir/build" ] ||
           echo "the fresh build directory survived its run (remove it): $dir/build"
+        [ ! -e "$dir/build.discard" ] ||
+          echo "the cancelled run's fresh build directory is still being removed, or its removal was cut short" \
+               "(remove it once the run's supervisor is gone): $dir/build.discard"
       fi ;;
   esac
   case $verdict in
@@ -4377,7 +4515,7 @@ case $sub in
     # lose the verdict; `run` differs from `start` only in staying attached to
     # wait and digest.
     OCANNL_TOOL_TESTRUN_BG=1 OCANNL_TOOL_TESTRUN_RD=$run_dir OCANNL_TOOL_TESTRUN_OWN=$run_dir \
-      OCANNL_TOOL_TESTRUN_RUNNER=$runner_root perl -e "$supervisor_perl" -- "$cap" \
+      OCANNL_TOOL_TESTRUN_RUNNER=$runner_root OCANNL_TOOL_TESTRUN_LOCK=$LOCK perl -e "$supervisor_perl" -- "$cap" \
         env "OCANNL_TOOL_TESTRUN_OWN=$run_dir" "${BASH:-bash}" "$runner_root/tools/test-run.sh" _resolve "$sub" "$cap" "$test_cap" "$DUNE" "$@" \
         </dev/null >>"$run_dir/log" 2>&1 &
     sup=$!
