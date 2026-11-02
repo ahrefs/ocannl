@@ -10671,15 +10671,15 @@ let first_access_positions (llc : t) : (Tn.t, int) Hashtbl.t =
   first
 
 (* Program order over [first_access_positions]: nodes the code touches in access order, then the
-   rest (a node only an opaque [Staged_compilation] reaches) by label, and node identity only
-   between equally-labelled nodes the code never names. *)
+   rest. A flip candidate is a node the raw code writes, or a footprint-scoped node it reads, so it
+   has a position; the identity fallback only keeps the order total for anything else. Not by label:
+   labels are display, not identity (gh-ocannl-1783). *)
 let compare_program_order positions a b =
   match (Hashtbl.find positions a, Hashtbl.find positions b) with
   | Some pa, Some pb -> Int.compare pa pb
   | Some _, None -> -1
   | None, Some _ -> 1
-  | None, None -> (
-      match List.compare String.compare a.Tn.label b.Tn.label with 0 -> Tn.compare a b | c -> c)
+  | None, None -> Tn.compare a b
 
 let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
