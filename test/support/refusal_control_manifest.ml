@@ -124,6 +124,9 @@ let raw_entries =
         "[scanner-refusal:b9a291d865e79e74582ef22daf02fd3a] AGENTS.md";
         "[scanner-refusal:2bd517cf99304ae6d8358f4bfc6d3995] synthesized guide of";
         "[scanner-refusal:6e5c887df5f7f65a45a232ef22d04e62] synthesized guide one";
+        "[scanner-refusal:6f380ec6130d7d24a10cfd39521bdaec] synthesized guide at";
+        "[scanner-refusal:2c8e54e9bdb6518252759d38c07973aa] synthesized guide one";
+        "[scanner-refusal:c32f3dd124b270ba497cf74ca1bc7e77] synthesized guide of";
       ] );
     ( "agent_notes_structure.ml",
       [

@@ -67,6 +67,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   bullet at a time, each rule carrying its mechanism and failure story with it. The September 2026
   trim moved the mechanisms into these notes and left the rules as one sentence plus a pointer,
   which is the shape to keep: a new rule in `AGENTS.md` is a line, and what it rests on goes here.
+- When `agents_md_size` prints its stderr `WARNING:` (the band from 31 KiB to the cap; the golden
+  does not move), trim before the next rule lands rather than after it crosses. How to trim: find
+  the bullets that carry their mechanism or failure story (a "because", a gh-number history, a
+  second example) and move that text into the matching note under `docs/agent-notes/`, leaving the
+  rule as one sentence plus a `<note>.md#<anchor>` pointer, which `agent_notes_structure` checks
+  names a real heading; merge two bullets that state one rule; and drop a rule a scan now enforces
+  down to its name and the scan's. Never trim by deleting the Pull Requests, Configuration or Syntax
+  sections at the end, which are what truncation would lose first.
 - The repository's PROSE is checkable where its structure carries meaning, and the agent notes are
   the case in point: `agent_notes_structure` (gh-ocannl-691) reads `docs/agent-notes.md` and
   `docs/agent-notes/` as structure rather than as text. It holds five things true — no bullet cut
