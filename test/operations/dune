@@ -12357,7 +12357,8 @@
 ; GPU-shaped limits record; the envelope, capacity and residency are passed explicitly.
 
 (test
- ; ocannl-backend: none -- hand-built IR is optimized, scheduled and scored, never linked or executed.
+ ; ocannl-backend: cc -- hand-built IR is optimized, scheduled and scored, never executed; the cc leg
+ ; reads cc's published limits off `Context.cpu ()`, whatever backend is ambient.
  (name cost_model_reuse)
  (package neural_nets_lib)
  (deps ocannl_config)

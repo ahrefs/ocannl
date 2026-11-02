@@ -176,8 +176,8 @@ files.
   tile and gives a tiled sketch back its untiled count. A serial kernel and its `Grid` twin then
   charge the same re-reads along the loops they tile (68190 ms both on `cost_model_selection`'s
   below-threshold matmul). Boundaries: one cache level, invariant loops only (a window's overlap is kept), a
-  multi-block nest's within-block serial loops uncharged, and no capacity (cc and Metal as
-  shipped, the capacity calibration) means no change. `cost_model_reuse`'s serial leg pins the
+  multi-block nest's within-block serial loops uncharged, and no capacity (Metal as shipped, the
+  capacity calibration) means no change. `cost_model_reuse`'s serial leg pins the
   exact counts.
 - Exact ranking ties go to fewer tile-MMA operand loads (gh-ocannl-1254), never a priced term.
   The count describes emitted code only through the backend's own arm description, never a
@@ -220,7 +220,13 @@ files.
   (the fit does: below the fastest point's working set), and print no capacity rather than invent
   one when no point reaches DRAM — a lower bound is neither `none` (unlimited) nor a value; minix's
   unified gfx1151 stayed at 1.7 TB/s requested to 10.8 GB, and its class constant is a separate,
-  documented per-class decision. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
+  documented per-class decision. On cc (gh-ocannl-1687, `CAPACITY_ONLY=1 gh1253_cells.sh cc`) the
+  untiled contraction is issue-bound: requested 5-20 GB/s on both sides of the knee against a
+  119 GB/s STREAM rate on minix's Zen 5, so a DRAM-rate split reads everything spilled; the cc
+  cell splits on the sweep's own contrast (13 GB/s through a 24 MiB `x`, 5-10 GB/s from 32 MiB)
+  and cc's advisory is that fit, pinned to its recorded rows in `capacity_calibration`. The proxy
+  reads a cc `Grid` iteration as a resident block (ahrefs/ocannl#1610), so a change there is a
+  re-fit. `bench_wgrad`'s `wgrad-model:` lines print each plan's per-kernel rank beside its
   distinct-cell bound; `benchmarks/gh1253_cells.sh` runs the whole calibration on one box. Its
   `EXPLAIN_ONLY=<run dir>` re-scores a past run's sites at the checkout's revision against that
   run's `rank_<site>.tsv` rows, timing no candidate: a ranking-score change's before/after agreement

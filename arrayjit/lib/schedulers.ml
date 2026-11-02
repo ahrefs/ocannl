@@ -17,9 +17,25 @@ let _get_local_debug_runtime = Utils.get_local_debug_runtime
    a single lane suffices. [simd_vector] reports the register-tiling's vector file (gh-ocannl-479:
    autotune's seeding pre-filter checks micro-kernel extents against the lane count); the only CPU
    backend is cc, so its setting is authoritative here. *)
+(* gh-ocannl-1687: [cache_capacity_bytes] is cc's advisory cache capacity, the ranking score's DRAM
+   tier: once a kernel's working set -- per-block global read bytes times the blocks -- exceeds it,
+   the score charges its operand re-reads per block at the DRAM rate, and a one-block nest's serial
+   re-reads where an iteration spills it (gh-ocannl-1633). A FITTED constant of that proxy, not a
+   cache size: the score reads every iteration of a cc [Grid] loop as a resident block
+   (ahrefs/ocannl#1610), so the value sits far above any last-level cache, and a change to that
+   model means a re-fit. Fitted by [CAPACITY_ONLY=1 benchmarks/gh1253_cells.sh cc] on
+   minix-amd-linux (Zen 5, 32 cores; at 95245073, 2026-11-02, run dir
+   [/home/lukstafi/gh1687-runs/minix-cc-capacity-2] there): the plain default pipeline's untiled 256 x 1024
+   weight gradient, cached through a 6.45 GB working set ([x] of 24 MiB) and spilled from 8.60 GB
+   (32 MiB), split on the sweep's own rate contrast (the kernel is issue-bound, below the STREAM
+   rate even when cached); the geometric mean of the two. The sweep is recorded in
+   [test/operations/capacity_calibration], which pins this value to its fit. The score acts only
+   where an envelope is configured: cc publishes no [peak_*] constants. Config
+   [model_cache_capacity] overrides it ([none]: no DRAM tier). Shared by [cc] and [multidev_cc]. *)
 let cpu_mma_limits () =
   {
     no_hardware_limits with
+    cache_capacity_bytes = Some 7_447_425_761;
     simd_vector = Cc_backend.vector_file_setting ();
     native_fp16_arithmetic = Cc_backend.has_native_fp16_arithmetic ();
     simdgroup_width = None;

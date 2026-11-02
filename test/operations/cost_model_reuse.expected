@@ -56,3 +56,8 @@ serial: the score with no capacity is analyze's distinct bytes: true
 serial: raising the capacity never raises the score: true
 serial: completion_floor <= analyze <= the score, at every capacity: true
 a Grid plan's requested bytes do not depend on the serial re-read charge: true
+cc publishes a cache capacity, and the ranking score resolves it: true
+cc: the default plan's working set spills the published capacity, its half fits it: true
+cc: past the published capacity the score is above the no-capacity score: true
+cc: within the published capacity the score is the no-capacity score: true
+cc: the score at the published capacity is at least the bound: true

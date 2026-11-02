@@ -4,6 +4,9 @@ the recorded tuf sweep fits a capacity between 1.08 GB and 2.16 GB, against its 
 the recorded tuf sweep's cache bandwidth is its cached plateau, 1.1 to 2.2 TB/s: true
 the recorded minix sweep never reaches DRAM: the capacity is at least its largest working set: true
 without a DRAM reference, the minix sweep's 1.7x contrast fits nothing: true
+the recorded cc sweep fits a monotone capacity between 6.45 GB and 8.60 GB, on its own contrast: true
+cc's published cache capacity is the recorded cc sweep's fit: true
+against the STREAM rate the issue-bound cc sweep reads all spilled: true
 rates that do not split by working set fit a capacity flagged non-monotone: true
 a sweep entirely below the DRAM reference is all spilled: true
 one timed point fits nothing: true

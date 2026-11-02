@@ -1215,7 +1215,9 @@
 # DRAM bandwidth (model_peak_memory_bandwidth); within it, at model_cache_bandwidth. Fit it with
 # `tools/calibrate_cache_capacity.exe`, a working-set sweep of an untiled contraction: it is
 # where the requested rate falls from the cache plateau to DRAM. `none`: no capacity, so no DRAM
-# tier (a device whose sweep never reaches DRAM). Unset/empty uses the backend's value. Never read
+# tier (a device whose sweep never reaches DRAM). Unset/empty uses the backend's value: CUDA and
+# HIP advise per class, cc and multidev_cc a fitted value (gh-ocannl-1687; it acts only where
+# model_peak_* give cc an envelope), Metal none. Never read
 # by `Autotune.tune`, whose bound pruning and keep-fraction ranking use the distinct-cell
 # roofline, and not part of the schedule-cache key.
 #model_cache_capacity=
