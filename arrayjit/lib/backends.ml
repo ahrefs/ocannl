@@ -1212,7 +1212,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     dp_cached_constants : (Tn.t * buffer_loc) list;
         (** Constants a [constant_buffer_cache] hit already resolves on this device. *)
     dp_new_constants : group_layout option;
-        (** New host-literal constants: device-wide ([Constant_key.Shared]). *)
+        (** New host-literal constants: device-wide ([Constant_key.Shared]), in pools of their own,
+            freed once no live release unit of any root binds them (gh-ocannl-1762). *)
     dp_new_root_constants : group_layout option;
         (** New constants of the context's root ([Constant_key.Rooted]), in pools of their own: such
             a pool is freed once no live release unit binds it (gh-ocannl-1654), so it must hold
@@ -1361,10 +1362,11 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
 
   (* gh-ocannl-344 Phase B/C: allocate a context's delta ([plan_delta]). Working pools belong to the
      context (freed at its [finalize]); constant pools are deduped per-device via
-     [constant_buffer_cache] and outlive the context (freed at device teardown). Pool ids and
-     offsets are deterministic across runs: the plan is in canonical order and ids are minted per
-     pool before any placement. The per-pool 4 GB cap (uint32 offsets unless large_models) is
-     enforced by {!Backend_utils.plan_pool_segments}. *)
+     [constant_buffer_cache] and outlive the context, until the last release unit binding them is
+     released (gh-ocannl-1654, gh-ocannl-1762; [reclaim_constants]). Pool ids and offsets are
+     deterministic across runs: the plan is in canonical order and ids are minted per pool before
+     any placement. The per-pool 4 GB cap (uint32 offsets unless large_models) is enforced by
+     {!Backend_utils.plan_pool_segments}. *)
   let%track3_sexp allocate_delta (context : context) ~name
       ~(alias_spans : (Tn.t, int * int) Base.Hashtbl.t option) (lowered : Low_level.optimized) :
       ctx_buffers =
@@ -1445,8 +1447,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
               ctx_buffers := Map.add_exn !ctx_buffers ~key ~data:(alloc ())));
       (* Pass 2b: constants / read-only -> per-device constant pool(s): the cache hits resolve
          directly, the remaining new constants pack into one constant pool (or more, past the cap),
-         deduped into the cache. Constant pools outlive the context and are skipped by context
-         [finalize] (freed at device teardown). *)
+         deduped into the cache. Constant pools outlive the context and are skipped by its own
+         [finalize] pass; the release of their last binder frees them ([reclaim_constants]). *)
       List.iter plan.dp_cached_constants ~f:(fun (key, data) ->
           ctx_buffers := Map.add_exn !ctx_buffers ~key ~data);
       List.iter
@@ -1680,8 +1682,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
            the child that would have held them. After the owned pools: those are told apart from
            constants by the cache, so an evicted pool would read as owned and be freed twice. *)
         let unheld =
-          reclaim_rooted_constants context.device ~mode:`Unheld
-            (rooted_pools_of context.device ~root:context.constant_root
+          reclaim_constants context.device ~mode:`Unheld
+            (constant_pools_of context.device ~root:context.constant_root
                (Map.filter_keys ctx_buffers ~f:(fun key -> not (Map.mem context.ctx_buffers key))))
         in
         free_pools_continuing context.device ~free_pool (Set.to_list unheld))
@@ -1785,7 +1787,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         | exception exn ->
             let backtrace = Stdlib.Printexc.get_raw_backtrace () in
             ignore
-              (reclaim_rooted_constants context.device context.held_constant_pools ~mode:`Unhold
+              (reclaim_constants context.device context.held_constant_pools ~mode:`Unhold
                 : Set.M(Int).t);
             Stdlib.Printexc.raise_with_backtrace exn backtrace)
 end
@@ -1883,10 +1885,11 @@ let finalize ?(on_retire = fun (_ : retired_location) -> ()) (type dev runner ev
     match cleanup () with
     | () ->
         Alloc_census.count_context_released ();
-        (* gh-ocannl-1654: the root's constant pools this unit was the last live binder of. Past the
-           committed flag, like the hooks: the unit's own pools ARE freed, and the counts are
-           already given back, so a failed free leaks the pool rather than freeing it twice. *)
-        let unowned = reclaim_rooted_constants ctx.device ctx.held_constant_pools ~mode:`Release in
+        (* gh-ocannl-1654, gh-ocannl-1762: the constant pools (its root's and the device-wide
+           literals) this unit was the last live binder of. Past the committed flag, like the hooks:
+           the unit's own pools ARE freed, and the counts are already given back, so a failed free
+           leaks the pool rather than freeing it twice. *)
+        let unowned = reclaim_constants ctx.device ctx.held_constant_pools ~mode:`Release in
         Set.iter unowned ~f:(fun pool_id -> on_retire (Pool pool_id));
         Option.iter Backend.free_pool ~f:(fun free_pool ->
             free_pools_continuing ctx.device ~free_pool (Set.to_list unowned));

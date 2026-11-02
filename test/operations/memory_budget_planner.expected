@@ -27,6 +27,8 @@ unreachable budget: still relieves what it can: true
 monotone: a tighter budget never scores larger: true
 deterministic: replanning picks the same flips: true
 default-off: nothing is planned: true
+default-off: releasing the step's context releases what its compile minted: true
+budget on: releasing the step's context releases the plan's decision context too: true
 budget on: a plan shipped: true
 budget on: it demoted intermediates to recompute-at-use: true
 budget on: the scored footprint is under the budget: true

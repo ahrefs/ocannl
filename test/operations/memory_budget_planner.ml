@@ -164,10 +164,14 @@ let build () =
   (ctx, comp, scalar_loss, mem0)
 
 (* Compile the step under [budget] and run six of them, returning the loss trajectory, the step's
-   actual device-footprint delta, and the plan that shipped (if any). *)
+   actual device-footprint delta, the plan that shipped (if any), and how many contexts the compile
+   minted are left unreleased once the returned context is released (gh-ocannl-1762: a plan's
+   decision context is an ancestor only the returned context can release). *)
 let train_phase ?budget ~label () =
   let ctx, comp, scalar_loss, mem0 = build () in
   let plan = ref None in
+  let unreleased () = Ir.Alloc_census.unreleased_contexts (Ir.Alloc_census.snapshot ()) in
+  let unreleased0 = unreleased () in
   let ctx, routine =
     Train.to_routine ctx ?budget ~budget_report:(fun r -> plan := Some r) IDX.empty comp
   in
@@ -182,7 +186,8 @@ let train_phase ?budget ~label () =
   eprintf "%s: losses %s; step footprint: %d bytes\n%!" label
     (String.concat ~sep:", " (List.map losses ~f:(Printf.sprintf "%.6f")))
     mem_delta;
-  (losses, mem_delta, !plan)
+  Context.release ctx;
+  (losses, mem_delta, !plan, unreleased () - unreleased0)
 
 (* Layer 0: the planner's precondition. Deliberately BEFORE the environment enables
    [buffer_aliasing], so the failure is the one a user gets by setting a budget alone. *)
@@ -281,11 +286,14 @@ let () =
 
 (* Layers 3 and 4: executed parity across the gate, and default-off. *)
 let () =
-  let losses_off, mem_off, plan_off = train_phase ~label:"budget off" () in
+  let losses_off, mem_off, plan_off, unreleased_off = train_phase ~label:"budget off" () in
   p "default-off: nothing is planned" (Option.is_none plan_off);
-  let losses_on, mem_on, plan_on =
+  p "default-off: releasing the step's context releases what its compile minted" (unreleased_off = 0);
+  let losses_on, mem_on, plan_on, unreleased_on =
     train_phase ~budget:(Memory_budget.Bytes mid) ~label:"budget on" ()
   in
+  p "budget on: releasing the step's context releases the plan's decision context too"
+    (unreleased_on = 0);
   (match plan_on with
   | None -> p "budget on: a plan shipped" false
   | Some plan ->

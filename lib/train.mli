@@ -379,7 +379,10 @@ val to_routine :
 
     The post-compile context is returned rather than discarded (gh-ocannl-772), matching
     {!Context.compile} and {!run_once}: chain it into the next compile instead of reaching into
-    [routine.context] for the same value. A caller that only wants the routine can [snd] this. *)
+    [routine.context] for the same value. A caller that only wants the routine can [snd] this. Under
+    a budget, the plan's decision context is an ancestor the caller never holds; the returned
+    context's release unit adopts it ({!Context.adopt_ancestor}, gh-ocannl-1762), so the
+    {!Context.release} of that context, or of [routine.context], releases it too. *)
 
 val ranged_launch_param : Ir.Indexing.static_symbol -> string option
 (** The kind of a launch parameter that has a range, so that 0 is not a neutral value for it, and
@@ -436,12 +439,12 @@ val run_once :
     backprop root only while the caller holds it, so a graph dropped after a forward-only run is
     reclaimed by the GC (gh-ocannl-1745; see {!Tensor.is_bprop_root}).
 
-    Its buffers are a different matter. {!Context.release} of the returned context frees the pools
-    the routine of [f t] allocated, but the parameters live in the context {!init_params} returned
-    here: an ancestor of the result that the caller never holds, so their pools stay in the
-    backend's pool table for the process (gh-ocannl-1762). A caller that builds fresh graphs in a
-    loop and wants their memory back initializes them itself, with {!init_params} and then
-    {!to_routine} from its result, and releases both contexts, the compiled one first. *)
+    Its buffers come back through {!Context.release} of the returned context: the pools the routine
+    of [f t] allocated, and those of the context {!init_params} returned here -- the parameters', an
+    ancestor of the result the caller never holds -- which the result adopted
+    ({!Context.adopt_ancestor}, gh-ocannl-1762), as it does a memory budget's decision context. So
+    release the result as a leaf: after every context compiled from it. The caller's own [ctx] is
+    not released with it. *)
 
 val forward_once :
   ?output_cd_file:bool ->

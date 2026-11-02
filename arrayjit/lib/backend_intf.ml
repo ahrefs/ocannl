@@ -1349,13 +1349,14 @@ module type Device_config_common = sig
 end
 
 (** The key of a device's constant cache (gh-ocannl-1654). A node every routine of a compile only
-    reads, and that is not [context_owned], lives in a constant pool that outlives its contexts. A
-    host-initialized literal ({!Host_inits}) is [Shared]: one buffer per device, uploaded once,
-    which every root on the device binds. Any other such node -- a data input, a zero-valid
-    accumulator -- is [Rooted] under the {!field-context.constant_root} of the independently created
-    context that allocated it, so compile siblings and descendants of one root share it while
-    another root gets a buffer of its own: a write in one root can never change what another root
-    reads. *)
+    reads, and that is not [context_owned], lives in a constant pool that outlives the context that
+    allocated it, until the last release unit binding it is released
+    ({!field-device.constant_owners}). A host-initialized literal ({!Host_inits}) is [Shared]: one
+    buffer per device, uploaded once, which every root on the device binds while any of them holds
+    it. Any other such node -- a data input, a zero-valid accumulator -- is [Rooted] under the
+    {!field-context.constant_root} of the independently created context that allocated it, so
+    compile siblings and descendants of one root share it while another root gets a buffer of its
+    own: a write in one root can never change what another root reads. *)
 module Constant_key = struct
   module T = struct
     type t = Shared of Tnode.t | Rooted of int * Tnode.t [@@deriving compare, sexp_of, hash]
@@ -1391,15 +1392,19 @@ type ('dev, 'runner, 'event) device = {
           also {!field-updating_for}. *)
   constant_buffer_cache : buffer_loc Hashtbl.M(Constant_key).t;
       (** Per-device cache for read-only/constant buffer allocations: device-wide for host literals,
-          per root otherwise ({!Constant_key}). A literal's pool is freed at device teardown, a
-          root's when no live release unit binds it ([rooted_constant_owners]). *)
-  rooted_constant_owners : int Hashtbl.M(Int).t;
-      (** For each pool holding [Rooted] constants (such pools hold nothing else), how many live
-          release units bind it ({!field-context.held_constant_pools}); the release taking it to 0
-          frees the pool and drops its cache entries (gh-ocannl-1654). Guarded by
-          [rooted_constant_mutex]. *)
-  rooted_constant_mutex : Stdlib.Mutex.t;
-      (** The lock of [rooted_constant_owners] and of the cache entries a release drops. *)
+          per root otherwise ({!Constant_key}). Either kind's pool is freed, and its entries
+          dropped, when no live release unit binds it ([constant_owners]); what is left at device
+          teardown is freed there. *)
+  constant_owners : int Hashtbl.M(Int).t;
+      (** For each constant pool (one holds either [Rooted] entries of one root or [Shared] ones,
+          never both, and nothing else), how many live release units bind it
+          ({!field-context.held_constant_pools}), across roots for a [Shared] pool; the release
+          taking it to 0 frees the pool and drops its cache entries (gh-ocannl-1654 for [Rooted],
+          gh-ocannl-1762 for [Shared]: dropping a literal's strong [Tnode.t] key is what lets its
+          node, and through {!Host_inits} its host array, be collected). Guarded by
+          [constant_mutex]. *)
+  constant_mutex : Stdlib.Mutex.t;
+      (** The lock of [constant_owners] and of the cache entries a release drops. *)
   mutable next_pool_id : int;
       (** Deterministic per-device pool-id counter, advanced by the shared allocator seam in tnode
           iteration order. Pool id 0 is reserved for the merge buffer; tnode pools start at 1. *)
@@ -1461,9 +1466,10 @@ type ('dev, 'runner, 'event) context = {
           hypothetical assignments-level backends was retired; the [Assignments.comp -> code] seam
           can be reintroduced if such a backend ever materializes). *)
   held_constant_pools : Set.M(Int).t;
-      (** The [Rooted] constant pools this release unit binds, each counted once in
-          {!field-device.rooted_constant_owners} when the unit was created and released when it is
-          finalized. Shared by every value of the unit (record copies keep it). *)
+      (** The constant pools this release unit binds -- its root's [Rooted] ones and the [Shared]
+          host literals it resolved -- each counted once in {!field-device.constant_owners} when the
+          unit was created and released when it is finalized. Shared by every value of the unit
+          (record copies keep it). *)
   constant_root : int;
       (** The independently created context this one derives from, as far as constants go: minted by
           {!Device.make_context}, inherited by every derived context. Keys the non-literal entries
@@ -1492,53 +1498,51 @@ let find_constant device ~root tn =
 let find_shared_constant device tn =
   Hashtbl.find device.constant_buffer_cache (Constant_key.Shared tn)
 
-(** The [Rooted] constant pools [ctx_buffers] binds, for a context of [root]: what a release unit
-    created over that map holds (gh-ocannl-1654). *)
-let rooted_pools_of device ~root (ctx_buffers : ctx_buffers) =
+(** The constant pools [ctx_buffers] binds, for a context of [root]: its root's [Rooted] ones
+    (gh-ocannl-1654) and the device-wide [Shared] literals (gh-ocannl-1762) -- what a release unit
+    created over that map holds. A node bound at its cached location, under either key. *)
+let constant_pools_of device ~root (ctx_buffers : ctx_buffers) =
   Map.fold ctx_buffers
     ~init:(Set.empty (module Int))
     ~f:(fun ~key ~data:loc pools ->
-      match Hashtbl.find device.constant_buffer_cache (Constant_key.Rooted (root, key)) with
+      match find_constant device ~root key with
       | Some cached when equal_buffer_loc cached loc -> Set.add pools loc.pool_id
       | _ -> pools)
 
 (** Count a new release unit binding [pools]; returns them, for its [held_constant_pools]. *)
-let hold_rooted_constants device pools =
-  Stdlib.Mutex.protect device.rooted_constant_mutex (fun () ->
+let hold_constants device pools =
+  Stdlib.Mutex.protect device.constant_mutex (fun () ->
       Set.iter pools ~f:(fun pool_id ->
-          Hashtbl.update device.rooted_constant_owners pool_id ~f:(fun n ->
-              1 + Option.value n ~default:0)));
+          Hashtbl.update device.constant_owners pool_id ~f:(fun n -> 1 + Option.value n ~default:0)));
   pools
 
-(** Give back rooted constant [pools] (gh-ocannl-1654), under the device's lock, in one of three
-    ways; returns the pools the caller must now free, already dropped from the cache so no later
-    compile resolves them:
+(** Give back constant [pools] (gh-ocannl-1654, gh-ocannl-1762), under the device's lock, in one of
+    three ways; returns the pools the caller must now free, already dropped from the cache so no
+    later compile resolves them:
     - [`Release]: a finalized release unit's holds. The pools no live unit binds any more.
     - [`Unhold]: the holds of a unit discarded before anyone could finalize it (a link failing after
       its [make_child]). Nothing: the cache is left as it is, for the delta's discard to reclaim.
     - [`Unheld]: of the pools a discarded delta binds, those no live unit holds. A pool another unit
       holds, such as a cache hit an earlier compile of the root allocated, stays. *)
-let reclaim_rooted_constants device pools ~mode =
+let reclaim_constants device pools ~mode =
   let unhold () =
     Set.filter pools ~f:(fun pool_id ->
-        match Hashtbl.find device.rooted_constant_owners pool_id with
+        match Hashtbl.find device.constant_owners pool_id with
         | Some n when n > 1 ->
-            Hashtbl.set device.rooted_constant_owners ~key:pool_id ~data:(n - 1);
+            Hashtbl.set device.constant_owners ~key:pool_id ~data:(n - 1);
             false
         | Some _ ->
-            Hashtbl.remove device.rooted_constant_owners pool_id;
+            Hashtbl.remove device.constant_owners pool_id;
             true
         | None -> false)
   in
   let evict unowned =
     if not (Set.is_empty unowned) then
-      Hashtbl.filteri_inplace device.constant_buffer_cache ~f:(fun ~key ~data:loc ->
-          match key with
-          | Constant_key.Rooted _ -> not (Set.mem unowned loc.pool_id)
-          | Constant_key.Shared _ -> true);
+      Hashtbl.filteri_inplace device.constant_buffer_cache ~f:(fun ~key:_ ~data:loc ->
+          not (Set.mem unowned loc.pool_id));
     unowned
   in
-  Stdlib.Mutex.protect device.rooted_constant_mutex (fun () ->
+  Stdlib.Mutex.protect device.constant_mutex (fun () ->
       match mode with
       | `Release -> evict (unhold ())
       | `Unhold ->
@@ -1546,8 +1550,7 @@ let reclaim_rooted_constants device pools ~mode =
           Set.empty (module Int)
       | `Unheld ->
           evict
-            (Set.filter pools ~f:(fun pool_id ->
-                 not (Hashtbl.mem device.rooted_constant_owners pool_id))))
+            (Set.filter pools ~f:(fun pool_id -> not (Hashtbl.mem device.constant_owners pool_id))))
 
 (** Working pools in a context map, excluding compile ancestors and cached constant locations.
     Shared by ownership registration and cleanup so both use the same pool classification. *)
@@ -1593,8 +1596,7 @@ let evolve_with_buffer ctx tn loc =
       ctx with
       ctx_buffers;
       held_constant_pools =
-        hold_rooted_constants ctx.device
-          (rooted_pools_of ctx.device ~root:ctx.constant_root ctx_buffers);
+        hold_constants ctx.device (constant_pools_of ctx.device ~root:ctx.constant_root ctx_buffers);
       finalized = Atomic.make false;
       released_pool_ids = Set.empty (module Int);
       upload_tip;

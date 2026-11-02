@@ -35,6 +35,11 @@ let pools_freed before after = after.AC.pools_freed - before.AC.pools_freed
 let live_working_delta before after = after.AC.live_working_pools - before.AC.live_working_pools
 let contexts_released before after = after.AC.contexts_released - before.AC.contexts_released
 
+let constant_allocated before after =
+  after.AC.constant_pools_allocated - before.AC.constant_pools_allocated
+
+let live_constant_delta before after = after.AC.live_constant_pools - before.AC.live_constant_pools
+
 (* Non-empty by construction (gh-ocannl-746): [Array.for_all2_exn] answers [true] on two empty
    arrays, and a readback and the reference it is compared against go empty TOGETHER -- the
    reference went through the same path. {!Verdict.p_all2} is the claim-shaped form; the sites
@@ -83,11 +88,15 @@ let () =
   let after_compile = AC.snapshot () in
   Context.release control_ctx;
   let after_release = AC.snapshot () in
+  (* Its literal's constant pool, which this compile allocated, goes with its last binder's release
+     too (gh-ocannl-1762). *)
   p "allocate-delta control commits then releases exactly one working pool"
     (working_allocated before after_compile = 1
     && live_working_delta before after_compile = 1
-    && pools_freed after_compile after_release = 1
-    && live_working_delta before after_release = 0);
+    && constant_allocated before after_compile = 1
+    && pools_freed after_compile after_release = 2
+    && live_working_delta before after_release = 0
+    && live_constant_delta before after_release = 0);
   ignore control_routine;
 
   (* Backend link: all delta locations and constant-cache insertions exist, but no child context
@@ -100,8 +109,10 @@ let () =
   p "post-allocation link injection fired" (raised && hits = 1);
   p "link failure freed the unowned delta exactly once"
     (working_allocated before after = 1
-    && pools_freed before after = 1
-    && live_working_delta before after = 0);
+    && constant_allocated before after = 1
+    && pools_freed before after = 2
+    && live_working_delta before after = 0
+    && live_constant_delta before after = 0);
   let before = AC.snapshot () in
   let linked_ctx, linked_routine = Context.compile (Context.cpu ()) comp Ir.Indexing.Empty in
   let linked_ctx = Context.run linked_ctx linked_routine in
@@ -112,8 +123,10 @@ let () =
   let after_release = AC.snapshot () in
   p "link control releases its committed pool exactly once"
     (working_allocated before after_run = 1
-    && pools_freed after_run after_release = 1
-    && live_working_delta before after_release = 0);
+    && constant_allocated before after_run = 1
+    && pools_freed after_run after_release = 2
+    && live_working_delta before after_release = 0
+    && live_constant_delta before after_release = 0);
 
   (* gh-ocannl-1555: a refused free part way through [allocate_delta]'s unwind strands no other
      pool. A fresh constant (its own label, so no earlier compile cached it) gives the delta two
