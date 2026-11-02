@@ -67,7 +67,8 @@ files.
   finalizer-independent); `Autotune.tune` does it per candidate at the end of its timing window,
   so at most one candidate is live (next entry). Not calling it is never a
   correctness bug, only a memory one. What `release` frees is precisely the pools a context holds
-  that its parent does not and that are not per-device constants — so sibling contexts are
+  that its parent does not and that are not constants (those go with their last binder, below),
+  plus the ancestors a wrapper handed it (`Context.adopt_ancestor`, below) — so sibling contexts are
   independent (each `compile` mints its own `pool_id`s) but a released context is a dead handle, and
   **release leaves, never interior nodes**: a context compiled from another inherits its buffer
   locations, so releasing an ancestor leaves the descendant resolving a dropped `pool_id`. This
@@ -207,13 +208,16 @@ files.
   `owned_pool_ids`) go through `BI.find_constant`, root first; insertion through `BI.constant_key`.
   Rooted constants pack into pools of their own (`dp_new_root_constants`), and each release unit
   holds the rooted pools its `ctx_buffers` binds (`held_constant_pools`, counted in the device's
-  `rooted_constant_owners` at the three places a unit is minted: `make_context`, `make_child`, an
+  `constant_owners` at the three places a unit is minted: `make_context`, `make_child`, an
   upload fork); the release of the last binder frees the pool and drops its cache entries, so
   fresh roots compiled and released one after another hold memory flat, as the device-wide cache
-  did by reuse. A unit nobody releases keeps its pools, as for working pools. A link that fails
+  did by reuse. Since gh-ocannl-1762 a `Shared` literal pool is held the same way, its count
+  spanning roots (`constant_owners`, `constant_pools_of` resolving either key): dropping its strong
+  `Tnode.t` key is what lets a released graph's literal node, and its `Host_inits` array, be
+  collected. A unit nobody releases keeps its pools, as for working pools. A link that fails
   after `allocate_delta` reclaims the delta's rooted pools no unit holds in `free_delta`, after the
   owned pools (an evicted pool would read as owned and be freed twice), and a failure after its
-  `make_child` first gives the discarded child's holds back (`reclaim_rooted_constants`'s modes). A new
+  `make_child` first gives the discarded child's holds back (`reclaim_constants`'s modes). A new
   place that mints a `finalized` flag must hold its rooted pools too, or a release frees a pool it
   binds. Guard: `context_handle_refusals` (`chr_root_constants`, `chr_root_constants_release`,
   `chr_shared_overwrite`, `chr_shared_writer`, `chr_shared_implicit`).
@@ -234,16 +238,15 @@ files.
   group nevertheless; both allocation and footprint scoring use `partition_layout_groups`.
   Two fresh contexts must retain independent parameter/state edits and resets. The marker changes
   allocation only, not the post-virtualization scalar recompute-price inputs.
-- **Two classes `release` cannot reach, so "bounded" always needs a qualifier.** (a) Device-wide
-  constants (host literals; a root's constants are freed with their last binder, above): it skips
-  every `Shared` `constant_buffer_cache` key by design. That is right for a shared weight
-  and wrong for a hoisted `Stage` candidate, whose `apply_stage` mints a FRESH packed-constant tnode
-  per application (`fresh_tile_id ()`), so a CPU search seeding `hoist` sketches grows one constant
-  pool per such candidate — measured on `cc` at 1 → 109 constant pools over 181 candidates while
-  working pools stayed within 2–6. Not safely fixable in place, because constants are bump-packed
-  several to a pool and the first candidate's pool mixes its private tile with the shared operand
-  weights later candidates reuse; a safe rule is per-pool purity, i.e. gh-ocannl-565's eviction-policy
-  work. (b) A link that RAISES after `allocate_delta` — now handled (`Backends.with_delta` frees the
+- **Two classes `release` cannot reach, so "bounded" always needs a qualifier.** (a) A constant
+  pool some live unit still binds (every constant, literals included, goes with its last binder,
+  above). Constants are bump-packed several to a pool, so one live binder of any entry keeps the
+  whole pool: a hoisted `Stage` candidate's `apply_stage` mints a FRESH packed-constant tnode per
+  application (`fresh_tile_id ()`), and a CPU search seeding `hoist` sketches was measured on `cc`
+  at 1 → 109 constant pools over 181 candidates while working pools stayed within 2–6, back when no
+  constant pool was ever freed; a pool mixing a released candidate's private tile with operand
+  weights a live context still binds stays whole. Per-pool purity is gh-ocannl-565's
+  eviction-policy work. (b) A link that RAISES after `allocate_delta` — now handled (`Backends.with_delta` frees the
   delta on the way out), but the shape is worth knowing: allocation precedes backend linking, so any
   new failure point between them leaks a whole routine footprint with no context to release it
   through. When asserting a memory bound, assert on `live_working_pools`, not `live_pools`: summing the
@@ -253,11 +256,11 @@ files.
   gh-ocannl-1745 the session lets an evaluated graph go, and the only strong holders of its nodes
   were two device tables: `updating_for` (every node a routine or upload wrote, now pruned of done
   events at each write, since its one reader treats a done event as absent) and the `Shared` keys of
-  `constant_buffer_cache` (host literals, still pinned: gh-ocannl-1762). A held node is a host-memory
-  pin, since `Host_inits` is an ephemeron keyed by the node. Pools are a separate question: the pool
-  table holds them, nodes or not, until `release`, and `Train.run_once`'s initialization context is
-  an ancestor nobody can release (gh-ocannl-1762). The analysis cache keeps eight compiles' nodes,
-  bounded. To find a pinner, put weak witnesses on the nodes and clear candidates one at a time
+  `constant_buffer_cache` (host literals, dropped with their last binder since gh-ocannl-1762). A
+  held node is a host-memory pin, since `Host_inits` is an ephemeron keyed by the node. Pools are a
+  separate question: the pool table holds them, nodes or not, until `release`. The analysis cache
+  keeps eight compiles' nodes, bounded. To find a pinner, put weak witnesses on the nodes and
+  clear candidates one at a time
   (`clear_analysis_cache`, `unsafe_reinitialize`, one more graph's writes -- which prune
   `updating_for` -- the constant cache): the recipe that found these two, and
   `dropped_graph_buffers` pins what it found. There is no device-wide event reset to call instead:
@@ -267,6 +270,19 @@ files.
   device-memory claim reads the process's own accounting (`Alloc_census`, the used gauge), never
   the driver's free bytes: device-wide, so any concurrent GPU process -- the suite's own parallel
   GPU tests included -- moves them between two readings (gh-ocannl-1798); print them on stderr only.
+- **A context a wrapper mints and does not return is adopted by the one it returns**
+  (gh-ocannl-1762). `Train.run_once`'s initialization context (the parameters' pools) and a memory
+  budget's decision context (rooted constant holds) are lifecycle ancestors of the returned context
+  that no caller holds, so `release` of the result never reached them and every `forward_once` in a
+  fresh-graph loop left one parameter pool behind. `Context.adopt_ancestor` hands one to the result:
+  a hold counted per release unit (`minted`, shared by the unit's values through record copies),
+  taken again by an upload fork in `derive` -- a fork keeps the source's lifecycle parent, so it
+  binds the ancestor's buffers too -- and not by a compile child, which is released first. The last
+  holder's `release` releases the ancestors, deepest first; a failure there is resumed by the next
+  `release` of the unit. A new wrapper that compiles from a context it minted adopts it the same way
+  (`Train.adopt_minted`), skipping the caller's own unit (`Context.same_release_unit`). Guard:
+  `dropped_graph_buffers` (the forward_once and fork cases; the fork case's claims fail when the
+  fork does not take its hold).
 - Five facts about the allocation seams that each cost a review round to learn, and that any further
   release work will meet again. (1) There are **two** shared allocation sites, not one:
   `Backends.allocate_delta` for a compile's delta, and the transfer destinations inside

@@ -75,21 +75,43 @@ type compile_frontier = {
     context is unchanged. This ensures that sibling compiles (from the same context) produce
     independent routines. *)
 
+(* gh-ocannl-1762: a lifecycle ancestor a wrapper minted on its caller's behalf and returns only a
+   descendant of -- [Train.forward_once]'s initialization context, a memory-budget decision context
+   -- which the caller therefore cannot release ({!adopt_ancestor}). [holders] counts the release
+   units holding it; [release_ancestor] releases it once none does. *)
+type minted_hold = { release_ancestor : unit -> unit; depth : int; holders : int Atomic.t }
+
+(* A release unit's holds, and whether its release gave them back yet (once per unit). *)
+type minted_entry = { holds : minted_hold list; mutable given_back : bool }
+
 type execution_ledger = {
   mutable next_id : int;
   mutable next_context_id : int;
+  minted_holds : minted_entry Hashtbl.M(Int).t;
+      (** By release unit ([context_id]), the ancestors the unit holds ({!adopt_ancestor},
+          gh-ocannl-1762): every value of the unit -- a [run] result, a linear upload, the routine's
+          compile context -- reaches them through the id. An upload fork takes holds of its own
+          ([derive]); a lifecycle child none, since it is released before its ancestors. An entry
+          goes once its unit's release has released what it no longer holds. *)
   routine_names : string Hashtbl.M(Int).t;
+      (** Every routine id of this root's lineages, named for refusal messages: one entry per
+          compile, not retired by {!release}. Intended: an entry is a string, a refusal may name any
+          routine of the root, and the table goes with the root -- the ledger is held only by the
+          root's context values -- so it grows with one root's compiles, not with the process
+          (gh-ocannl-1762). A retired merge-buffer transfer is the one id it forgets
+          (gh-ocannl-1654). *)
   mutable executed : Set.M(Int).t;
   mutable current_writers : int Map.M(Buffer_key).t;
       (** The routine whose execution most recently wrote each concrete ordinary buffer. Unlike the
           immutable compile frontier, this follows re-execution order without conflating sibling
           contexts that allocate distinct buffers for the same tnode. External writes remove their
-          buffer. Entries outlive a {!release} (unlike [written_buffers]'s), and a released upload
-          leaf's arena tail is handed to a survivor at the same location (gh-ocannl-1328); such an
-          entry cannot mislead: only [upload_slot] re-issues a location, and both of its callers
-          ([from_host], [copy]) record an external write over it, and every writer here is executed
-          ([run] adds both, [rollback_execution] removes both), so it could only ever report
-          "ready". *)
+          buffer. A {!release} retires the entries of the locations it gives up, as it does
+          [written_buffers]'s ([retire_written], gh-ocannl-1762), so the table does not grow by one
+          entry per freed buffer for the life of the root. Nothing depended on the entry before
+          that: only [upload_slot] re-issues a location (a released upload leaf's arena tail, to a
+          survivor, gh-ocannl-1328), and both of its callers ([from_host], [copy]) record an
+          external write over it, and every writer here is executed ([run] adds both,
+          [rollback_execution] removes both), so it could only ever report "ready". *)
   merge_buffer_readers : (int * int) list Hashtbl.M(Int).t;
       (** [(consumer routine id, owning context id)] by synthetic merge-transfer id, one entry per
           release unit that keeps the consumer live (an upload fork adds one, see [derive]).
@@ -174,9 +196,10 @@ and accumulation_undo = {
    into such a buffer mints a fresh token, kept here and in the writing ledger's [observed_tokens];
    a run whose ledger holds a different token for a buffer it reads is refused
    ([check_lineage_runnable]). Within one root the ledger is shared, so its compile siblings always
-   agree and keep sharing as before. Keys are constant-cache locations only: they live as long as
-   the device, and no other location is shared across roots (pool ids are minted per device and
-   never reused). Ordering needs no extra edge: roots on one device share its single FIFO runner. *)
+   agree and keep sharing as before. Keys are constant-cache locations only, and no other location
+   is shared across roots (pool ids are minted per device and never reused); a key goes with its
+   pool, which the release of its last binder frees (gh-ocannl-1762, [retire_written]). Ordering
+   needs no extra edge: roots on one device share its single FIFO runner. *)
 and token_undo = {
   tu_key : Buffer_key.t;
   tu_minted : int;
@@ -233,6 +256,7 @@ let create_ledger () =
   {
     next_id = 0;
     next_context_id = 1;
+    minted_holds = Hashtbl.create (module Int);
     routine_names = Hashtbl.create (module Int);
     executed = Set.empty (module Int);
     current_writers = Map.empty (module Buffer_key);
@@ -341,6 +365,12 @@ let check_live ~fn ctx =
    value stay live until every leaf holding them is released: their registrations are extended to
    the fork's id.
 
+   The ancestors a wrapper handed the unit ([minted_holds], gh-ocannl-1762) follow the same split:
+   the same unit keeps its holds, by its id; an upload fork keeps the source's lifecycle parent, so
+   it binds those ancestors' buffers too and takes a hold of its own on each, the last holder's
+   release releasing them; a lifecycle child takes none, since its ancestor is released after it
+   (release leaves first).
+
    Frontier updates ride along when the operation produced one. Operations that evolve the SAME
    logical context without touching the wrapped one ([run], [mark_initialized],
    [record_external_writes]) stay plain record updates. *)
@@ -351,12 +381,19 @@ let derive ?frontier ctx wrapped =
   else
     let context_id = ctx.ledger.next_context_id in
     ctx.ledger.next_context_id <- context_id + 1;
-    (if phys_equal (upload_lineage wrapped) (upload_lineage ctx.wrapped) then
+    let fork = phys_equal (upload_lineage wrapped) (upload_lineage ctx.wrapped) in
+    (if fork then
        let readers = ctx.ledger.merge_buffer_readers in
        Hashtbl.map_inplace readers ~f:(fun registered ->
            List.filter_map registered ~f:(fun (reader_id, owner) ->
                Option.some_if (owner = ctx.context_id) (reader_id, context_id))
            @ registered));
+    (if fork then
+       match Hashtbl.find ctx.ledger.minted_holds ctx.context_id with
+       | Some { holds; given_back = false } ->
+           List.iter holds ~f:(fun h -> Atomic.incr h.holders);
+           Hashtbl.set ctx.ledger.minted_holds ~key:context_id ~data:{ holds; given_back = false }
+       | Some { given_back = true; _ } | None -> ());
     { ctx with wrapped; context_id; frontier }
 
 let buffer_key ctx tn =
@@ -1790,8 +1827,44 @@ let retire_written ledger ~device_id retired =
   in
   if not (List.is_empty retired) then (
     ledger.written_buffers <- Set.filter ledger.written_buffers ~f:(fun key -> not (gone key));
+    (* gh-ocannl-1762: the writer table and the host-literal write tokens go with the location too
+       -- a freed constant pool is a literal's last binder released, and its tokens would otherwise
+       stay for the process. *)
+    ledger.current_writers <- Map.filter_keys ledger.current_writers ~f:(fun key -> not (gone key));
+    ledger.observed_tokens <- Map.filter_keys ledger.observed_tokens ~f:(fun key -> not (gone key));
+    shared_write_tokens := Map.filter_keys !shared_write_tokens ~f:(fun key -> not (gone key));
     ledger.accumulated <- Map.filter_keys ledger.accumulated ~f:(fun key -> not (gone key));
     Hashtbl.map_inplace ledger.fresh_writes ~f:(List.filter ~f:(fun key -> not (gone key))))
+
+(* gh-ocannl-1762: once [ctx]'s unit is released, its holds on the ancestors a wrapper minted for it
+   are given back (once per unit), and every ancestor no unit holds any more is released, deepest
+   first. Releasing an ancestor is idempotent, so the entry stays until every such release
+   succeeded: a release that raised part way is resumed by the next [release] of any value of the
+   unit. The first failure is re-raised once all were tried. *)
+let release_minted ctx =
+  let table = ctx.ledger.minted_holds in
+  match Hashtbl.find table ctx.context_id with
+  | Some entry when Atomic.get (release_flag ctx.wrapped) -> (
+      if not entry.given_back then (
+        entry.given_back <- true;
+        List.iter entry.holds ~f:(fun h -> Atomic.decr h.holders));
+      let unheld =
+        List.filter entry.holds ~f:(fun h -> Atomic.get h.holders <= 0)
+        |> List.sort ~compare:(fun a b -> Int.compare b.depth a.depth)
+      in
+      let first_failure =
+        List.fold unheld ~init:None ~f:(fun failure h ->
+            match h.release_ancestor () with
+            | () -> failure
+            | exception exn -> (
+                match failure with
+                | Some _ -> failure
+                | None -> Some (exn, Stdlib.Printexc.get_raw_backtrace ())))
+      in
+      match first_failure with
+      | None -> Hashtbl.remove table ctx.context_id
+      | Some (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
+  | Some _ | None -> ()
 
 let release ctx =
   let retire_readers () =
@@ -1815,16 +1888,57 @@ let release ctx =
   with
   | () ->
       retire_written ctx.ledger ~device_id !retired;
-      retire_readers ()
+      retire_readers ();
+      release_minted ctx
   | exception exn ->
       (* gh-ocannl-1445: a release hook (graph execs) that fails runs after the pools were freed and
          leaves the context finalized, so it is a released consumer all the same. A cleanup that
          raised part way reported only what it did give up, so that is retired either way. *)
       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
       retire_written ctx.ledger ~device_id !retired;
-      if Backends.query ctx.wrapped { q = (fun _ c -> Atomic.get c.BI.finalized) } then
+      if Backends.query ctx.wrapped { q = (fun _ c -> Atomic.get c.BI.finalized) } then (
         retire_readers ();
+        try release_minted ctx with _ -> ());
       Stdlib.Printexc.raise_with_backtrace exn backtrace
+
+let same_release_unit a b = phys_equal (release_flag a.wrapped) (release_flag b.wrapped)
+
+(* gh-ocannl-1762: see the interface. The ancestor is found on [ctx]'s lifecycle chain by its
+   release flag, the identity of its unit, as [released_ancestor_depth] finds a released one. *)
+let adopt_ancestor ctx ~ancestor =
+  check_live ~fn:"adopt_ancestor" ctx;
+  let flag = release_flag ancestor.wrapped in
+  let on_chain =
+    Backends.query ctx.wrapped
+      {
+        q =
+          (fun _ c ->
+            let rec walk p =
+              match p with
+              | None -> false
+              | Some p -> phys_equal p.BI.finalized flag || walk p.BI.parent
+            in
+            walk c.BI.parent);
+      }
+  in
+  if not on_chain then
+    invalid_arg
+      (Printf.sprintf
+         "Context.adopt_ancestor: context %d is not a lifecycle ancestor of context %d (a context \
+          it was compiled or decided from, directly or not)"
+         ancestor.context_id ctx.context_id);
+  if not (phys_equal ctx.ledger ancestor.ledger) then
+    invalid_arg "Context.adopt_ancestor: the ancestor's context value belongs to another root";
+  let hold =
+    {
+      release_ancestor = (fun () -> release ancestor);
+      depth = lifecycle_depth ancestor;
+      holders = Atomic.make 1;
+    }
+  in
+  Hashtbl.update ctx.ledger.minted_holds ctx.context_id ~f:(function
+    | None -> { holds = [ hold ]; given_back = false }
+    | Some entry -> { entry with holds = entry.holds @ [ hold ] })
 
 (* {2 Recompute-on-read (gh-ocannl-777)}
 

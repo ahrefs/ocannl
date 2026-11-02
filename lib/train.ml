@@ -1954,6 +1954,13 @@ let dump_cd_file ~caller bindings (comp : Asgns.comp) =
   | None -> ()
   | Some callback -> callback (Asgns.to_doc ~name ~static_indices () comp.Asgns.asgns)
 
+(* gh-ocannl-1762: [result] made responsible for [minted], a context this module derived from the
+   caller's [caller] and returns only through [result] -- unless it is [caller]'s own release unit,
+   which the caller holds. *)
+let adopt_minted ~caller ~minted result =
+  if not (Context.same_release_unit minted caller) then
+    Context.adopt_ancestor result ~ancestor:minted
+
 (** The gh-ocannl-498 rematerialization seam shared by {!to_routine} and {!run_once}: plan [comp]'s
     inlining decision vector against the budget, compile from the planned context, and only then let
     [budget_report] observe the plan.
@@ -1962,13 +1969,18 @@ let dump_cd_file ~caller bindings (comp : Asgns.comp) =
     failure must not have announced one. It also keeps a callback from reaching the compile it is
     reporting on: the config gates the scoring depends on ([buffer_aliasing]) are re-read at each
     compile, so a callback that flipped one would make the routine use a layout other than the one
-    just scored. *)
+    just scored.
+
+    The plan's decision context is minted here and returned only through its compiled child, so the
+    child adopts it (gh-ocannl-1762, {!Context.adopt_ancestor}): releasing the returned context
+    releases it too, with the constant pools it holds. *)
 let compile_within_budget ?budget ?max_candidates ?budget_report ctx comp bindings =
-  let ctx, budget_plan = fit_memory_budget ?budget ?max_candidates ctx comp bindings in
+  let planned, budget_plan = fit_memory_budget ?budget ?max_candidates ctx comp bindings in
   let budgeted = Option.is_some budget_plan in
-  let ctx, routine = compile_with_model_gate ~budgeted ctx comp bindings in
+  let compiled, routine = compile_with_model_gate ~budgeted planned comp bindings in
+  adopt_minted ~caller:ctx ~minted:planned compiled;
   Option.iter budget_report ~f:(fun f -> Option.iter budget_plan ~f);
-  (ctx, routine)
+  (compiled, routine)
 
 let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?budget ?max_candidates
     ?budget_report bindings comp =
@@ -2052,14 +2064,17 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_
   (* Compute the update early, to ensure the shape inference is done. *)
   let update = f t in
   if output_cd_file then dump_cd_file ~caller:"Train.run_once" bindings update;
-  let ctx =
+  let initialized =
     if skip_init || Set.is_empty t.params then ctx else init_params ?reinit_all ctx bindings t
   in
-  let ctx, routine =
-    compile_within_budget ?budget ?max_candidates ?budget_report ctx update bindings
+  let compiled, routine =
+    compile_within_budget ?budget ?max_candidates ?budget_report initialized update bindings
   in
+  (* gh-ocannl-1762: the initialization context is an ancestor the caller never holds, so the
+     returned context releases it (and the parameter pools it owns) with its own. *)
+  adopt_minted ~caller:ctx ~minted:initialized compiled;
   Idx.copy_launch_values ~from:launch routine.Context.bindings;
-  Context.run ctx routine
+  Context.run compiled routine
 
 let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty)
     ?launch_values ?budget ?max_candidates ?budget_report ctx t =

@@ -1,6 +1,7 @@
 released: every graph computed t = 2 w: true
 released: the live working pools are back to the baseline: true
 released: the device's used-memory gauge is back to the baseline: true
+released: every context the window created was released: true
 released: every pool the window allocated was freed, and the pool bytes are back: true
 released: every graph's nodes are reclaimed: true
 released: every parameter's host-init array is reclaimed: true
@@ -8,6 +9,24 @@ unreleased: every graph computed t = 2 w: true
 unreleased: two working pools per graph stay in the pool table (gh-ocannl-550): true
 unreleased: exactly those pools are left unfreed, and the pool bytes grew by theirs alone: true
 unreleased: every graph's nodes are reclaimed all the same: true
-forward_once: one parameter pool per graph stays after releasing the returned context: true
-literal: the constant bytes grew by each graph's literal: true
-literal: every literal's node is kept by the device's constant cache: true
+forward_once: every graph computed t = 2 w: true
+forward_once: the live working pools are back to the baseline: true
+forward_once: every context the calls minted was released, initialization included: true
+forward_once: the device's used-memory gauge is back to the baseline: true
+forward_once: every pool the window allocated was freed: true
+fork: after the chain's release the fork still reads the parameter: true
+fork: after the chain's release the parameter's pool is still live: true
+fork: releasing the fork gives the pools, the contexts and the used memory back: true
+literal: every graph computed t = 2 x: true
+literal: the constant bytes are back to the baseline: true
+literal: the device's used-memory gauge is back to the baseline: true
+literal: every pool the window allocated was freed: true
+literal: every literal's node is reclaimed: true
+literal: every literal's host array is reclaimed: true
+two roots: the first root computed t = 2 x: true
+two roots: the second root still computes after the first root's release: true
+two roots: the first root's release left the literal's one constant buffer in place: true
+two roots: the second root's release gave every constant pool and its used memory back: true
+two roots: every literal's node is reclaimed: true
+unreleased literal: the constant bytes grew by each graph's literal: true
+unreleased literal: every literal's node is kept by the device's constant cache: true

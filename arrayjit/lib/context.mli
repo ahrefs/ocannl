@@ -870,17 +870,21 @@ val release : t -> unit
     queries), only for touching buffers. The check walks the lifecycle chain, one atomic read per
     ancestor.
 
-    What it does {e not} free: device-wide host-literal constants
-    ({!Ir.Backend_intf.field-device.constant_buffer_cache} entries), which are shared across
-    contexts by design and outlive them until device teardown. A root's other constants are freed
-    with the release of the last context binding them (gh-ocannl-1654). That is a real bound on what
-    this can do for a schedule search — a hoisted [Stage] candidate mints a fresh packed constant
-    per application, so those accumulate whatever the caller does here (gh-ocannl-565). It is one
-    for a loop that builds a fresh graph per step too: each graph's literal adds a constant pool,
-    and keeps the literal's node and host data, for the process (gh-ocannl-1762). Nor does it free
-    an ancestor: the pools of a context minted on the caller's behalf, such as the initialization
-    context of {!Train.forward_once}, stay until that context is released, which only its minter can
-    do.
+    Constants ({!Ir.Backend_intf.field-device.constant_buffer_cache} entries) outlive the context
+    that allocated them and are shared: a root's own with its compile siblings and descendants
+    (gh-ocannl-1654), a host literal with every root on the device. Each constant pool is freed, and
+    its cache entries dropped, by the release of the last release unit binding it, whatever its root
+    (gh-ocannl-1762) -- so a loop that builds a fresh graph per step and releases what it ran holds
+    memory flat, and a dropped literal's node, and through {!Ir.Host_inits} its host array, can be
+    collected. A unit nobody releases keeps its constant pools, as it keeps its working ones.
+    Constants are bump-packed, so one live binder of any entry keeps the whole pool.
+
+    It frees no ancestor of its own accord, with one exception: the ancestors a wrapper minted on
+    the caller's behalf and handed to the release unit of the context it returns
+    ({!adopt_ancestor}), such as the initialization context of {!Train.forward_once}, are released
+    after the unit's own buffers, by the release of the last release unit holding them (the unit, or
+    the last of its upload forks). A [release] that fails releasing one of them is resumed by the
+    next [release] of a value of the unit.
 
     This exists because releasing is otherwise not something a finalizer can be relied on to do
     (gh-ocannl-550): the backends' pool tables hold a strong reference to every slab they allocated,
@@ -888,6 +892,23 @@ val release : t -> unit
     reclaims it. Callers that know an exact lifetime should say so — [Autotune.tune] does, per
     candidate. Everyone else can keep ignoring this: nothing regresses by not calling it, the
     process just holds more device memory. *)
+
+val same_release_unit : t -> t -> bool
+(** Whether the two values share a release unit: the same pools and release flag, as the values of a
+    linear upload chain do, or a context and what {!run} returned from it. *)
+
+val adopt_ancestor : t -> ancestor:t -> unit
+(** [adopt_ancestor ctx ~ancestor] makes [ctx]'s release unit responsible for [ancestor]: a
+    lifecycle ancestor of [ctx] (a context it was compiled or decided from, directly or not) that a
+    wrapper minted on its caller's behalf and does not return, so that no caller could release it
+    (gh-ocannl-1762). {!release} of any value of the unit -- [ctx], what {!run} returns from it, a
+    linear upload continuing it -- then releases [ancestor] after the unit's own buffers, once no
+    release unit holds it: an upload fork of the unit binds [ancestor]'s buffers too and holds it as
+    well, while a context compiled from the unit does not (release leaves first). Several ancestors
+    are released deepest first. Use it only for a context nobody else holds or derives from:
+    releasing it frees the pools every descendant of it binds. {!Train.run_once} and
+    {!Train.to_routine} adopt the contexts they mint. Raises [Invalid_argument] if [ancestor] is not
+    on [ctx]'s lifecycle chain, and refuses a {!release}d [ctx] like {!compile}. *)
 
 val placements : t -> Ir.Tnode.Placements.t
 (** The context's compilation lineage's memory-mode resolution
