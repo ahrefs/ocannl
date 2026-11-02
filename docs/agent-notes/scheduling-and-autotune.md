@@ -1307,11 +1307,16 @@ files.
   for a `Grid` loop (`Autotune.schedule_asks_grid`, read off the saved schedule) while its census
   records a serial one (`Autotune.grid_rendered_serially`); each also gets a `NOTE grid-serial`
   line in `autotune_log`. Keyed on the schedule because the label under-promises: the whole-triple
-  `W_sketch[mma-cpu 16x0x0]` carries no ` grid` token yet Grid-splits its row loop, and at 64^3 the
-  launch floor keeps that loop serial. The seeding pre-filter weighs only the packed tiles it knows
-  against the cap; the contracted `bm x bn` accumulator fragment of a grid-outermost shape is weighed
-  only at render, which is how `test/operations/autotune_grid_record` gets a timed hoisted-grid seed
-  rendered serially for the cap.
+  `W_sketch[mma-cpu 16x0x0]` carries no ` grid` token yet Grid-splits its row loop (at 64^3 that
+  loop is on the pool; its zeroing nest's Grid, 64^2 updates, is under the launch floor). The
+  seeding pre-filter weighs a Grid shape's known per-chunk locals against the cap: its in-kernel
+  packed tiles plus, under a grid-outermost shape, the contracted `bm x bn` accumulator fragment
+  (`cpu_pack_fragment_bytes`, gh-ocannl-1793), the sum the renderer's `Grid_private_over_cap`
+  reports. Refusing a geometry moves the shape's pad-waste minimum, so a padded geometry can surface
+  in its place; `test/operations/autotune_grid_record` compiles every hoisted-grid geometry of two
+  sites and pins proposed-iff-within-cap against each record. Not weighed: a row- or column-padded
+  geometry's masked statement-site tile, and the launch floor (the in-kernel `Grid` shape's
+  row-block launch sits under the k-blocks and is below it at 64^3, so it is timed serial).
 - **A test decides how a `Tile_mma` rendered from the census, never the source** (gh-ocannl-1316).
   The lane-0 fallback's `if (lane == 0)` guard also wraps the C backends' register tiling, so
   `"== 0)"` never told the two apart; "no intrinsic spelling" says nothing about a statement that
