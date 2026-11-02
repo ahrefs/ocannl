@@ -771,6 +771,29 @@ let row_block_components_structural ~cells =
     ~expected:(if cells then [| 20.; 21.; 30. |] else [| 20.; 21.; 4. |])
     ~verdict:Accepted
 
+(* With several terms the read's symbols need not decompose a cell the way the producer's loops do:
+   [x[2u + v]] for [v] in 0..3 reads cells the producer writes as [x[2s + t]] for [t] in 0..1, so a
+   pairwise binding [t := v] with its range guard would drop cells the component writes. In a
+   multi-component replay the match is left to unit-coefficient solving, which keeps [s]'s loop and
+   guards the decomposition that holds. [tag s t] separates the two decompositions (Codex
+   review). *)
+let row_block_components_two_terms () =
+  let x = mk ~dims:[| 6 |] "blk2_x" and out = mk ~dims:[| 2; n |] "blk2_out" in
+  materialize out;
+  let s = sym () and t = sym () and u = sym () and v = sym () in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        set x [| fixed 0 |] (c 10.);
+        loop_n s 3 (loop_n t 2 (set x [| aff [ (2, s); (1, t) ] 0 |] (tag s t)));
+        loop_n u 2
+          (loop_n v n (set out [| iter u; iter v |] (get x [| aff [ (2, u); (1, v) ] 0 |])));
+      ]
+  in
+  row ~label:"block_components_two_terms" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 1.; 2.; 11.; 12.; 11.; 12.; 21.; 22. |]
+    ~verdict:Accepted
+
 (* gh-ocannl-1690: one cell, two spellings. On an axis of extent 1 a producer position [Fixed_idx 0]
    and a read through a one-iteration loop address the same cell, so the read site is served with no
    guard and no refusal. The consumer reads the candidate both ways -- [x[u]] under [for u = 0 to 0]
@@ -1079,6 +1102,7 @@ let () =
   row_block_components_offset_affine ();
   row_block_components_structural ~cells:false;
   row_block_components_structural ~cells:true;
+  row_block_components_two_terms ();
   row_unit_axis_fixed_producer ();
   row_unit_axis_computed_producer ();
   row_unit_axis_loop_producer ();

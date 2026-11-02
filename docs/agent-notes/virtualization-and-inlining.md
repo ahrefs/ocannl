@@ -236,7 +236,9 @@ files.
   transposed operand reads (`flattened_read_*` rows). Range guards bound a solved symbol by its
   loop's `[from_, from_ + width)`, not `[0, width)` (`block_components_offset_*`), and a
   structural affine match (`s + 1` read at `t + 1`) gets one too in a multi-component replay, as a
-  pass-1 binding does (`block_components_structural_*`).
+  pass-1 binding does (`block_components_structural_*`); with several terms the read need
+  not decompose a cell as the producer's loops do, so there the match is left to unit solving
+  (`block_components_two_terms`).
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps

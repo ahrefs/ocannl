@@ -3055,8 +3055,15 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
               List.length (List.dedup_and_sort ~compare:Int.compare l) = List.length l
             in
             let unbound (_, s) = (not (Set.mem static_indices s)) && not (Map.mem !env s) in
+            (* gh-ocannl-1795: in a multi-component replay a matched symbol is range-guarded below,
+               and with several terms the read's symbols need not decompose a cell the way the
+               producer's loops do ([x[2u + v]] for [v] in 0..3 reads cells the producer writes as
+               [x[2s + t]] with [t] in 0..1): the guard would suppress a cell the component does
+               write. Such a position is left to unit-coefficient solving, which keeps a producer
+               loop and guards the decomposition that holds (Codex review of the PR). *)
             if
               (not (List.is_empty pterms))
+              && (set_computation_count <= 1 || List.length pterms = 1)
               && List.for_all pterms ~f:unbound && distinct pcoeffs
               && List.equal Int.equal
                    (List.sort ~compare:Int.compare pcoeffs)
