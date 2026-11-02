@@ -78,6 +78,8 @@ ok: skip list -- an iteration through a module alias of a collection
 ok: skip list -- a source's own List module, which only stores its callback
 ok: skip list -- a function value a loop body only builds
 ok: skip list -- a partial iteration, which stores its skip callback
+ok: skip list -- an iteration written as a pipeline
+ok: skip list -- a lazy a loop body only builds
 ok: skip list -- an Option iteration, which runs at most once
 the walk counts every string literal it passes: true
 and places the ones a named function receives: true
@@ -89,7 +91,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's
   [scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim
   [scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that
-  [scanner-refusal:d27a12056bb95d07884f5cc0aae01046] exempt_skip_lists
+  [scanner-refusal:6e412a3ea539daeb755ee0d61f3d40f7] exempt_skip_lists
   [scanner-refusal:ad023891a3bd7827b3905292c487055b] claim-shaped literal any
   [scanner-refusal:e1354d390a356f0c79420c25232b0b42] planted canaries the
 End of synthetic controls.

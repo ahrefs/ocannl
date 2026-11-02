@@ -835,7 +835,7 @@ helper. The population side now follows a data thunk (a lazy value and `Lazy.for
 too. The skip-list reader (`Verdict_scan.skip_list_census`) refuses a skip handed to an iteration,
 a callback or loop that only skips, and a branch applying two or more skips. Every run used
 tools/mutation-run.sh --batch on the named module and focused alias, and restored the source
-byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`; the local review's four rows ran later, on baselines `20261102T204037Z-20472` and `20261102T204156Z-60315`, and PR review round 1's two on `20261102T211705Z-35891` and `20261102T211412Z-41369`, round 2's on `20261102T212700Z-82004`, round 3's on `20261102T213539Z-9742`, `20261102T213609Z-14810` and `20261102T213642Z-21837`, round 4's on `20261102T215019Z-6151` and `20261102T215052Z-27993`).
+byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`; the local review's four rows ran later, on baselines `20261102T204037Z-20472` and `20261102T204156Z-60315`, and PR review round 1's two on `20261102T211705Z-35891` and `20261102T211412Z-41369`, round 2's on `20261102T212700Z-82004`, round 3's on `20261102T213539Z-9742`, `20261102T213609Z-14810` and `20261102T213642Z-21837`, round 4's on `20261102T215019Z-6151` and `20261102T215052Z-27993`, round 5's on `20261102T220105Z-99979`).
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
@@ -876,4 +876,6 @@ The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under
 | A collection module is resolved through the source's module bindings (PR review round 3) | `verdict_scan.ml`: the module read by its spelling | an iteration through a module alias of a collection; a source's own List module, which only stores its callback | `20261102T213652Z-24405` |
 | A function value inside a callback or loop body is deferred (PR review round 3) | `verdict_scan.ml`: nested functions read as run | a function value a loop body only builds | `20261102T213622Z-19085` |
 | A partial collection application stores its callback (PR review round 4) | `verdict_scan.ml`: completeness not checked | a partial iteration, which stores its skip callback | `20261102T215102Z-32306` |
+| A pipelined iteration is the application it spells (PR review round 5) | `verdict_scan.ml`: pipelines read as written | an iteration written as a pipeline | `20261102T220114Z-5289` |
+| A lazy inside a callback or loop body is deferred (PR review round 5) | `verdict_scan.ml`: lazies read as forced | a lazy a loop body only builds | `20261102T220125Z-10029` |
 | An Option iteration runs at most once | `verdict_scan.ml`: Option read as a collection iteration | an Option iteration, which runs at most once | `20261102T202018Z-64542` |

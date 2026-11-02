@@ -720,7 +720,7 @@ let raw_entries =
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
         "[scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that";
-        "[scanner-refusal:d27a12056bb95d07884f5cc0aae01046] exempt_skip_lists";
+        "[scanner-refusal:6e412a3ea539daeb755ee0d61f3d40f7] exempt_skip_lists";
         "[scanner-refusal:ad023891a3bd7827b3905292c487055b] claim-shaped literal any";
         "[scanner-refusal:e1354d390a356f0c79420c25232b0b42] planted canaries the";
         "[scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict";
@@ -983,7 +983,7 @@ let raw_direct_evidence =
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "verdict_ratchet.ml:e1354d390a356f0c79420c25232b0b42",
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
-    ( "verdict_ratchet.ml:d27a12056bb95d07884f5cc0aae01046",
+    ( "verdict_ratchet.ml:6e412a3ea539daeb755ee0d61f3d40f7",
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "env_var_deps.ml:02e183a4105132ec092206c1d35d6247",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );

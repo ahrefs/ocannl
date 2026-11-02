@@ -4793,49 +4793,62 @@ let read_gates ~fail ~source ~census content =
    [List.iter claims ~f:skipped] or a run of literal [skipped] calls -- broke three GPU backends'
    goldens when the two copies drifted (gh-ocannl-1668). The reader is
    [Verdict_scan.skip_list_census]; its header states what it reads and what it does not. A site
-   that must keep the form is exempted here by source and first skipped label, with the reason. *)
+   that must keep the form is exempted here by source and first skipped label, with the number of
+   sites the key covers and the reason: a site added under a key already exempted is refused, as a
+   removed one is. *)
 let exempt_skip_lists =
   [
     ( "test/operations/autotune_mma_companion.ml:claim",
+      1,
       "a two-claim `Withheld` capability branch over the parity and census claims of one match; \
        predates this rule; its migration to a leg waits on a run on the backends whose side it \
        changes (CUDA, HIP, Metal)" );
     ( "test/operations/bench_self_test.ml:label",
+      1,
       "the Windows-only skip of the stall-instrument claims, which have no interval timer there; \
        predates this rule; its migration to a leg waits on a run on the backends whose side it \
        changes (Windows)" );
     ( "test/operations/cc_march_census.ml:reuse",
+      1,
       "a compiler whose listing memoization is bypassed skips the reuse and invalidation claims, a \
        verdict read off the run's own census results that a leg's gate may not read; predates this \
        rule; its migration to a leg waits on a run on the backends whose side it changes (an \
        environment gate)" );
     ( "test/operations/gpu_lane_reduction.ml:omits",
+      3,
       "three cases' two emitted-kernel claims off a GPU; predates this rule; its migration to a \
        leg waits on a run on the backends whose side it changes (Metal, CUDA, HIP)" );
     ( "test/operations/hardware_warp_shuffle.ml:claim_bf16_1w",
+      1,
       "the two bf16 widening claims where the backend does not widen bf16 reductions; predates \
        this rule; its migration to a leg waits on a run on the backends whose side it changes \
        (CUDA, HIP)" );
     ( "test/operations/integer_power_domain.ml:ipow_f64: integer powers match independent \
        multiplication including exceptional values",
+      1,
       "the f64 case's two claims where the backend has no f64; predates this rule; its migration \
        to a leg waits on a run on the backends whose side it changes (Metal)" );
     ( "test/operations/launch_predicate_parity.ml:parity_label",
+      1,
       "a two-claim `Withheld` capability branch over one tensorized conv seed; predates this rule; \
        its migration to a leg waits on a run on the backends whose side it changes (CUDA, HIP, \
        Metal)" );
     ( "test/operations/reduction_forms.ml:evidence_claim",
+      1,
       "the per-member claim list of an unavailable reduction form, its VERIFY claims iterated from \
        the program; predates this rule; its migration to a leg waits on a run on the backends \
        whose side it changes (every backend: each skips a different set of members)" );
     ( "test/operations/reduction_forms.ml:Printf.sprintf \"%s @ %s: %s\" m.slug prec_name claim",
+      1,
       "the VERIFY claims of the same unavailable-form branch as evidence_claim, iterated from the \
        program's own list; predates this rule; its migration to a leg waits on a run on the \
        backends whose side it changes (every backend)" );
     ( "test/operations/reduction_forms.ml:form_claim",
+      1,
       "the tile-mma fallback's three claims off a CPU backend; predates this rule; its migration \
        to a leg waits on a run on the backends whose side it changes (Metal, CUDA, HIP)" );
     ( "test/operations/tile_mma_narrow.ml:parity_name",
+      1,
       "a toolchain that rejects the half kernel skips both pure-f16 claims from the exception \
        handler, a judgment only the compile itself makes; predates this rule; its migration to a \
        leg waits on a run on the backends whose side it changes (an exotic toolchain)" );
@@ -5727,8 +5740,12 @@ let () =
   and uncompared_legs = ref 0 in
   let folded_offenders = ref 0 and folded_claim_sites = ref 0 in
   let skip_list_offenders = ref 0 and skips_read = ref 0 in
-  let skip_list_exemptions = Map.of_alist_exn (module String) exempt_skip_lists in
-  let skip_lists_exempted = ref (Set.empty (module String)) in
+  let skip_list_exemptions =
+    Map.of_alist_exn
+      (module String)
+      (List.map exempt_skip_lists ~f:(fun (key, sites, _) -> (key, sites)))
+  in
+  let skip_lists_exempted = Hashtbl.create (module String) in
   let tolerance_offenders = ref 0 and parity_sites = ref 0 in
   let manifest =
     List.find_map arguments ~f:(fun (relative, path) ->
@@ -5800,8 +5817,7 @@ let () =
       skips_read := !skips_read + skip_lists.Scan.skips_read;
       List.iter skip_lists.Scan.skip_lists ~f:(fun site ->
           let key = skip_list_key ~source site in
-          if Map.mem skip_list_exemptions key then
-            skip_lists_exempted := Set.add !skip_lists_exempted key
+          if Map.mem skip_list_exemptions key then Hashtbl.incr skip_lists_exempted key
           else (
             Int.incr skip_list_offenders;
             refuse_skip_list ~fail ~source site));
@@ -5907,7 +5923,9 @@ let () =
   printf "\nHand-written skip lists exempted, with the reason each keeps the form:\n";
   if List.is_empty exempt_skip_lists then
     printf "  (none: every claim a backend cannot evaluate is written once, in a leg)\n"
-  else List.iter exempt_skip_lists ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
+  else
+    List.iter exempt_skip_lists ~f:(fun (key, sites, why) ->
+        printf "  %s (%d site%s) -- %s\n" key sites (if sites = 1 then "" else "s") why);
   printf "\nSynthetic helper-rule controls:\n";
   List.iter control_results ~f:(fun (label, ok) -> Verdict.pf "%s" label ok);
   print_syntax_matrix matrix_rows;
@@ -5936,13 +5954,18 @@ let () =
          (String.concat ~sep:", " (Set.to_list stale)));
   refuse_stale_quantified ~fail stale_quantified;
   let stale_skip_lists =
-    Set.diff (Set.of_list (module String) (List.map exempt_skip_lists ~f:fst)) !skip_lists_exempted
+    List.filter_map exempt_skip_lists ~f:(fun (key, sites, _) ->
+        let found = Option.value (Hashtbl.find skip_lists_exempted key) ~default:0 in
+        if found = sites then None
+        else Some (Printf.sprintf "%s (exempted %d, found %d)" key sites found))
+    |> Set.of_list (module String)
   in
   if not (Set.is_empty stale_skip_lists) then
     fail
       (Printf.sprintf
-         "exempted skip lists that no source carries any more -- drop them from exempt_skip_lists: \
-          %s"
+         "exempted skip lists whose sites no longer number what their exemption says -- a site \
+          added under an exempted key needs its own exemption, a removed one drops it from \
+          exempt_skip_lists: %s"
          (String.concat ~sep:", " (Set.to_list stale_skip_lists)));
   refuse_colliding_sites ~fail colliding_sites;
   refuse_colliding_quantified ~fail colliding_quantified;

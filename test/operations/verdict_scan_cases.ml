@@ -354,6 +354,12 @@ let () = List.iter labels ~f:skipped|ocaml},
       ( "a partial iteration, which stores its skip callback",
         {ocaml|let skip_labels = List.iter ~f:(Verdict.skipped ~backend:"cc")|ocaml},
         [] );
+      ( "an iteration written as a pipeline",
+        {ocaml|let () = labels |> List.iter ~f:(Verdict.skipped ~backend:backend_name)|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a lazy a loop body only builds",
+        {ocaml|let () = for _i = 1 to 2 do ignore (lazy (Verdict.skipped ~backend:"cc" "one")) done|ocaml},
+        [] );
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );

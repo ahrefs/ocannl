@@ -685,7 +685,7 @@ verdict_ratchet.ml: [scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance
 verdict_ratchet.ml: [scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
-verdict_ratchet.ml: [scanner-refusal:d27a12056bb95d07884f5cc0aae01046] exempt_skip_lists (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
+verdict_ratchet.ml: [scanner-refusal:6e412a3ea539daeb755ee0d61f3d40f7] exempt_skip_lists (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:ad023891a3bd7827b3905292c487055b] claim-shaped literal any (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:e1354d390a356f0c79420c25232b0b42] planted canaries the (direct failure) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true
 verdict_ratchet.ml: [scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict (claim) is catalogued beside verdict_scan_cases.expected, verdict_ratchet.expected: true

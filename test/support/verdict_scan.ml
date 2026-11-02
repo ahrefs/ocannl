@@ -3369,9 +3369,9 @@ let skip_list_census content =
           | Pexp_apply (callee, arguments) when is_skip_head callee ->
               (* The skip's own head is not a second skip. *)
               List.iter arguments ~f:(fun (_, argument) -> self#expression argument)
-          | Pexp_function _ when branches && not (phys_equal e root) ->
-              (* A function value inside the callback or loop body is deferred: what it skips is not
-                 skipped here. *)
+          | (Pexp_function _ | Pexp_lazy _) when branches && not (phys_equal e root) ->
+              (* A function value or lazy inside the callback or loop body is deferred: what it
+                 skips is not skipped here. *)
               ()
           | (Pexp_ifthenelse _ | Pexp_match _ | Pexp_function _) when not branches -> (
               match e.pexp_desc with
@@ -3474,6 +3474,18 @@ let skip_list_census content =
         (match expr.pexp_desc with
         | Pexp_ident _ when is_skip_head expr -> Int.incr skips_read
         | Pexp_apply (callee, arguments) ->
+            (* [labels |> List.iter ~f] and [List.iter ~f @@ labels] are the application they
+               spell. *)
+            let callee, arguments =
+              match (Read.longident_of callee, arguments) with
+              | Some [ "|>" ], [ (Ppxlib.Asttypes.Nolabel, x); (Ppxlib.Asttypes.Nolabel, f) ]
+              | Some [ "@@" ], [ (Ppxlib.Asttypes.Nolabel, f); (Ppxlib.Asttypes.Nolabel, x) ] -> (
+                  match (strip_constraints f).pexp_desc with
+                  | Pexp_apply (inner, inner_arguments) ->
+                      (inner, inner_arguments @ [ (Ppxlib.Asttypes.Nolabel, x) ])
+                  | _ -> (f, [ (Ppxlib.Asttypes.Nolabel, x) ]))
+              | _ -> (callee, arguments)
+            in
             Option.iter (collection_iteration callee) ~f:(fun name ->
                 (* Only an argument the function calls back is iterated over -- [List.iter]'s [~f],
                    not what [List.singleton] stores -- in either library's order, the loud direction
