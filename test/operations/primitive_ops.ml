@@ -805,6 +805,7 @@ let%expect_test "uint4x32_to_prec_uniform(x)" =
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect
     {|
+    OCANNL warning: the shape scheme of f was refused, so it stays unschemed (its shape errors surface only when its body runs): the function registers a precision-dependent total-elements constraint (a uint4x32 conversion, e.g. random number generation, or one capture reference bound both as a dimension and as a row): its coefficient is a lazy over the trace's own nodes, which a scheme cannot carry past the trace -- apply the function inline
     f(x)
          ┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
     0.752┤#                                                                                                   │

@@ -2001,6 +2001,34 @@ module Scheme = struct
     s.state <- Unschemed reason;
     emit (Unschemed (s.label, reason))
 
+  (* The refusals already reported, by label and rendered reason: a model building one block many
+     times (a dropout layer per transformer block) is told once, and a different refusal behind the
+     same label still is. Bounded by the distinct pairs. *)
+  let warned = Hash_set.create (module String)
+  [@@mutation_serial.exempt
+    "the refusal warnings already printed: diagnostics, not inference state"]
+
+  (* A trace refused by design leaves the function unschemed, which it does not choose
+     (gh-ocannl-1791): said on stderr, with the reason rendered as a shape error is
+     (gh-ocannl-1799), so the reserved-range ids of the trace's tensors and variables read by first
+     appearance. *)
+  let unscheme_refused s reason =
+    unscheme s reason;
+    (* The label is named once: the reason's own prefix would repeat it. *)
+    let reason =
+      Option.value ~default:reason
+        (String.chop_prefix reason ~prefix:[%string "tracing the shape scheme %{s.label}: "])
+    in
+    let text = Shape.error_to_string_hum reason [] in
+    let key = s.label ^ "\000" ^ text in
+    if not (Hash_set.mem warned key) then (
+      Hash_set.add warned key;
+      Stdio.eprintf
+        "OCANNL warning: the shape scheme of %s was refused, so it stays unschemed (its shape \
+         errors surface only when its body runs): %s\n\
+         %!"
+        s.label text)
+
   (* A rewind that must succeed for the fallback to be safe. When it is refused -- the trace read a
      pre-existing open shape's committed state (forcing its dims), and a lazy over that read may
      hold the failure, which no rewind can reset -- the function cannot degrade silently: loud,
@@ -2054,13 +2082,13 @@ module Scheme = struct
           | exception (Shape.Untraceable_scheme msg as exn) ->
               let bt = Stdlib.Printexc.get_raw_backtrace () in
               rewind_or_reraise s ck exn bt;
-              unscheme s msg
+              unscheme_refused s msg
           | exception exn ->
               (* The body cannot run on tracers (it reads concrete dims, say): degrade only once the
                  session is verifiably back where it was. *)
               let bt = Stdlib.Printexc.get_raw_backtrace () in
               rewind_or_reraise s ck exn bt;
-              unscheme s
+              unscheme_refused s
                 [%string
                   "tracing the shape scheme %{s.label}: the function raised %{Shape.exn_summary \
                    exn}"])

@@ -70,3 +70,26 @@ the traces allocated no session id: true
 successful and failed variant traces left the session as it was: true
 a labelled tensor annotated [Tensor.t] gets a scheme without operand evidence: true
 control: the same parameter unannotated stays unschemed, beside a schemed witness: true
+the closure's trace succeeds: true
+and nothing is left unschemed: true
+the application checks the scheme: true
+executed: each output is the sum of its row, against the closed form: true
+the closure published the reference's solution, the size of the summed axis: true
+a conflicting application is refused at the application, naming the scheme: true
+before the body ran: true
+control (no scheme): the body refuses it, unnamed: true
+control (no scheme): after the body ran: true
+the check of a fitting argument ran: true
+and left the session as it was: true
+the check of an argument conflicting with the reference's binding raises, naming the scheme: true
+and left the session as it was too: true
+the schemed function hands out the session ids its unschemed twin does: true
+and the same node uids: true
+and the same shape variable ids: true
+control (no id neutrality): the trace shifts the session's ids: true
+the refused function was left unschemed twice: true
+one warning names it, on stderr: true
+with the trace's reason: true
+no warning for the opted-out function: true
+nor for a closure built inside a trace: true
+nor with the schemes off: true

@@ -493,6 +493,47 @@ type delayed_var_ref = Delayed_ref.t = private {
 let get_variable_ref = Delayed_ref.make
 let check_ref_live = Delayed_ref.check_live
 
+(* A trace refused by design (gh-ocannl-1751): what the function does is valid, but a scheme cannot
+   carry it. Distinct from [Row.Shape_error], a contradiction, so that an automatic scheme can
+   degrade to an unschemed function on this one and stay loud on the other. *)
+exception Untraceable_scheme of string
+
+type ref_binding = [ `Dim of Row.dim_var | `Row of Row.row_var ]
+
+(* An external capture reference of a shape-scheme trace (gh-ocannl-1791): one made before the trace
+   began and bound by it, with the variable of its first binding there -- the application's
+   boundary, related to the reference's state at each application -- and of its last, which it is
+   left bound to. *)
+type ref_input = { input_ref : delayed_var_ref; first : ref_binding; mutable last : ref_binding }
+
+(* The innermost running trace's reference frame: references with a uid up to [frame_refs_mark] were
+   made before it, and [frame_inputs] (newest first) are the ones it bound. While a trace runs, such
+   a reference reads as unbound and unsolved: its state outside belongs to the application, not to
+   the scheme. *)
+type ref_frame = { frame_refs_mark : int; mutable frame_inputs : ref_input list }
+
+let trace_ref_frame : ref_frame option ref = ref None
+[@@mutation_serial.exempt "the shape-scheme trace's own record, saved and restored by the trace"]
+
+let trace_input_frame (r : delayed_var_ref) =
+  match !trace_ref_frame with Some f when r.uid <= f.frame_refs_mark -> Some f | _ -> None
+
+let is_trace_input r = Option.is_some (trace_input_frame r)
+
+(* What a scheme input cannot carry: an operation that reads or writes the reference's solution, or
+   relates it to another reference, rather than binding it to an operation's variable. Refused
+   before anything is read, so a no-op arm (an already held solution) is refused too. *)
+let refuse_external_in_trace ~operation (r : delayed_var_ref) =
+  if is_trace_input r then
+    let label = r.var_ref.ref_label in
+    raise
+    @@ Untraceable_scheme
+         [%string
+           "the function calls %{operation} on the capture reference %{label}, made outside it -- \
+            a scheme carries such a reference only as an input its operations bind (through \
+            ~capture_dims), not one it sets or relates; make the reference inside the function, or \
+            apply the function inline"]
+
 (* Whether a bound reference was bound before the last closure (or session reset): its uid is no
    longer in [open_refs]. [open_refs] also records solution writes, but in every reachable state it
    agrees with "bound in the open work": a closed reference holding no solution is written only
@@ -1047,11 +1088,182 @@ let is_projection_sizing (c : Row.constraint_) =
           Option.equal String.equal o.operation (Some projection_sizing_operation))
   | _ -> false
 
+(* The refusals ahead of binding [delayed_ref] (gh-ocannl-1655): binding touches the reference,
+   which would make one bound before the closure read as open work. *)
+let check_before_binding ~where ~error_shapes ~is_row (delayed_ref : delayed_var_ref) =
+  check_ref_live delayed_ref;
+  let label = delayed_ref.var_ref.ref_label in
+  refuse_closed_unsolved_ref ~operation:[%string "capturing it %{where}"] delayed_ref;
+  if is_row then
+    Option.iter (List.Assoc.find !row_numbered_refs delayed_ref.uid ~equal:Int.equal)
+      ~f:(fun partner ->
+        raise
+        @@ Row.Shape_error
+             ( [%string
+                 "Variable reference %{label} is captured as a row variable %{where}, but \
+                  Shape.set_equal related it to the row reference %{partner} while it was unbound, \
+                  which equated only a number (the row's product): bound to a row now, it would \
+                  leave the two rows tied by product alone, not as rows. Pass %{label} to an \
+                  operation's ~capture_dims before calling set_equal on it."],
+               [ Shape_mismatch error_shapes ] ))
+
+(* The constraints binding [delayed_ref] to [binding] implies, given [previous_binding] and the
+   reference's solution: equality with a value already solved for the reference, and a tie to the
+   variable another operation bound the reference to (gh-ocannl-1545). [as_input]: the reference is
+   an input of the running shape-scheme trace (gh-ocannl-1791), whose solution outside belongs to
+   the application -- it reads as unsolved, in every branch. *)
+let binding_constraints ~for_projections ~as_input ~error_shapes ~previous_binding
+    (delayed_ref : delayed_var_ref) (binding : ref_binding) =
+  let label = delayed_ref.var_ref.ref_label in
+  let solved_dim, solved_sym =
+    if as_input then (None, None)
+    else (delayed_ref.var_ref.solved_dim, delayed_ref.var_ref.solved_sym)
+  in
+  let origin operation =
+    [
+      {
+        Row.lhs_name = label;
+        lhs_kind = `Output;
+        rhs_name = delayed_ref.var_ref.ref_label;
+        rhs_kind = `Output;
+        operation = Some operation;
+      };
+    ]
+  in
+  let shared_origin = origin "shared capture reference" in
+  let row_of var = Row.get_row_for_var Row.empty_provenance var in
+  let product_is row_var dim_var =
+    Row.Rows_constr
+      {
+        r = [ row_of row_var ];
+        constr =
+          Total_elems
+            {
+              numerator =
+                Strided_var
+                  {
+                    coeff = Utils.safe_lazy "shared_capture_reference" (fun () -> 1);
+                    var = dim_var;
+                    denom = 1;
+                    round_up = false;
+                  };
+              divided_by = [];
+              keep_axis = false;
+            };
+        origin = shared_origin;
+      }
+  in
+  let unsolved = Option.is_none solved_dim && Option.is_none solved_sym in
+  match binding with
+  | `Dim var ->
+      let solved_origin =
+        origin (if for_projections then projection_sizing_operation else "set_dim")
+      in
+      let solved =
+        match (solved_sym, solved_dim) with
+        | Some sym, _ ->
+            [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin = solved_origin } ]
+        | None, Some solved_dim ->
+            [
+              Row.Dim_eq
+                {
+                  d1 = Row.Var var;
+                  d2 = Row.get_default_dim ~d:solved_dim ();
+                  origin = solved_origin;
+                };
+            ]
+        | None, None -> []
+      in
+      let tie =
+        match previous_binding with
+        | `Dim v0 when not (Row.equal_dim_var v0 var) ->
+            [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.Var v0; origin = shared_origin } ]
+        | `Row _ when Option.is_some solved_sym ->
+            (* Unreachable (gh-ocannl-1655): [set_sym_dim] refuses a row reference, a row's
+               publication is a product only, and the row arm below refuses a symbolic reference
+               before binding it -- and since gh-ocannl-1624 nothing but [Shape] can solve a
+               reference. Kept as the row arm's refusal, not a silent drop of the row tie. *)
+            raise
+            @@ Row.Shape_error
+                 ( "Variable " ^ label
+                   ^ " was bound to a row variable but is solved to a symbolic dimension (symbolic \
+                      dimensions take no part in row products)",
+                   [ Shape_mismatch error_shapes ] )
+        | `Row r0 when unsolved -> [ product_is r0 var ]
+        | `Dim _ | `Row _ | `Not_set_yet -> []
+      in
+      solved @ tie
+  | `Row var ->
+      if Option.is_some solved_sym then
+        raise
+        @@ Row.Shape_error
+             ( "Variable " ^ label
+               ^ " is bound to a row variable but is solved to a symbolic dimension (symbolic \
+                  dimensions take no part in row products)",
+               [ Shape_mismatch error_shapes ] );
+      let solved =
+        match solved_dim with
+        | _ when for_projections -> []
+        | Some solved_dim ->
+            [
+              Row.Rows_constr
+                {
+                  r = [ row_of var ];
+                  constr =
+                    Row.Total_elems
+                      { numerator = Num_elems solved_dim; divided_by = []; keep_axis = false };
+                  origin = origin "set_dim";
+                };
+            ]
+        | None -> []
+      in
+      let tie =
+        match previous_binding with
+        | `Row r0 when not (Row.equal_row_var r0 var) ->
+            [ Row.Row_eq { r1 = row_of var; r2 = row_of r0; origin = shared_origin } ]
+        | `Dim v0 when unsolved -> [ product_is var v0 ]
+        | `Dim _ | `Row _ | `Not_set_yet -> []
+      in
+      solved @ tie
+
+(* The binding of [delayed_ref] an operation (or an explicit scheme instance) makes: its
+   constraints, then the binding itself. A previous binding from before the closure names a dead
+   variable: the value it reached travels in [solved_dim]/[solved_sym] (the pre-pass refused a
+   reference holding none), and a tie to the dead variable would constrain nothing. Inside a
+   shape-scheme trace, a reference made before it is the scheme's input (gh-ocannl-1791): its first
+   binding there ties to nothing outside, and the trace's frame records it. *)
+let bind_ref ~for_projections ~error_shapes (delayed_ref : delayed_var_ref) (binding : ref_binding)
+    =
+  check_ref_live delayed_ref;
+  let frame = if for_projections then None else trace_input_frame delayed_ref in
+  let recorded =
+    Option.bind frame ~f:(fun f ->
+        List.find f.frame_inputs ~f:(fun i -> phys_equal i.input_ref delayed_ref))
+  in
+  let previous_binding =
+    match (frame, recorded) with
+    | Some _, None -> `Not_set_yet
+    | _ when for_projections || bound_before_closure delayed_ref -> `Not_set_yet
+    | _ -> delayed_ref.var
+  in
+  Delayed_ref.set_var delayed_ref
+    (binding :> [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ]);
+  let constraints =
+    binding_constraints ~for_projections ~as_input:(Option.is_some frame) ~error_shapes
+      ~previous_binding delayed_ref binding
+  in
+  (match (frame, recorded) with
+  | Some f, None ->
+      f.frame_inputs <-
+        { input_ref = delayed_ref; first = binding; last = binding } :: f.frame_inputs
+  | _, Some input -> input.last <- binding
+  | None, None -> ());
+  constraints
+
 (** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
-    [dim_var_env]/[row_var_env]. Returns the constraints the binding implies: equality with a value
-    already solved for the reference, and a tie to the variable another operation bound the
-    reference to (gh-ocannl-1545). Used by the unary-permute, binary-einsum, block, and
-    ternary-einsum branches of [get_inequalities].
+    [dim_var_env]/[row_var_env]. Returns the constraints the binding implies
+    ({!binding_constraints}). Used by the unary-permute, binary-einsum, block, and ternary-einsum
+    branches of [get_inequalities].
 
     A reference passed to several operations names one dimension. Within one inference, two dim
     bindings are equated and two row bindings are [Row_eq]-tied, whether or not the reference is
@@ -1071,157 +1283,22 @@ let is_projection_sizing (c : Row.constraint_) =
     (and a dimension-1 value there would pin the axis to [Fixed_idx 0]). *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
-  (* Every refusal before any binding (gh-ocannl-1655): binding touches the reference, which would
-     make one bound before the closure read as open work. Projection derivation rebinds references
-     to projection-local variables on purpose and emits no ties, so it is exempt. *)
+  (* Every refusal before any binding (gh-ocannl-1655). Projection derivation rebinds references to
+     projection-local variables on purpose and emits no ties, so it is exempt. *)
   if not for_projections then
     List.iter dim_refs ~f:(fun delayed_ref ->
-        check_ref_live delayed_ref;
         let label = delayed_ref.var_ref.ref_label in
-        refuse_closed_unsolved_ref ~operation:[%string "capturing it in spec \"%{spec}\""]
-          delayed_ref;
-        if (not (Hashtbl.mem dim_var_env label)) && Hashtbl.mem row_var_env label then
-          Option.iter (List.Assoc.find !row_numbered_refs delayed_ref.uid ~equal:Int.equal)
-            ~f:(fun partner ->
-              raise
-              @@ Row.Shape_error
-                   ( [%string
-                       "Variable reference %{label} is captured as a row variable in spec \
-                        \"%{spec}\", but Shape.set_equal related it to the row reference \
-                        %{partner} while it was unbound, which equated only a number (the row's \
-                        product): bound to a row now, it would leave the two rows tied by product \
-                        alone, not as rows. Pass %{label} to an operation's ~capture_dims before \
-                        calling set_equal on it."],
-                     [ Shape_mismatch error_shapes ] )));
+        check_before_binding ~where:[%string "in spec \"%{spec}\""] ~error_shapes
+          ~is_row:((not (Hashtbl.mem dim_var_env label)) && Hashtbl.mem row_var_env label)
+          delayed_ref);
   List.concat_map dim_refs ~f:(fun delayed_ref ->
       check_ref_live delayed_ref;
       let label = delayed_ref.var_ref.ref_label in
-      (* A previous binding from before the closure names a dead variable: the value it reached
-         travels in [solved_dim]/[solved_sym] (the [solved] arms below; the pre-pass refused a
-         reference holding none), and a tie to the dead variable would constrain nothing. *)
-      let previous_binding =
-        if for_projections || bound_before_closure delayed_ref then `Not_set_yet
-        else delayed_ref.var
-      in
-      let origin operation =
-        [
-          {
-            Row.lhs_name = label;
-            lhs_kind = `Output;
-            rhs_name = delayed_ref.var_ref.ref_label;
-            rhs_kind = `Output;
-            operation = Some operation;
-          };
-        ]
-      in
-      let shared_origin = origin "shared capture reference" in
-      let row_of var = Row.get_row_for_var Row.empty_provenance var in
-      let product_is row_var dim_var =
-        Row.Rows_constr
-          {
-            r = [ row_of row_var ];
-            constr =
-              Total_elems
-                {
-                  numerator =
-                    Strided_var
-                      {
-                        coeff = Utils.safe_lazy "shared_capture_reference" (fun () -> 1);
-                        var = dim_var;
-                        denom = 1;
-                        round_up = false;
-                      };
-                  divided_by = [];
-                  keep_axis = false;
-                };
-            origin = shared_origin;
-          }
-      in
-      let unsolved =
-        Option.is_none delayed_ref.var_ref.solved_dim
-        && Option.is_none delayed_ref.var_ref.solved_sym
-      in
       match Hashtbl.find dim_var_env label with
-      | Some var ->
-          Delayed_ref.set_var delayed_ref (`Dim var);
-          let solved_origin =
-            origin (if for_projections then projection_sizing_operation else "set_dim")
-          in
-          let solved =
-            match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
-            | Some sym, _ ->
-                [
-                  Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin = solved_origin };
-                ]
-            | None, Some solved_dim ->
-                [
-                  Row.Dim_eq
-                    {
-                      d1 = Row.Var var;
-                      d2 = Row.get_default_dim ~d:solved_dim ();
-                      origin = solved_origin;
-                    };
-                ]
-            | None, None -> []
-          in
-          let tie =
-            match previous_binding with
-            | `Dim v0 when not (Row.equal_dim_var v0 var) ->
-                [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.Var v0; origin = shared_origin } ]
-            | `Row _ when Option.is_some delayed_ref.var_ref.solved_sym ->
-                (* Unreachable (gh-ocannl-1655): [set_sym_dim] refuses a row reference, a row's
-                   publication is a product only, and the row arm below refuses a symbolic reference
-                   before binding it -- and since gh-ocannl-1624 nothing but [Shape] can solve a
-                   reference. Kept as the row arm's refusal, not a silent drop of the row tie. *)
-                raise
-                @@ Row.Shape_error
-                     ( "Variable " ^ label
-                       ^ " was bound to a row variable but is solved to a symbolic dimension \
-                          (symbolic dimensions take no part in row products)",
-                       [ Shape_mismatch error_shapes ] )
-            | `Row r0 when unsolved -> [ product_is r0 var ]
-            | `Dim _ | `Row _ | `Not_set_yet -> []
-          in
-          solved @ tie
+      | Some var -> bind_ref ~for_projections ~error_shapes delayed_ref (`Dim var)
       | None -> (
           match Hashtbl.find row_var_env label with
-          | Some var ->
-              Delayed_ref.set_var delayed_ref (`Row var);
-              if Option.is_some delayed_ref.var_ref.solved_sym then
-                raise
-                @@ Row.Shape_error
-                     ( "Variable " ^ label
-                       ^ " is bound to a row variable but is solved to a symbolic dimension \
-                          (symbolic dimensions take no part in row products)",
-                       [ Shape_mismatch error_shapes ] );
-              let solved =
-                match delayed_ref.var_ref.solved_dim with
-                | _ when for_projections -> []
-                | Some solved_dim ->
-                    [
-                      Row.Rows_constr
-                        {
-                          r = [ row_of var ];
-                          constr =
-                            Row.Total_elems
-                              {
-                                numerator = Num_elems solved_dim;
-                                divided_by = [];
-                                keep_axis = false;
-                              };
-                          origin = origin "set_dim";
-                        };
-                    ]
-                | None -> []
-              in
-              let tie =
-                match previous_binding with
-                | `Row r0 when not (Row.equal_row_var r0 var) ->
-                    [ Row.Row_eq { r1 = row_of var; r2 = row_of r0; origin = shared_origin } ]
-                | `Dim v0 when unsolved -> [ product_is var v0 ]
-                | `Dim _ | `Row _ | `Not_set_yet -> []
-              in
-              solved @ tie
+          | Some var -> bind_ref ~for_projections ~error_shapes delayed_ref (`Row var)
           | None ->
               raise
               @@ Row.Shape_error
@@ -2256,7 +2333,13 @@ let active_constraints = ref [] [@@mutation_serial.fingerprinted]
    applied and are closed, and their rows, with the scheme's renamed internal rows, join the update
    steps' rows at the [Shape_row] stage. Session state like the steps: captured by checkpoints,
    cleared by closures and resets. *)
-type scheme_instance = { inst_shapes : t list; inst_rows : (Row.t * Row.constraint_origin) list }
+type scheme_instance = {
+  inst_shapes : t list;
+  inst_rows : (Row.t * Row.constraint_origin) list;
+  inst_refs : delayed_var_ref list;
+      (** The capture references the instance bound (gh-ocannl-1791): the closure publishes their
+          solutions, as it does a step's. *)
+}
 
 let active_instances : scheme_instance list ref = ref [] [@@mutation_serial.fingerprinted]
 
@@ -2265,11 +2348,6 @@ let active_instances : scheme_instance list ref = ref [] [@@mutation_serial.fing
 let tracing : string list ref = ref []
 [@@mutation_serial.exempt
   "the shape-scheme traces in progress, restored by the trace's own finally"]
-
-(* A trace refused by design (gh-ocannl-1751): what the function does is valid, but a scheme cannot
-   carry it. Distinct from [Row.Shape_error], a contradiction, so that an automatic scheme can
-   degrade to an unschemed function on this one and stay loud on the other. *)
-exception Untraceable_scheme of string
 
 let tracing_in_progress () = not (List.is_empty !tracing)
 
@@ -2987,6 +3065,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
     creates a [Total_elems] constraint that will be reconciled during [finish_inference]. *)
 let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
   check_ref_live delayed_var_ref;
+  refuse_external_in_trace ~operation:"Shape.set_dim" delayed_var_ref;
   refuse_closed_unsolved_ref ~operation:"Shape.set_dim" delayed_var_ref;
   match delayed_var_ref with
   | { var_ref = { solved_sym = Some _; ref_label; _ }; _ } ->
@@ -3051,6 +3130,7 @@ let%track7_sexp set_dim (delayed_var_ref : delayed_var_ref) (dim : int) : unit =
 let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexing.static_symbol) :
     unit =
   check_ref_live delayed_var_ref;
+  refuse_external_in_trace ~operation:"Shape.set_sym_dim" delayed_var_ref;
   refuse_closed_unsolved_ref ~operation:"Shape.set_sym_dim" delayed_var_ref;
   (* Eagerly validate the declared range (raises [Utils.User_error] if absent or non-positive). *)
   let sym_dim = Row.get_sym_dim sym in
@@ -3118,6 +3198,8 @@ let refuse_closed_row_ref ~other (delayed_ref : delayed_var_ref) =
 let set_equal delayed_ref1 delayed_ref2 =
   check_ref_live delayed_ref1;
   check_ref_live delayed_ref2;
+  refuse_external_in_trace ~operation:"Shape.set_equal" delayed_ref1;
+  refuse_external_in_trace ~operation:"Shape.set_equal" delayed_ref2;
   (* Before the solved-value dispatch: its arms forward to [set_dim], which would otherwise reach a
      dead variable first (gh-ocannl-1655). *)
   refuse_closed_unsolved_ref ~operation:"Shape.set_equal" delayed_ref1;
@@ -3255,6 +3337,8 @@ let set_equal delayed_ref1 delayed_ref2 =
 let set_scale ~factor delayed_ref_large delayed_ref_small =
   check_ref_live delayed_ref_large;
   check_ref_live delayed_ref_small;
+  refuse_external_in_trace ~operation:"Shape.set_scale" delayed_ref_large;
+  refuse_external_in_trace ~operation:"Shape.set_scale" delayed_ref_small;
   refuse_closed_unsolved_ref ~operation:"Shape.set_scale" delayed_ref_large;
   refuse_closed_unsolved_ref ~operation:"Shape.set_scale" delayed_ref_small;
   if factor < 1 then
@@ -4037,34 +4121,37 @@ let compute_row_product env (row : Row.t) : int option =
     reach this point. {!Ir.Indexing.set_solved_dim}'s refusal of a second kind of solution is a
     backstop no inference path reaches, and since gh-ocannl-1624 no other path either: its
     [shape_writer] is [Shape]'s. *)
+let publish_ref_solutions env var_refs =
+  List.iter var_refs ~f:(fun (delayed_ref : delayed_var_ref) ->
+      let unsolved =
+        Option.is_none delayed_ref.var_ref.solved_dim
+        && Option.is_none delayed_ref.var_ref.solved_sym
+      in
+      match delayed_ref.var with
+      | _ when not unsolved -> ()
+      (* An input of the running shape-scheme trace (gh-ocannl-1791): its solution belongs to the
+         application, and the trace's constraints already say what this one would. *)
+      | _ when is_trace_input delayed_ref -> ()
+      | `Not_set_yet -> () (* Variable not bound yet, will be set later *)
+      | `Dim dim_var -> (
+          match Row.get_dim_from_env env dim_var with
+          | Some (Row.Dim { d; _ }) -> Delayed_ref.set_solved_dim delayed_ref d
+          | Some (Row.Sym { sym; _ }) -> Delayed_ref.set_solved_sym delayed_ref sym
+          | Some (Row.Var _ | Row.Affine _ | Row.Concat _) | None -> () (* Not yet resolved *))
+      | `Row row_var -> (
+          match Row.get_row_from_env env row_var with
+          | Some row -> (
+              match compute_row_product env row with
+              | Some product -> Delayed_ref.set_solved_dim delayed_ref product
+              | None -> () (* Row has unresolved or symbolic dimensions *))
+          | None -> () (* Row variable not yet resolved *)))
+
 let update_delayed_var_refs env update_step =
-  let update_var_ref_list var_refs =
-    List.iter var_refs ~f:(fun delayed_ref ->
-        let unsolved =
-          Option.is_none delayed_ref.var_ref.solved_dim
-          && Option.is_none delayed_ref.var_ref.solved_sym
-        in
-        match delayed_ref.var with
-        | _ when not unsolved -> ()
-        | `Not_set_yet -> () (* Variable not bound yet, will be set later *)
-        | `Dim dim_var -> (
-            match Row.get_dim_from_env env dim_var with
-            | Some (Row.Dim { d; _ }) -> Delayed_ref.set_solved_dim delayed_ref d
-            | Some (Row.Sym { sym; _ }) -> Delayed_ref.set_solved_sym delayed_ref sym
-            | Some (Row.Var _ | Row.Affine _ | Row.Concat _) | None -> () (* Not yet resolved *))
-        | `Row row_var -> (
-            match Row.get_row_from_env env row_var with
-            | Some row -> (
-                match compute_row_product env row with
-                | Some product -> Delayed_ref.set_solved_dim delayed_ref product
-                | None -> () (* Row has unresolved or symbolic dimensions *))
-            | None -> () (* Row variable not yet resolved *)))
-  in
   match update_step.logic with
-  | Transpose (Permute (_, var_refs), _) -> update_var_ref_list var_refs
-  | Broadcast (Einsum (_, var_refs), _, _) -> update_var_ref_list var_refs
-  | Broadcast_tern (Einsum_tern (_, var_refs), _, _, _) -> update_var_ref_list var_refs
-  | Block { delayed_vars; _ } -> update_var_ref_list delayed_vars
+  | Transpose (Permute (_, var_refs), _) -> publish_ref_solutions env var_refs
+  | Broadcast (Einsum (_, var_refs), _, _) -> publish_ref_solutions env var_refs
+  | Broadcast_tern (Einsum_tern (_, var_refs), _, _, _) -> publish_ref_solutions env var_refs
+  | Block { delayed_vars; _ } -> publish_ref_solutions env delayed_vars
   | _ -> ()
 
 let apply_env_step env update_step =
@@ -4229,7 +4316,9 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   refuse_unsolved ~where:"finish_inference" unsolved;
   let _active_update_steps : update_step list = !active_update_steps in
   List.iter ~f:(apply_env_step env) !active_update_steps;
-  List.iter !active_instances ~f:(fun inst -> List.iter inst.inst_shapes ~f:(apply_env_t env));
+  List.iter !active_instances ~f:(fun inst ->
+      List.iter inst.inst_shapes ~f:(apply_env_t env);
+      publish_ref_solutions env inst.inst_refs);
   let _applied_update_steps : update_step list = !active_update_steps in
   (* Derive projections for all active update_steps, setting their unsafe_projections field. This
      must happen before clearing active_update_steps. *)
@@ -4821,6 +4910,7 @@ module Scheme = struct
     | No_marks
     | No_internal_rows
     | No_end_validation
+    | No_ref_inputs
 
   type nonrec t = {
     label : string;
@@ -4842,6 +4932,9 @@ module Scheme = struct
         (** Fixed variables no anchor covers: the scheme cannot be instantiated after a closure. *)
     closure_at_trace : int;
     env : Row.environment;  (** The trace's final environment: for printing the scheme. *)
+    ref_inputs : ref_input list;
+        (** The capture references made before the trace that it bound (gh-ocannl-1791), in first
+            binding order: inputs, related at each application to their state then. *)
   }
 
   let label s = s.label
@@ -4887,6 +4980,18 @@ module Scheme = struct
     let side rows = String.concat ~sep:", " (List.map rows ~f:shape_str) in
     let args = side s.arg_rows in
     let results = side s.result_rows in
+    (* The capture inputs (gh-ocannl-1791): what each first binding is under the final
+       environment. *)
+    let captures =
+      List.map s.ref_inputs ~f:(fun i ->
+          let label = i.input_ref.var_ref.ref_label in
+          let bound =
+            match i.first with
+            | `Dim v -> dim_str (Option.value (Row.get_dim_from_env s.env v) ~default:(Row.Var v))
+            | `Row v -> row_str (Row.subst_row s.env (Row.get_row_for_var Row.empty_provenance v))
+          in
+          [%string "capture %{label} = %{bound}"])
+    in
     let boundary = s.arg_rows @ s.result_rows in
     let b_dims, b_rows =
       List.concat_map boundary ~f:(fun { r_batch; r_input; r_output } ->
@@ -4952,7 +5057,8 @@ module Scheme = struct
           | _ -> None)
     in
     let header = [%string "%{s.label} : %{args} => %{results}"] in
-    String.concat ~sep:"\n" (header :: List.map (dim_rels @ row_rels @ glbs) ~f:(fun r -> "  " ^ r))
+    String.concat ~sep:"\n"
+      (header :: List.map (captures @ dim_rels @ row_rels @ glbs) ~f:(fun r -> "  " ^ r))
 
   let rows_of env (sh : shape) =
     {
@@ -4997,27 +5103,39 @@ module Scheme = struct
       && not (List.mem args sh ~equal:phys_equal)
     in
     let refuse msg = raise @@ Untraceable_scheme msg in
+    let frame = { frame_refs_mark = refs_mark; frame_inputs = [] } in
+    let outer_frame = !trace_ref_frame in
     try
       trace_touches := Some [];
+      trace_ref_frame := Some frame;
       let results, touched =
         Exn.protect
           ~f:(fun () ->
             as_tracing ~label (fun () ->
                 let results = f () in
                 (results, Option.value !trace_touches ~default:[])))
-          ~finally:(fun () -> trace_touches := outer_touches)
+          ~finally:(fun () ->
+            trace_touches := outer_touches;
+            trace_ref_frame := outer_frame)
       in
+      let ref_inputs = List.rev frame.frame_inputs in
       let constraints = List.rev (window ~mark:constraints_mark !active_constraints) in
       if List.exists constraints ~f:Row.has_lazy_coefficient then
         refuse
           "the function registers a precision-dependent total-elements constraint (a uint4x32 \
-           conversion, e.g. random number generation): its coefficient is a lazy over the trace's \
-           own nodes, which a scheme cannot carry past the trace -- apply the function inline";
-      if List.exists touched ~f:(fun uid -> uid <= refs_mark) then
+           conversion, e.g. random number generation, or one capture reference bound both as a \
+           dimension and as a row): its coefficient is a lazy over the trace's own nodes, which a \
+           scheme cannot carry past the trace -- apply the function inline";
+      (* A backstop: the setters refuse an outside reference themselves, and a binding is an
+         input. *)
+      if
+        List.exists touched ~f:(fun uid ->
+            uid <= refs_mark && not (List.exists ref_inputs ~f:(fun i -> i.input_ref.uid = uid)))
+      then
         refuse
-          "the function binds or sets a capture reference made outside it, whose binding a scheme \
-           cannot carry per application -- make the reference inside the function, or apply the \
-           function inline";
+          "the function writes a capture reference made outside it other than by binding it in an \
+           operation, which a scheme cannot carry per application -- make the reference inside the \
+           function, or apply the function inline";
       let marks = Row.marks_since row_globals in
       (* Validation: the trailing setters ([set_dim], [infer_equal], [set_terminal]) push
          constraints without solving them, so the whole window is solved once more -- Stage1 only:
@@ -5151,6 +5269,7 @@ module Scheme = struct
         closure_bound;
         closure_at_trace = !closure_count;
         env = env_end;
+        ref_inputs;
       }
     with
     | Row.Shape_error (msg, trace) ->
@@ -5166,7 +5285,13 @@ module Scheme = struct
 
   let stale s = !closure_count <> s.closure_at_trace && Option.is_some s.closure_bound
 
-  let instantiate_core ?sabotage ~instance s ~application ~(args : shape list)
+  let same_binding (b1 : ref_binding) (b2 : ref_binding) =
+    match (b1, b2) with
+    | `Dim v1, `Dim v2 -> Row.equal_dim_var v1 v2
+    | `Row v1, `Row v2 -> Row.equal_row_var v1 v2
+    | _ -> false
+
+  let instantiate_core ?sabotage ~instance ~bind_refs s ~application ~(args : shape list)
       ~(results : shape list) =
     check_untainted ();
     let sabotaged x = Option.exists sabotage ~f:(fun y -> Poly.equal x y) in
@@ -5264,10 +5389,41 @@ module Scheme = struct
       List.fold s.discardable ~init:Row.dim_var_set_empty ~f:(fun acc v ->
           Set.add acc (rn.rn_dim v))
     in
+    let ref_inputs = if sabotaged No_ref_inputs then [] else s.ref_inputs in
+    let rename_binding : ref_binding -> ref_binding = function
+      | `Dim v -> `Dim (rn.rn_dim v)
+      | `Row v -> `Row (rn.rn_row v)
+    in
     try
       with_taint_on_failure
         ~describe:(fun exn -> prefix ^ exn_summary exn)
         (fun () ->
+          (* The capture inputs (gh-ocannl-1791): the first binding of each, renamed, related to the
+             reference's state at this application, as the body's first binding of it would be. An
+             instance also binds it, to the last one, so that the closure publishes its solution; a
+             check writes no reference. *)
+          let ref_constraints =
+            List.concat_map ref_inputs ~f:(fun i ->
+                let r = i.input_ref in
+                let first = rename_binding i.first in
+                check_before_binding ~where:[%string "in the shape scheme %{s.label}"]
+                  ~error_shapes:args
+                  ~is_row:(match first with `Row _ -> true | `Dim _ -> false)
+                  r;
+                if bind_refs then
+                  bind_ref ~for_projections:false ~error_shapes:args r first
+                  @
+                  if same_binding i.first i.last then []
+                  else bind_ref ~for_projections:false ~error_shapes:args r (rename_binding i.last)
+                else
+                  binding_constraints ~for_projections:false ~as_input:(is_trace_input r)
+                    ~error_shapes:args
+                    ~previous_binding:(if bound_before_closure r then `Not_set_yet else r.var)
+                    r first)
+            |> List.map ~f:(Row.add_constraint_origin origin)
+          in
+          let all = all @ ref_constraints in
+          let inst_refs = if bind_refs then List.map ref_inputs ~f:(fun i -> i.input_ref) else [] in
           List.iter s.unmarked_unused ~f:unmark_unused;
           if not (sabotaged No_marks) then Row.add_marks rn s.marks;
           active_constraints := List.rev_append all !active_constraints;
@@ -5278,12 +5434,16 @@ module Scheme = struct
                instantiated_constraints = c.instantiated_constraints + n - s.num_solutions;
                instantiated_solutions = c.instantiated_solutions + s.num_solutions;
                instantiated_boundary =
-                 c.instantiated_boundary + List.length boundary + List.length anchors;
+                 c.instantiated_boundary + List.length boundary + List.length anchors
+                 + List.length ref_constraints;
              });
-          if instance then active_instances := { inst_shapes; inst_rows } :: !active_instances;
+          if instance then
+            active_instances := { inst_shapes; inst_rows; inst_refs } :: !active_instances;
           let _, env = Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars all !state in
           state := env;
-          List.iter inst_shapes ~f:(apply_env_t env));
+          List.iter inst_shapes ~f:(apply_env_t env);
+          (* As [propagate_inline] publishes a step's references after its Stage1 solve. *)
+          publish_ref_solutions env inst_refs);
       (rn, origin)
     with Row.Shape_error (msg, trace) ->
       let bt = Stdlib.Printexc.get_raw_backtrace () in
@@ -5291,7 +5451,7 @@ module Scheme = struct
 
   let instantiate ?sabotage s ~application ~args ~results =
     ignore
-      (instantiate_core ?sabotage ~instance:true s ~application ~args ~results
+      (instantiate_core ?sabotage ~instance:true ~bind_refs:true s ~application ~args ~results
         : Row.renaming * Row.constraint_origin)
 
   (* What [instantiate] writes, put back: the session globals, the solver's, the taint, and the rows
@@ -5311,6 +5471,10 @@ module Scheme = struct
     in
     timed `Instantiation (fun () ->
         Exn.protect
-          ~f:(fun () -> instantiate ?sabotage s ~application ~args ~results:[])
+          ~f:(fun () ->
+            ignore
+              (instantiate_core ?sabotage ~instance:true ~bind_refs:false s ~application ~args
+                 ~results:[]
+                : Row.renaming * Row.constraint_origin))
           ~finally:(fun () -> restore_after_check ~globals ~row_globals ~taint:taint0 rows))
 end

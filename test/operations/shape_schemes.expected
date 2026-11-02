@@ -47,7 +47,33 @@ after the closure, the composed scheme applies again: true
 after the closure, a conflicting feature size is refused: true
 a reference made inside the function: inline 2x5 2, scheme 2x5 2
 a reference made inside the function: the scheme's application closes as the inline one does: true
-a reference made outside the function and bound by it is refused at the trace: true
+external : ..'a..|..'b..->'c,'d => ..'a..|..'b..->'c
+  capture b = 'd
+the trace leaves the outside reference unbound: true
+a reference made outside the function: inline 2x5 2, scheme 2x5 2
+a reference made outside the function: the scheme's application closes as the inline one does: true
+the instance binds the reference, and the closure publishes its solution: true
+control (no reference inputs): the instance leaves the reference unsolved: true
+an application fitting the reference's binding succeeds before a closure: true
+a conflicting application is refused at the application before a closure: true
+control (no reference inputs): the conflicting application is accepted before a closure: true
+an application fitting the reference's binding succeeds across a closure: true
+a conflicting application is refused at the application across a closure: true
+control (no reference inputs): the conflicting application is accepted across a closure: true
+a row reference bound to 2x6: an application to 2x6 succeeds: true
+an application to 3x4, of the same product, is refused: the rows are related: true
+control (no reference inputs): the application to 3x4 is accepted: true
+a reference bound outside to a row of 12 elements: a dimension of 12 inside fits: true
+and a dimension of 6 does not: true
+twice : ..'a..|..'b..->'c,'d => ..'a..|..'b..->'c, ..'a..|..'b..->'d
+  capture b = 'd
+a body binding the reference twice: an application fitting it succeeds: true
+and a conflicting one is refused: true
+an outer scheme applying the inner one carries its input: a conflicting application is refused: true
+control (the inner application drops its input): the outer scheme accepts it: true
+a function setting a reference made outside it is refused at the trace, naming the call: true
+control: the same function applied inline sets the reference: true
+a function binding a reference made outside it both as a row and as a dimension is refused: true
 the application changes the session: true
 after the rewind, the session is as at the checkpoint: true
 the rewound application's result shape is a discarded handle: true

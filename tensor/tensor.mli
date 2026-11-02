@@ -456,7 +456,10 @@ module Scheme : sig
       [f] (including one only the end-of-trace check of [f]'s trailing [Shape.set_dim] and the like
       finds), when [f] forces dims or projections (inference cannot close during a trace), and for
       what a scheme cannot carry: a precision-dependent total-elements constraint (random number
-      generation inside [f]), or a capture reference made outside [f] and bound or set by it. *)
+      generation inside [f]), or [Shape.set_dim] and the like on a capture reference made outside
+      [f]. A capture reference made outside [f] that [f]'s operations bind is an input of the scheme
+      (gh-ocannl-1791): each application relates it to the reference's state then, and
+      {!instantiate} binds it, as the body would. *)
 
   val instantiate : ?application:string -> t -> args:Shape.t list -> results:Shape.t list -> unit
   (** [instantiate s ~args ~results] adds [s]'s constraints for one application of its function to
@@ -481,10 +484,13 @@ module Scheme : sig
       A shape error that does not depend on the arguments raises at the trace, prefixed
       ["tracing the shape scheme <function>: "]; one that does raises at the application, before the
       body runs, prefixed ["applying the shape scheme <function> to <arguments>: "]. A trace a
-      scheme cannot carry (random number generation, an external capture reference, forcing dims, or
-      a body that cannot run on tracers) leaves the function unschemed, as it was before, once its
-      rewind succeeded. Ids are unaffected: traces and checks allocate tensor ids, node uids and
-      shape-variable ids from reserved ranges.
+      scheme cannot carry (random number generation, setting a capture reference made outside the
+      function, forcing dims, or a body that cannot run on tracers) leaves the function unschemed,
+      as it was before, once its rewind succeeded, and says so on stderr -- once per function and
+      reason in a process (gh-ocannl-1791). A capture reference made outside the function that its
+      operations bind is a scheme input, checked against each application's state of it. Ids are
+      unaffected: traces and checks allocate tensor ids, node uids and shape-variable ids from
+      reserved ranges.
 
       Option-valued tensor parameters (gh-ocannl-1792), annotated [~(p : Tensor.t option)] or
       [?(p : Tensor.t option)]: the function gets one scheme per presence pattern -- which of them

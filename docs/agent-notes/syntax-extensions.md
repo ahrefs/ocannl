@@ -45,8 +45,10 @@ files.
   by convention, labelled ones only with direct-operand evidence. The trace adapter ignores the
   result, so results are never classified. Two traps: a body that builds a closure whose `{ w }`
   takes the default random initialization makes the enclosing trace refused (an RNG lazy in the
-  window), so the enclosing function degrades to unschemed; and a body's OCaml side effects run
-  once more per closure, so a test counting body runs opts out with `[@@ocannl.no_scheme]`.
+  window), so the enclosing function degrades to unschemed (with a stderr warning, once per
+  function and reason, gh-ocannl-1791 -- an inline `%expect` block captures fd 2, so the warning
+  lands in its expectation); and a body's OCaml side effects run once more per
+  closure, so a test counting body runs opts out with `[@@ocannl.no_scheme]`.
 - Option-valued tensors in schemes (gh-ocannl-1792): only an annotation classifies them
   (`~(p : Tensor.t option)`, `?(p : Tensor.t option)`; `?(p : Tensor.t)` is an OCaml type error), and
   `(x : Tensor.t)` is evidence for a forwarded labelled tensor. The handle keeps one slot per
