@@ -2895,10 +2895,10 @@ type seed_gate =
 val seeded_default_gate : limits:Ir.Backend_intf.hardware_limits -> seed_gate
 (** Config [gpu_default_sketch_min_reduction]: an integer is [Min_reduction]; [auto] is [Ranked]
     under {!ranking_capacity}'s capacity and {!ranking_cache_bandwidth}, and [Min_reduction 32] —
-    the threshold's measured default — where nothing calibrates either tier: no advisory (Metal, the
-    C backends) and no [model_cache_capacity] / [model_cache_bandwidth] override. An explicit [none]
-    override is a calibration and keeps [Ranked], even with both tiers off. Raises
-    [Utils.Invalid_config_value] naming the key on anything else (gh-ocannl-1332). *)
+    the threshold's measured default — where nothing calibrates either tier: no advisory (Metal) and
+    no [model_cache_capacity] / [model_cache_bandwidth] override. An explicit [none] override is a
+    calibration and keeps [Ranked], even with both tiers off. Raises [Utils.Invalid_config_value]
+    naming the key on anything else (gh-ocannl-1332). *)
 
 val model_seeding :
   facts:Ir.Backend_intf.backend_facts ->

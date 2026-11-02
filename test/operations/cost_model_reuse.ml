@@ -606,3 +606,84 @@ let () =
         (fun (a, b) (a', b') -> Tn.equal a a' && b = b')
         (charge ())
         (charge ~cache_capacity_bytes:0 ()))
+
+(* --- cc's published capacity (gh-ocannl-1687) ---
+
+   cc used to publish no capacity, so its score had no DRAM tier: a cc kernel's re-reads went
+   uncharged however far its working set spilled. Its limits now carry a fitted advisory
+   ([Schedulers.cpu_mma_limits]), read here off a cc context as the untimed choosers read it
+   ([Autotune.ranking_capacity]). The same weight gradient at [k = n = 1024] under cc's own default
+   plan (a [Grid] over the rows, every row re-reading all of [x]), sized from the published
+   capacity: rows enough to spill it, and half as many as fit it. The score at the published
+   capacity is above the no-capacity score past it and equal within it, and never below the
+   bound. *)
+let () =
+  let cc_limits = Context.hardware_limits (Context.cpu ()) in
+  let published = cc_limits.Ir.Backend_intf.cache_capacity_bytes in
+  let resolved, residency = Autotune.ranking_capacity ~limits:cc_limits in
+  Stdio.eprintf "cc: published capacity %s bytes (not part of the golden)\n"
+    (Option.value_map published ~default:"none" ~f:Int.to_string);
+  p "cc publishes a cache capacity, and the ranking score resolves it"
+    (Option.is_some published && Option.equal Int.equal resolved published);
+  let ck = 1024 and cn = 1024 in
+  let cc_wgrad rows =
+    let cdy = node ~dims:[| ck; rows |] (Printf.sprintf "cmr_cc%d_dy" rows) in
+    let cx = node ~dims:[| ck; cn |] (Printf.sprintf "cmr_cc%d_x" rows) in
+    let cdw = node ~dims:[| rows; cn |] (Printf.sprintf "cmr_cc%d_dw" rows) in
+    List.iter [ cdy; cx; cdw ] ~f:Ll_test.materialize;
+    let o = Ll_test.sym () and i = Ll_test.sym () and k = Ll_test.sym () in
+    let raw =
+      Ll_test.optimize ~name:(Printf.sprintf "cmr_cc%d" rows)
+        (Ll_test.loop_n o rows
+           (Ll_test.loop_n i cn
+              (Ll_test.loop_n k ck
+                 (Ll_test.set cdw
+                    [| it o; it i |]
+                    (LL.Ternop
+                       ( Ir.Ops.FMA,
+                         (Ll_test.get cdy [| it k; it o |], Ll_test.single),
+                         (Ll_test.get cx [| it k; it i |], Ll_test.single),
+                         (Ll_test.get cdw [| it o; it i |], Ll_test.single) ))))))
+    in
+    Sched.apply (Sched.default_cpu ~min_work:0 (hermetic raw)) raw
+  in
+  (* One row's block reads a column of [dy] and all of [x]. *)
+  let per_block = (ck + (ck * cn)) * elt in
+  match resolved with
+  | None -> p "cc: the published capacity sizes the spilling and fitting legs" false
+  | Some capacity ->
+      let spilling = cc_wgrad ((capacity / per_block) + 2)
+      and fitting = cc_wgrad (max 1 (capacity / per_block / 2)) in
+      let cc_rank ?cache_capacity_bytes (o : LL.optimized) =
+        CM.ranking_seconds ~peak_flops ~peak_memory_bandwidth ?cache_capacity_bytes
+          ?max_resident_threads:residency ~is_global:(CM.global_in o) o.LL.llc
+      in
+      let working_set (o : LL.optimized) =
+        (CM.reuse_traffic ~cache_capacity_bytes:capacity ?max_resident_threads:residency
+           ~is_global:(CM.global_in o) o.LL.llc)
+          .CM.ru_working_set_bytes
+      in
+      Stdio.eprintf
+        "cc: spilling working set %d, fitting %d, rank %s / %s ms past it, %s / %s ms within (not \
+         part of the golden)\n"
+        (working_set spilling) (working_set fitting)
+        (Option.value_map ~default:"n/a" ~f:Float.to_string
+           (Option.map (cc_rank ~cache_capacity_bytes:capacity spilling) ~f:(fun s -> s *. 1e3)))
+        (Option.value_map ~default:"n/a" ~f:Float.to_string
+           (Option.map (cc_rank spilling) ~f:(fun s -> s *. 1e3)))
+        (Option.value_map ~default:"n/a" ~f:Float.to_string
+           (Option.map (cc_rank ~cache_capacity_bytes:capacity fitting) ~f:(fun s -> s *. 1e3)))
+        (Option.value_map ~default:"n/a" ~f:Float.to_string
+           (Option.map (cc_rank fitting) ~f:(fun s -> s *. 1e3)));
+      p "cc: the default plan's working set spills the published capacity, its half fits it"
+        (working_set spilling > capacity && working_set fitting <= capacity);
+      p "cc: past the published capacity the score is above the no-capacity score"
+        (match (cc_rank ~cache_capacity_bytes:capacity spilling, cc_rank spilling) with
+        | Some a, Some b -> Float.(a > b)
+        | _ -> false);
+      p "cc: within the published capacity the score is the no-capacity score"
+        (Option.equal Float.equal
+           (cc_rank ~cache_capacity_bytes:capacity fitting)
+           (cc_rank fitting));
+      p_all "cc: the score at the published capacity is at least the bound" [ spilling; fitting ]
+        ~f:(fun o -> le (bound_of o) (cc_rank ~cache_capacity_bytes:capacity o))

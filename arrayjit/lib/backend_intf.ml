@@ -344,10 +344,11 @@ type hardware_limits = {
           per block rather than as distinct cells. A FITTED constant of that proxy, not the device's
           L2 size: the working set sums per-block footprints that resident blocks share, so the
           value that separates cache-resident from DRAM-bound kernels sits well above any physical
-          cache. Per-class advisories on CUDA and HIP, overridable by config [model_cache_capacity];
-          [None] elsewhere: no DRAM tier (see {!field-cache_bandwidth}). Read only by the untimed
-          choosers, never by schedule construction, codegen or timing — so it is not in the
-          schedule-cache key ({!limits_key}). *)
+          cache. Per-class advisories on CUDA and HIP, and a fitted one on the C backends
+          (gh-ocannl-1687, [Schedulers.cpu_mma_limits]), overridable by config
+          [model_cache_capacity]; [None] elsewhere: no DRAM tier (see {!field-cache_bandwidth}).
+          Read only by the untimed choosers, never by schedule construction, codegen or timing — so
+          it is not in the schedule-cache key ({!limits_key}). *)
   max_resident_threads : int option; [@sexp.option]
       (** [Untimed]: how many threads the whole device keeps resident at once (multiprocessors times
           threads per multiprocessor), which divided by a kernel's workgroup size is the ranking

@@ -56,6 +56,29 @@ let minix =
       (5389844480, 1709.02);
     ]
 
+(* gh-ocannl-1687: the cc sweep behind cc's advisory capacity -- minix-amd-linux's Zen 5 (32 cores),
+   [CAPACITY_ONLY=1 benchmarks/gh1253_cells.sh cc] at 95245073, 2026-11-02. On cc the untiled
+   contraction is issue-bound: its requested rate stays far below the box's STREAM rate (119 GB/s)
+   on both sides of the knee, so the fit splits on the sweep's own contrast. The rate holds at 12-20
+   GB/s while [x] (k x 1024 floats) fits the last-level cache, through 24 MiB at k = 6144, and falls
+   to 5-10 GB/s from 32 MiB on. *)
+let minix_cc =
+  recorded
+    [
+      (269746176, 19.59);
+      (538443776, 14.01);
+      (1075838976, 15.33);
+      (2150629376, 13.20);
+      (3225419776, 13.01);
+      (4300210176, 12.49);
+      (6449790976, 13.22);
+      (8599371776, 9.66);
+      (12898533376, 6.24);
+      (17197694976, 5.70);
+      (25796018176, 5.46);
+      (34394341376, 5.23);
+    ]
+
 let () =
   let step =
     [
@@ -91,6 +114,24 @@ let () =
   p "without a DRAM reference, the minix sweep's 1.7x contrast fits nothing"
     (match Cal.fit_capacity minix with
     | Cal.No_transition { contrast } -> Float.(contrast < 2.)
+    | _ -> false);
+  (* The published advisory is this fit, read off cc's own limits: a re-fit that moves the knee
+     moves the claim, and an edited constant without one fails it. *)
+  let cc_published =
+    (Context.hardware_limits (Context.cpu ())).Ir.Backend_intf.cache_capacity_bytes
+  in
+  p
+    "the recorded cc sweep fits a monotone capacity between 6.45 GB and 8.60 GB, on its own \
+     contrast"
+    (transition_at ~cached:6449790976 ~spilled:8599371776 (Cal.fit_capacity minix_cc));
+  p "cc's published cache capacity is the recorded cc sweep's fit"
+    (match Cal.fit_capacity minix_cc with
+    | Cal.Transition { capacity; monotone = true; _ } ->
+        Option.equal Int.equal cc_published (Some capacity)
+    | _ -> false);
+  p "against the STREAM rate the issue-bound cc sweep reads all spilled"
+    (match Cal.fit_capacity ~dram_rate:1.18588e11 minix_cc with
+    | Cal.All_spilled _ -> true
     | _ -> false);
   p "rates that do not split by working set fit a capacity flagged non-monotone"
     (match
