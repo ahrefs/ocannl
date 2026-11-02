@@ -53,6 +53,16 @@ let test_merge_grad_operand a b =
   let%cd _r = { r } =:+ a.grad.merge * b ~logic:"." in
   _r
 
+(* A statement sequence (gh-ocannl-1770): the first statement is let-bound before the list, so the
+   statements are evaluated in source order and the first one naming a forward root embeds its code.
+   Within each statement, the operands' forward code is let-bound in order before the assignment. *)
+let test_statement_sequence a =
+  let%cd _r =
+    { p1 } =: a;
+    { p2 } =: a
+  in
+  _r
+
 let () =
   ignore
     ( test_raw_unop,
@@ -63,4 +73,5 @@ let () =
       test_raw_ternop_pointwise,
       test_raw_ternop_einsum,
       test_merge_value_operand,
-      test_merge_grad_operand )
+      test_merge_grad_operand,
+      test_statement_sequence )

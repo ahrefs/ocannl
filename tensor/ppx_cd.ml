@@ -127,6 +127,31 @@ let make_vb ~loc ~name ~name_expr ~hint_label ~extra_args =
   let vb = A.Vb.mk ~loc pat v in
   vb
 
+(** [source_ordered_list ~loc ~prefix exprs] is the list expression of [exprs], evaluated in source
+    order (gh-ocannl-1770). OCaml evaluates a list literal's elements right to left, and members of
+    a [%cd] sequence have effects whose order decides values: the first member naming a forward-root
+    tensor embeds its forward code ([Tensor.take_forward_code]), and the members run in list order.
+    Evaluated right to left, an earlier member would read a root a later one computes. So every
+    member but the last is let-bound, in order, to [prefix ^ "<position>"]; the last is evaluated
+    last anyway. *)
+let source_ordered_list ~loc ~prefix exprs =
+  let last = List.length exprs - 1 in
+  let named =
+    List.mapi exprs ~f:(fun i e ->
+        if i = last then (None, e)
+        else
+          let name = prefix ^ Int.to_string (i + 1) in
+          (Some (name, e), Ast_builder.Default.evar ~loc name))
+  in
+  let list = Ast_builder.Default.elist ~loc (List.map named ~f:snd) in
+  List.fold_right named ~init:list ~f:(fun (binding, _) body ->
+      match binding with
+      | None -> body
+      | Some (name, e) ->
+          [%expr
+            let [%p Ast_builder.Default.pvar ~loc name] = [%e e] in
+            [%e body]])
+
 (** The expression argument is of type: [Assignments.t]. *)
 let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
   let setups = lhs :: rhses in
@@ -175,10 +200,9 @@ let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
     (* A hand-written body's own assignments own no tensor fragment (gh-ocannl-1724). *)
     [%expr Ir.Assignments.to_comp [%e body]]
   in
-  let comps =
-    List.fold (body :: List.rev forward_args) ~init:[%expr []] ~f:(fun xs x ->
-        [%expr [%e x] :: [%e xs]])
-  in
+  (* The operands' forward code, then the assignment, evaluated in that order: an operand given as
+     code can embed a root that a later operand names. *)
+  let comps = source_ordered_list ~loc ~prefix:"__cd_fwd" (forward_args @ [ body ]) in
   let body = [%expr Ir.Assignments.sequence [%e comps]] in
   let body =
     if List.is_empty tensor_vbs then body else A.Exp.let_ ~loc Nonrecursive tensor_vbs body
@@ -1838,7 +1862,10 @@ let translate ?ident_label (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = Code { is_commented = false };
           slot = Nonslot;
-          expr = [%expr Ir.Assignments.sequence [ [%e res1.expr]; [%e res2.expr] ]];
+          expr =
+            [%expr
+              Ir.Assignments.sequence
+                [%e source_ordered_list ~loc ~prefix:"__cd_stmt" [ res1.expr; res2.expr ]]];
           array_opt_of_code = res2.array_opt_of_code;
         }
     | [%expr if [%e? expr1] then [%e? expr2] else [%e? expr3]] ->
