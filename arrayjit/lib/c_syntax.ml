@@ -426,8 +426,6 @@ type statement_accum = {
     [acc[idcs] = op(acc[idcs], contrib)] or its FMA form, no level or guard between — which is the
     shape the warp-shuffle and SIMD renderings can render. *)
 
-let empty_peel_summary = summarize_peel_census []
-
 (** The one-line peel census a report prints beside a routine (gh-ocannl-733): how many reduction
     sites localized, and the distinct verdicts they earned. *)
 let peel_summary_string summary =
@@ -544,8 +542,6 @@ let summarize_volatility_census ~requested entries =
     plain_accumulations = count (function Plain_accumulator _ -> true | _ -> false);
     volatile_rmw_reads = count (function Volatile_rmw_reads _ -> true | _ -> false);
   }
-
-let empty_volatility_summary = summarize_volatility_census ~requested:false []
 
 (** The one-line volatility census a report prints beside a routine (gh-ocannl-782/820): how many
     serial accumulations this routine carries and how many selected the volatile-read workaround. *)
@@ -4203,8 +4199,6 @@ module C_syntax (B : C_syntax_config) = struct
     match prec with
     | Uint4x32_prec _ -> List.init 4 ~f:(fun lane -> guarded (B.uint4x32_log_lane doc lane))
     | _ -> [ B.styled_log_arg (guarded doc) ]
-
-  let array_offset_to_string (idcs, dims) = doc_to_string @@ pp_array_offset (idcs, dims)
 
   let pp_local_defs (local_defs : (int * PPrint.document) list) =
     let open PPrint in
@@ -8858,6 +8852,12 @@ module C_syntax (B : C_syntax_config) = struct
            |> Set.of_list (module Tn)
        | _ -> Set.empty (module Tn));
     ctx
+
+  (* The two cells of a render context that [arrayjit/test/test_render_context] reaches into: its
+     negative control clears the zero-out record mid-emission, and its collection-bracket check
+     reads the peel census switch. *)
+  let zero_out_seen ctx = ctx.zero_out_seen
+  let peel_census_enabled ctx = ctx.peel_census_enabled
 
   (* gh-ocannl-1473: the order the kernel's [traced_store] entries are emitted in -- parameters, the
      Metal pool-slot table, local declarations. First the entries the code touches, in the order it

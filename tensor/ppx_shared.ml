@@ -413,10 +413,6 @@ let expr2string_or_empty expr =
   in
   string_expr ~loc:expr.pexp_loc @@ loop expr
 
-let opt_pat2string ~loc = function
-  | None -> [%expr None]
-  | Some pat -> [%expr Some [%e pat2string pat]]
-
 let opt_pat2string_list ~loc = function
   | None -> [%expr []]
   | Some pat -> [%expr [ [%e pat2string pat] ]]

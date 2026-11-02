@@ -53,19 +53,6 @@ module Dune = Test_utils.Dune_stanza_scan
 let exempt_zero_reference_exports =
   [
     "Backend_impl.next_global_device_id";
-    "C_syntax.c_float_literal";
-    "C_syntax.c_keywords";
-    "C_syntax.c_stdlib_idents";
-    "C_syntax.c_stdlib_macros";
-    "C_syntax.empty_peel_summary";
-    "C_syntax.empty_volatility_summary";
-    "C_syntax.extract_idents";
-    "C_syntax.is_f32_tie";
-    "C_syntax.log_declines";
-    "C_syntax.mma_census_enabled";
-    "C_syntax.op_syntax_idents";
-    "C_syntax.summarize_peel_census";
-    "C_syntax.summarize_volatility_census";
     "Lexer.multichar_token";
     "Lexer.single_char_token";
     "Ndarray.adjust_idx_for_padding";
@@ -164,52 +151,6 @@ let exempt_zero_reference_exports =
     "Ops.is_binop_infix";
     "Ops.precision_to_string";
     "Ops.ptr_to_string_hum";
-    "Ppx_extend_dsls.transform_dsl_binding";
-    "Ppx_ocannl.rules";
-    "Ppx_op.dsl_fn";
-    "Ppx_op.dsl_open_o";
-    "Ppx_op.dsl_path";
-    "Ppx_op.is_ndarray_constant_expr";
-    "Ppx_op.make_p";
-    "Ppx_op.make_vb";
-    "Ppx_op.make_vb_nd";
-    "Ppx_op.translate_block_tensor";
-    "Ppx_op.translate_tdsl";
-    (* gh-ocannl-1751's automatic-scheme expansion: the classification and wrapping helpers the
-       translation arms share (gh-ocannl-1792 added the annotation readers). Ppx_op has no .mli,
-       like the helpers above. *)
-    "Ppx_op.annotated_kind";
-    "Ppx_op.default_scheme_name";
-    "Ppx_op.drop_attr_named";
-    "Ppx_op.eligible_function";
-    "Ppx_op.first_operand_ops";
-    "Ppx_op.has_attr_named";
-    "Ppx_op.is_ident";
-    "Ppx_op.is_tensor_type";
-    "Ppx_op.mark_schemed";
-    "Ppx_op.mark_tail";
-    "Ppx_op.no_scheme_attr";
-    "Ppx_op.opt_out";
-    "Ppx_op.opt_out_binding";
-    "Ppx_op.opted_out";
-    "Ppx_op.rebinds";
-    "Ppx_op.scheme_attr";
-    "Ppx_op.schemed_name";
-    "Ppx_op.tensor_operand_evidence";
-    "Ppx_op.tensor_operand_ops";
-    "Ppx_op.tensor_params";
-    "Ppx_op.wrap_schemed";
-    "Ppx_shared.axes_or_dims_arg";
-    "Ppx_shared.axis_basis_of_type";
-    "Ppx_shared.dim_spec_to_string";
-    "Ppx_shared.flatten_str";
-    "Ppx_shared.non_alphanum_regexp";
-    "Ppx_shared.operators";
-    "Ppx_shared.opt_pat2string";
-    "Ppx_shared.string_literal";
-    "Ppx_shared.string_of_constant";
-    "Ppx_shared.string_of_pat";
-    "Ppx_shared.translate_str";
     "Schedulers.cpu_mma_limits";
     "Tnode.bounds_scan_worthwhile";
     "Tnode.current_namespace";
@@ -229,82 +170,6 @@ let exempt_zero_reference_exports =
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";
     "Tnode.validate_padded_numel_contract";
-    "Utils.artifacts_subdir";
-    "Utils.captured_log_processors";
-    (* gh-ocannl-1636: the capture window's body and the count of open windows that
-       [Utils.routine_log_window] reads; internal to the capture, not consumer API. *)
-    "Utils.capture_stdout_logs_window";
-    "Utils.stdout_capture_depth";
-    "Utils.config_table_of_lines";
-    (* gh-ocannl-604: bootstrap resolution and the sourced values carried from startup to its
-       deferred trace are intentionally internal, replacing the old unsourced bootstrap reader.
-       Utils has no .mli; publishing these staging details is not part of its consumer API. *)
-    "Utils.resolve_bootstrap_config";
-    "Utils.no_config_file_resolution";
-    "Utils.early_log_config_sourcing_resolution";
-    "Utils.log_config_sourcing_resolution";
-    "Utils.suppress_welcome_message_resolution";
-    "Utils.profile_selection";
-    (* gh-ocannl-1566: the same carried bootstrap resolution for the JSON stream's switch, and the
-       switch itself, published as [Utils.log_config_sourcing] is so that a program can turn the
-       stream on for what it reads after startup; nothing in the tree does. *)
-    "Utils.log_config_json_resolution";
-    "Utils.log_config_json";
-    (* Not pre-existing (gh-ocannl-1332): the lookup the typed getters share and the unchecked one
-       beneath [Utils.get_global_arg_with_source]. Utils has no .mli; every read of a registered key
-       goes through a getter, and of any other key through [get_global_arg], so nothing outside
-       should call either. *)
-    "Utils.registered_canonical";
-    "Utils.unchecked_global_arg_with_source";
-    (* Not pre-existing (gh-ocannl-1566): the recorder the getters and the bootstrap feed, beneath
-       [Utils.resolved_config]. Recording is the getters' job; a caller outside would forge a
-       resolution the process never made. *)
-    "Utils.record_config_resolution";
-    (* Not pre-existing. The C stub behind [Utils.c_stderr_detached] (gh-ocannl-1031): the module
-       calls it once at its own initialization, and what the rest of the tree reads is the resulting
-       boolean, not the stub. Publishing the stub is still right -- a caller that has taken fd 2
-       over for its own reasons can redo the detachment -- but nothing in the tree needs to. *)
-    "Utils.detach_c_stderr";
-    (* Not pre-existing, and the same shape (gh-ocannl-1370): the stub behind
-       [Utils.c_stderr_noise_collapsed], which the HIP backend forces; nothing else calls the
-       stub. *)
-    "Utils.collapse_c_stderr_noise";
-    "Utils.default_indent";
-    "Utils.doc_of_sexp";
-    "Utils.enable_runtime_debug";
-    "Utils.ensure_artifacts_dir";
-    "Utils.env_var_reserved_prefixes";
-    "Utils.equal_config_level";
-    "Utils.filename_concat";
-    "Utils.filename_of_parts";
-    "Utils.filename_parts";
-    "Utils.header_sep";
-    "Utils.input_line";
-    "Utils.input_scan_line";
-    "Utils.!@";
-    "Utils.log_config_sourcing";
-    "Utils.log_trace_tree";
-    "Utils.never_capture_stdout";
-    "Utils.original_log_level";
-    "Utils.pair";
-    "Utils.parallel_merge";
-    (* Not pre-existing: the third profile payload (gh-ocannl-719), listed like the two before it --
-       named only through [Utils.profile_payloads]. *)
-    "Utils.approximate_profile_payload";
-    "Utils.performance_profile_payload";
-    "Utils.profile_ineligible_keys";
-    "Utils.profile_lookup";
-    "Utils.reproducible_profile_payload";
-    "Utils.same_env_name";
-    "Utils.sexp_deep_mem";
-    "Utils.split_with_seps";
-    "Utils.str_nonempty";
-    (* Not pre-existing (gh-ocannl-1335). The artifact-naming layer's internals, consumed inside
-       Utils by the artifact paths and the startup cleanup: the tree outside names artifacts through
-       [build_file], [kept_library_name], [library_kernel_name] and the parsers of the two library
-       shapes. Utils has no .mli to hide them in. *)
-    "Utils.clean_filename";
-    "Utils.owned_artifact_name";
     (* gh-ocannl-1009 widened the census to lib/, the user-facing recipe library. gh-ocannl-1010
        then gave its recipe modules (Train, Parallel, Calibrate, Mixed_prec, Precision_policy)
        explicit interfaces, which took them out of this census, and decided that [Nn_blocks] gets
@@ -329,25 +194,6 @@ let exempt_zero_reference_exports =
     "Nn_blocks.xavier";
     "Nn_blocks.xavier_at";
     "Nn_blocks.xavier_impl";
-    (* gh-ocannl-915: the derived values its triage kept. None of their derivings is removable:
-       [C_syntax.compare_mma_rendering] and [compare_peel_site] sort the census summaries inside
-       C_syntax itself, and [compare_peel_skip] and [compare_peel_verdict] are what
-       [compare_peel_site] calls -- a support reference (gh-ocannl-914) counts only while its caller
-       is live, and [compare_peel_site] has no outside caller. Hiding all four is the job of an
-       interface for C_syntax. *)
-    "C_syntax.compare_mma_rendering";
-    "C_syntax.compare_peel_site";
-    "C_syntax.compare_peel_skip";
-    "C_syntax.compare_peel_verdict";
-    (* gh-ocannl-1668: the Grid census's domain-local cells, which only its bracket and the
-       renderer's collection inside C_syntax touch, and the reason sentence the decline diagnostic
-       and the census line share. Top-level because the cells are domain-local state outside the
-       renderer functor, as the other censuses' are; hiding them is the job of an interface for
-       C_syntax, as for gh-ocannl-915's entries above. *)
-    "C_syntax.grid_census";
-    "C_syntax.grid_census_enabled";
-    "C_syntax.grid_pool_available";
-    "C_syntax.grid_serial_reason_string";
   ]
 
 (* gh-ocannl-1009: the type census, filled from its first run. Every entry is a live type the
@@ -364,11 +210,6 @@ let exempt_unmentioned_types =
     "Nn_blocks.position_embedding";
     "Ops.apply_prec";
     "Ops.prec_family";
-    (* gh-ocannl-1792: a scheme parameter's classification, read by the translation arms of the same
-       .mli-less module. *)
-    "Ppx_op.param_kind";
-    "Utils.env_var_class";
-    "Utils.requirement";
   ]
 
 let require_implementations ~fail implementations =
