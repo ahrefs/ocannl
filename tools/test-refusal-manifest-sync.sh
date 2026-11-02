@@ -26,9 +26,12 @@
 #   4. a failure with no correction to promote is explained, exits with the run's status, and
 #      promotes nothing.
 #   5. a correction dune lists outside the sync's goldens is named and never promoted.
-#   6. the first run is forced and the later ones are not, and every run's log reaches the offers.
+#   6. the first run is forced and the later ones are not, and every run's log reaches the offers,
+#      through a `dune exec --no-build`: a build there would replace dune's promotion list.
 #   7. --rounds refuses anything but a number of at least 2, before anything runs.
 #   8. a plan naming no golden runs nothing and hands nothing to the offers.
+#   1b. leg 1 under the host's /bin/bash, which on macOS is Bash 3.2: an empty array expanded under
+#      `set -u` is an unbound variable there, which ended the second round.
 
 set -u
 
@@ -106,7 +109,7 @@ STUB
 sync() { # REPO [ARGS...] -- runs the subject, its output in REPO/stdout, status in REPO/rc
   local repo=$1
   shift
-  (cd "$repo" && PATH="$repo/bin:$PATH" tools/refusal-manifest-sync.sh "$@" >stdout 2>&1)
+  (cd "$repo" && PATH="$repo/bin:$PATH" ${SUBJECT_BASH:-bash} tools/refusal-manifest-sync.sh "$@" >stdout 2>&1)
   echo $? >"$repo/rc"
 }
 
@@ -123,7 +126,7 @@ seed_chain() { # REPO
 }
 
 leg_1() {
-  local r=$TMP/1
+  local r=$TMP/1${SUBJECT_BASH:+b} label="1${SUBJECT_BASH:+b}: a two-step correction chain converges in one invocation${SUBJECT_BASH:+ under $SUBJECT_BASH}"
   fixture "$r" "$chain" "$two_goldens"
   seed_chain "$r"
   sync "$r"
@@ -133,12 +136,15 @@ leg_1() {
     grep -q 'round 1: promoting test/operations/scanner.expected' "$r/stdout" &&
     grep -q 'round 2: promoting test/operations/audit.expected' "$r/stdout" &&
     printf 'audit saw:\nmarker: new\n' | cmp -s - "$r/test/operations/audit.expected"; then
-    report 0 "1: a two-step correction chain converges in one invocation"
+    report 0 "$label"
   else
-    report 1 "1: a two-step correction chain converges in one invocation" "see $r (rc $(cat "$r/rc"))"
+    report 1 "$label" "see $r (rc $(cat "$r/rc"))"
   fi
 }
 harness_leg_run '1: a two-step correction chain converges in one invocation' leg_1
+
+leg_1b() { SUBJECT_BASH=/bin/bash leg_1; }
+harness_leg_run "1b: the chain converges under the host's /bin/bash" leg_1b
 
 leg_2() {
   local r=$TMP/2
@@ -213,7 +219,8 @@ leg_6() {
   runs=$(grep '^test-run run build' "$r/calls")
   if [ "$(printf '%s\n' "$runs" | grep -c -- ' --force ')" = 1 ] &&
     printf '%s\n' "$runs" | head -1 | grep -q -- 'build --force @test/operations/runtest-scanner' &&
-    grep -qx "offers $logs/1/log $logs/2/log $logs/3/log" "$r/calls"; then
+    grep -qx "offers $logs/1/log $logs/2/log $logs/3/log" "$r/calls" &&
+    grep -q '^dune exec --no-build .* -- --offers ' "$r/calls"; then
     report 0 "6: the first run alone is forced, and every run's log reaches the offers"
   else
     report 1 "6: the first run alone is forced, and every run's log reaches the offers" "see $r"

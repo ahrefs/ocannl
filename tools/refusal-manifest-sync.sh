@@ -108,7 +108,7 @@ logs=()
 round=1
 force=(--force)
 while :; do
-  tools/test-run.sh run build "${force[@]}" "${aliases[@]}"
+  tools/test-run.sh run build ${force[@]+"${force[@]}"} "${aliases[@]}"
   status=$?
   force=()
   run=$(tools/test-run.sh paths run last) || {
@@ -151,5 +151,8 @@ while :; do
   tools/promote.sh "${pending[@]}" || exit $?
   round=$((round + 1))
 done
-dune exec --no-print-directory tools/refusal_manifest_sync.exe -- --offers "${logs[@]}" || exit 2
+# --no-build: a build here would replace dune's promotion list, which still names any correction
+# left unpromoted above.
+dune exec --no-build --no-print-directory tools/refusal_manifest_sync.exe -- --offers "${logs[@]}" ||
+  exit 2
 exit "$status"
