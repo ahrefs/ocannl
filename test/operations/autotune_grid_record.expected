@@ -1,6 +1,12 @@
 the renderer resolved the forced per-chunk privatization cap: true
+agr-seed: every judged candidate compiled: true
+agr-seed: no proposed hoisted-grid seed renders a Grid loop serially for the cap: true
+agr-seed: every refused geometry the renderer would privatize is over the cap: true
+agr-seed: the pre-filter refuses a geometry whose fragment is over the cap: true
+agr-seed: the pre-filter keeps a geometry that privatizes on the pool within the cap: true
 agr: the timing policy kept no timed seed out of the ranking: true
-agr: a ranked Grid seed's record shows its row-block loop serial for the cap: true
+agr: no ranked candidate rendered a Grid loop serially for the cap: true
+agr: a ranked Grid seed's record shows a loop serial for the launch floor: true
 agr: every listed candidate asked for a Grid loop the pool kept serial, per its own census: true
 agr: the crowned candidate's record is the one its shipped routine carries: true
 agr: a crowned Grid-asking schedule rendered serially is among the listed: true

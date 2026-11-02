@@ -2432,6 +2432,20 @@ let cpu_pack_shape_grid_outermost shape =
 let cpu_pack_contracts ~m_nk ~grid_outermost ~bk =
   grid_outermost && bk > 0 && blocks_of m_nk bk >= 2
 
+(* The bytes of the [bm x bn] accumulator fragment a packed geometry's contraction mints, at the
+   output's storage precision ([Sched.contract_tensorized_accumulator] mints it at its target's), or
+   0 where [cpu_pack_contracts] does not imply one. [bn = 0] is the full column extent. One spelling
+   for its two readers: the traffic floor charges its init-load and store-back, and the seeding
+   pre-filter weighs it against the per-chunk privatization cap, since under a grid-outermost shape
+   it lives inside the row-block [Grid] loop's body and the renderer privatizes it per chunk
+   (gh-ocannl-1793). *)
+let cpu_pack_fragment_bytes (site : matmul_site) ~shape ~bm ~bn ~bk =
+  if cpu_pack_contracts ~m_nk:site.m_nk ~grid_outermost:(cpu_pack_shape_grid_outermost shape) ~bk
+  then
+    let bn_eff = if bn = 0 then site.m_nj else bn in
+    bm * bn_eff * Ir.Ops.prec_in_bytes (Lazy.force site.m_d.Ir.Tnode.storage_prec)
+  else 0
+
 (* Cache-blocked, operand-packed tensorized CPU matmul: [Tile_mma] composed with the S4 packing
    pipeline (the remaining piece of gh-ocannl-469). GEBP loop structure, all-Serial: [j_o? { k_o {
    pack B~[bk x bn]; i_o { pack A~[bm x bk]; Tile_mma(bm, bn, bk) } } }] — the packing [Stage]s land
@@ -4181,21 +4195,42 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                 Printf.sprintf "bm=%d gives %d row block(s); a Grid split needs at least 2" p.sk_bm
                   (blocks_of site.m_ni p.sk_bm)
               in
-              (* Per-chunk privatized-tile floor for the Grid shapes ([C_syntax]'s
-                 [per_chunk_private_bytes_cap], config [cc_grid_private_bytes_cap]): a known
-                 in-kernel tile exceeding the cap makes [parallel_grid_safe] decline the Grid
-                 rendering — the candidate would run serially under a Grid label. Other per-chunk
-                 locals can still trip the cap at render; passing here is necessary, not sufficient
-                 (the routine's Grid census and the decline diagnostics cover the rest). The
-                 renderer's own resolved cap, so the two cannot disagree about it. *)
+              (* Per-chunk privatized-bytes floor for the Grid shapes ([C_syntax]'s
+                 [per_chunk_private_bytes_cap], config [cc_grid_private_bytes_cap]): the known
+                 per-chunk locals of a shape's row-block [Grid] body exceeding the cap make
+                 [parallel_grid_safe] decline the Grid rendering — the candidate would be timed
+                 serially under a Grid label. The known locals are the shape's in-kernel packed
+                 tiles ([tiles]) plus, under a grid-outermost shape, the [bm x bn] accumulator
+                 fragment its contraction mints inside that body ([cpu_pack_fragment_bytes],
+                 gh-ocannl-1793) — the renderer's [Grid_private_over_cap] sums the same locals.
+                 Other per-chunk locals can still trip the cap at render (a pad-masked
+                 statement-site tile, which [cpu_pack_contracts] does not imply); passing here is
+                 necessary, not sufficient (the routine's Grid census and the decline diagnostics
+                 cover the rest). The renderer's own resolved cap, so the two cannot disagree about
+                 it. *)
               let chunk_cap = Lazy.force Ir.C_syntax.per_chunk_private_bytes_cap in
-              let over_chunk_cap ~what bytes =
+              let over_chunk_cap ~shape ~what ~tiles p =
+                let fragment =
+                  cpu_pack_fragment_bytes site ~shape ~bm:p.sk_bm ~bn:p.sk_bn ~bk:p.sk_bk
+                in
+                let bytes = tiles + fragment in
                 if bytes > chunk_cap then
+                  let fragment_what () =
+                    Printf.sprintf "the contracted %dx%d accumulator fragment" p.sk_bm
+                      (if p.sk_bn = 0 then site.m_nj else p.sk_bn)
+                  in
+                  let what =
+                    if fragment = 0 then Printf.sprintf "%s (%d bytes)" what bytes
+                    else if tiles = 0 then Printf.sprintf "%s (%d bytes)" (fragment_what ()) bytes
+                    else
+                      Printf.sprintf "%s plus %s (%d + %d = %d bytes)" what (fragment_what ()) tiles
+                        fragment bytes
+                  in
                   Some
                     (Printf.sprintf
-                       "%s (%d bytes) exceeds the per-chunk privatization cap (%d, config \
+                       "%s exceeds the per-chunk privatization cap (%d, config \
                         cc_grid_private_bytes_cap)"
-                       what bytes chunk_cap)
+                       what chunk_cap)
                 else None
               in
               (* One packing shape's geometries: the shared menu judged per shape. The shape level
@@ -4284,7 +4319,12 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                   "extents do not divide the blocks: the non-hoistable operand is \
                                    read in place and cannot absorb the zero-fringe pad"
                               else if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
-                              else leaf (with_packing_shape `Hoisted_grid p))) );
+                              else
+                                (* No in-kernel tile: the hoisted panels live in the constant pool,
+                                   and the rest is read in place. *)
+                                match over_chunk_cap ~shape:`Hoisted_grid ~what:"" ~tiles:0 p with
+                                | Some w -> Sspace.Refuted w
+                                | None -> leaf (with_packing_shape `Hoisted_grid p))) );
                   ( Family_decision.Packing_shape `Hoisted_grid_pack_rest,
                     if not any_hoistable then Sspace.Refuted no_constant
                     else if Option.is_some (Lazy.force grid_refutation) then
@@ -4297,7 +4337,14 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                             (subt (fun () ->
                                  geoms ~f:(fun p _ _ ->
                                      if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
-                                     else leaf (with_packing_shape `Hoisted_grid_pack_rest p)))) )
+                                     else
+                                       match
+                                         over_chunk_cap ~shape:`Hoisted_grid_pack_rest ~what:""
+                                           ~tiles:0 p
+                                       with
+                                       | Some w -> Sspace.Refuted w
+                                       | None -> leaf (with_packing_shape `Hoisted_grid_pack_rest p))))
+                        )
                     else
                       subt (fun () ->
                           geoms ~f:(fun p _ _ ->
@@ -4310,7 +4357,10 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                               in
                               if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                               else
-                                match over_chunk_cap ~what:"per-chunk packed tile" rest_tile with
+                                match
+                                  over_chunk_cap ~shape:`Hoisted_grid_pack_rest
+                                    ~what:"per-chunk packed tile" ~tiles:rest_tile p
+                                with
                                 | Some w -> Sspace.Refuted w
                                 | None -> leaf (with_packing_shape `Hoisted_grid_pack_rest p))) );
                   ( Family_decision.Packing_shape `Grid_pack_rest,
@@ -4328,7 +4378,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                           if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                           else
                             match
-                              over_chunk_cap ~what:"per-chunk packed tiles" (privatized_bytes p)
+                              over_chunk_cap ~shape:`Grid_pack_rest ~what:"per-chunk packed tiles"
+                                ~tiles:(privatized_bytes p) p
                             with
                             | Some w -> Sspace.Refuted w
                             | None -> leaf (with_packing_shape `Grid_pack_rest p))
@@ -4348,12 +4399,15 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                         subt (fun () ->
                             geoms ~f:(fun p _ _ ->
                                 (* The per-row-block A~ tile privatizes per chunk; the read-only B~
-                                   panel is shared and does not count against the cap. *)
+                                   panel is shared and does not count against the cap. The row
+                                   blocks sit inside the reduction blocks, so no fragment is implied
+                                   ([cpu_pack_fragment_bytes] is 0 here). *)
                                 let a_tile = p.sk_bm * p.sk_bk * prec_bytes in
                                 if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                                 else
                                   match
-                                    over_chunk_cap ~what:"per-chunk privatized A~ tile" a_tile
+                                    over_chunk_cap ~shape:`Grid ~what:"per-chunk privatized A~ tile"
+                                      ~tiles:a_tile p
                                   with
                                   | Some w -> Sspace.Refuted w
                                   | None -> leaf (with_packing_shape `Grid p))) );
@@ -5500,13 +5554,10 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
               if Option.exists shape ~f:(Poly.equal `Serial) then tile_bytes ~bm ~bn:bn_eff ~bk
               else 0
             in
-            let contracts =
-              Option.exists shape ~f:(fun sh ->
-                  cpu_pack_contracts ~m_nk:site.m_nk
-                    ~grid_outermost:(cpu_pack_shape_grid_outermost sh)
-                    ~bk)
-            in
-            panels + if contracts then 2 * bm * bn_eff * pd else 0
+            panels
+            + 2
+              * Option.value_map shape ~default:0 ~f:(fun shape ->
+                  cpu_pack_fragment_bytes site ~shape ~bm ~bn ~bk)
         | Some (Family_decision.Cpu_blocktile _) ->
             (* The CPU blocktile pipeline stages nothing: its tiles are registers, and its hoisted
                flavor packs at link time. *)
