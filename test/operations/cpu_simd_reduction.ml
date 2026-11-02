@@ -30,7 +30,8 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-3)
+(* Scalar parity: an absolute 1e-3 around the reference. *)
+let tol _ = 1e-3
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 let single = Ir.Ops.single
@@ -93,7 +94,7 @@ let () =
   let v = TDSL.ndarray vv ~label:[ "v" ] ~output_dims:[ n ] () in
   let%op s0 = v ++ "i=>0" in
   let got_serial = run ~name:"red_sum_serial" ~transform:(fun opt -> opt) s0 in
-  p "serial sum correct" (approx got_serial expected_sum);
+  p_close "serial sum correct" [| got_serial |] [| expected_sum |] ~tol;
   let%op s1 = v ++ "i=>0" in
   let got =
     run ~name:"red_sum_simd"
@@ -102,7 +103,7 @@ let () =
         Sched.apply [ Sched.Retype { axis = j; ty = LL.Vectorized } ] opt)
       s1
   in
-  p "vectorized sum matches the serial twin" (approx got expected_sum);
+  p_close "vectorized sum matches the serial twin" [| got |] [| expected_sum |] ~tol;
   p "sum renders as accumulator chains (CPU) or serially (GPU)"
     (check_generated ~expect_chains:true "red_sum_simd");
 
@@ -132,7 +133,7 @@ let () =
                }))
       d1
   in
-  p "vectorized fma dot parity" (approx got_dot expected_dot);
+  p_close "vectorized fma dot parity" [| got_dot |] [| expected_dot |] ~tol;
   p "dot renders as accumulator chains (CPU) or serially (GPU)"
     (check_generated ~expect_chains:true "red_dot_simd");
 
@@ -160,7 +161,7 @@ let () =
                }))
       x1
   in
-  p "vectorized max parity" (approx got_max expected_max);
+  p_close "vectorized max parity" [| got_max |] [| expected_max |] ~tol;
   p "max renders as accumulator chains (CPU) or serially (GPU)"
     (check_generated ~expect_chains:true "red_max_simd");
 
@@ -237,6 +238,7 @@ let () =
                }))
       y1
   in
-  p "strided accumulation parity (serial fallback)" (approx got_strided expected_strided);
+  p_close "strided accumulation parity (serial fallback)" [| got_strided |] [| expected_strided |]
+    ~tol;
   p "strided accumulation declines chains and emits no pragma"
     (check_generated ~expect_chains:false "red_strided_simd")

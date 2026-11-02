@@ -110,5 +110,5 @@ let () =
   p_all "masked half-gradient replay writes only finite rows" cases ~f:(fun values ->
       Array.for_all values ~f:Float.is_finite);
   p_all "masked half-gradient replay stays within its half-rounding bound" cases ~f:(fun values ->
-      Array.for_alli values ~f:(fun r v ->
-          Float.(abs (v - reference.(r)) <= (gamma * abs reference.(r)) + floor)))
+      Verdict.within "masked half-gradient replay stays within its half-rounding bound" values
+        reference ~tol:(fun want -> (gamma *. Float.abs want) +. floor))

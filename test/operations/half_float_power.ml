@@ -82,17 +82,10 @@ let () =
       let want = List.map cases ~f:(fun (x, e, _) -> f16 (Float.( ** ) (f16 x) (f16 e))) in
       p_all "references are normal halves, so the tolerance is one ulp at half precision" want
         ~f:is_normal_half;
-      p_alli
+      p_close
         "fractional and dynamic half powers are within one ulp at half precision of the f64 \
          reference"
-        cases ~f:(fun i (x, e, kind) ->
-          let want = List.nth_exn want i in
-          let ok = Float.(abs (got.(i) - want) <= 0x1p-10 * abs want) in
-          if not ok then
-            Stdio.eprintf "(not part of the golden) %s %h^%h: got %h want %h\n"
-              (match kind with Const -> "const" | Dynamic -> "dynamic")
-              x e got.(i) want;
-          ok);
+        got (Array.of_list want) ~tol:(fun want -> 0x1p-10 *. Float.abs want);
       (* The same operands at f32, narrowed to half on the host: one rounding of the same [powf]
          result, by codegen on every backend. *)
       let single = run ~prec:Ops.single ~name:"hpow_f32" ~first_id:19200 cases in

@@ -79,14 +79,12 @@ let check ?subnormal ~prec ~narrow ~tol ~name ~first_id ~call () =
       let as_float (x, n) = (x, Float.of_int n) in
       let got = run ~prec ~narrow ~name ~first_id (List.map (negative @ mirrored) ~f:as_float) in
       let n_neg = List.length negative in
-      p_alli (name ^ ": negative bases under run-time integral exponents match the integer power")
-        negative ~f:(fun i (x, n) ->
-          let want = narrow (Float.( ** ) (narrow x) (Float.of_int n)) in
-          let ok = Float.(abs (got.(i) - want) <= tol * abs want) in
-          if not ok then
-            Stdio.eprintf "(not part of the golden) %s %h^%d: got %h want %h\n" name x n got.(i)
-              want;
-          ok);
+      p_close
+        (name ^ ": negative bases under run-time integral exponents match the integer power")
+        (Array.sub got ~pos:0 ~len:n_neg)
+        (Array.of_list_map negative ~f:(fun (x, n) ->
+             narrow (Float.( ** ) (narrow x) (Float.of_int n))))
+        ~tol:(fun want -> tol *. Float.abs want);
       gated_alli ~when_:gpu_backend ~on:backend_name
         (name
        ^ ": a negative base's power is its mirror's, bitwise, negated exactly for odd exponents")

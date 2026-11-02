@@ -41,7 +41,8 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-3)
+(* Scalar parity: an absolute 1e-3 around the reference. *)
+let tol _ = 1e-3
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let () = Stdio.eprintf "hardware_warp_shuffle: backend=%s (not part of the golden)\n%!" backend_name
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
@@ -154,7 +155,7 @@ let () =
   let v = TDSL.ndarray vv ~label:[ "v" ] ~output_dims:[ n ] () in
   let%op s0 = v ++ "i=>0" in
   let got_serial = run ~name:"wshfl_sum_serial" ~transform:(fun opt -> opt) s0 in
-  p "serial sum correct" (approx got_serial expected_sum);
+  p_close "serial sum correct" [| got_serial |] [| expected_sum |] ~tol;
   let%op s1 = v ++ "i=>0" in
   let got =
     run ~name:"sum_wshfl"
@@ -164,7 +165,7 @@ let () =
                (L.add (L.get s1.Tensor.value [| f0 |]) (L.get v.Tensor.value [| it i |]))))
       s1
   in
-  p "warp-shuffle sum parity" (approx got expected_sum);
+  p_close "warp-shuffle sum parity" [| got |] [| expected_sum |] ~tol;
   (let src = Generated.read "sum_wshfl" in
    let has sub = String.is_substring src ~substring:sub in
    let ok =
@@ -193,7 +194,7 @@ let () =
                     (L.get d1.Tensor.value [| f0 |], single) ))))
       d1
   in
-  p "warp-shuffle fma dot parity" (approx got_dot expected_dot);
+  p_close "warp-shuffle fma dot parity" [| got_dot |] [| expected_dot |] ~tol;
   (let src = Generated.read "dot_wshfl" in
    let has sub = String.is_substring src ~substring:sub in
    let ok =
@@ -218,7 +219,7 @@ let () =
                   (L.get w.Tensor.value [| it i |]))))
       x1
   in
-  p "warp-shuffle max parity" (approx got_max expected_max);
+  p_close "warp-shuffle max parity" [| got_max |] [| expected_max |] ~tol;
 
   (* --- A recognized accumulation whose extent (48) does not cover whole warps: the GPU renderer
      must reject it cleanly (binding the index would race); the C backends run it serially. --- *)
@@ -244,8 +245,9 @@ let () =
           (String.is_substring msg ~substring:"multiple of the warp size")
     | None -> p "non-warp-multiple extent rejected (GPU) or runs serially (CPU)" false
   else
-    p "non-warp-multiple extent rejected (GPU) or runs serially (CPU)"
-      (approx (run ~name:"odd_extent_wshfl" ~transform y1) expected_u);
+    p_close "non-warp-multiple extent rejected (GPU) or runs serially (CPU)"
+      [| run ~name:"odd_extent_wshfl" ~transform y1 |]
+      [| expected_u |] ~tol;
 
   (* --- A recognized accumulation sharing workgroup slot 0 with a LARGER sibling extent: on GPU
      [guard_annotated_extents] wraps the reduce body in the synthetic [If (i < 64)] launch guard,
@@ -284,8 +286,9 @@ let () =
           (String.is_substring msg ~substring:"cover the whole workgroup")
     | None -> p "guarded smaller-extent accumulation rejected (GPU) or runs serially (CPU)" false
   else
-    p "guarded smaller-extent accumulation rejected (GPU) or runs serially (CPU)"
-      (approx (run ~name:"guarded_extent_wshfl" ~transform:sibling_transform z1) expected_partial)
+    p_close "guarded smaller-extent accumulation rejected (GPU) or runs serially (CPU)"
+      [| run ~name:"guarded_extent_wshfl" ~transform:sibling_transform z1 |]
+      [| expected_partial |] ~tol
 
 (* --- gh-ocannl-754: an accumulation the shared width decision recognizes but the shuffle cannot
    render — a Serial level NESTED under the [Workgroup_reduce] one, accumulating into a cell every
@@ -322,7 +325,7 @@ let () =
     with
     | Some msg -> p claim (String.is_substring msg ~substring:"single accumulation statement")
     | None -> p claim false
-  else p claim (approx (run ~name:"nested_wshfl" ~transform ms) expected)
+  else p_close claim [| run ~name:"nested_wshfl" ~transform ms |] [| expected |] ~tol
 
 (* --- gh-ocannl-1238: a multi-warp reduction's barriers under enclosing control. Past one warp the
    shuffle stages per-warp partials between two barriers -- barriers the IR does not contain, which
@@ -747,7 +750,8 @@ let () =
         | Some msg ->
             p claim_narrow_refused (String.is_substring msg ~substring:"accumulator residency")
         | None -> p claim_narrow_refused false
-      else p claim_narrow_refused (approx (run ~name:"f16_wshfl" ~transform hs) expected))
+      else
+        p_close claim_narrow_refused [| run ~name:"f16_wshfl" ~transform hs |] [| expected |] ~tol)
 
 (* gh-ocannl-682 (Codex review, P1): the widening is sound only where the SERIAL rendering widens
    too, and one class of body it never widens is an RNG-bearing accumulation. An RNG conversion
@@ -1057,12 +1061,14 @@ let () =
       match refused ~name ~transform t with
       | Some msg -> p claim (String.is_substring msg ~substring:refusal_phrase)
       | None -> p claim false
-    else if on_cpu then p claim (approx (run_values ~name ~transform t).(index) cpu_value)
+    else if on_cpu then
+      p_close claim [| (run_values ~name ~transform t).(index) |] [| cpu_value |] ~tol
     else skipped claim
   in
   let renders_leg ?(index = 0) claim ~name ~transform t ~value =
     host_query ~into:host_renders ~name ~transform t;
-    if on_gpu || on_cpu then p claim (approx (run_values ~name ~transform t).(index) value)
+    if on_gpu || on_cpu then
+      p_close claim [| (run_values ~name ~transform t).(index) |] [| value |] ~tol
     else skipped claim
   in
   (* Replace the lowered code with a hand-built nest over the value node [s] (dropping the lowered
@@ -1157,10 +1163,10 @@ let () =
     | Some msg -> p claim_pin_other_axis_refused (String.is_substring msg ~substring:refusal_phrase)
     | None -> p claim_pin_other_axis_refused false)
   else if on_cpu then
-    p claim_pin_other_axis_refused
-      (approx
-         (run_values ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform pgs).(0)
-         (2. *. gv.(0)))
+    p_close claim_pin_other_axis_refused
+      [| (run_values ~name:"race_pin_grid_wshfl" ~transform:pin_grid_transform pgs).(0) |]
+      [| 2. *. gv.(0) |]
+      ~tol
   else skipped claim_pin_other_axis_refused;
   (* A pin is one thread along its axis: two stores under the same pin are that thread in program
      order. (What OTHER statements' threads do to the pinned cell is dependence analysis over
@@ -1258,10 +1264,10 @@ let () =
   in
   host_query ~into:host_renders ~name:"race_staged_wshfl" ~transform:staged_transform hs;
   if on_gpu then
-    p claim_staged_form_renders
-      (approx
-         (run_values ~name:"race_staged_wshfl" ~transform:staged_transform hs).(0)
-         (gv.(0) +. gv.(1)))
+    p_close claim_staged_form_renders
+      [| (run_values ~name:"race_staged_wshfl" ~transform:staged_transform hs).(0) |]
+      [| gv.(0) +. gv.(1) |]
+      ~tol
   else if on_cpu then
     p claim_staged_form_renders
       (Option.is_some (refused ~name:"race_staged_wshfl" ~transform:staged_transform hs))

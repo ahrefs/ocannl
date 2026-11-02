@@ -39,6 +39,4 @@ let () =
   let expected = [| 820.; 840. |] in
   Stdio.printf "materialized nodes read by one kernel = %d\n" n;
   Verdict.p "exceeds Metal ~31 binding limit" (n > 31);
-  Verdict.p "pooled binding computed the correct sum"
-    (Array.length got = 2
-    && Array.for_all2_exn got expected ~f:(fun a b -> Float.(abs (a - b) < 1e-2)))
+  Verdict.p_close "pooled binding computed the correct sum" got expected ~tol:(fun _ -> 1e-2)
