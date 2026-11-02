@@ -360,6 +360,9 @@ let () = List.iter labels ~f:skipped|ocaml},
       ( "a lazy a loop body only builds",
         {ocaml|let () = for _i = 1 to 2 do ignore (lazy (Verdict.skipped ~backend:"cc" "one")) done|ocaml},
         [] );
+      ( "a lazy sequence a map only builds",
+        {ocaml|let deferred = Stdlib.Seq.map (Verdict.skipped ~backend:"cc") (Stdlib.List.to_seq labels)|ocaml},
+        [] );
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );

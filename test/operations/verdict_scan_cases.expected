@@ -80,6 +80,7 @@ ok: skip list -- a function value a loop body only builds
 ok: skip list -- a partial iteration, which stores its skip callback
 ok: skip list -- an iteration written as a pipeline
 ok: skip list -- a lazy a loop body only builds
+ok: skip list -- a lazy sequence a map only builds
 ok: skip list -- an Option iteration, which runs at most once
 the walk counts every string literal it passes: true
 and places the ones a named function receives: true

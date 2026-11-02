@@ -685,6 +685,7 @@ names a formatted leg claim still awaiting its make function unread: true
 accepts a leg built in place, whose gate is no argument the make function hands a helper: true
 refuses a leg gate on the population a pipelined claim ranges over: true
 refuses a leg gate read off what a helper on one path is handed beside a claim on another: true
+refuses a helper's population gate beside a claim only a deferred function makes: true
 accepts a leg gated on a capability over a population built from the same program: true
 accepts a sub-leg gated on an invariant its claims' population does not decide: true
 names a leg handed in as a parameter uncompared rather than counting it read: true

@@ -2916,13 +2916,24 @@ let gate_census content =
                 ~stop:expr.pexp_loc.loc_end.pos_cnum (fun () -> self#visit env expr)
           | None -> self#visit env expr
         in
-        (* A leg claim's make function: walked with its collector innermost. *)
+        let with_stack stack =
+          let saved = leg_stack in
+          leg_stack <- stack;
+          Exn.protect ~f:dispatch ~finally:(fun () -> leg_stack <- saved)
+        in
+        (* A leg claim's make function: walked with its collector innermost. Inside it, a function
+           value no collection function calls back, or a lazy, is deferred: what it claims is no
+           claim [make] makes, so the collectors pause there. *)
         match if quiet > 0 then None else Hashtbl.find_and_remove leg_makes (position expr) with
-        | Some collector ->
-            let saved = leg_stack in
-            leg_stack <- collector :: saved;
-            Exn.protect ~f:dispatch ~finally:(fun () -> leg_stack <- saved)
-        | None -> dispatch ()
+        | Some collector -> with_stack (collector :: leg_stack)
+        | None -> (
+            match expr.pexp_desc with
+            | (Pexp_function _ | Pexp_lazy _)
+              when quiet = 0
+                   && (not (List.is_empty leg_stack))
+                   && not (Hash_set.mem synchronous (position expr)) ->
+                with_stack []
+            | _ -> dispatch ())
 
       method visit env expr =
         (if quiet = 0 then
@@ -3447,6 +3458,10 @@ let skip_list_census content =
     | Some None -> None
     | None -> Some name
   in
+  (* A lazy sequence's map or filter only builds it; these consume it, calling their callback. *)
+  let consuming =
+    [ "iter"; "iteri"; "fold"; "fold_left"; "for_all"; "exists"; "find"; "find_map" ]
+  in
   (* The function name of a collection-module function [callee] spells, where it is one: its module
      component resolved through the source's module bindings ([resolve_module]). *)
   let collection_iteration callee =
@@ -3457,7 +3472,9 @@ let skip_list_census content =
         | Some module_ ->
             if
               List.mem collection_modules module_ ~equal:String.equal
-              && not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal)
+              && (not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal))
+              && ((not (List.mem [ "Seq"; "Sequence" ] module_ ~equal:String.equal))
+                 || List.mem consuming (List.last_exn path) ~equal:String.equal)
             then Some (List.last_exn path)
             else None)
     | _ -> None
