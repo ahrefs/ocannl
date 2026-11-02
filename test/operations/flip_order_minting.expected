@@ -1,0 +1,9 @@
+control: the minting changes a node-keyed table's iteration order: true
+the step offers flips and the planner takes some: true
+the flip surface is the same whatever was minted before: true
+the planner's minimum takes the same flips whatever was minted before: true
+control: the creation orders differ: true
+hand-built: both nodes are candidates, at one cost: true
+hand-built: equal-cost candidates come in program order, built a first: true
+hand-built: equal-cost candidates come in program order, built b first: true
+ranking: equal ranks keep the input order: true

@@ -5269,15 +5269,13 @@ let rank_flip_candidates ~ordering ?(profit = Unmeasured) ~enablement ~disableme
           List.stable_sort fc.LL.fc_alternatives ~compare:(fun a b ->
               by_rank fc.LL.fc_tn a fc.LL.fc_tn b);
       })
-  |> List.sort ~compare:(fun (a : LL.flip_candidate) (b : LL.flip_candidate) ->
-      match
-        by_rank a.LL.fc_tn
-          (List.hd_exn a.LL.fc_alternatives)
-          b.LL.fc_tn
-          (List.hd_exn b.LL.fc_alternatives)
-      with
-      | 0 -> Ir.Tnode.compare a.LL.fc_tn b.LL.fc_tn
-      | c -> c)
+  (* Stable: equal ranks keep the input's order -- the surface's program order among ties
+     (gh-ocannl-1777), never node id, which unrelated node minting moves. *)
+  |> List.stable_sort ~compare:(fun (a : LL.flip_candidate) (b : LL.flip_candidate) ->
+      by_rank a.LL.fc_tn
+        (List.hd_exn a.LL.fc_alternatives)
+        b.LL.fc_tn
+        (List.hd_exn b.LL.fc_alternatives))
 
 let offers_materialize (fc : LL.flip_candidate) =
   List.exists fc.LL.fc_alternatives ~f:(fun fa -> LL.equal_reading fa.LL.fa_flip `Materialize)

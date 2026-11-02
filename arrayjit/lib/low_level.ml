@@ -9751,19 +9751,30 @@ let decide_placements (optim_ctx : optimize_ctx) traced_store ~max_visits ~reads
       | None ->
           (* Cycle guard: a node re-entered during its own expansion counts as one contributor, as
              if materialized — a cyclically-read node has an uncovered read and was placed
-             [On_device] by the coverage rule above anyway. *)
+             [On_device] by the coverage rule above anyway. A cycle through a node ALREADY
+             materialized never reaches it: [expand] does not enter such a node (below). *)
           Hashtbl.set memo ~key:tn ~data:(Set.singleton (module Tnode) tn);
           let expand acc p =
-            (* Recurse first: the dependency's own decision lands before its placement is consulted,
-               making the result traversal-order-independent. An undecided dependency expands as
-               though it will be virtual, though inlining legality is only settled later
-               ([check_and_store_virtual], inside the virtualizer this pass feeds) — an
-               over-approximation erring toward materialization, the safe direction shared with the
-               multiplicity bound; the opposite default would let a chain of undecided links through
-               the cap on every first compile. A consumer spuriously materialized this way stays an
-               [`Inline] flip candidate, the search's channel for undoing it. *)
-            let s_p = fanin p in
-            if Tn.Placements.known_non_virtual plc p then Set.add acc p else Set.union acc s_p
+            (* A dependency already materialized contributes itself, and is not entered: expanding
+               it could not change its decision (the cap only materializes), and the setter-reads
+               graph of a whole step is cyclic through exactly such nodes — a parameter reads its
+               gradient, which reads the activations that read the parameter. Entering them let the
+               guard above cut those cycles wherever the traversal happened to start, and the sets
+               memoized under a cut node's placeholder depended on the [traced_store] iteration
+               order, hence on node uids, hence on how many nodes the session minted before
+               (gh-ocannl-1777). The node's own set is still computed, from the top-level iteration
+               below. Otherwise recurse first: the dependency's own decision lands before its
+               placement is consulted, making the result traversal-order-independent. An undecided
+               dependency expands as though it will be virtual, though inlining legality is only
+               settled later ([check_and_store_virtual], inside the virtualizer this pass feeds) —
+               an over-approximation erring toward materialization, the safe direction shared with
+               the multiplicity bound; the opposite default would let a chain of undecided links
+               through the cap on every first compile. A consumer spuriously materialized this way
+               stays an [`Inline] flip candidate, the search's channel for undoing it. *)
+            if Tn.Placements.known_non_virtual plc p then Set.add acc p
+            else
+              let s_p = fanin p in
+              if Tn.Placements.known_non_virtual plc p then Set.add acc p else Set.union acc s_p
           in
           (* Per-setter maximum over the per-setter read sets (see [setter_reads]). *)
           let max_expansion read_sets =
@@ -10642,6 +10653,30 @@ let memoized_recompute_price an ~pricer ~static_indices ~world tn =
           an.an_price_cache := List.take ((key, price) :: !(an.an_price_cache)) 128;
           price)
 
+(* gh-ocannl-1777: each node's first buffer access in [llc], in {!iter_buffer_accesses}' walk order
+   (a statement's write before its reads), numbered from 0 -- a key the program fixes. A node's uid
+   is fixed by when it was built: the same program built in another order (hand-built IR, or
+   independent subterms constructed in a different sequence) would otherwise hand its equal-cost
+   decisions to whichever node happened to be built first. *)
+let first_access_positions (llc : t) : (Tn.t, int) Hashtbl.t =
+  let first = Hashtbl.create (module Tnode) in
+  iter_buffer_accesses llc
+    ~on_opaque:(fun () -> ())
+    ~touch:(fun tn ->
+      if not (Hashtbl.mem first tn) then Hashtbl.set first ~key:tn ~data:(Hashtbl.length first));
+  first
+
+(* Program order over [first_access_positions]: nodes the code touches in access order, then the
+   rest (a node only an opaque [Staged_compilation] reaches) by label, and node identity only
+   between equally-labelled nodes the code never names. *)
+let compare_program_order positions a b =
+  match (Hashtbl.find positions a, Hashtbl.find positions b) with
+  | Some pa, Some pb -> Int.compare pa pb
+  | Some _, None -> -1
+  | None, Some _ -> 1
+  | None, None -> (
+      match List.compare String.compare a.Tn.label b.Tn.label with 0 -> Tn.compare a b | c -> c)
+
 let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
   let llc = an.an_llc in
@@ -10714,6 +10749,9 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
      ([default_to_most_local]) has not yet rewritten the cap provenances. *)
   let flip_candidates =
     let plc = input_ctx.placements in
+    (* gh-ocannl-1777: equal-cost candidates are ordered by where the raw lowered code first touches
+       them, never by node id. *)
+    let program_position = lazy (first_access_positions an.an_llc) in
     (* The world a read of a candidate is instantiated in, resolved once per node: both the pricer
        and the refusal below read it (gh-ocannl-1093). *)
     let worlds = Hashtbl.create (module Tnode) in
@@ -10838,9 +10876,12 @@ let%diagn2_sexp specialize_proc (input_ctx : optimize_ctx) (an : analysis) : opt
               | [] -> acc
               | fc_alternatives -> { fc_tn = tn; fc_default; fc_alternatives } :: acc))
     |> List.sort ~compare:(fun a b ->
-        (* Most expensive first by the node's most expensive alternative. *)
+        (* Most expensive first by the node's most expensive alternative; equal costs in program
+           order. *)
         let top fc = (List.hd_exn fc.fc_alternatives).fa_recompute_cost in
-        match Int.compare (top b) (top a) with 0 -> Tn.compare a.fc_tn b.fc_tn | c -> c)
+        match Int.compare (top b) (top a) with
+        | 0 -> compare_program_order (Lazy.force program_position) a.fc_tn b.fc_tn
+        | c -> c)
   in
   let optimize_ctx = input_ctx in
   {

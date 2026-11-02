@@ -2458,7 +2458,8 @@ val rank_flip_candidates :
     [`Enablement] sorts family-unlocking [`Materialize] flips ([enablement] members) first and
     family-breaking [`Inline] flips (members of either set) last, cost-descending within each class.
     The unit ranked is the candidate (gh-ocannl-1017): each node's alternatives are sorted by that
-    order and the node ranks where its best-ranked alternative does, so a top-N prefix is N nodes.
+    order and the node ranks where its best-ranked alternative does, so a top-N prefix is N nodes;
+    equal ranks keep the input's order (gh-ocannl-1777: the surface's program order, never node id).
     [`Profitable] (gh-ocannl-579) is [`Enablement] weighed against [profit] per
     {!effective_flip_ordering} — the prior models expressibility, and on a device where the family
     it unlocks is measured hopeless, promotion is pure opportunity cost that displaces the winning

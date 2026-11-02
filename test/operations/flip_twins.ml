@@ -126,7 +126,11 @@ let () =
   let%op y2 = relu x2 in
   let%op x3 = a3 *. b3 in
   let%op y3 = relu x3 in
-  let%op loss = y1 ++ "ij => 0" + (y2 ++ "ij => 0") + (y3 ++ "ij => 0") in
+  (* Equal-cost candidates rank in program order (gh-ocannl-1777), and OCaml builds an application's
+     arguments right to left, so the branch summed LAST is computed first: written this way round,
+     the code runs branch 1, then 2, then 3, and the chain meets each twin pair back to back, its
+     first member first. *)
+  let%op loss = y3 ++ "ij => 0" + (y2 ++ "ij => 0") + (y1 ++ "ij => 0") in
   let comp = Train.forward loss in
   (* The surface, as the chain reads it. *)
   let surface = Autotune.placement_surface (Context.auto ()) comp Ir.Indexing.Empty in
