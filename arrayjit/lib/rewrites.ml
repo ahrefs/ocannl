@@ -28,6 +28,12 @@ let tier : rewrite list =
       reset = Winograd.reset;
     };
     {
+      name = "prefix_scan";
+      enabled = Prefix_scan.enabled;
+      apply = (fun _target -> Prefix_scan.rewrite);
+      reset = Prefix_scan.reset;
+    };
+    {
       name = "fp_contract, fp_reassociate, fp_finite_math";
       enabled = Fp_algebra.enabled;
       apply = (fun _target -> Fp_algebra.rewrite (Low_level.Fp_licence.of_config ()));

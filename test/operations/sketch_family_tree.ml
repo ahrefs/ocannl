@@ -219,27 +219,31 @@ let family_root_pins name ~is_gpu ~is_cpu ~limits opt =
    both operand tiles in kernel (written and read), while the CPU packed composition adds traffic
    only where it packs in kernel — every other shape packs at link time or per Grid chunk, replacing
    the original operand's reads rather than adding to them. *)
-let cpu_pack_contracts ~k_extent (p : Autotune.sketch_params) =
-  Autotune.cpu_pack_contracts ~m_nk:k_extent ~bk:p.Autotune.sk_bk
-    ~grid_outermost:
-      (Autotune.cpu_pack_grid_outermost ~sk_grid:p.Autotune.sk_grid ~sk_hoist:p.Autotune.sk_hoist
-         ~sk_pack_rest:p.Autotune.sk_pack_rest)
+let fragment_dims ~m_extent ~n_extent (p : Autotune.sketch_params) =
+  ( (if p.Autotune.sk_bm = 0 then m_extent else p.Autotune.sk_bm),
+    if p.Autotune.sk_bn = 0 then n_extent else p.Autotune.sk_bn )
 
-let expected_inc ~elt_bytes ~n_extent ~k_extent (p : Autotune.sketch_params) =
+let expected_inc ~elt_bytes ~m_extent ~n_extent opt (p : Autotune.sketch_params) =
   let bm = p.Autotune.sk_bm and bk = p.Autotune.sk_bk in
   let bn = if p.Autotune.sk_bn = 0 then n_extent else p.Autotune.sk_bn in
   let tile = ((bm * bk) + (bk * bn)) * elt_bytes in
-  (* gh-ocannl-1601: a staged tensorized GPU leaf whose reduction runs in two or more blocks
-     contracts its accumulator into a fresh [bm x bn] fragment, written and read. *)
-  let fragment = if p.Autotune.sk_mma && bk < k_extent then 2 * bm * bn * elt_bytes else 0 in
-  if p.Autotune.sk_gpu then if bk > 0 then (2 * tile) + fragment else 0
+  (* gh-ocannl-1601 / gh-ocannl-1676 / gh-ocannl-1706: a tensorized leaf whose accumulator every
+     application contracts — by an enclosing reduction-block loop of two or more iterations, or by
+     pad masks — mints a fresh fragment, written and read once; [fragment_pins] checks the library
+     predicate against the applied schedules. *)
+  let fragment =
+    if Autotune.matmul_fragment_certain opt p then
+      let fm, fn = fragment_dims ~m_extent ~n_extent p in
+      2 * fm * fn * elt_bytes
+    else 0
+  in
+  if p.Autotune.sk_gpu then (if bk > 0 then 2 * tile else 0) + fragment
   else if p.Autotune.sk_mma && bk > 0 then
     let panels =
       if not (p.Autotune.sk_hoist || p.Autotune.sk_grid || p.Autotune.sk_pack_rest) then tile else 0
     in
-    (* gh-ocannl-1676: a CPU packed leaf prices its fragment where the shared predicate says it
-       contracts; [fragment_pins] checks the predicate against the applied schedules. *)
-    panels + if cpu_pack_contracts ~k_extent p then 2 * bm * bn * elt_bytes else 0
+    panels + fragment
+  else if p.Autotune.sk_mma then fragment
   else 0
 
 let prefixes path =
@@ -251,7 +255,7 @@ let prefixes path =
    from [Sspace.enumerate] of the real tree, never from literals. A renamed level or a reworded
    label moves the rendered lines below and no number; a level ADDED, REMOVED or re-parameterized
    moves the counts and the per-leaf agreement. *)
-let traffic_pins name ~limits ~elt_bytes ~n_extent ~k_extent tree opt =
+let traffic_pins name ~limits ~elt_bytes ~m_extent ~n_extent tree opt =
   let inc = Autotune.sketch_path_traffic_floor ~limits opt in
   let paths = Sspace.enumerate tree in
   let priced = List.count paths ~f:(fun (path, _) -> inc path > 0) in
@@ -264,7 +268,7 @@ let traffic_pins name ~limits ~elt_bytes ~n_extent ~k_extent tree opt =
   Stdio.printf "  priced above the schedule-invariant floor: %d; max increment %d bytes\n" priced
     (List.fold paths ~init:0 ~f:(fun acc (path, _) -> max acc (inc path)));
   Verdict.p_all (name ^ ": every leaf's increment is the traffic its own parameters imply") paths
-    ~f:(fun (path, p) -> inc path = expected_inc ~elt_bytes ~n_extent ~k_extent p);
+    ~f:(fun (path, p) -> inc path = expected_inc ~elt_bytes ~m_extent ~n_extent opt p);
   Verdict.p_all (name ^ ": the increment is monotone along every path's prefixes") paths
     ~f:(fun (path, _) ->
       let incs = 0 :: List.map (prefixes path) ~f:inc in
@@ -273,7 +277,7 @@ let traffic_pins name ~limits ~elt_bytes ~n_extent ~k_extent tree opt =
     (name ^ ": the staging commitments price above the floor")
     (priced > 0
     && priced
-       = List.count paths ~f:(fun (_, p) -> expected_inc ~elt_bytes ~n_extent ~k_extent p > 0));
+       = List.count paths ~f:(fun (_, p) -> expected_inc ~elt_bytes ~m_extent ~n_extent opt p > 0));
   Verdict.p_all (name ^ ": every leaf path commits its pipeline's shape level") paths
     ~f:(fun (path, _) ->
       List.exists path ~f:(fun (_, d) ->
@@ -357,77 +361,100 @@ let soundness_pins name ~limits tree (opt : LL.optimized) =
       let total = Ir.Cost_model.total_bytes s in
       List.for_all ([] :: prefixes path) ~f:(fun pre -> floor.fr_bytes + inc pre <= total))
 
-(* gh-ocannl-1676: the CPU packed composition's contraction predicate ([Autotune.cpu_pack_contracts]
-   over the loop order [Autotune.cpu_pack_grid_outermost] the builder builds) judged against what
-   the applied schedules actually do — the authority being
-   [Schedule.contract_tensorized_accumulator]: a fresh fragment node appears on a packed leaf
-   exactly where the predicate says it contracts, and there it is charged written and read once at
-   its own storage width, which is exactly the leaf's increment (a grid-outermost shape adds no
-   panel bytes). [expect] says which regimes the fixture must reach: with [`Both] at least one
-   contracting and one non-contracting packed leaf, with [`Whole_k] a grid-outermost leaf whose
-   single reduction block keeps it from contracting. *)
-let fragment_pins name ~limits ~k_extent ~n_extent ~expect tree (opt : LL.optimized) =
-  let inc = Autotune.sketch_path_traffic_floor ~limits opt in
-  let base_nodes =
-    Set.of_list (module Ir.Tnode) (List.map (Ir.Cost_model.analyze opt.LL.llc).per_node ~f:fst)
+(* gh-ocannl-1676 / gh-ocannl-1706: the fragment predicate ([Autotune.matmul_fragment_certain], over
+   the loop orders and stagings the builders build) judged against what the applied schedules
+   actually do — the authority being [Schedule.contract_tensorized_accumulator]. Over every
+   tensorized leaf (CPU packed, CPU whole-triple, GPU mma): a contraction happened exactly where the
+   predicate says, read structurally as a fresh member of the applied code's fragment sets
+   ([simdgroup_fragments], [masked_fragments]), never by label; there the fragment (the persistent
+   one where a GPU masked loop site also stages a pad scratch tile) is charged written and read once
+   at its own storage width, [2 * rows * cols * width] for the leaf's own block. A leaf whose
+   schedule fails to apply is counted, never silently passed, and each named regime must have a
+   successful witness. *)
+let fragment_pins ?(contracting = true) name ~m_extent ~n_extent ~regimes tree (opt : LL.optimized)
+    =
+  let base_sets = Set.union opt.LL.simdgroup_fragments opt.LL.masked_fragments in
+  let tensorized =
+    List.filter (Sspace.enumerate tree) ~f:(fun (_, p) ->
+        p.Autotune.sk_mma && (not p.Autotune.sk_conv) && Option.is_none p.Autotune.sk_coalesce)
   in
-  let packed =
-    List.filter_map (Sspace.enumerate tree) ~f:(fun (path, p) ->
-        if p.Autotune.sk_gpu || (not p.Autotune.sk_mma) || p.Autotune.sk_bk = 0 then None
-        else
-          match
-            Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p opt) (scratch opt)
-          with
-          | post -> Some (path, p, Ir.Cost_model.analyze post.LL.llc)
-          | exception _ -> None)
+  let applied, refused =
+    List.partition_map tensorized ~f:(fun (path, p) ->
+        match
+          Ir.Schedule.apply (Autotune.sketch_schedule ~accum_prec:Fn.id ~p opt) (scratch opt)
+        with
+        | post -> First (path, p, post, Ir.Cost_model.analyze post.LL.llc)
+        | exception _ -> Second p)
   in
-  let fragments (s : Ir.Cost_model.summary) =
-    List.filter s.per_node ~f:(fun (tn, _) ->
-        (not (Set.mem base_nodes tn)) && List.mem tn.Ir.Tnode.label "fragment" ~equal:String.equal)
+  let fresh set = Set.to_list (Set.diff set base_sets) in
+  let contracted (post : LL.optimized) =
+    not (List.is_empty (fresh post.LL.simdgroup_fragments @ fresh post.LL.masked_fragments))
   in
-  let contracts = cpu_pack_contracts ~k_extent in
+  let certain p = Autotune.matmul_fragment_certain opt p in
   Stdio.printf
-    "== %s: %d packed leaves applied, %d contracting by the predicate, %d with a fragment ==\n" name
-    (List.length packed)
-    (List.count packed ~f:(fun (_, p, _) -> contracts p))
-    (List.count packed ~f:(fun (_, _, s) -> not (List.is_empty (fragments s))));
+    "== %s: %d tensorized leaves, %d applied, %d refused; %d contracting by the predicate, %d \
+     contracted ==\n"
+    name (List.length tensorized) (List.length applied) (List.length refused)
+    (List.count applied ~f:(fun (_, p, _, _) -> certain p))
+    (List.count applied ~f:(fun (_, _, post, _) -> contracted post));
   Verdict.p_all
-    (name ^ ": a packed leaf mints a fragment exactly where the predicate says it contracts") packed
-    ~f:(fun (_, p, s) -> Bool.equal (contracts p) (not (List.is_empty (fragments s))));
-  let charge_claim () =
+    (name ^ ": a tensorized leaf contracts its accumulator exactly where the predicate says")
+    applied ~f:(fun (_, p, post, _) -> Bool.equal (certain p) (contracted post));
+  (* [contracting:false] names a fixture none of whose leaves contracts (the whole-K control), where
+     the charge claim has nothing to judge; elsewhere it needs a contracting leaf. *)
+  if contracting then
     Verdict.p_all
-      (name ^ ": a contracting leaf's increment is its fragment's charge, written and read once")
-      (List.filter packed ~f:(fun (_, p, _) -> contracts p))
-      ~f:(fun (path, p, s) ->
-        match fragments s with
-        | [ (tn, fp) ] ->
+      (name ^ ": a contracting leaf's fragment is charged its block, written and read once")
+      (List.filter applied ~f:(fun (_, p, _, _) -> certain p))
+      ~f:(fun (_, p, (post : LL.optimized), (s : Ir.Cost_model.summary)) ->
+        let fragment =
+          match fresh post.LL.simdgroup_fragments with
+          | [ tn ] -> Some tn
+          | [] -> ( match fresh post.LL.masked_fragments with [ tn ] -> Some tn | _ -> None)
+          | _ -> None
+        in
+        match
+          Option.bind fragment ~f:(fun tn ->
+              Option.map (List.Assoc.find s.per_node tn ~equal:Ir.Tnode.equal) ~f:(fun fp ->
+                  (tn, fp)))
+        with
+        | Some (tn, fp) ->
             let w = Ir.Ops.prec_in_bytes (Lazy.force tn.Ir.Tnode.storage_prec) in
-            let bn = if p.Autotune.sk_bn = 0 then n_extent else p.Autotune.sk_bn in
-            let charged = fp.Ir.Cost_model.fp_read_bytes + fp.Ir.Cost_model.fp_write_bytes in
-            charged = 2 * p.Autotune.sk_bm * bn * w && inc path = charged
-        | _ -> false)
-  in
-  match expect with
-  | `Both ->
-      charge_claim ();
-      Verdict.p_exists (name ^ ": some packed leaf contracts") packed ~f:(fun (_, p, _) ->
-          contracts p);
-      Verdict.p_exists (name ^ ": some packed leaf does not") packed ~f:(fun (_, p, _) ->
-          not (contracts p))
-  | `Whole_k ->
-      Verdict.p_none (name ^ ": no packed leaf contracts") packed ~f:(fun (_, p, _) -> contracts p);
-      Verdict.p_exists (name ^ ": a grid-outermost packed leaf runs its reduction in one block")
-        packed ~f:(fun (_, p, _) ->
-          Autotune.cpu_pack_grid_outermost ~sk_grid:p.Autotune.sk_grid ~sk_hoist:p.Autotune.sk_hoist
-            ~sk_pack_rest:p.Autotune.sk_pack_rest
-          && p.Autotune.sk_bk >= k_extent)
+            let fm, fn = fragment_dims ~m_extent ~n_extent p in
+            fp.Ir.Cost_model.fp_read_bytes + fp.Ir.Cost_model.fp_write_bytes = 2 * fm * fn * w
+        | None -> false);
+  List.iter regimes ~f:(fun (regime, f) ->
+      let witnesses = List.count applied ~f:(fun (_, p, _, _) -> f p) in
+      Stdio.printf "  %-48s %d applied leaves\n" regime witnesses;
+      Verdict.p (name ^ ": regime witnessed: " ^ regime) (witnesses > 0))
+
+let certain opt p = Autotune.matmul_fragment_certain opt p
+
+let cpu_packed (p : Autotune.sketch_params) =
+  p.Autotune.sk_mma && (not p.Autotune.sk_gpu) && p.Autotune.sk_bk > 0
+
+let whole_triple (p : Autotune.sketch_params) =
+  p.Autotune.sk_mma && (not p.Autotune.sk_gpu) && p.Autotune.sk_bk = 0
+
+let grid_outermost (p : Autotune.sketch_params) =
+  Autotune.cpu_pack_grid_outermost ~sk_grid:p.Autotune.sk_grid ~sk_hoist:p.Autotune.sk_hoist
+    ~sk_pack_rest:p.Autotune.sk_pack_rest
+
+(* A staged leaf's row or column block not dividing its extent: the regime the pad masks force a
+   contraction in (the regimes are coverage requirements, not the verdict, which is the
+   library's). *)
+let pads_output ~m_extent ~n_extent (p : Autotune.sketch_params) =
+  let divides b n = b <= n && n % b = 0 in
+  p.Autotune.sk_mma && p.Autotune.sk_bk > 0
+  && ((not (divides p.Autotune.sk_bm m_extent))
+     || (p.Autotune.sk_bn > 0 && not (divides p.Autotune.sk_bn n_extent)))
 
 (* gh-ocannl-1676: the pick audit — the family walk under the bound the fragment now raises against
    the exhaustive answer, on a memory-dominated stand-in envelope (model-only: nothing executes).
    Every leaf is applied and scored as the walk scores it; the walk from an unbeatable incumbent
    must return the exhaustive first argmin, and must score no more leaves than the same walk under
    the schedule-invariant floor alone (a sound raised bound only fathoms more). *)
-let pick_audit name ~limits (opt : LL.optimized) =
+let pick_audit ?(is_gpu = false) name ~limits (opt : LL.optimized) =
   let limits =
     {
       limits with
@@ -443,7 +470,7 @@ let pick_audit name ~limits (opt : LL.optimized) =
   let score segs =
     List.fold segs ~init:(Some 0.) ~f:(fun acc o -> Option.map2 acc (rank o) ~f:Float.( + ))
   in
-  match Autotune.sketch_family_tree ~is_gpu:false ~is_cpu:true ~limits opt with
+  match Autotune.sketch_family_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits opt with
   | None -> Stdio.printf "== %s: no family claims the site ==\n" name
   | Some tree -> (
       let score_p p =
@@ -473,8 +500,8 @@ let pick_audit name ~limits (opt : LL.optimized) =
           ~incumbent:Float.infinity ~score:score_p tree
       in
       match
-        Autotune.model_family_search ~capabilities:Ir.Backend_intf.no_codegen_capabilities
-          ~is_gpu:false ~is_cpu:true ~limits ~static_indices:[] ~peak_flops:limits.peak_flops
+        Autotune.model_family_search ~capabilities:Ir.Backend_intf.no_codegen_capabilities ~is_gpu
+          ~is_cpu:(not is_gpu) ~limits ~static_indices:[] ~peak_flops:limits.peak_flops
           ~peak_memory_bandwidth:limits.peak_memory_bandwidth ~score ~incumbent:Float.infinity opt
       with
       | None -> Verdict.p (name ^ ": the family walk runs") false
@@ -1240,9 +1267,17 @@ let () =
          (gh-ocannl-591), so the pin moves with the tree rather than with a list of literals this
          test wrote for itself. *)
       let inc = Autotune.sketch_path_traffic_floor ~limits:gpu_full_limits mm2 in
-      traffic_pins "gpu staged lattice" ~limits:gpu_full_limits ~elt_bytes:4 ~n_extent:64
-        ~k_extent:64 lifted mm2;
+      traffic_pins "gpu staged lattice" ~limits:gpu_full_limits ~elt_bytes:4 ~m_extent:64
+        ~n_extent:64 lifted mm2;
       soundness_pins "gpu staged lattice" ~limits:gpu_full_limits lifted mm2;
+      fragment_pins "gpu staged lattice" ~m_extent:64 ~n_extent:64
+        ~regimes:
+          [
+            ( "staged, two or more k blocks: a fragment",
+              fun p -> p.Autotune.sk_bk > 0 && p.Autotune.sk_bk < 64 );
+            ("unstaged whole-K: no fragment", fun p -> p.Autotune.sk_bk = 0);
+          ]
+        lifted mm2;
       (* Search over the lifted tree with the increment itself as the bound and an incumbent between
          the small and large boxes' floors: large-tile boxes fathom without expansion, so the walk
          scores a fraction of the lattice — the logarithmic-effective regime. The score never
@@ -1263,9 +1298,17 @@ let () =
   (match Autotune.matmul_sketch_tree ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt with
   | None -> Stdio.printf "cpu traffic: no site detected\n"
   | Some tree ->
-      traffic_pins "cpu simd32" ~limits:cpu_limits ~elt_bytes:4 ~n_extent:64 ~k_extent:64 tree opt;
+      traffic_pins "cpu simd32" ~limits:cpu_limits ~elt_bytes:4 ~m_extent:64 ~n_extent:64 tree opt;
       soundness_pins "cpu simd32" ~limits:cpu_limits tree opt;
-      fragment_pins "cpu simd32" ~limits:cpu_limits ~k_extent:64 ~n_extent:64 ~expect:`Both tree opt;
+      fragment_pins "cpu simd32" ~m_extent:64 ~n_extent:64
+        ~regimes:
+          [
+            ( "grid-outermost packed, k blocks repeat: a fragment",
+              fun p -> cpu_packed p && grid_outermost p && p.Autotune.sk_bk < 64 );
+            ("packed, no fragment", fun p -> cpu_packed p && not (certain opt p));
+            ("whole-triple, no outer loop: no fragment", fun p -> whole_triple p);
+          ]
+        tree opt;
       pick_audit "cpu simd32 pick audit" ~limits:cpu_limits opt);
   (* The whole-K control (gh-ocannl-1676): a 64x16x64 site keeps the grid-outermost shapes, whose
      single 16-deep reduction block contracts nothing. *)
@@ -1288,11 +1331,127 @@ let () =
    match Autotune.matmul_sketch_tree ~is_gpu:false ~is_cpu:true ~limits:cpu_limits mk16 with
    | None -> Stdio.printf "cpu k16: no site detected\n"
    | Some tree ->
-       traffic_pins "cpu k16" ~limits:cpu_limits ~elt_bytes:4 ~n_extent:64 ~k_extent:16 tree mk16;
+       traffic_pins "cpu k16" ~limits:cpu_limits ~elt_bytes:4 ~m_extent:64 ~n_extent:64 tree mk16;
        soundness_pins "cpu k16" ~limits:cpu_limits tree mk16;
-       fragment_pins "cpu k16" ~limits:cpu_limits ~k_extent:16 ~n_extent:64 ~expect:`Whole_k tree
-         mk16;
+       fragment_pins "cpu k16" ~contracting:false ~m_extent:64 ~n_extent:64
+         ~regimes:
+           [
+             ( "grid-outermost packed, one reduction block: no fragment",
+               fun p ->
+                 cpu_packed p && grid_outermost p && p.Autotune.sk_bk >= 16 && not (certain mk16 p)
+             );
+           ]
+         tree mk16;
+       Verdict.p_none "cpu k16: no tensorized leaf contracts" (Sspace.enumerate tree)
+         ~f:(fun (_, p) -> certain mk16 p);
        pick_audit "cpu k16 pick audit" ~limits:cpu_limits mk16);
+  (* gh-ocannl-1706: the fragments the floor now prices beyond the loop-order case. Three sites:
+
+     - an outer contraction axis, [a[i,h,e] * b[h,e,j] => d[i,j]] with [h = 2] ([m_ko]): with [e =
+     16] ([m_k]) the grid-outermost CPU shapes' 16-deep block covers [e] in one block, which before
+     gh-ocannl-1706 was predicted not to contract, while they and the whole-triple form contract at
+     the [h] loop; with [e = 32] every GPU leaf contracts at it, staged or not; - the awkward 20^3
+     site: row blocks that do not divide 20 (and, on GPU, the 32-wide column block) pad, so
+     [Tensorize] forces the contraction — at the statement site where no loop qualifies (the CPU
+     serial shape, a single GPU k block); - a 64x20x20 site: on GPU the 32-wide column block pads (a
+     column-only mask); on CPU the 16-deep block pads the reduction alone, which masks nothing — the
+     k-only control. *)
+  let fixture ~name ~l ~a_dims ~b_dims ~spec =
+    let nb = List.fold b_dims ~init:1 ~f:( * ) in
+    let a =
+      NTDSL.init ~l:(l ^ "a") ~prec:Ir.Ops.single ~o:a_dims
+        ~f:(Ll_test.cycle ~dims:(Array.of_list a_dims) ~modulus:13 ~offset:(-6.) ~stride:0.25)
+        ()
+    in
+    let b =
+      TDSL.ndarray
+        (Array.init nb
+           ~f:
+             (Ll_test.cycle_flat ~dims:(Array.of_list b_dims) ~modulus:17 ~offset:(-8.)
+                ~stride:0.125))
+        ~label:[ l ^ "b" ]
+        ~output_dims:b_dims ()
+    in
+    with_lowering ~name (spec a b)
+  in
+  let mko =
+    fixture ~name:"sft_mko" ~l:"mko" ~a_dims:[ 64; 2; 32 ] ~b_dims:[ 2; 32; 64 ] ~spec:(fun a b ->
+        let%op d = a +* "ihe;hej=>ij" b in
+        d)
+  in
+  let mko16 =
+    fixture ~name:"sft_mko16" ~l:"mkw" ~a_dims:[ 64; 2; 16 ] ~b_dims:[ 2; 16; 64 ] ~spec:(fun a b ->
+        let%op d = a +* "ihe;hej=>ij" b in
+        d)
+  in
+  let awk =
+    fixture ~name:"sft_awk_frag" ~l:"awf" ~a_dims:[ 20; 20 ] ~b_dims:[ 20; 20 ] ~spec:(fun a b ->
+        let%op d = a +* "ik;kj=>ij" b in
+        d)
+  in
+  let col =
+    fixture ~name:"sft_col" ~l:"col" ~a_dims:[ 64; 20 ] ~b_dims:[ 20; 20 ] ~spec:(fun a b ->
+        let%op d = a +* "ik;kj=>ij" b in
+        d)
+  in
+  let pins ~name ~is_gpu ~m_extent ~n_extent ~regimes opt =
+    let limits = if is_gpu then gpu_full_limits else cpu_limits in
+    match Autotune.matmul_sketch_tree ~is_gpu ~is_cpu:(not is_gpu) ~limits opt with
+    | None -> Verdict.p (name ^ ": a matmul site is detected") false
+    | Some tree ->
+        traffic_pins name ~limits ~elt_bytes:4 ~m_extent ~n_extent tree opt;
+        soundness_pins name ~limits tree opt;
+        fragment_pins name ~m_extent ~n_extent ~regimes:(regimes opt) tree opt;
+        pick_audit ~is_gpu (name ^ " pick audit") ~limits opt
+  in
+  pins ~name:"cpu outer contraction" ~is_gpu:false ~m_extent:64 ~n_extent:64 mko16
+    ~regimes:(fun opt ->
+      [
+        ( "grid-outermost packed, one k block, outer loop: a fragment",
+          fun p -> cpu_packed p && grid_outermost p && p.Autotune.sk_bk >= 16 && certain opt p );
+        ( "packed, rows inside the reduction: no fragment",
+          fun p -> cpu_packed p && not (certain opt p) );
+        ("whole-triple under the outer loop: a fragment", fun p -> whole_triple p && certain opt p);
+      ]);
+  pins ~name:"gpu outer contraction" ~is_gpu:true ~m_extent:64 ~n_extent:64 mko ~regimes:(fun opt ->
+      [
+        ( "unstaged whole-K under the outer loop: a fragment",
+          fun p -> p.Autotune.sk_bk = 0 && certain opt p );
+        ( "staged, one k block, outer loop: a fragment",
+          fun p -> p.Autotune.sk_bk >= 32 && certain opt p );
+      ]);
+  pins ~name:"cpu awkward 20^3" ~is_gpu:false ~m_extent:20 ~n_extent:20 awk ~regimes:(fun opt ->
+      [
+        ( "padded rows, serial shape: a mask-forced fragment",
+          fun p ->
+            cpu_packed p
+            && pads_output ~m_extent:20 ~n_extent:20 p
+            && (not (grid_outermost p))
+            && certain opt p );
+      ]);
+  pins ~name:"gpu awkward 20^3" ~is_gpu:true ~m_extent:20 ~n_extent:20 awk ~regimes:(fun opt ->
+      [
+        ( "padded, one k block: a mask-forced fragment",
+          fun p ->
+            pads_output ~m_extent:20 ~n_extent:20 p && p.Autotune.sk_bk >= 20 && certain opt p );
+        ( "padded, k blocks repeat: one fragment",
+          fun p -> pads_output ~m_extent:20 ~n_extent:20 p && p.Autotune.sk_bk < 20 && certain opt p
+        );
+      ]);
+  pins ~name:"gpu column-only pad" ~is_gpu:true ~m_extent:64 ~n_extent:20 col ~regimes:(fun opt ->
+      [
+        ( "column pad, one k block: a mask-forced fragment",
+          fun p ->
+            pads_output ~m_extent:64 ~n_extent:20 p
+            && p.Autotune.sk_bm > 0
+            && 64 % p.Autotune.sk_bm = 0
+            && p.Autotune.sk_bk >= 20 && certain opt p );
+      ]);
+  pins ~name:"cpu k-only pad" ~is_gpu:false ~m_extent:64 ~n_extent:20 col ~regimes:(fun opt ->
+      [
+        ( "reduction pad alone: no fragment",
+          fun p -> cpu_packed p && 20 % p.Autotune.sk_bk <> 0 && not (certain opt p) );
+      ]);
   check_wide_scope_edges ();
   (* Corner-judged box refutations: a workgroup-memory cap that admits only the smallest staged
      tiles refutes the large-tile half-boxes at their most favorable corner, pre-expansion — the

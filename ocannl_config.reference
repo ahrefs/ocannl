@@ -2045,6 +2045,18 @@
 # Programmatic override: `Ir.Winograd.set_enabled`.
 #winograd_conv=false
 
+# The prefix-scan rewrite (gh-ocannl-1758), over the raw lowered code. A reduction whose operand
+# is masked by a triangle along one axis -- the cumulative sum written as a lower-triangular 0/1
+# selector times the input, `a +* "i; i o => o" tri`, or a running max as `where tri a (-inf)`
+# reduced by `@^^` -- becomes one O(n) scan per row instead of the O(n^2) contraction. The mask
+# must be computable from index grids in the same routine (ranges, broadcasts, comparisons, `not`,
+# `where`) and be exactly `i <= o`, `i < o`, `i >= o` or `i > o`; the cumsum's backward (a suffix
+# sum) is recognized the same way. A suffix scan regroups the sum, and an infinite payload outside
+# the triangle no longer turns the result into NaN (the selector form multiplies it by 0), so it is
+# a numerics gate: off by default, on in the `approximate` profile, pinned off in `reproducible`.
+# Programmatic override: `Ir.Prefix_scan.set_enabled`.
+#prefix_scan=false
+
 # Whether the cc backend's target has native _Float16 arithmetic. "auto" (the default) probes the
 # configured compiler once per process: "none" if _Float16 is missing, "native" if the target
 # defines __ARM_FEATURE_FP16_VECTOR_ARITHMETIC or __AVX512FP16__, "promoted" if the type exists
@@ -2181,6 +2193,7 @@
 # online_softmax_backward=false
 # online_softmax_block=0
 # winograd_conv=false
+# prefix_scan=false
 # # The untuned GPU default's split reductions (gh-ocannl-1325) likewise: deterministic and chosen
 # # from the routine alone, but they reassociate long sums into a tree over blocks, which this
 # # profile keeps serial.
@@ -2261,6 +2274,9 @@
 # # The Winograd F(2x2, 3x3) convolution rewrite (gh-ocannl-505): a 3x3 stride-1 convolution is
 # # computed in a transformed domain, through 16 channel contractions per 4x4 input tile.
 # winograd_conv=true
+# # The prefix-scan rewrite (gh-ocannl-1758): a triangular-mask reduction (cumsum, cummax) runs as
+# # one scan per row; the cumsum's backward regroups its suffix sums.
+# prefix_scan=true
 # # The C compiler's licence to reassociate (fast-math) and to contract a*b+c into one rounding
 # # across statements (fp-contract=fast). Both change results per compiler and target, which is
 # # why `reproducible` pins them off and `performance` leaves them at their defaults.

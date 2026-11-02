@@ -116,7 +116,11 @@ val grad_update :
     [1/accum_steps] (folded with [loss_scale] if both are given), so after [accum_steps] runs the
     leaf gradients hold the mean of the micro-batch gradients — matching a single batch
     [accum_steps] times larger under a mean-reduced loss. Run the optimizer step once per cycle,
-    after the last micro-step.
+    after the last micro-step. The code states the cycle
+    ({!Ir.Assignments.field-accumulation_runs}): [Context.run] refuses the routine's
+    [accum_steps + 1]-th run since the gradients' last reset (gh-ocannl-1781) -- without the
+    argument, its second -- so a forgotten {!zero_params_grads} is refused rather than summing every
+    step's gradient.
 
     Two objectives sharing a tensor (content and style losses over one [Require_grad] image, two
     losses over one parameter) each carry only their own contribution to its gradient, and only the

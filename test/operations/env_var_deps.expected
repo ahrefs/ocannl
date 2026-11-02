@@ -109,6 +109,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test fission_replay_segmentation (Autotune.tune): independent, by its marker
   test/operations/dune, test gpu_kernel_cache (Autotune.tune): independent, by its marker
   test/operations/dune, test inline_flip_tune (Train.tune_placements): independent, by its marker
+  test/operations/dune, test never_zeroed_grad (Autotune.tune): independent, by its marker
   test/operations/dune, test padded_conv_cache (Autotune.tune): independent, by its marker
   test/operations/dune, test placement_store (Train.tune_placements): independent, by its marker
   test/operations/dune, test schedule_cache_device (Autotune.tune): independent, by its marker
@@ -289,6 +290,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-optional_arg_inventory
   test/operations/dune                     @runtest-optional_arg_inventory_control
   test/operations/dune                     @runtest-placement_surface
+  test/operations/dune                     @runtest-prefix_scan_fp_licences
   test/operations/dune                     @runtest-primitive_ops
   test/operations/dune                     @runtest-provenance_tag_inventory
   test/operations/dune                     @runtest-qkv_zero_init-approximate

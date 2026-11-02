@@ -35,6 +35,7 @@ test/operations/cost_model_fill.ml -- not-executed: the bitwise claim compares c
 test/operations/cost_model_transactions.ml -- not-executed: the bitwise claims compare cost-model legs computed in OCaml
 test/operations/cpu_parallel.ml -- same-shape: one compiled pure-add routine runs twice and its results are compared
 test/operations/cuda_like_builtins_emulation.ml -- no-contraction: host probes of RNG-bit and fp8 conversion helpers, no multiply-add
+test/operations/division_special_values.ml -- no-contraction: every kernel divides or takes a reciprocal of a stored operand; no product feeds an add, so contraction has nothing to fuse.
 test/operations/epilogue_fusion_single_trip_sweep.ml -- exact-operands: quarters and small integers, every sum far inside f32's mantissa
 test/operations/fixed_name_temporaries.ml -- no-contraction: the claim compares two threefry draws converted to uniform floats
 test/operations/fp_contract_pin_scan.ml -- not-executed: its bitwise text is fixture sources and claim names, no kernels
@@ -49,6 +50,7 @@ test/operations/matmul_interchange.ml -- exact-operands: positive quarters and e
 test/operations/model_seeded_anchor.ml -- not-cc: the bitwise claim is gated on CUDA or HIP model seeding; cc skips it
 test/operations/narrow_storage_compute.ml -- pinned off
 test/operations/nonoverlap_pool_grads.ml -- exact-operands: small integer inputs and a unit loss gradient; every max, product and sum exact
+test/operations/prefix_scan.ml -- exact-operands: every product multiplies by an exact 0/1 selector, and the integer data's sums are derived exact below
 test/operations/print_tree_one_recompute.ml -- exact-operands: integer inputs and small integer polynomials, exact in f32
 test/operations/ptx_target_parity.ml -- not-cc: the floor-versus-native claims need CUDA PTX compiles; cc skips them
 test/operations/recompute_on_read.ml -- exact-operands: inputs are eighths and the elementwise products stay exact in f32

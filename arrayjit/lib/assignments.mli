@@ -102,6 +102,13 @@ type comp = {
           of its lineage accumulates into, unless a zeroing compiled before both, and carried by
           neither, resets it; and one accumulating into a gradient whose propagation (its [Bprop]
           fragment) an earlier routine of the lineage already carries. *)
+  accumulation_runs : int Map.M(Tnode).t;
+      (** For a gradient in [accumulates] and not in [zeroes], the runs of this computation one
+          reset of the gradient deliberately spans (gh-ocannl-1781); absent means one. [Context.run]
+          refuses a routine that has already accumulated into such a gradient's buffer that many
+          times since the buffer was last reset -- by a run of a routine zeroing it, or by a write
+          from outside a run. [Train.grad_update ~accum_steps:k] states [k]: the explicit opt-in for
+          gradient accumulation over micro-steps. *)
 }
 [@@deriving sexp_of]
 (** Computations based on assignments. [Tensor] construction fills in all five sets; zeroing owns
@@ -113,11 +120,12 @@ val comp :
   ?requires:Set.M(Fragment).t ->
   ?zeroes:Set.M(Tnode).t ->
   ?accumulates:Set.M(Tnode).t ->
+  ?accumulation_runs:int Map.M(Tnode).t ->
   embedded:Set.M(Tnode).t ->
   t ->
   comp
-(** The computation constructor; [owned], [requires], [zeroes] and [accumulates] default to empty.
-*)
+(** The computation constructor; [owned], [requires], [zeroes], [accumulates] and
+    [accumulation_runs] default to empty. *)
 
 val no_fragments : Set.M(Fragment).t
 val to_comp : t -> comp
@@ -127,10 +135,11 @@ val collect_nodes_guess_output : t -> Tnode.t_set * Tnode.t_set
 val collect_written : t -> Tnode.t_set
 
 val sequence : comp list -> comp
-(** Runs the computations in order, uniting their nodes, fragments and gradient sets. Raises
-    [Utils.User_error], naming the fragment, when two members own the same fragment
-    (gh-ocannl-1746): [owned] is a set, so the copy would otherwise run twice unseen -- for a
-    backprop fragment, a double-counted gradient. *)
+(** Runs the computations in order, uniting their nodes, fragments and gradient sets; a gradient two
+    members state different [accumulation_runs] for keeps the smaller, a member accumulating into it
+    without zeroing it and stating nothing counting as one. Raises [Utils.User_error], naming the
+    fragment, when two members own the same fragment (gh-ocannl-1746): [owned] is a set, so the copy
+    would otherwise run twice unseen -- for a backprop fragment, a double-counted gradient. *)
 
 val collect_neutral_elem : t -> float option
 val to_low_level : ?static_indices:Indexing.static_symbol list -> t -> Low_level.t

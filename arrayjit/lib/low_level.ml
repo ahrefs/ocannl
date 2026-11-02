@@ -5514,6 +5514,31 @@ let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec
 (* Exact canonicalization: every rewrite here preserves IEEE results. The licensed floating-point
    algebra runs once, on the raw lowering ({!Fp_algebra}, gh-ocannl-998); here [fp_algebra_step]
    runs unlicensed, which still canonicalizes integer arithmetic. *)
+(* The RNG lane conversions pick both their result type and which of the 128 random bits they
+   consume from the precision they are rendered at ([uint4x32_to_fp8_uniform_lane] is a different
+   generator from [uint4x32_to_single_uniform_lane], not a rounding of it), so an expression
+   carrying one renders at its target's storage precision. Anywhere in the expression, not just at
+   its root: a narrow uniform is routinely consumed by further arithmetic. Not descended into
+   [Local_scope], whose body renders at its own scope precision. Shared by [C_syntax]'s storage pin
+   and [Schedule.Privatize]'s tile precision ({!accum_update_widens}). *)
+let is_rng_conversion (llsc : scalar_t) =
+  match llsc with
+  | Binop (Ops.Uint4x32_to_prec_uniform_lane, _, _) | Unop (Ops.Uint4x32_to_prec_uniform1, _) ->
+      true
+  | _ -> false
+
+let rec mentions_rng_conversion (llsc : scalar_t) =
+  is_rng_conversion llsc
+  ||
+  match llsc with
+  | Ternop (_, (a, _), (b, _), (c, _)) ->
+      mentions_rng_conversion a || mentions_rng_conversion b || mentions_rng_conversion c
+  | Binop (_, (a, _), (b, _)) -> mentions_rng_conversion a || mentions_rng_conversion b
+  | Unop (_, (a, _)) -> mentions_rng_conversion a
+  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      false
+
 let simplify_llc static_indices llc =
   let licence = Fp_licence.exact in
   let positive_zero c = Float.(c = 0.) && not (Stdlib.Float.sign_bit c) in
@@ -5523,10 +5548,11 @@ let simplify_llc static_indices llc =
      comparison folds. *)
   let rec loop_proc ~ienv (llc : t) : t =
     let loop = loop_proc ~ienv in
-    (* At the slot's evaluation precision (gh-ocannl-1788): a statement's value slot is evaluated at
-       its node's (or local's) precision, a heterogeneous slot at its own annotation. *)
-    let loop_scalar ~eval = loop_scalar ~ienv ~eval in
-    let own ((_, p) as arg) = loop_scalar ~eval:p arg in
+    (* Every scalar a statement holds is rendered at the precision it is simplified at here: a
+       store's value at its target's storage precision, a scope local's at its scope's. A
+       statement's slot is also evaluated there, and a heterogeneous slot (a guard, a dynamic index,
+       a vector argument) at its own annotation (gh-ocannl-1788). *)
+    let loop_scalar ((_, prec) as arg) = loop_scalar ~ienv ~render:prec ~eval:prec arg in
     match llc with
     | Noop -> Noop
     | Seq (c1, c2) ->
@@ -5549,32 +5575,28 @@ let simplify_llc static_indices llc =
             scan_config with
             carried =
               List.map carried ~f:(fun c ->
-                  let p = Lazy.force c.prev.tn.Tn.storage_prec in
-                  { c with init = fst (loop_scalar ~eval:p (c.init, p)) });
+                  { c with init = fst (loop_scalar (c.init, Lazy.force c.prev.tn.Tn.storage_prec)) });
             body = loop_proc ~ienv:(ienv_extend ienv index ~from_ ~to_) body;
           }
     | Zero_out _ -> llc
     | Set { tn; idcs; llsc; debug } ->
-        let p = Lazy.force tn.Tn.storage_prec in
-        Set { tn; idcs; llsc = fst (loop_scalar ~eval:p (llsc, p)); debug }
+        Set { tn; idcs; llsc = fst (loop_scalar (llsc, Lazy.force tn.Tn.storage_prec)); debug }
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value; llsc; debug } ->
         (* gh-466: reached via [Schedule.apply]'s simplify of post-rewrite code. The scatter itself
            is never folded; its index value and RHS are. *)
-        let p = Lazy.force tn.Tn.storage_prec in
         Set_dynamic
           {
             tn;
             idcs;
             dyn_axis;
-            dyn_value = own dyn_value;
-            llsc = fst (loop_scalar ~eval:p (llsc, p));
+            dyn_value = loop_scalar dyn_value;
+            llsc = fst (loop_scalar (llsc, Lazy.force tn.Tn.storage_prec));
             debug;
           }
     | Set_from_vec { tn; idcs; length; vec_unop; arg; debug } ->
-        Set_from_vec { tn; idcs; length; vec_unop; arg = own arg; debug }
+        Set_from_vec { tn; idcs; length; vec_unop; arg = loop_scalar arg; debug }
     | Set_local (id, llsc) ->
-        let p = Lazy.force id.tn.Tn.storage_prec in
-        Set_local (id, fst (loop_scalar ~eval:p (llsc, p)))
+        Set_local (id, fst (loop_scalar (llsc, Lazy.force id.tn.Tn.storage_prec)))
     | Declare_local _ -> llc
     | Comment _ -> llc
     | Staged_compilation _ -> llc
@@ -5586,7 +5608,7 @@ let simplify_llc static_indices llc =
         (* Construct-then-fold (axis-types proposal §2): a guard whose condition the interval
            environment decides is erased -- provably true folds to the body, provably false to
            [Noop]. The comparison folds happen inside [loop_scalar]. *)
-        let c', _ = own (c, cprec) in
+        let c', _ = loop_scalar (c, cprec) in
         match c' with
         | Constant f when Float.(f = 0.) -> Noop
         | Constant _ -> loop body
@@ -5598,13 +5620,14 @@ let simplify_llc static_indices llc =
                 cond = (c', cprec);
                 body = loop_proc ~ienv:(ienv_narrow_from_cond ienv ~cprec c') body;
               })
-  and loop_scalar ~ienv ~eval ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
+  and loop_scalar ~ienv ~render ~eval ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
     (* [prec] is the operand's annotation, [eval] the precision its slot evaluates it at: the
        enclosing homogeneous operator's evaluation precision, or a heterogeneous slot's own
        annotation (gh-ocannl-1788). A homogeneous child keeps [eval]; a heterogeneous one is
-       evaluated at its own annotation. *)
-    let own ((_, p) as arg) = loop_scalar ~ienv ~eval:p arg in
-    let loop_scalar = loop_scalar ~ienv ~eval in
+       evaluated at its own annotation. [render] is the enclosing store's precision, whatever the
+       slot (gh-ocannl-1769). *)
+    let own ((_, p) as arg) = loop_scalar ~ienv ~render ~eval:p arg in
+    let loop_scalar = loop_scalar ~ienv ~render ~eval in
     let loop_proc = loop_proc ~ienv in
     (* gh-ocannl-1498: in a [uint4x32] slot the SOURCE precision of what renders there picks the
        conversion, so a rewrite that hands a child the wrapper's place -- a projection, an
@@ -5636,6 +5659,16 @@ let simplify_llc static_indices llc =
          | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } ->
              Ops.widens_exactly ~from:(Lazy.force tn.Tn.storage_prec) ~to_:scope_prec
          | _ -> false)
+    in
+    (* gh-ocannl-1769: an RNG conversion renders at the precision of the store holding it
+       ({!is_rng_conversion}), and a scope body is a store at the scope's precision -- the one a
+       virtualized packed uniform's lane-extract form ([instantiate_computations]) sized its lane
+       index for. Collapsed into a store of another precision, the conversion would re-render there:
+       another generator, and past a narrower-laned block an out-of-bounds lane read -- an f16 draw
+       (8 lanes) collapsed into an f32 store read lanes 4..7 of a 4-lane block, garbage that x86/gcc
+       turned into infinite losses. *)
+    let rng_collapsible (id : scope_id) v =
+      (not (mentions_rng_conversion v)) || Ops.equal_prec (Lazy.force id.tn.Tn.storage_prec) render
     in
     let local_scope_body, llsc' =
       match llsc with
@@ -5673,12 +5706,13 @@ let simplify_llc static_indices llc =
        scope's -- the latter, when the two differ, describes neither the value nor the slot, which
        {!describe_operand_precisions} repairs downstream. *)
     | Local_scope { id; body = Set_local (id2, v); _ }
-      when equal_scope_id id id2 && collapsible id v ->
+      when equal_scope_id id id2 && collapsible id v && rng_collapsible id v ->
         ignore (Lazy.force id.tn.Tn.dims);
         (fst (loop_scalar (v, Lazy.force id.tn.Tn.storage_prec)), prec)
     | Local_scope { id; body = Seq (Set_local (id1, v1), Set_local (id2, v2)); _ }
       when equal_scope_id id id1 && equal_scope_id id id2
-           && collapsible id (substitute_float ~var:(Get_local id) ~value:v1 v2) ->
+           && collapsible id (substitute_float ~var:(Get_local id) ~value:v1 v2)
+           && rng_collapsible id v1 && rng_collapsible id v2 ->
         ignore (Lazy.force id.tn.Tn.dims);
         let result = substitute_float ~var:(Get_local id) ~value:v1 v2 in
         (fst (loop_scalar (result, Lazy.force id.tn.Tn.storage_prec)), prec)
@@ -7199,31 +7233,6 @@ let accum_update_parts ~tn ~idcs (llsc : scalar_t) : (Ops.binop * scalar_t) opti
     when is_acc c && (not (scalar_touches_tn tn a)) && not (scalar_touches_tn tn b) ->
       Some (Ops.Add, Binop (Ops.Mul, (a, pa), (b, pb)))
   | _ -> None
-
-(* The RNG lane conversions pick both their result type and which of the 128 random bits they
-   consume from the precision they are rendered at ([uint4x32_to_fp8_uniform_lane] is a different
-   generator from [uint4x32_to_single_uniform_lane], not a rounding of it), so an expression
-   carrying one renders at its target's storage precision. Anywhere in the expression, not just at
-   its root: a narrow uniform is routinely consumed by further arithmetic. Not descended into
-   [Local_scope], whose body renders at its own scope precision. Shared by [C_syntax]'s storage pin
-   and [Schedule.Privatize]'s tile precision ({!accum_update_widens}). *)
-let is_rng_conversion (llsc : scalar_t) =
-  match llsc with
-  | Binop (Ops.Uint4x32_to_prec_uniform_lane, _, _) | Unop (Ops.Uint4x32_to_prec_uniform1, _) ->
-      true
-  | _ -> false
-
-let rec mentions_rng_conversion (llsc : scalar_t) =
-  is_rng_conversion llsc
-  ||
-  match llsc with
-  | Ternop (_, (a, _), (b, _), (c, _)) ->
-      mentions_rng_conversion a || mentions_rng_conversion b || mentions_rng_conversion c
-  | Binop (_, (a, _), (b, _)) -> mentions_rng_conversion a || mentions_rng_conversion b
-  | Unop (_, (a, _)) -> mentions_rng_conversion a
-  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
-  | Constant_bits _ | Embed_index _ ->
-      false
 
 (* gh-ocannl-1116: whether an update of [tn[idcs]] is one whose accumulator code generation holds at
    the backend's accumulator residency rather than narrowing it per step — the per-update half of

@@ -777,6 +777,7 @@ test/operations/cost_model_template.ml [through Ll_test.execute; through Ll_test
 test/operations/cpu_fork_join_chains.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-cpu_fork_join_chains]
 test/operations/cuda_launch_reservation.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-cuda_launch_reservation]
 test/operations/default_prefill.ml [through Ll_test.link; run by @test/operations/runtest-default_prefill]
+test/operations/division_special_values.ml [through Ll_test.execute; run by @test/operations/runtest-division_special_values]
 test/operations/dynamic_axis_coverage.ml [through Ll_test.execute; run by @test/operations/runtest-dynamic_axis_coverage]
 test/operations/fixed_name_temporaries.ml [through Ll_test.execute; through Ll_test.execute_with_census; through Ll_test.run_routine; run by @test/operations/runtest-fixed_name_temporaries-logged, @test/operations/runtest-fixed_name_temporaries-plain]
 test/operations/float_literal_forms.ml [through Ll_test.execute; run by @test/operations/runtest-float_literal_forms]
@@ -807,6 +808,7 @@ test/operations/operand_precision_annotation.ml [through Ll_test.link; run by @t
 test/operations/padded_conv_cache.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-padded_conv_cache]
 test/operations/peel_census.ml [prelowered compile; run by @test/operations/runtest-peel_census]
 test/operations/peel_dead_level.ml [through Ll_test.execute; run by @test/operations/runtest-peel_dead_level]
+test/operations/prefix_scan.ml [staged callback; through Ll_test.optimize_and_execute; run by @test/operations/runtest-prefix_scan, @test/operations/runtest-prefix_scan_fp_licences]
 test/operations/prelowered_seam.ml [staged callback; prelowered compile; through Ll_test.link; through Ll_test.optimize_and_execute; run by @test/operations/runtest-prelowered_seam]
 test/operations/privatize_recheck.ml [through Ll_test.execute; run by @test/operations/runtest-privatize_recheck]
 test/operations/qkv_zero_init.ml [prelowered compile; through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-qkv_zero_init, @test/operations/runtest-qkv_zero_init-approximate]
@@ -880,6 +882,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-cpu_fork_join_chains
 @test/operations/runtest-cuda_launch_reservation
 @test/operations/runtest-default_prefill
+@test/operations/runtest-division_special_values
 @test/operations/runtest-dynamic_axis_coverage
 @test/operations/runtest-fixed_name_temporaries-logged
 @test/operations/runtest-fixed_name_temporaries-plain
@@ -915,6 +918,8 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-padded_conv_cache
 @test/operations/runtest-peel_census
 @test/operations/runtest-peel_dead_level
+@test/operations/runtest-prefix_scan
+@test/operations/runtest-prefix_scan_fp_licences
 @test/operations/runtest-prelowered_seam
 @test/operations/runtest-privatize_recheck
 @test/operations/runtest-qkv_zero_init

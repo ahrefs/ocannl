@@ -1048,6 +1048,19 @@ files.
   development selector `simplify_fp_algebra` (six arm families) is retired with no alias;
   `benchmarks/gh998_cells.py` ablates the three keys, and a result line records each under
   `fp_licences` with its source.
+- **A virtualized uniform keeps its own precision's scope wherever its reader's differs**
+  (gh-ocannl-1769). The lane-extract form sizes its lane index for the DRAW's precision (8 lanes per
+  block at f16), while a conversion renders at the precision of the store holding it, so
+  `simplify_llc`'s scope collapse (`rng_collapsible`, keyed on the store precision it threads as
+  `~render`) keeps an RNG-carrying scope of another precision. Collapsed, an f16 draw in an f32
+  master's initializer read lanes 4..7 of a 4-lane f32 block: undefined behavior that x86/gcc read
+  as zeros and `1.4e27` (an infinite loss from step 0) and arm64/clang as other, finite garbage, so
+  byte-identical C diverged by platform. `Precision_policy`'s walk reaches that draw because it
+  treats a parameter's initializer as an activation. `test_uniform_virtual_lane`'s `draw into` rows
+  pin the parity; diagnosis recipe: break on the kernel under gdb and read its argument buffers.
+  The collapse still drops a narrow NON-RNG scope's conversion, so a virtual cast twin reads its f32
+  master unrounded (`mixed_prec_twin_rounding`: `Twin_virtual` and `Twin_auto` give `1 + 2^-12`
+  where `Twin_materialized` gives `1`).
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
@@ -2128,6 +2141,22 @@ files.
   and `x - x = 0` fold to a constant, silently disabling an overflow gate (the shape
   `Mixed_prec.gated_scaled_update` needs). It is the same reason `Builtins_metal`'s fp8 codec is
   written in integer/bitcast form rather than float arithmetic.
+- **HIP's f64 division is a builtin expansion, because no hiprtc lever reaches f64 alone**
+  (gh-ocannl-1782). Under `-ffast-math`, hiprtc rendered f64 `x / y` as a Newton-refined reciprocal
+  estimate: NaN for every `x / 0`, `x / inf` and `inf / y`, measured on gfx1151.
+  `-fapprox-func` makes the estimate and `-freciprocal-math` the `x * (1 / y)` rounding; dropping
+  both makes every precision exact, at the cost of every f32 division. The approximation follows
+  the kernel's `"approx-func-fp-math"` function attribute, so an instruction-level pragma cannot
+  undo it, and hiprtc ignores `#pragma float_control` anyway ("not supported on this target").
+  ROCm's `__ocml_div_rte_f64` is declared in `math_fwd.h` but absent from the device library.
+  `Builtins_hip.ocannl_div_f64` writes out LLVM's own `LowerFDIV64` in `__builtin_amdgcn_div_scale`
+  / `rcp` / `__builtin_fma` / `div_fmas` / `div_fixup`, and `Cuda_like_config`'s `div_f64` routes
+  f64 `Div` and `Recip` through it. HIP's f32, half and bfloat16 division stay the estimate,
+  as CUDA's f32 does under `--use_fast_math`. That is a recorded boundary of the fast policy:
+  1-ulp quotients (`3 / 3 = 1 - 2^-24`), subnormal divisors overflowing, and f32 divisors from
+  2^126 flushing their reciprocal (`inf / FLT_MAX` NaN). A `hip_fast_math` key (gh-ocannl-1779)
+  that drops the umbrella is what lifts it. The helper is correct under either policy. Pinned by
+  `division_special_values`, whose HIP f32 leg is the on-device negative control.
 - **gfx1102 compiles without `real-true16`, and HIPRTC never gets `-amdgpu-waitcnt-*`**
   (`Compiler_options.hip_target_options`, gh-ocannl-1182/1222). In true16 mode, 16-bit values live
   in VGPR halves, and a pending D16 high-half load raced a low-half update of the same register,

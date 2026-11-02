@@ -98,8 +98,10 @@
   vector_file
   register_tile
   low_level
+  lowered_nests
   online_softmax
   winograd
+  prefix_scan
   fp_algebra
   rewrites
   cost_model

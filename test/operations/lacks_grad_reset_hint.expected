@@ -3,7 +3,8 @@ The refusal:
 The linked context lacks node lh_w.grad: this computation's backprop accumulates into the gradient lh_w.grad without zeroing it, and no routine of its lineage zeroes it. Its reset is carried by an earlier-constructed consumer of its tensor, beside that consumer's backprop (gh-ocannl-1744), and that consumer is not compiled in this lineage -- typically a parameter's first consumer that was evaluated forward-only (Train.forward_once, Train.forward), whether or not it has since been dropped, or one compiled outside this lineage. Compile a zeroing of the gradient first -- Train.zero_params_grads ~params for a parameter's -- then compile this routine from the context that compile returned, and run the zeroing before each step.
 names the parameter's gradient, the missing reset and the remedy: true
 reset before each step: w.grad = 2 w: true
-a step without the reset carries over (the control): true
+a step without the reset is refused, naming the reset routine: true
+the refusal dispatched nothing: true
 a reset compiled in a sibling does not count, and the hint names it: true
 the refusal is exactly the bare message: true
 names the unpropagated gradient, and not the reset: true
