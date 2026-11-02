@@ -33,6 +33,21 @@ let accum_prec = Ll_test.backend_accum_prec
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 
+(* Where the GPU compiler holds a kernel's arithmetic still across kernels, so equal summation
+   orders mean equal bits. Not on HIP: hiprtc compiles under [-ffast-math], which licenses
+   contraction, and no configuration turns it off there (CUDA's is [cuda_fast_math]); whether an
+   [acc + a * b] fuses follows the surrounding kernel, and partitioning the staged copies
+   (gh-ocannl-1661) moved the 2x2 register-tile seeds' rounding at 2% of qkv's cells and 1% of
+   outproj's, identically across their geometries. There the bounded claims below stand in. *)
+let bitwise_gpu = on_gpu && not (String.equal backend_name "hip")
+
+(* Within 2^-16 of the output's largest magnitude: wide of contraction drift (a rounding per
+   product), narrow of a lost, stale or misplaced product, which moves a cell by a product. *)
+let within ~want got =
+  let top = Array.fold want ~init:0. ~f:(fun m v -> Float.max m (Float.abs v)) in
+  Array.length got = Array.length want
+  && Array.for_all2_exn got want ~f:(fun g w -> Float.(abs (g -. w) <= top /. 65536.))
+
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -56,6 +71,21 @@ let run_with fwd tensor transform =
   Context.get_values (Context.run ctx routine) tensor.Tensor.value
 
 let r32 x = Int32.float_of_bits (Int32.bits_of_float x)
+
+(* How a differing output differs (gh-ocannl-1661), for the record: how many cells, the largest
+   absolute difference and the largest distance in f32 units in the last place. A rounding
+   difference (a contraction) moves cells by an ulp or two; a lost or stale copy moves them by the
+   magnitude of a product. *)
+let difference got want =
+  if Array.length got <> Array.length want then "of another length"
+  else
+    let ulps a b = Int32.(abs (bits_of_float a - bits_of_float b)) |> Int32.to_int_exn in
+    let n, abs_max, ulp_max =
+      Array.fold2_exn got want ~init:(0, 0., 0) ~f:(fun (n, m, u) g w ->
+          if Float.equal g w then (n, m, u)
+          else (n + 1, Float.max m (Float.abs (g -. w)), Int.max u (ulps g w)))
+    in
+    Printf.sprintf "in %d of %d cells, by at most %g (%d ulp)" n (Array.length want) abs_max ulp_max
 
 (* A value per cell that varies with every index (1009 is prime and above every row-major stride's
    residue period here) and is inexact in binary: a multiple of 1/37, rounded to f32 as stored. *)
@@ -127,15 +157,31 @@ let leg ~tag ~layout cand reversed =
   (* The executed populations exist only on a GPU; off it they are empty and the gated claims skip
      without reading them. *)
   let outs = if on_gpu then List.map family ~f:(fun q -> (q, run q)) else [] in
+  let coal_outs =
+    if on_gpu then
+      List.map scalar ~f:(fun q ->
+          match run q with
+          | got -> (q, Some got)
+          | exception exn ->
+              Stdio.eprintf "coalesce_numerics: %s %s FAILED: %s\n%!" tag (label q)
+                (Exn.to_string exn);
+              (q, None))
+    else []
+  in
   let want = match outs with (_, w) :: _ -> w | [] -> [||] in
   gated ~when_:on_gpu ~on:backend_name
     (Printf.sprintf "%s: the family's output is not all zeros" tag)
     (Array.exists want ~f:(fun v -> Float.(v <> 0.)));
   gated_all ~when_:on_gpu ~on:backend_name
+    (Printf.sprintf "%s: the family's scalar blocktile seeds agree within 2^-16 of its scale" tag)
+    outs ~f:(fun (_, got) -> within ~want got);
+  gated_all ~when_:bitwise_gpu ~on:backend_name
     (Printf.sprintf "%s: the family's scalar blocktile seeds agree bitwise among themselves" tag)
     outs ~f:(fun (q, got) ->
       let ok = Array.equal Float.equal got want in
-      if not ok then Stdio.eprintf "coalesce_numerics: %s family %s differs\n%!" tag (label q);
+      if not ok then
+        Stdio.eprintf "coalesce_numerics: %s family %s differs %s\n%!" tag (label q)
+          (difference got want);
       ok);
   (* The executed control: the first family seed run on the reversed inputs sums every cell's
      products in the reverse order, and some cell's bits change -- so the bitwise claims here would
@@ -158,16 +204,19 @@ let leg ~tag ~layout cand reversed =
       "coalesce_numerics: %s: the serial reference %s the family (not part of the golden)\n%!" tag
       (if Array.equal Float.equal (run_with fwd cand Fn.id) want then "matches" else "differs from");
   gated_all ~when_:on_gpu ~on:backend_name
+    (Printf.sprintf "%s: every scalar blocktile %s seed computes the family's values within 2^-16"
+       tag lt) coal_outs ~f:(fun (_, got) -> Option.exists got ~f:(within ~want));
+  gated_all ~when_:bitwise_gpu ~on:backend_name
     (Printf.sprintf "%s: every scalar blocktile %s seed computes the family's values bitwise" tag lt)
-    scalar ~f:(fun q ->
-      match run q with
-      | got ->
+    coal_outs ~f:(fun (q, got) ->
+      match got with
+      | Some got ->
           let ok = Array.equal Float.equal got want in
-          if not ok then Stdio.eprintf "coalesce_numerics: %s %s differs\n%!" tag (label q);
+          if not ok then
+            Stdio.eprintf "coalesce_numerics: %s %s differs %s\n%!" tag (label q)
+              (difference got want);
           ok
-      | exception exn ->
-          Stdio.eprintf "coalesce_numerics: %s %s FAILED: %s\n%!" tag (label q) (Exn.to_string exn);
-          false)
+      | None -> false)
 
 (* {1 The control: the inputs make summation order visible} *)
 

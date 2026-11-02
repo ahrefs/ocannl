@@ -4,14 +4,18 @@ qkv: the family offers a scalar blocktile seed: true
 qkv: the coal-n layout offers seeds: true
 qkv: every coal-n seed is a scalar blocktile but for its coalescing: true
 qkv: the family's output is not all zeros: true
+qkv: the family's scalar blocktile seeds agree within 2^-16 of its scale: true
 qkv: the family's scalar blocktile seeds agree bitwise among themselves: true
 qkv: control: summing every cell's products in reverse changes some cell: true
+qkv: every scalar blocktile coal-n seed computes the family's values within 2^-16: true
 qkv: every scalar blocktile coal-n seed computes the family's values bitwise: true
 outproj: the coal-k prefix applies: true
 outproj: the family offers a scalar blocktile seed: true
 outproj: the coal-k layout offers seeds: true
 outproj: the coal-k layout offers a scalar blocktile seed but for its coalescing: true
 outproj: the family's output is not all zeros: true
+outproj: the family's scalar blocktile seeds agree within 2^-16 of its scale: true
 outproj: the family's scalar blocktile seeds agree bitwise among themselves: true
 outproj: control: summing every cell's products in reverse changes some cell: true
+outproj: every scalar blocktile coal-k seed computes the family's values within 2^-16: true
 outproj: every scalar blocktile coal-k seed computes the family's values bitwise: true
