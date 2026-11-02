@@ -333,6 +333,13 @@ let () = List.iter xs ~f:Other.skipped|ocaml},
 let skipped = Verdict.skipped ~backend:"cc"
 let () = let open Local in List.iter labels ~f:skipped|ocaml},
         [] );
+      ( "a skip alias past an open of a standard library",
+        {ocaml|let skipped = Verdict.skipped ~backend:"cc"
+let () = let open Stdio in List.iter labels ~f:skipped|ocaml},
+        [ "iterated skipped" ] );
+      ( "a skip callback a collection stores rather than calls",
+        {ocaml|let checks = List.singleton (fun () -> Verdict.skipped ~backend:"cc" "one")|ocaml},
+        [] );
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );

@@ -32,6 +32,7 @@ val label : string
 module List : sig
   val iter : 'a list -> f:('a -> unit) -> unit
   val filter_map : 'a list -> f:('a -> 'b option) -> 'b list
+  val singleton : 'a -> 'a list
 end
 
 module Array : sig

@@ -835,7 +835,7 @@ helper. The population side now follows a data thunk (a lazy value and `Lazy.for
 too. The skip-list reader (`Verdict_scan.skip_list_census`) refuses a skip handed to an iteration,
 a callback or loop that only skips, and a branch applying two or more skips. Every run used
 tools/mutation-run.sh --batch on the named module and focused alias, and restored the source
-byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`; the local review's four rows ran later, on baselines `20261102T204037Z-20472` and `20261102T204156Z-60315`, and PR review round 1's two on `20261102T211705Z-35891` and `20261102T211412Z-41369`).
+byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`; the local review's four rows ran later, on baselines `20261102T204037Z-20472` and `20261102T204156Z-60315`, and PR review round 1's two on `20261102T211705Z-35891` and `20261102T211412Z-41369`, round 2's on `20261102T212700Z-82004`).
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
@@ -869,4 +869,6 @@ The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under
 | A callback that evaluates its claim on one side of the gate is no skip list | `verdict_scan.ml`: evaluating claims not counted | a loop whose callback evaluates on one side of its gate and skips on the other | `20261102T202208Z-44233` |
 | Another module's `skipped` is no skip (local review) | `verdict_scan.ml`: every qualified `skipped` is a skip | another module's skipped | `20261102T204207Z-65992` |
 | An `open` may shadow a skip alias, which the resolver then decides (PR review round 1) | `verdict_scan.ml`: an open binds nothing in the alias scope | a skip alias a local open shadows with another skipped | `20261102T211421Z-48647` |
+| An open of a standard library shadows no skip alias (PR review round 2) | `verdict_scan.ml`: every open defers `skipped` to the resolver | a skip alias past an open of a standard library | `20261102T212708Z-84233` |
+| Only an argument a collection function calls back is iterated (PR review round 2) | `verdict_scan.ml`: every argument of a collection function read as called back | a skip callback a collection stores rather than calls | `20261102T212719Z-86797` |
 | An Option iteration runs at most once | `verdict_scan.ml`: Option read as a collection iteration | an Option iteration, which runs at most once | `20261102T202018Z-64542` |

@@ -3217,11 +3217,22 @@ let skip_positions ~owners ast =
       (* [Some b]: the source binds the name, to a skip or not; [None]: an [open] or [include] may
          have brought one in, which the resolver decides. *)
       method local = Some false
-      method module_path _ _ = None
+
+      (* A module's denotation: whether it may export a [skipped] -- a standard library does not
+         ({!Verdict_callee.standard_libraries}); any other module, or [Verdict] itself, may. *)
+      method module_path _ path =
+        Some
+          (not
+             (List.mem Verdict_callee.standard_libraries (Lexical_scope.head path)
+                ~equal:String.equal))
+
       method! attribute _ attr = attr
 
-      method! opened ~top:_ ~include_:_ env _ =
-        Lexical_scope.push_frame env (Map.singleton (module String) skip_name None)
+      method! opened ~top:_ ~include_:_ env denotes =
+        match denotes with
+        | Some false -> env
+        | Some true | None ->
+            Lexical_scope.push_frame env (Map.singleton (module String) skip_name None)
 
       method! binding_denotes env binding =
         let rec skip_head expr =
@@ -3337,13 +3348,17 @@ let skip_list_census content =
     | Pexp_function _ -> skip_only argument
     | _ -> []
   in
+  (* The function name of a collection-module function [callee] spells, where it is one. *)
   let collection_iteration callee =
     match Read.longident_of (strip_constraints callee) with
     | Some (_ :: _ :: _ as path) ->
         let module_ = List.nth_exn path (List.length path - 2) in
-        List.mem collection_modules module_ ~equal:String.equal
-        && not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal)
-    | _ -> false
+        if
+          List.mem collection_modules module_ ~equal:String.equal
+          && not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal)
+        then Some (List.last_exn path)
+        else None
+    | _ -> None
   in
   let branch body =
     let skips, _ = claims ~branches:false body in
@@ -3357,9 +3372,18 @@ let skip_list_census content =
         (match expr.pexp_desc with
         | Pexp_ident _ when is_skip_head expr -> Int.incr skips_read
         | Pexp_apply (callee, arguments) ->
-            if collection_iteration callee then
-              List.iter arguments ~f:(fun (_, argument) ->
-                  report Iterated expr (iterated_argument argument))
+            Option.iter (collection_iteration callee) ~f:(fun name ->
+                (* Only an argument the function calls back is iterated over -- [List.iter]'s [~f],
+                   not what [List.singleton] stores -- in either library's order, the loud direction
+                   ({!calls_back}). *)
+                let positional = ref 0 in
+                List.iter arguments ~f:(fun (label, argument) ->
+                    let index = !positional in
+                    (match label with Ppxlib.Asttypes.Nolabel -> Int.incr positional | _ -> ());
+                    if
+                      calls_back ~stdlib:false name label index
+                      || calls_back ~stdlib:true name label index
+                    then report Iterated expr (iterated_argument argument)))
         | Pexp_for (_, _, _, _, body) | Pexp_while (_, body) ->
             report Iterated expr (skip_only body)
         | Pexp_ifthenelse (_, yes, no) ->
