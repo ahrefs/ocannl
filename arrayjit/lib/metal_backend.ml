@@ -1696,6 +1696,13 @@ module Impl = struct
                       (C_syntax.codegen_bug_claim ~artifact:source_note)
                       options_rendered msg;
                 } )
+        else if Metal_failure.compiler_service_crash msg then
+          (* The compiler service crashed on this library, past Metal's own retries: a decline of
+             these kernels, as at pipeline creation ([pipeline_of], gh-ocannl-1436). *)
+          Schedule_outcome.Cause_at
+            ( Schedule_outcome.Backend_compile,
+              Metal_failure.compiler_service_crash_cause ~backend:Device_config.name
+                ~request:"the library" ~kernel:name msg )
         else
           (* No compiler diagnostic, or a header the compiler could not open: nothing establishes
              that the failure is this kernel's rather than the environment's (an unavailable
@@ -2016,31 +2023,29 @@ using namespace metal;|}
                the driver's own byte counts (gh-ocannl-1226): the driver applies per-allocation
                alignment the schedule-level estimate does not (each [threadgroup] array is rounded
                up to 4 bytes, so two odd-length [half] tiles summing exactly to the limit are
-               refused), so an estimate at the limit can still be over it here. Any other
-               pipeline-creation failure keeps propagating untyped: nothing here establishes that it
-               is the candidate's rather than the environment's. *)
+               refused), so an estimate at the limit can still be over it here. A compiler service
+               that crashed on the kernel, past Metal's own retries, is a typed decline of it
+               ([Metal_failure.compiler_service_crash], gh-ocannl-1436). Any other pipeline-creation
+               failure keeps propagating untyped: nothing here establishes that it is the
+               candidate's rather than the environment's. *)
             let pso, _ =
               try Me.ComputePipelineState.on_device_with_function metal_device func
               with Failure msg as exn -> (
                 let backtrace = Stdlib.Printexc.get_raw_backtrace () in
-                let overflow =
-                  Option.bind (String.substr_index msg ~pattern:"Threadgroup memory size (")
-                    ~f:(fun pos ->
-                      try
-                        Some
-                          (Stdlib.Scanf.sscanf (String.drop_prefix msg pos)
-                             "Threadgroup memory size (%d) exceeds the maximum threadgroup memory \
-                              allowed (%d)" (fun requested limit -> (requested, limit)))
-                      with Stdlib.Scanf.Scan_failure _ | End_of_file | Failure _ -> None)
-                in
-                match overflow with
-                | Some (requested, limit) ->
+                match Metal_failure.classify_pipeline_failure msg with
+                | Threadgroup_overflow { requested; limit } ->
                     reject_link Schedule_outcome.Workgroup_memory ~requested ~limit
                       [%string
                         "Metal: pipeline creation for %{func_name} refused its threadgroup memory: \
                          %{requested#Int} bytes requested, over the device limit of %{limit#Int} \
                          bytes (driver: %{msg})"]
-                | None -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
+                | Compiler_service_crash ->
+                    raise
+                    @@ Schedule_outcome.Cause_at
+                         ( Schedule_outcome.Backend_link,
+                           Metal_failure.compiler_service_crash_cause ~backend:Device_config.name
+                             ~request:"the pipeline" ~kernel:func_name msg )
+                | Unrecognized -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
             in
             Compile_cost.record_pipeline_created ();
             Hashtbl.set program.pipelines ~key:symbol ~data:(func, pso);

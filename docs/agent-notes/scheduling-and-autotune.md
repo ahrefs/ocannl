@@ -1022,6 +1022,17 @@ files.
   carries a `program_source:L:C: error:` diagnostic, and why every backend leaves a header the
   compiler could not open untyped (`C_syntax.missing_include`) although its toolchain reports it
   under that same status (`compile_failure_declines`, ahrefs/ocannl#1387).
+- A vendor compiler that CRASHES on a kernel is a decline too, at its own stage: Metal reports a
+  dead `MTLCompilerService` as `XPC_ERROR_CONNECTION_INTERRUPTED` only after relaunching it and
+  retrying itself, so `Metal_failure` types it, at either compile site, as `Backend_rejected` at
+  stage `compiler_crash`, `Compiler_bug` (gh-ocannl-1436). It was deterministic: the unparallelized
+  whole-routine gpt2_mini_train kernel (one 458 KB MSL function) aborted AGX instruction emission
+  on all four attempts, about 40 s each, and standalone from its source alone. gh-ocannl-1340 had
+  already removed that trigger by deciding gh-532 non-dispatch before codegen. Contained, each
+  crashing candidate still costs those 160 s. `XPC_ERROR_CONNECTION_INVALID`, an unreachable
+  service, stays untyped. The service's message is `<private>` in the unified log, so read the
+  crash stack from `~/Library/Logs/DiagnosticReports/MTLCompilerService-*.ips`
+  (`metal_failure_classes`).
 - The two pipelined-tile facts are also stated upstream, over the applied IR, as
   `Schedule.pipeline_violation` (gh-ocannl-1231): `op_legality` refuses any op leaving one — a
   `Split` or materializing `Unroll` of the rotor (its binder vanishes, so the reads fall outside),

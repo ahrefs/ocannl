@@ -114,6 +114,7 @@
   backend_intf
   backend_impl
   compiler_options
+  metal_failure
   c_syntax
   vendor_idents_cuda
   vendor_idents_hip

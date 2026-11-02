@@ -1,0 +1,24 @@
+the captured pipeline crash is Compiler_service_crash: true
+a library-compile crash (constructed: the binding's prefix, the observed description) is Compiler_service_crash: true
+a threadgroup overflow is (Threadgroup_overflow(requested 32772)(limit 32768)): true
+an unreachable compiler service is Unrecognized: true
+an unrelated pipeline failure is Unrecognized: true
+the captured pipeline crash: the library-compile test agrees with the pipeline class: true
+a library-compile crash (constructed: the binding's prefix, the observed description): the library-compile test agrees with the pipeline class: true
+a threadgroup overflow: the library-compile test agrees with the pipeline class: true
+an unreachable compiler service: the library-compile test agrees with the pipeline class: true
+an unrelated pipeline failure: the library-compile test agrees with the pipeline class: true
+the crash's key: (Backend_rejected_key metal compiler_crash Compiler_bug)
+the crash is a Compiler_bug rejection at its own stage, not the compiler's diagnosed one: true
+the detail names the kernel: true
+the detail carries the driver's report: true
+the detail says Metal retried, as the report does: true
+the detail does not claim an OCANNL codegen bug: true
+the crash is containable at Backend_compile: true
+typed at Backend_compile: classified at Backend_compile, (Backend_rejected_key metal compiler_crash Compiler_bug), No_device_writes
+typed at Backend_compile, the crash is a decline that wrote nothing: true
+untyped at Backend_compile, the same text is Fatal (the control): true
+the crash is containable at Backend_link: true
+typed at Backend_link: classified at Backend_link, (Backend_rejected_key metal compiler_crash Compiler_bug), No_device_writes
+typed at Backend_link, the crash is a decline that wrote nothing: true
+untyped at Backend_link, the same text is Fatal (the control): true
