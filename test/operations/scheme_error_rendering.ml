@@ -83,6 +83,24 @@ let cases =
           ignore (Shape.to_dims y.Tensor.shape : int array));
     };
     {
+      name = "a failed total-elements constraint (hand-built: the solver raises it on divisibility)";
+      in_scheme = false;
+      run =
+        (fun () ->
+          let v = Row.get_var ~name:"k" () in
+          raise
+          @@ Row.Shape_error
+               ( "Total_elems: the total is not divisible",
+                 [
+                   Row.Rows_constr_failed
+                     {
+                       constr =
+                         Total_elems
+                           { numerator = Num_elems 6; divided_by = [ v; v ]; keep_axis = false };
+                     };
+                 ] ));
+    };
+    {
       name = "the first mistake without a scheme (session ids, for contrast)";
       in_scheme = false;
       run = (fun () -> ignore (two_layer_unchecked ~hid:8 ~out:2 () (input "x" [ 3 ]) : Tensor.t));

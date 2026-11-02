@@ -4415,7 +4415,7 @@ let error_to_string_hum msg trace =
   let rank = function
     | Row.Dim_mismatch _ | Row.Row_mismatch _ | Row.Index_mismatch _ -> 0
     | Shape_mismatch _ -> 1
-    | Row.Constraint_failed _ -> 2
+    | Row.Constraint_failed _ | Row.Rows_constr_failed _ -> 2
     | _ -> 3
   in
   let ordered = List.stable_sort trace ~compare:(fun a b -> Int.compare (rank a) (rank b)) in
@@ -4436,6 +4436,8 @@ let error_to_string_hum msg trace =
       | Row.Constraint_failed c ->
           let text, origins = constraint_ c in
           ("failed constraint: " ^ text) :: map_seq origins ~f:(fun o -> "  from " ^ origin o)
+      | Row.Rows_constr_failed { constr } ->
+          [ "failed row constraint: the rows have " ^ row_constraint constr ]
       | other -> [ rename_text (Sexp.to_string_hum (sexp_of_error_trace other)) ])
     |> List.concat
   in

@@ -35,6 +35,9 @@ Shape_error: the size of the concatenation component 'a:o is not determined, and
   the axis: 'a:o
   failed constraint: row 'a:o
     from concat_undetermined (output) with _ (output): remaining rows
+--- a failed total-elements constraint (hand-built: the solver raises it on divisibility)
+Shape_error: Total_elems: the total is not divisible
+  failed row constraint: the rows have 6/'a:k/'a:k elements
 --- the first mistake without a scheme (session ids, for contrast)
 Shape_error: solved dimensions for axis: mismatch
   conflicting sizes: 2 vs 8
