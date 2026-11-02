@@ -1,0 +1,16 @@
+the default reaches a node the routine writes before reading: true
+the default leaves a routine input alone: true
+the prefill is clear of zero and of the sentinel: true
+the routine's own writes land over the default prefill: true
+cells no writer covers read back the default prefill: true
+an opted-out node keeps the fresh zero: true
+a second run starts from the first run's values, not a new prefill: true
+an opt-out without a reason raises: true
+an opt-out of a node the routine reads first raises: true
+the operands' products sum exactly in f32: true
+the prefill differs from the closed form in every cell: true
+dp_mm_default: the output is written before it is read: true
+the default pipeline's matmul from a prefilled output is the closed form: true
+dp_mm_gpu: the output is written before it is read: true
+the GPU-annotated matmul from a prefilled output is the closed form: true
+the same matmul from the default prefill is the closed form: true

@@ -11,7 +11,7 @@
     EXECUTED through the [?prelowered] seam (gh-ocannl-562) — because virtualization rewrites what
     value a cell holds, which no structural pin can reach.
 
-    Four doctrines are built into the helpers here, each learned from a leg that passed for the
+    Five doctrines are built into the helpers here, each learned from a leg that passed for the
     wrong reason:
 
     - The oracle must DISCRIMINATE. A producer value has to vary with every symbol of its iteration
@@ -25,6 +25,9 @@
     - A claim must be able to FAIL. Every {!p} is an assertion, not a recorded observation: a run
       with a false claim exits nonzero, so a regression cannot be [dune promote]d into the golden
       (gh-ocannl-601). Claims are therefore phrased so [true] is the passing reading.
+    - A run must not start from zero. A fresh device buffer is already zero, so a dropped zero
+      computes the same values from it; {!run_linked} prefills every node the routine writes before
+      reading unless the test seeds it or opts it out (gh-ocannl-1774).
     - A node to be read back must be declared {!materialize}d: [known_non_virtual] does NOT mean
       "has a context buffer" — a node written and read within one routine and never observed is
       placed [Local], routine-scoped scratch, and host access to it raises (gh-ocannl-599).
@@ -535,13 +538,82 @@ let link_finalized ?ctx ~placements ~name (o : LL.optimized) =
                 (Tn.debug_name tn))));
   linked
 
+(** {2 The default prefill}
+
+    A fresh device buffer is already zero, so a routine that wrongly drops a zero — an elided
+    initialization, a zero seed that reads the node instead, a [Zero_out] that never runs — computes
+    the same values from it, and its parity check passes (gh-ocannl-1625). {!run_linked} therefore
+    starts every node the routine writes before reading from per-cell values clear of zero, not from
+    the fresh zero, unless the test said otherwise (gh-ocannl-1774). *)
+
+(** [prefill_value prec i] is the default prefill of cell [i] of a node stored at [prec]: for a
+    float storage [-(3 + i mod 13 / 4)], the quarters in [-6 .. -3], negative where the producers
+    above ({!tick}, {!tag}, {!ramp}, {!cycle}) are positive, clear of the {!sentinel} [-1] that
+    marks cells no writer covers, and varying with the cell so a read of the wrong cell differs too;
+    for an integer storage [91 + i mod 13], which unsigned bytes hold. [None] for the packed RNG
+    state and [Void_prec], which hold no scalar value to prefill. *)
+let prefill_value prec i =
+  match Ops.prec_family prec with
+  | Ops.Scalar_float -> Some (-.(3. +. (0.25 *. Float.of_int (i % 13))))
+  | Ops.Scalar_integer -> Some (Float.of_int (91 + (i % 13)))
+  | Ops.Packed_integer | Ops.No_value -> None
+
+(** [prefill tn] is {!prefill_value} over every cell of [tn], [None] where its storage holds no
+    scalar value. *)
+let prefill tn =
+  let prec = Lazy.force tn.Tn.storage_prec in
+  Option.map (prefill_value prec 0) ~f:(fun _ ->
+      Array.init (Tn.num_elems tn) ~f:(fun i -> Option.value_exn (prefill_value prec i)))
+
+(** The materialized nodes [routine] writes before reading them, if at all: its [outputs] less its
+    required [inputs]. A node with registered host initialization data leaves [inputs] whether or
+    not it is read first ([Context.routine]'s [inputs]), so it is not known to be written first and
+    is left out. *)
+let written_before_read (routine : Context.routine) =
+  Set.filter (Set.diff routine.Context.outputs routine.Context.inputs) ~f:(fun tn ->
+      not (Ir.Host_inits.mem tn))
+
 (** [run_linked (ctx, routine) ~seed] drives the executed leg of an ALREADY-LINKED pair: uploads
     [seed], runs, and returns the context the values can be read from. It is the half of {!run} that
     survives keeping the routine — a test asserting on the [inputs]/[outputs] the link actually
     computed (gh-ocannl-590) holds the pair {!link} returned, so it needs the execution without
     compiling a second time. Every node in [seed] must have been {!materialize}d: host access to a
-    node the pipeline placed [Local] raises (gh-ocannl-599). *)
-let run_linked (ctx, routine) ~(seed : (Tn.t * float array) list) =
+    node the pipeline placed [Local] raises (gh-ocannl-599).
+
+    Before running, it PREFILLS every node the routine writes before reading
+    ({!written_before_read}) that [seed] does not name and that [ctx] holds no value for — no run,
+    upload or seed of [ctx]'s lineage wrote it, so the routine would otherwise read whatever the
+    buffer holds, a fresh zero on a fresh root — with {!prefill}. Its result must not depend on what
+    those buffers held, so a correct routine computes the same values, and one that reads a dropped
+    zero computes different ones. A node [ctx] already holds keeps its value: a second run on the
+    context the first run returned (the run-twice legs of gh-ocannl-1625) starts from the first
+    run's results, and a node an earlier routine wrote keeps what it wrote. The buffer, not the
+    context value, is what persists: a second run on the SAME context the first run started from is
+    prefilled again. Cells no writer covers are not written over by the routine, so a test reading
+    them seeds them itself, with {!blank}, rather than relying on either fill.
+
+    [~fresh_zero] opts nodes out, each with the reason the test relies on the fresh zero buffer; it
+    raises on an empty reason, and on a node the routine does not write before reading, which a
+    stale opt-out would otherwise pass through silently. *)
+let run_linked ?(fresh_zero : (Tn.t * string) list = []) (ctx, routine)
+    ~(seed : (Tn.t * float array) list) =
+  let candidates = written_before_read routine in
+  List.iter fresh_zero ~f:(fun (tn, reason) ->
+      if String.is_empty (String.strip reason) then
+        invalid_arg
+          (Printf.sprintf "Ll_test.run_linked: ~fresh_zero %s carries no reason" (Tn.debug_name tn));
+      if not (Set.mem candidates tn) then
+        invalid_arg
+          (Printf.sprintf
+             "Ll_test.run_linked: ~fresh_zero %s is not a node routine %s writes before reading, \
+              so no prefill would have reached it"
+             (Tn.debug_name tn) routine.Context.name));
+  let named tns tn = List.exists tns ~f:(fun (tn', _) -> Tn.equal tn tn') in
+  let ctx =
+    Set.fold candidates ~init:ctx ~f:(fun ctx tn ->
+        if named seed tn || named fresh_zero tn || Context.is_initialized ctx tn then ctx
+        else match prefill tn with Some vs -> Context.set_values ctx tn vs | None -> ctx)
+  in
   let ctx = List.fold seed ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs) in
   Context.run ctx routine
 
@@ -571,37 +643,40 @@ let check_launch ~bindings ~launch =
          Option.some_if (not (List.mem bound sym ~equal:Idx.equal_static_symbol)) sym))
 
 (* {!run}, keeping the routine for the census {!execute_with_census} returns. *)
-let run_routine ?ctx ?(bindings = Idx.Empty) ?(launch = []) ~name (o : LL.optimized) ~seed =
+let run_routine ?ctx ?(bindings = Idx.Empty) ?(launch = []) ?fresh_zero ~name (o : LL.optimized)
+    ~seed =
   check_launch ~bindings ~launch;
   let ctx, routine = link ?ctx ~bindings ~name o in
   List.iter launch ~f:(fun (sym, v) -> Idx.find_exn routine.Context.bindings sym := v);
-  (run_linked (ctx, routine) ~seed, routine)
+  (run_linked ?fresh_zero (ctx, routine) ~seed, routine)
 
 (** [run ~name o ~seed] is {!link} followed by {!run_linked}, for the tests that have no use for the
-    routine itself. Same materialization requirement on [seed].
+    routine itself. Same materialization requirement on [seed], and the same default prefill, with
+    its [~fresh_zero] opt-out.
 
     [~launch] carries what a {!link} caller would write into the returned routine's
     [Context.bindings]: these wrappers never hand the routine back, so it is their only way to set a
     launch parameter, and {!check_launch} requires it to give each of [~bindings]' bound symbols
     exactly one value. A case that also needs [~static_indices] on the optimization, or the routine
     itself, calls {!link} directly. *)
-let run ?ctx ?bindings ?launch ~name o ~seed =
-  fst (run_routine ?ctx ?bindings ?launch ~name o ~seed)
+let run ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed =
+  fst (run_routine ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed)
 
 (** {!execute}, also returning the compiled routine's mma census ([Context.routine.mma],
     gh-ocannl-1283). A schedule that requests tensorization and declines at codegen renders its
     scalar fallback, which computes the same values: parity alone cannot tell the two apart, so a
     claim about an executed TENSORIZED candidate requires {!rendered_tensorized} of this census
     beside its values. *)
-let execute_with_census ?ctx ?bindings ?launch ~name (o : LL.optimized) ~seed ~(read : Tn.t list) =
-  let ctx, routine = run_routine ?ctx ?bindings ?launch ~name o ~seed in
+let execute_with_census ?ctx ?bindings ?launch ?fresh_zero ~name (o : LL.optimized) ~seed
+    ~(read : Tn.t list) =
+  let ctx, routine = run_routine ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed in
   (List.map read ~f:(Context.get_values ctx), routine.Context.mma)
 
 (** {!run}, then read back [read] in order. Same materialization requirement, on both lists. The
     routine, and with it the mma census, is discarded: a test executing a tensorized candidate calls
     {!execute_with_census} instead. *)
-let execute ?ctx ?bindings ?launch ~name o ~seed ~read =
-  fst (execute_with_census ?ctx ?bindings ?launch ~name o ~seed ~read)
+let execute ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed ~read =
+  fst (execute_with_census ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed ~read)
 
 (** Whether a compile's mma census records at least one real tensor-core / SIMD-register-tile
     emission ([Ir.C_syntax.Tensorized]) — not a wholly declined [Tile_mma] ([Scalar_fallback]), nor
@@ -621,9 +696,9 @@ let refused_as_local f =
     the optimized record (for structural probes) and the values read back. A case whose [~bindings]
     also have to be declared to the optimization as [~static_indices] calls {!optimize} and
     {!execute} separately: this helper's optimize half takes no [~static_indices]. *)
-let optimize_and_execute ?ctx ?bindings ?launch ?materialized ~name llc ~seed ~read =
+let optimize_and_execute ?ctx ?bindings ?launch ?fresh_zero ?materialized ~name llc ~seed ~read =
   let o = optimize ?materialized ~name llc in
-  (o, execute ?ctx ?bindings ?launch ~name o ~seed ~read)
+  (o, execute ?ctx ?bindings ?launch ?fresh_zero ~name o ~seed ~read)
 
 (** The value seeded into cells no writer is supposed to cover: distinct from every producer value
     the builders above generate, and from the zero-init. *)

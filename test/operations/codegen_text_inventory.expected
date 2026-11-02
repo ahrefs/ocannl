@@ -776,6 +776,7 @@ test/operations/context_handle_refusals.ml [through Ll_test.link; run by @test/o
 test/operations/cost_model_template.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-cost_model_template]
 test/operations/cpu_fork_join_chains.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-cpu_fork_join_chains]
 test/operations/cuda_launch_reservation.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-cuda_launch_reservation]
+test/operations/default_prefill.ml [through Ll_test.link; run by @test/operations/runtest-default_prefill]
 test/operations/dynamic_axis_coverage.ml [through Ll_test.execute; run by @test/operations/runtest-dynamic_axis_coverage]
 test/operations/fixed_name_temporaries.ml [through Ll_test.execute; through Ll_test.execute_with_census; through Ll_test.run_routine; run by @test/operations/runtest-fixed_name_temporaries-logged, @test/operations/runtest-fixed_name_temporaries-plain]
 test/operations/float_literal_forms.ml [through Ll_test.execute; run by @test/operations/runtest-float_literal_forms]
@@ -877,6 +878,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-cost_model_template
 @test/operations/runtest-cpu_fork_join_chains
 @test/operations/runtest-cuda_launch_reservation
+@test/operations/runtest-default_prefill
 @test/operations/runtest-dynamic_axis_coverage
 @test/operations/runtest-fixed_name_temporaries-logged
 @test/operations/runtest-fixed_name_temporaries-plain
