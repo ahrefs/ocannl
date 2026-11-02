@@ -12577,3 +12577,14 @@
  (name runtest)
  (deps
   (alias runtest-routine_log_rng_init)))
+
+(test
+ (name build_file_descriptors)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules build_file_descriptors)
+ (libraries base ocannl stdio arrayjit.verdict test_utils)
+ (preprocess
+  (pps ppx_ocannl)))

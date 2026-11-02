@@ -1,0 +1,4 @@
+8 compiles with debug artifacts on grow open descriptors by fewer than 8: true
+every compile's optimized .ll artifact names its routine: true
+every compile's .cd artifact is written: true
+negative control: 8 leaking writes grow open descriptors by at least 8: true

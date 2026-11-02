@@ -3363,19 +3363,19 @@ let doc_of_sexp sexp =
 
   doc_of_sexp_indent !default_indent sexp
 
+(* The file is truncated at once, as before, but no descriptor outlives a call: the printer is
+   dropped without a close, so a channel kept open across calls leaked one descriptor per artifact
+   per compile -- three per lowered routine -- until a long test ran out of them
+   (gh-ocannl-1784). *)
 let output_to_build_file ~fname =
-  if settings.output_debug_files_in_build_directory then
-    let f = Stdio.Out_channel.create @@ build_file fname in
+  if settings.output_debug_files_in_build_directory then (
+    let path = build_file fname in
+    Stdio.Out_channel.with_file path ~f:(fun _ -> ());
     let print doc =
-      PPrint.ToChannel.pretty 0.7 100 f doc;
-      Stdio.Out_channel.flush f
+      Stdio.Out_channel.with_file ~append:true path ~f:(fun f ->
+          PPrint.ToChannel.pretty 0.7 100 f doc)
     in
-    Some print
-  else None
-
-let get_debug_output_channel ~fname =
-  if settings.output_debug_files_in_build_directory then
-    Some (Stdio.Out_channel.create @@ build_file fname)
+    Some print)
   else None
 
 exception User_error of string
