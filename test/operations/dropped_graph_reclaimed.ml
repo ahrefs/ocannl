@@ -1,9 +1,12 @@
-(* gh-ocannl-1745: the session's backprop-root map does not own its graphs. A differentiable graph
-   whose forward code left the forward-root map (a forward-only evaluation) stays a backprop root --
-   a loss built over it later trains through it (gh-ocannl-1724's leg B) -- but only while the
-   caller can still name it: once dropped, the GC reclaims it, the closure checkpoint and explicit
-   checkpoints included. The forward-root map stays strong: a graph dropped unevaluated is pinned,
-   because [consume_forward_code]'s conflicting-roots check must not depend on GC timing.
+(* gh-ocannl-1745, gh-ocannl-1796: the session's root maps do not own their graphs. A differentiable
+   graph whose forward code left the forward-root map (a forward-only evaluation) stays a backprop
+   root -- a loss built over it later trains through it (gh-ocannl-1724's leg B) -- but only while
+   the caller can still name it: once dropped, the GC reclaims it, the closure checkpoint and
+   explicit checkpoints included. Since gh-ocannl-1796 the forward-root map is weak too: a graph
+   dropped unevaluated is reclaimed, and so is a root only the last closure captured.
+   [consume_forward_code]'s conflicting-roots refusal reads the owner cells, not the map, so it does
+   not depend on GC timing: a held owner and a dropped one are both refused, and the cell verdict
+   equals the old live-root scan wherever every root is held.
 
    Witnesses ([Gc_witness]): each dropped graph is built in an [@inline never] function that returns
    a [Weak] observer on the root record and only what the case keeps. A "reclaimed" claim retries
@@ -119,8 +122,7 @@ let[@inline never] consumer_dropped () =
 
 (* [t] is built, the parameters' initialization closes its shapes while it is still an unconsumed
    forward root, and only then is its forward run and [t] dropped: the last closure's checkpoint
-   captured it as a forward root, and a rewind to that closure would restore it unless handed out,
-   so the checkpoint holds it -- until the next closure replaces the checkpoint. *)
+   captured it as a forward root, and holds it only weakly. *)
 let[@inline never] closed_before_evaluation () =
   let w = TDSL.param ~values:[| 1.; 2.; 3. |] "dg_cl_w" ~output_dims:[ 3 ] () in
   let%op t = w *. 2. in
@@ -129,7 +131,8 @@ let[@inline never] closed_before_evaluation () =
   ignore (Stdlib.Sys.opaque_identity ctx : Context.t);
   witness t
 
-let[@inline never] next_closure () =
+(* A closure of an unrelated graph. *)
+let[@inline never] a_closure () =
   let x = leaf "dg_nc_x" in
   let%op y = x *. 2. in
   ignore (Train.forward_once (Context.auto ()) y : Context.t)
@@ -140,6 +143,92 @@ let[@inline never] unevaluated_dropped () =
   p "unevaluated: t is a forward and a backprop root"
     (Tensor.is_fwd_root t && Tensor.is_bprop_root t);
   witness t
+
+(* {2 The conflicting-roots refusal (gh-ocannl-1796)}
+
+   [shared] is a computed trunk whose code its first-constructed consumer [owner] embeds; [sibling]
+   reads [shared] without embedding it, so consuming [sibling] is refused while [owner]'s code is
+   unconsumed -- and stays refused once [owner] is dropped, since its code can then never run. *)
+
+let nleaf name =
+  Tensor.term_init [| 1.; 2.; 3. |] ~label:[ name ] ~output_dims:[ 3 ] ~grad_spec:Prohibit_grad ()
+
+let name_of (t : Tensor.t) = Ir.Tnode.label_name t.value
+
+let fwd_refusal name f =
+  match f () with
+  | _ ->
+      fail (name ^ ": was accepted");
+      ""
+  | exception Tensor.Session_error (msg, _) ->
+      Stdio.eprintf "%s: %s (not part of the golden)\n%!" name msg;
+      msg
+
+let consumed name t =
+  match Tensor.consume_forward_code t with
+  | _ -> true
+  | exception Tensor.Session_error (msg, _) ->
+      Stdio.eprintf "%s: refused: %s (not part of the golden)\n%!" name msg;
+      false
+
+let conflicting msg ~owner = has msg "found conflicting roots" && has msg owner
+
+(* The cell verdict, pinned to the live-root scan it replaced while every root is held. *)
+let verdicts_agree name t ~expected =
+  let by_cells = Tensor.For_testing.forward_conflicts_by_cells t in
+  let by_scan = Tensor.For_testing.forward_conflicts_by_live_roots t in
+  p
+    (name ^ ": the owner cells and the live-root scan agree")
+    (List.equal String.equal by_cells by_scan);
+  p (name ^ ": they name the expected roots") (List.equal String.equal by_cells expected)
+
+let trio prefix =
+  let x = nleaf (prefix ^ "_x") in
+  let shared = NTDSL.O.relu ~label:[ prefix ^ "_shared" ] x in
+  let owner = NTDSL.O.relu ~label:[ prefix ^ "_owner" ] shared in
+  let sibling = NTDSL.O.relu ~label:[ prefix ^ "_sibling" ] shared in
+  (shared, owner, sibling)
+
+let[@inline never] dropped_owner prefix =
+  let _shared, owner, sibling = trio prefix in
+  (sibling, name_of owner, witness owner)
+
+(* [c]'s forward code replayed into a new root over [c]: the root's own [op_asn] embeds it. *)
+let replay ~label (code : Asgns.comp) c =
+  let%cd op_asn ~t ~t1 ~projections = v =:+ relu v1 in
+  let op_asn ~t ~t1 ~projections = Asgns.sequence [ code; op_asn ~t ~t1 ~projections ] in
+  Tensor.unop ~op_label:"replay" ~op_asn
+    ~grad_asn:(fun ~t:_ ~g:_ ~t1:_ ~projections:_ -> Asgns.empty_comp)
+    ~grad_spec:Prohibit_grad c ~label:[ label ] ()
+
+(* A handed-out computation [c], to replay. *)
+let handed_out prefix =
+  let c = NTDSL.O.relu ~label:[ prefix ^ "_c" ] (nleaf (prefix ^ "_x")) in
+  let code = Tensor.consume_forward_code c in
+  (c, code)
+
+let[@inline never] scoped_consumed_owner () =
+  let _shared, owner, sibling = trio "fo_sc" in
+  Tensor.with_unchanged_roots ~f:(fun () -> ignore (Tensor.consume_forward_code owner : Asgns.comp));
+  (sibling, name_of owner, witness owner)
+
+let[@inline never] transient_replay ~label c code = witness (replay ~label code c)
+
+let[@inline never] rewound_owner () =
+  let _shared, owner, sibling = trio "fo_rw" in
+  let ck = Tensor.checkpoint ~label:"fo_rw" () in
+  let u = NTDSL.O.relu ~label:[ "fo_rw_u" ] owner in
+  ignore (Stdlib.Sys.opaque_identity u : Tensor.t);
+  (sibling, name_of owner, ck, witness owner)
+
+(* [wrapped]: the replaying root is embedded by a consumer, which is what gets handed out, so the
+   held computation's owner is resolved only through its own owner. *)
+let[@inline never] replay_round ~wrapped ~label c code =
+  let r = replay ~label code c in
+  let live = Tensor.For_testing.owner_count c in
+  let out = if wrapped then NTDSL.O.relu ~label:[ label ^ "_s" ] r else r in
+  ignore (Tensor.consume_forward_code out : Asgns.comp);
+  live
 
 let () =
   case "a graph dropped after forward_once is reclaimed" (fun () ->
@@ -207,12 +296,98 @@ let () =
         | exception Tensor.Session_error (msg, _) -> has msg "is not a forward root"
       in
       p "consumer: consuming the child's forward code is still refused" refused);
-  case "the last closure's checkpoint holds a forward root it captured until the next closure"
-    (fun () ->
+  case "the last closure's checkpoint does not hold a forward root it captured" (fun () ->
       let w = closed_before_evaluation () in
-      p "closure: held by the last closure's checkpoint" (Gc_witness.kept w);
-      next_closure ();
-      p "closure: reclaimed once the next closure replaces the checkpoint" (Gc_witness.reclaimed w));
-  case "a graph dropped unevaluated stays a forward root" (fun () ->
+      p "closure: the dropped root is reclaimed before any next closure" (Gc_witness.reclaimed w));
+  case "a graph dropped unevaluated is reclaimed" (fun () ->
       let w = unevaluated_dropped () in
-      p "unevaluated: the dropped graph is kept by the forward-root map" (Gc_witness.kept w))
+      p "unevaluated: the dropped graph is reclaimed" (Gc_witness.reclaimed w));
+  case "a held owner refuses its sibling until it is handed out" (fun () ->
+      let _shared, owner, sibling = trio "fo_h" in
+      let w = witness owner in
+      p "held: the owner is kept while held" (Gc_witness.kept w);
+      verdicts_agree "held" sibling ~expected:[ name_of owner ];
+      let msg = fwd_refusal "held" (fun () -> Tensor.consume_forward_code sibling) in
+      p "held: the sibling is refused, naming the owner" (conflicting msg ~owner:(name_of owner));
+      p "held: the owner can be handed out" (consumed "held owner" owner);
+      verdicts_agree "held, owner handed out" sibling ~expected:[];
+      p "held: then the sibling is accepted" (consumed "held sibling" sibling));
+  case "a dropped owner still refuses its sibling" (fun () ->
+      let sibling, owner, w = dropped_owner "fo_d" in
+      p "dropped: the owner is reclaimed" (Gc_witness.reclaimed w);
+      p "dropped: the owner cells still name it, the live-root scan no longer does"
+        (List.equal String.equal (Tensor.For_testing.forward_conflicts_by_cells sibling) [ owner ]
+        && not
+             (List.mem
+                (Tensor.For_testing.forward_conflicts_by_live_roots sibling)
+                owner ~equal:String.equal));
+      let msg = fwd_refusal "dropped" (fun () -> Tensor.consume_forward_code sibling) in
+      p "dropped: the sibling is refused, naming the owner" (conflicting msg ~owner));
+  case "a dropped owner refuses its sibling whatever the GC has done" (fun () ->
+      let sibling, owner, _w = dropped_owner "fo_n" in
+      let msg = fwd_refusal "uncollected" (fun () -> Tensor.consume_forward_code sibling) in
+      p "uncollected: the sibling is refused, naming the owner" (conflicting msg ~owner));
+  case "an owner embedded into a later consumer is released with it" (fun () ->
+      let _shared, owner, sibling = trio "fo_e" in
+      let later = NTDSL.O.relu ~label:[ "fo_e_later" ] owner in
+      verdicts_agree "embedded" sibling ~expected:[ name_of later ];
+      p "embedded: the later consumer can be handed out" (consumed "embedded later" later);
+      verdicts_agree "embedded, consumer handed out" sibling ~expected:[];
+      p "embedded: then the sibling is accepted" (consumed "embedded sibling" sibling));
+  case "code replayed into two roots is owned by both, and by nothing else" (fun () ->
+      let c, code = handed_out "fo_rp" in
+      let a = replay ~label:"fo_rp_a" code c in
+      let b = replay ~label:"fo_rp_b" code c in
+      p "replay: a can be handed out" (consumed "replay a" a);
+      let reads_a = NTDSL.O.relu ~label:[ "fo_rp_ra" ] a in
+      verdicts_agree "replay, reader of a" reads_a ~expected:[];
+      p "replay: a reader of the handed-out root's result is accepted"
+        (consumed "replay reader of a" reads_a);
+      let reads_c = NTDSL.O.relu ~label:[ "fo_rp_rc" ] c in
+      verdicts_agree "replay, reader of c" reads_c ~expected:[ name_of b ];
+      let msg = fwd_refusal "replay" (fun () -> Tensor.consume_forward_code reads_c) in
+      p "replay: a reader of the replayed code is refused, naming the unconsumed root"
+        (conflicting msg ~owner:(name_of b)));
+  case "with_unchanged_roots restores a dropped owner's claim" (fun () ->
+      let sibling, owner, w = scoped_consumed_owner () in
+      p "scope: the owner is reclaimed" (Gc_witness.reclaimed w);
+      let msg = fwd_refusal "scope" (fun () -> Tensor.consume_forward_code sibling) in
+      p "scope: the sibling is refused, naming the owner" (conflicting msg ~owner));
+  case "a transient owner inside with_unchanged_roots leaves no claim, closure or not" (fun () ->
+      List.iter [ false; true ] ~f:(fun close ->
+          let tag = if close then "closed" else "open" in
+          let c, code = handed_out ("fo_tr_" ^ tag) in
+          let w =
+            Tensor.with_unchanged_roots ~f:(fun () ->
+                let w = transient_replay ~label:("fo_tr_t_" ^ tag) c code in
+                if close then (
+                  Gc_witness.settle ();
+                  a_closure ());
+                w)
+          in
+          p ("transient (" ^ tag ^ "): the transient root is reclaimed") (Gc_witness.reclaimed w);
+          let reader = NTDSL.O.relu ~label:[ "fo_tr_r_" ^ tag ] c in
+          p
+            ("transient (" ^ tag ^ "): a reader of the replayed code is accepted")
+            (consumed ("transient " ^ tag) reader)));
+  case "a rewind restores a dropped owner's claim" (fun () ->
+      let sibling, owner, ck, w = rewound_owner () in
+      Tensor.rewind ck;
+      p "rewind: the owner is reclaimed" (Gc_witness.reclaimed w);
+      let msg = fwd_refusal "rewind" (fun () -> Tensor.consume_forward_code sibling) in
+      p "rewind: the sibling is refused, naming the owner" (conflicting msg ~owner));
+  case "a held computation's owners do not accumulate across closures" (fun () ->
+      List.iter [ false; true ] ~f:(fun wrapped ->
+          let tag = if wrapped then "wrapped" else "direct" in
+          let c, code = handed_out ("fo_bd_" ^ tag) in
+          let live =
+            List.map (List.range 0 4) ~f:(fun i ->
+                let label = "fo_bd_" ^ tag ^ "_" ^ Int.to_string i in
+                let live = replay_round ~wrapped ~label c code in
+                a_closure ();
+                live)
+          in
+          p_all
+            ("bounded (" ^ tag ^ "): each replay finds the consumed earlier owners compacted away")
+            live
+            ~f:(fun n -> n = 1)))
