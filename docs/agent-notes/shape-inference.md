@@ -283,8 +283,14 @@ files.
   environment (`env`) and the printer walks `Bounds_row`/`Bounds_dim` monotone chains through the
   intermediate variables (`res` side: refines; `opnd` side: refined). Names go by first appearance
   in reading order, never by id: a trace's ids come from the reserved range, and so do the ids in
-  its errors' constraint sexps, which a golden must not pin (the tutorial prints only the message
-  and the `Dim_mismatch` sizes).
+  its errors' constraint sexps, which a golden must not pin.
+- Printing a shape error (gh-ocannl-1799, `Shape.error_to_string_hum`): `Printexc.to_string`
+  (the toplevel) and `Exn.to_string` render a `Row.Shape_error` readably by default, naming
+  variables and reserved-range tensors (`n'1`) by first appearance, also inside the message text
+  (`$<id>`, `n<id>`, `#<id>`); `shape_error_full_sexp=true` restores the raw sexp. Build every
+  part in reading order with explicit `let`s: a `[%string]` or list literal evaluates its parts
+  back to front, which would name the variables right to left. A golden prints the rendering, not
+  the sexp (`scheme_error_rendering` pins it with a reserved-id control).
 - Scheme cost (gh-ocannl-1752, `test/operations/scheme_payoff.ml`, `Shape.registration_times`):
   a scheme only checks; it cannot stand in for the body's registration. An instantiation carries
   about as many constraints as the body's inline registration produces (C' + E' vs the steps'

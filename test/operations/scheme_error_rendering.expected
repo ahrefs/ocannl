@@ -1,0 +1,47 @@
+--- a mistake no argument can fix, at the trace
+Shape_error: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
+  conflicting sizes: 2 vs 8
+  failed constraint: 'a = 8
+    from two_layer (output) with b2 (output): pointwise_binary
+--- the same mistake, found by a definition check
+Shape_error: checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch
+  conflicting sizes: 2 vs 8
+  failed constraint: 'a = 8
+    from two_layer (output) with b2 (output): pointwise_binary
+--- an argument the scheme refuses, at the application
+Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
+  conflicting sizes: 4 vs 3
+  failed constraint: 4 ⊑ 3
+    from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
+    from n6 (batch) with threefry4x32_light (output): Uint4x32_to_prec RESULT total elements
+    from residual_block (output) with x (output): the shape scheme residual_block applied to x
+    from n8 (input) with n6 (input): pointwise_binary
+    from residual_block (output) with n'1 (output): pointwise_binary
+    from w (input) with n'1 (output): compose
+    from w (input) with n8 (input): pointwise_binary
+--- an argument with too few axes for the spec
+Shape_error: applying the shape scheme two_axes to x: Mismatching number of axes
+  conflicting rows: 'a,'b vs 3
+  failed constraint: 'a,'b = 3
+    from two_axes (output) with x (output): the shape scheme two_axes applied to x
+--- a dimension and a row variable sharing a name
+Shape_error: tracing the shape scheme name_clash: Name 'v' is used as both a dimension variable and a row variable in spec: ..v.., v => v, ..v..
+  shape of name_clash: ..'a..|..'b..->..'c..
+  shape of n'1: ..'d..|..'e..->..'f..
+--- an empty concatenation component
+Shape_error: tracing the shape scheme concat_empty: einsum spec 0 ^ o => o: a concatenation component of size 0 is empty; drop it from the concatenation
+--- undetermined concatenation components, at the closure (a variable in the message)
+Shape_error: the size of the concatenation component 'a:o is not determined, and closure does not guess one: it is a segment of the axis, not a broadcast. Size it: capture the component (the spec's trailing label list) and Shape.set_dim it, write its size as an integer component (e.g. 2^o => o), or pass the operation's result dims explicitly
+  the axis: 'a:o
+  failed constraint: row 'a:o
+    from concat_undetermined (output) with _ (output): remaining rows
+--- the first mistake without a scheme (session ids, for contrast)
+Shape_error: solved dimensions for axis: mismatch
+  conflicting sizes: 2 vs 8
+  failed constraint: 'a = 8
+    from two_layer_unchecked (output) with b2 (output): pointwise_binary
+every case raised a shape error: true
+the raw constraint sexp of an error in a scheme spells a reserved-range id: true
+no rendering spells a reserved-range id: true
+every rendering fits one screen (at most 24 lines): true
+the exception's sexp carries the rendering's lines: true

@@ -12720,3 +12720,16 @@
  (libraries base ocannl stdio arrayjit.verdict test_utils)
  (preprocess
   (pps ppx_ocannl)))
+
+;; gh-ocannl-1799: shape errors raised inside a scheme trace or check, printed readably.
+
+(test
+ (name scheme_error_rendering)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules scheme_error_rendering)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

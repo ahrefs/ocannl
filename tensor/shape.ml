@@ -4276,12 +4276,202 @@ let sexp_of_error_trace = function
   | Shape_mismatch ts -> Sexp.List (Sexp.Atom "Shape_mismatch" :: List.map ts ~f:sexp_of_t)
   | error_trace -> Row.sexp_of_error_trace error_trace
 
+(** {3 Readable shape errors (gh-ocannl-1799)} *)
+
+let reserved_id_base = 1 lsl 40
+
+(* The name of the [n]th variable in order of first appearance: [a] .. [z], then [a1] .. [z1], ...
+   Shared by the scheme printer and the error printer. *)
+let letter_name n =
+  let letter = String.make 1 (Char.of_int_exn (Char.to_int 'a' + (n % 26))) in
+  if n < 26 then letter else letter ^ Int.to_string (n / 26)
+
+let kind_to_string = function `Batch -> "batch" | `Input -> "input" | `Output -> "output"
+
+let error_to_string_hum msg trace =
+  let names = Hashtbl.create (module String) in
+  let n_vars = ref 0 and n_tensors = ref 0 in
+  let fresh counter ~mk key =
+    Hashtbl.find_or_add names key ~default:(fun () ->
+        let n = !counter in
+        Int.incr counter;
+        mk n)
+  in
+  let var_id id = fresh n_vars ~mk:(fun n -> "'" ^ letter_name n) ("d" ^ Int.to_string id) in
+  let tensor_id id =
+    fresh n_tensors ~mk:(fun n -> Int.to_string (n + 1)) ("t" ^ Int.to_string id)
+  in
+  (* The ids a text spells: a dimension variable [$<id>] (its name, if any, follows as [:<name>]),
+     and a tensor of a trace or check, [n<id>] (an unlabeled tensor's name) or [#<id>], whose id
+     comes from the reserved range. A session tensor's id stays: it is the user's to look up. *)
+  let rename_text s =
+    let len = String.length s in
+    let buf = Buffer.create len in
+    let is_word c = Char.is_alphanum c || Char.equal c '_' || Char.equal c '\'' in
+    let rec digits_end j = if j < len && Char.is_digit s.[j] then digits_end (j + 1) else j in
+    let rec go i =
+      if i < len then
+        let c = s.[i] in
+        let starts =
+          match c with '$' | '#' -> true | 'n' -> i = 0 || not (is_word s.[i - 1]) | _ -> false
+        in
+        if starts && i + 1 < len && Char.is_digit s.[i + 1] then (
+          let j = digits_end (i + 1) in
+          let ends_word = j >= len || not (is_word s.[j]) in
+          (match Int.of_string_opt (String.sub s ~pos:(i + 1) ~len:(j - i - 1)) with
+          | Some id when Char.equal c '$' -> Buffer.add_string buf (var_id id)
+          | Some id when id >= reserved_id_base && ends_word ->
+              Buffer.add_char buf c;
+              Buffer.add_char buf '\'';
+              Buffer.add_string buf (tensor_id id)
+          | _ -> Buffer.add_substring buf s ~pos:i ~len:(j - i));
+          go j)
+        else (
+          Buffer.add_char buf c;
+          go (i + 1))
+    in
+    go 0;
+    Buffer.contents buf
+  in
+  (* Names are given in reading order, so everything below is sequenced: [List.rev_map] applies [f]
+     front to back, while OCaml evaluates a list literal's (and [%string]'s) parts back to front. *)
+  let map_seq l ~f = List.rev (List.rev_map l ~f) in
+  let concat_seq ~sep l ~f = String.concat ~sep (map_seq l ~f) in
+  let pair f a b =
+    let a = f a in
+    (a, f b)
+  in
+  let dim_var v = rename_text (Row.dim_to_string Row.Axis_size (Var v)) in
+  let dim = Row.dim_to_string ~var_to_string:dim_var Row.Axis_size in
+  let row_var v =
+    fresh n_vars ~mk:(fun n -> "'" ^ letter_name n) ("r" ^ Int.to_string (Row.row_var_id v))
+  in
+  let row (r : Row.t) =
+    let beg = map_seq r.beg_dims ~f:dim in
+    let middle =
+      match r.bcast with Row.Row_var v -> [ ".." ^ row_var v ^ ".." ] | Broadcastable -> []
+    in
+    match beg @ middle @ map_seq r.dims ~f:dim with
+    | [] -> "()"
+    | items -> String.concat ~sep:"," items
+  in
+  let total = function
+    | Row.Num_elems n -> Int.to_string n
+    | Range_elems { lo; hi } -> [%string "%{lo#Int}..%{hi#Int}"]
+    | Strided_var { coeff; var; denom; round_up } ->
+        let coeff =
+          if Utils.is_safe_val coeff then Int.to_string (Utils.safe_force coeff) else "?"
+        in
+        let div = if round_up then "/^" else "/" in
+        [%string "%{coeff}*%{dim_var var}%{div}%{denom#Int}"]
+  in
+  let row_constraint = function
+    | Row.Unconstrained -> "unconstrained"
+    | Total_elems { numerator; divided_by; keep_axis = _ } ->
+        let numerator = total numerator in
+        let divisor = concat_seq ~sep:"" divided_by ~f:(fun v -> "/" ^ dim_var v) in
+        [%string "%{numerator}%{divisor} elements"]
+    | Exact dims -> "exactly " ^ concat_seq ~sep:"," dims ~f:dim
+  in
+  let relation f a op b origin =
+    let a, b = pair f a b in
+    ([%string "%{a} %{op} %{b}"], origin)
+  in
+  let constraint_ (c : Row.constraint_) =
+    match c with
+    | Dim_eq { d1; d2; origin } -> relation dim d1 "=" d2 origin
+    | Row_eq { r1; r2; origin } -> relation row r1 "=" r2 origin
+    | Dim_ineq { res; opnd; from_ = _; origin } -> relation dim res "⊑" opnd origin
+    | Row_ineq { res; opnd; origin } -> relation row res "⊑" opnd origin
+    | Dim_constr { d; constr; origin } ->
+        let constr =
+          match constr with
+          | Unconstrained_dim -> "unconstrained"
+          | At_least_dim n -> [%string ">= %{n#Int}"]
+        in
+        (dim d ^ " " ^ constr, origin)
+    | Rows_constr { r; constr; origin } ->
+        let rows = concat_seq ~sep:" ^ " r ~f:row in
+        ([%string "%{rows} has %{row_constraint constr}"], origin)
+    | Terminal_dim (_, d, origin) -> ("terminal axis " ^ dim d, origin)
+    | Terminal_row (_, r, origin) -> ("terminal row " ^ row r, origin)
+    | Shape_row (r, origin) -> ("row " ^ row r, origin)
+  in
+  let origin (o : Row.constraint_origin) =
+    let name n = if String.is_empty n then "_" else rename_text n in
+    let lhs, rhs = pair name o.lhs_name o.rhs_name in
+    let op = Option.value_map o.operation ~default:"" ~f:(fun op -> ": " ^ rename_text op) in
+    [%string
+      "%{lhs} (%{kind_to_string o.lhs_kind}) with %{rhs} (%{kind_to_string o.rhs_kind})%{op}"]
+  in
+  let shape (sh : t) =
+    let name = rename_text sh.debug_name in
+    let b = row sh.batch in
+    let i = row sh.input in
+    let o = row sh.output in
+    [%string "%{name}: %{b}|%{i}->%{o}"]
+  in
+  (* The sizes in conflict first, then the shapes, then the constraint and where it came from. *)
+  let rank = function
+    | Row.Dim_mismatch _ | Row.Row_mismatch _ | Row.Index_mismatch _ -> 0
+    | Shape_mismatch _ -> 1
+    | Row.Constraint_failed _ -> 2
+    | _ -> 3
+  in
+  let ordered = List.stable_sort trace ~compare:(fun a b -> Int.compare (rank a) (rank b)) in
+  let header = rename_text msg in
+  let lines =
+    map_seq ordered ~f:(function
+      | Row.Dim_mismatch [ d ] -> [ "the axis: " ^ dim d ]
+      | Row.Dim_mismatch ds -> [ "conflicting sizes: " ^ concat_seq ~sep:" vs " ds ~f:dim ]
+      | Row.Row_mismatch [ r ] -> [ "the row: " ^ row r ]
+      | Row.Row_mismatch rs -> [ "conflicting rows: " ^ concat_seq ~sep:" vs " rs ~f:row ]
+      | Row.Index_mismatch idcs ->
+          [
+            "conflicting indices: "
+            ^ concat_seq ~sep:" vs " idcs ~f:(fun i ->
+                rename_text (Sexp.to_string (Idx.sexp_of_axis_index i)));
+          ]
+      | Shape_mismatch shapes -> map_seq shapes ~f:(fun sh -> "shape of " ^ shape sh)
+      | Row.Constraint_failed c ->
+          let text, origins = constraint_ c in
+          ("failed constraint: " ^ text) :: map_seq origins ~f:(fun o -> "  from " ^ origin o)
+      | other -> [ rename_text (Sexp.to_string_hum (sexp_of_error_trace other)) ])
+    |> List.concat
+  in
+  String.concat ~sep:"\n" (header :: List.map lines ~f:(fun l -> "  " ^ l))
+
+let shape_error_full_sexp () =
+  Utils.get_global_flag ~default:false ~arg_name:"shape_error_full_sexp"
+
 let () =
   Sexplib0.Sexp_conv.Exn_converter.add [%extension_constructor Row.Shape_error] (function
-    | Row.Shape_error (arg0, arg1) ->
-        let res0 = sexp_of_string arg0 and res1 = sexp_of_list sexp_of_error_trace arg1 in
-        Sexplib0.Sexp.List [ Sexplib0.Sexp.Atom "lib/shape.ml.Shape_error"; res0; res1 ]
-    | _ -> assert false)
+    | Row.Shape_error (msg, trace) -> (
+        let full () =
+          Sexp.List
+            [
+              Sexp.Atom "lib/shape.ml.Shape_error";
+              sexp_of_string msg;
+              sexp_of_list sexp_of_error_trace trace;
+            ]
+        in
+        match if shape_error_full_sexp () then None else Some (error_to_string_hum msg trace) with
+        | None -> full ()
+        | Some text ->
+            Sexp.List
+              (Sexp.Atom "Shape_error"
+              :: List.map (String.split_lines text) ~f:(fun l -> Sexp.Atom (String.strip l)))
+        | exception _ -> full ())
+    | _ -> assert false);
+  (* What the toplevel prints for an uncaught exception, and [Printexc.to_string]: registered after
+     Base's sexp printer, so tried first. *)
+  Stdlib.Printexc.register_printer (function
+    | Row.Shape_error (msg, trace) -> (
+        try
+          if shape_error_full_sexp () then None
+          else Some ("Shape_error: " ^ error_to_string_hum msg trace)
+        with _ -> None)
+    | _ -> None)
 
 (** {2 Shape builders.} *)
 
@@ -4594,9 +4784,7 @@ module Scheme = struct
           let k = if fixed then 1 else 0 in
           let n = counts.(k) in
           counts.(k) <- n + 1;
-          let letter = String.make 1 (Char.of_int_exn (Char.to_int 'a' + (n % 26))) in
-          let letter = if n < 26 then letter else letter ^ Int.to_string (n / 26) in
-          (if fixed then "'_" else "'") ^ letter)
+          (if fixed then "'_" else "'") ^ letter_name n)
     in
     let dim_key v = "d" ^ Int.to_string (Row.dim_var_id v) in
     let row_key v = "r" ^ Int.to_string (Row.row_var_id v) in
