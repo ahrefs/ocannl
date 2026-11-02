@@ -677,9 +677,11 @@ plan_batch() { # <log> dune argv
 # runner is harmless: the fleet's nested-slot rule runs this batch inside the
 # wrapper's slot.
 #
-# The probe is also the capability check: a fleet-worker.sh from before the
-# nested-slot rule has no `--probe` and is not used, so a worker's wrapper
-# around this script can never cost two slots. Anything else the probe says --
+# The probe -- fleet_slot_probe, the one tools/fmt-check.sh and
+# tools/test-harnesses.sh take their slots through too (gh-ocannl-1576) -- is
+# also the capability check: a fleet-worker.sh from before the nested-slot rule
+# has no `--probe` and is not used, so a worker's wrapper around this script
+# can never cost two slots. Anything else the probe says --
 # a machine outside the fleet, no skill deployed -- runs dune directly, as
 # before, and silently. The candidates -- and OCANNL_TOOL_FLEET_WORKER, which
 # names another fleet-worker.sh (the harness's fake) or turns the slot off with
@@ -694,29 +696,15 @@ slot_fw=          # the fleet-worker.sh to take the slot through, empty for none
 slot_wait=
 slot_announce=
 plan_slot() {
-  local fw tag box= slots tokens
   slot_fw= slot_wait= slot_announce=
-  # Each candidate in turn until one answers the probe: the two skill trees
-  # are deployed independently, and one of them may predate the probe while
-  # the other has it. The answer is one line, `EXECUTION SLOT PROBE <box>
-  # <slots> <tokens>`: no lock, no registry read, so it costs nothing on a box
-  # outside the fleet.
-  while IFS= read -r fw; do
-    [ -x "$fw" ] || continue
-    # Bounded, so a wedged fleet-worker.sh costs this launch 30s and no slot
-    # rather than its whole cap; answered through a file, so a descendant it
-    # leaves behind cannot hold the read open (the run's process group reaps
-    # that descendant with dune's). It is asked without the worktree lock.
-    perl -e 'alarm shift; exec @ARGV or exit 127' 30 "$fw" execution slot --probe \
-      </dev/null >"$run_dir/probe" 2>/dev/null 9>&- || continue
-    read -r tag _ _ box slots tokens _ <"$run_dir/probe"
-    [ "$tag" = EXECUTION ] && [ -n "$tokens" ] && { slot_fw=$fw; break; }
-  done < <(fleet_worker_candidates)
-  rm -f "$run_dir/probe"
-  [ -n "$slot_fw" ] || return 0
+  # Asked without the worktree lock (fleet_slot_probe closes fd 9), the answer
+  # in the run directory: a descendant the probe leaves behind is reaped with
+  # dune's by the run's process group.
+  fleet_slot_probe "$run_dir/probe" || return 0
+  slot_fw=$fleet_slot_fw
   slot_wait=${OCANNL_TOOL_SLOT_WAIT:-600}
   case $slot_wait in '' | *[!0-9]*) slot_wait=600 ;; esac
-  slot_box=$box slot_slots=$slots slot_tokens=$tokens
+  slot_box=$fleet_slot_box slot_slots=$fleet_slot_slots slot_tokens=$fleet_slot_tokens
 }
 # At most half of what the resolution left of the cap: the cap's alarm has run
 # since the supervisor started, and a busy slot must be able to refuse -- and
@@ -1248,7 +1236,8 @@ runner_root=$PWD
 [ -r tools/batch-backends.sh ] || die "cannot read tools/batch-backends.sh"
 # shellcheck source=batch-backends.sh
 . tools/batch-backends.sh
-# Where this host's fleet-worker.sh might be (plan_slot), shared with tools/sweep.sh.
+# Where this host's fleet-worker.sh might be, and the slot probe (plan_slot), shared with
+# tools/fmt-check.sh, tools/test-harnesses.sh and tools/sweep.sh.
 [ -r tools/fleet-worker-candidates.sh ] || die "cannot read tools/fleet-worker-candidates.sh"
 # shellcheck source=fleet-worker-candidates.sh
 . tools/fleet-worker-candidates.sh
