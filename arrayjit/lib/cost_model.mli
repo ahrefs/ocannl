@@ -242,13 +242,14 @@ val roofline_seconds :
       nest allocates.
     - Memory transactions (gh-ocannl-1600). Given the kernel's {!memory_transactions} and a
       [transaction_rate] (sectors/s), the excess sector transactions of its global accesses -- per
-      lane group, the sectors touched beyond the compact count for the same distinct bytes, each
+      launch block, the sectors touched beyond the compact count for the same distinct bytes, each
       context's over its fill under a launch model -- add their count over the rate to the compute
       leg: a strided access's replays occupy the issuing multiprocessor. That is what orders a
       layout whose lanes read contiguous cells against a twin whose lanes stride, which every term
       above ties (same work, launch and footprints). A fitted relative term: alignment is assumed,
-      L1/L2 reuse of an over-fetched sector is in the fitted rate, bank conflicts are not modeled.
-      No rate, or no excess: the leg is exactly as before. And the kernel's {!occupancy}, given a
+      L1 serves a sector across the block's lane groups and a lane's innermost run; other L1/L2
+      reuse of an over-fetched sector is in the fitted rate; bank conflicts are not modeled. No
+      rate, or no excess: the leg is exactly as before. And the kernel's {!occupancy}, given a
       workgroup capacity per multiprocessor: the compute leg over the fraction of a multiprocessor's
       thread slots its resident blocks fill -- what orders a deep-K staged tile (16-64 KiB of
       workgroup memory per block) against its shallow twin on HIP's RDNA parts, measured. Registers
@@ -333,7 +334,7 @@ type transaction_context = {
   tx_threads : int;
   tx_excess : float;
       (** The excess sector transactions of the context's global accesses over the compact count for
-          the same distinct bytes, summed over every lane group and every execution: zero for a
+          the same distinct bytes, per launch block and summed over every execution: zero for a
           fully coalesced access. Residue-averaged, hence fractional. *)
   tx_uncovered : int;
       (** How many of those accesses had an [Unknown] coordinate (a dynamic axis, a [Concat]) and
@@ -355,15 +356,17 @@ val memory_transactions :
   Low_level.t ->
   transaction_context list
 (** The excess memory transactions of one kernel, per parallel context in first-access order
-    (contexts with no global access are absent). Lane groups are [lane_width] consecutive threads of
-    the kernel's launch block, slot [.x] fastest; [sector] (default {!transaction_sector_bytes}) is
-    the counting unit. Activity follows each access's own workgroup loops (a lane outside one is
-    idle), a slot the access has no loop of is a broadcast, a lane's innermost run (the serial loops
-    inside every hardware loop, while the lane group's footprint over them is at most 8 KiB) is one
-    footprint with its lane group's (L1 serves the next iteration), the other symbols stand at their
-    base with the base averaged over its sector residues, guards are taken, buffers start
-    sector-aligned, [Tile_mma] statements and non-global nodes are left out ([is_global], as
-    {!reuse_traffic}). *)
+    (contexts with no global access are absent). The sectors are the ones the kernel's launch block
+    touches together (slot [.x] fastest): its lane groups, [lane_width] consecutive threads each,
+    share what L1 serves (gh-ocannl-1661's partitioned copies: two warps reading the halves of the
+    same sectors carry no excess); [lane_width] sizes the run window and the estimate of an
+    uncovered access. [sector] (default {!transaction_sector_bytes}) is the counting unit. Activity
+    follows each access's own workgroup loops (a lane outside one is idle), a slot the access has no
+    loop of is a broadcast, a lane's innermost run (the serial loops inside every hardware loop,
+    while a lane group's footprint over them is at most 8 KiB) is one footprint with its block's (L1
+    serves the next iteration), the other symbols stand at their base with the base averaged over
+    its sector residues, guards are taken, buffers start sector-aligned, [Tile_mma] statements and
+    non-global nodes are left out ([is_global], as {!reuse_traffic}). *)
 
 val occupancy :
   workgroup_bytes:int -> block_threads:int -> threads_per_mp:int -> bytes_per_mp:int -> float

@@ -1,24 +1,26 @@
 (* gh-ocannl-1600: the ranking score's memory-transaction term.
 
    Every score before it tied a layout whose lanes read contiguous cells with one whose lanes stride
-   through memory -- same work, same launch, same footprints -- so [model_default] could not rank
-   the coalesced layouts (coal-n, coal-k) against their uncoalesced twins. Per global access and
-   lane group, {!Ir.Cost_model.memory_transactions} counts the 32-byte sectors touched beyond the
-   compact count for the same distinct bytes.
+   through memory -- same work, same launch, same footprints. (A coalesced layout, coal-n or coal-k,
+   merges loops and keeps its twin's lane map, so the two carry equal counts: what the term orders
+   is lane maps, not the merge.) Per global access, {!Ir.Cost_model.memory_transactions} counts the
+   32-byte sectors the launch block's lane groups touch together beyond the compact count for the
+   same distinct bytes.
 
    On hand-built kernels at a lane width of 32, every count compared is exact (sector counts are
    integers, the residue average a dyadic fraction): contiguous, stride-2, column (stride-32) and
-   broadcast reads; a two-slot block whose lanes wrap rows; a partial lane group; idle lanes past a
-   narrow sibling nest's extent; a lane's register tile counted as one footprint (a 4-wide tile
-   reads contiguously, a column tile does not); grid blocks and serial iterations multiplying the
-   count; the base residues a serial unit stride shifts through (a base-only count would read 0),
-   stepped by a symbol's summed stride when it appears in two coordinates; a folded run based at its
-   loop's lower bound; f16 against f32; a flattened [Sub_axis] map counting as its unflattened twin;
-   non-global nodes and [Tile_mma] statements left out; a dynamic gather counted one sector per lane
-   and reported uncovered. Then the leg: without a rate, or without an excess, the compute leg is
-   bitwise what it was; with them, it adds exactly the excess over the rate, each context's over its
-   fill under a launch model. And the occupancy factor: theoretical occupancy's exact fractions, and
-   the compute leg over it. *)
+   broadcast reads; a two-slot block whose lanes wrap rows; two lane groups reading the halves of
+   the same sectors (gh-ocannl-1661's partitioned copy) against a gapped twin; a partial lane group;
+   idle lanes past a narrow sibling nest's extent; a lane's register tile counted as one footprint
+   (a 4-wide tile reads contiguously, a column tile does not); grid blocks and serial iterations
+   multiplying the count; the base residues a serial unit stride shifts through (a base-only count
+   would read 0), stepped by a symbol's summed stride when it appears in two coordinates; a folded
+   run based at its loop's lower bound; f16 against f32; a flattened [Sub_axis] map counting as its
+   unflattened twin; non-global nodes and [Tile_mma] statements left out; a dynamic gather counted
+   one sector per lane and reported uncovered. Then the leg: without a rate, or without an excess,
+   the compute leg is bitwise what it was; with them, it adds exactly the excess over the rate, each
+   context's over its fill under a launch model. And the occupancy factor: theoretical occupancy's
+   exact fractions, and the compute leg over it. *)
 
 (* cc-fp-contract: not-executed -- the bitwise claims compare cost-model legs computed in OCaml *)
 
@@ -98,6 +100,30 @@ let () =
     (Float.equal (excess (two ~tag:"tx_rm" ~xdims:[| 4; 8 |] (fun w0 w1 -> [| it w1; it w0 |]))) 0.);
   p "lanes reading 8 rows of 4 cells (16 bytes each) touch 8 sectors: excess 4"
     (Float.equal (excess (two ~tag:"tx_t" ~xdims:[| 8; 64 |] (fun w0 w1 -> [| it w0; it w1 |]))) 4.)
+
+let () =
+  (* gh-ocannl-1661's partitioned staging copy: [.x] (extent 8) walks rows, [.y] (extent 8) the
+     minor axis, so each 32-lane group reads 16 bytes of 8 rows. Its sibling group, the block's
+     other half, reads the other 16 bytes of the same 8 sectors, which L1 serves: no excess, where
+     counting each group alone read 4 + 4. *)
+  let block ~tag ~xdims xi =
+    let d = node (tag ^ "_d") [| 8; 8 |] and x = node (tag ^ "_x") xdims in
+    let w0 = Ll_test.sym () and w1 = Ll_test.sym () in
+    Ll_test.loop_n ~axis:wg w1 8
+      (Ll_test.loop_n ~axis:wg w0 8 (copy d [| it w1; it w0 |] x (xi w0 w1)))
+  in
+  p "two lane groups reading the halves of 8 rows' sectors: no excess"
+    (Float.equal
+       (excess (block ~tag:"tx_sib" ~xdims:[| 8; 64 |] (fun w0 w1 -> [| it w0; it w1 |])))
+       0.);
+  p
+    "while the block's lanes at stride 2 along the rows leave every row's second sector unread: \
+     excess 8"
+    (Float.equal
+       (excess
+          (block ~tag:"tx_sib2" ~xdims:[| 8; 64 |] (fun w0 w1 ->
+               [| it w0; Ll_test.aff [ (2, w1) ] 0 |])))
+       8.)
 
 let () =
   (* A wide nest sets the launch block to 64 lanes; a sibling nest of 16 lanes reads at stride 2. *)

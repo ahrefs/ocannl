@@ -926,21 +926,27 @@ let launch_fill fm contexts =
 
    Every score above ties a layout whose lanes read contiguous cells with one whose lanes stride
    through memory: same work, same launch, same per-block footprints. What differs is how many
-   memory transactions one lane group (a warp, a wavefront, a simdgroup) issues for one access. Per
-   global access, every lane group of the kernel's launch block is formed (threads linearized slot
-   [.x] fastest, {!Low_level.hardware_axes}); each active lane's byte span is read off the access's
-   coordinate view at the lane's coordinates, every other symbol at its base; and the distinct
-   [sector]-byte sectors the group touches are set against the compact count for the same distinct
-   bytes. The excess is the feature: zero for a fully coalesced access, so pricing it changes no
-   score of a kernel without one.
+   memory transactions an access issues. Per global access, the kernel's launch block is formed
+   (threads linearized slot [.x] fastest, {!Low_level.hardware_axes}); each active lane's byte span
+   is read off the access's coordinate view at the lane's coordinates, every other symbol at its
+   base; and the distinct [sector]-byte sectors the block's lanes touch together are set against the
+   compact count for the same distinct bytes. The excess is the feature: zero for a fully coalesced
+   access, so pricing it changes no score of a kernel without one. The block's lane groups (warps,
+   wavefronts, simdgroups) are counted together, not each on its own: a sector one group
+   over-fetches the multiprocessor's L1 serves to the sibling group reading its other half
+   (gh-ocannl-1661's partitioned staging copies put [.x] on rows and [.y] along them, so each warp
+   of an 8 x 8 block reads half of eight sectors whose other halves its sibling reads; counted per
+   group, that excess ranked those -- the fastest measured leaves, by 1.8x on tuf -- below 16-thread
+   tiles at every gh-ocannl-1479 qkv and outproj cell). The lane width still sizes the register-tile
+   window below and the uncovered estimate.
 
    Activity follows the access's own loops: a lane whose coordinate on a slot lies outside the
    access's loop of that slot is idle, so a wide sibling nest lends a narrow access no lanes. A slot
    the access has no loop of is a broadcast: its lanes read the same addresses. Serial and grid
    iterations shift the base. A lane's innermost run -- the serial loops nested inside every
-   hardware loop, while the lane group's footprint over them stays within [transaction_tile_bytes]
-   (8 KiB, an L1-scale share per lane group) -- is counted as one footprint with its lane group's:
-   its iterations issue back to back, so a sector one over-fetches serves the next from L1 (a 4-wide
+   hardware loop, while a lane group's footprint over them stays within [transaction_tile_bytes] (8
+   KiB, an L1-scale share per lane group) -- is counted as one footprint with its block's: its
+   iterations issue back to back, so a sector one over-fetches serves the next from L1 (a 4-wide
    register tile's lanes stride by 16 bytes per instruction and still read contiguous sectors
    together; so do a staging copy's lanes walking a row each). Over the other serial and grid
    iterations, with [g] the gcd of the sector and the byte strides of every symbol neither a lane's
@@ -1167,32 +1173,35 @@ let memory_transactions ?(sector = transaction_sector_bytes) ~lane_width ~is_glo
         in
         let groups = (block_threads + lane_width - 1) / lane_width in
         let excess = ref 0. in
-        for g = 0 to groups - 1 do
-          let members =
-            List.filter
-              (List.init lane_width ~f:(fun i -> (g * lane_width) + i))
-              ~f:(fun l -> l < block_threads && active l)
-          in
-          let n = List.length members in
-          if n > 0 then (
-            if not known then
-              (* One sector per active lane: an estimate, reported uncovered. *)
-              let compact = ((n * run * elt) + sector - 1) / sector in
-              excess := !excess +. Float.of_int (max 0 (n - compact))
-            else
-              let spans =
-                Array.of_list
-                  (List.concat_map members ~f:(fun l ->
-                       List.map tile_points ~f:(fun pt -> (address l pt * elt, run * elt))))
-              in
-              Array.sort spans ~compare:(fun (a, _) (b, _) -> Int.compare a b);
-              let compact = (span_union_bytes spans + sector - 1) / sector in
-              let total =
-                List.sum (module Int) residues ~f:(fun shift -> span_sectors ~sector ~shift spans)
-              in
-              let avg = Float.of_int total /. Float.of_int (List.length residues) in
-              excess := !excess +. Float.max 0. (avg -. Float.of_int compact))
-        done;
+        (if not known then
+           for g = 0 to groups - 1 do
+             let n =
+               List.count
+                 (List.init lane_width ~f:(fun i -> (g * lane_width) + i))
+                 ~f:(fun l -> l < block_threads && active l)
+             in
+             (* One sector per active lane: an estimate, reported uncovered. *)
+             let compact = ((n * run * elt) + sector - 1) / sector in
+             excess := !excess +. Float.of_int (max 0 (n - compact))
+           done
+         else
+           (* gh-ocannl-1600 (after gh-ocannl-1661): the block's lane groups together -- the
+              multiprocessor's L1 serves a sector one group over-fetches to the sibling group
+              reading its other half, as it serves a lane's next iteration. *)
+           let spans =
+             Array.of_list
+               (List.concat_map
+                  (List.filter (List.init block_threads ~f:Fn.id) ~f:active)
+                  ~f:(fun l -> List.map tile_points ~f:(fun pt -> (address l pt * elt, run * elt))))
+           in
+           if Array.length spans > 0 then (
+             Array.sort spans ~compare:(fun (a, _) (b, _) -> Int.compare a b);
+             let compact = (span_union_bytes spans + sector - 1) / sector in
+             let total =
+               List.sum (module Int) residues ~f:(fun shift -> span_sectors ~sector ~shift spans)
+             in
+             let avg = Float.of_int total /. Float.of_int (List.length residues) in
+             excess := Float.max 0. (avg -. Float.of_int compact)));
         let executions = Float.of_int (!blocks * !serial) in
         add (!blocks, !threads) ~excess:(executions *. !excess) ~uncovered:(if known then 0 else 1)));
   List.rev_map !order ~f:(fun ((b, t) as key) ->

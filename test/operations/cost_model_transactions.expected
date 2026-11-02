@@ -6,6 +6,8 @@ f16 lanes: contiguous is 2 sectors, no excess; stride 2 is 4 sectors: excess 2: 
 a partial lane group: 48 lanes at stride 2 are excess 4 + 2: true
 lanes reading row-major along .x are contiguous across the wrapped rows: no excess: true
 lanes reading 8 rows of 4 cells (16 bytes each) touch 8 sectors: excess 4: true
+two lane groups reading the halves of 8 rows' sectors: no excess: true
+while the block's lanes at stride 2 along the rows leave every row's second sector unread: excess 8: true
 a narrow sibling's idle lanes are not borrowed: 16 lanes at stride 2 are excess 2: true
 grid blocks and serial iterations multiply the excess: 4 * 3 * 4: true
 and the context is the 4 blocks of 32 threads: true

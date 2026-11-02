@@ -344,7 +344,14 @@ files.
   re-scores per kernel from `bench_rank_site`'s `rank-site: kernels` lines -- the routine's summed
   legs cannot rebuild a multi-kernel score). Their scalar leaves are numerics-preserving
   (`coalesce_numerics`), so admission is a score question only; `model_explain`'s coalesced rows
-  judge each leaf by its uncoalesced form.
+  judge each leaf by its uncoalesced form. The count is per LAUNCH BLOCK, its lane groups
+  together (gh-ocannl-1600 after gh-ocannl-1661): the partitioned staging copy puts `.x` on rows
+  and `.y` along them, so each warp of an 8x8 block reads half of eight sectors whose other halves
+  its sibling warp reads. Counted per lane group, that was 2.6e5 excess sectors on every staged
+  8x8-thread tile at qkv/outproj and none on 16-thread tiles, and at any rate the argmin moved to
+  `16x16x8/4x4 bgrid`, 1.8-2.6x slower (tuf, discrete RX 7700S, `ecb13bb8`). Block-level, no
+  candidate at the gh-1479 cells carries excess (wgrad's transposed operand included), so the
+  fitted rates are inert there.
 - **Compare a plan and its rivals in ONE kernel decomposition** (gh-ocannl-1477). The ranking score
   sums `max(compute, memory)` per kernel, so a memory-bound kernel run on its own (the seeded plan's
   zero-fill, the default segmentation having no zero fold) is charged in full, while the same writes
