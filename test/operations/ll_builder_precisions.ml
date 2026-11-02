@@ -74,7 +74,17 @@ let () =
          (LL.equal (B.if_ cond (copy ~d ~x s)) (B.if_idx cond (copy ~d ~x s))));
       refused_under
         "the old if_'s form -- a cmp comparison annotated single -- is refused under every store"
-        precs (fun ~d ~x ~flag:_ s -> B.if_at Ops.single (B.lt (B.embed s) (B.ic 2)) (copy ~d ~x s)))
+        precs (fun ~d ~x ~flag:_ s -> B.if_at Ops.single (B.lt (B.embed s) (B.ic 2)) (copy ~d ~x s));
+      (* gh-ocannl-1741: a comparison STORED as a flag value computes at the flag's precision, which
+         [cmp_at] names; [cmp]'s index-precision annotation is the refused form. *)
+      let store_flag build ~d:_ ~x:_ ~flag s =
+        B.set_at flag (B.fixed 0) (build (LL.scalar_precision (flag_value flag)) s)
+      in
+      accepted_under "a comparison stored to a flag at its own precision via cmp_at is accepted"
+        precs
+        (store_flag (fun prec s -> B.cmp_at prec Ops.Cmplt (B.embed s) (B.ic 2)));
+      refused_under "the same comparison built with cmp (index precision) is refused" precs
+        (store_flag (fun _ s -> B.lt (B.embed s) (B.ic 2))))
 
 let () =
   Verdict.case "value builders" (fun () ->
