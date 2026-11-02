@@ -28,7 +28,12 @@ type handout =
           {!consume_backprop_code}; [Not_handed_out] while it is a root, and for a parameter or a
           subterm whose code a consumer embeds. *)
 
-type consumption = { mutable fwd : handout; mutable bprop : handout }
+type owner_cell
+(** The tensor's forward owner cell (gh-ocannl-1796): whether its forward code is owned by an
+    unconsumed forward root, kept apart from the session's weak root map so that
+    {!consume_forward_code}'s refusal does not depend on what the GC has reclaimed. *)
+
+type consumption = { mutable fwd : handout; mutable bprop : handout; fwd_owner : owner_cell }
 (** A mutable cell shared by every copy of the record, so the marker follows the tensor; it is what
     lets the consume functions say "already consumed" rather than "not a root". *)
 
@@ -88,9 +93,11 @@ val init_params : ?skip:'a Map.M(Ir.Tnode).t -> t -> comp
 
 val is_fwd_root : t -> bool
 (** Whether [t]'s forward code is still unconsumed: no consumer embedded it and it was not handed
-    out. The session holds its forward roots strongly, including in the closure checkpoint that
-    captured them, and {!consume_forward_code} refuses a tensor whose reads another forward root
-    computes. A graph built and dropped without ever being evaluated therefore stays referenced. *)
+    out. The session holds its forward roots WEAKLY, checkpoints included (gh-ocannl-1796), as it
+    does its backprop roots: a graph built and dropped without ever being evaluated is reclaimed by
+    the GC, as is a root only the last closure's checkpoint captured. {!consume_forward_code}'s
+    refusal of a tensor whose reads another forward root computes does not read the map, so it does
+    not depend on the GC: a root dropped before its code was consumed keeps refusing its readers. *)
 
 val is_bprop_root : t -> bool
 (** Whether [t]'s backprop code is still unconsumed. The session holds its backprop roots WEAKLY,
@@ -286,12 +293,14 @@ val term_init : ?grad_spec:grad_spec -> float array -> op_fun
 
 val consume_forward_code : t -> comp
 (** A forward root is a tensor that is not (currently) used to compute another tensor. On the first
-    handout, checks that non-embedded reads are not owned by other live roots, then removes [t] from
-    the forward roots and returns its comp. Subsequent calls return the same comp, including after
-    {!take_forward_code} (the [%cd] embedding path), without checking or modifying roots constructed
-    since the first handout. This is equivalent to retaining the original comp; the caller still
-    owns execution order and the availability of non-embedded inputs. Parameters and subtensors
-    embedded in a tensor consumer remain rejected. *)
+    handout, checks that non-embedded reads are not owned by other unconsumed roots -- including a
+    root the caller dropped before consuming it, whose code can then never run, so its readers must
+    be rebuilt (gh-ocannl-1796) -- then removes [t] from the forward roots and returns its comp.
+    Subsequent calls return the same comp, including after {!take_forward_code} (the [%cd] embedding
+    path), without checking or modifying roots constructed since the first handout. This is
+    equivalent to retaining the original comp; the caller still owns execution order and the
+    availability of non-embedded inputs. Parameters and subtensors embedded in a tensor consumer
+    remain rejected. *)
 
 val consume_backprop_code : t -> comp
 (** A backprop root is a differentiable tensor not currently receiving gradients from another
@@ -589,6 +598,18 @@ module For_testing : sig
 
   val checkpoint_sizes : checkpoint -> (string * int) list
   (** The open frontier's sizes at the checkpoint. *)
+
+  val forward_conflicts_by_cells : t -> string list
+  (** The roots {!consume_forward_code} would refuse [t] over, by name, as its owner cells say
+      (gh-ocannl-1796). *)
+
+  val forward_conflicts_by_live_roots : t -> string list
+  (** The same, by the pre-gh-ocannl-1796 rule over the live forward roots: equal to
+      {!forward_conflicts_by_cells} while every root is held. *)
+
+  val owner_count : t -> int
+  (** The number of owners [t]'s forward owner cell records, as last compacted (the probe compacts
+      nothing itself). *)
 end
 
 val update_operand_prec : t -> Ir.Ops.prec -> unit

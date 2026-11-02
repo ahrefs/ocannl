@@ -7,8 +7,8 @@ files.
 
 - A shared subtensor's forward code is embedded in its first-CONSTRUCTED consumer, and
   `Tensor.consume_forward_code` rejects consuming a root whose non-embedded reads are embedded
-  in another live root. Consequences: construct (and compile) the consumer that should own a
-  shared computation FIRST; with padding in play, the margin-demanding consumer (conv) must also
+  in another unconsumed root, held or dropped (owner cells, below). Consequences: construct (and
+  compile) the consumer that should own a shared computation FIRST; with padding in play, the margin-demanding consumer (conv) must also
   compile before margin-blind ones, or the operand's layout locks unpadded. Sibling fragments
   are topologically ordered (owner-first forward, owner-last backward) — the old id-ascending
   order silently zeroed shared paths (regressions `forward_fragment_order.ml`,
@@ -87,16 +87,25 @@ files.
   explicit `t.forward` belongs before the statements naming `t` — after one, it is refused as a
   second copy (`cd_source_order.ml`). Any new ppx site that builds a list of comps with effects
   (takes, embeddings) owes the same binding.
-- The backprop-root map is weak and the forward-root map strong (gh-ocannl-1745). A backprop
-  entry is an ephemeron keyed by the tensor's `consumption` cell (`Weak_root` in `tensor.ml`),
-  live while any ownership-preserving record copy is reachable, so a graph dropped after its
-  forward was handed out is reclaimed, checkpoints included. Forward roots stay strong:
-  `consume_forward_code`'s conflict check is the only guard on forward reads (a lineage has no
-  forward `requires`), and it must not depend on GC timing. So an unevaluated dropped graph stays
-  pinned, as does a root captured by the last closure until the next closure. Traps: a stray
-  reference to ANY record sharing the cell keeps the entry alive. A GC witness builds the graph
-  in an `[@inline never]` function returning a `Weak` observer, and reads it with `Weak.check`
-  after `Gc.full_major` (`dropped_graph_reclaimed.ml`).
+- Both root maps are weak: backprop since gh-ocannl-1745, forward since gh-ocannl-1796. An entry
+  is an ephemeron keyed by the tensor's `consumption` cell (`Weak_root` in `tensor.ml`), live
+  while any ownership-preserving record copy is reachable, so a dropped graph is reclaimed,
+  evaluated or not, checkpoints and the last closure included. `consume_forward_code`'s
+  conflicting-roots check does not read the map: it reads OWNER CELLS (`owner_cell`, in
+  `consumption.fwd_owner`), a GC-independent shadow of "is a forward root" with one owner edge per
+  embedding (a DAG, not chains: code replayed into two roots is owned by both, and neither owns the
+  other's result). A weak `Owner_cells` table maps each value node, and each node an op's own
+  `op_asn` embeds, to its cell; `Tensor.op` adds the edges at registration. A root dropped
+  unconsumed keeps `is_root`, so its readers stay refused whatever the GC did. Map entries hold
+  their cells strongly so restores (`restore_root_cells`) reset a reclaimed root's cell like a
+  live one's; `with_unchanged_roots` defers forward pruning and owner-list compaction (by
+  `closure_epoch`) so its restore sees every root its body made. Traps: a new source of a root's
+  `embedded_nodes` must add owner edges, or it silently stops refusing (`For_testing`'s
+  `forward_conflicts_by_cells` vs `forward_conflicts_by_live_roots` pin the two equal on held
+  graphs); the refusal names roots by `label_name`. A stray reference to ANY record sharing the
+  cell keeps the entry alive. A GC witness builds the graph in an `[@inline never]` function
+  returning a `Weak` observer, and reads it with `Weak.check` after `Gc.full_major`
+  (`dropped_graph_reclaimed.ml`).
 
 - The `projections` handle an `op_asn` receives is a promise: `Tensor.op` creates the operation's
   shape update step only after `op_asn` returns, because the step's `neutral_elem` is immutable and

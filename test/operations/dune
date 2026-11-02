@@ -10921,10 +10921,12 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1745: the backprop-root map does not own its graphs. A differentiable graph dropped
-; after a forward-only evaluation is reclaimed (closure and explicit checkpoints included), a held
-; one or an ownership-preserving copy stays a root, and the lineage's requirement check survives the
-; owner's reclamation. Weak-pointer witnesses over repeated collections; executed values.
+; gh-ocannl-1745, gh-ocannl-1796: the root maps do not own their graphs. A graph dropped after a
+; forward-only evaluation, or never evaluated, is reclaimed (closure and explicit checkpoints
+; included), a held one or an ownership-preserving copy stays a root, the lineage's requirement
+; check survives the owner's reclamation, and consume_forward_code's conflicting-roots refusal holds
+; for a held and a dropped owner alike, through scoped restores and rewinds. Weak-pointer witnesses
+; over repeated collections; executed values.
 
 (test
  (name dropped_graph_reclaimed)

@@ -19,7 +19,41 @@ rewind: an external handout stays excluded: true
 consumer: the dropped consumer is reclaimed: true
 consumer: its embedded child is neither root: true
 consumer: consuming the child's forward code is still refused: true
-closure: held by the last closure's checkpoint: true
-closure: reclaimed once the next closure replaces the checkpoint: true
+closure: the dropped root is reclaimed before any next closure: true
 unevaluated: t is a forward and a backprop root: true
-unevaluated: the dropped graph is kept by the forward-root map: true
+unevaluated: the dropped graph is reclaimed: true
+held: the owner is kept while held: true
+held: the owner cells and the live-root scan agree: true
+held: they name the expected roots: true
+held: the sibling is refused, naming the owner: true
+held: the owner can be handed out: true
+held, owner handed out: the owner cells and the live-root scan agree: true
+held, owner handed out: they name the expected roots: true
+held: then the sibling is accepted: true
+dropped: the owner is reclaimed: true
+dropped: the owner cells still name it, the live-root scan no longer does: true
+dropped: the sibling is refused, naming the owner: true
+uncollected: the sibling is refused, naming the owner: true
+embedded: the owner cells and the live-root scan agree: true
+embedded: they name the expected roots: true
+embedded: the later consumer can be handed out: true
+embedded, consumer handed out: the owner cells and the live-root scan agree: true
+embedded, consumer handed out: they name the expected roots: true
+embedded: then the sibling is accepted: true
+replay: a can be handed out: true
+replay, reader of a: the owner cells and the live-root scan agree: true
+replay, reader of a: they name the expected roots: true
+replay: a reader of the handed-out root's result is accepted: true
+replay, reader of c: the owner cells and the live-root scan agree: true
+replay, reader of c: they name the expected roots: true
+replay: a reader of the replayed code is refused, naming the unconsumed root: true
+scope: the owner is reclaimed: true
+scope: the sibling is refused, naming the owner: true
+transient (open): the transient root is reclaimed: true
+transient (open): a reader of the replayed code is accepted: true
+transient (closed): the transient root is reclaimed: true
+transient (closed): a reader of the replayed code is accepted: true
+rewind: the owner is reclaimed: true
+rewind: the sibling is refused, naming the owner: true
+bounded (direct): each replay finds the consumed earlier owners compacted away: true
+bounded (wrapped): each replay finds the consumed earlier owners compacted away: true

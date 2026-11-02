@@ -55,9 +55,6 @@ n56 grad_=> as n55.grad: unknown; single prec 1; mem in bytes: 4
 n57 /._scalar_loss as scalar_loss: On-dev/28:set-materialized; single prec 1; mem in bytes: 4
 n58 grad_/._scalar_loss as scalar_loss.grad: unknown; single prec 1; mem in bytes: 4
 n68 /._learning_rate as learning_rate: On-dev/28:set-materialized; single prec 1; mem in bytes: 4
-n70 sgd_momentum_*._w2 as sgd_momentum_w2: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
-n74 sgd_momentum_*._b1 as sgd_momentum_b1: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
-n78 sgd_momentum_*._w1 as sgd_momentum_w1: unknown; single prec <not-in-yet>; mem in bytes: <not-in-yet>
 Tnode: Finished printing headers.
                                                                                                                                                                                  #57 /._scalar_loss On-dev/28:set-materialized
                                                                                                                                                                                  <not-in-context: needs scalar_loss>

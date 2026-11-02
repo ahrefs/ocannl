@@ -41,7 +41,32 @@ type diff = { grad : (Tn.t[@sexp.opaque]); zero_grads : Asgns.comp; backprop : A
    shared by record copies that preserve code ownership; [param] starts a fresh cell when it changes
    ownership. Markers stay on tensors rather than accumulating in session-global storage. *)
 type handout = Not_handed_out | Taken [@@deriving sexp_of, equal]
-type consumption = { mutable fwd : handout; mutable bprop : handout } [@@deriving sexp_of]
+
+(* gh-ocannl-1796: the forward owner cell of a tensor -- a GC-independent shadow of "this tensor is
+   a forward root", which [consume_forward_code]'s conflicting-roots check reads instead of the
+   session's (weak) forward-root map. [owners] are the cells of the tensors whose forward code
+   embeds this tensor's code: an edge per embedding, never a chain's top, so a computation replayed
+   into two roots is owned by both and neither owns the other's result. A read is pending while any
+   cell reachable through [owners] is a root. A cell holds only cells and its tensor's stable name:
+   never a tensor record, a comp, a [consumption] cell or a node, so a reader's cells keep no graph
+   alive. A root dropped before its code was consumed keeps [is_root]: its code is gone, so its
+   readers stay refused whether or not the GC reclaimed it. *)
+type owner_cell = {
+  oc_uid : int;  (** Unique per cell, for the traversal's visited set. *)
+  oc_name : string;  (** The tensor's [Tn.label_name], for the refusal. *)
+  mutable is_root : bool;
+  mutable resolved_epoch : int;
+      (** The closure epoch in which [is_root] was last cleared: an owner resolved before the last
+          closure can never become a root again, so it can be compacted away. *)
+  mutable owners : owner_cell list;
+}
+
+type consumption = {
+  mutable fwd : handout;
+  mutable bprop : handout;
+  fwd_owner : (owner_cell[@sexp.opaque]);
+}
+[@@deriving sexp_of]
 
 module rec Self : sig
   type t = {
@@ -121,6 +146,10 @@ module Weak_root : sig
   val make : t -> entry
   val get : entry -> t option
 
+  val cell : entry -> owner_cell
+  (** The tensor's forward owner cell, held strongly: a restore resets the cell of a root the GC
+      reclaimed as deterministically as a live one's (gh-ocannl-1796). *)
+
   val mem : map -> int -> bool
   (** Present and live. *)
 
@@ -129,15 +158,22 @@ module Weak_root : sig
   val prune : map -> map
   (** Drops the dead entries; physically the same map when there are none. *)
 end = struct
-  type entry = { anchor : consumption Stdlib.Weak.t; root : (consumption, t) Stdlib.Ephemeron.K1.t }
+  type entry = {
+    anchor : consumption Stdlib.Weak.t;
+    root : (consumption, t) Stdlib.Ephemeron.K1.t;
+    cell : owner_cell;
+  }
+
   type map = entry Map.M(Int).t
 
   let make t =
     let anchor = Stdlib.Weak.create 1 in
     Stdlib.Weak.set anchor 0 (Some t.consumption);
-    { anchor; root = Stdlib.Ephemeron.K1.make t.consumption t }
+    { anchor; root = Stdlib.Ephemeron.K1.make t.consumption t; cell = t.consumption.fwd_owner }
 
-  let get { anchor; root } =
+  let cell e = e.cell
+
+  let get { anchor; root; cell = _ } =
     match Stdlib.Weak.get anchor 0 with
     | None -> None
     | Some key -> Stdlib.Ephemeron.K1.query root key
@@ -154,20 +190,18 @@ end
 (* The session's graph state. Its writes are held to the mutation-serial obligation field by field
    (gh-ocannl-1573): the root maps count as session mutations, the id counter does not.
 
-   Forward roots are held strongly; backprop roots weakly ({!Weak_root}, gh-ocannl-1745). A root
-   still in [forward_roots] keeps its own backprop entry alive (same record, same cell), so only a
-   graph whose forward code left the forward map -- handed out ([Train.forward],
-   [Train.forward_once]), embedded by a non-differentiable consumer, or [%cd]-taken -- can be
-   reclaimed once the caller drops it. The forward map stays strong because [consume_forward_code]'s
-   conflicting-roots check is the only guard against compiling a reader of a node whose forward code
-   an unconsumed root owns (a lineage carries no forward [requires]): a weak forward map would make
-   that refusal depend on GC timing, and its absence is silent. *)
+   Both root maps are weak ({!Weak_root}): backprop roots since gh-ocannl-1745, forward roots since
+   gh-ocannl-1796. A graph the caller dropped is reclaimed whether or not its code was ever
+   evaluated, and a checkpoint's capture of the maps holds nothing either. [consume_forward_code]'s
+   conflicting-roots check, the only guard against compiling a reader of a node whose forward code
+   an unconsumed root owns, does not read the map: it reads the owner cells ({!owner_cell}), which
+   remember a dropped unconsumed root as pending, so the refusal does not depend on GC timing. *)
 type session_state = {
   mutable next_id : int;
       [@mutation_serial.exempt
         "a fresh-id counter: ids are never reused, so a rewind need not restore it (an id-neutral \
          window, Scheme.with_id_neutral, allocates from a reserved range and restores it)"]
-  mutable forward_roots : t Map.M(Int).t;
+  mutable forward_roots : Weak_root.map;
   mutable backprop_roots : Weak_root.map;
 }
 
@@ -176,12 +210,127 @@ let session_state =
 
 let bump_next_id id = session_state.next_id <- max session_state.next_id (id + 1)
 let get_next_id () = session_state.next_id
-let is_fwd_root t = Map.mem session_state.forward_roots t.value.id
+let is_fwd_root t = Weak_root.mem session_state.forward_roots t.value.id
+
+(** {2 Forward owner cells (gh-ocannl-1796)} *)
+
+(* Bumped by every closure, before it captures its checkpoint: an owner cell resolved in an earlier
+   epoch was not a root at the last closure, so no restore can make it one again. *)
+let closure_epoch = ref 0
+[@@mutation_serial.exempt "a closure counter: it only grows, and no rewind restores an older one"]
+
+(* While a [with_unchanged_roots] scope is open, its restore must find every forward root its body
+   created in the current map, and every owner edge intact: the forward map is not pruned and owner
+   lists are not compacted. *)
+let unchanged_roots_depth = ref 0
+[@@mutation_serial.exempt
+  "the nesting of with_unchanged_roots scopes, restored by the scope's own finally"]
+
+let next_cell_uid = ref 0
+[@@mutation_serial.exempt "a fresh-id counter for owner cells: ids are never reused"]
+
+let fresh_owner_cell (tn : Tn.t) =
+  Int.incr next_cell_uid;
+  {
+    oc_uid = !next_cell_uid;
+    oc_name = Tn.label_name tn;
+    is_root = false;
+    resolved_epoch = !closure_epoch;
+    owners = [];
+  }
+
+(* The owner cell of each value node, and of each node an operation's own code embeds: the cell of
+   the tensor whose forward code computes it. Keyed weakly by the node, so an entry lives while
+   anything can still read the node -- in particular while a reader's code does. *)
+module Owner_cells = Stdlib.Ephemeron.K1.Make (struct
+  type t = Tn.t
+
+  let equal = phys_equal
+  let hash (tn : Tn.t) = Int.hash tn.uid
+end)
+
+let owner_cells : owner_cell Owner_cells.t = Owner_cells.create 256
+[@@mutation_serial.exempt
+  "a weak registry of each node's owner cell: constructions add entries for the nodes they create, \
+   which a rewind discards with their nodes, so it restores nothing"]
+
+let set_not_root c =
+  if c.is_root then (
+    c.is_root <- false;
+    c.resolved_epoch <- !closure_epoch)
+
+(* An owner that can never claim a node again: not a root, resolved before the last closure (so no
+   restore revives it), and owned by nothing (its own list as last compacted). Dropping it keeps a
+   long-held node's owner list to the claims of one closure period. [compact] is one level;
+   [compact_deep] and [pending_owners] compact bottom-up over the cells above, each cell once per
+   [seen] set. Not while a [with_unchanged_roots] scope is open. *)
+let stale c = (not c.is_root) && c.resolved_epoch < !closure_epoch && List.is_empty c.owners
+
+let compact c =
+  if !unchanged_roots_depth = 0 && not (List.is_empty c.owners) then
+    c.owners <- List.filter c.owners ~f:(Fn.non stale)
+
+(* [seen] is created on first need: most cells gain their first owner with an empty list. *)
+let rec compact_deep ~(seen : Hash_set.M(Int).t option ref) c =
+  if !unchanged_roots_depth = 0 && not (List.is_empty c.owners) then
+    let visited =
+      match !seen with
+      | Some visited -> visited
+      | None ->
+          let visited = Hash_set.create (module Int) in
+          seen := Some visited;
+          visited
+    in
+    if not (Hash_set.mem visited c.oc_uid) then (
+      Hash_set.add visited c.oc_uid;
+      List.iter c.owners ~f:(compact_deep ~seen);
+      compact c)
+
+let add_owner ~seen c ~owner =
+  if not (phys_equal c owner || List.mem c.owners owner ~equal:phys_equal) then (
+    compact_deep ~seen c;
+    c.owners <- owner :: c.owners)
+
+(* [tn] is computed by the code of the tensor owning [cell]: a fresh node is registered to it, a
+   node some other tensor's code computes gains [cell] as an owner of that tensor's cell. *)
+let register_owned ~seen ~cell (tn : Tn.t) =
+  match Owner_cells.find_opt owner_cells tn with
+  | None -> Owner_cells.replace owner_cells tn cell
+  | Some c -> add_owner ~seen c ~owner:cell
+
+(* The root cells reachable from the read nodes' cells, other than [self]'s, in creation order. *)
+let pending_owners ~self (reads : Set.M(Tn).t) =
+  let seen = Hash_set.create (module Int) in
+  let found = ref [] in
+  let rec visit c =
+    if not (Hash_set.mem seen c.oc_uid) then (
+      Hash_set.add seen c.oc_uid;
+      if c.is_root && not (phys_equal c self) then found := c :: !found;
+      List.iter c.owners ~f:visit;
+      compact c)
+  in
+  Set.iter reads ~f:(fun tn -> Option.iter (Owner_cells.find_opt owner_cells tn) ~f:visit);
+  List.sort !found ~compare:(fun c1 c2 -> Int.compare c1.oc_uid c2.oc_uid)
+
+(* Clears the root marks of the current map's cells and sets those of [restored]'s, dead entries
+   included: an entry holds its cell, so a root the GC reclaimed is reset like a live one. *)
+let restore_root_cells ~restored =
+  Map.iter session_state.forward_roots ~f:(fun e -> set_not_root (Weak_root.cell e));
+  Map.iter restored ~f:(fun e -> (Weak_root.cell e).is_root <- true)
 
 (* Root-map and handout changes count as session mutations (gh-ocannl-1301): a construction that
    embedded a root and then failed has to be rewound. *)
+let add_fwd_root t =
+  Row.note_mutation ();
+  session_state.forward_roots <-
+    Map.add_exn session_state.forward_roots ~key:t.value.id ~data:(Weak_root.make t);
+  t.consumption.fwd_owner.is_root <- true
+
+(* The cell cleared is the map entry's: [param] passes a record with a fresh [consumption]. *)
 let remove_fwd_root t =
   Row.note_mutation ();
+  Option.iter (Map.find session_state.forward_roots t.value.id) ~f:(fun e ->
+      set_not_root (Weak_root.cell e));
   session_state.forward_roots <- Map.remove session_state.forward_roots t.value.id
 
 let is_bprop_root t = Weak_root.mem session_state.backprop_roots t.value.id
@@ -254,7 +403,7 @@ let note_external_handout ~fwd t =
    captured here, or classified [kept] or [exempt] (test/operations/mutation_serial_scan holds the
    relationship). *)
 type globals = {
-  g_forward_roots : t Map.M(Int).t;
+  g_forward_roots : Weak_root.map;
   g_backprop_roots : Weak_root.map;
   g_random_seed : t option;
   g_random_seeds_created : t list;
@@ -294,6 +443,13 @@ let record_checkpoint () =
      closure, before it is captured: a forward-only evaluation loop closes on every compile. Pruning
      drops only entries no one can name, so it changes no root's status. *)
   session_state.backprop_roots <- Weak_root.prune session_state.backprop_roots;
+  (* So are the dead forward roots (gh-ocannl-1796): their cells keep the roots' status, and no
+     restore reads them -- except an open [with_unchanged_roots] scope's, which needs the roots its
+     body created, so it defers the pruning. The epoch moves first: an owner cell resolved before
+     this closure was not a root at it. *)
+  Int.incr closure_epoch;
+  if !unchanged_roots_depth = 0 then
+    session_state.forward_roots <- Weak_root.prune session_state.forward_roots;
   open_nodes := [];
   handouts.fwd_out <- Set.empty (module Int);
   handouts.bprop_out <- Set.empty (module Int);
@@ -351,7 +507,12 @@ let with_unchanged_roots ~f =
   let bprop_roots = session_state.backprop_roots in
   let fwd_out = handouts.fwd_out and bprop_out = handouts.bprop_out in
   let closure = !last_closure in
+  Int.incr unchanged_roots_depth;
   let finally () =
+    Int.decr unchanged_roots_depth;
+    (* The owner cells follow the maps, the roots [f] created and dropped included: the scope kept
+       them in the map ({!record_checkpoint}), so the result does not depend on the GC. *)
+    restore_root_cells ~restored:fwd_roots;
     session_state.forward_roots <- fwd_roots;
     session_state.backprop_roots <- bprop_roots;
     (* Handouts inside [f] are undone, so their records are too (gh-ocannl-1301); after a closure
@@ -375,7 +536,7 @@ let with_unchanged_roots ~f =
         });
     (* A root's code can only have been taken inside [f] if it was a root at entry, and a root is by
        construction not yet taken: restoring the maps restores the markers. *)
-    Map.iter fwd_roots ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
+    List.iter (Weak_root.live fwd_roots) ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
     List.iter (Weak_root.live bprop_roots) ~f:(fun t -> t.consumption.bprop <- Not_handed_out)
       [@@mutation_serial.boundary
         "a scoped restore: puts back the roots saved at entry, on return and on a raise alike"]
@@ -820,7 +981,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       top_down_prec;
       shape;
       children;
-      consumption = { fwd = Not_handed_out; bprop = Not_handed_out };
+      consumption = { fwd = Not_handed_out; bprop = Not_handed_out; fwd_owner = fresh_owner_cell v };
     }
   in
   (* The operation's shape update step is created only once [op_asn] has returned: the step carries
@@ -878,15 +1039,20 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
      Restored on the way out, so a failing [op_asn] leaves the roots as they were; they are removed
      for good below, once the operation is registered. *)
   let this_op_asn =
+    let hidden =
+      List.filter_map fwd_root_ts ~f:(fun ti ->
+          Option.map (Map.find session_state.forward_roots ti.value.id) ~f:(fun e ->
+              (ti.value.id, e)))
+    in
     session_state.forward_roots <-
-      List.fold fwd_root_ts ~init:session_state.forward_roots ~f:(fun roots ti ->
-          Map.remove roots ti.value.id);
+      List.fold hidden ~init:session_state.forward_roots ~f:(fun roots (id, _) ->
+          Map.remove roots id);
     Exn.protect
       ~f:(fun () -> Shape.with_construction_window (fun () -> op_asn ~t ~projections))
       ~finally:(fun () ->
         session_state.forward_roots <-
-          List.fold fwd_root_ts ~init:session_state.forward_roots ~f:(fun roots ti ->
-              Map.set roots ~key:ti.value.id ~data:ti))
+          List.fold hidden ~init:session_state.forward_roots ~f:(fun roots (id, e) ->
+              Map.set roots ~key:id ~data:e))
   in
   (* An [op_asn] that forced the handle and swallowed the rejection has built its assignments over a
      poisoned thunk (a forced lazy re-raises); the operation is unusable either way. *)
@@ -918,16 +1084,23 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     }
   in
   List.iter ordered_ts ~f:(fun ti -> remove_fwd_root ti);
+  (* The owner cells (gh-ocannl-1796): [t]'s code computes [v], embeds the root children's code, and
+     whatever its own [op_asn] embedded ([%cd]'s takes and [.forward] replays, inline tensors). One
+     owner edge per embedded cell, so the relation stays exact when code is replayed into several
+     roots. *)
+  let cell = t.consumption.fwd_owner and seen = ref None in
+  register_owned ~seen ~cell v;
+  List.iter fwd_root_ts ~f:(fun ti -> add_owner ~seen ti.consumption.fwd_owner ~owner:cell);
+  Set.iter this_op_asn.embedded_nodes ~f:(register_owned ~seen ~cell);
   let t = { t with forward } in
   if
     is_prohibit_grad grad_spec
     || Fn.non is_require_grad grad_spec
        && List.for_all orig_ts ~f:(fun ti -> Option.is_none ti.diff)
   then (
-    (* Installing the result as a root is a session mutation (gh-ocannl-1301), counted here, in
-       [op]'s own frame (gh-ocannl-1573): nothing after it can fail. *)
-    Row.note_mutation ();
-    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
+    (* Installing the result as a root is a session mutation (gh-ocannl-1301), counted by
+       [add_fwd_root]: nothing after it can fail. *)
+    add_fwd_root t;
     t)
   else
     let get ti = Option.map ti.diff ~f:(fun d -> d.grad) in
@@ -1079,7 +1252,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.value.id);
     let diff = Some { grad = g; zero_grads; backprop } in
     let t = { t with diff } in
-    session_state.forward_roots <- Map.add_exn session_state.forward_roots ~key:id ~data:t;
+    add_fwd_root t;
     session_state.backprop_roots <-
       Map.add_exn session_state.backprop_roots ~key:id ~data:(Weak_root.make t);
     t
@@ -1357,7 +1530,13 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
   (* Parameterization changes code ownership (and replaces the gradient program). Its handout state
      must not alias an initializer returned by a custom [t], which may already be Taken. Keep that
      original initializer replayable while the parameter starts with fresh ownership. *)
-  let t = { t with consumption = { fwd = Not_handed_out; bprop = Not_handed_out } } in
+  let t =
+    {
+      t with
+      consumption =
+        { fwd = Not_handed_out; bprop = Not_handed_out; fwd_owner = fresh_owner_cell t.value };
+    }
+  in
   let t = if require_grad then force_param_diff t else strip_param_diff t in
   let v = t.value in
   (* Parameters live on device and are materialized; CPU access (init, inspection) is on-demand via
@@ -1399,6 +1578,13 @@ let not_a_root_reason ~(handout : handout) ~what ~name t =
          in a tensor constructed from it (a shared subtensor's code is owned by its \
          first-constructed consumer); consume that consumer instead"]
 
+(* [t]'s non-embedded reads -- the forward requirements of its code -- whose code an unconsumed
+   forward root still owns, read off the owner cells (gh-ocannl-1796): a root the caller dropped
+   before its code was consumed stays pending, whatever the GC has done. *)
+let forward_conflicts t =
+  let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
+  pending_owners ~self:t.consumption.fwd_owner (Set.diff all_read t.forward.embedded_nodes)
+
 let consume_forward_code t =
   Shape.check_untainted ();
   check_not_discarded ~what:"Tensor.consume_forward_code" t;
@@ -1416,22 +1602,14 @@ let consume_forward_code t =
                ~name:(Tn.debug_name t.value [@message_only "the refusal raised here"])
                t,
              Some t );
-    (* Check if any non-embedded descendants of t are embedded in other roots *)
-    let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
-    let non_embedded_descendants = Set.diff all_read t.forward.embedded_nodes in
-    let other_roots =
-      Map.data session_state.forward_roots |> List.filter ~f:(fun r -> r.value.id <> t.value.id)
-    in
-    let conflicting_roots =
-      List.filter other_roots ~f:(fun root ->
-          not (Set.is_empty (Set.inter non_embedded_descendants root.forward.embedded_nodes)))
-    in
+    let conflicting_roots = forward_conflicts t in
     if not @@ List.is_empty conflicting_roots then
       raise
       @@ Session_error
            ( [%string
                {|Tensor.consume_forward_code for %{debug_name t}:
-found conflicting roots with shared non-embedded descendants: %{String.concat ~sep:", " @@ List.map ~f:debug_name conflicting_roots}|}],
+found conflicting roots with shared non-embedded descendants: %{String.concat ~sep:", " @@ List.map ~f:(fun c -> c.oc_name) conflicting_roots}
+(consume them first; a root dropped before its forward code was consumed can never be, so rebuild this tensor's computation)|}],
              Some t );
     note_external_handout ~fwd:true t;
     take_forward_code t)
@@ -1587,9 +1765,12 @@ let restore_checkpoint ?omit ~provenance ck =
           | Some { diff = Some d; _ } -> not (Set.mem handouts.bprop_out d.grad.Tn.uid)
           | Some { diff = None; _ } -> true)
     in
+    (* The owner cells follow (gh-ocannl-1796), a reclaimed root's included: its entry holds its
+       cell, so whether the GC got to it changes nothing about its readers. *)
+    restore_root_cells ~restored:fwd;
     session_state.forward_roots <- fwd;
     session_state.backprop_roots <- bprop;
-    Map.iter fwd ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
+    List.iter (Weak_root.live fwd) ~f:(fun t -> t.consumption.fwd <- Not_handed_out);
     List.iter (Weak_root.live bprop) ~f:(fun t -> t.consumption.bprop <- Not_handed_out));
   (* The seed singleton as it was at the checkpoint: one created since is dropped, one replaced
      since ([set_random_seed]) comes back. *)
@@ -2055,6 +2236,21 @@ module For_testing = struct
     @ List.concat_map ck.ck_nodes ~f:Tn.open_snapshot_differences
     @ Shape.Checkpoint.differences ck.ck_shape
 
+  let forward_conflicts_by_cells t = List.map (forward_conflicts t) ~f:(fun c -> c.oc_name)
+
+  (* The pre-gh-ocannl-1796 rule, over the live roots only: the roots whose embedded nodes [t]'s
+     code reads without embedding. A test pins the cell verdict equal to it while every root is
+     held. *)
+  let forward_conflicts_by_live_roots t =
+    let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
+    let reads = Set.diff all_read t.forward.embedded_nodes in
+    Weak_root.live session_state.forward_roots
+    |> List.filter ~f:(fun r ->
+        r.value.id <> t.value.id && not (Set.is_empty (Set.inter reads r.forward.embedded_nodes)))
+    |> List.map ~f:(fun r -> Tn.label_name r.value)
+
+  let owner_count t = List.length t.consumption.fwd_owner.owners
+
   let checkpoint_sizes ck =
     ("open nodes", List.length ck.ck_globals.g_open_nodes) :: Shape.Checkpoint.sizes ck.ck_shape
 end
@@ -2065,6 +2261,7 @@ let%track5_sexp unsafe_reinitialize ?(namespace = Tn.default_namespace) () : uni
   Int.incr Scheme.generation;
   session_state.forward_roots <- Map.empty (module Int);
   session_state.backprop_roots <- Map.empty (module Int);
+  Owner_cells.reset owner_cells;
   (* A node an earlier session's rewind discarded stays refused: its record goes with the node. *)
   Weak_discards.clean (discarded_nodes ());
   install_validity_check ();
@@ -2434,9 +2631,7 @@ let print ?here ?(force = false) ?ctx ~with_grad ~with_code ?(with_low_level = f
   Stdio.Out_channel.flush Stdio.stdout
 
 let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
-  List.iter (Map.to_alist ~key_order:`Increasing session_state.forward_roots) ~f:(fun (id, root) ->
-      assert (id = root.value.id);
-      print ~with_grad ~with_code style root)
+  List.iter (Weak_root.live session_state.forward_roots) ~f:(print ~with_grad ~with_code style)
 
 let print_tree ?here ?(force = false) ?ctx ?entries_per_axis ?(with_backend_info = false)
     ?(with_id = true) ?(with_shape = false) ?(with_value = true) ?embedded_only ~with_grad ~depth t
