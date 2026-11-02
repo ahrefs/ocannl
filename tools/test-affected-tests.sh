@@ -60,6 +60,12 @@ cat >"$repo/t7/dune" <<'DUNE'
 (rule (alias runtest-g7) (action (diff g7.expected g7.actual)))
 DUNE
 : >"$repo/t7/g7.expected"
+# A quoted atom longer than perl's 65534-step regex recursion limit: a
+# one-character-per-step string pattern refused the real repository's
+# dead_export_scan file list (74k characters) as unreadable output.
+long_atom=$(printf '%*s' 70000 '' | tr ' ' 'a')
+printf '(rule (target long.txt) (action (with-stdout-to %%{target} (echo "%s"))))\n' "$long_atom" \
+  >>"$repo/t7/dune" || exit 2
 cat >"$repo/t6/dune" <<'DUNE'
 (rule (target word.txt) (action (progn (system "echo noise-from-an-action >&2") (with-stdout-to %{target} (echo dyn)))))
 (rule (target dyn.actual) (action (with-stdout-to %{target} (echo %{read:word.txt}))))

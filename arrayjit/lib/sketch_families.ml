@@ -1680,11 +1680,15 @@ let epilogue_tail_loop_syms ~(target : Ir.Tnode.t) (opt : LL.optimized) : Idx.sy
    [threadgroup_barrier(mem_threadgroup | mem_device)] on Metal, [__syncthreads()] on CUDA and HIP.
    The barrier spans the whole workgroup, so the ordering holds for any lane width the renderer
    emits; [qkv_zero_init] executes every seed of a folded projection against a materialized run. *)
-(* The materialized nodes a statement writes, by debug name: what a companion witness names. *)
+(* The materialized nodes a statement writes: whether there are any is decided on this list, never
+   on the names below (gh-ocannl-1783). *)
+let materialized_written ~plc (stmt : LL.t) : Ir.Tnode.t list =
+  List.filter (LL.write_demand stmt).written ~f:(Ir.Tnode.Placements.is_materialized_peek plc)
+
+(* The same nodes by debug name: what a companion witness names. *)
 let materialized_writes ~plc (stmt : LL.t) : string =
-  (LL.write_demand stmt).written
-  |> List.filter ~f:(Ir.Tnode.Placements.is_materialized_peek plc)
-  |> List.map ~f:Ir.Tnode.debug_name
+  (List.map (materialized_written ~plc stmt) ~f:Ir.Tnode.debug_name
+   [@message_only "names the written nodes in a companion witness"])
   |> List.dedup_and_sort ~compare:String.compare
   |> String.concat ~sep:","
 
@@ -1708,7 +1712,7 @@ let companion_demand ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol 
       | LL.Noop | LL.Comment _ -> false
       | LL.Zero_out tn when List.exists expanded_zeros ~f:(Ir.Tnode.equal tn) -> false
       | _ ->
-          (not (String.is_empty (materialized_writes ~plc stmt)))
+          (not (List.is_empty (materialized_written ~plc stmt)))
           && (not (mentions site_sym_list stmt))
           && not (mentions skip stmt))
 
@@ -5193,8 +5197,9 @@ let seeding_census_lines ~where (c : seeding_census) : string list =
     | Seeding_none -> []
     | Seeding_matmul { tree; _ } -> refutation_lines tree
     | Seeding_conv { site; real_stmts; tree } ->
-        detail "conv site %s: zeroed=%b real_stmts=%d" (Ir.Tnode.debug_name site.c_d) site.c_zeroed
-          real_stmts
+        detail "conv site %s: zeroed=%b real_stmts=%d"
+          (Ir.Tnode.debug_name site.c_d [@message_only "a seeding report line"])
+          site.c_zeroed real_stmts
         :: refutation_lines tree
   in
   (* gh-ocannl-1736: the axes that padded each seed, one line per distinct reason with its seed

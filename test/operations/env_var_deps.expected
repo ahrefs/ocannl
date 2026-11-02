@@ -259,6 +259,9 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-gpu_cotenants
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution
+  test/operations/dune                     @runtest-label_dispatch_scan
+  test/operations/dune                     @runtest-label_dispatch_scan_control
+  test/operations/dune                     @runtest-label_dispatch_scan_refusal_control
   test/operations/dune                     @runtest-launch_predicate_parity-tf32
   test/operations/dune                     @runtest-limits_field_classes
   test/operations/dune                     @runtest-ll_test_ratchet

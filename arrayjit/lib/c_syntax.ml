@@ -4973,10 +4973,16 @@ module C_syntax (B : C_syntax_config) = struct
                 | None -> false
               in
               if not all_inside then (
-                failed := Some (Grid_local_accessed_outside (Tn.debug_name info.gl_tn));
+                failed :=
+                  Some
+                    (Grid_local_accessed_outside
+                       (Tn.debug_name info.gl_tn [@message_only "the decline cause's message"]));
                 false)
               else if not (first_access_standalone_covering info.gl_tn body) then (
-                failed := Some (Grid_local_not_covering (Tn.debug_name info.gl_tn));
+                failed :=
+                  Some
+                    (Grid_local_not_covering
+                       (Tn.debug_name info.gl_tn [@message_only "the decline cause's message"]));
                 false)
               else (
                 private_bytes :=
@@ -6047,7 +6053,7 @@ module C_syntax (B : C_syntax_config) = struct
           (declinef ctx)
             "marked simdgroup fragment %s rendered outside its recognized fragment scope; falling \
              back from the intended persistent intrinsic path"
-            (Tn.debug_name d_tn));
+            (Tn.debug_name d_tn [@message_only "a declinef message"]));
         (* [ld] is the statement's recorded leading-dimension stride for this operand
            ([Tile_mma.ldd]/[lda]/[ldb]) — the minor dim of the tnode's last axis in the plain case,
            a larger stride when interior batch axes sit between the tile roles (gh-ocannl-528). *)

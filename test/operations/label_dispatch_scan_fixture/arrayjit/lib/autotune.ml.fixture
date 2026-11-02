@@ -1,0 +1,11 @@
+(* Refused: the pre-gh-ocannl-1723 backend-kind tests, by substring and by equality of the backend's
+   name; and a ~backend_name parameter renamed on entry, whose holder no reference spells. *)
+let backend_is_gpu backend_name = String.is_substring backend_name ~substring:"cuda"
+let retry_contended ctx = String.equal (Context.backend_name ctx) "metal"
+let seeded ~backend_name:b = String.equal b "cc"
+
+(* Accepted: the backend named in a message, forwarded under its own label, and the capability
+   facts, which are the sanctioned route. *)
+let refuse ctx = failwith (Printf.sprintf "backend %s has no sketch family" (Context.backend_name ctx))
+let forward ~backend_name = Backends.get_backend ~backend_name ()
+let is_gpu ctx = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts ctx)

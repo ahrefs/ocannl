@@ -56,6 +56,18 @@ let raw_entries =
         "[scanner-refusal:c622584e09b7ad9b23646841eb389ca9] @message_only";
         "[scanner-refusal:3c688ea5897f696f0882bff06b550c6e] debug_name";
       ] );
+    ( "label_dispatch_scan.ml",
+      [
+        "[scanner-refusal:7fe4eca3a2beb271d0627103af78040c] does not parse";
+        "[scanner-refusal:1705e6ff4f79cfed2aa6028e5b60cadc] label-dispatch reader raised";
+        "[scanner-refusal:20abdf23cc9b4767a5eb4f75bb006965] source under arrayjit/lib/";
+        "[scanner-refusal:298ad457cb53221b4d5bf26c57db10cb] online_softmax's";
+        "[scanner-refusal:a134c194b11e19f42951ac9ae0496f39] scan reads backends'";
+        "[scanner-refusal:5478be505fa459772de23c278bbd2980] ~backend_name";
+        "[scanner-refusal:1953375f4f82df9f942fae5674bb2e4d] @label_read";
+        "[scanner-refusal:753c4e61524edee33f56c2a0183bca9f] memory_budget's";
+        "[scanner-refusal:17bc0c94b9ab448cbc75a7f5df828695] low_level's";
+      ] );
     ( "render_decline_inventory.ml",
       [
         "[scanner-refusal:d5f512590dad4114be7fccd7fcad252d] control";
