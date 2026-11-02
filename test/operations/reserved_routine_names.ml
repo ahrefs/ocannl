@@ -36,7 +36,6 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 open Verdict.Claims
 
 let approx_tol _ = 1e-4
-let approx a b = Float.(abs (a - b) < approx_tol b)
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 module Generated = Test_utils.Generated
@@ -225,7 +224,11 @@ let vendor_results =
       let result =
         match run_named ~label:(Printf.sprintf "gh707_v%d" i) ~name with
         | values, routine_name ->
-            let correct = Array.length values = n && Array.for_all2_exn values expected ~f:approx in
+            let correct =
+              Verdict.within ~what_ran:name
+                "every vendor-header identifier probed as a routine name computes correct values"
+                values expected ~tol:approx_tol
+            in
             let source = Generated.read emitted in
             ( correct,
               String.equal routine_name name,

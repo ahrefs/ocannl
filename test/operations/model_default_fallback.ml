@@ -22,8 +22,6 @@ module LL = Ir.Low_level
 module Asgns = Ir.Assignments
 open Verdict.Claims
 
-let approx a b = Float.(abs (a - b) < 1e-4)
-
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
@@ -66,17 +64,13 @@ let pair tag =
   let%op d = e *. f in
   (c, d, named ("mdf_" ^ tag) (Asgns.sequence [ Train.forward c; Train.forward d ]))
 
-(* Non-empty by construction (gh-ocannl-746): [Array.for_all2_exn] answers [true] on two empty
-   arrays, and a readback and the reference it is compared against go empty TOGETHER -- the
-   reference went through the same path. {!Verdict.p_all2} is the claim-shaped form; the sites
-   reached through this helper keep a boolean, so the guard lives here. *)
-let values ctx (c : Tensor.t) (d : Tensor.t) =
-  let got_c = Context.get_values ctx c.Tensor.value in
-  let got_d = Context.get_values ctx d.Tensor.value in
-  (not (Array.is_empty got_c))
-  && (not (Array.is_empty got_d))
-  && Array.for_all2_exn got_c expected_c ~f:approx
-  && Array.for_all2_exn got_d expected_d ~f:approx
+(* Both readbacks against their references as one boolean, for a claim that stays one row:
+   [Verdict.within] refuses an empty pair and names the failing readback on stderr. [name] is the
+   claim's label. *)
+let values name ctx (c : Tensor.t) (d : Tensor.t) =
+  let tol _ = 1e-4 in
+  Verdict.within ~what_ran:"c" name (Context.get_values ctx c.Tensor.value) expected_c ~tol
+  && Verdict.within ~what_ran:"d" name (Context.get_values ctx d.Tensor.value) expected_d ~tol
 
 let () =
   (* --- The escape: the rejection happens in codegen, past the transform seam --- *)
@@ -127,7 +121,8 @@ let () =
     (match !fell_back with
     | Some msg -> String.is_substring msg ~substring:"all active hardware dimensions"
     | None -> false);
-  p "the fallback routine computes the default pipeline's values" (values ctx c d);
+  p "the fallback routine computes the default pipeline's values"
+    (values "the fallback routine computes the default pipeline's values" ctx c d);
 
   (* --- ... and not when the caller says there is nothing to fall back to (Codex P2) --- *)
   let _c, _d, comp = pair "nogate" in
@@ -197,7 +192,8 @@ let () =
   in
   let ctx = Context.run ctx routine in
   p "compile_advisory does not fall back on a transform that compiles" (Option.is_none !fell_back);
-  p "the non-fallback routine computes correct values" (values ctx c d)
+  p "the non-fallback routine computes correct values"
+    (values "the non-fallback routine computes correct values" ctx c d)
 
 let () =
   (* --- model_default keeps working end to end (envelope overrides make scoring live) --- *)
@@ -209,7 +205,8 @@ let () =
       (Context.auto ()) comp Ir.Indexing.Empty
   in
   let ctx = Context.run ctx routine in
-  p "model_default returns a working routine" (values ctx c d);
+  p "model_default returns a working routine"
+    (values "model_default returns a working routine" ctx c d);
   p "model_default reports a choice"
     (match !choice with
     | Some r -> (not (String.is_empty r.Autotune.mc_label)) && r.Autotune.mc_scored >= 1

@@ -64,7 +64,6 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let approx a b = Float.(abs (a - b) < 1e-2)
 let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
 
 (* Intentional dialect identity: these branches count the exact MSL versus CUDA/HIP array and
@@ -273,7 +272,9 @@ let () =
   (let label = "staged depths approximate the serial twin (GPU) or clean rejection (CPU)" in
    match results with
    | Some results ->
-       p_all label results ~f:(fun (_, got) -> Array.for_all2_exn got got_serial ~f:approx)
+       p_all label results ~f:(fun (key, got) ->
+           Verdict.within ~what_ran:(Printf.sprintf "depth %d" key) label got got_serial
+             ~tol:(fun _ -> 1e-2))
    | None ->
        (* The C backends reject the shared staging composition at compile (workgroup-shared
           placement is not renderable there) — same clean rejection as the SMEM matmul test, at any

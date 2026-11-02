@@ -21,7 +21,11 @@ module Asgns = Ir.Assignments
 open Verdict.Claims
 
 let approx_tol _ = 1e-4
-let approx a b = Float.(abs (a - b) < approx_tol b)
+
+(* The member of [xs] nearest [r]: some member is within an absolute tolerance of [r] exactly when
+   the nearest one is, so a claim checks that one alone and reports only it on a failure. *)
+let nearest_to r xs =
+  List.min_elt xs ~compare:(fun a b -> Float.compare (Float.abs (a -. r)) (Float.abs (b -. r)))
 
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
@@ -98,7 +102,11 @@ let () =
   let split_op, _o, _i = Sched.split ~axis:sym_i ~factor:4 ~outer:LL.Serial ~inner:LL.Serial in
   let s_split = Autotune.model_score ~static_indices:[] ~limits opt [ split_op ] in
   p "pure loop restructuring (Split) leaves the score unchanged"
-    (match (s_empty, s_split) with Some a, Some b -> approx a b | _ -> false);
+    (match (s_empty, s_split) with
+    | Some a, Some b ->
+        Verdict.within "pure loop restructuring (Split) leaves the score unchanged" [| b |] [| a |]
+          ~tol:approx_tol
+    | _ -> false);
   let sym_j, _ = first_loop_exn body in
   (* Swapping a pair in the wrong nesting order fails to apply: no coverage, not an error. *)
   let bad = [ Sched.Swap { outer = sym_j; inner = sym_i } ] in
@@ -553,7 +561,14 @@ let () =
     "each explained configured preset scores as the configured schedule on its search segment"
     below_explained.Autotune.x_segments ~f:(fun xs ->
       match Option.bind xs.Autotune.xs_configured ~f:rank_ms with
-      | Some r -> List.exists independent_configured ~f:(fun i -> approx i r)
+      | Some r -> (
+          match nearest_to r independent_configured with
+          | Some i ->
+              Verdict.within
+                "each explained configured preset scores as the configured schedule on its search \
+                 segment"
+                [| r |] [| i |] ~tol:approx_tol
+          | None -> false)
       | None -> false);
   Hashtbl.remove Utils.config_file_args "cpu_schedule_min_work";
   let below_ctx = Context.run below_ctx below_routine in

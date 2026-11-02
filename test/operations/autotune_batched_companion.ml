@@ -253,7 +253,10 @@ let () =
         let sctx = Context.run (Context.run sctx sroutine) sroutine in
         Context.get_values sctx y.Tensor.value
       with
-      | got -> Array.for_all2_exn got expected ~f:(fun a b -> Float.(abs (a - b) < 1e-3))
+      | got ->
+          Verdict.within ~what_ran:(Printf.sprintf "seed %d" idx)
+            "bc: every unfused GPU seed compiles and computes correctly" got expected ~tol:(fun _ ->
+              1e-3)
       | exception exn ->
           Stdio.eprintf "bc: scalar GPU seed %d FAILED %s\n" idx (Exn.to_string exn);
           false);
@@ -486,10 +489,11 @@ let () =
       (Sched.fission_scheduled ~promote_locals:is_gpu ~arity_cuts:true ~preset ~zero_sched
          ~static_indices:[] opt) ~f:(fun (_, _, _, post) -> post)
   in
-  (* Non-empty by construction (gh-ocannl-746): two arrays emptied together compare equal. *)
-  let approx got want =
-    (not (Array.is_empty got))
-    && Array.for_all2_exn got want ~f:(fun a c -> Float.(abs (a - c) < 1e-3))
+  (* Both readbacks against their references, each named on stderr when it fails. *)
+  let approx ?what_ran name (got_z, got_r) =
+    let tol _ = 1e-3 in
+    Verdict.within ?what_ran ("z: " ^ name) got_z z_expected ~tol
+    && Verdict.within ?what_ran ("r: " ^ name) got_r r_expected ~tol
   in
   p "lm: the finer fissioned form executes correctly"
     (match
@@ -501,7 +505,7 @@ let () =
        let ctx = Context.run (Context.run ctx routine) routine in
        (Context.get_values ctx z_e.Tensor.value, Context.get_values ctx r_e.Tensor.value)
      with
-    | got_z, got_r -> approx got_z z_expected && approx got_r r_expected
+    | got -> approx "lm: the finer fissioned form executes correctly" got
     | exception exn ->
         Stdio.eprintf "lm: finer fissioned execution FAILED: %s\n" (Exn.to_string exn);
         false);
@@ -536,7 +540,9 @@ let () =
         let ctx = Context.run (Context.run ctx routine) routine in
         (Context.get_values ctx z_s.Tensor.value, Context.get_values ctx r_s.Tensor.value)
       with
-      | got_z, got_r -> approx got_z z_expected && approx got_r r_expected
+      | got ->
+          approx ~what_ran:(Printf.sprintf "seed %d" idx)
+            "lm: every fine GPU seed compiles and computes correctly" got
       | exception exn ->
           Stdio.eprintf "lm: fine GPU seed %d FAILED %s\n" idx (Exn.to_string exn);
           false);
@@ -558,7 +564,8 @@ let () =
     ((Context.get_values ctx z.Tensor.value, Context.get_values ctx r.Tensor.value), !reports)
   in
   let (got_z, got_r), reports = tune_once () in
-  p "lm: tuned head matches the reference" (approx got_z z_expected && approx got_r r_expected);
+  p "lm: tuned head matches the reference"
+    (approx "lm: tuned head matches the reference" (got_z, got_r));
   (match reports with
   | [ rep ] ->
       if is_gpu && rep.Autotune.fiss_sketch_candidates = 0 then
@@ -566,6 +573,6 @@ let () =
   | _ -> ());
   let (got_z2, got_r2), reports2 = tune_once () in
   p "lm: cache-replayed head matches the reference"
-    (approx got_z2 z_expected && approx got_r2 r_expected);
+    (approx "lm: cache-replayed head matches the reference" (got_z2, got_r2));
   p "lm: second tune was a cache hit or full replay"
     (match reports2 with [ rep ] -> replayed rep || completed rep | _ -> false)
