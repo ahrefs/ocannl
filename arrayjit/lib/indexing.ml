@@ -34,6 +34,9 @@ type 'a environment = 'a Map.M(Symbol).t [@@deriving sexp]
 type static_symbol = {
   static_symbol : symbol;
   mutable static_range : int option; [@compare.ignore] [@equal.ignore] [@hash.ignore]
+      (** Mutable on purpose, though only tests write it (through {!set_static_range}): the analysis
+          caches key on the range ([Low_level.analysis_digest] hashes it), so a re-declared range
+          misses rather than reusing an analysis made under the old one (gh-ocannl-1624). *)
   mutable used_as_extent : bool; [@compare.ignore] [@equal.ignore] [@hash.ignore] [@sexp.bool]
       (** The symbol is used as a symbolic dimension (gh-490): its bound value is a size in
           [[0, static_range]] (inclusive -- buffers are sized [static_range]), rather than an index
