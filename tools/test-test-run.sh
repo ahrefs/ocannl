@@ -3792,8 +3792,8 @@ for variant in fix census order; do
         fi
         # The supervisor itself outlives the verdict only by its bounded tail:
         # the stuck reader is KILLed past three seconds, and says so.
-        for ((i = 0; i < 100; i++)); do kill -0 "$sup" 2>/dev/null || break; sleep 0.1; done
-        if [ -z "$detail" ] && kill -0 "$sup" 2>/dev/null; then
+        for ((i = 0; i < 100; i++)); do term_grace_dead "$sup" && break; sleep 0.1; done
+        if [ -z "$detail" ] && ! term_grace_dead "$sup"; then
           detail="$variant/$phase: the supervisor outlived its verdict by more than ten seconds"
         elif [ -z "$detail" ] && [ "$phase" = fresh ] &&
              { [ -e "$run_dir/build" ] || [ -e "$run_dir/build.discard" ]; }; then
@@ -3842,7 +3842,7 @@ term_grace_cleanup() { # <run dir> <escapee pid file> <reader pid file>
   [ -n "$1" ] || return 0
   harness_kill_recorded "$1/pgid" "$1/gtoken" group
   for ((i = 0; i < 100; i++)); do
-    [ -s "$1/pid" ] && kill -0 "$(cat "$1/pid")" 2>/dev/null || break
+    [ -s "$1/pid" ] && ! term_grace_dead "$(cat "$1/pid")" || break
     sleep 0.1
   done
   harness_kill_recorded "$1/pid" "$1/ptoken"

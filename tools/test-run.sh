@@ -1510,6 +1510,28 @@ supervisor_perl='
   # lstart under the same pinned locale/TZ and squeeze. Sampled by the process
   # itself, never by a parent that could catch a recycled pid after a fast
   # exit.
+  # Also asked of another pid (the census of a cancellation, below): empty
+  # once that pid is gone.
+  my $token_of = sub {
+    my $p = shift;
+    my $tok = "";
+    if (-d "/proc/self") {
+      if (open my $sf, "<", "/proc/$p/stat") {
+        my $s = <$sf>;
+        if (defined $s && $s =~ /^(?s:.*)\)\s+(.*)$/) {
+          my @f = split /\s+/, $1;
+          $tok = defined $f[19] ? $f[19] : "";
+        }
+      }
+    } else {
+      local $ENV{LC_ALL} = "C";
+      local $ENV{TZ} = "UTC";
+      $tok = qx{ps -o lstart= -p $p 2>/dev/null};
+      $tok =~ s/\s+$//;
+      $tok =~ s/ +/ /g;
+    }
+    $tok;
+  };
   my $self_token = sub {
     my $tok = "";
     if (open my $sf, "<", "/proc/self/stat") {
@@ -1749,18 +1771,21 @@ supervisor_perl='
     unlink $out;
     @found;
   };
-  # TERM the census, one second of grace, then KILL whoever of it is left.
-  # A survivor is the same process the census named: its pid cannot be
-  # reused while it is alive.
+  # TERM the census, one second of grace, then KILL whoever of it is left
+  # -- each pid only while it still carries the start token sampled with the
+  # census, so a holder that exited and whose pid was recycled meanwhile is
+  # never signalled: the lock does not stop pid reuse.
   my $reap_holders = sub {
-    my @h = $holders->();
+    my %tok = map { ($_, $token_of->($_)) } $holders->();
+    my $same = sub { my $p = shift; $tok{$p} ne "" && $token_of->($p) eq $tok{$p} };
+    my @h = grep { $tok{$_} ne "" } keys %tok;
     return unless @h;
     kill("TERM", @h);
     for (1 .. 10) {
       last unless grep { kill(0, $_) } @h;
       select undef, undef, undef, 0.1;
     }
-    my @left = grep { kill(0, $_) } @h;
+    my @left = grep { kill(0, $_) && $same->($_) } @h;
     kill("KILL", @left) if @left;
   };
   my $blast = sub { my $sig = shift; kill($sig, -$pid) or kill($sig, $pid) };
