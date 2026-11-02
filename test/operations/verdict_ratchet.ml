@@ -4687,6 +4687,13 @@ let () =
   let claim = in_legf ~leg "%s: all rows pass" tag in
   claim (fun label -> p_all label (probe ()) ~f:Fn.id)|ocaml},
       [ "unread in_legf" ] );
+    ( "accepts a leg built in place, whose gate is no argument the make function hands a helper",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  in_leg ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (label_of on_gpu) (fun label ->
+      check_rows label rows)|ocaml},
+      [] );
     ( "accepts a leg gated on a capability over a population built from the same program",
       {ocaml|open Verdict.Claims
 let () =

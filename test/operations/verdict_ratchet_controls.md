@@ -835,7 +835,7 @@ helper. The population side now follows a data thunk (a lazy value and `Lazy.for
 too. The skip-list reader (`Verdict_scan.skip_list_census`) refuses a skip handed to an iteration,
 a callback or loop that only skips, and a branch applying two or more skips. Every run used
 tools/mutation-run.sh --batch on the named module and focused alias, and restored the source
-byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`; the local review's four rows ran later, on baselines `20261102T204037Z-20472` and `20261102T204156Z-60315`).
+byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`; the local review's four rows ran later, on baselines `20261102T204037Z-20472` and `20261102T204156Z-60315`, and PR review round 1's two on `20261102T211705Z-35891` and `20261102T211412Z-41369`).
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
@@ -852,6 +852,7 @@ byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `202611
 | A match guard picks the leg and is a gate (local review) | `verdict_scan.ml`: guards not read | Failed: `refuses a leg a match guard picks on the population` | `20261102T204047Z-28668` |
 | Both branches of a choice are read, an ancestor they share on each path (local review: one visited set across branches lost the second path) | `verdict_scan.ml`: an `if`'s else branch reads as unresolved, as a shared ancestor's second visit did | Failed: `reads a population gate on an outer leg both branches of a choice share` | `20261102T204111Z-43247` |
 | An `in_legf` is complete only with its literal format's arguments and then its make function (local review) | `verdict_scan.ml`: the format's arity ignored | Failed: `names a formatted leg claim still awaiting its make function unread` | `20261102T204134Z-55744` |
+| Only the make function is the claim's population, not the `~leg` or the label (PR review round 1) | `verdict_scan.ml`: the collector is registered at the `~leg` argument instead of the make function | Failed: `accepts a leg built in place, whose gate is no argument the make function hands a helper`; the refusing leg controls, whose make functions then go uncollected; and the corpus claim, `division_special_values`' in-place legs then read as their own population | `20261102T211727Z-44749` |
 | `Verdict.leg` and `Verdict.sub_leg` resolve as Verdict's | `verdict_callee.ml`: no leg constructor recorded | Failed: every refusing leg control above but the two unread-leg ones, both accepting leg controls, and the corpus claim that the reader compared leg claims: each leg then reads as uncompared | `20261102T201842Z-60598` |
 
 The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under the
@@ -867,4 +868,5 @@ The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under
 | A nested branch is judged on its own | `verdict_scan.ml`: a branch counts the skips of the branches nested in it | a nested branch, judged on its own | `20261102T202003Z-47482` |
 | A callback that evaluates its claim on one side of the gate is no skip list | `verdict_scan.ml`: evaluating claims not counted | a loop whose callback evaluates on one side of its gate and skips on the other | `20261102T202208Z-44233` |
 | Another module's `skipped` is no skip (local review) | `verdict_scan.ml`: every qualified `skipped` is a skip | another module's skipped | `20261102T204207Z-65992` |
+| An `open` may shadow a skip alias, which the resolver then decides (PR review round 1) | `verdict_scan.ml`: an open binds nothing in the alias scope | a skip alias a local open shadows with another skipped | `20261102T211421Z-48647` |
 | An Option iteration runs at most once | `verdict_scan.ml`: Option read as a collection iteration | an Option iteration, which runs at most once | `20261102T202018Z-64542` |

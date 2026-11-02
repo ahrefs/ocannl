@@ -1699,10 +1699,11 @@ let () =
        tiled)
   in
   (* A vector file affording no alternative at this micro-kernel proposes no twin. The gate is that
-     judgment -- [Register_tile.alternatives] at the conv site's own micro-kernel extents, read off
-     a lowering of its own, under the machine's vector file (f32: 4-byte elements) -- never the
-     twins the claims quantify, whose loss would otherwise read as a skip (gh-ocannl-1794). A
-     lowering with no conv site opens the leg, so the claims fail rather than skip. *)
+     judgment -- [Register_tile.alternatives] (and, where enabled, [Register_tile.rm_twin]) at the
+     conv site's own micro-kernel extents, read off a lowering of its own, under the machine's
+     vector file (f32: 4-byte elements) -- never the twins the claims quantify, whose loss would
+     otherwise read as a skip (gh-ocannl-1794). A lowering with no conv site opens the leg, so the
+     claims fail rather than skip. *)
   let affords_twins =
     lazy
       (let site = ref None in
@@ -1717,10 +1718,14 @@ let () =
        match !site with
        | None -> true
        | Some site ->
-           not
-             (List.is_empty
-                (Ir.Register_tile.alternatives ~file:limits.Ir.Backend_intf.simd_vector ~elt_bytes:4
-                   ~m:site.Autotune.c_nrow ~n:site.Autotune.c_noc)))
+           let file = limits.Ir.Backend_intf.simd_vector
+           and m = site.Autotune.c_nrow
+           and n = site.Autotune.c_noc in
+           (* The seeder's own eligibility: the alternatives, and under
+              [autotune_register_tile_rm_twin] the two-row twin. *)
+           (not (List.is_empty (Ir.Register_tile.alternatives ~file ~elt_bytes:4 ~m ~n)))
+           || Utils.registered_flag ~arg_name:"autotune_register_tile_rm_twin"
+              && Option.is_some (Ir.Register_tile.rm_twin ~file ~elt_bytes:4 ~m ~n))
   in
   let leg = Verdict.sub_leg cpu_leg ~when_:affords_twins ~on:backend_name in
   (* [~runs:2] for the twin, once for its sibling: both apply the same zero handling, so only a

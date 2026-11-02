@@ -328,6 +328,11 @@ let () = match cap with `Withheld -> skipped first; skipped second | `Advertised
         {ocaml|module Other = struct let skipped x = ignore x end
 let () = List.iter xs ~f:Other.skipped|ocaml},
         [] );
+      ( "a skip alias a local open shadows with another skipped",
+        {ocaml|module Local = struct let skipped _ = () end
+let skipped = Verdict.skipped ~backend:"cc"
+let () = let open Local in List.iter labels ~f:skipped|ocaml},
+        [] );
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );

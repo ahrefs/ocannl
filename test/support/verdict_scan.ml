@@ -1545,6 +1545,10 @@ let gate_census content =
   let leg_sites = ref 0 and unread_legs = ref [] and uncompared_legs = ref [] in
   (* The positions of the leg-claim callees read as applied, which their own visit then passes. *)
   let leg_heads = Hash_set.create (module Int) in
+  (* The make function of each leg claim whose comparison is queued, by its position: walked with
+     its collector innermost, so that only what [make] does -- not the [~leg] or the label -- is the
+     claim's population. *)
+  let leg_makes = Hashtbl.create (module Int) in
   (* What is written into a binding after it is made -- [x := e], [Queue.enqueue x e] -- by the
      binding's identity, with the scope it was written in. *)
   let writes = Hashtbl.create (module Int) in
@@ -2689,7 +2693,7 @@ let gate_census content =
             | _ -> ())
 
       (* A leg claim [expr] applies, with its [~leg] and its make function in place: its comparison
-         is queued and its collector returned, for the walk of [make] to fill. Applied in part, it
+         is queued and its collector registered, for the walk of [make] to fill. Applied in part, it
          is reported unread. *)
       method leg_claim env expr ~member ~spelled ~ambiguous arguments =
         let line = expr.pexp_loc.loc_start.pos_lnum in
@@ -2788,7 +2792,7 @@ let gate_census content =
                         }
                         :: !readings)
               :: !pending;
-            Some collector
+            Hashtbl.set leg_makes ~key:(position make) ~data:collector
         | _ ->
             unread_legs :=
               {
@@ -2798,8 +2802,7 @@ let gate_census content =
                   "it is applied in part: its `~leg`, its label and its make function are not all \
                    handed to it in place";
               }
-              :: !unread_legs;
-            None
+              :: !unread_legs
 
       (* The gated claim an expression reaches, with every argument it has been handed so far, each
          with the scope it was written in. The nodes it absorbs -- the callee of an application, an
@@ -2861,11 +2864,20 @@ let gate_census content =
          expression is: only the body repeats, or is deferred, and it enters its frame before
          anything in it -- a claim or a write that is the body itself -- is placed. *)
       method! expression env expr =
-        match Hashtbl.find_and_remove body_frames (position expr) with
-        | Some kind ->
-            self#framed ~kind ~start:expr.pexp_loc.loc_start.pos_cnum
-              ~stop:expr.pexp_loc.loc_end.pos_cnum (fun () -> self#visit env expr)
-        | None -> self#visit env expr
+        let dispatch () =
+          match Hashtbl.find_and_remove body_frames (position expr) with
+          | Some kind ->
+              self#framed ~kind ~start:expr.pexp_loc.loc_start.pos_cnum
+                ~stop:expr.pexp_loc.loc_end.pos_cnum (fun () -> self#visit env expr)
+          | None -> self#visit env expr
+        in
+        (* A leg claim's make function: walked with its collector innermost. *)
+        match if quiet > 0 then None else Hashtbl.find_and_remove leg_makes (position expr) with
+        | Some collector ->
+            let saved = leg_stack in
+            leg_stack <- collector :: saved;
+            Exn.protect ~f:dispatch ~finally:(fun () -> leg_stack <- saved)
+        | None -> dispatch ()
 
       method visit env expr =
         (if quiet = 0 then
@@ -2970,41 +2982,37 @@ let gate_census content =
                    Hashtbl.add_multi field_writes ~key:identity
                      ~data:(Ppxlib.Longident.last_exn field.txt, (value, env, point)))
            | _ -> ());
-        (* A leg claim (gh-ocannl-1794): its [make] is walked with its collector innermost, so the
-           claims made there add their populations; one named as a value, or applied in part, is
-           reported unread. *)
-        let leg_collector =
-          if quiet > 0 then None
-          else
-            let leg_member callee =
-              match Verdict_callee.resolve owners callee with
-              | Some { member; ownership = (Verdicts | Ambiguous | Free) as ownership; spelled }
-                when List.mem leg_claims member ~equal:String.equal ->
-                  Some (member, spelled, Poly.equal ownership Verdict_callee.Ambiguous)
-              | _ -> None
-            in
-            match expr.pexp_desc with
-            | Pexp_apply (callee, arguments) -> (
-                self#collect_leg_population env callee arguments;
-                match leg_member callee with
-                | Some (member, spelled, ambiguous) ->
-                    Hash_set.add leg_heads (position (strip_constraints callee));
-                    self#leg_claim env expr ~member ~spelled ~ambiguous arguments
-                | None -> None)
-            | Pexp_ident _ when not (Hash_set.mem leg_heads (position expr)) -> (
-                match leg_member expr with
-                | Some (_, spelled, _) ->
-                    unread_legs :=
-                      {
-                        leg_form = spelled;
-                        leg_line = expr.pexp_loc.loc_start.pos_lnum;
-                        why = "it is named as a value rather than applied";
-                      }
-                      :: !unread_legs;
-                    None
-                | None -> None)
-            | _ -> None
-        in
+        (* A leg claim (gh-ocannl-1794): its [make] is registered to be walked with its collector
+           innermost (see [expression]), so the claims made there add their populations; one named
+           as a value, or applied in part, is reported unread. *)
+        (if quiet = 0 then
+           let leg_member callee =
+             match Verdict_callee.resolve owners callee with
+             | Some { member; ownership = (Verdicts | Ambiguous | Free) as ownership; spelled }
+               when List.mem leg_claims member ~equal:String.equal ->
+                 Some (member, spelled, Poly.equal ownership Verdict_callee.Ambiguous)
+             | _ -> None
+           in
+           match expr.pexp_desc with
+           | Pexp_apply (callee, arguments) -> (
+               self#collect_leg_population env callee arguments;
+               match leg_member callee with
+               | Some (member, spelled, ambiguous) ->
+                   Hash_set.add leg_heads (position (strip_constraints callee));
+                   self#leg_claim env expr ~member ~spelled ~ambiguous arguments
+               | None -> ())
+           | Pexp_ident _ when not (Hash_set.mem leg_heads (position expr)) -> (
+               match leg_member expr with
+               | Some (_, spelled, _) ->
+                   unread_legs :=
+                     {
+                       leg_form = spelled;
+                       leg_line = expr.pexp_loc.loc_start.pos_lnum;
+                       why = "it is named as a value rather than applied";
+                     }
+                     :: !unread_legs
+               | None -> ())
+           | _ -> ());
         (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with
            | Pexp_ident _ -> (
@@ -3081,16 +3089,7 @@ let gate_census content =
                          partials := (form, line) :: !partials)))
            | _ -> ());
         let start = expr.pexp_loc.loc_start.pos_cnum and stop = expr.pexp_loc.loc_end.pos_cnum in
-        let walk () =
-          match leg_collector with
-          | None -> super#expression env expr
-          | Some collector ->
-              let saved = leg_stack in
-              leg_stack <- collector :: saved;
-              Exn.protect
-                ~f:(fun () -> super#expression env expr)
-                ~finally:(fun () -> leg_stack <- saved)
-        in
+        let walk () = super#expression env expr in
         match expr.pexp_desc with
         | Pexp_for (_, _, _, _, body) ->
             Hashtbl.set body_frames ~key:(position body) ~data:Loop;
@@ -3206,31 +3205,42 @@ let skip_positions ~owners ast =
     | Some { ownership = Verdicts | Ambiguous | Free; _ } -> true
     | _ -> false
   in
+  let resolved env name loc =
+    match Lexical_scope.lookup env name with
+    | Some (Some skip) -> skip
+    | Some None | None -> verdicts loc
+  in
   let walker =
     object
-      inherit [bool, bool] Lexical_scope.scoped
-      method local = false
+      inherit [bool option, bool] Lexical_scope.scoped
+
+      (* [Some b]: the source binds the name, to a skip or not; [None]: an [open] or [include] may
+         have brought one in, which the resolver decides. *)
+      method local = Some false
       method module_path _ _ = None
       method! attribute _ attr = attr
+
+      method! opened ~top:_ ~include_:_ env _ =
+        Lexical_scope.push_frame env (Map.singleton (module String) skip_name None)
 
       method! binding_denotes env binding =
         let rec skip_head expr =
           match (strip_constraints expr).pexp_desc with
           | Pexp_ident { txt = Ppxlib.Longident.Lident name; loc } when String.equal name skip_name
             ->
-              Option.value (Lexical_scope.lookup env name) ~default:(verdicts loc)
+              resolved env name loc
           | Pexp_ident { txt = Ppxlib.Longident.Ldot (_, name); loc } ->
               String.equal name skip_name && verdicts loc
           | Pexp_apply (callee, _) -> skip_head callee
           | _ -> false
         in
-        Option.is_some (Read.pattern_name binding.pvb_pat) && skip_head binding.pvb_expr
+        Some (Option.is_some (Read.pattern_name binding.pvb_pat) && skip_head binding.pvb_expr)
 
       method! ident env ident =
         let skip =
           match ident.txt with
           | Ppxlib.Longident.Lident name when String.equal name skip_name ->
-              Option.value (Lexical_scope.lookup env name) ~default:(verdicts ident.loc)
+              resolved env name ident.loc
           | Ldot (_, name) -> String.equal name skip_name && verdicts ident.loc
           | _ -> false
         in
