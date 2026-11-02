@@ -44,9 +44,8 @@ summary() { # OUT
 import os, re, sys
 out = sys.argv[1]
 sys.path.insert(0, sys.argv[2])  # benchmarks/, for the shared runner and the table builders
-import cells
+import bench_output, cells
 from display_safe import display_value, log_line, table_lines
-line_re = re.compile(r'^(packmma(?:_par)?)\s+\S+ ms\s+\S+ GFLOP/s.*\[(.*)\]\s*$')
 bad, refused, rows = [], [], []
 log = os.path.join(out, 'driver.log')
 m = re.search(r'cases: (.*)', open(log).read()) if os.path.exists(log) else None
@@ -81,10 +80,18 @@ for c in (m.group(1).split() if m else []):
             continue
         text = cells.cell_stream(run, r, 'stdout')
         rn = r['arm'][2:]
-        header = next((ln for ln in text.splitlines() if ln.startswith('GEBP ')), '')
+        header = bench_output.gebp_header(text) or ''
         if f' rn{rn} ' not in header or '(requested)' not in header:
             bad.append(f'{cell}: header does not name the requested rn{rn}')
-        packed = {lm.group(1): lm.group(2) for lm in map(line_re.match, text.splitlines()) if lm}
+        # The mma census, read by bench_output's one reader of the timing line: until gh-ocannl-1767
+        # a last-bracket match here read the grid census in its place (gh-ocannl-1668 appended it),
+        # and every real cell failed the census check below.
+        try:
+            packed = {t['variant']: t['mma'] for t in bench_output.timing_lines(text)
+                      if t['variant'] in ('packmma', 'packmma_par')}
+        except ValueError as e:
+            bad.append(f'{cell}: ' + display_value(str(e)))
+            continue
         if set(packed) != {'packmma', 'packmma_par'}:
             bad.append(f'{cell}: packed lines missing ({sorted(packed)})')
         for variant, census in packed.items():

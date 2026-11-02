@@ -55,6 +55,7 @@ import re
 import statistics
 import sys
 
+import bench_output
 import cells as cell_runner
 from display_safe import display_value, log_line, table_lines
 
@@ -63,12 +64,6 @@ DIGITS = set()
 # The structural bound (see above): five times the ~5% a legitimately per-step-narrowed 2048-term
 # bf16 cell shows on minix and tuf, a quarter of what a zeroed output shows.
 REL_BOUND = 0.25
-# A timing line: `<variant> <ms> ms <rate> GFLOP/s (spot [i] v, chk a/b, <agreement>)  [<mma census>]`,
-# then, since gh-ocannl-1668, `[<grid census>]`. The mma census is the FIRST bracket after the
-# parenthesis: a greedy last-bracket match read the grid census in its place, where no
-# Mma_intrinsics can appear.
-LINE = re.compile(r"^(\w+)\s+([0-9.]+) ms\s+([0-9.]+) GFLOP/s\s+\(.*chk ([^,]+),.*\)"
-                  r"\s+\[([^\]]*)\](?:\s+\[[^\]]*\])?\s*$")
 
 
 def digits(chk):
@@ -77,14 +72,17 @@ def digits(chk):
 
 
 def parse_text(text):
-    """{variant: (ms, (chk_a, chk_b), census)} for one cell's output."""
+    """{variant: (ms, (chk_a, chk_b), mma census)} for one cell's output, its timing lines read by
+    bench_output's one reader of them (gh-ocannl-1767); ValueError for a timing line that does not
+    read as one."""
     out = {}
-    for line in text.splitlines():
-        m = LINE.match(line)
-        if m and m.group(1) in VARIANTS:
-            chk = tuple(float(x) for x in m.group(4).split("/"))
-            DIGITS.add(digits(m.group(4)))
-            out[m.group(1)] = (float(m.group(2)), chk, m.group(5))
+    for t in bench_output.timing_lines(text):
+        if t["variant"] in VARIANTS:
+            if t["chk"] is None:
+                raise ValueError(f"{t['variant']}: a timing line without its checksum")
+            chk = tuple(float(x) for x in t["chk"].split("/"))
+            DIGITS.add(digits(t["chk"]))
+            out[t["variant"]] = (t["ms"], chk, t["mma"])
     return out
 
 
@@ -142,7 +140,12 @@ def load(out, pattern, key_of):
         ok, why = status_ok(f, key["prec"])
         if not ok:
             problems.append(f"{os.path.basename(f)}: {why}")
-        add_cell(cells, problems, os.path.basename(f), key, parse_log(f))
+        try:
+            parsed = parse_log(f)
+        except ValueError as e:
+            problems.append(f"{display_value(os.path.basename(f))}: {display_value(str(e))}")
+            continue
+        add_cell(cells, problems, os.path.basename(f), key, parsed)
     return cells, problems
 
 
@@ -186,8 +189,13 @@ def load_runs(out):
             text = cell_runner.cell_stream(run, r, "stdout")
             if "FAILED" in text or "SIZE " in text:
                 problems.append(f"{cell}: FAILED variant or SIZE mismatch")
+            try:
+                parsed = parse_text(text)
+            except ValueError as e:
+                problems.append(f"{cell}: {display_value(str(e))}")
+                continue
             add_cell(cells, problems, cell, {"size": size, "arm": arm.group(1),
-                                             "prec": arm.group(2)}, parse_text(text))
+                                             "prec": arm.group(2)}, parsed)
     if not cells and not problems:
         problems.append("no bin_cells run under the output directory")
     return cells, problems
