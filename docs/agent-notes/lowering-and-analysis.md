@@ -699,4 +699,24 @@ files.
   segment (`fiss_sketch_candidates`, not `sketch_candidates`); (e) on bounded small-integer inputs
   the two forms agree BITWISE (every coefficient is dyadic and every partial sum representable),
   so the parity leg needs no tolerance to argue about; bound the fixture's magnitudes in the test.
+- **`Prefix_scan` is the tier's triangular-mask member** (gh-ocannl-1758, key `prefix_scan`): a
+  reduction whose operand is a 0/1 (or `where`-selected, or log-) mask along one axis times a
+  payload that ignores the output position becomes one `Scan_loop` per row; the cumsum's backward
+  is the same shape with the roles exchanged (a `Backward` scan). Traps: (a) the selector is
+  stored, not inline -- puzzle 7's mask is a chain of range, broadcast, comparison and `not` nests
+  -- so the member proves the triangle by evaluating the chain symbolically, as an affine form in
+  the reduced and output symbols or a function of their difference, and then checks that function
+  over the whole difference range: O(n), and exact only while every intermediate integer is
+  representable in every precision the chain passes through (an f16 range declines past 2048);
+  (b) a `%op` literal `0.` is a node lowered as `Zero_out`, not a nest, so a recognizer that reads
+  constants through definitions must take that statement too (the `where`-selected sum and the
+  tropical log-mask hid behind it); (c) carried-state nodes are memoized by the matched site
+  (target, ordinal of the scans into it, precision), never by the target alone, and in a
+  namespace of their own -- `Online_softmax`'s `rewrite` namespace numbers its nodes from its own
+  counter, so a second module minting there would collide identifiers; (d) it must run before
+  `Fp_algebra`, whose contraction turns `y + v * mask` into an FMA it does not read
+  (`runtest-prefix_scan_fp_licences`); (e) over one cell the triangle is a constant, which the
+  member reads as a payload factor, so a singleton extent is left alone. The mask's definitions
+  are not removed: the virtualizer drops the unread chain, and `test/operations/prefix_scan` pins
+  that no `[n, n]` node is written after the rewrite.
 

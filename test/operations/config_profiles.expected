@@ -47,6 +47,7 @@ Profile "reproducible" sets:
   online_softmax_backward=false
   online_softmax_block=0
   winograd_conv=false
+  prefix_scan=false
   gpu_default_split_reduce_min_serial=0
   gpu_default_seed_narrow_storage=false
 
@@ -73,6 +74,7 @@ Profile "approximate" sets:
   online_softmax_backward=true
   online_softmax_block=auto
   winograd_conv=true
+  prefix_scan=true
   cc_backend_fast_math=true
   cc_backend_fp_contract=fast
   fp_contract=true

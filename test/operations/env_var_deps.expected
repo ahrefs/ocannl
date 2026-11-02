@@ -288,6 +288,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-optional_arg_inventory
   test/operations/dune                     @runtest-optional_arg_inventory_control
   test/operations/dune                     @runtest-placement_surface
+  test/operations/dune                     @runtest-prefix_scan_fp_licences
   test/operations/dune                     @runtest-primitive_ops
   test/operations/dune                     @runtest-provenance_tag_inventory
   test/operations/dune                     @runtest-qkv_zero_init-approximate

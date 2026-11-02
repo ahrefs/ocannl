@@ -160,7 +160,6 @@ let exempt_zero_reference_exports =
     "Operation.wrap";
     "Ops.c_ptr_to_string";
     "Ops.hum_typ_of_prec";
-    "Ops.interpret_ternop";
     "Ops.is_assign_op";
     "Ops.is_binop_infix";
     "Ops.precision_to_string";

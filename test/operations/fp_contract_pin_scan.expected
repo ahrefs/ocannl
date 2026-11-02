@@ -49,6 +49,7 @@ test/operations/matmul_interchange.ml -- exact-operands: positive quarters and e
 test/operations/model_seeded_anchor.ml -- not-cc: the bitwise claim is gated on CUDA or HIP model seeding; cc skips it
 test/operations/narrow_storage_compute.ml -- pinned off
 test/operations/nonoverlap_pool_grads.ml -- exact-operands: small integer inputs and a unit loss gradient; every max, product and sum exact
+test/operations/prefix_scan.ml -- exact-operands: every product multiplies by an exact 0/1 selector, and the integer data's sums are derived exact below
 test/operations/print_tree_one_recompute.ml -- exact-operands: integer inputs and small integer polynomials, exact in f32
 test/operations/ptx_target_parity.ml -- not-cc: the floor-versus-native claims need CUDA PTX compiles; cc skips them
 test/operations/recompute_on_read.ml -- exact-operands: inputs are eighths and the elementwise products stay exact in f32
