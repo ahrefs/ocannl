@@ -435,6 +435,17 @@ files.
   within 2x (k80 at 2.35-2.38 ms), and the paired ratio k138/k120 read 1.37-1.39, resolved. The
   screen is now almost all of the cost: what remains is one call per kernel, so a step with more
   kernels pays linearly. `BENCH_KERNEL_TABLE=1` still re-times every kernel (kprof needs them).
+  On minix at `53c2ba0b`: cc (129 kernels) 119-122 s against the table's 233-245 s, both naming
+  k89 `wte.grad` (216-278 ms: a noisy box), the screen's two candidates the tables' only two within
+  2x -- the gain is smaller because re-timing two ~250 ms kernels costs ~30 s. HIP (unified
+  memory, 270 kernels) is the expensive case: one QUEUED call costs 1.1-1.5 s there (the CUDA/HIP
+  batch-depth calibration), so the screen alone took 408-412 s and the instrument ~452 s of its
+  600 s budget, with 9-10 candidates (the cap of 8 plus refused screen readings) re-timed in
+  40-45 s. The old four-call default extrapolates to ~1300 s there, past the budget: before the
+  screen a HIP `gpt2_mini_train` cell's column would have read "instrument over budget". The kprof
+  setting (`autotune_timing=isolated`, every kernel, four calls) took 47 s -- and named a different
+  kernel (k248 `wte.grad`) than queued timing does (k198, 1.16x over k248, resolved): the two modes
+  measure different quantities, so never compare a kprof table's dominant kernel with a cell's.
 - **What separates an isolated time from the in-step one on rog, and what does not**
   (gh-ocannl-1391). Not the buffers: the isolated compile is a child of the step's context and
   links against the step's own buffers (a probe of every kernel of gpt2_mini_train_b256 found

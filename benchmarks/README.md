@@ -1557,7 +1557,9 @@ fixtures still on neither box.
     the dominant-kernel instrument screens every kernel with ONE call and re-times only the
     candidates its screen leaves (the column's passage above), closing with a `bench: dominant
     kernel: screened ..` stderr line that states both stages' wall time (on that Metal step: 94-100 s,
-    against 364-366 s for the full table; the agent note has the A/A); with the table on, every
+    against 364-366 s for the full table; on cc about half the table's; on HIP, where one queued
+    call costs over a second, about 450 s of the 600 s budget -- the agent note has the numbers);
+    with the table on, every
     kernel is still re-timed, so a table costs what it did. With the table on, its
     closing `bench: per-kernel table:` line states the instrument's wall time. A kprof cell pins
     `--ocannl_autotune_timing=isolated`, whose synchronized singles keep its trace to a few hundred
