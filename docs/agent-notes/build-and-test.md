@@ -3134,6 +3134,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ## What CI actually covers
 
+- Two workflows, split by what each proves (gh-ocannl-1816). `ci.yml`, the full matrix (ubuntu
+  shards, macOS, the side jobs; Windows and the OCaml floor on the schedule), runs per PR -- the
+  merge gate reads the PR head's run -- daily on the schedule, and by dispatch; NEVER on a master
+  push. `ci-env.yml` runs on every master push and every PR: the clean room, a fresh checkout and a
+  fresh dependency switch solved from the opam files alone (no CI-side pins, no dependency cache),
+  `dune build -p arrayjit,neural_nets_lib` as opam builds them, `dune build @check`, and one smoke
+  test (`hello_world_dim1x1` on cc). That is master's per-merge verdict, in minutes: each push run
+  keys its concurrency group on its own commit, so none is cancelled or replaced. What the fleet's
+  boxes cannot prove is exactly this, since they share one opam switch, local pins, warm `_build`
+  directories and ignored fixtures; what the hosted full matrix would add on a merged commit
+  (beyond the PR head's run) the fleet's integration loops and the daily sweep cover. Readers of master's
+  verdict outside this repository (ship-pr's base checker, the fleet's launch gate, the CI-red
+  triage routine's prompt) have no `ci` push run to read: they read ci-env's runs, the schedule's,
+  and the execution registry's integration records.
 - `dune build @bin-smoke` runs every `bin/` executable sequentially on deliberately tiny workloads
   with the `cc` backend pinned (gh-ocannl-858), plus one macOS-only contribution outside `bin/`:
   `benchmarks/runners/ocannl/metal_queue_probe.exe --iterations=1024`, the exact-loop-count mode
@@ -3213,8 +3227,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   hold behind an older merge's run going only on it. Every test it runs, the ubuntu shards run too,
   so its unique coverage is the platform (arm64, Apple clang, the Metal queue probe above). In a
   ~20-PR wave its queue held merges and launches for about two hours, while the reds it alone
-  would catch are rare. A macOS-only red therefore lands on master, where the push run's macOS leg
-  finds it and the CI-red triage routine owns it. A change that is macOS-specific runs its suites
+  would catch are rare. A macOS-only red therefore lands on master, where the scheduled sweep's
+  macOS legs find it and the CI-red triage routine owns it. A change that is macOS-specific runs its suites
   on a development Mac before merging (or waits for the PR's own macOS leg on purpose).
 - The benchmark tests' torch legs run in ONE job, `torch-runner`. The main legs run
   `benchmarks/test_orchestrate.py` through dune on runners without torch, where the tests that
@@ -3227,19 +3241,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   Tinygrad is not provisioned: its runner has no CI leg.
 - A red on merged master is presumptively CLAIMED work. `ci.yml`'s `notify-triage-routine` job
   fires the "ocannl-staging CI-red triage" Claude Code cloud routine on any non-PR master red —
-  push and scheduled sweeps alike (a logged no-op until the `ROUTINE_FIRE_URL`/`ROUTINE_FIRE_TOKEN`
+  the scheduled sweep and plain dispatches — and `ci-env.yml`'s job of the same name on a red
+  master push (a logged no-op until the `ROUTINE_FIRE_URL`/`ROUTINE_FIRE_TOKEN`
   repo secrets are set; a lost fire is caught by the routine's own daily backstop sweep). The
   routine claims the red with an issue on **ahrefs/ocannl** titled
   `CI red on master@<short-sha>: <workflow>` — issues are disabled on the staging repository, and
   ahrefs/ocannl is where the issues live anyway (AGENTS.md's two-repository rule) — and either
   opens a `ci-fix/*` PR on staging (it never merges its own PRs) or posts its diagnosis to that
   issue.
-  A master push verdict covers a SPAN, not a merge: push runs share one concurrency group without
-  `cancel-in-progress`, so GitHub keeps at most one running and one pending run. A running run is
-  never cancelled; a pending one is, replaced by the next push's run (ci.yml's `concurrency`
-  comment says why; ahrefs/ocannl#1057 is the 9-of-16 cancelled verdicts it ended). A burst gets
-  a verdict within about two run lengths, covering every merge since the previous push run's head;
-  a scheduled red covers about a day of merges.
+  A ci-env red names its merge (one run per push). A full-matrix red on master comes from the
+  schedule and covers a SPAN, about a day of merges.
   Narrow a red span of more than one merge by hand: dispatch `ci` on `master` with `expected_sha`
   set to a commit inside it, bisecting. On master an ancestor of the head is accepted, the run is
   named `ci at <sha>`, and its red fires no triage. A red only the OCaml-floor job shows bisects the
