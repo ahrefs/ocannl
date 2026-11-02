@@ -254,8 +254,8 @@ files.
   ways. Module-level state: every tracked binding of `row.ml`, `shape.ml`, `tensor.ml` that is not
   `exempt` must be captured, as a pointer, by its file's top-level `capture_globals` (a persistent
   value in a ref, or a field of a tracked record), or carry `[@@mutation_serial.kept "<reason>"]`
-  (a registry rewinds extend: `discarded_refs`, `discarded_nodes`, the handout record, the
-  closure's checkpoint) -- the same `mutation_serial_scan`, so a new `Hashtbl`/`Hash_set` of session
+  (a registry rewinds extend: `discarded_nodes_table`, the handout record, the closure's
+  checkpoint) -- the same `mutation_serial_scan`, so a new `Hashtbl`/`Hash_set` of session
   state is refused (hold a `Set`/`Map` in a ref). `restore_globals` destructures the capture
   exhaustively, so a field it forgets is an unused-variable error. Objects: each sealed owner's
   `snapshot` (`Shape_record`, `Update_step_record`, `Delayed_ref`, `Ir.Indexing.variable_ref`,
@@ -270,6 +270,16 @@ files.
   (`Tensor.For_testing.rewind_omitting`): `test/operations/checkpoint_rewind.ml`. A window op that
   rewrites an older shape's rows in place needs an equation: pointwise ops only add broadcasting
   inequalities, an einsum (`+*`) equates.
+- What a rewind discarded is recorded where it lasts only as long as someone can present it
+  (gh-ocannl-1789): a shape's, a capture reference's and an update step's own `discarded_by` field,
+  and a node's entry in `Tensor`'s weak `discarded_nodes` (an ephemeron table). A schemed closure's
+  trace rewinds once, and a REPL rewinds per re-run cell, so a record keyed by id in a strong table
+  grows with the session. Marking needs the window's objects: references come from `Delayed_ref`'s
+  weak `live` registry (by the uids in `open_refs`), steps from `Update_step_record`'s weak `made`,
+  the steps made since the last closure (a rewind cannot cross one; registered or not). A mark is
+  set once: the provenance reported is the rewind that discarded the object, not a later enclosing
+  one. `test/operations/rewind_registries_bounded.ml` pins the counts flat over 1400 rewinds and
+  traces, with held stale handles as the control.
 - Shape schemes (gh-ocannl-404, `Shape.Scheme`): replaying a trace's constraints with renamed
   variables is unsound alone. The solver mints variables mid-solve (row flank splits, the template
   rule's `more_dims`), `apply_env_step` writes them into shapes, and LATER constraints mention them,

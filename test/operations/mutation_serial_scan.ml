@@ -64,8 +64,8 @@ let () =
            "tensor/row.ml: safe_to_guess (ref) -- accounted: every write noted or at a boundary; \
             captured by capture_globals");
       (* gh-ocannl-903: a registry a rewind extends rather than restores. *)
-      Verdict.p "the scan tracks a kept table (tensor.ml's discarded_nodes)"
-        (has "tensor/tensor.ml: discarded_nodes (Hashtbl) -- accounted; kept by rewinds");
+      Verdict.p "the scan tracks a kept registry (tensor.ml's discarded_nodes_table)"
+        (has "tensor/tensor.ml: discarded_nodes_table (ref) -- accounted; kept by rewinds");
       Verdict.p "the scan tracks an exempt counter (row.ml's uid)"
         (has "tensor/row.ml: uid (ref) -- exempt");
       Verdict.p "the scan tracks a fingerprinted ref (shape.ml's state)"

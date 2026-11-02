@@ -301,11 +301,6 @@ let ref_uid = ref 0
 
 let open_refs : int list ref = ref []
 
-(* The references discarded by rewinds, by uid, with the rewind's provenance: a registry rewinds
-   extend and never restore. *)
-let discarded_refs : (int, string) Hashtbl.t = Hashtbl.create (module Int)
-[@@mutation_serial.kept "a registry of what rewinds discarded: rewinds extend it, never restore it"]
-
 (* The references touched while a shape-scheme trace runs (gh-ocannl-404), when one does: [None]
    otherwise. [open_refs] lists a reference once per inference, so it cannot tell a trace's touch of
    a reference touched before it. *)
@@ -331,17 +326,6 @@ let note_row_numbered uid ~partner =
   if not (List.Assoc.mem !row_numbered_refs uid ~equal:Int.equal) then
     row_numbered_refs := (uid, partner) :: !row_numbered_refs
 
-let check_ref_live ~uid ~label =
-  match Hashtbl.find discarded_refs uid with
-  | None -> ()
-  | Some provenance ->
-      raise
-      @@ Row.Shape_error
-           ( [%string
-               "the variable reference %{label} was bound or set by work discarded by the rewind \
-                after %{provenance}; capture it afresh"],
-             [] )
-
 (* The process's one [Ir.Indexing.shape_writer], claimed as [Shape] initializes (gh-ocannl-1624):
    solving an [Ir.Indexing.variable_ref] and committing a static symbol's role take it, so they are
    [Shape]'s alone -- [Delayed_ref]'s setters below and the commit of [finish_inference]. Not
@@ -361,6 +345,10 @@ module Delayed_ref : sig
     mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
         (** The reference's identity for the rewind's tracking; not part of its value. *)
+    mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
+        (** The provenance of the rewind that discarded the reference (gh-ocannl-1789): the mark
+            lives on the reference, so it lasts exactly as long as someone can present it. Not part
+            of its value. *)
   }
   [@@deriving equal, sexp_of]
 
@@ -369,6 +357,13 @@ module Delayed_ref : sig
 
   val check_live : t -> unit
   (** Raises if a rewind discarded the reference. *)
+
+  val discard : uids:int list -> keep:Set.M(Int).t -> provenance:string -> unit
+  (** Marks every live reference among [uids] and not in [keep] discarded, by [provenance], unless
+      an earlier rewind did. *)
+
+  val count_discarded : unit -> int
+  (** The live references a rewind discarded: a diagnostic. *)
 
   val set_var : t -> [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ] -> unit
   val set_solved_dim : t -> int -> unit
@@ -394,11 +389,12 @@ end = struct
     var_ref : Ir.Indexing.variable_ref;
     mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
+    mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
   }
   [@@deriving equal, sexp_of]
 
   (* Every reference made and still alive, weakly: a checkpoint snapshots them all, since a caller
-     may hold one no step reaches. *)
+     may hold one no step reaches, and a rewind marks the ones it discards. *)
   module Live = Stdlib.Weak.Make (struct
     type nonrec t = t
 
@@ -412,11 +408,39 @@ end = struct
 
   let make ref_label =
     Int.incr ref_uid;
-    let r = { var_ref = Ir.Indexing.variable_ref ref_label; var = `Not_set_yet; uid = !ref_uid } in
+    let r =
+      {
+        var_ref = Ir.Indexing.variable_ref ref_label;
+        var = `Not_set_yet;
+        uid = !ref_uid;
+        discarded_by = None;
+      }
+    in
     Live.add live r;
     r
 
-  let check_live r = check_ref_live ~uid:r.uid ~label:r.var_ref.ref_label
+  let check_live r =
+    Option.iter r.discarded_by ~f:(fun provenance ->
+        let label = r.var_ref.ref_label in
+        raise
+        @@ Row.Shape_error
+             ( [%string
+                 "the variable reference %{label} was bound or set by work discarded by the rewind \
+                  after %{provenance}; capture it afresh"],
+               [] ))
+
+  (* A reference nobody holds needs no mark: it is gone from [live], and no one can present it. *)
+  let discard ~uids ~keep ~provenance =
+    let uids = Set.diff (Set.of_list (module Int) uids) keep in
+    if not (Set.is_empty uids) then
+      Live.iter
+        (fun r ->
+          if Set.mem uids r.uid && Option.is_none r.discarded_by then
+            r.discarded_by <- Some provenance)
+        live
+
+  let count_discarded () =
+    Live.fold (fun r n -> if Option.is_some r.discarded_by then n + 1 else n) live 0
 
   let set_var r v =
     check_live r;
@@ -443,7 +467,7 @@ end = struct
     snap_var_ref : Ir.Indexing.variable_ref_snapshot;
   }
 
-  let snapshot ({ var_ref; var; uid = _ } as r) =
+  let snapshot ({ var_ref; var; uid = _; discarded_by = _ } as r) =
     { snap_ref = r; snap_var = var; snap_var_ref = Ir.Indexing.snapshot_variable_ref var_ref }
 
   let snapshot_live () = Live.fold (fun r acc -> snapshot r :: acc) live []
@@ -462,6 +486,7 @@ type delayed_var_ref = Delayed_ref.t = private {
   var_ref : Ir.Indexing.variable_ref;
   mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
   uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
+  mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
 }
 [@@deriving equal, sexp_of]
 
@@ -599,11 +624,24 @@ module Update_step_record : sig
             operations. [derive_projections] reads it for the clamped-window decision (gh-504) and
             to commit the margins' neutral ([padding_elem]), so a step is only created once its
             operation's assignments are known -- see [Tensor.op]. *)
+    mutable discarded_by : string option; [@sexp_drop_if fun _ -> true]
+        (** The provenance of the rewind that discarded the step (gh-ocannl-1789): the mark lives on
+            the step, so it lasts exactly as long as someone can present it. *)
   }
   [@@deriving sexp_of]
 
   val make : shape:t -> logic:logic -> neutral_elem:float option -> update_step
   (** A fresh step, with a new id and no projections yet. *)
+
+  val discard_since : update_mark:int -> provenance:string -> unit
+  (** Marks every live step made since the last closure with an id above [update_mark] discarded, by
+      [provenance], unless an earlier rewind did. *)
+
+  val forget_made : unit -> unit
+  (** Called at a closure (and a session reset): no rewind can discard a step made before it. *)
+
+  val count_discarded : unit -> int
+  (** The live steps made since the last closure that a rewind discarded: a diagnostic. *)
 
   val with_logic : update_step -> logic -> update_step
   (** The same step (same id, same projection state) over another logic: [dealias_operands]'s
@@ -630,11 +668,51 @@ end = struct
     id : update_id;
     mutable unsafe_projections : Idx.projections option;
     neutral_elem : float option;
+    mutable discarded_by : string option; [@sexp_drop_if fun _ -> true]
   }
   [@@deriving sexp_of]
 
+  (* The steps made since the last closure and still alive, weakly: the steps a rewind can discard
+     -- a rewind cannot cross a closure -- registered or not (a construction that failed before
+     registering its step, or [make] called directly, still made one a caller may hold). *)
+  module Made = Stdlib.Weak.Make (struct
+    type t = update_step
+
+    let equal = phys_equal
+    let hash step = Update_id.hash step.id
+  end)
+
+  let made = Made.create 64
+  [@@mutation_serial.exempt
+    "a weak registry of the steps made since the last closure, which rewinds read: not inference \
+     state"]
+
   let make ~shape ~logic ~neutral_elem =
-    { shape; logic; id = get_update_id (); unsafe_projections = None; neutral_elem }
+    let step =
+      {
+        shape;
+        logic;
+        id = get_update_id ();
+        unsafe_projections = None;
+        neutral_elem;
+        discarded_by = None;
+      }
+    in
+    Made.add made step;
+    step
+
+  let discard_since ~update_mark ~provenance =
+    Made.iter
+      (fun step ->
+        let (Update_id.Update_id n) = step.id in
+        if n > update_mark && Option.is_none step.discarded_by then
+          step.discarded_by <- Some provenance)
+      made
+
+  let forget_made () = Made.clear made
+
+  let count_discarded () =
+    Made.fold (fun step n -> if Option.is_some step.discarded_by then n + 1 else n) made 0
 
   let with_logic step logic = { step with logic }
 
@@ -646,7 +724,9 @@ end = struct
 
   type snapshot = { snap_step : update_step; snap_projections : Idx.projections option }
 
-  let snapshot ({ shape = _; logic = _; id = _; unsafe_projections; neutral_elem = _ } as step) =
+  let snapshot
+      ({ shape = _; logic = _; id = _; unsafe_projections; neutral_elem = _; discarded_by = _ } as
+       step) =
     { snap_step = step; snap_projections = unsafe_projections }
 
   let restore { snap_step; snap_projections } = snap_step.unsafe_projections <- snap_projections
@@ -663,6 +743,7 @@ type update_step = Update_step_record.update_step = private {
   id : update_id;
   mutable unsafe_projections : Idx.projections option;
   neutral_elem : float option;
+  mutable discarded_by : string option; [@sexp_drop_if fun _ -> true]
 }
 [@@deriving sexp_of]
 
@@ -2273,21 +2354,6 @@ let with_taint_on_failure ~describe f =
     if mutated_since fp then taint_session ~provenance:(describe exn);
     Stdlib.Printexc.raise_with_backtrace exn bt
 
-(* Update-id ranges [(lo, hi]] discarded by rewinds, with the rewind's provenance, keyed by [lo].
-   Checkpoints nest, so the ranges are nested or disjoint, and a rewind's [hi] is the newest update
-   id: a new range contains every range starting at or after its [lo], which it replaces -- the
-   newest range containing a step is the provenance reported. The ranges stay disjoint, and a step
-   is looked up by the one range starting below it (gh-ocannl-1751: automatic shape schemes rewind a
-   trace per closure, so a long session accumulates ranges). *)
-let discarded_updates : (int * string) Map.M(Int).t ref = ref (Map.empty (module Int))
-[@@mutation_serial.kept "a registry of what rewinds discarded: rewinds extend it, never restore it"]
-
-let add_discarded_updates ~lo ~hi provenance =
-  let kept, _, _ = Map.split !discarded_updates lo in
-  discarded_updates := Map.set kept ~key:lo ~data:(hi, provenance)
-[@@mutation_serial.boundary
-  "part of a rewind: it records the discarded update range, which no rewind restores"]
-
 (* Called after every successful closure; [Tensor] records its checkpoint here. *)
 let on_closure : (unit -> unit) ref = ref (fun () -> ())
 [@@mutation_serial.exempt
@@ -2296,15 +2362,13 @@ let on_closure : (unit -> unit) ref = ref (fun () -> ())
 let set_on_closure f = on_closure := f
 
 let check_step_live (step : update_step) =
-  let (Update_id.Update_id n) = step.id in
-  Option.iter (Map.closest_key !discarded_updates `Less_than n) ~f:(fun (_lo, (hi, provenance)) ->
-      if n <= hi then
-        raise
-        @@ Row.Shape_error
-             ( [%string
-                 "the shape update step of #%{step.shape.id#Int} %{step.shape.debug_name} was \
-                  discarded by the rewind after %{provenance}; re-run its definition"],
-               [] ))
+  Option.iter step.discarded_by ~f:(fun provenance ->
+      raise
+      @@ Row.Shape_error
+           ( [%string
+               "the shape update step of #%{step.shape.id#Int} %{step.shape.debug_name} was \
+                discarded by the rewind after %{provenance}; re-run its definition"],
+             [] ))
 
 let check_can_rewind ?(what = "Tensor.rewind_to_last_closure") () =
   if !construction_depth > 0 then
@@ -2573,12 +2637,14 @@ module Checkpoint = struct
          handles, like its tensors. *)
       List.iter (open_shapes ~instances:!active_instances !active_update_steps) ~f:(fun sh ->
           if not (in_frontier ck sh) then mark_discarded sh ~provenance);
+      (* The steps the window made, registered or not, and the references it bound or set that the
+         checkpoint holds no snapshot of: made in the window (or, for the closure's checkpoint,
+         every one touched since). Each is marked on the object itself (gh-ocannl-1789): a rewind
+         keeps no record of its own, so a long session's rewinds accumulate nothing beyond what its
+         caller still holds. *)
       if !update_uid > ck.update_mark then
-        add_discarded_updates ~lo:ck.update_mark ~hi:!update_uid provenance;
-      (* The references the window bound or set that the checkpoint holds no snapshot of: made in
-         the window (or, for the closure's checkpoint, every one touched since). *)
-      List.iter !open_refs ~f:(fun uid ->
-          if not (Set.mem ck.ref_uids uid) then Hashtbl.set discarded_refs ~key:uid ~data:provenance));
+        Update_step_record.discard_since ~update_mark:ck.update_mark ~provenance;
+      Delayed_ref.discard ~uids:!open_refs ~keep:ck.ref_uids ~provenance);
     if not (skip "shapes") then List.iter ck.shapes ~f:Shape_record.restore;
     if not (skip "steps") then List.iter ck.steps ~f:Update_step_record.restore;
     if not (skip "refs") then List.iter ck.refs ~f:Delayed_ref.restore;
@@ -2587,7 +2653,6 @@ module Checkpoint = struct
     Row.reset_transient ();
     checkpoint_lineage := ck.lineage;
     taint := None
-  [@@mutation_serial.boundary "the rewind: it restores the checkpoint and clears the taint"]
 
   (* What differs between the session now and [ck], by component: a diagnostic. *)
   let differences ck =
@@ -2612,6 +2677,12 @@ end
 
 let checkpoint ~label ~id_mark = Checkpoint.take ~closure:false ~label ~id_mark
 let closure_checkpoint ~id_mark = Checkpoint.take ~closure:true ~label:"the last closure" ~id_mark
+
+let discarded_registry_sizes () =
+  [
+    ("discarded capture references", Delayed_ref.count_discarded ());
+    ("discarded update steps", Update_step_record.count_discarded ());
+  ]
 
 let infer_equal (sh1 : t) (sh2 : t) =
   unmark_unused sh1.id;
@@ -3320,9 +3391,8 @@ let unsafe_reinitialize () =
   tracing := [];
   construction_depth := 0;
   taint := None;
-  discarded_updates := Map.empty (module Int);
   open_refs := [];
-  Hashtbl.clear discarded_refs;
+  Update_step_record.forget_made ();
   row_numbered_refs := [];
   Int.incr closure_count;
   checkpoint_lineage := [];
@@ -4171,6 +4241,7 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   List.iter !active_instances ~f:(fun inst -> List.iter inst.inst_shapes ~f:close);
   Row.commit_symbol_roles ~commit:(Ir.Indexing.commit_role shape_writer);
   open_refs := [];
+  Update_step_record.forget_made ();
   Int.incr closure_count;
   checkpoint_lineage := [];
   failed_reads := [];

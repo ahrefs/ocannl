@@ -122,6 +122,9 @@ type delayed_var_ref = private {
   var_ref : Ir.Indexing.variable_ref;
   mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
   uid : int;  (** The reference's identity for rewind tracking; ignored by [equal] and sexps. *)
+  mutable discarded_by : string option;
+      (** The provenance of the rewind that discarded the reference, which every setter then refuses
+          (gh-ocannl-1789); ignored by [equal] and sexps. *)
 }
 [@@deriving equal, sexp_of]
 (** Private (gh-ocannl-1573): read and matched freely, written only by [Shape] -- through guarded
@@ -344,6 +347,9 @@ type update_step = private {
           [derive_projections] reads it for the clamped-window decision (gh-504) and to commit the
           margins' neutral ([padding_elem]), so a step is only created once its operation's
           assignments are known -- see [Tensor.op]. *)
+  mutable discarded_by : string option;
+      (** The provenance of the rewind that discarded the step, which {!get_projections} then
+          refuses (gh-ocannl-1789); left out of sexps. *)
 }
 [@@deriving sexp_of]
 (** Data required for a shape inference update step. Ideally, an update should be performed at least
@@ -548,6 +554,9 @@ val checkpoint : label:string -> id_mark:int -> Checkpoint.t
 
 val closure_checkpoint : id_mark:int -> Checkpoint.t
 (** The last closure's checkpoint (empty frontier), which stays valid until the next closure. *)
+
+val discarded_registry_sizes : unit -> (string * int) list
+(** The records the session holds of what rewinds discarded, by kind: a diagnostic for tests. *)
 
 val get_projections : update_step -> Ir.Indexing.projections
 (** Returns the projections for this update step, computing them if not already done. This triggers
