@@ -166,39 +166,6 @@ let exempt_zero_reference_exports =
     "Ops.ptr_to_string_hum";
     "Ppx_extend_dsls.transform_dsl_binding";
     "Ppx_ocannl.rules";
-    "Ppx_op.dsl_fn";
-    "Ppx_op.dsl_open_o";
-    "Ppx_op.dsl_path";
-    "Ppx_op.is_ndarray_constant_expr";
-    "Ppx_op.make_p";
-    "Ppx_op.make_vb";
-    "Ppx_op.make_vb_nd";
-    "Ppx_op.translate_block_tensor";
-    "Ppx_op.translate_tdsl";
-    (* gh-ocannl-1751's automatic-scheme expansion: the classification and wrapping helpers the
-       translation arms share (gh-ocannl-1792 added the annotation readers). Ppx_op has no .mli,
-       like the helpers above. *)
-    "Ppx_op.annotated_kind";
-    "Ppx_op.default_scheme_name";
-    "Ppx_op.drop_attr_named";
-    "Ppx_op.eligible_function";
-    "Ppx_op.first_operand_ops";
-    "Ppx_op.has_attr_named";
-    "Ppx_op.is_ident";
-    "Ppx_op.is_tensor_type";
-    "Ppx_op.mark_schemed";
-    "Ppx_op.mark_tail";
-    "Ppx_op.no_scheme_attr";
-    "Ppx_op.opt_out";
-    "Ppx_op.opt_out_binding";
-    "Ppx_op.opted_out";
-    "Ppx_op.rebinds";
-    "Ppx_op.scheme_attr";
-    "Ppx_op.schemed_name";
-    "Ppx_op.tensor_operand_evidence";
-    "Ppx_op.tensor_operand_ops";
-    "Ppx_op.tensor_params";
-    "Ppx_op.wrap_schemed";
     "Schedulers.cpu_mma_limits";
     "Tnode.bounds_scan_worthwhile";
     "Tnode.current_namespace";
@@ -277,9 +244,6 @@ let exempt_unmentioned_types =
     "Nn_blocks.position_embedding";
     "Ops.apply_prec";
     "Ops.prec_family";
-    (* gh-ocannl-1792: a scheme parameter's classification, read by the translation arms of the same
-       .mli-less module. *)
-    "Ppx_op.param_kind";
   ]
 
 let require_implementations ~fail implementations =
