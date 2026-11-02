@@ -64,35 +64,26 @@ missing (not an error: the agreement analysis goes on).
 
 import argparse
 import math
-import re
 import sys
 
-EXPLAIN = re.compile(r'rank-site: explain .*?label="((?:[^"\\]|\\.)*)" rank_ms=(\S+)'
-                     r'(?:.* admitted=(true|false))?')
+import bench_output
+
+# The rank-site lines are read by bench_output's one reader of them (gh-ocannl-1767): fields by
+# name, labels decoded as the OCaml literals they are.
+def _rank_site(path, kind):
+    with open(path) as f:
+        return [fields for _, fields, _ in bench_output.rank_site_lines(f.read(), kind)]
 
 
-PICK = re.compile(r'rank-site: pick .*?label="((?:[^"\\]|\\.)*)"'
-                  r'(?:.* seeded_label="((?:[^"\\]|\\.)*)")?')
-
-
-def unescape(text):
-    return None if text is None else text.encode().decode("unicode_escape")
-
-
-PICK_TIMED = re.compile(r' pick_ms=(\S+) untuned_ms=(\S+)')
-# gh-ocannl-1524: the runner's own paired ratio with its range, when the line carries it.
-PICK_RATIO = re.compile(r' pick_over_untuned=(\S+) pick_over_untuned_lo=(\S+)'
-                        r' pick_over_untuned_hi=(\S+) pick_over_untuned_resolved=(\S+)')
+def _picks(path):
+    """The pick lines that name a pick (`rank-site: pick site=.. no report` names none)."""
+    return [f for f in _rank_site(path, "pick") if "label" in f]
 
 
 def pick_of(path):
     """(pick label, the seeded plan's label under the pick's configuration, or None)."""
-    with open(path) as f:
-        for line in f:
-            m = PICK.search(line)
-            if m:
-                return unescape(m.group(1)), unescape(m.group(2))
-    return None, None
+    picks = _picks(path)
+    return (picks[0]["label"], picks[0].get("seeded_label")) if picks else (None, None)
 
 
 def pick_timing(path):
@@ -101,18 +92,17 @@ def pick_timing(path):
     admitted measurements (NaN: every timing call refused). Since gh-ocannl-1524 the times
     are medians of a re-timing session, and the third element is the session's paired ratio with
     its range as the line prints it (ratio, lo, hi, resolved), or None for an older line."""
-    with open(path) as f:
-        for line in f:
-            if PICK.search(line):
-                m = PICK_TIMED.search(line)
-                if m:
-                    pick_ms, untuned_ms = float(m.group(1)), float(m.group(2))
-                    # A re-timing whose every call the admission gate refused prints `nan`: no
-                    # measurement, so it cannot stand in for a timed row.
-                    if not all(math.isfinite(t) and t > 0 for t in (pick_ms, untuned_ms)):
-                        return None
-                    r = PICK_RATIO.search(line)
-                    return pick_ms, untuned_ms, (r.groups() if r else None)
+    for f in _picks(path):
+        if "pick_ms" in f and "untuned_ms" in f:
+            pick_ms, untuned_ms = float(f["pick_ms"]), float(f["untuned_ms"])
+            # A re-timing whose every call the admission gate refused prints `nan`: no
+            # measurement, so it cannot stand in for a timed row.
+            if not all(math.isfinite(t) and t > 0 for t in (pick_ms, untuned_ms)):
+                return None
+            # gh-ocannl-1524: the runner's own paired ratio with its range, when the line carries it.
+            ratio = tuple(f.get("pick_over_untuned" + k)
+                          for k in ("", "_lo", "_hi", "_resolved"))
+            return pick_ms, untuned_ms, (ratio if None not in ratio else None)
     return None
 
 
@@ -204,32 +194,24 @@ def measured(path):
 def scores(path):
     """Label -> (rank, listing position, admitted), in listing order."""
     out = {}
-    with open(path) as f:
-        for line in f:
-            m = EXPLAIN.search(line)
-            if m and m.group(2) != "n/a":
-                label = m.group(1).encode().decode("unicode_escape")
-                out[label] = (float(m.group(2)), len(out), m.group(3) != "false")
+    for f in _rank_site(path, "explain"):
+        if f.get("rank_ms", "n/a") != "n/a":
+            out[f["label"]] = (float(f["rank_ms"]), len(out), f.get("admitted") != "false")
     return out
-
-
-MMA_TERMS = re.compile(r'rank-site: explain .*?label="((?:[^"\\]|\\.)*)" .* mma_work=(\S+)'
-                       r' gathers=(\S+)')
 
 
 def fit_mma(path, times):
     """gh-ocannl-1495: prints the fitted tile-MMA and device-gather rates; False when nothing fits."""
     leaves = []
-    with open(path) as f:
-        for line in f:
-            m = MMA_TERMS.search(line)
-            if not m or "n/a" in (m.group(2), m.group(3)):
-                continue
-            label = unescape(m.group(1))
-            row = row_label(label, times)
-            work, gathers = float(m.group(2)), float(m.group(3))
-            if row is not None and work > 0:
-                leaves.append((label, times[row] / 1e3, work, gathers))
+    for f in _rank_site(path, "explain"):
+        work, gathers = f.get("mma_work", "n/a"), f.get("gathers", "n/a")
+        if "n/a" in (work, gathers):
+            continue
+        label = f["label"]
+        row = row_label(label, times)
+        work, gathers = float(work), float(gathers)
+        if row is not None and work > 0:
+            leaves.append((label, times[row] / 1e3, work, gathers))
     staged = [(l, t, w) for l, t, w, g in leaves if g == 0]
     if not staged:
         print("mma-fit: none (no timed tensorized leaf without device gathers)")

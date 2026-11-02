@@ -15,8 +15,9 @@
  ; The Python modules are globbed rather than named: the test grows imports faster than anyone
  ; remembers to pin them. Today it imports orchestrate, strict_json, bench_output, display_safe,
  ; gh675_cells, gh998_cells, gh1002_cells, gen_fixtures, bench_venv, cell_group, fixture_digest,
- ; runners.bench_common, test.test_cell_group and test_cells, runs gh1003_summary.py,
- ; gh612_parity.py, gh728_protocol.py and ab.py by path, and its venv-interpreter scan reads every
+ ; runners.bench_common, test.test_cell_group, test.test_bench_line_scan and test_cells, runs
+ ; gh1003_summary.py, gh612_parity.py, gh728_protocol.py and ab.py by path, and its venv-interpreter
+ ; scan, like its bench-line reader scan, reads every
  ; `*.py` here and under runners/ at any depth -- hence the recursive glob, the same population as
  ; the scan's `runners/**/*.py`. The shell scripts are listed for the same reason: the test drives
  ; gh612_cells.sh's parity step, gh1003_fold_cells.sh's summary step, and gh1343_ab.sh and
@@ -40,6 +41,14 @@
   fixtures/DIGESTS.txt
   ../ocannl_config.reference
   ../test/operations/bench_result_line.expected
+  ; The bench-line reader scan (test/test_bench_line_scan.py, gh-ocannl-1767) holds
+  ; bench_output.FORMATS to the sources that print each format.
+  ../bin/schedule_bench.ml
+  ../bin/narrow_gebp_bench.ml
+  ../arrayjit/lib/backends.ml
+  ../arrayjit/lib/autotune.ml
+  runners/ocannl/bench_harness.ml
+  runners/ocannl/bench_rank_site.ml
   (glob_files workloads/*.json)
   (sandbox always preserve_file_kind))
  (action

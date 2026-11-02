@@ -9,6 +9,7 @@ sys.path.insert(0, str(owner.parent))
 spec = importlib.util.spec_from_file_location("gh1002_cells", owner)
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
+import bench_output  # noqa: E402  (the kernel row's one reader, gh-ocannl-1767)
 
 
 def check(condition, detail):
@@ -36,7 +37,7 @@ with tempfile.TemporaryDirectory() as scratch:
     print("legacy rows preserve timing, launch dimensions and writes: true")
 
     text = row(0, 1, "tile_mma 16x8x16 fp16", "vol:yes ")
-    match = report.KERNEL.match(text.rstrip("\n"))
+    match = bench_output.KERNEL.match(text.rstrip("\n"))
     check(match is not None and match["mma"] == "tile_mma 16x8x16 fp16",
           "multiword mma descriptor must stop before vol")
     check(parse(text) == expected, "vol metadata must not contaminate writes")
@@ -44,11 +45,11 @@ with tempfile.TemporaryDirectory() as scratch:
 
     # gh-ocannl-1444: the cost model's bytes read/written sit between the geometry and mma:.
     text = row(0, 1, "tile_mma 16x8x16 fp16", "vol:1 accumulation(s), pinned ", "io:4096/1024~ ")
-    match = report.KERNEL.match(text.rstrip("\n"))
+    match = bench_output.KERNEL.match(text.rstrip("\n"))
     check(match is not None and (match["read"], match["written"], match["io_flags"], match["mma"])
           == ("4096", "1024", "~", "tile_mma 16x8x16 fp16"), "io field: %s" % (match and match.groupdict()))
     check(parse(text) == expected, "the io field must not contaminate timing, geometry or writes")
-    legacy = report.KERNEL.match(row(0, 1).rstrip("\n"))
+    legacy = bench_output.KERNEL.match(row(0, 1).rstrip("\n"))
     check(legacy is not None and legacy["read"] is None and legacy["writes"] == "layer_q layer_k",
           "a row without io must still parse")
     print("an io field parses into bytes read/written and leaves the other fields as they were: true")
@@ -57,7 +58,7 @@ with tempfile.TemporaryDirectory() as scratch:
     # between the time and the geometry; below min_readings the bounds print as nan.
     spread = "ms_lo=0.062500 ms_hi=0.250000 ms_retimed=6/6 "
     text = row(0, 1, "tile_mma 16x8x16 fp16", "vol:0 ", "io:4096/1024 ", spread)
-    match = report.KERNEL.match(text.rstrip("\n"))
+    match = bench_output.KERNEL.match(text.rstrip("\n"))
     check(match is not None and (match["lo"], match["hi"], match["admitted"], match["calls"])
           == ("0.062500", "0.250000", "6", "6"), "range fields: %s" % (match and match.groupdict()))
     check(parse(text) == [dict(expected[0], lo=0.0625, hi=0.25)],

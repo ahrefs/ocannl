@@ -409,7 +409,9 @@ for site in $sites; do
       if $last_ok; then
         picks+=(--pick "${pname}=$pout")
         # The plan this configuration seeds, timed here unless the timing cell already did.
-        seeded=$(sed -n 's/.*seeded_label="\([^"]*\)".*/\1/p' "$pout" | tail -1)
+        # Read by bench_output's one reader of the rank-site lines (gh-ocannl-1767): the literal
+        # decoded, an escaped quote in it kept; a line it refuses (named on stderr) leaves it empty.
+        seeded=$(python3 "$root/benchmarks/bench_output.py" rank-site-field "$pout" pick seeded_label) || seeded=
         if $timed && [[ -n "$seeded" && "$seeded" != none ]] &&
           ! grep -qF "$seeded" "$out/rank_${name}.tsv"; then
           cell "rank_${name}_time_${pname}" env BENCH_TUNE=1 BENCH_SITE="$kind" BENCH_SITE_DIMS="$dims" \

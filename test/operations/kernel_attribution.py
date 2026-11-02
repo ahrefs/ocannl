@@ -61,7 +61,7 @@ def write_cell(out, stem, in_step=IN_STEP, isolated=ISOLATED, table_rows=None, t
         (header + "kprof: memory model %s\n" % model if model is not None else "") + "".join(
             # The row as gh-ocannl-1694 prints it: the median, then its range and admission count.
             "bench: kernel %d/%d %.4f ms ms_lo=%.6f ms_hi=%.6f ms_retimed=6/6 grid=[1;1;1] "
-            "block=[32;1;1] %smma:none w: %s\n"
+            "block=[32;1;1] %smma:none vol:0 w: %s\n"
             % (i, n, isolated[i][0] + 0.01, isolated[i][0], isolated[i][0] + 0.02,
                "" if io is None else "io:%d/%d " % io(i), writes(i))
             for i in (table_rows if table_rows is not None else range(n))))

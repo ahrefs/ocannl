@@ -31,10 +31,10 @@ import re
 import sys
 from pathlib import Path
 
+import bench_output
 from display_safe import display_value, log_line, table_lines
 from strict_json import loads
 
-KERNEL = re.compile(r"^bench: kernel (\d+)/(\d+) (?:([0-9.]+) ms .*? w: (.*)|.*(?:DECLINED|UNTIMED).*)$")
 PARAM = re.compile(r"^(?:kernel|bias)_(stem|s\d+(?:c[12]|sc))(?:\.grad)?$")
 RELU = re.compile(r"^relu_(stem|s\d+(?:c1)?)out(?:\.grad)?$")
 RES = re.compile(r"^(s\d+res)(?:\.grad)?$")
@@ -65,24 +65,21 @@ def family_of(site):
 
 def read_cell(path):
     """(result line, kernel rows, declared kernel count) of one cell log, or None if it is not an
-    OCANNL resnet cell."""
-    result, kernels, declared = None, [], None
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = KERNEL.match(line)
-        if m:
-            # A DECLINED row's detail runs over several lines before its `w:`: no time, no names.
-            # Nor has an UNTIMED one (gh-ocannl-1694: no timing call admitted), on one line.
-            ms = float(m.group(3)) if m.group(3) else None
-            kernels.append((int(m.group(1)), ms, (m.group(4) or "").split()))
-            declared = int(m.group(2))
-        elif line.startswith('{"framework":"ocannl"'):
+    OCANNL resnet cell. The rows are bench_output's reader's (gh-ocannl-1767): a DECLINED or
+    UNTIMED row has no time and no names. ValueError for a row that does not read as one."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    result = None
+    for line in text.splitlines():
+        if line.startswith('{"framework":"ocannl"'):
             try:
                 result = loads(line)
             except ValueError:
                 pass
     if result is None or not str(result.get("workload", "")).startswith("cifar_resnet"):
         return None
-    return result, kernels, declared
+    rows = bench_output.kernel_rows(text)
+    kernels = [(r["i"], r["ms"], r["writes"]) for r in rows]
+    return result, kernels, (rows[-1]["n"] if rows else None)
 
 
 def complete(kernels, declared):
@@ -124,7 +121,16 @@ def main(argv=None):
     # A tuned cell's search pass logs beside its measured replay under the same cell label (orchestrate
     # names it `<label> (search pass)`): its kernel table describes no measured step.
     logs = [p for p in sorted(args.logs.glob("*.log")) if "_search_pass_" not in p.name]
-    cells = [c for c in map(read_cell, logs) if c]
+    cells = []
+    for p in logs:
+        try:
+            cell = read_cell(p)
+        except ValueError as e:
+            print(log_line(f"gh1161_sites: {display_value(p.name)}: {display_value(str(e))}"),
+                  file=sys.stderr)
+            return 1
+        if cell:
+            cells.append(cell)
     if not cells:
         print(log_line(f"gh1161_sites: no OCANNL cifar_resnet cell log in "
                        f"{display_value(str(args.logs))}"), file=sys.stderr)

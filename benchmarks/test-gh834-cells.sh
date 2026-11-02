@@ -23,8 +23,10 @@ mkdir -p "$tree/benchmarks" "$TMP/runs"
 # The checker's result-line reader and its strict loader, beside it as in the shipping tree.
 cp "$here/bench_output.py" "$here/strict_json.py" "$tree/benchmarks/" || exit 2
 
-# The trace summary of a session whose timing calls all completed.
-GOOD_TRACE='timing-trace: summary: 12.5s wall, 9 candidate attempts, 31 timing calls'
+# The trace summary of a session whose timing calls all completed, in the full format
+# Bench_harness.install_timing_trace prints (its reader, bench_output.trace_summary, is held to a
+# line the harness itself printed by test/operations/bench_line_readers).
+GOOD_TRACE='timing-trace: summary: 12.5s wall, 9 candidate attempts, 31 timing calls, 64 launches, calib 0.40 s (0 calls untagged), timed 1.20 s; depth histogram (calls x depth): 31x2; 0 calls reused 0 calibration batches as their window'
 
 # [arm NAME [KEY=JSON]...]: one arm object. The nested timing matrix and a nested terminal-failure
 # slot come BEFORE best_ms, the order a brace-bounded scan cannot read; KEY=JSON overrides a field
@@ -64,6 +66,8 @@ check() {
   awk '/^require_complete_session\(\) \{/ { f = 1 } f { print } f && /^}$/ { exit }' "$driver" \
     >"$d/fn.sh" || return 2
   grep -q '^require_complete_session() {' "$d/fn.sh" || { echo "no require_complete_session in $driver" >&2; return 2; }
+  # The trace predicate it calls, a one-line function of the driver's own.
+  grep '^trace_has() {' "$driver" >>"$d/fn.sh" || { echo "no trace_has in $driver" >&2; return 2; }
   printf 'compile done\n%s\n' "$result" >"$d/out/s.out"
   printf '%s\n' "$GOOD_TRACE" >"$d/out/s.err"
   root=$tree out=$d/out bash -c 'set -u; status=0; . "$1"; require_complete_session s; echo "status=$status"' \

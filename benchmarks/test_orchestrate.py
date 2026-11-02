@@ -29,6 +29,7 @@ import orchestrate
 import strict_json
 from runners import bench_common
 from test.test_cell_group import CellGroupTest  # imported so unittest.main includes shared tests
+from test.test_bench_line_scan import BenchLineReaderScanTest  # noqa: F401  (likewise)
 from test_cells import (  # noqa: F401  (likewise)
     AbDriverTest, CellCommandTest, ConfigRecordsExpectTest, Gh1051AbDriverTest, Gh1180DriverTest,
     Gh1253FlipDriverTest, Gh1279DriverTest, Gh1557DriverTest, Gh740DriverTest, ProseTraceScanTest)
@@ -4280,10 +4281,11 @@ class Gh1161SitesTest(unittest.TestCase):
                 lines.append(f"bench: kernel {row[0]} grid=[1;1;1] block=[32;1;1] UNTIMED (none of "
                              "its 6 timing calls was admitted) w: n1")
             else:
-                # The row as gh-ocannl-1694 prints it: the median, then its range.
+                # The row as Bench_harness prints it: the median, then its range (gh-ocannl-1694),
+                # the geometry, the global-memory bytes (gh-ocannl-1444) and the censuses.
                 lines.append(f"bench: kernel {row[0]} {row[1]:.4f} ms ms_lo={row[1]:.6f} "
                              f"ms_hi={row[1]:.6f} ms_retimed=6/6 grid=[1;1;1] block=[1;1;1] "
-                             f"mma:not-requested vol:0 w: {' '.join(row[2])}")
+                             f"io:4096/1024 mma:not-requested vol:0 w: {' '.join(row[2])}")
         lines.append(json.dumps(result, separators=(",", ":")))
         (self.dir / orchestrate.cell_log_name(label)).write_text("\n".join(lines) + "\n")
 

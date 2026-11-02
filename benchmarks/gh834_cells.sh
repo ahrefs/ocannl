@@ -219,6 +219,10 @@ require() {
   echo "== step $1: MISSING EVIDENCE in $1.$2: no line matching $3"
   status=1
 }
+# [trace_has STEP PREDICATE]: the step's timing trace has PREDICATE (bench_output.py trace-has: summary,
+# timing-calls, incomplete, attempt, search-done). A trace line that does not read as one is refused
+# there, on stderr, and reads as not having it.
+trace_has() { python3 -I "$root/benchmarks/bench_output.py" trace-has "$out/$1.err" "$2"; }
 
 # Every session must be a COMPLETE two-arm experiment on an uncontended box, or its wall and totals
 # are not comparable across modes: a placement arm that dies can still ship its sibling
@@ -235,13 +239,13 @@ require_complete_session() {
     [ -n "$verdicts" ] || echo "== step $1: INCOMPLETE SESSION: the result-line check exited $rc"
     status=1
   fi
-  if ! grep -q '^timing-trace: summary: [0-9.]*s wall, [0-9]* candidate attempts, [1-9][0-9]* timing calls' \
-    "$out/$1.err"; then
+  # The trace's lines are read by bench_output's one reader of them (gh-ocannl-1767).
+  if ! trace_has "$1" timing-calls; then
     echo "== step $1: INCOMPLETE SESSION: the trace recorded no timing call"
     status=1
   fi
   # A timing call that raised is in none of the trace's totals, so its cost split is not the session's.
-  if grep -q '^timing-trace: summary: .*INCOMPLETE' "$out/$1.err"; then
+  if trace_has "$1" incomplete; then
     echo "== step $1: INCOMPLETE SESSION: the trace summary is missing raised timing calls"
     status=1
   fi
@@ -337,7 +341,10 @@ for s in "$@"; do
       --ocannl_autotune_log=false --ocannl_log_config_json=true; then
       # A completed session is evidence only with its treatment and its cost record in it.
       # compile_s and searched:true are the result line's fields: gh834_session.py reads them.
-      require "$s" err '^timing-trace: summary: '
+      trace_has "$s" summary || {
+        echo "== step $s: MISSING EVIDENCE in $s.err: no timing-trace summary"
+        status=1
+      }
       require_config "$s" backend="$backend" autotune_timing="$mode"
       require_complete_session "$s"
     else
@@ -346,8 +353,7 @@ for s in "$@"; do
       # a cap spent loading the fixture or building the graph measured no search at all.
       # ... and only if the search was still going: a cap reached after the runner's
       # "search done" marker cut off the post-search steps, not the search.
-      if [ "$rc" -eq 124 ] && grep -q '^timing-trace: attempt ' "$out/$s.err" &&
-        ! grep -q '^timing-trace: search done: ' "$out/$s.err" &&
+      if [ "$rc" -eq 124 ] && trace_has "$s" attempt && ! trace_has "$s" search-done &&
         config_holds "$s" backend="$backend" autotune_timing="$mode" >/dev/null; then
         capped_any=1
       else
@@ -364,8 +370,7 @@ for s in "$@"; do
     # The result line (compile_s is the search wall) and the trace's last word: the summary on a
     # completed run, the running totals of the last timing call on a capped one.
     cat "$out/$s.out"
-    grep -c 'timing-trace: attempt' "$out/$s.err" | sed 's/^/candidate attempts /'
-    grep 'timing-trace: \(call\|summary\)' "$out/$s.err" | tail -2
+    python3 -I "$root/benchmarks/bench_output.py" trace-digest "$out/$s.err"
     python3 -I "$root/benchmarks/config_records.py" show "$out/$s.err" backend autotune_timing
     ;;
   *) echo "gh834: unknown step $s" >&2; exit 2 ;;
