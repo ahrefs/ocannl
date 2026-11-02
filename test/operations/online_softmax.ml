@@ -128,7 +128,6 @@ let forward ?mask_fill ~on ~layers ~d_k ~prefix () =
   { values; optimized; raw }
 
 let close_tol ~tol w = Float.(tol *. max 1. (abs w))
-let close ~tol g w = Float.(abs (g - w) <= close_tol ~tol w)
 
 let report label (got : float array) =
   eprintf "%s: %s (not part of the golden)\n%!" label
@@ -231,7 +230,8 @@ let () =
   let loss_c, grads_c = train ~on:false in
   let loss_f, grads_f = train ~on:true in
   eprintf "loss: composed %.9g rewritten %.9g (not part of the golden)\n%!" loss_c loss_f;
-  p "the loss agrees within 1e-5 relative" (close ~tol:1e-5 loss_f loss_c);
+  p_close "the loss agrees within 1e-5 relative" [| loss_f |] [| loss_c |]
+    ~tol:(close_tol ~tol:1e-5);
   printf "parameters with gradients: %d\n" (List.length grads_f);
   p "the same parameters carry gradients in both runs"
     (List.equal String.equal (List.map grads_f ~f:fst) (List.map grads_c ~f:fst));
@@ -502,8 +502,12 @@ let () =
   eprintf
     "normalizers for [-inf; -inf; 0; 1; 2]: composed %.9g online %.9g (not part of the golden)\n%!"
     c_fin o_fin;
-  p "a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative"
-    (Float.is_finite c_fin && close ~tol:1e-6 o_fin c_fin);
+  (let label =
+     "a genuinely all-masked prefix leaves both normalizers finite and equal within 1e-6 relative"
+   in
+   p label
+     (Float.is_finite c_fin
+     && Verdict.within label [| o_fin |] [| c_fin |] ~tol:(close_tol ~tol:1e-6)));
   (* The same prefix at f64: the floor is the largest finite double, not Base's [Float.max_value]
      (which is infinity -- a floor of [-inf] made the masked prefix NaN). Metal has no doubles. *)
   let f64 = not (String.equal (String.lowercase backend_name) "metal") in
@@ -516,27 +520,36 @@ let () =
        golden)\n\
        %!"
       c64 o64;
-  gated ~when_:f64 ~on:backend_name
-    "an all-masked prefix at f64 leaves both normalizers finite and equal within 1e-12 relative"
-    (Float.is_finite c64 && close ~tol:1e-12 o64 c64);
+  (let label =
+     "an all-masked prefix at f64 leaves both normalizers finite and equal within 1e-12 relative"
+   in
+   gated ~when_:f64 ~on:backend_name label
+     (Float.is_finite c64 && Verdict.within label [| o64 |] [| c64 |] ~tol:(close_tol ~tol:1e-12)));
   (* Executed at a narrow uniform precision: the composed form rounds every intermediate to f16 per
      step while the carried pair lives at f32 -- the one difference beyond summation order, and it
      stays within f16's own resolution. *)
   let c_h, o_h = both ~precs:(uniform Ir.Ops.half) "os_half_chain" [| 0.5; 2.; -1.; 3.; 1.5 |] in
   eprintf "normalizers for an f16 chain: composed %.9g online %.9g (not part of the golden)\n%!" c_h
     o_h;
-  p "an f16 chain: the f32-carried normalizer agrees with the per-step-rounded one within 2e-3"
-    (Float.is_finite c_h && close ~tol:2e-3 o_h c_h);
+  (let label =
+     "an f16 chain: the f32-carried normalizer agrees with the per-step-rounded one within 2e-3"
+   in
+   p label
+     (Float.is_finite c_h && Verdict.within label [| o_h |] [| c_h |] ~tol:(close_tol ~tol:2e-3)));
   let c_min, o_min = both "os_min_finite" (Array.create ~len:n (-3.4028234663852886e38)) in
   eprintf
     "normalizers for a row at the lowest finite value: composed %.9g online %.9g (not part of the \
      golden)\n\
      %!"
     c_min o_min;
-  p
-    "a row of scores at the format's lowest finite value is a finite maximum in both forms, with \
-     the row length as normalizer"
-    (Float.is_finite c_min && close ~tol:1e-6 o_min c_min && close ~tol:1e-6 c_min (Float.of_int n));
+  (let label =
+     "a row of scores at the format's lowest finite value is a finite maximum in both forms, with \
+      the row length as normalizer"
+   in
+   p label
+     (Float.is_finite c_min
+     && Verdict.within label [| o_min |] [| c_min |] ~tol:(close_tol ~tol:1e-6)
+     && Verdict.within label [| c_min |] [| Float.of_int n |] ~tol:(close_tol ~tol:1e-6)));
   let c_all, o_all = both "os_all_masked" (Array.create ~len:n Float.neg_infinity) in
   eprintf "normalizers for an all-masked row: composed %g online %g (not part of the golden)\n%!"
     c_all o_all;
@@ -738,7 +751,8 @@ let () =
   let forward_only = training ~d_k ~on:true ~bwd:false () in
   let fused = training ~d_k ~on:true ~bwd:true () in
   eprintf "loss: composed %.9g fused %.9g (not part of the golden)\n%!" composed.loss fused.loss;
-  p "the loss agrees within 1e-5 relative" (close ~tol:1e-5 fused.loss composed.loss);
+  p_close "the loss agrees within 1e-5 relative" [| fused.loss |] [| composed.loss |]
+    ~tol:(close_tol ~tol:1e-5);
   grads_agree ~tol:1e-5 ~what:"head width 8" fused.grads composed.grads;
   let flat grads = Array.concat (List.map grads ~f:snd) in
   p_all2
@@ -1074,7 +1088,11 @@ let () =
               "d%s along the probe: finite difference %.12g, fused %.12g (not part of the golden)\n\
                %!"
               name fd analytic;
-            Float.(abs analytic > 1e-3) && close ~tol:1e-6 analytic fd) )
+            Float.(abs analytic > 1e-3)
+            && Verdict.within
+                 (Printf.sprintf
+                    "d%s: the fused gradient matches the f64 finite difference within 1e-6" name)
+                 [| analytic |] [| fd |] ~tol:(close_tol ~tol:1e-6)) )
   in
   (* Metal has no double precision. *)
   gated ~when_:f64 ~on:backend_name "the fused backward fired at f64" fired;

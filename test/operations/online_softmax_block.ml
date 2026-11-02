@@ -140,7 +140,6 @@ let forward ?mask_fill ?dead ?(layers = 1) ?(d_k = 8) ?(prefix = 0) ~on ~block ~
       })
 
 let close_tol ~tol w = Float.(tol *. max 1. (abs w))
-let close ~tol g w = Float.(abs (g - w) <= close_tol ~tol w)
 
 let report label (got : float array) =
   eprintf "%s: %s (not part of the golden)\n%!" label
@@ -149,9 +148,14 @@ let report label (got : float array) =
 
 let ceil_div a b = (a + b - 1) / b
 
-(* Values equal within [tol] where both are numbers, and NaN in the same cells. *)
-let agree ~tol a b =
-  Bool.equal (Float.is_nan a) (Float.is_nan b) && (Float.is_nan a || close ~tol a b)
+(* Values equal within [tol] where both are numbers, and NaN in the same cells: a cell NaN on both
+   sides compares as zero on both, while a NaN on one side only fails [Verdict.within]. *)
+let agree ~tol name got want =
+  let both_nan i =
+    Array.length got = Array.length want && Float.is_nan got.(i) && Float.is_nan want.(i)
+  in
+  let blank a = Array.mapi a ~f:(fun i x -> if both_nan i then 0. else x) in
+  Verdict.within name (blank got) (blank want) ~tol:(close_tol ~tol)
 
 let () =
   eprintf "backend: %s (not part of the golden)\n%!" backend_name;
@@ -231,10 +235,10 @@ let () =
               p
                 (what ^ ": the composed output has NaN rows")
                 (Array.exists composed.values ~f:Float.is_nan));
-          p_all2
-            (what
-           ^ ": the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere")
-            fold.values composed.values ~f:(agree ~tol:1e-5)));
+          let label =
+            what ^ ": the fold is NaN exactly where the composed form is, and within 1e-5 elsewhere"
+          in
+          p label (agree ~tol:1e-5 label fold.values composed.values)));
 
   printf "--- leg 4: two stacked blocks ---\n";
   let seq = 20 in
@@ -738,7 +742,9 @@ let () =
       p
         (what ^ if bwd then ": and the fused backward" else ": and no fused backward")
         (rowdot_writes optimized.LL.llc = if bwd then 1 else 0);
-      p (what ^ ": the loss agrees within 1e-5 relative") (close ~tol:1e-5 loss loss_c);
+      p_close
+        (what ^ ": the loss agrees within 1e-5 relative")
+        [| loss |] [| loss_c |] ~tol:(close_tol ~tol:1e-5);
       p
         (what ^ ": the same parameters carry gradients")
         (List.equal String.equal (List.map grads ~f:fst) (List.map grads_c ~f:fst));

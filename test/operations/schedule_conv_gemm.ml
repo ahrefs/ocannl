@@ -467,8 +467,8 @@ let () =
         sums, fresh buffers being already zero (gh-ocannl-1625). *)
      let ctx = Context.run (Context.run ctx routine) routine in
      let got = Context.get_values ctx y.Tensor.value in
-     ( (not (Array.is_empty got))
-       && Array.for_all2_exn got want2 ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+     ( Verdict.within ~what_ran:tag "cvs2: the seeded stride-2 candidate matches the natural form"
+         got want2 ~tol:(fun _ -> 1e-3),
        rendered_tensorized routine.Context.mma )
    in
    in_leg ~leg:cpu_leg "cvs2: the stride-2 conv seeds are the serial pipeline and its Grid twin"
@@ -840,8 +840,9 @@ let () =
           let ctx = Context.run ctx routine in
           let got = Context.get_values ctx y.Tensor.value in
           `Ran
-            ( (not (Array.is_empty got))
-              && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+            ( Verdict.within ~what_ran:name
+                (tag ^ ": the whole-routine zeroed GPU candidate matches the natural form run twice")
+                got want ~tol:(fun _ -> 1e-3),
               rendered_tensorized routine.Context.mma )
     in
     (!zeroed, !seeds, List.mapi !seeds ~f:run_seed)
@@ -966,15 +967,16 @@ let () =
             let ctx = Context.run ctx routine in
             let got = Context.get_values ctx y.Tensor.value in
             `Ran
-              ( (not (Array.is_empty got))
-                && Array.for_all2_exn got want ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+              ( Verdict.within ~what_ran:name
+                  (tag ^ ": the folded-segment candidate matches the natural form run twice")
+                  got want ~tol:(fun _ -> 1e-3),
                 rendered_tensorized routine.Context.mma )
       in
       (match result with
       | `Declined ->
           Stdio.eprintf "%s: declined at companion coverage (not part of the golden)\n" name
       | `Failed msg -> Stdio.eprintf "%s (fused=%b) failed: %s\n" name p_.Autotune.sk_epilogue msg
-      | `Ran (ok, _) -> if not ok then Stdio.eprintf "%s differs from the natural form\n" name);
+      | `Ran _ -> ());
       (p_, result)
     in
     (!folded_local, !seeds, List.mapi !seeds ~f:run_seed)
@@ -1265,8 +1267,9 @@ let () =
        run_fiss_sched tag y ~conv_sched:(fun site seg ->
            if site.Autotune.c_zeroed then [] else Autotune.sketch_schedule ~accum_prec ~p:p_ seg)
      in
-     ( (not (Array.is_empty got))
-       && Array.for_all2_exn got want12 ~f:(fun a b -> Float.(abs (a - b) < 1e-3)),
+     ( Verdict.within ~what_ran:tag
+         "cvs2b: the per-segment stride-2 candidate matches the natural form" got want12
+         ~tol:(fun _ -> 1e-3),
        rendered_tensorized census )
    in
    in_leg ~leg:cpu_leg "cvs2b: the strided non-dividing row seeds a padded row-panel flavor"

@@ -169,7 +169,7 @@ let error got want = Array.fold2_exn got want ~init:0. ~f:(fun acc g r -> acc +.
 (* Within one bf16 rounding of the reference: half a bf16 unit in the last place is at most 2^-8 of
    the magnitude (8 significant bits); the f32 accumulation's own error is about 2^-24 per row, so
    [2^-8 * |ref| + 2^-16] bounds a single rounding of a near-exact sum and no more. *)
-let within_one_rounding got want = Float.(abs (got -. want) <= (abs want /. 256.) +. (1. /. 65536.))
+let one_rounding want = Float.((abs want /. 256.) +. (1. /. 65536.))
 
 let run compile =
   let ctx, routine = compile (Context.auto ()) comp Ir.Indexing.Empty in
@@ -288,12 +288,16 @@ let () =
   Verdict.gated_all ~when_:narrow_here ~on:backend_name
     "where accum_prec widens bf16, every admitted bias-gradient cell is one bf16 rounding of the \
      reference"
-    (List.zip_exn (Array.to_list b_on) (Array.to_list bgrad_ref))
-    ~f:(fun (g, r) -> within_one_rounding g r);
+    [ (b_on, bgrad_ref) ]
+    ~f:(fun (got, want) ->
+      Verdict.within
+        "where accum_prec widens bf16, every admitted bias-gradient cell is one bf16 rounding of \
+         the reference"
+        got want ~tol:one_rounding);
   Verdict.gated_exists ~when_:narrow_here ~on:backend_name
     "where accum_prec widens bf16, some default bias-gradient cell is not (the control)"
     (List.zip_exn (Array.to_list b_default) (Array.to_list bgrad_ref))
-    ~f:(fun (g, r) -> not (within_one_rounding g r));
+    ~f:(fun (g, r) -> Float.(abs (g -. r) > one_rounding r));
   Verdict.gated_all ~when_:(not narrow_here) ~on:backend_name
     "where nothing widens, the admission leaves the weight gradient bitwise the default's"
     (List.zip_exn (Array.to_list w_on) (Array.to_list w_default))

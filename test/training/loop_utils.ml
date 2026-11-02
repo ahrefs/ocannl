@@ -45,18 +45,23 @@ let schedules () =
   let lin_s = show "linear" Train.Lr_schedule.Linear in
   let wsd_s = show "wsd" (Train.Lr_schedule.Wsd { decay_frac = 0.2 }) in
   let lr sched step = Train.Lr_schedule.learning_rate sched ~step in
-  Verdict.p_all "warmup applies to every kind, constant included" [ con_s; cos_s; lin_s; wsd_s ]
-    ~f:(fun s -> Float.(abs (lr s 0 -. 0.2) < 1e-12));
-  Verdict.p_all "constant holds base_lr after warmup" [ 5; 15; 30 ] ~f:(fun s ->
-      Float.(abs (lr con_s s -. 1.0) < 1e-12));
-  Verdict.p "warmup starts at base_lr/warmup_steps" Float.(abs (lr cos_s 0 -. 0.2) < 1e-12);
-  Verdict.p "warmup reaches base_lr on its last step" Float.(abs (lr cos_s 4 -. 1.0) < 1e-12);
-  Verdict.p "cosine reaches final_frac * base_lr past total_steps"
-    Float.(abs (lr cos_s 30 -. 0.1) < 1e-12);
-  Verdict.p "linear reaches final_frac * base_lr past total_steps"
-    Float.(abs (lr lin_s 30 -. 0.1) < 1e-12);
-  Verdict.p_all "wsd holds base_lr between warmup and the decay point" [ 5; 12; 19 ] ~f:(fun s ->
-      Float.(abs (lr wsd_s s -. 1.0) < 1e-12));
+  let tol _ = 1e-12 in
+  let at sched steps = Array.of_list (List.map steps ~f:(lr sched)) in
+  let const c got = Array.create ~len:(Array.length got) c in
+  (let got = Array.of_list (List.map [ con_s; cos_s; lin_s; wsd_s ] ~f:(fun s -> lr s 0)) in
+   Verdict.p_close "warmup applies to every kind, constant included" got (const 0.2 got) ~tol);
+  (let got = at con_s [ 5; 15; 30 ] in
+   Verdict.p_close "constant holds base_lr after warmup" got (const 1.0 got) ~tol);
+  Verdict.p_close "warmup starts at base_lr/warmup_steps" [| lr cos_s 0 |] [| 0.2 |] ~tol;
+  Verdict.p_close "warmup reaches base_lr on its last step" [| lr cos_s 4 |] [| 1.0 |] ~tol;
+  Verdict.p_close "cosine reaches final_frac * base_lr past total_steps"
+    [| lr cos_s 30 |]
+    [| 0.1 |] ~tol;
+  Verdict.p_close "linear reaches final_frac * base_lr past total_steps"
+    [| lr lin_s 30 |]
+    [| 0.1 |] ~tol;
+  (let got = at wsd_s [ 5; 12; 19 ] in
+   Verdict.p_close "wsd holds base_lr between warmup and the decay point" got (const 1.0 got) ~tol);
   Verdict.p "wsd decays below base_lr after the decay point" Float.(lr wsd_s 21 < 1.0);
   Verdict.p_all "cosine decay is nonincreasing" (List.range 5 30) ~f:(fun s ->
       Float.(lr cos_s Int.(s + 1) <= lr cos_s s +. 1e-12));
@@ -70,7 +75,10 @@ let schedules () =
       final_frac = 0.1;
     }
   in
-  Verdict.p "the total_steps clamp outranks a longer warmup" Float.(abs (lr over 6 -. 0.1) < 1e-12)
+  Verdict.p_close "the total_steps clamp outranks a longer warmup"
+    [| lr over 6 |]
+    [| 0.1 |]
+    ~tol:(fun _ -> 1e-12)
 
 (* ----- Shared deterministic model: logits = b + w*x, mean squared error ----- *)
 
@@ -186,39 +194,38 @@ let clipping () =
     let device_scale = (ctx, clip.Train.grad_scale).@[0] in
     let host_scale = if Float.(host_norm > max_norm) then max_norm /. host_norm else 1. in
     let lr = Train.Lr_schedule.learning_rate sched ~step in
-    let max_err = ref 0. in
-    let check p0 p1 g =
-      let expected = p0 -. (lr *. ((host_scale *. g) +. (weight_decay *. p0))) in
-      max_err := Float.max !max_err (Float.abs (p1 -. expected))
+    let expected p0 g = p0 -. (lr *. ((host_scale *. g) +. (weight_decay *. p0))) in
+    (* The stepped parameters, [w] row-major then [b], beside the host oracle's. *)
+    let got = Array.append (Array.concat (Array.to_list wv1)) bv1 in
+    let want =
+      Array.append
+        (Array.concat
+           (Array.to_list
+              (Array.mapi wv0 ~f:(fun c row ->
+                   Array.mapi row ~f:(fun d p0 -> expected p0 wg.(c).(d))))))
+        (Array.mapi bv0 ~f:(fun c p0 -> expected p0 bg.(c)))
     in
-    Array.iteri wv0 ~f:(fun c row ->
-        Array.iteri row ~f:(fun d p0 -> check p0 wv1.(c).(d) wg.(c).(d)));
-    Array.iteri bv0 ~f:(fun c p0 -> check p0 bv1.(c) bg.(c));
-    (ctx, host_norm, device_norm, device_scale, host_scale, !max_err)
+    (ctx, host_norm, device_norm, device_scale, host_scale, (got, want))
   in
-  let ctx, host_norm, device_norm, device_scale, host_scale, max_err = one_step ctx ~step:0 in
+  let ctx, host_norm, device_norm, device_scale, host_scale, (got, want) = one_step ctx ~step:0 in
   Verdict.p "gradient norm exceeds max_norm (clipping engaged)" Float.(host_norm > max_norm);
-  Verdict.pass_fail "device grad_norm matches host norm over unclipped buffers"
-    Float.(abs (device_norm -. host_norm) < 1e-4 *. (1. +. host_norm))
-    ~detail:(fun () -> Printf.sprintf "device %.6f vs host %.6f" device_norm host_norm);
-  Verdict.pass_fail "device grad_scale is min(1, max_norm/norm)"
-    Float.(abs (device_scale -. host_scale) < 1e-5)
-    ~detail:(fun () -> Printf.sprintf "device %.6f vs host %.6f" device_scale host_scale);
-  Verdict.pass_fail "clipped sgd step matches host oracle (step 0)"
-    Float.(max_err < 1e-5)
-    ~detail:(fun () -> Printf.sprintf "max abs err %.8f" max_err);
+  Verdict.pass_fail_close "device grad_norm matches host norm over unclipped buffers"
+    [| device_norm |] [| host_norm |] ~tol:(fun w -> 1e-4 *. (1. +. Float.abs w));
+  Verdict.pass_fail_close "device grad_scale is min(1, max_norm/norm)" [| device_scale |]
+    [| host_scale |] ~tol:(fun _ -> 1e-5);
+  Verdict.pass_fail_close "clipped sgd step matches host oracle (step 0)" got want ~tol:(fun _ ->
+      1e-5);
   (* A later schedule point: a visibly different lr must reach the device (data-backed scalar). *)
   let step = 8 in
-  let _ctx, _, _, _, _, max_err = one_step ctx ~step in
+  let _ctx, _, _, _, _, (got, want) = one_step ctx ~step in
   Verdict.p "scheduled lr differs between the probed steps"
     Float.(
       abs
         (Train.Lr_schedule.learning_rate sched ~step
         -. Train.Lr_schedule.learning_rate sched ~step:0)
       > 1e-3);
-  Verdict.pass_fail "clipped sgd step matches host oracle at the rescheduled lr (step 8)"
-    Float.(max_err < 1e-5)
-    ~detail:(fun () -> Printf.sprintf "max abs err %.8f" max_err)
+  Verdict.pass_fail_close "clipped sgd step matches host oracle at the rescheduled lr (step 8)" got
+    want ~tol:(fun _ -> 1e-5)
 
 (* ----- 3. Gradient accumulation ----- *)
 
@@ -264,30 +271,20 @@ let accumulation () =
   let max_abs_diff a b =
     Array.fold2_exn a b ~init:0. ~f:(fun acc x y -> Float.max acc (Float.abs (x -. y)))
   in
-  let grads_err =
-    Float.max
-      (Array.fold2_exn wg_a wg_b ~init:0. ~f:(fun acc r1 r2 -> Float.max acc (max_abs_diff r1 r2)))
-      (max_abs_diff bg_a bg_b)
-  in
+  (* A model's weights row-major, then its bias, as one array. *)
+  let flat w b = Array.append (Array.concat (Array.to_list w)) b in
   Verdict.p "second micro-step changed the accumulated gradients"
     Float.(
       Float.max
         (Array.fold2_exn wg_1 wg_b ~init:0. ~f:(fun acc r1 r2 -> Float.max acc (max_abs_diff r1 r2)))
         (max_abs_diff bg_1 bg_b)
       > 1e-4);
-  Verdict.pass_fail "accumulated micro-batch gradients match the single big-batch gradients"
-    Float.(grads_err < 1e-5)
-    ~detail:(fun () -> Printf.sprintf "max abs err %.8f" grads_err);
+  Verdict.pass_fail_close "accumulated micro-batch gradients match the single big-batch gradients"
+    (flat wg_b bg_b) (flat wg_a bg_a) ~tol:(fun _ -> 1e-5);
   let ctx = Context.run ctx sgd_routine in
   let wv_b, bv_b, _, _ = read_params_and_grads ctx w b_p in
-  let params_err =
-    Float.max
-      (Array.fold2_exn wv_a wv_b ~init:0. ~f:(fun acc r1 r2 -> Float.max acc (max_abs_diff r1 r2)))
-      (max_abs_diff bv_a bv_b)
-  in
-  Verdict.pass_fail "post-sgd parameters match between accumulation and big batch"
-    Float.(params_err < 1e-5)
-    ~detail:(fun () -> Printf.sprintf "max abs err %.8f" params_err)
+  Verdict.pass_fail_close "post-sgd parameters match between accumulation and big batch"
+    (flat wv_b bv_b) (flat wv_a bv_a) ~tol:(fun _ -> 1e-5)
 
 (* ----- 3b. Accumulation with a frozen backbone -----
 
@@ -356,14 +353,10 @@ let frozen_backbone_accumulation () =
       let ctx = Context.set_values ctx targets.Tensor.value target_data in
       let ctx = Context.run ctx micro_routine in
       let bg_b = bias_grads ctx b_p in
-      let bias_err =
-        Array.fold2_exn bg_a bg_b ~init:0. ~f:(fun acc x y -> Float.max acc (Float.abs (x -. y)))
-      in
       Verdict.p "the frozen model's micro-steps move the trainable gradient"
         Float.(Array.fold bg_b ~init:0. ~f:(fun acc g -> Float.max acc (Float.abs g)) > 1e-4);
-      Verdict.pass_fail "the trainable gradient accumulates the same as the big batch"
-        Float.(bias_err < 1e-5)
-        ~detail:(fun () -> Printf.sprintf "max abs err %.8f" bias_err)
+      Verdict.pass_fail_close "the trainable gradient accumulates the same as the big batch" bg_b
+        bg_a ~tol:(fun _ -> 1e-5)
 
 (* ----- 3c. Params-driven helpers over a paramless differentiable loss (gh-ocannl-670) -----
 
@@ -441,8 +434,10 @@ let outlier_detector () =
     [ 1e8; 1e8 +. 1.; 1e8 -. 1.; 1e8 ]
     ~f:(fun v -> ignore (Train.Outlier_detector.update det v : float));
   let z_offset = Train.Outlier_detector.update det (1e8 +. 1.) in
-  Verdict.p "a large-offset window keeps a finite variance (no cancellation)"
-    (Float.is_finite z_offset && Float.(abs (z_offset -. Float.sqrt 2.) < 1e-6));
+  (let label = "a large-offset window keeps a finite variance (no cancellation)" in
+   Verdict.p label
+     (Float.is_finite z_offset
+     && Verdict.within label [| z_offset |] [| Float.sqrt 2. |] ~tol:(fun _ -> 1e-6)));
   (* Normalized moments: a huge finite spike, once recorded, must not overflow the variance to
      infinity -- which would score the NEXT spike 0 and let it through. Against the post-spike
      window [1e308; 1; 1; 1] the correct z of a second 1e308 is (0.75 / sqrt 0.1875) = sqrt 3. *)
@@ -452,8 +447,11 @@ let outlier_detector () =
   let z_spike1 = Train.Outlier_detector.update det 1e308 in
   let z_spike2 = Train.Outlier_detector.update det 1e308 in
   Verdict.p "a spike off a constant baseline scores +infinity" Float.(z_spike1 = infinity);
-  Verdict.p "a recorded huge spike does not overflow the variance (second spike scores sqrt 3)"
-    Float.(abs (z_spike2 -. Float.sqrt 3.) < 1e-6);
+  Verdict.p_close
+    "a recorded huge spike does not overflow the variance (second spike scores sqrt 3)"
+    [| z_spike2 |]
+    [| Float.sqrt 3. |]
+    ~tol:(fun _ -> 1e-6);
   (* Mean accumulation: a window saturated at the float maximum must not overflow the x/n partial
      sums into a nan mean -- a sample far below that constant-at-max baseline must score decisively
      negative (nan fails this comparison, so a poisoned mean fails the claim). *)
