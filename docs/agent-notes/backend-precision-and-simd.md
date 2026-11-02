@@ -1085,9 +1085,12 @@ files.
   byte-identical C diverged by platform. `Precision_policy`'s walk reaches that draw because it
   treats a parameter's initializer as an activation. `test_uniform_virtual_lane`'s `draw into` rows
   pin the parity; diagnosis recipe: break on the kernel under gdb and read its argument buffers.
-  The collapse still drops a narrow NON-RNG scope's conversion, so a virtual cast twin reads its f32
-  master unrounded (`mixed_prec_twin_rounding`: `Twin_virtual` and `Twin_auto` give `1 + 2^-12`
-  where `Twin_materialized` gives `1`).
+  A virtual cast twin's f16 scope over its f32 master is kept too, by gh-ocannl-1788's exact-collapse
+  rule, so whether it rounds is the backend's `compute_prec` of f16, the precision its local is
+  declared at: rounded on Metal, CUDA and HIP and on cc under `narrow_compute_f32=false`, unrounded
+  on cc's default. `mixed_prec_twin_rounding` derives the expected value from
+  `Context.codegen_capabilities`, and its digits go to stderr: they differ by backend, and the golden
+  that printed them went red on every non-cc backend once gh-ocannl-1788 landed (gh-ocannl-1817).
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator
