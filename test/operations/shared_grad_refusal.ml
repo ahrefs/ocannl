@@ -154,10 +154,12 @@ let () =
           exact "reset, content, style: x.grad = 2x + 3" (Context.get_values ctx (grad_of x)) summed;
           let ctx = run_all ctx [ zero; a1; a2 ] in
           exact "a second cycle: the same" (Context.get_values ctx (grad_of x)) summed;
-          let ctx = run_all ctx [ a1; a2 ] in
-          exact "a cycle without the reset carries over (the control)"
-            (Context.get_values ctx (grad_of x))
-            [| 10.; 14.; 18. |]);
+          (* Without the reset the cycle would sum two cycles' gradients: refused
+             (gh-ocannl-1781). *)
+          let msg = refusal "a cycle without the reset" (fun () -> run_all ctx [ a1; a2 ]) in
+          p "a cycle without the reset is refused at its first contribution"
+            (names_grad msg x && has msg "has not run since");
+          exact "the refusal dispatched nothing" (Context.get_values ctx (grad_of x)) summed);
   case "shared input, reset order" (fun () ->
       let x, content, style = objectives "sg_ro" in
       let reset () = Train.zero_params_grads ~params:(one x) content in

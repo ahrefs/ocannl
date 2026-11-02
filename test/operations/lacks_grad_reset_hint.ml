@@ -5,9 +5,10 @@
    forward-only -- and, since gh-ocannl-1745, dropped and reclaimed -- a later loss over the
    parameter accumulates into a gradient no routine resets, and the link fails over it. The golden
    pins that message in full; the suggested remedy (a [Train.zero_params_grads] routine compiled
-   first) is run here with exact values; and the other "lacks node" refusals keep their text: the
-   bare one over a non-gradient node, and gh-ocannl-1724's hint over an unpropagated intermediate
-   gradient. Values are small integers, compared bitwise. *)
+   first) is run here with exact values, and a step skipping it is refused (gh-ocannl-1781); and the
+   other "lacks node" refusals keep their text: the bare one over a non-gradient node, and
+   gh-ocannl-1724's hint over an unpropagated intermediate gradient. Values are small integers,
+   compared bitwise. *)
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules
@@ -73,10 +74,11 @@ let () =
       exact "reset before each step: w.grad = 2 w"
         (Context.get_values ctx (grad_of w))
         [| 2.; 4.; 6. |];
-      let ctx = Context.run ctx step in
-      exact "a step without the reset carries over (the control)"
-        (Context.get_values ctx (grad_of w))
-        [| 4.; 8.; 12. |]);
+      (* Without the reset the step would sum two steps' gradients: refused (gh-ocannl-1781). *)
+      let msg = refusal "a step without the reset" (fun () -> Context.run ctx step) in
+      p "a step without the reset is refused, naming the reset routine"
+        (has msg (Ir.Tnode.label_name (grad_of w)) && has msg "has not run since");
+      exact "the refusal dispatched nothing" (Context.get_values ctx (grad_of w)) [| 2.; 4.; 6. |]);
   case "a parameter whose first consumer's update was compiled in a sibling" (fun () ->
       let w = param "lh_sib" in
       let%op c = w *. 2. in
