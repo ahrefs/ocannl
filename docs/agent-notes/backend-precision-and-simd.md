@@ -1033,6 +1033,23 @@ files.
   `shadowing_check` fails a row whose stamp it contradicts (gh-ocannl-1337). A new way for a
   source to outrank the environment needs `shadowed_ambient` and `predicted_source` taught it, or
   every affected cell goes red — which is the point.
+- **A sum's accumulator starts at `+0.0`, not IEEE's additive identity `-0.0`** (gh-ocannl-1457,
+  a recorded decision; the maintainer may still overrule it). Two zeros sum to `-0` only when both
+  are `-0`, so a `+0` start makes every all-zero sum `+0` on every schedule: zero-fringe padding
+  (`Schedule`'s staged `guarded_get` reads `Constant 0.`), Tensorize pad masks and tensor-core
+  K-padding add `(+0) * x` terms, `Split_reduce` partials start at `+0`, and vector chains fold into
+  the zeroed target. A `-0` start would give `-0` only on schedules adding no `+0` term, so a padded
+  seed and the serial loop would disagree in the sign, and no padding value fixes that
+  (`(-0) * x = +0` for `x < 0`). It would close a gap only against a serial fold from the first
+  element (numpy's reduce), at ~12 correctness sites (`Ops.neutral_elem`; the `Fetch Constant 0.0`
+  to `Zero_out` lowering, whose float pattern matches `-0.` by IEEE equality and would silently
+  memset `+0`; `prefix_scan`'s neutral; `Split_reduce`; `online_softmax`'s accumulators;
+  `Fold_mma`'s score init) and ~20 recognizers keyed on a bit-zero or `Zero_out` start
+  (`zero_initializer_target`/`zero_fill_target`, so GPU `elide_covered_zeros`, the localized and
+  Privatize seeds, the sketch zero geometry, `online_softmax`'s fused backward), with every
+  schedule digest re-keyed. HIP's default `-ffast-math` keeps no signed zeros anyway.
+  `test/operations/sum_signed_zero` pins it on every backend (HIP without fast math), with the
+  control that the same products `=+`-accumulated into a `-0` target stay `-0`.
 - **The floating-point licences are three keys, applied once on the raw lowering** (gh-ocannl-998):
   `fp_contract` (a float `a * b + c` into one `FMA`), `fp_reassociate` (constant reassociation,
   subtraction re-parenthesizing, the multiplication/division interchanges, integer-power

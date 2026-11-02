@@ -11975,6 +11975,20 @@
  (modules fp_licence_values)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test))
 
+; gh-ocannl-1457: a sum's accumulator starts at +0.0, so an all-zero sum is +0 on every schedule
+; (the recorded decision); every backend, its sign claims open on HIP only without fast math.
+
+(test
+ (name sum_signed_zero)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules sum_signed_zero)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1457: a tensorized matmul's Tile_mma scalar fallback under a contraction-off compile is
 ; the serial loop's two-rounding f32 chain, bitwise, on non-dyadic operands (cc; skipped elsewhere).
 

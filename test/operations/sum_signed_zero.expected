@@ -1,0 +1,6 @@
+the host's serial fold from the first element of all-negative-zero terms is -0: true
+a clearing sum of all-negative-zero terms returns +0: true
+a clearing matmul whose row-0 products are all -0 returns +0 there: true
+the clearing matmul's other rows are not all zeros: true
+the same products accumulated into a -0 target return -0 (the +0 is the start value's): true
+every packed seed's clearing matmul returns +0 on the all -0 row: true

@@ -604,7 +604,13 @@ let binop_conditionality = function
 let ternop_conditionality = function Where -> Cond_and_one_arm | FMA | Mul3 -> All_three
 
 (** Either the left-neutral or right-neutral element of the operation. Unspecified if the operation
-    does not have a neutral element. *)
+    does not have a neutral element.
+
+    [Add]'s is [+0.], deliberately not IEEE's additive identity [-0.] (gh-ocannl-1457): two zeros
+    sum to [-0] only when both are [-0], so a [+0] start makes every all-zero sum [+0] on every
+    schedule, while zero-fringe padding, tensor-core K-padding and split partials add [+0] terms
+    that a [-0] start would make the sign depend on. The decision record:
+    docs/agent-notes/backend-precision-and-simd.md, pinned by [test/operations/sum_signed_zero]. *)
 let neutral_elem = function
   | Add -> 0.
   | Sub -> 0.
