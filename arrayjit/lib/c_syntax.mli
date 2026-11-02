@@ -1090,8 +1090,8 @@ module Source_tokens : sig
   val scan : string -> t
 
   val scan_static : string -> t
-  (** [scan], remembered per domain for this very string (by physical identity): for text a caller
-      passes unchanged again and again, such as a backend's includes and builtin definitions. *)
+  (** [scan], remembered per domain by content (a bounded number of texts): for text a caller passes
+      unchanged again and again, such as a backend's includes and builtin definitions. *)
 
   val mentions : t -> string -> bool
   (** Whether the code tokens contain [marker]'s tokens in sequence. *)

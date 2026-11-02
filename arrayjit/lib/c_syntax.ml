@@ -3131,23 +3131,26 @@ end = struct
     { tokens; closed = !closed }
 
   (* gh-ocannl-1675: the scans of text that does not change between preludes -- a backend's includes
-     and builtin definitions, the same physical strings every time -- kept per domain, by physical
-     identity. Bounded: a caller that passes fresh strings only refills it. *)
+     and builtin definitions -- kept per domain, by content: a backend may rebuild the same text
+     afresh for every render (CUDA's includes), and a hash and a comparison of it are still far
+     cheaper than its scan. Bounded by entry count: a caller that keeps passing new text only
+     refills it. *)
   let static_scans =
-    let key : (int, (string * t) list) Hashtbl.t Stdlib.Domain.DLS.key =
-      Stdlib.Domain.DLS.new_key (fun () -> Hashtbl.create (module Int))
+    let key : (string, t) Hashtbl.t Stdlib.Domain.DLS.key =
+      Stdlib.Domain.DLS.new_key (fun () -> Hashtbl.create (module String))
     in
     fun () -> Stdlib.Domain.DLS.get key
 
+  let static_scans_capacity = 1024
+
   let scan_static source =
     let table = static_scans () in
-    let len = String.length source in
-    match List.find (Hashtbl.find_multi table len) ~f:(fun (s, _) -> phys_equal s source) with
-    | Some (_, t) -> t
+    match Hashtbl.find table source with
+    | Some t -> t
     | None ->
         let t = scan source in
-        if Hashtbl.length table > 4096 then Hashtbl.clear table;
-        Hashtbl.add_multi table ~key:len ~data:(source, t);
+        if Hashtbl.length table >= static_scans_capacity then Hashtbl.clear table;
+        Hashtbl.set table ~key:source ~data:t;
         t
 
   (* The tokens of [parts] joined by newlines, when that is the parts' tokens in order: every part

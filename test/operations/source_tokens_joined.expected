@@ -17,5 +17,5 @@ joined declines the parts: a literal open across parts: true
 the cc corpus mentions some builtin key: true
 a marker straddling two parts is mentioned: true
 an open block comment hides what its part's own scan reads: true
-scan_static remembers a physical string: true
+scan_static remembers a text by content: true
 scan_static mentions what scan does: true

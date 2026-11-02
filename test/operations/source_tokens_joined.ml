@@ -68,9 +68,11 @@ let () =
   p "an open block comment hides what its part's own scan reads"
     (T.mentions (T.scan "simdgroup_load */ y") "simdgroup_load"
     && not (T.mentions (T.scan "x /* open\nsimdgroup_load */ y") "simdgroup_load"));
-  (* [scan_static] is [scan], remembered for the same physical string. *)
+  (* [scan_static] is [scan], remembered by content: a copy of the text, as a backend that rebuilds
+     its includes for every render passes, is answered by the same scan. *)
   let static = T.scan_static Builtins_cc.includes in
-  p "scan_static remembers a physical string"
-    (phys_equal static (T.scan_static Builtins_cc.includes));
+  let copy = Bytes.to_string (Bytes.of_string Builtins_cc.includes) in
+  p "scan_static remembers a text by content"
+    ((not (phys_equal copy Builtins_cc.includes)) && phys_equal static (T.scan_static copy));
   p_all "scan_static mentions what scan does" markers ~f:(fun m ->
       Bool.equal (T.mentions static m) (T.mentions (T.scan Builtins_cc.includes) m))
