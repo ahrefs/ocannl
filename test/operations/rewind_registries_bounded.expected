@@ -1,0 +1,6 @@
+every registry holds as many records as after the first round: true
+holding one window's stale handles, every registry counts them: true
+each held handle is refused, naming its rewind: true
+and still refused, naming its rewind, after as many rewinds again: true
+control: the closure happened: true
+and still refused, naming its rewind, after a closure: true

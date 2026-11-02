@@ -21,7 +21,6 @@ tensor/row.ml: boundary drop_symbol_roles -- part of a rewind or session reset, 
 tensor/row.ml: boundary restore_globals -- part of a rewind: puts back the solver's inference sets as a checkpoint captured them
 tensor/shape.ml: ref_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/shape.ml: open_refs (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
-tensor/shape.ml: discarded_refs (Hashtbl) -- accounted; kept by rewinds: a registry of what rewinds discarded: rewinds extend it, never restore it
 tensor/shape.ml: trace_touches (ref) -- exempt: the shape-scheme trace's own record, saved and restored by the trace
 tensor/shape.ml: row_numbered_refs (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/shape.ml: update_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
@@ -34,7 +33,6 @@ tensor/shape.ml: active_constraints (ref) -- fingerprinted by mutated_since; cap
 tensor/shape.ml: active_instances (ref) -- fingerprinted by mutated_since; captured by capture_globals
 tensor/shape.ml: tracing (ref) -- exempt: the shape-scheme traces in progress, restored by the trace's own finally
 tensor/shape.ml: taint (ref) -- exempt: the taint itself: a record of the first failure, not inference state
-tensor/shape.ml: discarded_updates (ref) -- accounted; kept by rewinds: a registry of what rewinds discarded: rewinds extend it, never restore it
 tensor/shape.ml: on_closure (ref) -- exempt: a hook Tensor installs once at module initialization, not inference state
 tensor/shape.ml: closure_count (ref) -- exempt: a count of commits, which only ends checkpoints: never restored
 tensor/shape.ml: checkpoint_lineage (ref) -- exempt: the lineage of valid checkpoints: bookkeeping of checkpoints, not inference state
@@ -44,9 +42,8 @@ tensor/shape.ml: counts (ref) -- exempt: registration statistics, not inference 
 tensor/shape.ml: times (ref) -- exempt: registration timings, not inference state
 tensor/shape.ml: timing_paused (ref) -- exempt: registration timings, not inference state
 tensor/shape.ml: live (unread state) -- exempt
-tensor/shape.ml: boundary add_discarded_updates -- part of a rewind: it records the discarded update range, which no rewind restores
+tensor/shape.ml: made (unread state) -- exempt
 tensor/shape.ml: boundary restore_globals -- part of a rewind: puts back the globals a checkpoint captured
-tensor/shape.ml: boundary rewind -- the rewind: it restores the checkpoint and clears the taint
 tensor/shape.ml: boundary unsafe_reinitialize -- the session reset: it discards all state and clears the taint
 tensor/shape.ml: boundary finish_inference_body -- the commit point: finish_inference taints the session on any failure of this body
 tensor/tensor.ml: session_state.next_id (mutable field) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it (an id-neutral window, Scheme.with_id_neutral, allocates from a reserved range and restores it)
@@ -58,8 +55,7 @@ tensor/tensor.ml: open_nodes (ref) -- exempt: a record of what the open work all
 tensor/tensor.ml: handouts.fwd_out (mutable field) -- accounted; kept by rewinds: a record of code given to callers, which no rewind takes back
 tensor/tensor.ml: handouts.bprop_out (mutable field) -- accounted; kept by rewinds: a record of code given to callers, which no rewind takes back
 tensor/tensor.ml: last_closure (ref) -- accounted; kept by rewinds: the last closure's checkpoint: a closure records it, and no rewind restores an older one
-tensor/tensor.ml: discarded_nodes (Hashtbl) -- accounted; kept by rewinds: a registry of what rewinds discarded: rewinds extend it, never restore it
-tensor/tensor.ml: discarded_window_nodes_table (ref) -- accounted; kept by rewinds: a registry of the nodes id-neutral windows discarded, held weakly: windows extend it, never restore it
+tensor/tensor.ml: discarded_nodes_table (ref) -- accounted; kept by rewinds: a registry of the nodes rewinds discarded, held weakly: rewinds extend it, never restore it
 tensor/tensor.ml: id_neutral_depth (ref) -- exempt: the nesting of id-neutral windows, restored by their own finally
 tensor/tensor.ml: window_discarded_nodes (ref) -- exempt: scratch of the current id-neutral window, emptied when it ends
 tensor/tensor.ml: default_value_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state
@@ -74,14 +70,13 @@ tensor/tensor.ml: generation (unread state) -- exempt
 tensor/tensor.ml: mode_override (unread state) -- exempt
 tensor/tensor.ml: boundary note_external_handout -- a closed-world act: records that work left the session, so a rewind does not resurrect it; not open inference state
 tensor/tensor.ml: boundary record_checkpoint -- the closure's record: run at the commit of a successful finish_inference, and to re-anchor after a rewind or a session reset
-tensor/tensor.ml: boundary discarded_window_nodes -- the weak registry's creation on first use: an empty registry, which no rewind restores
+tensor/tensor.ml: boundary discarded_nodes -- the weak registry's creation on first use: an empty registry, which no rewind restores
 tensor/tensor.ml: boundary finally -- a scoped restore: puts back the roots saved at entry, on return and on a raise alike
 tensor/tensor.ml: boundary with_saved_random_seed -- a scoped restore: puts back the seed saved at entry, on return and on a raise alike
-tensor/tensor.ml: boundary end_id_neutral_window -- the end of an id-neutral window: it compacts what the window's rewinds discarded, which no rewind restores
 tensor/tensor.ml: boundary restore_checkpoint -- the rewind: it restores the checkpoint and clears the taint
 tensor/tensor.ml: boundary unsafe_reinitialize -- the session reset: it discards all state and clears the taint
 the scan tracks a noted ref, captured by capture_globals (row.ml's safe_to_guess): true
-the scan tracks a kept table (tensor.ml's discarded_nodes): true
+the scan tracks a kept registry (tensor.ml's discarded_nodes_table): true
 the scan tracks an exempt counter (row.ml's uid): true
 the scan tracks a fingerprinted ref (shape.ml's state): true
 the scan tracks an accounted record field (tensor.ml's session_state.forward_roots): true

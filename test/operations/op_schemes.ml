@@ -298,17 +298,17 @@ let () =
            (error_message (fun () -> Tensor.Scheme.For_ppx.apply h [ bad ] (fun () -> ()))));
       p_empty "and left the session as it was too" ~over:Tensor.For_testing.restore_categories
         (Tensor.For_testing.checkpoint_differences ck));
-  Verdict.case "a trace's discarded nodes are held weakly" (fun () ->
+  Verdict.case "a trace's discards are held weakly" (fun () ->
       Tensor.unsafe_reinitialize ();
       Stdlib.Gc.full_major ();
-      let nodes0, weak0 = Tensor.For_testing.discarded_registry_sizes () in
+      let sizes0 = Tensor.For_testing.discarded_registry_sizes () in
       for _ = 1 to 20 do
         ignore (layer () : Tensor.t -> Tensor.t)
       done;
       Stdlib.Gc.full_major ();
-      let nodes1, weak1 = Tensor.For_testing.discarded_registry_sizes () in
-      p "twenty traces leave no node in the per-node registry" (nodes1 = nodes0);
-      p "and the weak registry keeps none of their nodes once unreachable" (weak1 = weak0);
+      let sizes1 = Tensor.For_testing.discarded_registry_sizes () in
+      p_all "twenty traces leave no record in any discard registry once unreachable"
+        (List.zip_exn sizes0 sizes1) ~f:(fun ((_, n0), (_, n1)) -> n1 = n0);
       let f = leaky () in
       let stale = Option.value_exn !leaked in
       ignore (f (leaf "x" [ 2 ]) : Tensor.t);

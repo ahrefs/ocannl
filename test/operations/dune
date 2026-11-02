@@ -12615,6 +12615,21 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-1789: what rewinds record of the work they discarded stays bounded by what is still
+;; reachable, over a thousand explicit rewinds, rewinds to the last closure and schemed closures'
+;; traces; held stale handles stay refused.
+
+(test
+ (name rewind_registries_bounded)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules rewind_registries_bounded)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ;; gh-ocannl-1752: what shape schemes buy in inference cost on repeated blocks (off and check):
 ;; registration and constraint counts claimed, timings on stderr; `--bench` measures.
 

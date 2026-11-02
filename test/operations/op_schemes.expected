@@ -22,8 +22,7 @@ the check of a fitting argument ran: true
 and left the session as it was: true
 the check of a conflicting argument raises, naming the scheme: true
 and left the session as it was too: true
-twenty traces leave no node in the per-node registry: true
-and the weak registry keeps none of their nodes once unreachable: true
+twenty traces leave no record in any discard registry once unreachable: true
 a handle leaked from a trace is still refused, naming the trace: true
 building the closure raises, naming the function and the opt-out: true
 control (opted out): the same function builds and applies: true
