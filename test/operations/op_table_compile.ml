@@ -36,7 +36,24 @@
    swept twice, over buffer reads and with an inlined [a + b] as its first operand ([Inlined]),
    since integer promotion types the two differently. Conversions are every ordered pair of distinct
    storage precisions the backend can store ({!Ir.Backend_intf.codegen_capabilities}'s
-   [supports_f64]). *)
+   [supports_f64]).
+
+   gh-ocannl-1768 extended the sweep in three directions.
+
+   - The explicit-SIMD renderings: at each float compute precision, every arm the backend's vector
+   style renders ({!vector_arms}: cc's GCC vector arithmetic and SIMD reductions, the GPU dialects'
+   packed lanes) as a [Vectorized] loop of its own. A loop the rendering declines compiles serially,
+   so each compiled routine's source is read for the rendering's banner: at one precision the
+   rendering takes all of its arms or none, and on every backend some precision takes them. - The
+   value-select blends ([select_blend_syntax], gh-ocannl-1622): the [Where] and gate arms already
+   reach them; the sources now show it, every select arm blending or none at a precision, and on cc
+   and HIP some precision blending. - Builtin parameter guards ({!Ir.C_syntax.Param_guards}): the
+   whole sweep compiles with every builtin call on cc and Metal passing its arguments through a
+   guard that fails the compile when the operand's type narrows into the parameter's, so the compile
+   claim covers what gh-ocannl-1704 was (a [half] passed by value to a [uint16_t]). Its negative
+   control plants gh-ocannl-1704 back in the backend's own table, and must compile without the
+   guards and fail with them. Which functions the guards read is checked over both tables: an
+   unreadable function is named, with why. *)
 
 open Base
 module LL = Ir.Low_level
@@ -44,6 +61,8 @@ module Ops = Ir.Ops
 module Idx = Ir.Indexing
 module Tn = Ir.Tnode
 module Outcome = Ir.Schedule_outcome
+module Guards = Ir.C_syntax.Param_guards
+module Generated = Test_utils.Generated
 open Verdict.Claims
 
 type arm =
@@ -56,6 +75,15 @@ type arm =
       (** A homogeneous arithmetic arm whose first operand is an inlined [a + b] rather than a
           buffer read: C-family integer promotion types that sum [int] where the read is [uchar], so
           an arm that compiles over a read can still be an ambiguous call over an expression. *)
+  | Lanes of arm
+      (** A homogeneous arithmetic arm applied cell by cell over a [Vectorized] loop, every operand
+          read at the loop index: what the explicit-SIMD rendering takes (gh-ocannl-1768). *)
+  | Lanes_uniform of arm
+      (** {!Lanes} with the last operand a loop-free read: the rendering's splat of a lane-uniform
+          value, and the only form a gated operand may take in a lane. *)
+  | Reduce of Ops.binop
+      (** [acc = op(acc, x[i])] over a [Vectorized] loop: the SIMD accumulator grid. *)
+  | Reduce_fma  (** [acc = fma(x[i], y[i], acc)] over a [Vectorized] loop. *)
 
 let rec arm_name = function
   | Unary op -> "unop " ^ Sexp.to_string (Ops.sexp_of_unop op)
@@ -64,6 +92,31 @@ let rec arm_name = function
   | Vector op -> "vec_unop " ^ Sexp.to_string (Ops.sexp_of_vec_unop op)
   | Convert_from q -> "convert from " ^ Ops.prec_string q
   | Inlined arm -> arm_name arm ^ " over an inlined operand"
+  | Lanes arm -> arm_name arm ^ " over vector lanes"
+  | Lanes_uniform arm -> arm_name arm ^ " over vector lanes, its last operand uniform"
+  | Reduce op -> "vector reduction " ^ Sexp.to_string (Ops.sexp_of_binop op)
+  | Reduce_fma -> "vector fma reduction"
+
+let is_vector_arm = function
+  | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma -> true
+  | Unary _ | Binary _ | Ternary _ | Vector _ | Convert_from _ | Inlined _ -> false
+
+(* A value select: an operator that yields one of its operands, the other evaluated only
+   conditionally, which the backend's [select_blend_syntax] may render branchless (gh-ocannl-1622).
+   The logical [And] and [Or] gate their second operand too, but yield a truth value, not an
+   operand: they are not selects. *)
+let rec is_select = function
+  | Ternary op -> (
+      match Ops.ternop_conditionality op with
+      | Ops.Cond_and_one_arm -> true
+      | Ops.All_three -> false)
+  | Binary (Ops.And | Ops.Or) -> false
+  | Binary op -> (
+      match Ops.binop_conditionality op with
+      | Ops.Gated_second -> true
+      | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false)
+  | Inlined arm -> is_select arm
+  | Unary _ | Vector _ | Convert_from _ | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma -> false
 
 type verdict =
   | Compiled
@@ -75,6 +128,52 @@ let is_threefry = function Ops.Threefry4x32_crypto | Ops.Threefry4x32_light -> t
 
 let is_projection op =
   match Ops.binop_conditionality op with Ops.Only_first | Ops.Only_second -> true | _ -> false
+
+(* The extent of every [Vectorized] loop: a multiple of every pack and chain width a backend
+   renders, so neither rendering declines for want of lanes. *)
+let lanes_extent = 128
+
+(* The vector arms at compute precision [compute], in the backend's explicit-SIMD style (both
+   renderings decline anything but a float compute precision).
+
+   - [`Vec_extensions] (cc's GCC/Clang vector types) renders vector arithmetic itself, so its arms
+   are the operators [C_syntax]'s [vec_expr] spells over vectors -- the four infix operators, a
+   fused [FMA], [Neg] and [Identity] -- each also over a lane-uniform last operand where it has one
+   (the splat), and the accumulations its SIMD reduction grid folds ({!Ir.Low_level}'s
+   [accum_local_update_parts]: [Add], [Mul], [Max], [Min], and the fused form). - [`Packed_struct]
+   (the GPU dialects) moves whole packs and computes each lane through the scalar operator tables,
+   so its arms are every homogeneous arithmetic arm, a gated operand uniform (a lane may not load
+   one, see [try_vectorize]). It renders no reduction. *)
+let vector_arms ~style ~compute =
+  if not (Ops.is_float compute) then []
+  else
+    match style with
+    | `Vec_extensions ->
+        List.map
+          [
+            Binary Ops.Add;
+            Binary Ops.Sub;
+            Binary Ops.Mul;
+            Binary Ops.Div;
+            Ternary Ops.FMA;
+            Unary Ops.Neg;
+            Unary Ops.Identity;
+          ] ~f:(fun arm -> Lanes arm)
+        @ [ Lanes_uniform (Binary Ops.Add); Lanes_uniform (Ternary Ops.FMA) ]
+        @ List.map [ Ops.Add; Ops.Mul; Ops.Max; Ops.Min ] ~f:(fun op -> Reduce op)
+        @ [ Reduce_fma ]
+    | `Packed_struct ->
+        List.filter_map Ops.all_of_unop ~f:(fun op ->
+            if Ops.is_homogeneous_prec_unop op then Some (Lanes (Unary op)) else None)
+        @ List.filter_map Ops.all_of_binop ~f:(fun op ->
+            if is_projection op || is_threefry op || not (Ops.is_homogeneous_prec_binop op) then
+              None
+            else
+              match Ops.binop_conditionality op with
+              | Ops.Gated_second -> Some (Lanes_uniform (Binary op))
+              | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> Some (Lanes (Binary op)))
+        @ List.filter_map Ops.all_of_ternop ~f:(fun op ->
+            if Ops.is_homogeneous_prec_ternop op then Some (Lanes (Ternary op)) else None)
 
 (* The in-domain arms at storage precision [store], over the storage precisions [precs] the backend
    can hold. *)
@@ -98,7 +197,8 @@ let arms_at ~precs store =
       | Unary op -> Ops.is_homogeneous_prec_unop op
       | Binary op -> Ops.is_homogeneous_prec_binop op
       | Ternary op -> Ops.is_homogeneous_prec_ternop op
-      | Vector _ | Convert_from _ | Inlined _ -> false
+      | Vector _ | Convert_from _ | Inlined _ | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma ->
+          false
     in
     arithmetic
     @ List.filter_map arithmetic ~f:(fun arm ->
@@ -130,6 +230,7 @@ type operands = {
   block : Tn.t;  (** A packed [uint4x32] block, for the heterogeneous consumers. *)
   lane : Tn.t;  (** An [int32] lane index. *)
   sources : (Ops.prec * Tn.t) list;  (** A source node per conversion. *)
+  lanes : Tn.t array;  (** Three operands of [lanes_extent] cells, for the vector arms. *)
   out : Tn.t;  (** One cell per scalar arm. *)
   vec_out : Tn.t;  (** The lanes of the vector arm. *)
 }
@@ -148,6 +249,9 @@ let operands ~precs ~n_arms store =
       List.filter_map precs ~f:(fun q ->
           if Ops.equal_prec q store then None
           else Some (q, node ~prec:q (tag ^ "_from_" ^ Ops.prec_string q)));
+    lanes =
+      Array.init 3 ~f:(fun k ->
+          node ~prec:store ~dims:[| lanes_extent |] (Printf.sprintf "%s_lanes%d" tag k));
     out = node ~prec:store ~dims:[| n_arms |] (tag ^ "_out");
     vec_out =
       (if is_packed store then mk "vec_out_unused"
@@ -157,12 +261,45 @@ let operands ~precs ~n_arms store =
 let at0 = [| Idx.Fixed_idx 0 |]
 let read tn prec : LL.scalar_arg = (LL.Get (tn, at0), prec)
 
+(* The statement applying a vector arm, and the nodes it writes: each its own, so no two loops of a
+   routine write one node. *)
+let vector_statement o arm : LL.t * Tn.t list =
+  let s = o.store in
+  let i = Ll_test.sym () in
+  let at_i = [| Idx.Iterator i |] in
+  let lane k = (LL.Get (o.lanes.(k), at_i), s) in
+  let loop body = Ll_test.loop ~axis:LL.Vectorized ~upto:(lanes_extent - 1) i body in
+  let tag = Ops.prec_string s in
+  match arm with
+  | Lanes inner | Lanes_uniform inner ->
+      let uniform = match arm with Lanes_uniform _ -> true | _ -> false in
+      let operand k ~last = if uniform && last then read o.c s else lane k in
+      let llsc : LL.scalar_t =
+        match inner with
+        | Unary op -> Unop (op, operand 0 ~last:true)
+        | Binary op -> Binop (op, operand 0 ~last:false, operand 1 ~last:true)
+        | Ternary op ->
+            Ternop (op, operand 0 ~last:false, operand 1 ~last:false, operand 2 ~last:true)
+        | _ -> invalid_arg ("op_table_compile: no vector rendering of " ^ arm_name inner)
+      in
+      let out = node ~prec:s ~dims:[| lanes_extent |] (tag ^ "_vout") in
+      (loop (Ll_test.set out at_i llsc), [ out ])
+  | Reduce op ->
+      let acc = node ~prec:s (tag ^ "_vacc") in
+      (loop (Ll_test.set acc at0 (LL.Binop (op, read acc s, lane 0))), [ acc ])
+  | Reduce_fma ->
+      let acc = node ~prec:s (tag ^ "_vacc") in
+      (loop (Ll_test.set acc at0 (LL.Ternop (Ops.FMA, lane 0, lane 1, read acc s))), [ acc ])
+  | _ -> invalid_arg ("op_table_compile: not a vector arm: " ^ arm_name arm)
+
 (* The statement applying [arm] (the [k]th of its routine). *)
 let rec statement o k arm : LL.t =
   let s = o.store in
   let store llsc = Ll_test.set o.out [| Idx.Fixed_idx k |] llsc in
   let sum = (LL.Binop (Ops.Add, read o.a s, read o.b s), s) in
   match arm with
+  | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma ->
+      invalid_arg "op_table_compile: a vector arm is a loop of its own (vector_statement)"
   | Inlined (Unary op) -> store (LL.Unop (op, sum))
   | Inlined (Binary op) -> store (LL.Binop (op, sum, read o.c s))
   | Inlined (Ternary op) -> store (LL.Ternop (op, sum, read o.b s, read o.c s))
@@ -179,8 +316,15 @@ let rec statement o k arm : LL.t =
       let src = List.Assoc.find_exn o.sources ~equal:Ops.equal_prec q in
       store (LL.Get (src, at0))
 
-let nodes o = [ o.a; o.b; o.c; o.block; o.lane; o.out; o.vec_out ] @ List.map o.sources ~f:snd
+let nodes o =
+  [ o.a; o.b; o.c; o.block; o.lane; o.out; o.vec_out ]
+  @ Array.to_list o.lanes @ List.map o.sources ~f:snd
+
+(* The vector and blend coverage claims read the emitted kernels. *)
+let () = Utils.settings.output_debug_files_in_build_directory <- true
 let base_ctx = Lazy.force Ll_test.base_ctx
+let backend_name = String.lowercase (Context.backend_name base_ctx)
+let () = Generated.init ~backend_name
 let compiles = ref 0
 
 (* A refusal is the renderer raising [Invalid_argument] or a [User_error] (or a typed [Unsupported]
@@ -207,18 +351,27 @@ let verdict_of_failure : Outcome.failure -> verdict =
           Refused detail
       | _ -> Failed detail)
 
+(* The routines that compiled, with the arms each holds: the compiled arms, partitioned, since a
+   routine that compiles is never split. *)
+let compiled_routines : (string * arm list) list ref = ref []
+
 (* Compiles the [arms] (each with its routine-wide position) as one routine; [None] when it
    compiled. *)
 let try_compile ~policy ~name o arms =
-  let llc =
-    List.fold_right arms ~init:LL.Noop ~f:(fun (k, arm) acc -> LL.Seq (statement o k arm, acc))
+  let llc, written =
+    List.fold_right arms ~init:(LL.Noop, []) ~f:(fun (k, arm) (acc, written) ->
+        if is_vector_arm arm then
+          let stmt, nodes = vector_statement o arm in
+          (LL.Seq (stmt, acc), nodes @ written)
+        else (LL.Seq (statement o k arm, acc), written))
   in
   Int.incr compiles;
   let name = Printf.sprintf "%s_%d" name !compiles in
+  let compiled () = compiled_routines := (name, List.map arms ~f:snd) :: !compiled_routines in
   Test_utils.with_policy
     (fun _ -> policy)
     (fun () ->
-      match Ll_test.optimize ~materialized:(nodes o) ~name llc with
+      match Ll_test.optimize ~materialized:(nodes o @ written) ~name llc with
       | exception exn ->
           let detail = "lowering: " ^ Exn.to_string exn in
           Some
@@ -231,7 +384,9 @@ let try_compile ~policy ~name o arms =
               ~lowered_transform:(fun x -> [ x ])
               base_ctx Ir.Assignments.empty_comp Idx.Empty
           with
-          | Ok (_ctx, _routine) -> None
+          | Ok (_ctx, _routine) ->
+              compiled ();
+              None
           | Error failure -> Some (verdict_of_failure failure)))
 
 (* Routines that failed although every one of their arms compiled on its own: a failure of the
@@ -271,9 +426,48 @@ let rec c_reference_refuses ~store ~compute arm =
   | Ternary op -> raises (fun () -> Ops.ternop_c_syntax compute op)
   | Vector op -> raises (fun () -> Ops.vec_unop_c_syntax compute op)
   | Convert_from from -> raises (fun () -> Ops.c_convert_precision ~from ~to_:store)
-  | Inlined arm -> c_reference_refuses ~store ~compute arm
+  | Inlined arm | Lanes arm | Lanes_uniform arm -> c_reference_refuses ~store ~compute arm
+  | Reduce op -> c_reference_refuses ~store ~compute (Binary op)
+  | Reduce_fma -> c_reference_refuses ~store ~compute (Ternary Ops.FMA)
 
-type case = { store : Ops.prec; compute : Ops.prec; results : (arm * verdict) list }
+type case = {
+  store : Ops.prec;
+  compute : Ops.prec;
+  results : (arm * verdict) list;
+  routines : (string * arm list) list;  (** The routines that compiled, with their arms. *)
+}
+
+(* The C reference's explicit-SIMD style: the backends rendering through cc's syntax config use GCC
+   vector extensions, the GPU dialects pack structs. *)
+let on_cc = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts base_ctx)
+let style = if on_cc then `Vec_extensions else `Packed_struct
+
+(* How often [pattern] occurs in [text]. *)
+let occurrences text ~pattern =
+  List.length (String.substr_index_all text ~may_overlap:false ~pattern)
+
+(* Over the routines of [case] that compiled an arm satisfying [kind]: how many such arms they hold,
+   and how often their sources show [pattern]. *)
+let witnessed case ~kind ~patterns =
+  List.fold case.routines ~init:(0, 0) ~f:(fun (arms, seen) (name, routine_arms) ->
+      let k = List.count routine_arms ~f:kind in
+      if k = 0 then (arms, seen)
+      else
+        let source = Generated.read name in
+        ( arms + k,
+          seen + List.sum (module Int) patterns ~f:(fun pattern -> occurrences source ~pattern) ))
+
+(* A defect the parameter guards must catch: gh-ocannl-1704 reverted, in this backend's own table.
+   On cc the conversion's call site passed a [half] node bare -- [HALF_TO_UINT16] the identity -- to
+   [half_to_uint4x32]'s [uint16_t]; on Metal the definition took [uint16_t] where its call site
+   passes [half]. Both converted by VALUE. *)
+let reverted_1704 =
+  if on_cc then [ ("HALF_TO_UINT16", "#define HALF_TO_UINT16(x) (x)") ]
+  else
+    [
+      ( "half_to_uint4x32",
+        "uint4 half_to_uint4x32(uint16_t x) {\n    return uint4(uint32_t(x), 0, 0, 0);\n}" );
+    ]
 
 let () =
   let caps = Context.codegen_capabilities base_ctx in
@@ -295,13 +489,28 @@ let () =
     |> List.stable_sort ~compare:(fun (s1, _, _) (s2, _, _) -> Ops.compare_prec s1 s2)
   in
   let cases =
-    List.map pairs ~f:(fun (store, compute, policy) ->
-        let arms = arms_at ~precs store in
-        let o = operands ~precs ~n_arms:(List.length arms) store in
-        let name =
-          Printf.sprintf "optbl_%s_at_%s" (Ops.prec_string store) (Ops.prec_string compute)
-        in
-        { store; compute; results = probe ~policy ~name o (List.mapi arms ~f:(fun k a -> (k, a))) })
+    Guards.with_guards (fun () ->
+        List.map pairs ~f:(fun (store, compute, policy) ->
+            (* The vector arms compile apart from the scalar ones, so a routine's source witnesses
+               one rendering: a packed lane renders its gate's blend too, once per lane loop. *)
+            let arms = arms_at ~precs store in
+            let vectors = vector_arms ~style ~compute in
+            let o = operands ~precs ~n_arms:(List.length arms) store in
+            let name =
+              Printf.sprintf "optbl_%s_at_%s" (Ops.prec_string store) (Ops.prec_string compute)
+            in
+            let before = !compiled_routines in
+            let positioned = List.mapi ~f:(fun k a -> (k, a)) in
+            let results =
+              probe ~policy ~name o (positioned arms)
+              @
+              if List.is_empty vectors then []
+              else probe ~policy ~name:(name ^ "_vec") o (positioned vectors)
+            in
+            let routines =
+              List.take !compiled_routines (List.length !compiled_routines - List.length before)
+            in
+            { store; compute; results; routines }))
   in
   let label { store; compute; _ } =
     Printf.sprintf "%s storage at %s compute" (Ops.prec_string store) (Ops.prec_string compute)
@@ -342,7 +551,98 @@ let () =
       | Compiled | Failed _ -> true);
   p_all "every storage precision the backend holds compiled at least one arm" precs ~f:(fun p ->
       List.exists all_results ~f:(fun (case, (_, v)) ->
-          Ops.equal_prec case.store p && match v with Compiled -> true | _ -> false))
+          Ops.equal_prec case.store p && match v with Compiled -> true | _ -> false));
+  (* gh-ocannl-1768: the explicit-SIMD renderings. A [Vectorized] loop the rendering declines
+     compiles as a serial loop, so compiling says nothing unless the rendering was taken: each
+     compiled loop's source carries the rendering's banner. Whether a rendering takes a loop is
+     decided per precision, its operators being its domain ({!vector_arms}), so at one precision it
+     takes all of them or none -- an operator it silently stopped vectorizing breaks that. *)
+  let vectorized case =
+    witnessed case ~kind:is_vector_arm
+      ~patterns:[ "/* Vectorized rendering:"; "/* Vectorized reduction rendering:" ]
+  in
+  List.iter cases ~f:(fun case ->
+      let arms, seen = vectorized case in
+      if arms > 0 then
+        Stdio.eprintf "  %s: %d of %d compiled vector arms took the explicit-SIMD rendering\n"
+          (label case) seen arms);
+  p_all "at each precision, the explicit-SIMD rendering takes every vector arm or none" cases
+    ~f:(fun case ->
+      let arms, seen = vectorized case in
+      seen = 0 || seen = arms);
+  let vector_leg =
+    Verdict.leg ~aggregation:`Environment
+      ~when_:((not on_cc) || Context.Cc_backend.vector_bytes_setting () >= 8)
+      ~on:"cc with cc_vector_bytes below 8" ()
+  in
+  Verdict.in_leg ~leg:vector_leg "some precision's vector arms take the explicit-SIMD rendering"
+    (fun label ->
+      p_exists label cases ~f:(fun case ->
+          let _, seen = vectorized case in
+          seen > 0));
+  (* The value-select blends (gh-ocannl-1622): a select the backend may speculate renders as its
+     [select_blend_syntax], which binds the arms to locals first. Whether it does is decided per
+     compute precision, so at one precision every select arm blends or none does. *)
+  let blended case =
+    witnessed case ~kind:is_select ~patterns:[ Ir.C_syntax.blend_local_a ^ " =" ]
+  in
+  List.iter cases ~f:(fun case ->
+      let arms, seen = blended case in
+      if arms > 0 then
+        Stdio.eprintf "  %s: %d select blends over %d compiled select arms\n" (label case) seen arms);
+  p_all "at each precision, the select blend renders every select arm or none" cases ~f:(fun case ->
+      let arms, seen = blended case in
+      seen = 0 || seen = arms);
+  (* cc and HIP blend; CUDA's ptxas if-converts the short-circuiting spelling itself, and Metal's
+     compiler no tool here can read, so both keep [?:] (C_syntax's [select_blend_syntax]). *)
+  let blend_leg =
+    Verdict.leg ~when_:(on_cc || String.equal backend_name "hip") ~on:backend_name ()
+  in
+  Verdict.in_leg ~leg:blend_leg "some precision's select arms render the select blend" (fun label ->
+      p_exists label cases ~f:(fun case ->
+          let _, seen = blended case in
+          seen > 0));
+  (* gh-ocannl-1768: the builtin parameter guards were in force over the whole sweep, so the claim
+     above that no arm fails to compile includes that no arm passes a builtin an operand its
+     parameter narrows. The guards exist on cc and Metal. *)
+  let guard_leg =
+    Verdict.leg ~when_:(on_cc || String.equal backend_name "metal") ~on:backend_name ()
+  in
+  Verdict.in_leg ~leg:guard_leg "the sweep's kernels carried builtin parameter guards" (fun label ->
+      p label (Guards.emitted () > 0));
+  (* The negative control: gh-ocannl-1704 reverted compiles unguarded, as it shipped, and fails the
+     guards. On a cc compiler without [_Float16], [HALF_T] is the storage bits and there is no
+     defect to revert. *)
+  let control_leg =
+    Verdict.sub_leg guard_leg ~aggregation:`Environment
+      ~when_:
+        (lazy
+          ((not on_cc)
+          || not
+               (String.equal "none"
+                  (Option.value ~default:"none"
+                     (List.Assoc.find
+                        (Context.Cc_backend.host_capabilities ())
+                        ~equal:String.equal "fp16")))))
+      ~on:"a cc compiler without _Float16"
+  in
+  let control ~guard =
+    let o = operands ~precs ~n_arms:1 Ops.uint4x32 in
+    let policy = List.hd_exn Ir.Numerics.all in
+    Guards.with_guards ~guard ~overrides:reverted_1704 (fun () ->
+        try_compile ~policy ~name:"optbl_reverted_1704" o [ (0, Convert_from Ops.half) ])
+  in
+  Verdict.in_leg ~leg:control_leg "gh-ocannl-1704 reverted compiles without the guards"
+    (fun label -> p label (Option.is_none (control ~guard:false)));
+  Verdict.in_leg ~leg:control_leg "gh-ocannl-1704 reverted fails the guards" (fun label ->
+      match control ~guard:true with
+      | Some (Failed why) ->
+          Stdio.eprintf "  the reverted gh-ocannl-1704 under the guards: %s\n" why;
+          p label true
+      | Some (Refused why) ->
+          Stdio.eprintf "  the reverted gh-ocannl-1704 was refused: %s\n" why;
+          p label false
+      | None | Some Compiled -> p label false)
 
 (* The executed legs. Compiling an arm says nothing about its value, and the integer-precision table
    fixes here had values to get right. Each case is one the wrong fix gets wrong, with every operand
@@ -422,3 +722,39 @@ let () =
           ~read:[ out ]
       in
       p claim (Ll_test.same got [ [| want |] ]))
+
+(* gh-ocannl-1768: what the parameter guards cover in the two tables they guard. An entry the guard
+   cannot read is either not a function -- a macro, a type, a constant, which have no parameter
+   types -- or a function it skips, which has to be named here with why. *)
+let unguarded_functions =
+  [
+    ( ("metal", "ocannl_max"),
+      "a template: integer Max in the operands' common type, which it is instantiated at" );
+    ( ("metal", "ocannl_min"),
+      "a template: integer Min in the operands' common type, which it is instantiated at" );
+    ( ("metal", "threefry_round"),
+      "its state passed by reference, internal to the threefry functions, which are guarded" );
+  ]
+
+let () =
+  let not_a_function why =
+    String.equal why Guards.a_macro || String.equal why Guards.not_a_function
+  in
+  let skipped =
+    List.concat_map
+      [ ("cc", Context.Builtins_cc.builtins); ("metal", Builtins_metal.builtins) ]
+      ~f:(fun (table, entries) ->
+        List.filter_map entries ~f:(fun (key, definition, _) ->
+            match Guards.parameter_types ~key definition with
+            | Ok _ -> None
+            | Error why when not_a_function why -> None
+            | Error why ->
+                Stdio.eprintf "  %s's %s is unguarded: %s\n" table key why;
+                Some (table, key)))
+  in
+  let named = List.map unguarded_functions ~f:fst in
+  let equal (t1, k1) (t2, k2) = String.equal t1 t2 && String.equal k1 k2 in
+  p_all "every function of the cc and Metal tables is guarded or named as skipped" skipped
+    ~f:(List.mem named ~equal);
+  p_all ~min:1 "every function named as skipped is one the guards skip" named
+    ~f:(List.mem skipped ~equal)

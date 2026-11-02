@@ -203,6 +203,10 @@ files.
   `fmax(0, uchar)`/`tanh(int)` ambiguity, `__half == 0.0` on CUDA and HIP, and cc's
   `uint4x32_to_<prec>` conversion, which names no builtin. A plain conversion OUT of `uint4x32`
   still means three things: cc refuses it, Metal reads the uniform conversion, CUDA and HIP lane 0.
+  Since gh-ocannl-1768 it also compiles each float precision's explicit-SIMD arms (cc's vector
+  arithmetic and SIMD reductions, the GPU dialects' packed lanes) as `Vectorized` loops and the
+  select blends, reading each compiled routine's source: a declined vector loop compiles serially,
+  so its claim is that the rendering takes all of a precision's arms or none, and some precision's.
 - The sweep's inlined operand is integer-valued (`a + b`); a FLOAT-valued subexpression at an
   integer compute precision (an inlined `Sin`, `Sqrt`, or Metal's float-dividing `Recip`) is a class
   it leaves out, and no backend handles it coherently: every table keeps the math result a float as

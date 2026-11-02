@@ -685,6 +685,7 @@ module Impl = struct
     (* 16-byte packs that only move data: no vector arithmetic, so no register tile and no count. *)
     let vector_file = { Vector_file.bytes = 16; registers = 0 }
     let vector_style = `Packed_struct
+    let builtin_param_guards = Some C_syntax.Cxx_guards
 
     let ident_blacklist =
       ident_blacklist
@@ -1498,9 +1499,11 @@ module Impl = struct
       (* fp8 conversions go through the software codec, which is where the storage/compute seam
          lands for e5m2 on Metal: a load widens once, a store narrows once, and the arithmetic in
          between is f32 ([compute_prec]). The spellings mirror {!Ops.c_convert_precision}'s fp8
-         arms, so a tensor written by a C backend reads back identically here. *)
+         arms, so a tensor written by a C backend reads back identically here. A store casts its
+         operand to [float] whatever its precision: an operator computed at f32 can be MSL-typed
+         [bool] (a comparison), which [single_to_fp8]'s [float] parameter would narrow implicitly
+         (gh-ocannl-1768). *)
       | Ops.Fp8_prec _, (Ops.Single_prec _ | Ops.Double_prec _) -> ("fp8_to_single(", ")")
-      | (Ops.Single_prec _ | Ops.Double_prec _), Ops.Fp8_prec _ -> ("single_to_fp8(", ")")
       | Ops.Fp8_prec _, _ -> ("(" ^ typ_of_prec to_ ^ ")(fp8_to_single(", "))")
       | _, Ops.Fp8_prec _ -> ("single_to_fp8((float)(", "))")
       (* Metal has no native double. Keep double tensor storage unsupported in [typ_of_prec], so a

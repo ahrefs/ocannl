@@ -1846,13 +1846,22 @@ let emitted_claims ~label (emitted : emitted list) =
         List.filter_map e.loops ~f:(fun l ->
             if String.equal l.store l.comp then None else Some (e, l)))
   in
+  (* The codec a prefix calls, without what it applies to its operand first: the narrowing prefix
+     casts the operand to [float] before the codec's call (gh-ocannl-1768), and a register tile
+     narrows through [OCANNL_VEC_NARROW_*], whose body calls the codec on each lane without it. *)
+  let codec_call prefix =
+    let ident c = Char.is_alphanum c || Char.equal c '_' in
+    match String.lfindi prefix ~f:(fun _ c -> not (ident c)) with
+    | Some i when i > 0 && Char.equal prefix.[i] '(' -> String.prefix prefix (i + 1)
+    | _ -> prefix
+  in
   Verdict.p_all
     (label "every narrow-storage loop's kernel spells both directions of its conversion")
     narrow_rows ~f:(fun (e, l) ->
       (not (String.is_empty l.widen))
       && (not (String.is_empty l.narrow))
       && String.is_substring e.source ~substring:l.widen
-      && String.is_substring e.source ~substring:l.narrow);
+      && String.is_substring e.source ~substring:(codec_call l.narrow));
   (* {2 That each row's anchor names its own loop and no other}
 
      The census selects the SMALLEST-span loop carrying an anchor line, so two loops of one kernel

@@ -2,8 +2,17 @@ no in-domain arm renders and then fails the backend's compiler: true
 every failing routine's failure is pinned to one arm: true
 every refused arm is one the C reference refuses too: true
 every storage precision the backend holds compiled at least one arm: true
+at each precision, the explicit-SIMD rendering takes every vector arm or none: true
+some precision's vector arms take the explicit-SIMD rendering: true
+at each precision, the select blend renders every select arm or none: true
+some precision's select arms render the select blend: true
+the sweep's kernels carried builtin parameter guards: true
+gh-ocannl-1704 reverted compiles without the guards: true
+gh-ocannl-1704 reverted fails the guards: true
 byte Min over an integer-promoted sum compares before narrowing: true
 byte math over an integer operand keeps its float result until the store: true
 byte Min compares float-valued operands as floats: true
 byte Min of a float and a NaN intermediate is the float, as fmin's is: true
 byte Trunc truncates a float-valued operand: true
+every function of the cc and Metal tables is guarded or named as skipped: true
+every function named as skipped is one the guards skip: true
