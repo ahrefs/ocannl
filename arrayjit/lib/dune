@@ -98,6 +98,7 @@
   vector_file
   register_tile
   low_level
+  lowered_nests
   online_softmax
   winograd
   fp_algebra
