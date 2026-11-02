@@ -2630,6 +2630,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1774: Ll_test.run_linked's default prefill, and the localized-accumulator zero seed
+; against a closed form from a prefilled output.
+
+(test
+ (name default_prefill)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules default_prefill)
+ (libraries base stdio ocannl arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-878: real-graph maximum-one reachability and executed index-zero-write probe.
 
 (test
