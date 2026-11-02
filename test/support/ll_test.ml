@@ -559,6 +559,39 @@ let unowned_copy ?name (c : Ir.Assignments.comp) =
   in
   Ir.Assignments.comp ~embedded:c.embedded_nodes asgns
 
+(** {2 Printing a schedule} *)
+
+(** [schedule_op_lines sched] is [sched]'s op list, one line per op, for debugging which seed op
+    order produced a shape (gh-ocannl-1741): each op's sexp with every tensor node collapsed to
+    [label#id] in place of the full record [Tn.t]'s sexp dumps. Derived from
+    [Ir.Schedule.sexp_of_optop], so a new constructor or field prints with no change here. A node's
+    record is recognized as a list of [(field value)] pairs among which [id] and [label], two fields
+    [Tn.t]'s derived sexp always prints. *)
+let schedule_op_lines (sched : Ir.Schedule.schedule) =
+  let tnode_record_name = function
+    | Sexp.List fields -> (
+        let field name =
+          List.find_map fields ~f:(function
+            | Sexp.List [ Sexp.Atom n; v ] when String.equal n name -> Some v
+            | _ -> None)
+        in
+        let all_pairs =
+          List.for_all fields ~f:(function Sexp.List [ Sexp.Atom _; _ ] -> true | _ -> false)
+        in
+        match (field "id", field "label") with
+        | Some (Sexp.Atom id), Some (Sexp.List label) when all_pairs ->
+            let words = List.filter_map label ~f:(function Sexp.Atom w -> Some w | _ -> None) in
+            Some (String.concat ~sep:"_" words ^ "#" ^ id)
+        | _ -> None)
+    | Sexp.Atom _ -> None
+  in
+  let rec collapse s =
+    match tnode_record_name s with
+    | Some name -> Sexp.Atom name
+    | None -> ( match s with Sexp.List l -> Sexp.List (List.map l ~f:collapse) | a -> a)
+  in
+  List.map sched ~f:(fun op -> Sexp.to_string (collapse (Ir.Schedule.sexp_of_optop op)))
+
 (** {2 The default prefill}
 
     A fresh device buffer is already zero, so a routine that wrongly drops a zero — an elided

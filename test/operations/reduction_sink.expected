@@ -6,6 +6,7 @@ an overwrite (no self-read) is not an accumulation and is left alone: true
 a bf16 accumulator its backend widens to f32 is left alone: true
 the same bf16 accumulator kept at its storage precision is sunk (the control): true
 admitted, the widened bf16 accumulator is sunk by the chain it gets at its storage precision: true
+schedule_op_lines prints one line per op, a node as its label#id and never its record: true
 structural: for cuda the untuned plan sinks a segment with the seeding off, seeding none: true
 structural control: for cuda with the sink off nothing is sunk: true
 structural control: for cc no plan is derived: true
