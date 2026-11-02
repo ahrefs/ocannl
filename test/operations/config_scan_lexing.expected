@@ -84,6 +84,9 @@ ok: alias reach -- an alias of an alias written before it expands through it
 ok: alias reach -- an alias of a module aliased only later names the outer module
 ok: alias reach -- a structure rebinding an alias ends it
 ok: alias reach -- the body of a structure rebinding an alias still sees the alias
+ok: alias reach -- a functor included once at top level reads as its body
+ok: alias reach -- a functor no top-level include applies stays opaque
+ok: alias reach -- a functor included twice is not read as one body
 ok: process-lifetime -- a top-level lazy
 ok: process-lifetime -- a lazy in a closure's environment
 ok: process-lifetime -- a lazy argument at module level

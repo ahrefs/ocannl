@@ -83,9 +83,57 @@ let flatten_longident = Longident.flatten_exn
 let longident_of expr =
   match expr.pexp_desc with Pexp_ident { txt; _ } -> Some (flatten_longident txt) | _ -> None
 
+(** A top-level [include F (A)] of a functor [F] this structure defines -- [Autotune]'s
+    [include Make (Context_driver)], gh-ocannl-1754 -- read as [F]'s body in place: the
+    instantiation's values ARE the module's top-level values, so a scan asking what the module's
+    [tune] reads, or which of its top-level functions a use sits in, finds them there, and its
+    parameter's values ([D.f]) name nothing local, as any other module's do. [F]'s own binding is
+    dropped, so the body is read once. Only a functor included exactly once is inlined: two
+    instantiations would read one body twice, and a functor no top-level [include] applies stays
+    opaque, as before. A functor nested in another module, or applied anywhere but a top-level
+    [include], is left alone. *)
+let inline_instantiation structure =
+  let rec unwrap module_expr =
+    match module_expr.pmod_desc with Pmod_constraint (inner, _) -> unwrap inner | _ -> module_expr
+  in
+  let rec body module_expr =
+    match (unwrap module_expr).pmod_desc with
+    | Pmod_functor (_, inner) -> body inner
+    | Pmod_structure items -> Some items
+    | _ -> None
+  in
+  let functor_of item =
+    match item.pstr_desc with
+    | Pstr_module { pmb_name = { txt = Some name; _ }; pmb_expr; _ } -> (
+        match (unwrap pmb_expr).pmod_desc with
+        | Pmod_functor _ -> Option.map (body pmb_expr) ~f:(fun items -> (name, items))
+        | _ -> None)
+    | _ -> None
+  in
+  let applied item =
+    match item.pstr_desc with
+    | Pstr_include { pincl_mod; _ } -> (
+        match (unwrap pincl_mod).pmod_desc with
+        | Pmod_apply ({ pmod_desc = Pmod_ident { txt = Lident name; _ }; _ }, _) -> Some name
+        | _ -> None)
+    | _ -> None
+  in
+  let functors = List.filter_map structure ~f:functor_of in
+  let included = List.filter_map structure ~f:applied in
+  let inlined name =
+    List.Assoc.mem functors name ~equal:String.equal
+    && List.count included ~f:(String.equal name) = 1
+  in
+  List.concat_map structure ~f:(fun item ->
+      match (functor_of item, applied item) with
+      | Some (name, _), _ when inlined name -> []
+      | _, Some name when inlined name -> List.Assoc.find_exn functors name ~equal:String.equal
+      | _ -> [ item ])
+
 (** Raises if [content] does not parse: a scan that cannot read its input must say so rather than
-    report an empty census. *)
-let structure_of content = Parse.implementation (Lexing.from_string content)
+    report an empty census. A top-level [include] of a functor the file defines reads as its body
+    ({!inline_instantiation}). *)
+let structure_of content = inline_instantiation (Parse.implementation (Lexing.from_string content))
 
 (** The ppx_minidebug extension whose argument names a module's compile-time tracing gate. *)
 let tracing_gate_extension = "global_debug_log_level_from_env_var"
