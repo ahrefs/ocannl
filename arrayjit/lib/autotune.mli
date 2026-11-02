@@ -3227,16 +3227,19 @@ type segment_explain = {
           labels ([F_sketch[...]]) and {!model_default}'s pick name it. *)
   xs_candidates : (string * explain) list;
       (** ["preset"] first -- the segment under the search's preset ({!segment_preset} at [`Search],
-          gh-ocannl-1512), the incumbent its sketches must strictly beat, as must they the segment's
-          [ex_anchor] leaf where there is one -- then every sketch leaf {!model_default}'s family
-          search visits on the segment, in visiting order, each labeled
-          [<sketch parameters> @<key tag>] as an [F_sketch] label renders its entries
-          ({!sketch_params_label}). *)
+          gh-ocannl-1512), one of the two prices its sketches must strictly beat (see
+          {!field-xs_configured}), as must they the segment's [ex_anchor] leaf where there is one --
+          then every sketch leaf {!model_default}'s family search visits on the segment, in visiting
+          order, each labeled [<sketch parameters> @<key tag>] as an [F_sketch] label renders its
+          entries ({!sketch_params_label}). *)
   xs_configured : explain option;
       (** The segment under the CONFIGURED preset ({!segment_preset} at [`Config], gh-ocannl-1633):
-          what {!model_default}'s substitution ships on a segment it leaves unsketched. A diagnostic
-          beside the threshold, not the threshold: a sketch must strictly beat ["preset"] to enter a
-          substitution. [None] where the preset fails to apply. *)
+          what {!model_default}'s substitution ships on a segment it leaves unsketched. The other
+          price (gh-ocannl-1687): a sketch enters a substitution only by strictly beating the lower
+          of ["preset"]'s and this row's ranking scores (and the segment's anchor, where lower) --
+          one that beats only the search's preset would make the shipped pipeline worse than leaving
+          the segment out. [None] where the preset fails to apply; then, as where this row has no
+          score, the segment forms no strict entry (its anchor may still stand). *)
 }
 
 type explanation = {

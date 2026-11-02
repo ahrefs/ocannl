@@ -37,6 +37,11 @@ below the threshold some segment's sketch strictly beats the segment's preset: t
 below the threshold some segment's sketch strictly beats the segment's configured preset: true
 each explained configured preset scores as the configured schedule on its search segment: true
 the below-threshold pick computes the host's values exactly: true
+a segment has a leaf strictly between its configured and its search preset: true
+a segment has a leaf strictly below both of its presets: true
+the pick is a per-segment substitution: true
+each entry of the picked substitution ranks strictly below its segment's lower preset: true
+the configured-price pick computes the host's values exactly: true
 each explained segment is listed once: true
 each explained segment lists its preset first, admitted: true
 every explained per-segment ranking score is at least its bound: true
