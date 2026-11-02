@@ -3680,6 +3680,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   purpose: a `ci.yml` dispatch with `expected_sha` checks out that commit, which may predate any
   new action under `.github/actions/`, so a step that `uses:` one fails the red-span bisection of
   older commits.
+- **A Linux CI job that fills its disk is stopped, not left to hang** (gh-ocannl-1771). On a full
+  disk dune does not fail: run 41203731123 (attempt 1) printed `dune_trace_write(): No space left on
+  device` three minutes into an ubuntu main shard and then sat, `dune` and its `tee` alive, until the
+  45-minute ceiling cancelled it. `ci.yml`'s step `Free disk space and start the disk watchdog
+  (Linux)` deletes the preinstalled toolchains nothing uses (Android, .NET, GHC, CodeQL) in the
+  background and leaves a watchdog polling free space every 5s; under a 1 GiB floor it kills every
+  dune from then on, and `Report the disk headroom (Linux)` (always run) prints the end headroom and
+  the lowest reading, and fails with `::error title=disk space::` on a trip. The tell of a trip: that
+  annotation, and a build step ending in a killed dune. The watchdog's state is in `/dev/shm`, and
+  its output is detached, or the step would wait on it; `test/operations/ci_matrix.sh` runs both
+  steps against stub `df`/`sudo`/`pkill`; a dispatched drill that filled a shard's disk mid-build
+  (run 41476763884) tripped 7s after the fill and ended the job in 4 minutes. Runner disks vary:
+  that drill's runner started with 86 GB free of 145 GB, so the ENOSPC run's must have been a far
+  smaller one. macOS and Windows jobs have no watchdog (no ENOSPC seen there).
 - Where this repository PARSES opam's output, it freezes the format with `--cli=2.1` rather than
   tracking opam — `.github/actions/pin-revisions/resolve.sh` does it for both `opam show --raw
   --sort` and `opam pin list`. Re-verified against a real opam 2.6.0 (2026-09-17): the definition
