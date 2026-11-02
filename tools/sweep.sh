@@ -2618,7 +2618,8 @@ else echo 'check-box: not at this revision'; exit 3; fi" "$log" "$path_prefix" b
 # line of its own, kept in <stamp>-<machine>-<backend>-<log>.log, and never reaching the unit's
 # outcome or its history row; the suite's own claims are what turn a unit red. A swept ref without
 # the script says so. One row per leg, `|`-separated:
-#   backend   the unit's backend the leg follows
+#   backend   the unit the leg follows, by its name: a configuration variant (cc-outlined,
+#             unit_backend) is its own unit and follows no backend's row
 #   when      ran: after pass, incremental-pass or fail; green: after pass or incremental-pass only
 #   gpu       gpu: the leg holds the device for minutes, so it takes a GPU token where the unit does
 #             (run_on_unit_host); -: it does not
@@ -2661,9 +2662,9 @@ diagnostic_legs() { # machine backend host wt path_prefix outcome repo
     jobs=$(box_jobs_sweep_jobs "$machine" "$backend" "$host")
     script=tools/${command#* tools/}
     script=${script%% *}
-    # The unit's own targets, `@slow` included where the unit ran it (test_cmd).
-    if [ -n "$TARGET" ]; then suite="@$TARGET/runtest"; else suite='@runtest @train'; fi
-    [ "$SLOW" != 1 ] || suite="$suite @slow"
+    # The unit's own targets, `@slow` included where the unit ran it (unit_suite, unit_takes_slow).
+    if [ -n "$TARGET" ]; then suite="@$TARGET/runtest"; else suite=$(unit_suite "$backend"); fi
+    ! unit_takes_slow "$backend" || suite="$suite @slow"
     # A leg that runs the suite runs it under the unit's per-test cap (test_cap_start_cmd), which
     # leaves a leg reaching `@slow` to the leg's own cap, as it does the unit's.
     watched=
