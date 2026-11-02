@@ -1,6 +1,6 @@
 (* gh-ocannl-1752: what shape schemes buy in inference cost, on stacks where one block repeats N
-   times, under op_shape_schemes=off|check|guided. Each workload is built in a fresh session; the
-   closure that ends it is forced, and the registration statistics say what each source added to the
+   times, under op_shape_schemes=off|check. Each workload is built in a fresh session; the closure
+   that ends it is forced, and the registration statistics say what each source added to the
    constraint store and where the shape-registration time went. Nothing is compiled.
 
    The deterministic counts are claimed (stdout); the full count and timing tables go to stderr,
@@ -12,10 +12,10 @@ open Ocannl.Nn_blocks.DSL_modules
 open Verdict.Claims
 module Nn = Ocannl.Nn_blocks
 
-type mode = [ `Off | `Check | `Guided ]
+type mode = [ `Off | `Check ]
 
-let modes : mode list = [ `Off; `Check; `Guided ]
-let mode_name = function `Off -> "off" | `Check -> "check" | `Guided -> "guided"
+let modes : mode list = [ `Off; `Check ]
+let mode_name = function `Off -> "off" | `Check -> "check"
 let d_model = 16
 
 (* The repeated block: schemed at its [()] stage, made of schemed nn_blocks layers. *)
@@ -103,20 +103,18 @@ let run_one (mode : mode) w n =
   }
 
 let row_header =
-  "workload depth mode | guided fallback unmatched backward inline | C' E' boundary ties \
-   backward_c inline_c | closure_constraints"
+  "workload depth mode | checked inline | C' E' boundary inline_c | closure_constraints"
 
 let count_row w n mode (c : Shape.registration_counts) =
-  Printf.sprintf "%s %d %s | %d %d %d %d %d | %d %d %d %d %d %d | %d" w n (mode_name mode)
-    c.guided_steps c.fallback_steps c.unmatched_steps c.backward_steps c.inline_registrations
-    c.instantiated_constraints c.instantiated_solutions c.instantiated_boundary c.tie_equations
-    c.backward_constraints c.inline_constraints c.closure_constraints
+  Printf.sprintf "%s %d %s | %d %d | %d %d %d %d | %d" w n (mode_name mode) c.checked_applications
+    c.inline_registrations c.instantiated_constraints c.instantiated_solutions
+    c.instantiated_boundary c.inline_constraints c.closure_constraints
 
 let ms x = Printf.sprintf "%.2f" (x *. 1000.)
 
 let time_header =
-  "workload depth mode | construction_ms closure_ms total_ms | tracing instantiation guided_steps \
-   backward_steps inline_steps (ms)"
+  "workload depth mode | construction_ms closure_ms total_ms | tracing instantiation inline_steps \
+   (ms)"
 
 let time_row w n mode r =
   let t = r.times in
@@ -132,8 +130,6 @@ let time_row w n mode r =
       "|";
       ms t.tracing_s;
       ms t.instantiation_s;
-      ms t.guided_steps_s;
-      ms t.backward_steps_s;
       ms t.inline_steps_s;
     ]
 
@@ -216,20 +212,6 @@ let () =
           p_all "checking leaves the closure the constraint store it has without schemes" cells
             ~f:(fun ((w, n, _), off) ->
               (get w n `Check).counts.closure_constraints = off.counts.closure_constraints);
-          (* As many guided steps per application at every depth: [steps(n) * apps(1)] equals
-             [steps(1) * apps(n)]. *)
-          p_all "a guided application registers as many guided steps at every depth" cells
-            ~f:(fun ((w, n, _), _) ->
-              let c = (get w n `Guided).counts
-              and c1 = (get w (List.hd_exn depths) `Guided).counts in
-              c.guided_steps > 0
-              && c.guided_steps * c1.guided_applications = c1.guided_steps * c.guided_applications);
-          p_all "guided registration skips most of the body's own inequalities" cells
-            ~f:(fun ((w, n, _), off) ->
-              let g = (get w n `Guided).counts in
-              g.inline_constraints + g.backward_constraints < off.counts.inline_constraints);
-          (* The instantiated constraints and the steps' ties stand beside each other until the
-             closure: gh-ocannl-1800's first lever targets this. *)
-          p_all "under guided registration the closure holds more constraints than without schemes"
-            cells ~f:(fun ((w, n, _), off) ->
-              (get w n `Guided).counts.closure_constraints > off.counts.closure_constraints))
+          p_all "checking instantiates a scheme at every depth" cells ~f:(fun ((w, n, _), _) ->
+              let c = (get w n `Check).counts in
+              c.checked_applications > 0 && c.instantiated_constraints > 0))

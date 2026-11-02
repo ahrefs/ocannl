@@ -467,14 +467,6 @@ module Scheme : sig
       scheme. How each application uses it is the [op_shape_schemes] setting:
       - [check] (the default): each application checks the scheme against its arguments' shapes, in
         a window that is always rewound, before the body runs and registers as it always does;
-      - [guided] (opt-in, gh-ocannl-1761; gh-ocannl-1752 measured it slower than [check] on every
-        stack, superlinearly in depth): the scheme is instantiated against the arguments' shapes
-        once, persistently, and the body runs with its shape registration guided by the trace --
-        each update step that matches the trace's next step registers without deriving or solving
-        its own inequalities (see {!Shape.Scheme.guided}). Closed shapes, projections, generated
-        code, ids and values are those of inline construction; the function's graph must not depend
-        on state outside its closure and its arguments' shapes: a trace step the body does not build
-        raises ["... the function built a different graph than at its trace"];
       - [off]: no schemes.
 
       A shape error that does not depend on the arguments raises at the trace, prefixed
@@ -483,9 +475,7 @@ module Scheme : sig
       scheme cannot carry (random number generation, an external capture reference, forcing dims, or
       a body that cannot run on tracers) leaves the function unschemed, as it was before, once its
       rewind succeeded. Ids are unaffected: traces and checks allocate tensor ids, node uids and
-      shape-variable ids from reserved ranges; a guided application allocates no tensor id or node
-      uid beyond its body's, but its shape-variable ids (which closure discards) differ from inline
-      registration's. *)
+      shape-variable ids from reserved ranges. *)
 
   type handle
   (** A function's scheme slot: one per closure. *)
@@ -497,11 +487,10 @@ module Scheme : sig
     | Traced of string  (** A function's scheme was traced. *)
     | Unschemed of string * string  (** A function was left unschemed, with the reason. *)
     | Checked of string  (** An application was checked against its function's scheme. *)
-    | Guided of string  (** An application was registered guided by its function's scheme. *)
 
   val registration_counts : unit -> Shape.registration_counts
-  (** Process-wide registration statistics since the last reset (gh-ocannl-1761, for
-      gh-ocannl-1752's attribution): see {!Shape.registration_counts}. *)
+  (** Process-wide registration statistics since the last reset (gh-ocannl-1752's attribution): see
+      {!Shape.registration_counts}. *)
 
   val reset_registration_counts : unit -> unit
 
@@ -530,10 +519,8 @@ module Scheme : sig
     (** Traces at the first application: a [%op] function without a [()] stage. *)
 
     val apply : handle -> tensor list -> (unit -> 'a) -> 'a
-    (** [apply h args body] (tracing [h]'s scheme first when pending or stale) runs [body] guided by
-        the scheme, or checks the scheme against [args] and then runs [body], per the
-        [op_shape_schemes] setting. Inside a trace, inside a guided application, and when unschemed,
-        only runs [body]. *)
+    (** [apply h args body] (tracing [h]'s scheme first when pending or stale) checks the scheme
+        against [args], then runs [body]. Inside a trace, and when unschemed, only runs [body]. *)
   end
 end
 
@@ -557,12 +544,8 @@ module For_testing : sig
   val observe_schemes : (unit -> 'a) -> on_event:(Scheme.event -> unit) -> 'a
   (** Runs the function, reporting the automatic schemes' events to [on_event]. *)
 
-  val set_op_shape_schemes : [ `Guided | `Check | `Off ] option -> unit
+  val set_op_shape_schemes : [ `Check | `Off ] option -> unit
   (** Overrides the [op_shape_schemes] setting in-process ([None]: back to the setting). *)
-
-  val with_guided_sabotage : Shape.Scheme.sabotage -> (unit -> 'a) -> 'a
-  (** Runs the function with guided applications ({!Shape.Scheme.guided}) sabotaged: a negative
-      control. *)
 
   val discarded_registry_sizes : unit -> int * int
   (** The number of nodes the rewinds' registry of discarded nodes holds, and of the still-reachable

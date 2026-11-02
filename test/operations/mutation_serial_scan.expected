@@ -73,7 +73,6 @@ tensor/tensor.ml: id_neutral_sabotaged (unread state) -- exempt
 tensor/tensor.ml: observers (unread state) -- exempt
 tensor/tensor.ml: generation (unread state) -- exempt
 tensor/tensor.ml: mode_override (unread state) -- exempt
-tensor/tensor.ml: guided_sabotage (unread state) -- exempt
 tensor/tensor.ml: boundary note_external_handout -- a closed-world act: records that work left the session, so a rewind does not resurrect it; not open inference state
 tensor/tensor.ml: boundary record_checkpoint -- the closure's record: run at the commit of a successful finish_inference, and to re-anchor after a rewind or a session reset
 tensor/tensor.ml: boundary discarded_window_nodes -- the weak registry's creation on first use: an empty registry, which no rewind restores

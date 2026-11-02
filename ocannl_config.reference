@@ -2076,22 +2076,15 @@
 # in shape error exceptions.
 #max_shape_error_origins=20
 
-# Automatic shape schemes of `%op` functions (gh-ocannl-1751, gh-ocannl-1761). The scheme of a
-# `%op` function whose returned function takes only tensors is traced when its closure is built (at
-# its `()` application, or at the first application without a `()` stage); an application error
-# that depends on the arguments is reported naming the function, before the body runs.
+# Automatic shape schemes of `%op` functions (gh-ocannl-1751). The scheme of a `%op` function whose
+# returned function takes only tensors is traced when its closure is built (at its `()`
+# application, or at the first application without a `()` stage); an application error that
+# depends on the arguments is reported naming the function, before the body runs.
 # `check` (the default): each application checks the scheme in a rewound window, then the body
-#   registers as without schemes.
-# `guided` (opt-in): each application instantiates the scheme once against its arguments, and the
-#   body's shape registration follows the trace -- every update step that matches the trace's next
-#   step skips deriving and solving its own constraints. The function's graph must not depend on
-#   state outside its closure and its arguments' shapes: a trace step the body does not build
-#   raises "the function built a different graph than at its trace". Measured slower than `check`
-#   (gh-ocannl-1752: 2.5x off at depth 1, 26-31x at depth 16), so not the default.
+#   registers as without schemes. Shape inference takes about twice as long (gh-ocannl-1752).
 # `off`: every function builds as before, unchecked.
-# In every mode the closed shapes, the tensor ids and node uids, the generated code and the values
-# are the same (guided registration changes only the ids of open shape variables, which closure
-# discards). Read once per process. See docs/syntax_extensions.md.
+# Either way the graph, its tensor ids and node uids, the generated code and the values are the
+# same. Read once per process. See docs/syntax_extensions.md.
 #op_shape_schemes=check
 
 # Whether Persistence.load / Persistence.restore wrap a checkpoint's payloads as private
