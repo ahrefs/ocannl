@@ -1232,6 +1232,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   stand-in delayed 1.5 s before recording reproduced the original failure on the base tree; a
   natural reproduction was not found (mac-studio at load 70, CPU and fresh-exe churn, started it
   within 0.2 s).
+  The same trap reddened `sweep_harness`'s probe legs and the benchmark drivers' capped cells on a
+  loaded macbook-pro (gh-ocannl-1807), fixed by making the start-up irrelevant rather than
+  waiting it out. `sweep_harness` counts a unit's queries from the SWEEP's record of them
+  (`probe_queries`), which a query killed before its first line is still in; only the answered leg
+  reads the stand-in's own record (its directory), and the hung query's pid is judged when the
+  stand-in got to publish it. `SWEEP_TEST_PROBE_SILENT` pins the count against a stand-in that
+  records nothing. In `benchmarks/`, a capped fixture writes its evidence and then `publish_pid`s:
+  `cap_counted_from(pidfile)` (`benchmarks/test/test_cell_group.py`; `started=` on
+  `CellTimeoutTest.run_cell`) holds the wait that carries the cap until the publication, and
+  `interrupt_once_published` replaces an interval timer armed before the spawn. A new capped or
+  interrupted fixture whose test reads what it wrote before the kill goes through one of them.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
