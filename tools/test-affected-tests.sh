@@ -587,6 +587,13 @@ if harness_leg 'link-only'; then
       && grep -qF 'Helper (no definition: only comments or blank lines changed)' "$err"; then
     report 0 'a comment-only change changes no definition, and says so'
   else report 1 'a comment-only change changes no definition, and says so' "exit $rc; $(tr '\n' '|' <"$err")"; fi
+  # ... but delimiters that comment out lines git shows unchanged change them: the whole module
+  # (local review). gen names `used`, which `(*` and `*)` lines around it remove.
+  printf '(*\nlet used = 1\n*)\nlet unused = 2\n' >"$repo/lib/helper.ml"
+  affected --referenced-only HEAD
+  if [ "$rc" = 0 ] && grep -qx @t2/runtest-gen-v1 "$out"; then
+    report 0 'commenting out an unchanged line changes the module as a whole'
+  else report 1 'commenting out an unchanged line changes the module as a whole' "exit $rc; $(tr '\n' ' ' <"$out"); $(tr '\n' '|' <"$err")"; fi
   # A blank line inside a string literal is a changed value, not an inert line.
   printf 'let used = 1\nlet unused = 2\nlet text = {|a\nb|}\n' >"$repo/lib/helper.ml"
   git_q commit -qam helper-text || exit 2
@@ -706,6 +713,8 @@ helper_fixture() {
 (test (name t_hopen) (modules t_hopen) (libraries core))
 (test (name t_halias) (modules t_halias) (libraries core))
 (test (name t_hcross) (modules t_hcross) (libraries hlp))
+(library (name hinc) (modules hinc) (libraries core))
+(test (name t_hinc) (modules t_hinc) (libraries hinc))
 (test (name t_hsel) (modules t_hsel) (libraries (select t_hsel.ml from (core -> t_hsel.real.ml) (-> t_hsel.missing.ml))))
 DUNE
   cat >"$repo/t8/hlp.ml" <<'ML'
@@ -733,6 +742,9 @@ ML
   printf 'module C = Core\nlet () = ignore C.H.used\n' >"$repo/t8/t_halias.ml"
   # An open in the helper opens nothing in the test calling it: this `H` is its own.
   printf 'module H = struct let used = 0 end\nlet () = Hlp.plain (); ignore H.used\n' >"$repo/t8/t_hcross.ml"
+  # `include` re-exports Helper's members as Hinc's own: `Hinc.used` names Helper (local review).
+  printf 'include Core.H\n' >"$repo/t8/hinc.ml"
+  printf 'let () = ignore Hinc.used\n' >"$repo/t8/t_hinc.ml"
   # A `(select)` module is read through every arm (gh-ocannl-1765), the one not built here too.
   printf 'let () = ()\n' >"$repo/t8/t_hsel.real.ml"
   printf 'let () = ignore Core.H.used\n' >"$repo/t8/t_hsel.missing.ml"
@@ -746,12 +758,12 @@ if harness_leg 'helper definitions'; then
   affected --referenced-only --files lib/helper.ml
   expect 'a helper library names a module through the definitions a test names, never its comments; a bare re-export name is no mention' 0 \
     @t1/runtest-t_core @t2/runtest-gen-v1 @t2/runtest-needs_pkg @t2/runtest-orphan @t2/runtest-pkg @t2/runtest-scan @t2/runtest-scenario_x @t2/slow-gen \
-    @t5/slow-usesh @t8/runtest-t_hindirect @t8/runtest-t_hnamed @t8/runtest-t_hopen @t8/runtest-t_halias @t8/runtest-t_hsel
+    @t5/slow-usesh @t8/runtest-t_hindirect @t8/runtest-t_hnamed @t8/runtest-t_hopen @t8/runtest-t_halias @t8/runtest-t_hsel @t8/runtest-t_hinc
   if grep -qx 'affected: link-only: @t8/runtest-t_hplain' "$err" && grep -qx 'affected: link-only: @t8/runtest-t_hbare' "$err" \
       && grep -qx 'affected: link-only: @t8/runtest-t_hbeside' "$err" && grep -qx 'affected: link-only: @t8/runtest-t_hcross' "$err"; then
     report 0 'what names neither is ranked link-only, and named on stderr'
   else report 1 'what names neither is ranked link-only, and named on stderr' "$(cat "$err")"; fi
-  hctl() { # LABEL FROM TO: the mutant must list t_hplain under --referenced-only
+  hctl() { # LABEL FROM TO ALIAS: the mutant must list ALIAS under --referenced-only
     local mutant=$repo/tools/affected-mutant.sh
     if FROM=$2 TO=$3 perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
         "$repo/tools/affected-tests.sh" >"$mutant"; then
@@ -789,7 +801,7 @@ if harness_leg 'explain'; then
   printf 'let used = 2\nlet unused = 2\n' >"$repo/lib/helper.ml"
   affected HEAD --why @t8/runtest-t_hindirect --why t8/runtest-t_hplain --why @t2/runtest-gen-v1 \
     --why @t2/runtest-scan --why @t3/runtest-neg --why @t9/runtest-none --why @t8/runtest-t_hopen --why @t8/runtest-t_hbeside \
-    --why @t8/runtest-t_hsel
+    --why @t8/runtest-t_hsel --why @t8/runtest-t_hinc
   cp "$out" "$TMP/why-out" || exit 2
   why_has 'helper: the changed definition is named through the helper definitions a test names, back to its own source' \
     'affected: why @t8/runtest-t_hindirect: REFERENCED: printed first' \
@@ -798,7 +810,7 @@ if harness_leg 'explain'; then
   why_has 'link-only: what names neither the module nor a re-export of it says so (the leading @ optional)' \
     'affected: why @t8/runtest-t_hplain: LINK-ONLY: printed last; --referenced-only leaves it off' \
     'affected: why @t8/runtest-t_hplain: its owner tests t_hplain (t8) -> library hlp (t8) -> library core (lib), which lib/helper.ml (its module Helper) reached' \
-    'affected: why @t8/runtest-t_hplain:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names neither Helper nor a re-export of it through the module making it (H through Core)'
+    'affected: why @t8/runtest-t_hplain:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names neither Helper nor a re-export of it through the module making it (H through Core, Hinc through Hinc)'
   why_has 're-export: a test naming the module through a re-export, but no changed definition, is link-only and told so' \
     'affected: why @t2/runtest-gen-v1: LINK-ONLY: printed last; --referenced-only leaves it off' \
     'affected: why @t2/runtest-gen-v1:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names Helper (`H`, re-exporting Helper from Core: `Core.H` at t2/gen.ml (its own source)) but none of its changed definitions (used)'
@@ -806,10 +818,13 @@ if harness_leg 'explain'; then
     'affected: why @t8/runtest-t_hopen: REFERENCED: printed first' \
     'affected: why @t8/runtest-t_hopen:   referenced: it names Helper: `H`, re-exporting Helper from Core: `open Core: H` at t8/t_hopen.ml (its own source); and its changed definition(s): `used` at t8/t_hopen.ml (its own source)' \
     'affected: why @t8/runtest-t_hbeside: LINK-ONLY: printed last; --referenced-only leaves it off' \
-    'affected: why @t8/runtest-t_hbeside:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names neither Helper nor a re-export of it through the module making it (H through Core)'
+    'affected: why @t8/runtest-t_hbeside:   link-only on its account: its code (its sources, its project ppx'"'"'s, the helper definitions it names) names neither Helper nor a re-export of it through the module making it (H through Core, Hinc through Hinc)'
   why_has 'select: a (select) module is read through every arm, the one this build did not choose included (gh-ocannl-1765)' \
     'affected: why @t8/runtest-t_hsel: REFERENCED: printed first' \
     'affected: why @t8/runtest-t_hsel:   referenced: it names Helper: `H`, re-exporting Helper from Core: `Core.H` at t8/t_hsel.missing.ml (its own source); and its changed definition(s): `used` at t8/t_hsel.missing.ml (its own source)'
+  # Hinc's own `include Core.H` names H through Core too; the second reason is the include's.
+  why_has 'include: naming the including module is a reference to what it includes (local review)' \
+    'affected: why @t8/runtest-t_hinc:   referenced: it names Helper: `H`, re-exporting Helper from Core: `Core.H` at t8/hinc.ml (a top-level form, counted whenever Hinc is named) <- `Hinc` at t8/t_hinc.ml (its own source); `Hinc`, re-exporting Helper from Hinc: `Hinc` at t8/t_hinc.ml (its own source); and its changed definition(s): `used` at t8/t_hinc.ml (its own source)'
   why_has 'a scan: its own rule reads the changed path; an alias nothing reaches, and a name dune does not list, say so' \
     'affected: why @t2/runtest-scan: REFERENCED: printed first' \
     'affected: why @t2/runtest-scan: the rule of its own target t2/scan.actual reads lib/helper.ml' \

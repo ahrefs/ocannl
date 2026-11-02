@@ -3017,15 +3017,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     (a local `module C = Context` too), or in a file that opens or includes the re-exporter (`open`,
     `let open`, `X.( )`), or in the re-exporter's own source -- an open in a helper opens nothing in
     the test calling it, and any other token of the re-exporter no longer counts (`Tn` beside a
-    `Tensor.print`). A `(select)` module counts by every arm's file (a `tests` stanza, read from its
-    dune form), and a described stanza's copied module (a select arm, a `copy#`: a rule that runs
-    nothing and reads one OCaml file) by the file it copies; both were "code not all known", so
-    always first (12 of the 21 code-referenced owners of the `tnode.ml` case below). And a changed
-    line holding no code -- blank or comment only, outside every literal -- touches no definition:
-    the blank line or doc comment above an added definition had touched the definition above it
-    (the `walk_scalar` sighting), and a comment-only edit now ranks every linking alias last. One
-    added function in `tnode.ml` went from 628 aliases to 24 under `--referenced-only`, all of them
-    scans reading the file. The re-export reading alone moved no count on the real edits tried
+    `Tensor.print`). An `include M` in X re-exports into X itself, so naming X is the reference
+    (`Autotune.sketch_seed_params` names `Sketch_families`). A `(select)` module counts by every
+    arm's file (a `tests` stanza, read from its dune form), and a described stanza's copied module
+    (a select arm, a `copy#`: a rule that runs nothing and reads one OCaml file) by the file it
+    copies; both were "code not all known", so always first (12 of the 21 code-referenced owners
+    of the `tnode.ml` case below). And a changed line holding no code -- blank or comment only,
+    outside every literal -- touches no definition: the blank line or doc comment above an added
+    definition had touched the definition above it (the `walk_scalar` sighting), and a
+    comment-only edit now ranks every linking alias last -- unless a delimiter changes how a line
+    git shows unchanged reads (a definition commented out between added `(*` and `*)` lines, or
+    brought back), which changes the module as a whole. One added function in `tnode.ml` went
+    from 628 aliases to 24 under `--referenced-only`, all of them scans reading the file. The re-export reading alone moved no count on the real edits tried
     (`tnode.ml`, `indexing.ml`, `ndarray.ml`, `assignments.ml`, `low_level.ml`): every owner it
     stopped counting also names the module itself, or is reached through `ppx_ocannl`'s sources,
     which name `Assignments`, `Indexing` and more for every `%cd`/`%op` user (the boundary above).

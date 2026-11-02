@@ -2187,11 +2187,26 @@ if (-f "$tmp/ml-diff") {
     # A changed line holding no code -- blank, or comment only, outside every
     # literal -- changes no definition (gh-ocannl-1765: the blank line above an
     # added definition was attributed to the definition above it).
-    my %inert = map { my $f = "$tmp/$_/$p"; my @l = -f $f ? split(/\n/, code_of(slurp($f), 1), -1) : ();
-                      ($_ => { map { $l[$_] =~ /\S/ ? () : ($_ + 1 => 1) } 0 .. $#l }) } qw(old new);
+    my %code = map { my $f = "$tmp/$_/$p"; ($_ => [-f $f ? split(/\n/, code_of(slurp($f), 1), -1) : ()]) } qw(old new);
+    my %inert = map { my $l = $code{$_}; ($_ => { map { $l->[$_] =~ /\S/ ? () : ($_ + 1 => 1) } 0 .. $#$l }) } qw(old new);
     # A file new on this side (an `.mli` added beside its `.ml`, say) or gone from
     # it can hide or expose any member: the whole module.
     if (!-f "$tmp/old/$p" || !-f "$tmp/new/$p") { $path_defs{$p} = undef; next }
+    # A delimiter on a changed line can comment out, or bring back, lines git
+    # shows unchanged (a definition between an added `(*` and `*)`), and a quote
+    # can turn them into a literal: every unchanged line must read as the same
+    # code on both sides, or the whole module changed (local review).
+    my ($o, $n, $moved) = (1, 1, 0);
+    my @hs = @{$hunks{$p}};
+    for (my $k = 0; $k <= $#hs; $k += 2) {
+      my ((undef, $os, $oc), (undef, $ns, $nc)) = (@{$hs[$k]}, @{$hs[$k + 1]});
+      my $before = $oc ? $os : $os + 1;   # the first old line of the hunk, or the one after an insertion
+      for (; $o < $before; $o++, $n++) { $moved = 1 if ($code{old}[$o - 1] // "") ne ($code{new}[$n - 1] // "") }
+      $o += $oc;
+      $n += $nc;
+    }
+    for (; $o <= @{$code{old}}; $o++, $n++) { $moved = 1 if ($code{old}[$o - 1] // "") ne ($code{new}[$n - 1] // "") }
+    if ($moved) { $path_defs{$p} = undef; next }
     for my $h (@{$hunks{$p}}) {
       my ($which, $start, $count) = @$h;
       next unless $count;
@@ -2355,6 +2370,8 @@ sub owner_names {
   for (keys %$tok) { $aliases{$2}{$1} = 1 if /^alias (\S+) (\S+):/ }
   my $through = sub {   # RE-EXPORTER NAME -> the key (qual_keys) reading NAME as RE-EXPORTER's, or undef
     my ($x, $n) = @_;
+    # `include M` in X re-exports M's members as X's own: naming X is the reference.
+    return $n if $x eq $n && $tok->{$n};
     my ($k) = grep { $tok->{$_} } "$x.$n", "open $x: $n", map { "alias $_ $x: $n" } sort keys %{$aliases{$x} // {}};
     return $k;
   };
