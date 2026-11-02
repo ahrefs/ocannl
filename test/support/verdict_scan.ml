@@ -813,13 +813,14 @@ let tolerance_census content =
     too -- and the body of a local function it applies; an ancestor two branches share is read on
     each path. Its POPULATION is what the claims its [make] function makes in place range over, each
     read by {!leg_population_slots}: a boolean as a [gated] boolean's, collections as a [gated_*]
-    claim's. A make function that makes no claim in place (its claim a helper's), or a helper
-    applied in [make]'s place, makes it from what it hands a helper: every argument of every
-    application of a function of the source or another module (not an operator, a
-    {!standard_functions} name or a standard or collection module's function), each read as a
-    population -- the loud direction. On both sides, and for the [gated_*] forms too, a [lazy e] is
-    [e]'s and [Lazy.force x] (or [Base]'s [force]) is [x]'s: a leg's evidence lives in lazies only
-    its claims force.
+    claim's. Beside them, every argument the make function hands a helper -- a function of the
+    source or another module, not an operator, a {!standard_functions} name, a standard or
+    collection module's function, or [Verdict]'s own -- is the population of the claim that helper
+    makes, on every path where no claim read in place runs: where each such claim sits in another
+    branch of some [if], [match] or [function] than the helper. A helper applied in [make]'s place
+    is such a helper. The loud direction. On both sides, and for the [gated_*] forms too, a [lazy e]
+    is [e]'s and [Lazy.force x] (or [Base]'s [force]) is [x]'s: a leg's evidence lives in lazies
+    only its claims force.
 
     A leg claim applied in part -- without its [~leg], its label and its make function in place, an
     [in_legf] with exactly as many arguments as its literal format takes before the make function
@@ -1043,10 +1044,15 @@ let standard_functions =
 (* A leg claim's population as the walk meets the claims of its [make]: each slot's expression,
    whether it is a boolean, and the scope it was written in. *)
 type leg_collector = {
-  mutable populations : (expression * bool * (gate_denotation, gate_module) Lexical_scope.env) list;
-  mutable handed : (expression * (gate_denotation, gate_module) Lexical_scope.env) list;
-      (** Every argument of every application in [make]: the population where it makes no claim this
-          reader reads in place (a helper's). *)
+  mutable populations :
+    (int * expression * bool * (gate_denotation, gate_module) Lexical_scope.env) list;
+      (** Each claim's slot, after the position of the claim. *)
+  mutable handed : (int * expression * (gate_denotation, gate_module) Lexical_scope.env) list;
+      (** Every argument of every helper application in [make], after the application's position:
+          the population on a path where it makes no claim this reader reads in place. *)
+  mutable branches : (int * int) list list;
+      (** The branch spans of every [if], [match] and [function] in [make]: two points in different
+          branches of one never run together. *)
 }
 
 let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
@@ -2659,7 +2665,8 @@ let gate_census content =
 
       (* While a leg's [make] is walked: a claim adds its population to the innermost leg's, and an
          application of a {!helper} hands its arguments to the leg's fallback population. *)
-      method collect_leg_population env callee arguments =
+      method collect_leg_population env expr callee arguments =
+        let at = position expr in
         match leg_stack with
         | [] -> ()
         | collector :: _ -> (
@@ -2670,9 +2677,20 @@ let gate_census content =
               | Some (callee, arguments, _) -> (callee, arguments)
               | None -> (callee, arguments)
             in
-            if self#helper env callee then
+            (* A [Verdict] claim or leg constructor is no helper: its arguments are a claim's own
+               slots, or a skip's label and backend. *)
+            let verdicts =
+              match
+                (Verdict_callee.resolve owners callee, Verdict_callee.resolve_leg owners callee)
+              with
+              | Some { ownership = Verdicts | Ambiguous | Free; _ }, _
+              | _, Some { ownership = Verdicts | Ambiguous; _ } ->
+                  true
+              | _ -> false
+            in
+            if (not verdicts) && self#helper env callee then
               collector.handed <-
-                List.map arguments ~f:(fun (_, argument) -> (argument, env)) @ collector.handed;
+                List.map arguments ~f:(fun (_, argument) -> (at, argument, env)) @ collector.handed;
             match Verdict_callee.resolve owners callee with
             | Some { member; ownership = Verdicts | Ambiguous | Free; _ } -> (
                 let positional =
@@ -2687,7 +2705,7 @@ let gate_census content =
                 in
                 let add boolean expressions =
                   collector.populations <-
-                    List.map expressions ~f:(fun e -> (e, boolean, env)) @ collector.populations
+                    List.map expressions ~f:(fun e -> (at, e, boolean, env)) @ collector.populations
                 in
                 let last n = List.drop positional (List.length positional - n) in
                 match List.Assoc.find leg_population_slots member ~equal:String.equal with
@@ -2729,7 +2747,7 @@ let gate_census content =
         in
         match (leg, make) with
         | Some leg, Some make ->
-            let collector = { populations = []; handed = [] } in
+            let collector = { populations = []; handed = []; branches = [] } in
             (* A make function not written in place -- a helper applied to its arguments -- makes
                its claim from what it is handed; one given by name, from what this reader cannot
                see. *)
@@ -2737,7 +2755,8 @@ let gate_census content =
               match (strip_constraints make).pexp_desc with
               | Pexp_function _ -> false
               | Pexp_apply (_, arguments) ->
-                  collector.handed <- List.map arguments ~f:(fun (_, argument) -> (argument, env));
+                  collector.handed <-
+                    List.map arguments ~f:(fun (_, argument) -> (position make, argument, env));
                   false
               | _ -> true
             in
@@ -2766,10 +2785,29 @@ let gate_census content =
                     let built = Hash_set.Poly.create () in
                     (* No claim read in place: everything the make function hands to a call, the
                        population of the claim a helper makes. *)
+                    (* A helper's arguments are its claim's population on a path where no claim
+                       read in place runs: where every such claim sits in another branch of some
+                       conditional than the helper. *)
+                    let disjoint a b =
+                      List.exists collector.branches ~f:(fun spans ->
+                          let branch_of point =
+                            List.findi spans ~f:(fun _ (start, stop) ->
+                                start <= point && point < stop)
+                            |> Option.map ~f:fst
+                          in
+                          match (branch_of a, branch_of b) with
+                          | Some i, Some j -> i <> j
+                          | _ -> false)
+                    in
                     let populations =
-                      if List.is_empty collector.populations then
-                        List.map collector.handed ~f:(fun (e, e_env) -> (e, false, e_env))
-                      else collector.populations
+                      List.map collector.populations ~f:(fun (_, e, boolean, e_env) ->
+                          (e, boolean, e_env))
+                      @ List.filter_map collector.handed ~f:(fun (helper, e, e_env) ->
+                          if
+                            List.for_all collector.populations ~f:(fun (claim, _, _, _) ->
+                                disjoint claim helper)
+                          then Some (e, false, e_env)
+                          else None)
                     in
                     List.iter populations ~f:(fun (population, boolean, population_env) ->
                         Hash_set.iter
@@ -2992,6 +3030,17 @@ let gate_census content =
         (* A leg claim (gh-ocannl-1794): its [make] is registered to be walked with its collector
            innermost (see [expression]), so the claims made there add their populations; one named
            as a value, or applied in part, is reported unread. *)
+        (match (quiet, leg_stack) with
+        | 0, collector :: _ -> (
+            let span e = (e.pexp_loc.loc_start.pos_cnum, e.pexp_loc.loc_end.pos_cnum) in
+            let record spans = collector.branches <- spans :: collector.branches in
+            match expr.pexp_desc with
+            | Pexp_ifthenelse (_, yes, no) ->
+                record (span yes :: Option.to_list (Option.map no ~f:span))
+            | Pexp_match (_, cases) | Pexp_function (_, _, Pfunction_cases (cases, _, _)) ->
+                record (List.map cases ~f:(fun case -> span case.pc_rhs))
+            | _ -> ())
+        | _ -> ());
         (if quiet = 0 then
            let leg_member callee =
              match Verdict_callee.resolve owners callee with
@@ -3002,7 +3051,7 @@ let gate_census content =
            in
            match expr.pexp_desc with
            | Pexp_apply (callee, arguments) -> (
-               self#collect_leg_population env callee arguments;
+               self#collect_leg_population env expr callee arguments;
                match leg_member callee with
                | Some (member, spelled, ambiguous) ->
                    Hash_set.add leg_heads (position (strip_constraints callee));
@@ -3433,9 +3482,13 @@ let skip_list_census content =
                 List.iter arguments ~f:(fun (label, argument) ->
                     let index = !positional in
                     (match label with Ppxlib.Asttypes.Nolabel -> Int.incr positional | _ -> ());
+                    let labels = List.map arguments ~f:fst in
+                    (* A partial application stores its callback; only a complete one runs it. *)
                     if
                       calls_back ~stdlib:false name label index
+                      && applied_fully ~stdlib:false name labels
                       || calls_back ~stdlib:true name label index
+                         && applied_fully ~stdlib:true name labels
                     then report Iterated expr (iterated_argument argument)))
         | Pexp_for (_, _, _, _, body) | Pexp_while (_, body) ->
             report Iterated expr (skip_only body)

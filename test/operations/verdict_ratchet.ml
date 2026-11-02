@@ -4701,6 +4701,13 @@ let () =
   let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
   in_leg ~leg "all rows pass" (fun label -> p_all label ~f:Fn.id @@ rows)|ocaml},
       [ "rows" ] );
+    ( "refuses a leg gate read off what a helper on one path is handed beside a claim on another",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  in_leg ~leg "all rows pass" (fun label -> if feature then p label true else check_rows label rows)|ocaml},
+      [ "rows" ] );
     ( "accepts a leg gated on a capability over a population built from the same program",
       {ocaml|open Verdict.Claims
 let () =

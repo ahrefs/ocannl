@@ -2154,8 +2154,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (gh-ocannl-1794): an `in_leg`/`in_legf`'s gate is the `~when_` of the qualified `Verdict.leg`/
   `Verdict.sub_leg` its `~leg` reaches -- through names, every `sub_leg`'s outer leg, an `if`'s or
   `match`'s pick of a leg (its condition, scrutinee or guard a gate too) and a local function's body --
-  and its population is what the claims its make function makes range over, or, made through a
-  helper, everything the make function hands one. Both sides follow data thunks (`lazy`,
+  and its population is what the claims its make function makes range over, and, on a path where
+  none of those runs, everything the make function hands a helper. Both sides follow data thunks (`lazy`,
   `Lazy.force`), the population side for `gated_*` claims too. A leg handed in as a parameter or
   read from a field is the boundary, counted on stderr as uncompared, as a `gated_*` population
   through a parameter is; a leg claim applied in part is refused as unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing

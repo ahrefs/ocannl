@@ -351,6 +351,9 @@ let () = List.iter labels ~f:skipped|ocaml},
       ( "a function value a loop body only builds",
         {ocaml|let () = for _i = 1 to 2 do ignore (fun () -> Verdict.skipped ~backend:"cc" "one") done|ocaml},
         [] );
+      ( "a partial iteration, which stores its skip callback",
+        {ocaml|let skip_labels = List.iter ~f:(Verdict.skipped ~backend:"cc")|ocaml},
+        [] );
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );
