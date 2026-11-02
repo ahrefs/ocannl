@@ -56,6 +56,18 @@ a skipped probe leaves the reading the singles' minimum, as the confirmed settle
 under the ratio a fixed-dominated device's probe still batches it: true
 past the ratio a fixed term of the target's size is timed at depth 1 (the stated boundary): true
 
+== a prior depth the singles agree with is kept without probes ==
+singles at the target with a prior of 1 settle at depth 1 on themselves, with no probe: true
+without the prior the same singles take the depth-2 probe and settle at depth 1: true
+the prior leaves the reading the probed call's: the singles' minimum: true
+a deep prior at or past the singles' provisional depth is kept, with no probe: true
+its window's batches are all at that depth: true
+a prior-depth window reads the batch's per-launch wall at that depth: true
+without the prior the same device probes: true
+singles that disagree with the prior calibrate exactly as without it: true
+without a prior a fixed-dominated device's probe batches it: true
+with a prior of 1 the same device is timed at depth 1 (the stated boundary): true
+
 == Metal queued contention retry ==
 a transiently contended Metal window retries once and admits the fresh window: true
 persistent Metal contention retries once and remains refused: true

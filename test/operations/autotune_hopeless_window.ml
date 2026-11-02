@@ -86,7 +86,7 @@ let call ?hopeless_against ~timing ~cap ~per_launch_ms () =
   in
   let outcome =
     match
-      Autotune.calibrate_and_time_with_retry_observer ~hopeless_against
+      Autotune.calibrate_and_time_with_retry_observer ~hopeless_against ~prior_depth:None
         ~on_retry:(fun () -> ())
         ~on_call:(fun _ -> ())
         ~phase:None ~retry_contended:false ~dispersion:Autotune.Refuse_dispersed ~timing ~repeats:3

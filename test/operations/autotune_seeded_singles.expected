@@ -38,3 +38,9 @@ a segment single is among the cut: true
 a seeded single under 1.05 times the plan takes its whole window: true
 a segment single takes its whole window: true
 the report counts the cut seeded windows, and the search crowns the plan: true
+the plan calibrates itself: its depth-2 probe settles depth 1: true
+every seeded single settles at the plan's depth with no probe: true
+a segment single is timed: true
+a split single is timed: true
+no other candidate settles at a prior depth: true
+the search crowns the plan at its reading: true
