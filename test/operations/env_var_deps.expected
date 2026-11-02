@@ -174,6 +174,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-bin_smoke_membership_scan
   test/operations/dune                     @runtest-bin_smoke_membership_scan_control
   test/operations/dune                     @runtest-branchless_select-no_hip_fast_math
+  test/operations/dune                     @runtest-branchless_select-outlined
   test/operations/dune                     @runtest-cache_dir_ignores
   test/operations/dune                     @runtest-cache_dir_ignores_control
   test/operations/dune                     @runtest-cc_dlopen_cause
@@ -264,6 +265,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-gh1133_summary
   test/operations/dune                     @runtest-gpu_cotenants
   test/operations/dune                     @runtest-half_unary_math-reproducible
+  test/operations/dune                     @runtest-heap_local_arrays-outlined
   test/operations/dune                     @runtest-hello_world_op
   test/operations/dune                     @runtest-kernel_attribution
   test/operations/dune                     @runtest-label_dispatch_scan
@@ -316,6 +318,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-test_where_precision-extension
   test/operations/dune                     @runtest-test_where_precision-unoptimized
   test/operations/dune                     @runtest-tf32_reference_rounding-tf32
+  test/operations/dune                     @runtest-thread_private_gate-outlined
   test/operations/dune                     @runtest-top_down_prec-extension
   test/operations/dune                     @runtest-top_down_prec-unoptimized
   test/operations/dune                     @runtest-unary_math_special_values-reproducible

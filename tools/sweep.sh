@@ -36,11 +36,13 @@
 # boxes do not wait for each other.
 #
 # Usage:
-#   tools/sweep.sh                     # cc + metal locally; cuda on rog-nv, hip + multidev_cc on minix,
-#                                      # and hip again on tuf (discrete memory), if up
+#   tools/sweep.sh                     # cc + metal + cc-outlined locally; cuda on rog-nv, hip +
+#                                      # multidev_cc on minix, and hip again on tuf (discrete
+#                                      # memory), if up
 #   tools/sweep.sh --slow             # also `dune build @slow`
 #   tools/sweep.sh --force             # cold rebuild and re-execute every test alias
 #   tools/sweep.sh --only metal        # one backend (repeatable)
+#   tools/sweep.sh --only cc-outlined  # the cc suite with outlining forced (unit_backend)
 #   tools/sweep.sh --target test/einsum  # narrower dune target, for smoke-testing
 #   tools/sweep.sh --ref origin/master   # what to test (default: origin/master)
 #   OCANNL_TOOL_SWEEP_LOCAL_BOX=m4-max tools/sweep.sh  # required stable local box ID
@@ -455,7 +457,44 @@ UNITS=(
   "minix:hip:@minix"
   "minix:multidev_cc:@minix"
   "tuf:hip:@tuf"
+  "$LOCAL_BOX:cc-outlined:"
 )
+
+# A unit whose backend field is not a backend is a backend run under extra configuration, keyed
+# by its own name everywhere a unit is (logs, history, unit state, --only, the run record) and
+# mapped back to its backend wherever the backend itself decides something (OCANNL_BACKEND, the
+# CPU/GPU gates). One so far, cc-outlined (gh-ocannl-1778): the cc suite with every kernel large
+# enough forced outlined -- each top-level statement its own part, every part batch its own
+# translation unit (OCANNL_CC_KERNEL_PART_WEIGHT=1, OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0). At the
+# default part weight no test-size kernel is outlined, so a reader of kernel text added after
+# gh-ocannl-1708's reruns is checked against outlined text only here. Outlining runs the same
+# statements in the same order, so a VALUE golden that moves under it is a finding; a golden
+# holding the kernel's text moves by design. Last in the table, so it runs after cc and metal in
+# the local lane, and @runtest only (unit_suite): it is a check of the renderer, not of training.
+unit_backend() { # unit-backend
+  case $1 in
+    cc-outlined) printf cc ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+# The unit's configuration and backend, as the environment prefix of each of its dune calls.
+unit_dune_env() { # unit-backend
+  case $1 in
+    cc-outlined) printf 'OCANNL_CC_KERNEL_PART_WEIGHT=1 OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0 ' ;;
+  esac
+  printf 'OCANNL_BACKEND=%s' "$(unit_backend "$1")"
+}
+# The aliases a full-suite run of the unit builds, and whether --slow adds @slow to it.
+unit_suite() { # unit-backend
+  case $1 in
+    cc-outlined) printf '@runtest' ;;
+    *) printf '@runtest @train' ;;
+  esac
+}
+unit_takes_slow() { [ "$SLOW" = 1 ] && [ "$1" != cc-outlined ]; }
+# A configuration variant adds no backend whose skips need covering, and covers a narrower scope
+# than the skip report's, so the skip aggregation neither counts it nor reads its records.
+unit_is_variant() { [ "$(unit_backend "$1")" != "$1" ]; }
 
 # hip twice, on purpose (gh-ocannl-1035): minix's gfx1151 is an iGPU whose "device" memory IS host
 # memory, so a missing or misplaced host<->device transfer can read the right bytes there anyway,
@@ -566,7 +605,7 @@ refusal_with_status() { # log name status
 # The collected window needs no such gate: only a remote GPU unit has one (window_sidecar).
 environment_red() { # log backend
   local name status
-  if ! box_jobs_cpu_backend "$2"; then
+  if ! box_jobs_cpu_backend "$(unit_backend "$2")"; then
     while read -r name status; do
       [ -n "$name" ] || continue
       if [ -z "$status" ]; then
@@ -965,7 +1004,7 @@ verdict_records_env() { # wt
 test_cap_start_cmd() { # backend wt dune-target...
   local backend=$1 wt=$2 watched
   shift 2
-  ! box_jobs_cpu_backend "$backend" && [ "$TEST_CAP" -gt 0 ] || return 1
+  ! box_jobs_cpu_backend "$(unit_backend "$backend")" && [ "$TEST_CAP" -gt 0 ] || return 1
   ! test_cap_reaches_slow "$@" >/dev/null || return 1
   watched=$(test_cap_dir "$wt")
   printf 'rm -rf "%s" && mkdir -p "%s" || exit 126; ' "$watched" "$watched"
@@ -989,7 +1028,7 @@ test_cap_stop_cmd() { printf 'kill $watch 2>/dev/null; wait $watch 2>/dev/null; 
 # and fails where the leg gets no probe.
 device_probe_cmd() { # backend wt host
   local backend=$1 wt=$2 host=$3 rd prog=$PROBE
-  ! box_jobs_cpu_backend "$backend" && [ "$PROBE" != none ] || return 1
+  ! box_jobs_cpu_backend "$(unit_backend "$backend")" && [ "$PROBE" != none ] || return 1
   [ -n "$PROBE" ] || [ -n "$host" ] || [ "$(uname -s)" != Darwin ] || return 1
   rd=$(device_probe_dir "$wt")
   printf 'rm -rf "%s" && mkdir -p "%s" || exit 126; ' "$rd" "$rd"
@@ -1080,7 +1119,7 @@ test_cmd() { # backend wt [jobs [host]]
   # code the target never reaches, and its cone is small enough to compile under
   # the cap (Codex P2 on PR #658).
   if [ -n "$jobs" ] && [ -z "$TARGET" ]; then
-    printf 'OCANNL_BACKEND=%s %s build @check; ' "$backend" "$(switch_dune_cmd)"
+    printf '%s %s build @check; ' "$(unit_dune_env "$backend")" "$(switch_dune_cmd)"
   fi
   # The device probe, after the compile-only prebuild has built most of `bin/device_props` and
   # before any test touches the device (device_probe_cmd): a wedged device ends the unit here, as
@@ -1098,16 +1137,17 @@ test_cmd() { # backend wt [jobs [host]]
     # The host-capability record goes first, so the copy below (gh-ocannl-1038) can only find one
     # this invocation produced: a build that fails before reaching its producer leaves none.
     printf 'rm -f _build/default/test/config/ocannl_host_capabilities; '
-    printf 'OCANNL_BACKEND=%s %s build %s%s @runtest @train; rc1=$?; ' \
-      "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
+    printf '%s %s build %s%s %s; rc1=$?; ' \
+      "$(unit_dune_env "$backend")" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg" \
+      "$(unit_suite "$backend")"
   else
-    printf 'OCANNL_BACKEND=%s %s runtest %s%s %s; rc1=$?; ' \
-      "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg" "$TARGET"
+    printf '%s %s runtest %s%s %s; rc1=$?; ' \
+      "$(unit_dune_env "$backend")" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg" "$TARGET"
   fi
   [ -z "$watched" ] || test_cap_stop_cmd
-  if [ "$SLOW" = 1 ]; then
-    printf 'OCANNL_BACKEND=%s %s build %s%s @slow; rc2=$?; ' \
-      "$backend" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
+  if unit_takes_slow "$backend"; then
+    printf '%s %s build %s%s @slow; rc2=$?; ' \
+      "$(unit_dune_env "$backend")" "$(switch_dune_cmd)" "$jobs_arg${jobs_arg:+ }" "$force_arg"
   else
     printf 'rc2=0; '
   fi
@@ -1588,9 +1628,11 @@ prep_cmd() {
 # derives its unit rows from the rows of THIS stamp rather than from a second
 # per-unit channel written beside them (see write_run_record).
 record() {
-  local row
+  local row slow=0
+  # The `slow` column says whether THIS unit ran @slow: not every unit takes it (unit_takes_slow).
+  unit_takes_slow "$2" && slow=1
   row=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
-    "$stamp" "$1" "$2" "$run_sha" "$3" "$4" "${TARGET:-<all>}" "$SLOW" \
+    "$stamp" "$1" "$2" "$run_sha" "$3" "$4" "${TARGET:-<all>}" "$slow" \
     "${5:--}" "${6:-none}")
   perl -e 'use Fcntl ":flock";
     open(my $h, ">>", $ARGV[0]) or exit 1;
@@ -1863,7 +1905,7 @@ say_bisect() { # label where backend good log
     esac
   done < <(bisect_targets "$log")
   if [ ${#targets[@]} -gt 0 ]; then
-    say "  $label: bisect on $where: OCANNL_BACKEND=$backend tools/test-run.sh bisect $good $full_sha ${targets[*]}"
+    say "  $label: bisect on $where: $(unit_dune_env "$backend") tools/test-run.sh bisect $good $full_sha ${targets[*]}"
   else
     say "  $label: bisect: no command -- no failing site names a stanza"
   fi
@@ -1893,7 +1935,7 @@ serial_rerun_cmd() { # backend wt host alias...
   for a in "$@"; do
     printf 'echo "=== serial rerun %s ==="; ' "$a"
     watched=$(test_cap_start_cmd "$backend" "$wt" "$a") && printf '%s' "$watched"
-    printf 'OCANNL_BACKEND=%s %s build -j 1 %s; ' "$backend" "$(switch_dune_cmd)" "$a"
+    printf '%s %s build -j 1 %s; ' "$(unit_dune_env "$backend")" "$(switch_dune_cmd)" "$a"
     printf 'rc=$?; '
     [ -z "$watched" ] || test_cap_stop_cmd
     printf 'echo "=== serial rerun %s: exit $rc ==="; ' "$a"
@@ -1911,13 +1953,15 @@ serial_rerun_cmd() { # backend wt host alias...
 # under the per-test cap (test_cap_start_cmd), unless it reaches `@slow`.
 suite_completion_cmd() { # backend wt
   local slow_alias= watched
-  [ "$SLOW" = 1 ] && slow_alias=' @slow'
+  unit_takes_slow "$1" && slow_alias=' @slow'
   printf 'cd "%s" || exit 127; ' "$2"
   verdict_records_env "$2"
   printf 'echo "=== suite completion ==="; '
   # shellcheck disable=SC2086  # the slow alias is word-split on purpose
-  watched=$(test_cap_start_cmd "$1" "$2" @runtest @train $slow_alias) && printf '%s' "$watched"
-  printf 'OCANNL_BACKEND=%s %s build -j 1 @runtest @train%s; ' "$1" "$(switch_dune_cmd)" "$slow_alias"
+  # shellcheck disable=SC2046  # the suite's aliases are word-split on purpose
+  watched=$(test_cap_start_cmd "$1" "$2" $(unit_suite "$1") $slow_alias) && printf '%s' "$watched"
+  printf '%s %s build -j 1 %s%s; ' "$(unit_dune_env "$1")" "$(switch_dune_cmd)" "$(unit_suite "$1")" \
+    "$slow_alias"
   printf 'rc=$?; '
   [ -z "$watched" ] || test_cap_stop_cmd
   printf 'echo "=== suite completion: exit $rc ==="; '
@@ -2297,7 +2341,7 @@ run_unit() { # machine backend host
     # reserved there, and -- where the tokens bind -- the fleet-worker.sh this unit takes one
     # through (gh-ocannl-1177). Before the preparation, so a contended box is on record however the
     # unit then ends.
-    if ! box_jobs_cpu_backend "$backend"; then
+    if ! box_jobs_cpu_backend "$(unit_backend "$backend")"; then
       [ -z "${BOX_RESERVATIONS:-}" ] ||
         gpu_tokens_append_reservations "$(gpu_tokens_sidecar "$log")" "$(lab_box_of "$host")" \
           "$BOX_RESERVATIONS" || :
@@ -2462,7 +2506,7 @@ run_unit() { # machine backend host
   # Who held the box's GPU tokens as the suite ended (the `closed` reading), and every reading that
   # saw another batch on the GPU, named on the summary: a launch OOM beside them is contention until
   # the serial rerun says otherwise. A remote GPU unit only, as its `opened` reading was.
-  if [ -n "$host" ] && ! box_jobs_cpu_backend "$backend"; then
+  if [ -n "$host" ] && ! box_jobs_cpu_backend "$(unit_backend "$backend")"; then
     read_gpu_tokens closed "$host" "$log" "$remote_home"
     while IFS= read -r line; do say "  $machine/$backend: $line"; done \
       < <(gpu_tokens_summary report "$(gpu_tokens_sidecar "$log")")
@@ -2988,6 +3032,7 @@ die_post_run() {
 for unit in "${UNITS[@]}"; do
   IFS=: read -r machine backend host <<<"$unit"
   evidence=$LANE_DIR/skip-run.$machine.$backend
+  ! unit_is_variant "$backend" || continue
   [ -f "$evidence" ] || continue
   SKIP_RUN_BACKENDS+=("$backend")
   SKIP_RUN_BOXES+=("$machine")
@@ -3001,7 +3046,7 @@ if [ "$FORCE" = 1 ] && [ -z "$TARGET" ]; then
   [ -x "$AGGREGATE_SKIPS" ] || die_post_run "skip aggregator is not executable: $AGGREGATE_SKIPS"
   aggregate_args=()
   while IFS= read -r backend; do
-    [ -n "$backend" ] && aggregate_args+=(--known "$backend")
+    [ -n "$backend" ] && ! unit_is_variant "$backend" && aggregate_args+=(--known "$backend")
   done <<<"$known_backends"
   for box in "${known_boxes[@]:-}"; do
     [ -n "$box" ] && aggregate_args+=(--known-box "$box")

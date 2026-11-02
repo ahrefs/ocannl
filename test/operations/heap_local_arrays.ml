@@ -29,6 +29,23 @@ let backend_name = "cc"
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Generated.init ~backend_name
 
+(* gh-ocannl-1778: the [outlined] mode is this test run with every kernel forced outlined
+   ([cc_kernel_part_weight=1], [cc_compile_unit_min_bytes=0] on its rule), under the plain run's
+   golden. A Grid chunk's privatized tile is declared inside the loop, so an outlined kernel
+   declares it in the part its loop moved to, while a function-scope array stays in the kernel's own
+   frame: the mode claims each Grid tile was read from a part, which a declarations reading that
+   misses the parts cannot satisfy, and which a threshold change leaving the kernels whole fails
+   too. *)
+let outlined =
+  match
+    List.filter
+      (List.tl_exn (Array.to_list Stdlib.Sys.argv))
+      ~f:(fun arg -> not (String.is_prefix arg ~prefix:"--"))
+  with
+  | [] -> false
+  | [ "outlined" ] -> true
+  | _ -> failwith "usage: heap_local_arrays.exe [outlined] [--ocannl_<key>=<value>...]"
+
 (* The Grid legs pin the stack budget of a privatized tile, so they need tiles the privatization
    rule admits past it: [cc_grid_private_bytes_cap] (a lazy the first compile forces, stated here
    before any) raised over the 12 MiB tile; and every launch admitted whatever its work estimate. *)
@@ -77,16 +94,22 @@ let routine ~name tiles =
 
 (* The Grid legs: under a [Grid] loop over [g], the privatized tile holds [1 + 10 g + x] at [x],
    rewritten wholly by each iteration before it is read; the output at [g, x] is its cell [n - 1 -
-   x]. *)
+   x]. A short loop filling a second output comes first: a kernel of one top-level statement stays
+   whole at any part weight ([Ir.Kernel_outline.groups]), and the [outlined] mode needs the Grid
+   loop in a part of its own. *)
 let grid_routine ~name tile ~n =
   let out = mk ~dims:[| grid_extent; n |] (name ^ "_out") in
+  let lead = mk ~dims:[| grid_extent |] (name ^ "_lead") in
   materialize out;
-  let g = sym () and x = sym () and y = sym () in
+  materialize lead;
+  let g = sym () and x = sym () and y = sym () and z = sym () in
   let llc =
-    loop_n ~axis:LL.Grid g grid_extent
-      (seq
-         (loop_n x n (set tile [| iter x |] (tag g x)))
-         (loop_n y n (set out [| iter g; iter y |] (get tile [| rev ~n y |]))))
+    seq
+      (loop_n z grid_extent (set lead [| iter z |] (tick z)))
+      (loop_n ~axis:LL.Grid g grid_extent
+         (seq
+            (loop_n x n (set tile [| iter x |] (tag g x)))
+            (loop_n y n (set out [| iter g; iter y |] (get tile [| rev ~n y |])))))
   in
   let want =
     Array.init (grid_extent * n) ~f:(fun cell ->
@@ -96,21 +119,37 @@ let grid_routine ~name tile ~n =
   (optimize ~materialized:[ out ] ~name llc, out, want)
 
 (* The emitted forms of a tile, by its identifier (its label: each is unique in its routine and
-   clear of every reserved name; every tile is single precision): a stack array declares [float
-   ident[n]], a heap array a [float *] named [ident] into the allocation [free] takes, named by the
-   renderer's own derivation. Each form is claimed present, never only the other absent, so an
-   identifier spelled otherwise fails rather than passes. *)
+   clear of every reserved name; every tile is single precision), read structurally
+   ([Generated.declared_arrays]): a stack array declares [float ident[n]], a heap array a [float *]
+   named [ident] into the allocation [free] takes, named by the renderer's own derivation -- each in
+   the scope claimed. Each form is claimed present, never only the other absent, so an identifier
+   spelled otherwise fails rather than passes. *)
 let allocation ident = Ir.C_syntax.derived_name Ir.C_syntax.heap_local_derivation ident
-let declared_on_stack src ~ident = String.is_substring src ~substring:("float " ^ ident ^ "[")
 
-let on_stack src ~ident ~n =
-  String.is_substring src ~substring:(Printf.sprintf "float %s[%d]" ident n)
-  && not (String.is_substring src ~substring:(allocation ident))
+let declarations src ~ident =
+  List.filter (Generated.declared_arrays src) ~f:(fun a -> String.equal a.Generated.ident ident)
 
-let on_heap src ~ident =
-  String.is_substring src ~substring:(Printf.sprintf "float * const %s = " ident)
+let in_scope ~scope (a : Generated.declared_array) =
+  match (scope, a.scope) with
+  | `Function, Function_scope | `Block, Block_scope _ -> true
+  | _ -> false
+
+let on_stack src ~scope ~ident ~n =
+  match declarations src ~ident with
+  | [ a ] -> (not a.heap) && a.elems = n && String.equal a.typ "float" && in_scope ~scope a
+  | _ -> false
+
+let on_heap src ~scope ~ident ~n =
+  (match declarations src ~ident with
+    | [ a ] -> a.heap && a.elems = n && String.equal a.typ "float" && in_scope ~scope a
+    | _ -> false)
   && String.is_substring src ~substring:(Printf.sprintf "free(%s);" (allocation ident))
-  && not (declared_on_stack src ~ident)
+
+(* Where the [outlined] mode claims a Grid tile was declared: inside an outlined part. *)
+let in_part src ~ident =
+  match declarations src ~ident with
+  | [ { scope = Block_scope { part = Some _ }; _ } ] -> true
+  | _ -> false
 
 let pool_rendered src = String.is_substring src ~substring:"Pool-backed Grid rendering"
 
@@ -126,10 +165,11 @@ let function_leg ~what ~name tiles ~heap =
   let src, got, want = run_leg ~name (routine ~name (List.map tns ~f:snd)) in
   List.iter tns ~f:(fun (label, tn) ->
       if List.mem heap label ~equal:String.equal then
-        pf "function scope, %s: %s is a heap array, freed" what label (on_heap src ~ident:label)
+        pf "function scope, %s: %s is a heap array, freed" what label
+          (on_heap src ~scope:`Function ~ident:label ~n:(Tn.num_elems tn))
       else
         pf "function scope, %s: %s is a stack array" what label
-          (on_stack src ~ident:label ~n:(Tn.num_elems tn)));
+          (on_stack src ~scope:`Function ~ident:label ~n:(Tn.num_elems tn)));
   pf_all2 "function scope, %s: values" what got want ~f:Float.equal
 
 let () =
@@ -152,9 +192,10 @@ let () =
   let name = "hla_fs_named" in
   let heap_tile = scratch name (floats routine_budget + 1) and named = scratch "free" 16 in
   let src, got, want = run_leg ~name (routine ~name [ heap_tile; named ]) in
-  p "function scope, beside a node labeled free: the heap array, freed" (on_heap src ~ident:name);
-  p "function scope, beside a node labeled free: no array is declared as free"
-    (not (declared_on_stack src ~ident:"free"));
+  p "function scope, beside a node labeled free: the heap array, freed"
+    (on_heap src ~scope:`Function ~ident:name ~n:(Tn.num_elems heap_tile));
+  p_none "function scope, beside a node labeled free: no array is declared as free"
+    (Generated.declared_arrays src) ~f:(fun a -> String.equal a.ident "free");
   p_all2 "function scope, beside a node labeled free: values" got want ~f:Float.equal
 
 let grid_leg ~what ~name ~n ~heap =
@@ -162,8 +203,11 @@ let grid_leg ~what ~name ~n ~heap =
   let src, got, want = run_leg ~name (grid_routine ~name tile ~n) in
   let id = name ^ "_tile" in
   pf "Grid chunk, %s: the Grid renders on the pool" what (pool_rendered src);
-  if heap then pf "Grid chunk, %s: a heap tile, freed" what (on_heap src ~ident:id)
-  else pf "Grid chunk, %s: a stack tile" what (on_stack src ~ident:id ~n);
+  if heap then pf "Grid chunk, %s: a heap tile, freed" what (on_heap src ~scope:`Block ~ident:id ~n)
+  else pf "Grid chunk, %s: a stack tile" what (on_stack src ~scope:`Block ~ident:id ~n);
+  if outlined then
+    Verdict.claimf "Grid chunk, %s: the forced run declared the tile inside an outlined part" what
+      (in_part src ~ident:id);
   pf_all2 "Grid chunk, %s: values" what got want ~f:Float.equal
 
 let () =

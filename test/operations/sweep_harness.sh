@@ -139,7 +139,7 @@ credential_free() { # record min
 # an inherited one would rewrite a unit's log without appearing at any call site.
 # The nested sweep's own variables are neutralized at `run_sweep_args`, which is
 # where its environment is built.
-unset SWEEP_TEST_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
+unset SWEEP_TEST_CALLS SWEEP_TEST_ENV_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OPAM_RC \
   SWEEP_TEST_OPAM_OUT SWEEP_TEST_OPAM_OUT_CC SWEEP_TEST_OPAM_OUT_MULTIDEV_CC \
   SWEEP_TEST_OPAM_OUT_METAL SWEEP_TEST_LOCAL_BOX SWEEP_TEST_JOBS \
   SWEEP_TEST_OPAM_SERIAL_RED SWEEP_TEST_OPAM_OUT_SERIAL SWEEP_TEST_OPAM_OUT_RETRY \
@@ -242,6 +242,11 @@ if [ "${1:-}" = exec ] && [ "${2:-}" = -- ] && [ "${3:-}" = sh ] && [ "${4:-}" =
   exec sh -c "$_text" "$_name" "${SWEEP_TEST_OPAM_SELF:-$0}" exec -- "$@"
 fi
 printf '%s\n' "$*" >>"$SWEEP_TEST_CALLS"
+# The configuration a call ran under (gh-ocannl-1778; the cc-outlined unit's case reads it).
+if [ -n "${SWEEP_TEST_ENV_CALLS:-}" ]; then
+  printf '%s|%s|%s\t%s\n' "${OCANNL_BACKEND-}" "${OCANNL_CC_KERNEL_PART_WEIGHT-}" \
+    "${OCANNL_CC_COMPILE_UNIT_MIN_BYTES-}" "$*" >>"$SWEEP_TEST_ENV_CALLS"
+fi
 # Which credential fixtures reached this call (gh-ocannl-1280; credential_free reads it): names only.
 if [ -n "${SWEEP_TEST_CREDENTIALS:-}" ]; then
   printf '%s\t%s\n' "$*" "${GH_TOKEN+GH_TOKEN }${FOO_API_KEY+FOO_API_KEY }${SWEEP_TEST_CREDENTIAL_PLAIN+plain}" \
@@ -816,7 +821,11 @@ run_sweep_args() {
   # lock directory (gh-ocannl-1030): an ambient WAKE_LAB_HOSTS or OCANNL_TOOL_SWEEP_DEST_* -- both
   # supported knobs -- would otherwise decide which alias the fake remote lanes are asked for, and
   # the destination cases below assert exactly that.
+  # The two outlining keys are unset for the same reason as OCANNL_BACKEND: the sweep's own
+  # cc-outlined unit runs this harness with them exported (gh-ocannl-1778), and the plain cc unit's
+  # case below asserts its calls carry neither.
   local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
+    -u OCANNL_CC_KERNEL_PART_WEIGHT -u OCANNL_CC_COMPILE_UNIT_MIN_BYTES \
     -u OCANNL_TOOL_SWEEP_LOCAL_BOX -u OCANNL_TOOL_VERDICT_RECORDS \
     "OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT=${SWEEP_TEST_LAB_LOCK_WAIT:-300}" \
     "OCANNL_TOOL_FLEET_WORKER=${SWEEP_TEST_FLEET_WORKER-$fake_bin/fleet-worker.sh}" \
@@ -840,6 +849,7 @@ run_sweep_args() {
     "SWEEP_TEST_PREP_OK=${SWEEP_TEST_PREP_OK:-}" \
     "PATH=$fake_bin:$PATH" \
     "SWEEP_TEST_CALLS=$calls" \
+    "SWEEP_TEST_ENV_CALLS=${SWEEP_TEST_ENV_CALLS:-}" \
     "SWEEP_TEST_WAIT_PREFIX=${SWEEP_TEST_WAIT_PREFIX:-}" \
     "SWEEP_TEST_OPAM_RC=${SWEEP_TEST_OPAM_RC:-0}" \
     "SWEEP_TEST_OPAM_OUT=${SWEEP_TEST_OPAM_OUT:-}" \
@@ -927,6 +937,20 @@ expected_header='when	machine	backend	ref	outcome	seconds	target	slow	log	execut
 [ "$(sed -n '4p' "$calls")" = 'exec -- dune clean' ]
 [ "$(sed -n '5p' "$calls")" = 'exec -- dune build --force @runtest @train' ]
 [ "$(sed -n '6p' "$calls")" = 'exec -- dune build --force @slow' ]
+
+# gh-ocannl-1778: the cc-outlined unit is the cc suite with outlining forced -- backend cc, the two
+# outlining keys set, @runtest alone (no @train, and no @slow even under --slow) -- recorded under
+# its own name. The plain cc unit, run the same way, is the negative control: neither key reaches
+# its calls, so a mapping that leaked the configuration into every unit fails here.
+outlined_env=$tmp/opam.env-calls-outlined
+plain_env=$tmp/opam.env-calls-plain
+outlined_run=$(SWEEP_TEST_ENV_CALLS=$outlined_env run_sweep_backend cc-outlined --slow)
+SWEEP_TEST_ENV_CALLS=$plain_env run_sweep >/dev/null
+grep -q 'm4-max/cc-outlined: incremental-pass ' <<<"$outlined_run"
+[ "$(cat "$outlined_env")" = "$(printf 'cc|1|0\texec -- dune build @runtest')" ]
+[ "$(cat "$plain_env")" = "$(printf 'cc||\texec -- dune build @runtest @train')" ]
+[ "$(awk -F '\t' 'END { print $2 ":" $3 ":" $5 }' "$state/history.tsv")" = 'm4-max:cc:incremental-pass' ]
+[ "$(awk -F '\t' '$3 == "cc-outlined" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
 
 # Per-unit state distinguishes a standing red from two transitions that need an
 # operator's attention: red after green, and red after the failing golden was
@@ -2906,7 +2930,8 @@ lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
   "$(printf '%s\n' m4-max/cc:incremental-pass:0 m4-max/metal:incremental-pass:0 \
     minix/hip:skip:0 minix/multidev_cc:skip:0 rog-nv/cuda:skip:0 tuf/hip:gate:0 | sort)" ]
 [ "$(awk -F '\t' '$1 == "backend" { print $2 ":" $3 }' "$lanes_record")" = \
-  "$(printf '%s\n' cc:m4-max metal:m4-max cuda:rog-nv hip:minix multidev_cc:minix hip:tuf)" ]
+  "$(printf '%s\n' cc:m4-max metal:m4-max cuda:rog-nv hip:minix multidev_cc:minix hip:tuf \
+  cc-outlined:m4-max)" ]
 # ...and the memory model each unit exercised: hip twice, once on each side of the unified/discrete
 # line, which is what the second hip unit is for.
 [ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $11 }' "$lanes_record" | sort)" = \
