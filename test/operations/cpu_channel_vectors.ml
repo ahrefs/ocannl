@@ -141,6 +141,14 @@ let compile_pair ~name s =
   (on, off)
 
 let simd_loop = "Vectorized rendering"
+
+(* Whether the explicit SIMD rendering has a width for an f32 loop of [extent]: the renderer's own
+   ladder over this machine's vector file (an 8-wide floor on a 32- or 64-byte file, so a 4-channel
+   conv renders its channel loop serially there and as SIMD on a 16-byte one). *)
+let simd_fits extent =
+  let { Ir.Vector_file.bytes; _ } = Context.Cc_backend.vector_file_setting () in
+  Option.is_some (Ir.Backend_intf.simd_lanes_for ~vector_bytes:bytes ~elt_bytes:4 ~extent)
+
 let pack_prefix = "tile_"
 
 let shapes =
@@ -172,9 +180,10 @@ let () =
         (same on off);
       p
         (s.tag
-       ^ ": the default routine renders the channel loop as explicit SIMD over a packed kernel")
+       ^ ": the default routine packs the kernel, and renders the channel loop as explicit SIMD \
+          exactly where some vector width of the machine fits the channel count")
         (let src = source ("cv_" ^ s.tag ^ "_on") in
-         String.is_substring src ~substring:simd_loop
+         Bool.equal (String.is_substring src ~substring:simd_loop) (simd_fits s.oc)
          && String.is_substring src ~substring:(pack_prefix ^ s.tag ^ "k"));
       p
         (s.tag ^ ": the key-off routine renders neither")
