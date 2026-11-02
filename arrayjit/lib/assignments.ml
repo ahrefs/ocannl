@@ -270,8 +270,9 @@ let refuse_shared_fragments l shared =
            recomputes, re-running any state update the forward carries. Sequence each fragment \
            once: a computation that embeds a fragment already carries it (Train.grad_update \
            carries its loss's forward and backprop code); in [%%cd], a statement naming a \
-           forward-root tensor embeds its forward code, so an explicit [t.forward] beside a \
-           statement naming [t] is a second copy -- drop the explicit one."
+           forward-root tensor embeds its forward code, and statements are built in source order, \
+           so an explicit [t.forward] after a statement naming [t] is a second copy -- drop it, or \
+           move it first."
           listed)
 
 let sequence l =

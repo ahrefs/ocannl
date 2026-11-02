@@ -10650,6 +10650,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1770: a %cd statement sequence is built in source order, so the first statement naming a
+; forward root embeds its code and the later ones read it computed. Executed values, every backend.
+
+(test
+ (name cd_source_order)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cd_source_order)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name consume_code_replay)
  (package neural_nets_lib)
