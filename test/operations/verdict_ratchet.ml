@@ -4694,6 +4694,13 @@ let () =
   in_leg ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (label_of on_gpu) (fun label ->
       check_rows label rows)|ocaml},
       [] );
+    ( "refuses a leg gate on the population a pipelined claim ranges over",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  in_leg ~leg "all rows pass" (fun label -> p_all label ~f:Fn.id @@ rows)|ocaml},
+      [ "rows" ] );
     ( "accepts a leg gated on a capability over a population built from the same program",
       {ocaml|open Verdict.Claims
 let () =

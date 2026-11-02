@@ -74,6 +74,9 @@ ok: skip list -- another module's skipped
 ok: skip list -- a skip alias a local open shadows with another skipped
 ok: skip list -- a skip alias past an open of a standard library
 ok: skip list -- a skip callback a collection stores rather than calls
+ok: skip list -- an iteration through a module alias of a collection
+ok: skip list -- a source's own List module, which only stores its callback
+ok: skip list -- a function value a loop body only builds
 ok: skip list -- an Option iteration, which runs at most once
 the walk counts every string literal it passes: true
 and places the ones a named function receives: true

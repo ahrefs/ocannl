@@ -2663,6 +2663,13 @@ let gate_census content =
         match leg_stack with
         | [] -> ()
         | collector :: _ -> (
+            (* [rows |> p_all label ~f] and [p_all label ~f @@ rows] are the application they
+               spell. *)
+            let callee, arguments =
+              match self#pipeline callee arguments with
+              | Some (callee, arguments, _) -> (callee, arguments)
+              | None -> (callee, arguments)
+            in
             if self#helper env callee then
               collector.handed <-
                 List.map arguments ~f:(fun (_, argument) -> (argument, env)) @ collector.handed;
@@ -3296,6 +3303,7 @@ let skip_list_census content =
   (* The skips and evaluating claims [expr] applies, in source order; [~branches:false] stops at the
      branches nested in it and the functions written in it. *)
   let claims ~branches expr =
+    let root = expr in
     let found_skips = ref [] and evaluating = ref 0 in
     let reader =
       object (self)
@@ -3312,6 +3320,10 @@ let skip_list_census content =
           | Pexp_apply (callee, arguments) when is_skip_head callee ->
               (* The skip's own head is not a second skip. *)
               List.iter arguments ~f:(fun (_, argument) -> self#expression argument)
+          | Pexp_function _ when branches && not (phys_equal e root) ->
+              (* A function value inside the callback or loop body is deferred: what it skips is not
+                 skipped here. *)
+              ()
           | (Pexp_ifthenelse _ | Pexp_match _ | Pexp_function _) when not branches -> (
               match e.pexp_desc with
               | Pexp_ifthenelse (condition, _, _) -> self#expression condition
@@ -3348,16 +3360,57 @@ let skip_list_census content =
     | Pexp_function _ -> skip_only argument
     | _ -> []
   in
-  (* The function name of a collection-module function [callee] spells, where it is one. *)
+  (* The modules the source binds, by name: an alias to a path ([module L = List]) by the path's
+     last component, a structure of its own as [None]. By name across the source, not by scope: a
+     name bound both ways reads as the alias, the loud direction. *)
+  let module_bindings = Hashtbl.create (module String) in
+  let bind_module name (module_expr : module_expr) =
+    let rec peel me =
+      match me.pmod_desc with Pmod_constraint (inner, _) -> peel inner | _ -> me
+    in
+    match ((peel module_expr).pmod_desc, Hashtbl.find module_bindings name) with
+    | Pmod_ident { txt; _ }, _ ->
+        Hashtbl.set module_bindings ~key:name ~data:(Some (Ppxlib.Longident.last_exn txt))
+    | _, Some (Some _) -> ()
+    | _, _ -> Hashtbl.set module_bindings ~key:name ~data:None
+  in
+  let module_binder =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! module_binding binding =
+        Option.iter binding.pmb_name.txt ~f:(fun name -> bind_module name binding.pmb_expr);
+        super#module_binding binding
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_letmodule ({ txt = Some name; _ }, module_expr, _) -> bind_module name module_expr
+        | _ -> ());
+        super#expression e
+    end
+  in
+  module_binder#structure ast;
+  let rec resolve_module seen name =
+    match Hashtbl.find module_bindings name with
+    | Some (Some target) when not (List.mem seen name ~equal:String.equal) ->
+        resolve_module (name :: seen) target
+    | Some (Some _) -> Some name
+    | Some None -> None
+    | None -> Some name
+  in
+  (* The function name of a collection-module function [callee] spells, where it is one: its module
+     component resolved through the source's module bindings ([resolve_module]). *)
   let collection_iteration callee =
     match Read.longident_of (strip_constraints callee) with
-    | Some (_ :: _ :: _ as path) ->
-        let module_ = List.nth_exn path (List.length path - 2) in
-        if
-          List.mem collection_modules module_ ~equal:String.equal
-          && not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal)
-        then Some (List.last_exn path)
-        else None
+    | Some (_ :: _ :: _ as path) -> (
+        match resolve_module [] (List.nth_exn path (List.length path - 2)) with
+        | None -> None
+        | Some module_ ->
+            if
+              List.mem collection_modules module_ ~equal:String.equal
+              && not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal)
+            then Some (List.last_exn path)
+            else None)
     | _ -> None
   in
   let branch body =

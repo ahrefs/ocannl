@@ -340,6 +340,17 @@ let () = let open Stdio in List.iter labels ~f:skipped|ocaml},
       ( "a skip callback a collection stores rather than calls",
         {ocaml|let checks = List.singleton (fun () -> Verdict.skipped ~backend:"cc" "one")|ocaml},
         [] );
+      ( "an iteration through a module alias of a collection",
+        {ocaml|module L = List
+let () = L.iter labels ~f:(Verdict.skipped ~backend:backend_name)|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a source's own List module, which only stores its callback",
+        {ocaml|module List = struct let iter xs ~f = ignore (xs, f) end
+let () = List.iter labels ~f:skipped|ocaml},
+        [] );
+      ( "a function value a loop body only builds",
+        {ocaml|let () = for _i = 1 to 2 do ignore (fun () -> Verdict.skipped ~backend:"cc" "one") done|ocaml},
+        [] );
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
         [] );
