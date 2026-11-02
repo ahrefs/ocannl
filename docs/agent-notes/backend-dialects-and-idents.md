@@ -202,17 +202,17 @@ files.
   and `1.0l` is a `long double` literal that crashed the Metal compiler service), nvrtc's
   `fmax(0, uchar)`/`tanh(int)` ambiguity, `__half == 0.0` on CUDA and HIP, and cc's
   `uint4x32_to_<prec>` conversion, which names no builtin. A plain conversion OUT of `uint4x32`
-  still means three things: cc refuses it, Metal reads the uniform conversion, CUDA and HIP lane 0.
+  is now refused on every backend; the rule lives in backend-precision-and-simd.md (gh-ocannl-1785).
   Since gh-ocannl-1768 it also compiles each float precision's explicit-SIMD arms (cc's vector
   arithmetic and SIMD reductions, the GPU dialects' packed lanes) as `Vectorized` loops and the
   select blends, reading each compiled routine's source: a declined vector loop compiles serially,
   so its claim is that the rendering takes all of a precision's arms or none, and some precision's.
-- The sweep's inlined operand is integer-valued (`a + b`); a FLOAT-valued subexpression at an
-  integer compute precision (an inlined `Sin`, `Sqrt`, or Metal's float-dividing `Recip`) is a class
-  it leaves out, and no backend handles it coherently: every table keeps the math result a float as
-  C does, so cc's integer `Mod` renders `%` over a double, and CUDA's integer `min(uchar, float)` is
-  ambiguous. Metal's integer `Max`/`Min`/`Relu` go through `Builtins_metal`'s `ocannl_max` /
-  `ocannl_min`, which compare in the operands' common type (`fmax`/`fmin` for a float one).
+- The sweep inlines an integer-valued `a + b` and, at the integer precisions, a real-valued
+  `Sqrt(a)` as an arm's first operand. A float-valued subexpression at an integer compute precision
+  never reaches an integer table arm: the shared renderer computes it in float (the rule:
+  backend-precision-and-simd.md, gh-ocannl-1785). Metal's integer `Max`/`Min`/`Relu` go through
+  `Builtins_metal`'s `ocannl_max` / `ocannl_min`, which compare in the operands' common type, for
+  the integer-promoted sums.
 - Tensor-node debug names become identifiers verbatim in the emitted kernel, so anything the
   backend also emits as a *name* must be reserved (`ident_blacklist`). Reserve it from the
   backend's own syntax functions, never from the C spellings: `C_syntax.op_syntax_idents` renders

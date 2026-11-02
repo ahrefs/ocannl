@@ -1256,8 +1256,10 @@ module Impl = struct
        therefore call the f32 overload: the precision the CUDA and HIP tables already compute
        integer math at ([expf], [sqrtf], ...). cc's C reference calls the double functions, which
        MSL lacks, so a large integer operand can round differently here (and on CUDA/HIP) than on
-       cc. The result stays a float, as it does in C: an inlined [2 * sin(a)] keeps its fraction
-       until the store narrows it, rather than truncating the sine first. *)
+       cc. Since gh-ocannl-1785 the shared renderer computes a real-valued operator at an integer
+       precision through the FLOAT arms itself ([C_syntax]'s [integer_op]), so the real-valued
+       integer arms below are reached only by name harvesting; [Trunc] and [Satur01] over an integer
+       operand still render through here, a float-typed integral value. *)
     let int_via_f32 fn v = group (string (fn ^ "((float)") ^^ parens v ^^ rparen)
 
     (* The integer arms the C reference ({!Ops.binop_c_syntax} / {!Ops.unop_c_syntax}) refuses,
@@ -1331,7 +1333,8 @@ module Impl = struct
       | Mod, _ -> math "precise::fmod"
       (* [fmax]/[fmin] are float-only and the integer [max]/[min] want one operand type; the
          [Builtins_metal] templates compare in the operands' common type instead (an inlined [uchar]
-         sum stays an [int], an inlined float stays a float). *)
+         sum stays an [int]; a float-valued operand is computed at the float arms,
+         gh-ocannl-1785). *)
       | Max, p when Ops.is_integer p -> func "ocannl_max"
       | Min, p when Ops.is_integer p -> func "ocannl_min"
       | Max, _ -> math "fmax"
@@ -1433,7 +1436,7 @@ module Impl = struct
           raise @@ Utils.User_error "Metal backend does not support double precision"
       (* Through [Builtins_metal]'s [ocannl_max], for [Max]'s reasons: an [int] literal against a
          [uchar], [ushort], [uint] or 64-bit operand makes the integer [max] ambiguous, and casting
-         the operand would narrow an integer-promoted sum or truncate an inlined float. *)
+         the operand would narrow an integer-promoted sum. *)
       | Relu, p when Ops.is_integer p ->
           fun v -> func_doc "ocannl_max" (separate comma_sep [ string "0"; v ])
       | Relu, _ (* Uint4x32_prec, Void_prec *) ->
@@ -1453,9 +1456,9 @@ module Impl = struct
           fun v -> infix_binop "/" (string @@ "1.0" ^ s) v
       | Recip_sqrt, p when Ops.is_integer p -> int_refusal p "Recip_sqrt"
       | Recip_sqrt, _ -> math_doc "rsqrt"
-      (* Not the identity: an operand at an integer precision can still be float-valued -- the
-         integer [Recip] arm above divides in floating point, and [int_via_f32] results stay float.
-         [truncf] on the widened operand is also what cc's C reference renders. *)
+      (* Reached with an integer operand only: the shared renderer truncates a float-valued operand
+         at the float arm (gh-ocannl-1785). [truncf] on the widened operand is what cc's C reference
+         renders, an integral value typed float. *)
       | Trunc, p when Ops.is_integer p -> int_via_f32 "trunc"
       | Trunc, _ -> math_doc "trunc"
       | Tanh_approx, Ops.Half_prec _ -> math_doc "tanh"
@@ -1493,8 +1496,9 @@ module Impl = struct
       | Ops.Fp8_prec _, Ops.Fp8_prec _
       | Ops.Void_prec, Ops.Void_prec ->
           ("", "")
-      (* Uint4x32 conversions - special handling *)
-      | Ops.Uint4x32_prec _, _ -> ("uint4x32_to_" ^ Ops.prec_string to_ ^ "_uniform(", ")")
+      (* Uint4x32 conversions - special handling. A plain conversion out of a block is refused, as
+         on every backend (gh-ocannl-1785): this arm used to read it as the uniform conversion. *)
+      | Ops.Uint4x32_prec _, _ -> Ops.no_plain_uint4x32_conversion ~to_
       | _, Ops.Uint4x32_prec _ -> (Ops.prec_string from ^ "_to_uint4x32(", ")")
       (* fp8 conversions go through the software codec, which is where the storage/compute seam
          lands for e5m2 on Metal: a load widens once, a store narrows once, and the arithmetic in

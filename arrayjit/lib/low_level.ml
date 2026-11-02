@@ -5712,6 +5712,33 @@ let is_rng_conversion (llsc : scalar_t) =
       true
   | _ -> false
 
+let rec float_valued (llsc : scalar_t) =
+  match llsc with
+  | Unop (op, (v, _)) -> (
+      match Ops.unop_integer_valuation op with
+      | Real_valued -> true
+      | Follows_operands -> float_valued v
+      | Truth | Integer_only | Projection | Integer_table -> false)
+  | Binop (op, (v1, _), (v2, _)) -> (
+      match Ops.binop_integer_valuation op with
+      | Real_valued -> true
+      | Follows_operands -> float_valued v1 || float_valued v2
+      | Projection -> (
+          match Ops.binop_conditionality op with
+          | Only_first -> float_valued v1
+          | Only_second -> float_valued v2
+          | Both_operands | Gated_second -> false)
+      | Truth | Integer_only | Integer_table -> false)
+  | Ternop (op, (v1, _), (v2, _), (v3, _)) -> (
+      match (Ops.ternop_integer_valuation op, op) with
+      | Follows_operands, Ops.Where -> float_valued v2 || float_valued v3
+      | Follows_operands, _ -> float_valued v1 || float_valued v2 || float_valued v3
+      | Real_valued, _ -> true
+      | (Truth | Integer_only | Projection | Integer_table), _ -> false)
+  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      false
+
 let rec mentions_rng_conversion (llsc : scalar_t) =
   is_rng_conversion llsc
   ||
@@ -5836,14 +5863,25 @@ let simplify_llc static_indices llc =
          and cc under [narrow_compute_f32=false]), and a wide scope collapsed into a narrower slot
          would evaluate its arithmetic narrow. The rule covers a float scope in a float slot; a
          scope or slot of an integer precision collapses as before (a one-hot comparison scope read
-         in a float product is what the gh-343 gather rewrite then recognizes). *)
-      && ((not (Ops.is_float scope_prec && Ops.is_float eval))
+         in a float product is what the gh-343 gather rewrite then recognizes).
+
+         gh-ocannl-1785 extends the rule to a float scope read where the slot evaluates at an
+         INTEGER precision: collapsed, its arithmetic would be evaluated at the integer precision,
+         every operand converted first ([(uchar)0.5 + (uchar)0.75] where the scope holds 1.25);
+         kept, it is computed in float and converted once, where it is read. *)
+      && ((not (Ops.is_float scope_prec && (Ops.is_float eval || Ops.is_integer eval)))
          || Ops.equal_prec scope_prec eval
          ||
          match v with
          | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } ->
              Ops.widens_exactly ~from:(Lazy.force tn.Tn.storage_prec) ~to_:scope_prec
          | _ -> false)
+      (* gh-ocannl-1785: an integer scope holding a float-valued value ({!float_valued}) rounds it
+         to the scope's precision, as the materialized node's store would. Collapsed, the value
+         would reach its consumer unrounded wherever the consumer computes in float -- under an
+         operator following its operands, [3 * sqrt(8)] gives 8 where the scope gives [3 * 2] -- and
+         the simplifier cannot see which kind of consumer the slot is. *)
+      && not (Ops.is_integer scope_prec && float_valued v)
     in
     (* gh-ocannl-1769: an RNG conversion renders at the precision of the store holding it
        ({!is_rng_conversion}), and a scope body is a store at the scope's precision -- the one a
@@ -5942,6 +5980,13 @@ let simplify_llc static_indices llc =
            narrow storage. Keep integer powers for codegen so constants and materialized bases share
            the same multiplication and reciprocal rounding. *)
         (llsc, prec)
+    (* gh-ocannl-1785: at an integer evaluation precision the renderer converts each constant
+       operand to the integer precision first, so folding in double agrees with it only over
+       integral constants -- [10 rem 2.83] would fold to 1.51 where [Mod] converts its operand and
+       gives [10 % 2]. *)
+    | Binop (_, (Constant c1, _), (Constant c2, _))
+      when Ops.is_integer eval && not (Float.is_integer c1 && Float.is_integer c2) ->
+        (llsc, prec)
     | Binop (op, (Constant c1, prec1), (Constant c2, prec2)) ->
         (* Folded in double and rounded once where the constant is rendered. For operands
            representable at the target precision (f32, f16, bf16) that is the target's correctly
@@ -6016,6 +6061,15 @@ let simplify_llc static_indices llc =
           | _ -> result
         else loop_scalar result
     | Unop (Identity, llsc) -> loop_scalar (at_slot llsc)
+    (* gh-ocannl-1785: at an integer evaluation precision a real-valued operator yields a float the
+       renderer carries in float to its conversion point, where a folded [Constant] would be
+       converted wherever it is read -- [2 * sin(1)] would fold its sine to 0.84 and render [2 *
+       (uchar)0.84]. A non-integral operand is converted first by the renderer, unlike the fold. *)
+    | Unop (op, (Constant c, _))
+      when Ops.is_integer eval
+           && (Ops.equal_integer_valuation (Ops.unop_integer_valuation op) Ops.Real_valued
+              || not (Float.is_integer c)) ->
+        (llsc, prec)
     | Unop (op, (Constant c, _)) -> (Constant (Ops.interpret_unop op c), prec)
     | Unop (op, llsc) ->
         let v = if Ops.is_homogeneous_prec_unop op then loop_scalar llsc else own llsc in

@@ -1020,11 +1020,9 @@ end = struct
       | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
       | Double_prec _, Uint4x32_prec _ -> ("double_to_uint4x32(", ")")
       | Single_prec _, Uint4x32_prec _ -> ("single_to_uint4x32(", ")")
-      (* __nv_fp8_e5m2's constructors are all explicit, so the [.v[0]] arm below would not
-         implicitly convert on assignment; spell out the (numeric) constructor call. *)
-      | Uint4x32_prec _, Bfloat16_prec _ -> ("__ushort_as_bfloat16((unsigned short)((", ").v[0]))")
-      | Uint4x32_prec _, Fp8_prec _ -> ("(__nv_fp8_e5m2)((", ").v[0])")
-      | Uint4x32_prec _, _ -> ("", ".v[0]")
+      (* A plain conversion out of a block is refused, as on every backend (gh-ocannl-1785): these
+         arms used to read lane 0's bits. *)
+      | Uint4x32_prec _, _ -> Ops.no_plain_uint4x32_conversion ~to_
       | Byte_prec _, Uint4x32_prec _ -> ("byte_to_uint4x32(", ")")
       | Uint16_prec _, Uint4x32_prec _ -> ("uint16_to_uint4x32(", ")")
       | Bfloat16_prec _, Uint4x32_prec _ -> ("bfloat16_to_uint4x32(", ")")

@@ -386,6 +386,33 @@ files.
   take `tile_prec` (exact widenings only) to fold the widening into the pack; seeding resolves the
   same `Numerics.cpu_compute_prec` the emission uses — change either side only through that
   helper, or "timed is not tensorized" returns for narrow sites.
+- **A float-valued subexpression at an integer compute precision is computed in float and
+  converted once** (gh-ocannl-1785): at the store or scope holding it, or at an operand of `Mod`,
+  the one operator whose integer spelling takes integers only. That is C's usual arithmetic
+  conversions made explicit in the shared renderer (`C_syntax`'s `integer_op`), so every backend
+  computes what cc's `sin()`/`fmin()` always did. The classification is `Ops.unop_integer_valuation`
+  and its siblings: a real-valued operator (`Exp` ... `Sqrt`, `Recip`, `Recip_sqrt`,
+  `Tanh_approx`) computes at `int_math_prec`, which is `double` where the backend has f64 and
+  `single` on Metal. An operator that follows its operands computes there when one of them is
+  float-valued. A comparison or `Not` compares there and yields an integer truth. `Where`'s
+  condition keeps its own type. `FMA` and `ToPowOf` stay refused at integer precisions, identically
+  on every backend. The integer tables therefore never meet a float operand, so CUDA's ambiguous
+  `min(uchar, float)` and cc's `%` over a double are gone. Integer `Recip`, refused on cc, integer
+  division on CUDA/HIP int32 and float division on Metal, is float division everywhere.
+  `Low_level.float_valued` is the one reader over trees: the simplifier keeps an integer scope
+  holding a float-valued value (collapsed, it would skip its rounding), keeps a float scope read in
+  an integer slot unless it is an exactly widening load (collapsed, its operands would convert
+  first), and folds neither a real-valued operator nor a non-integral constant at an integer
+  evaluation precision. The rule was chosen over rounding at every integer operator's operand,
+  which would have overturned the C-promotion values gh-ocannl-1731 pinned on four backends. The
+  executed cases and the virtualized/materialized parity legs live in `op_table_compile`. Out of
+  scope: integer arms whose spelling is float-TYPED over integral values (cc's `fmax`/`truncf`
+  arms, Metal's `int_via_f32` `Trunc`), so `Mod(Max(a, b), c)` still fails to compile on cc; and
+  C's integer promotion of inlined integer arithmetic against the storage width.
+- **A plain conversion out of `uint4x32` is refused on every backend** (gh-ocannl-1785), with one
+  message, `Ops.no_plain_uint4x32_conversion`, from every `convert_precision`. Metal used to read
+  it as the uniform conversion and CUDA/HIP as lane 0's bits. Random bits reach a scalar through
+  the uniform operators only, `Uint4x32_to_prec_uniform_lane` naming the lane.
 ## Accumulator localization and legality
 - **A reduction accumulator's WIDTH is policy and its RESIDENCY is unconditional; its narrowing
   POINTS are schedule** (gh-ocannl-639, gh-ocannl-693). The plain serial fallback of an

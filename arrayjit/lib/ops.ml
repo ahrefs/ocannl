@@ -992,6 +992,19 @@ let ternop_c_syntax prec op =
   | FMA, _ -> ("fmaf(", ",", ",", ")")
   | Mul3, _ -> ("((", ") * (", ") * (", "))")
 
+(** gh-ocannl-1785: what a plain conversion out of packed RNG state means -- nothing, on every
+    backend. A [uint4x32] block holds 128 random bits; which of them make a scalar, and how, is what
+    the uniform operators name ([Uint4x32_to_prec_uniform1], [Uint4x32_to_prec_uniform], and
+    [Uint4x32_to_prec_uniform_lane], which names the lane). Metal used to read a plain conversion as
+    the uniform one and CUDA/HIP as lane 0's bits; every backend's [convert_precision] now raises
+    this one refusal instead. *)
+let no_plain_uint4x32_conversion_message ~to_ =
+  "no plain conversion from uint4x32 to " ^ prec_string to_
+  ^ "; convert random bits with Uint4x32_to_prec_uniform1, Uint4x32_to_prec_uniform or \
+     Uint4x32_to_prec_uniform_lane"
+
+let no_plain_uint4x32_conversion ~to_ = invalid_arg (no_plain_uint4x32_conversion_message ~to_)
+
 let c_convert_precision ~from ~to_ =
   match (from, to_) with
   | Double_prec _, Double_prec _
@@ -1061,11 +1074,9 @@ let c_convert_precision ~from ~to_ =
   (* Uint4x32 conversions - special handling. A scalar widens into a block through the
      [<prec>_to_uint4x32] builtins, but no plain conversion back is defined: the spelling this arm
      used to emit, [uint4x32_to_<prec>], names no builtin, so it rendered a kernel the compiler
-     rejected (gh-ocannl-1731). A block reaches a scalar through the uniform operators. *)
-  | Uint4x32_prec _, _ ->
-      invalid_arg
-        ("Ops.c_convert_precision: no plain conversion from uint4x32 to " ^ prec_string to_
-       ^ "; convert random bits with Uint4x32_to_prec_uniform1 or Uint4x32_to_prec_uniform")
+     rejected (gh-ocannl-1731). A block reaches a scalar through the uniform operators
+     ({!no_plain_uint4x32_conversion}, gh-ocannl-1785). *)
+  | Uint4x32_prec _, _ -> no_plain_uint4x32_conversion ~to_
   (* The C table's [<prec>_to_uint4x32] takes the 16- and 8-bit floating formats as their storage
      bits, which [bfloat16] and [fp8] nodes already are; a [half] node is [HALF_T], [_Float16] where
      the compiler has it, so passing it bare converted its VALUE (1.5 became counter 1), unlike the
@@ -1206,6 +1217,53 @@ let is_homogeneous_prec_ternop = function
   | Where -> false (* Heterogeneous: condition can have different precision *)
   | FMA -> true
   | Mul3 -> true
+
+(** {2 *** Float-valued subexpressions at an integer precision (gh-ocannl-1785) ***} *)
+
+(** What an operator yields when it is evaluated at an integer compute precision, by which the
+    renderer ([C_syntax]) and the simplifier ([Low_level.float_valued], the classification's one
+    reader over expression trees) agree on the rule: a float-valued subexpression is computed in
+    float -- through the operators that follow their operands, as C's usual arithmetic conversions
+    do -- and converted to the integer precision once, at the store or scope holding it, or at an
+    operand of an [Integer_only] operator.
+
+    - [Real_valued]: a math function with no integer meaning; computed in float whatever its
+      operand.
+    - [Follows_operands]: float-valued exactly when one of its value operands is.
+    - [Truth]: a comparison or logical connective; with a float-valued operand it compares in float,
+      and its 0/1 result is an integer.
+    - [Integer_only]: its integer spelling takes integers only ([Mod]'s [%]); a float-valued operand
+      converts at the operand.
+    - [Projection]: the selected operand itself ({!binop_conditionality}).
+    - [Integer_table]: rendered by the integer table as it stands, never float-valued: the
+      heterogeneous RNG operators, and the operators refused at an integer precision ([FMA],
+      [ToPowOf]) -- an integer power is a meaning of its own, refused identically on every backend.
+*)
+type integer_valuation =
+  | Real_valued
+  | Follows_operands
+  | Truth
+  | Integer_only
+  | Projection
+  | Integer_table
+[@@deriving sexp_of, equal]
+
+let unop_integer_valuation = function
+  | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Recip | Recip_sqrt | Tanh_approx -> Real_valued
+  | Identity | Neg | Relu | Satur01 | Trunc -> Follows_operands
+  | Not -> Truth
+  | Uint4x32_to_prec_uniform1 -> Integer_table
+
+let binop_integer_valuation = function
+  | Add | Sub | Mul | Div | Max | Min | Relu_gate | Satur01_gate -> Follows_operands
+  | Cmplt | Cmple | Cmpeq | Cmpne | And | Or -> Truth
+  | Mod -> Integer_only
+  | Arg1 | Arg2 -> Projection
+  | ToPowOf | Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane ->
+      Integer_table
+
+(** [Where] follows its two arms; its condition keeps its own precision and type, as in C. *)
+let ternop_integer_valuation = function Where | Mul3 -> Follows_operands | FMA -> Integer_table
 
 let () =
   (* Ensure that the functions are linked in *)
