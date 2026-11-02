@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -79,6 +80,67 @@ def kill_the_group_on_cleanup(case, pidfile):
             kill_the_group(int(pidfile.read_text()))
 
     case.addCleanup(kill_what_is_left)
+
+
+@contextlib.contextmanager
+def cap_counted_from(published, within=120):
+    """Start a supervised child's cap only once the child has published to `published`.
+
+    A fixture killed at its cap writes its evidence (a checkpoint, a line of output, a pid) and
+    THEN publishes its pid (`publish_pid`), and the test reads that evidence after the kill. With
+    the cap counted from the spawn, the evidence is there only if the child started up inside the
+    cap -- a race with the box's load, which a one-second cap lost on a loaded macbook-pro
+    (gh-ocannl-1807: a killed cell's record without its checkpoint). Here the wait that carries
+    the cap (`cell_group.ManagedProcess.wait`, which both `orchestrate.run_cell` and
+    `gh1002_cells.run_in_own_group` call) first waits for the publication, or for the child to
+    exit without one, so the cap expires after the evidence, at any start-up latency. A child that
+    publishes nothing within `within` seconds fails the test rather than hang it; the caller's
+    own cleanup then collects it, as it would a cell over its cap. `published=None` gates nothing.
+    """
+    if published is None:
+        yield
+        return
+    published = Path(published)
+
+    def wait(self, timeout=None):
+        if timeout is not None:
+            deadline = time.monotonic() + within
+            while not published.exists() and self.proc.poll() is None:
+                if time.monotonic() >= deadline:
+                    raise AssertionError(f"the child published nothing to {published} in {within}s")
+                time.sleep(0.01)
+        return self.proc.wait(timeout=timeout)
+
+    with unittest.mock.patch.object(cell_group.ManagedProcess, "wait", wait, create=True):
+        yield
+
+
+def interrupt_once_published(case, published, within=120):
+    """SIGALRM this process's main thread once a child has published to `published`.
+
+    The interrupt tests' counterpart of `cap_counted_from`: an interval timer armed before the
+    spawn lands wherever the child's start-up has got to by then, so evidence the test reads after
+    the interrupt (a checkpoint, a pid) is there only if the start-up beat the timer
+    (gh-ocannl-1807). Delivered from a thread at the publication instead, the interrupt lands after
+    the evidence at any load. A child that publishes nothing within `within` seconds is
+    interrupted anyway, so the test fails on its own assertions rather than hang. POSIX only, as
+    the SIGALRM tests are; the caller installs the handler.
+    """
+    published = Path(published)
+    stop = threading.Event()
+
+    def deliver():
+        deadline = time.monotonic() + within
+        while not published.exists() and time.monotonic() < deadline:
+            if stop.wait(0.01):
+                return
+        if not stop.is_set():
+            signal.pthread_kill(threading.main_thread().ident, signal.SIGALRM)
+
+    thread = threading.Thread(target=deliver, daemon=True)
+    thread.start()
+    case.addCleanup(thread.join)
+    case.addCleanup(stop.set)
 
 
 # Short read-only probes a driver may run directly: they finish in moments and fork no workers of
@@ -320,10 +382,13 @@ class CellGroupTest(unittest.TestCase):
         driver = subprocess.Popen(
             self.python(
                 "import subprocess, sys, gh1002_cells as driver\n"
+                "from test.test_cell_group import cap_counted_from\n"
                 "driver._cancellation.install()\n"
                 "driver.CELL_TERMINATE_GRACE_S = 0.1\n"
                 f"driver.CELL_TIMEOUT_S = {timeout!r}\n"
-                "status = driver.run_in_own_group([sys.executable, '-c', sys.argv[1], "
+                # The cap counts from the child's publication, not its spawn (gh-ocannl-1807).
+                "with cap_counted_from(sys.argv[2]):\n"
+                "    status = driver.run_in_own_group([sys.executable, '-c', sys.argv[1], "
                 "sys.argv[2]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
                 "print(status)\n",
                 child_source,
@@ -483,12 +548,15 @@ class CellGroupTest(unittest.TestCase):
         driver = subprocess.Popen(
             self.python(
                 "import pathlib, subprocess, sys, gh1002_cells as driver\n"
+                "from test.test_cell_group import cap_counted_from\n"
                 "driver._cancellation.install()\n"
                 "driver.CELL_TERMINATE_GRACE_S = 0.1\n"
                 f"driver.BUILD_TIMEOUT_S = {timeout!r}\n"
                 "driver.ROOT = pathlib.Path(sys.argv[2])\n"
                 "driver.BUILD_ARGV = [sys.executable, '-c', sys.argv[1], sys.argv[3]]\n"
-                f"{build}\n"
+                # The deadline counts from the builder's publication (gh-ocannl-1807).
+                "with cap_counted_from(driver.ROOT / sys.argv[3]):\n"
+                f"    {build}\n"
                 "print('built')\n",
                 builder_source,
                 self.dir,
