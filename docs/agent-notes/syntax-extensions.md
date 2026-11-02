@@ -22,6 +22,13 @@ files.
   alike, because a shared `delayed_var_ref` pins the first call's solution and a second size then
   fails inference (gh-ocannl-1507). A lifted initializer cannot name one; a capture that would
   shadow a lifted name is a clash, found through the `ocannl.bound_capture` marker `let_opt` checks.
+- Label sources: only a toplevel `%op` function WITHOUT `()` reads its parameters' labels into
+  the result's (the no-unit arm of `translate`); after `()`, no parameter is one. There every
+  parameter except an optional one is read as `p.Tensor.value.Ir.Tnode.label`, so a labelled or
+  unlabelled non-tensor parameter is a type error at the parameter ("not a record type"), never a
+  ppx message; optional ones are skipped (gh-ocannl-1787) since `?x` is an option and a default
+  marks configuration. This is separate from `tensor_params`' scheme classification, which
+  requires operand evidence for a labelled parameter.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`

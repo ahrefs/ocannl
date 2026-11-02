@@ -773,10 +773,14 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
               pexp_attributes = drop_attr_named no_scheme_attr expr.pexp_attributes;
             } )
       | None ->
-          (* No unit parameter, everything is "after_unit" *)
+          (* No unit parameter, everything is "after_unit": each parameter is a label source, except
+             an optional one (gh-ocannl-1787). [?x] is an option in the body, never a tensor, and a
+             defaulted one is configuration ([?(stride = 2)]): read as a tensor, it failed to
+             type-check at its default, with nothing naming the missing [()]. *)
           let labels =
             Option.to_list label
             @ List.filter_map args ~f:(function
+              | { pparam_desc = Pparam_val (Optional _, _, _); _ } -> None
               | { pparam_desc = Pparam_val (_, _, pat); _ } ->
                   let loc = pat.ppat_loc in
                   Some [%expr [%e pat2expr pat].Tensor.value.Ir.Tnode.label]

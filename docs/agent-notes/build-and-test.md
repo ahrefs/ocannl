@@ -759,9 +759,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   itself reports for the module (`dune ocaml-merlin`: the `-ppx` driver, the `-open`s, every
   library's `-I`), so the context is the stanza's reading, never a restated copy of its fields
   (gh-ocannl-1587). Doing it found the `let%op` arms of `optional_arg_scan_cases` in a spelling
-  no compiler builds: an `%op` function with no `()` parameter makes every parameter a label
-  source (`stride.Tensor.value`), and a `"stride*o+k"` spec reads `use_padding`, so the arms took
-  a `()` and the stub a `use_padding`. An extension no preprocessor expands (`[%%ext …]`) is then
+  no compiler builds: an `%op` function with no `()` parameter then read even an optional
+  parameter as a label source (`stride.Tensor.value`; gh-ocannl-1787 exempts optional ones), and
+  a `"stride*o+k"` spec reads `use_padding`, so the arms took a `()` and the stub a
+  `use_padding`. An extension no preprocessor expands (`[%%ext …]`) is then
   an ordinary rejection, listed where the arm is that parse shape on purpose. A snippet passed as
   `~interface:` is compiled as a signature. The context needs the project's libraries, so the harness's
   leg 1 runs `--no-project-context` (project arms REFUSED) and the `#project` legs check them:
