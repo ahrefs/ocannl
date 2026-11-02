@@ -302,6 +302,56 @@ jobs:
         done
         echo "::error title=apt-get update::sudo apt-get update did not complete in 2 capped attempts; the last $last. The apt index refresh precedes the change under test: re-run the job."
         exit 1
+    # A full disk hangs the build instead of failing it (gh-ocannl-1771). On
+    # 2026-10-31 an ubuntu main shard filled its disk three minutes into its
+    # dune walk; dune printed `dune_trace_write(): No space left on device` and
+    # then sat, with its `tee`, until the 45-minute ceiling cancelled the job
+    # (run 41203731123, attempt 1). Nothing after the ENOSPC would have ended
+    # it, so on Linux this step does two things. It deletes the preinstalled
+    # toolchains no step here uses (Android, .NET, GHC, CodeQL), in the
+    # background while the switch is set up. And it starts a watchdog that
+    # polls free space on the workspace's and /tmp's filesystems every 5s for
+    # the rest of the job. Once it falls below a 1 GiB floor, the watchdog
+    # stops every dune, then and for the rest of the job (TERM, then KILL 15s
+    # later), so the build step fails within about half a minute, and `Report
+    # the disk headroom` near the end of the job turns the trip into an error
+    # naming disk space. Its state lives in /dev/shm (RAM), writable when the
+    # disk is full; its output goes nowhere, so the step ends at once. Inline
+    # for the apt refresh's reason. test/operations/ci_matrix.sh runs this step
+    # and the report against stubs.
+    - name: Free disk space and start the disk watchdog (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        state=/dev/shm/ocannl-disk-watch
+        mkdir -p "$state"
+        echo "::group::Disk headroom before the cleanup"
+        df -h "$GITHUB_WORKSPACE" /tmp
+        echo "::endgroup::"
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+          /opt/hostedtoolcache/CodeQL </dev/null >/dev/null 2>&1 &
+        disk_watch() {
+          floor_mb=1024 poll=5 grace=15 min= tripped=
+          while :; do
+            avail=$(df -Pm "$GITHUB_WORKSPACE" /tmp |
+              awk 'NR > 1 && (m == "" || $4 + 0 < m) { m = $4 + 0 } END { print m }') || avail=
+            if [ -n "$avail" ]; then
+              if [ -z "$min" ] || [ "$avail" -lt "$min" ]; then
+                min=$avail
+                echo "$min MB at $(date -u +%H:%M:%SZ)" > "$state/min" || true
+              fi
+              if [ -z "$tripped" ] && [ "$avail" -lt "$floor_mb" ]; then
+                tripped=1
+                echo "Free disk space fell to $avail MB, under the watchdog's $floor_mb MB floor, at $(date -u +%H:%M:%SZ), and it stopped dune: on a full disk dune hangs to the job's ceiling instead of failing (gh-ocannl-1771). This is the runner's disk, not a test verdict: re-run the job; if it recurs, the build outgrew the runner's disk." > "$state/tripped" || true
+              fi
+            fi
+            if [ -n "$tripped" ] && pkill -TERM -x dune; then
+              sleep "$grace"
+              pkill -KILL -x dune || true
+            fi
+            sleep "$poll"
+          done
+        }
+        disk_watch </dev/null >/dev/null 2>&1 &
     # A dispatch builds the commit it names; with none (every other event)
     # `ref` is empty and checkout takes the event's own commit.
     - uses: actions/checkout@v7
@@ -817,6 +867,26 @@ jobs:
         # Not covered: the second-launch lock refusal (exit 2), which needs a
         # run still holding the lock when the second arrives -- i.e. minutes of
         # real build, against a step meant to cost seconds.
+    # The end of the disk watchdog (gh-ocannl-1771; its start says why): every
+    # Linux job prints its headroom now and the lowest the watchdog saw, and a
+    # trip is an error naming disk space, red even when the build step was
+    # cancelled rather than failed.
+    - name: Report the disk headroom (Linux)
+      if: ${{ always() && runner.os == 'Linux' }}
+      run: |
+        state=/dev/shm/ocannl-disk-watch
+        echo "::group::Disk headroom at the end of the job"
+        df -h "$GITHUB_WORKSPACE" /tmp
+        echo "::endgroup::"
+        if [ -s "$state/min" ]; then
+          echo "Lowest free disk space the watchdog saw: $(cat "$state/min")"
+        else
+          echo "::warning title=disk space::the disk watchdog recorded no reading"
+        fi
+        if [ -s "$state/tripped" ]; then
+          echo "::error title=disk space::$(cat "$state/tripped")"
+          exit 1
+        fi
     # A red job's last output (gh-ocannl-1304): the dune rules that failed,
     # read from the build steps' log, under the host line saved above, each
     # also annotated on the run's summary page. Without it a red log ends with
