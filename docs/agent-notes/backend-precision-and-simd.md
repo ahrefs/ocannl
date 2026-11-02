@@ -2116,7 +2116,7 @@ files.
   rationale is its cross-MACHINE principle, not backend agreement (its header scopes that out);
   it is the profile's one pin that changes a backend's default math. Pinned by
   `test_cuda_compile_options` (both vectors exactly; the umbrella iff fast), `config_profiles`
-  (only `reproducible` states the key), `cache_key_agreement` (CUDA scope), and on CUDA by
+  (`reproducible` states it off, `approximate` at its default), `cache_key_agreement` (CUDA scope), and on CUDA by
   `bf16_subnormal_storage` and `unary_math_special_values` with their `-reproducible` rules: the
   default run must flush f32 arithmetic bitwise, the reproducible one must not, and its f32 and
   bfloat16 functions meet the stated ulps with subnormals kept.
@@ -2145,8 +2145,9 @@ files.
   The DEFAULT is unchanged: `-fhonor-nans` after the fast umbrella lifts the same five but makes the
   `ocannl_fmod*` wrappers return `x` for `fmod(x, NaN)` at every precision (their NaN test is
   shaped for finite-math), so it is no drop-in; `-ffp-contract=on` for the default is unmeasured
-  for throughput. Both are performance-graded follow-ups. Like CUDA's key, only `reproducible`
-  states it (`config_profiles`): the default IS the `approximate` value.
+  for throughput. Both are performance-graded follow-ups. `reproducible` states it `false` and
+  `approximate` `true` -- its default, stated so the regime report names an explicit `false`
+  beside that profile; `cuda_fast_math` likewise since this PR (`config_profiles`).
 - **CUDA and HIP compile with fast-math umbrellas by default; Metal pins safe arithmetic while
   retaining fast math functions**: CUDA passes `--use_fast_math` (unless `cuda_fast_math` is off,
   above), HIP `-ffast-math` (unless `hip_fast_math` is off, above), and Metal selects

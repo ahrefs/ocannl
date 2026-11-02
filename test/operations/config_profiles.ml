@@ -88,15 +88,19 @@ let () =
   Verdict.p "the approximate profile sets keys the performance profile does not"
     (List.length approximate > List.length performance);
   (* gh-ocannl-1710, gh-ocannl-1779: the GPU fast math stays the default everywhere but
-     [reproducible], which turns it off; [performance] and [approximate] leave it to its default
-     rather than restating it. *)
+     [reproducible], which turns it off; [approximate] states it at that default, so the regime
+     report names an explicit [false] beside it, and [performance] leaves it unstated. *)
   Verdict.p_all ~min:6
-    "only the reproducible profile states cuda_fast_math and hip_fast_math, and it states false"
+    "the reproducible profile states cuda_fast_math and hip_fast_math false, the approximate \
+     profile true, and the performance profile neither"
     (List.cartesian_product [ "cuda_fast_math"; "hip_fast_math" ] Utils.profile_payloads)
     ~f:(fun (key, (name, _)) ->
       Option.equal String.equal
         (List.Assoc.find (parsed name) key ~equal:String.equal)
-        (Option.some_if (String.equal name "reproducible") "false"))
+        (match name with
+        | "reproducible" -> Some "false"
+        | "approximate" -> Some "true"
+        | _ -> None))
 
 (* gh-ocannl-604: a truncated bootstrap source list uses the same walk and provenance formatter.
    These cases distinguish explicit false from absence, and profile selection normalizes each source

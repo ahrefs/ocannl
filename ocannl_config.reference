@@ -104,7 +104,8 @@
 #   approximate  -- the fastest configuration at tolerance-bounded semantics: the
 #                   `performance` payload plus every numerics-changing knob (tf32_matmuls,
 #                   fp16_arithmetic, bf16_arithmetic, cc_backend_fast_math, cc_backend_fp_contract,
-#                   tune_inline_flips, and the algebraic-rewrite gates as they land).
+#                   tune_inline_flips, cuda_fast_math and hip_fast_math at their defaults, and
+#                   the algebraic-rewrite gates as they land).
 #                   Results differ from the exact profiles by the tolerance the benchmark
 #                   parity envelope names (`PARITY_TOL_APPROX` in benchmarks/orchestrate.py),
 #                   never in shape or in which operations run (gh-ocannl-719). The knobs it
@@ -2328,4 +2329,10 @@
 # # its result; a sunk one (a bias gradient) keeps its summation order but rounds to storage once
 # # instead of after every step.
 # gpu_default_seed_narrow_storage=true
+# # The GPU compilers' fast math (gh-ocannl-1710, gh-ocannl-1779), stated at the value it already
+# # defaults to: the `reproducible` profile turns both off, and stating them here makes an explicit
+# # `cuda_fast_math=false` or `hip_fast_math=false` beside this profile a departure the regime
+# # report (`Utils.profile_payload_sources`) names, as for every other key of this payload.
+# cuda_fast_math=true
+# hip_fast_math=true
 # --- END PROFILE PAYLOAD approximate ---

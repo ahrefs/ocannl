@@ -83,10 +83,12 @@ Profile "approximate" sets:
   fp_finite_math=true
   tune_inline_flips=2
   gpu_default_seed_narrow_storage=true
+  cuda_fast_math=true
+  hip_fast_math=true
 
 every key the performance profile sets, the approximate profile sets to the same value: true
 the approximate profile sets keys the performance profile does not: true
-only the reproducible profile states cuda_fast_math and hip_fast_math, and it states false: true
+the reproducible profile states cuda_fast_math and hip_fast_math false, the approximate profile true, and the performance profile neither: true
 bootstrap resolution preserves precedence and source descriptions: true
 profile selection normalizes and falls through each source: true
 truncated bootstrap sources report the ordinary default: true

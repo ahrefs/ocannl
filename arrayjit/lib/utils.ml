@@ -1675,6 +1675,12 @@ tune_inline_flips=2
 # its result; a sunk one (a bias gradient) keeps its summation order but rounds to storage once
 # instead of after every step.
 gpu_default_seed_narrow_storage=true
+# The GPU compilers' fast math (gh-ocannl-1710, gh-ocannl-1779), stated at the value it already
+# defaults to: the `reproducible` profile turns both off, and stating them here makes an explicit
+# `cuda_fast_math=false` or `hip_fast_math=false` beside this profile a departure the regime
+# report (`Utils.profile_payload_sources`) names, as for every other key of this payload.
+cuda_fast_math=true
+hip_fast_math=true
 |}
 
 (** The embedded profile payloads, by name. Each is literally a partial [ocannl_config] file: same
