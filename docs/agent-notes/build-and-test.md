@@ -3425,8 +3425,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   own `select`. An arm compiled as a library module is checked slightly more permissively than in
   its executable (an unused top-level value is an error only under the executable's empty
   interface). A stub is a check of signatures only: it proves nothing about the vendor library's
-  behavior, so a change to a backend's runtime behavior still needs its box. Nothing yet refuses a
-  NEW vendor-gated `select` arm that `arms/dune` does not copy: add its library there by hand.
+  behavior, so a change to a backend's runtime behavior still needs its box. A NEW vendor-gated
+  `select` arm that no library under `arrayjit/vendor_stubs/` copies and compiles is refused by
+  `test/operations/vendor_stub_arms_scan` (a `@scans` member), naming its dune file: copy it into
+  `arms/dune` as its siblings are. The vendor libraries are derived from the stand-in tree.
   Verify on the box carrying the toolchain — rog for cudajit, minix for hipjit, through whichever
   boot is up (`rog-nv-linux`/`minix-amd-linux` on native Ubuntu, `rog-nv-wsl`/`minix-amd-wsl` on
   WSL; the site's `kind_of` says which) —

@@ -166,6 +166,14 @@ generated_lock_scan.ml: [scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-
 generated_lock_scan.ml: [scanner-refusal:90a5bf8d781c4ed0a5407b52bd9fa3cd] arguments the rule's (direct failure) is catalogued beside generated_lock_scan.expected, generated_lock_scan_control.expected: true
 generated_lock_scan.ml: [scanner-refusal:a02da6b10b325cc5503fe4adf61da286] reaches the scanner-defect (claim) is catalogued beside generated_lock_scan.expected, generated_lock_scan_control.expected: true
 generated_lock_scan.ml: [scanner-refusal:01eec44b44e6e6a758bc7e95ef545443] Generated.init (claim) is catalogued beside generated_lock_scan.expected, generated_lock_scan_control.expected: true
+vendor_stub_arms_scan.ml has exactly the explicitly assigned refusal controls: true
+vendor_stub_arms_scan.ml: [scanner-refusal:99b67dac359b15961fd222795ccfdc9b] does not read (direct failure) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
+vendor_stub_arms_scan.ml: [scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-file glob matches (direct failure) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
+vendor_stub_arms_scan.ml: [scanner-refusal:513451a79c3ecc3b1fb18f6fee5ee404] arrayjit/vendor_stubs/<package>/dune (direct failure) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
+vendor_stub_arms_scan.ml: [scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/ (direct failure) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
+vendor_stub_arms_scan.ml: [scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into (direct failure) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
+vendor_stub_arms_scan.ml: [scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/ (direct failure) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
+vendor_stub_arms_scan.ml: [scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select (claim) is catalogued beside vendor_stub_arms_scan.expected, vendor_stub_arms_scan_control.expected: true
 census_total_ratchet.ml has exactly the explicitly assigned refusal controls: true
 census_total_ratchet.ml: [scanner-refusal:6d5b4fe654d3592b327d32a16ca1fa2a] checked-in file this (claim) is catalogued beside census_total_ratchet.expected: true
 census_total_ratchet.ml: [scanner-refusal:571968c7f074e29e60dddf8d93d23f34] number the allow-list (claim) is catalogued beside census_total_ratchet.expected: true

@@ -275,23 +275,33 @@ let field stanza name =
 
 let rec atoms = function Sexp.Atom a -> [ a ] | Sexp.List l -> List.concat_map l ~f:atoms
 
-(** A stanza's [(select <target> from (<libs> -> <arm>) … (-> <arm>))] relationships in its
-    [libraries], as [(target, arm)] pairs: an arm is source for the generated target module, never a
-    module named [*.real] or [*.missing] (gh-ocannl-964). *)
-let select_arms stanza =
+(** A stanza's [(select <target> from (<libs> -> <arm>) … (-> <arm>))] choices in its [libraries],
+    as [(target, condition, arm)] triples: [condition] is the library list before the [->], each
+    forbidden one spelled with its [!], and empty for the fallback [(-> <arm>)]. *)
+let select_choices stanza =
   Option.value (field stanza "libraries") ~default:[]
   |> List.concat_map ~f:(function
     | Sexp.List (Sexp.Atom "select" :: Sexp.Atom target :: Sexp.Atom "from" :: arms)
       when String.is_suffix target ~suffix:".ml" ->
         List.filter_map arms ~f:(function
           | Sexp.List terms -> (
-              match
-                List.drop_while terms ~f:(fun term -> not (Sexp.equal term (Sexp.Atom "->")))
-              with
-              | [ Sexp.Atom "->"; Sexp.Atom source ] -> Some (target, source)
+              let condition, rest =
+                List.split_while terms ~f:(fun term -> not (Sexp.equal term (Sexp.Atom "->")))
+              in
+              match rest with
+              | [ Sexp.Atom "->"; Sexp.Atom source ] ->
+                  Some
+                    ( target,
+                      List.filter_map condition ~f:(function Sexp.Atom l -> Some l | _ -> None),
+                      source )
               | _ -> None)
           | _ -> None)
     | _ -> [])
+
+(** {!select_choices} as [(target, arm)] pairs: an arm is source for the generated target module,
+    never a module named [*.real] or [*.missing] (gh-ocannl-964). *)
+let select_arms stanza =
+  List.map (select_choices stanza) ~f:(fun (target, _condition, arm) -> (target, arm))
 
 (** Whether a [copy_files] pattern could name [name] — the literal spelling, or a wildcard that
     covers it. Only [*] and [?] are interpreted; a pattern using dune's set syntax ([{a,b}], [[ab]])

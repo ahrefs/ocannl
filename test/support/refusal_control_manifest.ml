@@ -217,6 +217,16 @@ let raw_entries =
         "[scanner-refusal:a02da6b10b325cc5503fe4adf61da286] reaches the scanner-defect";
         "[scanner-refusal:01eec44b44e6e6a758bc7e95ef545443] Generated.init";
       ] );
+    ( "vendor_stub_arms_scan.ml",
+      [
+        "[scanner-refusal:99b67dac359b15961fd222795ccfdc9b] does not read";
+        "[scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-file glob matches";
+        "[scanner-refusal:513451a79c3ecc3b1fb18f6fee5ee404] arrayjit/vendor_stubs/<package>/dune";
+        "[scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/";
+        "[scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into";
+        "[scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/";
+        "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
+      ] );
     ( "cache_dir_ignores.ml",
       [
         "[scanner-refusal:e2e9d19ffe2ad7688396847bd1ee643a] the repository-root gitignore";
