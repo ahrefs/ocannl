@@ -376,8 +376,8 @@ val matmul_sketch_tree :
 (** The lazy matmul family, including unfused and epilogue-fused flavors; [None] when no site is
     recognized. Refutations carry statically decidable builder failures. The workgroup-memory
     refutations charge the staged tiles as the gate does ([Schedule.kernel_workgroup_bytes]):
-    [capabilities] (the compiling context's [Context.codegen_capabilities]) supplies the backend's
-    allocation rounding and tile-MMA scratch; the default,
+    [capabilities] (the compiling context's [codegen_capabilities], through the autotuner's driver)
+    supplies the backend's allocation rounding and tile-MMA scratch; the default,
     {!Ir.Backend_intf.no_codegen_capabilities}, charges the exact tile sizes alone — a weaker floor,
     never a wrong one (gh-ocannl-1255). *)
 

@@ -7,6 +7,7 @@ placement_surface ~name reads a nameless comp's decision surface: true
 the second comp does carry a derivable name: true
 the overriding name wins over the block comment for the routine: true
 the overridingly named search still computes correct values: true
+a search given no name ships a routine named by its block comment: true
 a search contributed rows exactly when it timed a candidate: true
 a search with no rows was refused its timings, not silently lost: true
 no calibration row names the block comment the search overrode: true

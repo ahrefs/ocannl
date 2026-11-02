@@ -3199,3 +3199,27 @@ files.
   reads (`OCANNL_TF32_MATMULS`, `OCANNL_PROFILE`, the two logging keys, `OCANNL_CC_VECTOR_BYTES`).
   For an f32 site that leaves Metal as the only GPU evaluating those claims at default config (CUDA
   needs tf32, HIP has no f32 shape), and CI's macOS job runs cc, not Metal.
+## The context-driver boundary
+
+- **The autotuner reaches a context only through `Autotune.Driver`** (gh-ocannl-1754): the
+  driver-dependent part of `autotune.ml` (the compile, run and timing paths: `time_routine`,
+  `placement_surface`, the seeded and model defaults, `tune` and its deferred form) is the functor
+  `Autotune.Make (D : Driver)`; everything above it is driver-independent and stays at top level.
+  The file's last section, `Context_driver` plus `include Make (Context_driver)`, is the only code
+  in `autotune.ml`/`.mli` naming `Context` or `Ir.Assignments` -- the section gh-ocannl-852's move
+  carries with `Context`. A new context member the autotuner needs goes into `Driver` (both files)
+  and `Context_driver`, never as a direct `Context.` call inside `Make`.
+- **What goes inside `Make` and what stays out is a contract, not layout.** Types `Make` declares
+  are generative per instantiation, and its top-level effects run once per application; driver-free
+  types, exceptions and process-wide state (reports, outcomes, `Concurrent_search` and
+  `exclusive_search`, the `Seam` hooks) are declared outside, so every instantiation shares them --
+  in particular one search exclusion. Put a new definition inside `Make` only when it calls `D`.
+- **Two driver members are not plain aliases of a `Context` function**: `program_name`, the name a
+  nameless compile derives (`get_name_exn`; `None` where it raises), read lazily as a diagnostic
+  label; and `program_nodes`, which gates the bounds-blind cache rebase (gh-ocannl-1614) -- cache
+  replay behaviour, not a diagnostic. `reuse` is the driver's because `Ir.Lowering_reuse` keys its
+  cell on the program (`lower_or_reuse ~asgns`).
+- **The boundary check, until gh-ocannl-852 makes it structural**: drop `context` from the
+  autotune stanza's `(libraries ...)` and cut both files at their production-instantiation
+  section; `dune build @arrayjit/lib/check` must still pass, and a `Context.ordinal` inside `Make`
+  must then fail as `Unbound module Context`.
