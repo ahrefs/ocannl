@@ -23,6 +23,9 @@ module LL = Ir.Low_level
 module Ops = Ir.Ops
 open Verdict.Claims
 
+(* The forms compared bitwise are different kernel shapes, so the C compiler's contraction must not
+   fuse the sum into a product in one of them only. *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
 let bf = Ops.bfloat16
 let f32 = Ops.single
 let n = 4
