@@ -2009,6 +2009,7 @@ using namespace metal;|}
         match Hashtbl.find program.pipelines symbol with
         | Some func_and_pso -> func_and_pso
         | None ->
+            Compile_cost.time_pipeline @@ fun () ->
             let func = Me.Library.new_function_with_name program.library symbol in
             (* Over-limit threadgroup memory never reaches a pipeline to query: Metal refuses to
                create one, and the binding reports it as a bare [Failure] carrying the driver's

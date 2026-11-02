@@ -1713,7 +1713,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       ~code_node:code.expected_merge_node;
     let (inputs, outputs), merge_buffer_input = Low_level.input_and_output_nodes code.lowered in
     let ctx_buffers =
-      allocate_delta context ~name:code.name ~alias_spans:code.alias_spans code.lowered
+      Compile_cost.time_link_delta (fun () ->
+          allocate_delta context ~name:code.name ~alias_spans:code.alias_spans code.lowered)
     in
     with_delta context ctx_buffers ~f:(fun () ->
         (* gh-ocannl-489: a routine reading a node whose buffer an earlier routine of this lineage

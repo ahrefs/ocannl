@@ -6,10 +6,12 @@ type t = {
   backend_compile_s : float;
   device_s : float option;
   link_s : float;
+  link_delta_s : float;
   kernels : int;
   kernels_compiled : int;
   kernels_reused : int;
   pipelines_created : int;
+  pipeline_s : float;
   reuse_capable : bool;
 }
 [@@deriving sexp_of]
@@ -21,10 +23,12 @@ let empty =
     backend_compile_s = 0.;
     device_s = None;
     link_s = 0.;
+    link_delta_s = 0.;
     kernels = 0;
     kernels_compiled = 0;
     kernels_reused = 0;
     pipelines_created = 0;
+    pipeline_s = 0.;
     reuse_capable = false;
   }
 
@@ -41,10 +45,12 @@ let add a b =
       | None, None -> None
       | x, y -> Some (Option.value x ~default:0. +. Option.value y ~default:0.));
     link_s = a.link_s +. b.link_s;
+    link_delta_s = a.link_delta_s +. b.link_delta_s;
     kernels = a.kernels + b.kernels;
     kernels_compiled = a.kernels_compiled + b.kernels_compiled;
     kernels_reused = a.kernels_reused + b.kernels_reused;
     pipelines_created = a.pipelines_created + b.pipelines_created;
+    pipeline_s = a.pipeline_s +. b.pipeline_s;
     reuse_capable = a.reuse_capable || b.reuse_capable;
   }
 
@@ -97,6 +103,8 @@ let time_device f =
   timed (fun r s -> { r with device_s = Some (Option.value r.device_s ~default:0. +. s) }) f
 
 let time_link f = timed (fun r s -> { r with link_s = r.link_s +. s }) f
+let time_pipeline f = timed (fun r s -> { r with pipeline_s = r.pipeline_s +. s }) f
+let time_link_delta f = timed (fun r s -> { r with link_delta_s = r.link_delta_s +. s }) f
 
 let record_kernels ~rendered ~compiled =
   update (fun r ->

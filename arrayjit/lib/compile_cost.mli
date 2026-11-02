@@ -19,6 +19,11 @@
       upper bound on the vendor compiler's time, not that time alone. [None] when no compile in the
       bracket timed one: Metal compiles its library at link, so there [link_s] carries it.
     - [link_s]: [Backend.link] (module loading, buffer allocation, the per-kernel checks).
+    - [link_delta_s]: the share of [link_s] spent allocating and initializing the routine's buffers
+      ([Backends.allocate_delta]: pool allocation, zero fills, host uploads). It is the part of a
+      link every backend pays whether or not its kernels came from a kernel code cache, so
+      [link_s -. link_delta_s] is the backend's own kernel linking (gh-ocannl-1675). Not added again
+      by {!total_s}.
     - [kernels]: the kernels the compiles rendered; [kernels_compiled]: the ones the vendor compiler
       was given, counted just before it runs, so a compile it refused still counts (on Metal, inside
       link). They differ only on a backend that reuses compiled kernels ([reuse_capable]).
@@ -30,7 +35,8 @@
       from the cold one that filled it).
     - [pipelines_created]: the per-kernel pipeline objects the links created rather than reused
       (Metal's compute pipeline states, gh-ocannl-1605), counted at the creation call; 0 on a
-      backend that has no such object.
+      backend that has no such object. [pipeline_s]: the share of [link_s] spent creating them, the
+      function lookup included (gh-ocannl-1675: what a cross-process pipeline cache could save).
     - [reuse_capable]: whether a compile in the bracket went through a backend's kernel code cache
       ({!Kernel_code_cache}; HIP's, CUDA's, cc's, Metal's), whether or not the cache was enabled:
       with it disabled ([hip_kernel_cache_mib=0]) such a compile compiles every kernel, which is
@@ -44,10 +50,12 @@ type t = {
   backend_compile_s : float;
   device_s : float option;
   link_s : float;
+  link_delta_s : float;
   kernels : int;
   kernels_compiled : int;
   kernels_reused : int;
   pipelines_created : int;
+  pipeline_s : float;
   reuse_capable : bool;
 }
 [@@deriving sexp_of]
@@ -74,6 +82,13 @@ val time_transform : (unit -> 'a) -> 'a
 val time_backend_compile : (unit -> 'a) -> 'a
 val time_device : (unit -> 'a) -> 'a
 val time_link : (unit -> 'a) -> 'a
+
+val time_pipeline : (unit -> 'a) -> 'a
+(** Times [pipeline_s], inside a {!time_link}. *)
+
+val time_link_delta : (unit -> 'a) -> 'a
+(** Times [link_delta_s]; it runs inside a {!time_link}, which counts the same seconds in [link_s].
+*)
 
 val record_kernels : rendered:int -> compiled:int -> unit
 (** Adds a compile's kernel counts. *)
