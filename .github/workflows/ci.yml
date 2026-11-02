@@ -4,10 +4,14 @@ name: ci
 # later commit than the one built (`expected_sha`, below). Every other run
 # evaluates this to empty, which keeps GitHub's default name.
 run-name: ${{ inputs.expected_sha && format('ci at {0}', inputs.expected_sha) || '' }}
+# No `push` trigger (gh-ocannl-1816): a merge to master gets its verdict from
+# `ci-env.yml`, a fresh-checkout build from the opam files alone that takes
+# minutes. This matrix gates each PR head, sweeps master daily on the
+# schedule, and runs on demand by dispatch. Behind a wave's PR runs it takes
+# hours, and on a merged commit nothing would act on it sooner than on the
+# sweep: the fleet's boxes cover the backends and platforms after a merge, and
+# what only a hosted runner adds -- a clean room -- is ci-env.yml's job.
 on:
-  push:
-    branches:
-      - master
   # Markdown contains compiled examples; documentation edits need this gate too.
   pull_request:
   # Daily, 03:00 UTC, so a scheduled red spans about one day of merges: it
@@ -50,30 +54,17 @@ on:
 # answers to questions nobody is still asking (thirteen runs deep on one PR
 # before this landed).
 #
-# Master's push runs are NOT cancelled, and they share ONE group. A cancelled
-# run answers nothing: under cancel-in-progress, 9 of 16 master pushes on
-# 2026-09-25 were cancelled and produced no verdict (ahrefs/ocannl#1057).
-# Without it, GitHub keeps at most one running and one pending run per group,
-# and a newer push replaces only the PENDING one, never the one running. So a
-# merge burst gets a verdict within about two run lengths, and each verdict
-# covers a span: the merges since the previous push run's head. The same rule
-# bounds the cost -- at most one master run in flight, so a PR's macOS jobs
-# queue behind at most one master macOS job. A per-commit group would buy a
-# verdict per merge with a queue as deep as the burst on the scarce macOS
-# runners. A red span is narrowed by hand, by dispatching this workflow at
-# commits inside it through `expected_sha`.
-#
-# `github.event_name` is in the group so that only like supersedes like. All
-# three non-PR triggers share `refs/heads/master` as their ref, and a master
-# push must not displace the other two: the scheduled sweep carries that
-# period's only Windows and OCaml-floor coverage (the same reasoning as
-# `fail-fast: false` below -- cancellation destroys information), and a
-# workflow_dispatch run was launched deliberately, for a rerun, a Windows-only
-# check or a probe inside a red span. Dispatches go further and key on the run
-# itself, since in a shared group a newer dispatch would replace an older one
-# still pending, and every dispatch is somebody's open question. Scheduled runs
-# cannot overlap each other in practice (the Windows job's longest runs
-# against a 24-hour cadence), so grouping them is harmless.
+# Nothing else is cancelled: a cancelled run answers nothing (ahrefs/ocannl#1057
+# is the 9-of-16 cancelled master verdicts that taught it). `github.event_name`
+# is in the group so that only like supersedes like: the scheduled sweep
+# carries that period's only Windows and OCaml-floor coverage (the same
+# reasoning as `fail-fast: false` below -- cancellation destroys information),
+# and a workflow_dispatch run was launched deliberately, for a rerun, a
+# Windows-only check or a probe inside a red span. Dispatches go further and
+# key on the run itself, since in a shared group a newer dispatch would replace
+# an older one still pending, and every dispatch is somebody's open question.
+# Scheduled runs cannot overlap each other in practice (the Windows job's
+# longest runs against a 24-hour cadence), so grouping them is harmless.
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -153,7 +144,7 @@ jobs:
         # the macOS concurrency it grants Linux), so a second macOS job would
         # more likely wait for a runner than run beside the first.
         #
-        # Then the `train` tier. Per PR and on master it runs as two ubuntu
+        # Then the `train` tier. Per PR it runs as two ubuntu
         # shards, NOT on macOS (gh-ocannl-1422): as a second macOS job beside
         # `main` it doubled each PR's claim on the scarce runners, and in a
         # wave of ~20 PRs in review macOS jobs queued ~2h, one was cancelled
@@ -1219,8 +1210,10 @@ jobs:
   # failure with an issue on ahrefs/ocannl -- issues are disabled on this
   # repository, and that is where the issues live anyway -- and then either
   # opens a ci-fix/* PR here or posts its diagnosis to the claiming issue.
-  # Scheduled sweeps are included on purpose -- their reds (Windows, OCaml
-  # floor) are master reds that no merge event announces. PR runs are excluded:
+  # With no push trigger, this workflow's master runs are the scheduled sweep
+  # and dispatches; a merge's own red comes from ci-env.yml, which fires the
+  # same routine. The sweep's reds (Windows, OCaml floor, the full matrix) are
+  # master reds that no merge event announces. PR runs are excluded:
   # the PR's own session watches those. So is a dispatch that names its commit
   # (`expected_sha`): its dispatcher reads the verdict -- the routine's own
   # re-run of a red commit among them, which would otherwise fire it again --

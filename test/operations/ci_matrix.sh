@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Evaluate ci.yml's actual matrix expressions and execute its commit guard.
+# Evaluate ci.yml's actual matrix expressions and execute its commit guard, and
+# read both workflows' triggers: the full matrix per PR and never on a master
+# push, ci-env.yml on both (gh-ocannl-1816).
 # Requires only python3 and bash; run on the Ubuntu main leg before opam setup.
 # ocannl-harness: standalone
 # Usage: test/operations/ci_matrix.sh [--keep|--help]
@@ -61,27 +63,36 @@ def expression(value, event, windows=False, compiler=''):
                      fromJSON=json.loads, format=gh_format))
 
 
-def documentation_triggers(text):
-    # These are compiler inputs now. Ask the actual workflow's event blocks,
-    # rather than maintain a second list of selected documentation paths.
+def unfiltered_triggers(text, events, absent=()):
+    # Documentation is compiler input now. Ask the actual workflow's event
+    # blocks, rather than maintain a second list of selected documentation paths.
     trigger = text.split('\non:\n', 1)[1].split('\nconcurrency:', 1)[0]
-    for event in ('push', 'pull_request'):
+    for event in absent:
+        assert not re.search(r'^  ' + event + r':', trigger, re.M), event + ' trigger present'
+    for event in events:
         blocks = re.findall(r'^  ' + event + r': *\n(.*?)(?=^  [a-z_]+:|\Z)',
                             trigger, re.M | re.S)
         assert len(blocks) == 1, event + ' trigger absent, repeated or unsupported'
         # Fail on unsupported fields/quoting rather than infer that an unread
         # paths filter is absent. The current trigger dialect is deliberately small.
-        branches = False
+        branches = None
         for line in blocks[0].splitlines():
             if not line.strip() or line.lstrip().startswith('#'):
                 continue
             if event == 'push' and line == '    branches:':
-                assert not branches, 'repeated push branch selection'
-                branches = True
-            elif event == 'push' and branches and re.fullmatch(r'      - .+', line):
-                continue
+                assert branches is None, 'repeated push branch selection'
+                branches = []
+            elif event == 'push' and branches is not None and re.fullmatch(r'      - .+', line):
+                branches.append(line.strip().removeprefix('- '))
             else:
                 raise AssertionError(event + ' trigger has an unsupported field: ' + line)
+        assert event != 'push' or branches == ['master'], 'push selects %s, not master' % branches
+
+
+def documentation_triggers(text):
+    # The full matrix gates PRs and never runs on a master push: a merge's
+    # verdict is ci-env.yml's (gh-ocannl-1816).
+    unfiltered_triggers(text, ('pull_request',), absent=('push',))
 
 
 
@@ -173,7 +184,7 @@ def unshard(jobs):
     return sorted(collapsed), counts
 
 
-# Per PR and on master: ubuntu carries both suites, macOS only `main` -- ONE
+# Per PR: ubuntu carries both suites, macOS only `main` -- ONE
 # job on the scarce runners (gh-ocannl-1422). The schedule adds macOS `train`.
 normal = sorted([('ubuntu-latest', '5.5.x', 'main'), ('ubuntu-latest', '5.5.x', 'train'),
                  ('macos-latest', '5.5.x', 'main')])
@@ -248,8 +259,7 @@ def controls(text):
     # Inputs are empty on every other event; no value of either may narrow them.
     for option in (False, True):
         for compiler in [''] + compilers:
-            for event in ('pull_request', 'push'):
-                assert matrix(text, event, option, compiler) == (normal, True), event
+            assert matrix(text, 'pull_request', option, compiler) == (normal, True), 'pull_request'
             assert matrix(text, 'schedule', option, compiler) == (full, True), 'scheduled full coverage'
     assert matrix(text, 'workflow_dispatch', False, ordinary) == (normal, True), 'ordinary manual run'
     # The input's default IS the compiler of the ordinary matrix, read from it.
@@ -286,14 +296,14 @@ controls(extra_job('new-side-job', fallback_guard))
 scheduled_guard = re.search(r'^  harness-legs-alone:\n(    if: .*\n)', source, re.M)[1]
 assert scheduled_guard.startswith('    if: ' + SCHEDULED_GUARD), 'scheduled side-job guard moved'
 controls(extra_job('new-scheduled-job', scheduled_guard))
-print('PASS documentation compiler inputs are unfiltered on push and PR')
+print('PASS ci.yml runs per PR, unfiltered, and has no push trigger')
 print('PASS normal, scheduled and explicit Windows fallback matrix selections')
 print('PASS every ocaml_compiler option: the default is the ordinary matrix, another is one ubuntu job')
 print('PASS every scheduled-only compiler dispatches as exactly its scheduled job')
 print('PASS side jobs are read from ci.yml: a new guarded job joins the selection')
 print('PASS a scheduled side job runs on the schedule and an ordinary dispatch, never per PR or in the fallback')
 print('PASS ubuntu main and train shards are exactly 1/N..N/N, over the aliases ci-shard.sh shards')
-print('PASS per PR and on master macOS runs one job, main; the schedule adds its train job')
+print('PASS per PR macOS runs one job, main; the schedule adds its train job')
 print('PASS every build step piping into tee has pipefail; the PowerShell one exits with dune\'s status')
 second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "main", "shard": "2/2"},'
 train_second = '{"os": "ubuntu-latest", "ocaml-compiler": "5.5.x", "suite": "train", "shard": "2/2"},'
@@ -306,7 +316,7 @@ compiler_axis = "&& format('[\"{0}\"]', inputs.ocaml_compiler)"
 assert compiler_axis in source, 'compiler axis text moved; update the mutants below'
 for label, mutant in (
     ('fallback enabled by default', source.replace('default: false', 'default: true')),
-    ('push skips documentation inputs', source.replace('  push:\n', '  push:\n    paths-ignore:\n      - "docs/**"\n', 1)),
+    ('full matrix back on master push', source.replace('\non:\n', '\non:\n  push:\n    branches:\n      - master\n', 1)),
     ('PR skips documentation inputs', source.replace('  pull_request:\n', '  pull_request:\n    paths-ignore:\n      - "docs/**"\n', 1)),
     ('quoted PR documentation filter', source.replace('  pull_request:\n', '  pull_request:\n    "paths-ignore": ["docs/**"]\n', 1)),
     ('repeated PR trigger hides documentation filter', source.replace('  pull_request:\n', '  pull_request:\n  pull_request:\n    paths-ignore: ["docs/**"]\n', 1)),
@@ -366,6 +376,35 @@ for label, mutant in (
         raise AssertionError('accepted mutant: ' + label)
 
 
+# ci-env.yml, master's per-merge verdict (gh-ocannl-1816): on every master push
+# and every PR, unfiltered, never cancelling a push run.
+env_source = (Path(sys.argv[1]).parent / 'ci-env.yml').read_text()
+
+
+def env_controls(text):
+    unfiltered_triggers(text, ('push', 'pull_request'))
+    concurrency = text.split('\nconcurrency:\n', 1)[1].split('\njobs:', 1)[0] + '\n'
+    assert "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n" in concurrency, \
+        'ci-env.yml cancels more than superseded PR runs'
+
+
+env_controls(env_source)
+print('PASS ci-env.yml runs on master push and per PR, unfiltered, cancelling only superseded PR runs')
+for label, mutant in (
+    ('ci-env.yml without push', env_source.replace('  push:\n    branches:\n      - master\n', '', 1)),
+    ('ci-env.yml push off master', env_source.replace('      - master\n', '      - main\n', 1)),
+    ('ci-env.yml PR skips documentation', env_source.replace('  pull_request:\n', '  pull_request:\n    paths-ignore:\n      - "docs/**"\n', 1)),
+    ('ci-env.yml cancels push runs', env_source.replace("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", 'cancel-in-progress: true', 1)),
+):
+    assert mutant != env_source, label
+    try:
+        env_controls(mutant)
+    except AssertionError:
+        print('PASS rejected mutant:', label)
+    else:
+        raise AssertionError('accepted mutant: ' + label)
+
+
 # The `train` shards together build exactly the tier `@train` builds. The tier
 # is read here on its own terms -- each tracked dune file's top-level `train`
 # aggregate, its `(alias train-<name>)` deps -- a reader deliberately simpler
@@ -401,7 +440,7 @@ def partitions(shards, whole):
 
 
 group = ('ubuntu-latest', '5.5.x', 'train')
-for event in ('pull_request', 'push', 'schedule'):
+for event in ('pull_request', 'schedule'):
     counts = unshard(sorted(raw_jobs(source, event)))[1]
     assert group in counts, '%s runs no ubuntu train shards' % event
     shards = train_shards(counts[group])
