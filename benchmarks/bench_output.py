@@ -196,6 +196,10 @@ def trace_events(text, event):
 # here, by name, rather than read as a different one.
 
 TIMING_CENSUSES = ("mma", "grid")
+# The line before gh-ocannl-1668 carried the mma census alone. A driver that times historical
+# revisions (gh1051_boundary_split.sh) names this layout explicitly, beside the current one; the
+# census count then says which layout a line is in, and any other count is still refused.
+TIMING_CENSUSES_BEFORE_1668 = ("mma",)
 _TIMING_HEAD = re.compile(r"^(?P<variant>\w+)\s+(?P<ms>\S+) ms\s+(?P<rate>\S+) GFLOP/s\s+")
 _TIMING_CHK = re.compile(r"(?:^|[ ,])chk ([^,]+),")
 
@@ -214,11 +218,12 @@ def _balanced(line, start, opening, closing):
     return None
 
 
-def timing_line(line):
+def timing_line(line, layouts=(TIMING_CENSUSES,)):
     """One timing line as a dict -- `variant`, `ms`, `rate` (GFLOP/s), `detail` (the parenthesized
-    group), `chk` (its printed checksum, `a/b`) and the censuses by TIMING_CENSUSES' names -- or
-    None when the line does not open like one. ValueError for a line that opens like one and does
-    not read as one."""
+    group), `chk` (its printed checksum, `a/b`) and the censuses by name, in the layout of
+    `layouts` (tuples of census names) whose census count the line has -- or None when the line
+    does not open like one. ValueError for a line that opens like one and does not read as one,
+    its census count among them."""
     head = _TIMING_HEAD.match(line)
     if not head:
         return None
@@ -239,9 +244,11 @@ def timing_line(line):
             raise ValueError(f"timing line whose census never closes: {line}")
         censuses.append(stripped[1:close - 1])
         rest = stripped[close:]
-    if len(censuses) != len(TIMING_CENSUSES):
-        raise ValueError(f"timing line with {len(censuses)} censuses, not the "
-                         f"{len(TIMING_CENSUSES)} ({', '.join(TIMING_CENSUSES)}) it prints: {line}")
+    layout = next((names for names in layouts if len(names) == len(censuses)), None)
+    if layout is None:
+        expected = " or ".join(f"{len(names)} ({', '.join(names)})" for names in layouts)
+        raise ValueError(f"timing line with {len(censuses)} censuses, not the {expected} it "
+                         f"prints: {line}")
     chk = _TIMING_CHK.search(detail)
     try:
         ms, rate = float(head["ms"]), float(head["rate"])
@@ -249,12 +256,12 @@ def timing_line(line):
         raise ValueError(f"timing line with an unreadable time or rate: {line}") from None
     return {"variant": head["variant"], "ms": ms, "rate": rate, "detail": detail,
             "chk": chk.group(1).strip() if chk else None,
-            **dict(zip(TIMING_CENSUSES, censuses))}
+            **dict(zip(layout, censuses))}
 
 
-def timing_lines(text):
+def timing_lines(text, layouts=(TIMING_CENSUSES,)):
     """The timing lines of a GEBP bench's stdout, in order (`timing_line`)."""
-    return [t for t in map(timing_line, text.splitlines()) if t is not None]
+    return [t for t in (timing_line(line, layouts) for line in text.splitlines()) if t is not None]
 
 
 GEBP_HEADER_PREFIX = "GEBP "

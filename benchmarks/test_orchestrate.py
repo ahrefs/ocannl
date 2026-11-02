@@ -8693,6 +8693,27 @@ class ReportScriptsDisplayTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assert_display_safe(proc.stdout)
 
+    def test_gh1051_split_reads_timing_lines_from_before_the_grid_census(self):
+        # gh1051_boundary_split.sh times two revisions around gh-ocannl-1064, which predate
+        # gh-ocannl-1668: their timing lines carry the mma census alone. The ab mode's current
+        # benches print both, and a line in neither layout is refused (gh-ocannl-1767).
+        import gh1051_cells
+
+        legacy = "".join(f"{v}   1.5 ms   10.0 GFLOP/s   (x chk 1.0/2.0, y)  [Mma_intrinsics 2]\n"
+                         for v in ("parallel", "smem", "regtile", "mma_pd1", "mma_pd2"))
+        with self.assertRaises(ValueError):
+            gh1051_cells.parse_text(legacy)
+        both = (bench_output.TIMING_CENSUSES, bench_output.TIMING_CENSUSES_BEFORE_1668)
+        self.assertEqual(gh1051_cells.parse_text(legacy, both)["mma_pd1"][2], "Mma_intrinsics 2")
+        for arm in ("before", "after"):
+            (self.dir / f"n64_r1_{arm}.log").write_text(legacy)
+            (self.dir / f"n64_r1_{arm}.log.status").write_text("0\n")
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "gh1051_cells.py"), "split", str(self.dir), self.HOSTILE],
+            text=True, capture_output=True, timeout=60)
+        self.assertNotIn("censuses", proc.stdout + proc.stderr)
+        self.assertNotIn("MISSING timing", proc.stdout + proc.stderr)
+
     def test_gh1181_summary_shows_the_box_and_workload(self):
         import gh1181_cells
 

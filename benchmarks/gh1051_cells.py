@@ -71,12 +71,12 @@ def digits(chk):
     return max(len(re.sub(r"[^0-9]", "", x.split("e")[0]).lstrip("0")) for x in chk.split("/"))
 
 
-def parse_text(text):
+def parse_text(text, layouts=(bench_output.TIMING_CENSUSES,)):
     """{variant: (ms, (chk_a, chk_b), mma census)} for one cell's output, its timing lines read by
-    bench_output's one reader of them (gh-ocannl-1767); ValueError for a timing line that does not
-    read as one."""
+    bench_output's one reader of them (gh-ocannl-1767) in `layouts`; ValueError for a timing line
+    that does not read as one."""
     out = {}
-    for t in bench_output.timing_lines(text):
+    for t in bench_output.timing_lines(text, layouts):
         if t["variant"] in VARIANTS:
             if t["chk"] is None:
                 raise ValueError(f"{t['variant']}: a timing line without its checksum")
@@ -86,10 +86,10 @@ def parse_text(text):
     return out
 
 
-def parse_log(path):
+def parse_log(path, layouts=(bench_output.TIMING_CENSUSES,)):
     """`parse_text` of one cell log."""
     with open(path) as f:
-        return parse_text(f.read())
+        return parse_text(f.read(), layouts)
 
 
 def status_ok(path, prec):
@@ -130,7 +130,7 @@ def add_cell(cells, problems, name, key, parsed):
         )
 
 
-def load(out, pattern, key_of):
+def load(out, pattern, key_of, layouts=(bench_output.TIMING_CENSUSES,)):
     cells, problems = {}, []
     for f in sorted(glob.glob(os.path.join(out, pattern))):
         key = key_of(os.path.basename(f))
@@ -141,7 +141,7 @@ def load(out, pattern, key_of):
         if not ok:
             problems.append(f"{os.path.basename(f)}: {why}")
         try:
-            parsed = parse_log(f)
+            parsed = parse_log(f, layouts)
         except ValueError as e:
             problems.append(f"{display_value(os.path.basename(f))}: {display_value(str(e))}")
             continue
@@ -278,7 +278,10 @@ def split(out, label):
         m = re.match(r"n(\d+)_r(\d+)_(before|after)\.log$", name)
         return m and {"size": int(m.group(1)), "arm": m.group(3), "prec": "bfloat16"}
 
-    cells, problems = load(out, "n*.log", key_of)
+    # The two revisions around gh-ocannl-1064 predate gh-ocannl-1668's grid census: their timing
+    # lines carry the mma census alone.
+    cells, problems = load(out, "n*.log", key_of,
+                           (bench_output.TIMING_CENSUSES, bench_output.TIMING_CENSUSES_BEFORE_1668))
     sizes = sorted({k[0] for k in cells})
     for size in sizes:
         for v in VARIANTS:
