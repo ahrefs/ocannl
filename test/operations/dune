@@ -824,6 +824,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1548: the Winograd rewrite of a conv's data gradient -- exact parity on integer
+; fixtures, the error bound on non-dyadic ones, hand-built scatters, padded margins, staleness and
+; the tuned path.
+
+(test
+ ; cc-vector-width: independent -- exact-operand and error-bound claims hold at any vector width.
+ (name winograd_backward)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules winograd_backward)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; The same executable on cc under `cc_backend_fast_math` (gh-ocannl-483 review round 5): the
 ; `approximate` profile turns on both this rewrite and the C compiler's fast-math licence, whose
 ; finite-math assumption would fold -inf arithmetic (which is why the flag takes it back). The

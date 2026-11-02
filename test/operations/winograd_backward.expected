@@ -1,0 +1,122 @@
+--- leg 1 bpad: padded 6x6 (gather extent 8x8), batch 2, 3 -> 4 channels ---
+bpad: the direct scatter writes every gather row and column: true
+bpad: each cell the transposed image's count of times: true
+bpad: rewritten, the direct form writes exactly the scatter's last odd row and column: true
+bpad: the pass changes the raw lowering: true
+bpad: the pass is idempotent: true
+bpad: a second lowering mints the same nodes: true
+bpad: the gate off mints nothing: true
+bpad: the gate on writes the kernel, input and product transforms: true
+bpad: the conv input's gradient is written from a minted product buffer: true
+bpad: the direct gradient is the host transposed convolution, bitwise: true
+bpad: the Winograd gradient matches the direct form bitwise: true
+--- leg 1 bval: valid 8x10 (gather extent 8x10), batch 2, 2 -> 3 channels ---
+bval: the direct scatter writes every gather row and column: true
+bval: each cell the transposed image's count of times: true
+bval: rewritten, the direct form writes exactly the scatter's last odd row and column: true
+bval: the pass changes the raw lowering: true
+bval: the pass is idempotent: true
+bval: a second lowering mints the same nodes: true
+bval: the gate off mints nothing: true
+bval: the gate on writes the kernel, input and product transforms: true
+bval: the conv input's gradient is written from a minted product buffer: true
+bval: the direct gradient is the host transposed convolution, bitwise: true
+bval: the Winograd gradient matches the direct form bitwise: true
+--- leg 1 bodd: valid 7x9 (gather extent 7x9), batch 2, 3 -> 2 channels ---
+bodd: the direct scatter writes every gather row and column: true
+bodd: each cell the transposed image's count of times: true
+bodd: rewritten, the direct form writes exactly the scatter's last odd row and column: true
+bodd: the pass changes the raw lowering: true
+bodd: the pass is idempotent: true
+bodd: a second lowering mints the same nodes: true
+bodd: the gate off mints nothing: true
+bodd: the gate on writes the kernel, input and product transforms: true
+bodd: the conv input's gradient is written from a minted product buffer: true
+bodd: the direct gradient is the host transposed convolution, bitwise: true
+bodd: the Winograd gradient matches the direct form bitwise: true
+--- leg 1 boddw: valid 8x7 (gather extent 8x7), batch 2, 2 -> 3 channels ---
+boddw: the direct scatter writes every gather row and column: true
+boddw: each cell the transposed image's count of times: true
+boddw: rewritten, the direct form writes exactly the scatter's last odd row and column: true
+boddw: the pass changes the raw lowering: true
+boddw: the pass is idempotent: true
+boddw: a second lowering mints the same nodes: true
+boddw: the gate off mints nothing: true
+boddw: the gate on writes the kernel, input and product transforms: true
+boddw: the conv input's gradient is written from a minted product buffer: true
+boddw: the direct gradient is the host transposed convolution, bitwise: true
+boddw: the Winograd gradient matches the direct form bitwise: true
+--- leg 1 brect: padded 5x8 (gather extent 7x10), batch 3, 5 -> 2 channels ---
+brect: the direct scatter writes every gather row and column: true
+brect: each cell the transposed image's count of times: true
+brect: rewritten, the direct form writes exactly the scatter's last odd row and column: true
+brect: the pass changes the raw lowering: true
+brect: the pass is idempotent: true
+brect: a second lowering mints the same nodes: true
+brect: the gate off mints nothing: true
+brect: the gate on writes the kernel, input and product transforms: true
+brect: the conv input's gradient is written from a minted product buffer: true
+brect: the direct gradient is the host transposed convolution, bitwise: true
+brect: the Winograd gradient matches the direct form bitwise: true
+--- leg 1 bb1: padded 6x4 (gather extent 8x6), batch 1, 2 -> 3 channels ---
+bb1: the direct scatter writes every gather row and column: true
+bb1: each cell the transposed image's count of times: true
+bb1: rewritten, the direct form writes exactly the scatter's last odd row and column: true
+bb1: the pass changes the raw lowering: true
+bb1: the pass is idempotent: true
+bb1: a second lowering mints the same nodes: true
+bb1: the gate off mints nothing: true
+bb1: the gate on writes the kernel, input and product transforms: true
+bb1: the conv input's gradient is written from a minted product buffer: true
+bb1: the direct gradient is the host transposed convolution, bitwise: true
+bb1: the Winograd gradient matches the direct form bitwise: true
+--- leg 1 bn3: valid 5x5 (gather extent 5x5), batch 2, 2 -> 2 channels ---
+bn3: the direct scatter writes every gather row and column: true
+bn3: each cell the transposed image's count of times: true
+bn3: rewritten, the direct form writes exactly the scatter's last odd row and column: true
+bn3: the pass changes the raw lowering: true
+bn3: the pass is idempotent: true
+bn3: a second lowering mints the same nodes: true
+bn3: the gate off mints nothing: true
+bn3: the gate on writes the kernel, input and product transforms: true
+bn3: the conv input's gradient is written from a minted product buffer: true
+bn3: the direct gradient is the host transposed convolution, bitwise: true
+bn3: the Winograd gradient matches the direct form bitwise: true
+--- leg 1 bchain: two chained conv sites ---
+bchain: the first conv's data-gradient scatter is gone: true
+bchain: four sites' worth of transforms are written (12 distinct minted buffers): true
+bchain: the Winograd gradient matches the direct form bitwise: true
+--- leg 2: non-dyadic inputs, within the error bound ---
+breal: the rewrite fired: true
+breal: the Winograd gradient is within the error bound of the direct form: true
+breal: negative control -- an unflipped kernel's gradient leaves the bound by 10x: true
+--- leg 3: hand-built scatters ---
+wbodd: rewritten: true
+wbodd: adds onto the destination's prior contents, bitwise: true
+wbodd: the rewritten contraction is a matmul site accumulating the product buffer: true
+wbswap: rewritten: true
+wbswap: adds onto the destination's prior contents, bitwise: true
+wbfma: rewritten: true
+wbfma: adds onto the destination's prior contents, bitwise: true
+wbone: rewritten: true
+wbone: adds onto the destination's prior contents, bitwise: true
+a scatter whose upstream gradient also reads the window symbol (not separable): left alone: true
+a 5x5 scatter: left alone: true
+an f16 kernel: left alone: true
+a scatter reading its own destination as the upstream gradient: left alone: true
+--- leg 4: a 3x3 valid input (n_o = 1) declines ---
+bone: nothing minted -- the singleton source axis is a fixed index, so no o + k axis: true
+bone: the gradient is the host transposed convolution, bitwise: true
+bone: and matches the gate off bitwise: true
+--- leg 5: a padded reader of the gradient, and its physical margins ---
+the conv input's gradient carries margins in both runs: true
+the gate on rewrites the step's conv (forward and data gradient: 6 minted buffers): true
+the gradient's physical buffer, margins included, matches the direct form bitwise: true
+a padded window reading the gradient matches the direct form bitwise: true
+--- leg 6: a changed kernel and upstream gradient are seen by the next call ---
+the replaced kernel and upstream gradient change the direct gradient: true
+first call: the Winograd gradient matches the direct form bitwise: true
+second call, new kernel and upstream gradient: the Winograd gradient matches bitwise: true
+--- leg 7: the tuner schedules a rewritten step ---
+the search seeded sketches (whole routine or per fission segment): true
+the tuned Winograd gradient is within the error bound of the direct form: true
