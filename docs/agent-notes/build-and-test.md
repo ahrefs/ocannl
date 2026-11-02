@@ -1614,7 +1614,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   bound, an unjudged `%{read:...}` and an action head the scan does not place are refused too. A
   `(test)` stanza may declare no targets, so it writes its response file under `(no-infer ...)` and
   lists its own `<name>.exe` in `deps`, which `no-infer` stops `%{test}` declaring
-  (`slot_kind_live` is the pattern).
+  (`slot_kind_live` is the pattern). Leave that dependency out and the build does not fail where the
+  mistake is: the action runs the bare executable before dune has built it, and `posix_spawn` fails
+  with ENOENT naming `<name>.exe` (gh-ocannl-1748).
 - A Windows checkout with `core.symlinks=false` (git's default there without Developer Mode) writes
   every git symlink as a small TEXT FILE holding the link target. The repository has around twenty —
   `docs/in-progress/` and `docs/research/` are views onto `docs/proposals/` — so any scan that reads
@@ -2080,7 +2082,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   second family. What stays on the unguarded spelling is the claim whose passing reading IS
   emptiness — "no candidate declines", "no key is undocumented", a scan over a tree that is usually
   clean — and those want a companion claim that the population was there at all, which is what the
-  `p_empty ~over` form is.
+  `p_empty ~over` form is. In short, the scan refuses a `List.for_all` (or `for_alli`,
+  `for_all2_exn`) over a population it cannot prove non-empty, written as `p_all` (`p_alli`,
+  `p_all2`) instead, and a bare `List.is_empty xs` claim, written as `p_empty name ~over:population
+  xs` (or `p_none` for an `is_empty (filter …)`).
   `verdict_ratchet` enforces the guard mechanically, for a quantifier (`for_all`/`for_alli`,
   `for_all2_exn`, `is_empty`, a negated `exists`/`existsi`, in Base's or `Stdlib`'s spelling)
   written directly into a

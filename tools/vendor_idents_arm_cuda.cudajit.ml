@@ -1,6 +1,7 @@
 (* The CUDA arm of tools/vendor_idents.ml (gh-ocannl-1338): the backend's own probe, its include
-   tree, and its host capabilities. Compiled only on a box with cudajit, so it holds the vendor
-   calls and nothing else; the harvest itself lives in vendor_idents.ml. *)
+   tree, and its host capabilities. Linked only on a box with cudajit (type-checked everywhere
+   through arrayjit/vendor_stubs), so it holds the vendor calls and nothing else; the harvest itself
+   lives in vendor_idents.ml. *)
 
 open Base
 
