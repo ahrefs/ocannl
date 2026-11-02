@@ -199,17 +199,6 @@ let exempt_zero_reference_exports =
     "Ppx_op.tensor_operand_ops";
     "Ppx_op.tensor_params";
     "Ppx_op.wrap_schemed";
-    "Ppx_shared.axes_or_dims_arg";
-    "Ppx_shared.axis_basis_of_type";
-    "Ppx_shared.dim_spec_to_string";
-    "Ppx_shared.flatten_str";
-    "Ppx_shared.non_alphanum_regexp";
-    "Ppx_shared.operators";
-    "Ppx_shared.opt_pat2string";
-    "Ppx_shared.string_literal";
-    "Ppx_shared.string_of_constant";
-    "Ppx_shared.string_of_pat";
-    "Ppx_shared.translate_str";
     "Schedulers.cpu_mma_limits";
     "Tnode.bounds_scan_worthwhile";
     "Tnode.current_namespace";
