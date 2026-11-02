@@ -681,7 +681,14 @@ gpu staged lattice: every leaf path commits its pipeline's shape level: true
 == gpu staged lattice: 80 leaf paths, 80 applied; floor 49152 bytes ==
 gpu staged lattice: the freshly minted nodes are charged at least the increment: true
 gpu staged lattice: at every prefix the composed floor is within the leaf's analyzed bytes: true
-lifted search at incumbent 6000: 22 expanded, 6 scored, 21 fathomed, 1 refuted, 0 excluded
+== gpu staged lattice: 75 tensorized leaves, 75 applied, 0 refused; 69 contracting by the predicate, 69 contracted ==
+gpu staged lattice: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+gpu staged lattice: a contracting leaf's fragment is charged its block, written and read once: true
+  staged, two or more k blocks: a fragment         65 applied leaves
+gpu staged lattice: regime witnessed: staged, two or more k blocks: a fragment: true
+  unstaged whole-K: no fragment                    2 applied leaves
+gpu staged lattice: regime witnessed: unstaged whole-K: no fragment: true
+lifted search at incumbent 6000: 18 expanded, 6 scored, 17 fathomed, 1 refuted, 0 excluded
 == cpu simd32: certain-traffic increments over 22 leaf paths ==
   levels on the leaf paths: fusion, geometry, packing, packing-shape, pipeline, register-tile, row-block, tensorized-form
   priced above the schedule-invariant floor: 8; max increment 32768 bytes
@@ -697,11 +704,15 @@ cpu simd32: every leaf path commits its pipeline's shape level: true
 == cpu simd32: 22 leaf paths, 22 applied; floor 49152 bytes ==
 cpu simd32: the freshly minted nodes are charged at least the increment: true
 cpu simd32: at every prefix the composed floor is within the leaf's analyzed bytes: true
-== cpu simd32: 14 packed leaves applied, 4 contracting by the predicate, 4 with a fragment ==
-cpu simd32: a packed leaf mints a fragment exactly where the predicate says it contracts: true
-cpu simd32: a contracting leaf's increment is its fragment's charge, written and read once: true
-cpu simd32: some packed leaf contracts: true
-cpu simd32: some packed leaf does not: true
+== cpu simd32: 18 tensorized leaves, 18 applied, 0 refused; 4 contracting by the predicate, 4 contracted ==
+cpu simd32: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+cpu simd32: a contracting leaf's fragment is charged its block, written and read once: true
+  grid-outermost packed, k blocks repeat: a fragment 4 applied leaves
+cpu simd32: regime witnessed: grid-outermost packed, k blocks repeat: a fragment: true
+  packed, no fragment                              10 applied leaves
+cpu simd32: regime witnessed: packed, no fragment: true
+  whole-triple, no outer loop: no fragment         4 applied leaves
+cpu simd32: regime witnessed: whole-triple, no outer loop: no fragment: true
 == cpu simd32 pick audit: 22 leaves scored exhaustively; the walk scores 2 (2 fathomed), the floor-only walk 2 ==
 cpu simd32 pick audit: the walk's pick is the exhaustive first argmin: true
 cpu simd32 pick audit: the raised bound scores no more leaves than the floor alone: true
@@ -720,13 +731,157 @@ cpu k16: every leaf path commits its pipeline's shape level: true
 == cpu k16: 18 leaf paths, 18 applied; floor 24576 bytes ==
 cpu k16: the freshly minted nodes are charged at least the increment: true
 cpu k16: at every prefix the composed floor is within the leaf's analyzed bytes: true
-== cpu k16: 10 packed leaves applied, 0 contracting by the predicate, 0 with a fragment ==
-cpu k16: a packed leaf mints a fragment exactly where the predicate says it contracts: true
-cpu k16: no packed leaf contracts: true
-cpu k16: a grid-outermost packed leaf runs its reduction in one block: true
+== cpu k16: 14 tensorized leaves, 14 applied, 0 refused; 0 contracting by the predicate, 0 contracted ==
+cpu k16: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+  grid-outermost packed, one reduction block: no fragment 4 applied leaves
+cpu k16: regime witnessed: grid-outermost packed, one reduction block: no fragment: true
+cpu k16: no tensorized leaf contracts: true
 == cpu k16 pick audit: 18 leaves scored exhaustively; the walk scores 16 (1 fathomed), the floor-only walk 18 ==
 cpu k16 pick audit: the walk's pick is the exhaustive first argmin: true
 cpu k16 pick audit: the raised bound scores no more leaves than the floor alone: true
+== cpu outer contraction: certain-traffic increments over 18 leaf paths ==
+  levels on the leaf paths: fusion, geometry, packing, packing-shape, pipeline, register-tile, row-block, tensorized-form
+  priced above the schedule-invariant floor: 10; max increment 32768 bytes
+cpu outer contraction: every leaf's increment is the traffic its own parameters imply: true
+cpu outer contraction: the increment is monotone along every path's prefixes: true
+cpu outer contraction: the staging commitments price above the floor: true
+cpu outer contraction: every leaf path commits its pipeline's shape level: true
+  staged geometry            5120 bytes
+    fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm16 bn0 bk16 > register-tile=auto
+  unpriced geometry          0 bytes
+    fusion=unfused > pipeline=blocktile > packing=in-kernel > geometry=b16
+  lattice leaf               (none in this tree)
+== cpu outer contraction: 18 leaf paths, 18 applied; floor 32768 bytes ==
+cpu outer contraction: the freshly minted nodes are charged at least the increment: true
+cpu outer contraction: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== cpu outer contraction: 14 tensorized leaves, 14 applied, 0 refused; 8 contracting by the predicate, 8 contracted ==
+cpu outer contraction: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+cpu outer contraction: a contracting leaf's fragment is charged its block, written and read once: true
+  grid-outermost packed, one k block, outer loop: a fragment 4 applied leaves
+cpu outer contraction: regime witnessed: grid-outermost packed, one k block, outer loop: a fragment: true
+  packed, rows inside the reduction: no fragment   6 applied leaves
+cpu outer contraction: regime witnessed: packed, rows inside the reduction: no fragment: true
+  whole-triple under the outer loop: a fragment    4 applied leaves
+cpu outer contraction: regime witnessed: whole-triple under the outer loop: a fragment: true
+== cpu outer contraction pick audit: 18 leaves scored exhaustively; the walk scores 8 (5 fathomed), the floor-only walk 18 ==
+cpu outer contraction pick audit: the walk's pick is the exhaustive first argmin: true
+cpu outer contraction pick audit: the raised bound scores no more leaves than the floor alone: true
+== gpu outer contraction: certain-traffic increments over 16 leaf paths ==
+  levels on the leaf paths: fusion, geometry, pipeline, twin
+  priced above the schedule-invariant floor: 16; max increment 24576 bytes
+gpu outer contraction: every leaf's increment is the traffic its own parameters imply: true
+gpu outer contraction: the increment is monotone along every path's prefixes: true
+gpu outer contraction: the staging commitments price above the floor: true
+gpu outer contraction: every leaf path commits its pipeline's shape level: true
+  staged geometry            4096 bytes
+    fusion=unfused > pipeline=tensorized > geometry=bm16 bn32 bk0 > twin=plain
+  unpriced geometry          (none in this tree)
+  lattice leaf               (none in this tree)
+== gpu outer contraction: 16 leaf paths, 16 applied; floor 49152 bytes ==
+gpu outer contraction: the freshly minted nodes are charged at least the increment: true
+gpu outer contraction: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== gpu outer contraction: 11 tensorized leaves, 11 applied, 0 refused; 11 contracting by the predicate, 11 contracted ==
+gpu outer contraction: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+gpu outer contraction: a contracting leaf's fragment is charged its block, written and read once: true
+  unstaged whole-K under the outer loop: a fragment 2 applied leaves
+gpu outer contraction: regime witnessed: unstaged whole-K under the outer loop: a fragment: true
+  staged, one k block, outer loop: a fragment      6 applied leaves
+gpu outer contraction: regime witnessed: staged, one k block, outer loop: a fragment: true
+== gpu outer contraction pick audit: 16 leaves scored exhaustively; the walk scores 4 (6 fathomed), the floor-only walk 16 ==
+gpu outer contraction pick audit: the walk's pick is the exhaustive first argmin: true
+gpu outer contraction pick audit: the raised bound scores no more leaves than the floor alone: true
+== cpu awkward 20^3: certain-traffic increments over 5 leaf paths ==
+  levels on the leaf paths: fusion, geometry, packing-shape, pipeline, row-block, tensorized-form
+  priced above the schedule-invariant floor: 4; max increment 4864 bytes
+cpu awkward 20^3: every leaf's increment is the traffic its own parameters imply: true
+cpu awkward 20^3: the increment is monotone along every path's prefixes: true
+cpu awkward 20^3: the staging commitments price above the floor: true
+cpu awkward 20^3: every leaf path commits its pipeline's shape level: true
+  staged geometry            4864 bytes
+    fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm16 bn0 bk16
+  unpriced geometry          0 bytes
+    fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple > row-block=bm0
+  lattice leaf               (none in this tree)
+== cpu awkward 20^3: 5 leaf paths, 5 applied; floor 4800 bytes ==
+cpu awkward 20^3: the freshly minted nodes are charged at least the increment: true
+cpu awkward 20^3: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== cpu awkward 20^3: 5 tensorized leaves, 5 applied, 0 refused; 4 contracting by the predicate, 4 contracted ==
+cpu awkward 20^3: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+cpu awkward 20^3: a contracting leaf's fragment is charged its block, written and read once: true
+  padded rows, serial shape: a mask-forced fragment 3 applied leaves
+cpu awkward 20^3: regime witnessed: padded rows, serial shape: a mask-forced fragment: true
+== cpu awkward 20^3 pick audit: 5 leaves scored exhaustively; the walk scores 1 (4 fathomed), the floor-only walk 5 ==
+cpu awkward 20^3 pick audit: the walk's pick is the exhaustive first argmin: true
+cpu awkward 20^3 pick audit: the raised bound scores no more leaves than the floor alone: true
+== gpu awkward 20^3: certain-traffic increments over 10 leaf paths ==
+  levels on the leaf paths: fusion, geometry, pipeline, twin
+  priced above the schedule-invariant floor: 10; max increment 24576 bytes
+gpu awkward 20^3: every leaf's increment is the traffic its own parameters imply: true
+gpu awkward 20^3: the increment is monotone along every path's prefixes: true
+gpu awkward 20^3: the staging commitments price above the floor: true
+gpu awkward 20^3: every leaf path commits its pipeline's shape level: true
+  staged geometry            16384 bytes
+    fusion=unfused > pipeline=tensorized > geometry=bm16 bn32 bk32 > twin=plain
+  unpriced geometry          (none in this tree)
+  lattice leaf               (none in this tree)
+== gpu awkward 20^3: 10 leaf paths, 10 applied; floor 4800 bytes ==
+gpu awkward 20^3: the freshly minted nodes are charged at least the increment: true
+gpu awkward 20^3: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== gpu awkward 20^3: 6 tensorized leaves, 6 applied, 0 refused; 6 contracting by the predicate, 6 contracted ==
+gpu awkward 20^3: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+gpu awkward 20^3: a contracting leaf's fragment is charged its block, written and read once: true
+  padded, one k block: a mask-forced fragment      4 applied leaves
+gpu awkward 20^3: regime witnessed: padded, one k block: a mask-forced fragment: true
+  padded, k blocks repeat: one fragment            2 applied leaves
+gpu awkward 20^3: regime witnessed: padded, k blocks repeat: one fragment: true
+== gpu awkward 20^3 pick audit: 10 leaves scored exhaustively; the walk scores 4 (3 fathomed), the floor-only walk 10 ==
+gpu awkward 20^3 pick audit: the walk's pick is the exhaustive first argmin: true
+gpu awkward 20^3 pick audit: the raised bound scores no more leaves than the floor alone: true
+== gpu column-only pad: certain-traffic increments over 10 leaf paths ==
+  levels on the leaf paths: fusion, geometry, pipeline, twin
+  priced above the schedule-invariant floor: 10; max increment 24576 bytes
+gpu column-only pad: every leaf's increment is the traffic its own parameters imply: true
+gpu column-only pad: the increment is monotone along every path's prefixes: true
+gpu column-only pad: the staging commitments price above the floor: true
+gpu column-only pad: every leaf path commits its pipeline's shape level: true
+  staged geometry            16384 bytes
+    fusion=unfused > pipeline=tensorized > geometry=bm16 bn32 bk32 > twin=plain
+  unpriced geometry          (none in this tree)
+  lattice leaf               (none in this tree)
+== gpu column-only pad: 10 leaf paths, 10 applied; floor 11840 bytes ==
+gpu column-only pad: the freshly minted nodes are charged at least the increment: true
+gpu column-only pad: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== gpu column-only pad: 6 tensorized leaves, 6 applied, 0 refused; 6 contracting by the predicate, 6 contracted ==
+gpu column-only pad: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+gpu column-only pad: a contracting leaf's fragment is charged its block, written and read once: true
+  column pad, one k block: a mask-forced fragment  4 applied leaves
+gpu column-only pad: regime witnessed: column pad, one k block: a mask-forced fragment: true
+== gpu column-only pad pick audit: 10 leaves scored exhaustively; the walk scores 4 (3 fathomed), the floor-only walk 10 ==
+gpu column-only pad pick audit: the walk's pick is the exhaustive first argmin: true
+gpu column-only pad pick audit: the raised bound scores no more leaves than the floor alone: true
+== cpu k-only pad: certain-traffic increments over 6 leaf paths ==
+  levels on the leaf paths: fusion, geometry, packing-shape, pipeline, row-block, tensorized-form
+  priced above the schedule-invariant floor: 2; max increment 2560 bytes
+cpu k-only pad: every leaf's increment is the traffic its own parameters imply: true
+cpu k-only pad: the increment is monotone along every path's prefixes: true
+cpu k-only pad: the staging commitments price above the floor: true
+cpu k-only pad: every leaf path commits its pipeline's shape level: true
+  staged geometry            2304 bytes
+    fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm16 bn0 bk16
+  unpriced geometry          0 bytes
+    fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple > row-block=bm0
+  lattice leaf               (none in this tree)
+== cpu k-only pad: 6 leaf paths, 6 applied; floor 11840 bytes ==
+cpu k-only pad: the freshly minted nodes are charged at least the increment: true
+cpu k-only pad: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== cpu k-only pad: 6 tensorized leaves, 6 applied, 0 refused; 1 contracting by the predicate, 1 contracted ==
+cpu k-only pad: a tensorized leaf contracts its accumulator exactly where the predicate says: true
+cpu k-only pad: a contracting leaf's fragment is charged its block, written and read once: true
+  reduction pad alone: no fragment                 3 applied leaves
+cpu k-only pad: regime witnessed: reduction pad alone: no fragment: true
+== cpu k-only pad pick audit: 6 leaves scored exhaustively; the walk scores 6 (0 fathomed), the floor-only walk 6 ==
+cpu k-only pad pick audit: the walk's pick is the exhaustive first argmin: true
+cpu k-only pad pick audit: the raised bound scores no more leaves than the floor alone: true
 MMA emission-scope serialization and comparison distinguish accumulator lifetimes: true
 a one-block staged matmul uses the per-statement wide-f16 capability: true
 a multi-axis contraction requires fragment-scope wide-f16 accumulation even with no explicit k-block: true
