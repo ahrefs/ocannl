@@ -639,3 +639,25 @@ files.
   0.50 s (0 kernels compiled). The tuned step was unchanged (64-66 ms). The base arm's library
   compiles may have been warmed by macOS's own Metal compiler cache; its link time is read from the
   trace as measured.
+
+## Host transfers and page-locked memory
+- **A pinned staging pool does not pay; page-locked host arrays do, on rog only** (gh-ocannl-170,
+  `benchmarks/gh170_transfer.sh` over `benchmarks/gh170_transfer_probe.c`, 15 reps, at 367043e6).
+  `Cuda_backend`/`Hip_backend` `from_host`/`to_host` copy straight from the pageable bigarray. At
+  256 MiB, host-to-device / device-to-host GB/s, pageable vs page-locked vs staged through one
+  pinned buffer vs a two-buffer 4 MiB chunked pipeline (the bounded pool's shape) vs the bigarray
+  after `cuMemHostRegister`/`hipHostRegister`: rog (RTX 5070 Ti Laptop, discrete) 16.4/13.0,
+  50.7/22.5, 16.2/11.9, 12.4/11.1, 50.6/21.6; tuf (RX 7700S, discrete) 13.6/14.1, 13.6/14.1,
+  8.2/4.5, 12.7/8.3, 13.6/14.2; minix (Radeon 8060S, unified) 47.4/46.4, 47.6/46.2, 16.1/15.4,
+  21.6/17.7, 47.2/47.6. The 4 and 64 MiB rows give the same conclusions.
+- Staging loses because the host memcpy into the pinned buffer (about 10 GB/s single-threaded on
+  rog) is the same work the driver's own pageable path does, now serialized before the DMA. HIP's
+  pageable path already runs at the link's rate on both AMD boxes, so pinning buys bandwidth only
+  on rog (3.1x / 1.7x). The asynchrony pinning buys (the host returns from the call in about
+  10 us) is invisible through `Context.from_host`/`to_host`: both await the device before and after
+  the backend copy.
+- Registration's one-off cost on rog is about 19 us per MiB (5.1 ms for 256 MiB, 7.3 ms with the
+  unregister): about a third of one pageable transfer, so a node transferred every step repays it
+  at once. HIP reported a size-independent 3 us on tuf and 1 us on minix, so treat
+  `hipHostRegister`'s cost as unmeasured there (likely deferred). cudajit 0.8.0 binds neither
+  `cuMemHostAlloc` nor `cuMemHostRegister`, so the registration route starts with bindings.
