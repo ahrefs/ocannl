@@ -276,18 +276,23 @@ val image_cardinality_lb :
     width [run] that no other coordinate shares. Where that coordinate is not known, [v] is read as
     [view ~vec:(Run run)] reads it. *)
 
-val image_cardinality_range_ub :
+val image_cardinality_ub :
   ?range:(Indexing.symbol -> (int * int) option) ->
   ?run:int ->
   domain:(Indexing.symbol * int) list ->
   coord array ->
   int
 (** The upper companion of {!image_cardinality_lb} over the same coordinates (and the same [?run]
-    frame): the product of the coordinates' value ranges — a [Known] coordinate takes
-    [min size (span + 1)] for [span = Σ |c|·(w - 1)] (a run's term adds [run - 1]), an [Unknown] one
-    its whole size. An upper bound on the distinct cells under {!view}'s in-bounds assumption, for
-    every value a dynamic coordinate takes. Saturates upward at a cap above every real count, so a
-    caller's [min] with the node's cells keeps it a bound (gh-ocannl-1601, gh-ocannl-1676). *)
+    frame): the product of the coordinates' value-set counts, the image lying in their product
+    whatever symbols they share. A [Known] coordinate's terms are added in the same gcd-normalized
+    ascending walk as the lower bound's — exact on interval unions and disjoint translates, and
+    [min (n*w) (span + 1)] where the translates may overlap in holes — capped by its size; an
+    [Unknown] one takes its whole size. Never above the coordinates' value ranges ([span + 1] for
+    [span = Σ |c|·(w - 1)]); the two bounds take the same branch at every step, so they meet
+    wherever the walk is exact. An upper bound on the distinct cells under {!view}'s in-bounds
+    assumption, for every value a dynamic coordinate takes. Saturates upward at a cap above every
+    real count, so a caller's [min] with the node's cells keeps it a bound (gh-ocannl-1601,
+    gh-ocannl-1676, gh-ocannl-1706). *)
 
 (** {2 Projection-level predicates}
 
