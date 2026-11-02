@@ -48,9 +48,10 @@ files.
   render all three operands with no `?`/`&&`/`||`. Consequences for the classifier's consumers: the
   floors stay floors, `a_gated` over-approximates (conservative), and `Cost_model`'s upper walk
   already charges BOTH arms (`sc_split`'s sum, since gh-ocannl-637), flagged approximate because it
-  reads no backend (CUDA and Metal short-circuit) (gh-ocannl-1695 pins it in `cost_model_extraction`). The one walk that charges a
-  single arm is the inline fan-in guard's per-arm maximum (`Low_level.eval_reads_traversal`'s
-  `branches` hook), which under-counts a blended select whose arms read distinct nodes. Two traps for a test of it
+  reads no backend (CUDA and Metal short-circuit) (gh-ocannl-1695 pins it in `cost_model_extraction`). The inline fan-in guard's
+  collector (`Low_level.eval_reads_traversal`'s `branches` hook) charges the backend's rendering:
+  the union of an admitted select's arms where `backend_facts.blends_value_selects` holds, the wider
+  arm elsewhere (gh-ocannl-1775; virtualization-and-inlining.md). Two traps for a test of it
   (`test/operations/branchless_select`): clang if-converts `c ? a[i] : b[i]` on base by selecting
   the ADDRESS, so a branch claim needs a constant arm (`where cond g 0`, the backward shape); and a
   routine-local array is dereferenceable, so the realistic leg materializes the gated gradient.
@@ -574,7 +575,8 @@ files.
   hook, not in a second recursion (gh-ocannl-1451). Merge taint, spliced reads, traced-store
   reconciliation, hosted-init classification, loop bounds, the statement-local symbol census and
   `trace_node_facts` use it. Two shared walks sit on it (gh-ocannl-1451): `evaluation_reads` is the
-  one fan-in read collector (wider arm, first on a tie; scope bodies charge the statement), used by
+  one fan-in read collector (wider arm, first on a tie, or under `~blends` the union of a select
+  `speculable_select` admits; scope bodies charge the statement), used by
   `trace_node_facts`' `setter_reads` and the guard's replay of inherited computations alike; and
   `write_demand`/`fold_statement_positions` is the one statement-position walk (loops, scans,
   guards, sequences; no expressions, no `Tile_mma` fallback), which the sketch demand walks,

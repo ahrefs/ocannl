@@ -100,6 +100,7 @@ val finalize :
     {!Context.release} is the front-end entry point; prefer it over calling this directly. *)
 
 val lower_assignments :
+  facts:Ir.Backend_intf.backend_facts ->
   limits:Ir.Backend_intf.hardware_limits ->
   Ir.Low_level.optimize_ctx ->
   ?name:string ->
@@ -110,8 +111,9 @@ val lower_assignments :
     ([Low_level.copy_optimize_ctx], so the compile's decisions stay hermetic), derives the routine
     name, wires the debug-file callbacks, and runs [Assignments.lower]. Exposed for analyze-only
     consumers (gh-560: {!Context.decision_surface}) that read the optimized code's decision surface
-    without backend codegen. [limits] is required so every backend-aware lowering resolves
-    device-dependent rewrites from the same facts as compilation. *)
+    without backend codegen. [limits] and [facts] are required so every backend-aware lowering
+    resolves device-dependent rewrites, and the inline fan-in guard's charge of a value select
+    ([blends_value_selects], gh-ocannl-1775), from the same facts as compilation. *)
 
 (** {2 The implemented backends}
 

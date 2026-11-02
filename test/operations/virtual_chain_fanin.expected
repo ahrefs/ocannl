@@ -11,16 +11,37 @@ scope: producer materialized (scope-body loads count, fan-in 9): true
 scope: executed values match the reference: true
 scope rmw: self-read excluded, producer stays virtual (fan-in 8): true
 scope rmw: executed values match the reference: true
-where: producer stays virtual (fan-in 5: mask + the wider arm): true
+where, short-circuiting: producer stays virtual (fan-in 5: mask + the wider arm): true
+where, blended: producer materialized (fan-in 9: mask + both arms): true
 where: executed values match the reference (both arms exercised): true
+where, blended: executed values match the reference: true
 where scopes: producer materialized (hoisted bodies both charge, fan-in 9): true
 where scopes: executed values match the reference: true
+select, short-circuiting: the producer stays virtual (fan-in 6: mask + the wider arm): true
+select, blended: the producer is materialized by the fan-in cap (fan-in 9: mask + both arms): true
+select: the short-circuiting reading executes the reference (both arms exercised): true
+select: the blended reading executes the reference: true
+select: the forced-materialized control executes the reference: true
+select: one analysis specializes to both readings, blended first: true
+select: one analysis specializes to both readings, short-circuiting first: true
+select, blended, shared sources: the producer stays virtual (union fan-in 8, at the cap): true
+select, shared sources: executed values match the reference: true
+select, blended, index condition: the producer stays virtual (fan-in 5: the wider arm): true
+select, index condition: executed values match the reference: true
+cross-routine select, blended: routine A commits the producer virtual: true
+cross-routine select, blended: the copy is materialized by the fan-in cap (fan-in 9): true
+cross-routine select, blended: executed values match the reference: true
+cross-routine select, short-circuiting: routine A commits the producer virtual: true
+cross-routine select, short-circuiting: the copy stays virtual (fan-in 6): true
+cross-routine select, short-circuiting: executed values match the reference: true
 pipeline: x7 stays virtual: true
 pipeline: x8 materialized by the fan-in cap: true
 pipeline: x9 and x10 virtual again past the reset: true
 pipeline, cap disabled: whole chain virtual: true
 pipeline: loss matches the reference: true
 pipeline: default and cap-disabled arms agree: true
+pipeline select: the producer is materialized by the fan-in cap exactly where the backend blends: true
+pipeline select: the loss matches the reference (exact: small integers): true
 cross-routine: routine A leaves x1..x5 virtual: true
 cross-routine: x7 stays virtual: true
 cross-routine: x8 materialized by the fan-in cap: true

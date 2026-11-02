@@ -285,9 +285,10 @@ and carried = { prev : scope_id; next : scope_id; init : scalar_t }
     in source order (both Where arms) by default. [Skip] gated operands skips the entire subtree,
     including hoisted definitions: it is NOT an execution floor. The arms of a
     {!Ops.Cond_and_one_arm} ternary -- exactly one of which evaluates per visit -- reach the
-    [branches] hook as one continuation each (in source order, under [gated]); the default
-    {!in_order} folds them in sequence, and a consumer with a branch algebra (a per-arm maximum,
-    gh-ocannl-1451) supplies its own reduction there. Scope bodies reset [gated] because definitions
+    [branches] hook as one continuation each (in source order, under [gated]), with the ternary
+    itself as [select]; the default {!in_order} folds them in sequence, and a consumer with a branch
+    algebra (a per-arm maximum, gh-ocannl-1451; the union of a select the backend blends,
+    gh-ocannl-1775) supplies its own reduction there. Scope bodies reset [gated] because definitions
     hoist, while preserving statement guards. Dead-loop bodies visited structurally carry
     [live=false]; this does not evaluate constant guards or perform cleanup's placement-dependent
     setter elimination.
@@ -337,10 +338,10 @@ module Access_fold : sig
     scalar : context -> 'a -> scalar_t -> 'a descent;
     after_statement : context -> 'a -> t -> 'a;
     after_scalar : context -> 'a -> scalar_t -> 'a;
-    branches : context -> 'a -> ('a -> 'a) list -> 'a;
+    branches : context -> 'a -> select:scalar_t -> ('a -> 'a) list -> 'a;
   }
 
-  val in_order : context -> 'a -> ('a -> 'a) list -> 'a
+  val in_order : context -> 'a -> select:scalar_t -> ('a -> 'a) list -> 'a
   (** The default [branches]: the arms folded in source order (union semantics). *)
 
   val hooks : unit -> 'a hooks
@@ -368,16 +369,20 @@ val write_demand : t -> write_demand
     Scan bodies are entered (gh-ocannl-1134); a scan binder is reported with [axis = None]. Dead
     loops are entered: the walk is structural. *)
 
-val evaluation_reads : self:Tnode.t -> scalar_t -> Set.M(Tnode).t
+val evaluation_reads : blends:bool -> self:Tnode.t -> scalar_t -> Set.M(Tnode).t
 (** The one read collector (gh-ocannl-1451): the tensor nodes one evaluation of [llsc], the
     right-hand side of a setter of [self], loads -- the transitive inline-fanin guard's contributors
     (gh-573), shared by [trace_node_facts]' per-setter [setter_reads] and the guard's replay of
     stored computations. [self] and merge-buffer reads are excluded, a gather counts its table,
     projection-discarded operands are not evaluated, a [Where] charges its wider arm (the first on a
-    tie), and [Local_scope] bodies -- hoisted, unconditional -- charge the statement whichever arm
-    they sit in. Dead loops replay nothing; a [Tile_mma] is opaque. *)
+    tie) -- or, with [blends] (a backend whose [blends_value_selects] fact holds, gh-ocannl-1775),
+    the union of its arms when {!speculable_select} admits it: the blend evaluates both. Admission
+    is judged at the arms' own annotations and ahead of inlining, an over-approximation of the
+    renderer's (which also needs a float compute precision, and on HIP no NaN-literal arm) that errs
+    toward the union only. And [Local_scope] bodies -- hoisted, unconditional -- charge the
+    statement whichever arm they sit in. Dead loops replay nothing; a [Tile_mma] is opaque. *)
 
-val evaluation_reads_of_proc : self:Tnode.t -> t -> Set.M(Tnode).t
+val evaluation_reads_of_proc : blends:bool -> self:Tnode.t -> t -> Set.M(Tnode).t
 (** {!evaluation_reads} of a statement: one replay of a stored computation of [self]. *)
 
 type replay_facts = {
@@ -547,9 +552,10 @@ val speculable_select : cond:scalar_t -> arms:scalar_arg list -> bool
     ({!Ops.ternop_conditionality}, {!Ops.binop_conditionality}) call conditional: their floors stay
     floors, [Affine]'s [a_gated] stays a conservative over-approximation, and [Cost_model]'s upper
     walk, which charges both arms, stays an upper bound (flagged approximate: it reads no backend,
-    and CUDA and Metal still short-circuit). The one walk that charges a single arm is the inline
-    fan-in guard's per-arm maximum ({!evaluation_reads}, gh-ocannl-1451), which can under-count a
-    blended select whose two arms read distinct nodes. *)
+    and CUDA and Metal still short-circuit). The inline fan-in guard's read collector
+    ({!evaluation_reads}) charges a single arm only where the backend short-circuits: on a backend
+    whose [blends_value_selects] fact holds it charges an admitted select's arms by their union
+    (gh-ocannl-1775). *)
 
 val mentions_rng_conversion : scalar_t -> bool
 (** Whether an RNG lane conversion occurs anywhere in the expression (not inside a [Local_scope]).
@@ -1178,6 +1184,17 @@ val footprint_namespace : string
 (** gh-ocannl-616: the namespace of the scratch nodes footprint-scoped materialization mints — how a
     test tells them from the program's own nodes in an [optimized] record's traced store. *)
 
+type setter_read_sets = {
+  reads_branching : Set.M(Tnode).t;
+      (** A select charges its wider arm (it short-circuits: CUDA, Metal). *)
+  reads_blended : Set.M(Tnode).t;
+      (** A select {!speculable_select} admits charges the union of its arms (cc, HIP). *)
+}
+[@@deriving sexp_of]
+(** One setter's fan-in contributors under both renderings of a value select (gh-ocannl-1775): the
+    analysis is cached across backends, so it keeps both and the guard picks by the backend's
+    [blends_value_selects] fact. *)
+
 type traced_array = {
   tn : Tnode.t;
   mutable has_assignment : bool;
@@ -1238,11 +1255,12 @@ type traced_array = {
           read-multiplicity metric, same-cell reads count, while a setter's own read-modify-write
           does not. Gates the recompute-cost guard: a node never read in the routine has no inlining
           cost, so it must stay eligible for virtual dead-code elimination. *)
-  mutable setter_reads : Set.M(Tnode).t list;
-      (** Per setter statement ([Set]/[Set_from_vec]), the tensor nodes its right-hand side reads —
-          including reads inside [Local_scope] bodies, excluding the node's own read-modify-write
-          self-reads. Analysis fact behind the transitive inline-fanin guard (gh-573), which takes
-          the per-setter maximum (a read of one cell executes one setter's computation). *)
+  mutable setter_reads : setter_read_sets list;
+      (** Per setter statement ([Set]/[Set_from_vec]), the tensor nodes its right-hand side reads,
+          under each rendering of a value select ({!setter_read_sets}) — including reads inside
+          [Local_scope] bodies, excluding the node's own read-modify-write self-reads. Analysis fact
+          behind the transitive inline-fanin guard (gh-573), which takes the per-setter maximum (a
+          read of one cell executes one setter's computation). *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in [decide_placements] computed for this node under the current
           placements (at least 1); multiplies into the proxy [fa_recompute_cost] (gh-ocannl-637: the
@@ -1593,6 +1611,7 @@ type footprint = {
     placement vector. The allocator-side scorer lives in [Backends.score_footprint]. *)
 
 val optimize :
+  ?blends_value_selects:bool ->
   optimize_ctx ->
   unoptim_ll_source:(PPrint.document -> unit) option ->
   ll_source:(PPrint.document -> unit) option ->
@@ -1600,6 +1619,11 @@ val optimize :
   Indexing.static_symbol list ->
   t ->
   optimized
+(** [blends_value_selects] is the rendering backend's fact of that name
+    ({!Backend_intf.backend_facts}; [Backends.lower_assignments] passes it): where true, the inline
+    fan-in guard charges a select {!speculable_select} admits by the union of its arms, which the
+    backend's blend evaluates (gh-ocannl-1775). Default [false], the short-circuiting reading:
+    hand-built IR optimized without a backend in mind. *)
 
 type analysis
 (** Decision-independent analysis of a lowered routine (gh-555 step 1): the structural per-node
@@ -1611,12 +1635,13 @@ val analyze_proc : Indexing.static_symbol list -> t -> analysis
 (** Compute the analysis once for a routine. [optimize] is [analyze_proc] followed by
     [specialize_proc] (plus the pretty-printing callbacks). *)
 
-val specialize_proc : optimize_ctx -> analysis -> optimized
+val specialize_proc : ?blends_value_selects:bool -> optimize_ctx -> analysis -> optimized
 (** The decision-dependent tail of the pipeline: placement decisions ([decide_placements] under the
-    given lineage's placements and inline preferences), virtualization, cleanup, simplification and
-    CSE. Cheap to replay per candidate over one shared [analysis] (gh-555): sibling calls with
-    hermetic [optimize_ctx] forks (see [copy_optimize_ctx]) produce hermetic [optimized] results —
-    the traced store is record-copied per call. *)
+    given lineage's placements and inline preferences, and the backend's select rendering as in
+    {!optimize}: the analysis keeps both charges, so one analysis serves either), virtualization,
+    cleanup, simplification and CSE. Cheap to replay per candidate over one shared [analysis]
+    (gh-555): sibling calls with hermetic [optimize_ctx] forks (see [copy_optimize_ctx]) produce
+    hermetic [optimized] results — the traced store is record-copied per call. *)
 
 val validate_virtualization_decision_coverage : Tnode.Placements.t -> t -> unit
 (** The gh-ocannl-805 seam assertion run after virtualization and before cleanup: every

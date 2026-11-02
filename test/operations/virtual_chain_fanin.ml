@@ -215,10 +215,12 @@ let phase1b () =
   in
   let got2 = execute ~name:"vcf_scope_rmw" o2 ~seed:seed2 ~read:[ out2 ] in
   p "scope rmw: executed values match the reference" (same got2 [ expected2 ]);
-  (* Review round 5: [Where]'s arms are mutually exclusive per evaluation
-     ([Ops.ternop_conditionality] = [Cond_and_one_arm]), so a setter's fan-in charges the wider arm,
-     not the union: mask + two 4-load arms is fan-in 5, within the cap — the union (9) would
-     spuriously materialize. Both arms execute in the parity leg (mask alternates). *)
+  (* Review round 5: where a select short-circuits, [Where]'s arms are mutually exclusive per
+     evaluation ([Ops.ternop_conditionality] = [Cond_and_one_arm]), so a setter's fan-in charges the
+     wider arm, not the union: mask + two 4-load arms is fan-in 5, within the cap — the union (9)
+     would spuriously materialize. A backend that blends the select evaluates both arms, and there
+     the union is the charge (gh-ocannl-1775; phase 1c). Both arms execute in the parity leg (mask
+     alternates). *)
   let y4 = mk "y4" and out4 = mk "wout" and m = mk "m" in
   materialize out4;
   materialize m;
@@ -235,7 +237,10 @@ let phase1b () =
   in
   let consumer4 = loop_n j4 dim (set out4 [| iter j4 |] (get y4 [| iter j4 |])) in
   let o4 = optimize ~name:"vcf_where" (seq producer4 consumer4) in
-  p "where: producer stays virtual (fan-in 5: mask + the wider arm)" (known_virtual o4 y4);
+  p "where, short-circuiting: producer stays virtual (fan-in 5: mask + the wider arm)"
+    (known_virtual o4 y4);
+  let o4b = optimize ~blends_value_selects:true ~name:"vcf_where_blend" (seq producer4 consumer4) in
+  p "where, blended: producer materialized (fan-in 9: mask + both arms)" (known_non_virtual o4b y4);
   let m_vals = Array.init dim ~f:(fun i -> Float.of_int (i % 2)) in
   let expected4 =
     Array.init dim ~f:(fun i ->
@@ -250,6 +255,8 @@ let phase1b () =
   in
   let got4 = execute ~name:"vcf_where" o4 ~seed:seed4 ~read:[ out4 ] in
   p "where: executed values match the reference (both arms exercised)" (same got4 [ expected4 ]);
+  let got4b = execute ~name:"vcf_where_blend" o4b ~seed:seed4 ~read:[ out4 ] in
+  p "where, blended: executed values match the reference" (same got4b [ expected4 ]);
   (* Review round 6: [Local_scope] bodies inside [Where] arms hoist to statement level and BOTH
      execute (see the operand-conditionality agent notes), so their reads union at the statement
      sink rather than joining the per-arm maximum: mask + two hoisted 4-load bodies is fan-in 9 —
@@ -292,6 +299,150 @@ let phase1b () =
   in
   let got5 = execute ~name:"vcf_where_scopes" o5 ~seed:seed5 ~read:[ out5 ] in
   p "where scopes: executed values match the reference" (same got5 [ expected4 ])
+
+(* === Phase 1c: a value select's arms are charged as the backend renders the select ===
+
+   gh-ocannl-1775: a backend whose [blends_value_selects] fact holds (cc, HIP) renders a select
+   [LL.speculable_select] admits as a blend that evaluates BOTH arms, so the guard charges the union
+   of the arms' loads there; a short-circuiting backend (CUDA, Metal) evaluates one arm and is
+   charged the wider. The flag is the backend's fact in production ([Backends.lower_assignments]);
+   here both readings are optimized explicitly, and each executes on the running backend, whose
+   values cannot depend on the decision. *)
+
+let phase1c () =
+  let mk = node_factory ~first_id:3150 ~dims:[| dim |] () in
+  let ws =
+    Array.init 9 ~f:(fun k ->
+        let w = mk (Printf.sprintf "bw%d" (k + 1)) in
+        materialize w;
+        w)
+  in
+  let m = mk "bm" in
+  materialize m;
+  let m_vals = Array.init dim ~f:(fun i -> Float.of_int (i % 2)) in
+  let arm i ks =
+    List.fold ks ~init:(Ll_test.c 0.) ~f:(fun acc k -> add acc (get ws.(k) [| iter i |]))
+  in
+  let arm_ref ks i = List.fold ks ~init:0. ~f:(fun acc k -> acc +. (w_vals k).(i)) in
+  let seed out =
+    (out, blank dim) :: (m, m_vals) :: (Array.to_list ws |> List.mapi ~f:(fun k w -> (w, w_vals k)))
+  in
+  (* [y[i] = where cond then else; out[i] = y[i]] with fresh nodes per fixture. *)
+  let fixture label ~cond ~then_ks ~else_ks =
+    let y = mk ("y_" ^ label) and out = mk ("o_" ^ label) in
+    materialize out;
+    let i = sym () and j = sym () in
+    let producer =
+      loop_n i dim
+        (set y
+           [| iter i |]
+           (LL.Ternop (Ir.Ops.Where, cond i, (arm i then_ks, single), (arm i else_ks, single))))
+    in
+    let consumer = loop_n j dim (set out [| iter j |] (get y [| iter j |])) in
+    (y, out, seq producer consumer)
+  in
+  let mask_cond i = (get m [| iter i |], single) in
+  let mask_ref ~then_ks ~else_ks =
+    Array.init dim ~f:(fun i -> if i % 2 <> 0 then arm_ref then_ks i else arm_ref else_ks i)
+  in
+  let is_fanin_cap o tn =
+    Option.equal Tn.equal_provenance (rejection_code o tn) (Some Tn.Inline_fanin_cap)
+  in
+  (* The unequal-arm witness: mask + a 3-load arm + a disjoint 5-load arm. Short-circuiting it is
+     charged 1 + 5 = 6 (within the cap of 8); blended, 1 + 3 + 5 = 9. *)
+  let then_ks = [ 0; 1; 2 ] and else_ks = [ 3; 4; 5; 6; 7 ] in
+  let y, out, llc = fixture "unequal" ~cond:mask_cond ~then_ks ~else_ks in
+  let expected = mask_ref ~then_ks ~else_ks in
+  let o_branch = optimize ~name:"vcf_sel_branch" llc in
+  let o_blend = optimize ~blends_value_selects:true ~name:"vcf_sel_blend" llc in
+  let o_mat = optimize ~materialized:[ y ] ~name:"vcf_sel_mat" llc in
+  p "select, short-circuiting: the producer stays virtual (fan-in 6: mask + the wider arm)"
+    (known_virtual o_branch y);
+  p "select, blended: the producer is materialized by the fan-in cap (fan-in 9: mask + both arms)"
+    (is_fanin_cap o_blend y);
+  let run name o = execute ~name o ~seed:(seed out) ~read:[ out ] in
+  let got_branch = run "vcf_sel_branch" o_branch in
+  let got_blend = run "vcf_sel_blend" o_blend in
+  let got_mat = run "vcf_sel_mat" o_mat in
+  p "select: the short-circuiting reading executes the reference (both arms exercised)"
+    (same got_branch [ expected ]);
+  p "select: the blended reading executes the reference" (same got_blend [ expected ]);
+  p "select: the forced-materialized control executes the reference" (same got_mat [ expected ]);
+  (* One analysis serves both readings, in either order: it keeps both charges per setter, so the
+     cached analysis cannot carry whichever backend specialized it first. *)
+  let decisions first =
+    let an = LL.analyze_proc [] llc in
+    let spec b = LL.specialize_proc ~blends_value_selects:b (LL.empty_optimize_ctx ()) an in
+    let o1 = spec first in
+    let o2 = spec (not first) in
+    let o3 = spec first in
+    let capped b o = Bool.equal b (is_fanin_cap o y) && Bool.equal (not b) (known_virtual o y) in
+    capped first o1 && capped (not first) o2 && capped first o3
+  in
+  p "select: one analysis specializes to both readings, blended first" (decisions true);
+  p "select: one analysis specializes to both readings, short-circuiting first" (decisions false);
+  (* Negative control: arms sharing sources are charged their union, not the sum of their sizes:
+     mask + {w1..w5} and {w3..w7} is 1 + 7 = 8, at the cap, where the sizes' sum would be 11. *)
+  let then_ks = [ 0; 1; 2; 3; 4 ] and else_ks = [ 2; 3; 4; 5; 6 ] in
+  let y, out, llc = fixture "shared" ~cond:mask_cond ~then_ks ~else_ks in
+  let o = optimize ~blends_value_selects:true ~name:"vcf_sel_shared" llc in
+  p "select, blended, shared sources: the producer stays virtual (union fan-in 8, at the cap)"
+    (known_virtual o y);
+  let got = execute ~name:"vcf_sel_shared" o ~seed:(seed out) ~read:[ out ] in
+  p "select, shared sources: executed values match the reference"
+    (same got [ mask_ref ~then_ks ~else_ks ]);
+  (* Negative control: a select over an index condition -- the shape of the inliner's range and
+     component guards -- is never blended ([speculable_select]), so even on a blending backend it is
+     charged its wider arm: 5 of a 4- and a 5-load arm, where the union would be 9. *)
+  let then_ks = [ 0; 1; 2; 3 ] and else_ks = [ 4; 5; 6; 7; 8 ] in
+  let index_cond i = (lt (embed i) (ic 2), iprec ()) in
+  let y, out, llc = fixture "index" ~cond:index_cond ~then_ks ~else_ks in
+  let o = optimize ~blends_value_selects:true ~name:"vcf_sel_index" llc in
+  p "select, blended, index condition: the producer stays virtual (fan-in 5: the wider arm)"
+    (known_virtual o y);
+  let got = execute ~name:"vcf_sel_index" o ~seed:(seed out) ~read:[ out ] in
+  p "select, index condition: executed values match the reference"
+    (same got
+       [ Array.init dim ~f:(fun i -> if i < 2 then arm_ref then_ks i else arm_ref else_ks i) ]);
+  (* Across routines: routine A only defines the select's producer, which it commits [Virtual]
+     (gh-ocannl-611); routine B copies it through [z] into [out]. [z]'s fan-in is the stored
+     computation's, replayed through [LL.evaluation_reads_of_proc] under the same reading: 9
+     blended, so [z] is materialized; 6 short-circuiting, so it stays virtual. *)
+  let then_ks = [ 0; 1; 2 ] and else_ks = [ 3; 4; 5; 6; 7 ] in
+  let cross blends =
+    let tag = if blends then "blend" else "branch" in
+    let y = mk ("yx_" ^ tag) and z = mk ("zx_" ^ tag) and out = mk ("ox_" ^ tag) in
+    materialize out;
+    let i = sym () and j = sym () and k = sym () in
+    let llc_a =
+      loop_n i dim
+        (set y
+           [| iter i |]
+           (LL.Ternop (Ir.Ops.Where, mask_cond i, (arm i then_ks, single), (arm i else_ks, single))))
+    in
+    let llc_b =
+      seq
+        (loop_n j dim (set z [| iter j |] (get y [| iter j |])))
+        (loop_n k dim (set out [| iter k |] (get z [| iter k |])))
+    in
+    let ctx = LL.empty_optimize_ctx () in
+    let o_a = optimize_in ~blends_value_selects:blends ctx ~name:("vcf_selx_a_" ^ tag) llc_a in
+    let o_b = optimize_in ~blends_value_selects:blends ctx ~name:("vcf_selx_b_" ^ tag) llc_b in
+    let got = execute ~name:("vcf_selx_b_" ^ tag) o_b ~seed:(seed out) ~read:[ out ] in
+    (known_virtual o_a y, o_b, z, got)
+  in
+  let y_virtual, o_b, z, got = cross true in
+  p "cross-routine select, blended: routine A commits the producer virtual" y_virtual;
+  p "cross-routine select, blended: the copy is materialized by the fan-in cap (fan-in 9)"
+    (is_fanin_cap o_b z);
+  p "cross-routine select, blended: executed values match the reference"
+    (same got [ mask_ref ~then_ks ~else_ks ]);
+  let y_virtual, o_b, z, got = cross false in
+  p "cross-routine select, short-circuiting: routine A commits the producer virtual" y_virtual;
+  p "cross-routine select, short-circuiting: the copy stays virtual (fan-in 6)"
+    (known_virtual o_b z);
+  p "cross-routine select, short-circuiting: executed values match the reference"
+    (same got [ mask_ref ~then_ks ~else_ks ])
 
 (* === Phase 2: the Assignments pipeline === *)
 
@@ -354,6 +505,58 @@ let phase2 () =
     (Array.length lv_default = 1 && Float.(abs (lv_default.(0) -. expected) <= 1e-3));
   p "pipeline: default and cap-disabled arms agree"
     (Array.length lv_off = 1 && Float.(abs (lv_default.(0) -. lv_off.(0)) <= 1e-3))
+
+(* === Phase 2b: the select charge follows the running backend's facts ===
+
+   gh-ocannl-1775, end to end: [y = where mask (a1 + a2 + a3) (b1 + ... + b5)] through [Context],
+   whose lowering states the backend's [blends_value_selects] fact. Charged as the backend renders
+   the select -- the union (9) where it blends, the wider arm (6) where it short-circuits -- [y] is
+   materialized by the fan-in cap exactly where the fact holds. Two-sided on every backend. *)
+
+let phase2b () =
+  Utils.settings.fixed_state_for_init <- Some 42;
+  Tensor.unsafe_reinitialize ();
+  let init l k =
+    NTDSL.init ~l ~prec:Ir.Ops.single ~o:[ dim ]
+      ~f:(fun idcs -> Float.of_int ((100 * k) + (10 * idcs.(0)) + 1))
+      ()
+  in
+  let mask =
+    NTDSL.init ~l:"vcf_sel_mask" ~prec:Ir.Ops.single ~o:[ dim ]
+      ~f:(fun idcs -> Float.of_int (idcs.(0) % 2))
+      ()
+  in
+  let sum ks =
+    List.map ks ~f:(fun k -> init (Printf.sprintf "vcf_sel_w%d" k) k)
+    |> List.reduce_exn ~f:TDSL.O.( + )
+  in
+  let then_ks = [ 1; 2; 3 ] and else_ks = [ 4; 5; 6; 7; 8 ] in
+  let y = TDSL.O.where mask (sum then_ks) (sum else_ks) in
+  let%op loss = y ++ "i=>0" in
+  Train.set_materialized loss.Tensor.value;
+  Tn.set_observable loss.Tensor.value;
+  let ctx = Context.auto () in
+  let blends = (Context.backend_facts ctx).Ir.Backend_intf.blends_value_selects in
+  Stdio.eprintf "phase 2b: on the %s backend, blends_value_selects=%b (not part of the golden)\n%!"
+    (Context.backend_name ctx) blends;
+  let ctx, routine = Context.compile ctx (Train.forward loss) Ir.Indexing.Empty in
+  let ctx = Context.run ctx routine in
+  let plc = Context.placements ctx in
+  p
+    "pipeline select: the producer is materialized by the fan-in cap exactly where the backend \
+     blends"
+    (Bool.equal blends (Tn.Placements.known_non_virtual plc y.Tensor.value)
+    && Bool.equal (not blends) (Tn.Placements.known_virtual plc y.Tensor.value));
+  let cell ks i =
+    List.fold ks ~init:0. ~f:(fun acc k -> acc +. Float.of_int ((100 * k) + (10 * i) + 1))
+  in
+  let expected =
+    List.init dim ~f:(fun i -> if i % 2 <> 0 then cell then_ks i else cell else_ks i)
+    |> List.fold ~init:0. ~f:( +. )
+  in
+  let lv = Context.get_values ctx loss.Tensor.value in
+  p "pipeline select: the loss matches the reference (exact: small integers)"
+    (Array.length lv = 1 && Float.equal lv.(0) expected)
 
 (* === Phase 3: the chain split across two routines in one lineage === *)
 
@@ -1352,7 +1555,9 @@ let phase6 () =
 let () =
   phase1 ();
   phase1b ();
+  phase1c ();
   phase2 ();
+  phase2b ();
   phase3 ();
   phase4 ();
   phase5 ();

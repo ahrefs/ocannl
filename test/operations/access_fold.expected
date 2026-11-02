@@ -24,6 +24,12 @@ a body read sees its enclosing binders innermost first, the scan's with no axis:
 a scan's synthetic init sits outside its binder, its rotation inside: true
 a Where charges its condition and its wider arm, not the union: true
 a Where whose arms tie charges the first: true
+a blended speculable Where charges the union of its arms: true
+a blended Where whose arms read the same node charges it once: true
+a blended Where over an index condition (an inliner guard) keeps the wider arm: true
+a blended Where with a gather arm keeps the wider arm: true
+a blended Where with an integer-division arm keeps the wider arm: true
+nested blended selects charge every arm: true
 a scope body inside an arm charges the statement, not the arm: true
 nested alternatives take the wider arm at each level: true
 the setter's own reads and merge-buffer reads are no contributors: true

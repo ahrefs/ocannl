@@ -85,3 +85,33 @@ let () =
     ~vary:(fun f ->
       ({ f with BI.host_load_attributable = true }, { f with BI.host_load_attributable = false }))
     ~decide:Autotune.dispersion_policy_for_backend
+
+(* gh-ocannl-1775: the inline fan-in guard charges a value select as the backend renders it, read at
+   the lowering seam every compile and the autotune decision surface go through
+   ([Backends.lower_assignments ~facts]). [y = where mask (a1 + a2 + a3) (b1 + ... + b5)], reduced
+   into a materialized root: short-circuiting, [y]'s fan-in is the mask and the wider arm (6, within
+   the cap of 8); blended, the mask and both arms (9), and the cap materializes it. *)
+let () =
+  let open Ocannl.Operation.DSL_modules in
+  let init l k =
+    NTDSL.init ~l ~prec:Ir.Ops.single ~o:[ 4 ] ~f:(fun idcs -> Float.of_int (k + idcs.(0))) ()
+  in
+  let mask = init "bf_mask" 0 in
+  let sum ks =
+    List.map ks ~f:(fun k -> init (Printf.sprintf "bf_w%d" k) k) |> List.reduce_exn ~f:TDSL.O.( + )
+  in
+  let y = TDSL.O.where mask (sum [ 1; 2; 3 ]) (sum [ 4; 5; 6; 7; 8 ]) in
+  let root = TDSL.O.einsum1 "i=>0" y in
+  Ocannl.Train.set_materialized root.Tensor.value;
+  let comp = Ocannl.Train.forward root in
+  (* The frontend gate, which finishes shape inference, as a compile would. *)
+  ignore (Context.lowered_for_decisions (Context.auto ()) comp Ir.Indexing.Empty : LL.optimized);
+  moves "blends_value_selects alone moves the inline fan-in cap's decision on a select"
+    ~vary:(fun f ->
+      ({ f with BI.blends_value_selects = true }, { f with BI.blends_value_selects = false }))
+    ~decide:(fun facts ->
+      let _, (o : LL.optimized) =
+        Context.Backends.lower_assignments ~facts ~limits:BI.no_hardware_limits
+          (LL.empty_optimize_ctx ()) Ir.Indexing.Empty comp.Ir.Assignments.asgns
+      in
+      Tn.Placements.known_non_virtual o.LL.optimize_ctx.placements y.Tensor.value)

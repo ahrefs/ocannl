@@ -660,6 +660,23 @@ files.
   was the same six artifacts replayed in an unbalanced order; three replay sets of them spanned
   5.5-6.5%, so an identical schedule varies ~1pp run to run -- all three non-overlapping), and balancing that order matters: a fixed order
   confounds the cap with session position, which was worth ~1.4pp of an apparent 7.1%.
+- **The fan-in guard charges a value select as the backend renders it** (gh-ocannl-1775). Where
+  `backend_facts.blends_value_selects` holds (cc, HIP), a `Where` that `speculable_select` admits is
+  a blend evaluating both arms, so a setter is charged the UNION of the arms' loads (distinct nodes,
+  never the sum of sizes); elsewhere (CUDA, Metal) the wider arm. The cached analysis is
+  backend-independent, so `setter_reads` keeps both (`reads_branching` / `reads_blended`) and
+  `decide_placements` picks by the flag, which reaches it only through `Backends.lower_assignments
+  ~facts` -- the compile and `Context.lowered_for_decisions` alike; `Low_level.optimize`, and so
+  `Ll_test`, default to the short-circuiting reading, so a hand-built test of a select decision says
+  which reading it asks for. Admission is judged before inlining at the arms' annotations, while the
+  renderer judges it after virtualization at the compute precision (and HIP keeps `?:` over a NaN
+  literal): the guard can charge the union where the select ends up branching, never the reverse --
+  the materializing direction. The per-setter maximum across components is untouched: each
+  component's update sits under an index-only `Where` no backend blends. Two known under-counts
+  remain: overlapping components (two bodies run where both guards hold) and, short-circuiting, the
+  wider arm chosen by direct loads before transitive expansion. Pins: `virtual_chain_fanin` phases
+  1c and 2b (the latter two-sided on the running backend), `access_fold`, `backend_facts`, and
+  `op_table_compile` against the emitted kernels.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
   reads activations that read the parameter), and the cycle guard memoizes whatever it computed under

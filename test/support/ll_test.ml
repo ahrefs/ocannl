@@ -422,15 +422,22 @@ let reduction_cells ~out ~over term =
     gh-490 runtime-extent guard ([If (i < s)], as [Assignments.extent_guard] emits) needs them — the
     virtualization walk asserts that every [Embed_index (Iterator s)] it meets is in scope, and a
     launch parameter is in scope only because the caller declared it. Empty by default, which is
-    right for every nest whose indices are all loop indices. *)
-let optimize_in ?(materialized = []) ?(static_indices = []) (ctx : LL.optimize_ctx) ~name llc :
-    LL.optimized =
+    right for every nest whose indices are all loop indices.
+
+    [~blends_value_selects] optimizes as for a backend whose fact of that name holds
+    (gh-ocannl-1775: the inline fan-in guard then charges a speculable select the union of its
+    arms). Default [false], the short-circuiting reading, whatever backend later executes the
+    result: a decision that moves with it is tested under both values explicitly. *)
+let optimize_in ?(materialized = []) ?(static_indices = []) ?blends_value_selects
+    (ctx : LL.optimize_ctx) ~name llc : LL.optimized =
   LL.decide_materialized ~provenance:(Tn.Site "589:test-ll-materialize") ctx materialized;
-  LL.optimize ctx ~unoptim_ll_source:None ~ll_source:None ~name static_indices llc
+  LL.optimize ?blends_value_selects ctx ~unoptim_ll_source:None ~ll_source:None ~name static_indices
+    llc
 
 (** [optimize ~name llc] is {!optimize_in} in a fresh lineage. *)
-let optimize ?materialized ?static_indices ~name llc =
-  optimize_in ?materialized ?static_indices (LL.empty_optimize_ctx ()) ~name llc
+let optimize ?materialized ?static_indices ?blends_value_selects ~name llc =
+  optimize_in ?materialized ?static_indices ?blends_value_selects (LL.empty_optimize_ctx ()) ~name
+    llc
 
 (** [optimize_scoped ~name ~raw scoped] is the supported route for hand-built IR in the
     POST-optimize [Local_scope] form — a scope over a MATERIALIZED node, which
