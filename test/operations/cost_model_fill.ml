@@ -21,6 +21,8 @@
    leaf ranks strictly above its [bgrid] twin and the best-ranked leaf is a [bgrid] one; without
    them the twins tie, as before. Ranks go to stderr: device constants' quotients. *)
 
+(* cc-fp-contract: not-executed -- the bitwise claim compares cost-model scores computed in OCaml *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

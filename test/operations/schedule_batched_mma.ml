@@ -21,6 +21,8 @@
    accumulations. GPU backends keep the seeding checks (pure functions of the lowering) and skip the
    CPU-pipeline execution legs. *)
 
+(* cc-fp-contract: exact-operands -- dyadic cycles, and Ll_test.exact_partials for the bf16 leg *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

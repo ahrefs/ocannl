@@ -11,6 +11,7 @@ import stat as stat_module
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -31,7 +32,8 @@ from test.test_cell_group import CellGroupTest  # imported so unittest.main incl
 from test_cells import (  # noqa: F401  (likewise)
     AbDriverTest, CellCommandTest, ConfigRecordsExpectTest, Gh1051AbDriverTest, Gh1180DriverTest,
     Gh1253FlipDriverTest, Gh1279DriverTest, Gh1557DriverTest, Gh740DriverTest, ProseTraceScanTest)
-from test.test_cell_group import kill_the_group_on_cleanup, publish_pid
+from test.test_cell_group import (
+    cap_counted_from, interrupt_once_published, kill_the_group_on_cleanup, publish_pid)
 
 HERE = Path(__file__).resolve().parent
 
@@ -4373,9 +4375,10 @@ class CellTimeoutTest(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
 
-    def run_cell(self, *args, **kwargs):
-        """run_cell with the cell's own output kept out of the test's."""
-        with contextlib.redirect_stdout(io.StringIO()) as out:
+    def run_cell(self, *args, started=None, **kwargs):
+        """run_cell with the cell's own output kept out of the test's, its cap counted from the
+        cell's publication to `started` when given (`cap_counted_from`)."""
+        with contextlib.redirect_stdout(io.StringIO()) as out, cap_counted_from(started):
             result, note = orchestrate.run_cell(*args, **kwargs)
         return result, note, out.getvalue()
 
@@ -4542,7 +4545,7 @@ class CellTimeoutTest(unittest.TestCase):
             "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
             pidfile,
         )
-        result, note, log = self.run_cell("wedged", cell, timeout=1.0)
+        result, note, log = self.run_cell("wedged", cell, timeout=1.0, started=pidfile)
 
         self.assertIsNone(result)
         self.assertIn("TIMED OUT after 1s", note)
@@ -4574,7 +4577,7 @@ class CellTimeoutTest(unittest.TestCase):
         kept = []
 
         result, note, _ = self.run_cell(
-            "killed in diagnostics", cell, timeout=1.0, on_checkpoint=kept.append
+            "killed in diagnostics", cell, timeout=1.0, on_checkpoint=kept.append, started=pidfile
         )
 
         self.assertIsNone(result)
@@ -4636,7 +4639,7 @@ class CellTimeoutTest(unittest.TestCase):
         )
 
         t0 = time.monotonic()
-        result, note, _ = self.run_cell("wedged with workers", cell, timeout=2.0)
+        result, note, _ = self.run_cell("wedged with workers", cell, timeout=2.0, started=pidfile)
         elapsed = time.monotonic() - t0
 
         self.assertIsNone(result)
@@ -4674,7 +4677,7 @@ class CellTimeoutTest(unittest.TestCase):
         # under test here -- what is under test is which pass the escalation is owed to, and that
         # is the same at any grace length.
         with unittest.mock.patch.object(orchestrate, "CELL_KILL_GRACE_S", 0.5):
-            result, note, _ = self.run_cell("stubborn descendant", cell, timeout=2.0)
+            result, note, _ = self.run_cell("stubborn descendant", cell, timeout=2.0, started=pidfile)
 
         self.assertIsNone(result)
         stubborn = int(pidfile.read_text())
@@ -4702,7 +4705,7 @@ class CellTimeoutTest(unittest.TestCase):
                     lambda _proc, _allow_zombie_gone=False: cell_group.SURVIVORS,
                 )
             )
-            _, note, _ = self.run_cell("stuck in the driver", cell, timeout=0.5)
+            _, note, _ = self.run_cell("stuck in the driver", cell, timeout=0.5, started=pidfile)
 
         self.assertIn("SURVIVED SIGKILL", note)
         self.assertIn("measured against it", note)
@@ -4727,8 +4730,7 @@ class CellTimeoutTest(unittest.TestCase):
 
         previous = signal.signal(signal.SIGALRM, handler)
         self.addCleanup(signal.signal, signal.SIGALRM, previous)
-        signal.setitimer(signal.ITIMER_REAL, 1.0)
-        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, 0)
+        interrupt_once_published(self, pidfile)
 
         with self.assertRaises(KeyboardInterrupt):
             self.run_cell("interrupted in diagnostics", cell, on_checkpoint=kept.append)
@@ -4774,8 +4776,7 @@ class CellTimeoutTest(unittest.TestCase):
 
         previous = signal.signal(signal.SIGALRM, handler)
         self.addCleanup(signal.signal, signal.SIGALRM, previous)
-        signal.setitimer(signal.ITIMER_REAL, 0.5)
-        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, 0)
+        interrupt_once_published(self, pidfile)
 
         with self.assertRaises(KeyboardInterrupt):
             self.run_cell(
@@ -4906,7 +4907,7 @@ class CellTimeoutTest(unittest.TestCase):
             pidfile,
             line,
         )
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), cap_counted_from(pidfile):
             result, note, checkpoint = orchestrate.run_cell_kept("killed", cell, timeout=1.0)
         self.assertIsNone(result)
         self.assertIn("TIMED OUT after 1s", note)
@@ -4925,6 +4926,82 @@ class CellTimeoutTest(unittest.TestCase):
         self.assertEqual(record["provenance"]["source_revision"], "a" * 40)
         self.assertEqual((record["arm"], record["repeat"], record["stage"]),
                          ("ocannl-master-exact", 1, "search"))
+
+    # A cell whose start-up outlasts its cap or interrupt, stood in for by a wait on a file the test
+    # creates: a marker, not a delay, which would only race the cap (gh-ocannl-1366).
+    SLOW_START = (
+        "import pathlib, sys, time\n"
+        "while not pathlib.Path(sys.argv[2]).exists(): time.sleep(0.01)\n"
+    )
+
+    def start_later(self, started):
+        """Let a `SLOW_START` cell start a second from now."""
+        timer = threading.Timer(1.0, started.touch)
+        timer.start()
+        self.addCleanup(timer.cancel)
+
+    def test_the_cap_counts_from_the_publication_not_the_spawn(self):
+        # gh-ocannl-1807: the killed-checkpoint tests above read evidence written before the cap
+        # expired, which a loaded box's start-up can outrun. Counted from the spawn, the cap kills
+        # a cell that has not started before it checkpoints (the control: this one never starts);
+        # counted from the publication (`cap_counted_from`), the checkpoint is kept however late
+        # the cell starts.
+        expected = orchestrate.last_checkpoint(self.golden_checkpoint("running"))
+        for gated in (False, True):
+            with self.subTest(gated=gated):
+                pidfile = self.dir / f"slow-start-{gated}.pid"
+                started = self.dir / f"slow-start-{gated}.go"
+                kill_the_group_on_cleanup(self, pidfile)
+                cell = self.python(
+                    self.SLOW_START
+                    + self.WRITE_CHECKPOINT
+                    + publish_pid("sys.argv[1]", "os.getpid()")
+                    + "time.sleep(300)\n",
+                    pidfile,
+                    started,
+                    self.golden_checkpoint("running"),
+                )
+                if gated:
+                    self.start_later(started)
+                with contextlib.redirect_stdout(io.StringIO()), \
+                        cap_counted_from(pidfile if gated else None):
+                    result, note, checkpoint = orchestrate.run_cell_kept(
+                        "slow to start", cell, timeout=0.5
+                    )
+                self.assertIsNone(result)
+                self.assertIn("TIMED OUT after 0.5s", note)
+                self.assertEqual(checkpoint, expected if gated else None)
+
+    @unittest.skipUnless(os.name == "posix", "SIGALRM is POSIX here")
+    def test_the_interrupt_lands_after_the_publication(self):
+        # The same for the interrupt tests' `interrupt_once_published`: a cell that starts after
+        # the interval timers they used to arm still hands over its checkpoint.
+        pidfile = self.dir / "slow-interrupted.pid"
+        started = self.dir / "slow-interrupted.go"
+        kill_the_group_on_cleanup(self, pidfile)
+        cell = self.python(
+            self.SLOW_START
+            + self.WRITE_CHECKPOINT
+            + publish_pid("sys.argv[1]", "os.getpid()")
+            + "time.sleep(300)\n",
+            pidfile,
+            started,
+            self.golden_checkpoint("running"),
+        )
+        self.start_later(started)
+        kept = []
+
+        def handler(_signum, _frame):
+            raise KeyboardInterrupt
+
+        previous = signal.signal(signal.SIGALRM, handler)
+        self.addCleanup(signal.signal, signal.SIGALRM, previous)
+        interrupt_once_published(self, pidfile)
+
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_cell("slow to start, interrupted", cell, on_checkpoint=kept.append)
+
+        self.assertEqual(len(kept), 1)
 
     def test_gh675_keeps_a_killed_passs_checkpoint(self):
         import gh675_cells
@@ -4945,7 +5022,7 @@ class CellTimeoutTest(unittest.TestCase):
                 unittest.mock.patch.object(gh675_cells, "TASKSET", []), \
                 unittest.mock.patch.dict(gh675_cells.DIGESTS, {"gpt2_mini": "d" * 64}), \
                 unittest.mock.patch.dict(gh675_cells.SOURCE, {"source_revision": "b" * 40}), \
-                contextlib.redirect_stdout(io.StringIO()):
+                contextlib.redirect_stdout(io.StringIO()), cap_counted_from(pidfile):
             record = gh675_cells.run(
                 "D_ocannl gpt2_mini rep1 pass1", cell, timeout=1.0, workload="gpt2_mini"
             )
@@ -5041,7 +5118,7 @@ class CellTimeoutTest(unittest.TestCase):
         with unittest.mock.patch.object(gh1002_cells, "BENCH_GPT", runner), \
                 unittest.mock.patch.object(gh1002_cells, "CELL_TIMEOUT_S", 1), \
                 unittest.mock.patch.object(gh1002_cells, "CELL_TERMINATE_GRACE_S", 0.1), \
-                contextlib.redirect_stdout(io.StringIO()):
+                contextlib.redirect_stdout(io.StringIO()), cap_counted_from(pidfile):
             gh1002_cells.run_cell(out, "cc", "gpt2_mini_train", "A", 0)
         records = [
             strict_loads(text) for text in (out / "failures.jsonl").read_text().splitlines()
@@ -5249,7 +5326,10 @@ class CellTimeoutTest(unittest.TestCase):
             # same at any grace length.
             "orchestrate.CELL_KILL_GRACE_S = 2.0\n"
             f"cell = [sys.executable, '-c', {cell_source!r}, sys.argv[1], sys.argv[2]]\n"
-            "orchestrate.run_cell('cell cancelled mid-kill', cell, timeout=2)\n",
+            # The cap counts from the cell's publication, its handler installed (gh-ocannl-1807).
+            "from test.test_cell_group import cap_counted_from\n"
+            "with cap_counted_from(sys.argv[1]):\n"
+            "    orchestrate.run_cell('cell cancelled mid-kill', cell, timeout=2)\n",
             pidfile,
             termfile,
         )
@@ -5423,8 +5503,7 @@ class CellTimeoutTest(unittest.TestCase):
 
         previous = signal.signal(signal.SIGALRM, handler)
         self.addCleanup(signal.signal, signal.SIGALRM, previous)
-        signal.setitimer(signal.ITIMER_REAL, 1.5)
-        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, 0)
+        interrupt_once_published(self, pidfile)
 
         with self.assertRaises(KeyboardInterrupt):
             orchestrate.run_supporting(build, capture_output=True)
@@ -5474,7 +5553,7 @@ class CellTimeoutTest(unittest.TestCase):
         )
 
         with unittest.mock.patch.object(orchestrate, "CELL_KILL_GRACE_S", 1.0):
-            _, note, log = self.run_cell("wedged behind a held pipe", cell, timeout=1.5)
+            _, note, log = self.run_cell("wedged behind a held pipe", cell, timeout=1.5, started=pidfile)
 
         self.assertIn("TIMED OUT", note)
         self.assertIn("the evidence", log)
@@ -5545,7 +5624,6 @@ class CellTimeoutTest(unittest.TestCase):
 
         previous = signal.signal(signal.SIGALRM, handler)
         self.addCleanup(signal.signal, signal.SIGALRM, previous)
-        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, 0)
         with contextlib.ExitStack() as stack:
             stack.enter_context(unittest.mock.patch.object(orchestrate, "CELL_KILL_GRACE_S", 0.2))
             stack.enter_context(
@@ -5555,7 +5633,7 @@ class CellTimeoutTest(unittest.TestCase):
                     lambda _proc, _allow_zombie_gone=False: cell_group.SURVIVORS,
                 )
             )
-            signal.setitimer(signal.ITIMER_REAL, 1.0)
+            interrupt_once_published(self, pidfile)
             with self.assertRaises(cell_group.CleanupFailed) as raised:
                 orchestrate.run_supporting(command)
 
@@ -5668,7 +5746,7 @@ class CellTimeoutTest(unittest.TestCase):
             "import sys, time\n" + publish_pid("sys.argv[1]", "os.getpid()") + "time.sleep(300)\n",
             pidfile,
         )
-        _, note, _ = self.run_cell("briefly capped", cell, timeout=0.25)
+        _, note, _ = self.run_cell("briefly capped", cell, timeout=0.25, started=pidfile)
 
         self.assertIn("TIMED OUT after 0.25s", note)
 
@@ -5717,8 +5795,7 @@ class CellTimeoutTest(unittest.TestCase):
 
         previous = signal.signal(signal.SIGALRM, handler)
         self.addCleanup(signal.signal, signal.SIGALRM, previous)
-        signal.setitimer(signal.ITIMER_REAL, 0.5)
-        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, 0)
+        interrupt_once_published(self, pidfile)
 
         with contextlib.ExitStack() as stack:
             stack.enter_context(unittest.mock.patch.object(orchestrate, "CELL_KILL_GRACE_S", 0.2))
@@ -5753,6 +5830,7 @@ class CellTimeoutTest(unittest.TestCase):
                 "wedged with a broken log dir",
                 cell,
                 timeout=1.0,
+                started=pidfile,
                 on_incomplete=lambda killed: called.append(("killed", killed))
                 or "quarantined the cache",
             )
@@ -5779,7 +5857,7 @@ class CellTimeoutTest(unittest.TestCase):
             pidfile,
         )
         with unittest.mock.patch.object(orchestrate, "CELL_LOG_DIR", logs):
-            result, note, _ = self.run_cell("gpt2 ocannl/cc/tuned (search pass)", cell, timeout=2.0)
+            result, note, _ = self.run_cell("gpt2 ocannl/cc/tuned (search pass)", cell, timeout=2.0, started=pidfile)
 
         self.assertIsNone(result)
         self.assertIn("TIMED OUT", note)

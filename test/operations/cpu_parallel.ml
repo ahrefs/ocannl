@@ -17,6 +17,9 @@
    On GPU backends the same programs go through the GPU annotator / hardware binding; every printed
    boolean holds on every backend (structure checks dispatch on the configured backend). *)
 
+(* cc-fp-contract: same-shape -- one compiled pure-add routine runs twice and its results are
+   compared *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

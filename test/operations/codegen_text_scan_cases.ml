@@ -19,6 +19,9 @@
    itself rather than an exemption -- the source rule asks whether a file READS generated source,
    and nothing here does. *)
 
+(* cc-fp-contract: not-executed -- the bitwise text is fixture prose a codegen-text scan
+   classifies *)
+
 open Base
 module Scan = Test_utils.Codegen_text_scan
 module Attempt = Test_utils.Scan_attempt

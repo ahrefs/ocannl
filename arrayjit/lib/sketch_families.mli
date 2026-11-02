@@ -73,7 +73,9 @@ type sketch_params = {
             operands pack inside the Grid body and privatize per chunk — each chunk re-packs its own
             B~ panel (redundant copies, but one dispatch instead of one per k-block). Needs the
             tiles under the renderer's per-chunk privatization cap (config
-            [cc_grid_private_bytes_cap]).
+            [cc_grid_private_bytes_cap]). All three grid-outermost shapes also privatize the
+            [bm x bn] accumulator fragment their contraction mints inside the Grid body
+            ({!cpu_pack_contracts}), which seeding weighs against the same cap (gh-ocannl-1793).
           - Without [sk_hoist] or [sk_pack_rest], in-kernel packing: the per-row-block A~ packing
             Stage lands inside the Grid body — its tile is privatized to per-chunk block-scope
             storage by the renderer ([C_syntax.parallel_grid_safe]'s privatization rule) — while the
@@ -596,7 +598,8 @@ val cpu_pack_contracts : m_nk:int -> grid_outermost:bool -> bk:int -> bool
 (** Whether a packed geometry's accumulator contraction is implied: grid-outermost, with the
     reduction-block loop running at least twice ([bk < m_nk]). Then
     [Schedule.contract_tensorized_accumulator] mints a fresh [bm x bn] fragment at the output's
-    storage precision, which {!sketch_path_traffic_floor} prices (gh-ocannl-1676). Exposed for
+    storage precision, which {!sketch_path_traffic_floor} prices (gh-ocannl-1676) and the seeding
+    pre-filter adds to a Grid shape's per-chunk privatized bytes (gh-ocannl-1793). Exposed for
     tests, which check it against the applied schedules. *)
 
 val sketch_path_traffic_floor :

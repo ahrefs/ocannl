@@ -27,6 +27,8 @@
    persistent fragment give different values, and the output must be the once-narrowed one wherever
    the scope rendered. *)
 
+(* cc-fp-contract: not-cc -- executed claims need a GPU advertising an f16 tile; cc skips them *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

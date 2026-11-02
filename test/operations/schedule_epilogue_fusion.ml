@@ -17,6 +17,9 @@
    (the tail write is not covered by the hardware axes — [validate_parallel] rejects it); fusion is
    what makes whole-routine sketches apply to matmul+tail graphs at all. *)
 
+(* cc-fp-contract: exact-operands -- quarter-step and integer operands make every product and sum
+   exact *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

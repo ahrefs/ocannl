@@ -19,6 +19,9 @@
    limits, so every one of them can run. Off GPU the coalesced seeds cannot execute and only the
    structural claims hold. *)
 
+(* cc-fp-contract: not-cc -- the executed bitwise claims are gated on a hardware grid, so cc skips
+   them *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

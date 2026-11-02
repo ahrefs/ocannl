@@ -24,6 +24,9 @@
    controls: iterator draws are pairwise distinct, and fixed draws differ from the draw of the
    counter as a double-converted [Constant]. *)
 
+(* cc-fp-contract: no-contraction -- threefry bit draws and their uniform conversions, no product
+   feeding an add *)
+
 open Base
 module LL = Ir.Low_level
 module Ops = Ir.Ops

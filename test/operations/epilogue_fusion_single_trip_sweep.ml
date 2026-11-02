@@ -34,6 +34,9 @@
    search are bench_seed_parity's (gh-ocannl-1490), and beam moves applied after a fused twin
    operate on already-fused code. *)
 
+(* cc-fp-contract: exact-operands -- quarters and small integers, every sum far inside f32's
+   mantissa *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

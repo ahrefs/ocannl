@@ -14,7 +14,7 @@
 # below and closed by the one group it belongs to (gh-ocannl-1202):
 # #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83-85),
 # #options (26-28, 37, 89, 94-96), #width (29-34, 48-52, 64, 70), #digest (35-36,
-# 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74: the run/start
+# 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74, 97: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
 # #source (59-63, 66), #slot (53-58, 78, 88, 93), #device (75-77, 91), #credentials (79, 90),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
@@ -207,6 +207,15 @@
 #      resolve (the published run's first phase) cancels the run: exit 143,
 #      dune never started and the log says so, the worktree idle; a hung
 #      reader is cut off by the cap, a reader's leftover reaped with the run.
+#  97 sits after leg 65: a TERM to the supervisor, while the backends resolve
+#      or while a TERM-ignoring dune runs, each leaving a session-escaped
+#      descendant holding the lock, settles inside the fleet wrappers' 10 s
+#      grace (gh-ocannl-1808): verdict 143, the log ending `exit: 143`, the
+#      escapee and the group gone, the lock idle; the slowest-actions reader
+#      runs after, bounded to 3 s; a `fresh` run's own build directory goes
+#      with it all the same. Mutation controls: no lock census leaves
+#      the escapee holding the lock; the reader before the verdict misses
+#      the 10 s.
 #  53-58 sit at the end: the fleet's run-time slot, taken by the runner
 #      (gh-ocannl-1004), against a fake fleet-worker.sh and the fake readers
 #      every leg runs with.
@@ -1403,6 +1412,11 @@ export FAKE_READS='reads config: it reaches t_cfg in x, which reads the configur
 cat >"$batch_reach" <<'FAKE'
 #!/usr/bin/env bash
 [ -z "${FAKE_REACH_CALLS:-}" ] || printf '%s\n' "$*" >>"$FAKE_REACH_CALLS"
+[ -z "${FAKE_REACH_ESCAPE:-}" ] || perl -MPOSIX -e '
+  $SIG{$_} = "IGNORE" for qw(TERM INT HUP);
+  POSIX::setsid() >= 0 or die "setsid: $!";
+  open my $pf, ">", "$ARGV[0].tmp" or die; print $pf "$$\n"; close $pf;
+  rename "$ARGV[0].tmp", $ARGV[0]; sleep 120' "$FAKE_REACH_ESCAPE" </dev/null >/dev/null 2>&1 &
 [ -z "${FAKE_REACH_IGNORE_TERM:-}" ] || trap '' TERM INT HUP
 [ -z "${FAKE_REACH_SLEEP:-}" ] || sleep "$FAKE_REACH_SLEEP"
 [ -z "${FAKE_REACH_LEAVE:-}" ] || sleep "$FAKE_REACH_LEAVE" &
@@ -2185,6 +2199,20 @@ case $REPEAT_TEST_MODE in
     fi
     [ -e "$REPEAT_TEST_ORPHAN_REAPED" ] || exit 93
     printf 'post-reap stdout\n'; printf 'post-reap stderr\n' >&2
+    ;;
+  # Leg 97: a dune that leaves a session-escaped descendant holding the
+  # worktree lock (inherited fd 9, TERM ignored), says it is ready, and then
+  # ignores TERM itself, so the supervisor's group KILL is the only way out.
+  term_escape)
+    perl -MPOSIX -e '
+      $SIG{$_} = "IGNORE" for qw(TERM INT HUP);
+      POSIX::setsid() >= 0 or die "setsid: $!";
+      open my $pf, ">", "$ARGV[0].tmp" or die; print $pf "$$\n"; close $pf;
+      rename "$ARGV[0].tmp", $ARGV[0]; sleep 120' "$REPEAT_TEST_ESCAPE_PID" </dev/null >/dev/null 2>&1 &
+    trap '' TERM INT HUP
+    while [ ! -s "$REPEAT_TEST_ESCAPE_PID" ]; do sleep 0.05; done
+    : >"$REPEAT_TEST_ESCAPE_READY"
+    while :; do sleep 1; done
     ;;
   session_escape)
     for arg in "$@"; do
@@ -3646,6 +3674,180 @@ else
 fi
 }
 harness_leg_run '65: a stop while the backends resolve cancels the run #lifecycle' leg_65
+
+# Leg 97: a cancellation fits the fleet wrappers' grace (gh-ocannl-1808).
+# `execution slot` and `bg-run.sh stop` KILL ten seconds after their TERM, so
+# the supervisor, TERMed, publishes its verdict and frees the worktree lock
+# inside that: the run's group reaped on a short grace, then every other
+# holder of the lock -- here a session-escaped descendant, TERM ignored,
+# still holding inherited fd 9 -- found by the census and KILLed, then the
+# verdict, then the lock, and only after them the slowest-actions reader,
+# bounded (a stuck one stands in). Two phases: TERM while the batch's
+# backends resolve (the reader that spawned the escapee asleep), and while a
+# TERM-ignoring dune runs. Within ten seconds of the TERM: the verdict is 143,
+# the log ends with `exit: 143`, the escapee and the group are gone, the lock
+# is idle. Two mutation controls, each one line of the shipping supervisor
+# replaced: a census cut out leaves the escapee holding the lock in either
+# phase, and the cancellation finished in the old order (reader before
+# verdict) publishes no verdict within ten seconds of a TERM to dune.
+leg_97() {
+local label="a TERMed run publishes its verdict and frees the lock within ten seconds, the reader after"
+local nc_census="negative control: a supervisor without the lock census leaves the escapee holding the lock"
+local nc_order="negative control: the reader before the verdict misses the ten seconds"
+local skip_why= census_line order_line
+case $(uname -s) in MSYS* | MINGW*) skip_why="POSIX sessions and process groups (setsid) are not native here" ;; esac
+if [ -z "$skip_why" ] && [ "$have_state" = 0 ]; then
+  skip_why="no way to read a process's state, so a reaped escapee cannot be told from a live one"
+elif [ -z "$skip_why" ] && [ ! -d /proc/self/fdinfo ] && ! command -v lsof >/dev/null 2>&1; then
+  skip_why="neither /proc fdinfo nor lsof here: the supervisor has no lock census"
+fi
+if [ -n "$skip_why" ]; then
+  skip "$label" "$skip_why"; skip "$nc_census" "$skip_why"; skip "$nc_order" "$skip_why"
+  return
+fi
+census_line='    $reap_holders->() if $cancel;'
+order_line='    $finish->($code, $cancel);'
+local slow_reader=$TMP/term-grace-reader.sh
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$$" >"$TERM_GRACE_READER_PID"\nexec sleep 120\n' >"$slow_reader"
+local trace=$TMP/term-grace-trace.csexp
+printf 'not a trace; the stand-in reader never reads it\n' >"$trace"
+local detail= census_detail= order_detail=
+local phase variant tag runs pre esc run_dir pg sup t0 i ok took last launcher
+for variant in fix census order; do
+  for phase in resolve dune fresh; do
+    [ "$variant" = order ] && [ "$phase" = resolve ] && continue
+    [ "$variant" != fix ] && [ "$phase" = fresh ] && continue
+    tag=term-grace-$variant-$phase
+    runs=$TMP/argv-runs-$tag
+    pre=$TMP/$tag
+    esc=$pre.escape
+    rm -rf "$runs"; mkdir -p "$runs"
+    rm -f "$esc" "$pre".* 2>/dev/null
+    : >"$pre.calls"; : >"$pre.counter"; : >"$pre.reach"
+    cp "$SRC" "$repeat_root/tools/test-run.sh"
+    case $variant in
+      census | order)
+        [ "$variant" = census ] && last=$census_line || last=$order_line
+        awk -v line="$last" -v v="$variant" '
+          $0 == line { n++; print (v == "census" ? "    1;" : "    $finish->($code, 0);"); next }
+          { print }
+          END { exit n == 1 ? 0 : 1 }' "$SRC" >"$repeat_root/tools/test-run.sh" ||
+          { report 1 "$label" "the $variant control line was not found once in $SRC"; cp "$SRC" "$repeat_root/tools/test-run.sh"; return; }
+        ;;
+    esac
+    local mode=stable reach_sleep= reach_escape= launch=(start build @cheap)
+    if [ "$phase" = resolve ]; then reach_sleep=30 reach_escape=$esc; else mode=term_escape; fi
+    [ "$phase" != fresh ] || launch=(fresh @test/operations/runtest-alpha)
+    FAKE_REACH_CALLS=$pre.reach FAKE_REACH_SLEEP=$reach_sleep FAKE_REACH_ESCAPE=$reach_escape \
+    REPEAT_TEST_MODE=$mode REPEAT_TEST_COUNTER=$pre.counter REPEAT_TEST_CALLS=$pre.calls \
+    REPEAT_TEST_ESCAPE_PID=$esc REPEAT_TEST_ESCAPE_READY=$pre.ready REPEAT_TEST_TRACE=$trace \
+    REPEAT_TEST_WAIT_PREFIX= REPEAT_TEST_WAIT_AT= REPEAT_TEST_ORPHAN_PID= REPEAT_TEST_ORPHAN_REAPED= \
+    REPEAT_TEST_DIFF_WAIT_PREFIX= REPEAT_TEST_REAL_DIFF="$(command -v diff)" \
+    TERM_GRACE_READER_PID=$pre.reader OCANNL_TOOL_SLOWEST_READER=$slow_reader REPEAT_TEST_MKBUILD=1 \
+    OCANNL_TOOL_TEST_RUNS=$runs OCANNL_TOOL_DXG_DEVICE=$dxg_present OCANNL_BACKEND=cuda \
+    OCANNL_TOOL_KFD_TOPOLOGY=$kfd_absent OCANNL_TOOL_NVIDIA_DEVICE=$nv_absent PATH=$repeat_bin:$PATH \
+      "$repeat_root/tools/test-run.sh" "${launch[@]}" >"$pre.out" 2>"$pre.err" &
+    launcher=$!
+    # The launch returns once the batch has resolved, so it is not waited on
+    # here: the run is found by its supervisor's record.
+    ok= run_dir=
+    for ((i = 0; i < 300; i++)); do
+      run_dir=$(ls -d "$runs"/2*/ 2>/dev/null | head -n 1)
+      run_dir=${run_dir%/}
+      if [ -n "$run_dir" ] && [ -s "$esc" ] && [ -s "$run_dir/pid" ] &&
+         { [ "$phase" = resolve ] && [ -s "$pre.reach" ] || [ -e "$pre.ready" ]; } &&
+         { [ "$phase" != fresh ] || [ -d "$run_dir/build" ]; }; then ok=1; break; fi
+      sleep 0.05
+    done
+    [ -s "$esc" ] && ps_token "$(cat "$esc")" >"$esc.token"
+    if [ -z "$ok" ] || [ -z "$run_dir" ]; then
+      detail="$variant/$phase: the fixture never got ready: $(cat "$pre.out" "$pre.err" "$run_dir/log" 2>/dev/null)"
+      term_grace_cleanup "$run_dir" "$esc" "$pre.reader"
+      kill -KILL "$launcher" 2>/dev/null; wait "$launcher" 2>/dev/null
+      break 2
+    fi
+    sup=$(cat "$run_dir/pid")
+    pg=$(cat "$run_dir/pgid" 2>/dev/null)
+    t0=$SECONDS
+    kill -TERM "$sup"
+    took=
+    # Ten seconds, measured from the TERM: 100 polls, each at least 0.1s.
+    for ((i = 0; i < 100; i++)); do
+      if [ -f "$run_dir/exit" ] && term_grace_dead "$(cat "$esc")" &&
+         { [ -z "$pg" ] || ! group_alive "$pg"; } &&
+         [ "$(OCANNL_TOOL_TEST_RUNS=$runs "$repeat_root/tools/test-run.sh" lock-status 2>/dev/null)" = idle ]; then
+        took=$((SECONDS - t0)); break
+      fi
+      sleep 0.1
+    done
+    [ -n "$took" ] && [ $((SECONDS - t0)) -gt 10 ] && took=
+    case $variant in
+      fix)
+        if [ -z "$took" ]; then
+          detail="$variant/$phase: not settled 10s after the TERM: exit=$(cat "$run_dir/exit" 2>/dev/null || echo none) escapee=$(pstate "$(cat "$esc")") group=$(group_alive "$pg" && echo alive || echo gone) lock=$(OCANNL_TOOL_TEST_RUNS=$runs "$repeat_root/tools/test-run.sh" lock-status 2>&1); log: $(tail -n 5 "$run_dir/log")"
+        elif [ "$(cat "$run_dir/exit")" != 143 ] || [ "$(tail -n 1 "$run_dir/log")" != "exit: 143" ]; then
+          detail="$variant/$phase: verdict $(cat "$run_dir/exit"), log ends: $(tail -n 1 "$run_dir/log")"
+        elif [ "$phase" = resolve ] && { [ -s "$pre.calls" ] || ! grep -q "dune was not started" "$run_dir/log"; }; then
+          detail="$variant/$phase: dune ran, or the log does not say it did not: calls $(cat "$pre.calls"); $(cat "$run_dir/log")"
+        fi
+        # The supervisor itself outlives the verdict only by its bounded tail:
+        # the stuck reader is KILLed past three seconds, and says so.
+        for ((i = 0; i < 100; i++)); do term_grace_dead "$sup" && break; sleep 0.1; done
+        if [ -z "$detail" ] && ! term_grace_dead "$sup"; then
+          detail="$variant/$phase: the supervisor outlived its verdict by more than ten seconds"
+        elif [ -z "$detail" ] && [ "$phase" = fresh ] &&
+             { [ -e "$run_dir/build" ] || [ -e "$run_dir/build.discard" ]; }; then
+          detail="$variant/$phase: the fresh build directory outlived the supervisor: $(ls "$run_dir" | tr '\n' ' ')"
+        elif [ -z "$detail" ] && [ "$phase" != resolve ]; then
+          { [ "$(cat "$run_dir/slowest-skipped" 2>/dev/null)" = "the reader did not finish within 3s" ] &&
+            term_grace_dead "$(cat "$pre.reader" 2>/dev/null)" && [ ! -e "$run_dir/trace.csexp" ]; } ||
+            detail="$variant/$phase: the reader's tail: skip record '$(cat "$run_dir/slowest-skipped" 2>&1)', reader $(pstate "$(cat "$pre.reader" 2>/dev/null)")"
+        fi
+        ;;
+      census)
+        if [ -n "$took" ]; then
+          census_detail="$census_detail $phase: settled in ${took}s without the census, so the leg cannot tell it;"
+        elif term_grace_dead "$(cat "$esc")"; then
+          census_detail="$census_detail $phase: the escapee died without the census;"
+        fi ;;
+      order)
+        [ -f "$run_dir/exit" ] && [ "$((SECONDS - t0))" -le 10 ] &&
+          order_detail="the verdict published within ten seconds with the reader first"
+        [ -n "$order_detail" ] || [ -f "$run_dir/exit" ] || [ -s "$pre.reader" ] ||
+          order_detail="the stand-in reader never ran, so the control proves nothing"
+        ;;
+    esac
+    term_grace_cleanup "$run_dir" "$esc" "$pre.reader"
+    kill -KILL "$launcher" 2>/dev/null; wait "$launcher" 2>/dev/null
+    [ -z "$detail" ] || break 2
+  done
+done
+cp "$SRC" "$repeat_root/tools/test-run.sh"
+if [ -z "$detail" ]; then report 0 "$label"; else report 1 "$label" "$detail"; fi
+if [ -n "$detail" ]; then
+  skip "$nc_census" "the leg itself failed"; skip "$nc_order" "the leg itself failed"
+  return
+fi
+if [ -z "$census_detail" ]; then report 0 "$nc_census"; else report 1 "$nc_census" "$census_detail"; fi
+if [ -z "$order_detail" ]; then report 0 "$nc_order"; else report 1 "$nc_order" "$order_detail"; fi
+}
+term_grace_dead() { # <pid>: 0 iff gone (or a zombie no one here can reap)
+  [ -n "$1" ] || return 0
+  case $(pstate "$1") in '' | Z*) return 0 ;; *) return 1 ;; esac
+}
+term_grace_cleanup() { # <run dir> <escapee pid file> <reader pid file>
+  local i
+  harness_kill_recorded "$2" "$2.token"
+  [ -s "$3" ] && kill -KILL "$(cat "$3")" 2>/dev/null
+  [ -n "$1" ] || return 0
+  harness_kill_recorded "$1/pgid" "$1/gtoken" group
+  for ((i = 0; i < 100; i++)); do
+    [ -s "$1/pid" ] && ! term_grace_dead "$(cat "$1/pid")" || break
+    sleep 0.1
+  done
+  harness_kill_recorded "$1/pid" "$1/ptoken"
+}
+harness_leg_run '97: a TERMed run publishes its verdict and frees the lock inside the wrappers grace #lifecycle' leg_97
 
 # Leg 52: one place for the numbers. A hip cap is not a literal of its own
 # but its measured budget over its box's slot count, so a change to either
@@ -5173,7 +5375,10 @@ harness_leg_run '40-47: run/start lifecycle #lifecycle' leg_40_47
 # Leg 74: inject a real TERM after fork returns but BEFORE its pid assignment.
 # No seam exists in production: only this fixture copy replaces that expression.
 # The child records its own identity before pausing, so every control survivor
-# is contained even if it never reached the ordinary pgid publication.
+# is contained even if it never reached the ordinary pgid publication. Every
+# copy also cuts the cancellation's lock census (gh-ocannl-1808, leg 97), a
+# second defence that would reap the unmasked child too: the legs pin the
+# mask alone, and the no-mask control still tells it.
 leg_74() {
 case $(uname -s) in MSYS*|MINGW*) fork_posix=0 ;; *) fork_posix=1 ;; esac
 if [ "$fork_posix" = 1 ] && [ "$have_state" = 1 ]; then
@@ -5184,6 +5389,7 @@ if [ "$fork_posix" = 1 ] && [ "$have_state" = 1 ]; then
     awk -v mode="$fork_mode" -v control="$fork_case" '
       /POSIX::sigprocmask/ && control == "no-mask" { dropping=1; next }
       dropping { dropping=0; next }
+      $0 == "    $reap_holders->() if $cancel;" { census++; print "    1;"; next }
       /\$SIG\{\$_\} = "DEFAULT" for qw\(ALRM INT TERM HUP\)/ && control == "inherited-handler" { next }
       /^  \$pid = fork\(\);$/ {
         found++
@@ -5203,10 +5409,10 @@ if [ "$fork_posix" = 1 ] && [ "$have_state" = 1 ]; then
         next
       }
       { print }
-      END { if (found != 1) exit 1 }
+      END { if (found != 1 || census != 1) exit 1 }
     ' "$SRC" >"$life_root/tools/test-run.sh" || {
       cp "$SRC" "$life_root/tools/test-run.sh"
-      harness_abandon "fork: the seam '  \$pid = fork();' is not in $SRC exactly once"
+      harness_abandon "fork: the seam '  \$pid = fork();' or the census line is not in $SRC exactly once"
       return
     }
     rm -f "$life_prefix.ready" "$life_prefix.release"

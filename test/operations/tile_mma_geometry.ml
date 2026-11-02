@@ -41,6 +41,9 @@
    - The cache format: a saved [Tensorize] with a geometry round-trips through its sexp, and one
    without omits the field, so entries written before gh-ocannl-619 keep parsing. *)
 
+(* cc-fp-contract: exact-operands -- quarter, integer and half-step cycles, exact at f32, bf16 and
+   half *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

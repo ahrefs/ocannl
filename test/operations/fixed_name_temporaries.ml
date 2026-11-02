@@ -30,6 +30,9 @@
    logged leg executes on every backend, Metal included: it is the witness that Metal routine
    logging no longer crashes the host (gh-ocannl-1594). *)
 
+(* cc-fp-contract: no-contraction -- the claim compares two threefry draws converted to uniform
+   floats *)
+
 open Base
 module LL = Ir.Low_level
 module Ops = Ir.Ops

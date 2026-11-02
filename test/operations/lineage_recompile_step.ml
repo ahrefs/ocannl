@@ -15,6 +15,9 @@
    [x] holds small integers, [w] eighths, the learning rate is a power of two, and three steps stay
    well inside single precision's mantissa -- so the two agree bitwise whatever schedule computed
    them. *)
+(* cc-fp-contract: exact-operands -- integer inputs, eighth-step weights and a dyadic rate stay
+   exact for the three steps *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

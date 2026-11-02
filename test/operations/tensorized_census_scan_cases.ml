@@ -1,6 +1,9 @@
 (* gh-ocannl-1309: the tensorized-census reader's rule, put to synthesized sources -- each form it
    recognises beside the nearest text it must not read -- and the shipping scanner run on a
    synthetic tree holding a parity-only tensorized claim it must refuse. *)
+(* cc-fp-contract: not-executed -- the bitwise text is synthetic sources for the census scan's label
+   rule *)
+
 open Base
 open Stdio
 module Scan = Test_utils.Tensorized_census_scan

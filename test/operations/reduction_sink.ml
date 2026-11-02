@@ -20,6 +20,9 @@
    accumulations rendered against their cells (the peel census), and be turned off by
    [~reduction_sink:false]; elsewhere it must sink nothing. *)
 
+(* cc-fp-contract: same-shape -- on cc seeded_default sinks nothing, so both sides compile the same
+   kernel *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

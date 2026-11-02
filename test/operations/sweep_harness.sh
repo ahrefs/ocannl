@@ -392,9 +392,12 @@ chmod +x "$fake_bin/opam"
 # The device probe's stand-in for bin/device_props (gh-ocannl-1252; OCANNL_TOOL_SWEEP_DEVICE_PROBE):
 # each query is a line of SWEEP_TEST_PROBE_CALLS (its directory and argv), and the Nth query hangs
 # where SWEEP_TEST_PROBE_HANG_AT lists N, its pid beside the record, as a wedged device's never
-# answers. Every other query answers.
+# answers. Every other query answers. SWEEP_TEST_PROBE_SILENT=1 stands in for a loaded box's
+# start-up outlasting the bound: the query hangs before its first line, recording nothing (a
+# marker rather than a delay, which would only race the polled bound; gh-ocannl-1366).
 cat >"$fake_bin/fake-device-probe" <<'EOF'
 #!/bin/sh
+[ -z "${SWEEP_TEST_PROBE_SILENT:-}" ] || exec sleep 30
 printf '%s %s\n' "$PWD" "$*" >>"$SWEEP_TEST_PROBE_CALLS"
 n=$(grep -c . "$SWEEP_TEST_PROBE_CALLS")
 case " ${SWEEP_TEST_PROBE_HANG_AT:-} " in
@@ -403,6 +406,17 @@ esac
 echo "static.device[0].device_name = fixture ${1#--ocannl_backend=}"
 EOF
 chmod +x "$fake_bin/fake-device-probe"
+# How many device queries a unit's log records, read from the sweep's own record of the probe
+# (device_probe_sh's lines: `sweep: device probe: <b>: ...` after an answer, the indented record
+# in a DEVICE UNHEALTHY refusal) rather than from the stand-in's: a hung query is killed at its
+# bound wherever its start-up has got to, so on a loaded box the stand-in can be killed before its
+# first line runs and record nothing (gh-ocannl-1807), while the sweep records every query it asked.
+probe_queries() { # log
+  grep -cE '^(sweep: device probe: |  )[a-z_]+: (answered in |NO ANSWER within |failed fast |the query could not be run )' "$1" || :
+}
+# One run of the stand-in before any leg bounds it: the first exec of a fresh script pays macOS's
+# assessment of it, which a loaded box stretches -- out of the 1s bound the hang legs set.
+SWEEP_TEST_PROBE_CALLS=/dev/null "$fake_bin/fake-device-probe" --ocannl_backend=warm-up >/dev/null
 # The fake opam's test action: the real probe, under the executable name the
 # fixture records carry.
 cp "$verdict_probe" "$fake_bin/fixture.exe"
@@ -861,6 +875,7 @@ run_sweep_args() {
     "OCANNL_TOOL_SWEEP_DEVICE_PROBE_CAP=${SWEEP_TEST_DEVICE_PROBE_CAP:-}" \
     "SWEEP_TEST_PROBE_CALLS=${SWEEP_TEST_PROBE_CALLS:-$tmp/probe.calls}" \
     "SWEEP_TEST_PROBE_HANG_AT=${SWEEP_TEST_PROBE_HANG_AT:-}" \
+    "SWEEP_TEST_PROBE_SILENT=${SWEEP_TEST_PROBE_SILENT:-}" \
     "OCANNL_TOOL_SWEEP_REPO=$main" \
     "OCANNL_TOOL_SWEEP_STATE=$state")
   # The cancellation controls need the sweep's own pid, and a process group
@@ -1667,23 +1682,47 @@ grep -q '^  m4-max/metal: DEVICE UNHEALTHY, dune not started: a fresh device que
 unhealthy_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 grep -q '^  metal: NO ANSWER within 1s; the query was killed$' "$unhealthy_log"
 grep -q 'journalctl -k' "$unhealthy_log"
-# Asked once, from the worktree's test/config; no test leg started after it.
-[ "$(awk 'END { print NR }' "$probe_calls")" = 1 ]
-grep -q '/test/config --ocannl_backend=metal$' "$probe_calls"
+# Asked once (probe_queries: the stand-in's own record of the hung query is load-dependent); no
+# test leg started after it.
+[ "$(probe_queries "$unhealthy_log")" = 1 ]
 absent '@runtest' < <(tail -n "+$((calls_before + 1))" "$calls")
-probe_query=$(cat "$probe_calls.pid")
-if pid_alive "$probe_query"; then
-  kill -KILL "$probe_query" 2>/dev/null || true
-  printf 'sweep_harness: the wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
-  exit 1
+# The wedged query was killed. Its pid is known only once the stand-in has run its first lines; one
+# killed before that ran nothing that could outlive the bound (the bound KILLs the query's whole
+# group), and the warm-up above keeps that the exception.
+if [ -s "$probe_calls.pid" ]; then
+  probe_query=$(cat "$probe_calls.pid")
+  if pid_alive "$probe_query"; then
+    kill -KILL "$probe_query" 2>/dev/null || true
+    printf 'sweep_harness: the wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
+    exit 1
+  fi
+else
+  printf 'sweep_harness: the wedged query was killed before its stand-in ran (a loaded box)\n' >&2
 fi
+rm -f "$probe_calls.pid"
+# The same refusal when the query is killed before its first line, as a loaded box can make it
+# (gh-ocannl-1807): the sweep's record still counts the one query, where the stand-in's own says
+# nothing -- the control that the count above does not depend on the start-up.
+: >"$probe_calls"
+slow_start=$(SWEEP_TEST_DEVICE_PROBE=$fake_bin/fake-device-probe SWEEP_TEST_DEVICE_PROBE_CAP=1 \
+  SWEEP_TEST_PROBE_SILENT=1 run_sweep_backend metal 2>&1)
+grep -q '^  m4-max/metal: DEVICE UNHEALTHY, dune not started: a fresh device query for metal did not answer within 1s$' \
+  <<<"$slow_start"
+slow_start_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
+[ "$(probe_queries "$slow_start_log")" = 1 ]
+[ ! -s "$probe_calls" ]
+[ ! -e "$probe_calls.pid" ]
 : >"$probe_calls"
 answered=$(SWEEP_TEST_DEVICE_PROBE=$fake_bin/fake-device-probe run_sweep_backend metal 2>&1)
 grep -q 'm4-max/metal: incremental-pass' <<<"$answered"
 absent 'DEVICE UNHEALTHY' <<<"$answered"
 answered_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
 grep -q '^sweep: device probe: metal: answered in ' "$answered_log"
+[ "$(probe_queries "$answered_log")" = 1 ]
+# The query that answered ran to its first line, so it says where it was asked from: the
+# worktree's test/config.
 [ "$(awk 'END { print NR }' "$probe_calls")" = 1 ]
+grep -q '/test/config --ocannl_backend=metal$' "$probe_calls"
 : >"$probe_calls"
 cpu_unprobed=$(SWEEP_TEST_DEVICE_PROBE=$fake_bin/fake-device-probe SWEEP_TEST_PROBE_HANG_AT=1 \
   run_sweep_backend cc 2>&1)
@@ -2295,12 +2334,19 @@ grep -q '^  m4-max/metal: serial rerun: DEVICE UNHEALTHY, no stanza ran: a fresh
 grep -q '^  m4-max/metal: serial rerun: unjudged (exit 69): @test/runtest-pre-diff-probe @test/runtest-serial-probe @test/runtest-serial-alpha @test/runtest-serial-beta @test/runtest$' \
   <<<"$rerun_unhealthy"
 absent -- '-j 1' < <(tail -n "+$((calls_before + 1))" "$calls")
-[ "$(awk 'END { print NR }' "$probe_calls")" = 2 ]
-probe_query=$(cat "$probe_calls.pid")
-if pid_alive "$probe_query"; then
-  kill -KILL "$probe_query" 2>/dev/null || true
-  printf 'sweep_harness: the serial rerun'\''s wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
-  exit 1
+# Asked twice, the unit's query and the rerun's, as the sweep recorded them (probe_queries); the
+# wedged one killed, where its stand-in got far enough to say which it was (the first hang leg).
+rerun_unhealthy_log=$(awk -F '\t' '$3 == "metal" { print $9 }' "$state/history.tsv" | tail -1)
+[ "$(probe_queries "$rerun_unhealthy_log")" = 2 ]
+if [ -s "$probe_calls.pid" ]; then
+  probe_query=$(cat "$probe_calls.pid")
+  if pid_alive "$probe_query"; then
+    kill -KILL "$probe_query" 2>/dev/null || true
+    printf 'sweep_harness: the serial rerun'\''s wedged query (pid %s) outlived its bound\n' "$probe_query" >&2
+    exit 1
+  fi
+else
+  printf 'sweep_harness: the serial rerun'\''s wedged query was killed before its stand-in ran (a loaded box)\n' >&2
 fi
 
 # The per-test cap on the serial rerun and the completion pass (gh-ocannl-1252): a GPU unit's

@@ -1232,6 +1232,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   stand-in delayed 1.5 s before recording reproduced the original failure on the base tree; a
   natural reproduction was not found (mac-studio at load 70, CPU and fresh-exe churn, started it
   within 0.2 s).
+  The same trap reddened `sweep_harness`'s probe legs and the benchmark drivers' capped cells on a
+  loaded macbook-pro (gh-ocannl-1807), fixed by making the start-up irrelevant rather than
+  waiting it out. `sweep_harness` counts a unit's queries from the SWEEP's record of them
+  (`probe_queries`), which a query killed before its first line is still in; only the answered leg
+  reads the stand-in's own record (its directory), and the hung query's pid is judged when the
+  stand-in got to publish it. `SWEEP_TEST_PROBE_SILENT` pins the count against a stand-in that
+  records nothing. In `benchmarks/`, a capped fixture writes its evidence and then `publish_pid`s:
+  `cap_counted_from(pidfile)` (`benchmarks/test/test_cell_group.py`; `started=` on
+  `CellTimeoutTest.run_cell`) holds the wait that carries the cap until the publication, and
+  `interrupt_once_published` replaces an interval timer armed before the spawn. A new capped or
+  interrupted fixture whose test reads what it wrote before the kill goes through one of them.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
@@ -1240,6 +1251,26 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   every `/proc/<pid>/fdinfo`; trusting the name reported `STILL hold` and reaped nothing. Leg 67
   pins it with a lock whose acquirer exited, against the unfiltered census as negative control
   (skipped on a kernel that names nobody, where no census can trust a name).
+- **A cancelled run settles inside the fleet wrappers' 10 s grace** (gh-ocannl-1808).
+  `fleet-worker.sh execution slot` and `bg-run.sh stop` send KILL 10 s after their TERM, so a
+  supervisor that spent 5 s reaping and then up to 30 s in the slowest-actions reader was KILLed
+  with no `exit:` sentinel (the run reads as died) and with a session-escaped dune descendant still
+  holding the worktree lock (gh-ocannl-1727's incident). On INT/TERM/HUP the supervisor now reaps
+  on a short grace (2 s TERM, 1 s for a KILLed leader, 0.5 s for the corpses). It then KILLs every
+  other holder of the lock, found by a census of its own (Linux fdinfo FLOCK rows, otherwise
+  `lsof` openers bounded to 2 s, never itself or its launcher), and only then writes the verdict.
+  Next it closes fd 9, and last, best-effort, removes a `fresh` run's build directory (renamed to
+  `build.discard` before the verdict) and runs the reader on a 3 s bound. `wait` can digest such a
+  run before its slowest-actions record lands. A cancellation that arrives while a normal finish is
+  under way changes no verdict, but cuts the reader short (`slowest-skipped`: cancelled while the
+  reader ran). The cap's own expiry (142) keeps the long order, since no wrapper is counting down
+  then. Only a `run`/`start` supervisor runs the census (`OCANNL_TOOL_TESTRUN_LOCK`), because a
+  repeat coordinator also holds the lock. `tools/test-test-run.sh` leg 97 TERMs a run during
+  `_resolve`, during a TERM-ignoring dune, and during a `fresh` run, each with an escapee. It has
+  two controls: one cuts the census (the lock stays held) and one restores the reader-first order
+  (no verdict within 10 s). Leg 74's fixture copies cut the census too. It is a second defence
+  against the unmasked fork child, and leaving it in would let that leg's legs pass without the
+  mask.
 - **A run directory says which source it ran, as of the launch** (gh-ocannl-992): beside `cmd`,
   `cap`, `wt`, `runs`, `log` and the verdict, `run`/`start`/`repeat` record `head` (the checkout's
   HEAD commit) and `dirty` (its `git status --porcelain`: empty when clean, else one line per
@@ -2358,14 +2389,26 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   partials zero. A fresh device buffer is already zero, so a zero that never runs computes the
   same values and the parity check passes. Prefill each zeroed node with per-cell values clear of 0
   and of what the routine leaves there (`Context.set_values` between compile and run, or the
-  `~seed` of `Ll_test.run_linked`), and claim the prefill differs from the result. A node the
+  `~seed` of `Ll_test.run_linked`), and claim the prefill differs from the result. `run_linked`
+  (so `Ll_test.run` and `execute` too) does this BY DEFAULT (gh-ocannl-1774): every node the
+  routine writes before reading (`Ll_test.written_before_read`: `outputs` less `inputs`, with
+  host-initialized nodes left out) that the seed leaves out and the context holds no value for
+  starts from `Ll_test.prefill`. `~fresh_zero:[(tn, reason)]` opts a node out, and raises on an
+  empty reason or a node the default would not reach. A value the passed context holds is kept,
+  so a run-twice leg that runs on the context the first run returned still reads its results. A root's device buffer outlives the context value it came
+  from, so a leg that needs a buffer no run has written links in a fresh `Context.auto ()` root. The
+  default stops at `run_linked`: a test that drives `Context.run` itself prefills by hand, and a
+  claim that the prefill differs from the result names its own seed. A node the
   schedule mints (the partials) has no host handle: run the idempotent routine twice and read the
   second run. A `Local` or shared-memory node cannot be prefilled at all: put its zero after a write
   in the same routine (`zero_out_local_decl`'s hand-built leg). The prefill must reach the
   transformed arm; a reference that keeps its zeros is indifferent to it. A reference that is a
   plain compile shares every default-on zero transform (`gpu_elide_covered_zeros` on GPU,
   `buffer_aliasing`'s sink when both arms set it), so it is no oracle for that one: use a closed
-  form or the gate-off compile. Prove the leg with `tools/mutation-run.sh` and a drop-one-zero
+  form or the gate-off compile. `default_prefill` is the closed form for the localized-accumulator
+  zero seed: `seed_first_write`'s peel on a GPU backend, `try_localize_serial_reduce` on cc.
+  `schedule_ops`'s matmul twins both take that seed, so they cannot catch a seed that reads the
+  node. Prove the leg with `tools/mutation-run.sh` and a drop-one-zero
   patch; the inventory and its mutants are in lukstafi/ocannl-staging's gh-1625 PR body.
 - A test operand minted from a FLATTENED offset stops discriminating at sizes that divide its
   modulus, and does it while still looking right: `(row * stride + col) mod p` collapses to
@@ -3401,8 +3444,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   hook. The real
   download is deliberately x86_64 Linux/Debian-family-only, since its cc kernels execute on the
   host; `--dry-run` validates and prints the complete staging plan on macOS and other hosts. This is compiler/codegen evidence, not an OS emulator: the
-  GCC patch release is whichever candidate the configured apt indexes serve (the exact version and
-  target are printed and major 13 is enforced), and the clang leg has a Linux cross sysroot rather
+  GCC 13 packages come from an isolated scratch index over Ubuntu 24.04 (noble), the series
+  `ubuntu-latest` runs, so a newer host's own `gcc-13` (resolute's 13.4 on minix) cannot stand in
+  for CI's 13.3 (gh-ocannl-1696; the exact version and target are printed and major 13 is
+  enforced). `--toolchain DIR` keeps that GCC in DIR, staged on first use and reused unfetched
+  afterwards: minix keeps one at `/home/lukstafi/.local/opt/x86_64-linux-gnu-gcc-13`, the census
+  leg is one run per `cc_march_census` piece (`tools/ci-compiler-test.sh --toolchain <dir>
+  @test/operations/runtest-cc_march_census-<piece>`), and a fresh-build-directory run costs
+  seconds to minutes once dune's cache is warm. Run it under the fleet's slot with `--cpu`. The
+  clang leg has a Linux cross sysroot rather
   than the macOS SDK, ABI, linker or runtime. It therefore complements CI and the GPU boxes rather
   than replacing either. Fetches, extraction and the test harness are attached children: an outer
   cancellation forwards `TERM` and reaps the active child before scratch cleanup.
@@ -3653,6 +3703,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   purpose: a `ci.yml` dispatch with `expected_sha` checks out that commit, which may predate any
   new action under `.github/actions/`, so a step that `uses:` one fails the red-span bisection of
   older commits.
+- **A Linux CI job that fills its disk is stopped, not left to hang** (gh-ocannl-1771). On a full
+  disk dune does not fail: run 41203731123 (attempt 1) printed `dune_trace_write(): No space left on
+  device` three minutes into an ubuntu main shard and then sat, `dune` and its `tee` alive, until the
+  45-minute ceiling cancelled it. `ci.yml`'s step `Free disk space and start the disk watchdog
+  (Linux)` deletes the preinstalled toolchains nothing uses (Android, .NET, GHC, CodeQL) in the
+  background and leaves a watchdog polling free space every 5s; under a 1 GiB floor it kills every
+  dune from then on, and `Report the disk headroom (Linux)` (always run) prints the end headroom and
+  the lowest reading, and fails with `::error title=disk space::` on a trip. The tell of a trip: that
+  annotation, and a build step ending in a killed dune. The watchdog's state is in `/dev/shm`, and
+  its output is detached, or the step would wait on it; `test/operations/ci_matrix.sh` runs both
+  steps against stub `df`/`sudo`/`pkill`; a dispatched drill that filled a shard's disk mid-build
+  (run 41476763884) tripped 7s after the fill and ended the job in 4 minutes. Runner disks vary:
+  that drill's runner started with 86 GB free of 145 GB, so the ENOSPC run's must have been a far
+  smaller one. macOS and Windows jobs have no watchdog (no ENOSPC seen there).
 - Where this repository PARSES opam's output, it freezes the format with `--cli=2.1` rather than
   tracking opam — `.github/actions/pin-revisions/resolve.sh` does it for both `opam show --raw
   --sort` and `opam pin list`. Re-verified against a real opam 2.6.0 (2026-09-17): the definition

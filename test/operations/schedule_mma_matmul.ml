@@ -21,6 +21,9 @@
    and fp8 (inline-PTX mma.sync) combinations. The negative check pins Tensorize's pattern
    discipline. *)
 
+(* cc-fp-contract: exact-operands -- dyadic or derived-exact operands; the full-mantissa leg has an
+   explicit fma on both sides *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

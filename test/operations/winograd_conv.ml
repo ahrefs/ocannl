@@ -34,6 +34,9 @@
    symbol (not separable) is left alone, and an accumulation into a destination holding nonzero
    values keeps them (the rewrite accumulates, it does not overwrite). *)
 
+(* cc-fp-contract: exact-operands -- bounded integer fixtures with dyadic transforms, every sum
+   exact in f32 *)
+
 open Base
 open Stdio
 open Ocannl
