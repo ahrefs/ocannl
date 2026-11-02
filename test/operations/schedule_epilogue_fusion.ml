@@ -291,8 +291,8 @@ let () =
      this file's header: the two-kernel form is not expressible as one kernel here, and fusion is
      what makes whole-routine sketches apply — so every seed is a twin (gh-ocannl-632). On the C
      backends both flavors enumerate; the unfused one loses only the CPU tensorized shapes binding a
-     hardware dimension, which the tail would leave uncovered (gh-ocannl-1561), and keeps the
-     all-serial ones. *)
+     hardware dimension, which it excludes beside the tail as search economy (gh-ocannl-1609), and
+     keeps the all-serial ones. *)
   (match !reports with
   | [ r ] ->
       let fused = r.Autotune.epilogue_sketch_candidates in

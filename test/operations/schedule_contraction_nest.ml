@@ -246,11 +246,12 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
   in
   let cpu_seeds = unfused_seeds ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt in
   let cpu_valid, cpu_invalid = constructs_and_validates ~tag ~what:"CPU" cpu_seeds opt in
-  (* The CPU pipelines give a companion nest no geometry, so the shapes binding a hardware dimension
-     -- the pool-parallel Grid shapes and the whole-triple form's Workgroup lane -- cannot build
-     beside one. They used to be seeded and decline at validation; since gh-ocannl-1561 the family
-     tree refutes them at seeding, naming the companion, so every seeded CPU seed validates on every
-     leg, and the companion leg finds the refutation in the tree instead. *)
+  (* The shapes binding a hardware dimension -- the pool-parallel Grid shapes and the whole-triple
+     form's Workgroup lane -- used to be seeded beside a companion and decline at validation (before
+     the fork-join validator, gh-ocannl-1458); gh-ocannl-1561 refuted them at seeding, and since
+     gh-ocannl-1609 the family tree excludes them as search economy (valid on the fork-join model),
+     naming the companion. Every seeded CPU seed validates on every leg, and the companion leg finds
+     the exclusion in the tree instead. *)
   (* Quantified over the whole CPU family (gh-ocannl-729). The membership test comes first so that
      [binds_hardware], which re-applies the schedule, runs only on the declines. *)
   p_none (tag ^ ": every CPU seed binding no hardware dimension validates") cpu_seeds ~f:(fun q ->
@@ -258,15 +259,16 @@ let leg ~tag ~ko_extents ~nk ?(companion = false) ~build () =
   p_empty (tag ^ ": every CPU seed validates") ~over:cpu_seeds cpu_invalid;
   (* Built under no-limits on a GPU backend, the CPU family has no tensorized shapes to refute. *)
   if companion then
-    in_legf ~leg:cpu_leg "%s: the seeding refutes the hardware-binding CPU shapes on the companion"
-      tag (fun label ->
+    in_legf ~leg:cpu_leg
+      "%s: the seeding excludes the hardware-binding CPU shapes beside the companion" tag
+      (fun label ->
         p label
           (match
              fst (Autotune.family_seeding ~is_gpu:false ~is_cpu:true ~limits:cpu_limits opt)
            with
           | Autotune.Seeding_matmul { tree; _ } ->
-              List.exists (Ir.Schedule_space.refutations tree) ~f:(fun (_, w) ->
-                  String.is_substring w ~substring:"gh-ocannl-1561")
+              List.exists (Ir.Schedule_space.exclusions tree) ~f:(fun (_, w) ->
+                  String.is_substring w ~substring:"gh-ocannl-1609")
           | Autotune.Seeding_conv _ | Autotune.Seeding_none -> false));
   (* Claims, in [leg], that every seed of the family ran and matched; returns the seeds whose
      routine rendered tensorized per its mma census (gh-ocannl-1283), forced only where [leg] is

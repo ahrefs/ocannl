@@ -1835,31 +1835,24 @@ let matmul_coverage_witness ~(opt : LL.optimized) ~(fused : bool) (site : matmul
   | Ok _ -> None
   | Error why -> Some (Printf.sprintf "GPU matmul companion coverage (gh-521): %s" why)
 
-(* The CPU analog of the rule above, for the CPU tensorized flavors that bind a hardware dimension
-   (gh-ocannl-1561): the whole-triple form's [Workgroup] lane — the zeroing's column loop and the
-   [Tensorize] lane at the full column extent [m_nj], so active at every seeded extent — plus its
-   [Grid] row split under [sk_bm > 0], and the packed Grid shapes' row-block loop (at least two
-   blocks, so active). The builders annotate only the accumulation nest and the output zero they
-   expand; they give companions no geometry, so where a nest writing a materialized node remains
-   beside them, [validate_parallel] rejects the candidate at every compile (every hardware index
-   would execute the companion). The packed Serial and Hoisted shapes bind nothing (all-serial
-   loops, a unit lane) and stay unaffected. The demand is the GPU rule's, with the fused flavor's
-   epilogue tail skipped (the fusion relocates it into the accumulation nest) and a whole-node zero
-   of the output excluded; its emptiness, not an alignment, decides, since no CPU builder gives a
-   companion the site's geometry. Before this, a whole-routine search over a matmul with any
-   materialized companion -- footprint_diagonal's product read through its diagonal, in the
-   materialize-all arm -- offered [W_sketch[mma-cpu 0x0x0]] (the whole-triple form: [0] is the
-   unsplit row, not a size) and paid a failed compile for it. The [F_sketch] granularity, where
-   fission leaves the matmul alone in its segment, keeps the form. [None] when nothing would be left
-   uncovered, else the companions' materialized writes. *)
-let cpu_mma_companion_writes ~(opt : LL.optimized) ~(fused : bool) (site : matmul_site) :
-    string option =
-  match
-    companion_demand ~site_syms:(matmul_site_chain site)
-      ~skip:(if fused then epilogue_tail_loop_syms ~target:site.m_d opt else [])
-      ~expanded_zeros:(if site.m_zeroed then [ site.m_d ] else [])
-      opt
-  with
+(* {3 CPU companions under the fork-join model (gh-ocannl-1458, gh-ocannl-1609)}
+
+   The C backends run each pool-parallel [Grid] loop as one synchronous dispatch joined before the
+   next statement, and everything outside [Grid] loops once, on the calling thread
+   ([Low_level.validate_parallel ~fork_join], which the cc compile path and the tuner's validation
+   both pass). A companion nest beside a CPU sketch site therefore needs no alignment with the
+   site's geometry: a serial companion runs once, after the site's dispatch joined, and a companion
+   with a [Grid] loop of its own is its own dispatch. The GPU rule above ([companion_geometry]) is
+   the one that needs alignment, because launch dimensions are kernel-global there.
+
+   [cpu_companion_writes]: the companions a CPU sketch site leaves beside it — the GPU rule's demand
+   ({!companion_demand}: materialized writes, the fused flavor's epilogue tail skipped, the site's
+   own expanded zero excluded) — as their materialized writes, [None] when there are none. It scopes
+   the policy exclusion of the CPU flavors whose site binds a hardware dimension
+   ({!cpu_companion_exclusion}); it is no legality verdict. *)
+let cpu_companion_writes ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
+    ~(expanded_zeros : Ir.Tnode.t list) (opt : LL.optimized) : string option =
+  match companion_demand ~site_syms ~skip ~expanded_zeros opt with
   | [] -> None
   | needs ->
       let plc = opt.LL.optimize_ctx.LL.placements in
@@ -1871,14 +1864,65 @@ let cpu_mma_companion_writes ~(opt : LL.optimized) ~(fused : bool) (site : matmu
               (List.dedup_and_sort ~compare:String.compare
                  (List.map needs ~f:(materialized_writes ~plc)))))
 
-(* The refutation of a CPU tensorized flavor whose [what] binds a hardware dimension, given
-   {!cpu_mma_companion_writes}' verdict. *)
-let cpu_mma_companion_witness ~what companions =
-  Option.map companions ~f:(fun c ->
-      Printf.sprintf
-        "CPU matmul companion coverage (gh-ocannl-1561): %s binds a hardware dimension, and %s \
-         outside it, which validate_parallel rejects"
-        what c)
+(* The CPU companion geometry (gh-ocannl-1609): the default CPU preset's own per-nest geometry for
+   each companion nest — the [Grid] [Retype]s of [Sched.default_cpu ~min_work:0] whose loop belongs
+   to a statement of the companion demand. One hazard-proven loop per nest, or none: a companion the
+   preset cannot prove stays serial, which the fork-join model admits. Ungated, like the tuner's
+   [Search] presets and [conv_aligned_grid]: the renderer's launch floor ([cc_grid_min_updates])
+   still renders a dispatch too small to pay serially.
+
+   Sound for any site geometry on a fork-join renderer: the proof is over the companion's OWN
+   iterations, on a statement the site's ops do not touch (they rewrite the site nest and the tiles
+   they mint; the fused flavor's tail, which [Fuse_epilogue] moves, is [skip]ped), and statements
+   are ordered by the joins. On [validate_parallel]'s side the companion write under its own [Grid]
+   loop must cover every active slot: it covers [Grid] slot 0, so a site that binds [Grid] slot 0
+   alone with a unit [Tensorize] lane (the packed Grid shapes, the conv Grid and row-panel shapes)
+   can take it, while the whole-triple form's [Workgroup] lane at [m_nj] is an active slot no
+   companion loop covers — that form leaves its companions serial. *)
+let cpu_companion_geometry ~(site_syms : (Idx.symbol * int) list) ~(skip : Idx.symbol list)
+    ~(expanded_zeros : Ir.Tnode.t list) (opt : LL.optimized) : Sched.schedule =
+  match companion_demand ~site_syms ~skip ~expanded_zeros opt with
+  | [] -> []
+  | needs ->
+      let syms = List.concat_map needs ~f:nest_loop_syms in
+      List.filter (Sched.default_cpu ~min_work:0 opt) ~f:(function
+        | Sched.Retype { axis; ty = LL.Grid } -> List.mem syms axis ~equal:Idx.equal_symbol
+        | _ -> false)
+
+(* The matmul site's companion query, one spelling for the builder and the tree. *)
+let matmul_cpu_companion_args ~(opt : LL.optimized) ~(fused : bool) (site : matmul_site) =
+  ( matmul_site_chain site,
+    (if fused then epilogue_tail_loop_syms ~target:site.m_d opt else []),
+    if site.m_zeroed then [ site.m_d ] else [] )
+
+let cpu_mma_companion_writes ~(opt : LL.optimized) ~(fused : bool) (site : matmul_site) :
+    string option =
+  let site_syms, skip, expanded_zeros = matmul_cpu_companion_args ~opt ~fused site in
+  cpu_companion_writes ~site_syms ~skip ~expanded_zeros opt
+
+let cpu_mma_companion_geometry ~(opt : LL.optimized) ~(fused : bool) (site : matmul_site) :
+    Sched.schedule =
+  let site_syms, skip, expanded_zeros = matmul_cpu_companion_args ~opt ~fused site in
+  cpu_companion_geometry ~site_syms ~skip ~expanded_zeros opt
+
+(* The policy exclusion of a CPU flavor whose site binds a hardware dimension, beside companions
+   (gh-ocannl-1609). Before the fork-join validator (gh-ocannl-1458) such a flavor failed
+   [validate_parallel] at every compile and the tree refuted it (gh-ocannl-1561); on the fork-join
+   model it is valid — its companions run serially or take {!cpu_companion_geometry} — so it is
+   [Excluded], a search-economy verdict a driver may lift, with [child] its payload. Companion-free
+   sites are untouched. *)
+let cpu_companion_witness_prefix = "CPU companions (gh-ocannl-1609):"
+
+let cpu_companion_exclusion ~what companions (child : unit -> ('l, 'a) Sspace.child) =
+  match companions with
+  | None -> child ()
+  | Some c ->
+      Sspace.Excluded
+        ( Printf.sprintf
+            "%s %s binds a hardware dimension beside %s; valid on the fork-join model, excluded as \
+             search economy until a measurement shows it winning"
+            cpu_companion_witness_prefix what c,
+          lazy (child ()) )
 
 (* Chain-position roles matching [matmul_site_chain]: row/column positions get the pipeline's
    geometry; batch positions stay [Serial] by default (serial loops above hardware loops are legal:
@@ -2700,35 +2744,29 @@ let conv_coverage_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_sit
   | Ok _ -> None
   | Error why -> Some (Printf.sprintf "GPU conv companion coverage (gh-521): %s" why)
 
-(* The CPU conv pipeline's flavors that Grid-type a loop of the conv nest itself — the Grid flavor
-   and the row panels, wherever the segment holds at most one statement besides the conv (more, and
-   they adopt the preset's whole-segment geometry, [conv_aligned_grid]) — leave every other nest
-   outside the only annotated loop. [validate_parallel]'s hardware-thread mode rejects such a nest
-   that writes a materialized node, so the flavor is refuted where one remains. On the C backends
-   this is now conservative: their fork-join mode (gh-ocannl-1458) runs a nest outside every [Grid]
-   loop once, on the calling thread, and admits it — relaxing this refutation is left to a follow-up
-   with its own conv tests, since it widens the tuner's search space. The demand: the companion
-   demand, with the fused flavor's tail skipped (the fusion relocates it under the Grid loop) and a
-   whole-node zero of the output excluded (the pipeline expands and annotates it). Before
-   gh-ocannl-697 the unfused Grid flavor of a conv+tail segment was proposed and failed validation
-   at every compile, its fused twin the only survivor. *)
-let conv_direct_grid_witness ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) :
+(* The CPU conv pipeline's direct flavors — the Grid flavor and the row panels where the segment
+   holds at most one statement besides the conv (more, and they adopt the preset's whole-segment
+   geometry, [conv_aligned_grid]) — Grid-type a loop of the conv nest itself, slot 0, with a unit
+   [Tensorize] lane. Their companions: the companion demand, with the fused flavor's tail skipped
+   (the fusion relocates it under the Grid loop) and a whole-node zero of the output excluded (the
+   pipeline expands and annotates it). Before the fork-join validator (gh-ocannl-1458) a
+   materialized companion outside the Grid loop failed [validate_parallel] and the flavor was
+   refuted (gh-ocannl-697); on the fork-join model the companions take {!cpu_companion_geometry} and
+   the flavor is valid ({!cpu_companion_exclusion}, gh-ocannl-1609). *)
+let conv_cpu_companion_args ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) =
+  ( conv_site_chain site,
+    (if fused then conv_tail_loop_syms site opt else []),
+    if site.c_zeroed then [ site.c_d ] else [] )
+
+let conv_direct_companion_writes ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) :
     string option =
-  match
-    companion_demand ~site_syms:(conv_site_chain site)
-      ~skip:(if fused then conv_tail_loop_syms site opt else [])
-      ~expanded_zeros:(if site.c_zeroed then [ site.c_d ] else [])
-      opt
-  with
-  | [] -> None
-  | needs ->
-      let plc = opt.LL.optimize_ctx.LL.placements in
-      Some
-        (Printf.sprintf
-           "the conv nest's own Grid loop leaves %d companion nest(s) writing materialized %s \
-            outside it, which validate_parallel rejects"
-           (List.length needs)
-           (String.concat ~sep:"; " (List.map needs ~f:(materialized_writes ~plc))))
+  let site_syms, skip, expanded_zeros = conv_cpu_companion_args ~opt ~fused site in
+  cpu_companion_writes ~site_syms ~skip ~expanded_zeros opt
+
+let conv_direct_companion_geometry ~(opt : LL.optimized) ~(fused : bool) (site : conv_site) :
+    Sched.schedule =
+  let site_syms, skip, expanded_zeros = conv_cpu_companion_args ~opt ~fused site in
+  cpu_companion_geometry ~site_syms ~skip ~expanded_zeros opt
 
 (* Whole-segment Grid alignment for the conv pipeline on merged segments (gh-ocannl-493): the
    pipeline's own [Retype] covers only the conv nest, so on an aligned-merged segment (lenet's
@@ -2769,10 +2807,11 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
    fragment resident across the whole kernel-window chain (gh-ocannl-480, gh-ocannl-501: one
    fragment init/store per output tile). With [sk_grid], the outermost output loop is [Grid]-typed
    and pool-parallelizes; a whole-node [Zero_out] of the output then expands with the matching
-   geometry. On a segment with more than one companion statement the grid ops come from
-   [conv_aligned_grid] instead, so every companion nest is annotated with the aligned whole-segment
-   geometry (such segments carry no [Zero_out] — the preset's analysis bails on those, and the seeds
-   gate accordingly).
+   geometry, and a remaining companion statement (the unfused tail) takes its own per-nest geometry
+   ({!conv_direct_companion_geometry}, gh-ocannl-1609; the row-panel flavor alike). On a segment
+   with more than one companion statement the grid ops come from [conv_aligned_grid] instead, so
+   every companion nest is annotated with the aligned whole-segment geometry (such segments carry no
+   [Zero_out] — the preset's analysis bails on those, and the seeds gate accordingly).
 
    With [sk_bm > 0] (gh-ocannl-500) the GEMM row is split into panels of [sk_bm] rows before the
    reorder — cache-blocked GEBP-style panels, the conv analog of [cpu_mma_sketch_schedule]'s
@@ -2829,7 +2868,7 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
         match conv_aligned_grid site opt with
         | Some sched -> (drop_tail_retypes sched, LL.Serial)
         | None -> refuse "Autotune conv sketch: companion nests do not align for Grid"
-      else ([], LL.Grid)
+      else (conv_direct_companion_geometry ~opt ~fused:sk_epilogue site, LL.Grid)
     in
     let sp_row, row_o, row_i =
       Sched.split ~axis:site.c_row ~factor:sk_bm ~outer:panel_axis ~inner:LL.Serial
@@ -2867,7 +2906,9 @@ let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
                 | z0 :: _ -> [ ez; Sched.Retype { axis = z0; ty = LL.Grid } ]
                 | [] -> [ ez ]
             in
-            (zops, [ Sched.Retype { axis = outermost; ty = LL.Grid } ])
+            ( zops,
+              Sched.Retype { axis = outermost; ty = LL.Grid }
+              :: conv_direct_companion_geometry ~opt ~fused:sk_epilogue site )
     in
     zops @ grid_ops
     @ reorder_swaps ~current:site.c_loops ~target:loop_syms
@@ -3033,7 +3074,13 @@ let family_schedule ~accum_prec ~p (opt : LL.optimized) : Sched.schedule =
           let sched =
             if p.sk_mma then
               if p.sk_gpu then gpu_mma_sketch_schedule ~opt site p
-              else if p.sk_bk > 0 then cpu_mma_pack_sketch_schedule site p
+              else if p.sk_bk > 0 then
+                (* The packed Grid shapes bind [Grid] slot 0 alone (a unit lane), so their
+                   companions take the default preset's per-nest geometry (gh-ocannl-1609); the
+                   whole-triple form's companions stay serial ({!cpu_companion_geometry}). *)
+                cpu_mma_pack_sketch_schedule site p
+                @
+                if p.sk_grid then cpu_mma_companion_geometry ~opt ~fused:p.sk_epilogue site else []
               else cpu_mma_sketch_schedule site p
             else if p.sk_gpu then gpu_sketch_schedule ~accum_prec ~opt site p
             else cpu_sketch_schedule ~accum_prec site p
@@ -4135,24 +4182,16 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
             in
             let whole_child =
               refute_unless
-                ([
-                   ( site.m_row_stride = 1,
-                     strided_row_in_place_witness site ~what:"the whole-triple form" );
-                   ( not tb_in_place,
-                     "stored B is transposed: whole-triple reads B in place, which the register \
-                      tiling statically declines" );
-                   ( lanes_fit site.m_nj,
-                     Printf.sprintf "column extent n=%d is below one vector of lanes (%d)" site.m_nj
-                       lanes );
-                 ]
-                @
-                (* Every [bm] of the form keeps the lane, so the verdict is the form's. *)
-                match
-                  cpu_mma_companion_witness ~what:"the whole-triple form's Workgroup lane"
-                    (Lazy.force cpu_companions)
-                with
-                | Some w -> [ (false, w) ]
-                | None -> [])
+                [
+                  ( site.m_row_stride = 1,
+                    strided_row_in_place_witness site ~what:"the whole-triple form" );
+                  ( not tb_in_place,
+                    "stored B is transposed: whole-triple reads B in place, which the register \
+                     tiling statically declines" );
+                  ( lanes_fit site.m_nj,
+                    Printf.sprintf "column extent n=%d is below one vector of lanes (%d)" site.m_nj
+                      lanes );
+                ]
                 (fun () ->
                   match site.m_tb with
                   | None ->
@@ -4163,7 +4202,12 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                       Sspace.Refuted
                         "stored B has no role symbol on its minor axis: whole-triple reads B in \
                          place and cannot satisfy Tensorize's role check"
-                  | Some _ -> subt (fun () -> whole ()))
+                  | Some _ ->
+                      (* Every [bm] of the form keeps the [Workgroup] lane at [m_nj], an active slot
+                         no companion loop covers, so the form's companions stay serial — valid on
+                         the fork-join model — and the exclusion is the form's. *)
+                      cpu_companion_exclusion ~what:"the whole-triple form's Workgroup lane"
+                        (Lazy.force cpu_companions) (fun () -> subt (fun () -> whole ())))
             in
             (* Cache-blocked packed composition ([cpu_mma_pack_sketch_schedule]; [bk > 0] selects
                it): [bn = 0] = unsplit column panel. The packed tiles are function-scope stack
@@ -4237,15 +4281,14 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                       tiles_bytes ))
               in
               (* What refutes every Grid shape whatever its geometry: a configuration that renders
-                 Grid loops serially, or a companion the row-block loop would leave uncovered
-                 ({!cpu_mma_companion_writes}). *)
-              let grid_refutation =
-                lazy
-                  (match Lazy.force cpu_grid_rendering_disabled with
-                  | Some _ as w -> w
-                  | None ->
-                      cpu_mma_companion_witness ~what:"the packed Grid shape's row-block loop"
-                        (Lazy.force cpu_companions))
+                 Grid loops serially. *)
+              let grid_refutation = Lazy.force cpu_grid_rendering_disabled in
+              (* Beside companions every Grid shape is excluded alike ({!cpu_companion_exclusion});
+                 the payload is the shape's own judgment, where the companions take
+                 {!cpu_companion_geometry}. *)
+              let companion_excluded child =
+                cpu_companion_exclusion ~what:"the packed Grid shape's row-block loop"
+                  (Lazy.force cpu_companions) child
               in
               let grid_ok p = blocks_of site.m_ni p.sk_bm >= 2 in
               let too_few_blocks p =
@@ -4338,8 +4381,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                     else Sspace.Refuted no_constant );
                   ( Family_decision.Packing_shape `Hoisted_grid,
                     if not any_hoistable then Sspace.Refuted no_constant
-                    else if Option.is_some (Lazy.force grid_refutation) then
-                      Sspace.Refuted (Option.value_exn (Lazy.force grid_refutation))
+                    else if Option.is_some grid_refutation then
+                      Sspace.Refuted (Option.value_exn grid_refutation)
                     else if site.m_row_stride > 1 then
                       (* A strided-row site's A is never [site_hoistable], so this shape omits its
                          stage. *)
@@ -4364,6 +4407,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                              reads non-hoistable B in place and cannot satisfy Tensorize's role \
                              check")
                     else
+                      companion_excluded @@ fun () ->
                       subt (fun () ->
                           geoms ~f:(fun p full_div _ ->
                               if
@@ -4384,25 +4428,28 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                 | None -> leaf (with_packing_shape `Hoisted_grid p))) );
                   ( Family_decision.Packing_shape `Hoisted_grid_pack_rest,
                     if not any_hoistable then Sspace.Refuted no_constant
-                    else if Option.is_some (Lazy.force grid_refutation) then
-                      Sspace.Refuted (Option.value_exn (Lazy.force grid_refutation))
+                    else if Option.is_some grid_refutation then
+                      Sspace.Refuted (Option.value_exn grid_refutation)
                     else if site_hoistable site site.m_a && site_hoistable site site.m_b then
-                      Sspace.Excluded
-                        ( "both operands are hoistable: nothing is left to pack in-kernel, the \
-                           shape degenerates to hoisted-grid",
-                          lazy
-                            (subt (fun () ->
-                                 geoms ~f:(fun p _ _ ->
-                                     if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
-                                     else
-                                       match
-                                         over_chunk_cap ~shape:`Hoisted_grid_pack_rest ~what:""
-                                           ~tiles:0 p
-                                       with
-                                       | Some w -> Sspace.Refuted w
-                                       | None -> leaf (with_packing_shape `Hoisted_grid_pack_rest p))))
-                        )
+                      companion_excluded (fun () ->
+                          Sspace.Excluded
+                            ( "both operands are hoistable: nothing is left to pack in-kernel, the \
+                               shape degenerates to hoisted-grid",
+                              lazy
+                                (subt (fun () ->
+                                     geoms ~f:(fun p _ _ ->
+                                         if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
+                                         else
+                                           match
+                                             over_chunk_cap ~shape:`Hoisted_grid_pack_rest ~what:""
+                                               ~tiles:0 p
+                                           with
+                                           | Some w -> Sspace.Refuted w
+                                           | None ->
+                                               leaf (with_packing_shape `Hoisted_grid_pack_rest p))))
+                            ))
                     else
+                      companion_excluded @@ fun () ->
                       subt (fun () ->
                           geoms ~f:(fun p _ _ ->
                               let bn_eff = if p.sk_bn = 0 then site.m_nj else p.sk_bn in
@@ -4441,18 +4488,21 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                             | Some w -> Sspace.Refuted w
                             | None -> leaf (with_packing_shape `Grid_pack_rest p))
                     in
-                    if Option.is_some (Lazy.force grid_refutation) then
-                      Sspace.Refuted (Option.value_exn (Lazy.force grid_refutation))
-                    else if any_hoistable then
-                      Sspace.Excluded
-                        ( "a hoistable operand exists: the hoisted shapes cover the one-dispatch \
-                           role without per-chunk re-packing",
-                          lazy (subt judged) )
-                    else subt judged );
+                    if Option.is_some grid_refutation then
+                      Sspace.Refuted (Option.value_exn grid_refutation)
+                    else
+                      companion_excluded @@ fun () ->
+                      if any_hoistable then
+                        Sspace.Excluded
+                          ( "a hoistable operand exists: the hoisted shapes cover the one-dispatch \
+                             role without per-chunk re-packing",
+                            lazy (subt judged) )
+                      else subt judged );
                   ( Family_decision.Packing_shape `Grid,
-                    match Lazy.force grid_refutation with
+                    match grid_refutation with
                     | Some w -> Sspace.Refuted w
                     | None ->
+                        companion_excluded @@ fun () ->
                         subt (fun () ->
                             geoms ~f:(fun p _ _ ->
                                 (* The per-row-block A~ tile privatizes per chunk; the read-only B~
@@ -4632,7 +4682,7 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
     fun ~fused:f -> Lazy.force (if f then fused else unfused)
   in
   let gpu_coverage = flavor_indexed (fun ~fused -> conv_coverage_witness ~opt ~fused site) in
-  let direct_grid = flavor_indexed (fun ~fused -> conv_direct_grid_witness ~opt ~fused site) in
+  let direct_grid = flavor_indexed (fun ~fused -> conv_direct_companion_writes ~opt ~fused site) in
   let leaf p =
     match launch_geometry_refutation ~limits (conv_launch_geometry site p) with
     | Some witness -> Sspace.Refuted witness
@@ -4760,19 +4810,20 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                Grid"
               n_real
           in
-          (* Grid flavors need every materialized write in the routine covered by the Grid axis
-             ([validate_parallel]), and the conv pipeline's own [Retype] only annotates the conv
-             nest: proposed when the conv statement is alone — or has exactly one companion
-             statement, the would-be epilogue tail, whose fused twin relocates the tail write under
-             the Grid loop. Segments with more companions (an aligned-merged segment, e.g. lenet's
-             conv+bias/relu+pooling) are proposed when the default preset's aligned cross-nest
-             analysis Grid-annotates the whole segment ([conv_aligned_grid]) — the pipeline then
-             adopts that whole-segment geometry, and its fused twin omits the preset [Retype] on the
-             tail nest the fusion consumes (fuse-before-annotate, gh-ocannl-501). *)
-          (* At most one companion statement: the builder Grid-types the conv nest's own loop, so
-             the flavor's companion demand must be empty ([conv_direct_grid_witness]). *)
+          (* Grid flavors: the conv pipeline's own [Retype] annotates the conv nest. At most one
+             statement beside the conv (the would-be epilogue tail, which the fused twin relocates
+             under the Grid loop) is the direct form: the companion, if one remains, takes its own
+             per-nest geometry ({!conv_direct_companion_geometry}) — valid on the fork-join model,
+             and excluded as search economy where a companion remains ([direct_grid],
+             {!cpu_companion_exclusion}, gh-ocannl-1609). Segments with more companions (an
+             aligned-merged segment, e.g. lenet's conv+bias/relu+pooling) are proposed when the
+             default preset's analysis Grid-annotates the conv nest's outermost loop
+             ([conv_aligned_grid]) — the pipeline then adopts that whole-segment geometry, and its
+             fused twin omits the preset [Retype] on the tail nest the fusion consumes
+             (fuse-before-annotate, gh-ocannl-501). *)
           let direct p =
-            match direct_grid ~fused with Some w -> Sspace.Refuted w | None -> leaf p
+            cpu_companion_exclusion ~what:"the conv nest's own Grid loop" (direct_grid ~fused)
+              (fun () -> leaf p)
           in
           let grid =
             if not outer_ok then Sspace.Refuted "no outer output loop of extent at least 2"
@@ -5434,6 +5485,24 @@ let lift_pad_waste (tree : family_tree) : family_tree =
         Sspace.Choice { level; children = List.map children ~f:(fun (lbl, c) -> (lbl, child_f c)) }
   and child_f = function
     | Sspace.Excluded (w, _) as c when String.is_prefix w ~prefix:pad_waste_witness_prefix ->
+        child_f (Sspace.lift_excluded c)
+    | Sspace.Child sub -> Sspace.Child (lazy (tree_f (Lazy.force sub)))
+    | Sspace.Unknown (w, sub) -> Sspace.Unknown (w, lazy (tree_f (Lazy.force sub)))
+    | (Sspace.Excluded _ | Sspace.Refuted _) as c -> c
+  in
+  tree_f tree
+
+(* gh-ocannl-1609: lift every CPU-companion exclusion ({!cpu_companion_exclusion}) in a family tree,
+   matmul or conv, as [lift_pad_waste] lifts pad waste: laziness preserved, a lifted branch still
+   subject to legality, other policies' exclusions (nested ones included) kept. Its leaves are the
+   flavors the fork-join model admits beside companions. *)
+let lift_cpu_companions (tree : family_tree) : family_tree =
+  let rec tree_f = function
+    | Sspace.Leaf _ as l -> l
+    | Sspace.Choice { level; children } ->
+        Sspace.Choice { level; children = List.map children ~f:(fun (lbl, c) -> (lbl, child_f c)) }
+  and child_f = function
+    | Sspace.Excluded (w, _) as c when String.is_prefix w ~prefix:cpu_companion_witness_prefix ->
         child_f (Sspace.lift_excluded c)
     | Sspace.Child sub -> Sspace.Child (lazy (tree_f (Lazy.force sub)))
     | Sspace.Unknown (w, sub) -> Sspace.Unknown (w, lazy (tree_f (Lazy.force sub)))

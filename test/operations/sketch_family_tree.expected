@@ -419,19 +419,26 @@ tree leaves = flat enumeration: true
 == companion-reduction cpu: 12 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --
-  fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple: CPU matmul companion coverage (gh-ocannl-1561): the whole-triple form's Workgroup lane binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid: CPU matmul companion coverage (gh-ocannl-1561): the packed Grid shape's row-block loop binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest: CPU matmul companion coverage (gh-ocannl-1561): the packed Grid shape's row-block loop binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest: CPU matmul companion coverage (gh-ocannl-1561): the packed Grid shape's row-block loop binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
-  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid: CPU matmul companion coverage (gh-ocannl-1561): the packed Grid shape's row-block loop binds a hardware dimension, and 2 companion nest(s) writing materialized cred outside it, which validate_parallel rejects
   fusion=fused: Schedule.Fuse_epilogue: the tail is not the sole consumer: a later statement mentions n14
 -- excluded --
+  fusion=unfused > pipeline=tensorized > tensorized-form=whole-triple: CPU companions (gh-ocannl-1609): the whole-triple form's Workgroup lane binds a hardware dimension beside 2 companion nest(s) writing materialized cred; valid on the fork-join model, excluded as search economy until a measurement shows it winning
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn0 bk256: pad waste: padding k=64 to 256 does 4.00x the site's work, 4.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm128 bn128 bk128: pad waste: padding m=64 to 128, n=64 to 128, k=64 to 128 does 8.00x the site's work, 8.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=serial > geometry=bm64 bn128 bk256: pad waste: padding n=64 to 128, k=64 to 256 does 8.00x the site's work, 8.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted > geometry=bm64 bn0 bk256: pad waste: padding k=64 to 256 does 4.00x the site's work, 4.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted > geometry=bm128 bn128 bk128: pad waste: padding m=64 to 128, n=64 to 128, k=64 to 128 does 8.00x the site's work, 8.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
   fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted > geometry=bm64 bn128 bk256: pad waste: padding n=64 to 128, k=64 to 256 does 8.00x the site's work, 8.00x the 1.00x of this menu's least-padded geometry, at or above the 2x search-economy threshold (config autotune_pad_waste_max)
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid: CPU companions (gh-ocannl-1609): the packed Grid shape's row-block loop binds a hardware dimension beside 2 companion nest(s) writing materialized cred; valid on the fork-join model, excluded as search economy until a measurement shows it winning
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=hoisted-grid-pack-rest: CPU companions (gh-ocannl-1609): the packed Grid shape's row-block loop binds a hardware dimension beside 2 companion nest(s) writing materialized cred; valid on the fork-join model, excluded as search economy until a measurement shows it winning
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid-pack-rest: CPU companions (gh-ocannl-1609): the packed Grid shape's row-block loop binds a hardware dimension beside 2 companion nest(s) writing materialized cred; valid on the fork-join model, excluded as search economy until a measurement shows it winning
+  fusion=unfused > pipeline=tensorized > tensorized-form=packed > packing-shape=grid: CPU companions (gh-ocannl-1609): the packed Grid shape's row-block loop binds a hardware dimension beside 2 companion nest(s) writing materialized cred; valid on the fork-join model, excluded as search economy until a measurement shows it winning
+companion-reduction cpu: 12 leaves, 22 lifted
+== companion-reduction cpu lifted: 22 leaf paths, 22 applied; floor 65792 bytes ==
+companion-reduction cpu lifted: the freshly minted nodes are charged at least the increment: true
+companion-reduction cpu lifted: at every prefix the composed floor is within the leaf's analyzed bytes: true
+== companion-reduction cpu pick audit: 12 leaves scored exhaustively; the walk scores 8 (2 fathomed), the floor-only walk 12 ==
+companion-reduction cpu pick audit: the walk's pick is the exhaustive first argmin: true
+companion-reduction cpu pick audit: the raised bound scores no more leaves than the floor alone: true
 lifted-lattice search over the refuted family: 2 expanded, 0 scored, 3 refuted
 == out-projection cpu: 6 seeds ==
  0  gpu:false mma:true simd:0  bm:16  bn:0   bk:16  tm:0 tn:0 hoist:false grid:false packrest:false epi:false swz:- depth:1
@@ -608,8 +615,8 @@ tree leaves = flat enumeration: true
 every fused leaf follows every unfused leaf: true
 every unfused leaf has its fused twin, in order: true
 every fused leaf without an unfused twin is a CPU tensorized shape binding a hardware dimension: true
-the unfused flavor refutes those shapes on companion coverage: true
-refuted: 5 unfused, 13 fused; excluded: 6 unfused, 7 fused
+the unfused flavor excludes those shapes beside its companion: true
+refuted: 0 unfused, 13 fused; excluded: 11 unfused, 7 fused
 == gpu tight smem: 9 seeds ==
 tree leaves = flat enumeration: true
 -- refuted --

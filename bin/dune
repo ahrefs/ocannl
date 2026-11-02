@@ -159,6 +159,7 @@
    (run %{exe:compilation_speed.exe} 1 --ocannl_backend=cc)
    (run %{exe:schedule_bench.exe} 2 1 2 2 1 --ocannl_backend=cc)
    (run %{exe:cpu_vectorization_bench.exe} 2 1 --ocannl_backend=cc)
+   (run %{exe:companion_flavor_bench.exe} diag 8 4 1 --ocannl_backend=cc)
    (run %{exe:narrow_storage_bench.exe} 2 1 1 --ocannl_backend=cc)
    (run %{exe:narrow_gebp_bench.exe} f32 2 1 1 1 --ocannl_backend=cc)
    (run %{exe:device_props.exe} --ocannl_backend=cc)
@@ -175,6 +176,16 @@
     seeds
     --allow-unmeasured
     --ocannl_backend=cc))))
+
+(executable
+ (package neural_nets_lib)
+ (public_name companion_flavor_bench)
+ (name companion_flavor_bench)
+ (modules companion_flavor_bench)
+ (libraries ocannl base stdio bench_args bench_out)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (modes exe))
 
 (executable
  (package neural_nets_lib)
