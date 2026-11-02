@@ -2689,6 +2689,14 @@ let is_resolve_at_use v = Set.mem !resolve_at_use v
    divergence detection needs this side table. *)
 let global_rank_edges : (row_var * int) list Map.M(Row_var).t ref = ref (Map.empty (module Row_var))
 
+(* The rank-cycle search's work counter (gh-ocannl-1802): the states it visited since the last
+   reset, reported by [Shape.registration_counts]. *)
+let rank_search_visit_count = ref 0
+[@@mutation_serial.exempt "a work counter of the rank-cycle search, not inference state"]
+
+let rank_search_visits () = !rank_search_visit_count
+let reset_rank_search_visits () = rank_search_visit_count := 0
+
 (* Would adding [rank v >= rank w + k] close a cycle of positive total weight? A path [w ~> v] of
    total weight [s] entails [rank v >= rank v + s + k]: contradiction iff [s + k > 0]. Stored
    weights are nonnegative, so for [k > 0] reachability suffices, and for [k = 0] the path must
@@ -2703,6 +2711,7 @@ let closes_positive_rank_cycle ~src:v ~dst:w k =
     (not (Hash_set.mem visited u))
     &&
     (Hash_set.add visited u;
+     Int.incr rank_search_visit_count;
      List.exists (Map.find_multi !global_rank_edges u) ~f:(fun (u', k') ->
          dfs u' (need_positive && k' = 0)))
   in

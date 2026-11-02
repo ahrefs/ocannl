@@ -448,6 +448,7 @@ type registration_counts = {
   inline_constraints : int;
   closures : int;
   closure_constraints : int;
+  rank_search_visits : int;
 }
 [@@deriving sexp_of]
 (** Registration statistics (gh-ocannl-1752), process-wide since the last reset: checked [%op]
@@ -458,7 +459,10 @@ type registration_counts = {
     scheme instantiation's renamed trace constraints (C'), its renamed solution equations (E'), and
     its boundary and anchor equations -- checked instantiations included, though their window is
     rewound -- and every registration's own inequalities outside a trace. [closure_constraints] sums
-    the store's size at the entry of each [finish_inference] ([closures] counts them). *)
+    the store's size at the entry of each [finish_inference] ([closures] counts them).
+
+    [rank_search_visits] is the rank-cycle search's work counter (gh-ocannl-1802): the states it
+    visited, for every rank fact recorded since the reset, inside traces too. *)
 
 type registration_times = {
   tracing_s : float;

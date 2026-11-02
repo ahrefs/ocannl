@@ -11,6 +11,7 @@ tensor/row.ml: used_in_pointwise (ref) -- accounted: every write noted or at a b
 tensor/row.ml: concat_component_vars (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: resolve_at_use (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: global_rank_edges (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
+tensor/row.ml: rank_search_visit_count (ref) -- exempt: a work counter of the rank-cycle search, not inference state
 tensor/row.ml: global_template_cache (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: fresh (unread state) -- exempt
 tensor/row.ml: boundary commit_symbol_roles -- part of the commit: only a successful finish_inference calls it
