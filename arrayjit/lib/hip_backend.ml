@@ -1944,7 +1944,12 @@ end = struct
       ^
       let fast_math = Cuda_like_config.hip_fast_math () in
       if fast_math then ""
-      else "/hiprtc-math:" ^ Compiler_options.render (Compiler_options.hip_math_options ~fast_math)
+      else
+        "/hiprtc-math:"
+        ^ Compiler_options.render (Compiler_options.hip_math_options ~fast_math)
+        (* gh-ocannl-1457: a contraction-off compile renders a [Tile_mma] fallback unfused, so a
+           crown timed with the fused one does not replay. Derived from the dialect's own pin. *)
+        ^ if Cuda_like_config.Hip.compiler_contraction_off () then "/mma-fallback-unfused" else ""
       (* No [bf16_accum_wide] component (gh-ocannl-1117): gh-ocannl-1051 added one by hand when
          [Bf16_auto] went wide here with the configured mode unchanged, but what a mode resolves to
          is now cache identity by derivation — [Schedule_cache.codegen_tag] tabulates this backend's

@@ -1990,8 +1990,9 @@
 # the decision, so no schedule-cache component is needed.
 #
 # Contraction: a floating a*b+c becomes one fused multiply-add, one rounding instead of two. An
-# explicit FMA the program or a schedule wrote (a tensorized accumulation's fallback) is not this
-# licence's and stays.
+# explicit FMA the program wrote is not this licence's and stays. A tensorized accumulation is
+# fused where the backend's compile leaves contraction to the compiler, and keeps the serial
+# loop's two roundings where the compile pins it off (gh-ocannl-1457).
 #fp_contract=false
 #
 # Reassociation: constant reassociation through Add and Mul ((x + c2) + c1 to x + (c1 + c2)),
@@ -2193,8 +2194,8 @@
 # # The lowered code's own licences of the same kinds (gh-ocannl-998), pinned at their defaults: it
 # # contracts no a*b+c into an fma, reassociates no constant, sum or product, and folds no zero
 # # identity that infinities, NaNs or the sign of zero would contradict. What remains is the
-# # arithmetic the program wrote, rounded where it wrote it (explicit FMAs, such as a tensorized
-# # accumulation's, stay).
+# # arithmetic the program wrote, rounded where it wrote it: explicit FMAs stay, and a tensorized
+# # accumulation keeps the serial loop's two roundings (gh-ocannl-1457).
 # fp_contract=false
 # fp_reassociate=false
 # fp_finite_math=false

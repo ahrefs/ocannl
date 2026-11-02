@@ -587,12 +587,11 @@ val split_reduce :
 
 val fused_accumulation :
   d:Tnode.t -> di:Indexing.axis_index array -> Low_level.scalar_t -> Low_level.scalar_t option
-(** gh-ocannl-998: the accumulation into [d[di]] as a [Tile_mma] fallback states it -- fused, since
-    a tile multiply-accumulate is fused on every tensor unit and in the cc register tile. An [FMA]
-    accumulating into [d[di]] is returned as is and a floating plain add of a product is returned as
-    the [FMA] (a schedule decision, not the contraction licence); [None] for an integer accumulation
-    (gh-ocannl-824) or no product accumulated into [d[di]]. [Tensorize] writes its fallback through
-    it, and the sketch seeding asks it whether the register tile can render a site. *)
+(** {!Low_level.fused_accumulation}: the fused form of a [Tile_mma] fallback's accumulation into
+    [d[di]], [None] for an integer accumulation (gh-ocannl-824) or no product accumulated into
+    [d[di]]. [Tensorize] no longer writes its fallback through it (gh-ocannl-1457): the renderer
+    fuses the fallback unless the backend's compile pins contraction off. The sketch seeding asks it
+    whether the register tile can render a site. *)
 
 val tensorize :
   ?tile:Register_tile.t ->

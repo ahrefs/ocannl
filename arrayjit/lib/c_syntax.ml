@@ -1095,6 +1095,21 @@ module type C_syntax_config = sig
   (** Declaration prefix for workgroup-shared placements ([__shared__ ] / [threadgroup ]); [None]
       makes a non-empty [workgroup_shared] set a compile-time error. *)
 
+  val compiler_contraction_off : unit -> bool
+  (** Whether this backend's kernel compile is pinned so its compiler never contracts a [a * b + c]
+      into a fused multiply-add on its own (gh-ocannl-1457), derived from the same option builder
+      the compile uses: cc's [cc_backend_fp_contract=off] ([-ffp-contract=off], placed after any
+      [-ffast-math]), CUDA's [--fmad=false] ([cuda_fast_math=false]), HIP's [-ffp-contract=off]
+      ([hip_fast_math=false]). Only an explicit pin counts, never a toolchain default; Metal exposes
+      no contraction switch, so it is [false] there (the {!Pure_C_config} default). Read per call:
+      the settings behind it are mutable within a process.
+
+      When [true], a [Tile_mma] fallback renders in the form the contraction licence left it, and
+      the register-tiled rendering spells a plain-add fallback as an unfused vector multiply then
+      add -- both the serial loop's two roundings, which the compiler is forbidden to fuse. When
+      [false], the fallback renders fused ({!Low_level.fuse_tile_fallback}), as every tile
+      multiply-accumulate computes. *)
+
   val volatile_serial_accumulation : bool
   (** Workaround for a Metal shader-compiler miscompilation of serial accumulations (observed on
       macOS 15/Metal 3.1-3.2 through macOS 26/Metal 4), in both spellings a reduction can take.
@@ -1370,6 +1385,7 @@ let codegen_capabilities (module Config : C_syntax_config) =
     compute_prec = Config.compute_prec;
     accum_prec = Config.accum_prec;
     asynchronous_staging_copy = Option.is_some Config.async_copy;
+    compiler_contraction_off = Config.compiler_contraction_off;
     mma_arm = Config.mma_arm;
     mma_operand_loads = Config.mma_operand_loads;
     (* gh-ocannl-1254: the hook itself, asked with no addresses — it decides acceptance from
@@ -2949,6 +2965,7 @@ struct
   let shared_decl_prefix = None
   let restrict_keyword = Some "restrict"
   let volatile_serial_accumulation = false
+  let compiler_contraction_off () = false
 
   (* Clang defines both [__clang__] and [__GNUC__], so test [__clang__] first. *)
   let vectorize_pragma =
@@ -4928,6 +4945,12 @@ module C_syntax (B : C_syntax_config) = struct
             lanes dst fma_fn a b dst)
     ^^ hardline ^^ string "#endif"
 
+  (* [dst = dst + a * b] on vector registers, UNFUSED (gh-ocannl-1457): the register tile's update
+     under a compile that pins contraction off, where the scalar fallback and the serial loop it
+     stands for round the product and the sum separately and the compiler may not fuse either. *)
+  let vec_acc_muladd ~prec:_ ~lanes:_ ~dst ~a ~b =
+    PPrint.string (Printf.sprintf "%s = %s + %s * %s;" dst dst a b)
+
   (* Fold every register of the grid into [grid.(0).(0)] (a statement list; empty for a 1×1
      grid). *)
   let vec_acc_grid_fold ~prec ~lanes ~op (grid : string array array) : PPrint.document list =
@@ -6470,6 +6493,14 @@ module C_syntax (B : C_syntax_config) = struct
            runs once per simdgroup, guarded on lane 0 — the lane loop still supplies the launch's
            threads. *)
         let d_tn = fst d in
+        (* The fallback's arithmetic form is the backend's compile to settle (gh-ocannl-1457):
+           fused, as a tile multiply-accumulate computes, unless the compile pins contraction off --
+           then the form the licence left, which the compiler cannot fuse behind the serial loop's
+           back either. *)
+        let unfused = B.compiler_contraction_off () in
+        let fallback =
+          if unfused then fallback else Low_level.fuse_tile_fallback ~d:d_tn fallback
+        in
         let fragment_is_active =
           match !(ctx.active_mma_accumulator) with
           | Some (Active_fragment (fragment, _)) | Some (Active_target (fragment, _)) ->
@@ -6584,12 +6615,14 @@ module C_syntax (B : C_syntax_config) = struct
            is BITWISE equal to the scalar fallback. A narrow-storage rendering instead rounds
            strictly less often than the fallback's per-k-step narrowing (better, never bitwise on
            inexact values — the gh-ocannl-545 accumulator precedent), so parity tests pick
-           narrow-exact inputs. The plain-add (non-FMA) fallback form is declined — its [a * b + c]
-           arithmetic is only maybe-contracted, so a vector twin could not promise the equality.
-           [Schedule.Tensorize] writes its floating fallbacks fused whatever the simplifier's
-           contraction licence (gh-ocannl-998), so the decline guards hand-built statements. Emitted
-           under the same lane-0 guard as the fallback ([`Vec_extensions] backends render the lane
-           loop serially; GPU backends never take this path). *)
+           narrow-exact inputs. A plain-add (non-FMA) fallback is rendered unfused only under a
+           compile that pins contraction off ([B.compiler_contraction_off], gh-ocannl-1457): there
+           the serial loop rounds twice by construction, and so does [vec_acc_muladd]. Under any
+           other compile [a * b + c] is only maybe-contracted, so the fallback arrives fused
+           ({!Low_level.fuse_tile_fallback} above, gh-ocannl-998) and the plain form is declined — a
+           vector twin could not promise the equality. Emitted under the same lane-0 guard as the
+           fallback ([`Vec_extensions] backends render the lane loop serially; GPU backends never
+           take this path). *)
         let try_register_tile () : PPrint.document option =
           (* [cond] names a rule violation: decline (with the per-rule diagnostic, gh-ocannl-479)
              when it holds. *)
@@ -6667,7 +6700,7 @@ module C_syntax (B : C_syntax_config) = struct
                  (Ops.equal_prec (comp_prec a_store_prec) prec
                  && Ops.equal_prec (comp_prec b_store_prec) prec))
           in
-          (* The fallback carries the arithmetic form; require the fused one (see above). *)
+          (* The fallback carries the arithmetic form (see above). *)
           let rec innermost_set (llc : Low_level.t) =
             match llc with
             | Low_level.For_loop { body; _ } | If { body; _ } -> innermost_set body
@@ -6676,12 +6709,40 @@ module C_syntax (B : C_syntax_config) = struct
             | Set { tn; llsc; _ } -> Some (tn, llsc)
             | _ -> None
           in
-          let* () =
-            no_test ~reason:"accumulation is not in fused (FMA) form"
-              (match innermost_set fallback with
-              | Some (tn, Low_level.Ternop (Ops.FMA, _, _, (Low_level.Get (tn2, _), _))) ->
-                  not (Tn.equal tn d_tn && Tn.equal tn2 d_tn)
-              | _ -> true)
+          (* [fused]: the update is an [FMA] (the tile's [vec_acc_fma]); otherwise a plain add of a
+             product, rendered unfused ([vec_acc_muladd]) -- only under a contraction-off compile,
+             where the fallback arrives plain ([unfused] above), and only at f32/f64: a narrow
+             compute precision's scalar spelling is not the vector operators' rounding sequence, so
+             it declines to the fallback, which is then the serial loop's own form. *)
+          let self_update tn sc =
+            match sc with
+            | Low_level.Get (tn2, _) -> Tn.equal tn d_tn && Tn.equal tn2 d_tn
+            | _ -> false
+          in
+          let plain_self_update tn (llsc : Low_level.scalar_t) =
+            match llsc with
+            | Binop (Ops.Add, (acc, _), (Binop (Ops.Mul, _, _), _))
+            | Binop (Ops.Add, (Binop (Ops.Mul, _, _), _), (acc, _)) ->
+                self_update tn acc
+            | _ -> false
+          in
+          let* fused =
+            match innermost_set fallback with
+            | Some (tn, Low_level.Ternop (Ops.FMA, _, _, (acc, _))) when self_update tn acc ->
+                Some true
+            | Some (tn, llsc) when unfused && plain_self_update tn llsc -> (
+                match prec with
+                | Ops.Single_prec _ | Ops.Double_prec _ -> Some false
+                | _ ->
+                    (declinef ctx)
+                      "Tile_mma register tiling declined (unfused accumulation at a narrow compute \
+                       precision): %s"
+                      (describe ());
+                    None)
+            | _ ->
+                (declinef ctx) "Tile_mma register tiling declined (%s): %s"
+                  "accumulation is not in fused (FMA) form" (describe ());
+                None
           in
           (* The C-tile geometry (gh-ocannl-619): [rm] rows of [rn] vectors of [lanes]. A schedule
              that carries one ([tile]) is honoured exactly or declined — never silently replaced, so
@@ -6828,7 +6889,8 @@ module C_syntax (B : C_syntax_config) = struct
                          ^^ vec_splat ~vtyp ~lanes (Printf.sprintf "tmma_as_%d__" r)
                          ^^ semi)
                          :: List.mapi cols ~f:(fun c _ ->
-                             vec_acc_fma ~prec ~lanes
+                             (if fused then vec_acc_fma else vec_acc_muladd)
+                               ~prec ~lanes
                                ~dst:grid.(r).(c)
                                ~a:(Printf.sprintf "tmma_a_%d__" r)
                                ~b:(Printf.sprintf "tmma_b_%d__" c))))

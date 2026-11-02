@@ -431,8 +431,10 @@ module Impl = struct
            worker_pool_tag = None;
            (* gh-ocannl-572: no codegen or dispatch knob of this backend is configurable — the
               kernel source is a function of the lowered code, the device capabilities and the
-              numerics policy, all of which the cache key already covers. *)
-           codegen_tag = None;
+              numerics policy, all of which the cache key already covers. What the host's runtime
+              picks is not a knob but is a math regime (gh-ocannl-1457): the legacy option
+              sequence's component, [None] on the default modern one. *)
+           codegen_tag = Compiler_options.metal_regime_tag (Metal_math_api_runtime.get ());
            (* Advisory roofline envelope (gh-ocannl-491): documented rough constants for the
               Apple-silicon class ([Device.attributes] exposes no throughput numbers). Flops:
               mid-range M-series ~5 fp32 TFLOP/s — the model only ranks, so a class-typical number

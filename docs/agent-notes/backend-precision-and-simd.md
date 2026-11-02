@@ -352,9 +352,11 @@ files.
   rejects it under `-Werror`) to every contraction mode but `off`, so contraction follows the
   expression alone, as under clang (the parameter is in the codegen tag, so gcc boxes re-key).
   `schedule_pad` pins packed = serial bitwise on non-dyadic operands for every packing shape. Under
-  `cc_backend_fp_contract=off` the two still differ by design on every compiler (nothing contracts
-  the serial loop; the tile's FMA is a schedule decision, gh-ocannl-998): a bitwise claim there
-  also needs `fp_contract=true`.
+  `cc_backend_fp_contract=off` the tile renders its update unfused, as the serial loop computes it
+  (gh-ocannl-1457, the `Tensorize` bullet below), so the two agree there too:
+  `runtest-schedule_pad-contract_off` reruns the claim under that pin. Only `on` with a gcc before
+  14, or a target without an FMA, still splits them (nothing contracts the serial loop while the
+  tile fuses): a bitwise claim there needs `fp_contract=true`.
 - **A bitwise claim on cc is held to the compilers and hosts the fleet lacks** (gh-ocannl-1696).
   Only `cc_backend_fp_contract=off` means the same thing to every compiler: gcc before 14 treats
   `-ffp-contract=on` as `off` in C, `auto` and `fast` contract by kernel shape (the two entries
@@ -365,9 +367,10 @@ files.
   carrying one marker comment `cc-fp-contract` + colon + `<kind> -- <reason>`, the kinds a closed
   vocabulary the scan's golden prints (`exact-operands`, `no-contraction`, `same-shape`, `gated`,
   `not-cc`, `not-executed`). A new bitwise claim comparing two kernel shapes on inexact operands
-  pins; a marker is for a claim contraction cannot reach, and says why. Mind the previous entry:
-  under `off` a packed tile's explicit FMA still differs from the serial loop, so such a claim
-  needs the IR licence too, or a runtime gate (`schedule_pad`'s, kind `gated`). The census and a
+  pins; a marker is for a claim contraction cannot reach, and says why. Under `off` a packed tile
+  and its fallback round as the serial loop does (gh-ocannl-1457), so a pinned claim between them
+  needs nothing more; under `on` with an old gcc it needs the IR licence too, or a runtime gate
+  (`schedule_pad`'s, kind `gated`). The census and a
   test's executed values against CI's gcc 13.3 are checked locally with
   `tools/ci-compiler-test.sh --toolchain <dir>` (build-and-test.md, *What CI actually covers*).
 - **`-march=native` is the wrong flag on ARM and was silently downgrading every CPU kernel.** Apple
@@ -1319,14 +1322,37 @@ files.
   (width 48 over 512, a 4-column tail) runs 1.15–1.29 ms against 1.40–1.53 ms for the tail-free
   `--rn=4`, i.e. ~20% — the gh-ocannl-620 reuse-only ranking is right here by well more than the
   bench's timing noise, and `--rn=6` is what `Register_tile.default` picks.
-- **`Tensorize` writes a floating fallback fused, whatever the contraction licence**
-  (gh-ocannl-998). The register tile renders only an `FMA`-form fallback, because a plain
-  `acc + a * b` is contracted or not at the C compiler's discretion and no vector twin could match
-  it bitwise. When the simplifier contracted every float `a * b + c`, every accumulation reached
-  `Tensorize` fused; with the licence off it arrives plain, and every cc register tile would have
-  declined silently. A tile multiply-accumulate is fused on every unit, so the fallback states that:
-  a schedule decision, kept off integer accumulations (gh-ocannl-824). `tile_mma_declines` pins
-  the register-tiled census with the contraction licence off.
+- **A tile's multiply-accumulate is fused unless the backend's compile pins contraction off**
+  (gh-ocannl-998, gh-ocannl-1457). `Tensorize` leaves its fallback in the form the contraction
+  licence left it, and the renderer decides: `C_syntax`'s `Tile_mma` case fuses every
+  accumulation into `d` (`Low_level.fuse_tile_fallback`) unless
+  `C_syntax_config.compiler_contraction_off ()` -- a plain `acc + a * b` is contracted or not at the
+  compiler's discretion, so only a fused fallback and the register tile's `vec_acc_fma` twin can
+  promise equality there. Under a contraction-off compile the fallback renders plain and the
+  register tile renders it unfused (`vec_acc_muladd`, f32/f64 only; a narrow compute precision
+  declines to the fallback), both the serial loop's two roundings, which the compiler may not fuse
+  either. An explicit `FMA` (the IR licence, or a user's `fma`) stays fused, matching a serial loop
+  that carries it. Before gh-ocannl-1457 `Tensorize` wrote every floating fallback as an `FMA`, so
+  under the reproducible profile (which pins `cc_backend_fp_contract=off` and `cc_vector_bytes=0`, so
+  the tile declines to its fallback) a packed seed differed from the serial loop by an ulp on
+  non-dyadic data. `tile_fallback_unfused` pins the fallback against a host emulation of the
+  two-rounding f32 chain, `runtest-schedule_pad-contract_off` the register tile; restoring the
+  unconditional fusion fails both (0x1.8p-11 and 0x1p-10). `tile_mma_declines` pins the
+  register-tiled census with the contraction licence off.
+- **The contraction pin is a per-backend fact read off the compile's own option builder**
+  (gh-ocannl-1457): `compiler_contraction_off` is cc's `Cc_backend.contraction_off`
+  (`Compiler_options.clang_contraction_off` over the fast-math and contraction flags in compile
+  order: `-ffp-contract=off` after `-ffast-math` still pins), CUDA's
+  `Compiler_options.nvrtc_contraction_off` (`--fmad=false`, `cuda_fast_math=false`), HIP's
+  `clang_contraction_off` over `hip_math_options` (`hip_fast_math=false`), and Metal's `false`:
+  `MTLCompileOptions` has no contraction switch, and Safe mode does contract -- measured on the M4
+  Max (macOS 27), `(a * b) + c` with `a = b = 1 + 2^-12`, `c = -(1 + 2^-11)` came back `2^-24` on
+  Metal and `0` on cc under `off`. Only an explicit pin counts, never a toolchain default. Cache
+  identity: cc's tag carries the flags, CUDA's `/nvrtc-math:` and HIP's `/hiprtc-math:` the precise
+  switches, and each adds `mma-fallback-unfused` under the pin, so a crown timed with the fused
+  tile does not replay; Metal's tag carries `Compiler_options.metal_regime_tag` -- nothing on the
+  default modern option split, the legacy sequence (macOS 14, `fastMathEnabled=false`, precise
+  functions) otherwise. The compile-options tests pin the predicate against each builder.
 ## SIMD operations and rounding
 - **gfx11's WMMA returns the exact sum only when the products share a sign** (gh-ocannl-1420; the
   bf16 builtins, gh-ocannl-1509). The

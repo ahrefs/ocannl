@@ -363,10 +363,11 @@ let () =
    contract, and gcc's x86 tunings used to decline exactly this loop-carried chain while clang fused
    it, so the seeds agreed with the serial loop on a Mac and missed it by an ulp on Linux
    ([Cc_backend.fp_contract_flag] now turns that heuristic off). Under [cc_backend_fp_contract=off]
-   (or [on] with a gcc before 14), or on a target without an FMA, nothing contracts the serial loop
-   and the two differ by design, so the claim is skipped there: a bitwise claim there needs
-   [fp_contract=true] (docs/agent-notes/backend-precision-and-simd.md). Each seed's distance from
-   the serial loop, and the compile line, go to stderr.
+   the tile renders its update unfused, as the serial loop computes it (gh-ocannl-1457), so the
+   claim holds there too; under [on] with a gcc before 14, or on a target without an FMA, nothing
+   contracts the serial loop while the tile fuses, so the claim is skipped there: a bitwise claim
+   there needs [fp_contract=true] (docs/agent-notes/backend-precision-and-simd.md). Each seed's
+   distance from the serial loop, and the compile line, go to stderr.
 
    The same seeds carry the k-block split (gh-ocannl-1670): every one, in each packing shape the
    site seeds, partitions its k-block loop at the last full block ([Sched.pad_edge_partition]: k =
@@ -424,23 +425,25 @@ let () =
     let ctx = Context.run ctx routine in
     nonzero "nondyadic_serial" (Context.get_values ctx nc0.Tensor.value)
   in
-  (* The bitwise claim is about what the compiler may contract, so it holds only where the serial
-     loop CAN be contracted: the kernel compile leaves contraction at the compiler's default or asks
-     for [fast] -- not [off], and not [on], which gcc before 14 treats as [off] in C -- and the
-     target has a fused multiply-add (the ISA the cc backend probed under its kernel flags).
-     Elsewhere the serial loop rounds twice by construction while the tile's FMA rounds once, as the
-     comment above says; a portable bitwise claim needs [fp_contract=true], where both carry the
-     IR's own [FMA]. *)
+  (* The bitwise claim holds where the serial loop and the tile round alike. Two compiles give that:
+     one that pins contraction off ([Cc_backend.contraction_off], gh-ocannl-1457), where the tile
+     renders its plain-add update unfused, as the serial loop computes it; and one that leaves
+     contraction at the compiler's default or asks for [fast] -- not [on], which gcc before 14
+     treats as [off] in C -- on a target with a fused multiply-add (the ISA the cc backend probed
+     under its kernel flags), where the compiler fuses the serial loop as the tile's FMA rounds.
+     Elsewhere the serial loop rounds twice while the tile's FMA rounds once; a portable bitwise
+     claim there needs [fp_contract=true], where both carry the IR's own [FMA]. *)
   let kernel_flags = Context.Cc_backend.kernel_compiler_flags () in
   let isa =
     Option.value ~default:"none-probed"
       (List.Assoc.find (Context.Cc_backend.host_capabilities ()) ~equal:String.equal "isa")
   in
   let contractible =
-    (not (String.is_substring kernel_flags ~substring:"-ffp-contract=off"))
-    && (not (String.is_substring kernel_flags ~substring:"-ffp-contract=on"))
-    && List.exists [ "fma"; "avx512f"; "neon" ] ~f:(fun sub ->
-        String.is_substring isa ~substring:sub)
+    Context.Cc_backend.contraction_off ()
+    || (not (String.is_substring kernel_flags ~substring:"-ffp-contract=off"))
+       && (not (String.is_substring kernel_flags ~substring:"-ffp-contract=on"))
+       && List.exists [ "fma"; "avx512f"; "neon" ] ~f:(fun sub ->
+           String.is_substring isa ~substring:sub)
   in
   if on_cpu then
     Stdio.eprintf "kernel compile: %s %s, isa %s (not part of the golden)\n%!"
@@ -535,7 +538,9 @@ let () =
   gated_all
     ~aggregation:(if on_cpu then `Environment else `Backend)
     ~min:2 ~when_:(on_cpu && contractible)
-    ~on:(if on_cpu then "a kernel compile that cannot contract the serial loop" else backend_name)
+    ~on:
+      (if on_cpu then "a kernel compile whose serial loop and tile round differently"
+       else backend_name)
     "every 16x16 packed seed matches the serial twin bitwise on non-dyadic operands" runs
     ~f:(fun (_, _, got, _, _, _) -> Array.equal Float.equal got want);
   let shapes =

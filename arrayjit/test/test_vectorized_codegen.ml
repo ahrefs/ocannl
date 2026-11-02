@@ -117,7 +117,7 @@ let () =
 
   (* --- Explicit SIMD emission with a 32-byte [vector_file]: an eligible elementwise body renders
      as vector-extension code (8 float lanes); the lane-uniform constant store splats. --- *)
-  let compile_with_vector_config ~name optimized =
+  let compile_with_vector_config ?(contraction_off = false) ~name optimized =
     let module Syntax = Ir.C_syntax.C_syntax (struct
       include Ir.C_syntax.Pure_C_config (struct
         let procs = [| optimized.LL.llc |]
@@ -125,6 +125,7 @@ let () =
       end)
 
       let vector_file = { Ir.Vector_file.bytes = 32; registers = 16 }
+      let compiler_contraction_off () = contraction_off
     end) in
     let _kparams, doc, _launch = Syntax.compile_proc ~name [] optimized in
     doc
@@ -308,9 +309,12 @@ let () =
   PPrint.ToChannel.pretty 0.9 100 Stdio.stdout doc10;
   Stdio.printf "\n";
 
-  (* --- The plain-add (non-FMA) fallback form is declined: its maybe-contracted [a * b + c] could
-     not promise bitwise equality with a fused vector twin, so the scalar fallback renders under the
-     lane-0 guard instead. --- *)
+  (* --- The plain-add (non-FMA) fallback form (gh-ocannl-1457): a compile that leaves contraction
+     to the compiler renders it fused ([Low_level.fuse_tile_fallback]), the same register tiling as
+     the FMA form above -- a maybe-contracted [a * b + c] could not promise bitwise equality with a
+     vector twin. A compile that pins contraction off keeps it plain, and the register tiling
+     renders the unfused [dst = dst + a * b] update ([vec_acc_muladd]): the serial loop's two
+     roundings. --- *)
   let td2 = make_sized 24 "td2" [| 6; 29 |] in
   let ta2 = make_sized 25 "ta2" [| 6; 5 |] in
   let tb2 = make_sized 26 "tb2" [| 5; 29 |] in
@@ -319,6 +323,15 @@ let () =
       (make_optimized (tile_mma_loop ~body_form:`Plain (td2, ta2, tb2)) [ td2; ta2; tb2 ])
   in
   PPrint.ToChannel.pretty 0.9 100 Stdio.stdout doc11;
+  Stdio.printf "\n";
+  let td3 = make_sized 27 "td3" [| 6; 29 |] in
+  let ta3 = make_sized 28 "ta3" [| 6; 5 |] in
+  let tb3 = make_sized 29 "tb3" [| 5; 29 |] in
+  let doc12 =
+    compile_with_vector_config ~contraction_off:true ~name:"tile_mma_unfused_kernel"
+      (make_optimized (tile_mma_loop ~body_form:`Plain (td3, ta3, tb3)) [ td3; ta3; tb3 ])
+  in
+  PPrint.ToChannel.pretty 0.9 100 Stdio.stdout doc12;
   Stdio.printf "\n";
 
   (* --- The whole-vector FMA arms, at every (compute precision, lane count) the emission can reach

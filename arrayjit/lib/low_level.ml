@@ -8734,6 +8734,38 @@ let zero_seed_candidate ?(allow_workgroup_barriers = false) (tn : Tn.t) (next : 
         else None
     | _ -> None
 
+(* gh-ocannl-998, gh-ocannl-1457: the accumulation into [d[di]] in the fused form a tile
+   multiply-accumulate computes. An [FMA] accumulating into [d[di]] is returned as is and a floating
+   plain add of a product as the [FMA]; [None] for an integer accumulation (gh-ocannl-824) or no
+   product accumulated into [d[di]]. *)
+let fused_accumulation ~(d : Tn.t) ~(di : Indexing.axis_index array) (llsc : scalar_t) :
+    scalar_t option =
+  let is_d_read (sc : scalar_t) =
+    match sc with
+    | Get (tn, idcs) -> Tn.equal tn d && Array.equal Indexing.equal_axis_index idcs di
+    | _ -> false
+  in
+  match llsc with
+  | Ternop (Ops.FMA, _, _, (acc, _)) when is_d_read acc -> Some llsc
+  | _ when not (Ops.is_float (Lazy.force d.Tn.storage_prec)) -> None
+  | Binop (Ops.Add, ((acc, _) as acc_arg), (Binop (Ops.Mul, x, y), _)) when is_d_read acc ->
+      Some (Ternop (Ops.FMA, x, y, acc_arg))
+  | Binop (Ops.Add, (Binop (Ops.Mul, x, y), _), ((acc, _) as acc_arg)) when is_d_read acc ->
+      Some (Ternop (Ops.FMA, x, y, acc_arg))
+  | _ -> None
+
+let fuse_tile_fallback ~(d : Tn.t) (fallback : t) : t =
+  let rec go (c : t) : t =
+    match c with
+    | Set ({ tn; idcs; llsc; _ } as set) when Tn.equal tn d ->
+        Set { set with llsc = Option.value (fused_accumulation ~d ~di:idcs llsc) ~default:llsc }
+    | For_loop fc -> For_loop { fc with body = go fc.body }
+    | If ({ body; _ } as guard) -> If { guard with body = go body }
+    | Seq (c1, c2) -> Seq (go c1, go c2)
+    | c -> c
+  in
+  go fallback
+
 (* The whole-node zero or its Expand_zero form, with no effects beside the covering store. Hardware
    annotations do not change the iteration box; guards do, and are refused here. *)
 let zero_initializer_target (stmt : t) : Tn.t option =

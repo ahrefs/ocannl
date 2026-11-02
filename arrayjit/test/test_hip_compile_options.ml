@@ -118,6 +118,25 @@ let () =
         (List.mem
            (build ~fast_math ~uses_rocwmma:false ~with_debug:false ())
            "-ffast-math" ~equal:String.equal));
+  (* gh-ocannl-1457: the contraction pin [C_syntax_config.compiler_contraction_off] reads off this
+     builder holds exactly under the precise policy. *)
+  Verdict.p_all ~min:2 "the HIPRTC math switches pin contraction off exactly when fast math is off"
+    [ true; false ] ~f:(fun fast_math ->
+      Bool.equal (not fast_math)
+        (Ir.Compiler_options.clang_contraction_off
+           (Ir.Compiler_options.hip_math_options ~fast_math)));
+  (* Clang applies the floating-point switches left to right, and the umbrella sets contraction to
+     fast: the pin is the LAST contraction switch, which is why cc passes [-ffp-contract=off] after
+     [-ffast-math]. Each vector names its expected reading. *)
+  Verdict.p_all "the clang contraction pin is the last contraction switch in the vector"
+    [
+      ([ "-ffast-math"; "-ffp-contract=off" ], true);
+      ([ "-ffp-contract=off"; "-ffast-math" ], false);
+      ([ "-ffast-math"; "-fno-finite-math-only"; "-ffp-contract=off" ], true);
+      ([ "-ffp-contract=off"; "-ffp-contract=fast" ], false);
+      ([ "-O3" ], false);
+    ]
+    ~f:(fun (options, want) -> Bool.equal want (Ir.Compiler_options.clang_contraction_off options));
   Verdict.p_all ~min:2 "both HIPRTC math policies keep the reduction-order guard (gh-ocannl-735)"
     [ true; false ] ~f:(fun fast_math ->
       List.mem

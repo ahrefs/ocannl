@@ -306,11 +306,12 @@ type matmul_site = {
           normalizes it. A transposed A never declines (its feeds are scalar splats either way), so
           it is not tracked. *)
   m_fma : bool;
-      (** The accumulation is fused in the [Tile_mma] fallback [Tensorize] writes
-          ({!Ir.Schedule.fused_accumulation}: an [Ops.FMA], or a floating plain add of the product,
-          gh-ocannl-998) — the form the register-tiled rendering requires (its vector twin promises
-          bitwise equality only for fused rounding). Candidate schedules rewrite operand reads but
-          never the accumulation form, so this is decidable at seeding time. *)
+      (** The accumulation can be rendered by the register tile ({!Ir.Schedule.fused_accumulation}:
+          an [Ops.FMA], or a floating plain add of the product, gh-ocannl-998): fused where the
+          backend's compile leaves contraction to the compiler, unfused where it pins it off
+          (gh-ocannl-1457) -- either way the form its vector twin promises bitwise equality for.
+          Candidate schedules rewrite operand reads but never the accumulation form, so this is
+          decidable at seeding time. *)
 }
 
 let strip_stmts stmts =
@@ -580,8 +581,8 @@ let rec stmt_at (llc : LL.t) (path : A.path_comp list) : LL.t option =
   | _, [ (A.Rhs | A.Write) ] -> Some llc
   | _ -> None
 
-(* The accumulation form (fused, or fusable by [Tensorize]: {!Ir.Schedule.fused_accumulation}) is
-   scalar structure the access records do not carry; probe the recognized write's own statement
+(* The accumulation form (fused, or fusable at render: {!Ir.Schedule.fused_accumulation}) is scalar
+   structure the access records do not carry; probe the recognized write's own statement
    directly. *)
 let fma_form (llc : LL.t) ~stmt_path ~d ~(di : Idx.axis_index array) : bool =
   let is_d_read tn idcs = phys_equal tn d && Array.equal Idx.equal_axis_index idcs di in

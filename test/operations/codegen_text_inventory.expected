@@ -23,6 +23,7 @@ to_doc_cstyle [Ir.Low_level.to_doc_cstyle]
 to_doc_inline [Ir.Ndarray.to_doc_inline]
 unop_syntax [Ir.C_syntax.C_syntax_config.unop_syntax Ir.C_syntax.Pure_C_config.unop_syntax Ir.Cuda_like_config.Make.unop_syntax]
 vec_acc_fma [Ir.C_syntax.C_syntax.vec_acc_fma]
+vec_acc_muladd [Ir.C_syntax.C_syntax.vec_acc_muladd]
 vec_unop_syntax [Ir.C_syntax.C_syntax_config.vec_unop_syntax Ir.C_syntax.Pure_C_config.vec_unop_syntax Ir.Cuda_like_config.Make.vec_unop_syntax]
 
 document combinators, given nothing of the libraries to render, so not on the frontier:
@@ -440,7 +441,7 @@ test/operations/schedule_packed_constants.ml [run by @test/operations/runtest-sc
     "packed_ma"
     "packed_mb"
     "threadgroup float"
-test/operations/schedule_pad.ml [run by @test/operations/runtest-schedule_pad]
+test/operations/schedule_pad.ml [run by @test/operations/runtest-schedule_pad, @test/operations/runtest-schedule_pad-contract_off]
     "!= 0.0 ? "
     "(float)(0.0)"
     sprintf "< (int)(%d.0))) {"
@@ -638,6 +639,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-schedule_pack_mma_matmul
 @test/operations/runtest-schedule_packed_constants
 @test/operations/runtest-schedule_pad
+@test/operations/runtest-schedule_pad-contract_off
 @test/operations/runtest-schedule_pipelined_matmul
 @test/operations/runtest-schedule_register_matmul
 @test/operations/runtest-schedule_smem_matmul

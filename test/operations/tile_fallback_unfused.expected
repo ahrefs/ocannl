@@ -1,0 +1,4 @@
+the host emulation separates one rounding per k step from two: true
+the serial loop computes the two-rounding f32 chain bitwise: true
+every packed seed renders its Tile_mma through the scalar fallback: true
+every packed seed's fallback computes the two-rounding f32 chain bitwise: true

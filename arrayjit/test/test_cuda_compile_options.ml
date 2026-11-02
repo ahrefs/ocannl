@@ -74,6 +74,13 @@ let () =
         (List.mem
            (build ~arch_options ~fast_math ~with_device_debug)
            "--use_fast_math" ~equal:String.equal));
+  (* gh-ocannl-1457: the contraction pin [C_syntax_config.compiler_contraction_off] reads off this
+     builder holds exactly under the precise policy, the one that spells out [--fmad=false]. *)
+  Verdict.p_all "an nvrtc variant pins contraction off exactly when its policy is precise" cases
+    ~f:(fun (_label, arch_options, fast_math, with_device_debug, _want) ->
+      Bool.equal (not fast_math)
+        (Ir.Compiler_options.nvrtc_contraction_off
+           (build ~arch_options ~fast_math ~with_device_debug)));
   (* The membership claim. Quantified over the same case matrix so a variant added above is covered
      by it automatically, and phrased over the option NAME the production module exports rather than
      a second copy of the spelling. *)

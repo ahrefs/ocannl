@@ -31,6 +31,10 @@ module Cuda = struct
      the f32 tanh is the library's, as it is on cc, HIP and Metal ([precise::tanh]). *)
   let tanh_approx () = if cuda_fast_math () then "__tanhf" else "tanhf"
 
+  let compiler_contraction_off () =
+    Compiler_options.nvrtc_contraction_off
+      (Compiler_options.nvrtc_math_options ~fast_math:(cuda_fast_math ()))
+
   (* gh-ocannl-1779: CUDA's half functions ([hexp], [hsin], [hsqrt], [hrcp], [htanh_approx], ...)
      are hardware approximations ([ex2.approx], [sin.approx], [rcp.approx], [tanh.approx] in
      cuda_fp16.hpp) whatever nvrtc's switches say, so under [cuda_fast_math] off they render as the
@@ -71,6 +75,10 @@ module Hip = struct
      ([hip_facts.blends_value_selects]). *)
   let bf16_relu = ("__float2bfloat16(fmaxf(0.0f, __bfloat162float(", ")))")
   let tanh_approx () = "tanhf"
+
+  let compiler_contraction_off () =
+    Compiler_options.clang_contraction_off
+      (Compiler_options.hip_math_options ~fast_math:(hip_fast_math ()))
 
   (* hip_fp16.h's half functions are ROCm's OCML f16 library functions ([__ocml_exp_f16], ...), and
      [htanh_approx] is [Builtins_hip]'s f32 route already. *)
@@ -126,6 +134,10 @@ module Make (Dialect : sig
   val bf16_relu : string * string
   val tanh_approx : unit -> string
 
+  (* The compile's contraction pin, derived from its option builder
+     ([C_syntax_config.compiler_contraction_off], gh-ocannl-1457). *)
+  val compiler_contraction_off : unit -> bool
+
   (* Whether the half unary functions ([Exp] ... [Tanh_approx]) render as the f32 rendering of the
      widened operand, narrowed once, rather than as the vendor's half functions. *)
   val precise_half_functions : unit -> bool
@@ -166,6 +178,7 @@ struct
   (* Qualified: [include C_syntax.Pure_C_config] above brings its own empty [vendor_routine_idents]
      into scope, which an unqualified reference here would pick up. *)
   let vendor_routine_idents = Dialect.vendor_routine_idents
+  let compiler_contraction_off = Dialect.compiler_contraction_off
 
   (* gh-ocannl-1338: the vendor headers' global types and macros ([half2], [float4], [CUDARTAPI],
      [HIPRT_INF_FP16]) cannot be shadowed by, or expand into, a node's identifier. *)

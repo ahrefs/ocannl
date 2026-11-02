@@ -18,6 +18,13 @@ val hip_math_options : fast_math:bool -> string list
       -fno-gpu-flush-denormals-to-zero -fno-gpu-approx-transcendentals]). Used by both the compiler
     and the HIP schedule-cache regime. *)
 
+val clang_contraction_off : string list -> bool
+(** Whether a clang-family option vector (cc's kernel flags split into words, {!hip_math_options})
+    pins contraction off (gh-ocannl-1457): the last of [-ffp-contract=off] and the switches that
+    turn contraction on ([-ffast-math], [-ffp-contract=fast|on|fast-honor-pragmas]) is
+    [-ffp-contract=off]. A vector naming none of them leaves contraction to the toolchain's default,
+    which is not a pin. [C_syntax_config.compiler_contraction_off] reads it. *)
+
 val hiprtc :
   target_archs:string list ->
   hip_include_options:string list ->
@@ -44,6 +51,10 @@ val nvrtc_math_options : fast_math:bool -> string list
     on; when off, no umbrella (so no fast-intrinsic substitution of the f32 library functions) and
     [--ftz=false --prec-div=true --prec-sqrt=true --fmad=false], every switch explicit. Used by both
     the compiler and the CUDA schedule-cache regime. *)
+
+val nvrtc_contraction_off : string list -> bool
+(** Whether an nvrtc option vector pins contraction off: it holds [--fmad=false], which
+    {!nvrtc_math_options} spells out when [cuda_fast_math] is off (gh-ocannl-1457). *)
 
 val nvrtc :
   cuda_include_options:string list ->
@@ -83,6 +94,12 @@ type metal_option =
 val equal_metal_option : metal_option -> metal_option -> bool
 val metal : routine_logging:bool -> math_api:metal_math_api -> metal_option list
 val render_metal : metal_option list -> string
+
+val metal_regime_tag : metal_math_api -> string option
+(** The Metal backend's schedule-cache regime component (gh-ocannl-1457): [None] for [Modern_split],
+    the default on macOS 15 and later, so its keys stay valid; for [Legacy], the rendered {!metal}
+    sequence, a different arithmetic regime ([fastMathEnabled=false] also makes the math functions
+    precise). *)
 
 val render : string list -> string
 (** One line, for diagnostics that have to travel through a log or an exception message: a compile's
