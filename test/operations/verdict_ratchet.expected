@@ -679,6 +679,9 @@ refuses a leg gate a boolean claim's quantifier ranges over: true
 refuses a leg a match picks on a scrutinee read off the population: true
 refuses a leg a local function builds from the population: true
 refuses a leg gate read off what a helper making the claim is handed: true
+refuses a leg a match guard picks on the population: true
+reads a population gate on an outer leg both branches of a choice share: true
+names a formatted leg claim still awaiting its make function unread: true
 accepts a leg gated on a capability over a population built from the same program: true
 accepts a sub-leg gated on an invariant its claims' population does not decide: true
 names a leg handed in as a parameter uncompared rather than counting it read: true

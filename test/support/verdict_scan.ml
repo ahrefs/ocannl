@@ -809,22 +809,25 @@ let tolerance_census content =
     application ({!Verdict_callee.leg_constructors}) its [~leg] reaches, read as a gate is above,
     and then of each [sub_leg]'s outer leg; [~leg] is followed through a name into its [let]
     right-hand side, a type constraint, the body of a [let] or a sequence, both branches of an [if]
-    and every case of a [match] -- whose condition and scrutinee pick the leg and are gates too --
-    and the body of a local function it applies. Its POPULATION is what the claims its [make]
-    function makes in place range over, each read by {!leg_population_slots}: a boolean as a [gated]
-    boolean's, collections as a [gated_*] claim's. A make function that makes no claim in place (its
-    claim a helper's), or a helper applied in [make]'s place, makes it from what it hands a helper:
-    every argument of every application of a function of the source or another module (not an
-    operator, a {!standard_functions} name or a standard or collection module's function), each read
-    as a population -- the loud direction. On both sides, and for the [gated_*] forms too, a
-    [lazy e] is [e]'s and [Lazy.force x] (or [Base]'s [force]) is [x]'s: a leg's evidence lives in
-    lazies only its claims force.
+    and every case of a [match] -- whose condition, scrutinee and guards pick the leg and are gates
+    too -- and the body of a local function it applies; an ancestor two branches share is read on
+    each path. Its POPULATION is what the claims its [make] function makes in place range over, each
+    read by {!leg_population_slots}: a boolean as a [gated] boolean's, collections as a [gated_*]
+    claim's. A make function that makes no claim in place (its claim a helper's), or a helper
+    applied in [make]'s place, makes it from what it hands a helper: every argument of every
+    application of a function of the source or another module (not an operator, a
+    {!standard_functions} name or a standard or collection module's function), each read as a
+    population -- the loud direction. On both sides, and for the [gated_*] forms too, a [lazy e] is
+    [e]'s and [Lazy.force x] (or [Base]'s [force]) is [x]'s: a leg's evidence lives in lazies only
+    its claims force.
 
-    A leg claim applied in part -- without its [~leg], its label and its make function in place --
-    or named as a value is reported unread. A complete one whose [~leg] reaches a parameter, a
-    pattern, a field, another module's value or an unqualified [leg] (an [open Verdict]'s) is
-    reported UNCOMPARED: counted, and not refused, as a population threaded through a parameter is
-    not read for a [gated_*] claim.
+    A leg claim applied in part -- without its [~leg], its label and its make function in place, an
+    [in_legf] with exactly as many arguments as its literal format takes before the make function
+    ({!format_arity}) -- or named as a value is reported unread. A complete one whose [~leg] reaches
+    a parameter, a pattern, a field, another module's value or an unqualified [leg] (an
+    [open Verdict]'s), or whose make function is a value given by name, is reported UNCOMPARED:
+    counted, and not refused, as a population threaded through a parameter is not read for a
+    [gated_*] claim.
 
     {2 What is not read}
 
@@ -983,6 +986,33 @@ let leg_population_slots =
 (** The members that make no claim with a population: a message, a skip, a case boundary, and the
     leg claims themselves. *)
 let leg_slotless_members = [ "fail"; "skipped"; "case"; "in_leg"; "in_legf" ]
+
+(** How many arguments a [Printf] format literal takes: one per conversion, two for [%a], one more
+    per [*] width or precision; [%%], [%!], [%,] and [%@] take none. [None] for a format this does
+    not read ([%(], [%{]): its leg claim is then reported unread. *)
+let format_arity format =
+  let n = String.length format in
+  let rec go i count =
+    if i >= n then Some count
+    else if Char.equal format.[i] '%' && i + 1 < n then
+      let rec spec j stars =
+        if j >= n then None
+        else
+          match format.[j] with
+          | '%' | '!' | ',' | '@' -> if j = i + 1 then go (j + 1) count else None
+          | '-' | '0' .. '9' | '.' | '+' | ' ' | '#' | '_' -> spec (j + 1) stars
+          | '*' -> spec (j + 1) (stars + 1)
+          | ('l' | 'n' | 'L') when j + 1 < n && Char.is_alpha format.[j + 1] ->
+              go (j + 2) (count + stars + 1)
+          | 'a' -> go (j + 1) (count + stars + 2)
+          | '(' | '{' -> None
+          | c when Char.is_alpha c -> go (j + 1) (count + stars + 1)
+          | _ -> None
+      in
+      spec (i + 1) 0
+    else go (i + 1) count
+  in
+  go 0 0
 
 (** The unqualified functions of the standard libraries a leg's [make] may apply without handing
     them a claim's population: printing, raising, the pair and reference primitives. *)
@@ -2493,8 +2523,8 @@ let gate_census content =
          (gh-ocannl-1794). With whether a constructor was only ambiguously [Verdict]'s; [Error]
          names what it could not follow: a parameter, a field, another module's value. *)
       method leg_gates env expr =
-        let seen = Hash_set.create (module Int) in
-        let rec go env expr =
+        (* [seen]: the bindings on this path, so that two branches may share an ancestor leg. *)
+        let rec go seen env expr =
           let expr = strip_constraints expr in
           let both a b =
             Result.bind a ~f:(fun (gates, x) ->
@@ -2503,22 +2533,22 @@ let gate_census content =
           match expr.pexp_desc with
           | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
               match Lexical_scope.lookup env name with
-              | Some { identity; definition = Some (rhs, rhs_env) }
-                when not (Hash_set.mem seen identity) ->
-                  Hash_set.add seen identity;
-                  go rhs_env rhs
+              | Some { identity; definition = Some (rhs, rhs_env) } when not (Set.mem seen identity)
+                ->
+                  go (Set.add seen identity) rhs_env rhs
               | _ ->
                   Error
                     (Printf.sprintf
                        "its leg reaches `%s`, a name bound to no definition the reader follows (a \
                         parameter, a pattern, a recursive binding)"
                        name))
-          | Pexp_sequence (_, inner) -> go env inner
+          | Pexp_sequence (_, inner) -> go seen env inner
           | Pexp_let (rec_flag, bindings, body) ->
-              go (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
+              go seen (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
           | Pexp_ifthenelse (condition, yes, no) -> (
               let branches =
-                both (go env yes) (Option.value_map no ~default:(Ok ([], false)) ~f:(go env))
+                both (go seen env yes)
+                  (Option.value_map no ~default:(Ok ([], false)) ~f:(go seen env))
               in
               match branches with
               | Ok (gates, ambiguous) -> Ok ((condition, env) :: gates, ambiguous)
@@ -2527,7 +2557,15 @@ let gate_census content =
               List.fold cases
                 ~init:(Ok ([ (scrutinee, env) ], false))
                 ~f:(fun acc case ->
-                  both acc (go (self#bind_parts env case.pc_lhs (scrutinee, env)) case.pc_rhs))
+                  let case_env = self#bind_parts env case.pc_lhs (scrutinee, env) in
+                  (* A guard picks the case's leg as the scrutinee does. *)
+                  let guard =
+                    Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
+                        [ (guard, case_env) ])
+                  in
+                  both
+                    (Result.map acc ~f:(fun (gates, x) -> (gates @ guard, x)))
+                    (go seen case_env case.pc_rhs))
           | Pexp_apply (callee, arguments) -> (
               match Verdict_callee.resolve_leg owners callee with
               | Some { member; ownership = (Verdicts | Ambiguous) as ownership; _ } -> (
@@ -2548,7 +2586,7 @@ let gate_census content =
                         (Printf.sprintf "its leg is a `%s` application without its `~when_`" member)
                   | Some gate, "leg", _ -> Ok ([ gate ], ambiguous)
                   | Some gate, _, Some outer ->
-                      Result.map (go env outer) ~f:(fun (gates, outer_ambiguous) ->
+                      Result.map (go seen env outer) ~f:(fun (gates, outer_ambiguous) ->
                           (gates @ [ gate ], ambiguous || outer_ambiguous))
                   | Some _, _, None ->
                       Error
@@ -2570,15 +2608,15 @@ let gate_census content =
                                 ( { pexp_desc = Pexp_function (params, _, Pfunction_body body); _ },
                                   definition_env );
                           }
-                        when not (Hash_set.mem seen identity) ->
-                          Hash_set.add seen identity;
+                        when not (Set.mem seen identity) ->
+                          let seen = Set.add seen identity in
                           let body_env =
                             List.fold params ~init:definition_env ~f:(fun env param ->
                                 match param.pparam_desc with
                                 | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
                                 | Pparam_newtype _ -> env)
                           in
-                          go body_env body
+                          go seen body_env body
                       | _ ->
                           Error
                             (Printf.sprintf
@@ -2594,7 +2632,7 @@ let gate_census content =
                 (Printf.sprintf "its leg is `%s`, an expression the reader does not follow"
                    (Ppxlib.Pprintast.string_of_expression expr))
         in
-        go env expr
+        go (Set.empty (module Int)) env expr
 
       (* Whether [callee] may be a helper making a claim from what it is handed: a function of this
          source or of another module -- an unqualified name nothing binds is one an [open] brought
@@ -2665,21 +2703,33 @@ let gate_census content =
             | Ppxlib.Asttypes.Labelled "leg", leg -> Some leg
             | _ -> None)
         in
+        (* The make function: [in_leg]'s second positional argument, [in_legf]'s the one after its
+           literal format's arguments -- complete only with exactly that many. *)
         let make =
-          if String.equal member "in_leg" then List.nth positional 1
-          else if List.length positional >= 2 then List.last positional
-          else None
+          if String.equal member "in_leg" then
+            if List.length positional = 2 then List.nth positional 1 else None
+          else
+            match
+              Option.bind (List.hd positional) ~f:(fun format ->
+                  Option.bind (Read.string_literal (strip_constraints format)) ~f:format_arity)
+            with
+            | Some arity when List.length positional = arity + 2 -> List.last positional
+            | _ -> None
         in
         match (leg, make) with
         | Some leg, Some make ->
             let collector = { populations = []; handed = [] } in
             (* A make function not written in place -- a helper applied to its arguments -- makes
-               its claim from what it is handed. *)
-            (match (strip_constraints make).pexp_desc with
-            | Pexp_function _ -> ()
-            | Pexp_apply (_, arguments) ->
-                collector.handed <- List.map arguments ~f:(fun (_, argument) -> (argument, env))
-            | _ -> ());
+               its claim from what it is handed; one given by name, from what this reader cannot
+               see. *)
+            let make_by_name =
+              match (strip_constraints make).pexp_desc with
+              | Pexp_function _ -> false
+              | Pexp_apply (_, arguments) ->
+                  collector.handed <- List.map arguments ~f:(fun (_, argument) -> (argument, env));
+                  false
+              | _ -> true
+            in
             let point = self#point_of expr in
             pending :=
               (fun () ->
@@ -2689,6 +2739,14 @@ let gate_census content =
                 | Error why ->
                     uncompared_legs :=
                       { leg_form = spelled; leg_line = line; why } :: !uncompared_legs
+                | Ok _ when make_by_name ->
+                    uncompared_legs :=
+                      {
+                        leg_form = spelled;
+                        leg_line = line;
+                        why = "its make function is a value given by name, whose claim is not read";
+                      }
+                      :: !uncompared_legs
                 | Ok (gates, leg_ambiguous) ->
                     Int.incr leg_sites;
                     let reads = Hash_set.Poly.create () in
@@ -3091,11 +3149,12 @@ let gate_census content =
 
     {2 What is read}
 
-    A SKIP is an identifier whose last path component is [skipped] -- [Verdict.skipped], an opened
-    one, and the per-test [let skipped = Verdict.skipped ~backend:backend_name] alike, as
-    {!dialect_census} matches it -- applied or not. An EVALUATING claim is an application of any
-    other {!Verdict_callee.members} name but [fail] and [case], matched the same way. Two shapes are
-    refused:
+    A SKIP is a [skipped] {!Verdict_callee} reads as [Verdict]'s ([Verdict.skipped], an opened one),
+    or one a [let] of the source binds to a skip or its application (the per-test
+    [let skipped = Verdict.skipped ~backend:backend_name]) -- never a parameter or another binding
+    of the name, nor another module's -- applied or not. An EVALUATING claim is an application of
+    any other {!Verdict_callee.members} name but [fail] and [case] that the resolver reads as
+    [Verdict]'s. Two shapes are refused:
 
     - an ITERATED skip: an argument of a collection-module function ({!collection_modules}, but
       [Option] and [Result], whose iteration runs at most once) that is a skip itself, partially
@@ -3135,11 +3194,18 @@ type skip_list_census = {
 let skip_name = "skipped"
 let skip_list_unread_members = [ "fail"; "case"; skip_name ]
 
-(* The positions of the identifiers that are skips: a qualified [M.skipped], and an unqualified
-   [skipped] that nothing in scope binds or that a [let] binds to a skip or a skip's application --
-   not a parameter, a pattern, or a [let] of anything else named [skipped]. *)
-let skip_positions ast =
+(* The positions of the identifiers that are skips: a [skipped] {!Verdict_callee} reads as
+   [Verdict]'s (qualified, or unqualified where nothing of the source binds it), and an unqualified
+   [skipped] a [let] binds to a skip or a skip's application -- the per-test [let skipped =
+   Verdict.skipped ~backend:backend_name] -- but not a parameter, a pattern, a [let] of anything
+   else named [skipped], or another module's. *)
+let skip_positions ~owners ast =
   let positions = Hash_set.create (module Int) in
+  let verdicts loc =
+    match Verdict_callee.resolve_at owners loc with
+    | Some { ownership = Verdicts | Ambiguous | Free; _ } -> true
+    | _ -> false
+  in
   let walker =
     object
       inherit [bool, bool] Lexical_scope.scoped
@@ -3150,9 +3216,11 @@ let skip_positions ast =
       method! binding_denotes env binding =
         let rec skip_head expr =
           match (strip_constraints expr).pexp_desc with
-          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } when String.equal name skip_name ->
-              Option.value (Lexical_scope.lookup env name) ~default:true
-          | Pexp_ident { txt = Ppxlib.Longident.Ldot (_, name); _ } -> String.equal name skip_name
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; loc } when String.equal name skip_name
+            ->
+              Option.value (Lexical_scope.lookup env name) ~default:(verdicts loc)
+          | Pexp_ident { txt = Ppxlib.Longident.Ldot (_, name); loc } ->
+              String.equal name skip_name && verdicts loc
           | Pexp_apply (callee, _) -> skip_head callee
           | _ -> false
         in
@@ -3162,8 +3230,8 @@ let skip_positions ast =
         let skip =
           match ident.txt with
           | Ppxlib.Longident.Lident name when String.equal name skip_name ->
-              Option.value (Lexical_scope.lookup env name) ~default:true
-          | Ldot (_, name) -> String.equal name skip_name
+              Option.value (Lexical_scope.lookup env name) ~default:(verdicts ident.loc)
+          | Ldot (_, name) -> String.equal name skip_name && verdicts ident.loc
           | _ -> false
         in
         if skip then Hash_set.add positions ident.loc.loc_start.pos_cnum
@@ -3176,23 +3244,18 @@ let skip_positions ast =
 
 let skip_list_census content =
   let ast = Read.structure_of content in
-  let skips = skip_positions ast in
-  let last_component expr =
-    match (strip_constraints expr).pexp_desc with
-    | Pexp_ident { txt; _ } -> Some (Ppxlib.Longident.last_exn txt)
-    | _ -> None
-  in
+  let owners = Verdict_callee.of_structure ast in
+  let skips = skip_positions ~owners ast in
   let is_skip_head expr =
     match (strip_constraints expr).pexp_desc with
     | Pexp_ident { loc; _ } -> Hash_set.mem skips loc.loc_start.pos_cnum
     | _ -> false
   in
   let is_evaluating_head expr =
-    match last_component expr with
-    | Some name ->
-        Verdict_callee.member name
-        && not (List.mem skip_list_unread_members name ~equal:String.equal)
-    | None -> false
+    match Verdict_callee.resolve owners expr with
+    | Some { member; ownership = Verdicts | Ambiguous | Free; _ } ->
+        not (List.mem skip_list_unread_members member ~equal:String.equal)
+    | _ -> false
   in
   let label_of expr =
     match expr.pexp_desc with

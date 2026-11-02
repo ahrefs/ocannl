@@ -388,6 +388,9 @@ let resolve (t : t) expr =
   | Pexp_ident { loc; _ } -> Hashtbl.find t.values (key loc)
   | _ -> None
 
+(** The resolution of the claim name spelled at [loc], where it is one. *)
+let resolve_at (t : t) (loc : Location.t) = Hashtbl.find t.values (key loc)
+
 (** The resolution of [expr] as a {!leg_constructors} identifier, where it is one. *)
 let resolve_leg (t : t) expr =
   match (peel expr).pexp_desc with

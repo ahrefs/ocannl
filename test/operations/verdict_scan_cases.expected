@@ -70,6 +70,7 @@ ok: skip list -- one skip per branch
 ok: skip list -- a local function that only shares the name
 ok: skip list -- a parameter that only shares the name
 ok: skip list -- a nested branch, judged on its own
+ok: skip list -- another module's skipped
 ok: skip list -- an Option iteration, which runs at most once
 the walk counts every string literal it passes: true
 and places the ones a named function receives: true

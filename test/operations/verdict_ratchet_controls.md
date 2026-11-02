@@ -835,7 +835,7 @@ helper. The population side now follows a data thunk (a lazy value and `Lazy.for
 too. The skip-list reader (`Verdict_scan.skip_list_census`) refuses a skip handed to an iteration,
 a callback or loop that only skips, and a branch applying two or more skips. Every run used
 tools/mutation-run.sh --batch on the named module and focused alias, and restored the source
-byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`).
+byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`; the local review's four rows ran later, on baselines `20261102T204037Z-20472` and `20261102T204156Z-60315`).
 
 | Mechanism | Mutation | Controls | Run |
 |---|---|---|---|
@@ -849,6 +849,9 @@ byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `202611
 | A gate reads only what it spells | `verdict_scan.ml`: a leg gate is taken to read its whole population | Failed: `accepts a leg gated on a capability over a population built from the same program`; `accepts a sub-leg gated on an invariant its claims' population does not decide`; refuses a sub-leg gate read off the collection its claims' population is mapped from and refuses a leg gate read off what a helper making the claim is handed, whose readings then name every population binding; and the corpus claim, refusing about thirty sites' legs | `20261102T201710Z-88441` |
 | A leg claim applied in part is reported unread | `verdict_scan.ml`: no unread leg reported | Failed: `names a leg claim applied in part instead of counting it clean`; `refuses a leg claim it cannot complete, a planted hand-written skip list, and a skip-list reader that raised` | `20261102T201733Z-3874` |
 | A leg the reader cannot follow is reported uncompared | `verdict_scan.ml`: no uncompared leg reported | Failed: names a leg handed in as a parameter uncompared rather than counting it read | `20261102T201758Z-26046` |
+| A match guard picks the leg and is a gate (local review) | `verdict_scan.ml`: guards not read | Failed: `refuses a leg a match guard picks on the population` | `20261102T204047Z-28668` |
+| Both branches of a choice are read, an ancestor they share on each path (local review: one visited set across branches lost the second path) | `verdict_scan.ml`: an `if`'s else branch reads as unresolved, as a shared ancestor's second visit did | Failed: `reads a population gate on an outer leg both branches of a choice share` | `20261102T204111Z-43247` |
+| An `in_legf` is complete only with its literal format's arguments and then its make function (local review) | `verdict_scan.ml`: the format's arity ignored | Failed: `names a formatted leg claim still awaiting its make function unread` | `20261102T204134Z-55744` |
 | `Verdict.leg` and `Verdict.sub_leg` resolve as Verdict's | `verdict_callee.ml`: no leg constructor recorded | Failed: every refusing leg control above but the two unread-leg ones, both accepting leg controls, and the corpus claim that the reader compared leg claims: each leg then reads as uncompared | `20261102T201842Z-60598` |
 
 The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under the
@@ -863,4 +866,5 @@ The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under
 | A loop body that only skips is a skip list | `verdict_scan.ml`: loop bodies not read | a loop body that only skips | `20261102T201951Z-30851` |
 | A nested branch is judged on its own | `verdict_scan.ml`: a branch counts the skips of the branches nested in it | a nested branch, judged on its own | `20261102T202003Z-47482` |
 | A callback that evaluates its claim on one side of the gate is no skip list | `verdict_scan.ml`: evaluating claims not counted | a loop whose callback evaluates on one side of its gate and skips on the other | `20261102T202208Z-44233` |
+| Another module's `skipped` is no skip (local review) | `verdict_scan.ml`: every qualified `skipped` is a skip | another module's skipped | `20261102T204207Z-65992` |
 | An Option iteration runs at most once | `verdict_scan.ml`: Option read as a collection iteration | an Option iteration, which runs at most once | `20261102T202018Z-64542` |

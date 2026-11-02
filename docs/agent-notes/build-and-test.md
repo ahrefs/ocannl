@@ -1965,7 +1965,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the population exists (`schedule_conv_gemm`'s cvr leg reads `Register_tile.alternatives` at the
   site's own extents; `ptx_target_parity` reads that the backend is the one compiling PTX, and
   claims the PTX was recorded). The two-branch form is refused too: `verdict_ratchet` reads every
-  `skipped` its scope does not bind to something else (`Verdict_scan.skip_list_census`) and
+  `skipped` the resolver reads as `Verdict`'s, or a `let` binds to one (`Verdict_scan.skip_list_census`) and
   refuses one handed to a collection-module iteration, a callback or loop body that only skips,
   and a branch of an `if`/`match` applying two or more; the sites that predate the rule are
   `exempt_skip_lists` entries, each with its reason.
@@ -2153,7 +2153,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`p "…" ((not on_cpu) || ok)`) is the fifth reader's (below). LEG claims are gated claims to it
   (gh-ocannl-1794): an `in_leg`/`in_legf`'s gate is the `~when_` of the qualified `Verdict.leg`/
   `Verdict.sub_leg` its `~leg` reaches -- through names, every `sub_leg`'s outer leg, an `if`'s or
-  `match`'s pick of a leg (its condition or scrutinee a gate too) and a local function's body --
+  `match`'s pick of a leg (its condition, scrutinee or guard a gate too) and a local function's body --
   and its population is what the claims its make function makes range over, or, made through a
   helper, everything the make function hands one. Both sides follow data thunks (`lazy`,
   `Lazy.force`), the population side for `gated_*` claims too. A leg handed in as a parameter or

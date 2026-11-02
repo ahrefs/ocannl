@@ -4661,6 +4661,32 @@ let () =
   let leg = Verdict.leg ~when_:(List.length rows > 0) ~on:"cc" () in
   in_leg ~leg "all rows pass" (fun label -> check_rows label rows)|ocaml},
       [ "rows" ] );
+    ( "refuses a leg a match guard picks on the population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg =
+    match () with
+    | _ when List.is_empty rows -> Verdict.leg ~when_:false ~on:"cc" ()
+    | _ -> Verdict.leg ~when_:true ~on:"cc" ()
+  in
+  in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "reads a population gate on an outer leg both branches of a choice share",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let base = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  let leg = if feature then Verdict.sub_leg base ~when_:(lazy on_gpu) ~on:"cc" else base in
+  in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "names a formatted leg claim still awaiting its make function unread",
+      {ocaml|open Verdict.Claims
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:"cc" () in
+  let claim = in_legf ~leg "%s: all rows pass" tag in
+  claim (fun label -> p_all label (probe ()) ~f:Fn.id)|ocaml},
+      [ "unread in_legf" ] );
     ( "accepts a leg gated on a capability over a population built from the same program",
       {ocaml|open Verdict.Claims
 let () =
@@ -5929,8 +5955,8 @@ let () =
     (List.length sources) !literals !applied;
   eprintf "Gated quantified claims whose gate and population were compared: %d.\n" !gated_sites;
   eprintf
-    "Leg claims whose gates and population were compared: %d; whose leg the reader could not \
-     follow to its gates (a parameter, a field): %d.\n"
+    "Leg claims whose gates and population were compared: %d; whose leg or make function the \
+     reader could not follow (a parameter, a field, a make function given by name): %d.\n"
     !leg_sites !uncompared_legs;
   eprintf "Verdict claim labels read for line breaks: %d.\n" !label_sites;
   eprintf "Verdict claim values read for a folded gate: %d.\n" !folded_claim_sites;

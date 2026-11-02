@@ -324,6 +324,10 @@ let () = match cap with `Withheld -> skipped first; skipped second | `Advertised
       ( "a nested branch, judged on its own",
         {ocaml|let () = if a then (skipped "x"; if b then skipped "y" else p "y" ok) else p "x" ok|ocaml},
         [] );
+      ( "another module's skipped",
+        {ocaml|module Other = struct let skipped x = ignore x end
+let () = List.iter xs ~f:Other.skipped|ocaml},
+        [] );
       ( "an Option iteration, which runs at most once",
         {ocaml|let () = Option.iter label ~f:skipped|ocaml},
         [] );
