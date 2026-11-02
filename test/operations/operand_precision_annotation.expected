@@ -7,6 +7,8 @@ single loads annotated single under a bfloat store (own precision, narrowed) are
 a Where condition keeps any annotation (a heterogeneous slot): true
 a ?prelowered routine carrying the old leg's form is refused at codegen's exit gate, naming the destination, both precisions and the remedy: true
 the same ?prelowered routine annotated bfloat16 compiles: true
+a load's request reaches the exit gate through a schedule too: simplification keeps a load's annotation (gh-ocannl-1788): true
+a schedule keeps a load's annotation in a heterogeneous slot (a Where condition): true
 a request still reaches the exit gate through a schedule, which re-describes only a program that starts descriptive: true
 its descriptive twin compiles through the same schedule: true
 the bfloat node read in the single sum is inlined, so the case reaches the scope collapse: true

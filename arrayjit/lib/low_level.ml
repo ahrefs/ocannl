@@ -5625,31 +5625,37 @@ let simplify_llc static_indices llc =
     match llsc' with
     | Constant _ -> (llsc, prec)
     | Constant_bits _ -> (llsc, prec)
-    | Get (tn, _indices) -> (llsc, Lazy.force tn.Tn.storage_prec)
+    (* gh-ocannl-1788: a leaf keeps its annotation. Re-annotating a load at its storage precision
+       erased a request a [?prelowered] routine carried before codegen's exit gate could judge it
+       ({!validate_operand_precisions}), and in a heterogeneous slot -- where the annotation is the
+       evaluation precision -- it changed what the renderer computes. *)
+    | Get _ -> (llsc, prec)
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, vprec } ->
         (* gh-343: defensive -- simplify runs before the one-hot rewrite, so this is unreachable in
            practice; still simplify the dynamic index sub-expression and never fold to a
            constant. *)
         let v', vprec' = loop_scalar (v, vprec) in
-        (Get_dynamic { tn; idcs; dyn_axis; dyn_value = (v', vprec') }, Lazy.force tn.Tn.storage_prec)
+        (Get_dynamic { tn; idcs; dyn_axis; dyn_value = (v', vprec') }, prec)
     (* Collapsing a single-assignment scope into the enclosing expression demotes its hoisted reads
        to in-expression reads, i.e. moves them relative to any sibling scope body's effects. That is
        unconditionally sound under scope purity (gh-ocannl-584, {!validate_scope_bodies}): sibling
        bodies touch only their own locals, so no read can observe where it was placed. *)
+    (* The collapsed value takes the scope's place, so it keeps the scope's annotation: the
+       semantics in a heterogeneous slot, and in a homogeneous one the slot's precision or the
+       scope's -- the latter, when the two differ, describes neither the value nor the slot, which
+       {!describe_operand_precisions} repairs downstream. *)
     | Local_scope { id; body = Set_local (id2, v); _ } when equal_scope_id id id2 && collapsible id
       ->
         ignore (Lazy.force id.tn.Tn.dims);
-        loop_scalar (v, Lazy.force id.tn.Tn.storage_prec)
+        (fst (loop_scalar (v, Lazy.force id.tn.Tn.storage_prec)), prec)
     | Local_scope { id; body = Seq (Set_local (id1, v1), Set_local (id2, v2)); _ }
       when equal_scope_id id id1 && equal_scope_id id id2 && collapsible id ->
         ignore (Lazy.force id.tn.Tn.dims);
         let result = substitute_float ~var:(Get_local id) ~value:v1 v2 in
-        loop_scalar (result, Lazy.force id.tn.Tn.storage_prec)
-    | Local_scope opts ->
-        ( Local_scope { opts with body = loop_proc local_scope_body },
-          Lazy.force opts.id.tn.Tn.storage_prec )
-    | Get_local id -> (llsc, Lazy.force id.tn.Tn.storage_prec)
-    | Get_merge_buffer (tn, _) -> (llsc, Lazy.force tn.Tn.storage_prec)
+        (fst (loop_scalar (result, Lazy.force id.tn.Tn.storage_prec)), prec)
+    | Local_scope opts -> (Local_scope { opts with body = loop_proc local_scope_body }, prec)
+    | Get_local _ -> (llsc, prec)
+    | Get_merge_buffer _ -> (llsc, prec)
     (* gh-ocannl-1468: an index embedded into a [uint4x32] slot stays an index. The renderer picks
        the conversion by its SOURCE precision -- [int32_to_uint4x32] spreads an index over four
        words, [double_to_uint4x32] copies a double's bit pattern -- so folding it to a [Constant]

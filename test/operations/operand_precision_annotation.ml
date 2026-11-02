@@ -16,7 +16,12 @@
    collapsed scope of another precision, an elided arm) -- its input passed the entry gate, so none
    of them is a builder's request; [Low_level.describe_operand_precisions] does it. [Schedule.apply]
    applies it to a schedule's result when the program the schedule started from passes the check, so
-   a [?prelowered] request still reaches the gate through a schedule. *)
+   a [?prelowered] request still reaches the gate through a schedule.
+
+   gh-ocannl-1788: that includes a request on a load. [simplify] used to re-annotate every load at
+   its storage precision, which erased such a request before the gate could judge it (and, in a
+   heterogeneous slot, changed the precision the renderer evaluates the load at); it now keeps a
+   leaf's annotation. *)
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
@@ -125,6 +130,27 @@ let scheduled_collapse name =
   let o = Ll_test.optimize_scoped ~name ~raw:(sum (product, f32)) (sum (scope, bf)) in
   Ir.Schedule.apply [ Ir.Schedule.Retype { axis = s; ty = LL.Serial } ] o
 
+(* A [?prelowered] bfloat store selecting on a bfloat load whose condition slot -- a heterogeneous
+   one, evaluated at its own annotation -- is annotated half, through a schedule. Returns the
+   condition annotations left in the scheduled program. *)
+let scheduled_condition name =
+  let s = Ll_test.sym () in
+  let i = [| Ll_test.iter s |] in
+  let in_bf = bnode (name ^ "_in_bf") and out_bf = bnode (name ^ "_out_bf") in
+  List.iter [ in_bf; out_bf ] ~f:Ll_test.materialize;
+  let x = Ll_test.get in_bf i in
+  let llc cond_prec =
+    Ll_test.loop_n s n
+      (Ll_test.set out_bf i (LL.Ternop (Ops.Where, (x, cond_prec), (x, bf), (LL.Constant 0., bf))))
+  in
+  let o = Ll_test.optimize_scoped ~name ~raw:(llc bf) (llc half) in
+  let o = Ir.Schedule.apply [ Ir.Schedule.Retype { axis = s; ty = LL.Serial } ] o in
+  let conds = ref [] in
+  Ll_test.walk o.LL.llc ~on_scalar:(function
+    | LL.Ternop (Ops.Where, (_, cprec), _, _) -> conds := cprec :: !conds
+    | _ -> ());
+  !conds
+
 let refused label ~needles result =
   let outcome, dest = result in
   match outcome with
@@ -180,9 +206,16 @@ let () =
         (prelowered "opx_req" ~annotate:f32);
       accepted "the same ?prelowered routine annotated bfloat16 compiles"
         (prelowered "opx_ok" ~annotate:bf);
-      (* A constant's annotation, which simplification keeps (it re-annotates a load at its storage
-         precision, so a load's request would not survive a schedule's trailing simplify whatever
-         the schedule did). *)
+      refused
+        "a load's request reaches the exit gate through a schedule too: simplification keeps a \
+         load's annotation (gh-ocannl-1788)"
+        ~needles:
+          [ "C_syntax.compile_proc"; "Operand 1 of Add"; "annotated single"; "here bfloat16" ]
+        (prelowered ~scheduled:true "opx_req_ld_sch" ~annotate:f32);
+      p "a schedule keeps a load's annotation in a heterogeneous slot (a Where condition)"
+        (match scheduled_condition "opx_cond_sch" with
+        | [ cprec ] -> Ops.equal_prec cprec half
+        | _ -> false);
       let plus_one ~x p = LL.Binop (Ops.Add, (x, bf), (LL.Constant 1., p)) in
       refused
         "a request still reaches the exit gate through a schedule, which re-describes only a \
