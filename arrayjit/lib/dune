@@ -132,6 +132,7 @@
   base
   cudajit.cuda
   cudajit.nvrtc
+  unix
   utils
   ir
   builtins_cc

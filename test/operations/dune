@@ -8448,6 +8448,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1773: a CUDA launch refused device memory for its local-memory reservation, forced
+; through the real driver and declined at once when it can never fit (cuda only; elsewhere every
+; claim skips). Its `--contended` leg, retried while a child process holds the device's memory,
+; needs the box to itself, so no alias runs it (the test's header says how).
+
+(test
+ (name cuda_launch_reservation)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cuda_launch_reservation)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1326: the real driver refusing a 1 TiB device allocation, typed (cuda and hip only).
 
 (test
