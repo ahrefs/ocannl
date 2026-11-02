@@ -420,11 +420,6 @@ type renaming = { rn_dim : dim_var -> dim_var; rn_row : row_var -> row_var }
 val rename_dim : renaming -> dim -> dim
 val rename_row : renaming -> t -> t
 
-val canonical_rows : t list -> t list
-(** A canonical form of a row group: two groups are equal up to a bijective renaming of their
-    variables (sharing across the group included) exactly when their canonical forms are equal.
-    Provenance and projection ids are dropped; static symbols stay rigid. *)
-
 val rename_constraint : renaming -> constraint_ -> constraint_
 (** Every variable position of every constructor; static symbols stay rigid. *)
 

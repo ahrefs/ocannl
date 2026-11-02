@@ -1378,14 +1378,7 @@ let unused_shapes = ref (Set.empty (module Int))
 
 (* Writes to [unused_shapes] count as session mutations (gh-ocannl-1301): it filters which rows
    [finish_inference] closes. *)
-(* The unmarks [get_inequalities] attempts while a shape-scheme trace records them (gh-ocannl-1761):
-   attempts, not removals -- an operand already used at the trace can be unused at an application,
-   whose guided step must still unmark it. *)
-let unmark_log : int list option ref = ref None
-[@@mutation_serial.exempt "the shape-scheme trace's own record, saved and restored by the trace"]
-
 let unmark_unused id =
-  Option.iter !unmark_log ~f:(fun l -> unmark_log := Some (id :: l));
   if Set.mem !unused_shapes id then (
     Row.note_mutation ();
     unused_shapes := Set.remove !unused_shapes id)
@@ -2199,51 +2192,6 @@ exception Untraceable_scheme of string
 
 let tracing_in_progress () = not (List.is_empty !tracing)
 
-(* A guided shape-scheme application in progress (gh-ocannl-1761): its label, and the registration
-   that replaces [get_inequalities] for the steps its body builds. Installed and removed by
-   [Scheme.guided] alone, with an [Exn.protect]; checkpoints and closures are refused while it is
-   installed, so no rewind or commit can disagree with its cursor. *)
-type guide_hook = { guide_label : string; guide_register : update_step -> unit }
-
-let active_guide : guide_hook option ref = ref None
-[@@mutation_serial.exempt
-  "the guided application in progress, installed and removed by Scheme.guided's own finally"]
-
-let guide_active () = Option.is_some !active_guide
-
-let refuse_while_guided what =
-  Option.iter !active_guide ~f:(fun g ->
-      raise
-      @@ Row.Shape_error
-           ( [%string
-               "%{what}: called inside a guided application of the shape scheme %{g.guide_label} \
-                -- not supported: the body of a schemed function must not close inference, take a \
-                checkpoint or rewind (its trace could not have). Opt the function out with \
-                [@@ocannl.no_scheme], or set op_shape_schemes=check."],
-             [] ))
-
-(* What a recording trace learns per registered step (gh-ocannl-1761), newest first: the step's lhs
-   creation rows (canonical) and the shape ids its [get_inequalities] attempted to unmark. *)
-type step_log_entry = {
-  log_step : update_id;
-  log_creation : Row.t list;
-  log_unmarks : int list;
-  log_backward : bool;
-}
-
-(* Gradient code under construction (gh-ocannl-1761): [Tensor.op]'s [grad_asn] may build helper
-   tensors, and it builds them only when an operand needs a gradient -- which a trace's tracers
-   never do -- so their steps are not part of the graph a guided application follows. *)
-let backward_depth = ref 0
-[@@mutation_serial.exempt "a dynamic-scope depth, restored by with_backward_construction's finally"]
-
-let with_backward_construction f =
-  Int.incr backward_depth;
-  Exn.protect ~f ~finally:(fun () -> Int.decr backward_depth)
-
-let trace_step_log : step_log_entry list option ref = ref None
-[@@mutation_serial.exempt "the shape-scheme trace's own record, saved and restored by the trace"]
-
 (** {3 Session consistency (gh-ocannl-1301)}
 
     [finish_inference] is the session's only commit point. A construction that fails after mutating
@@ -2355,7 +2303,6 @@ let check_step_live (step : update_step) =
                [] ))
 
 let check_can_rewind ?(what = "Tensor.rewind_to_last_closure") () =
-  refuse_while_guided what;
   if !construction_depth > 0 then
     raise
     @@ Row.Shape_error
@@ -2364,7 +2311,7 @@ let check_can_rewind ?(what = "Tensor.rewind_to_last_closure") () =
               supported; rewind after the construction returns or raises",
            [] )
 
-let can_checkpoint () = !construction_depth = 0 && Option.is_none !taint && not (guide_active ())
+let can_checkpoint () = !construction_depth = 0 && Option.is_none !taint
 
 (** {3 Checkpoints (gh-ocannl-903)}
 
@@ -2516,7 +2463,6 @@ module Checkpoint = struct
     List.rev !acc
 
   let take ~closure ~label ~id_mark =
-    if not closure then refuse_while_guided [%string "taking the checkpoint %{label}"];
     let seq =
       if closure then 0
       else (
@@ -4051,20 +3997,13 @@ let apply_env_step env update_step =
   iter_shapes update_step ~f:(apply_env_t env);
   update_delayed_var_refs env update_step
 
-(* Registration statistics (gh-ocannl-1761), for attributing construction cost (gh-ocannl-1752). *)
+(* Registration statistics, for attributing construction cost (gh-ocannl-1752). *)
 type registration_counts = {
-  guided_applications : int;
   checked_applications : int;
-  guided_steps : int;
-  fallback_steps : int;
-  unmatched_steps : int;
-  backward_steps : int;
   inline_registrations : int;
   instantiated_constraints : int;
   instantiated_solutions : int;
   instantiated_boundary : int;
-  tie_equations : int;
-  backward_constraints : int;
   inline_constraints : int;
   closures : int;
   closure_constraints : int;
@@ -4073,18 +4012,11 @@ type registration_counts = {
 
 let zero_counts =
   {
-    guided_applications = 0;
     checked_applications = 0;
-    guided_steps = 0;
-    fallback_steps = 0;
-    unmatched_steps = 0;
-    backward_steps = 0;
     inline_registrations = 0;
     instantiated_constraints = 0;
     instantiated_solutions = 0;
     instantiated_boundary = 0;
-    tie_equations = 0;
-    backward_constraints = 0;
     inline_constraints = 0;
     closures = 0;
     closure_constraints = 0;
@@ -4096,52 +4028,21 @@ let counts = ref zero_counts
 let registration_counts () = !counts
 let reset_registration_counts () = counts := zero_counts
 
-let diff_registration_counts later earlier =
-  let d f = f later - f earlier in
-  {
-    guided_applications = d (fun c -> c.guided_applications);
-    checked_applications = d (fun c -> c.checked_applications);
-    guided_steps = d (fun c -> c.guided_steps);
-    fallback_steps = d (fun c -> c.fallback_steps);
-    unmatched_steps = d (fun c -> c.unmatched_steps);
-    backward_steps = d (fun c -> c.backward_steps);
-    inline_registrations = d (fun c -> c.inline_registrations);
-    instantiated_constraints = d (fun c -> c.instantiated_constraints);
-    instantiated_solutions = d (fun c -> c.instantiated_solutions);
-    instantiated_boundary = d (fun c -> c.instantiated_boundary);
-    tie_equations = d (fun c -> c.tie_equations);
-    backward_constraints = d (fun c -> c.backward_constraints);
-    inline_constraints = d (fun c -> c.inline_constraints);
-    closures = d (fun c -> c.closures);
-    closure_constraints = d (fun c -> c.closure_constraints);
-  }
-
 (* Where shape-registration time goes (gh-ocannl-1752), process-wide since the last reset. *)
 type registration_times = {
   tracing_s : float;
   instantiation_s : float;
-  guided_steps_s : float;
-  backward_steps_s : float;
   inline_steps_s : float;
   closure_s : float;
 }
 [@@deriving sexp_of]
 
-let zero_times =
-  {
-    tracing_s = 0.;
-    instantiation_s = 0.;
-    guided_steps_s = 0.;
-    backward_steps_s = 0.;
-    inline_steps_s = 0.;
-    closure_s = 0.;
-  }
-
+let zero_times = { tracing_s = 0.; instantiation_s = 0.; inline_steps_s = 0.; closure_s = 0. }
 let times = ref zero_times [@@mutation_serial.exempt "registration timings, not inference state"]
 let registration_times () = !times
 let reset_registration_times () = times := zero_times
 
-type phase = [ `Tracing | `Instantiation | `Guided_step | `Backward_step | `Inline_step | `Closure ]
+type phase = [ `Tracing | `Instantiation | `Inline_step | `Closure ]
 
 let add_time (phase : phase) dt =
   let t = !times in
@@ -4149,12 +4050,10 @@ let add_time (phase : phase) dt =
     match phase with
     | `Tracing -> { t with tracing_s = t.tracing_s +. dt }
     | `Instantiation -> { t with instantiation_s = t.instantiation_s +. dt }
-    | `Guided_step -> { t with guided_steps_s = t.guided_steps_s +. dt }
-    | `Backward_step -> { t with backward_steps_s = t.backward_steps_s +. dt }
     | `Inline_step -> { t with inline_steps_s = t.inline_steps_s +. dt }
     | `Closure -> { t with closure_s = t.closure_s +. dt }
 
-(* Nested timed phases (a guided application's instantiation inside an outer trace, say) are charged
+(* Nested timed phases (an instantiation inside a closure built mid-construction, say) are charged
    to the innermost only: the outer phase's clock pauses meanwhile. *)
 let timing_paused = ref 0. [@@mutation_serial.exempt "registration timings, not inference state"]
 
@@ -4182,12 +4081,8 @@ let refuse_discarded_operands update_step =
                     %{provenance}; re-run its definition"],
                  [] )))
 
-let creation_rows (sh : t) =
-  Row.canonical_rows (List.map [ sh.batch; sh.input; sh.output ] ~f:(Row.subst_row !state))
-
-(* The registration proper: the step's own inequalities, derived and solved. [backward]: a gradient
-   helper of a guided application, for the statistics. *)
-let propagate_inline ?(backward = false) (update_step : update_step) : unit =
+(* The registration proper: the step's own inequalities, derived and solved. *)
+let propagate_inline (update_step : update_step) : unit =
   (* The step and its inequalities are registered before the solver runs: a solver failure leaves
      them registered against the old environment, so it taints the session (gh-ocannl-1301). *)
   with_taint_on_failure
@@ -4201,39 +4096,12 @@ let propagate_inline ?(backward = false) (update_step : update_step) : unit =
       (* Allow the derivation of constraints to depend on the shapes (currently, only Batch_slice
          does). *)
       iter_shapes update_step ~f:(apply_env_t !state);
-      let (_, discardable_vars, ineqs), log =
-        match !trace_step_log with
-        | None -> (get_inequalities update_step, None)
-        | Some _ ->
-            (* A recording trace: the creation rows before anything solves, and the unmarks. *)
-            let creation = creation_rows update_step.shape in
-            let outer = !unmark_log and unmarks = ref [] in
-            unmark_log := Some [];
-            let result =
-              Exn.protect
-                ~f:(fun () -> get_inequalities update_step)
-                ~finally:(fun () ->
-                  unmarks := Option.value !unmark_log ~default:[];
-                  unmark_log := outer)
-            in
-            ( result,
-              Some
-                {
-                  log_step = update_step.id;
-                  log_creation = creation;
-                  log_unmarks = !unmarks;
-                  log_backward = !backward_depth > 0;
-                } )
-      in
+      let _, discardable_vars, ineqs = get_inequalities update_step in
       active_update_steps := update_step :: !active_update_steps;
       active_constraints := ineqs @ !active_constraints;
-      (if not (tracing_in_progress ()) then
-         let n = List.length ineqs in
-         counts :=
-           if backward then { !counts with backward_constraints = !counts.backward_constraints + n }
-           else { !counts with inline_constraints = !counts.inline_constraints + n });
-      Option.iter log ~f:(fun e ->
-          trace_step_log := Option.map !trace_step_log ~f:(fun l -> e :: l));
+      if not (tracing_in_progress ()) then
+        counts :=
+          { !counts with inline_constraints = !counts.inline_constraints + List.length ineqs };
       let ineqs', env = Row.solve_inequalities ~stage:Row.Stage1 ~discardable_vars ineqs !state in
       let _debug_remaining_constraints : Row.constraint_ list = ineqs' in
       apply_env_step env update_step;
@@ -4242,10 +4110,8 @@ let propagate_inline ?(backward = false) (update_step : update_step) : unit =
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   check_untainted ();
   refuse_discarded_operands update_step;
-  match !active_guide with
-  | Some g when not (tracing_in_progress ()) -> g.guide_register update_step
-  | _ when tracing_in_progress () -> propagate_inline update_step
-  | _ -> timed `Inline_step (fun () -> propagate_inline update_step)
+  if tracing_in_progress () then propagate_inline update_step
+  else timed `Inline_step (fun () -> propagate_inline update_step)
 
 let with_construction_window f =
   Int.incr construction_depth;
@@ -4319,7 +4185,6 @@ let finish_inference (() : unit) : unit =
               %{label} (via Shape.to_dims, Shape.to_padding or a projections handle) -- not \
               supported: a closure would commit the trace's work, which the trace must leave \
               undone. Do not force dims or projections inside a traced function."]);
-  refuse_while_guided "finish_inference";
   if !construction_depth > 0 then
     raise
     @@ Row.Shape_error
@@ -4684,21 +4549,6 @@ module Scheme = struct
     | No_marks
     | No_internal_rows
     | No_end_validation
-    | No_unify
-    | No_creation_check
-
-  (* The class of a shape a traced step held (gh-ocannl-1761): a traced argument, a shape that
-     existed before the trace (open or closed), or the trace's [c]-th own shape. *)
-  type slot = Arg of int | Fixed of shape | Created of int
-
-  type skeleton_step = {
-    sk_key : string;  (** {!step_key} of the step's logic. *)
-    sk_spec : string;
-    sk_fallback : string option;  (** Why the step must register normally, when it must. *)
-    sk_slots : slot array;  (** In [iter_shapes] order. *)
-    sk_unmarks : int list;  (** The slots whose unmark [get_inequalities] attempted. *)
-    sk_creation : Row.t list;  (** The lhs's rows at registration, canonical. *)
-  }
 
   type nonrec t = {
     label : string;
@@ -4720,92 +4570,9 @@ module Scheme = struct
         (** Fixed variables no anchor covers: the scheme cannot be instantiated after a closure. *)
     closure_at_trace : int;
     env : Row.environment;  (** The trace's final environment: for printing the scheme. *)
-    skeleton : skeleton_step array;
-        (** The trace's steps, oldest first: a guided application's map. *)
-    created_rows : rows array;  (** The rows of the trace's own shapes, by [Created] index. *)
-    has_instances : bool;  (** Whether the trace applied a scheme (registering no step for it). *)
   }
 
   let label s = s.label
-  let has_instances s = s.has_instances
-
-  (* What a step's registration depends on besides its shapes: equal keys and corresponding shapes
-     give the same inequalities, up to the shapes' renaming. Terminal payloads are not compared: the
-     ones whose inequalities read them register normally ({!fallback_reason}). *)
-  let step_key (logic : logic) =
-    let refs l = Int.to_string (List.length l) in
-    match logic with
-    | Broadcast (ct, _, _) -> (
-        "B"
-        ^
-        match ct with
-        | Pointwise_bin -> "."
-        | Compose -> "@"
-        | Einsum (spec, r) -> "e" ^ refs r ^ ":" ^ spec
-        | Defined_by_cd_logic -> "cd")
-    | Transpose (tt, _) -> (
-        "T"
-        ^
-        match tt with
-        | Transpose -> "T"
-        | Pointwise_un -> "."
-        | Permute (spec, r) -> "p" ^ refs r ^ ":" ^ spec
-        | Batch_slice _ -> "slice"
-        | Uint4x32_to_prec _ -> "u4"
-        | Defined_by_cd_logic -> "cd")
-    | Broadcast_tern (tt, _, _, _) -> (
-        "3"
-        ^
-        match tt with
-        | Pointwise_tern -> "."
-        | Compose_accumulate -> "@"
-        | Einsum_tern (spec, r) -> "e" ^ refs r ^ ":" ^ spec
-        | Defined_by_cd_logic -> "cd")
-    | Terminal { is_param; logic } -> (
-        (if is_param then "tp:" else "t:")
-        ^
-        match logic with
-        | Data (Broadcast _) -> "bcast"
-        | Data (Reshape _) -> "reshape"
-        | Data (Keep_shape_no_padding _) -> "keep"
-        | Data (Padded _) -> "padded"
-        | Fetch (Constant _) -> "const"
-        | Fetch (Constant_bits _) -> "bits"
-        | Fetch (Constant_fill _) -> "fill"
-        | Fetch Range_over_offsets -> "range"
-        | Fetch (Slice _) -> "slice"
-        | Fetch (Embed_symbol _) -> "symbol"
-        | Fetch Embed_self_id -> "self_id"
-        | Fetch (Embed_dim _) -> "dim")
-    | Block { spec; delayed_vars; rhses } ->
-        "K" ^ Int.to_string (List.length rhses) ^ "/" ^ refs delayed_vars ^ ":" ^ spec
-
-  (* The steps a guided application registers normally even when they match: their inequalities bind
-     capture references to the application's own variables, or read more than the shapes and the key
-     (a precision lazy, the symbol roles and range of a slice, a payload's dims). *)
-  let fallback_reason (logic : logic) =
-    match logic with
-    | Broadcast (Einsum (_, _ :: _), _, _)
-    | Transpose (Permute (_, _ :: _), _)
-    | Broadcast_tern (Einsum_tern (_, _ :: _), _, _, _)
-    | Block { delayed_vars = _ :: _; _ } ->
-        Some "capture references"
-    | Transpose (Uint4x32_to_prec _, _) -> Some "a uint4x32 conversion"
-    | Transpose (Batch_slice _, _) -> Some "a batch slice"
-    | Terminal
-        {
-          logic =
-            Data (Reshape _ | Keep_shape_no_padding _ | Padded _) | Fetch (Constant_fill _ | Slice _);
-          _;
-        } ->
-        Some "a payload-dependent terminal"
-    | _ -> None
-
-  let slot_shapes step =
-    let acc = ref [] in
-    iter_shapes step ~f:(fun sh -> acc := sh :: !acc);
-    Array.of_list_rev !acc
-
   let arity s = List.length s.arg_rows
   let num_results s = List.length s.result_rows
 
@@ -4951,7 +4718,6 @@ module Scheme = struct
     let unused_start = !unused_shapes in
     let refs_mark = !ref_uid in
     let outer_touches = !trace_touches in
-    let outer_log = !trace_step_log in
     let frontier = Hashtbl.create (module Int) in
     List.iter (Checkpoint.open_shapes ~instances:!active_instances !active_update_steps)
       ~f:(fun (sh : shape) -> Hashtbl.add_multi frontier ~key:sh.id ~data:sh);
@@ -4964,17 +4730,13 @@ module Scheme = struct
     try
       tracing := label :: !tracing;
       trace_touches := Some [];
-      trace_step_log := Some [];
-      let results, touched, step_log =
+      let results, touched =
         Exn.protect
           ~f:(fun () ->
             let results = f () in
-            ( results,
-              Option.value !trace_touches ~default:[],
-              Option.value !trace_step_log ~default:[] ))
+            (results, Option.value !trace_touches ~default:[]))
           ~finally:(fun () ->
             trace_touches := outer_touches;
-            trace_step_log := outer_log;
             match !tracing with _ :: rest -> tracing := rest | [] -> ())
       in
       let constraints = List.rev (window ~mark:constraints_mark !active_constraints) in
@@ -5069,59 +4831,6 @@ module Scheme = struct
       in
       let arg_rows = List.map args ~f:(rows_of env_end) in
       let result_rows = List.map results ~f:(rows_of env_end) in
-      (* The skeleton a guided application follows (gh-ocannl-1761): each step's key and shape
-         classes, the trace's own shapes numbered by first occurrence. *)
-      let log = Hashtbl.Poly.create () in
-      List.iter step_log ~f:(fun e -> Hashtbl.set log ~key:e.log_step ~data:e);
-      let created = Hashtbl.create (module Int) and created_shapes = ref [] in
-      let classify (sh : shape) =
-        match List.findi args ~f:(fun _ a -> phys_equal a sh) with
-        | Some (j, _) -> Arg j
-        | None when sh.closed || List.mem (Hashtbl.find_multi frontier sh.id) sh ~equal:phys_equal
-          ->
-            Fixed sh
-        | None -> (
-            match
-              List.find_map (Hashtbl.find_multi created sh.id) ~f:(fun (s', c) ->
-                  if phys_equal s' sh then Some c else None)
-            with
-            | Some c -> Created c
-            | None ->
-                let c = List.length !created_shapes in
-                created_shapes := sh :: !created_shapes;
-                Hashtbl.add_multi created ~key:sh.id ~data:(sh, c);
-                Created c)
-      in
-      (* Gradient helpers are left out: an application builds its own, as its operands need. *)
-      let forward_steps =
-        List.filter steps ~f:(fun step ->
-            match Hashtbl.find log step.id with Some e -> not e.log_backward | None -> true)
-      in
-      let skeleton =
-        List.fold forward_steps ~init:[] ~f:(fun acc step ->
-            let shapes = slot_shapes step in
-            let slots = Array.map shapes ~f:classify in
-            let entry = Hashtbl.find log step.id in
-            {
-              sk_key = step_key step.logic;
-              sk_spec = logic_to_spec step.logic;
-              sk_fallback =
-                (match entry with
-                | None -> Some "a step the trace did not record"
-                | Some _ -> fallback_reason step.logic);
-              sk_slots = slots;
-              sk_unmarks =
-                (match entry with
-                | None -> []
-                | Some e ->
-                    List.filter_mapi (Array.to_list shapes) ~f:(fun i (sh : shape) ->
-                        if List.mem e.log_unmarks sh.id ~equal:Int.equal then Some i else None));
-              sk_creation = (match entry with None -> [] | Some e -> e.log_creation);
-            }
-            :: acc)
-        |> Array.of_list_rev
-      in
-      let created_rows = Array.of_list_rev_map !created_shapes ~f:(rows_of env_end) in
       (* Coverage: a fixed variable left unsolved dies at the next closure; an anchor re-ties it to
          its shape's closed rows then. One no anchor covers makes the scheme closure-bound. *)
       let fixed_unsolved =
@@ -5174,9 +4883,6 @@ module Scheme = struct
         closure_bound;
         closure_at_trace = !closure_count;
         env = env_end;
-        skeleton;
-        created_rows;
-        has_instances = not (List.is_empty instances);
       }
     with
     | Row.Shape_error (msg, trace) ->
@@ -5339,184 +5045,4 @@ module Scheme = struct
         Exn.protect
           ~f:(fun () -> instantiate ?sabotage s ~application ~args ~results:[])
           ~finally:(fun () -> restore_after_check ~globals ~row_globals ~taint:taint0 rows))
-
-  (* {3 Guided registration (gh-ocannl-1761)}
-
-     The scheme is instantiated once, persistently, against the arguments; then the body runs, and
-     each step it builds that matches the next step of the trace's skeleton registers without
-     [get_inequalities] and without solving inequalities of its own: the instantiation already holds
-     them, renamed. Its shapes the trace created are unified, at their first occurrence, with the
-     scheme's renamed rows for them, and the step joins [active_update_steps], so closure and
-     projections see the real step as they do inline. A match is exact -- equal keys, corresponding
-     shapes, a fresh lhs created with the trace's rows up to renaming -- so a guided step's
-     inequalities would have been a renaming of the trace step's. *)
-  let guided ?sabotage s ~application ~(args : shape list) ~id_mark f =
-    let sabotaged x = Option.exists sabotage ~f:(fun y -> Poly.equal x y) in
-    let prefix = [%string "applying the shape scheme %{s.label} to %{application}: "] in
-    (* A refused instantiation is put back, as a check's is: named, before the body, untainted. *)
-    let globals = capture_globals () and row_globals = Row.capture_globals () and taint0 = !taint in
-    let rows =
-      List.map
-        (args @ List.map s.anchors ~f:fst)
-        ~f:(fun (sh : shape) -> (sh, sh.batch, sh.input, sh.output))
-    in
-    let rn, origin =
-      try
-        timed `Instantiation (fun () ->
-            instantiate_core ?sabotage ~instance:false s ~application ~args ~results:[])
-      with exn ->
-        let bt = Stdlib.Printexc.get_raw_backtrace () in
-        restore_after_check ~globals ~row_globals ~taint:taint0 rows;
-        Stdlib.Printexc.raise_with_backtrace exn bt
-    in
-    counts := { !counts with guided_applications = !counts.guided_applications + 1 };
-    let args = Array.of_list args in
-    let n = Array.length s.skeleton in
-    let bound = Array.create ~len:(Array.length s.created_rows) None in
-    let bound_of = Hashtbl.create (module Int) in
-    let is_bound (sh : shape) =
-      List.exists (Hashtbl.find_multi bound_of sh.id) ~f:(fun s' -> phys_equal s' sh)
-    in
-    let renamed =
-      Array.map s.created_rows ~f:(fun r ->
-          lazy
-            {
-              r_batch = Row.rename_row rn r.r_batch;
-              r_input = Row.rename_row rn r.r_input;
-              r_output = Row.rename_row rn r.r_output;
-            })
-    in
-    let cursor = ref 0 in
-    (* Pure: the new bindings when the step matches the skeleton step, injective both ways. *)
-    let match_step sk (step : update_step) =
-      if not (String.equal sk.sk_key (step_key step.logic)) then None
-      else
-        let shapes = slot_shapes step in
-        if Array.length shapes <> Array.length sk.sk_slots then None
-        else
-          let pending = ref [] in
-          let corresponds i (sh : shape) =
-            match sk.sk_slots.(i) with
-            | Arg j -> phys_equal sh args.(j)
-            | Fixed f -> phys_equal sh f
-            | Created c -> (
-                match bound.(c) with
-                | Some b -> phys_equal b sh
-                | None -> (
-                    match List.Assoc.find !pending c ~equal:Int.equal with
-                    | Some b -> phys_equal b sh
-                    | None ->
-                        let fresh =
-                          sh.id >= id_mark && (not sh.closed)
-                          && (not (is_bound sh))
-                          && not (List.exists !pending ~f:(fun (_, b) -> phys_equal b sh))
-                        in
-                        if fresh then pending := (c, sh) :: !pending;
-                        fresh))
-          in
-          let lhs_fresh =
-            match sk.sk_slots.(0) with
-            | Created c -> Option.is_none bound.(c)
-            | Arg _ | Fixed _ -> false
-          in
-          if
-            Array.for_alli shapes ~f:corresponds
-            && ((not lhs_fresh) || sabotaged No_creation_check
-               || List.equal Row.equal (creation_rows step.shape) sk.sk_creation)
-          then Some (List.rev !pending)
-          else None
-    in
-    let ties binds =
-      if sabotaged No_unify then []
-      else
-        List.concat_map binds ~f:(fun (c, (sh : shape)) ->
-            let r = Lazy.force renamed.(c) in
-            List.map
-              [
-                (`Batch, r.r_batch, sh.batch);
-                (`Input, r.r_input, sh.input);
-                (`Output, r.r_output, sh.output);
-              ]
-              ~f:(fun (kind, r1, r2) ->
-                Row.Row_eq
-                  {
-                    r1;
-                    r2;
-                    origin =
-                      [ { origin with lhs_kind = kind; rhs_kind = kind; rhs_name = sh.debug_name } ];
-                  }))
-    in
-    let solve_ties step eqs =
-      active_constraints := eqs @ !active_constraints;
-      counts := { !counts with tie_equations = !counts.tie_equations + List.length eqs };
-      let _, env = Row.solve_inequalities ~stage:Row.Stage1 eqs !state in
-      apply_env_step env step;
-      state := env
-    in
-    let register_untimed (step : update_step) =
-      let matched =
-        if !backward_depth > 0 || !cursor >= n then None
-        else
-          let sk = s.skeleton.(!cursor) in
-          Option.map (match_step sk step) ~f:(fun binds -> (sk, binds))
-      in
-      match matched with
-      | None ->
-          let backward = !backward_depth > 0 in
-          counts :=
-            if backward then { !counts with backward_steps = !counts.backward_steps + 1 }
-            else { !counts with unmatched_steps = !counts.unmatched_steps + 1 };
-          propagate_inline ~backward step
-      | Some (sk, binds) -> (
-          Int.incr cursor;
-          List.iter binds ~f:(fun (c, (sh : shape)) ->
-              bound.(c) <- Some sh;
-              Hashtbl.add_multi bound_of ~key:sh.id ~data:sh);
-          let describe exn =
-            [%string
-              "%{prefix}guided shape propagation for #%{step.shape.id#Int} \
-               %{step.shape.debug_name}: %{exn_summary exn}"]
-          in
-          match sk.sk_fallback with
-          | Some _ ->
-              counts := { !counts with fallback_steps = !counts.fallback_steps + 1 };
-              propagate_inline step;
-              with_taint_on_failure ~describe (fun () -> solve_ties step (ties binds))
-          | None ->
-              counts := { !counts with guided_steps = !counts.guided_steps + 1 };
-              with_taint_on_failure ~describe (fun () ->
-                  let shapes = slot_shapes step in
-                  List.iter sk.sk_unmarks ~f:(fun i -> unmark_unused shapes.(i).id);
-                  active_update_steps := step :: !active_update_steps;
-                  solve_ties step (ties binds)))
-    in
-    let register step =
-      timed
-        (if !backward_depth > 0 then `Backward_step else `Guided_step)
-        (fun () -> register_untimed step)
-    in
-    let outer = !active_guide in
-    active_guide := Some { guide_label = s.label; guide_register = register };
-    let result =
-      try Exn.protect ~f ~finally:(fun () -> active_guide := outer)
-      with exn ->
-        (* The scheme's constraints for the steps the body did not get to build still stand. *)
-        let bt = Stdlib.Printexc.get_raw_backtrace () in
-        taint_session
-          ~provenance:
-            [%string "%{prefix}the function raised %{exn_summary exn} after its scheme applied"];
-        Stdlib.Printexc.raise_with_backtrace exn bt
-    in
-    if !cursor < n then (
-      let sk = s.skeleton.(!cursor) in
-      let msg =
-        [%string
-          "%{prefix}the function built a different graph than at its trace: the trace's step \
-           %{(!cursor + 1)#Int} of %{n#Int} (%{sk.sk_spec}) was not built -- a schemed function's \
-           graph must not depend on state outside its closure and its arguments' shapes; opt it \
-           out with [@@ocannl.no_scheme], or set op_shape_schemes=check"]
-      in
-      taint_session ~provenance:msg;
-      raise @@ Row.Shape_error (msg, []));
-    result
 end

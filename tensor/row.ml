@@ -3631,42 +3631,6 @@ let rename_constraint rn = function
   | Terminal_row (b, r, origin) -> Terminal_row (b, rename_row rn r, origin)
   | Shape_row (r, origin) -> Shape_row (rename_row rn r, origin)
 
-(* A canonical form of a row group, equal for two groups exactly when they are equal up to a
-   bijective renaming of their variables (gh-ocannl-1761): variables are numbered by first
-   occurrence across the whole group, so sharing between its rows counts; provenance and projection
-   ids are dropped, and static symbols stay rigid. *)
-let canonical_rows rows =
-  let dims = Hashtbl.create (module Int) and row_vars = Hashtbl.create (module Int) in
-  let rn =
-    {
-      rn_dim =
-        (fun v ->
-          Hashtbl.find_or_add dims v.Dim_var.id ~default:(fun () ->
-              ({ Dim_var.id = Hashtbl.length dims; name = None } : dim_var)));
-      rn_row =
-        (fun v ->
-          Hashtbl.find_or_add row_vars (row_var_id v) ~default:(fun () ->
-              Row_var.Row_var (Hashtbl.length row_vars)));
-    }
-  in
-  let rec erase = function
-    | Dim s -> Dim { s with proj_id = None }
-    | Sym s -> Sym { s with sym_proj_id = None }
-    | Var _ as d -> d
-    | Affine { stride; over; conv; stride_offset } ->
-        let conv = Option.map conv ~f:(fun c -> { c with kernel = erase c.kernel }) in
-        Affine { stride; over = erase over; conv; stride_offset }
-    | Concat ds -> Concat (List.map ds ~f:erase)
-  in
-  List.map rows ~f:(fun r ->
-      let { beg_dims; dims; bcast; prov = _ } = rename_row rn r in
-      {
-        beg_dims = List.map beg_dims ~f:erase;
-        dims = List.map dims ~f:erase;
-        bcast;
-        prov = empty_provenance;
-      })
-
 (* The variables of a value, collected through the renaming traversal: one owner for the
    positions. *)
 let collect_vars ~f =

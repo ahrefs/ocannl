@@ -161,8 +161,6 @@ let bench reps cells =
                     {
                       tracing_s = med (fun r -> r.times.tracing_s);
                       instantiation_s = med (fun r -> r.times.instantiation_s);
-                      guided_steps_s = med (fun r -> r.times.guided_steps_s);
-                      backward_steps_s = med (fun r -> r.times.backward_steps_s);
                       inline_steps_s = med (fun r -> r.times.inline_steps_s);
                       closure_s = med (fun r -> r.times.closure_s);
                     };

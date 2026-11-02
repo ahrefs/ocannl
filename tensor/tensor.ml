@@ -1052,10 +1052,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* [grad_asn] runs inside the construction window too: the operands' roots are already removed
        and the result's not yet installed, so a closure here would checkpoint an incomplete graph
        (gh-ocannl-1301). *)
-    let own_grad_asn =
-      Shape.with_backward_construction (fun () ->
-          Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections))
-    in
+    let own_grad_asn = Shape.with_construction_window (fun () -> grad_asn ~t ~g ~projections) in
     let backprop = Asgns.sequence (own_grad_asn :: bcks) in
     let written = Asgns.collect_written own_grad_asn.asgns in
     let requires =

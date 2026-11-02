@@ -24,16 +24,12 @@ tensor/shape.ml: row_numbered_refs (ref) -- accounted: every write noted or at a
 tensor/shape.ml: update_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/shape.ml: with_error_trace (ref) -- accounted; kept by rewinds: user configuration of error messages, not inference state
 tensor/shape.ml: unused_shapes (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
-tensor/shape.ml: unmark_log (ref) -- exempt: the shape-scheme trace's own record, saved and restored by the trace
 tensor/shape.ml: state (ref) -- fingerprinted by mutated_since; captured by capture_globals
 tensor/shape.ml: construction_depth (ref) -- exempt: the construction window's depth, restored by the window's own finally
 tensor/shape.ml: active_update_steps (ref) -- fingerprinted by mutated_since; captured by capture_globals
 tensor/shape.ml: active_constraints (ref) -- fingerprinted by mutated_since; captured by capture_globals
 tensor/shape.ml: active_instances (ref) -- fingerprinted by mutated_since; captured by capture_globals
 tensor/shape.ml: tracing (ref) -- exempt: the shape-scheme traces in progress, restored by the trace's own finally
-tensor/shape.ml: active_guide (ref) -- exempt: the guided application in progress, installed and removed by Scheme.guided's own finally
-tensor/shape.ml: backward_depth (ref) -- exempt: a dynamic-scope depth, restored by with_backward_construction's finally
-tensor/shape.ml: trace_step_log (ref) -- exempt: the shape-scheme trace's own record, saved and restored by the trace
 tensor/shape.ml: taint (ref) -- exempt: the taint itself: a record of the first failure, not inference state
 tensor/shape.ml: discarded_updates (ref) -- accounted; kept by rewinds: a registry of what rewinds discarded: rewinds extend it, never restore it
 tensor/shape.ml: on_closure (ref) -- exempt: a hook Tensor installs once at module initialization, not inference state

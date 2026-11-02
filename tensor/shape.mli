@@ -422,8 +422,7 @@ val check_can_rewind : ?what:string -> unit -> unit
 (** Raises when called within a construction window; [what] names the caller in the message. *)
 
 val can_checkpoint : unit -> bool
-(** Whether an explicit checkpoint can be taken now: outside a construction window, untainted, and
-    outside a guided shape-scheme application. *)
+(** Whether an explicit checkpoint can be taken now: outside a construction window and untainted. *)
 
 exception Untraceable_scheme of string
 (** A shape-scheme trace refused by design (gh-ocannl-1751): the function is valid, but a scheme
@@ -435,79 +434,50 @@ exception Untraceable_scheme of string
 val tracing_in_progress : unit -> bool
 (** Whether a shape-scheme trace is running. *)
 
-val guide_active : unit -> bool
-(** Whether a guided shape-scheme application is running (gh-ocannl-1761): its body's steps are
-    matched against the scheme's trace. Closing inference, taking a checkpoint and rewinding are
-    refused meanwhile. *)
-
 type registration_counts = {
-  guided_applications : int;
   checked_applications : int;
-  guided_steps : int;
-  fallback_steps : int;
-  unmatched_steps : int;
-  backward_steps : int;
   inline_registrations : int;
   instantiated_constraints : int;
   instantiated_solutions : int;
   instantiated_boundary : int;
-  tie_equations : int;
-  backward_constraints : int;
   inline_constraints : int;
   closures : int;
   closure_constraints : int;
 }
 [@@deriving sexp_of]
-(** Registration statistics (gh-ocannl-1761), process-wide since the last reset: guided and checked
-    [%op] applications; matched steps registered guided (no [get_inequalities]) or normally (a
-    fallback kind); steps a guided application's trace lacked, and the gradient helpers its body
-    built (both registered normally); and every registration outside a trace that ran
-    [get_inequalities]. Projection derivation is not counted.
+(** Registration statistics (gh-ocannl-1752), process-wide since the last reset: checked [%op]
+    applications, and every registration outside a trace that ran [get_inequalities]. Projection
+    derivation is not counted.
 
     The constraint counts (gh-ocannl-1752) say what each source adds to the open constraint store: a
     scheme instantiation's renamed trace constraints (C'), its renamed solution equations (E'), and
     its boundary and anchor equations -- checked instantiations included, though their window is
-    rewound -- each guided step's tie equations, the gradient helpers' inequalities under a guided
-    application, and every other registration's own inequalities outside a trace.
-    [closure_constraints] sums the store's size at the entry of each [finish_inference] ([closures]
-    counts them). *)
+    rewound -- and every registration's own inequalities outside a trace. [closure_constraints] sums
+    the store's size at the entry of each [finish_inference] ([closures] counts them). *)
 
 type registration_times = {
   tracing_s : float;
   instantiation_s : float;
-  guided_steps_s : float;
-  backward_steps_s : float;
   inline_steps_s : float;
   closure_s : float;
 }
 [@@deriving sexp_of]
 (** Where shape-registration wall time goes (gh-ocannl-1752), process-wide since the last reset, in
-    seconds: tracing schemes (the body on tracers, and the rewind), instantiating them (guided and
-    checked applications), a guided application's steps (matched, fallback and unmatched alike), its
-    gradient helpers, every other step registered outside a trace, and [finish_inference]. A phase
-    nested in another (an instantiation inside a closure built mid-construction, say) is charged to
-    the inner phase alone. Construction work that is not shape registration (building tensors, their
-    code) is in none of them. *)
+    seconds: tracing schemes (the body on tracers, and the rewind), instantiating them (checked
+    applications and explicit instantiations), every step registered outside a trace, and
+    [finish_inference]. A phase nested in another (an instantiation inside a closure built
+    mid-construction, say) is charged to the inner phase alone. Construction work that is not shape
+    registration (building tensors, their code) is in none of them. *)
 
-type phase = [ `Tracing | `Instantiation | `Guided_step | `Backward_step | `Inline_step | `Closure ]
+type phase = [ `Tracing | `Instantiation | `Inline_step | `Closure ]
 
 val timed : phase -> (unit -> 'a) -> 'a
 (** Runs the function, charging its wall time, less that of nested timed phases, to the phase. *)
 
 val registration_times : unit -> registration_times
 val reset_registration_times : unit -> unit
-
-val with_backward_construction : (unit -> 'a) -> 'a
-(** Runs gradient-code construction ([Tensor.op]'s [grad_asn]): the helper tensors it builds depend
-    on which operands need gradients, so a shape-scheme trace leaves their steps out of its skeleton
-    and a guided application registers them normally ([backward_steps]). *)
-
 val registration_counts : unit -> registration_counts
 val reset_registration_counts : unit -> unit
-
-val diff_registration_counts : registration_counts -> registration_counts -> registration_counts
-(** [diff_registration_counts later earlier]: what happened in between. *)
-
 val note_checked_application : unit -> unit
 
 (** {3 Checkpoints (gh-ocannl-903)}
@@ -596,9 +566,6 @@ module Scheme : sig
     | No_internal_rows
         (** Register none of the scheme's internal rows with the closure ([instantiate] only). *)
     | No_end_validation  (** Skip the end-of-trace solve of the whole window ([trace] only). *)
-    | No_unify
-        (** Do not unify a guided application's shapes with the scheme's rows ([guided] only). *)
-    | No_creation_check  (** Match a step whatever its lhs's creation rows ([guided] only). *)
 
   val label : t -> string
   val arity : t -> int
@@ -642,31 +609,6 @@ module Scheme : sig
       and solver globals, the taint, the rows of the arguments and anchored shapes): an
       argument-dependent shape error raises as [instantiate]'s does, and the session is unchanged
       either way. Costs what [instantiate] does, independent of the open frontier. *)
-
-  val has_instances : t -> bool
-  (** Whether the traced function applied a scheme explicitly ({!instantiate}): such a scheme's
-      inherited internal rows belong to no step, so it is not applied {!guided}. *)
-
-  val guided :
-    ?sabotage:sabotage ->
-    t ->
-    application:string ->
-    args:shape list ->
-    id_mark:int ->
-    (unit -> 'a) ->
-    'a
-  (** [guided s ~application ~args ~id_mark body] (gh-ocannl-1761) instantiates [s] persistently
-      against [args] (registering no instance) and runs [body], whose shapes are those of tensors
-      with ids at least [id_mark]. Each update step [body] registers that matches the next step of
-      the trace -- an equal logic key, shapes corresponding to the trace's (the same arguments, the
-      same pre-existing shapes, its own shapes one-to-one), and a fresh lhs created with the trace's
-      rows up to renaming -- registers without [get_inequalities]: its shapes the trace created are
-      unified with the scheme's renamed rows, and the step is still registered for closure and
-      projections. A matched step with capture references, a uint4x32 conversion, a batch slice or a
-      payload-dependent terminal registers normally, unified too; a step the trace lacked registers
-      normally. A refused instantiation raises as {!check}'s does and puts the session back; after
-      it, an exception from [body] taints the session, and a trace step [body] did not build raises
-      [Row.Shape_error] ("the function built a different graph than at its trace"), tainting it. *)
 
   val stale : t -> bool
   (** Whether {!instantiate} would refuse the scheme for a closure since its trace (the scheme
