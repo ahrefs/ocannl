@@ -161,18 +161,7 @@ let () =
   (* A synthetic f32 mma capability so the tensorized pipeline seeds too: the prediction covers both
      GPU pipelines, whose workgroup geometries differ (register splits vs. the tensorization lane).
      Machine-independent by construction — no field here is read off a device. *)
-  let mma_limits =
-    {
-      BI.no_hardware_limits with
-      mma =
-        Some
-          {
-            BI.minimal_mma_capability with
-            mma_tile = (8, 8, 8);
-            mma_format_tiles = [ ((BI.Mma_f32, BI.Mma_f32, BI.Mma_f32), (8, 8, 8)) ];
-          };
-    }
-  in
+  let mma_limits = Ll_test.f32_mma_limits in
   let seeds limits = Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits opt in
 
   (* === The prediction is the geometry the schedule actually launches with === *)

@@ -46,19 +46,9 @@ module BI = Ir.Backend_intf
 module Idx = Ir.Indexing
 open Verdict.Claims
 
-(* An mma capability with 8x8x8 f32 tiles: enough for the GPU conv and matmul families to seed,
-   whatever device (if any) the run has. *)
-let mma_limits =
-  {
-    BI.no_hardware_limits with
-    mma =
-      Some
-        {
-          BI.minimal_mma_capability with
-          mma_tile = (8, 8, 8);
-          mma_format_tiles = [ ((BI.Mma_f32, BI.Mma_f32, BI.Mma_f32), (8, 8, 8)) ];
-        };
-  }
+(* The shared stand-in mma capability, 8x8x8 f32 tiles: enough for the GPU conv and matmul families
+   to seed, whatever device (if any) the run has. *)
+let mma_limits = Ll_test.f32_mma_limits
 
 (* The C-backend leg's limits: a pinned 16-byte vector width, no mma. *)
 let cpu_limits =
