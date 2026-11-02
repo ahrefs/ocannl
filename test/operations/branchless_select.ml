@@ -75,6 +75,21 @@ let census_axis = if Option.is_some gpu_dialect then LL.Grid else LL.Serial
 let blend_leg ~cpu_only = Verdict.leg ~when_:(on_cc || (blends && not cpu_only)) ~on:backend_name ()
 let () = Generated.init ~backend_name
 
+(* gh-ocannl-1778: the [outlined] mode is this test run with every kernel forced outlined
+   ([cc_kernel_part_weight=1], [cc_compile_unit_min_bytes=0] on its rule), under the plain run's
+   golden. It claims the pool kernel -- the one large enough to outline -- was rendered outlined, so
+   a threshold change leaving it whole cannot turn the variant into a second copy of the plain
+   run. *)
+let outlined =
+  match
+    List.filter
+      (List.tl_exn (Array.to_list Stdlib.Sys.argv))
+      ~f:(fun arg -> not (String.is_prefix arg ~prefix:"--"))
+  with
+  | [] -> false
+  | [ "outlined" ] -> true
+  | _ -> failwith "usage: branchless_select.exe [outlined] [--ocannl_<key>=<value>...]"
+
 (* NaN against NaN by kind (the payload is the hardware's), everything else on the bits: a signed
    zero is half of what is pinned. *)
 let same_bits a b =
@@ -90,14 +105,12 @@ let mk_double = node_factory ~prec:Ops.double ~first_id:16260 ~dims:[| n |] ()
 let mk_half = node_factory ~prec:Ops.half ~first_id:16300 ~dims:[| n |] ()
 let mk_bf16 = node_factory ~prec:Ops.bfloat16 ~first_id:16340 ~dims:[| n |] ()
 
-(* The kernel's own text: the generated source past its builtins prelude, which spells [?:] itself
-   (the integer-power helpers, the select helpers). *)
-let kernel_text name =
-  let src = Generated.read name in
-  match String.substr_index src ~pattern:(name ^ "(") with
-  | Some i -> String.drop_prefix src i
-  | None -> ""
-
+(* The kernel's statements ({!Generated.main_logic}): not the builtins prelude, which spells [?:]
+   itself (the integer-power helpers, the select helpers), and, where the kernel was rendered
+   outlined, its parts' bodies spliced in at their calls. The text after the kernel's name read only
+   the kernel's own body, which an outlined kernel spends calling its parts: its positive claims
+   went red and its negative ones held over nothing (gh-ocannl-1778). *)
+let kernel_text name = Generated.main_logic (Generated.read name)
 let has text s = String.is_substring text ~substring:s
 
 (* Every short-circuiting spelling a value select has on cc ([Ops.ternop_c_syntax],
@@ -749,6 +762,9 @@ let () =
     ~f:same_bits;
   p_all2 "pool backward: the inlined gradient equals the inlining-off run, bitwise" inlined
     materialized ~f:same_bits;
+  if outlined then
+    Verdict.claim "the forced run rendered the pool kernel outlined"
+      (not (List.is_empty (Generated.outlined_parts (Generated.read "bs_pool_inlined"))));
   let claim = "pool backward: the inlined gradient's selects call the blend" in
   if blends then
     let text = kernel_text "bs_pool_inlined" in

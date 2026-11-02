@@ -276,6 +276,7 @@
   (alias runtest-schedule_conv_gemm-tf32)
   (alias runtest-test_uniform_virtual_lane-outlined)
   (alias runtest-thread_private_gate-outlined)
+  (alias runtest-branchless_select-outlined)
   (alias runtest-heap_local_arrays-outlined)
   (alias runtest-epilogue_fusion_mma_seeds-tf32)
   (alias runtest-fast_math_libmvec)
@@ -5594,6 +5595,34 @@
  (package neural_nets_lib)
  (action
   (diff branchless_select.expected branchless_select-no_hip_fast_math.actual)))
+
+; gh-ocannl-1778: the same claims with every kernel forced outlined, under the plain run's golden.
+; The sweep's cc-outlined unit found this test's kernel-text reading blind to an outlined kernel's
+; parts; the `outlined` mode also claims the pool kernel was outlined.
+
+(rule
+ ; ocannl-backend: cc -- outlining is the cc renderer's; the command line pins the backend.
+ (target branchless_select-outlined.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (locks branchless_select)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:branchless_select.exe}
+    outlined
+    --ocannl_backend=cc
+    --ocannl_cc_kernel_part_weight=1
+    --ocannl_cc_compile_unit_min_bytes=0))))
+
+(rule
+ (alias runtest-branchless_select-outlined)
+ (package neural_nets_lib)
+ (action
+  (diff branchless_select.expected branchless_select-outlined.actual)))
 
 (test
  (name narrow_rng_nesting)

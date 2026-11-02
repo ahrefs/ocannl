@@ -2536,7 +2536,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   force it (gh-ocannl-1708): `test_uniform_virtual_lane-outlined` (the plain golden, flags on its
   rule) and the census's `emission-outlined` piece (its emit children are forced), each claiming
   the outlining itself through `Generated.outlined_parts` -- over the run or the main kernels,
-  since a one-statement kernel stays whole at any weight. And `codegen_text_inventory` refuses a
+  since a one-statement kernel stays whole at any weight. `branchless_select-outlined` (gh-ocannl-1778)
+  joined them after the sweep's `cc-outlined` unit found its after-the-name reading blind to the
+  parts. And `codegen_text_inventory` refuses a
   `substr_index` on the banner (`Codegen_text_scan.reads_after_marker`), exempting by name only
   `cc_kernel_outline`'s negative control.
 - A test asserting on the ARRAYS a kernel declares reads them through `Generated.declared_arrays`
