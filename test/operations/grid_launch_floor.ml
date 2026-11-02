@@ -20,6 +20,9 @@
    under the default floor every launch is recorded serial for the floor, with its estimate below
    it, and with the floor disabled every launch is recorded on the pool. *)
 
+(* cc-fp-contract: exact-operands -- Bench_gebp products are multiples of an eighth and every sum
+   stays exact in f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

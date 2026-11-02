@@ -39,6 +39,9 @@
    (packed and register-tiled pipelines included), so every backend executes a
    multi-axis-contraction sketch. *)
 
+(* cc-fp-contract: exact-operands -- half-integer times quarter-step cycles, Ll_test.exact_partials
+   for bf16 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

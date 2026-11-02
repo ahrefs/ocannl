@@ -26,6 +26,8 @@
    apart; and the production out projection, far above [sr_out_max], is no site, though the split of
    its merged k is a legal op and the contraction branch tiles that k 256 deep. *)
 
+(* cc-fp-contract: exact-operands -- sixteenths: every product and sum is exact in f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

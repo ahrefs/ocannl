@@ -35,6 +35,9 @@
    representable in f32, so bitwise equality is required regardless of accumulation-order changes
    from the tiling. *)
 
+(* cc-fp-contract: exact-operands -- products are small multiples of an eighth and sums stay exact
+   in f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

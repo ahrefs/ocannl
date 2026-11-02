@@ -25,6 +25,9 @@
 
    Per-cell and per-seed detail goes to stderr; the golden holds the claims. *)
 
+(* cc-fp-contract: exact-operands -- weights of one and zero and an explicit-fma split; the hardware
+   leg is GPU-only *)
+
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules

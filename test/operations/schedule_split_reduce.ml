@@ -30,6 +30,11 @@ module Idx = Ir.Indexing
 module Asgns = Ir.Assignments
 module IDX = Train.IDX
 
+(* The C compiler's own contraction pinned off, before the first compile (gh-ocannl-1696): the
+   parallel legs compare fissioned, pool-annotated kernels with a single-routine serial twin bitwise
+   on full-mantissa operands, and a compiler free to fuse [acc + m * v] may fuse the two kernel
+   shapes differently. The claims are about the schedule, not that licence. *)
+let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims

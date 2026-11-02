@@ -36,6 +36,9 @@
    On a backend with no CPU pool a [Grid] loop is a hardware grid and nothing is recorded, so the
    whole leg is skipped there by name. *)
 
+(* cc-fp-contract: exact-operands -- Ll_test.exact_partials derives the operands' sums exact at
+   f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

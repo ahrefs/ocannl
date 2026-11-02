@@ -1,3 +1,6 @@
+(* cc-fp-contract: no-contraction -- threefry draws from an inlined and a materialized counter: bit
+   operations only *)
+
 open Base
 open Ocannl
 open Ocannl.Nn_blocks.DSL_modules

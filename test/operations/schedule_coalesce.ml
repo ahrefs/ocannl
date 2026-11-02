@@ -34,6 +34,9 @@
    that every association of its sums is exact in f32 (an [Ll_test.exact_partials] claim over its
    cells), so bitwise equality is required whatever order a tiling accumulates in. *)
 
+(* cc-fp-contract: exact-operands -- every executed leg derives Ll_test.exact_partials over its
+   cycles *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

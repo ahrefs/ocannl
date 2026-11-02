@@ -16,6 +16,8 @@
    seeded without a fallback, and both outputs must stay bitwise the default pipeline's on
    non-dyadic inputs; elsewhere nothing is seeded. *)
 
+(* cc-fp-contract: same-shape -- cc seeds no untuned default, so both sides are the plain compile *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

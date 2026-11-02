@@ -28,6 +28,9 @@
    schedules are pinned structurally (prefix, replay) on every backend under a synthetic f32 mma
    capability. *)
 
+(* cc-fp-contract: exact-operands -- positive quarters and eighths with an explicit fma; every
+   gradient sum is exact *)
+
 open Base
 module LL = Ir.Low_level
 module Sched = Ir.Schedule

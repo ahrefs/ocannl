@@ -18,6 +18,9 @@
    domain there is no semantic difference to choose, only cost. - [einmax1]'s flag: a full reduction
    (trivially non-overlapping) with ties matches the product-space gradient bitwise. *)
 
+(* cc-fp-contract: exact-operands -- small integer inputs and a unit loss gradient; every max,
+   product and sum exact *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

@@ -20,6 +20,8 @@
    fill under a launch model. And the occupancy factor: theoretical occupancy's exact fractions, and
    the compute leg over it. *)
 
+(* cc-fp-contract: not-executed -- the bitwise claims compare cost-model legs computed in OCaml *)
+
 open Base
 open Verdict.Claims
 module LL = Ir.Low_level

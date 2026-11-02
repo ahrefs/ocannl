@@ -22,6 +22,8 @@
    tag inside the shared read, and [Context.to_host_all] raises the very refusal [Context.to_host]
    raises for it, before compiling anything. Runs on the backend [Context.auto] picks. *)
 
+(* cc-fp-contract: exact-operands -- integer inputs and small integer polynomials, exact in f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

@@ -28,6 +28,9 @@
    one of its two alternatives, and a cut group commits nothing -- arm A ships, though the measured
    alternative beat it. *)
 
+(* cc-fp-contract: exact-operands -- small integer operands make every sum of products exact in
+   f32 *)
+
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules

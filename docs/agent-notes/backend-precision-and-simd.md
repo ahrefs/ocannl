@@ -352,6 +352,21 @@ files.
   `cc_backend_fp_contract=off` the two still differ by design on every compiler (nothing contracts
   the serial loop; the tile's FMA is a schedule decision, gh-ocannl-998): a bitwise claim there
   also needs `fp_contract=true`.
+- **A bitwise claim on cc is held to the compilers and hosts the fleet lacks** (gh-ocannl-1696).
+  Only `cc_backend_fp_contract=off` means the same thing to every compiler: gcc before 14 treats
+  `-ffp-contract=on` as `off` in C, `auto` and `fast` contract by kernel shape (the two entries
+  above), and only the AVX512-FP16 CI runners compute f16 natively -- no fleet box has
+  `avx512_fp16`, so a native-fp16 VALUE claim is checked on CI alone. `test/operations/fp_contract_pin_scan`
+  lists every test source whose string literals claim bitwise equality, each either pinned
+  in-process (`Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"` before the first compile) or
+  carrying one marker comment `cc-fp-contract` + colon + `<kind> -- <reason>`, the kinds a closed
+  vocabulary the scan's golden prints (`exact-operands`, `no-contraction`, `same-shape`, `gated`,
+  `not-cc`, `not-executed`). A new bitwise claim comparing two kernel shapes on inexact operands
+  pins; a marker is for a claim contraction cannot reach, and says why. Mind the previous entry:
+  under `off` a packed tile's explicit FMA still differs from the serial loop, so such a claim
+  needs the IR licence too, or a runtime gate (`schedule_pad`'s, kind `gated`). The census and a
+  test's executed values against CI's gcc 13.3 are checked locally with
+  `tools/ci-compiler-test.sh --toolchain <dir>` (build-and-test.md, *What CI actually covers*).
 - **`-march=native` is the wrong flag on ARM and was silently downgrading every CPU kernel.** Apple
   clang accepts it on arm64 and targets a *lower* baseline than passing nothing: 22
   `__ARM_FEATURE_*` macros against 26 with no flag and 33 with `-mcpu=native`, losing

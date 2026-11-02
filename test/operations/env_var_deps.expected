@@ -251,6 +251,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-flip_twins
   test/operations/dune                     @runtest-foreign_c_stderr
   test/operations/dune                     @runtest-foreign_c_stderr_noise
+  test/operations/dune                     @runtest-fp_contract_pin_scan
   test/operations/dune                     @runtest-generated_lock_scan
   test/operations/dune                     @runtest-generated_lock_scan_control
   test/operations/dune                     @runtest-generated_provenance

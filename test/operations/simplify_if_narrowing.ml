@@ -12,6 +12,8 @@
    [Ir.Low_level.t] and run through [Ir.Low_level.simplify_llc] -- the pass under test, called with
    no static indices, exactly as [Schedule.apply]'s trailing simplify calls it. *)
 
+(* cc-fp-contract: no-contraction -- the executed cases are guarded copies and selects *)
+
 open Base
 module LL = Ir.Low_level
 module Tn = Ir.Tnode
