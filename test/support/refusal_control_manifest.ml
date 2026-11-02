@@ -706,9 +706,12 @@ let raw_entries =
         "[scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports the claim";
         "[scanner-refusal:b58d64bebca3825149316fa29084d773] which reads";
         "[scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised";
+        "[scanner-refusal:0de32014cb53ae9628faaa035dbb0ac7] starting with";
+        "[scanner-refusal:cccb6b32fe71c4e65b2b51a39ea8c519] skip-list reader raised";
         "[scanner-refusal:f3e306858423827e6575d13a17d57af6] check cannot vouch";
         "[scanner-refusal:4b8222a751df16e2ca351f7bacca5583] claim readers raised";
         "[scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application";
+        "[scanner-refusal:f94dbc9f97cc1e9b0662107356001f6b] applies the leg";
         "[scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate";
         "[scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into";
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
@@ -717,6 +720,7 @@ let raw_entries =
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
         "[scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that";
+        "[scanner-refusal:6e412a3ea539daeb755ee0d61f3d40f7] exempt_skip_lists";
         "[scanner-refusal:ad023891a3bd7827b3905292c487055b] claim-shaped literal any";
         "[scanner-refusal:e1354d390a356f0c79420c25232b0b42] planted canaries the";
         "[scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict";
@@ -732,7 +736,12 @@ let raw_entries =
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
         "[scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims";
         "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";
+        "[scanner-refusal:03571cf329d0733bb946c2eca2946008] Verdict.Claims";
+        "[scanner-refusal:f675a65703076dfc53ea44fb59f9fd09] claim-name resolver resolves";
+        "[scanner-refusal:664fc647996773a4adb1a331fc223f1f] gates and populations";
         "[scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into";
+        "[scanner-refusal:90b4edf499fe49feb30dde99ff5e87b3] no source writes";
+        "[scanner-refusal:83059def842c32ad5e0ce705c42e5d69] skip-list reader read";
         "[scanner-refusal:e9935bd293c26e123652183c000cb7e8] Verdict.Claims";
         "[scanner-refusal:07f11cb8fe0952beedc14df2223a8f0f] values of Verdict";
         "[scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted";
@@ -973,6 +982,8 @@ let raw_direct_evidence =
     ( "verdict_ratchet.ml:ad023891a3bd7827b3905292c487055b",
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "verdict_ratchet.ml:e1354d390a356f0c79420c25232b0b42",
+      "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
+    ( "verdict_ratchet.ml:6e412a3ea539daeb755ee0d61f3d40f7",
       "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true" );
     ( "env_var_deps.ml:02e183a4105132ec092206c1d35d6247",
       "a dune file built to trip the marker grammar and the declaration checks is refused: true" );

@@ -1,3 +1,4 @@
+the natural compile recorded the PTX it compiled: true
 a whole-routine GPU seed pads the row to the mma tile: true
 every variant's floor and native compiles agree bit for bit: true
 every variant with floor PTX for another arch compiled native PTX, all for the device's arch: true

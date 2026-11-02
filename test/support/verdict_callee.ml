@@ -93,6 +93,13 @@ let members =
 
 let member name = List.mem members name ~equal:String.equal
 
+(** The functions of [Verdict] that build a leg ({!Verdict.leg}, {!Verdict.sub_leg}), which
+    [Verdict.Claims] does not export: decided apart from {!members}, and only QUALIFIED
+    ([Verdict.leg], [V.sub_leg] under [module V = Verdict]), since an unqualified [leg] is the name
+    every test binds its leg to (gh-ocannl-1794). Held equal by [verdict_ratchet] to the top-level
+    functions of [test/support/verdict.ml] that return a [leg]. *)
+let leg_constructors = [ "leg"; "sub_leg" ]
+
 (** Libraries whose exports this resolver knows: no claim name, and no module named [Verdict]. *)
 let standard_libraries = [ "Base"; "Core"; "Stdlib"; "Caml"; "Stdio" ]
 
@@ -150,6 +157,8 @@ let ownership_of_value = function
 
 type t = {
   values : (int * int, resolution) Hashtbl.t;
+  legs : (int * int, resolution) Hashtbl.t;
+      (** Every qualified {!leg_constructors} identifier, resolved as a qualified member is. *)
   modules : (int * int, ownership) Hashtbl.t;
       (** Every module path spelled as a module expression -- opened, included, bound, a functor's
           argument -- that denotes [Verdict] ([Verdicts] or [Ambiguous]). *)
@@ -159,6 +168,7 @@ let key (loc : Location.t) = (loc.loc_start.pos_cnum, loc.loc_end.pos_cnum)
 
 let of_structure ast : t =
   let table = Hashtbl.Poly.create () and modules = Hashtbl.Poly.create () in
+  let legs = Hashtbl.Poly.create () in
   let walker =
     object (self)
       inherit [value, module_] Lexical_scope.scoped as super
@@ -319,7 +329,7 @@ let of_structure ast : t =
             }
 
       method! ident env ident =
-        let record name ownership =
+        let record ?(table = table) name ownership =
           Hashtbl.set table ~key:(key ident.loc)
             ~data:
               {
@@ -351,13 +361,20 @@ let of_structure ast : t =
                   Option.value_map (Map.find values name) ~default:Not_verdicts
                     ~f:ownership_of_value
               | Some (Standard | Unknown) | None -> Not_verdicts)
+        | Ldot (prefix, name) when List.mem leg_constructors name ~equal:String.equal ->
+            (* A structure's export of a leg constructor is not tracked: such a path is not
+               [Verdict]'s here, and the leg it builds goes unread rather than misread. *)
+            record ~table:legs name
+              (match self#module_path env prefix with
+              | Some (Verdict_library { ambiguous }) -> if ambiguous then Ambiguous else Verdicts
+              | Some (Structure _ | Standard | Unknown) | None -> Not_verdicts)
         | _ -> ()
     end
   in
   ignore
     (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
       : structure);
-  { values = table; modules }
+  { values = table; legs; modules }
 
 (* A callee under type constraints or coercions is the path it wraps. *)
 let rec peel expr =
@@ -369,6 +386,15 @@ let rec peel expr =
 let resolve (t : t) expr =
   match (peel expr).pexp_desc with
   | Pexp_ident { loc; _ } -> Hashtbl.find t.values (key loc)
+  | _ -> None
+
+(** The resolution of the claim name spelled at [loc], where it is one. *)
+let resolve_at (t : t) (loc : Location.t) = Hashtbl.find t.values (key loc)
+
+(** The resolution of [expr] as a {!leg_constructors} identifier, where it is one. *)
+let resolve_leg (t : t) expr =
+  match (peel expr).pexp_desc with
+  | Pexp_ident { loc; _ } -> Hashtbl.find t.legs (key loc)
   | _ -> None
 
 (** Whether [module_expr], under any constraints, is a path denoting [Verdict]: [Verdicts],

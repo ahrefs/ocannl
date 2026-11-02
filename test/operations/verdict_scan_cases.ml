@@ -276,6 +276,118 @@ let () = skipped "same"|ocaml},
       let found = List.length (Scan.dialect_census source).Scan.pairings in
       if found = expected then printf "ok: dialect scope -- %s\n" name
       else fail "dialect scope -- %s: expected %d pairings, found %d" name expected found);
+  (* gh-ocannl-1794: a hand-written skip list -- a skip handed to an iteration, a callback or loop
+     that only skips, a branch running two skips -- is found; the leg form and a gated claim in a
+     loop are not. Each finding prints as its kind and its first skip's label. *)
+  List.iter
+    [
+      ( "an iteration handed a skip",
+        {ocaml|let () = if on_gpu then check () else List.iter labels ~f:skipped|ocaml},
+        [ "iterated skipped" ] );
+      ( "an iteration handed a partially applied Verdict skip",
+        {ocaml|let () = List.iter labels ~f:(Verdict.skipped ~backend:backend_name)|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a callback that only skips",
+        {ocaml|let () = Array.iter names ~f:(fun l -> skipped (tag ^ l))|ocaml},
+        [ "iterated tag ^ l" ] );
+      ( "a loop body that only skips",
+        {ocaml|let () = for i = 0 to 2 do Verdict.skipped ~backend:"cc" names.(i) done|ocaml},
+        [ "iterated names.(i)" ] );
+      ( "a branch running two literal skips",
+        {ocaml|let () =
+  if on_cpu then (p "a" x; p "b" y) else (skipped "a"; skipped "b")|ocaml},
+        [ "run 2 a" ] );
+      ( "a match case running two skips through a per-test partial skip",
+        {ocaml|let skipped = Verdict.skipped ~backend:backend_name
+let () = match cap with `Withheld -> skipped first; skipped second | `Advertised -> run ()|ocaml},
+        [ "run 2 first" ] );
+      ( "claims written once in a leg",
+        {ocaml|let () =
+  let leg = Verdict.leg ~when_:on_cpu ~on:backend_name () in
+  in_leg ~leg "a" (fun label -> p label x);
+  in_leg ~leg "b" (fun label -> p label y)|ocaml},
+        [] );
+      ( "a loop whose callback evaluates on one side of its gate and skips on the other",
+        {ocaml|let () =
+  List.iter cases ~f:(fun c -> if on_gpu then p (case_label c) (passes c) else skipped (case_label c))|ocaml},
+        [] );
+      ("one skip per branch", {ocaml|let () = if on_gpu then p "a" x else skipped "a"|ocaml}, []);
+      ( "a local function that only shares the name",
+        {ocaml|let () =
+  let skipped s = s > 2 in
+  if a then (ignore (skipped 1); ignore (skipped 2)) else ();
+  List.iter xs ~f:(fun x -> ignore (skipped x))|ocaml},
+        [] );
+      ( "a parameter that only shares the name",
+        {ocaml|let () = ignore (List.filter_map skips ~f:(fun skipped -> pair skipped))|ocaml},
+        [] );
+      ( "a nested branch, judged on its own",
+        {ocaml|let () = if a then (skipped "x"; if b then skipped "y" else p "y" ok) else p "x" ok|ocaml},
+        [] );
+      ( "another module's skipped",
+        {ocaml|module Other = struct let skipped x = ignore x end
+let () = List.iter xs ~f:Other.skipped|ocaml},
+        [] );
+      ( "a skip alias a local open shadows with another skipped",
+        {ocaml|module Local = struct let skipped _ = () end
+let skipped = Verdict.skipped ~backend:"cc"
+let () = let open Local in List.iter labels ~f:skipped|ocaml},
+        [] );
+      ( "a skip alias past an open of a standard library",
+        {ocaml|let skipped = Verdict.skipped ~backend:"cc"
+let () = let open Stdio in List.iter labels ~f:skipped|ocaml},
+        [ "iterated skipped" ] );
+      ( "a skip callback a collection stores rather than calls",
+        {ocaml|let checks = List.singleton (fun () -> Verdict.skipped ~backend:"cc" "one")|ocaml},
+        [] );
+      ( "an iteration through a module alias of a collection",
+        {ocaml|module L = List
+let () = L.iter labels ~f:(Verdict.skipped ~backend:backend_name)|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a source's own List module, which only stores its callback",
+        {ocaml|module List = struct let iter xs ~f = ignore (xs, f) end
+let () = List.iter labels ~f:skipped|ocaml},
+        [] );
+      ( "a function value a loop body only builds",
+        {ocaml|let () = for _i = 1 to 2 do ignore (fun () -> Verdict.skipped ~backend:"cc" "one") done|ocaml},
+        [] );
+      ( "a partial iteration, which stores its skip callback",
+        {ocaml|let skip_labels = List.iter ~f:(Verdict.skipped ~backend:"cc")|ocaml},
+        [] );
+      ( "an iteration written as a pipeline",
+        {ocaml|let () = labels |> List.iter ~f:(Verdict.skipped ~backend:backend_name)|ocaml},
+        [ "iterated Verdict.skipped ~backend:backend_name" ] );
+      ( "a lazy a loop body only builds",
+        {ocaml|let () = for _i = 1 to 2 do ignore (lazy (Verdict.skipped ~backend:"cc" "one")) done|ocaml},
+        [] );
+      ( "a lazy sequence a map only builds",
+        {ocaml|let deferred = Stdlib.Seq.map (Verdict.skipped ~backend:"cc") (Stdlib.List.to_seq labels)|ocaml},
+        [] );
+      ( "a partial skip a loop body only builds",
+        {ocaml|let () = for _i = 1 to 2 do let _emit = Verdict.skipped ~backend:"cc" in () done|ocaml},
+        [] );
+      ( "a lazy a branch only builds",
+        {ocaml|let () =
+  if on_gpu then ignore (lazy (Verdict.skipped ~backend:"cc" "a"; Verdict.skipped ~backend:"cc" "b"))|ocaml},
+        [] );
+      ( "an Option iteration, which runs at most once",
+        {ocaml|let () = Option.iter maybe_label ~f:skipped|ocaml},
+        [] );
+    ]
+    ~f:(fun (name, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"skip-list source" ~name ~default:[ "<raised>" ] (fun () ->
+            List.map (Scan.skip_list_census source).Scan.skip_lists ~f:(fun site ->
+                (match site.Scan.skip_kind with
+                  | Scan.Iterated -> "iterated "
+                  | Scan.Skip_run n -> Printf.sprintf "run %d " n)
+                ^ site.Scan.first_label))
+      in
+      if List.equal String.equal found expected then printf "ok: skip list -- %s\n" name
+      else
+        fail "skip list -- %s: expected [%s], found [%s]" name
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found));
   (* The census the ratchet leans on to tell "nothing to report" from "nothing read": on a source
      with literals it must count them, and it must place the ones an application receives. *)
   let counted = Scan.scan {ocaml|let unapplied = "c"

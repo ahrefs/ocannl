@@ -4602,6 +4602,158 @@ let () =
   Verdict.gated_all ~when_:(not (Set.is_empty keep)) ~on:"cc" "all kept rows pass"
     (Hashtbl.data table) ~f:Fn.id|ocaml},
       [ "keep" ] );
+    (* gh-ocannl-1794: a leg's gate is its [~when_], through every [sub_leg]'s outer leg, and its
+       population is what the claims its [make] functions make range over. *)
+    ( "refuses a gated claim's gate read off a lazy population",
+      {ocaml|let () =
+  let rows = lazy (probe ()) in
+  Verdict.gated_all ~when_:(not (List.is_empty (Lazy.force rows))) ~on:"cc" "all rows pass"
+    (Lazy.force rows) ~f:Fn.id|ocaml},
+      [ "rows" ] );
+    ( "refuses a leg gate that tests its claims' own population for emptiness",
+      {ocaml|open Verdict.Claims
+let () =
+  let results = lazy (List.map seeds ~f:run) in
+  let leg = Verdict.leg ~when_:(not (List.is_empty (Lazy.force results))) ~on:backend_name () in
+  in_leg ~leg "every GPU sketch matches" (fun label -> p_all label (Lazy.force results) ~f:snd)|ocaml},
+      [ "results, run, seeds" ] );
+    ( "refuses a sub-leg gate read off the collection its claims' population is mapped from",
+      {ocaml|open Verdict.Claims
+let () =
+  let cpu_leg = Verdict.leg ~when_:on_cpu ~on:backend_name () in
+  let tiled = lazy (List.filter (probe ()) ~f:is_tiled) in
+  let leg =
+    Verdict.sub_leg cpu_leg ~when_:(lazy (not (List.is_empty (Lazy.force tiled)))) ~on:backend_name
+  in
+  let results = lazy (List.map (Lazy.force tiled) ~f:run) in
+  in_legf ~leg "%s: every twin matches" tag (fun label -> p_all label (Lazy.force results) ~f:snd)|ocaml},
+      [ "is_tiled, tiled" ] );
+    ( "refuses a leg gate a boolean claim's quantifier ranges over",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(List.length rows > 0) ~on:"cc" () in
+  in_leg ~leg "some row passes" (fun label -> p label (List.exists rows ~f:Fn.id))|ocaml},
+      [ "rows" ] );
+    ( "refuses a leg a match picks on a scrutinee read off the population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg =
+    match rows with
+    | [] -> Verdict.leg ~when_:false ~on:"cc" ()
+    | _ -> Verdict.leg ~when_:true ~on:"cc" ()
+  in
+  in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "refuses a leg a local function builds from the population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg_of () = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  let leg = leg_of () in
+  in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "refuses a leg gate read off what a helper making the claim is handed",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(List.length rows > 0) ~on:"cc" () in
+  in_leg ~leg "all rows pass" (fun label -> check_rows label rows)|ocaml},
+      [ "rows" ] );
+    ( "refuses a leg a match guard picks on the population",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg =
+    match () with
+    | _ when List.is_empty rows -> Verdict.leg ~when_:false ~on:"cc" ()
+    | _ -> Verdict.leg ~when_:true ~on:"cc" ()
+  in
+  in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "reads a population gate on an outer leg both branches of a choice share",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let base = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  let leg = if feature then Verdict.sub_leg base ~when_:(lazy on_gpu) ~on:"cc" else base in
+  in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "rows" ] );
+    ( "names a formatted leg claim still awaiting its make function unread",
+      {ocaml|open Verdict.Claims
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:"cc" () in
+  let claim = in_legf ~leg "%s: all rows pass" tag in
+  claim (fun label -> p_all label (probe ()) ~f:Fn.id)|ocaml},
+      [ "unread in_legf" ] );
+    ( "accepts a leg built in place, whose gate is no argument the make function hands a helper",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  in_leg ~leg:(Verdict.leg ~when_:on_gpu ~on:backend_name ()) (label_of on_gpu) (fun label ->
+      check_rows label rows)|ocaml},
+      [] );
+    ( "refuses a leg gate on the population a pipelined claim ranges over",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  in_leg ~leg "all rows pass" (fun label -> p_all label ~f:Fn.id @@ rows)|ocaml},
+      [ "rows" ] );
+    ( "refuses a leg gate read off what a helper on one path is handed beside a claim on another",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  in_leg ~leg "all rows pass" (fun label -> if feature then p label true else check_rows label rows)|ocaml},
+      [ "rows" ] );
+    ( "refuses a helper's population gate beside a claim only a deferred function makes",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let leg = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  in_leg ~leg "all rows pass" (fun label ->
+      let _deferred () = p label true in
+      check_rows label rows)|ocaml},
+      [ "rows" ] );
+    ( "refuses an outer leg's gate on the population a nested leg claim ranges over",
+      {ocaml|open Verdict.Claims
+let () =
+  let rows = probe () in
+  let outer = Verdict.leg ~when_:(not (List.is_empty rows)) ~on:"cc" () in
+  let inner = Verdict.leg ~when_:true ~on:"cc" () in
+  in_leg ~leg:outer "rows" (fun label ->
+      in_leg ~leg:inner label (fun label -> p_all label rows ~f:Fn.id))|ocaml},
+      [ "rows" ] );
+    ( "accepts a leg gated on a capability over a population built from the same program",
+      {ocaml|open Verdict.Claims
+let () =
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let leg = Verdict.leg ~when_:(Poly.equal (capability limits) `Advertised) ~on:backend_name () in
+  let results = lazy (List.map (gpu_seeds limits) ~f:run) in
+  in_leg ~leg "every seed matches" (fun label -> p_all label (Lazy.force results) ~f:snd)|ocaml},
+      [] );
+    ( "accepts a sub-leg gated on an invariant its claims' population does not decide",
+      {ocaml|open Verdict.Claims
+let () =
+  let cpu_leg = Verdict.leg ~when_:on_cpu ~on:backend_name () in
+  let tiled = lazy (List.filter (probe ()) ~f:is_tiled) in
+  let affords = lazy (not (List.is_empty (alternatives (site ())))) in
+  let leg = Verdict.sub_leg cpu_leg ~when_:affords ~on:backend_name in
+  let results = lazy (List.map (Lazy.force tiled) ~f:run) in
+  in_leg ~leg "every twin matches" (fun label -> p_all label (Lazy.force results) ~f:snd)|ocaml},
+      [] );
+    ( "names a leg handed in as a parameter uncompared rather than counting it read",
+      {ocaml|open Verdict.Claims
+let check ~leg rows = in_leg ~leg "all rows pass" (fun label -> p_all label rows ~f:Fn.id)|ocaml},
+      [ "uncompared in_leg" ] );
+    ( "names a leg claim applied in part instead of counting it clean",
+      {ocaml|open Verdict.Claims
+let () =
+  let leg = Verdict.leg ~when_:on_gpu ~on:"cc" () in
+  List.iter2_exn labels makes ~f:(in_leg ~leg)|ocaml},
+      [ "unread in_leg" ] );
   ]
 
 let gate_control_findings source =
@@ -4610,6 +4762,9 @@ let gate_control_findings source =
       String.concat ~sep:", " reading.reads ^ if reading.ambiguous then " [ambiguous]" else "")
   @ List.map census.Scan.unread ~f:(fun (form, _) -> "unread " ^ form)
   @ List.map census.Scan.unlisted ~f:(fun (call : Scan.unlisted_call) -> "unlisted " ^ call.callee)
+  @ List.map census.Scan.unread_legs ~f:(fun (leg : Scan.unread_leg) -> "unread " ^ leg.leg_form)
+  @ List.map census.Scan.uncompared_legs ~f:(fun (leg : Scan.unread_leg) ->
+      "uncompared " ^ leg.leg_form)
 
 let run_gate_population_controls () =
   List.map gate_population_controls ~f:(fun (label, source, expected) ->
@@ -4639,14 +4794,114 @@ let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
 let read_gates ~fail ~source ~census content =
   match Test_utils.Scan_attempt.run (fun () -> census content) with
   | Test_utils.Scan_attempt.Scanned gates -> gates
-  | Unparsed _ -> { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
+  | Unparsed _ -> Scan.empty_gate_census
   | Raised exn ->
       fail
         (Printf.sprintf
            "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, \
             not of the source, and the source's gated claims went uncompared"
            exn source);
-      { Scan.readings = []; gated_sites = 0; unread = []; unlisted = [] }
+      Scan.empty_gate_census
+
+(* {1 A skip list written by hand (gh-ocannl-1794)}
+
+   Claims only some backends can evaluate are written once, in a leg ([Verdict.leg], [in_leg]): the
+   closed side skips each one under its own label, in the order the same code reaches it. The form
+   the legs replaced -- the evaluating branch's claims, and a second copy on the other side as
+   [List.iter claims ~f:skipped] or a run of literal [skipped] calls -- broke three GPU backends'
+   goldens when the two copies drifted (gh-ocannl-1668). The reader is
+   [Verdict_scan.skip_list_census]; its header states what it reads and what it does not. A site
+   that must keep the form is exempted here by source and first skipped label, with the number of
+   sites the key covers and the reason: a site added under a key already exempted is refused, as a
+   removed one is. *)
+let exempt_skip_lists =
+  [
+    ( "test/operations/autotune_mma_companion.ml:claim",
+      1,
+      "a two-claim `Withheld` capability branch over the parity and census claims of one match; \
+       predates this rule; its migration to a leg waits on a run on the backends whose side it \
+       changes (CUDA, HIP, Metal)" );
+    ( "test/operations/bench_self_test.ml:label",
+      1,
+      "the Windows-only skip of the stall-instrument claims, which have no interval timer there; \
+       predates this rule; its migration to a leg waits on a run on the backends whose side it \
+       changes (Windows)" );
+    ( "test/operations/cc_march_census.ml:reuse",
+      1,
+      "a compiler whose listing memoization is bypassed skips the reuse and invalidation claims, a \
+       verdict read off the run's own census results that a leg's gate may not read; predates this \
+       rule; its migration to a leg waits on a run on the backends whose side it changes (an \
+       environment gate)" );
+    ( "test/operations/gpu_lane_reduction.ml:omits",
+      3,
+      "three cases' two emitted-kernel claims off a GPU; predates this rule; its migration to a \
+       leg waits on a run on the backends whose side it changes (Metal, CUDA, HIP)" );
+    ( "test/operations/hardware_warp_shuffle.ml:claim_bf16_1w",
+      1,
+      "the two bf16 widening claims where the backend does not widen bf16 reductions; predates \
+       this rule; its migration to a leg waits on a run on the backends whose side it changes \
+       (CUDA, HIP)" );
+    ( "test/operations/integer_power_domain.ml:ipow_f64: integer powers match independent \
+       multiplication including exceptional values",
+      1,
+      "the f64 case's two claims where the backend has no f64; predates this rule; its migration \
+       to a leg waits on a run on the backends whose side it changes (Metal)" );
+    ( "test/operations/launch_predicate_parity.ml:parity_label",
+      1,
+      "a two-claim `Withheld` capability branch over one tensorized conv seed; predates this rule; \
+       its migration to a leg waits on a run on the backends whose side it changes (CUDA, HIP, \
+       Metal)" );
+    ( "test/operations/reduction_forms.ml:evidence_claim",
+      1,
+      "the per-member claim list of an unavailable reduction form, its VERIFY claims iterated from \
+       the program; predates this rule; its migration to a leg waits on a run on the backends \
+       whose side it changes (every backend: each skips a different set of members)" );
+    ( "test/operations/reduction_forms.ml:Printf.sprintf \"%s @ %s: %s\" m.slug prec_name claim",
+      1,
+      "the VERIFY claims of the same unavailable-form branch as evidence_claim, iterated from the \
+       program's own list; predates this rule; its migration to a leg waits on a run on the \
+       backends whose side it changes (every backend)" );
+    ( "test/operations/reduction_forms.ml:form_claim",
+      1,
+      "the tile-mma fallback's three claims off a CPU backend; predates this rule; its migration \
+       to a leg waits on a run on the backends whose side it changes (Metal, CUDA, HIP)" );
+    ( "test/operations/tile_mma_narrow.ml:parity_name",
+      1,
+      "a toolchain that rejects the half kernel skips both pure-f16 claims from the exception \
+       handler, a judgment only the compile itself makes; predates this rule; its migration to a \
+       leg waits on a run on the backends whose side it changes (an exotic toolchain)" );
+  ]
+
+let skip_list_key ~source (site : Scan.skip_list) = source ^ ":" ^ site.Scan.first_label
+
+let refuse_skip_list ~fail ~source (site : Scan.skip_list) =
+  fail
+    (Printf.sprintf
+       "%s:%d %s, starting with `%s` -- a hand-written skip list, a second copy of the claims the \
+        evaluating side makes, whose order nothing ties to the first (gh-ocannl-1668). Write the \
+        claims once, in a leg: `let leg = Verdict.leg ~when_ ~on ()`, then each claim as `in_leg \
+        ~leg label (fun label -> ...)` in code that runs on every backend (gh-ocannl-1703); or \
+        exempt the site in verdict_ratchet.ml's exempt_skip_lists with the reason"
+       source site.Scan.skip_line
+       (match site.Scan.skip_kind with
+       | Scan.Iterated -> "skips a claim from an iteration that makes no other claim"
+       | Scan.Skip_run n -> Printf.sprintf "applies %d skips in one branch" n)
+       site.Scan.first_label)
+
+(* The skip-list reader over one source, its failures told apart as {!read_gates} tells the gate
+   reader's. *)
+let read_skip_lists ~fail ~source ~census content =
+  let nothing = { Scan.skip_lists = []; skips_read = 0 } in
+  match Test_utils.Scan_attempt.run (fun () -> census content) with
+  | Test_utils.Scan_attempt.Scanned census -> census
+  | Unparsed _ -> nothing
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the skip-list reader raised %s on %s, which parses -- a defect of \
+            Verdict_scan.skip_list_census, not of the source, and the source's skips went unread"
+           exn source);
+      nothing
 
 (* The four claim readers over one source, their failures told apart (gh-ocannl-1292): a source that
    does not parse is reported by name, and an exception from one that parses is a reader defect,
@@ -4710,6 +4965,15 @@ let refuse_unread_gate ~fail ~source (form, line) =
         gate reads the population. Apply the claim, or a `let`-bound partial application of it, to \
         its label and population directly"
        source line form)
+
+let refuse_unread_leg ~fail ~source (leg : Scan.unread_leg) =
+  fail
+    (Printf.sprintf
+       "%s:%d applies the leg claim `%s`, whose gate the gate reader cannot compare with its \
+        population because %s. Bind the leg to a name with `let leg = Verdict.leg ~when_ ~on ()` \
+        (or `Verdict.sub_leg`), and hand `~leg`, the label and a `fun label -> ...` making the \
+        claim in place to the leg claim (gh-ocannl-1794)"
+       source leg.Scan.leg_line leg.Scan.leg_form leg.Scan.why)
 
 let refuse_unlisted_gate ~fail ~source (call : Scan.unlisted_call) =
   fail
@@ -4784,6 +5048,58 @@ let run_gate_refusal_control () =
       : Scan.gate_census);
   ( "refuses a planted gate that reads its population, and a gated claim it cannot read",
     !refused_reading && !refused_unread && !refused_unlisted && !refused_raise )
+
+(* The wiring from a leg claim the gate reader cannot complete, a hand-written skip list and a
+   skip-list reader that raised to their failures (gh-ocannl-1794), exercised as
+   {!run_gate_refusal_control} exercises the gate reader's. *)
+let run_leg_and_skip_list_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let unread_leg_format =
+    "%s:%d applies the leg claim `%s`, whose gate the gate reader cannot compare with its \
+     population because %s. Bind the leg to a name with `let leg = Verdict.leg ~when_ ~on ()` (or \
+     `Verdict.sub_leg`), and hand `~leg`, the label and a `fun label -> ...` making the claim in \
+     place to the leg claim (gh-ocannl-1794)"
+  and skip_list_format =
+    "%s:%d %s, starting with `%s` -- a hand-written skip list, a second copy of the claims the \
+     evaluating side makes, whose order nothing ties to the first (gh-ocannl-1668). Write the \
+     claims once, in a leg: `let leg = Verdict.leg ~when_ ~on ()`, then each claim as `in_leg ~leg \
+     label (fun label -> ...)` in code that runs on every backend (gh-ocannl-1703); or exempt the \
+     site in verdict_ratchet.ml's exempt_skip_lists with the reason"
+  and raised_format =
+    "the skip-list reader raised %s on %s, which parses -- a defect of \
+     Verdict_scan.skip_list_census, not of the source, and the source's skips went unread"
+  in
+  let refused_leg = ref false and refused_list = ref false and refused_raise = ref false in
+  let fixture label =
+    List.find_map_exn gate_population_controls ~f:(fun (found, source, _) ->
+        if String.equal found label then Some source else None)
+  in
+  List.iter
+    (Scan.gate_census (fixture "names a leg claim applied in part instead of counting it clean"))
+      .Scan.unread_legs
+    ~f:
+      (refuse_unread_leg ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_leg := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unread_leg_format));
+  List.iter
+    (Scan.skip_list_census
+       {ocaml|let () = if on_gpu then (p "a" x; p "b" y) else (skipped "a"; skipped "b")|ocaml})
+      .Scan.skip_lists
+    ~f:
+      (refuse_skip_list ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_list := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:skip_list_format));
+  ignore
+    (read_skip_lists ~source:"fixture.ml"
+       ~fail:(fun _ ->
+         refused_raise := true;
+         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+       ~census:(fun _ -> raise Stdlib.Exit)
+       "let () = ()"
+      : Scan.skip_list_census);
+  ( "refuses a leg claim it cannot complete, a planted hand-written skip list, and a skip-list \
+     reader that raised",
+    !refused_leg && !refused_list && !refused_raise )
 
 (* {1 A gate is a skip, not a disjunct of the claim (gh-ocannl-1310)}
 
@@ -5436,8 +5752,18 @@ let () =
   let quantified_offenders = ref 0 in
   let dialect_offenders = ref 0 and skipped_sites = ref 0 and pass_fail_sites = ref 0 in
   let line_break_offenders = ref 0 and label_sites = ref 0 in
-  let gate_offenders = ref 0 and gated_sites = ref 0 in
+  let gate_offenders = ref 0
+  and gated_sites = ref 0
+  and leg_sites = ref 0
+  and uncompared_legs = ref 0 in
   let folded_offenders = ref 0 and folded_claim_sites = ref 0 in
+  let skip_list_offenders = ref 0 and skips_read = ref 0 in
+  let skip_list_exemptions =
+    Map.of_alist_exn
+      (module String)
+      (List.map exempt_skip_lists ~f:(fun (key, sites, _) -> (key, sites)))
+  in
+  let skip_lists_exempted = Hashtbl.create (module String) in
   let tolerance_offenders = ref 0 and parity_sites = ref 0 in
   let manifest =
     List.find_map arguments ~f:(fun (relative, path) ->
@@ -5454,7 +5780,7 @@ let () =
     @ run_line_break_controls ()
     @ [ run_line_break_refusal_control () ]
     @ run_gate_population_controls ()
-    @ [ run_gate_refusal_control () ]
+    @ [ run_gate_refusal_control (); run_leg_and_skip_list_refusal_control () ]
     @ [ run_claim_reader_refusal_control (); run_matrix_reader_control () ]
     @ run_folded_gate_controls ()
     @ [ run_folded_gate_refusal_control () ]
@@ -5500,6 +5826,19 @@ let () =
       List.iter gates.Scan.unlisted ~f:(fun call ->
           Int.incr gate_offenders;
           refuse_unlisted_gate ~fail ~source call);
+      leg_sites := !leg_sites + gates.Scan.leg_sites;
+      uncompared_legs := !uncompared_legs + List.length gates.Scan.uncompared_legs;
+      List.iter gates.Scan.unread_legs ~f:(fun leg ->
+          Int.incr gate_offenders;
+          refuse_unread_leg ~fail ~source leg);
+      let skip_lists = read_skip_lists ~fail ~source ~census:Scan.skip_list_census content in
+      skips_read := !skips_read + skip_lists.Scan.skips_read;
+      List.iter skip_lists.Scan.skip_lists ~f:(fun site ->
+          let key = skip_list_key ~source site in
+          if Map.mem skip_list_exemptions key then Hashtbl.incr skip_lists_exempted key
+          else (
+            Int.incr skip_list_offenders;
+            refuse_skip_list ~fail ~source site));
       let folds = read_folded_gates ~fail ~source ~census:Scan.folded_gate_census content in
       folded_claim_sites := !folded_claim_sites + folds.Scan.folded_claim_sites;
       List.iter folds.Scan.folded ~f:(fun fold ->
@@ -5599,6 +5938,12 @@ let () =
   if List.is_empty exempt_quantified_helpers then
     printf "  (none: every quantified binding in a claim must witness a population)\n"
   else List.iter exempt_quantified_helpers ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
+  printf "\nHand-written skip lists exempted, with the reason each keeps the form:\n";
+  if List.is_empty exempt_skip_lists then
+    printf "  (none: every claim a backend cannot evaluate is written once, in a leg)\n"
+  else
+    List.iter exempt_skip_lists ~f:(fun (key, sites, why) ->
+        printf "  %s (%d site%s) -- %s\n" key sites (if sites = 1 then "" else "s") why);
   printf "\nSynthetic helper-rule controls:\n";
   List.iter control_results ~f:(fun (label, ok) -> Verdict.pf "%s" label ok);
   print_syntax_matrix matrix_rows;
@@ -5626,6 +5971,20 @@ let () =
           %s"
          (String.concat ~sep:", " (Set.to_list stale)));
   refuse_stale_quantified ~fail stale_quantified;
+  let stale_skip_lists =
+    List.filter_map exempt_skip_lists ~f:(fun (key, sites, _) ->
+        let found = Option.value (Hashtbl.find skip_lists_exempted key) ~default:0 in
+        if found = sites then None
+        else Some (Printf.sprintf "%s (exempted %d, found %d)" key sites found))
+    |> Set.of_list (module String)
+  in
+  if not (Set.is_empty stale_skip_lists) then
+    fail
+      (Printf.sprintf
+         "exempted skip lists whose sites no longer number what their exemption says -- a site \
+          added under an exempted key needs its own exemption, a removed one drops it from \
+          exempt_skip_lists: %s"
+         (String.concat ~sep:", " (Set.to_list stale_skip_lists)));
   refuse_colliding_sites ~fail colliding_sites;
   refuse_colliding_quantified ~fail colliding_quantified;
   (* An exempted source that carries no claim-shaped literal is either a file that stopped being a
@@ -5657,8 +6016,13 @@ let () =
   eprintf "Totals: %d sources, %d string literals (%d of them an argument of a named function).\n"
     (List.length sources) !literals !applied;
   eprintf "Gated quantified claims whose gate and population were compared: %d.\n" !gated_sites;
+  eprintf
+    "Leg claims whose gates and population were compared: %d; whose leg or make function the \
+     reader could not follow (a parameter, a field, a make function given by name): %d.\n"
+    !leg_sites !uncompared_legs;
   eprintf "Verdict claim labels read for line breaks: %d.\n" !label_sites;
   eprintf "Verdict claim values read for a folded gate: %d.\n" !folded_claim_sites;
+  eprintf "Skips read for a hand-written skip list: %d.\n" !skips_read;
   eprintf "Verdict parity claims whose predicate was read for a hand-rolled tolerance: %d.\n"
     !parity_sites;
   printf "\n";
@@ -5735,7 +6099,52 @@ let () =
       (String.concat ~sep:"; " recognized_gated_forms);
   Verdict.p "and it recognizes every gated form Verdict.Claims exports" recognizes_every_gated_form;
   Verdict.p "and the gate reader completed gated claims to compare" (!gated_sites > 0);
+  (* The members whose population a leg claim's [make] carries, and those with none, held equal
+     together to [Verdict.Claims]: a new member in neither would be a claim whose population the leg
+     reader never reads (gh-ocannl-1794). *)
+  let leg_judged =
+    List.map Scan.leg_population_slots ~f:fst @ Scan.leg_slotless_members
+    |> List.sort ~compare:String.compare
+  in
+  let leg_judges_every_member =
+    List.equal String.equal (List.sort claims_members ~compare:String.compare) leg_judged
+  in
+  if not leg_judges_every_member then
+    eprintf "Verdict.Claims exports [%s]; the leg reader judges [%s]\n"
+      (String.concat ~sep:"; " claims_members)
+      (String.concat ~sep:"; " leg_judged);
+  Verdict.p "and the leg reader judges every member Verdict.Claims exports" leg_judges_every_member;
+  (* The leg constructors it resolves, held equal to the top-level functions of
+     test/support/verdict.ml declared to return a [leg]. *)
+  let declared_leg_constructors =
+    Option.value_map (Map.find on_disk "test/support/verdict.ml") ~default:[] ~f:(fun path ->
+        In_channel.read_lines path
+        |> List.filter_map ~f:(fun line ->
+            match String.chop_prefix line ~prefix:"let " with
+            | Some rest when String.is_suffix line ~suffix:": leg =" ->
+                List.hd (String.split rest ~on:' ')
+            | _ -> None))
+    |> List.sort ~compare:String.compare
+  in
+  let resolved_leg_constructors =
+    List.sort Test_utils.Verdict_callee.leg_constructors ~compare:String.compare
+  in
+  let resolves_every_leg_constructor =
+    (not (List.is_empty declared_leg_constructors))
+    && List.equal String.equal declared_leg_constructors resolved_leg_constructors
+  in
+  if not resolves_every_leg_constructor then
+    eprintf
+      "test/support/verdict.ml declares the leg constructors [%s]; Verdict_callee resolves [%s]\n"
+      (String.concat ~sep:"; " declared_leg_constructors)
+      (String.concat ~sep:"; " resolved_leg_constructors);
+  Verdict.p "and the claim-name resolver resolves every leg constructor Verdict declares"
+    resolves_every_leg_constructor;
+  Verdict.p "and it compared the gates and populations of leg claims" (!leg_sites > 0);
   Verdict.p "no claim folds a run-constant gate into its value" (!folded_offenders = 0);
+  Verdict.p "no source writes a skip list by hand" (!skip_list_offenders = 0);
+  Verdict.p "and the skip-list reader read skips" (!skips_read > 0);
+
   (* The members whose values the folded-gate reader reads, and those it judges to have none, held
      equal together to [Verdict.Claims]: a new member in neither would be a claim whose value it
      never reads. *)
@@ -5755,7 +6164,8 @@ let () =
   Verdict.p "and it read the values of Verdict claims" (!folded_claim_sites > 0);
   Verdict.p "the scan found every literal planted for it" (Set.is_empty missing);
   Verdict.p "every exemption on this check's lists is still earned"
-    (Set.is_empty unread && Set.is_empty stale && Set.is_empty stale_quantified);
+    (Set.is_empty unread && Set.is_empty stale && Set.is_empty stale_quantified
+   && Set.is_empty stale_skip_lists);
   (* Over the exemption lists, which is where a shared key would have to be written. *)
   Verdict.p_empty "every exempted claim-shaped literal is one source site, not a shared key"
     ~over:(exempt_sites @ exempt_computed_sites)

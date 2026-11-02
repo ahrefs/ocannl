@@ -121,10 +121,15 @@ let targets (compiles : Mma.ptx_compile list) =
 
 let native_arch (c : Mma.ptx_compile) = "sm_" ^ Int.to_string c.Mma.device_cc
 
-(* Off an f32 tensor-core tile, or where its compile recorded no PTX, every claim is skipped by
-   name, in the order this one sequence makes them (gh-ocannl-1703). *)
+(* Off CUDA, or off an f32 tensor-core tile, every claim is skipped by name, in the order this one
+   sequence makes them (gh-ocannl-1703). CUDA is the backend that compiles through nvrtc to PTX, so
+   the floor/native distinction exists exactly there: the gate is that fact, never the compiles the
+   claims are about -- a CUDA run whose compile recorded no PTX fails below rather than skipping
+   (gh-ocannl-1794). *)
 let () =
-  let leg = Verdict.leg ~when_:gpu_capable ~on:backend_name () in
+  let leg =
+    Verdict.leg ~when_:(gpu_capable && String.equal backend_name "cuda") ~on:backend_name ()
+  in
   (* Compiled only where an f32 tensor-core tile can seed at all. *)
   let natural_floor =
     lazy (run ~target:Mma.Floor ~name:"ptp_nat_f" ~transform:(fun opt -> [ opt ]))
@@ -133,13 +138,13 @@ let () =
     let _, _, compiles = Lazy.force natural_floor in
     compiles
   in
-  (* No PTX compiled: the backend has no floor/native distinction to compare. *)
-  let leg =
-    Verdict.sub_leg leg ~when_:(lazy (not (List.is_empty (natural_compiles ())))) ~on:backend_name
-  in
+  in_leg ~leg "the natural compile recorded the PTX it compiled" (fun label ->
+      p label (not (List.is_empty (natural_compiles ()))));
   let seeds =
     lazy
-      (let device_cc = (List.hd_exn (natural_compiles ())).Mma.device_cc in
+      (let device_cc =
+         Option.value_map (List.hd (natural_compiles ())) ~default:0 ~f:(fun c -> c.Mma.device_cc)
+       in
        Stdio.eprintf "ptx_target_parity (not part of the golden): backend %s, device compute %d\n%!"
          backend_name device_cc;
        Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits (whole_lowering ()))

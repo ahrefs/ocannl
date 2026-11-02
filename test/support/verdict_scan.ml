@@ -802,6 +802,40 @@ let tolerance_census content =
     [if]), which is how a capability judgment over the same program reads, and must not read the
     population or a collection it is mapped, filtered or appended from.
 
+    {2 Leg claims (gh-ocannl-1794)}
+
+    A leg claim, [in_leg ~leg label make] or [in_legf ~leg fmt ... make] ({!leg_claims}), is a gated
+    claim too. Its GATES are the [~when_] of the qualified [Verdict.leg] or [Verdict.sub_leg]
+    application ({!Verdict_callee.leg_constructors}) its [~leg] reaches, read as a gate is above,
+    and then of each [sub_leg]'s outer leg; [~leg] is followed through a name into its [let]
+    right-hand side, a type constraint, the body of a [let] or a sequence, both branches of an [if]
+    and every case of a [match] -- whose condition, scrutinee and guards pick the leg and are gates
+    too -- and the body of a local function it applies; an ancestor two branches share is read on
+    each path. Its POPULATION is what the claims its [make] function makes in place range over, each
+    read by {!leg_population_slots}: a boolean as a [gated] boolean's, collections as a [gated_*]
+    claim's. Beside them, every argument the make function hands a helper -- a function of the
+    source or another module, not an operator, a {!standard_functions} name, a standard or
+    collection module's function, or [Verdict]'s own -- is the population of the claim that helper
+    makes, on every path where no claim read in place runs: where each such claim sits in another
+    branch of some [if], [match] or [function] than the helper. A helper applied in [make]'s place
+    is such a helper. The loud direction. On both sides, and for the [gated_*] forms too, a [lazy e]
+    is [e]'s and [Lazy.force x] (or [Base]'s [force]) is [x]'s: a leg's evidence lives in lazies
+    only its claims force.
+
+    The same model of what runs bounds the population: a function value or [lazy] inside the make
+    function is deferred, and its claims are no population, unless a collection-module function
+    calls it back. A leg claim nested in a make function is a claim that make function makes: its
+    population is every enclosing leg's too. Anything else the reader cannot follow is outside the
+    model: such a leg is counted as UNCOMPARED (below), never refused.
+
+    A leg claim applied in part -- without its [~leg], its label and its make function in place, an
+    [in_legf] with exactly as many arguments as its literal format takes before the make function
+    ({!format_arity}) -- or named as a value is reported unread. A complete one whose [~leg] reaches
+    a parameter, a pattern, a field, another module's value or an unqualified [leg] (an
+    [open Verdict]'s), or whose make function is a value given by name, is reported UNCOMPARED:
+    counted, and not refused, as a population threaded through a parameter is not read for a
+    [gated_*] claim.
+
     {2 What is not read}
 
     The forms above are a closed list: any other expression form ends the population side there, and
@@ -879,12 +913,152 @@ type unlisted_call = {
     one handed a mutable container they reach, that the table does not list: the reader cannot say
     which of its arguments carry the population, or whether it writes into the container. *)
 
+type unread_leg = {
+  leg_form : string;  (** The leg claim's callee as written: [in_leg], [Verdict.in_legf]. *)
+  leg_line : int;
+  why : string;  (** What the reader could not resolve, as a clause completing "because ...". *)
+}
+(** A leg claim ({!Verdict.in_leg}, {!Verdict.in_legf}) whose gates or population this reader could
+    not resolve (gh-ocannl-1794). *)
+
 type gate_census = {
   readings : gate_reading list;  (** Claims whose gate reads their population, in source order. *)
   gated_sites : int;  (** Every completed [gated_*] claim the reader compared. *)
   unread : (string * int) list;  (** [gated_*] applications it could not complete: callee, line. *)
   unlisted : unlisted_call list;
       (** Compared claims that reach an unlisted collection-module function, in source order. *)
+  leg_sites : int;  (** Every leg claim whose gates and population the reader compared. *)
+  unread_legs : unread_leg list;
+      (** Leg claims applied in part, which the reader cannot complete, in source order. *)
+  uncompared_legs : unread_leg list;
+      (** Complete leg claims whose leg the reader could not follow to its gates -- a leg handed in
+          as a parameter, say -- in source order: the boundary, as a population threaded through a
+          parameter is a [gated_*] claim's. *)
+}
+
+let empty_gate_census =
+  {
+    readings = [];
+    gated_sites = 0;
+    unread = [];
+    unlisted = [];
+    leg_sites = 0;
+    unread_legs = [];
+    uncompared_legs = [];
+  }
+
+(** The leg claims: [in_leg ~leg label make] and [in_legf ~leg fmt ... make], whose gate is the
+    [~when_] of every {!Verdict_callee.leg_constructors} application [~leg] is bound to, through
+    each [sub_leg]'s outer leg, and whose population is what the claims [make] makes range over
+    ({!leg_population_slots}). *)
+let leg_claims = [ "in_leg"; "in_legf" ]
+
+(** Where a claim made inside a leg's [make] carries its population: a boolean, read as a [gated]
+    boolean is ({!Verdict_scan.gate_census}'s [quantified]), at a positional argument or the last
+    one (after a format's arguments); or collections, read as a [gated_*] claim's is, at positional
+    arguments or the last [n] of them, each with a labelled [~over]. *)
+type leg_slot =
+  | Boolean_at of int
+  | Boolean_last
+  | Collections_at of int list
+  | Collections_last of int
+
+(** Each [Verdict.Claims] member that makes a claim with a value, and where its population is; held
+    equal to [Verdict.Claims] together with {!leg_slotless_members} by [verdict_ratchet]. *)
+let leg_population_slots =
+  [
+    ("p", Boolean_at 1);
+    ("claim", Boolean_at 1);
+    ("pass_fail", Boolean_at 1);
+    ("gated", Boolean_at 1);
+    ("pf", Boolean_last);
+    ("claimf", Boolean_last);
+    ("p_all", Collections_at [ 1 ]);
+    ("p_alli", Collections_at [ 1 ]);
+    ("p_exists", Collections_at [ 1 ]);
+    ("p_none", Collections_at [ 1 ]);
+    ("p_empty", Collections_at [ 1 ]);
+    ("p_pairwise_distinct", Collections_at [ 1 ]);
+    ("gated_all", Collections_at [ 1 ]);
+    ("gated_alli", Collections_at [ 1 ]);
+    ("gated_exists", Collections_at [ 1 ]);
+    ("p_all2", Collections_at [ 1; 2 ]);
+    ("pass_fail_all2", Collections_at [ 1; 2 ]);
+    ("p_close", Collections_at [ 1; 2 ]);
+    ("pass_fail_close", Collections_at [ 1; 2 ]);
+    ("pf_all2", Collections_last 2);
+    ("pf_close", Collections_last 2);
+  ]
+
+(** The members that make no claim with a population: a message, a skip, a case boundary, and the
+    leg claims themselves. *)
+let leg_slotless_members = [ "fail"; "skipped"; "case"; "in_leg"; "in_legf" ]
+
+(** How many arguments a [Printf] format literal takes: one per conversion, two for [%a], one more
+    per [*] width or precision; [%%], [%!], [%,] and [%@] take none. [None] for a format this does
+    not read ([%(], [%{]): its leg claim is then reported unread. *)
+let format_arity format =
+  let n = String.length format in
+  let rec go i count =
+    if i >= n then Some count
+    else if Char.equal format.[i] '%' && i + 1 < n then
+      let rec spec j stars =
+        if j >= n then None
+        else
+          match format.[j] with
+          | '%' | '!' | ',' | '@' -> if j = i + 1 then go (j + 1) count else None
+          | '-' | '0' .. '9' | '.' | '+' | ' ' | '#' | '_' -> spec (j + 1) stars
+          | '*' -> spec (j + 1) (stars + 1)
+          | ('l' | 'n' | 'L') when j + 1 < n && Char.is_alpha format.[j + 1] ->
+              go (j + 2) (count + stars + 1)
+          | 'a' -> go (j + 1) (count + stars + 2)
+          | '(' | '{' -> None
+          | c when Char.is_alpha c -> go (j + 1) (count + stars + 1)
+          | _ -> None
+      in
+      spec (i + 1) 0
+    else go (i + 1) count
+  in
+  go 0 0
+
+(** The unqualified functions of the standard libraries a leg's [make] may apply without handing
+    them a claim's population: printing, raising, the pair and reference primitives. *)
+let standard_functions =
+  [
+    "not";
+    "ignore";
+    "fst";
+    "snd";
+    "raise";
+    "failwith";
+    "invalid_arg";
+    "printf";
+    "eprintf";
+    "sprintf";
+    "print_string";
+    "print_endline";
+    "prerr_endline";
+    "ref";
+    "incr";
+    "decr";
+    "min";
+    "max";
+    "compare";
+    "phys_equal";
+  ]
+
+(* A leg claim's population as the walk meets the claims of its [make]: each slot's expression,
+   whether it is a boolean, and the scope it was written in. *)
+type leg_collector = {
+  mutable populations :
+    (int * expression * bool * (gate_denotation, gate_module) Lexical_scope.env) list;
+      (** Each claim's slot, after the position of the claim. *)
+  mutable handed : (int * expression * (gate_denotation, gate_module) Lexical_scope.env) list;
+      (** Every argument of every helper application in [make], after the application's position:
+          the population on a path where it makes no claim this reader reads in place. *)
+  mutable branches : (int * int) list list;
+      (** The branch spans of every [if], [match] and [function] in [make]: two points in different
+          branches of one never run together. *)
 }
 
 let gated_forms = [ "gated_all"; "gated_alli"; "gated_exists" ]
@@ -1380,6 +1554,13 @@ let gate_census content =
   let ast = Read.structure_of content in
   let owners = Verdict_callee.of_structure ast in
   let readings = ref [] and gated_sites = ref 0 in
+  let leg_sites = ref 0 and unread_legs = ref [] and uncompared_legs = ref [] in
+  (* The positions of the leg-claim callees read as applied, which their own visit then passes. *)
+  let leg_heads = Hash_set.create (module Int) in
+  (* The make function of each leg claim whose comparison is queued, by its position: walked with
+     its collector innermost, so that only what [make] does -- not the [~leg] or the label -- is the
+     claim's population. *)
+  let leg_makes = Hashtbl.create (module Int) in
   (* What is written into a binding after it is made -- [x := e], [Queue.enqueue x e] -- by the
      binding's identity, with the scope it was written in. *)
   let writes = Hashtbl.create (module Int) in
@@ -1495,6 +1676,10 @@ let gate_census content =
          compared is evaluated. *)
       val mutable stack : frame list = []
       val mutable claim_point : point option = None
+
+      (* The leg claims whose [make] is being walked, innermost first: a claim met there adds its
+         population to the innermost one. *)
+      val mutable leg_stack : leg_collector list = []
 
       (* The bodies of the [for] loops and binding operators being walked, by position: the frame
          each enters. *)
@@ -1940,7 +2125,10 @@ let gate_census content =
           | Pexp_coerce (inner, _, _)
           | Pexp_sequence (_, inner)
           | Pexp_letexception (_, inner)
-          | Pexp_newtype (_, inner) ->
+          | Pexp_newtype (_, inner)
+          | Pexp_lazy inner ->
+              (* A [lazy e] is the data thunk of [e] (gh-ocannl-1794: a leg's evidence lives in
+                 lazies only its claims force). *)
               visit env inner
           | Pexp_open ({ popen_expr; _ }, inner) ->
               visit
@@ -1949,6 +2137,9 @@ let gate_census content =
           | Pexp_letmodule ({ txt = Some name; _ }, module_expr, inner) ->
               visit (self#bind_module env name module_expr) inner
           | Pexp_letmodule ({ txt = None; _ }, _, inner) -> visit env inner
+          | Pexp_apply (callee, [ (Ppxlib.Asttypes.Nolabel, thunk) ]) when self#forces env callee ->
+              (* [Lazy.force rows] is what [rows] holds. *)
+              visit env thunk
           | Pexp_letop { let_; ands; body } ->
               (* [let+ x = e in body]: [x] is a part of [e], as a match case's name is of its
                  scrutinee. *)
@@ -2061,7 +2252,8 @@ let gate_census content =
           | Pexp_coerce (inner, _, _)
           | Pexp_sequence (_, inner)
           | Pexp_letexception (_, inner)
-          | Pexp_newtype (_, inner) ->
+          | Pexp_newtype (_, inner)
+          | Pexp_lazy inner ->
               visit env inner
           | Pexp_open ({ popen_expr; _ }, inner) ->
               visit
@@ -2070,6 +2262,8 @@ let gate_census content =
           | Pexp_letmodule ({ txt = Some name; _ }, module_expr, inner) ->
               visit (self#bind_module env name module_expr) inner
           | Pexp_letmodule ({ txt = None; _ }, _, inner) -> visit env inner
+          | Pexp_apply (callee, [ (Ppxlib.Asttypes.Nolabel, thunk) ]) when self#forces env callee ->
+              visit env thunk
           | Pexp_ifthenelse (_, yes, no) ->
               visit env yes;
               Option.iter no ~f:(visit env)
@@ -2138,6 +2332,23 @@ let gate_census content =
         in
         visit env expr;
         found
+
+      (* Whether [callee] forces a lazy value: [Lazy.force] or [Lazy.force_val] of the standard
+         library (qualified by any path ending in [Lazy] that is not a structure of this source), or
+         [Base]'s unqualified [force] where the source binds no [force] of its own. *)
+      method forces env callee =
+        let callee, callee_env = self#resolve_callee env callee in
+        match callee.pexp_desc with
+        | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, ("force" | "force_val")); _ } -> (
+            match List.last (Read.flatten_longident prefix) with
+            | Some "Lazy" -> (
+                match Map.find callee_env.Lexical_scope.modules (Lexical_scope.head prefix) with
+                | Some (Local_structure _) -> false
+                | _ -> true)
+            | _ -> false)
+        | Pexp_ident { txt = Ppxlib.Longident.Lident "force"; _ } ->
+            Option.is_none (Lexical_scope.lookup callee_env "force")
+        | _ -> false
 
       (* A callee through the [let]s that rename it: [let map = List.map in map raw ~f] calls
          [List.map], resolved in the scope its definition was written in (gh-ocannl-1303). Only a
@@ -2320,6 +2531,336 @@ let gate_census content =
             | _ -> Some (f, [ (Ppxlib.Asttypes.Nolabel, x) ], None))
         | _ -> None
 
+      (* The gates of the leg [expr] denotes, each with its scope: the [~when_] of the [Verdict.leg]
+         or [Verdict.sub_leg] application it is, then of each [sub_leg]'s outer leg, through a name
+         into its [let] right-hand side, a type constraint, the body of a [let] or a sequence, both
+         branches of an [if] and every case of a [match] -- whose condition and scrutinee, which
+         pick the leg, are gates too -- and the body of a local function it applies
+         (gh-ocannl-1794). With whether a constructor was only ambiguously [Verdict]'s; [Error]
+         names what it could not follow: a parameter, a field, another module's value. *)
+      method leg_gates env expr =
+        (* [seen]: the bindings on this path, so that two branches may share an ancestor leg. *)
+        let rec go seen env expr =
+          let expr = strip_constraints expr in
+          let both a b =
+            Result.bind a ~f:(fun (gates, x) ->
+                Result.map b ~f:(fun (more, y) -> (gates @ more, x || y)))
+          in
+          match expr.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+              match Lexical_scope.lookup env name with
+              | Some { identity; definition = Some (rhs, rhs_env) } when not (Set.mem seen identity)
+                ->
+                  go (Set.add seen identity) rhs_env rhs
+              | _ ->
+                  Error
+                    (Printf.sprintf
+                       "its leg reaches `%s`, a name bound to no definition the reader follows (a \
+                        parameter, a pattern, a recursive binding)"
+                       name))
+          | Pexp_sequence (_, inner) -> go seen env inner
+          | Pexp_let (rec_flag, bindings, body) ->
+              go seen (self#bind_group env bindings (self#denotations env rec_flag bindings)) body
+          | Pexp_ifthenelse (condition, yes, no) -> (
+              let branches =
+                both (go seen env yes)
+                  (Option.value_map no ~default:(Ok ([], false)) ~f:(go seen env))
+              in
+              match branches with
+              | Ok (gates, ambiguous) -> Ok ((condition, env) :: gates, ambiguous)
+              | Error _ as error -> error)
+          | Pexp_match (scrutinee, cases) ->
+              List.fold cases
+                ~init:(Ok ([ (scrutinee, env) ], false))
+                ~f:(fun acc case ->
+                  let case_env = self#bind_parts env case.pc_lhs (scrutinee, env) in
+                  (* A guard picks the case's leg as the scrutinee does. *)
+                  let guard =
+                    Option.value_map case.pc_guard ~default:[] ~f:(fun guard ->
+                        [ (guard, case_env) ])
+                  in
+                  both
+                    (Result.map acc ~f:(fun (gates, x) -> (gates @ guard, x)))
+                    (go seen case_env case.pc_rhs))
+          | Pexp_apply (callee, arguments) -> (
+              match Verdict_callee.resolve_leg owners callee with
+              | Some { member; ownership = (Verdicts | Ambiguous) as ownership; _ } -> (
+                  let ambiguous = Poly.equal ownership Verdict_callee.Ambiguous in
+                  let gate =
+                    List.find_map arguments ~f:(function
+                      | Ppxlib.Asttypes.Labelled "when_", gate -> Some (gate, env)
+                      | _ -> None)
+                  in
+                  let outer =
+                    List.find_map arguments ~f:(function
+                      | Ppxlib.Asttypes.Nolabel, outer -> Some outer
+                      | _ -> None)
+                  in
+                  match (gate, member, outer) with
+                  | None, _, _ ->
+                      Error
+                        (Printf.sprintf "its leg is a `%s` application without its `~when_`" member)
+                  | Some gate, "leg", _ -> Ok ([ gate ], ambiguous)
+                  | Some gate, _, Some outer ->
+                      Result.map (go seen env outer) ~f:(fun (gates, outer_ambiguous) ->
+                          (gates @ [ gate ], ambiguous || outer_ambiguous))
+                  | Some _, _, None ->
+                      Error
+                        (Printf.sprintf "its leg is a `%s` application without its outer leg" member)
+                  )
+              | Some _ ->
+                  Error "its leg is built by a `leg` or `sub_leg` that is not certainly `Verdict`'s"
+              | None -> (
+                  (* A local function's application: what its body returns, its parameters bound to
+                     nothing the reader follows. *)
+                  match (strip_constraints callee).pexp_desc with
+                  | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                      match Lexical_scope.lookup env name with
+                      | Some
+                          {
+                            identity;
+                            definition =
+                              Some
+                                ( { pexp_desc = Pexp_function (params, _, Pfunction_body body); _ },
+                                  definition_env );
+                          }
+                        when not (Set.mem seen identity) ->
+                          let seen = Set.add seen identity in
+                          let body_env =
+                            List.fold params ~init:definition_env ~f:(fun env param ->
+                                match param.pparam_desc with
+                                | Pparam_val (_, _, pattern) -> self#bind_patterns env [ pattern ]
+                                | Pparam_newtype _ -> env)
+                          in
+                          go seen body_env body
+                      | _ ->
+                          Error
+                            (Printf.sprintf
+                               "its leg is the result of `%s`, which is not a local function the \
+                                reader follows"
+                               name))
+                  | _ ->
+                      Error
+                        (Printf.sprintf "its leg is the result of `%s`, another module's function"
+                           (Ppxlib.Pprintast.string_of_expression callee))))
+          | _ ->
+              Error
+                (Printf.sprintf "its leg is `%s`, an expression the reader does not follow"
+                   (Ppxlib.Pprintast.string_of_expression expr))
+        in
+        go (Set.empty (module Int)) env expr
+
+      (* Whether [callee] may be a helper making a claim from what it is handed: a function of this
+         source or of another module -- an unqualified name nothing binds is one an [open] brought
+         in -- not an operator, a standard library's function ({!standard_functions}) or a
+         collection module's (whose arguments, in a condition say, are no claim's population). *)
+      method helper env callee =
+        let callee, callee_env = self#resolve_callee env callee in
+        match callee.pexp_desc with
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Lexical_scope.lookup callee_env name with
+            | Some _ -> true
+            | None ->
+                Char.is_alpha name.[0] && not (List.mem standard_functions name ~equal:String.equal)
+            )
+        | Pexp_ident { txt = Ppxlib.Longident.Ldot (prefix, _); _ } -> (
+            match self#module_path callee_env prefix with
+            | Some (Collection_module _ | Standard_library _) -> false
+            | _ -> true)
+        | _ -> true
+
+      (* While a leg's [make] is walked: a claim adds its population to the innermost leg's, and an
+         application of a {!helper} hands its arguments to the leg's fallback population. *)
+      method collect_leg_population env expr callee arguments =
+        let at = position expr in
+        match leg_stack with
+        | [] -> ()
+        | collectors -> (
+            (* [rows |> p_all label ~f] and [p_all label ~f @@ rows] are the application they
+               spell. *)
+            let callee, arguments =
+              match self#pipeline callee arguments with
+              | Some (callee, arguments, _) -> (callee, arguments)
+              | None -> (callee, arguments)
+            in
+            (* A [Verdict] claim or leg constructor is no helper: its arguments are a claim's own
+               slots, or a skip's label and backend. *)
+            let verdicts =
+              match
+                (Verdict_callee.resolve owners callee, Verdict_callee.resolve_leg owners callee)
+              with
+              | Some { ownership = Verdicts | Ambiguous | Free; _ }, _
+              | _, Some { ownership = Verdicts | Ambiguous; _ } ->
+                  true
+              | _ -> false
+            in
+            (* Every enclosing leg's: a leg claim nested in a make function is a claim that make
+               function makes. *)
+            if (not verdicts) && self#helper env callee then
+              List.iter collectors ~f:(fun collector ->
+                  collector.handed <-
+                    List.map arguments ~f:(fun (_, argument) -> (at, argument, env))
+                    @ collector.handed);
+            match Verdict_callee.resolve owners callee with
+            | Some { member; ownership = Verdicts | Ambiguous | Free; _ } -> (
+                let positional =
+                  List.filter_map arguments ~f:(function
+                    | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+                    | _ -> None)
+                in
+                let over =
+                  List.filter_map arguments ~f:(function
+                    | Ppxlib.Asttypes.Labelled "over", argument -> Some argument
+                    | _ -> None)
+                in
+                let add boolean expressions =
+                  List.iter collectors ~f:(fun collector ->
+                      collector.populations <-
+                        List.map expressions ~f:(fun e -> (at, e, boolean, env))
+                        @ collector.populations)
+                in
+                let last n = List.drop positional (List.length positional - n) in
+                match List.Assoc.find leg_population_slots member ~equal:String.equal with
+                | Some (Boolean_at i) -> add true (Option.to_list (List.nth positional i))
+                | Some Boolean_last -> add true (Option.to_list (List.last positional))
+                | Some (Collections_at indices) ->
+                    add false (List.filter_map indices ~f:(List.nth positional) @ over)
+                | Some (Collections_last n) -> add false (last n @ over)
+                | None -> ())
+            | _ -> ())
+
+      (* A leg claim [expr] applies, with its [~leg] and its make function in place: its comparison
+         is queued and its collector registered, for the walk of [make] to fill. Applied in part, it
+         is reported unread. *)
+      method leg_claim env expr ~member ~spelled ~ambiguous arguments =
+        let line = expr.pexp_loc.loc_start.pos_lnum in
+        let positional =
+          List.filter_map arguments ~f:(function
+            | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+            | _ -> None)
+        in
+        let leg =
+          List.find_map arguments ~f:(function
+            | Ppxlib.Asttypes.Labelled "leg", leg -> Some leg
+            | _ -> None)
+        in
+        (* The make function: [in_leg]'s second positional argument, [in_legf]'s the one after its
+           literal format's arguments -- complete only with exactly that many. *)
+        let make =
+          if String.equal member "in_leg" then
+            if List.length positional = 2 then List.nth positional 1 else None
+          else
+            match
+              Option.bind (List.hd positional) ~f:(fun format ->
+                  Option.bind (Read.string_literal (strip_constraints format)) ~f:format_arity)
+            with
+            | Some arity when List.length positional = arity + 2 -> List.last positional
+            | _ -> None
+        in
+        match (leg, make) with
+        | Some leg, Some make ->
+            let collector = { populations = []; handed = []; branches = [] } in
+            (* A make function not written in place -- a helper applied to its arguments -- makes
+               its claim from what it is handed; one given by name, from what this reader cannot
+               see. *)
+            let make_by_name =
+              match (strip_constraints make).pexp_desc with
+              | Pexp_function _ -> false
+              | Pexp_apply (_, arguments) ->
+                  collector.handed <-
+                    List.map arguments ~f:(fun (_, argument) -> (position make, argument, env));
+                  false
+              | _ -> true
+            in
+            let point = self#point_of expr in
+            pending :=
+              (fun () ->
+                unlisted_sink := [];
+                claim_point <- Some point;
+                match self#leg_gates env leg with
+                | Error why ->
+                    uncompared_legs :=
+                      { leg_form = spelled; leg_line = line; why } :: !uncompared_legs
+                | Ok _ when make_by_name ->
+                    uncompared_legs :=
+                      {
+                        leg_form = spelled;
+                        leg_line = line;
+                        why = "its make function is a value given by name, whose claim is not read";
+                      }
+                      :: !uncompared_legs
+                | Ok (gates, leg_ambiguous) ->
+                    Int.incr leg_sites;
+                    let reads = Hash_set.Poly.create () in
+                    List.iter gates ~f:(fun (gate, gate_env) ->
+                        Hash_set.iter (self#gate_reads gate_env gate) ~f:(Hash_set.add reads));
+                    let built = Hash_set.Poly.create () in
+                    (* No claim read in place: everything the make function hands to a call, the
+                       population of the claim a helper makes. *)
+                    (* A helper's arguments are its claim's population on a path where no claim
+                       read in place runs: where every such claim sits in another branch of some
+                       conditional than the helper. *)
+                    let disjoint a b =
+                      List.exists collector.branches ~f:(fun spans ->
+                          let branch_of point =
+                            List.findi spans ~f:(fun _ (start, stop) ->
+                                start <= point && point < stop)
+                            |> Option.map ~f:fst
+                          in
+                          match (branch_of a, branch_of b) with
+                          | Some i, Some j -> i <> j
+                          | _ -> false)
+                    in
+                    let populations =
+                      List.map collector.populations ~f:(fun (_, e, boolean, e_env) ->
+                          (e, boolean, e_env))
+                      @ List.filter_map collector.handed ~f:(fun (helper, e, e_env) ->
+                          if
+                            List.for_all collector.populations ~f:(fun (claim, _, _, _) ->
+                                disjoint claim helper)
+                          then Some (e, false, e_env)
+                          else None)
+                    in
+                    List.iter populations ~f:(fun (population, boolean, population_env) ->
+                        Hash_set.iter
+                          (if boolean then self#quantified population_env population
+                           else self#population population_env population)
+                          ~f:(Hash_set.add built));
+                    let shared =
+                      Hash_set.filter built ~f:(Hash_set.mem reads)
+                      |> Hash_set.to_list |> List.map ~f:fst
+                      |> List.dedup_and_sort ~compare:String.compare
+                    in
+                    List.dedup_and_sort !unlisted_sink ~compare:Poly.compare
+                    |> List.iter ~f:(fun (callee, callee_line) ->
+                        unlisted :=
+                          { claim = spelled; claim_line = line; callee; callee_line } :: !unlisted);
+                    if not (List.is_empty shared) then
+                      readings :=
+                        {
+                          form = spelled;
+                          ambiguous = ambiguous || leg_ambiguous;
+                          line;
+                          gate =
+                            String.concat ~sep:" && "
+                              (List.map gates ~f:(fun (gate, _) ->
+                                   Ppxlib.Pprintast.string_of_expression gate));
+                          reads = shared;
+                        }
+                        :: !readings)
+              :: !pending;
+            Hashtbl.set leg_makes ~key:(position make) ~data:collector
+        | _ ->
+            unread_legs :=
+              {
+                leg_form = spelled;
+                leg_line = line;
+                why =
+                  "it is applied in part: its `~leg`, its label and its make function are not all \
+                   handed to it in place";
+              }
+              :: !unread_legs
+
       (* The gated claim an expression reaches, with every argument it has been handed so far, each
          with the scope it was written in. The nodes it absorbs -- the callee of an application, an
          application a pipeline rewrites -- are marked [consumed]: read here, they are not read
@@ -2380,11 +2921,31 @@ let gate_census content =
          expression is: only the body repeats, or is deferred, and it enters its frame before
          anything in it -- a claim or a write that is the body itself -- is placed. *)
       method! expression env expr =
-        match Hashtbl.find_and_remove body_frames (position expr) with
-        | Some kind ->
-            self#framed ~kind ~start:expr.pexp_loc.loc_start.pos_cnum
-              ~stop:expr.pexp_loc.loc_end.pos_cnum (fun () -> self#visit env expr)
-        | None -> self#visit env expr
+        let dispatch () =
+          match Hashtbl.find_and_remove body_frames (position expr) with
+          | Some kind ->
+              self#framed ~kind ~start:expr.pexp_loc.loc_start.pos_cnum
+                ~stop:expr.pexp_loc.loc_end.pos_cnum (fun () -> self#visit env expr)
+          | None -> self#visit env expr
+        in
+        let with_stack stack =
+          let saved = leg_stack in
+          leg_stack <- stack;
+          Exn.protect ~f:dispatch ~finally:(fun () -> leg_stack <- saved)
+        in
+        (* A leg claim's make function: walked with its collector innermost. Inside it, a function
+           value no collection function calls back, or a lazy, is deferred: what it claims is no
+           claim [make] makes, so the collectors pause there. *)
+        match if quiet > 0 then None else Hashtbl.find_and_remove leg_makes (position expr) with
+        | Some collector -> with_stack (collector :: leg_stack)
+        | None -> (
+            match expr.pexp_desc with
+            | (Pexp_function _ | Pexp_lazy _)
+              when quiet = 0
+                   && (not (List.is_empty leg_stack))
+                   && not (Hash_set.mem synchronous (position expr)) ->
+                with_stack []
+            | _ -> dispatch ())
 
       method visit env expr =
         (if quiet = 0 then
@@ -2488,6 +3049,48 @@ let gate_census content =
                Option.iter (self#write_target env record) ~f:(fun identity ->
                    Hashtbl.add_multi field_writes ~key:identity
                      ~data:(Ppxlib.Longident.last_exn field.txt, (value, env, point)))
+           | _ -> ());
+        (* A leg claim (gh-ocannl-1794): its [make] is registered to be walked with its collector
+           innermost (see [expression]), so the claims made there add their populations; one named
+           as a value, or applied in part, is reported unread. *)
+        (match (quiet, leg_stack) with
+        | 0, collector :: _ -> (
+            let span e = (e.pexp_loc.loc_start.pos_cnum, e.pexp_loc.loc_end.pos_cnum) in
+            let record spans = collector.branches <- spans :: collector.branches in
+            match expr.pexp_desc with
+            | Pexp_ifthenelse (_, yes, no) ->
+                record (span yes :: Option.to_list (Option.map no ~f:span))
+            | Pexp_match (_, cases) | Pexp_function (_, _, Pfunction_cases (cases, _, _)) ->
+                record (List.map cases ~f:(fun case -> span case.pc_rhs))
+            | _ -> ())
+        | _ -> ());
+        (if quiet = 0 then
+           let leg_member callee =
+             match Verdict_callee.resolve owners callee with
+             | Some { member; ownership = (Verdicts | Ambiguous | Free) as ownership; spelled }
+               when List.mem leg_claims member ~equal:String.equal ->
+                 Some (member, spelled, Poly.equal ownership Verdict_callee.Ambiguous)
+             | _ -> None
+           in
+           match expr.pexp_desc with
+           | Pexp_apply (callee, arguments) -> (
+               self#collect_leg_population env expr callee arguments;
+               match leg_member callee with
+               | Some (member, spelled, ambiguous) ->
+                   Hash_set.add leg_heads (position (strip_constraints callee));
+                   self#leg_claim env expr ~member ~spelled ~ambiguous arguments
+               | None -> ())
+           | Pexp_ident _ when not (Hash_set.mem leg_heads (position expr)) -> (
+               match leg_member expr with
+               | Some (_, spelled, _) ->
+                   unread_legs :=
+                     {
+                       leg_form = spelled;
+                       leg_line = expr.pexp_loc.loc_start.pos_lnum;
+                       why = "it is named as a value rather than applied";
+                     }
+                     :: !unread_legs
+               | None -> ())
            | _ -> ());
         (if quiet = 0 && not (Hash_set.mem consumed (position expr)) then
            match expr.pexp_desc with
@@ -2605,6 +3208,366 @@ let gate_census content =
     gated_sites = !gated_sites;
     unread;
     unlisted = List.rev !unlisted;
+    leg_sites = !leg_sites;
+    unread_legs = List.sort !unread_legs ~compare:(fun a b -> Int.compare a.leg_line b.leg_line);
+    uncompared_legs =
+      List.sort !uncompared_legs ~compare:(fun a b -> Int.compare a.leg_line b.leg_line);
+  }
+
+(** {1 A hand-written skip list (gh-ocannl-1794)}
+
+    A claim sequence only some backends can evaluate is written ONCE, as a leg ({!Verdict.leg},
+    {!Verdict.in_leg}): where the leg is closed each claim skips under its own label, in the order
+    the same code reaches it. The two-branch form the legs replaced kept the off-gate side in a
+    second copy -- the evaluating branch's claims, then [List.iter claims ~f:skipped] over a
+    hand-written list, or a run of literal [skipped] calls -- whose order nothing tied to the first:
+    [grid_launch_floor] appended two claims to its list while the CPU branch made them mid-sequence,
+    and Metal, CUDA and HIP went red (gh-ocannl-1668). gh-ocannl-1703 migrated about thirty such
+    tests; this reader keeps the form from regrowing.
+
+    {2 The model (the boundary, stated once)}
+
+    This reader decides skip lists under a BOUNDED, static model of what runs. It reads exactly the
+    constructs listed below; anything else is outside the model and is read CONSERVATIVELY: as no
+    skip list, never refused. A construct outside the model can hide a skip list from this reader;
+    it is never a reason to report one. Widening the model is a change to this header first.
+
+    - A SKIP is a [skipped] {!Verdict_callee} reads as [Verdict]'s ([Verdict.skipped], an opened
+      one), or one a [let] of the source binds to a skip or its application (the per-test
+      [let skipped = Verdict.skipped ~backend:backend_name]), through [open]s of the standard
+      libraries; never a parameter or other binding of the name, nor another module's. A skip RUNS
+      where it is applied to its label (a positional argument); a partial skip is a callback, read
+      only where a collection function is handed it.
+    - An EVALUATING claim is an application of any other {!Verdict_callee.members} name but [fail]
+      and [case] that the resolver reads as [Verdict]'s.
+    - What RUNS: the code written in place. A function value and a [lazy] are DEFERRED -- their
+      bodies are not read as run -- except a function a collection-module function calls back.
+    - A COLLECTION ITERATION is a complete ({!applied_fully}) application of a function of
+      {!collection_modules} -- the module resolved through the source's own module aliases and
+      structures, [Option] and [Result] excluded (at most one run), [Seq]/[Sequence] only through
+      their consuming functions -- written directly or through [|>]/[@@]; its argument is CALLED
+      BACK where {!calls_back} says so, in either library's order.
+    - A BRANCH is one branch of an [if], or one case of a [match] or [function].
+
+    Two shapes are refused:
+
+    - an ITERATED skip: a called-back argument of a collection iteration that is a skip itself,
+      partially applied or not ([List.iter labels ~f:skipped], [~f:(Verdict.skipped ~backend)]), or
+      a function written there whose run code makes a skip and no evaluating claim
+      ([~f:(fun l -> skipped (tag ^ l))]); and the body of a [for] or [while] loop whose run code
+      makes a skip and no evaluating claim. A loop whose callback evaluates the claim on one side of
+      its gate and skips it on the other is one claim written once, and passes;
+    - a SKIP RUN: a branch whose run code applies two or more skips, read down to the branches
+      nested in it, which are judged on their own.
+
+    {2 Outside the model}
+
+    Known examples, each read as no skip list: a skip routed through a wrapper of another name
+    ([let skip_all () = skipped "a"; skipped "b"] applied in a branch); labels iterated by a
+    function of the source rather than a collection module's; a partial iteration stored and applied
+    later; a run of single skips spread across nested branches; a deferred value that some other
+    code forces or calls. *)
+
+type skip_list_kind =
+  | Iterated  (** A skip handed to an iteration, or a loop body that only skips. *)
+  | Skip_run of int  (** A branch applying this many skips. *)
+
+type skip_list = {
+  skip_kind : skip_list_kind;
+  skip_line : int;  (** Where the iteration, loop or branch starts. *)
+  first_label : string;
+      (** The first skip's label: its literal, or its expression printed; the skip itself printed
+          where it is not applied. What an exemption is keyed by, after the source. *)
+}
+
+type skip_list_census = {
+  skip_lists : skip_list list;  (** In source order. *)
+  skips_read : int;  (** Every skip the reader met. *)
+}
+
+let skip_name = "skipped"
+let skip_list_unread_members = [ "fail"; "case"; skip_name ]
+
+(* The positions of the identifiers that are skips: a [skipped] {!Verdict_callee} reads as
+   [Verdict]'s (qualified, or unqualified where nothing of the source binds it), and an unqualified
+   [skipped] a [let] binds to a skip or a skip's application -- the per-test [let skipped =
+   Verdict.skipped ~backend:backend_name] -- but not a parameter, a pattern, a [let] of anything
+   else named [skipped], or another module's. *)
+let skip_positions ~owners ast =
+  let positions = Hash_set.create (module Int) in
+  let verdicts loc =
+    match Verdict_callee.resolve_at owners loc with
+    | Some { ownership = Verdicts | Ambiguous | Free; _ } -> true
+    | _ -> false
+  in
+  let resolved env name loc =
+    match Lexical_scope.lookup env name with
+    | Some (Some skip) -> skip
+    | Some None | None -> verdicts loc
+  in
+  let walker =
+    object
+      inherit [bool option, bool] Lexical_scope.scoped
+
+      (* [Some b]: the source binds the name, to a skip or not; [None]: an [open] or [include] may
+         have brought one in, which the resolver decides. *)
+      method local = Some false
+
+      (* A module's denotation: whether it may export a [skipped] -- a standard library does not
+         ({!Verdict_callee.standard_libraries}); any other module, or [Verdict] itself, may. *)
+      method module_path _ path =
+        Some
+          (not
+             (List.mem Verdict_callee.standard_libraries (Lexical_scope.head path)
+                ~equal:String.equal))
+
+      method! attribute _ attr = attr
+
+      method! opened ~top:_ ~include_:_ env denotes =
+        match denotes with
+        | Some false -> env
+        | Some true | None ->
+            Lexical_scope.push_frame env (Map.singleton (module String) skip_name None)
+
+      method! binding_denotes env binding =
+        let rec skip_head expr =
+          match (strip_constraints expr).pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; loc } when String.equal name skip_name
+            ->
+              resolved env name loc
+          | Pexp_ident { txt = Ppxlib.Longident.Ldot (_, name); loc } ->
+              String.equal name skip_name && verdicts loc
+          | Pexp_apply (callee, _) -> skip_head callee
+          | _ -> false
+        in
+        Some (Option.is_some (Read.pattern_name binding.pvb_pat) && skip_head binding.pvb_expr)
+
+      method! ident env ident =
+        let skip =
+          match ident.txt with
+          | Ppxlib.Longident.Lident name when String.equal name skip_name ->
+              resolved env name ident.loc
+          | Ldot (_, name) -> String.equal name skip_name && verdicts ident.loc
+          | _ -> false
+        in
+        if skip then Hash_set.add positions ident.loc.loc_start.pos_cnum
+    end
+  in
+  ignore
+    (walker#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
+      : structure);
+  positions
+
+let skip_list_census content =
+  let ast = Read.structure_of content in
+  let owners = Verdict_callee.of_structure ast in
+  let skips = skip_positions ~owners ast in
+  let is_skip_head expr =
+    match (strip_constraints expr).pexp_desc with
+    | Pexp_ident { loc; _ } -> Hash_set.mem skips loc.loc_start.pos_cnum
+    | _ -> false
+  in
+  let is_evaluating_head expr =
+    match Verdict_callee.resolve owners expr with
+    | Some { member; ownership = Verdicts | Ambiguous | Free; _ } ->
+        not (List.mem skip_list_unread_members member ~equal:String.equal)
+    | _ -> false
+  in
+  let label_of expr =
+    match expr.pexp_desc with
+    | Pexp_apply (_, arguments) -> (
+        match
+          List.find_map arguments ~f:(function
+            | Ppxlib.Asttypes.Nolabel, argument -> Some argument
+            | _ -> None)
+        with
+        | Some label -> (
+            match Read.string_literal (strip_constraints label) with
+            | Some literal -> literal
+            | None -> Ppxlib.Pprintast.string_of_expression label)
+        | None -> Ppxlib.Pprintast.string_of_expression expr)
+    | _ -> Ppxlib.Pprintast.string_of_expression expr
+  in
+  (* The skips and evaluating claims [expr] applies, in source order; [~branches:false] stops at the
+     branches nested in it and the functions written in it. *)
+  let claims ~branches expr =
+    let root = expr in
+    let found_skips = ref [] and evaluating = ref 0 in
+    let reader =
+      object (self)
+        inherit Ast_traverse.iter as super
+
+        method! expression e =
+          (* Applied skips only: a skip handed on as a value is an iteration's argument, which the
+             walk reads where it is handed. *)
+          (match e.pexp_desc with
+          | Pexp_apply (callee, arguments)
+            when is_skip_head callee
+                 && List.exists arguments ~f:(fun (label, _) ->
+                     Poly.equal label Ppxlib.Asttypes.Nolabel) ->
+              (* A skip handed its label; a partial one is a callback, read where it is handed. *)
+              found_skips := e :: !found_skips
+          | Pexp_apply (callee, _) when is_evaluating_head callee -> Int.incr evaluating
+          | _ -> ());
+          match e.pexp_desc with
+          | Pexp_apply (callee, arguments) when is_skip_head callee ->
+              (* The skip's own head is not a second skip. *)
+              List.iter arguments ~f:(fun (_, argument) -> self#expression argument)
+          | (Pexp_function _ | Pexp_lazy _) when branches && not (phys_equal e root) ->
+              (* A function value or lazy inside the callback or loop body is deferred: what it
+                 skips is not skipped here. *)
+              ()
+          | (Pexp_ifthenelse _ | Pexp_match _ | Pexp_function _ | Pexp_lazy _) when not branches
+            -> (
+              match e.pexp_desc with
+              | Pexp_ifthenelse (condition, _, _) -> self#expression condition
+              | Pexp_match (scrutinee, _) -> self#expression scrutinee
+              | _ -> ())
+          | _ -> super#expression e
+      end
+    in
+    reader#expression expr;
+    (List.rev !found_skips, !evaluating)
+  in
+  let found = ref [] and skips_read = ref 0 in
+  let report kind (at : expression) skips =
+    match skips with
+    | first :: _ ->
+        found :=
+          {
+            skip_kind = kind;
+            skip_line = at.pexp_loc.loc_start.pos_lnum;
+            first_label = label_of first;
+          }
+          :: !found
+    | [] -> ()
+  in
+  let skip_only expr =
+    let skips, evaluating = claims ~branches:true expr in
+    if evaluating = 0 then skips else []
+  in
+  let iterated_argument argument =
+    let argument = strip_constraints argument in
+    match argument.pexp_desc with
+    | Pexp_ident _ when is_skip_head argument -> [ argument ]
+    | Pexp_apply (callee, _) when is_skip_head callee -> [ argument ]
+    | Pexp_function _ -> skip_only argument
+    | _ -> []
+  in
+  (* The modules the source binds, by name: an alias to a path ([module L = List]) by the path's
+     last component, a structure of its own as [None]. By name across the source, not by scope: a
+     name bound both ways reads as the alias, the loud direction. *)
+  let module_bindings = Hashtbl.create (module String) in
+  let bind_module name (module_expr : module_expr) =
+    let rec peel me =
+      match me.pmod_desc with Pmod_constraint (inner, _) -> peel inner | _ -> me
+    in
+    match ((peel module_expr).pmod_desc, Hashtbl.find module_bindings name) with
+    | Pmod_ident { txt; _ }, _ ->
+        Hashtbl.set module_bindings ~key:name ~data:(Some (Ppxlib.Longident.last_exn txt))
+    | _, Some (Some _) -> ()
+    | _, _ -> Hashtbl.set module_bindings ~key:name ~data:None
+  in
+  let module_binder =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! module_binding binding =
+        Option.iter binding.pmb_name.txt ~f:(fun name -> bind_module name binding.pmb_expr);
+        super#module_binding binding
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_letmodule ({ txt = Some name; _ }, module_expr, _) -> bind_module name module_expr
+        | _ -> ());
+        super#expression e
+    end
+  in
+  module_binder#structure ast;
+  let rec resolve_module seen name =
+    match Hashtbl.find module_bindings name with
+    | Some (Some target) when not (List.mem seen name ~equal:String.equal) ->
+        resolve_module (name :: seen) target
+    | Some (Some _) -> Some name
+    | Some None -> None
+    | None -> Some name
+  in
+  (* A lazy sequence's map or filter only builds it; these consume it, calling their callback. *)
+  let consuming =
+    [ "iter"; "iteri"; "fold"; "fold_left"; "for_all"; "exists"; "find"; "find_map" ]
+  in
+  (* The function name of a collection-module function [callee] spells, where it is one: its module
+     component resolved through the source's module bindings ([resolve_module]). *)
+  let collection_iteration callee =
+    match Read.longident_of (strip_constraints callee) with
+    | Some (_ :: _ :: _ as path) -> (
+        match resolve_module [] (List.nth_exn path (List.length path - 2)) with
+        | None -> None
+        | Some module_ ->
+            if
+              List.mem collection_modules module_ ~equal:String.equal
+              && (not (List.mem [ "Option"; "Result" ] module_ ~equal:String.equal))
+              && ((not (List.mem [ "Seq"; "Sequence" ] module_ ~equal:String.equal))
+                 || List.mem consuming (List.last_exn path) ~equal:String.equal)
+            then Some (List.last_exn path)
+            else None)
+    | _ -> None
+  in
+  let branch body =
+    let skips, _ = claims ~branches:false body in
+    if List.length skips >= 2 then report (Skip_run (List.length skips)) body skips
+  in
+  let walker =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_ident _ when is_skip_head expr -> Int.incr skips_read
+        | Pexp_apply (callee, arguments) ->
+            (* [labels |> List.iter ~f] and [List.iter ~f @@ labels] are the application they
+               spell. *)
+            let callee, arguments =
+              match (Read.longident_of callee, arguments) with
+              | Some [ "|>" ], [ (Ppxlib.Asttypes.Nolabel, x); (Ppxlib.Asttypes.Nolabel, f) ]
+              | Some [ "@@" ], [ (Ppxlib.Asttypes.Nolabel, f); (Ppxlib.Asttypes.Nolabel, x) ] -> (
+                  match (strip_constraints f).pexp_desc with
+                  | Pexp_apply (inner, inner_arguments) ->
+                      (inner, inner_arguments @ [ (Ppxlib.Asttypes.Nolabel, x) ])
+                  | _ -> (f, [ (Ppxlib.Asttypes.Nolabel, x) ]))
+              | _ -> (callee, arguments)
+            in
+            Option.iter (collection_iteration callee) ~f:(fun name ->
+                (* Only an argument the function calls back is iterated over -- [List.iter]'s [~f],
+                   not what [List.singleton] stores -- in either library's order, the loud direction
+                   ({!calls_back}). *)
+                let positional = ref 0 in
+                List.iter arguments ~f:(fun (label, argument) ->
+                    let index = !positional in
+                    (match label with Ppxlib.Asttypes.Nolabel -> Int.incr positional | _ -> ());
+                    let labels = List.map arguments ~f:fst in
+                    (* A partial application stores its callback; only a complete one runs it. *)
+                    if
+                      calls_back ~stdlib:false name label index
+                      && applied_fully ~stdlib:false name labels
+                      || calls_back ~stdlib:true name label index
+                         && applied_fully ~stdlib:true name labels
+                    then report Iterated expr (iterated_argument argument)))
+        | Pexp_for (_, _, _, _, body) | Pexp_while (_, body) ->
+            report Iterated expr (skip_only body)
+        | Pexp_ifthenelse (_, yes, no) ->
+            branch yes;
+            Option.iter no ~f:branch
+        | Pexp_match (_, cases) | Pexp_function (_, _, Pfunction_cases (cases, _, _)) ->
+            List.iter cases ~f:(fun case -> branch case.pc_rhs)
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  walker#structure ast;
+  {
+    skip_lists = List.sort !found ~compare:(fun a b -> Int.compare a.skip_line b.skip_line);
+    skips_read = !skips_read;
   }
 
 (** {1 A gate folded into the claim's value (gh-ocannl-1310)}
