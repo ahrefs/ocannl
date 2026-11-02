@@ -421,6 +421,26 @@ let () =
 
 (* {2 Capture references} *)
 
+let solved (r : Shape.delayed_var_ref) = r.var_ref.solved_dim
+
+let external_ r = function
+  | [ x ] -> [ NTDSL.einsum1 ~capture_dims:[ r ] "...|...->ab => ...|...->a" x () ]
+  | _ -> assert false
+
+(* Captures [t]'s whole output row as the row variable of [r]. *)
+let capture_row (r : Shape.delayed_var_ref) t =
+  let l = r.var_ref.ref_label in
+  NTDSL.einsum1 ~capture_dims:[ r ] (Printf.sprintf "..%s.. => ..%s.." l l) t ()
+
+let instantiate ?sabotage s args =
+  let results =
+    List.init (Tensor.Scheme.num_results s) ~f:(fun i -> result_shape ("res" ^ Int.to_string i))
+  in
+  let args = List.map args ~f:(fun t -> t.Tensor.shape) in
+  match sabotage with
+  | None -> Tensor.Scheme.instantiate s ~args ~results
+  | Some sabotage -> Tensor.For_testing.instantiate_scheme ~sabotage s ~args ~results
+
 let () =
   Verdict.case "capture references" (fun () ->
       let local = function
@@ -437,13 +457,159 @@ let () =
         ~scheme:(instantiate_closed s [ x ]);
       Tensor.unsafe_reinitialize ();
       let r = Shape.get_variable_ref "b" in
-      let external_ = function
-        | [ x ] -> [ NTDSL.einsum1 ~capture_dims:[ r ] "...|...->ab => ...|...->a" x () ]
+      let s = Tensor.Scheme.trace ~label:"external" 1 (external_ r) in
+      Stdio.printf "%s\n" (Tensor.Scheme.to_string s);
+      p "the trace leaves the outside reference unbound"
+        (match r.var with `Not_set_yet -> true | `Dim _ | `Row _ -> false);
+      same_closure "a reference made outside the function" ~inline:i
+        ~scheme:(instantiate_closed s [ x ]);
+      p "the instance binds the reference, and the closure publishes its solution"
+        (Option.equal Int.equal (solved r) (Some 5));
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
+      let s = Tensor.Scheme.trace ~label:"external" 1 (external_ r) in
+      ignore (instantiate_closed ~sabotage:No_ref_inputs s [ x ] : (int list list, string) Result.t);
+      p "control (no reference inputs): the instance leaves the reference unsolved"
+        (Option.is_none (solved r)))
+
+(* An outside reference is a scheme input (gh-ocannl-1791): each application relates it to the
+   reference's state then -- bound in open work, or solved across a closure -- as the body's own
+   binding would. The scheme is traced while the reference is unbound, so only the application can
+   see what a later application of the body bound it to. *)
+let () =
+  Verdict.case "capture references: bound per application" (fun () ->
+      let conflicting ?sabotage ~close () =
+        Tensor.unsafe_reinitialize ();
+        let r = Shape.get_variable_ref "b" in
+        let s = Tensor.Scheme.trace ~label:"external" 1 (external_ r) in
+        (* The body applied inline binds the reference: in open work, or solved by a closure. *)
+        let y = List.hd_exn (external_ r [ leaf "x1" [ 2; 5 ] ]) in
+        if close then ignore (dims y.Tensor.shape : int list);
+        let fitting = outcome (fun () -> instantiate ?sabotage s [ leaf "ok" [ 3; 5 ] ]) in
+        let bad = outcome (fun () -> instantiate ?sabotage s [ leaf "bad" [ 3; 7 ] ]) in
+        (fitting, bad)
+      in
+      List.iter [ false; true ] ~f:(fun close ->
+          let when_ = if close then "across a closure" else "before a closure" in
+          let fitting, bad = conflicting ~close () in
+          p
+            ("an application fitting the reference's binding succeeds " ^ when_)
+            (Result.is_ok fitting);
+          p
+            ("a conflicting application is refused at the application " ^ when_)
+            (match bad with
+            | Error msg ->
+                Stdio.eprintf "(not part of the golden) refused: %s\n%!" msg;
+                String.is_substring msg ~substring:"applying the shape scheme external to"
+            | Ok () -> false);
+          let _, bad = conflicting ~sabotage:No_ref_inputs ~close () in
+          p
+            ("control (no reference inputs): the conflicting application is accepted " ^ when_)
+            (Result.is_ok bad)))
+
+(* A row reference: rows, not products, are related -- and a dimension bound outside meets a row
+   bound inside by its product, as two operations sharing the reference do. *)
+let () =
+  Verdict.case "capture references: rows and mixed kinds" (fun () ->
+      let row_body r = function [ x ] -> [ capture_row r x ] | _ -> assert false in
+      let rows ?sabotage arg =
+        Tensor.unsafe_reinitialize ();
+        let r = Shape.get_variable_ref "q" in
+        let s = Tensor.Scheme.trace ~label:"row_capture" 1 (row_body r) in
+        ignore (capture_row r (leaf "x1" [ 2; 6 ]) : Tensor.t);
+        outcome (fun () -> instantiate ?sabotage s [ arg () ])
+      in
+      p "a row reference bound to 2x6: an application to 2x6 succeeds"
+        (Result.is_ok (rows (fun () -> leaf "same" [ 2; 6 ])));
+      p "an application to 3x4, of the same product, is refused: the rows are related"
+        (Result.is_error (rows (fun () -> leaf "other" [ 3; 4 ])));
+      p "control (no reference inputs): the application to 3x4 is accepted"
+        (Result.is_ok (rows ~sabotage:No_ref_inputs (fun () -> leaf "other" [ 3; 4 ])));
+      let mixed arg =
+        Tensor.unsafe_reinitialize ();
+        let r = Shape.get_variable_ref "b" in
+        let s = Tensor.Scheme.trace ~label:"external" 1 (external_ r) in
+        ignore (capture_row r (leaf "x1" [ 2; 6 ]) : Tensor.t);
+        outcome (fun () -> instantiate s [ arg () ])
+      in
+      p "a reference bound outside to a row of 12 elements: a dimension of 12 inside fits"
+        (Result.is_ok (mixed (fun () -> leaf "twelve" [ 3; 12 ])));
+      p "and a dimension of 6 does not" (Result.is_error (mixed (fun () -> leaf "six" [ 3; 6 ]))))
+
+(* One input however often the body binds the reference; a scheme applied inside another trace
+   passes its inputs on to the outer scheme. *)
+let () =
+  Verdict.case "capture references: repeated and nested" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
+      let twice = function
+        | [ x ] ->
+            let y = NTDSL.einsum1 ~capture_dims:[ r ] "...|...->ab => ...|...->a" x () in
+            [ y; NTDSL.einsum1 ~capture_dims:[ r ] "...|...->ab => ...|...->b" x () ]
         | _ -> assert false
       in
-      p "a reference made outside the function and bound by it is refused at the trace"
-        (raises ~substrings:[ "tracing the shape scheme external"; "made outside it" ] (fun () ->
-             Tensor.Scheme.trace ~label:"external" 1 external_)))
+      let s = Tensor.Scheme.trace ~label:"twice" 1 twice in
+      Stdio.printf "%s\n" (Tensor.Scheme.to_string s);
+      Shape.set_dim r 5;
+      p "a body binding the reference twice: an application fitting it succeeds"
+        (Result.is_ok (outcome (fun () -> instantiate s [ leaf "ok" [ 5; 5 ] ])));
+      p "and a conflicting one is refused"
+        (Result.is_error (outcome (fun () -> instantiate s [ leaf "bad" [ 5; 7 ] ])));
+      let nested ?sabotage () =
+        Tensor.unsafe_reinitialize ();
+        let r = Shape.get_variable_ref "b" in
+        let inner = Tensor.Scheme.trace ~label:"external" 1 (external_ r) in
+        let outer = function
+          | [ x ] ->
+              let y = NTDSL.einsum1 "...|...->ab => ...|...->a" x () in
+              (match sabotage with
+              | None -> Tensor.Scheme.instantiate inner ~args:[ x.shape ] ~results:[ y.shape ]
+              | Some sabotage ->
+                  Tensor.For_testing.instantiate_scheme ~sabotage inner ~args:[ x.shape ]
+                    ~results:[ y.shape ]);
+              [ y ]
+          | _ -> assert false
+        in
+        let s = Tensor.Scheme.trace ~label:"outer" 1 outer in
+        Shape.set_dim r 5;
+        outcome (fun () -> instantiate s [ leaf "bad" [ 3; 7 ] ])
+      in
+      p
+        "an outer scheme applying the inner one carries its input: a conflicting application is \
+         refused"
+        (Result.is_error (nested ()));
+      p "control (the inner application drops its input): the outer scheme accepts it"
+        (Result.is_ok (nested ~sabotage:No_ref_inputs ())))
+
+(* What stays refused: an outside reference set or related, not bound, inside the function; and one
+   reference bound both as a dimension and as a row inside it (its product tie is a total-elements
+   constraint with a lazy coefficient). *)
+let () =
+  Verdict.case "capture references: what stays refused" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
+      let sets = function
+        | [ x ] ->
+            Shape.set_dim r 5;
+            external_ r [ x ]
+        | _ -> assert false
+      in
+      p "a function setting a reference made outside it is refused at the trace, naming the call"
+        (raises ~substrings:[ "tracing the shape scheme sets"; "Shape.set_dim"; "made outside it" ]
+           (fun () -> Tensor.Scheme.trace ~label:"sets" 1 sets));
+      p "control: the same function applied inline sets the reference"
+        (succeeds (fun () -> ignore (sets [ leaf "x" [ 2; 5 ] ] : Tensor.t list)));
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
+      let mixed = function
+        | [ x ] ->
+            ignore (capture_row r x : Tensor.t);
+            external_ r [ x ]
+        | _ -> assert false
+      in
+      p "a function binding a reference made outside it both as a row and as a dimension is refused"
+        (raises ~substrings:[ "tracing the shape scheme mixed"; "both as a dimension and as a row" ]
+           (fun () -> Tensor.Scheme.trace ~label:"mixed" 1 mixed)))
 
 (* {2 Rollback and delayed diagnostics} *)
 

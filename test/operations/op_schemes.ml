@@ -93,6 +93,30 @@ let%op outer () x =
 (* Random number generation: a trace a scheme cannot carry. *)
 let%op noisy () x = x + uniform ()
 
+(* A capture reference made outside the function (gh-ocannl-1791), by its caller: an input of the
+   scheme, bound per application -- the sum over [x]'s last axis, whose size [r] captures. *)
+let summed_runs = ref 0
+
+let%op summed r () x =
+  Int.incr summed_runs;
+  [%oc NTDSL.einsum1 ~capture_dims:[ r ] "...|...->ab => ...|...->a" x ()]
+
+let%op summed_plain r () x =
+  Int.incr summed_runs;
+  [%oc NTDSL.einsum1 ~capture_dims:[ r ] "...|...->ab => ...|...->a" x ()]
+[@@ocannl.no_scheme]
+
+(* Refusals the warning reports, each used by the warning's case alone: the warning is printed once
+   per function and reason in a process. *)
+let%op rng_warned () x = x + uniform ()
+let%op rng_quiet () x = x + uniform () [@@ocannl.no_scheme]
+let%op rng_off () x = x + uniform ()
+let%op const_inner () x = { cw2 = 0.5; o = [ 4 ] } * x
+
+let%op outer_quiet () x =
+  let inner = const_inner () in
+  inner x
+
 (* A body that leaks the tensor it builds, when traced, to a reference: a stale handle. *)
 let leaked : Tensor.t option ref = ref None
 
@@ -597,3 +621,130 @@ let () =
       in
       p "control: the same parameter unannotated stays unschemed, beside a schemed witness"
         (List.exists evs ~f:(traced "layer") && not (List.exists evs ~f:(about "forwarded_bare"))))
+
+(* {2 External capture references (gh-ocannl-1791)} *)
+
+let () =
+  Verdict.case "a capture reference made outside the function: schemed, bound per application"
+    (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
+      let f, at_unit = events (fun () -> summed r ()) in
+      p "the closure's trace succeeds" (List.exists at_unit ~f:(traced "summed"));
+      p_none "and nothing is left unschemed" at_unit ~f:(function
+        | Tensor.Scheme.Unschemed _ -> true
+        | _ -> false);
+      let xv = Array.init 10 ~f:(fun i -> Float.of_int (i + 1) *. 10.) in
+      let x = TDSL.ndarray xv ~label:[ "x" ] ~output_dims:[ 2; 5 ] () in
+      let y, at_first = events (fun () -> f x) in
+      p "the application checks the scheme" (List.exists at_first ~f:(checked "summed"));
+      let ctx = Ocannl.Train.forward_once (Context.auto ()) y in
+      let yv = Context.get_values ctx y.value in
+      let expected = [| 150.; 400. |] in
+      p_all "executed: each output is the sum of its row, against the closed form" (List.range 0 2)
+        ~f:(fun i -> Array.length yv = 2 && Float.(abs (yv.(i) - expected.(i)) <= 1e-3));
+      p "the closure published the reference's solution, the size of the summed axis"
+        (Option.equal Int.equal r.var_ref.solved_dim (Some 5));
+      (* The reference changed since the trace (it was unbound then): a conflicting application is
+         refused by the check, before the body runs. *)
+      let runs_before = !summed_runs in
+      let msg = error_message (fun () -> f (leaf "bad" [ 3; 7 ])) in
+      p "a conflicting application is refused at the application, naming the scheme"
+        (has_substring ~substring:"applying the shape scheme summed to bad" msg);
+      p "before the body ran" (!summed_runs = runs_before);
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
+      let g = summed_plain r () in
+      ignore (Shape.to_dims (g (leaf "x" [ 2; 5 ])).Tensor.shape : int array);
+      let runs_before = !summed_runs in
+      let msg = error_message (fun () -> g (leaf "bad" [ 3; 7 ])) in
+      p "control (no scheme): the body refuses it, unnamed"
+        (Option.is_some msg && not (has_substring ~substring:"applying the shape scheme" msg));
+      p "control (no scheme): after the body ran" (!summed_runs = runs_before + 1));
+  Verdict.case "a capture input's checks leave the session as it was" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
+      let h =
+        Tensor.Scheme.For_ppx.closure ~name:"probe_capture" ~arity:1 (function
+          | [ x ] ->
+              ignore (NTDSL.einsum1 ~capture_dims:[ r ] "...|...->ab => ...|...->a" x () : Tensor.t)
+          | _ -> assert false)
+      in
+      (* An application in open work binds the reference. *)
+      ignore
+        (NTDSL.einsum1 ~capture_dims:[ r ] "...|...->ab => ...|...->a" (leaf "x0" [ 2; 5 ]) ()
+          : Tensor.t);
+      let ok = leaf "ok" [ 3; 5 ] and bad = leaf "bad" [ 3; 7 ] in
+      let ck = Tensor.checkpoint ~label:"before the checks" () in
+      let (), evs = events (fun () -> Tensor.Scheme.For_ppx.apply h [ ok ] (fun () -> ())) in
+      p "the check of a fitting argument ran" (List.exists evs ~f:(checked "probe_capture"));
+      p_empty "and left the session as it was" ~over:Tensor.For_testing.restore_categories
+        (Tensor.For_testing.checkpoint_differences ck);
+      p
+        "the check of an argument conflicting with the reference's binding raises, naming the \
+         scheme"
+        (has_substring ~substring:"applying the shape scheme probe_capture to bad"
+           (error_message (fun () -> Tensor.Scheme.For_ppx.apply h [ bad ] (fun () -> ()))));
+      p_empty "and left the session as it was too" ~over:Tensor.For_testing.restore_categories
+        (Tensor.For_testing.checkpoint_differences ck));
+  Verdict.case "a capture input changes no id" (fun () ->
+      let run ~schemed =
+        Tensor.unsafe_reinitialize ();
+        let first = Tensor.term ~grad_spec:Prohibit_grad ~label:[ "first" ] () in
+        let first_var = Row.var_mark () in
+        let r = Shape.get_variable_ref "b" in
+        let f = if schemed then summed r () else summed_plain r () in
+        let y1 = f (leaf "x1" [ 2; 5 ]) in
+        let y2 = f (leaf "x2" [ 3; 5 ]) in
+        ignore (Shape.to_dims y2.Tensor.shape : int array);
+        ( Tensor.get_next_id (),
+          y1.Tensor.value.Ir.Tnode.uid - first.Tensor.value.Ir.Tnode.uid,
+          Row.var_mark () - first_var )
+      in
+      let next_on, uids_on, vars_on = run ~schemed:true in
+      let next_off, uids_off, vars_off = run ~schemed:false in
+      p "the schemed function hands out the session ids its unschemed twin does" (next_on = next_off);
+      p "and the same node uids" (uids_on = uids_off);
+      p "and the same shape variable ids" (vars_on = vars_off);
+      let next_sabotaged, _, _ =
+        Tensor.For_testing.without_id_neutrality (fun () -> run ~schemed:true)
+      in
+      p "control (no id neutrality): the trace shifts the session's ids" (next_sabotaged <> next_off))
+
+(* A refused trace says so on stderr (gh-ocannl-1791), once per function and reason, naming the
+   function; an opted-out or switched-off function, and a closure built inside a trace, do not. *)
+let () =
+  Verdict.case "a refused trace warns, once" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let evs = ref [] in
+      let (), lines =
+        Stderr_capture.lines (fun () ->
+            Tensor.For_testing.observe_schemes
+              (fun () ->
+                ignore ((rng_warned ()) (leaf "x" [ 4 ]) : Tensor.t);
+                ignore ((rng_warned ()) (leaf "y" [ 4 ]) : Tensor.t);
+                ignore ((rng_quiet ()) (leaf "z" [ 4 ]) : Tensor.t);
+                ignore ((outer_quiet ()) (leaf ~batch:[ 2 ] "w" [ 3 ]) : Tensor.t);
+                Tensor.For_testing.set_op_shape_schemes (Some `Off);
+                Exn.protect
+                  ~f:(fun () -> ignore ((rng_off ()) (leaf "v" [ 4 ]) : Tensor.t))
+                  ~finally:(fun () -> Tensor.For_testing.set_op_shape_schemes check_mode))
+              ~on_event:(fun e -> evs := e :: !evs))
+      in
+      let warnings = List.filter lines ~f:(String.is_prefix ~prefix:"OCANNL warning:") in
+      let about name l = String.is_substring l ~substring:("the shape scheme of " ^ name ^ " ") in
+      p "the refused function was left unschemed twice"
+        (List.count !evs ~f:(function
+           | Tensor.Scheme.Unschemed (n, _) -> String.equal n "rng_warned"
+           | _ -> false)
+        = 2);
+      p "one warning names it, on stderr" (List.count warnings ~f:(about "rng_warned") = 1);
+      p_exists "with the trace's reason" warnings ~f:(fun l ->
+          about "rng_warned" l && String.is_substring l ~substring:"precision-dependent");
+      p "no warning for the opted-out function" (List.count warnings ~f:(about "rng_quiet") = 0);
+      p "nor for a closure built inside a trace"
+        (List.exists !evs ~f:(function
+           | Tensor.Scheme.Unschemed (n, _) -> String.equal n "const_inner"
+           | _ -> false)
+        && List.count warnings ~f:(about "const_inner") = 0);
+      p "nor with the schemes off" (List.count warnings ~f:(about "rng_off") = 0))

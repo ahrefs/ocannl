@@ -451,10 +451,11 @@ val can_checkpoint : unit -> bool
 
 exception Untraceable_scheme of string
 (** A shape-scheme trace refused by design (gh-ocannl-1751): the function is valid, but a scheme
-    cannot carry what it does -- a precision-dependent total-elements constraint, an external
-    capture reference bound in the trace, or forcing dims or projections during the trace. Raised by
-    {!Scheme.trace}, prefixed ["tracing the shape scheme <label>: "]; a contradiction raises
-    [Row.Shape_error] instead. *)
+    cannot carry what it does -- a precision-dependent total-elements constraint (random number
+    generation), [set_dim], [set_sym_dim], [set_equal] or [set_scale] on a capture reference made
+    outside the trace (gh-ocannl-1791; binding one is an input), or forcing dims or projections
+    during the trace. Raised by {!Scheme.trace}, prefixed ["tracing the shape scheme <label>: "]; a
+    contradiction raises [Row.Shape_error] instead. *)
 
 val tracing_in_progress : unit -> bool
 (** Whether a shape-scheme trace is running. *)
@@ -603,6 +604,8 @@ module Scheme : sig
     | No_internal_rows
         (** Register none of the scheme's internal rows with the closure ([instantiate] only). *)
     | No_end_validation  (** Skip the end-of-trace solve of the whole window ([trace] only). *)
+    | No_ref_inputs
+        (** Relate and bind none of the scheme's capture inputs ([instantiate] and [check]). *)
 
   val label : t -> string
   val arity : t -> int
@@ -624,10 +627,16 @@ module Scheme : sig
       constraints are not the scheme's). Must run inside a rewound window ([Tensor.with_rewind]),
       which undoes the trace. While [f] runs, [finish_inference] raises. Refuses, with
       [Untraceable_scheme] on what a scheme cannot carry: a precision-dependent total-elements
-      constraint, a capture reference made outside the window and bound or set in it, or forcing
-      dims or projections; and [Row.Shape_error] on a contradiction among the window's constraints
-      (solved at Stage1 once more at the end, so a trailing [set_dim] is checked too). Both are
-      prefixed ["tracing the shape scheme <label>: "]. *)
+      constraint, a capture reference made outside the window and set or related in it ([set_dim]
+      and the like), or forcing dims or projections; and [Row.Shape_error] on a contradiction among
+      the window's constraints (solved at Stage1 once more at the end, so a trailing [set_dim] is
+      checked too). Both are prefixed ["tracing the shape scheme <label>: "].
+
+      A capture reference made outside the window that [f]'s operations bind ([~capture_dims]) is an
+      input of the scheme (gh-ocannl-1791): during the trace it reads as unbound and unsolved, so
+      the scheme does not depend on its state then, and each application relates the variable of its
+      first binding in [f] to its state at that application -- an open binding, or a solution held
+      across a closure -- as the body's own first binding of it would. *)
 
   val instantiate :
     ?sabotage:sabotage -> t -> application:string -> args:shape list -> results:shape list -> unit
@@ -639,11 +648,15 @@ module Scheme : sig
       ["applying the shape scheme <label> to <application>: "]: before anything is written, on an
       arity mismatch, a boundary or anchored shape discarded by a rewind, or a closure since the
       trace when the scheme depends on open state no anchored shape holds; after registering
-      (tainting the session, as a failed construction does), on a contradiction. *)
+      (tainting the session, as a failed construction does), on a contradiction. The scheme's
+      capture inputs are related to the references' current state and bound, to the variable of
+      their last binding in the trace, so their solutions are published -- after the Stage1 solve
+      and at the closure -- as the body's would be. *)
 
   val check : ?sabotage:sabotage -> t -> application:string -> args:shape list -> unit
-  (** [instantiate] against [args] with no results, then puts back everything it wrote (the session
-      and solver globals, the taint, the rows of the arguments and anchored shapes): an
+  (** [instantiate] against [args] with no results, binding no capture reference (its capture inputs
+      are only related to their current state), then puts back everything it wrote (the session and
+      solver globals, the taint, the rows of the arguments and anchored shapes): an
       argument-dependent shape error raises as [instantiate]'s does, and the session is unchanged
       either way. Costs what [instantiate] does, independent of the open frontier. *)
 

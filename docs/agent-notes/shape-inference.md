@@ -287,6 +287,15 @@ files.
   environment. Export everything else substituted under that environment, so it holds only unsolved
   variables. A reference made before the trace may already be in `open_refs`, which lists each once
   per inference: the trace records its own touches (`trace_touches`).
+- External capture references in schemes (gh-ocannl-1791, `ref_inputs`): a reference made before
+  the trace that the body binds is an input, not a refusal. During the trace it must read as unbound
+  AND unsolved in every branch of `binding_constraints` -- the `unsolved` flag behind the mixed
+  ties and the row arm's symbolic refusal too -- and `publish_ref_solutions` skips it, or the scheme
+  bakes in the trace-time state. Instantiation relates the FIRST binding to the reference's current
+  state; an explicit instance binds it to the LAST (what the body leaves it bound to). Setters on
+  such a reference refuse at entry (`refuse_external_in_trace`): a satisfied `set_dim` and the
+  row/row `set_equal` touch nothing, so `trace_touches` alone would miss them. A dim/row mixed
+  binding inside a trace stays refused by `has_lazy_coefficient` (its product tie's coefficient).
 - Printing a scheme (gh-ocannl-1753, `Shape.Scheme.to_string`): substituted boundary rows alone
   say almost nothing -- after a trace an argument's and its result's rows are distinct unsolved
   variables, related only by broadcasting bounds -- so the scheme keeps the trace's final
