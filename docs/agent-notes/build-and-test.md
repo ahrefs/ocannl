@@ -456,7 +456,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   direction). The claim is a gate -- incidental refusals keep a malformed tree's child at exit 1 on
   their own -- and the line is the evidence; map each key to the claim whose run prints it. A
   line from a sibling claim's run counts for nothing (gh-ocannl-1233): pooled per scanner, the
-  runs let a key stand mapped to a claim whose own run never printed it. A
+  runs let a key stand mapped to a claim whose own run never printed it. A key may carry several
+  entries, one per claim whose run prints it, and every entry is consulted -- any one answering is
+  enough, and a marker that did not print names each of its claims that failed (gh-ocannl-1572:
+  a first-match lookup once left a key's later entries dead). A
   refusal no control can reach -- a library constant, a walk defect the raw-text floor exists for
   -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
   heading, so it stays catalogued without claiming execution; a key in both tables is refused by
@@ -2233,7 +2236,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the failed claim behind it, as `print_section` named it on stderr in a `Refusal marker not
   printed (not part of the golden): <marker> -- <reason>` line (`not_printed_head`) -- `its claim
   failed: "<label>"`, or for a direct failure `the claim answering for it failed: "<label>"`, its
-  `raw_direct_evidence` claim -- or, with no such line, `no failed check of this run is behind it:
+  `raw_direct_evidence` claim (`the claims answering for it failed: "<a>", "<b>"` when several of
+  its entries' claims failed) -- or, with no such line, `no failed check of this run is behind it:
   its claim or refusal did not run` (a reworded diagnostic gets `its diagnostic is no longer in the
   source`). The printer names only failures: a run prints a subset of its row (the rest belong to
   another control golden), so "did not run" is every passing run's normal state, and writing it

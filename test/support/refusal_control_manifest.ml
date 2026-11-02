@@ -1186,6 +1186,13 @@ let owns_line ~rivals ~format line =
 (** The claim label a [raw_direct_evidence] entry names, without its [": true"]. *)
 let evidence_label claim = Option.value (String.chop_suffix claim ~suffix:": true") ~default:claim
 
+(** The claim labels every [direct_evidence] entry under [key] names, in table order: a key may have
+    several entries, each naming one claim that answers for the refusal, and each is consulted
+    (gh-ocannl-1572). *)
+let evidence_labels direct_evidence key =
+  List.filter_map direct_evidence ~f:(fun (entry_key, claim) ->
+      Option.some_if (String.equal entry_key key) (evidence_label claim))
+
 (** Whether the control claim [label] answers for the direct failure whose [format] it is checked
     against: the claim passed, and one of the lines of the runs it made ([claim_lines]) is the
     refusal's own ({!owns_line} against [rivals]). The one test {!standing} applies to the claim an
@@ -1213,7 +1220,8 @@ let answering_claims ~passed_labels ~claim_lines ~rivals diagnostic =
     claim's label; gh-ocannl-1233) is the refusal's own: the claim alone is an accepted fixture as
     far as this refusal knows, the line alone is a refusal nothing asserted on, and a line from a
     sibling claim's run is a refusal the mapped claim never asserted on; printed output is no input
-    at all. A catalogue-only refusal that ran, by either route and in any run, is reported as such.
+    at all. Every entry under [key] is consulted ({!evidence_labels}), and any one that counts is
+    enough. A catalogue-only refusal that ran, by either route and in any run, is reported as such.
 *)
 let standing ~direct_evidence ~catalogue_only ~observed ~refused ~claim_lines ~rivals ~passed_labels
     ~key diagnostic =
@@ -1221,9 +1229,9 @@ let standing ~direct_evidence ~catalogue_only ~observed ~refused ~claim_lines ~r
   let owned = List.exists ~f:(owns_line ~rivals ~format) in
   let ran = observed || owned refused in
   let answered =
-    match List.Assoc.find direct_evidence key ~equal:String.equal with
-    | None -> false
-    | Some claim -> claim_answers ~passed_labels ~claim_lines ~rivals ~format (evidence_label claim)
+    List.exists
+      (evidence_labels direct_evidence key)
+      ~f:(claim_answers ~passed_labels ~claim_lines ~rivals ~format)
   in
   match (List.Assoc.mem catalogue_only key ~equal:String.equal, ran) with
   | true, true -> Executed_yet_catalogue_only
@@ -1235,11 +1243,12 @@ let standing ~direct_evidence ~catalogue_only ~observed ~refused ~claim_lines ~r
     checks that failed are [failed] ({!Verdict.failed_checks}), as the reason the marker did not
     print -- [None] when no failed check stands behind it, so that its claim or refusal did not run
     (gh-ocannl-1499). A claim's marker stands for the claim its format matches; a direct failure's
-    for the [direct_evidence] claim answering for it under [key] (one its caught branch records has
-    no claim behind it). Only a failure is named: a run prints a subset of the row's markers, the
-    rest exercised in another control golden, so "did not run" is every passing run's normal state
-    and is left for the reader of a golden diff to infer. Taking the table as an argument, as
-    {!standing} does, lets the rule be pinned on tables the repository does not have to hold.
+    for the [direct_evidence] claims answering for it under [key], every failed one named (one its
+    caught branch records has no claim behind it). Only a failure is named: a run prints a subset of
+    the row's markers, the rest exercised in another control golden, so "did not run" is every
+    passing run's normal state and is left for the reader of a golden diff to infer. Taking the
+    table as an argument, as {!standing} does, lets the rule be pinned on tables the repository does
+    not have to hold.
 
     Answers the reason with the failed checks left for the markers after this one. A claim's marker
     consumes the failure it names, as {!claim_exercises} consumes a passing execution: two identical
@@ -1258,11 +1267,16 @@ let why_not_printed ~direct_evidence ~failed ~key diagnostic =
       in
       take [] failed
   | Refusal_control_scan.Fail ->
-      List.Assoc.find direct_evidence key ~equal:String.equal
-      |> Option.map ~f:evidence_label
-      |> Option.filter ~f:(List.mem failed ~equal:String.equal)
-      |> Option.map ~f:(fun label ->
-          (Printf.sprintf "the claim answering for it failed: \"%s\"" label, failed))
+      (match
+         List.filter (evidence_labels direct_evidence key) ~f:(List.mem failed ~equal:String.equal)
+       with
+        | [] -> None
+        | [ label ] -> Some (Printf.sprintf "the claim answering for it failed: \"%s\"" label)
+        | labels ->
+            Some
+              (Printf.sprintf "the claims answering for it failed: %s"
+                 (String.concat ~sep:", " (List.map labels ~f:(Printf.sprintf "\"%s\"")))))
+      |> Option.map ~f:(fun reason -> (reason, failed))
 
 (** The [raw_entries] row for [source] (its key without the [test/operations/] prefix) listing
     [diagnostics]' markers in extraction order, ready to paste. *)
