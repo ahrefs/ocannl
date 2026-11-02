@@ -112,6 +112,56 @@ let%op reads_dims_plain c () x =
   x + c
 [@@ocannl.no_scheme]
 
+(* {3 Option-valued tensor parameters (gh-ocannl-1792)}
+
+   One scheme per presence pattern: which annotated option-valued tensor parameters are [Some]. *)
+
+(* The mask meets a parameter of width 4 only when present. *)
+let%op masked () ?(mask : Tensor.t option) x =
+  Int.incr runs;
+  let y = { mw; o = [ 4 ] } * x in
+  match mask with None -> y | Some m -> y *. (m + { mb = 0.; o = [ 4 ] })
+
+let%op masked_plain () ?(mask : Tensor.t option) x =
+  Int.incr runs;
+  let y = { mw; o = [ 4 ] } * x in
+  match mask with None -> y | Some m -> y *. (m + { mb = 0.; o = [ 4 ] })
+[@@ocannl.no_scheme]
+
+(* Two option-valued parameters, one labelled and one optional: four patterns. *)
+let%op stepped () ~(train_step : Tensor.t option) ?(mask : Tensor.t option) x =
+  let x = match train_step with None -> x | Some s -> x + s in
+  match mask with None -> x | Some m -> x *. m
+
+(* A contradiction only the masked pattern reaches, whatever the arguments. *)
+let%op broken_when_masked () ?(mask : Tensor.t option) x =
+  match mask with None -> x | Some m -> x + m + ({ c3 = 0.; o = [ 3 ] } + { c4 = 0.; o = [ 4 ] })
+
+let%op broken_when_masked_plain () ?(mask : Tensor.t option) x =
+  match mask with None -> x | Some m -> x + m + ({ c3 = 0.; o = [ 3 ] } + { c4 = 0.; o = [ 4 ] })
+[@@ocannl.no_scheme]
+
+(* Refusals confined to the training pattern: a deterministic one (the body refuses to run on
+   tracers) and random number generation. *)
+let%op picky () ~(train_step : Tensor.t option) x =
+  match train_step with
+  | None -> x
+  | Some s ->
+      [%oc if Shape.tracing_in_progress () then failwith "picky: no tracers"];
+      x + s
+
+let%op noisy_step () ~(train_step : Tensor.t option) x =
+  match train_step with None -> x | Some s -> x + uniform_at s
+
+(* A labelled tensor that is only passed on: an annotation is evidence, a bare name is not. *)
+let scale ~gamma x = TDSL.O.(gamma *. x)
+let%op forwarded () ~(gamma : Tensor.t) x = scale ~gamma x
+let%op forwarded_bare () ~gamma x = scale ~gamma x
+
+(* Without a [()] stage: every pattern is traced at the first application. *)
+let%op masked_late ?(mask : Tensor.t option) x =
+  match mask with None -> x + x | Some m -> (x + x) *. m
+
 let () =
   Verdict.case "the closure built at () traces once; each application checks first" (fun () ->
       Tensor.unsafe_reinitialize ();
@@ -371,3 +421,179 @@ let () =
         (uid_span next_sabotaged <> uid_span next_off);
       p "control (no id neutrality): and its shape variable ids"
         (var_span next_sabotaged <> var_span next_off))
+
+let () =
+  let mask_ = "masked [mask]" and no_mask = "masked [no mask]" in
+  Verdict.case "option-valued parameters: one scheme per presence pattern, traced at ()" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let _, evs = events (fun () -> masked ()) in
+      p "both patterns are traced at ()"
+        (List.count evs ~f:(traced mask_) = 1 && List.count evs ~f:(traced no_mask) = 1);
+      let _, evs = events (fun () -> stepped ()) in
+      p_all "two option-valued parameters: all four patterns are traced at ()"
+        [
+          "stepped [train_step, mask]";
+          "stepped [train_step, no mask]";
+          "stepped [no train_step, mask]";
+          "stepped [no train_step, no mask]";
+        ] ~f:(fun l -> List.count evs ~f:(traced l) = 1);
+      (* A schemed [layer] in the same window witnesses that the log records. *)
+      let _, evs =
+        events (fun () ->
+            ignore (layer () : Tensor.t -> Tensor.t);
+            masked_plain ())
+      in
+      p_none "control (opted out): nothing is traced" evs ~f:(fun e ->
+          about mask_ e || about no_mask e || about "masked_plain" e));
+  Verdict.case "option-valued parameters: each application checks its own pattern" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let f = masked () in
+      let x () = leaf ~batch:[ 2 ] "x" [ 3 ] in
+      let (_ : Tensor.t), evs1 = events (fun () -> f ~mask:(leaf "m1" [ 4 ]) (x ())) in
+      let (_ : Tensor.t), evs2 = events (fun () -> f ~mask:(leaf "m2" [ 4 ]) (x ())) in
+      let (_ : Tensor.t), evs3 = events (fun () -> f (x ())) in
+      p "two masked applications, different masks: the masked scheme is checked twice"
+        (List.count (evs1 @ evs2) ~f:(checked mask_) = 2);
+      p_none "and neither checks nor traces the unmasked one" (evs1 @ evs2) ~f:(fun e ->
+          checked no_mask e || traced no_mask e || traced mask_ e);
+      p "an unmasked application checks the unmasked scheme"
+        (List.count evs3 ~f:(checked no_mask) = 1);
+      p_none "and not the masked one" evs3 ~f:(checked mask_);
+      let g = stepped () in
+      let (_ : Tensor.t), evs =
+        events (fun () -> g ~train_step:(Some (leaf "s" [ 3 ])) (leaf "y" [ 3 ]))
+      in
+      p "a labelled option and an omitted optional select their pattern"
+        (List.count evs ~f:(checked "stepped [train_step, no mask]") = 1));
+  Verdict.case "option-valued parameters: an argument-dependent error of one pattern" (fun () ->
+      let conflict ~plain =
+        Tensor.unsafe_reinitialize ();
+        runs := 0;
+        let f = if plain then masked_plain () else masked () in
+        let unmasked = outcome (fun () -> f (leaf ~batch:[ 2 ] "x" [ 3 ])) in
+        let before = !runs in
+        let msg =
+          error_message (fun () -> f ~mask:(leaf "wide" [ 5 ]) (leaf ~batch:[ 2 ] "y" [ 3 ]))
+        in
+        (Result.is_ok unmasked, msg, !runs - before)
+      in
+      let unmasked_ok, msg, ran = conflict ~plain:false in
+      p "the unmasked application succeeds" unmasked_ok;
+      p "a mask conflicting with the masked pattern raises, naming the pattern"
+        (has_substring ~substring:"applying the shape scheme masked [mask] to wide" msg);
+      p "the body did not run" (ran = 0);
+      let _, msg, ran = conflict ~plain:true in
+      p "control (opted out): the body's own error, after the body started"
+        (Option.is_some msg && (not (has_substring ~substring:"shape scheme" msg)) && ran = 1));
+  Verdict.case "option-valued parameters: an argument-independent error of one pattern" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let msg = error_message (fun () -> broken_when_masked ()) in
+      p "the closure's creation raises, naming the masked pattern"
+        (has_substring ~substring:"tracing the shape scheme broken_when_masked [mask]" msg);
+      Tensor.unsafe_reinitialize ();
+      let msg =
+        error_message (fun () ->
+            ignore
+              (Tensor.Scheme.check_definition ~name:"broken_when_masked" (fun () ->
+                   ignore (broken_when_masked () : ?mask:Tensor.t -> Tensor.t -> Tensor.t))
+                : string list))
+      in
+      p "check_definition reports it, naming the definition and the pattern"
+        (has_substring
+           ~substring:
+             "checking the definition broken_when_masked: tracing the shape scheme \
+              broken_when_masked [mask]"
+           msg);
+      Tensor.unsafe_reinitialize ();
+      p "control (opted out): the closure builds, and an unmasked application succeeds"
+        (Result.is_ok
+           (outcome (fun () -> broken_when_masked_plain () (leaf ~batch:[ 2 ] "x" [ 3 ])))));
+  Verdict.case "option-valued parameters: a refused pattern degrades alone" (fun () ->
+      let refused name f apply_eval =
+        Tensor.unsafe_reinitialize ();
+        let g, at_unit = events f in
+        let (_ : Tensor.t), at_apply = events (fun () -> apply_eval g) in
+        p
+          (name ^ ": the training pattern is unschemed")
+          (List.exists at_unit ~f:(function
+            | Tensor.Scheme.Unschemed (n, _) -> String.equal n (name ^ " [train_step]")
+            | _ -> false));
+        p
+          (name ^ ": the evaluation pattern is traced at () and checked at its application")
+          (List.exists at_unit ~f:(traced (name ^ " [no train_step]"))
+          && List.exists at_apply ~f:(checked (name ^ " [no train_step]")))
+      in
+      refused "picky" picky (fun g -> g ~train_step:None (leaf "x" [ 3 ]));
+      refused "noisy_step" noisy_step (fun g -> g ~train_step:None (leaf "x" [ 3 ]));
+      Tensor.unsafe_reinitialize ();
+      let g = picky () in
+      let lay = layer () in
+      (* The schemed [layer]'s check witnesses that the log records. *)
+      let (_ : Tensor.t), evs =
+        events (fun () ->
+            ignore (lay (leaf "w" [ 3 ]) : Tensor.t);
+            g ~train_step:(Some (leaf "s" [ 3 ])) (leaf "x" [ 3 ]))
+      in
+      p_none "a training application runs unchecked" evs ~f:(fun e ->
+          checked "picky [train_step]" e || traced "picky [train_step]" e));
+  Verdict.case
+    "option-valued parameters: tracing begins with every pattern, re-tracing is per pattern"
+    (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let late_mask = "masked_late [mask]" and late_no_mask = "masked_late [no mask]" in
+      let (_ : Tensor.t), first =
+        events (fun () -> masked_late ~mask:(leaf "m" [ 2 ]) (leaf "x" [ 2 ]))
+      in
+      let (_ : Tensor.t), second = events (fun () -> masked_late (leaf "y" [ 2 ])) in
+      p "without a () stage, the first application traces every pattern"
+        (List.count first ~f:(traced late_mask) = 1 && List.count first ~f:(traced late_no_mask) = 1);
+      p "the other pattern's first application checks"
+        (List.count second ~f:(checked late_no_mask) = 1);
+      p_none "and does not trace" second ~f:(traced late_no_mask);
+      Tensor.unsafe_reinitialize ();
+      let (_ : Tensor.t), evs =
+        events (fun () -> masked_late ~mask:(leaf "m2" [ 3 ]) (leaf "x2" [ 3 ]))
+      in
+      p "after a session reset, the applied pattern alone is traced again, and checked"
+        (List.count evs ~f:(traced late_mask) = 1 && List.count evs ~f:(checked late_mask) = 1);
+      p_none "the other pattern is not traced" evs ~f:(traced late_no_mask));
+  Verdict.case "option-valued parameters: a check and the traces leave the session as it was"
+    (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let ck = Tensor.checkpoint ~label:"before the variant traces" () in
+      let next_id = Tensor.get_next_id () in
+      ignore
+        (Tensor.Scheme.check_definition ~name:"stepped" (fun () ->
+             ignore
+               (stepped () : train_step:Tensor.t option -> ?mask:Tensor.t -> Tensor.t -> Tensor.t))
+          : string list);
+      (* The failing one inside a definition check too: its closure's [()] parameters are session
+         tensors. *)
+      (try
+         ignore
+           (Tensor.Scheme.check_definition ~name:"broken_when_masked" (fun () ->
+                ignore (broken_when_masked () : ?mask:Tensor.t -> Tensor.t -> Tensor.t))
+             : string list)
+       with Row.Shape_error _ -> ());
+      p "the traces allocated no session id" (Tensor.get_next_id () = next_id);
+      p_empty "successful and failed variant traces left the session as it was"
+        ~over:Tensor.For_testing.restore_categories
+        (Tensor.For_testing.checkpoint_differences ck));
+  Verdict.case "option-valued parameters: which get a scheme" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let (), evs =
+        events (fun () ->
+            let f = forwarded () in
+            ignore (f ~gamma:(leaf "g" [ 2 ]) (leaf "x" [ 2 ]) : Tensor.t))
+      in
+      p "a labelled tensor annotated [Tensor.t] gets a scheme without operand evidence"
+        (List.exists evs ~f:(traced "forwarded") && List.exists evs ~f:(checked "forwarded"));
+      let (), evs =
+        events (fun () ->
+            let lay = layer () in
+            ignore (lay (leaf "w" [ 2 ]) : Tensor.t);
+            let f = forwarded_bare () in
+            ignore (f ~gamma:(leaf "g" [ 2 ]) (leaf "x" [ 2 ]) : Tensor.t))
+      in
+      p "control: the same parameter unannotated stays unschemed, beside a schemed witness"
+        (List.exists evs ~f:(traced "layer") && not (List.exists evs ~f:(about "forwarded_bare"))))

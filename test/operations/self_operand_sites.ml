@@ -338,7 +338,8 @@ let layer_norm_case label =
     (normalization_oracle ~epsilon ~group:(fun i -> i / per_row) xv wv)
 
 (* [centered *. centered] in the batch statistics: over the batch (and spatial) axes, per channel.
-   The batch statistics are the ones a training step ([~train_step:(Some 0)]) normalizes with. *)
+   The batch statistics are the ones a training step ([~train_step:(Some x)], the presence of a step
+   being what it reads) normalizes with. *)
 let batch_norm_case ~spatial label =
   let channels = 3 in
   let b, o, make =
@@ -346,7 +347,7 @@ let batch_norm_case ~spatial label =
     else ([ 2; 3 ], [ channels ], Nn_blocks.batch_norm1d)
   in
   let layer = make ~label:[ "bn" ] ~epsilon ?momentum:None () in
-  let xv, wv, y, dx = run_loss ~b ~o (fun x -> layer ~train_step:(Some 0) x) in
+  let xv, wv, y, dx = run_loss ~b ~o (fun x -> layer ~train_step:(Some x) x) in
   check_forward_backward label (y, dx)
     (normalization_oracle ~epsilon ~group:(fun i -> i % channels) xv wv)
 

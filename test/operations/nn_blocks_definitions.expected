@@ -1,17 +1,34 @@
 the expansion schemes some block at its () stage: true
 the trial list is the expansion's list: true
-mlp_layer: its own scheme was traced: true
-mlp: its own scheme was traced: true
-softmax: its own scheme was traced: true
-cross_entropy_loss: its own scheme was traced: true
-layer_norm: its own scheme was traced: true
-conv2d: its own scheme was traced: true
-depthwise_separable_conv2d: its own scheme was traced: true
-max_pool2d: its own scheme was traced: true
-max_pool2d_copy: its own scheme was traced: true
-avg_pool2d: its own scheme was traced: true
+mlp_layer: every presence pattern's scheme was traced: true
+mlp: every presence pattern's scheme was traced: true
+softmax: every presence pattern's scheme was traced: true
+cross_entropy_loss: every presence pattern's scheme was traced: true
+layer_norm: every presence pattern's scheme was traced: true
+conv2d: every presence pattern's scheme was traced: true
+depthwise_separable_conv2d: every presence pattern's scheme was traced: true
+max_pool2d: every presence pattern's scheme was traced: true
+max_pool2d_copy: every presence pattern's scheme was traced: true
+avg_pool2d: every presence pattern's scheme was traced: true
+dropout: every presence pattern's scheme was traced: true
+multi_head_attention: every presence pattern's scheme was traced: true
+cross_attention: every presence pattern's scheme was traced: true
+transformer_encoder_block: every presence pattern's scheme was traced: true
+decoder_only_block: every presence pattern's scheme was traced: true
+transformer_decoder_block: every presence pattern's scheme was traced: true
+batch_norm1d: every presence pattern's scheme was traced: true
+batch_norm2d: every presence pattern's scheme was traced: true
+conv_bn_relu: every presence pattern's scheme was traced: true
+resnet_block: every presence pattern's scheme was traced: true
+vgg_block: every presence pattern's scheme was traced: true
 the checks allocated no session id: true
 the checks left the session as it was: true
+the evaluation pattern was traced: true
+the training pattern was not traced: true
+the training pattern was left unschemed: true
+the result's forward code is consumed, the counter beside it: true
+the result is no longer a forward root: true
+the counter stays a forward root, unconsumed: true
 the inconsistent definition is refused, naming the definition and its scheme: true
 the failed check left the session as it was: true
 the session is usable after the failed check: true

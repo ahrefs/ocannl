@@ -120,7 +120,7 @@ let () =
   let model = build_model () in
 
   (* === Training computation === *)
-  let train_logits = model ~train_step:(Some step_n) ~mask input_batch in
+  let train_logits = model ~train_step:(Some (NTDSL.embed_symbol step_n)) ~mask input_batch in
   (* Numerically stable log-softmax cross-entropy: subtract max before exp to avoid overflow. *)
   let%op max_logits = train_logits @^^ "...|... => ...|0" in
   let%op shifted = train_logits - max_logits in

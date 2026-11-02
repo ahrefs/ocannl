@@ -87,6 +87,24 @@ let%op _scheme_tail () =
 
 let%op _scheme_step () ~train_step x = match train_step with Some () -> x + 1.0 | None -> x
 let%op _scheme_mask () ?mask x = match mask with None -> x | Some m -> x *. m
+
+(* gh-ocannl-1792: annotated option-valued tensors (labelled, optional) get one scheme per presence
+   pattern, through the [_variants] entry points; a [Tensor.t] annotation is evidence for a labelled
+   tensor that is only passed on; a function without [()] reads no label from an option. *)
+let%op _scheme_variants () ~(train_step : Tensor.t option) ?(mask : Tensor.t option) x =
+  let x = match train_step with Some s -> x + s | None -> x in
+  match mask with Some m -> x *. m | None -> x
+
+let%op _scheme_forwarded () ~(gamma : Tensor.t) x = _scheme_labelled () ~gamma ~beta:gamma x
+let%op _scheme_late ?(mask : Tensor.t option) x = match mask with Some m -> x *. m | None -> x
+
+(* Without [()], an annotated non-tensor is not a label source either; the function stays
+   unschemed. *)
+let%op _late_config ~(scale : float) x = x *. !.scale
+
+let%op _scheme_defaulted () ?(scale : Tensor.t option = None) x =
+  match scale with Some s -> x *. s | None -> x
+
 let%op _scheme_opted_out () x = { ow } * x [@@ocannl.no_scheme]
 let%op rec _scheme_rec () x = if false then _scheme_rec () x else x + 1.0
 

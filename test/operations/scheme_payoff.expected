@@ -2,6 +2,10 @@ every mode closes the shapes it closes without schemes: true
 checking leaves the closure the constraint store it has without schemes: true
 checking leaves the body's inline registrations those it has without schemes: true
 checking instantiates a scheme at every depth: true
+decoder: checking reaches decoder_only_block [no train_step], multi_head_attention [no train_step, mask]: true
+decoder_train: checking reaches decoder_only_block [train_step], multi_head_attention [train_step, mask]: true
+encoder_train: checking reaches transformer_encoder_block [train_step], multi_head_attention [train_step, no mask]: true
+schemes off: no application is checked: true
 the bounded search closes the shapes the unbounded one closes: true
 the bounded search visits fewer states than the unbounded one: true
 the bounded search's saving grows with depth: true

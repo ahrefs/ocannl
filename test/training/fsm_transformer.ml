@@ -113,7 +113,7 @@ let () =
   let model = build_model () in
 
   (* === Training computation === *)
-  let train_logits = model ~train_step:(Some step_n) ~mask input_batch in
+  let train_logits = model ~train_step:(Some (NTDSL.embed_symbol step_n)) ~mask input_batch in
   let%op counts = exp train_logits in
   let%op probs = counts /. (counts ++ "...|... => ...|0") in
   let%op output_probs = (probs *. target_batch) ++ "...|... => ...|0" in

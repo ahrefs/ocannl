@@ -74,7 +74,9 @@ let () =
   let train_step_n, bindings = IDX.get_static_symbol IDX.empty in
   let loss, logits =
     Ocannl.Demo_models.transformer_with_loss ~label:[ "transformer_loss" ] ~model:transformer_model
-      () ~train_step:(Some train_step_n) ~src ~tgt_input ~tgt_target ~mask
+      ()
+      ~train_step:(Some (NTDSL.embed_symbol train_step_n))
+      ~src ~tgt_input ~tgt_target ~mask
   in
 
   (* Forward pass to check shapes and loss; set [output_cd_file] to true for debugging. *)

@@ -28,6 +28,26 @@ let%op block ~label () =
 let input () =
   Tensor.term ~grad_spec:Prohibit_grad ~label:[ "x" ] ~batch_dims:[ 8 ] ~output_dims:[ d_model ] ()
 
+(* The transformer workloads' input, causal mask and training step counter. *)
+let seq_input () =
+  Tensor.term ~grad_spec:Prohibit_grad ~label:[ "x" ] ~batch_dims:[ 2; 8 ] ~output_dims:[ d_model ]
+    ()
+
+let causal_mask () =
+  NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ 8 ] ~i:[ 8 ] ~o:[]
+    ~f:(function [| s; t |] -> if s >= t then 1. else 0. | _ -> 0.)
+    ()
+
+let step () =
+  let step_n, _ = Ocannl.Train.IDX.get_static_symbol Ocannl.Train.IDX.empty in
+  NTDSL.embed_symbol step_n
+
+let decoder ~train_step n =
+  let model =
+    Nn.decoder_only ~label:[ "dec" ] ~num_layers:n ~num_heads:2 ~d_k:8 ~d_v:8 ~d_ff:32 ()
+  in
+  model ~train_step (seq_input ()) ~mask:(causal_mask ())
+
 (* A workload builds a model of depth [n] on a fresh input; it returns the result. *)
 type workload = { w_name : string; build : int -> Tensor.t }
 
@@ -49,25 +69,20 @@ let workloads =
           let layer = block ~label:[ "tied" ] () in
           Fn.apply_n_times ~n layer (input ()));
     };
+    (* nn_blocks' transformer stacks, whose blocks are schemed per presence pattern of [~train_step]
+       and attention's [?mask] (gh-ocannl-1792): evaluation and training of the decoder-only stack
+       (masked attention), and training of the encoder stack (unmasked). *)
+    { w_name = "decoder"; build = (fun n -> decoder ~train_step:None n) };
+    { w_name = "decoder_train"; build = (fun n -> decoder ~train_step:(Some (step ())) n) };
     {
-      w_name = "decoder";
-      (* nn_blocks' decoder-only transformer: its blocks stay unschemed (~train_step and ~mask come
-         after (), gh-ocannl-1792), their layer norms and feed-forward layers are schemed. *)
+      w_name = "encoder_train";
       build =
         (fun n ->
           let model =
-            Nn.decoder_only ~label:[ "dec" ] ~num_layers:n ~num_heads:2 ~d_k:8 ~d_v:8 ~d_ff:32 ()
+            Nn.transformer_encoder ~label:[ "enc" ] ~num_layers:n ~num_heads:2 ~d_k:8 ~d_v:8
+              ~d_ff:32 ()
           in
-          let x =
-            Tensor.term ~grad_spec:Prohibit_grad ~label:[ "x" ] ~batch_dims:[ 2; 8 ]
-              ~output_dims:[ d_model ] ()
-          in
-          let mask =
-            NTDSL.init ~l:"mask" ~prec:Ir.Ops.single ~b:[ 8 ] ~i:[ 8 ] ~o:[]
-              ~f:(function [| s; t |] -> if s >= t then 1. else 0. | _ -> 0.)
-              ()
-          in
-          model ~train_step:None x ~mask);
+          model ~train_step:(Some (step ())) (seq_input ()));
     };
   ]
 
@@ -77,6 +92,7 @@ type run = {
   construction_s : float;
   total_s : float;
   dims : int list list;  (** The closed dims of the result and of every parameter. *)
+  checked : string list;  (** The labels of the schemes the applications were checked against. *)
 }
 
 let seconds started = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9
@@ -89,8 +105,13 @@ let run_one ?(unbounded = false) (mode : mode) w n =
   Tensor.Scheme.reset_registration_counts ();
   Tensor.Scheme.reset_registration_times ();
   let started = Mtime_clock.counter () in
+  let checked = ref [] in
   let infer () =
-    let y = w.build n in
+    let y =
+      Tensor.For_testing.observe_schemes
+        (fun () -> w.build n)
+        ~on_event:(function Tensor.Scheme.Checked l -> checked := l :: !checked | _ -> ())
+    in
     let construction_s = seconds started in
     (y, construction_s, Array.to_list (Shape.to_dims y.Tensor.shape))
   in
@@ -108,6 +129,7 @@ let run_one ?(unbounded = false) (mode : mode) w n =
     construction_s;
     total_s;
     dims = result_dims :: params;
+    checked = List.dedup_and_sort !checked ~compare:String.compare;
   }
 
 let row_header =
@@ -258,7 +280,27 @@ let () =
               && c.inline_constraints = off.counts.inline_constraints);
           p_all "checking instantiates a scheme at every depth" cells ~f:(fun ((w, n, _), _) ->
               let c = (get w n `Check).counts in
-              c.checked_applications > 0 && c.instantiated_constraints > 0));
+              c.checked_applications > 0 && c.instantiated_constraints > 0);
+          (* The transformer blocks' own schemes, by pattern: the counts above are already positive
+             through the layer norms and feed-forward layers alone. *)
+          let checks_at_every_depth w labels =
+            p_all
+              (w ^ ": checking reaches " ^ String.concat ~sep:", " labels)
+              depths
+              ~f:(fun n ->
+                List.for_all labels ~f:(fun l ->
+                    List.mem (get w n `Check).checked l ~equal:String.equal))
+          in
+          checks_at_every_depth "decoder"
+            [ "decoder_only_block [no train_step]"; "multi_head_attention [no train_step, mask]" ];
+          checks_at_every_depth "decoder_train"
+            [ "decoder_only_block [train_step]"; "multi_head_attention [train_step, mask]" ];
+          checks_at_every_depth "encoder_train"
+            [
+              "transformer_encoder_block [train_step]"; "multi_head_attention [train_step, no mask]";
+            ];
+          p_all "schemes off: no application is checked" results ~f:(fun ((_, _, mode), r) ->
+              Poly.equal mode `Check || List.is_empty r.checked));
       (* gh-ocannl-1802: the rank-cycle search bounded by the new edge's endpoints' levels, against
          the unbounded walk it replaced. *)
       let unbounded_visits w n =
