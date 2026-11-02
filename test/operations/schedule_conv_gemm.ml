@@ -1681,10 +1681,10 @@ let () =
     in
     y
   in
+  let limits = Context.hardware_limits (Context.auto ()) in
   let tiled =
     lazy
-      (let limits = Context.hardware_limits (Context.auto ()) in
-       let seeds = ref [] in
+      (let seeds = ref [] in
        ignore
          (Context.compile
             ~lowered_transform:(fun o ->
@@ -1698,10 +1698,31 @@ let () =
          (List.length !seeds) (List.length tiled);
        tiled)
   in
-  (* A vector file affording no alternative at this micro-kernel proposes no twin. *)
-  let leg =
-    Verdict.sub_leg cpu_leg ~when_:(lazy (not (List.is_empty (Lazy.force tiled)))) ~on:backend_name
+  (* A vector file affording no alternative at this micro-kernel proposes no twin. The gate is that
+     judgment -- [Register_tile.alternatives] at the conv site's own micro-kernel extents, read off
+     a lowering of its own, under the machine's vector file (f32: 4-byte elements) -- never the
+     twins the claims quantify, whose loss would otherwise read as a skip (gh-ocannl-1794). A
+     lowering with no conv site opens the leg, so the claims fail rather than skip. *)
+  let affords_twins =
+    lazy
+      (let site = ref None in
+       ignore
+         (Context.compile
+            ~lowered_transform:(fun o ->
+              site := Autotune.detect_conv o.LL.llc;
+              [ o ])
+            (Context.auto ())
+            (named "cvr_site" (Train.forward (make "cvr_s")))
+            Ir.Indexing.Empty);
+       match !site with
+       | None -> true
+       | Some site ->
+           not
+             (List.is_empty
+                (Ir.Register_tile.alternatives ~file:limits.Ir.Backend_intf.simd_vector ~elt_bytes:4
+                   ~m:site.Autotune.c_nrow ~n:site.Autotune.c_noc)))
   in
+  let leg = Verdict.sub_leg cpu_leg ~when_:affords_twins ~on:backend_name in
   (* [~runs:2] for the twin, once for its sibling: both apply the same zero handling, so only a
      correct (idempotent) twin run over the first run's sums matches a fresh sibling, fresh buffers
      being already zero (gh-ocannl-1625). *)

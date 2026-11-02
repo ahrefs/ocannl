@@ -823,3 +823,44 @@ restored the source byte-for-byte. Each run's baseline exited 0 (`20261020T07425
 | A later binding of a name replaces what it denoted | `verdict_scan.ml`: a name once bound to a tolerance stays one | Failed: `does not read a predicate name a later binding takes over` | `20261020T074756Z-99032` |
 | Only Verdict's parity claims are read | `verdict_scan.ml`: every callee of a parity name read as Verdict's | Failed: `does not read a p_all2 the source binds itself` | `20261020T074609Z-91663` |
 | A tolerance reader that raises on a source that parses refuses as a reader defect | `verdict_ratchet.ml`: the raised arm of `read_tolerances` reports nothing | Failed: refuses a planted hand-rolled tolerance, and names a tolerance reader that raised | `20261020T074933Z-67188` |
+
+## gh-ocannl-1794 mutation runs
+
+The gate reader (`Verdict_scan.gate_census`) now reads leg claims too: an `in_leg`/`in_legf`
+claim's gate is the `~when_` of the `Verdict.leg`/`Verdict.sub_leg` its `~leg` is bound to,
+through every `sub_leg`'s outer leg, an `if`'s or `match`'s choice of leg (whose condition and
+scrutinee are gates) and a local function's body; its population is what the claims its make
+function makes range over, or, where it makes them through a helper, everything it hands that
+helper. The population side now follows a data thunk (a lazy value and `Lazy.force`), for gated claims
+too. The skip-list reader (`Verdict_scan.skip_list_census`) refuses a skip handed to an iteration,
+a callback or loop that only skips, and a branch applying two or more skips. Every run used
+tools/mutation-run.sh --batch on the named module and focused alias, and restored the source
+byte-for-byte; each batch's baseline exited 0 (`20261102T201437Z-13361`, `20261102T201820Z-43104`, `20261102T201904Z-73198`, and for the three mutants first written with an unused variable, which failed to compile and were rewritten, `20261102T202100Z-97744` and `20261102T202144Z-26378`).
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A leg claim is a gated claim | `verdict_scan.ml`: no callee resolves to a leg claim | Failed: `refuses a leg gate that tests its claims' own population for emptiness`; `refuses a leg gate a boolean claim's quantifier ranges over`; `names a leg handed in as a parameter uncompared rather than counting it read`; every other refusing leg control and both unread-leg controls, each named in its own row; and the corpus claim that the reader compared leg claims | `20261102T201446Z-17689` |
+| A sub-leg's own gate is one of its gates | `verdict_scan.ml`: a `sub_leg` contributes only its outer leg's gates | Failed: `refuses a sub-leg gate read off the collection its claims' population is mapped from` | `20261102T202122Z-13487` |
+| `Lazy.force` reads what the lazy holds | `verdict_scan.ml`: nothing forces | Failed: `refuses a gated claim's gate read off a lazy population`; refuses a leg gate that tests its claims' own population for emptiness; refuses a sub-leg gate read off the collection its claims' population is mapped from | `20261102T201512Z-32174` |
+| A lazy value is its body's | `verdict_scan.ml`: the population side stops at `lazy` | Failed: refuses a leg gate that tests its claims' own population for emptiness; refuses a sub-leg gate read off the collection its claims' population is mapped from | `20261102T201535Z-43837` |
+| A match's scrutinee picks the leg and is a gate | `verdict_scan.ml`: the scrutinee is not read | Failed: `refuses a leg a match picks on a scrutinee read off the population` | `20261102T201559Z-51543` |
+| A local function's body is the leg it returns | `verdict_scan.ml`: a local function is not followed | Failed: `refuses a leg a local function builds from the population` | `20261102T201623Z-63760` |
+| A make function with no claim in place makes one from what it hands a helper | `verdict_scan.ml`: no fallback population | Failed: `refuses a leg gate read off what a helper making the claim is handed` | `20261102T201646Z-72341` |
+| A gate reads only what it spells | `verdict_scan.ml`: a leg gate is taken to read its whole population | Failed: `accepts a leg gated on a capability over a population built from the same program`; `accepts a sub-leg gated on an invariant its claims' population does not decide`; refuses a sub-leg gate read off the collection its claims' population is mapped from and refuses a leg gate read off what a helper making the claim is handed, whose readings then name every population binding; and the corpus claim, refusing about thirty sites' legs | `20261102T201710Z-88441` |
+| A leg claim applied in part is reported unread | `verdict_scan.ml`: no unread leg reported | Failed: `names a leg claim applied in part instead of counting it clean`; `refuses a leg claim it cannot complete, a planted hand-written skip list, and a skip-list reader that raised` | `20261102T201733Z-3874` |
+| A leg the reader cannot follow is reported uncompared | `verdict_scan.ml`: no uncompared leg reported | Failed: names a leg handed in as a parameter uncompared rather than counting it read | `20261102T201758Z-26046` |
+| `Verdict.leg` and `Verdict.sub_leg` resolve as Verdict's | `verdict_callee.ml`: no leg constructor recorded | Failed: every refusing leg control above but the two unread-leg ones, both accepting leg controls, and the corpus claim that the reader compared leg claims: each leg then reads as uncompared | `20261102T201842Z-60598` |
+
+The skip-list reader's cases are `verdict_scan_cases`' skip-list rows, run under the
+`runtest-verdict_scan_cases` alias:
+
+| Mechanism | Mutation | Cases that failed | Run |
+|---|---|---|---|
+| A skip handed to an iteration is a skip list | `verdict_scan.ml`: a skip handed as a value is not read | an iteration handed a skip | `20261102T201915Z-84868` |
+| A callback that only skips is one | `verdict_scan.ml`: a callback's body is not read | a callback that only skips | `20261102T201926Z-99562` |
+| Two skips in one branch are a run | `verdict_scan.ml`: a run needs three | a branch running two literal skips; a match case running two skips through a per-test partial skip | `20261102T201937Z-12253` |
+| A `skipped` its scope binds to something else is no skip | `verdict_scan.ml`: every `skipped` is a skip | a local function that only shares the name (a parameter named `skipped` is passed over by the applied-skips rule instead: only an applied skip counts inside a callback) | `20261102T202157Z-36567` |
+| A loop body that only skips is a skip list | `verdict_scan.ml`: loop bodies not read | a loop body that only skips | `20261102T201951Z-30851` |
+| A nested branch is judged on its own | `verdict_scan.ml`: a branch counts the skips of the branches nested in it | a nested branch, judged on its own | `20261102T202003Z-47482` |
+| A callback that evaluates its claim on one side of the gate is no skip list | `verdict_scan.ml`: evaluating claims not counted | a loop whose callback evaluates on one side of its gate and skips on the other | `20261102T202208Z-44233` |
+| An Option iteration runs at most once | `verdict_scan.ml`: Option read as a collection iteration | an Option iteration, which runs at most once | `20261102T202018Z-64542` |

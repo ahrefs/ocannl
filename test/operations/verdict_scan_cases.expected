@@ -58,6 +58,19 @@ ok: dialect scope -- computed labels pair when shadowing inputs resolve to the s
 ok: dialect scope -- computed labels do not pair when literal inputs differ
 ok: dialect scope -- bindings inside a computed expression hide outer names
 ok: dialect scope -- the same literal still pairs across scopes
+ok: skip list -- an iteration handed a skip
+ok: skip list -- an iteration handed a partially applied Verdict skip
+ok: skip list -- a callback that only skips
+ok: skip list -- a loop body that only skips
+ok: skip list -- a branch running two literal skips
+ok: skip list -- a match case running two skips through a per-test partial skip
+ok: skip list -- claims written once in a leg
+ok: skip list -- a loop whose callback evaluates on one side of its gate and skips on the other
+ok: skip list -- one skip per branch
+ok: skip list -- a local function that only shares the name
+ok: skip list -- a parameter that only shares the name
+ok: skip list -- a nested branch, judged on its own
+ok: skip list -- an Option iteration, which runs at most once
 the walk counts every string literal it passes: true
 and places the ones a named function receives: true
 verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true
@@ -68,6 +81,7 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's
   [scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim
   [scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that
+  [scanner-refusal:d27a12056bb95d07884f5cc0aae01046] exempt_skip_lists
   [scanner-refusal:ad023891a3bd7827b3905292c487055b] claim-shaped literal any
   [scanner-refusal:e1354d390a356f0c79420c25232b0b42] planted canaries the
 End of synthetic controls.

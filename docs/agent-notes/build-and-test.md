@@ -1958,8 +1958,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `pass_fail`, no silent `claim`, no second claim) and fails the run otherwise, since the closed
   side prints `<label>: true`; `verdict_quantified` pins both sides and each refusal. A single
   claim with one gate stays `gated` (or a one-label `if … else skipped label`); code outside the
-  `make` functions runs off the gate too, so it computes only what is computable there. Known
-  limit: the gate reader (gh-ocannl-1289) does not read a leg's `~when_`.
+  `make` functions runs off the gate too, so it computes only what is computable there. A leg's
+  `~when_` is a GATE, read by the gate reader below (gh-ocannl-1794): it may not read what the
+  leg's claims quantify -- `sub_leg cpu_leg ~when_:(lazy (not (List.is_empty (Lazy.force tiled))))`
+  turned a seeder that lost its twins into two skips; gate on the invariant that decides whether
+  the population exists (`schedule_conv_gemm`'s cvr leg reads `Register_tile.alternatives` at the
+  site's own extents; `ptx_target_parity` reads that the backend is the one compiling PTX, and
+  claims the PTX was recorded). The two-branch form is refused too: `verdict_ratchet` reads every
+  `skipped` its scope does not bind to something else (`Verdict_scan.skip_list_census`) and
+  refuses one handed to a collection-module iteration, a callback or loop body that only skips,
+  and a branch of an `if`/`match` applying two or more; the sites that predate the rule are
+  `exempt_skip_lists` entries, each with its reason.
 - A negative control confirms the run REACHED its last row, not only that `FAIL:` lines appeared
   (gh-ocannl-1067): the claims it printed, passed plus failed, number the golden's lines, or the
   rows run under `Verdict.case`. A raise ends a run at the case that raised, and the rows after it
@@ -2141,7 +2150,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `gated ~when_:(not (List.is_empty xs)) label ((not (List.is_empty xs)) && List.for_all xs …)` is
   refused; a boolean that quantifies nothing has no population. Its recognized forms are held
   equal to the `gated` and `gated_*` members of `Verdict.Claims`. A gate folded into the claim's value
-  (`p "…" ((not on_cpu) || ok)`) is the fifth reader's (below). Most of its mutation runs exit 4, not 1: the ratchet's trailing
+  (`p "…" ((not on_cpu) || ok)`) is the fifth reader's (below). LEG claims are gated claims to it
+  (gh-ocannl-1794): an `in_leg`/`in_legf`'s gate is the `~when_` of the qualified `Verdict.leg`/
+  `Verdict.sub_leg` its `~leg` reaches -- through names, every `sub_leg`'s outer leg, an `if`'s or
+  `match`'s pick of a leg (its condition or scrutinee a gate too) and a local function's body --
+  and its population is what the claims its make function makes range over, or, made through a
+  helper, everything the make function hands one. Both sides follow data thunks (`lazy`,
+  `Lazy.force`), the population side for `gated_*` claims too. A leg handed in as a parameter or
+  read from a field is the boundary, counted on stderr as uncompared, as a `gated_*` population
+  through a parameter is; a leg claim applied in part is refused as unread. Most of its mutation runs exit 4, not 1: the ratchet's trailing
   `OK:` row prints only on success (the manifest's gh-ocannl-1289 section says how they were
   read).
 - `verdict_ratchet`'s fifth reader is about a gate FOLDED INTO THE VALUE (gh-ocannl-1310):

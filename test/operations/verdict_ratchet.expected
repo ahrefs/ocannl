@@ -67,6 +67,19 @@ Quantified bindings exempted because emptiness is their passing meaning:
   test/operations/test_cpu_topology.ml:classes well-formed -- a live probe of the host's core classes: a host the probe cannot classify legitimately reports none, and the invariant is over whatever it found
   test/operations/tile_mma_geometry.ml:a column extent below one vector has no default and no alternatives -- the absence of alternatives is the geometry rule the claim states, for an extent that admits no tile; the shapes that do admit one are quantified by the claims above it
 
+Hand-written skip lists exempted, with the reason each keeps the form:
+  test/operations/autotune_mma_companion.ml:claim -- a two-claim `Withheld` capability branch over the parity and census claims of one match; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (CUDA, HIP, Metal)
+  test/operations/bench_self_test.ml:label -- the Windows-only skip of the stall-instrument claims, which have no interval timer there; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (Windows)
+  test/operations/cc_march_census.ml:reuse -- a compiler whose listing memoization is bypassed skips the reuse and invalidation claims, a verdict read off the run's own census results that a leg's gate may not read; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (an environment gate)
+  test/operations/gpu_lane_reduction.ml:omits -- three cases' two emitted-kernel claims off a GPU; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (Metal, CUDA, HIP)
+  test/operations/hardware_warp_shuffle.ml:claim_bf16_1w -- the two bf16 widening claims where the backend does not widen bf16 reductions; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (CUDA, HIP)
+  test/operations/integer_power_domain.ml:ipow_f64: integer powers match independent multiplication including exceptional values -- the f64 case's two claims where the backend has no f64; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (Metal)
+  test/operations/launch_predicate_parity.ml:parity_label -- a two-claim `Withheld` capability branch over one tensorized conv seed; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (CUDA, HIP, Metal)
+  test/operations/reduction_forms.ml:evidence_claim -- the per-member claim list of an unavailable reduction form, its VERIFY claims iterated from the program; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (every backend: each skips a different set of members)
+  test/operations/reduction_forms.ml:Printf.sprintf "%s @ %s: %s" m.slug prec_name claim -- the VERIFY claims of the same unavailable-form branch as evidence_claim, iterated from the program's own list; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (every backend)
+  test/operations/reduction_forms.ml:form_claim -- the tile-mma fallback's three claims off a CPU backend; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (Metal, CUDA, HIP)
+  test/operations/tile_mma_narrow.ml:parity_name -- a toolchain that rejects the half kernel skips both pure-f16 claims from the exception handler, a judgment only the compile itself makes; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (an exotic toolchain)
+
 Synthetic helper-rule controls:
 refuses an unguarded for_all2_exn helper behind a local Verdict alias: true
 refuses an unguarded helper behind an open of Verdict.Claims: true
@@ -659,7 +672,19 @@ refuses a gate on a value written before a claim a Stdlib collection stores is c
 refuses a gate on a value written before a lazy claim is forced: true
 refuses a gate on a value written after an expect test making the claim: true
 refuses a gate read off the set an in-place filter keeps the population's keys by: true
+refuses a gated claim's gate read off a lazy population: true
+refuses a leg gate that tests its claims' own population for emptiness: true
+refuses a sub-leg gate read off the collection its claims' population is mapped from: true
+refuses a leg gate a boolean claim's quantifier ranges over: true
+refuses a leg a match picks on a scrutinee read off the population: true
+refuses a leg a local function builds from the population: true
+refuses a leg gate read off what a helper making the claim is handed: true
+accepts a leg gated on a capability over a population built from the same program: true
+accepts a sub-leg gated on an invariant its claims' population does not decide: true
+names a leg handed in as a parameter uncompared rather than counting it read: true
+names a leg claim applied in part instead of counting it clean: true
 refuses a planted gate that reads its population, and a gated claim it cannot read: true
+refuses a leg claim it cannot complete, a planted hand-written skip list, and a skip-list reader that raised: true
 a claim reader's exception on a source that parses reaches the scanner-defect refusal, not the parse one: true
 a syntax matrix cell whose reader raises reads as a reader defect, not a parse failure: true
 refuses a negated backend gate folded into a claim's value: true
@@ -815,7 +840,12 @@ and it reads the label of every claim form Verdict.Claims exports: true
 no gated claim's gate reads the population it quantifies: true
 and it recognizes every gated form Verdict.Claims exports: true
 and the gate reader completed gated claims to compare: true
+and the leg reader judges every member Verdict.Claims exports: true
+and the claim-name resolver resolves every leg constructor Verdict declares: true
+and it compared the gates and populations of leg claims: true
 no claim folds a run-constant gate into its value: true
+no source writes a skip list by hand: true
+and the skip-list reader read skips: true
 and the folded-gate reader judges every member Verdict.Claims exports: true
 and it read the values of Verdict claims: true
 the scan found every literal planted for it: true
@@ -836,8 +866,11 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:138941bb9d8e8476a0e47662d3b84393] reports the claim
   [scanner-refusal:b58d64bebca3825149316fa29084d773] which reads
   [scanner-refusal:06f7a9a77b49e173f538bb4f1b062a58] gate reader raised
+  [scanner-refusal:0de32014cb53ae9628faaa035dbb0ac7] starting with
+  [scanner-refusal:cccb6b32fe71c4e65b2b51a39ea8c519] skip-list reader raised
   [scanner-refusal:4b8222a751df16e2ca351f7bacca5583] claim readers raised
   [scanner-refusal:6fa8a8891ce1cc5457a70a7dc0955684] let`-bound partial application
+  [scanner-refusal:f94dbc9f97cc1e9b0662107356001f6b] applies the leg
   [scanner-refusal:1decd3d7c917569b94d9f613373fc1c2] population or gate
   [scanner-refusal:c2cbc4e8a5802e3ad11a4c22d434e95b] run-constant gate into
   [scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised
@@ -856,7 +889,12 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies
   [scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims
   [scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated
+  [scanner-refusal:03571cf329d0733bb946c2eca2946008] Verdict.Claims
+  [scanner-refusal:f675a65703076dfc53ea44fb59f9fd09] claim-name resolver resolves
+  [scanner-refusal:664fc647996773a4adb1a331fc223f1f] gates and populations
   [scanner-refusal:92b2164afd41d9fd93850d02494032d7] run-constant gate into
+  [scanner-refusal:90b4edf499fe49feb30dde99ff5e87b3] no source writes
+  [scanner-refusal:83059def842c32ad5e0ce705c42e5d69] skip-list reader read
   [scanner-refusal:e9935bd293c26e123652183c000cb7e8] Verdict.Claims
   [scanner-refusal:07f11cb8fe0952beedc14df2223a8f0f] values of Verdict
   [scanner-refusal:be24b406399ca10a3226fec87a6d2b7f] every literal planted
