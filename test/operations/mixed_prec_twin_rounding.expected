@@ -1,6 +1,4 @@
 Twin_materialized: y = 0x1p+0
 the materialized twin rounds the master to f16: true
-Twin_virtual: y = 0x1.001p+0
-Twin_virtual: y is the rounded or the unrounded master: true
-Twin_auto: y = 0x1.001p+0
-Twin_auto: y is the rounded or the unrounded master: true
+the virtual twin rounds the master exactly where f16 computes at f16: true
+the auto twin gives the materialized twin's value or the virtual twin's: true
