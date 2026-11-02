@@ -245,7 +245,7 @@ cat >"$ptable" <<'EOF'
 let cases =
   [
     ("a well-typed op arm", {ocaml|let%op f ?(stride = 1) () x = x ++ "stride*o+k => o"|ocaml});
-    ("an op arm without its unit parameter", {ocaml|let%op f ?(stride = 1) x = x ++ "stride*o+k => o"|ocaml});
+    ("an op arm without its unit parameter", {ocaml|let%op f ~(stride : int) x = x ++ "stride*o+k => o"|ocaml});
     ("an extension no preprocessor expands", {ocaml|[%%no_such_extension let x = 1]|ocaml});
     ("a plain arm beside them", {ocaml|let y = not use_padding|ocaml});
   ]
