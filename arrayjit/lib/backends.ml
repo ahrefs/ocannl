@@ -1982,7 +1982,13 @@ let get_backend ?backend_name () =
   let name =
     Option.value_or_thunk
       (backend_name [@label_read "the user's choice of a backend by name: this IS the selection"])
-      ~default:(fun () -> Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+      ~default:(fun () ->
+        (* The key's one default is [""], as [Context.auto] reads it, where it means "probe"; here
+           an unset key means [cc]. Two defaults would resolve one unset key two ways, and the
+           resolved-configuration stream would carry both (gh-ocannl-1766). *)
+        match Utils.get_global_arg ~arg_name:"backend" ~default:"" with
+        | "" -> "cc"
+        | name -> name)
     |> String.lowercase
   in
   match List.Assoc.find accepted_names ~equal:String.equal name with

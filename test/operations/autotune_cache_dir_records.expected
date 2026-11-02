@@ -1,0 +1,5 @@
+a search uses the built-in default directory: true
+with the search off, the built-in default directory is no cache: true
+with the search off, a passed directory is still used: true
+the key has one record, the built-in default, naming the directory a search uses: true
+ocannl_autotune_cache_dir: 'autotune_cache' (default)

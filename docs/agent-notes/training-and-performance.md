@@ -895,10 +895,10 @@ files.
   pins, hermetic environment, supervision and records check, one process per call, exit 125 when a
   group survives its cleanup. No driver reads the prose `log_config_sourcing` trace any more --
   `config_records.py expect FILE KEY=VALUE...` is the check over a stderr a driver kept itself, and
-  `test_cells.py` refuses a driver that names the prose trace. Two traps the conversion met: a tuned
-  cell must pin `autotune_cache_dir` (`Autotune.resolve_cache_dir` reads it under two defaults, so a
-  defaulted key resolves two ways and the reader refuses the cell, gh-ocannl-1697), and a driver
-  that measures revisions older than the stream (gh-ocannl-1566) cannot use it at all
+  `test_cells.py` refuses a driver that names the prose trace. The reader refuses a key resolved
+  two ways in one process, which an unset key read under two defaults would be:
+  `test_config_consistency` holds every key's literal defaults to one value (gh-ocannl-1766). A
+  driver that measures revisions older than the stream (gh-ocannl-1566) cannot use it at all
   (`gh1051_boundary_split.sh`, README).
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
   gh-ocannl-743). Mirroring each batch cancels LINEAR drift (every pair exchanged, equal mean

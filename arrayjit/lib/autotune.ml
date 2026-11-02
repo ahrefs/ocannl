@@ -7527,19 +7527,21 @@ let search_setting () = Utils.registered_flag ~arg_name:"autotune_search"
    search happened to leave in ./autotune_cache (gh-ocannl-559; Codex P2 on PR #291): the latter
    would make two reproducible runs differ on local state, which is the leak that turning the search
    off exists to close. Shared with [Train.tune_placements], whose placement-decision store lives in
-   the same directory (gh-ocannl-786) and must open or not open it by the same rule. *)
+   the same directory (gh-ocannl-786) and must open or not open it by the same rule.
+
+   The key is read ONCE, under its one default, and "chosen" is that read's source (gh-ocannl-1766):
+   two reads under two defaults resolved one defaulted key two ways, which the
+   resolved-configuration stream records as two records and [benchmarks/config_records.py] refuses.
+   It is read even when the caller passes [cache_dir], so the stream reports the key whichever way
+   the call went. *)
 let resolve_cache_dir ?cache_dir ~search () =
+  let configured, source =
+    Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"autotune_cache"
+  in
   let cache_dir_chosen =
-    Option.is_some cache_dir
-    ||
-    match snd (Utils.get_global_arg_with_source ~arg_name:"autotune_cache_dir" ~default:"") with
-    | Utils.From_default -> false
-    | _ -> true
+    Option.is_some cache_dir || match source with Utils.From_default -> false | _ -> true
   in
-  let cache_dir =
-    Option.value cache_dir
-      ~default:(Utils.get_global_arg ~arg_name:"autotune_cache_dir" ~default:"autotune_cache")
-  in
+  let cache_dir = Option.value cache_dir ~default:configured in
   (* A search-less [tune] replays only a cache someone asked for. *)
   if search || cache_dir_chosen then cache_dir else ""
 

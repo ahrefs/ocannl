@@ -434,9 +434,8 @@ let read ?(source = "") content =
       method! expression env expr =
         (match expr.pexp_desc with
         | Pexp_apply (callee, args) ->
-            (* The built-in default: the [~default:] literal of a read of the key by name. The
-               library reads it twice and only one carries the directory -- the other asks merely
-               whether the key was set, and defaults to the empty string. *)
+            (* The built-in default: the [~default:] literal of a read of the key by name. An empty
+               one names no directory. *)
             if
               Option.equal String.equal (labelled_literal args "arg_name") (Some default_config_key)
             then

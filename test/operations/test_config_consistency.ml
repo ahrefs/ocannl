@@ -344,6 +344,31 @@ let () =
         eprintf "%s reads the registered key %s other than through Utils.%s ~arg_name:%S: %s\n" base
           read.Config_key_scan.read_key getter read.read_key (line_at original read.at);
       ok);
+  (* 9. gh-ocannl-1766: one key, one default. The resolved-configuration stream records a key again
+     whenever its value or source changes, so two reads of an unset key under two defaults leave two
+     [From_default] records, and [benchmarks/config_records.py] refuses the process as having
+     resolved the key two ways -- a run whose treatment check fails on nothing it was given. A site
+     that means something else by an unset key maps the one default itself ([Backends.get_backend]).
+     Every scanned root, since a bench or a [bin/] executable runs in one process with the library.
+     A default spelled as anything but a literal is not compared: what it evaluates to is the
+     runtime's to say, and [benchmarks/config_records.py] says it on every stream a driver keeps. *)
+  let literal_defaults =
+    List.concat_map source_files ~f:(fun fname ->
+        let base = Stdlib.Filename.basename fname in
+        let original = In_channel.read_all fname in
+        List.filter_map (Config_key_scan.keyed_reads original) ~f:(fun read ->
+            Option.map read.Config_key_scan.default_value ~f:(fun default ->
+                (read.read_key, (default, base ^ ": " ^ line_at original read.at)))))
+    |> Map.of_alist_multi (module String)
+  in
+  p_all ~min:50 "every config key read under a literal default is read under one default"
+    (Map.to_alist literal_defaults) ~f:(fun (key, reads) ->
+      let defaults = List.dedup_and_sort ~compare:String.compare (List.map reads ~f:fst) in
+      let one = List.length defaults <= 1 in
+      if not one then
+        List.iter reads ~f:(fun (default, site) ->
+            eprintf "%s is read under the default %S at %s\n" key default site);
+      one);
   (* 8. gh-ocannl-1535: the settings a process keeps from their first read. A lazy created at module
      initialization is forced once, and its value -- or the exception a refused value raised, which
      every later force re-raises -- answers for the rest of the process, so a test that states one

@@ -699,18 +699,37 @@ let label_uses content =
   iterator#structure (structure_of content);
   List.rev !uses
 
-type keyed_read = { read_key : string; reader : string list option; defaulted : bool; at : int }
+type keyed_read = {
+  read_key : string;
+  reader : string list option;
+  defaulted : bool;
+  default_value : string option;
+  at : int;
+}
 (** A configuration key named by a string literal, with what reads it (gh-ocannl-1332): at an
     application site [~arg_name:"k"], [reader] is the applied function's path ([None] when it is no
     plain identifier) and [defaulted] whether the same application passes [~default] or [?default];
     as a parameter's default ([?(arg_name = "k")]), [reader] is [None] and [defaulted] is [true] --
-    a helper that reads [k] unless told otherwise. [at] is where the literal sits. *)
+    a helper that reads [k] unless told otherwise. [at] is where the literal sits.
+
+    [default_value] is the value the passed default resolves the key to when it is spelled as a
+    literal (gh-ocannl-1766): a string literal's contents, or ["true"]/["false"] for a boolean
+    constructor, which [Utils.get_global_flag] renders that way before it reads. [None] when no
+    default is passed or it is any other expression. *)
 
 let keyed_reads content =
   let reads = ref [] in
   let is_default = function
     | Asttypes.Labelled "default" | Asttypes.Optional "default" -> true
     | _ -> false
+  in
+  let literal_value expr =
+    match expr.pexp_desc with
+    | Pexp_construct ({ txt; _ }, None) -> (
+        match Ppxlib.Longident.flatten_exn txt with
+        | [ (("true" | "false") as b) ] -> Some b
+        | _ -> None)
+    | _ -> string_literal expr
   in
   let iterator =
     object
@@ -720,6 +739,10 @@ let keyed_reads content =
         (match expr.pexp_desc with
         | Pexp_apply (fn, args) ->
             let defaulted = List.exists args ~f:(fun (lbl, _) -> is_default lbl) in
+            let default_value =
+              List.find_map args ~f:(fun (lbl, arg) ->
+                  if is_default lbl then literal_value arg else None)
+            in
             List.iter args ~f:(fun (lbl, arg) ->
                 if is_our_label lbl then
                   Option.iter (string_literal arg) ~f:(fun read_key ->
@@ -728,6 +751,7 @@ let keyed_reads content =
                           read_key;
                           reader = longident_of fn;
                           defaulted;
+                          default_value;
                           at = arg.pexp_loc.loc_start.pos_cnum;
                         }
                         :: !reads))
@@ -741,6 +765,7 @@ let keyed_reads content =
                             read_key;
                             reader = None;
                             defaulted = true;
+                            default_value = None;
                             at = param.pparam_loc.loc_start.pos_cnum;
                           }
                           :: !reads)

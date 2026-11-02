@@ -4,6 +4,7 @@ Sources naming a schedule cache directory, all with the `autotune_cache` prefix 
   test/operations/autotune_bound_pruning.ml
   test/operations/autotune_budget.ml
   test/operations/autotune_budget_unfloored.ml
+  test/operations/autotune_cache_dir_records.ml
   test/operations/autotune_candidate_release.ml
   test/operations/autotune_composite_playoff.ml
   test/operations/autotune_crown_log.ml

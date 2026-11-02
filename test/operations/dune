@@ -320,6 +320,7 @@
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
   (alias runtest-config_var_fatal_spelling)
+  (alias runtest-autotune_cache_dir_records)
   (alias runtest-test_config_consistency)
   (alias runtest-render_decline_inventory)
   (alias runtest-digest_completeness)
@@ -3350,6 +3351,62 @@
    %{test}
    --ocannl_autotune_timing=isolated
    --ocannl_profile=approximate)))
+
+; gh-ocannl-1766: one read of `autotune_cache_dir` behind `Autotune.resolve_cache_dir`, so an unset
+; key leaves one record in the resolved-configuration stream, held there by the reader every bench
+; driver checks its cells with (`benchmarks/config_records.py`, which refuses a key resolved two
+; ways). The executable's claims go to stdout and its stream to stderr; the reader's line for the
+; key follows the claims in the golden.
+
+(executable
+ (name autotune_cache_dir_records)
+ (modules autotune_cache_dir_records)
+ (libraries base arrayjit.utils arrayjit.autotune arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links arrayjit.autotune (and so arrayjit.context) for
+ ; Autotune.resolve_cache_dir alone, which reads one key and opens no device.
+ (targets
+  autotune_cache_dir_records.claims
+  autotune_cache_dir_records.stream)
+ (deps
+  ocannl_config
+  (alias runtest-env_spelling_gate))
+ (action
+  (with-stdout-to
+   autotune_cache_dir_records.claims
+   (with-stderr-to
+    autotune_cache_dir_records.stream
+    (run %{dep:autotune_cache_dir_records.exe} --ocannl_log_config_json=true)))))
+
+(rule
+ ; ocannl-backend: none -- runs the stream reader in Python over the stream the rule above kept.
+ (alias runtest-autotune_cache_dir_records)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  autotune_cache_dir_records.expected
+  autotune_cache_dir_records.claims
+  autotune_cache_dir_records.stream
+  ../../benchmarks/config_records.py
+  ../../benchmarks/strict_json.py
+  (sandbox always preserve_file_kind))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     autotune_cache_dir_records.actual
+     (progn
+      (cat autotune_cache_dir_records.claims)
+      (run
+       python3
+       %{dep:../../benchmarks/config_records.py}
+       show
+       autotune_cache_dir_records.stream
+       autotune_cache_dir)))
+    (diff
+     autotune_cache_dir_records.expected
+     autotune_cache_dir_records.actual)))))
 
 ; gh-ocannl-605: the environment and commandline spellings of a configuration key. The rule sets
 ; the synthetic keys the executable looks up -- `demo_key` in the one environment spelling that
