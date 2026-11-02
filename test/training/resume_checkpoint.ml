@@ -21,15 +21,15 @@
    included. A format-1 checkpoint, which predates the recorded seed, restores under any seed with a
    warning; a format-2 one missing its seed is refused as malformed.
 
-   The mixed-precision leg (gh-ocannl-1726): master weights with f16 cast twins and gradients,
-   dynamic loss scaling ([Mixed_prec.scaled_grad_update] / [scaled_sgd_update], the checksum read on
-   the host between the two routines), and a [Train.Outlier_detector] on the loss whose verdict
-   skips the optimizer step. The scaler's scale and good-step count and the detector's window are
-   host state no device checkpoint holds; they travel in [progress.extra] through their [save_state]
-   / [restore_state] pairs, and the fresh-process resume continues bit for bit -- losses, z-scores,
-   skips, scales and final master weights. The controls: a resume re-creating the scaler, and one
-   re-creating the detector, both end on other parameters; and both restores refuse a state saved
-   under other schedule parameters. *)
+   The mixed-precision leg (gh-ocannl-1726): master weights with f16 cast twins, activations and
+   gradients, dynamic loss scaling ([Mixed_prec.scaled_grad_update] / [scaled_sgd_update], the
+   checksum read on the host between the two routines), and a [Train.Outlier_detector] on the loss
+   whose verdict skips the optimizer step. The scaler's scale and good-step count and the detector's
+   window are host state no device checkpoint holds; they travel in [progress.extra] through their
+   [save_state] / [restore_state] pairs, and the fresh-process resume continues bit for bit --
+   losses, z-scores, skips, scales and final master weights. The controls: a resume re-creating the
+   scaler, and one re-creating the detector, both end on other parameters; and both restores refuse
+   a state saved under other schedule parameters. *)
 
 open Base
 open Ocannl
@@ -428,12 +428,16 @@ let build_mp () =
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let mlp = MP.with_master_weights ~prec:Ir.Ops.half make_mlp in
   let loss = batch_loss ~mlp ~xs ~ys batch_n in
-  (* f16 gradients, where loss scaling matters; the activations stay single. With f16 activations
-     too, this graph's forward computes an infinite loss on x86 under gcc (and a finite one on arm64
-     from the same generated C), so nothing would train and the controls could not discriminate
-     there. *)
+  (* f16 activations and gradients, where loss scaling matters. The policy's walk also narrows the
+     masters' initializer draws to f16 (gh-ocannl-1769): their lane-extract reads once collapsed
+     into the f32 masters' stores, reading lanes 4..7 of a 4-lane block -- an infinite loss from
+     step 0 on x86/gcc, a finite but wrong one on arm64/clang. *)
   Precision_policy.apply
-    { Precision_policy.param_prec = None; activation_prec = None; grad_prec = Some Ir.Ops.half }
+    {
+      Precision_policy.param_prec = None;
+      activation_prec = Some Ir.Ops.half;
+      grad_prec = Some Ir.Ops.half;
+    }
     loss;
   let scaler =
     MP.Loss_scaler.create ~init_scale:mp_init_scale ~growth_interval:mp_growth_interval ()
@@ -552,6 +556,9 @@ let mp_parent () =
         ~f:(fun (_, s) -> s.finite && not s.outlier);
       p_all "the mixed-precision run's losses are finite" steps ~f:(fun (_, s) ->
           Float.is_finite s.loss);
+      (* What makes the finiteness claim bite: the loss is an f16 activation (gh-ocannl-1769). *)
+      p "the mixed-precision loss is an f16 activation"
+        (Ir.Ops.equal_prec (Lazy.force prog.mp_loss.Tensor.value.Tn.storage_prec) Ir.Ops.half);
       p_all "the mixed-precision masters stay single" prog.mp_params ~f:(fun tn ->
           Ir.Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ir.Ops.single);
       (* The interrupted run. *)

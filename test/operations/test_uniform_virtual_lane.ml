@@ -43,14 +43,14 @@ let outlined =
    reads each cell of [u] exactly once so [u] stays a virtualization candidate. Both runs create
    tensors in the same order after [unsafe_reinitialize], so the threefry keys (self ids) line
    up. *)
-let run ~virtual_ ~prec ?input_dims output_dims =
+let run ~virtual_ ~prec ?(consumer_prec = prec) ?input_dims output_dims =
   Tensor.unsafe_reinitialize ();
   let ctx = Context.auto () in
   let u = TDSL.uniform () ?input_dims ~output_dims () in
   Ir.Tnode.update_prec u.value prec;
   if not virtual_ then Train.set_materialized u.value;
   let%op uvl = u *. 1. in
-  Ir.Tnode.update_prec uvl.value prec;
+  Ir.Tnode.update_prec uvl.value consumer_prec;
   (* Every leg of every precision compiles under the one routine name [uvl_fwd], so each compile
      overwrites the previous one's artifact. Arming deletes it first: what is read back below is
      this run's kernel or nothing, never the previous leg's. *)
@@ -69,10 +69,10 @@ let has sub s = String.is_substring (Generated.main_logic s) ~substring:sub
 (* Per kernel compiled, whether it was rendered outlined; filled in the [outlined] mode only. *)
 let kernels = ref []
 
-let check ~name ~prec ?input_dims output_dims =
+let check ~name ~prec ?consumer_prec ?input_dims output_dims =
   Verdict.case name @@ fun () ->
-  let ref_vals, ref_src = run ~virtual_:false ~prec ?input_dims output_dims in
-  let vir_vals, vir_src = run ~virtual_:true ~prec ?input_dims output_dims in
+  let ref_vals, ref_src = run ~virtual_:false ~prec ?consumer_prec ?input_dims output_dims in
+  let vir_vals, vir_src = run ~virtual_:true ~prec ?consumer_prec ?input_dims output_dims in
   let parity =
     Array.length ref_vals = Array.length vir_vals
     && (not (Array.is_empty vir_vals))
@@ -125,6 +125,14 @@ let () =
   check ~name:"double n=3" ~prec:Ir.Ops.double [ 3 ];
   (* fp8 is the stress case: 16 lanes per block. *)
   check ~name:"fp8 n=17" ~prec:Ir.Ops.fp8 [ 17 ];
+  (* gh-ocannl-1769: a draw consumed at ANOTHER precision. The lane index is sized for the draw's
+     precision, and so is the generator, so the conversion must stay at the draw's precision rather
+     than re-render at the consumer's. A half draw rendered at single read lanes 4..7 of a 4-lane
+     block (out of bounds: zeros and garbage on x86/gcc); a single draw rendered at half would be
+     another generator. The [*. 1.] consumer converts both runs' draws the same way. *)
+  check ~name:"half draw into single n=9" ~prec:Ir.Ops.half ~consumer_prec:Ir.Ops.single [ 9 ];
+  check ~name:"fp8 draw into single n=17" ~prec:Ir.Ops.fp8 ~consumer_prec:Ir.Ops.single [ 17 ];
+  check ~name:"single draw into half n=9" ~prec:Ir.Ops.single ~consumer_prec:Ir.Ops.half [ 9 ];
   if outlined then (
     let whole = List.count !kernels ~f:not in
     Stdio.eprintf "%d of %d kernels rendered whole (not part of the golden)\n" whole
