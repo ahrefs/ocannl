@@ -23,3 +23,11 @@ env: an even count of at least min_readings is taken: true
 env: an odd count is refused (the design mirrors every batch): true
 env: a count below min_readings is refused: true
 env: a non-number is refused: true
+screen: kept [b c d] dropped [a e]
+screen: within 2x of the slowest is kept, below it dropped, a refused reading kept: true
+screen: a reading exactly at the cut is kept: true
+screen: the cap keeps the slowest readings, in input order: true
+screen: a tie at the cap goes to the earlier entry; refused readings are outside the cap: true
+screen: with every reading refused, everything is kept: true
+screen: nothing to screen keeps nothing, drops nothing: true
+screen: applied after each reading, it keeps what one application to all of them keeps: true

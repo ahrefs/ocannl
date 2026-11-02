@@ -1200,23 +1200,28 @@ let kernel_timing_legend ~calls =
     kernel with fewer than {!Bench_retime.min_readings} admitted readings keeps its median, with its
     range unstated (NaN). An untyped failure still propagates: [User_schedule] provenance keeps the
     instrument honest about compiler bugs. *)
-let time_hermetic ?calls ~bind compile =
+let with_hermetic ~bind compile ~f =
   match compile () with
   | Error (Ir.Schedule_outcome.Fatal _ as failure) -> Ir.Schedule_outcome.raise_failure failure
   | Error (Ir.Schedule_outcome.Classified classified) ->
       Error (Declined (Ir.Schedule_outcome.detail_of_cause classified.Ir.Schedule_outcome.cause))
   | Ok (ctx, routine) ->
+      f ctx routine ~run_once:(fun () ->
+          bind routine;
+          Train.run ctx routine;
+          Context.sync ctx)
+
+let time_hermetic ?calls ~bind compile =
+  with_hermetic ~bind compile ~f:(fun ctx routine ~run_once ->
       Exn.protect
         ~finally:(fun () -> Context.release ctx)
         ~f:(fun () ->
-          bind routine;
-          Train.run ctx routine;
-          Context.sync ctx;
+          run_once ();
           let _timing, readings =
             Bench_retime.retime ~calls:(kernel_calls calls) [ (ctx, routine) ]
           in
           let spread = Bench_retime.spread_of (List.hd_exn readings) in
-          if spread.Bench_retime.admitted = 0 then Error (Untimed spread) else Ok (spread, routine))
+          if spread.Bench_retime.admitted = 0 then Error (Untimed spread) else Ok (spread, routine)))
 
 (** A per-kernel row's time: the median, then {!Bench_retime.bounds_fields}' range and admission
     count, the spelling every runner's re-timed line uses ([ms_lo=.. ms_hi=.. ms_retimed=a/c]). *)
@@ -1302,18 +1307,20 @@ let time_segments ?promote_locals ?calls ~backend ~limits ~static_indices ~ctx ~
 
     The report's per-cell attainment column. Every kernel the step SHIPPED ([Context.routine]'s
     [segments] — for a tuned cell the searched winner's, which re-lowering the computation would not
-    reproduce) is timed on its own by {!time_hermetic}; the slowest is the dominant kernel, and
+    reproduce) is timed on its own -- screened with one timing call, the slowest few then re-timed
+    with a median and range ({!dominant_kernel}); the slowest is the dominant kernel, and
     {!Bench_json.dominant_kernel_object} scores its [Ir.Cost_model.analyze] counts against the
     envelope ceiling matched to it. Dominance is by measured time, not by the model's roofline
     bound: the column exists partly to check the model, and choosing by its prediction would be
     circular.
 
-    What the instrument costs and why it is still on for every cell: one compile per kernel, one
-    run, and {!kernel_calls} timing calls of it (each a warmup, a calibration and a window of at
-    least 16 batches, about half a second per call whatever the kernel's size; gh-ocannl-1694),
-    after the timed steps (so none of it is in the step times or the memory column), which on a
-    many-kernel workload is a visible share of a cell's wall time -- {!dominant_kernel_budget_s}
-    bounds it. [BENCH_DOMINANT_KERNEL=0] turns it off, and the result line then carries [null]. *)
+    What the instrument costs and why it is still on for every cell: one compile per kernel, one run
+    and one timing call (a warmup, a calibration and a window of at least 16 batches, about half a
+    second whatever the kernel's size; gh-ocannl-1694), then {!kernel_calls} calls for each of at
+    most {!Bench_retime.screen_at_most} candidates (gh-ocannl-1763), after the timed steps (so none
+    of it is in the step times or the memory column), which on a many-kernel workload is a visible
+    share of a cell's wall time -- {!dominant_kernel_budget_s} bounds it. [BENCH_DOMINANT_KERNEL=0]
+    turns it off, and the result line then carries [null]. *)
 
 let dominant_kernel_enabled () =
   match Stdlib.Sys.getenv_opt "BENCH_DOMINANT_KERNEL" with Some "0" -> false | _ -> true
@@ -1433,10 +1440,16 @@ let print_shipped_census ?(out = Stdio.stdout) routines =
     [stop], asked before each kernel, ends the loop there: the rows returned are then the kernels
     timed before it said so, fewer than the census. [time_kernel ~i timing] runs kernel [i]'s
     compile-and-time [timing] (default: just runs it) -- the seam a test stands a slow kernel in.
-    [calls] is {!time_hermetic}'s. *)
+    [calls] is {!time_hermetic}'s. [hermetic ~i ~bind compile] compiles and times kernel [i]
+    (default {!time_hermetic}); {!dominant_kernel}'s screen stands its one-reading timing in it. *)
 let time_shipped_kernels ?out ?calls ?(stop = fun () -> false)
-    ?(time_kernel = fun ~i:_ timing -> timing ()) ~ctx ~bindings routines =
+    ?(time_kernel = fun ~i:_ timing -> timing ()) ?hermetic ~ctx ~bindings routines =
   let calls = kernel_calls calls in
+  let hermetic =
+    match hermetic with
+    | Some hermetic -> hermetic
+    | None -> fun ~i:_ ~bind compile -> time_hermetic ~calls ~bind compile
+  in
   let kernels = shipped_kernels routines in
   let n = List.length kernels in
   let rec attempted i = function
@@ -1447,7 +1460,7 @@ let time_shipped_kernels ?out ?calls ?(stop = fun () -> false)
         row :: attempted (i + 1) rest
   and time_one i (shipped, seg) =
     let bind, compile = compile_shipped_kernel ~ctx ~bindings ~i shipped seg in
-    let result = time_kernel ~i (fun () -> time_hermetic ~calls ~bind compile) in
+    let result = time_kernel ~i (fun () -> hermetic ~i ~bind compile) in
     let row_out =
       match (out, result) with
       | Some out, _ -> Some out
@@ -1550,18 +1563,33 @@ let dominant_kernel_record ~segment ~segments ~declined ~seg_ms ?(seg_ms_lo = Fl
     has been paid for, and a cell must not lose its result line to a diagnostic column, so any
     failure is reported on stderr and as a ["no-kernel"] verdict naming it.
 
+    Screen, then re-time (gh-ocannl-1763). Each kernel is compiled on its own, run once and SCREENED
+    with one timing call ({!Bench_retime.read_once}); the kernels whose reading comes within
+    {!Bench_retime.screen_ratio} of the slowest -- at most {!Bench_retime.screen_at_most}, plus any
+    whose reading was refused -- stay compiled ({!Bench_retime.screen_keep}, the rest released as
+    the screen goes), and once every kernel is screened those candidates are re-timed together in
+    one {!Bench_retime.retime} session of [calls] (default {!kernel_calls}) calls each, interleaved,
+    and released. Dominance is by median among the candidates, and the record carries the dominant
+    kernel's range beside it, as when every kernel was re-timed (gh-ocannl-1694): what the screen
+    removes is the [calls] calls on each of the many kernels nowhere near the slowest, which cost
+    the instrument about 2.1 s a kernel on a 178-kernel Metal step. A screened kernel's time in
+    [segments_ms] is its one reading. With the table on ({!kernel_table_enabled}) every kernel is
+    instead re-timed on its own, as before, so every row states a median and range. A closing stderr
+    line states the screen's and the re-timing's wall time and, with two candidates timed, the
+    dominant kernel's paired ratio over the runner-up ({!Bench_retime.paired_ratio}).
+
     Nor may it eat the cell: past [budget_s] seconds (default {!dominant_kernel_budget_s}) it stops
     and reports ["no-kernel"], instrument over budget (gh-ocannl-1260). It is stopped mid-kernel
-    where {!instrument_preemptible} ({!with_deadline}), and in any case starts no kernel once the
-    budget has passed. A kernel that started inside the budget and is not interrupted (Windows, or a
-    long foreign call) may finish past it; when that was the last one, every kernel was timed and
-    the column is the full answer, so it is reported -- the budget bounds the instrument's cost, and
-    discarding a completed measurement would recover none of it. [calls] and [time_kernel] are
-    {!time_shipped_kernels}'.
+    where {!instrument_preemptible} ({!with_deadline}), and in any case starts no kernel, and no
+    re-timing, once the budget has passed. A kernel that started inside the budget and is not
+    interrupted (Windows, or a long foreign call) may finish past it; when that was the last stage,
+    every kernel was timed and the column is the full answer, so it is reported -- the budget bounds
+    the instrument's cost, and discarding a completed measurement would recover none of it. [calls]
+    is {!time_shipped_kernels}'; [time_kernel ~i] wraps kernel [i]'s compile and screen (its compile
+    and full timing with the table on), once per kernel in launch order.
 
-    Dominance is by median ({!time_hermetic}); the record carries the dominant kernel's range beside
-    it. Two kernels whose ranges overlap are not resolved apart, so on a step whose two slowest
-    kernels are that close, which one is named can change between processes. *)
+    Two kernels whose ranges overlap are not resolved apart, so on a step whose two slowest kernels
+    are that close, which one is named can change between processes. *)
 let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing ()) ~ctx ~bindings
     routines =
   let calls = kernel_calls calls in
@@ -1592,11 +1620,48 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
     Stdio.eprintf "bench: dominant kernel: %s\n%!" note;
     Bench_json.dominant_kernel_object ~note ~ceiling:(Error note) None
   in
+  (* The screen's candidates: kernel index, its compiled context and routine, its screen reading.
+     Held compiled until the re-timing, and released on every path out of the instrument. *)
+  let held = ref [] in
+  let retiming = ref None in
   let over_budget_note () =
     Printf.sprintf
-      "instrument over budget: stopped after %.1f s with %d of %d kernels started, past its %g s \
+      "instrument over budget: stopped after %.1f s with %d of %d kernels started%s, past its %g s \
        budget (BENCH_DOMINANT_KERNEL_BUDGET_S)"
-      (elapsed_s ()) !started n budget_s
+      (elapsed_s ()) !started n
+      (match !retiming with
+      | None -> ""
+      | Some candidates -> Printf.sprintf " and %d candidates being re-timed" candidates)
+      budget_s
+  in
+  let release_held () =
+    (* Every held context is attempted, each dropped from [held] only once released, and a failure
+       (an asynchronous device error surfacing at the release's synchronization) is contained: the
+       first one is returned, for the instrument to report as it reports a failure of its own,
+       rather than escaping the cell. [Context.release] is idempotent, so a context an interrupted
+       release left in [held] is safely released again. *)
+    List.fold !held ~init:None ~f:(fun first (j, kctx, _, _) ->
+        match Context.release kctx with
+        | () ->
+            held := List.filter !held ~f:(fun (k, _, _, _) -> k <> j);
+            first
+        | exception exn -> Option.first_some first (Some exn))
+  in
+  let screen ~i ~bind compile =
+    with_hermetic ~bind compile ~f:(fun kctx routine ~run_once ->
+        (* Held before anything else can raise, so the instrument's exit releases it. *)
+        held := (i, kctx, routine, None) :: !held;
+        run_once ();
+        let reading = Bench_retime.read_once (kctx, routine) in
+        held :=
+          List.map !held ~f:(fun ((k, c, r, _) as e) -> if k = i then (k, c, r, reading) else e);
+        let _kept, dropped =
+          Bench_retime.screen_keep (List.map !held ~f:(fun ((_, _, _, r) as e) -> (e, r)))
+        in
+        List.iter dropped ~f:(fun (j, kctx, _, _) ->
+            Context.release kctx;
+            held := List.filter !held ~f:(fun (k, _, _, _) -> k <> j));
+        Ok (Bench_retime.spread_of [| reading |], routine))
   in
   let table = kernel_table_enabled () in
   if table then
@@ -1609,40 +1674,109 @@ let dominant_kernel ?calls ?budget_s ?(time_kernel = fun ~i:_ timing -> timing (
         n (elapsed_s ());
     rows
   in
-  match
-    with_deadline ~seconds:budget_s (fun () ->
-        rows_of
-          (time_shipped_kernels
-             ?out:(if table then Some Stdio.stderr else None)
-             ~calls ~stop:over_budget ~time_kernel ~ctx ~bindings routines))
-  with
-  | exception Instrument_over_budget -> no_kernel (over_budget_note ())
-  | exception exn -> no_kernel ("instrument failed: " ^ Exn.to_string exn)
-  | rows when List.length rows < n -> no_kernel (over_budget_note ())
-  | rows -> (
-      match
+  (* Each row's time and whether it decides dominance: with the table on every timed kernel was
+     re-timed; otherwise the candidates are, and the rest keep their screen reading. *)
+  let measure () =
+    let rows =
+      rows_of
+        (time_shipped_kernels
+           ?out:(if table then Some Stdio.stderr else None)
+           ?hermetic:(if table then None else Some screen)
+           ~calls ~stop:over_budget ~time_kernel ~ctx ~bindings routines)
+    in
+    if table || List.length rows < n then (rows, `Retimed_all, [])
+    else if over_budget () then raise Instrument_over_budget
+    else
+      let screen_s = elapsed_s () in
+      let candidates =
+        List.sort !held ~compare:(fun (a, _, _, _) (b, _, _, _) -> Int.compare a b)
+      in
+      retiming := Some (List.length candidates);
+      let _timing, readings =
+        if List.is_empty candidates then (Bench_retime.configured_timing (), [])
+        else Bench_retime.retime ~calls (List.map candidates ~f:(fun (_, kctx, r, _) -> (kctx, r)))
+      in
+      let retimed = List.map2_exn candidates readings ~f:(fun (i, _, _, _) rs -> (i, rs)) in
+      (rows, `Screened (screen_s, elapsed_s () -. screen_s), retimed)
+  in
+  let outcome =
+    match with_deadline ~seconds:budget_s measure with
+    | measured -> Ok measured
+    | exception exn -> Error exn
+  in
+  let outcome =
+    match (release_held (), outcome) with Some exn, Ok _ -> Error exn | _, outcome -> outcome
+  in
+  match outcome with
+  | Error Instrument_over_budget -> no_kernel (over_budget_note ())
+  | Error exn -> no_kernel ("instrument failed: " ^ Exn.to_string exn)
+  | Ok (rows, _, _) when List.length rows < n -> no_kernel (over_budget_note ())
+  | Ok (rows, how, retimed) -> (
+      (* Every kernel with a time: [(i, seg, spread, mma, how)], [how] [`Alone] with the table on
+         (each kernel re-timed in a session of its own), [`Candidate readings] for a candidate (its
+         readings in the shared re-timing), [`Screen] for a kernel that kept its screen reading. A
+         candidate none of whose re-timed readings was admitted has no time. *)
+      let timed =
         List.filter_map rows ~f:(fun (i, seg, result) ->
             Result.ok result
-            |> Option.map ~f:(fun (spread, routine) -> (i, seg, spread, routine.Context.mma)))
-      with
-      | [] when n = 0 -> no_kernel "the step shipped no kernel segments"
-      | [] ->
+            |> Option.bind ~f:(fun (spread, routine) ->
+                let mma = routine.Context.mma in
+                match how with
+                | `Retimed_all -> Some (i, seg, spread, mma, `Alone)
+                | `Screened _ -> (
+                    match List.Assoc.find retimed i ~equal:Int.equal with
+                    | None -> Some (i, seg, spread, mma, `Screen)
+                    | Some rs ->
+                        let s = Bench_retime.spread_of rs in
+                        if s.Bench_retime.admitted = 0 then None
+                        else Some (i, seg, s, mma, `Candidate rs))))
+      in
+      let median (_, _, s, _, _) = s.Bench_retime.ms in
+      let by_median a b = Float.compare (median a) (median b) in
+      let deciding =
+        List.filter timed ~f:(fun (_, _, _, _, how) ->
+            match how with `Alone | `Candidate _ -> true | `Screen -> false)
+      in
+      (match how with
+      | `Retimed_all -> ()
+      | `Screened (screen_s, retime_s) ->
+          let runner_up =
+            match List.rev (List.sort deciding ~compare:by_median) with
+            | (i, _, _, _, `Candidate num) :: (j, _, _, _, `Candidate den) :: _ ->
+                Printf.sprintf "; k%d over k%d: %s" i j
+                  (Bench_retime.ratio_fields ~name:"ratio" (Bench_retime.paired_ratio ~num ~den))
+            | _ -> ""
+          in
+          Stdio.eprintf
+            "bench: dominant kernel: screened %d kernels with one timing call each in %.1f s, \
+             re-timed %d candidates (within %gx of the slowest reading, at most %d) with %d calls \
+             each in %.1f s%s\n\
+             %!"
+            n screen_s (List.length retimed) Bench_retime.screen_ratio Bench_retime.screen_at_most
+            calls retime_s runner_up);
+      match List.max_elt deciding ~compare:by_median with
+      | None when n = 0 -> no_kernel "the step shipped no kernel segments"
+      | None when not (List.is_empty timed) ->
+          no_kernel
+            (Printf.sprintf
+               "none of the %d candidates re-timed had a timing call admitted, though %d of the %d \
+                kernels were screened"
+               (List.length retimed) (List.length timed) n)
+      | None ->
           let untimed =
-            List.count rows ~f:(fun (_, _, r) ->
-                match r with Error (Untimed _) -> true | Ok _ | Error (Declined _) -> false)
+            List.count rows ~f:(fun (i, _, r) ->
+                match r with
+                | Error (Untimed _) -> true
+                | Error (Declined _) -> false
+                | Ok _ -> List.Assoc.mem retimed i ~equal:Int.equal)
           in
           no_kernel
             (Printf.sprintf
                "none of the %d kernels was timed on its own: %d declined to compile alone, %d had \
                 no timing call admitted"
                n (n - untimed) untimed)
-      | timed ->
-          let median (_, _, s, _) = s.Bench_retime.ms in
+      | Some (i, seg, spread, mma, _) ->
           let segments_ms = List.sum (module Float) timed ~f:median in
-          let i, seg, spread, mma =
-            List.max_elt timed ~compare:(fun a b -> Float.compare (median a) (median b))
-            |> Option.value_exn ~here:[%here]
-          in
           let tensorization = Ir.C_syntax.tensorization_name mma.Ir.C_syntax.tensorization in
           let kernel, s =
             dominant_kernel_record ~segment:i ~segments:n
