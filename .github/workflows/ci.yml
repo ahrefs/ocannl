@@ -527,7 +527,8 @@ jobs:
     # solution the install's request and flags select, as pin-revisions solves
     # it -- so a dependency gaining or dropping a depext needs no edit here.
     # Only the missing ones are passed on, as opam's depext step installs only
-    # those: `apt-get install` of an installed package would upgrade it. Every
+    # those: `apt-get install` of an installed package would upgrade it, and of
+    # a name an installed package provides would replace that package. Every
     # part is best-effort, and the install below stays the fallback. Inline,
     # and passing apt-debs-cache only the inputs it had at its recorded merge,
     # so a dispatch's bisection floor stays put (build-and-test.md, "How far
@@ -543,10 +544,19 @@ jobs:
           echo "::warning::could not list opam's system dependencies; the install below fetches them itself"
           exit 0
         fi
+        # Present: an installed package's name, or a name one provides -- opam
+        # counts both (22.04's pkgconf provides pkg-config, and installing the
+        # real pkg-config there would remove pkgconf).
+        if ! present=$(dpkg-query -W -f='${db:Status-Abbrev}|${Package}|${Provides}\n' |
+            awk -F'|' 'substr($1, 2, 1) == "i" { print $2; n = split($3, p, ",")
+              for (i = 1; i <= n; i++) { sub(/\(.*/, "", p[i]); gsub(/[ \t]/, "", p[i]); print p[i] } }'); then
+          echo "::warning::could not list the installed packages; the install below fetches opam's system dependencies itself"
+          exit 0
+        fi
+        present=" $(echo $present) "
         missing=
         for p in $listed; do
-          status=$(dpkg-query -W -f='${Status}\n' "$p" 2>/dev/null) || status=
-          case $status in *'install ok installed'*) ;; *) missing="$missing $p" ;; esac
+          case $present in *" $p "*) ;; *) missing="$missing $p" ;; esac
         done
         echo "opam's system dependencies: $(echo $listed); missing:${missing:- none}"
         echo "packages=${missing# }" >>"$GITHUB_OUTPUT"

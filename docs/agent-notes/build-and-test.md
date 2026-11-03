@@ -3923,9 +3923,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   after the action as the fallback. opam's depexts take the same route before each ubuntu depext
   install (`ci.yml`, `ci-env.yml`, `gh-pages-api.yml`; gh-ocannl-1574): a step asks opam for them
   (`opam list --external --resolve=<project packages>` under the install's own test/doc flags),
-  keeps those `dpkg-query` does not report installed, as opam's depext step does (an `apt-get
-  install` of an installed package upgrades it), and hands the rest to the action under
-  `opam-depexts-debs-v1`. The fill is a step of its own with its own cap (gh-ocannl-1649):
+  keeps those no installed package is or `Provides`, as opam's depext step does (an `apt-get
+  install` of an installed package upgrades it, and of a provided name replaces its provider:
+  22.04's `pkgconf` provides `pkg-config`, and the first run of lukstafi/ocannl-staging#1683
+  removed `pkgconf` and `r-base-dev` by installing the real one), and hands the rest to the
+  action under `opam-depexts-debs-v1`, whose plan is `--no-remove`, so a filter miss warns
+  rather than removes. The fill is a step of its own with its own cap (gh-ocannl-1649):
   `apt-get --download-only` in fresh attempts of `fetch-attempt-minutes` each, keeping finished
   files, since the slowness is per apt session, not per runner -- so a 15-minute job ceiling
   never has to clear a slow fill. **`actions/cache`'s post step inside a composite action that

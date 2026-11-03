@@ -97,8 +97,12 @@ runs:
         fi
         packages="$REQUIRED $optional"
         echo "packages=$packages" >>"$GITHUB_OUTPUT"
-        if ! uris=$(sudo apt-get --yes -qq --print-uris install $packages); then
-          echo "::warning::could not plan the apt packages ($packages); the caller installs them itself"
+        # `--no-remove`: a plan that would remove an installed package is
+        # refused, so a pre-install never takes a package away on its own
+        # (gh-ocannl-1574: a provided name passed as missing replaced pkgconf);
+        # the caller's own install decides.
+        if ! uris=$(sudo apt-get --yes -qq --no-remove --print-uris install $packages); then
+          echo "::warning::could not plan the apt packages ($packages) without removing any; the caller installs them itself"
           exit 0
         fi
         printf '%s\n' "$uris"
