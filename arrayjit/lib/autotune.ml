@@ -5016,6 +5016,37 @@ type model_choice = {
           (gh-ocannl-1253). *)
 }
 
+(* gh-ocannl-1780: the target a decision-only reader of the model judges for (see the .mli). *)
+type model_target = {
+  mt_facts : Ir.Backend_intf.backend_facts;
+  mt_limits : Ir.Backend_intf.hardware_limits;
+  mt_capabilities : Ir.Backend_intf.codegen_capabilities;
+}
+
+(* What the model reports where it ranks nothing: the default pipeline, unscored. *)
+let no_selection =
+  {
+    mc_label = "default";
+    mc_model_ms = None;
+    mc_rank_ms = None;
+    mc_scored = 0;
+    mc_skipped = 0;
+    mc_rejected = 0;
+    mc_excluded = 0;
+  }
+
+(* [model_default]'s selection, as its compile and {!model_pick} consume it: the transform the
+   compile hands its lowering to (it runs the selection and records it in [sel_choice]), whether the
+   applied segments came from a pick ([sel_applied_pick], the compile-level fallback's condition),
+   the fallback's report, and the placement pre-search's pick. *)
+type model_selection = {
+  sel_transforms : LL.optimized -> LL.optimized list;
+  sel_choice : model_choice ref;
+  sel_applied_pick : bool ref;
+  sel_on_fallback : exn -> unit;
+  sel_placement_pick : (Ir.Tnode.t list * Ir.Tnode.t list * Ir.Tnode.t list) option;
+}
+
 let model_default_enabled =
   lazy (Utils.get_global_flag ~default:false ~arg_name:"model_default_schedule")
 
@@ -6271,10 +6302,14 @@ module type Driver = sig
     ?materialized:Ir.Tnode.t list ->
     ?inline:Ir.Tnode.t list ->
     ?footprint:Ir.Tnode.t list ->
+    ?facts:Ir.Backend_intf.backend_facts ->
+    ?limits:Ir.Backend_intf.hardware_limits ->
     ctx ->
     program ->
     Ir.Indexing.unit_bindings ->
     Ir.Low_level.optimized
+
+  val lowered_transform_input : Ir.Low_level.optimized -> Ir.Low_level.optimized
 
   val probe_link_floor :
     ?name:string -> ?prelowered:bool -> ctx -> Ir.Low_level.optimized -> Ir.Backend_intf.link_floor
@@ -6787,7 +6822,17 @@ module Make (D : Driver) = struct
         Some (Fiss (F_split_saved (prelude, extend segs i, Some (move (Some i)))))
     | _ -> None
 
-  let placement_surface ?name ?ordering ?(evidence = []) ctx comp bindings =
+  (* The context's own target, which every entry point judges for unless a decision-only one is
+     handed another ({!model_target}, gh-ocannl-1780). *)
+  let model_target_of ctx =
+    {
+      mt_facts = D.backend_facts ctx;
+      mt_limits = D.hardware_limits ctx;
+      mt_capabilities = D.codegen_capabilities ctx;
+    }
+
+  let placement_surface ?name ?ordering ?(evidence = []) ?target ctx comp bindings =
+    let target = match target with Some t -> t | None -> model_target_of ctx in
     let ordering = match ordering with Some o -> o | None -> flip_ordering () in
     (* The evidence is derived only on the path that consults it, so an unconditional ordering does
        not depend on [tune_flip_profit_margin] at all — it is not merely ignored: a malformed or
@@ -6797,9 +6842,9 @@ module Make (D : Driver) = struct
       | `Profitable -> Some (family_profit_of_reports evidence)
       | `Cost | `Enablement -> None
     in
-    let limits = D.hardware_limits ctx in
+    let limits = target.mt_limits and facts = target.mt_facts in
     let static_indices = Idx.bound_symbols bindings in
-    let base = D.lowered_for_decisions ?name ctx comp bindings in
+    let base = D.lowered_for_decisions ?name ~facts ~limits ctx comp bindings in
     let candidates = base.LL.flip_candidates in
     (* The all-materialized specialization of the decision surface: the [`Materialize] flips are the
        default-virtual candidates, so deciding exactly those materialized makes every open node's
@@ -6808,10 +6853,12 @@ module Make (D : Driver) = struct
     let to_materialize =
       List.filter_map candidates ~f:(fun fc -> Option.some_if (offers_materialize fc) fc.LL.fc_tn)
     in
-    let allmat = D.lowered_for_decisions ?name ~materialized:to_materialize ctx comp bindings in
+    let allmat =
+      D.lowered_for_decisions ?name ~materialized:to_materialize ~facts ~limits ctx comp bindings
+    in
     let enablement, disablement =
       placement_enablement
-        ~is_gpu:(Ir.Backend_intf.binds_hardware_grid (D.backend_facts ctx))
+        ~is_gpu:(Ir.Backend_intf.binds_hardware_grid facts)
         ~limits ~static_indices ~base ~allmat
     in
     let ps_candidates =
@@ -6952,32 +6999,24 @@ module Make (D : Driver) = struct
         emit ();
         result
 
-  let model_default ?name ?report ctx comp bindings =
-    let facts = D.backend_facts ctx in
+  (* gh-ocannl-1780: [model_default]'s selection for one computation, up to the compile it hands
+     [sel_transforms] to, under [target] -- the context's own for [model_default], a stand-in's for
+     {!model_pick}. [None] where it ranks nothing (no envelope constants, or the default annotator
+     off). The selection itself runs in [sel_transforms], on whatever lowering it is handed; the
+     placement pre-search (config [model_default_placements]) has already run. *)
+  let model_selection ?name ~target ctx comp bindings =
+    let facts = target.mt_facts in
     let is_gpu = Ir.Backend_intf.binds_hardware_grid facts
     and is_cpu = Ir.Backend_intf.renders_on_host_pool facts in
-    let limits = D.hardware_limits ctx in
-    let accum_prec = (D.codegen_capabilities ctx).Ir.Backend_intf.accum_prec in
+    let limits = target.mt_limits in
+    let capabilities = target.mt_capabilities in
+    let accum_prec = capabilities.Ir.Backend_intf.accum_prec in
     let static_indices = Idx.bound_symbols bindings in
     let peak_flops, peak_memory_bandwidth = envelope ~limits in
-    let emit r = Option.iter report ~f:(fun f -> f r) in
-    let no_selection =
-      {
-        mc_label = "default";
-        mc_model_ms = None;
-        mc_rank_ms = None;
-        mc_scored = 0;
-        mc_skipped = 0;
-        mc_rejected = 0;
-        mc_excluded = 0;
-      }
-    in
     if
       (Option.is_none peak_flops && Option.is_none peak_memory_bandwidth)
       || not (Sched.automatic_schedule_active ~facts)
-    then (
-      emit no_selection;
-      D.compile ?name ctx comp bindings)
+    then None
     else
       let choice = ref no_selection in
       (* Whether the segments the compile actually received came from a model pick rather than the
@@ -6995,10 +7034,7 @@ module Make (D : Driver) = struct
          below stays [completion_floor]'s roofline: the ranking score is never below [analyze]'s, so
          it is never below the bound, and fathoming stays sound. *)
       let score opts =
-        match
-          segments_ranking ~capabilities:(D.codegen_capabilities ctx) ~peak_flops
-            ~peak_memory_bandwidth ~limits opts
-        with
+        match segments_ranking ~capabilities ~peak_flops ~peak_memory_bandwidth ~limits opts with
         | Some (rank, _bound) ->
             Int.incr n_scored;
             Some rank
@@ -7036,7 +7072,6 @@ module Make (D : Driver) = struct
       let admits base_opt =
         model_admits ~coalesced ~seeding:(Lazy.force seeding_here) ~accum_prec base_opt
       in
-      let capabilities = D.codegen_capabilities ctx in
       (* gh-ocannl-1477: under seeding, a walk's threshold is the seeded plan's own sketch on the
          searched program, scored as its leaves are ({!model_seeded_anchors}), where it is below the
          incumbent: a leaf that only ties the seeded geometry never displaces the seeded plan, while
@@ -7168,7 +7203,6 @@ module Make (D : Driver) = struct
           | Some ds -> (
               (* Whole-routine sketch candidates. A candidate without coverage is skipped — it is
                  never picked over the default without a measured run ({!tune} covers that). *)
-              let capabilities = D.codegen_capabilities ctx in
               log_seeding ~capabilities ~where:"model_default whole-routine" ~is_gpu ~is_cpu ~limits
                 base;
               (* The claiming family's tree (matmul or conv), twins included, searched with the
@@ -7387,7 +7421,7 @@ module Make (D : Driver) = struct
         if placement_budget <= 0 then None
         else
           match
-            let surface = placement_surface ?name ctx comp bindings in
+            let surface = placement_surface ?name ~target ctx comp bindings in
             (* The cut counts nodes (gh-ocannl-1017): a candidate is the whole node, so a level
                always decides every reading it has. *)
             let cands = List.take surface.ps_candidates placement_budget in
@@ -7424,8 +7458,8 @@ module Make (D : Driver) = struct
               let score vector =
                 let mat, inl, fp = LL.partition_readings vector in
                 match
-                  D.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp ctx comp
-                    bindings
+                  D.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp ~facts
+                    ~limits ctx comp bindings
                 with
                 | opt_v ->
                     let _lbl, s, _act = select opt_v in
@@ -7480,72 +7514,115 @@ module Make (D : Driver) = struct
                 (Outcome.detail_of_cause cause);
               None
       in
-      (* With the model on the default pipeline (no sketch strictly improved on it, or the pick
-         failed validation above), the compile that just failed IS the fallback: retrying it would
-         duplicate an expensive failure and delay the honest error, so the exception propagates
-         instead. *)
-      let compile_from ?on_unrecovered base_ctx =
-        compile_advisory ?name ~on_fallback ?on_unrecovered
-          ~fallback_if:(fun () -> !applied_pick)
-          transforms base_ctx comp bindings
-      in
-      let result =
-        match placement_pick with
-        | None -> compile_from ctx
-        | Some (mat, inl, fp) ->
-            (* Every reading gets its call, empty or not — the historical context lineage of this
-               path, kept as is; skipping would change only context identity, not the decisions. *)
-            let ctx' = D.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
-            let picked = ref true in
-            (* A CLASSIFIED rejection that [compile_advisory] had nothing to fall back to under the
-               picked placements: [applied_pick] was false (the pick's win was the placement move
-               itself, so the failing compile was already the default pipeline — under [ctx'], not
-               under [ctx]), or its fallback to the default pipeline under [ctx'] failed classified
-               too. The pick is advisory, so abandon it and rerun the ordinary selection from the
-               caller's own placements. Only the classified cause comes here (gh-ocannl-1390): a
-               fatal failure — an untyped exception a transform or the builder raised, under
-               [strict_failure_classification] — propagates, rather than being retried from the
-               default placements as one more decline. *)
-            let on_unrecovered (classified : Outcome.classified_cause) =
-              logf
-                "model_default: compiling under the picked placements FAILED (%s); recompiling \
-                 from                the default placements"
-                (Exn.to_string (Outcome.exception_of_cause classified.cause));
-              picked := false;
-              applied_pick := false;
-              compile_from ctx
-            in
-            let result = compile_from ~on_unrecovered ctx' in
-            (if !picked then
-               (* The emitted label carries the placement decision: the in-compile selection only
-                  names the pipeline it chose under those placements. *)
-               let names tns =
-                 String.concat ~sep:","
-                   (List.map tns ~f:Ir.Tnode.debug_name
-                    [@message_only "spells the placements in the choice's report label"])
-               in
-               choice :=
-                 {
-                   !choice with
-                   mc_label =
-                     Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl)
-                       (names fp) !choice.mc_label;
-                 });
-            result
-      in
-      emit !choice;
-      result
+      Some
+        {
+          sel_transforms = transforms;
+          sel_choice = choice;
+          sel_applied_pick = applied_pick;
+          sel_on_fallback = on_fallback;
+          sel_placement_pick = placement_pick;
+        }
 
-  let model_explain ?name ?(coalesced = false) ctx comp bindings =
-    let facts = D.backend_facts ctx in
+  (* The label a placement pick prefixes the in-compile selection's with: that selection only names
+     the pipeline it chose under those placements. *)
+  let placements_label (mat, inl, fp) label =
+    let names tns =
+      String.concat ~sep:","
+        (List.map tns ~f:Ir.Tnode.debug_name
+         [@message_only "spells the placements in the choice's report label"])
+    in
+    Printf.sprintf "placements[mat:%s inl:%s fp:%s] %s" (names mat) (names inl) (names fp) label
+
+  let model_default ?name ?report ctx comp bindings =
+    let emit r = Option.iter report ~f:(fun f -> f r) in
+    match model_selection ?name ~target:(model_target_of ctx) ctx comp bindings with
+    | None ->
+        emit no_selection;
+        D.compile ?name ctx comp bindings
+    | Some
+        {
+          sel_transforms = transforms;
+          sel_choice = choice;
+          sel_applied_pick = applied_pick;
+          sel_on_fallback = on_fallback;
+          sel_placement_pick = placement_pick;
+        } ->
+        (* With the model on the default pipeline (no sketch strictly improved on it, or the pick
+           failed validation above), the compile that just failed IS the fallback: retrying it would
+           duplicate an expensive failure and delay the honest error, so the exception propagates
+           instead. *)
+        let compile_from ?on_unrecovered base_ctx =
+          compile_advisory ?name ~on_fallback ?on_unrecovered
+            ~fallback_if:(fun () -> !applied_pick)
+            transforms base_ctx comp bindings
+        in
+        let result =
+          match placement_pick with
+          | None -> compile_from ctx
+          | Some (mat, inl, fp) ->
+              (* Every reading gets its call, empty or not — the historical context lineage of this
+                 path, kept as is; skipping would change only context identity, not the
+                 decisions. *)
+              let ctx' = D.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
+              let picked = ref true in
+              (* A CLASSIFIED rejection that [compile_advisory] had nothing to fall back to under
+                 the picked placements: [applied_pick] was false (the pick's win was the placement
+                 move itself, so the failing compile was already the default pipeline — under
+                 [ctx'], not under [ctx]), or its fallback to the default pipeline under [ctx']
+                 failed classified too. The pick is advisory, so abandon it and rerun the ordinary
+                 selection from the caller's own placements. Only the classified cause comes here
+                 (gh-ocannl-1390): a fatal failure — an untyped exception a transform or the builder
+                 raised, under [strict_failure_classification] — propagates, rather than being
+                 retried from the default placements as one more decline. *)
+              let on_unrecovered (classified : Outcome.classified_cause) =
+                logf
+                  "model_default: compiling under the picked placements FAILED (%s); recompiling \
+                   from                the default placements"
+                  (Exn.to_string (Outcome.exception_of_cause classified.cause));
+                picked := false;
+                applied_pick := false;
+                compile_from ctx
+              in
+              let result = compile_from ~on_unrecovered ctx' in
+              (* The emitted label carries the placement decision. *)
+              if !picked then
+                choice :=
+                  { !choice with mc_label = placements_label (mat, inl, fp) !choice.mc_label };
+              result
+        in
+        emit !choice;
+        result
+
+  let model_pick ?name ?target ctx comp bindings =
+    let target = match target with Some t -> t | None -> model_target_of ctx in
+    match model_selection ?name ~target ctx comp bindings with
+    | None -> no_selection
+    | Some { sel_transforms; sel_choice; sel_placement_pick; _ } ->
+        let mat, inl, fp = Option.value sel_placement_pick ~default:([], [], []) in
+        (* The transform runs on what the compile would hand it: the hermetic lowering prepared as
+           the compile prepares its own ([D.lowered_transform_input]). *)
+        ignore
+          (sel_transforms
+             (D.lowered_transform_input
+                (D.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp
+                   ~facts:target.mt_facts ~limits:target.mt_limits ctx comp bindings))
+            : LL.optimized list);
+        Option.value_map sel_placement_pick ~default:!sel_choice ~f:(fun readings ->
+            { !sel_choice with mc_label = placements_label readings !sel_choice.mc_label })
+
+  let model_explain ?name ?(coalesced = false) ?target ctx comp bindings =
+    let target = match target with Some t -> t | None -> model_target_of ctx in
+    let facts = target.mt_facts in
     let is_gpu = Ir.Backend_intf.binds_hardware_grid facts
     and is_cpu = Ir.Backend_intf.renders_on_host_pool facts in
-    let limits = D.hardware_limits ctx in
-    let caps = D.codegen_capabilities ctx in
+    let limits = target.mt_limits in
+    let caps = target.mt_capabilities in
     let accum_prec = caps.Ir.Backend_intf.accum_prec in
     let static_indices = Idx.bound_symbols bindings in
     let peak_flops, peak_memory_bandwidth = envelope ~limits in
-    let opt = D.lowered_for_decisions ?name ctx comp bindings in
+    let opt =
+      D.lowered_transform_input (D.lowered_for_decisions ?name ~facts ~limits ctx comp bindings)
+    in
     let ms = Option.map ~f:(fun s -> s *. 1e3) in
     let explain ?(ex_admitted = true) ?(ex_anchor = false) segs =
       let ex_operand_loads =

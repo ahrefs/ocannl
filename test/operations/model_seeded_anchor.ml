@@ -184,8 +184,8 @@ let is_entry ~pick entry =
     [ "[" ^ entry ^ ","; "[" ^ entry ^ "]"; "," ^ entry ^ ","; "," ^ entry ^ "]" ]
     ~f:(fun bracketed -> String.is_substring pick ~substring:bracketed)
 
-let strictly_below_anchor (o : outcome) =
-  let pick = o.o_pick.Autotune.mc_label in
+let strictly_below_anchor ~(pick : Autotune.model_choice) ~(explained : Autotune.explanation) =
+  let pick = pick.Autotune.mc_label in
   (* Strictly below the walk's one anchor; a walk without an anchor proves nothing, so it fails:
      every site here is seeded, which the first claims check. *)
   let below cands rank =
@@ -196,12 +196,12 @@ let strictly_below_anchor (o : outcome) =
   in
   if String.equal pick "seeded" then true
   else if String.is_prefix pick ~prefix:"W_sketch[" then
-    below o.o_explained.x_routine (rank_of o.o_explained.x_routine pick)
+    below explained.x_routine (rank_of explained.x_routine pick)
   else if String.is_prefix pick ~prefix:"F_sketch[" then
     (* Every entry against its own segment's anchor: the anchor itself (a segment no leaf strictly
        improves keeps the seeded sketch) or strictly below it; at least one strictly. *)
     let entries =
-      List.concat_map o.o_explained.x_segments ~f:(fun xs ->
+      List.concat_map explained.x_segments ~f:(fun xs ->
           List.filter_map (List.tl_exn xs.Autotune.xs_candidates) ~f:(fun (label, ex) ->
               if is_entry ~pick label then Some (xs.Autotune.xs_candidates, ex) else None))
     in
@@ -256,7 +256,7 @@ let () =
       not (String.equal o.o_pick.Autotune.mc_label "default"));
   gated_all ~when_:seeds_here ~on:backend_name
     "on CUDA/HIP the pick is the seeded plan, or ranks strictly below its walk's anchor (no tie)"
-    outcomes ~f:strictly_below_anchor;
+    outcomes ~f:(fun o -> strictly_below_anchor ~pick:o.o_pick ~explained:o.o_explained);
   gated_all ~when_:seeds_here ~on:backend_name
     "on CUDA/HIP the picked routine computes bitwise what the seeded plan's does" outcomes
     ~f:(fun o ->
@@ -279,3 +279,98 @@ let () =
   gated_all ~when_:(not seeds_here) ~on:backend_name
     "off CUDA/HIP the explanation lists candidates, none of them an anchor" unseeded
     ~f:(fun (_, ex) -> not ex.Autotune.ex_anchor)
+
+(* gh-ocannl-1780: the same premises on every backend, for a CUDA stand-in target
+   ([Ll_test.cuda_model_target]: CUDA's facts, the CUDA dialect's capabilities, rated ceilings) on
+   this host's hermetic lowerings. The seeded plan is [Autotune.seeded_plan]'s for that target, the
+   walks [Autotune.model_explain]'s and the pick [Autotune.model_pick]'s, all three under the
+   target: the anchor claim pairs two derivations, the plan's sketch and the walk's anchor.
+   Executing the pick stays the device's. The leg is the configuration's (the untuned seeding on for
+   that target); the control takes the envelope away, so the model ranks nothing: the pick is the
+   default pipeline and no walk is anchored. *)
+let () =
+  let target = Ll_test.cuda_model_target () in
+  let facts = target.Autotune.mt_facts and limits = target.Autotune.mt_limits in
+  let capabilities = target.Autotune.mt_capabilities in
+  let leg =
+    Verdict.leg ~aggregation:`Environment
+      ~when_:(Option.is_some (Autotune.model_seeding ~facts ~limits))
+      ~on:(backend_name ^ ", untuned seeding off for the cuda stand-in")
+      ()
+  in
+  let sites = [ qkv (); outproj (); wgrad (); chain () ] in
+  let judged =
+    lazy
+      (List.map sites ~f:(fun s ->
+           let ctx = Context.auto () in
+           let name what = Printf.sprintf "msa_%s_cuda_%s" s.tag what in
+           let opt =
+             Context.lowered_for_decisions ~name:(name "plan") ~facts ~limits ctx s.comp
+               Ir.Indexing.Empty
+           in
+           let seeded =
+             match
+               Autotune.seeded_plan ~capabilities ~facts ~limits
+                 ~accum_prec:capabilities.Ir.Backend_intf.accum_prec ~static_indices:[] opt
+             with
+             | Some { Autotune.sp_segments = Some (_, ds); _ } ->
+                 List.filter_map ds ~f:(function
+                   | Autotune.Seeded_sketch { params; _ } -> Some params
+                   | _ -> None)
+             | _ -> []
+           in
+           let explained =
+             Autotune.model_explain ~name:(name "explain") ~target ctx s.comp Ir.Indexing.Empty
+           in
+           let pick =
+             Autotune.model_pick ~name:(name "pick") ~target ctx s.comp Ir.Indexing.Empty
+           in
+           Stdio.eprintf "structural %s: seeded [%s], pick %s (not part of the golden)\n" s.tag
+             (String.concat ~sep:"; " (List.map seeded ~f:Autotune.sketch_params_label))
+             pick.Autotune.mc_label;
+           (s, seeded, explained, pick)))
+  in
+  let singles () = List.filter (Lazy.force judged) ~f:(fun (s, _, _, _) -> s.single) in
+  in_leg ~leg "structural: for the cuda stand-in the seeded plan seeds each single-site contraction"
+    (fun label -> p_all label (singles ()) ~f:(fun (_, seeded, _, _) -> List.length seeded = 1));
+  in_leg ~leg
+    "structural: for the cuda stand-in each single-site walk is anchored exactly once, at the \
+     seeded plan's own sketch" (fun label ->
+      p_all label (singles ()) ~f:(fun (_, seeded, explained, _) ->
+          match (anchors explained.Autotune.x_routine, seeded) with
+          | [ (label, ex) ], [ p ] ->
+              String.equal label (whole_label p) && Option.is_some ex.Autotune.ex_rank_ms
+          | _ -> false));
+  in_leg ~leg
+    "structural: for the cuda stand-in the chain's per-segment substitution anchors a segment"
+    (fun label ->
+      p_exists label
+        (List.filter (Lazy.force judged) ~f:(fun (s, _, _, _) -> not s.single))
+        ~f:(fun (_, _, explained, _) ->
+          List.exists explained.Autotune.x_segments ~f:(fun xs ->
+              List.length (anchors xs.Autotune.xs_candidates) = 1)));
+  in_leg ~leg
+    "structural: for the cuda stand-in model_pick's pick is no fallback to the default pipeline"
+    (fun label ->
+      p_all label (Lazy.force judged) ~f:(fun (_, _, _, pick) ->
+          not (String.equal pick.Autotune.mc_label "default")));
+  in_leg ~leg
+    "structural: for the cuda stand-in the pick is the seeded plan, or ranks strictly below its \
+     walk's anchor (no tie)" (fun label ->
+      p_all label (Lazy.force judged) ~f:(fun (_, _, explained, pick) ->
+          strictly_below_anchor ~pick ~explained));
+  let unrated = { target with mt_limits = Ir.Backend_intf.no_hardware_limits } in
+  let s = List.hd_exn sites in
+  let ctx = Context.auto () in
+  let explained =
+    Autotune.model_explain ~name:"msa_unrated_explain" ~target:unrated ctx s.comp Ir.Indexing.Empty
+  in
+  p "structural control: without rated ceilings the cuda stand-in's pick is the default pipeline"
+    (String.equal
+       (Autotune.model_pick ~name:"msa_unrated_pick" ~target:unrated ctx s.comp Ir.Indexing.Empty)
+         .Autotune.mc_label
+       "default");
+  p_none "structural control: without rated ceilings no walk is anchored"
+    (explained.Autotune.x_routine
+    @ List.concat_map explained.Autotune.x_segments ~f:(fun xs -> xs.Autotune.xs_candidates))
+    ~f:(fun (_, ex) -> ex.Autotune.ex_anchor)

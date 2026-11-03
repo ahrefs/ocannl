@@ -2533,8 +2533,8 @@ let global_debug_info ctx =
    hermetic sibling: the argument context, its ledger and frontier are unaffected. With the analysis
    cache (gh-560), a context that already compiled this routine (e.g. the tuner's arms) pays only
    the [specialize_proc] replay here. *)
-let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint = []) ctx comp
-    bindings =
+let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint = []) ?facts ?limits
+    ctx comp bindings =
   (* Lowering forces dims like a compile does: the same gate first. *)
   frontend_gate comp;
   let optim_ctx = Backends.query ctx.wrapped { q = (fun _ c -> c.BI.optimize_ctx) } in
@@ -2545,10 +2545,14 @@ let lowered_for_decisions ?name ?(materialized = []) ?(inline = []) ?(footprint 
   Ir.Low_level.prefer_inline optim_ctx inline;
   Ir.Low_level.prefer_footprint optim_ctx footprint;
   let _name, (lowered : Ir.Low_level.optimized) =
-    Backends.lower_assignments ~facts:(backend_facts ctx) ~limits:(hardware_limits ctx) optim_ctx
-      ?name bindings comp.Asgns.asgns
+    Backends.lower_assignments
+      ~facts:(Option.value_or_thunk facts ~default:(fun () -> backend_facts ctx))
+      ~limits:(Option.value_or_thunk limits ~default:(fun () -> hardware_limits ctx))
+      optim_ctx ?name bindings comp.Asgns.asgns
   in
   lowered
+
+let lowered_transform_input = Backends.maybe_sink_zeros
 
 let decision_surface ?name ctx comp bindings =
   (lowered_for_decisions ?name ctx comp bindings).Ir.Low_level.flip_candidates

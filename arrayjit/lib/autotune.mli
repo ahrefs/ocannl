@@ -2618,6 +2618,24 @@ type model_choice = {
           [mc_skipped] nor in [mc_rejected]. *)
 }
 
+type model_target = {
+  mt_facts : Ir.Backend_intf.backend_facts;
+      (** Whether the target binds a hardware grid, runs a host pool, seeds its untuned default,
+          blends selects: what {!model_seeding}, the default annotator and the lowering read. *)
+  mt_limits : Ir.Backend_intf.hardware_limits;
+      (** The rated ceilings the envelope and the ranking price at, the matrix unit, the workgroup
+          limits. *)
+  mt_capabilities : Ir.Backend_intf.codegen_capabilities;
+      (** The accumulator residency and the codegen facts scoring reads. *)
+}
+(** The target {!model_explain} and {!model_pick} judge for, in place of the context's
+    (gh-ocannl-1780): what a host without the device reads of another backend's model decision, the
+    premise of a GPU-gated claim checked on cc. A record threaded through [?target], not driver
+    members, because only the decision-only entry points may take it: a driver overriding these
+    would also redirect every compile of its instance, and a GPU-scheduled pick would be compiled by
+    the context's own backend. The lowering takes the target's facts and limits
+    ({!Context.lowered_for_decisions}); the optimize context and placements stay the context's. *)
+
 val model_default_enabled : bool Lazy.t
 (** Config [model_default_schedule]: recipe-level untuned compiles ({!Train.to_routine},
     {!Train.run_once}, the benchmark runners) route through {!model_default} instead of
@@ -3923,10 +3941,14 @@ module type Driver = sig
     ?materialized:Ir.Tnode.t list ->
     ?inline:Ir.Tnode.t list ->
     ?footprint:Ir.Tnode.t list ->
+    ?facts:Ir.Backend_intf.backend_facts ->
+    ?limits:Ir.Backend_intf.hardware_limits ->
     ctx ->
     program ->
     Ir.Indexing.unit_bindings ->
     Ir.Low_level.optimized
+
+  val lowered_transform_input : Ir.Low_level.optimized -> Ir.Low_level.optimized
 
   val probe_link_floor :
     ?name:string -> ?prelowered:bool -> ctx -> Ir.Low_level.optimized -> Ir.Backend_intf.link_floor
@@ -3971,6 +3993,7 @@ module Make (D : Driver) : sig
     ?name:string ->
     ?ordering:[ `Cost | `Enablement | `Profitable ] ->
     ?evidence:report list ->
+    ?target:model_target ->
     D.ctx ->
     D.program ->
     Ir.Indexing.unit_bindings ->
@@ -3985,7 +4008,8 @@ module Make (D : Driver) : sig
       [Train.tune_placements]' flip refinement passes the placement A/B arms' reports, while
       {!model_default}'s placement search (config [model_default_placements]) passes none — it
       measures nothing, so the prior stands there. Under an unconditional ordering the evidence is
-      not derived at all, so such a run never reads [tune_flip_profit_margin]. *)
+      not derived at all, so such a run never reads [tune_flip_profit_margin]. [target] (default:
+      the context's) is the target the lowerings and the enablement judge for ({!model_target}). *)
 
   val compile_advisory :
     ?name:string ->
@@ -4154,9 +4178,26 @@ module Make (D : Driver) : sig
       [reduction_sink] (default: config [gpu_default_reduction_sink], true) turns it off; it applies
       with the seeding disabled too. Reads and writes no schedule cache. *)
 
+  val model_pick :
+    ?name:string ->
+    ?target:model_target ->
+    D.ctx ->
+    D.program ->
+    Ir.Indexing.unit_bindings ->
+    model_choice
+  (** {!model_default}'s choice for one computation, decided and not compiled (gh-ocannl-1780): the
+      same selection -- the placement pre-search where configured, then the in-compile selection run
+      on {!Context.lowered_for_decisions}' hermetic lowering under the placements it picked --
+      reported as {!model_default} reports it before its compile. What it cannot see is the
+      compile-level fallback, which only a backend compile triggers: where {!model_default}'s
+      compile of the pick fails, it reports ["default"] and this reports the pick. The context is
+      untouched. [target] (default: the context's) is the target the selection judges for
+      ({!model_target}): a host judging a GPU's pick on cc, which no compile could. *)
+
   val model_explain :
     ?name:string ->
     ?coalesced:bool ->
+    ?target:model_target ->
     D.ctx ->
     D.program ->
     Ir.Indexing.unit_bindings ->
@@ -4164,19 +4205,23 @@ module Make (D : Driver) : sig
   (** What {!model_default} sees of the candidates it ranks for one computation, without choosing or
       compiling (gh-ocannl-1254, the interface gh-ocannl-1269 reads): the whole-routine candidates
       and, per segment, the per-segment ones (gh-ocannl-1438), each with whether the numerics
-      restriction admits it. The lowering is {!Context.lowered_for_decisions}', so the context is
-      untouched. The placement pre-search is not listed. Candidates whose scheduled form fails to
-      apply or validate are omitted, as {!model_default} excludes them; a segment whose preset has
-      no score is listed with its unscored entries, where {!model_default} skips it. Where
-      {!model_default} ranks nothing — no envelope constants, or the default annotator off —
-      [x_routine] is the default pipeline alone and [x_segments] is empty.
+      restriction admits it. The lowering is {!Context.lowered_for_decisions}', prepared as the
+      compile prepares its own ({!Context.lowered_transform_input}), so the context is untouched.
+      The placement pre-search is not listed. Candidates whose scheduled form fails to apply or
+      validate are omitted, as {!model_default} excludes them; a segment whose preset has no score
+      is listed with its unscored entries, where {!model_default} skips it. Where {!model_default}
+      ranks nothing — no envelope constants, or the default annotator off — [x_routine] is the
+      default pipeline alone and [x_segments] is empty.
 
       [~coalesced:true] (default [false]) appends to [x_routine] the whole-routine leaves of the
       coalesced tuner branch ({!coalesced_seed_params}), so the score's ranking of them can be
       checked against timings (gh-ocannl-1278); they are appended regardless where {!model_default}
       ranks them ({!model_ranks_coalesced}, gh-ocannl-1600), so its pick is a listed row -- on each
       segment's candidates too, labeled as the segment's leaves are. Each is marked admitted exactly
-      when its uncoalesced form would be. *)
+      when its uncoalesced form would be.
+
+      [target] (default: the context's) is the target the candidates are ranked for, the lowering
+      included ({!model_target}, gh-ocannl-1780). *)
 
   val untuned_compile :
     ?name:string -> D.ctx -> D.program -> Ir.Indexing.unit_bindings -> D.ctx * D.routine

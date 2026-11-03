@@ -5328,7 +5328,9 @@ box.
   (gh-ocannl-1780; `hardware_warp_shuffle` judges every racing body and every rendering one). A
   test-local seeding helper that reads the running backend takes an optional
   `Ll_test.tuner_target` defaulting to it, so the same probe feeds the device leg and the stand-in
-  one (`schedule_strided_1x1`'s f16 sites). The inventory and each skipped entry's reason are in
+  one (`schedule_strided_1x1`'s f16 sites). A model decision is judged for a stand-in target
+  without compiling it: `Autotune.model_pick` and `model_explain` under `Ll_test.cuda_model_target`
+  (scheduling-and-autotune.md). The inventory and each skipped entry's reason are in
   gh-ocannl-1626's closing comment.
 
 - `refused_action_streams` (gh-ocannl-1005) holds accepted-failure Dune actions to the same
