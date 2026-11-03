@@ -3153,6 +3153,21 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     gh-ocannl-1765), 6 named a changed definition with the module (4 listed with `Tn` beside a
     re-exporter such as `Context` or `Tensor`, but each also names `Tnode`, so the stricter
     re-export reading keeps them), 4 of them through a `test/support` helper definition.
+  - The shell harnesses are no dune aliases, so `affected` reads them from their own text
+    (gh-ocannl-1900; the boundary is `tools/affected-tests.sh`'s header, The harness legs): each
+    member `tools/test-harnesses.sh --list` names reaches what its program (it and the scripts it
+    sources or imports, to a fixpoint) names, with the program of each script named; what a named
+    script names in turn is not followed, so a harness driving a script through another names it
+    itself. stderr gives each changed path's harnesses with the step that reached each, then
+    `affected: harness: CMD` lines; `--harnesses` prints only those commands, on stdout, and asks
+    dune nothing (under a second here). A header declares the legs that read files its code does
+    not name, `# affected-reads: GLOB... [--only 'ERE']`; a declaration only adds, never narrowing
+    what the text reaches: `tools/test-typecheck-scan-cases.sh` sends the scan-case tables and
+    `scan_case_stubs/*` to its legs 1 and 10, its engine to every leg, so a stub edit is mapped
+    there rather than UNMAPPED (gh-ocannl-1584). A marker line outside a header stops the run, so
+    a harness's fixture writes one through a variable. gh-ocannl-1797's two CI reds read this way:
+    `tools/test-run.sh` reaches `tools/test-test-run.sh`, `benchmarks/fixture_digest.py`
+    `benchmarks/test-check-box.sh`.
   - A module of a library this build does not compile (`cuda_backend.ml` on a Mac) stays UNMAPPED,
     exit 3, but an OFF-BUILD line on stderr counts what a build compiling it reaches -- read from
     the dune files' `libraries` (a `(select)` condition included), since dune describes none of

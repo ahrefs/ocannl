@@ -52,10 +52,13 @@
 #   tools/test-run.sh lock-status [RUN|last]          # idle/held; exits 0/3 (2 error)
 #   tools/test-run.sh idle                             # 0 idle, 3 locked, 2 unreadable
 #                                                     # snapshot, not a reservation
-#   tools/test-run.sh affected [--referenced-only] [--why ALIAS|all] --since BASE|REV|REV..REV|--files PATH...
+#   tools/test-run.sh affected [--referenced-only] [--why ALIAS|all] [--harnesses] --since BASE|REV|REV..REV|--files PATH...
 #                                                      # the per-test aliases a change reaches,
 #                                                      # link-only ones last; runs none;
-#                                                      # --why explains one on stderr
+#                                                      # --why explains one on stderr;
+#                                                      # --harnesses prints the harness
+#                                                      # commands instead, without dune
+#                                                      # or the worktree lock
 #                                                      # (tools/affected-tests.sh)
 #   tools/test-run.sh aliases PATH...                 # a test's per-test aliases, by family;
 #                                                      # runs none
@@ -3412,8 +3415,18 @@ fi
 
 case $sub in
   affected)
-    hold_query_lock
-    select_dune
+    # `--harnesses` (gh-ocannl-1900) reads the shell harnesses' own text and
+    # asks dune nothing, so it neither contends for `_build` nor needs a dune:
+    # no query lock, no dune selected. Read as the helper reads it, anywhere
+    # before a `--`.
+    aff_dune=1
+    for aff_arg in "$@"; do
+      case $aff_arg in --) break ;; --harnesses) aff_dune=0 ;; esac
+    done
+    if [ "$aff_dune" = 1 ]; then
+      hold_query_lock
+      select_dune
+    fi
     exec bash tools/affected-tests.sh "$@"
     ;;
   aliases)

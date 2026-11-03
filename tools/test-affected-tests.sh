@@ -13,6 +13,9 @@
 # with the exact expected one, so an over-reach fails as surely as a miss. The
 # real repository's three commits are the PR's reproduction, since reading its
 # graph needs the full opam switch, which this harness's CI job does not install.
+# The harness legs (gh-ocannl-1900) are read on a dune-free fixture and on this
+# repository's own harnesses; the latter reads the scan-case stubs directory:
+# affected-reads: test/operations/scan_case_stubs/* --only '^harness legs of this repository$'
 set -u
 # The expected lists are sorted with `sort` and compared with the helper's
 # bytewise order: one collation, whatever the caller's locale (gh-ocannl-1431).
@@ -1128,6 +1131,337 @@ if harness_leg 'negative controls'; then
   control 'an executable target is what finds a test stanza naming no library' \
     'push @st, { kind => "tests", dir => $d, names => [$x]' 'next; push @st, { kind => "tests", dir => $d, names => [$x]' \
     --files t3/t_plain.ml -- @t3/runtest-t_plain
+fi
+
+# The harness legs (gh-ocannl-1900): what a change reaches among the shell
+# harnesses, read from their own text and header declarations, never from
+# dune. A dune-free fixture of its own: a manifest, three harnesses, the
+# scripts they name and load, and the data one declares. Every run there has a
+# `dune` on PATH that records being called, so `--harnesses` is shown to ask
+# dune nothing.
+hrepo=$TMP/hproj
+mkdir -p "$hrepo/tools/pkg" "$hrepo/data" "$TMP/nodune" || exit 2
+cp "$HERE/affected-tests.sh" "$hrepo/tools/" || exit 2
+printf '#!/bin/sh\n: >"%s/dune-called"\nexit 97\n' "$TMP" >"$TMP/nodune/dune" && chmod +x "$TMP/nodune/dune" || exit 2
+cat >"$hrepo/tools/test-harnesses.sh" <<'STUB'
+#!/usr/bin/env bash
+[ "$*" = --list ] || exit 2
+printf '%s\n' tools/test-a.sh tools/test-b.sh tools/test-c.sh
+STUB
+cat >"$hrepo/tools/test-a.sh" <<'H'
+#!/usr/bin/env bash
+# Harness a: drives sub.sh.
+"$(dirname "$0")/sub.sh" run
+H
+cat >"$hrepo/tools/sub.sh" <<'H'
+#!/usr/bin/env bash
+. "$(dirname "$0")/lib.sh"
+# shellcheck source=dyn.sh
+. "$DYN"
+true || source tools/late.sh
+tools/other.sh
+H
+cat >"$hrepo/tools/test-b.sh" <<'H'
+#!/usr/bin/env bash
+# Harness b. tools/sub.sh is named only in this comment.
+my-sub.sh; x_sub.sh.bak
+python3 tools/drive.py
+./gen.exe
+H
+cat >"$hrepo/tools/drive.py" <<'H'
+import helper
+from pkg import mod
+from . import sib
+H
+# Its declarations are printed, not written out here: a line of this file led
+# by the marker would be a declaration of this harness, out of its header.
+mark='# affected-reads:'
+printf '%s\n' '#!/usr/bin/env bash' '# Harness c.' "$mark data/*.tbl --only '^(1|3):'" "$mark data/two.tbl --only '^5 two:'" \
+  "$mark data/all.cfg" 'cat data/three.tbl' '. tools/clib.sh' >"$hrepo/tools/test-c.sh" || exit 2
+for f in tools/lib.sh tools/dyn.sh tools/late.sh tools/other.sh tools/clib.sh tools/helper.py tools/pkg/mod.py \
+  tools/sib.py tools/gen.ml data/one.tbl data/two.tbl data/three.tbl data/all.cfg data/x.txt; do : >"$hrepo/$f"; done
+git -C "$hrepo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false init -q &&
+  git -C "$hrepo" add -A && git -C "$hrepo" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm fixture ||
+  exit 2
+cp "$hrepo/tools/test-c.sh" "$TMP/test-c.sh.orig" || exit 2
+haffected() { # ARGS... -> $out, $err, $rc, run in the fixture with the recording dune first on PATH
+  rc=0
+  rm -f "$TMP/dune-called"
+  (cd "$TMP" && PATH=$TMP/nodune:$PATH "${HSUBJECT:-$hrepo/tools/affected-tests.sh}" "$@") >"$out" 2>"$err" || rc=$?
+}
+hexpect() { # LABEL RC LINE...: the exact stdout, in order, the exit status, and dune not called
+  local label=$1 want_rc=$2
+  shift 2
+  if [ $# -gt 0 ]; then printf '%s\n' "$@" >"$TMP/want"; else : >"$TMP/want"; fi
+  if [ "$rc" = "$want_rc" ] && cmp -s "$TMP/want" "$out" && [ ! -e "$TMP/dune-called" ]; then
+    report 0 "$label"
+  else
+    report 1 "$label" "exit $rc (want $want_rc)$([ -e "$TMP/dune-called" ] && echo ', dune called'); got [$(tr '\n' '|' <"$out")] want [$(tr '\n' '|' <"$TMP/want")]; stderr: $(tr '\n' '|' <"$err")"
+  fi
+}
+herr() { # LABEL FIXED-TEXT: stderr carries it
+  if grep -qF -- "$2" "$err"; then report 0 "$1"
+  else report 1 "$1" "no stderr line carries '$2': $(tr '\n' '|' <"$err")"; fi
+}
+hc_restore() { cp "$TMP/test-c.sh.orig" "$hrepo/tools/test-c.sh"; }
+
+if harness_leg 'harness names and loads'; then
+  haffected --harnesses --files tools/sub.sh
+  hexpect 'a script a harness names reaches it whole, not one naming it in a comment or in a longer name' 0 tools/test-a.sh
+  herr 'and says why' 'tools/sub.sh: read by 1 harness(es): tools/test-a.sh (every leg: it names tools/sub.sh)'
+  haffected --harnesses --files tools/test-a.sh
+  hexpect 'a harness reaches itself' 0 tools/test-a.sh
+  haffected --harnesses --files tools/lib.sh
+  hexpect 'what a named script sources is reached' 0 tools/test-a.sh
+  herr 'through it' 'tools/test-a.sh (every leg: it names tools/sub.sh, which loads tools/lib.sh)'
+  haffected --harnesses --files tools/dyn.sh
+  hexpect 'a shellcheck source directive loads its script' 0 tools/test-a.sh
+  haffected --harnesses --files tools/late.sh
+  hexpect 'a source command after an operator loads its script' 0 tools/test-a.sh
+  haffected --harnesses --files tools/other.sh
+  hexpect 'what a named script only names is not followed' 0
+  herr 'and a script no harness reaches is named' 'tools/other.sh: no harness reads it'
+  for f in tools/helper.py tools/pkg/mod.py tools/sib.py; do
+    haffected --harnesses --files "$f"
+    hexpect "a Python import loads $f" 0 tools/test-b.sh
+  done
+  haffected --harnesses --files tools/gen.ml
+  hexpect 'an X.exe names its X.ml' 0 tools/test-b.sh
+  haffected --harnesses --files tools/sub.sh tools/helper.py
+  hexpect 'several harnesses, sorted' 0 tools/test-a.sh tools/test-b.sh
+  haffected --harnesses --files data/x.txt
+  hexpect 'a file no harness names reaches none' 0
+fi
+
+if harness_leg 'harness declarations'; then
+  haffected --harnesses --files data/one.tbl
+  hexpect 'a declared path its harness does not name reaches the declared legs' 0 "tools/test-c.sh --only '^(1|3):'"
+  herr 'and says which line' "tools/test-c.sh (legs '^(1|3):': its affected-reads line 3)"
+  haffected --harnesses --files data/two.tbl
+  hexpect 'two declarations matching one path select both, a blank inside a selector kept' 0 "tools/test-c.sh --only '(^(1|3):)|(^5 two:)'"
+  haffected --harnesses --files data/one.tbl data/two.tbl
+  hexpect 'two paths selecting different legs select both' 0 "tools/test-c.sh --only '(^(1|3):)|(^5 two:)'"
+  haffected --harnesses --files data/three.tbl
+  hexpect 'a declaration never narrows what its harness code names' 0 tools/test-c.sh
+  herr 'which the text reaches' 'tools/test-c.sh (every leg: it names data/three.tbl)'
+  haffected --harnesses --files data/one.tbl data/all.cfg
+  hexpect 'a declaration without --only selects every leg' 0 tools/test-c.sh
+  haffected --harnesses --files data/one.tbl tools/clib.sh
+  hexpect 'a path its program reaches selects every leg' 0 tools/test-c.sh
+  printf 'x\n' >>"$hrepo/data/one.tbl"
+  haffected --harnesses HEAD
+  hexpect 'the git forms read the same changed paths' 0 "tools/test-c.sh --only '^(1|3):'"
+  git -C "$hrepo" checkout -q -- data/one.tbl
+fi
+
+if harness_leg 'harness refusals'; then
+  tab=$'\t'
+  for bad in "# affected-reads:  data/x.txt" "# affected-reads: data/x.txt --only \"^1:\"" "#affected-reads: data/x.txt" \
+    "# affected-reads: ../data/x.txt" "# affected-reads: --only '^1:'" "# affected-reads: data/x.txt --only '^1:${tab}x'"; do
+    { head -n 2 "$TMP/test-c.sh.orig"; printf '%s\n' "$bad"; tail -n +3 "$TMP/test-c.sh.orig"; } >"$hrepo/tools/test-c.sh"
+    haffected --harnesses --files data/x.txt
+    hexpect "a malformed declaration stops the run: $bad" 2
+  done
+  herr 'naming its line' 'tools/test-c.sh:3:'
+  { cat "$TMP/test-c.sh.orig"; printf '%s\n' "# affected-reads: data/x.txt"; } >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files data/x.txt
+  hexpect 'a declaration after the header stops the run' 2
+  herr 'saying so' 'tools/test-c.sh:8: an affected-reads declaration outside the header'
+  { head -n 2 "$TMP/test-c.sh.orig"; printf '%s\n' "# affected-reads: data/x.txt --only '(('"; tail -n +3 "$TMP/test-c.sh.orig"; } >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files tools/other.sh
+  hexpect 'an ERE bash refuses stops the run, whatever changed' 2
+  herr 'naming it' "tools/test-c.sh:3: --only '((' is not an extended regular expression bash accepts"
+  { head -n 2 "$TMP/test-c.sh.orig"; printf '%s\n' "# affected-reads: data/*.none --only '^1:'"; tail -n +3 "$TMP/test-c.sh.orig"; } >"$hrepo/tools/test-c.sh"
+  haffected --harnesses --files data/x.txt
+  hexpect 'a glob matching no file is no refusal' 0
+  herr 'but a warning' 'affected: warning: tools/test-c.sh:3: data/*.none matches no file here'
+  hc_restore
+  for opts in '--referenced-only' '--why all' '--harnesses=1'; do
+    # shellcheck disable=SC2086
+    haffected --harnesses $opts --files data/x.txt
+    hexpect "--harnesses refuses $opts" 2
+  done
+  mv "$hrepo/tools/test-harnesses.sh" "$TMP/test-harnesses.sh.aside" || exit 2
+  haffected --harnesses --files data/x.txt
+  hexpect '--harnesses with no manifest stops the run' 2
+  mv "$TMP/test-harnesses.sh.aside" "$hrepo/tools/test-harnesses.sh" || exit 2
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" tools/test-a.sh tools/test-gone.sh\n' >"$hrepo/tools/test-harnesses.sh.new" &&
+    cp "$hrepo/tools/test-harnesses.sh" "$TMP/test-harnesses.sh.orig" && mv "$hrepo/tools/test-harnesses.sh.new" "$hrepo/tools/test-harnesses.sh" ||
+    exit 2
+  haffected --harnesses --files data/x.txt
+  hexpect 'a manifest naming a missing harness stops the run' 2
+  cp "$TMP/test-harnesses.sh.orig" "$hrepo/tools/test-harnesses.sh" || exit 2
+fi
+
+hcontrol() { # LABEL FROM TO ARGS... -- WANT...: the mutant must not print the shipping list
+  local label=$1 from=$2 to=$3 mutant=$hrepo/tools/affected-mutant.sh
+  shift 3
+  local args=()
+  while [ "$1" != -- ]; do args+=("$1"); shift; done
+  shift
+  if ! FROM=$from TO=$to perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$hrepo/tools/affected-tests.sh" >"$mutant"; then
+    report 1 "negative control: $label" "the mutation anchor does not occur exactly once"
+    return
+  fi
+  chmod +x "$mutant"
+  HSUBJECT=$mutant haffected "${args[@]}"
+  printf '%s\n' "$@" >"$TMP/want"
+  if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then report 1 "negative control: $label" "the mutant printed the shipping list"
+  else report 0 "negative control: $label"; fi
+  rm -f "$mutant"
+}
+if harness_leg 'harness negative controls'; then
+  hcontrol 'a declaration is what reaches a path its harness code does not name' \
+    '    } elsif (@d) {' '    } elsif (0) {' --harnesses --files data/one.tbl -- "tools/test-c.sh --only '^(1|3):'"
+  hcontrol 'the text reaching a path is what keeps a declaration from narrowing it' \
+    '    if (exists $reach{$h}{$p}) {' '    if (0) {' --harnesses --files data/three.tbl -- tools/test-c.sh
+  hcontrol 'the loads of a named script are what reach the file it sources' \
+    'next unless is_script($named[$i]);' 'next;' --harnesses --files tools/lib.sh -- tools/test-a.sh
+  hcontrol 'comment lines are what name nothing' \
+    'grep { !/^\s*#/ } split /\n/, raw($f)' 'split /\n/, raw($f)' --harnesses --files tools/sub.sh -- tools/test-a.sh
+  hcontrol 'the boundary of a name is what keeps a longer name from naming a basename' \
+    '$t =~ s{\A[^/]*/}{} or last;' '$t =~ s{\A.}{} or last;' --harnesses --files tools/sub.sh -- tools/test-a.sh
+fi
+
+# The full run, on the dune fixture: a module source no stanza lists that a
+# harness declares is mapped to those legs, not UNMAPPED, and the aliases are
+# what they are without the harness legs.
+if harness_leg 'harness legs in the full run'; then
+  mkdir -p "$repo/stubs" "$repo/stubs2" || exit 2
+  cat >"$repo/tools/test-harnesses.sh" <<'STUB'
+#!/usr/bin/env bash
+[ "$*" = --list ] || exit 2
+echo tools/test-h.sh
+STUB
+  printf '#!/usr/bin/env bash\n# Harness h.\n# affected-reads: stubs/* --only %s\n' "'^1:'" >"$repo/tools/test-h.sh"
+  printf 'val x : int\n' >"$repo/stubs/s.mli"
+  printf 'val x : int\n' >"$repo/stubs2/s.mli"
+  affected --files stubs/s.mli
+  if [ "$rc" = 0 ] && ! grep -q 'UNMAPPED' "$err" && grep -qxF "affected: harness: tools/test-h.sh --only '^1:'" "$err"; then
+    report 0 'a module source no stanza lists that a harness declares is mapped to its legs, exit 0'
+  else report 1 'a module source no stanza lists that a harness declares is mapped to its legs, exit 0' "exit $rc; $(tr '\n' '|' <"$err")"; fi
+  affected --files stubs2/s.mli
+  if [ "$rc" = 3 ] && grep -q 'UNMAPPED: stubs2/s.mli' "$err" && ! grep -q 'affected: harness:' "$err"; then
+    report 0 'one no harness reads stays UNMAPPED, exit 3'
+  else report 1 'one no harness reads stays UNMAPPED, exit 3' "exit $rc; $(tr '\n' '|' <"$err")"; fi
+  affected --files lib/helper.ml
+  # shellcheck disable=SC2086
+  expect 'the aliases are unchanged by the harness legs' 0 $reached_by_core
+  affected --harnesses --files stubs/s.mli
+  if [ "$rc" = 0 ] && [ "$(cat "$out")" = "tools/test-h.sh --only '^1:'" ]; then
+    report 0 '--harnesses prints the command on stdout instead of the aliases'
+  else report 1 '--harnesses prints the command on stdout instead of the aliases' "exit $rc; [$(tr '\n' '|' <"$out")]"; fi
+  # Through the public entry: no dune on PATH (this fixture has no
+  # tools/opam-env.sh to find one), and a run holding the worktree's lock.
+  nodune_path=
+  IFS=: read -r -a path_dirs <<<"$PATH"
+  for d in "${path_dirs[@]}"; do [ -x "$d/dune" ] || nodune_path=${nodune_path:+$nodune_path:}$d; done
+  rc=0
+  (cd "$TMP" && PATH=$nodune_path "$repo/tools/test-run.sh" affected --harnesses --files stubs/s.mli) >"$out" 2>"$err" || rc=$?
+  if [ "$rc" = 0 ] && [ "$(cat "$out")" = "tools/test-h.sh --only '^1:'" ]; then
+    report 0 'tools/test-run.sh affected --harnesses needs no dune'
+  else report 1 'tools/test-run.sh affected --harnesses needs no dune' "exit $rc; [$(tr '\n' '|' <"$out")]; $(tr '\n' '|' <"$err")"; fi
+  rc=0
+  (cd "$TMP" && PATH=$nodune_path "$repo/tools/test-run.sh" affected --files stubs/s.mli) >"$out" 2>"$err" || rc=$?
+  if [ "$rc" = 2 ] && grep -q 'dune not found' "$err"; then report 0 'while the alias query without one is refused'
+  else report 1 'while the alias query without one is refused' "exit $rc; $(tr '\n' '|' <"$err")"; fi
+  lock=$("$repo/tools/test-run.sh" paths lock) || exit 2
+  mkdir -p "$(dirname "$lock")" "$TMP/hlock" || exit 2
+  mkfifo "$TMP/hlock/release" "$TMP/hlock/ready" || exit 2
+  perl -e 'use Fcntl ":flock";
+    my $fh; my $ok = open($fh, ">>", $ARGV[0]) && flock($fh, LOCK_EX);
+    open my $ready, ">", $ARGV[1] or exit 1; print $ready ($ok ? "held\n" : "failed\n"); close $ready;
+    exit 1 unless $ok;
+    open my $r, "<", $ARGV[2]; <$r>;' "$lock" "$TMP/hlock/ready" "$TMP/hlock/release" &
+  holder=$!
+  state=
+  read -r state <"$TMP/hlock/ready" || state=
+  rc=0 rc2=0
+  if [ "$state" = held ]; then
+    (cd "$TMP" && "$repo/tools/test-run.sh" affected --harnesses --files stubs/s.mli) >"$out" 2>"$err" || rc=$?
+    (cd "$TMP" && "$repo/tools/test-run.sh" affected --files stubs/s.mli) >/dev/null 2>"$TMP/hlock/err" || rc2=$?
+    echo >"$TMP/hlock/release"
+  else
+    rc=holder-$state
+  fi
+  wait "$holder"
+  rm -rf "${TMP:?}/hlock"
+  if [ "$rc" = 0 ] && [ "$(cat "$out")" = "tools/test-h.sh --only '^1:'" ] && [ "$rc2" = 2 ]; then
+    report 0 'tools/test-run.sh affected --harnesses runs while a run holds the worktree, the alias query refusing'
+  else report 1 'tools/test-run.sh affected --harnesses runs while a run holds the worktree, the alias query refusing' "exit $rc, alias query $rc2; $(tr '\n' '|' <"$err")"; fi
+  # The shipping run's verdict is its exit status, so the control's is too.
+  if FROM='unless (!@ix && $harness_read{$p}) {' TO='unless (0) {' \
+       perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+       "$repo/tools/affected-tests.sh" >"$repo/tools/affected-mutant.sh"; then
+    rc=0
+    (cd "$TMP" && bash "$repo/tools/affected-mutant.sh" --files stubs/s.mli) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 3 ]; then report 0 'negative control: the harness reading it is what keeps that stub from UNMAPPED'
+    else report 1 'negative control: the harness reading it is what keeps that stub from UNMAPPED' "mutant exit $rc"; fi
+  else
+    report 1 'negative control: the harness reading it is what keeps that stub from UNMAPPED' 'the mutation anchor does not occur exactly once'
+  fi
+  rm -f "$repo/tools/affected-mutant.sh"
+  rm -rf "${repo:?}/stubs" "${repo:?}/stubs2" "${repo:?}/tools/test-harnesses.sh" "${repo:?}/tools/test-h.sh"
+fi
+
+# This repository's own harnesses, read as `affected --harnesses` reads them
+# (dune-free, so the toolchain-free jobs can run it too): gh-ocannl-1797's two
+# CI reds, and the scan-case tables and stubs (gh-ocannl-1584).
+root=$(cd "$HERE/.." && pwd)
+raffected() { # ARGS... -> $out, $err, $rc, over this repository
+  rc=0
+  (cd "$TMP" && PATH=$TMP/nodune:$PATH "$root/tools/affected-tests.sh" --harnesses "$@") >"$out" 2>"$err" || rc=$?
+}
+rhas() { # LABEL LINE: stdout carries exactly that line, exit 0, no warning
+  if [ "$rc" = 0 ] && grep -qxF -- "$2" "$out" && ! grep -q '^affected: warning:' "$err"; then report 0 "$1"
+  else report 1 "$1" "exit $rc; got [$(tr '\n' '|' <"$out")]; stderr: $(tr '\n' '|' <"$err")"; fi
+}
+if harness_leg 'harness legs of this repository'; then
+  raffected --files tools/test-run.sh
+  rhas 'tools/test-run.sh reaches its harness whole' tools/test-test-run.sh
+  raffected --files benchmarks/fixture_digest.py
+  rhas 'benchmarks/fixture_digest.py reaches the harness probing it' benchmarks/test-check-box.sh
+  raffected --files tools/typecheck-scan-cases.sh
+  rhas 'the scan-case type check reaches its harness whole' tools/test-typecheck-scan-cases.sh
+  # The tables --stubbed checks, found as tools/typecheck-scan-cases.sh finds
+  # them: each companion under scan_case_stubs names its table beside it.
+  n=0
+  for stub in "$root"/test/operations/scan_case_stubs/*; do
+    [ -f "$stub" ] || continue
+    rel=${stub#"$root"/} name=${stub##*/}
+    n=$((n + 1))
+    raffected --files "$rel"
+    printf '%s\n' "tools/test-affected-tests.sh --only '^harness legs of this repository\$'" \
+      "tools/test-typecheck-scan-cases.sh --only '^(1|10):'" >"$TMP/want"
+    if [ "$rc" = 0 ] && cmp -s "$TMP/want" "$out"; then
+      report 0 "the stub $name reaches the legs over the repository tables and this leg, and nothing else"
+    else report 1 "the stub $name reaches the legs over the repository tables and this leg, and nothing else" "exit $rc; [$(tr '\n' '|' <"$out")]"; fi
+    raffected --files "test/operations/${name%.*}.ml"
+    rhas "its table ${name%.*}.ml reaches those legs" "tools/test-typecheck-scan-cases.sh --only '^(1|10):'"
+  done
+  [ "$n" -ge 1 ] || report 1 'the repository has stubbed scan-case tables' 'none under test/operations/scan_case_stubs'
+  # The legs that selector picks are exactly the ones over the repository's
+  # tables, as their names say: a new such leg must join the declaration.
+  if "$root/tools/test-typecheck-scan-cases.sh" --list-legs >"$TMP/legs" 2>&1; then
+    sed -n 's/^LEG  //p' "$TMP/legs" >"$TMP/leg-names"
+    picked=$(while IFS= read -r l; do [[ $l =~ ^(1|10): ]] && printf '%s\n' "$l"; done <"$TMP/leg-names")
+    named=$(grep -F 'the repository tables' "$TMP/leg-names")
+    if [ -n "$picked" ] && [ "$picked" = "$named" ]; then report 0 "'^(1|10):' selects exactly the legs over the repository tables"
+    else report 1 "'^(1|10):' selects exactly the legs over the repository tables" "picked [$picked] named [$named]"; fi
+  else report 1 'tools/test-typecheck-scan-cases.sh lists its legs' "$(tail -n 3 "$TMP/legs")"; fi
+  # Every declared selector of every harness selects some leg of it.
+  bash "$root/tools/test-harnesses.sh" --list >"$TMP/members" || exit 2
+  while IFS= read -r h; do
+    grep -q '^# affected-reads: .* --only ' "$root/$h" || continue
+    "$root/$h" --list-legs 2>/dev/null | sed -n 's/^LEG  //p' >"$TMP/leg-names"
+    while IFS= read -r ere; do
+      hit=0
+      while IFS= read -r l; do [[ $l =~ $ere ]] && hit=1; done <"$TMP/leg-names"
+      [ "$hit" = 1 ] && report 0 "$h: --only '$ere' selects a leg" ||
+        report 1 "$h: --only '$ere' selects a leg" "its --list-legs: $(tr '\n' '|' <"$TMP/leg-names")"
+    done < <(sed -n "s/^# affected-reads: .* --only '\\([^']*\\)'\$/\\1/p" "$root/$h")
+  done <"$TMP/members"
 fi
 
 # The probe (gh-ocannl-1541): dune is handed each alias rule as a target rule

@@ -9,9 +9,11 @@
 #   tools/test-run.sh affected [--referenced-only] REV | REV..REV | REV...REV [-- PATHSPEC...]
 #   tools/test-run.sh affected [--referenced-only] --files PATH...
 #   ... [--why ALIAS|all]... (with any of the forms above)
+#   ... --harnesses (with any of the forms above, instead of the two options
+#   before it: the harness commands, below, without asking dune)
 #
-# `--referenced-only` and `--why` may stand anywhere before a `--` (after
-# `--since BASE`, a revision, or the `--files` paths too).
+# `--referenced-only`, `--why` and `--harnesses` may stand anywhere before a
+# `--` (after `--since BASE`, a revision, or the `--files` paths too).
 #
 # `--why ALIAS` (gh-ocannl-1711; repeatable, the leading `@` optional) explains
 # that alias on stderr, in `affected: why @ALIAS: ...` lines, whether it is
@@ -210,11 +212,52 @@
 #     changed rule this reader cannot map to an owner, or a failed comparison
 #     keeps the reach below for that file, and says why.
 #
+# The harness legs (gh-ocannl-1900). The shell harnesses are no dune aliases,
+# so what they read is read from their own text, never from dune. Their
+# membership is `tools/test-harnesses.sh --list`, CI's sole list of them; each
+# changed path reaching one is named on stderr with the reason, and
+# `affected: harness: CMD` gives the command that runs what it reaches. With
+# `--harnesses` those commands are stdout instead of the aliases, one per line
+# (`HARNESS` for every leg, `HARNESS --only 'ERE'` for some), and dune is not
+# asked at all. Boundary, as an allowlist:
+#   - A harness's PROGRAM is its own file plus every script it loads, to a
+#     fixpoint: a script is a file ending `.sh` or `.py`; a shell `.` or
+#     `source` command, or a `# shellcheck source=` directive, loads each script
+#     its words name; a Python `import M` or `from M import N` loads `M.py`
+#     (and `M/N.py`, or `N.py` for a relative `from . import N`).
+#   - Text names a path when a maximal run of `[A-Za-z0-9_./-]` in it (trailing
+#     dots dropped), or a part of that run after one of its slashes, is the
+#     path itself (one holding a `/` or a `.`), its basename (one holding a
+#     `.`), or for an OCaml `X.ml` the basename `X.exe`. Lines whose first
+#     non-blank character is `#` are comments, and name nothing. A changed
+#     path is named whether or not the worktree still has it.
+#   - A harness reaches every path its program's text names, and the program
+#     of every script among them (a script it runs, with what that loads); what
+#     such a script names in turn is not followed, so a harness that drives a
+#     script through another must name it. It reaches its program too.
+#   - A harness's header (the comment block `--help` prints, from line 2) may
+#     declare legs: `# affected-reads: GLOB... [--only 'ERE']`, each GLOB a
+#     repository path in which `*` stands for any run of characters but `/`,
+#     ERE the harness's `--only` selector (no quote, no tab). A changed path
+#     the text does not reach, matched by a declaration of a harness, reaches
+#     the legs it names (every leg without `--only`): the harness's word on
+#     which of its legs read files its code does not name (a table `--stubbed`
+#     finds). A declaration only adds: what the text reaches stays every leg's.
+#     Any other `affected-reads` line, in the header or out of it, and an ERE
+#     bash refuses, stop the run (exit 2); a GLOB matching no file is warned
+#     about.
+#   - A harness's command is whole when any changed path reaches it whole; else
+#     `--only` carries each declared ERE, `(A)|(B)` for several.
+#   A module source no stanza of this build lists (not even one it does not
+#   compile) that a harness reaches is mapped to those legs, not UNMAPPED.
+#   A changed script no harness reaches is named on stderr.
+#
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr; for a module of a library this
 # build does not compile, an OFF-BUILD line counts what a build compiling it
 # would reach, read from the dune files, and names the aliases whose code names
 # it -- a CUDA module on a Mac); 2 usage, git or dune failure, nothing printed.
+# `--harnesses` exits 0 or 2.
 set -u
 die() { echo "affected: $*" >&2; exit 2; }
 # One collation everywhere: `sort` and Perl's `sort` then agree bytewise, so
@@ -222,8 +265,6 @@ die() { echo "affected: $*" >&2; exit 2; }
 export LC_ALL=C
 
 CDPATH= cd -P "$(dirname "$0")/.." || die "cannot cd to the repository root"
-command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
-command -v dune >/dev/null 2>&1 || die "dune not found (opam environment not set up?)"
 command -v perl >/dev/null 2>&1 || die "perl not found"
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/affected.XXXXXX") || die "cannot create a temporary directory"
@@ -231,10 +272,11 @@ tmp=$(cd "$tmp" && pwd -P) || die "cannot resolve $tmp"
 trap 'rm -rf "${tmp:?}"' EXIT
 trap "exit 130" INT TERM
 
-usage="usage: affected [--referenced-only] [--why ALIAS|all]... --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] [--why ALIAS|all]... --files PATH..."
+usage="usage: affected [--referenced-only] [--why ALIAS|all]... [--harnesses] --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] [--why ALIAS|all]... [--harnesses] --files PATH..."
 # Link-only aliases (see the Perl below) are printed last, and named on stderr;
 # --referenced-only leaves them off stdout.
 referenced_only=0
+harnesses=0
 : >"$tmp/why"
 mode=git
 old_rev= new_rev=
@@ -249,6 +291,8 @@ args=()
 while [ $# -gt 0 ]; do
   case $1 in
     --referenced-only) referenced_only=1; shift ;;
+    --harnesses) harnesses=1; shift ;;
+    --harnesses=*) die "--harnesses is a flag and takes no value: $1 ($usage)" ;;
     # A flag: with a value it is refused by name, never read as a path.
     --referenced-only=*) die "--referenced-only is a flag and takes no value: $1 ($usage)" ;;
     --why)
@@ -261,6 +305,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 set -- ${args[@]+"${args[@]}"}
+# Both rank and explain aliases, which --harnesses does not print.
+if [ "$harnesses" = 1 ]; then
+  [ "$referenced_only" = 0 ] || die "--harnesses prints no alias, so --referenced-only has nothing to leave off ($usage)"
+  [ ! -s "$tmp/why" ] || die "--harnesses prints no alias, so --why has none to explain ($usage)"
+fi
 if [ "${1:-}" = --files ]; then
   shift
   [ $# -ge 1 ] || die "--files needs at least one path ($usage)"
@@ -340,6 +389,214 @@ else
   git diff -U0 --no-color --no-renames --no-ext-diff "${revs[0]}" -- '*.ml' '*.mli' >"$tmp/ml-diff" ||
     die "git diff ${revs[0]} failed"
 fi
+
+# The harness legs (gh-ocannl-1900; the header's boundary): their membership
+# from CI's own list, every file their text may name, and harness.pl's reading
+# of that text. Dune is not asked: `--harnesses` stops here.
+for x in harness-cmds harness-err harness-read harness-eres; do : >"$tmp/$x"; done
+if [ -f tools/test-harnesses.sh ]; then
+  bash tools/test-harnesses.sh --list >"$tmp/harness-members" 2>"$tmp/err" ||
+    die "tools/test-harnesses.sh --list failed:
+$(cat "$tmp/err")"
+  if [ "$in_git" = 1 ]; then
+    git ls-files --cached --others --exclude-standard >"$tmp/files" || die "git ls-files failed"
+  else
+    find . \( -name _build -o -name .git \) -prune -o -type f -print | sed 's|^\./||' >"$tmp/files"
+  fi
+  cat >"$tmp/harness.pl" <<'HARNESS'
+# harness.pl TMP: the harness legs the changed paths reach (the header's
+# boundary). Reads TMP/changed, TMP/files and TMP/harness-members; writes
+# harness-cmds (one command per line), harness-err (lines for stderr),
+# harness-read (`PATH<TAB>N` for each changed path N harnesses read) and
+# harness-eres (`ERE<TAB>HARNESS:LINE` for every declared selector).
+use strict; use warnings;
+my ($tmp) = @ARGV;
+sub fail { print STDERR "affected: $_[0]\n"; exit 2 }
+sub lines {
+  my ($f) = @_;
+  open my $h, "<", $f or fail("cannot read $f");
+  my @l = grep { $_ ne "" } map { s/\r?\n\z//r } <$h>;
+  close $h;
+  return @l;
+}
+my %once;
+my @changed = grep { !$once{$_}++ } lines("$tmp/changed");
+my @members = lines("$tmp/harness-members");
+-f $_ or fail("tools/test-harnesses.sh --list names $_, which is not a file here") for @members;
+my %known;
+$known{$_} = 1 for lines("$tmp/files"), @changed, @members;
+my @known = sort keys %known;
+# The names text may know a path by: itself (holding a `/` or a `.`), its
+# basename (holding a `.`), and `X.exe` for an `X.ml`.
+my %idx;
+for my $p (@known) {
+  my $b = $p =~ s{.*/}{}r;
+  $idx{$p}{$p} = 1 if $p =~ m{[/.]};
+  $idx{$b}{$p} = 1 if $b =~ /\./;
+  $idx{"$1.exe"}{$p} = 1 if $b =~ /\A(.+)\.ml\z/;
+}
+sub is_script { $_[0] =~ /\.(?:sh|py)\z/ }
+sub resolve {   # a run of path characters -> the paths it, or a part after one of its slashes, names
+  my ($t) = @_;
+  $t =~ s/\.+\z//;
+  my %r;
+  while ($t ne "") {
+    $r{$_} = 1 for keys %{$idx{$t} // {}};
+    $t =~ s{\A[^/]*/}{} or last;
+  }
+  return sort keys %r;
+}
+sub named_in { my %r; $r{$_} = 1 for map { resolve($_) } $_[0] =~ m{[A-Za-z0-9_./-]+}g; return \%r }
+my (%raw, %names, %loads);
+sub raw {
+  my ($f) = @_;
+  return $raw{$f} if exists $raw{$f};
+  my $s = "";
+  if (-f $f && open my $h, "<", $f) { local $/; $s = <$h> // ""; close $h }
+  return $raw{$f} = $s;
+}
+sub names_of { my ($f) = @_; return $names{$f} //= named_in(join "\n", grep { !/^\s*#/ } split /\n/, raw($f)) }
+sub loads_of {
+  my ($f) = @_;
+  return $loads{$f} if $loads{$f};
+  my @words;
+  for my $line (split /\n/, raw($f)) {
+    if ($f =~ /\.sh\z/) {
+      if ($line =~ /^\s*#\s*shellcheck\s.*\bsource=(\S+)/) { push @words, $1; next }
+      next if $line =~ /^\s*#/;
+      # A `.` or `source` command: the rest of its line names what it loads.
+      push @words, $1 if $line =~ /(?:^|[;&|({]|\bthen|\belse|\bdo)\s*(?:\.|source)\s+(.*)/;
+    } elsif ($line =~ /^\s*import\s+([\w.]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.]+(?:\s+as\s+\w+)?)*)/) {
+      push @words, map { (s/\s.*//sr =~ tr{.}{/}r) . ".py" } split /\s*,\s*/, $1;
+    } elsif ($line =~ /^\s*from\s+\.*([\w.]*)\s+import\s+\(?\s*(\w+(?:\s+as\s+\w+)?(?:\s*,\s*\w+(?:\s+as\s+\w+)?)*)/) {
+      my ($base, $ns) = ($1 =~ tr{.}{/}r, $2);
+      push @words, "$base.py" if $base ne "";
+      push @words, map { ($base ne "" ? "$base/" : "") . (s/\s.*//sr) . ".py" } split /\s*,\s*/, $ns;
+    }
+  }
+  my %r;
+  $r{$_} = 1 for grep { is_script($_) } map { resolve($_) } map { m{[A-Za-z0-9_./-]+}g } @words;
+  return $loads{$f} = \%r;
+}
+# Each harness's reach, with the step that reached each path: its program (it
+# and what it loads), what that names, and the program of each script named.
+my %reach;
+for my $h (@members) {
+  my %par = ($h => undef);
+  my @prog = ($h);
+  for (my $i = 0; $i < @prog; $i++) {
+    for my $l (sort keys %{loads_of($prog[$i])}) { next if exists $par{$l}; $par{$l} = [$prog[$i], "loads"]; push @prog, $l }
+  }
+  my @named;
+  for my $x (@prog) {
+    for my $z (sort keys %{names_of($x)}) { next if exists $par{$z}; $par{$z} = [$x, "names"]; push @named, $z }
+  }
+  for (my $i = 0; $i < @named; $i++) {
+    next unless is_script($named[$i]);
+    for my $l (sort keys %{loads_of($named[$i])}) { next if exists $par{$l}; $par{$l} = [$named[$i], "loads"]; push @named, $l }
+  }
+  $reach{$h} = \%par;
+}
+sub chain {   # how harness H reached P, read from its steps
+  my ($h, $p) = @_;
+  return "it is the harness" if $p eq $h;
+  my @steps;
+  for (my $q = $p; defined $reach{$h}{$q}; $q = $reach{$h}{$q}[0]) { unshift @steps, "$reach{$h}{$q}[1] $q" }
+  return "it " . join(", which ", @steps);
+}
+# The declarations, from each harness's header (lines 2.. up to the first not
+# led by `#`, as `--help` prints it); an `affected-reads` line anywhere else,
+# or of any other shape, is refused.
+my (%decl, @eres, @err);
+for my $h (@members) {
+  my @l = split /\n/, raw($h);
+  my $header = 1;
+  for my $i (0 .. $#l) {
+    $header = 0 if $i >= 1 && $l[$i] !~ /^#/;
+    next unless $l[$i] =~ /^\s*#\s*affected-reads\b/;
+    my $where = "$h:" . ($i + 1);
+    fail("$where: an affected-reads declaration outside the header (the comment block from line 2) is not read; move it there")
+      if $i == 0 || !$header;
+    $l[$i] =~ m{\A# affected-reads: (\S+(?: \S+)*?)(?: --only '([^'\t\n\r]+)')?\z}
+      or fail("$where: not of the form `# affected-reads: GLOB... [--only 'ERE']`: $l[$i]");
+    my ($globs, $ere) = ($1, $2);
+    my @re;
+    for my $g (split / /, $globs) {
+      $g =~ m{\A[A-Za-z0-9_.*][A-Za-z0-9_.*-]*(?:/[A-Za-z0-9_.*-]+)*\z} && $g !~ m{(?:\A|/)\.\.?(?:/|\z)}
+        or fail("$where: '$g' is not a repository path glob (letters, digits, `_.-*`, `/` between parts, no `.` or `..` part)");
+      my $re = join "[^/]*", map { quotemeta } split /\*/, $g, -1;
+      push @re, qr/\A$re\z/;
+      push @err, "affected: warning: $where: $g matches no file here" unless grep { $_ =~ $re[-1] } @known;
+    }
+    push @{$decl{$h}}, { re => \@re, ere => $ere, line => $i + 1 };
+    push @eres, "$ere\t$where" if defined $ere;
+  }
+}
+my (%whole, %some);
+open my $rd, ">", "$tmp/harness-read" or fail("cannot write $tmp/harness-read");
+for my $p (@changed) {
+  my @hits;
+  for my $h (@members) {
+    # What the text reaches is every leg's; a declaration only adds the legs
+    # it names for a path the text does not reach.
+    my @d = grep { my $d = $_; grep { $p =~ $_ } @{$d->{re}} } @{$decl{$h} // []};
+    if (exists $reach{$h}{$p}) {
+      $whole{$h} = 1;
+      push @hits, "$h (every leg: " . chain($h, $p) . ")";
+    } elsif (@d) {
+      my $at = "its affected-reads line" . (@d > 1 ? "s " : " ") . join(", ", map { $_->{line} } @d);
+      if (grep { !defined $_->{ere} } @d) { $whole{$h} = 1; push @hits, "$h (every leg: $at)" }
+      else {
+        my %e = map { $_->{ere} => 1 } @d;
+        $some{$h}{$_} = 1 for keys %e;
+        push @hits, "$h (legs " . join(" ", map { "'$_'" } sort keys %e) . ": $at)";
+      }
+    }
+  }
+  if (@hits) {
+    print $rd "$p\t" . scalar(@hits) . "\n";
+    push @err, "affected: $p: read by " . scalar(@hits) . " harness(es): " . join("; ", @hits);
+  } elsif (is_script($p)) {
+    push @err, "affected: $p: no harness reads it (no member of tools/test-harnesses.sh --list names it, loads it,"
+      . " runs a script loading it, or declares it)";
+  }
+}
+close $rd;
+open my $cm, ">", "$tmp/harness-cmds" or fail("cannot write $tmp/harness-cmds");
+for my $h (sort grep { $whole{$_} || $some{$_} } @members) {
+  if ($whole{$h}) { print $cm "$h\n"; next }
+  my @e = sort keys %{$some{$h}};
+  printf $cm "%s --only '%s'\n", $h, @e == 1 ? $e[0] : join("|", map { "($_)" } @e);
+}
+close $cm;
+open my $er, ">", "$tmp/harness-err" or fail("cannot write $tmp/harness-err");
+print $er "$_\n" for @err;
+close $er;
+open my $ee, ">", "$tmp/harness-eres" or fail("cannot write $tmp/harness-eres");
+print $ee "$_\n" for @eres;
+close $ee;
+HARNESS
+  perl "$tmp/harness.pl" "$tmp" || exit 2
+  # The selectors as the harnesses will match them: bash's own `=~` (exit 2 an
+  # expression it refuses), as scripts/harness-support.sh's harness_args checks.
+  while IFS=$'\t' read -r ere where; do
+    ere_rc=0
+    [[ '' =~ $ere ]] || ere_rc=$?
+    [ "$ere_rc" != 2 ] || die "$where: --only '$ere' is not an extended regular expression bash accepts"
+  done <"$tmp/harness-eres"
+else
+  [ "$harnesses" = 0 ] || die "--harnesses: there is no tools/test-harnesses.sh here to list the harnesses"
+  echo "affected: no tools/test-harnesses.sh here, so no harness legs are mapped" >"$tmp/harness-err"
+fi
+if [ "$harnesses" = 1 ]; then
+  cat "$tmp/harness-err" >&2
+  cat "$tmp/harness-cmds"
+  printf 'affected: %d harness command(s) from %d changed path(s)\n' \
+    "$(wc -l <"$tmp/harness-cmds" | tr -d ' ')" "$(sort -u "$tmp/changed" | sed '/^$/d' | wc -l | tr -d ' ')" >&2
+  exit 0
+fi
+command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
+command -v dune >/dev/null 2>&1 || die "dune not found (opam environment not set up?)"
 
 dune describe workspace --root . --with-pps >"$tmp/workspace" 2>"$tmp/err" ||
   die "dune describe workspace failed:
@@ -1360,6 +1617,12 @@ for my $o (grep { /\.o$/ } @stub_targets) {
 }
 
 my (%hit, %dune_dirs, %data_dirs, %read_by, @unmapped, @unread, %unmapped_mod);
+# The changed paths a harness reads (gh-ocannl-1900), and how many harnesses.
+my %harness_read;
+if (open my $hr, "<", "$tmp/harness-read") {
+  while (<$hr>) { chomp; my ($p, $n) = split /\t/; $harness_read{$p} = $n }
+  close $hr;
+}
 # For `--why` (gh-ocannl-1711), the first changed path behind each of those:
 # a hit stanza's, a dune directory's, a data directory's, any data at all, and
 # per changed path and alias the own target whose rule reads it.
@@ -1739,8 +2002,12 @@ for my $p (@changed) {
       # modules and all, and the path stays UNMAPPED either way.
       @ix = grep { $st[$_]{undescribed} && $st[$_]{dir} eq $d } 0 .. $#st;
       $how = "no stanza of this build owns $mod; reaching the stanzas dune lists here but does not build:";
-      $unmapped = 1;
-      $unmapped_mod{$p} = [$d, $mod];
+      # No stanza lists it at all, compiled here or not, and a harness reads it
+      # (a scan table's stub): mapped to those legs, named below.
+      unless (!@ix && $harness_read{$p}) {
+        $unmapped = 1;
+        $unmapped_mod{$p} = [$d, $mod];
+      }
     }
     push @parts, "$how " . (@ix > 3 ? scalar(@ix) . " stanzas" : join(", ", map { label($_) } @ix)) if @ix;
   }
@@ -1751,6 +2018,7 @@ for my $p (@changed) {
   }
   if (defined $by_module) { $mod_hit{$_}{$by_module} = 1 for @ix; $mod_paths{$by_module}{$p} = 1 } else { $whole_hit{$_} = 1 for @ix }
   push @parts, "read by the rules of $n_read alias(es)" if $n_read;
+  push @parts, "read by $harness_read{$p} harness(es), named below" if $harness_read{$p};
   print STDERR "affected: $p: " . join("; ", @parts) . "\n" if @parts;
   # Any path but a module source a stanza owns may be an input of an alias
   # action dune does not dump (see `opaque` below).
@@ -2638,6 +2906,15 @@ if (@link_only) {
   print STDERR "affected: link-only: $_\n" for @link_only;
 }
 print STDERR "$_\n" for @why_lines;
+# The harness legs (gh-ocannl-1900): what each changed path reached, and the
+# commands; `--harnesses` prints those on stdout instead.
+{
+  for my $f ("harness-err", "harness-cmds") {
+    open my $fh, "<", "$tmp/$f" or next;
+    while (my $l = <$fh>) { print STDERR $f eq "harness-cmds" ? "affected: harness: $l" : $l }
+    close $fh;
+  }
+}
 # A first tier spanning most of the suite (gh-ocannl-1765): the ranking cannot
 # narrow this change, so say so, and who runs the whole list -- except its
 # `slow-` aliases, which no CI job runs (local review): those stay local.
