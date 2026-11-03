@@ -3006,7 +3006,8 @@ my (%byargs, %spoken);
 push @{$byargs{$args{$_}}}, $_ for grep { !defined $uid{$_} || $uid{$_} eq $uid } keys %args;
 sub orphan { my $p = shift; return !defined $pp{$p} || $pp{$p} <= 1 }
 # A start time in epoch seconds from the token: stat starttime ticks after the
-# boot time, or lstart (rendered under TZ=UTC); undef when unknown.
+# boot time (whole seconds, so up to a second early), or lstart (rendered
+# under TZ=UTC); undef when unknown.
 my $btime;
 sub started {
   my $t = $tok{$_[0]};

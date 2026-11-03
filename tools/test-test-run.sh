@@ -9198,7 +9198,9 @@ if [ -z "$q_detail" ]; then
   if ! q_until 30 q_gone || ! q_finished "$q_root" "$q_before"; then
     q_detail="the first detached wrapper never finished its run: last: $(q_last "$q_root")"
   else
-    sleep 1.2
+    # Start times read at a second's resolution at best (/proc's btime is
+    # whole seconds): the relaunch comes well clear of the verdict.
+    sleep 2.5
     if ! q_detached orphaned; then
       q_detail="the second detached wrapper is no orphan of parent 1: ppid $(ps -o ppid= -p "$q_orphan" 2>/dev/null)"
     else
