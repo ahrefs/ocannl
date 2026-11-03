@@ -2771,8 +2771,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   callback input have distinct uncertainty states. A named fragment requires generated-source
   evidence; an untraced callback parameter alone keeps only the partial mark. Unary callbacks
   for `List.iter`, `map`, `exists`, `for_all`, `filter`, `filter_map` and `count` receive generated evidence
-  only from their actual collection argument, with unresolved execution. Other combinators and
-  callback shapes remain unsupported. Symbolic components
+  only from their actual collection argument, with unresolved execution. A leg claim's make
+  function (`in_leg`/`in_legf` qualified by `Verdict` or `Claims`, or unqualified and bound by
+  nothing in the file) receives its claim's label, a known plain string, so its body reads as
+  ordinary code (gh-ocannl-1703). Other combinators and callback shapes remain unsupported. Symbolic components
   of opaque aggregate inputs and results flowing through explicit writes are uncorrelated, so
   substituting a generated argument cannot pretend that the selected component contains it.
   Discarded ref, field, array and byte writes preserve source dependencies as uncertain effects;

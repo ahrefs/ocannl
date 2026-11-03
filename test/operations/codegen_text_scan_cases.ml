@@ -1140,6 +1140,32 @@ let () =
       {ocaml|let barrier src = String.is_substring src ~substring:"barrier marker"
 let () = List.iter [Generated.read "r"] ~f:barrier|ocaml},
       "+partial(callback)" );
+    (* A leg claim hands its make function the claim's label, a plain string: the function is the
+       leg's body, read as ordinary code, and a text test over the label is no untraced callback
+       (gh-ocannl-1703). *)
+    ( "a leg claim's make function is the leg's body, its label plain text",
+      {ocaml|open Verdict.Claims
+let () =
+  in_leg ~leg "l" (fun label ->
+      p label
+        (String.is_substring (Generated.read "r") ~substring:"m"
+        && not (String.is_substring label ~substring:"label text")))|ocaml},
+      {|"m"|} );
+    ( "a formatted leg claim qualified by Verdict reads its make function the same way",
+      {ocaml|let () =
+  Verdict.in_legf ~leg "%s: l" name (fun label ->
+      p label
+        (String.is_substring (Generated.read "r") ~substring:"m"
+        && not (String.is_substring label ~substring:"label text")))|ocaml},
+      {|"m"|} );
+    ( "a file-local in_leg is no leg claim, and its callback stays untraced",
+      {ocaml|let in_leg f = ignore f
+let () =
+  in_leg (fun label ->
+      p label
+        (String.is_substring (Generated.read "r") ~substring:"m"
+        && not (String.is_substring label ~substring:"label text")))|ocaml},
+      {|"m" +partial(callback)|} );
     ( "validated source parameters propagate through nested predicate calls",
       {ocaml|let inner code = String.is_substring code ~substring:"inner marker"
 let outer input = String.is_substring input ~substring:"outer marker" && inner input

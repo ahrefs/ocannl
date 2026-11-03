@@ -167,6 +167,9 @@ ok: source -- nested helpers own their tests independently of enclosing predicat
 ok: source -- validated source aliases propagate into nested predicate calls
 ok: source -- an ordinary direct call does not hide an unresolved generated-source callback
 ok: source -- unfollowed callbacks keep hard-coded predicate text visibly partial
+ok: source -- a leg claim's make function is the leg's body, its label plain text
+ok: source -- a formatted leg claim qualified by Verdict reads its make function the same way
+ok: source -- a file-local in_leg is no leg claim, and its callback stays untraced
 ok: source -- validated source parameters propagate through nested predicate calls
 ok: source -- marker-first partial applications remain visibly partial
 ok: source -- explicit optional absence selects a generated-source default
