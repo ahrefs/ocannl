@@ -3759,6 +3759,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   $LASTEXITCODE`; `test/operations/ci_matrix.sh` holds both, with mutants.
   `tools/test-ci-failed-rules.sh` (the `promotion` harness group, so current Dune and the floor)
   builds a fixture project red and green.
+- **Each listed rule quotes why it failed** (gh-ocannl-1831): under its entry, behind `| `, the
+  first 3 lines of its own block holding `FAIL:`, `FAILED:`, `AssertionError`, `Error:` or
+  `Fatal error:` (of a golden diff, only the `+` lines), and a count of the rest; the annotation
+  carries them on its one line. A block ends at the next header, at another action's `(cd ...)`
+  line (CI's display prints one above any output, a passing action's too), or at a dune error
+  chained to a target by `-> required by` lines (below any lines dune wrapped its message onto)
+  -- dune's own, listed with its chain under
+  `dune errors without a location` wherever it falls, since that chain is its only attribution
+  (ahrefs/ocannl#1720 read a chained `CreateProcess()` error as the listed rule's). Dune elides
+  the middle of a long action output (`...TRUNCATED BY DUNE...`), so a test prints its verdict
+  last. `gh` 2.x prints a log's ESC as the text `^[` (and `gh api` refuses the raw bytes), which
+  the reader strips like a raw escape: before that, a piped `gh run view --log-failed` listed
+  nothing for any coloured header.
 - **Each build job prints the host it drew** (gh-ocannl-1371), before building: `tools/host_caps.exe`
   (run from `test/config`) prints `Context.host_capabilities` -- CPU, CPU count and pool tag, the
   ISA the cc probes find under the kernel flags (`avx2+fma`, `avx512f+bw+vl`, `neon`), the resolved

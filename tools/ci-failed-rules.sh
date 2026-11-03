@@ -10,11 +10,13 @@
 #   LOG        a build log: dune's own output as `tee` saved it, or a job log
 #              GitHub serves (`gh api .../actions/jobs/<id>/logs`, or
 #              `gh run view <id> --log-failed`, whose JOB<TAB>STEP<TAB>
-#              prefixes are dropped). Timestamps, colour escapes, a byte-order
-#              mark and CRLF line ends are all read through. No LOG reads stdin.
+#              prefixes are dropped). Timestamps, colour escapes (raw, or as
+#              the `^[[...m` text gh prints them as), a byte-order mark and
+#              CRLF line ends are all read through. No LOG reads stdin.
 #   --github   CI mode: also emit one `::error file=...,line=...` annotation
 #              per failure, so each is listed on the run's summary page, its
-#              message led by the entry's `<path>:<lines>`; say
+#              message led by the entry's `<path>:<lines>` and carrying the
+#              lines quoted under it, on one line; say
 #              so when the log holds none; and say so when LOG is missing,
 #              rather than refusing.
 #   --host FILE  print FILE (the host-capability line, gh-ocannl-1371) above
@@ -24,22 +26,39 @@
 # `lines N-M` -- in the order dune reported them, a repeated one once:
 #   test/operations/dune:7709-7715  (rule) alias runtest-foo
 #       ran: (cd _build/default/test/operations && ./foo.exe) > ...
+#       | FAIL: the claim the test makes, as it printed it
+#       (2 more such lines)
 # For a header in a dune file the rule is named by its own fields (alias,
 # aliases, name, names, target, targets), read from the source file when it is
 # present under the working directory and from dune's excerpt otherwise; the
 # second line is the command dune ran for it, or the error it printed. A
 # header in any other file is a compile error or an expectation diff and says
 # which. Warning and alert blocks that did not fail the build are left out.
+# Under each entry, behind `| `, are the first 3 lines of its own block that
+# say why (gh-ocannl-1831): those holding `FAIL:`, `FAILED:`,
+# `AssertionError`, `Error:` (so a Python `KeyError:` too) or OCaml's
+# `Fatal error:`, and the count of the rest. An entry's block is what dune
+# printed after its header and up to the first of: the next header, another
+# action's `(cd ...)` command line (CI's display prints one above any output),
+# or a dune error of its own (below). Of an expectation diff only the lines it
+# adds (`+`) are read, since a context or removed line is not what the run
+# said. Under a display that prints no command lines (not CI's), a later
+# action's output can run on into the block above it.
 # A header is read only at the start of its line (after the timestamps and
 # prefixes GitHub adds), so a replay a test prefixes is never one; and a dune-
 # file header whose excerpt omits its first or last line is not dune's -- a
 # failing test's own output, quoting a fixture -- and is left out too
 # (gh-ocannl-1590).
 # Dune's locationless `Error:` lines (an unknown alias, say) are listed after
-# them: every one when the log has no header, and otherwise those printed
-# before the first header (after one, such a line may be a failing action's
-# own output). A log with neither prints nothing (except under
-# --github), which is what a green build's log gives.
+# them, each with the `-> required by` lines dune printed under it, which name
+# the target it failed for and are its only attribution (a message dune
+# wrapped above them is read as one line; ahrefs/ocannl#1720
+# read a chained CreateProcess() error as the listed rule's): every one when
+# the log has no header, and otherwise those printed before the first header
+# and those followed by a `-> required by` line anywhere. An unchained one after
+# a header may be a failing action's own output, and is quoted under that
+# action's entry instead when it falls in its block. A log with neither prints
+# nothing (except under --github), which is what a green build's log gives.
 #
 # Exit 0 after reading the log, 2 for a usage error or an unreadable LOG.
 
@@ -91,6 +110,10 @@ function clean(s) {
   if (index(s, bom) == 1) s = substr(s, length(bom) + 1)
   sub(/\r$/, "", s)
   gsub(esc "\\[[0-9;]*[A-Za-z]", "", s)
+  # gh 2.x prints a log'"'"'s ESC as the two characters `^[` (and refuses the raw
+  # bytes from `gh api` without --allow-escape-sequences), so a coloured header
+  # reached this reader as `^[[0;1mFile ...` and nothing was listed.
+  gsub(/\^\[\[[0-9;]*[A-Za-z]/, "", s)
   # `gh run view --log` puts JOB<TAB>STEP<TAB> before the timestamp.
   if (match(s, "^[^" tab "]*" tab "[^" tab "]*" tab ts)) {
     sub("^[^" tab "]*" tab "[^" tab "]*" tab, "", s)
@@ -156,17 +179,35 @@ function close_block() {
       }
       cwhat[count] = what
       cdetail[count] = detail
+      cq[count] = qn
+      for (j = 1; j <= qn && j <= qcap; j++) cql[count, j] = q[j]
     }
   }
-  cur = ""
+  cur = ""; qopen = 0
 }
-BEGIN {
-  ts = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9](\\.[0-9]+)?Z ?"
-  header = "^File \"[^\"]+\", lines? [0-9]+(-[0-9]+)?, characters [0-9]+-[0-9]+:$"
-  cur = ""; count = 0; nerr = 0
+# A line of the open block that says why its action failed (see the header).
+function quote(s) {
+  if (!qopen) return
+  if (qdiff) { if (s !~ /^\+/ || s ~ /^\+\+\+ /) return }
+  if (s !~ /FAIL(ED)?:|AssertionError|Error:|Fatal error:/) return
+  if (++qn <= qcap) q[qn] = s
 }
-{
-  s = clean($0)
+# An `Error:` line at the start of its line waits for what follows it: dune
+# wraps a long message onto further lines (a long path, say), and a
+# `-> required by` line below them makes it dune'"'"'s own error, printed apart
+# from any action'"'"'s output. Anything else -- a header, a `(cd ...)` line,
+# another `Error:`, a blank line, or more lines than a wrapped message takes --
+# leaves it as before: listed when it came before every header, and otherwise
+# also quoted in the open block; the lines held behind it are then read in turn.
+function flush_pend(   k, n) {
+  if (pend == "") return
+  errs[++nerr] = pend; echain[nerr] = ""; echained[nerr] = 0; errafter[nerr] = pend_after
+  if (pend_after) quote(pend)
+  pend = ""; n = npb; npb = 0
+  for (k = 1; k <= n; k++) step(pb[k])
+}
+# One log line, past any `Error:` line waiting above it.
+function step(s) {
   if (s ~ header) {
     close_block()
     cur = s
@@ -177,11 +218,16 @@ BEGIN {
     first += 0; last += 0
     is_dune = (path ~ /(^|\/)dune$/ || path ~ /(^|\/)dune-project$/)
     decided = 0; dropped = 0; detail = ""; xkind = ""; xfields = ""; nx = 0; split("", xl)
-    next
+    qopen = 0; qdiff = 0; qn = 0
+    return
   }
   if (cur == "" || decided) {
-    if (s ~ /^Error: /) { if (!(s in errseen)) { errseen[s] = 1; errs[++nerr] = s; errafter[nerr] = (cur != "") } }
-    next
+    if (s ~ /^Error: /) { pend = s; pend_after = (cur != ""); npb = 0; return }
+    if (qopen) {
+      if (s ~ /^\(cd /) qopen = 0
+      else quote(s)
+    }
+    return
   }
   # dune excerpt of the located source: `NNN | text`, a row of dots where it
   # elides the middle of a long stanza, and carets.
@@ -192,18 +238,46 @@ BEGIN {
     if (xkind == "" && match(src, /^\([A-Za-z_]+/)) xkind = substr(src, 2, RLENGTH - 1)
     f = name_field(src)
     if (f != "") xfields = xfields (xfields == "" ? "" : ", ") f
-    next
+    return
   }
-  if (s ~ /^\.+$/ || s ~ /^ *\^+ *$/ || s ~ /^ *$/) next
+  if (s ~ /^\.+$/ || s ~ /^ *\^+ *$/ || s ~ /^ *$/) return
   decided = 1
-  if (s ~ /^(Warning|Alert)/) { dropped = 1; next }
+  if (s ~ /^(Warning|Alert)/) { dropped = 1; return }
+  qopen = 1
   # A header outside a dune file followed by the diff (or the command that
   # printed it) is an expectation mismatch: the header already says where.
-  if (!is_dune && (s ~ /(^|[ \/(])diff / || s ~ /^--- /)) detail = ""
+  if (!is_dune && (s ~ /(^|[ \/(])diff / || s ~ /^--- /)) { detail = ""; qdiff = 1 }
   else if (s ~ /^\(cd /) detail = "ran: " s
   else detail = s
 }
+BEGIN {
+  ts = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9](\\.[0-9]+)?Z ?"
+  header = "^File \"[^\"]+\", lines? [0-9]+(-[0-9]+)?, characters [0-9]+-[0-9]+:$"
+  cur = ""; count = 0; nerr = 0; qcap = 3; qopen = 0; qn = 0; pend = ""; npb = 0; inchain = 0
+}
+{
+  s = clean($0)
+  if (pend != "") {
+    if (s ~ /^-> required by /) {
+      # A wrapped message reads as dune printed it before wrapping.
+      for (k = 1; k <= npb; k++) pend = pend " " pb[k]
+      errs[++nerr] = pend; echain[nerr] = s; echained[nerr] = 1; errafter[nerr] = pend_after
+      pend = ""; npb = 0; inchain = 1
+      # dune prints a message whole, so the action output above it has ended.
+      qopen = 0
+      next
+    }
+    if (npb < 8 && s !~ header && s !~ /^\(cd / && s !~ /^Error: / && s !~ /^ *$/) { pb[++npb] = s; next }
+    flush_pend()
+  }
+  if (inchain) {
+    if (s ~ /^-> required by /) { echain[nerr] = echain[nerr] "\n" s; next }
+    inchain = 0
+  }
+  step(s)
+}
 END {
+  flush_pend()
   close_block()
   if (count > 0) {
     printf "Failed dune rules (%d), in the order dune reported them:\n", count
@@ -211,28 +285,45 @@ END {
       loc[i] = cpath[i] ":" cfirst[i] (clast[i] != cfirst[i] ? "-" clast[i] : "")
       printf "  %s  %s\n", loc[i], cwhat[i]
       if (cdetail[i] != "") printf "      %s\n", trim(cdetail[i], 240)
+      for (j = 1; j <= cq[i] && j <= qcap; j++) printf "      | %s\n", trim(cql[i, j], 240)
+      if (cq[i] > qcap) printf "      (%d more such lines)\n", cq[i] - qcap
     }
     if (github) {
       for (i = 1; i <= count; i++) {
         # The message leads with the location the listing gives: the annotation
         # list on the summary page shows the message, not `file=`, and a golden
-        # mismatch carries no detail to name it otherwise (gh-ocannl-1464).
+        # mismatch carries no detail to name it otherwise (gh-ocannl-1464). The
+        # quoted lines follow on the same line, so the job log GitHub echoes the
+        # annotation into holds no line a later read of it could take for dune'"'"'s.
         msg = loc[i] "  " cwhat[i] (cdetail[i] == "" ? "" : " -- " trim(cdetail[i], 200))
+        for (j = 1; j <= cq[i] && j <= qcap; j++) msg = msg (j == 1 ? " -- " : " | ") trim(cql[i, j], 200)
+        if (cq[i] > qcap) msg = msg " | (" (cq[i] - qcap) " more such lines)"
         gsub(/%/, "%25", msg); gsub(/\r/, "%0D", msg); gsub(/\n/, "%0A", msg)
         printf "::error file=%s,line=%d,endLine=%d,title=Failed dune rule::%s\n", cpath[i], cfirst[i], clast[i], msg
       }
     }
   }
   # Every locationless error when no header was found; beside located failures, those dune
-  # printed before its first header -- after one, an `Error:` line may be the output of a
-  # failing action.
+  # printed before its first header, and those it chained to a target anywhere -- after a
+  # header, an unchained `Error:` line may be the output of a failing action. A repeated
+  # one, chain and all, once.
   nshow = 0
-  for (i = 1; i <= nerr; i++) if (count == 0 || !errafter[i]) shown[++nshow] = errs[i]
+  for (i = 1; i <= nerr; i++) {
+    if (count > 0 && errafter[i] && !echained[i]) continue
+    k = errs[i] SUBSEP echain[i]
+    if (k in eseen) continue
+    eseen[k] = 1; shown[++nshow] = errs[i]; schain[nshow] = echain[i]
+  }
   if (nshow > 0) {
     printf "dune errors without a location (%d):\n", nshow
-    for (i = 1; i <= nshow; i++) printf "  %s\n", trim(shown[i], 240)
+    for (i = 1; i <= nshow; i++) {
+      printf "  %s\n", trim(shown[i], 240)
+      nc = split(schain[i], ch, "\n")
+      for (j = 1; j <= nc; j++) printf "    %s\n", trim(ch[j], 240)
+    }
     if (github) for (i = 1; i <= nshow; i++) {
-      msg = trim(shown[i], 200); gsub(/%/, "%25", msg)
+      msg = shown[i] (schain[i] == "" ? "" : " " schain[i])
+      gsub(/\n/, " ", msg); msg = trim(msg, 400); gsub(/%/, "%25", msg); gsub(/\r/, "%0D", msg)
       printf "::error title=dune error::%s\n", msg
     }
   }
