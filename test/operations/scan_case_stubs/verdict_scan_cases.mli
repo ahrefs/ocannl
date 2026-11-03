@@ -33,6 +33,7 @@ module List : sig
   val iter : 'a list -> f:('a -> unit) -> unit
   val filter_map : 'a list -> f:('a -> 'b option) -> 'b list
   val singleton : 'a -> 'a list
+  val length : 'a list -> int
 end
 
 module Array : sig
@@ -49,6 +50,20 @@ module Verdict : sig
 
   val skipped : backend:string -> string -> unit
   val leg : when_:bool -> on:string -> unit -> leg
+
+  (** The floor arms (post-1-task-4): the quantified claims that take [?min], at the least types
+      their calls need ([pf_all2]'s format is a plain string here). *)
+
+  val p_all : ?min:int -> string -> 'a list -> f:('a -> bool) -> unit
+  val p_alli : ?min:int -> string -> 'a list -> f:(int -> 'a -> bool) -> unit
+  val p_exists : ?min:int -> string -> 'a list -> f:('a -> bool) -> unit
+  val p_none : ?min:int -> string -> 'a list -> f:('a -> bool) -> unit
+  val gated_all : ?min:int -> when_:bool -> on:string -> string -> 'a list -> f:('a -> bool) -> unit
+  val pf_all2 : ?min:int -> string -> string -> 'a list -> 'a list -> f:('a -> 'a -> bool) -> unit
+
+  module Claims : sig
+    val p_all : ?min:int -> string -> 'a list -> f:('a -> bool) -> unit
+  end
 end
 
 val in_leg : leg:Verdict.leg -> string -> (string -> unit) -> unit
@@ -75,6 +90,18 @@ val pair : int -> int option
 val check : unit -> unit
 val run : unit -> unit
 val cap : [ `Withheld | `Advertised ]
+
+(** The floor arms' populations, predicates and gate. *)
+
+val rows : int list
+val holds : int -> bool
+val fails : int -> bool
+val above : int -> int -> bool
+val when_ : bool
+val on : string
+val leg : string
+val got : float list
+val want : float list
 
 (* The project-syntax arm is checked as a top-level item of a test that reports claims, under its
    stanza's preprocessors and libraries. It is a parse shape: it pins the scanner's reading of a
