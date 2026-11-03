@@ -7,7 +7,10 @@
 # (timestamps, colour, CRLF, a byte-order mark, `gh run view --log` prefixes),
 # read it from a checkout of another revision, and pin the CI mode's
 # annotations and refusals. A mutant with the timestamp handling removed must
-# lose the GitHub-served leg, so that leg is seen to discriminate.
+# lose the GitHub-served leg, so that leg is seen to discriminate. The
+# quoting legs (gh-ocannl-1831) build rules that fail for a stated reason --
+# claims, a Python unittest run, a scan's golden -- and two that must not lend
+# their lines to the rule above them, each boundary held by a mutant.
 # Usage: tools/test-ci-failed-rules.sh [--keep] [--only REGEX]
 #
 # In the `promotion` harness group, beside the other readers of Dune's output,
@@ -156,10 +159,12 @@ if harness_leg 'a GitHub-served log reads the same #dune'; then
     { printf "2026-10-19T13:11:44.%07dZ %s\r\n", NR, $0 }' "$TMP/red.log" >"$TMP/served.log"
   LC_ALL=C awk '{ sub(/^\357\273\277/, ""); printf "Build (ubuntu-latest, 5.5.x, main)\tRun opam exec -- dune build\t%s\n", $0 }' \
     "$TMP/served.log" >"$TMP/gh-view.log"
+  # And as gh 2.x prints it: each ESC as the two characters `^[`.
+  LC_ALL=C awk -v esc="$esc" '{ gsub(esc, "^["); print }' "$TMP/gh-view.log" >"$TMP/gh-caret.log"
   # Under a UTF-8 locale too, where an awk reads the BOM as one character.
   ok=0
   for locale in C en_US.UTF-8; do
-    for form in served gh-view; do
+    for form in served gh-view gh-caret; do
       out=$(cd "$proj" && LC_ALL=$locale subject "$TMP/$form.log" 2>&1); rc=$?
       listing_ok "$out" "$rc" || { ok=1; detail="$form, LC_ALL=$locale: exit $rc; $out"; }
     done
@@ -173,6 +178,15 @@ if harness_leg 'a GitHub-served log reads the same #dune'; then
       report 0 'negative control: keeping timestamps loses the served log'
     else report 1 'negative control: keeping timestamps loses the served log' "mutant applied: $(grep -c 'timestamps kept' "$mut"); $out"; fi
   else report 1 'negative control: keeping timestamps loses the served log' 'mutant did not build'; fi
+  # And without the caret-escape handling gh's rendering lists nothing (the
+  # colour sits right before `File`), so that form is seen to discriminate.
+  if mut=$(mutant no-caret-escapes '{ sub(/^  gsub\(\/\\\^\\\[\\\[.*$/, "  # caret escapes kept") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/gh-caret.log" 2>&1); rc=$?
+    if grep -q '^  # caret escapes kept$' "$mut" && ! listing_ok "$out" "$rc" &&
+       grep -q '\^\[\[0;1mFile "t/dune"' "$TMP/gh-caret.log"; then
+      report 0 'negative control: keeping caret escapes loses gh'"'"'s rendering'
+    else report 1 'negative control: keeping caret escapes loses gh'"'"'s rendering' "mutant applied: $(grep -c 'caret escapes kept' "$mut"); $out"; fi
+  else report 1 'negative control: keeping caret escapes loses gh'"'"'s rendering' 'mutant did not build'; fi
 fi
 if harness_leg 'a log from another revision names nothing it cannot see #dune'; then
   # Read from a checkout where the stanza has moved down a line: the lines
@@ -196,13 +210,15 @@ fi
 if harness_leg 'locationless errors beside located failures #dune'; then
   # One log holding dune's locationless error, then the red build, then an
   # `Error:` line a failing action printed: the first stays listed beside
-  # the failed rule, the last is the action's output and is not.
+  # the failed rule, the last is the action's output, quoted under its rule
+  # (gh-ocannl-1831) and not listed.
   { cat "$TMP/alias.log" "$TMP/red.log"; echo 'Error: printed by the failing test itself'; } >"$TMP/mixed.log"
   out=$(cd "$proj" && subject "$TMP/mixed.log" 2>&1); rc=$?
   if [ "$rc" = 0 ] && listing_ok "$(printf '%s\n' "$out" | sed -n '1,3p')" 0 &&
-     [ "$(printf '%s\n' "$out" | sed -n '4p')" = 'dune errors without a location (1):' ] &&
-     printf '%s\n' "$out" | sed -n '5p' | grep -q '^  Error: .*runtest-nonesuch' &&
-     [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 5 ]; then
+     [ "$(printf '%s\n' "$out" | sed -n '4p')" = '      | Error: printed by the failing test itself' ] &&
+     [ "$(printf '%s\n' "$out" | sed -n '5p')" = 'dune errors without a location (1):' ] &&
+     printf '%s\n' "$out" | sed -n '6p' | grep -q '^  Error: .*runtest-nonesuch' &&
+     [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 6 ]; then
     report 0 'locationless errors beside located failures'
   else report 1 'locationless errors beside located failures' "exit $rc; $out"; fi
 fi
@@ -275,6 +291,198 @@ unit.exe: segmentation fault'
     else report 1 'negative control: without the excerpt anchor the fixture block is a failed rule' \
       "mutant applied: $(grep -c 'excerpt anchor removed' "$mut"); $out"; fi
   else report 1 'negative control: without the excerpt anchor the fixture block is a failed rule' 'mutant did not build'; fi
+fi
+# Why each rule failed (gh-ocannl-1831): the lines of its own output block that say so, quoted
+# under its entry. Four real rules, each built alone into its own log: a test whose claims fail
+# (more of them than the 3 quoted), a Python unittest run as `test_orchestrate` prints one (its
+# AssertionError a couple of thousand lines below the command), a scan whose golden diff adds its
+# FAIL: line, and two rules that are not failures of theirs -- a passing one that prints a FAIL:
+# line, and one whose dependency dune cannot build, named long enough that dune wraps its error.
+# Built outside the gates, so each leg passes run alone.
+mkdir -p "$proj/r" || exit 2
+cat >"$proj/r/dune" <<'DUNE'
+(rule
+ (alias runtest-claims)
+ (deps claims.out)
+ (action
+  (run sh -c "cat claims.out; exit 1")))
+
+(rule
+ (alias runtest-orchestrate)
+ (deps orchestrate.out)
+ (action
+  (run sh -c "cat orchestrate.out >&2; exit 1")))
+
+(rule
+ (target scan.actual)
+ (deps scan.out)
+ (action
+  (copy scan.out scan.actual)))
+
+(rule
+ (alias runtest-scan)
+ (action
+  (diff scan.expected scan.actual)))
+
+(rule
+ (alias runtest-chatty)
+ (action
+  (run sh -c "echo 'FAIL: printed by a rule that passes'")))
+
+(rule
+ (alias runtest-unbuildable)
+ (deps a-dependency-whose-name-is-long-enough-that-dune-wraps-its-error-onto-a-second-line.exe)
+ (action
+  (run ./a-dependency-whose-name-is-long-enough-that-dune-wraps-its-error-onto-a-second-line.exe)))
+DUNE
+printf '%s\n' 'checking 7 claims' 'FAIL: claim 1: the gradient is finite' 'ok: claim 2' \
+  'FAIL: claim 3: the arena is released' 'FAIL: claim 4: two runs agree' 'FAIL: claim 5: the tile fits' \
+  'FAIL: claim 6: the cache is hit' 'FAILED: 5 checks did not hold' >"$proj/r/claims.out"
+{ i=0; while [ "$i" -lt 2000 ]; do
+    printf 'test_cell_%04d (test_orchestrate.CellTest.test_cell_%04d) ... ok\n' "$i" "$i"; i=$((i + 1)); done
+  cat <<'PY'
+test_parity_flag (test_orchestrate.ParityCheckTest.test_parity_flag) ... FAIL
+
+======================================================================
+FAIL: test_parity_flag (test_orchestrate.ParityCheckTest.test_parity_flag)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/runner/work/ocannl/benchmarks/test_orchestrate.py", line 84, in test_parity_flag
+    self.assertEqual(flat["parity"], "FAIL")
+AssertionError: 'PASS' != 'FAIL'
+- PASS
++ FAIL
+
+
+----------------------------------------------------------------------
+Ran 2001 tests in 3.210s
+
+FAILED (failures=1)
+PY
+} >"$proj/r/orchestrate.out"
+# The golden's context holds an `Error:` line and it loses a FAIL: line: neither is what the run
+# said, only the line the diff adds is.
+printf '%s\n' 'accepted position in use: printed or raised' 'accepted position in use: an Error: payload' \
+  'canary held: the scan reads FAIL: markers' >"$proj/r/scan.expected"
+printf '%s\n' 'accepted position in use: printed or raised' 'accepted position in use: an Error: payload' \
+  'FAIL: arrayjit/lib/backends.ml:120: a label read the scan cannot place' >"$proj/r/scan.out"
+build "$TMP/claims.log" @r/runtest-claims; claims_brc=$?
+build "$TMP/orchestrate.log" @r/runtest-orchestrate; orch_brc=$?
+build "$TMP/scan.log" @r/runtest-scan; scan_brc=$?
+build "$TMP/chatty.log" @r/runtest-chatty; chatty_brc=$?
+build "$TMP/unbuildable.log" @r/runtest-unbuildable; unb_brc=$?
+claims_want='Failed dune rules (1), in the order dune reported them:
+  r/dune:1-5  (rule) alias runtest-claims'
+claims_quoted='      | FAIL: claim 1: the gradient is finite
+      | FAIL: claim 3: the arena is released
+      | FAIL: claim 4: two runs agree'
+# The claims rule's entry: its two lines, its first 3 reasons, and the count of the other 3.
+claims_ok() { # OUTPUT RC MORE
+  [ "$2" = 0 ] && [ "$(printf '%s\n' "$1" | sed -n '1,2p')" = "$claims_want" ] &&
+    printf '%s\n' "$1" | sed -n '3p' | grep -qE "^      ran: \(cd _build/default/r && [^ ]*sh -c 'cat claims\.out; exit 1'\)$" &&
+    [ "$(printf '%s\n' "$1" | sed -n '4,6p')" = "$claims_quoted" ] &&
+    [ "$(printf '%s\n' "$1" | sed -n '7p')" = "      ($3 more such lines)" ]
+}
+if harness_leg 'a failing claim is quoted under its rule #dune'; then
+  out=$(cd "$proj" && subject "$TMP/claims.log" 2>&1); rc=$?
+  if [ "$claims_brc" = 1 ] && claims_ok "$out" "$rc" 3 && [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 7 ]; then
+    report 0 'a failing claim is quoted under its rule'
+  else report 1 'a failing claim is quoted under its rule' "build exit $claims_brc, exit $rc; $out"; fi
+  out=$(cd "$proj" && subject --github "$TMP/claims.log" 2>&1); rc=$?
+  ann=$(printf '%s\n' "$out" | grep '^::error ')
+  if [ "$rc" = 0 ] && [ "$(printf '%s\n' "$ann" | wc -l | tr -d ' ')" = 1 ] &&
+     [[ $ann == '::error file=r/dune,line=1,endLine=5,title=Failed dune rule::r/dune:1-5  (rule) alias runtest-claims -- ran: '*"'cat claims.out; exit 1') -- FAIL: claim 1: the gradient is finite | FAIL: claim 3: the arena is released | FAIL: claim 4: two runs agree | (3 more such lines)" ]]; then
+    report 0 '--github carries the quoted claims into the annotation'
+  else report 1 '--github carries the quoted claims into the annotation' "exit $rc; $out"; fi
+fi
+if harness_leg 'a Python AssertionError is quoted under its rule #dune'; then
+  out=$(cd "$proj" && subject "$TMP/orchestrate.log" 2>&1); rc=$?
+  # unittest's verdict and the assertion, over a thousand lines below the command (dune elides
+  # the middle of a long output, `...TRUNCATED BY DUNE...`, but keeps its end); not its
+  # traceback's source line, which holds "FAIL" without a colon, nor its `FAILED (failures=1)`.
+  want="Failed dune rules (1), in the order dune reported them:
+  r/dune:7-11  (rule) alias runtest-orchestrate
+      | FAIL: test_parity_flag (test_orchestrate.ParityCheckTest.test_parity_flag)
+      | AssertionError: 'PASS' != 'FAIL'"
+  if [ "$orch_brc" = 1 ] && [ "$rc" = 0 ] && [ "$(printf '%s\n' "$out" | sed -n '1,2p;4,$p')" = "$want" ] &&
+     printf '%s\n' "$out" | sed -n '3p' | grep -q "^      ran: (cd _build/default/r && .*orchestrate\.out" &&
+     [ "$(grep -c '^test_cell_' "$TMP/orchestrate.log")" -ge 1000 ]; then
+    report 0 'a Python AssertionError is quoted under its rule'
+  else report 1 'a Python AssertionError is quoted under its rule' "build exit $orch_brc, exit $rc; $out"; fi
+fi
+if harness_leg 'a scan'"'"'s FAIL: line is quoted under its golden #dune'; then
+  out=$(cd "$proj" && subject "$TMP/scan.log" 2>&1); rc=$?
+  want='Failed dune rules (1), in the order dune reported them:
+  r/scan.expected:1  output differs from this golden
+      | +FAIL: arrayjit/lib/backends.ml:120: a label read the scan cannot place'
+  if [ "$scan_brc" = 1 ] && [ "$rc" = 0 ] && [ "$out" = "$want" ] &&
+     grep -q '^ accepted position in use: an Error: payload$' "$TMP/scan.log" &&
+     grep -q '^-canary held: the scan reads FAIL: markers$' "$TMP/scan.log"; then
+    report 0 'a scan'"'"'s FAIL: line is quoted under its golden'
+  else report 1 'a scan'"'"'s FAIL: line is quoted under its golden' "build exit $scan_brc, exit $rc; $out"; fi
+  # The negative control: reading the whole diff quotes its context line and the line it removes.
+  if mut=$(mutant no-diff-filter '{ sub(/^  if \(qdiff\) \{.*$/, "  # diff filter removed") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/scan.log" 2>&1); rc=$?
+    if grep -q '^  # diff filter removed$' "$mut" && [ "$out" != "$want" ] &&
+       printf '%s\n' "$out" | grep -q '^      | -canary held: the scan reads FAIL: markers$' &&
+       printf '%s\n' "$out" | grep -q '^      |  accepted position in use: an Error: payload$'; then
+      report 0 'negative control: reading the whole diff quotes what the run did not say'
+    else report 1 'negative control: reading the whole diff quotes what the run did not say' \
+      "mutant applied: $(grep -c 'diff filter removed' "$mut"); $out"; fi
+  else report 1 'negative control: reading the whole diff quotes what the run did not say' 'mutant did not build'; fi
+fi
+if harness_leg 'another rule'"'"'s output and dune'"'"'s own error are not quoted #dune'; then
+  # After the claims block, in one log a passing rule's FAIL: line, behind the `(cd ...)` line
+  # CI's display prints above its output; in another dune's error for a target it cannot build,
+  # wrapped onto a second line above the `-> required by` chain that names that target. Neither is
+  # the claims rule's: its entry reads as built alone, and dune's error is listed whole with its
+  # chain.
+  cat "$TMP/claims.log" "$TMP/chatty.log" >"$TMP/after-pass.log"
+  cat "$TMP/claims.log" "$TMP/unbuildable.log" >"$TMP/after-dune.log"
+  pass_ok() { # OUTPUT RC
+    claims_ok "$1" "$2" 3 && [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 7 ]
+  }
+  dune_ok() { # OUTPUT RC
+    claims_ok "$1" "$2" 3 && [ "$(printf '%s\n' "$1" | sed -n '8p')" = 'dune errors without a location (1):' ] &&
+      [ "$(printf '%s\n' "$1" | sed -n '9p')" = '  Error: No rule found for r/a-dependency-whose-name-is-long-enough-that-dune-wraps-its-error-onto-a-second-line.exe' ] &&
+      printf '%s\n' "$1" | sed -n '10p' | grep -q '^    -> required by alias r/runtest-unbuildable' &&
+      [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 10 ]
+  }
+  out=$(cd "$proj" && subject "$TMP/after-pass.log" 2>&1); rc=$?
+  out2=$(cd "$proj" && subject "$TMP/after-dune.log" 2>&1); rc2=$?
+  if [ "$chatty_brc" = 0 ] && [ "$unb_brc" = 1 ] && grep -q '^(cd .*printed by a rule that passes' "$TMP/chatty.log" &&
+     grep -q '^-> required by alias r/runtest-unbuildable' "$TMP/unbuildable.log" &&
+     grep -qx 'Error: No rule found for' "$TMP/unbuildable.log" &&
+     pass_ok "$out" "$rc" && dune_ok "$out2" "$rc2"; then
+    report 0 'another rule'"'"'s output and dune'"'"'s own error are not quoted'
+  else report 1 'another rule'"'"'s output and dune'"'"'s own error are not quoted' \
+    "builds $chatty_brc/$unb_brc, exits $rc/$rc2; $out; $out2; $(cat "$TMP/chatty.log" "$TMP/unbuildable.log")"; fi
+  # The negative controls: without the `(cd ...)` boundary the passing rule's command and output
+  # lines (both hold its FAIL:) are counted as the claims rule's, and without the chain check, or
+  # without holding a wrapped message's lines until its chain, dune's error is, and goes unlisted.
+  if mut=$(mutant no-command-boundary '{ sub(/^      if \(s ~ \/\^\\\(cd \/\) qopen = 0$/, "      if (0) qopen = 0 # command boundary removed") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/after-pass.log" 2>&1); rc=$?
+    if grep -q '^      if (0) qopen = 0 # command boundary removed$' "$mut" && ! pass_ok "$out" "$rc" && claims_ok "$out" "$rc" 5; then
+      report 0 'negative control: without the command boundary a passing rule'"'"'s line is quoted'
+    else report 1 'negative control: without the command boundary a passing rule'"'"'s line is quoted' \
+      "mutant applied: $(grep -c 'command boundary removed' "$mut"); $out"; fi
+  else report 1 'negative control: without the command boundary a passing rule'"'"'s line is quoted' 'mutant did not build'; fi
+  if mut=$(mutant no-chain-check '{ sub(/^    if \(s ~ \/\^-> required by \/\) \{$/, "    if (0) {") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/after-dune.log" 2>&1); rc=$?
+    if grep -q '^    if (0) {$' "$mut" && ! dune_ok "$out" "$rc" && claims_ok "$out" "$rc" 4 &&
+       ! printf '%s\n' "$out" | grep -q 'without a location'; then
+      report 0 'negative control: without the chain check dune'"'"'s error is quoted as the rule'"'"'s'
+    else report 1 'negative control: without the chain check dune'"'"'s error is quoted as the rule'"'"'s' \
+      "mutant applied: $(grep -c '^    if (0) {$' "$mut"); $out"; fi
+  else report 1 'negative control: without the chain check dune'"'"'s error is quoted as the rule'"'"'s' 'mutant did not build'; fi
+  if mut=$(mutant no-wrap-hold '{ sub(/npb < 8 && /, "npb < 0 \\&\\& ") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/after-dune.log" 2>&1); rc=$?
+    if grep -q 'npb < 0 && ' "$mut" && ! dune_ok "$out" "$rc" && claims_ok "$out" "$rc" 4 &&
+       ! printf '%s\n' "$out" | grep -q 'without a location'; then
+      report 0 'negative control: without holding a wrapped error dune'"'"'s error is quoted as the rule'"'"'s'
+    else report 1 'negative control: without holding a wrapped error dune'"'"'s error is quoted as the rule'"'"'s' \
+      "mutant applied: $(grep -c 'npb < 0 && ' "$mut"); $out"; fi
+  else report 1 'negative control: without holding a wrapped error dune'"'"'s error is quoted as the rule'"'"'s' 'mutant did not build'; fi
 fi
 if harness_leg 'the green build prints nothing #dune'; then
   write_fixture 0
