@@ -59,6 +59,30 @@
 #                                                      # (tools/affected-tests.sh)
 #   tools/test-run.sh aliases PATH...                 # a test's per-test aliases, by family;
 #                                                      # runs none
+#   tools/test-run.sh prepush --since BASE [--cap N] [--test-cap N] [--expect-backend B]...
+#                             [build [DUNE OPTIONS...]] # the pre-push run: affected's default
+#                                                      # list without slow-/train-, as `run`
+#   tools/test-run.sh prepush --since BASE --list      # that list, one alias per line; runs none
+#
+# `prepush --since BASE` (gh-ocannl-1829) is the pre-push run as one command:
+# `affected --since BASE`'s default list (link-only aliases included, never
+# `--referenced-only`'s) without its `slow-` and `train-` members, run exactly
+# as `run [OPTIONS] --targets-file LIST [build DUNE OPTIONS...]` would run it
+# (the same verdict, digest and exit status). `train-` members run in CI's
+# `@train` shards on every PR; no CI job runs `@slow`, so the `slow-` members
+# left off are named on stderr, each on a `prepush: slow:` line, for the caller
+# to run those the change exercises. `--list` prints the list instead (a valid
+# --targets-file, empty when nothing is left) and runs nothing: the form for a
+# fleet leg, whose runner is one plain command line, `... execution leg ...
+# --file LIST -- env OCANNL_BACKEND=B tools/test-run.sh run --expect-backend B
+# --targets-file '{file}'`. Every line `affected` prints must be one `@`
+# operand naming a `runtest-`, `slow-` or `train-` alias (an allowlist): any
+# other line refuses the whole list (exit 2). Nothing runs when `affected`
+# fails (exit 2) or says CROSS-CUTTING (exit 2: the PR's CI run owns the list
+# then, AGENTS.md), nor when its list is INCOMPLETE (exit 3: a changed path is
+# UNMAPPED); `--list` then still prints what it found and exits 3. A list with
+# no `runtest-` alias runs nothing and exits 0. `--targets-file` is refused
+# (the list is affected's): name any further alias after `build`.
 #
 # `--targets-file FILE` (repeatable; gh-ocannl-1740) adds the aliases FILE lists
 # to dune's argv, after its own words (before dune's `--`, if any): one `@`
@@ -426,6 +450,7 @@ reject_misplaced_options() {
           repeat) form='repeat [--cap N] [--test-cap N] [--alone] [--direct] [--targets-file FILE]... N [DUNE ARGS...]' ;;
           fresh) form='fresh [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]... @DIR/KIND-NAME... [-j N]' ;;
           bisect) form=$bisect_usage ;;
+          prepush) form=$pp_usage ;;
           *) form="$sub [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]... [DUNE ARGS...]" ;;
         esac
         die "$arg belongs before the dune arguments, not after them:
@@ -3286,8 +3311,104 @@ hold_query_lock() {
 }
 
 sub=${1:-}
-[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected|aliases ... (see header)"
+[ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected|aliases|prepush ... (see header)"
 shift
+
+# `prepush` (gh-ocannl-1829; see the header): the pre-push run is `affected
+# --since BASE`'s default list without its slow- and train- members, run as
+# `run --targets-file`. It asks `affected` in a child (which takes and releases
+# the worktree lock as a query does), sorts each line it prints into a family
+# by an allowlist, and then BECOMES that run: `sub` is `run` from here on and
+# the list reaches the run's own intake as a targets file in a scratch
+# directory this launcher removes as it exits (the run records the argv it
+# read; no launch path sets an EXIT trap of its own). Nothing runs when the change is
+# CROSS-CUTTING (exit 2: the pre-push run is then not this list), nor when the
+# list is INCOMPLETE (exit 3: a path reached what this build cannot place), so
+# no green verdict ever stands for a list that was not the pre-push one.
+if [ "$sub" = prepush ]; then
+  pp_usage='prepush --since BASE [--list | [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
+  pp_base= pp_print=0 pp_run_opts=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --since | --since=*) opt_value "a base revision" "$@"; pp_base=$opt_value; shift "$opt_shift" ;;
+      --list | --list=*) opt_flag "$1"; pp_print=1; shift ;;
+      --cap | --cap=* | --test-cap | --test-cap=* | --expect-backend | --expect-backend=*)
+        opt_value "a value" "$@"
+        pp_run_opts+=("${1%%=*}" "$opt_value")
+        shift "$opt_shift" ;;
+      --targets-file | --targets-file=*)
+        die "prepush: the list is affected's, not a file's: write any further alias after build, tools/test-run.sh $pp_usage" ;;
+      --cpu | --cpu=* | --gpu | --gpu=*) refuse_slot_option "$1" ;;
+      -*) die "prepush: unknown option $1
+  usage: tools/test-run.sh $pp_usage" ;;
+      *) break ;;
+    esac
+  done
+  [ -n "$pp_base" ] || die "prepush: --since BASE is required (the base branch, e.g. the staging remote's master)
+  usage: tools/test-run.sh $pp_usage"
+  if [ "$pp_print" = 1 ] && { [ $# -gt 0 ] || [ ${#pp_run_opts[@]} -gt 0 ]; }; then
+    die "prepush: --list prints the list and runs nothing, so it takes no run option or dune argument
+  usage: tools/test-run.sh $pp_usage"
+  fi
+  [ $# -eq 0 ] || [ "$1" = build ] ||
+    die "prepush: the list is aliases, which only dune's build takes: tools/test-run.sh $pp_usage, not $1"
+  reject_misplaced_options "$@"
+  pp_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-run-prepush.XXXXXX") || die "cannot create a scratch directory"
+  trap 'rm -rf "$pp_dir"' EXIT
+  pp_rc=0
+  bash "$runner_root/tools/test-run.sh" affected --since "$pp_base" >"$pp_dir/affected" 2>"$pp_dir/affected.err" ||
+    pp_rc=$?
+  cat "$pp_dir/affected.err" >&2
+  case $pp_rc in
+    0 | 3) ;;
+    *) die "prepush: affected --since $pp_base exited $pp_rc (above); nothing run" ;;
+  esac
+  grep -q '^affected: CROSS-CUTTING:' "$pp_dir/affected.err" &&
+    die "prepush: this change is CROSS-CUTTING (above), so the pre-push run is not this list: the PR's CI run owns it but its slow- aliases; run those and the tests that exercise the change, named in the PR body, then dune build @check (AGENTS.md, gh-ocannl-1765); nothing run"
+  # The allowlist: one `@` operand per line, its last component a per-test
+  # alias of one of the three families; any other line stops it.
+  pp_keep=() pp_slow=() pp_train=() pp_all=0
+  while IFS= read -r pp_line || [ -n "$pp_line" ]; do
+    pp_name=${pp_line##*/} pp_name=${pp_name#@} pp_name=${pp_name#@}
+    case $pp_line in
+      *[[:space:]]* | '' | [!@]*) pp_name= ;;
+    esac
+    case $pp_name in
+      runtest-?*) pp_keep+=("$pp_line") ;;
+      slow-?*) pp_slow+=("$pp_line") ;;
+      train-?*) pp_train+=("$pp_line") ;;
+      *) die "prepush: affected printed a line that is no per-test alias of runtest, slow or train: '$pp_line'; nothing run" ;;
+    esac
+    pp_all=$((pp_all + 1))
+  done <"$pp_dir/affected"
+  {
+    printf 'test-run: prepush: %d of the %d alias(es) affected --since %s lists; left off: %d train- (CI'\''s @train shards run them on every PR) and %d slow-' \
+      "${#pp_keep[@]}" "$pp_all" "$pp_base" "${#pp_train[@]}" "${#pp_slow[@]}"
+    if [ ${#pp_slow[@]} -gt 0 ]; then
+      printf ' (no CI job runs @slow: run those the change exercises, named in the PR body):\n'
+      printf 'test-run: prepush: slow: %s\n' "${pp_slow[@]}"
+    else
+      printf '\n'
+    fi
+  } >&2
+  if [ "$pp_print" = 1 ]; then
+    [ ${#pp_keep[@]} -eq 0 ] || printf '%s\n' "${pp_keep[@]}"
+    [ "$pp_rc" = 0 ] ||
+      echo "test-run: prepush: the list is INCOMPLETE (UNMAPPED above): extend it with what those paths reach (the OFF-BUILD aliases, on a box that builds them)" >&2
+    exit "$pp_rc"
+  fi
+  if [ "$pp_rc" = 3 ]; then
+    echo "test-run: prepush: the list is INCOMPLETE (UNMAPPED above): a changed path reaches what this build cannot place, so this is not the pre-push list; nothing run. prepush --since $pp_base --list prints what was found, to extend (the OFF-BUILD aliases, on a box that builds them) and run as run --targets-file F" >&2
+    exit 3
+  fi
+  if [ ${#pp_keep[@]} -eq 0 ]; then
+    echo "test-run: prepush: no runtest- alias to run; nothing run" >&2
+    exit 0
+  fi
+  printf '%s\n' "${pp_keep[@]}" >"$pp_dir/list" || die "cannot write the list in $pp_dir"
+  sub=run
+  set -- ${pp_run_opts[@]+"${pp_run_opts[@]}"} --targets-file "$pp_dir/list" "$@"
+fi
 
 case $sub in
   affected)
@@ -5012,5 +5133,5 @@ case $sub in
     done
     [ "$found" = 1 ] || echo "no recorded runs in $RUNS"
     ;;
-  *) die "unknown subcommand: $sub (run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected|aliases)" ;;
+  *) die "unknown subcommand: $sub (run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected|aliases|prepush)" ;;
 esac
