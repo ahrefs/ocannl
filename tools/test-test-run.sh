@@ -322,11 +322,15 @@
 #      green verdict, which `wait RUN` still reads by name; released, the wait
 #      follows it to its own red verdict. One that ends without publishing (its
 #      slot refused) is refused (`unpublished:`, wait 2, status 1) until a run
-#      publishes, and so is one seen queued behind a live run. A run's own chain alive after its verdict is no launch in
-#      flight, a later run published or not, and with its `launchers` record
-#      emptied it is (the negative
-#      control). The slot this script takes itself is taken after publication:
-#      a run waiting for it is `last`, live, and its wait times out on it.
+#      publishes, and so is one seen queued behind a live run. A run's own
+#      chain alive after its verdict is no launch in flight, a later run
+#      published or not; with its `launchers` record emptied it is (the
+#      negative control). A shell whose words hold a second launch is in
+#      flight once its first has run. A launch published before its supervisor
+#      recorded itself is no launch to come, and its verdict is not refused
+#      afterwards. The slot this script takes itself is taken after
+#      publication: a run waiting for it is `last`, live, and its wait times
+#      out on it.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
 #      red run in the same state root, `wait last`, `status last` and `paths
 #      run last` name the worktree's own, `list` lists only its runs (`--all`
@@ -8723,7 +8727,7 @@ chmod +x "$q_bin/dune"
 q() { # root subcommand [argv...]: that checkout's script, against the shared state root
   local root=$1
   shift
-  OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH "$root/tools/test-run.sh" "$@"
+  OCANNL_TOOL_TEST_RUNS=$q_runs PATH=${Q_PATH_PREFIX:+$Q_PATH_PREFIX:}$q_bin:$PATH "$root/tools/test-run.sh" "$@"
 }
 q_capture() { # root subcommand [argv...]
   q "$@" >"$TMP/queued.out" 2>&1
@@ -8758,7 +8762,7 @@ q_kill_all() {
     wait "$q_follow" 2>/dev/null
   fi
   # The runs this leg holds on a file: let them end on their own.
-  touch "$TMP/queued.hold" "$TMP/queued.slot" 2>/dev/null
+  touch "$TMP/queued.hold" "$TMP/queued.slot" "$TMP/queued.sup" 2>/dev/null
   return 0
 }
 q_release_all() {
@@ -8933,6 +8937,73 @@ q "$q_root" run build @ok >/dev/null 2>&1
 if [ -z "$q_detail" ]; then report 0 "$q_own_label"; else report 1 "$q_own_label" "$q_detail"; fi
 if [ -z "$q_nc_detail" ] && [ -z "$q_detail" ]; then report 0 "$q_own_nc_label"
 else report 1 "$q_own_nc_label" "${q_nc_detail:-not reached: $q_detail}"; fi
+
+# One shell, two launches in its words: once the first has run, the shell is
+# that run's chain AND a launch still to come, and the first run's green is
+# not the second's answer.
+q_seq_label="a shell whose words hold a second launch is in flight after its first run"
+q_detail=
+q_before=$(q_last "$q_root")
+(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
+  tools/test-run.sh run build @ok >/dev/null 2>&1
+  while [ ! -e "$1" ]; do sleep .1; done
+  tools/test-run.sh run build @red >/dev/null 2>&1' q-seq "$TMP/queued.release6") &
+q_wraps+=("$!:$TMP/queued.release6")
+if ! q_until 30 q_finished "$q_root" "$q_before"; then
+  q_detail="the shell's first run never finished: last: $(q_last "$q_root")"
+else
+  q_first=$(q_last "$q_root")
+  q_capture "$q_root" wait last --timeout 1
+  { [ "$q_rc" = 124 ] && grep -qF 'has not published its run yet' <<<"$q_out"; } ||
+    q_detail="wait last after the shell's first run: exit $q_rc (want 124): $q_out"
+  touch "$TMP/queued.release6"
+  if [ -z "$q_detail" ]; then
+    q_capture "$q_root" wait last --timeout 30
+    { [ "$q_rc" = 1 ] && ! grep -qF "$q_first" <<<"$q_out"; } ||
+      q_detail="wait last once the second launch ran: exit $q_rc (want 1): $q_out"
+  fi
+fi
+q_release_all
+if [ -z "$q_detail" ]; then report 0 "$q_seq_label"; else report 1 "$q_seq_label" "$q_detail"; fi
+
+# The milliseconds between a launch's publication and its supervisor's first
+# record, held open: a perl on PATH that waits for a release file before it
+# becomes the supervisor (the one perl started with OCANNL_TOOL_TESTRUN_BG).
+# The launcher is `last`'s already, so it is no launch to come, and no note
+# taken then may refuse the run's own verdict once it has one.
+q_window_label="a launch published before its supervisor recorded itself is no launch to come"
+q_detail=
+q_perlbin=$TMP/queued-perl-bin
+mkdir -p "$q_perlbin"
+cat >"$q_perlbin/perl" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${OCANNL_TOOL_TESTRUN_BG:-}" ] && [ -n "\${Q_SUP_DELAY:-}" ]; then
+  while [ ! -e "\$Q_SUP_DELAY" ]; do sleep .1; done
+fi
+exec "$(command -v perl)" "\$@"
+EOF
+chmod +x "$q_perlbin/perl"
+q_before=$(q_last "$q_root")
+Q_PATH_PREFIX=$q_perlbin Q_SUP_DELAY=$TMP/queued.sup q "$q_root" start build @ok >/dev/null 2>&1 &
+q_follow=$!
+q_moved() { local d; d=$(q_last "$q_root") && [ "$d" != "$q_before" ]; }
+if ! q_until 30 q_moved; then
+  q_detail="the delayed launch never published: last: $(q_last "$q_root")"
+else
+  q_window=$(q_last "$q_root")
+  q_capture "$q_root" status last
+  { [ "$q_rc" = 3 ] && grep -qF 'launch in progress' <<<"$q_out" && [ ! -f "$q_window/pid" ]; } ||
+    q_detail="status last before the supervisor: exit $q_rc (want 3, launch in progress): $q_out"
+fi
+touch "$TMP/queued.sup"
+wait "$q_follow"
+q_follow=
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 30
+  { [ "$q_rc" = 0 ] && grep -qF "$q_window" <<<"$q_out"; } ||
+    q_detail="wait last once the run passed: exit $q_rc (want 0, not unpublished): $q_out"
+fi
+if [ -z "$q_detail" ]; then report 0 "$q_window_label"; else report 1 "$q_window_label" "$q_detail"; fi
 
 # The other wait: the fleet slot this script takes itself, through a fake
 # fleet-worker.sh that holds the batch until a release file appears. The run

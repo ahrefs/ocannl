@@ -1171,9 +1171,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the batch ends — under a fail-closed allowlist (`proc_table_perl`: a shell, env, perl or python
   program; a `test-run.sh` word followed by a launching verb, naming THIS worktree's script; no
   `ssh` or `execution leg` before it; not the reader's own ancestors), less the chains this
-  worktree's started runs recorded at launch (`launchers`: each launcher and its ancestors, by pid
-  and start token), so a run's own wrapper living on after its verdict is not mistaken for a
-  launch to come. The
+  worktree's published runs recorded at launch (`launchers`: each launcher and its ancestors, by
+  pid and start token; a process counted once per launch its words name), so a run's own wrapper
+  living on after its verdict is not mistaken for a launch to come, while a shell whose words
+  hold a second launch still is. The
   one fact stored is the sighting (`queued-<key>`, the run `last` named then), since a launch
   that left without publishing leaves nothing else; a note naming another run is inert. This
   does not settle gh-ocannl-607: the gap is before any publication, so deriving `last` from the

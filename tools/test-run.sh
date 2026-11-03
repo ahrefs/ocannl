@@ -2823,27 +2823,35 @@ group_identity_matches() {
 # one of the processes a run of this worktree recorded as its launch chain
 # (`launchers`, below, in every run directory whose `wt` is this worktree): the
 # launcher of that run and every ancestor it had, by pid and start token --
-# read only from a run whose supervisor recorded itself (`pid`) or that has a
-# verdict, so a launch between its directory and its publication (the lock
-# taken in between) is still in flight -- so a run's own chain living on after
-# its verdict (an attached launcher printing
-# the digest, the slot's wrapper releasing it, a shell that ran it and went on
-# -- even once a later run has published) is never read as a launch still to
-# come. Out of reach, said so: a launch
-# behind a word this cannot resolve (a `cd` inside a `-c` string its process
-# has not run yet, a variable), `bisect`'s steps (its frozen runner is another
-# tree's), a launch on another box.
+# read only from a run that is published: the one `last` names, or one whose
+# supervisor recorded itself (`pid`) or that has a verdict, so a launch
+# between its directory and its publication (the lock taken in between) is
+# still in flight -- as many times as its words name launches: a process
+# whose argv names two (`run A; ...; run B` in one `-c` string) and that two
+# runs recorded is spent, and one that only the first recorded still has a
+# launch to come. So a run's own chain living on after its verdict (an
+# attached launcher printing the digest, the slot's wrapper releasing it, a
+# shell that ran it and went on -- even once a later run has published) is
+# never read as a launch still to come. Out of reach, said so: a launch behind
+# a word this cannot resolve (a `cd` inside a `-c` string its process has not
+# run yet, a variable), a loop's later passes over one word (counted once),
+# `bisect`'s steps (its frozen runner is another tree's), a launch on another
+# box. Over-read, loudly: a word on a branch never taken (`if ...; then run A;
+# else run B; fi`) is a launch to come until its process exits, and then one
+# that ended unpublished; and so is a launch of this worktree under another
+# OCANNL_TOOL_TEST_RUNS (environments are not read).
 #
 # The table comes from /proc where it exists (Linux, Cygwin/MSYS), from `ps`
 # elsewhere, and start tokens are ps_token's renderings (stat's starttime, or
 # lstart under C/UTC), so the chain a launcher recorded compares as strings.
 # Modes: `chain` prints "PID TOKEN" for this reader's parent and each ancestor
-# above it; `pending ROOT UID RUNS` prints "PID ARGV" for each launch in
-# flight, RUNS being the state root whose run directories hold the chains.
+# above it; `pending ROOT UID RUNS [LAST]` prints "PID ARGV" for each launch
+# in flight, RUNS being the state root whose run directories hold the chains
+# and LAST the run `last` names.
 # Exits 2 when the table cannot be read.
 proc_table_perl='
 use strict; use warnings; use Cwd ();
-my ($mode, $root, $uid, $runs) = @ARGV;
+my ($mode, $root, $uid, $runs, $last) = @ARGV;
 my (%pp, %uid, %tok, %args);
 sub slurp { open(my $f, "<", $_[0]) or return undef; local $/; my $s = <$f>; close $f; return $s }
 my $proc = -d "/proc/$$";
@@ -2891,9 +2899,10 @@ my %known;
 if (defined $runs && opendir(my $rd, $runs)) {
   for my $e (grep { /\A[0-9]{8}T[0-9]{6}Z-[0-9]+\z/ } readdir $rd) {
     my $w = slurp("$runs/$e/wt");
-    next unless defined $w && $w eq "$root\n" && (-e "$runs/$e/pid" || -e "$runs/$e/exit");
+    next unless defined $w && $w eq "$root\n";
+    next unless -e "$runs/$e/pid" || -e "$runs/$e/exit" || (defined $last && "$runs/$e" eq $last);
     my $c = slurp("$runs/$e/launchers");
-    $known{$_} = 1 for split /\n/, defined $c ? $c : "";
+    $known{$_}++ for split /\n/, defined $c ? $c : "";
   }
   closedir $rd;
 }
@@ -2927,9 +2936,9 @@ for my $p (sort { $a <=> $b } keys %args) {
     }
     (my $dir = $path) =~ s{/[^/]*\z}{};
     my $r = Cwd::abs_path("$dir/..");
-    if (defined $r && $r eq $root && -f $path) { $hit = 1; last }
+    $hit++ if defined $r && $r eq $root && -f $path;
   }
-  next unless $hit && !$known{"$p $tok{$p}"};
+  next unless $hit > ($known{"$p $tok{$p}"} || 0);
   print "$p ", substr($args{$p}, 0, 240), "\n";
 }
 '
@@ -2938,8 +2947,8 @@ for my $p (sort { $a <=> $b } keys %args) {
 # pending_out empty, when the table cannot be read -- said once on stderr, and
 # then nothing is in flight: the reader degrades to the answer it gave before.
 pending_warned=
-pending_launches() {
-  pending_out=$(perl -e "$proc_table_perl" pending "$PWD" "$(id -u)" "$RUNS" 2>/dev/null) && return 0
+pending_launches() { # [the run `last` names, published whether or not it has started]
+  pending_out=$(perl -e "$proc_table_perl" pending "$PWD" "$(id -u)" "$RUNS" "${1:-}" 2>/dev/null) && return 0
   pending_out=
   [ -n "$pending_warned" ] ||
     echo "test-run: cannot read the process table here; a launch of this worktree still queued would not be seen" >&2
@@ -2963,7 +2972,7 @@ follow_last() {
   last_quietly
   while :; do
     before=$run_dir
-    pending_launches || :
+    pending_launches "$run_dir" || :
     last_quietly
     [ "$run_dir" != "$before" ] || break
   done
