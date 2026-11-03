@@ -57,13 +57,14 @@
 # tools/fmt-check.sh take theirs and through the same probe,
 # tools/fleet-worker-candidates.sh's fleet_slot_probe (gh-ocannl-1576): this
 # script runs again under `fleet-worker.sh execution slot --wait
-# <OCANNL_TOOL_SLOT_WAIT, 600> --cpu`, after its arguments and lists are
-# checked and before any member starts; a caller's own enclosing slot is
-# reused, not doubled. A slot that never ran it (refused, or the registry
-# unreachable) exits 75 with `harnesses: SLOT REFUSED` and no member run;
-# otherwise the run's own status is the exit status. --list takes no slot, and
-# no probe answer (CI, a machine outside the fleet,
-# OCANNL_TOOL_FLEET_WORKER=none) runs the members directly, silently.
+# <OCANNL_TOOL_SLOT_WAIT, 600> --cpu`, through the rerun helper it shares with
+# tools/fmt-check.sh, fleet_slot_rerun (gh-ocannl-1841), after its arguments
+# and lists are checked and before any member starts; a caller's own enclosing
+# slot is reused, not doubled. A slot that never ran it (refused, or the
+# registry unreachable) exits 75 with `harnesses: FAILED (exit 75): SLOT
+# REFUSED` and no member run; otherwise the run's own status is the exit
+# status. --list takes no slot, and no probe answer (CI, a machine outside the
+# fleet, OCANNL_TOOL_FLEET_WORKER=none) runs the members directly, silently.
 set -u
 # Set only by this script, for the copy of itself it runs inside the fleet
 # slot (take_fleet_slot): the file that says it started and, at its exit, its
@@ -231,7 +232,7 @@ fi
 # refusal above and before anything below is exported -- the fleet-worker.sh
 # runs with the caller's environment, FLEET_BOXES included.
 take_fleet_slot() {
-  local candidates wait rc recorded self slot_dir
+  local candidates slot_dir
   candidates=$root/tools/fleet-worker-candidates.sh
   [ -r "$candidates" ] || { echo "test-harnesses.sh: cannot read $candidates" >&2; exit 2; }
   # shellcheck source=fleet-worker-candidates.sh
@@ -239,30 +240,9 @@ take_fleet_slot() {
   slot_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-slot.XXXXXX") ||
     { echo "test-harnesses.sh: cannot create the slot's scratch directory" >&2; exit 2; }
   scratch+=("$slot_dir")
-  fleet_slot_probe "$slot_dir/probe" || return 0
-  wait=${OCANNL_TOOL_SLOT_WAIT:-600}
-  case $wait in '' | *[!0-9]*) wait=600 ;; esac
   # The script by its absolute path: the copy runs from wherever the caller is.
-  self=$root/tools/$(basename -- "$0")
-  echo "harnesses: taking one of $fleet_slot_box's $fleet_slot_slots fleet correctness slots for the run, as --cpu (gh-ocannl-1576); waiting at most ${wait}s, an enclosing slot reused"
-  rc=0
-  OCANNL_TOOL_HARNESSES_IN_SLOT=$slot_dir/record "$fleet_slot_fw" execution slot --wait "$wait" --cpu -- \
-    "${BASH:-bash}" "$self" "${original_args[@]+"${original_args[@]}"}" || rc=$?
-  if [ ! -e "$slot_dir/record" ]; then
-    echo "harnesses: SLOT REFUSED (exit 75): fleet-worker.sh exited $rc without running the harnesses; nothing ran" >&2
-    exit 75
-  fi
-  recorded=
-  read -r recorded <"$slot_dir/record"
-  case $recorded in
-    '' | *[!0-9]*)
-      # The run under the slot ended without recording its status: killed.
-      [ "$rc" -ne 0 ] || rc=1
-      echo "harnesses: the run under the fleet slot ended without a status (exit $rc)" >&2
-      exit "$rc" ;;
-  esac
-  # The run's own status, whatever fleet-worker.sh's after it.
-  exit "$recorded"
+  fleet_slot_rerun OCANNL_TOOL_HARNESSES_IN_SLOT "$slot_dir" harnesses "the harnesses" -- \
+    "${BASH:-bash}" "$root/tools/$(basename -- "$0")" "${original_args[@]+"${original_args[@]}"}"
 }
 [ "$list" = 1 ] || [ -n "$slot_record" ] || take_fleet_slot
 if [ -n "$expected" ]; then

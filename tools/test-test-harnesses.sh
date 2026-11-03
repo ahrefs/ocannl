@@ -458,12 +458,12 @@ if [ "$got" = 1 ] && [ -n "$slot_calls" ] && members_ran_in shell 1 && grep -q '
 else report 1 'a failing member in the slot keeps the run red, every member run' "exit $got; $(tail -n 3 "$TMP/out")"; fi
 for mode in refused unreachable; do
   slot_run FAKE_FW_MODE=${mode%d} -- --shell
-  if [ "$got" = 75 ] && [ ! -s "$RECORD" ] && grep -q '^harnesses: SLOT REFUSED (exit 75)' "$TMP/out"; then
+  if [ "$got" = 75 ] && [ ! -s "$RECORD" ] && grep -q '^harnesses: FAILED (exit 75): SLOT REFUSED' "$TMP/out"; then
     report 0 "a slot $mode is SLOT REFUSED (exit 75), and no member ran"
   else report 1 "a slot $mode is SLOT REFUSED (exit 75), and no member ran" "exit $got; $(tail -n 3 "$TMP/out")"; fi
 done
 slot_run FAKE_FW_MODE=killed -- --shell
-if [ "$got" = 137 ] && grep -q '^harnesses: the run under the fleet slot ended without a status (exit 137)' "$TMP/out"; then
+if [ "$got" = 137 ] && grep -q '^harnesses: FAILED (exit 137): the harnesses under the fleet slot ended without a status' "$TMP/out"; then
   report 0 'a run killed in the slot is told apart from a refused slot'
 else report 1 'a run killed in the slot is told apart from a refused slot' "exit $got; $(tail -n 3 "$TMP/out")"; fi
 slot_run FAKE_FW_MODE=wrapfail -- --shell
@@ -492,15 +492,32 @@ for args in --list --unknown expected-skips; do
   else report 1 "$args asks the fleet nothing and runs no member" "exit $got; calls: $(tr '\n' '|' <"$FAKE_FW_CALLS")"; fi
 done
 unset SLOT_RECORD FAKE_FW_CALLS
-# One probe for the three slot-takers (gh-ocannl-1576): each calls
-# fleet_slot_probe, and no code line of theirs asks `execution slot --probe`
-# itself (their comments may name it).
+# One probe for every fleet asker, one rerun helper for the two tools that run
+# themselves again inside the slot (gh-ocannl-1576, gh-ocannl-1841): the
+# slot-takers call fleet_slot_probe (test-run.sh) or fleet_slot_rerun
+# (fmt-check.sh, test-harnesses.sh), the sweep's registry reader calls
+# fleet_slot_probe, and the GPU-token reading ships fleet_slot_probe to the box;
+# outside tools/fleet-worker-candidates.sh no code line of a tool asks
+# `execution slot --probe` itself (comments, and the `answered 'execution slot
+# --probe'` of a message saying none did, may name it), and neither rerunning
+# tool runs `execution slot` itself. The tools' own harnesses (test-*.sh), whose
+# fakes answer the verbs, are not askers.
 probe_copies=
-for taker in test-run.sh fmt-check.sh test-harnesses.sh; do
-  grep -q 'fleet_slot_probe ' "$here/$taker" || probe_copies="$probe_copies $taker:no-call"
-  ! grep -v '^[[:space:]]*#' "$here/$taker" | grep -q 'slot --probe' || probe_copies="$probe_copies $taker:own-probe"
+for asker in test-run.sh:'fleet_slot_probe ' fmt-check.sh:'fleet_slot_rerun ' \
+  test-harnesses.sh:'fleet_slot_rerun ' fleet-registry.sh:'fleet_slot_probe ' \
+  gpu-tokens.sh:'declare -f fleet_slot_alarm fleet_slot_count fleet_slot_probe'; do
+  grep -qF -- "${asker#*:}" "$here/${asker%%:*}" || probe_copies="$probe_copies ${asker%%:*}:no-call"
 done
-if [ -z "$probe_copies" ] && grep -q 'slot --probe' "$here/fleet-worker-candidates.sh"; then
-  report 0 'the slot-takers share one probe, fleet_slot_probe'
-else report 1 'the slot-takers share one probe, fleet_slot_probe' "${probe_copies# }"; fi
+for tool in "$here"/*.sh; do
+  case ${tool##*/} in test-*.sh | fleet-worker-candidates.sh) continue ;; esac
+  ! grep -v '^[[:space:]]*#' "$tool" | grep -v 'answered [^ ]*execution slot --probe' |
+    grep -q 'slot --probe' || probe_copies="$probe_copies ${tool##*/}:own-probe"
+done
+for taker in fmt-check.sh test-harnesses.sh; do
+  ! grep -v '^[[:space:]]*#' "$here/$taker" | grep -q 'execution slot' || probe_copies="$probe_copies $taker:own-rerun"
+done
+if [ -z "$probe_copies" ] && grep -q 'slot --probe' "$here/fleet-worker-candidates.sh" &&
+   grep -q 'execution slot --wait' "$here/fleet-worker-candidates.sh"; then
+  report 0 'the fleet askers share one probe and one rerun helper'
+else report 1 'the fleet askers share one probe and one rerun helper' "${probe_copies# }"; fi
 finish

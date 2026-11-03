@@ -51,13 +51,23 @@ beta beta-linux beta-wsl'
 
 fleet_fixture() {
   . "$TOOLS/lab-map.sh"
+  . "$TOOLS/fleet-worker-candidates.sh"
   . "$TOOLS/fleet-registry.sh"
   LAB_MAP='alpha renamed-linux renamed-win renamed-wsl'
   fleet_worker_candidates() { printf '%s\n' "$TMP/fleet"; }
-  # A shebang, not just the mode bit: MSYS decides -x from a file's content on NTFS.
-  printf '#!/bin/sh\n' >"$TMP/fleet"; chmod +x "$TMP/fleet"
-  ask_capped() { printf -v "$1" '%s' 'EXECUTION slot on local-fixture with 4 tokens'; }
-  sweep_fleet_probe
+  # A shebang, not just the mode bit: MSYS decides -x from a file's content on NTFS. The answer is
+  # FLEET_ANSWER's, through the sweep's own bound (run_capped), which records its budget.
+  printf '#!/bin/sh\necho "$FLEET_ANSWER"\n' >"$TMP/fleet"; chmod +x "$TMP/fleet"
+  run_capped() { probe_budget=$1; shift; "$@"; }
+  # A line outside the probe's grammar is no answer (gh-ocannl-1841): the shared probe's boundary,
+  # which the sweep used to restate more loosely.
+  FLEET_ANSWER='EXECUTION slot on local-fixture with 4 tokens' sweep_fleet_probe
+  equal 'fleet: an answer outside the probe grammar is not consulted' "$SWEEP_FLEET_FW:$SWEEP_FLEET_STATUS" \
+    ":NOT CONSULTED -- no fleet-worker.sh answered 'execution slot --probe' ($TMP/fleet)"
+  probe_budget=
+  FLEET_ANSWER='EXECUTION SLOT PROBE local-fixture 4 4 measurement m-1' sweep_fleet_probe
+  equal "fleet: the probe is bounded by the sweep's run_capped" "$probe_budget" 30
+  equal 'fleet: the probe names the fleet-worker.sh it consults' "$SWEEP_FLEET_FW" "$TMP/fleet"
   equal 'fleet: probe retains the host identity' "$SWEEP_FLEET_BOX" local-fixture
   equal 'fleet: local lane uses the probed name' "$(sweep_fleet_lane_names '')" local-fixture
   equal 'fleet: remote lane checks every boot' "$(sweep_fleet_lane_names renamed-linux)" 'renamed-linux renamed-win renamed-wsl'
@@ -79,7 +89,7 @@ fleet_fixture() {
   sweep_fleet_under_measurement renamed-linux
   equal 'fleet: command failure is a read failure' "$?" 2
   registry_rc=0
-  ask_capped() { return 1; }
+  run_capped() { return 1; }
   OCANNL_TOOL_FLEET_WORKER=none sweep_fleet_probe
   equal 'fleet: disabled registry is reported' "$SWEEP_FLEET_STATUS" 'NOT CONSULTED -- OCANNL_TOOL_FLEET_WORKER=none'
 }
@@ -130,6 +140,7 @@ LOG
 # (ludics-lite's holders.py, whose own tests hold that format to the kernel's flock table); the take
 # is real flocks on fixture slot files, held by fixture batches.
 tokens_fixture() {
+  . "$TOOLS/fleet-worker-candidates.sh"
   . "$TOOLS/gpu-tokens.sh"
   . "$TOOLS/sweep-supervisor.sh"
   local state=$TMP/slot-state dir fw gpu_pid holder_pid rc

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Sweep fleet registry reader, sourced by tools/sweep.sh.
-# The caller provides fleet_worker_candidates, ask_capped, run_capped and the
-# lab-map.sh lookups; per-unit reads use its LANE_DIR. No probe runs on sourcing.
+# The caller provides fleet_slot_probe and fleet_worker_candidates (by sourcing
+# tools/fleet-worker-candidates.sh), run_capped and the lab-map.sh lookups; per-unit reads use its
+# LANE_DIR. No probe runs on sourcing.
 
 # ------------------------------------------------------ the fleet's execution reservations
 # The lab locks say "a lane runs on this box" and "keep this VM alive"; neither says "this box is
@@ -46,34 +47,34 @@
 #
 # The reader is the registry's own, `fleet-worker.sh execution list --active --compact` -- the
 # supervision read executions.md documents, which asks the anchor over ssh from anywhere else --
-# through the first fleet-worker candidate that answers the probe, as tools/test-run.sh chooses the
-# one it takes its slot through. No candidate answering means this host is outside the fleet, and
+# through the fleet-worker.sh that tools/fleet-worker-candidates.sh's fleet_slot_probe finds, the
+# one probe tools/test-run.sh takes its slot through (gh-ocannl-1841), bounded here by run_capped so
+# a cancellation reaches it. No candidate answering means this host is outside the fleet, and
 # the header says the registry was NOT CONSULTED. A registry that cannot be read for one unit fails
 # OPEN and loud: the unit runs, under a WARNING line. An outage must not cost a day of the only
 # coverage five backends have; a measurement overlapped by a sweep can be run again, and the
 # fleet's measurement guidance already has its owner check the box's activity before timing.
 #
-# The names are the sweep's own, outside the fleet's FLEET_* namespace: a fleet host's environment
-# EXPORTS FLEET_LOCAL_BOX (and FLEET_BOXES, FLEET_ANCHOR), and an assignment keeps the export, so a
-# global of that name cleared here reaches the probed fleet-worker.sh as an empty box name and the
-# probe dies -- the registry silently NOT CONSULTED on the very host that runs the sweep.
+# The names are the sweep's own, outside the fleet's FLEET_* namespace, for the reason
+# fleet_slot_probe's are: a fleet host's environment EXPORTS FLEET_LOCAL_BOX (and FLEET_BOXES,
+# FLEET_ANCHOR), and an assignment keeps the export, so a global of that name cleared here reaches
+# the probed fleet-worker.sh as an empty box name and the probe dies -- the registry silently NOT
+# CONSULTED on the very host that runs the sweep.
 SWEEP_FLEET_FW=     # the fleet-worker.sh that answered the probe, empty for none
 SWEEP_FLEET_BOX=    # this host's name in the fleet, as that probe gave it
 SWEEP_FLEET_STATUS= # the header's line
 sweep_fleet_probe() {
-  local fw probe tag box tokens
-  while IFS= read -r fw; do
-    [ -x "$fw" ] || continue
-    ask_capped probe 30 "$fw" execution slot --probe || continue
-    read -r tag _ _ box _ tokens _ <<<"$probe"
-    if [ "$tag" = EXECUTION ] && [ -n "$box" ] && [ -n "$tokens" ]; then
-      SWEEP_FLEET_FW=$fw
-      SWEEP_FLEET_BOX=$box
-      SWEEP_FLEET_STATUS="consulted before each unit through $fw (this host is $box)"
-      return 0
-    fi
-  done < <(fleet_worker_candidates)
-  if [ "${OCANNL_TOOL_FLEET_WORKER-}" = none ]; then
+  local answer
+  SWEEP_FLEET_FW= SWEEP_FLEET_BOX=
+  if ! answer=$(mktemp "${TMPDIR:-/tmp}/ocannl-sweep-probe.XXXXXX"); then
+    SWEEP_FLEET_STATUS="NOT CONSULTED -- cannot create the probe's answer file under ${TMPDIR:-/tmp}"
+    return
+  fi
+  if fleet_slot_probe "$answer" run_capped; then
+    SWEEP_FLEET_FW=$fleet_slot_fw
+    SWEEP_FLEET_BOX=$fleet_slot_box
+    SWEEP_FLEET_STATUS="consulted before each unit through $SWEEP_FLEET_FW (this host is $SWEEP_FLEET_BOX)"
+  elif [ "${OCANNL_TOOL_FLEET_WORKER-}" = none ]; then
     SWEEP_FLEET_STATUS="NOT CONSULTED -- OCANNL_TOOL_FLEET_WORKER=none"
   else
     SWEEP_FLEET_STATUS="NOT CONSULTED -- no fleet-worker.sh answered 'execution slot --probe' ($(fleet_worker_candidates | tr '\n' ' ' | sed 's/ $//'))"
