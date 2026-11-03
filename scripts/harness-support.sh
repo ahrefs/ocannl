@@ -8,6 +8,7 @@ harness_args() {
   harness_ran=() harness_skips=() harness_leg_running= harness_leg_current=
   harness_list=0 harness_listed=0 harness_leg_names=$'\n' harness_group_seen=$'\n'
   harness_number_keys=() harness_number_legs=()
+  not_applicable=0 harness_nas=() harness_checks=0 harness_leg_na= harness_leg_na_at=0 harness_leg_checks_at=0
   while [ $# -gt 0 ]; do
     case $1 in
       --keep) KEEP=1 ;;
@@ -178,10 +179,61 @@ harness_leg() { # NAME
 # say anything.
 harness_leg_run() { # NAME FUNCTION
   harness_leg "$1" || return 0
-  harness_leg_running=$1
+  harness_leg_running=$1 harness_leg_na= harness_leg_checks_at=${harness_checks:-0} harness_leg_level=$BASH_SUBSHELL
+  rm -f "$TMP/.harness-na-nested"
   "$2"
-  harness_leg_running=
+  if [ -e "$TMP/.harness-na-nested" ]; then
+    harness_leg_na=
+    report 1 "$1: declared not applicable in a subshell of its own, which cannot end the leg" "$(cat "$TMP/.harness-na-nested")"
+  fi
+  harness_leg_na_settle
+  harness_leg_running= harness_leg_na=
   return 0
+}
+# A leg's outcome when what it tests does not exist on this host
+# (gh-ocannl-1839): `harness_not_applicable REASON; return`, as the first thing
+# a harness_leg_run or harness_leg_run_errexit body decides. It is no skip: a
+# skip is coverage this host lost (a tool it lacks, a capability it was not
+# given), which a strict run refuses unless its list names it, while a leg
+# whose subject is absent here loses nothing, so it is counted apart, printed
+# `N/A   LEG` with its reason, and no list of expected skips names or needs
+# it. The leg declares it from a probe that OBSERVED the subject absent (the
+# host's /bin/bash expanded what Bash 3.2 refuses), never from a probe that
+# could not tell: an unanswered probe runs the leg, or skips. The outcome is
+# settled when the body returns. Refused, as a FAIL of the leg and never
+# counted: a call outside a function leg body (an `if harness_leg` gate or
+# shared code, where no leg owns it), inside a subshell of the body (a command
+# substitution, a pipeline), with no reason, after the leg decided a check,
+# twice, or with a check after it -- a leg applies here or does not.
+harness_not_applicable() { # REASON
+  local leg=${harness_leg_running:-}
+  if [ -n "$leg" ] && [ "$BASH_SUBSHELL" != "${harness_leg_level:-0}" ]; then
+    printf '%s\n' "${1:-(no reason)}" >"$TMP/.harness-na-nested"
+  elif [ -z "$leg" ]; then
+    report 1 "not applicable outside a leg: ${1:-(no reason)}" \
+      'a leg outcome needs its leg: declare it from a harness_leg_run or harness_leg_run_errexit body'
+  elif [ -z "${1:-}" ]; then
+    report 1 "$leg: declared not applicable with no reason" 'the reason says what this host lacks of the subject'
+  elif [ -n "${harness_leg_na:-}" ]; then
+    report 1 "$leg: declared not applicable twice" "$harness_leg_na; then: $1"
+    harness_leg_na=
+  elif [ "${harness_checks:-0}" != "${harness_leg_checks_at:-0}" ]; then
+    report 1 "$leg: declared not applicable after it decided a check" "$1"
+  else
+    harness_leg_na=$1 harness_leg_na_at=${harness_checks:-0}
+  fi
+  return 0
+}
+harness_leg_na_settle() { # at the end of a leg body: count and print its N/A, or refuse it
+  [ -n "${harness_leg_na:-}" ] || return 0
+  if [ "${harness_checks:-0}" != "$harness_leg_na_at" ]; then
+    report 1 "$harness_leg_running: decided checks after declaring itself not applicable" "$harness_leg_na"
+  else
+    not_applicable=$((${not_applicable:-0} + 1))
+    harness_nas+=("$harness_leg_running -- $harness_leg_na")
+    printf 'N/A   %s\n      %s\n' "$harness_leg_running" "$harness_leg_na"
+  fi
+  harness_leg_na=
 }
 harness_abandon() { # DETAIL -- inside a harness_leg_run body, then `return`
   report 1 "${harness_leg_running:-a leg}: abandoned, its later checks did not run" "$1"
@@ -205,9 +257,12 @@ harness_abandon() { # DETAIL -- inside a harness_leg_run body, then `return`
 # fails).
 harness_leg_run_errexit() { # NAME FUNCTION
   harness_leg "$1" || return 0
-  harness_leg_running=$1
+  harness_leg_running=$1 harness_leg_na= harness_leg_checks_at=${harness_checks:-0}
   harness_errexit_body "$2"
-  if [ -n "$harness_errexit_detail" ]; then
+  if [ -n "$harness_errexit_na" ]; then
+    harness_not_applicable "$harness_errexit_na"
+    harness_leg_na_settle
+  elif [ -n "$harness_errexit_detail" ]; then
     harness_abandon "$harness_errexit_detail"
     if [ "$harness_errexit_ran" = 1 ] && declare -F harness_leg_restore >/dev/null; then
       harness_errexit_body harness_leg_restore
@@ -215,21 +270,32 @@ harness_leg_run_errexit() { # NAME FUNCTION
         report 1 "$1: the shared state it left was not restored; a later leg may fail for it" "$harness_errexit_detail"
     fi
   fi
-  harness_leg_running=
+  harness_leg_running= harness_leg_na=
   return 0
 }
 # harness_leg_run_errexit's containment: run FUNCTION in an errexit subshell,
 # then set harness_errexit_detail to why it did not reach its end (empty when
-# it did), and harness_errexit_ran to 0 when it was not run at all. It returns
+# it did, or declared itself not applicable), harness_errexit_na to the reason
+# it gave for that, and harness_errexit_ran to 0 when it was not run at all. It returns
 # 0 whatever the body did: the subshell exits 0 through its own EXIT trap, so
 # the caller's errexit never sees the body's status, and the call never sits
 # in a condition that would turn errexit off inside it.
 harness_errexit_body() { # FUNCTION
   local mark rc
   mark=$TMP/.harness-errexit
-  rm -f "$mark.rc" "$mark.done" "$mark.failed" "$mark.ignored"
+  rm -f "$mark.rc" "$mark.done" "$mark.failed" "$mark.ignored" "$mark.na" "$mark.na-nested"
   harness_errexit_subshell "$1" "$mark"
-  harness_errexit_detail= harness_errexit_ran=1
+  harness_errexit_detail= harness_errexit_ran=1 harness_errexit_na=
+  # A declaration from a subshell of the body (a command substitution) ended
+  # that subshell alone, whatever the body did next: never the leg's outcome.
+  if [ -e "$mark.na-nested" ]; then
+    harness_errexit_detail="it declared itself not applicable in a subshell of its own, which cannot end the leg: $(cat "$mark.na-nested")"
+    return 0
+  fi
+  if [ -e "$mark.na" ]; then
+    harness_errexit_na=$(cat "$mark.na")
+    return 0
+  fi
   [ ! -e "$mark.done" ] || return 0
   if [ -e "$mark.ignored" ]; then
     harness_errexit_ran=0
@@ -244,7 +310,8 @@ harness_errexit_body() { # FUNCTION
 }
 # The subshell itself, a function whose body is one, so its `set -e` is its
 # own: MARK.done when FUNCTION reached its end, MARK.failed naming why it did
-# not, MARK.rc the status it ended with, MARK.ignored when errexit could not
+# not, MARK.na the reason it declared itself not applicable (which ends it;
+# MARK.na-nested when a subshell of the body declared it instead), MARK.rc the status it ended with, MARK.ignored when errexit could not
 # take effect at all.
 harness_errexit_subshell() ( # FUNCTION MARK
   harness_errexit_mark=$2
@@ -254,11 +321,23 @@ harness_errexit_subshell() ( # FUNCTION MARK
   set +e
   (set -e; false; exit 3)
   [ "$?" != 3 ] || { : >"$harness_errexit_mark.ignored"; exit 1; }
+  harness_errexit_checked=0
   report() { # RC LABEL [DETAIL]
-    [ "$1" -ne 0 ] || { printf 'PASS  %s\n' "$2"; return 0; }
+    [ "$1" -ne 0 ] || { harness_errexit_checked=1; printf 'PASS  %s\n' "$2"; return 0; }
     harness_abandon "report $1 inside the body: $2${3:+ -- $3}"
   }
   skip() { harness_abandon "skip inside the body: $1 -- $2"; }
+  harness_errexit_level=$BASH_SUBSHELL
+  harness_not_applicable() { # REASON: the leg ends, its outcome handed back
+    if [ "$BASH_SUBSHELL" != "$harness_errexit_level" ]; then
+      printf '%s\n' "${1:-(no reason)}" >"$harness_errexit_mark.na-nested"
+      exit 1
+    fi
+    [ -n "${1:-}" ] || harness_abandon 'declared not applicable with no reason'
+    [ "$harness_errexit_checked" = 0 ] || harness_abandon "declared not applicable after it decided a check: $1"
+    printf '%s\n' "$1" >"$harness_errexit_mark.na"
+    exit 0
+  }
   harness_abandon() { printf '%s\n' "$1" >"$harness_errexit_mark.failed"; exit 1; }
   set -eE
   # Commands inside a command substitution report at a deeper level; only the
@@ -268,6 +347,7 @@ harness_errexit_subshell() ( # FUNCTION MARK
   : >"$harness_errexit_mark.done"
 )
 report() { # RC LABEL [DETAIL]
+  harness_checks=$((${harness_checks:-0} + 1))
   if [ "$1" -eq 0 ]; then
     printf 'PASS  %s\n' "$2"
   else
@@ -282,6 +362,7 @@ skip() { # LABEL REASON
   # toolchain) sets OCANNL_TOOL_HARNESS_STRICT=1: an undecided leg is red,
   # unless the run's list of expected platform skips names it (below).
   local expected=
+  harness_checks=$((${harness_checks:-0} + 1))
   if [ "${OCANNL_TOOL_HARNESS_STRICT:-0}" = 1 ]; then
     if ! harness_skip_expected "$1"; then
       report 1 "$1" "skipped under OCANNL_TOOL_HARNESS_STRICT=1: $2"
@@ -312,6 +393,12 @@ harness_skip_expected() { # LABEL
     [ -n "${OCANNL_TOOL_HARNESS_SKIP_RECORD:-}" ] &&
     grep -qxF -- "$OCANNL_TOOL_HARNESS_NAME"$'\t'"$1" "$OCANNL_TOOL_HARNESS_EXPECTED_SKIPS"
 }
+# The footer's account of what the run did not decide: its skips, and the legs
+# that declared themselves not applicable, counted apart (only when any did).
+harness_tally() {
+  printf '%s skipped' "$skipped"
+  [ "${not_applicable:-0}" = 0 ] || printf ', %s leg(s) not applicable' "$not_applicable"
+}
 finish() {
   harness_finished=1
   harness_header_unclaimed
@@ -339,15 +426,19 @@ finish() {
       echo "skipped $skipped check(s):"
       for note in "${harness_skips[@]}"; do printf '  SKIP  %s\n' "$note"; done
     fi
+    if [ "${not_applicable:-0}" -gt 0 ]; then
+      echo "not applicable here, $not_applicable leg(s):"
+      for note in "${harness_nas[@]}"; do printf '  N/A   %s\n' "$note"; done
+    fi
     if [ "$failures" -eq 0 ]; then
-      echo "FILTERED RUN, not a full pass: $legs_selected leg(s) selected, $legs_filtered filtered out by --only '$harness_only'; no failure ($skipped skipped)"
+      echo "FILTERED RUN, not a full pass: $legs_selected leg(s) selected, $legs_filtered filtered out by --only '$harness_only'; no failure ($(harness_tally))"
     else
-      echo "$failures leg(s) failed ($skipped skipped); FILTERED RUN: $legs_selected leg(s) selected, $legs_filtered filtered out by --only '$harness_only'"
+      echo "$failures leg(s) failed ($(harness_tally)); FILTERED RUN: $legs_selected leg(s) selected, $legs_filtered filtered out by --only '$harness_only'"
     fi
   elif [ "$failures" -eq 0 ]; then
-    echo "all legs passed ($skipped skipped)"
+    echo "all legs passed ($(harness_tally))"
   else
-    echo "$failures leg(s) failed ($skipped skipped)"
+    echo "$failures leg(s) failed ($(harness_tally))"
   fi
   exit $((failures > 0 ? 1 : 0))
 }

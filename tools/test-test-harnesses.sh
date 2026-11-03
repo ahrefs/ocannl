@@ -4,6 +4,8 @@
 # skips, run the CI shell job's own check (--ci-shell) with that job's
 # absences, hold its hidden-dune list to the skips the hidden dune caused,
 # run the real-dune job's check (--ci-real-dune) on the selected legs alone,
+# pass a leg declared not applicable with no list naming it while an unlisted
+# skip beside it is still refused,
 # refuse arguments (or a malformed list) before executing work, and take the
 # fleet's run-time slot through the shared probe (gh-ocannl-1576).
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
@@ -67,6 +69,14 @@ if [ "$name" = "${SKIP_MEMBER:-}" ]; then
   else
     skip "$SKIP_LABEL" 'not on the fixture platform'
   fi
+  finish
+fi
+if [ "$name" = "${NA_MEMBER:-}" ]; then
+  . "$SUPPORT"
+  harness_args
+  na_leg() { harness_not_applicable 'its subject is absent from the fixture platform'; return; }
+  harness_leg_run "$NA_LEG" na_leg
+  [ -z "${NA_SKIP:-}" ] || skip "$SKIP_LABEL" 'not on the fixture platform'
   finish
 fi
 exit 0
@@ -294,6 +304,27 @@ if [ "$got" = 1 ] && grep -qxF "harnesses: listed in harness-skips-ci-shell-dune
   report 0 '--ci-shell fails a dune-list skip whose reason is not the hidden dune'
 else report 1 '--ci-shell fails a dune-list skip whose reason is not the hidden dune' "exit $got; $(cat "$TMP/out")"; fi
 SKIP_DUNE=
+# A leg declared not applicable (gh-ocannl-1839) is no skip: --ci-shell passes
+# it with no list naming it, on either platform, and the same member's
+# undeclared skip beside it is still refused -- the N/A relaxes nothing.
+export NA_MEMBER NA_LEG='1: a leg whose subject the fixture platform lacks' NA_SKIP
+NA_MEMBER=$first SKIP_MEMBER=
+printf '# job\n' >"$ci_list"
+printf '# dune\n' >"$dune_list"
+for os in Linux Darwin; do
+  NA_SKIP= ci_run "$os" --ci-shell
+  if [ "$got" = 0 ] && grep -qxF "N/A   $NA_LEG" "$TMP/out" \
+     && grep -qxF 'all legs passed (0 skipped, 1 leg(s) not applicable)' "$TMP/out" \
+     && grep -q '^harnesses: [0-9]* run, 0 failed; 0 expected skip(s) did not occur; 0 hidden-dune skip(s) misfiled$' "$TMP/out"; then
+    report 0 "--ci-shell on $os passes a leg declared not applicable, with no list naming it"
+  else report 1 "--ci-shell on $os passes a leg declared not applicable, with no list naming it" "exit $got; $(cat "$TMP/out")"; fi
+done
+NA_SKIP=1 ci_run Linux --ci-shell
+if [ "$got" = 1 ] && grep -qxF "N/A   $NA_LEG" "$TMP/out" && grep -qxF "FAIL  $SKIP_LABEL" "$TMP/out" \
+   && grep -qxF "HARNESS $first exit: 1" "$TMP/out"; then
+  report 0 '--ci-shell still refuses an undeclared skip beside a leg declared not applicable (negative control)'
+else report 1 '--ci-shell still refuses an undeclared skip beside a leg declared not applicable (negative control)' "exit $got; $(cat "$TMP/out")"; fi
+NA_MEMBER= NA_SKIP= SKIP_MEMBER=$first
 printf '# job\n%s\t%s\n' "$SKIP_MEMBER" "$SKIP_LABEL" >"$ci_list"
 printf '# dune\n' >"$dune_list"
 for args in group expected missing missing-dune; do
