@@ -122,7 +122,7 @@ let cumsum_leg ~direction ~label ~want =
 
 let () =
   eprintf "backend: %s (not part of the golden)\n%!"
-    (Utils.get_global_arg ~arg_name:"backend" ~default:"cc");
+    (Utils.get_global_arg ~arg_name:"backend" ~default:"");
   printf "--- leg 1: inclusive forward cumsum ---\n";
   let o, _ = cumsum_leg ~direction:LL.Forward ~label:"sl_fwd" ~want:prefix_sums in
   printf "optimized IR:\n";

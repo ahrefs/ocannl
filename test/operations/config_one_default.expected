@@ -1,0 +1,5 @@
+a key read twice under one default resolves both times to one value: true
+a second default is refused, naming both, though the config file sets the key: true
+a refused read records nothing, and the first default still reads: true
+a second default is refused for a key the library read first, at module initialization: true
+a second default is refused for a key the bootstrap resolved: true

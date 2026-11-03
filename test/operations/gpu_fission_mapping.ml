@@ -37,7 +37,7 @@ module Train = Ocannl.Train
 module Nn_blocks = Ocannl.Nn_blocks
 module Online_softmax = Ir.Online_softmax
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* The GPU pipeline is what the cases are about: on a C backend it is still built (and executed, its
    hardware loops rendered serially) under a GPU backend's name. *)

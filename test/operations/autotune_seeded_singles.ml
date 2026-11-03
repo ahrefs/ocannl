@@ -41,7 +41,7 @@ open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 module LL = Ir.Low_level
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* The seeding gate pinned at threshold 32, as in [autotune_seeded_seed]: the ranked [auto] gate
    seeds nothing on this fixture on HIP, and every claim needs a plan that seeds. *)

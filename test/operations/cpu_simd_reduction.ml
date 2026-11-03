@@ -32,7 +32,7 @@ open Verdict.Claims
 
 (* Scalar parity: an absolute 1e-3 around the reference. *)
 let tol _ = 1e-3
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 let single = Ir.Ops.single
 

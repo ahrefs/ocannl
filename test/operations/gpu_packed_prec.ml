@@ -35,7 +35,7 @@ module LL = Ir.Low_level
 module Ops = Ir.Ops
 module Generated = Test_utils.Generated
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Stdio.eprintf "gpu-packed-prec backend: %s (not part of the golden)\n%!" backend_name
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let () = Generated.init ~backend_name

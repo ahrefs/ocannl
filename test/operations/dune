@@ -3444,6 +3444,19 @@
    --ocannl_autotune_timing=isolated
    --ocannl_profile=approximate)))
 
+; gh-ocannl-1861: one key, one default, refused at runtime: a key read under a second default in one
+; process raises, whatever its source -- this directory's config file sets `backend`, and the read
+; is still refused.
+
+(test
+ ; ocannl-backend: none -- reads the backend key but links no backend, and prints the same claims
+ ; whichever backend the config file or the environment names.
+ (name config_one_default)
+ (package neural_nets_lib)
+ (deps ocannl_config config_one_default.expected)
+ (modules config_one_default)
+ (libraries base arrayjit.utils arrayjit.verdict stdio))
+
 ; gh-ocannl-1766: one read of `autotune_cache_dir` behind `Autotune.resolve_cache_dir`, so an unset
 ; key leaves one record in the resolved-configuration stream, held there by the reader every bench
 ; driver checks its cells with (`benchmarks/config_records.py`, which refuses a key resolved two

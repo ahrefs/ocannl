@@ -22,7 +22,7 @@ open Ocannl.Nn_blocks.DSL_modules
 open Verdict.Claims
 module H = Bench_harness
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let batch = 4
 let seq = 16
 let d = 32

@@ -31,7 +31,7 @@ module Sched = Ir.Schedule
 module Idx = Ir.Indexing
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 let sinks_here =
   String.is_substring backend_name ~substring:"cuda"

@@ -32,7 +32,7 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module BI = Ir.Backend_intf
 
-let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:"cc"
+let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:""
 let () = Generated.init ~backend_name
 let () = Utils.settings.output_debug_files_in_build_directory <- true
 let batch = 2

@@ -29,7 +29,7 @@ module LL = Ir.Low_level
 module Tn = Ir.Tnode
 module Asgns = Ir.Assignments
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let raises f = match f () with _ -> false | exception Invalid_argument _ -> true
 
 (* {1 Part 1: the harness contract} *)

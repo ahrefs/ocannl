@@ -351,7 +351,10 @@ let () =
      that means something else by an unset key maps the one default itself ([Backends.get_backend]).
      Every scanned root, since a bench or a [bin/] executable runs in one process with the library.
      A default spelled as anything but a literal is not compared: what it evaluates to is the
-     runtime's to say, and [benchmarks/config_records.py] says it on every stream a driver keeps. *)
+     runtime's to say, and [benchmarks/config_records.py] says it on every stream a driver keeps.
+     The runtime also refuses the second default itself (gh-ocannl-1861,
+     [Utils.unchecked_global_arg_with_source]), in every process, test roots included; this check is
+     what finds the pair in a library process that has not yet reached both reads. *)
   let literal_defaults =
     List.concat_map source_files ~f:(fun fname ->
         let base = Stdlib.Filename.basename fname in

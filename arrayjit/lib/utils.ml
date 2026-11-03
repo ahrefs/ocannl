@@ -1858,33 +1858,58 @@ let record_config_resolution, resolved_config =
   let resolved () = Stdlib.Mutex.protect mutex (fun () -> List.rev !records_rev) in
   (record, resolved)
 
+(* The settings resolved before the ordinary per-key reads, with the defaults they were read
+   under. *)
+let bootstrap_reads =
+  [
+    ("log_config_sourcing", "false", log_config_sourcing_resolution);
+    ("log_config_json", "false", log_config_json_resolution);
+    ("no_config_file", "false", no_config_file_resolution);
+    ("suppress_welcome_message", "false", suppress_welcome_message_resolution);
+    ("profile", "", profile_selection);
+  ]
+
 (** Bootstrap values cannot trace themselves until the sourcing switches are settled. Report the
     sourced resolutions already used above, without another precedence walk. [no_config_file]
     deliberately has no file source, and every bootstrap read has no profile source. *)
 let () =
-  let bootstrap =
-    [
-      ("log_config_sourcing", "false", log_config_sourcing_resolution);
-      ("log_config_json", "false", log_config_json_resolution);
-      ("no_config_file", "false", no_config_file_resolution);
-      ("suppress_welcome_message", "false", suppress_welcome_message_resolution);
-      ("profile", "", profile_selection);
-    ]
-  in
   if !log_config_sourcing then (
     Stdio.eprintf
       "\nOCANNL: settings resolved before the ordinary per-key trace could report them:\n%!";
-    List.iter bootstrap ~f:(fun (n, default, (value, source)) ->
+    List.iter bootstrap_reads ~f:(fun (n, default, (value, source)) ->
         Stdio.eprintf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
         Stdio.eprintf "%s\n%!" (describe_config_source ~value ~default source)));
-  List.iter bootstrap ~f:(fun (key, _, resolution) -> record_config_resolution ~key resolution)
+  List.iter bootstrap_reads ~f:(fun (key, _, resolution) ->
+      record_config_resolution ~key resolution)
 
 let profile_lookup =
   Option.map active_profile ~f:(fun (level, name, table) ->
       (level, name, fun key -> Hashtbl.find table key))
 
+(* gh-ocannl-1861: the default each key was first read under in this process, seeded with the
+   bootstrap reads' ones. A key read under two defaults resolves one unset key two ways -- the
+   resolved-configuration stream then carries two [From_default] records for it, and
+   [benchmarks/config_records.py] refuses the process (gh-ocannl-1766) -- so the second read is
+   refused whatever the key's source: a configuration that sets the key hides the disagreement
+   without removing it. *)
+let read_defaults : (string, string) Hashtbl.t =
+  let table = Hashtbl.create (module String) in
+  List.iter bootstrap_reads ~f:(fun (key, default, _) -> Hashtbl.set table ~key ~data:default);
+  table
+
 (* The lookup itself, for {!get_global_arg_with_source} and the typed getters below it. *)
 let unchecked_global_arg_with_source ~default ~arg_name:n =
+  (match Hashtbl.find read_defaults n with
+  | None -> Hashtbl.set read_defaults ~key:n ~data:default
+  | Some earlier when String.equal earlier default -> ()
+  | Some earlier ->
+      invalid_arg
+        (Printf.sprintf
+           "OCANNL: ocannl_%s is read under the default %S after this process read it under %S: \
+            one key has one default (gh-ocannl-1861). A site that means something else by an unset \
+            key reads the common default and maps it itself, as Backends.get_backend maps the \
+            backend key's \"\" to cc"
+           n default earlier));
   let with_debug = !log_config_sourcing && not (Hash_set.mem accessed_global_args n) in
   if with_debug then
     Stdio.eprintf "Retrieving commandline, environment, or config file variable ocannl_%s\n%!" n;
@@ -2807,11 +2832,14 @@ let restore_settings () =
   settings.default_prng_variant <- get_global_arg ~default:"light" ~arg_name:"default_prng_variant";
   (* [big_models] is the pre-gh-ocannl-344 name; read it as a fallback so existing configs / CLI /
      OCANNL_BIG_MODELS still enable 64-bit index and pool-offset widths when [large_models] is
-     unset. *)
+     unset. The fallback is taken on the source, not by passing [big_models]' value as
+     [large_models]' default: that would read [large_models] under a second default whenever
+     [big_models] changed between two [restore_settings] (gh-ocannl-1861). *)
   settings.large_models <-
-    get_global_flag
-      ~default:(get_global_flag ~default:false ~arg_name:"big_models")
-      ~arg_name:"large_models"
+    (let big_models = get_global_flag ~default:false ~arg_name:"big_models" in
+     match get_global_arg_with_source ~default:"false" ~arg_name:"large_models" with
+     | _, From_default -> big_models
+     | value, _ -> bool_of_config_string ~arg_name:"large_models" value)
 
 let () = restore_settings ()
 

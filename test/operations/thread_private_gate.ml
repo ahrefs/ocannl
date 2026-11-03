@@ -35,7 +35,7 @@ module BI = Ir.Backend_intf
 module Generated = Test_utils.Generated
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Generated.init ~backend_name
 
 (* gh-ocannl-1778: the [outlined] mode is this test run with every kernel forced outlined

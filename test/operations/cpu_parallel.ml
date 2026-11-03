@@ -38,7 +38,7 @@ let phase name = Stdio.eprintf "cpu_parallel phase: %s\n%!" name
 open Verdict.Claims
 
 let approx_tol _ = 1e-2
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 
 module Generated = Test_utils.Generated

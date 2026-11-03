@@ -35,7 +35,7 @@ let build () =
   (r, xv, y, z, w)
 
 let () =
-  let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:"cc" in
+  let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:"" in
   Stdio.eprintf "affine_view_executed: backend=%s (not part of the golden)\n%!" backend_name;
   (* The reference: [r] materialized on its own. *)
   let r_ref =

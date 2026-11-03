@@ -40,7 +40,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* The bitwise claims compare two kernel shapes over the same summation order: every product
    accumulation is an explicit FMA (the contraction licence, as [seeded_default] pins it), so a GPU

@@ -35,7 +35,7 @@ module Mma = Ir.Cuda_mma
 
 let () = Ir.Numerics.set_policy { (Ir.Numerics.get ()) with Ir.Numerics.tf32_matmuls = true }
 let accum_prec = Ll_test.backend_accum_prec
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 let limits = Context.hardware_limits (Context.auto ())
 

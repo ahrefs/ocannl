@@ -61,7 +61,7 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* Intentional dialect identity: this test exists to pin CUDA inline-PTX [ldmatrix] instruction
    forms; which way each statement rendered, the other dialects' decline included, is the MMA

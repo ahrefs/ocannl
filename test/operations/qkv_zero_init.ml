@@ -12,7 +12,7 @@ open Verdict.Claims
 module LL = Ir.Low_level
 module Sched = Ir.Schedule
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Stdio.eprintf "qkv_zero_init backend=%s\n" backend_name
 let x_value ~offset ix = Float.of_int (offset + 1 + (3 * ix.(0)) + (5 * ix.(1)) + ix.(2)) /. 16.
 let w_value ~offset ix = Float.of_int (offset + 1 + (7 * ix.(0)) + (3 * ix.(1)) + ix.(2)) /. 32.

@@ -40,7 +40,7 @@ module Numerics = Ir.Numerics
 open Verdict.Claims
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_metal = String.is_substring backend_name ~substring:"metal"
 
 module Generated = Test_utils.Generated

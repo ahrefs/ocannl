@@ -51,7 +51,7 @@ let fast_math = Utils.get_global_flag ~default:false ~arg_name:"cc_backend_fast_
    (gh-ocannl-998), as the [approximate] profile has them: their member runs after this rewrite in
    the tier, and contraction must not hide the value reduction from the hoist. *)
 let fp_licences = Ir.Low_level.Fp_licence.(fields (of_config ()))
-let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:"cc"
+let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:""
 let batch = 2
 
 (* Distinct from every other extent in the models, so a node with two axes of this extent is one of

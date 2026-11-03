@@ -33,7 +33,7 @@ module Asgns = Ir.Assignments
 module Cs = Ir.C_syntax
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* The register-tiled rendering is the C backends'; "cc" also matches "multidev_cc". *)
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)

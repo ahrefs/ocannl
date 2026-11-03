@@ -13,7 +13,7 @@
 open Base
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* [f]'s result and every byte written to file descriptor 1 while it ran, by OCaml and C code alike:
    the descriptor itself is routed to a temporary file, as device [printf] writes to it. Both stdio

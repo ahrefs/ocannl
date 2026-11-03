@@ -32,7 +32,7 @@ let expected_sum = Array.fold vv ~init:0. ~f:( +. )
 
 (* Scalar parity: an absolute 1e-3 around the reference. *)
 let tol _ = 1e-3
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let skipped = Verdict.skipped ~backend:backend_name
 let has_barriers = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 

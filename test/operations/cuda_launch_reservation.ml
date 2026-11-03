@@ -33,7 +33,7 @@ open Ll_test
 open Verdict.Claims
 module SO = Ir.Schedule_outcome
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cuda = String.equal backend_name "cuda"
 
 (* Near the 512 KiB per-thread local-memory limit: reserved for every resident thread, more than any

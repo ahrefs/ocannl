@@ -152,7 +152,7 @@ let remove_or_fail ~context p =
 
     [~backend_name] selects the source extension ({!extension_of_backend}; a name that is no
     backend's aborts the run here); tests already derive it as
-    [String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")]. It is passed in
+    [String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")]. It is passed in
     rather than read here to keep the dependency at [arrayjit.utils]: this module resolves paths, it
     does not choose backends. *)
 let is_symlink p =

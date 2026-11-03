@@ -29,7 +29,7 @@ module Idx = Ir.Indexing
 open Verdict.Claims
 
 let single = Ir.Ops.single
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let node = Ll_test.node_factory ~first_id:967_000_000 ~dims:[| 1 |] ()
 let m = 1024
 let outer = 256

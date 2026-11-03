@@ -35,7 +35,7 @@ open Verdict.Claims
 module IDX = Train.IDX
 module P = Bench_seed_parity
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 let nd debug dims f = Ir.Ndarray.init_array ~debug Ir.Ops.single ~dims ~padding:None ~f
 let f32_of_bits b = Stdlib.Int32.float_of_bits (Stdlib.Int32.of_int b)

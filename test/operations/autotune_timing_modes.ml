@@ -30,7 +30,7 @@ let timing_identity =
 
 open Verdict.Claims
 
-let backend () = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend () = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* {1 Sampling policy, with an injected clock} *)
 

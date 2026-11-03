@@ -14,7 +14,7 @@ open Ll_test
 module LL = Ir.Low_level
 module Ops = Ir.Ops
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
 let () = Stdio.eprintf "fp-licence values backend: %s\n" backend_name
 let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"

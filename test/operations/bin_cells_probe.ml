@@ -23,7 +23,7 @@ let () =
   (* What a bench consults: an unpinnable search gate, a mode setting, the backend. *)
   let _pruning : bool = Utils.registered_flag ~arg_name:"autotune_bound_pruning" in
   let _timing : string = Utils.get_global_arg ~arg_name:"autotune_timing" ~default:"queued" in
-  let _backend : string = Utils.get_global_arg ~arg_name:"backend" ~default:"cc" in
+  let _backend : string = Utils.get_global_arg ~arg_name:"backend" ~default:"" in
   match mode with
   | "fail" -> Stdlib.exit 1
   | "silent" -> ()

@@ -47,7 +47,7 @@ module Tn = Ir.Tnode
 module Idx = Ir.Indexing
 module Winograd = Ir.Winograd
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 let named name (comp : Ir.Assignments.comp) : Ir.Assignments.comp =
   { comp with asgns = Ir.Assignments.Block_comment (name, comp.asgns) }

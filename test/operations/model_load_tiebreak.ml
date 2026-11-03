@@ -42,7 +42,7 @@ module Sspace = Ir.Schedule_space
 module BI = Ir.Backend_intf
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* {1 The search's tie semantics} *)
 

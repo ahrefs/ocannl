@@ -70,7 +70,7 @@ let () =
    the host, and the register tile's geometry follows it): the claims are about hoisted-grid seeds'
    records, which need the menu that proposes them. Also before the first search. *)
 let () = Fissioned_chain.small_menu_envelope ()
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 
 (* The census exists only where the pool does: gated on the backend's own predicate, never on the

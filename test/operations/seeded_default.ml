@@ -23,7 +23,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* gh-ocannl-998: the bitwise claims are about summation order, so every product accumulation is an
    explicit FMA -- the contraction licence, pinned on here. With the licence off (the default) the

@@ -43,7 +43,7 @@ open Verdict.Claims
 
 (* Scalar parity: an absolute 1e-3 around the reference. *)
 let tol _ = 1e-3
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Stdio.eprintf "hardware_warp_shuffle: backend=%s (not part of the golden)\n%!" backend_name
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)

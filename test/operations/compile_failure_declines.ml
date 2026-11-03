@@ -19,7 +19,7 @@ open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 module Outcome = Ir.Schedule_outcome
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 let describe = function
   | Ok _ -> "compiled"
