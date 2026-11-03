@@ -423,14 +423,14 @@ type hardware_limits = {
   transaction_rate : float option; [@sexp.option]
       (** [Untimed]: how many excess 32-byte memory sectors a device serves per second -- the rate
           of the ranking score's memory-transaction term (gh-ocannl-1600,
-          {!Ir.Cost_model.memory_transactions}): per lane group of {!field-simdgroup_width} lanes,
-          the sectors a global access touches beyond the compact count for the same distinct bytes,
-          at the access's own context fill, added to the compute leg. What orders a layout whose
-          lanes read contiguous cells against a twin whose lanes stride. A FITTED constant
-          ([benchmarks/gh1442_agreement.py --fit-txn]), per device class. Overridable by config
-          [model_transaction_rate]; [None] where unmeasured, which adds no term and keeps the
-          coalesced layouts out of [model_default]'s candidate set. Same readers and same cache
-          identity as {!field-cache_capacity_bytes}. *)
+          {!Ir.Cost_model.memory_transactions}): per launch block (its lane groups of
+          {!field-simdgroup_width} lanes sharing what L1 serves), the sectors a global access
+          touches beyond the compact count for the same distinct bytes, at the access's own context
+          fill, added to the compute leg. What orders a layout whose lanes read contiguous cells
+          against a twin whose lanes stride. A FITTED constant ([benchmarks/gh1600_txn_fit.py]), per
+          device class. Overridable by config [model_transaction_rate]; [None] where unmeasured,
+          which adds no term and keeps the coalesced layouts out of [model_default]'s candidate set.
+          Same readers and same cache identity as {!field-cache_capacity_bytes}. *)
   workgroup_bytes_per_multiprocessor : int option; [@sexp.option]
       (** [Untimed]: the workgroup-shared memory one multiprocessor (SM / WGP) holds for all its
           resident blocks -- the capacity of the ranking score's occupancy factor (gh-ocannl-1600,

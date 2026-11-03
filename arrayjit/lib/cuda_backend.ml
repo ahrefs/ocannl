@@ -1927,8 +1927,11 @@ end = struct
               the gh-ocannl-1479 cells on rog-nv's RTX 5070 Ti (2026-10-26, 630016bd): once a lane's
               innermost run counts as one footprint (L1 serves it), the qkv and outproj kernels
               carry no excess, and only the weight gradient's transposed operand does; agreement
-              there rises 50.0 -> 58.3% over 7.9e11-1.6e12, everywhere else unchanged. No coalesced
-              layouts here regardless: no occupancy capacity (below). Overridable by
+              there rises 50.0 -> 58.3% over 7.9e11-1.6e12, everywhere else unchanged. Since the
+              count takes a block's lane groups together (after gh-ocannl-1661's partitioned copies,
+              whose sibling warps read the halves of the same sectors), no candidate at those cells
+              carries excess, so the rate is inert there; it stays as fitted. No coalesced layouts
+              here regardless: no occupancy capacity (below). Overridable by
               model_transaction_rate. *)
            transaction_rate = Some 1.0e12;
            (* gh-ocannl-1600: no occupancy capacity. At the gh-ocannl-1479 outproj cells on rog the
