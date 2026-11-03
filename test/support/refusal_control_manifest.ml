@@ -258,6 +258,7 @@ let raw_entries =
     ( "codegen_text_inventory.ml",
       [
         "[scanner-refusal:83dfdd0395c402128515f27b2f3b1b1c] the exclusion for";
+        "[scanner-refusal:24dcaa782a3b33780918bb1933206e78] the compiler entry";
         "[scanner-refusal:3f0b314f29005911be716581fa1a4f10] the scan raised";
         "[scanner-refusal:cf8b947a00d5153ebc294985137e0a8a] per-test alias gh-ocannl-1533";
         "[scanner-refusal:8cd31f89229d140f44ef65da81a353ed] is re-run by";
@@ -265,6 +266,7 @@ let raw_entries =
         "[scanner-refusal:d4306fe9c227b85db951de0b64f85ad8] Test_utils.Generated.main_logic";
         "[scanner-refusal:6eb14f027a4be6648748900004341e36] the after-marker exemption";
         "[scanner-refusal:b1a8055bff15f499f2f143975afca3d7] reaches the stale-exclusion";
+        "[scanner-refusal:ae3ea5e30f52522fe3ba79794609f56f] reaches the stale-entry";
         "[scanner-refusal:2c67621c20b4be85e0176da0370f83cb] reaches the scanner-defect";
         "[scanner-refusal:0e0975906df73fda3897bc10ee9904c0] refuses it exiting";
         "[scanner-refusal:88b9820837c81d0eb1237428429e025c] members' interfaces refuses";
@@ -278,6 +280,10 @@ let raw_entries =
         "[scanner-refusal:a59159ac0fd0f431da9519f8016e6762] every scanned root";
         "[scanner-refusal:c995ea0a058a228bf654449befcccb4b] meets its source-site";
         "[scanner-refusal:1b40c8a4f6d202c5b6563c1565f86060] tests building their";
+        "[scanner-refusal:9daca1e74abb76588d6d48344619233f] a backend's compiler";
+        "[scanner-refusal:be259785a66474faf20368ccde6692c0] support helpers pinning";
+        "[scanner-refusal:6e6bfc66aed4b3a13a8be04373cff907] every compiler entry";
+        "[scanner-refusal:c278c7bc3f7af4c303d597336e94a1cc] configuration reader writes";
         "[scanner-refusal:d246f03ca5c483db40b94796658cf426] every source handed";
         "[scanner-refusal:87e46487d17e609858f4af46f001e1c3] backend whose build";
         "[scanner-refusal:73a439e337c34309cf51b52176da80ad] alias that re-runs";

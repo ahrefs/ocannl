@@ -2643,6 +2643,32 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fails the run, as a text member does. `codegen_text_scan_cases` pins each route beside its near
   miss, including the negative control: a fixture whose staged callback writes a node by its bare
   label.
+- **Then the tests that call a backend's compiler themselves** (gh-ocannl-1772): a change to a
+  backend's builtins prelude, its compiler flags or how its compiler is resolved breaks them, and
+  neither section above lists them. `test_shared_builtins` writes `Builtins_cc.source` and a probe
+  of its own to a file and compiles it with `Cc_backend.compiler_command`; the `*_emulation` tests
+  do the same with the Metal and CUDA builtins under cc. `Kernel_exec_scan.compiler_entries` names
+  the entry points as spellings (cc's command and flags, `Nvrtc.compile_to_ptx`,
+  `Hip_backend.Impl.hip_to_code`, Metal's `Library.on_device`), matched through aliases and opens,
+  and the support values reaching one are found as above. The golden closes on an alias list per
+  backend whose compiler is called, run on that backend's box. A spelling no handed-over source
+  still uses fails the run; that claim dropped `Hiprtc.compile_to_code`, which only `arrayjit/lib`
+  spells, on its first run. A NEW entry point is not found by itself: add its spelling. A test that
+  compiles with a hard-coded `cc` and no entry is not found either.
+- **Pins one file away, behind a `test/support` helper** (gh-ocannl-1772): gh-ocannl-1736 moved
+  the residency markers into `Ll_test`, and after that the inventory showed
+  `masked_persistent_fragment` -- pinning them through `Ll_test.resident_regions` -- as a member
+  pinning nothing, with a complete itemisation. `Codegen_text_scan.helper_predicates` derives the
+  helpers from the support modules: a structure-level value with a text test whose haystack
+  derives from its own parameter, a nested closure included. Their fragments are itemised by the
+  literal discipline plus a record field read off a parameter (every literal the module builds
+  that field with), a nested function's parameter (what the helper passes there), and the
+  module's other helpers they call. Whether a call pins generated text is decided at the call, by
+  the CALLER's provenance: generated text is a pin; text the model cannot decide is listed as
+  "haystack unvalidated" with its boundary; ordinary text is no use. So the scanners' own text
+  predicates stay off the list. The golden lists each called helper with its fragments and
+  callers, and each caller says which helpers it pins through. A value that only forwards to a
+  helper in another module is not followed.
 - **A test reaches generated text three ways, and the inventory tags which.** Through
   `Test_utils.Generated` (the freshness-checked artifact reader); by opening `build_files/` itself,
   which two tests predating that module still do; or **in memory**, calling an emitter and

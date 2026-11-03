@@ -64,7 +64,28 @@
     alone. gh-ocannl-1338 ran every text pin on CUDA and HIP and master still went red on one of
     these (gh-ocannl-1685). They are listed in a section of their own, with the support values that
     reach such text DERIVED from the sources ({!Test_utils.Kernel_exec_scan}) and their own closing
-    list of aliases, which a codegen change runs on every GPU backend. *)
+    list of aliases, which a codegen change runs on every GPU backend.
+
+    {1 The tests calling a backend's compiler themselves}
+
+    A third population breaks on a change to a backend's builtins prelude, its compiler flags or how
+    its compiler is resolved, and pins nothing either: [test_shared_builtins] compiles
+    [Builtins_cc.source] and a probe of its own with [Cc_backend.compiler_command] (gh-ocannl-1772).
+    They are listed by the backend whose compiler they call, through the same harness derivation,
+    with a closing list per backend. The entries they are recognised by are spellings
+    ({!Test_utils.Kernel_exec_scan.compiler_entries}); a spelling no source handed over still uses
+    fails the run, since an entry renamed away would leave the population empty and the list
+    cheerful.
+
+    {1 Pins one file away}
+
+    A test can pin emitted text through a [test/support] helper that tests the text it is handed:
+    gh-ocannl-1736 moved the residency markers into [Ll_test], and after that
+    [masked_persistent_fragment] -- pinning them through [Ll_test.residency_holds] -- read here as a
+    member pinning nothing, complete. The helpers are derived from the support modules
+    ({!Test_utils.Codegen_text_scan.helper_predicates}), each call is judged by its caller's
+    provenance, and every helper some test hands text to is listed with the fragments it spells and
+    the tests calling it, whose aliases are the ones above. *)
 
 open Base
 open Stdio
@@ -94,6 +115,14 @@ let source_floors = [ ("test", 20); ("arrayjit/test", 2) ]
 (** The tests building their own kernel text, likewise floored: [test/operations] alone held 47 on
     the day gh-ocannl-1685 derived them. *)
 let exec_floors = [ ("test", 20) ]
+
+(** The tests calling a backend's compiler with source of their own: on the day gh-ocannl-1772
+    derived them, [test/operations] held a dozen and [arrayjit/test] four. *)
+let compile_floors = [ ("test", 5); ("arrayjit/test", 2) ]
+
+(** The support helpers pinning emitted text for their callers: [Ll_test]'s residency predicates on
+    the day gh-ocannl-1772 derived them. *)
+let helper_floors = [ ("test", 1) ]
 
 (** The sources handed over only so that the harness frontier can be derived from them: the runners'
     support libraries, which tests link ([Bench_harness]) but which are no test themselves, so no
@@ -145,6 +174,18 @@ let refuse_stale_exclusions ~fail stale =
            "the exclusion for %s (%s) names a file the globs no longer hand over -- drop it, or \
             fix the path it was meant to name"
            path reason))
+
+let stale_entries ~entries ~named =
+  List.filter entries ~f:(fun entry -> not (List.mem named entry ~equal:Poly.equal))
+
+let refuse_stale_entries ~fail stale =
+  List.iter stale ~f:(fun entry ->
+      fail
+        (Printf.sprintf
+           "the compiler entry %s (%s) is spelled by no source handed over, so the tests calling \
+            that compiler are found by nothing -- rename it to the spelling the tree uses now, or \
+            drop it (gh-ocannl-1772)"
+           (Exec.entry_name entry) entry.Exec.entry_backend))
 
 let refuse_raised ~fail raised =
   List.iter raised ~f:(fun (path, exn) ->
@@ -247,6 +288,35 @@ let refusal_control ~wrapper =
   refuse_stale_exclusions ~fail stale;
   Verdict.p "an exclusion absent from the hand-over reaches the stale-exclusion refusal"
     (!refused && List.length stale = 1);
+  (* gh-ocannl-1772: an entry no source spells, judged by the reader the census uses -- a fixture
+     spelling only one of two entries, the other in a comment. *)
+  let entry_refused = ref false in
+  let fail _message =
+    entry_refused := true;
+    Test_utils.Refusal_control_manifest.observe_failure ~source
+      ~format:
+        "the compiler entry %s (%s) is spelled by no source handed over, so the tests calling that \
+         compiler are found by nothing -- rename it to the spelling the tree uses now, or drop it \
+         (gh-ocannl-1772)"
+  in
+  let named =
+    Exec.entries_named
+      ~contents:
+        "module Cc = Context.Cc_backend\n\
+         (* Nvrtc.compile_to_ptx *)\n\
+         let cmd = Cc.compiler_command ()\n"
+  in
+  let entries =
+    List.filter Exec.compiler_entries ~f:(fun e ->
+        List.mem
+          [ "compiler_command"; "compile_to_ptx" ]
+          (List.last_exn e.Exec.entry_path) ~equal:String.equal)
+  in
+  let stale = stale_entries ~entries ~named in
+  refuse_stale_entries ~fail stale;
+  Verdict.p "a compiler entry only a comment spells reaches the stale-entry refusal"
+    (!entry_refused
+    && List.equal String.equal (List.map stale ~f:Exec.entry_name) [ "Nvrtc.compile_to_ptx" ]);
   (* The non-parse path: a scanner defect on a file that parses is reported as the exception it is,
      not as an unparsable file. The provocation is [boundaries_of]'s own precondition, broken the
      one way the scan's constructors make unreachable from source. *)
@@ -321,7 +391,8 @@ let refusal_control ~wrapper =
   in
   refuse_direct_reads ~fail
     (Option.to_list
-       (Scan.classify_source ~emitters:[] ~path:"test/direct.ml" ~contents:direct_fixture));
+       (Scan.classify_source ~emitters:[] ~helpers:[] ~path:"test/direct.ml"
+          ~contents:direct_fixture));
   Verdict.p "a test reading build_files/ itself reaches the direct-read refusal" !direct_refused;
   (* gh-ocannl-1708: the after-marker refusal, on the reader test_uniform_virtual_lane had before
      gh-ocannl-1678 -- a substr_index on the banner, then a slice -- classified by the scan's own
@@ -337,7 +408,8 @@ let refusal_control ~wrapper =
   in
   let after_marker_sites =
     Option.to_list
-      (Scan.classify_source ~emitters:[] ~path:"test/after_marker.ml" ~contents:after_marker_fixture)
+      (Scan.classify_source ~emitters:[] ~helpers:[] ~path:"test/after_marker.ml"
+         ~contents:after_marker_fixture)
   in
   let after_refused = ref false in
   let fail _message =
@@ -370,7 +442,8 @@ let refusal_control ~wrapper =
     stale_after_marker_exemptions
       ~exempt:[ ("test/direct.ml", "fixture"); ("test/after_marker.ml", "fixture") ]
       (Option.to_list
-         (Scan.classify_source ~emitters:[] ~path:"test/direct.ml" ~contents:direct_fixture)
+         (Scan.classify_source ~emitters:[] ~helpers:[] ~path:"test/direct.ml"
+            ~contents:direct_fixture)
       @ after_marker_sites)
   in
   refuse_stale_after_marker_exemptions ~fail stale;
@@ -509,6 +582,25 @@ let () =
   let unparsed = ref [] in
   let raised = ref [] in
   let rejected = ref [] in
+  (* gh-ocannl-1772: the support helpers testing a text they are handed, derived from every support
+     module -- a module some [(library)] stanza owns, or a runner library's -- before the census,
+     which judges each call of one by its caller's provenance. A module that does not parse is
+     reported by the census (a test-root source) or by the harness derivation below. *)
+  let helpers =
+    List.filter (harness_only_ml @ source_files) ~f:(fun (name, _) ->
+        Rerun.owned_by_library stanzas ~path:name && not (is_excluded name))
+    |> List.concat_map ~f:(fun (name, on_disk) ->
+        match
+          Attempt.run (fun () ->
+              Scan.helper_predicates ~emitters ~module_name:(Exec.module_name_of_path name)
+                ~path:name ~contents:(read on_disk))
+        with
+        | Attempt.Scanned helpers -> helpers
+        | Attempt.Unparsed _ -> []
+        | Attempt.Raised exn ->
+            raised := (name, exn) :: !raised;
+            [])
+  in
   let sites =
     List.filter_map source_files ~f:(fun (name, on_disk) ->
         if is_excluded name then None
@@ -517,7 +609,7 @@ let () =
           match
             Attempt.run (fun () ->
                 ( Scan.rejections ~emitters ~path:name ~contents,
-                  Scan.classify_source ~emitters ~path:name ~contents ))
+                  Scan.classify_source ~emitters ~helpers ~path:name ~contents ))
           with
           | Attempt.Scanned (rejections, site) ->
               rejected := rejections @ !rejected;
@@ -592,6 +684,49 @@ let () =
     List.filter_map executing ~f:(fun (name, _, runs) ->
         if List.is_empty runs then Some name else None)
   in
+  (* The two populations the harness routes reach, each printed with only the routes reaching it:
+     kernels built outside the pipeline (gh-ocannl-1685), and compilers called directly
+     (gh-ocannl-1772). A test can be in both. *)
+  let population ~keep =
+    ( List.filter_map executing ~f:(fun (name, routes, runs) ->
+          match Exec.restrict harness ~keep routes with
+          | [] -> None
+          | routes -> Some (name, routes, runs)),
+      Map.filter_map harness.Exec.values ~f:(fun routes ->
+          match Exec.restrict harness ~keep routes with [] -> None | routes -> Some routes) )
+  in
+  let kernel_exec, kernel_values = population ~keep:Exec.builds_kernel_text in
+  let compiling, compiling_values =
+    population ~keep:(fun route -> Option.is_some (Exec.compiler_of route))
+  in
+  let backends_called routes =
+    Exec.base_routes harness routes |> List.filter_map ~f:Exec.compiler_of
+  in
+  (* The entries' own relationship: each still a spelling some source handed over uses. *)
+  let named_entries =
+    List.concat_map (source_files @ harness_only_ml) ~f:(fun (name, on_disk) ->
+        if is_excluded name then []
+        else
+          match Attempt.run (fun () -> Exec.entries_named ~contents:(read on_disk)) with
+          | Attempt.Scanned entries -> entries
+          | Attempt.Unparsed _ | Attempt.Raised _ -> [])
+  in
+  let stale_entry_list = stale_entries ~entries:Exec.compiler_entries ~named:named_entries in
+  refuse_stale_entries ~fail:Verdict.fail stale_entry_list;
+  (* The helpers some test hands text to, each with its callers. *)
+  let callers_of key =
+    List.filter_map sites ~f:(fun s ->
+        List.find_map s.Scan.through ~f:(fun (k, validated) ->
+            Option.some_if (String.equal k key) (s.Scan.site_path, validated)))
+  in
+  let called_helpers =
+    List.filter_map helpers ~f:(fun h ->
+        match callers_of h.Scan.helper_key with [] -> None | callers -> Some (h, callers))
+    |> List.sort ~compare:(fun (a, _) (b, _) ->
+        String.compare
+          (a.Scan.helper_path ^ " " ^ a.Scan.helper_key)
+          (b.Scan.helper_path ^ " " ^ b.Scan.helper_key))
+  in
   List.iter !unparsed ~f:(fun path ->
       Verdict.fail
         (Printf.sprintf
@@ -624,12 +759,21 @@ let () =
   let unselected = unselected (Map.to_alist golden_routes) in
   refuse_unselected ~fail:Verdict.fail unselected;
   let site_paths = List.map sites ~f:(fun s -> s.Scan.site_path) in
-  let exec_paths = List.map executing ~f:(fun (name, _, _) -> name) in
+  let exec_paths = List.map kernel_exec ~f:(fun (name, _, _) -> name) in
+  let compile_paths = List.map compiling ~f:(fun (name, _, _) -> name) in
+  let helper_paths =
+    List.dedup_and_sort ~compare:String.compare
+      (List.map called_helpers ~f:(fun (h, _) -> h.Scan.helper_path))
+  in
   Floors.report ~floors:golden_floors ~noun:"golden" ~what:"Goldens holding emitted text"
     golden_paths;
   Floors.report ~floors:source_floors ~noun:"site" ~what:"Sources pinning emitted text" site_paths;
   Floors.report ~floors:exec_floors ~noun:"test" ~what:"Tests building their own kernel text"
     exec_paths;
+  Floors.report ~floors:compile_floors ~noun:"test"
+    ~what:"Tests calling a backend's compiler themselves" compile_paths;
+  Floors.report ~floors:helper_floors ~noun:"helper"
+    ~what:"Support modules pinning emitted text for their callers" helper_paths;
   eprintf "Files handed over: %d goldens, %d sources.\n" (List.length golden_files)
     (List.length source_files);
   print_endline
@@ -687,6 +831,8 @@ let () =
         (if s.Scan.direct then [ "reads build_files/ directly" ] else [])
         @ (if s.Scan.after_marker then [ "reads after the Main logic banner, exempted" ] else [])
         @ (if s.Scan.rendered then [ "renders generated text in memory" ] else [])
+        @ List.map s.Scan.through ~f:(fun (helper, validated) ->
+            "pins through " ^ helper ^ if validated then "" else ", haystack unvalidated")
         @ (match routes_of site_routes s.Scan.site_path with
           | [] -> []
           | routes -> [ "run by " ^ String.concat ~sep:", " (List.map routes ~f:Rerun.render) ])
@@ -702,6 +848,34 @@ let () =
       printf "%s%s\n" s.Scan.site_path
         (match flags with [] -> "" | flags -> " [" ^ String.concat ~sep:"; " flags ^ "]");
       List.iter s.Scan.pins ~f:(fun pin -> printf "    %s\n" pin));
+  printf
+    "\n\
+     == support helpers pinning emitted text for their callers ==\n\
+     A test/support value testing the text a test hands it (gh-ocannl-1772), with the fragments it\n\
+     spells itself -- a field of a record it is handed is itemised as every fragment its module\n\
+     builds that field with -- and the tests calling it, each run by its aliases above. A caller\n\
+     whose haystack the scan could not show to be generated text is listed all the same.\n";
+  printf "roots scanned: %s\n"
+    (String.concat ~sep:", " (Floors.roots ~floors:helper_floors helper_paths));
+  List.iter called_helpers ~f:(fun (h, callers) ->
+      let flags =
+        [
+          "called by "
+          ^ String.concat ~sep:", "
+              (List.map callers ~f:(fun (path, validated) ->
+                   if validated then path else path ^ " (haystack unvalidated)"));
+        ]
+        @
+        match h.Scan.helper_partial with
+        | [] -> []
+        | boundaries ->
+            [
+              "also pins text this scan cannot name: "
+              ^ String.concat ~sep:", " (List.map boundaries ~f:Scan.boundary_name);
+            ]
+      in
+      printf "%s: %s [%s]\n" h.Scan.helper_path h.Scan.helper_key (String.concat ~sep:"; " flags);
+      List.iter h.Scan.helper_pins ~f:(fun pin -> printf "    %s\n" pin));
   printf
     "\n\
      == the aliases a codegen change runs ==\n\
@@ -744,23 +918,67 @@ let () =
      shape the pipeline never emits, a shipped kernel compiled alone loses the batch around it. Run\n\
      them on every GPU backend. The rules are stated in test/support/kernel_exec_scan.ml.\n";
   printf "support values reaching such text, derived from the sources:\n";
-  Map.iteri harness.Exec.values ~f:(fun ~key ~data ->
+  Map.iteri kernel_values ~f:(fun ~key ~data ->
       printf "%s [%s]\n" key (String.concat ~sep:"; " (List.map data ~f:Exec.route_name)));
   printf "\nroots scanned: %s\n"
     (String.concat ~sep:", " (Floors.roots ~floors:exec_floors exec_paths));
-  List.iter executing ~f:(fun (name, routes, runs) ->
+  List.iter kernel_exec ~f:(fun (name, routes, runs) ->
       printf "%s [%s]\n" name
         (String.concat ~sep:"; "
            (List.map routes ~f:Exec.route_name
            @ [ "run by " ^ String.concat ~sep:", " (List.map runs ~f:Rerun.render) ])));
   printf "\n== the aliases a codegen change runs on every GPU backend ==\n";
-  List.concat_map executing ~f:(fun (_, _, runs) -> List.map runs ~f:(fun r -> r.Rerun.alias))
+  List.concat_map kernel_exec ~f:(fun (_, _, runs) -> List.map runs ~f:(fun r -> r.Rerun.alias))
   |> List.dedup_and_sort ~compare:String.compare
   |> List.iter ~f:print_endline;
+  printf
+    "\n\
+     == tests calling a backend's compiler with source of their own ==\n\
+     They pin nothing and build no kernel through the pipeline, and a change to a backend's\n\
+     builtins prelude, its compiler flags or how its compiler is resolved breaks them all the same\n\
+     (gh-ocannl-1772): test_shared_builtins compiles Builtins_cc.source and a probe of its own with\n\
+     Cc_backend.compiler_command. Run a backend's list, at the end, on a box with OCANNL_BACKEND set\n\
+     to it. The rules are stated in test/support/kernel_exec_scan.ml.\n";
+  printf "compiler entries, each still spelled by a source handed over:\n";
+  List.iter Exec.compiler_entries ~f:(fun e ->
+      printf "%s [%s]\n" (Exec.entry_name e) e.Exec.entry_backend);
+  printf "\nsupport values reaching them, derived from the sources:\n";
+  Map.iteri compiling_values ~f:(fun ~key ~data ->
+      printf "%s [%s]\n" key (String.concat ~sep:"; " (List.map data ~f:Exec.route_name)));
+  printf "\nroots scanned: %s\n"
+    (String.concat ~sep:", " (Floors.roots ~floors:compile_floors compile_paths));
+  List.iter compiling ~f:(fun (name, routes, runs) ->
+      printf "%s [%s]\n" name
+        (String.concat ~sep:"; "
+           (List.map routes ~f:Exec.route_name
+           @ [ "run by " ^ String.concat ~sep:", " (List.map runs ~f:Rerun.render) ])));
+  printf "\n== of those, the aliases by the backend whose compiler they call ==\n";
+  List.iter
+    (List.dedup_and_sort ~compare:String.compare
+       (List.map Exec.compiler_entries ~f:(fun e -> e.Exec.entry_backend)))
+    ~f:(fun backend ->
+      printf "%s:\n" backend;
+      match
+        List.concat_map compiling ~f:(fun (_, routes, runs) ->
+            if List.mem (backends_called routes) backend ~equal:String.equal then
+              List.map runs ~f:(fun r -> r.Rerun.alias)
+            else [])
+        |> List.dedup_and_sort ~compare:String.compare
+      with
+      | [] -> printf "  (none)\n"
+      | aliases -> List.iter aliases ~f:(printf "  %s\n"));
   printf "\n";
   let exec_violations =
     Floors.violations ~floors:exec_floors ~noun:"test"
       ~floors_name:"codegen_text_inventory.exec_floors" exec_paths
+  in
+  let compile_violations =
+    Floors.violations ~floors:compile_floors ~noun:"test"
+      ~floors_name:"codegen_text_inventory.compile_floors" compile_paths
+  in
+  let helper_violations =
+    Floors.violations ~floors:helper_floors ~noun:"helper"
+      ~floors_name:"codegen_text_inventory.helper_floors" helper_paths
   in
   let golden_violations =
     Floors.violations ~floors:golden_floors ~noun:"golden"
@@ -796,18 +1014,34 @@ let () =
                 wrapper -- the emitter frontier is derived from these, so a census taken without \
                 it is short by however many renderers it exports"
                i.Emitter_frontier.library m)));
-  List.iter (golden_violations @ source_violations @ exec_violations) ~f:Verdict.fail;
+  List.iter
+    (golden_violations @ source_violations @ exec_violations @ compile_violations
+   @ helper_violations)
+    ~f:Verdict.fail;
   Verdict.p_empty "every scanned root meets its golden floor" ~over:golden_paths golden_violations;
   Verdict.p_empty "every scanned root meets its source-site floor" ~over:site_paths
     source_violations;
   Verdict.p_empty "every scanned root meets its floor of tests building their own kernel text"
     ~over:exec_paths exec_violations;
+  Verdict.p_empty "every scanned root meets its floor of tests calling a backend's compiler"
+    ~over:compile_paths compile_violations;
+  Verdict.p_empty "every scanned root meets its floor of support helpers pinning emitted text"
+    ~over:helper_paths helper_violations;
+  Verdict.p_empty "every compiler entry is still spelled by some source handed over"
+    ~over:(List.map Exec.compiler_entries ~f:Exec.entry_name)
+    (List.map stale_entry_list ~f:Exec.entry_name);
+  Verdict.p_all "every compiler entry names a backend the configuration reader writes"
+    Exec.compiler_entries ~f:(fun e ->
+      List.mem Rerun.backends e.Exec.entry_backend ~equal:String.equal);
   Verdict.p_empty "every source handed over parsed as OCaml" ~over:source_files !unparsed;
   Verdict.p_empty "every condition a golden is re-run under names the backend whose build meets it"
     ~over:(Map.data golden_routes |> List.concat)
     unselected;
   Verdict.p_empty "every member has an alias that re-runs it"
-    ~over:(golden_paths @ List.map sites ~f:(fun s -> s.Scan.site_path) @ exec_paths)
+    ~over:
+      (golden_paths
+      @ List.map sites ~f:(fun s -> s.Scan.site_path)
+      @ List.map executing ~f:(fun (name, _, _) -> name))
     (unplaced @ exec_unplaced);
   Verdict.p_empty "the scan raised on no source handed over" ~over:source_files !raised;
   Verdict.p_empty "every exclusion still names a file the globs hand over" ~over:handed_over stale;

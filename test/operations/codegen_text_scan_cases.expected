@@ -211,6 +211,20 @@ ok: support module -- an inline-test library's module is one too
 ok: support module -- a test's module is not
 ok: support module -- a module no stanza owns is not
 ok: harness -- the frontier closes under reference and include, and nothing else
+ok: helpers -- a support module's helpers are derived with the fragments each spells, and nothing else
+ok: helper -- a helper handed generated source is a pin through it
+ok: helper -- a caller's fragment through a helper's text parameter is the caller's pin
+ok: helper -- ordinary text handed to a helper is no use of it
+ok: helper -- a haystack the model cannot decide lists the call, unvalidated
+ok: helper -- a helper passed as a callback is listed, unvalidated
+ok: helper -- a helper's bare name under an open of its module
+ok: helper -- a helper reached through an alias of a library's qualifier
+ok: helper -- a test's own value of a helper's name, nothing opened, is not
+ok: population -- a value reaching the seam reaches a prelowered compile
+ok: population -- a value calling a compiler reaches that compiler alone
+ok: population -- the kernel-text population keeps only the routes reaching a built kernel
+ok: entry -- an entry spelled through an alias
+ok: entry -- an entry in a comment is not spelled
 ok: executing -- a staged callback naming a node is a member
 ok: executing -- matching on the constructor builds nothing
 ok: executing -- a hand-held lowering through the seam is a member
@@ -225,6 +239,14 @@ ok: executing -- a test's own value of a harness value's name, nothing opened, i
 ok: executing -- a support module including the harness passes its values on
 ok: executing -- a link-free harness value is not
 ok: executing -- a comment or a string naming the routes is not
+ok: executing -- a literal source compiled with cc's compiler command is a member
+ok: executing -- a compiler entry by its bare name under an open
+ok: executing -- a test's own compiler_command, nothing opened, is not
+ok: executing -- a backend value that compiles nothing is not
+ok: executing -- nvrtc on a literal source
+ok: executing -- HIP's seam through its implementation module
+ok: executing -- Metal's library from source under an alias of the bindings
+ok: executing -- a harness value calling a compiler
 ok: rerun -- a test stanza's own golden
 ok: rerun -- a pform in the golden path is a substitution, reported
 ok: rerun -- the shortest backend extension substitutes as well

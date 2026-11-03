@@ -409,11 +409,13 @@ type emitter = {
 type module_denotes = Named of string | Opaque
 
 (** What an unqualified value name denotes where it is spelled: the string a [let] binds it to
-    directly, a name an [open] of an attributed module made unqualified ({!rejections}), or any
-    other binding the file makes. *)
+    directly, a name an [open] of an attributed module made unqualified ({!rejections}), a support
+    helper's value an [open] of its module brought in ({!helper}, as [Module.value]), or any other
+    binding the file makes. *)
 type value_denotes =
   | Literal_binding of string
   | Hidden of { opened : string; name : string }
+  | Opened_helper of string
   | Function_binding of (int * int)
   | Bound
 
@@ -453,11 +455,13 @@ let hidden_names ~emitters target =
     staging#855): the inventory recorded the wrong text for one leg and none for another, and
     nothing failed. Here each identifier reaches the binding OCaml gives it.
 
-    What this does NOT reach is an alias in another FILE: this scan decides one source at a time, so
-    a wrapper module that some other file defines around the reader would leave its callers
-    unrecognised. Nothing in the tree does that today -- the one wrapper, [Test_utils.Generated], IS
-    the target -- and a shared helper of that shape would have to be added to the seeds here. *)
-let scope_of ~emitters structure =
+    What this decides one source at a time is the reader and the emitters. A support helper that
+    some other file defines around a text test -- [Ll_test.residency_holds] -- is reached through
+    [helpers], the [(Module, value)] pairs {!helper_predicates} derived from the support modules: a
+    qualified call resolves through its qualifier as any other, and a bare name under an [open] of
+    the helper's module denotes the helper ([Opened_helper]) rather than being refused, since the
+    call is attributed either way (gh-ocannl-1772). *)
+let scope_of ~emitters ?(helpers = []) structure =
   let qualifiers = Hashtbl.Poly.create () and values = Hashtbl.Poly.create () in
   let resolver =
     object (self)
@@ -488,14 +492,19 @@ let scope_of ~emitters structure =
       method! opened ~top:_ ~include_:_ env denoted =
         match denoted with
         | Some (Named target) -> (
-            match hidden_names ~emitters target with
+            let hidden =
+              List.map (hidden_names ~emitters target) ~f:(fun name ->
+                  (name, Hidden { opened = target; name }))
+            and helper =
+              List.filter_map helpers ~f:(fun (owner, name) ->
+                  Option.some_if (String.equal owner target)
+                    (name, Opened_helper (owner ^ "." ^ name)))
+            in
+            match hidden @ helper with
             | [] -> env
             | names ->
                 Lexical_scope.push_frame env
-                  (Map.of_alist_reduce
-                     (module String)
-                     (List.map names ~f:(fun name -> (name, Hidden { opened = target; name })))
-                     ~f:(fun _ later -> later)))
+                  (Map.of_alist_reduce (module String) names ~f:(fun _ later -> later)))
         | Some Opaque | None -> env
 
       method! expression env e =
@@ -1832,6 +1841,11 @@ type site = {
   rendered : bool;
       (** Renders generated text in memory, through an emitter or a dump printer, rather than
           reading an artifact. Such a test has no [build_files/] output to inspect. *)
+  through : (string * bool) list;
+      (** The support helpers ({!helper}) this source hands text to, as [Module.value], each with
+          whether the haystack at its call was shown to be generated source -- [false] where the
+          provenance model could not decide it, which still lists the call (gh-ocannl-1772). Sorted
+          and deduplicated. *)
 }
 
 (** The words of {!Ir.C_syntax.main_logic_marker}, the banner opening a kernel's statements, that a
@@ -1901,7 +1915,7 @@ let rejections ~emitters ~path ~contents =
   Hashtbl.data scope.values
   |> List.filter_map ~f:(function
     | Hidden { opened; name } -> Some (opened, name)
-    | Literal_binding _ | Function_binding _ | Bound -> None)
+    | Literal_binding _ | Opened_helper _ | Function_binding _ | Bound -> None)
   |> List.dedup_and_sort ~compare:Poly.compare
   |> List.map ~f:(fun (opened, name) ->
       Printf.sprintf
@@ -1910,16 +1924,296 @@ let rejections ~emitters ~path ~contents =
          (or an alias of it) instead."
         path opened name opened name)
 
-(** [classify_source ~emitters ~path ~contents] is [Some] when the file reads generated source at
-    all.
+(** Every function expression of [structure] with how a caller addresses its parameters, keyed by
+    its span: what a call's arguments are matched against. Compiler-plan classifiers are skipped, as
+    everywhere. *)
+let function_parameters_of structure =
+  let functions = Hashtbl.Poly.create () in
+  let collect =
+    object
+      inherit Ast_traverse.iter as super
+      method! value_binding vb = if not (classifies_compiler_plan vb) then super#value_binding vb
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_function _ ->
+            let params, _ = peel_params e in
+            Hashtbl.set functions ~key:(span e.pexp_loc) ~data:(param_destinations params)
+        | _ -> ());
+        super#expression e
+    end
+  in
+  collect#structure structure;
+  functions
+
+type helper = {
+  helper_key : string;  (** [Module.value], as a caller's qualifier resolves it. *)
+  helper_path : string;  (** The support module's source. *)
+  helper_source : parameter_destination;
+      (** Where a call hands the helper the text it tests -- the parameter its text tests' haystack
+          derives from. Defaults are dropped: they are expressions of the helper's file. *)
+  helper_text : parameter_destination list;
+      (** The parameters a caller supplies a fragment through, itemised at the call. *)
+  helper_pins : string list;
+      (** The fragments the helper spells itself, its own and those of the module's predicates it
+          calls, rendered as a site's pins are; sorted, deduplicated. *)
+  helper_partial : boundary list;
+      (** Why some fragment of its own could not be named, as a site's [partial]. *)
+}
+(** A value of a support module that tests a text it is handed for a fragment: a pin one file away
+    from the test that reads the text (gh-ocannl-1772). gh-ocannl-1736 moved the residency markers
+    of [schedule_mma_matmul] into [Ll_test], and after that the inventory showed
+    [masked_persistent_fragment] -- which pins them through [Ll_test.residency_holds] -- as a member
+    pinning nothing, complete. Whether a call is a pin of generated text is decided at the call, by
+    the caller's provenance ({!classify_source}): the helper only says where its haystack and its
+    caller-supplied fragments arrive. *)
+
+(** The fields records of [structure] are built with, each with the fragments its construction sites
+    put there: a literal (or literal-bound name, concatenation, format) at the leaf of each branch
+    of an [if] or [match], [None] for a leaf of any other shape. *)
+let record_field_fragments scope structure =
+  let rec leaves e =
+    match e.pexp_desc with
+    | Pexp_ifthenelse (_, a, Some b) -> leaves a @ leaves b
+    | Pexp_match (_, cases) -> List.concat_map cases ~f:(fun case -> leaves case.pc_rhs)
+    | Pexp_sequence (_, e) | Pexp_let (_, _, e) | Pexp_constraint (e, _) | Pexp_open (_, e) ->
+        leaves e
+    | _ -> [ render_pin (pin_of_expr scope e) ]
+  in
+  let found = ref [] in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_record (fields, _) ->
+            List.iter fields ~f:(fun ({ txt; _ }, value) ->
+                found := (Longident.last_exn txt, leaves value) :: !found)
+        | _ -> ());
+        super#expression e
+    end
+  in
+  iterator#structure structure;
+  Map.of_alist_reduce (module String) !found ~f:( @ )
+
+(** The values bound at structure level, nested modules flattened, with their right-hand sides. *)
+let top_level_values_with_rhs structure =
+  let rec items_of structure =
+    List.concat_map structure ~f:(fun item ->
+        match item.pstr_desc with
+        | Pstr_value (_, bindings) ->
+            List.filter_map bindings ~f:(fun vb ->
+                Option.map (bound_name vb.pvb_pat) ~f:(fun name -> (name, vb.pvb_expr)))
+        | Pstr_module { pmb_expr; _ } -> items_of_module pmb_expr
+        | Pstr_recmodule mbs -> List.concat_map mbs ~f:(fun mb -> items_of_module mb.pmb_expr)
+        | _ -> [])
+  and items_of_module me =
+    match me.pmod_desc with
+    | Pmod_structure s -> items_of s
+    | Pmod_constraint (me, _) -> items_of_module me
+    | _ -> []
+  in
+  items_of structure
+
+(** The helpers ({!helper}) a support module [module_name] at [path] exports: each structure-level
+    value with a text test whose haystack derives from one of its own parameters -- the parameter
+    itself, a name [let]-bound from one, at any depth, inside a nested function too (a local
+    [let all pattern = String.substr_index_all src ~pattern] closing over the helper's [src] is the
+    helper's test). The reading is syntactic and errs toward listing, since a helper is only listed
+    where a caller's provenance shows it is handed generated text ({!classify_source}).
+
+    A fragment is itemised by the literal discipline, plus three ways a helper spells one: a field
+    of a record ([m.frag_load]) is every fragment the module builds that field with, a table of
+    markers being how a helper shared between tests holds them; a parameter of a nested function is
+    whatever the helper passes there; and one of the helper's own parameters is the caller's,
+    itemised at the call. The module's other helpers it calls lend it their fragments. What none of
+    these names is [helper_partial].
 
     Raises if [contents] does not parse. *)
-let classify_source ~emitters ~path ~contents =
+let helper_predicates ~emitters ~module_name ~path ~contents =
+  let structure = structure_of contents in
+  let scope = scope_of ~emitters structure in
+  let fields = record_field_fragments scope structure in
+  let top = top_level_values_with_rhs structure in
+  let analyse (name, rhs) =
+    let params, body = peel_params rhs in
+    let destinations = param_destinations params in
+    let own = List.map params ~f:(fun (_label, name, _default) -> name) in
+    (* The names deriving from a parameter, each with the parameters it derives from. *)
+    let inner = bindings_in_expression body in
+    let derived = Hashtbl.create (module String) in
+    List.iter own ~f:(fun p -> Hashtbl.set derived ~key:p ~data:[ p ]);
+    let origins_of e =
+      List.concat_map (idents_in e) ~f:(fun n -> Option.value (Hashtbl.find derived n) ~default:[])
+      |> List.dedup_and_sort ~compare:String.compare
+    in
+    let changed = ref true in
+    while !changed do
+      changed := false;
+      List.iter inner ~f:(fun b ->
+          match b.params with
+          | _ :: _ -> ()
+          | [] -> (
+              match origins_of b.body with
+              | [] -> ()
+              | origins ->
+                  List.iter b.names ~f:(fun n ->
+                      if not (Hashtbl.mem derived n) then (
+                        Hashtbl.set derived ~key:n ~data:origins;
+                        changed := true))))
+    done;
+    (* The nested functions, by name, with how their parameters are addressed. *)
+    let nested =
+      List.filter_map inner ~f:(fun b ->
+          match (b.names, b.params) with
+          | [ n ], _ :: _ -> Some (n, param_destinations b.params)
+          | _ -> None)
+    in
+    let applications_of fname =
+      let found = ref [] in
+      let iterator =
+        object
+          inherit Ast_traverse.iter as super
+
+          method! expression e =
+            (match e.pexp_desc with
+            | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident f; _ }; _ }, args)
+              when String.equal f fname ->
+                found := args :: !found
+            | _ -> ());
+            super#expression e
+        end
+      in
+      iterator#expression body;
+      !found
+    in
+    let pins = ref [] and partial = ref [] and text_at = ref [] and sources = ref [] in
+    let rec fragment ~fuel text =
+      match render_pin (pin_of_expr scope text) with
+      | Some pin -> pins := pin :: !pins
+      | None -> (
+          match text.pexp_desc with
+          | Pexp_field (_, { txt; _ }) -> (
+              match Map.find fields (Longident.last_exn txt) with
+              | Some fragments when not (List.is_empty fragments) ->
+                  List.iter fragments ~f:(function
+                    | Some pin -> pins := pin :: !pins
+                    | None -> partial := Computed_fragment :: !partial)
+              | _ -> partial := Forwarded_parameter :: !partial)
+          | Pexp_ident { txt = Lident x; _ } when List.mem own x ~equal:String.equal ->
+              Option.iter (List.Assoc.find destinations x ~equal:String.equal) ~f:(fun d ->
+                  text_at := { d with default = None } :: !text_at)
+          | Pexp_ident { txt = Lident x; _ }
+            when fuel > 0
+                 && List.exists nested ~f:(fun (_, ds) -> List.Assoc.mem ds x ~equal:String.equal)
+            ->
+              List.iter nested ~f:(fun (fname, ds) ->
+                  Option.iter (List.Assoc.find ds x ~equal:String.equal) ~f:(fun d ->
+                      List.iter (applications_of fname) ~f:(fun args ->
+                          match predicate_argument_at { d with default = None } args with
+                          | Some arg -> fragment ~fuel:(fuel - 1) arg
+                          | None -> partial := Unsupplied_application :: !partial)))
+          | _ ->
+              partial :=
+                (if List.is_empty (origins_of text) then Computed_fragment else Forwarded_parameter)
+                :: !partial)
+    in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression e =
+          (match text_test scope e with
+          | Some { text; tested = Some tested; _ } -> (
+              match origins_of tested with
+              | [] -> ()
+              | origins ->
+                  sources := origins @ !sources;
+                  fragment ~fuel:3 text)
+          | _ -> ());
+          super#expression e
+      end
+    in
+    iterator#expression body;
+    (* The first parameter, in the order a caller addresses them, that a haystack derives from. *)
+    let source =
+      List.find_map destinations ~f:(fun (p, d) ->
+          Option.some_if (List.mem !sources p ~equal:String.equal) { d with default = None })
+    in
+    let calls =
+      List.filter (idents_in body) ~f:(fun n -> List.Assoc.mem top n ~equal:String.equal)
+    in
+    (name, source, !text_at, !pins, !partial, calls)
+  in
+  let analysed =
+    List.filter_map (top_level_values_with_rhs structure) ~f:(fun item -> Some (analyse item))
+  in
+  let helper_names =
+    List.filter_map analysed ~f:(fun (n, source, _, _, _, _) -> Option.map source ~f:(fun _ -> n))
+  in
+  let rec reach seen = function
+    | [] -> seen
+    | n :: rest ->
+        if List.mem seen n ~equal:String.equal || not (List.mem helper_names n ~equal:String.equal)
+        then reach seen rest
+        else
+          let calls =
+            List.find_map analysed ~f:(fun (m, _, _, _, _, calls) ->
+                Option.some_if (String.equal m n) calls)
+          in
+          reach (n :: seen) (Option.value calls ~default:[] @ rest)
+  in
+  List.filter_map analysed ~f:(fun (name, source, text_at, _, _, _) ->
+      Option.map source ~f:(fun source ->
+          let reached = reach [] [ name ] in
+          let lent =
+            List.filter analysed ~f:(fun (m, _, _, _, _, _) ->
+                List.mem reached m ~equal:String.equal)
+          in
+          {
+            helper_key = module_name ^ "." ^ name;
+            helper_path = path;
+            helper_source = source;
+            helper_text = List.dedup_and_sort text_at ~compare:Poly.compare;
+            helper_pins =
+              List.concat_map lent ~f:(fun (_, _, _, pins, _, _) -> pins)
+              |> List.dedup_and_sort ~compare:String.compare;
+            helper_partial =
+              List.concat_map lent ~f:(fun (_, _, _, _, partial, _) -> partial)
+              |> List.dedup_and_sort ~compare:Poly.compare;
+          }))
+
+(** [classify_source ~emitters ~helpers ~path ~contents] is [Some] when the file reads generated
+    source at all. [helpers] are the support modules' {!helper}s, matched at each call by the
+    caller's qualifier.
+
+    Raises if [contents] does not parse. *)
+let classify_source ~emitters ~helpers ~path ~contents =
   let structure = structure_of contents in
   (* Every qualifier and every literal-bound name resolved where it is spelled: [Generated] and
      [Utils] for the artifact readers, and [Buffer] for the backstop below -- [module B = Buffer]
      then [B.contents buf] reads a buffer as surely as the bare spelling does. *)
-  let scope = scope_of ~emitters structure in
+  let scope =
+    scope_of ~emitters
+      ~helpers:(List.filter_map helpers ~f:(fun h -> String.lsplit2 h.helper_key ~on:'.'))
+      structure
+  in
+  (* The helper a callee names: through its qualifier, or -- a bare name -- the open that brought
+     the helper's module in. *)
+  let helper_at callee =
+    let find key = List.find helpers ~f:(fun h -> String.equal h.helper_key key) in
+    match Option.map (longident_of callee) ~f:List.rev with
+    | Some [ _ ] -> (
+        match Hashtbl.find scope.values (span callee.pexp_loc) with
+        | Some (Opened_helper key) -> find key
+        | _ -> None)
+    | Some (name :: _ :: _) -> (
+        match Hashtbl.find scope.qualifiers (span callee.pexp_loc) with
+        | Some (Named owner) -> find (owner ^ "." ^ name)
+        | Some Opaque | None -> None)
+    | Some [] | None -> None
+  in
   (* The bindings come first because the emitter aliases do: an emitter bound to a local name is
      called without a qualifier afterwards, and every rule below -- membership, taint, the buffer
      destinations, the pin walk -- has to recognise the same set of calls. Rules that know different
@@ -1954,22 +2248,7 @@ let classify_source ~emitters ~path ~contents =
   if not (!reads_generated || !reads_direct || !reads_after || !renders) then None
   else
     let seeds = buffer_destinations ~emitters ~aliases structure in
-    let functions = Hashtbl.Poly.create () in
-    let collect_functions =
-      object
-        inherit Ast_traverse.iter as super
-        method! value_binding vb = if not (classifies_compiler_plan vb) then super#value_binding vb
-
-        method! expression e =
-          (match e.pexp_desc with
-          | Pexp_function _ ->
-              let params, _ = peel_params e in
-              Hashtbl.set functions ~key:(span e.pexp_loc) ~data:(param_destinations params)
-          | _ -> ());
-          super#expression e
-      end
-    in
-    collect_functions#structure structure;
+    let functions = function_parameters_of structure in
     let source_parameters = Hashtbl.Poly.create () in
     let source_provenance () =
       scoped_provenance scope ~emitters ~aliases ~seeds ~source_parameters
@@ -2122,6 +2401,7 @@ let classify_source ~emitters ~path ~contents =
        provenance carries, so the category is the model's, not a guess made here. *)
     let partial = ref [] in
     let mark boundaries = partial := boundaries @ !partial in
+    let through = ref [] in
     (* A fragment with no literal part is named by why: the boundary its own value met, else a
        helper parameter it arrives through, else the plain limit of the literal discipline. *)
     let add_pin text =
@@ -2182,6 +2462,14 @@ let classify_source ~emitters ~path ~contents =
             && ((not (List.is_empty (predicates_at e)))
                || Option.exists (function_at e) ~f:(Hashtbl.mem forwarding))
           then mark [ Untraced_callback ];
+          (* A helper passed as a value: its haystack arrives through whatever calls it, which is no
+             call this scan validates -- listed, and unvalidated. *)
+          (if Option.is_some (longident_of e) && not (Hashtbl.mem applied (span e.pexp_loc)) then
+             match helper_at e with
+             | Some helper ->
+                 mark [ Untraced_callback ];
+                 through := (helper.helper_key, false) :: !through
+             | None -> ());
           (match text_test scope e with
           | Some { text; tested; inherent } -> (
               if inherent || Option.value_map tested ~default:false ~f:mentions_tainted then (
@@ -2198,6 +2486,26 @@ let classify_source ~emitters ~path ~contents =
           | None -> (
               match e.pexp_desc with
               | Pexp_apply (callee, args) ->
+                  (* A support helper's call (gh-ocannl-1772): a pin where the haystack it is handed
+                     is generated source, and the caller's fragment itemised as an in-file
+                     predicate's would be. A haystack the model cannot decide still lists the call,
+                     unvalidated, with the boundary that stopped it; one that is certainly ordinary
+                     text is no use of the helper at all. *)
+                  Option.iter (helper_at callee) ~f:(fun helper ->
+                      let source = argument_provenance !provenance helper.helper_source args in
+                      if names_generated_source source then (
+                        if Poly.equal source.uncertainty Unresolved then mark (boundaries_of source);
+                        through := (helper.helper_key, true) :: !through;
+                        List.iter helper.helper_text ~f:(fun parameter ->
+                            match predicate_argument_at parameter args with
+                            | Some text -> record text
+                            | None -> mark [ Unsupplied_application ]))
+                      else
+                        match haystack_boundaries !provenance helper.helper_source args with
+                        | [ Unvalidated_haystack ] -> ()
+                        | boundaries ->
+                            mark boundaries;
+                            through := (helper.helper_key, false) :: !through);
                   if List.is_empty (predicates_at callee) then
                     Option.iter
                       (Option.bind (function_at callee) ~f:(Hashtbl.find forwarding))
@@ -2245,4 +2553,5 @@ let classify_source ~emitters ~path ~contents =
         direct = !reads_direct;
         after_marker = !reads_after;
         rendered = !renders;
+        through = List.dedup_and_sort !through ~compare:Poly.compare;
       }

@@ -29,7 +29,20 @@
 
     The reading is syntactic and errs toward listing: a name that resolves to a harness value counts
     whether or not the binding in scope is that value, and an [open] counts file-wide. A spurious
-    member costs one run; a missing one is the gh-ocannl-1338 red. *)
+    member costs one run; a missing one is the gh-ocannl-1338 red.
+
+    {1 The tests calling a backend's compiler themselves}
+
+    A third population breaks on a change that is not to the renderers at all -- to a backend's
+    builtins prelude, its compiler flags, how its compiler is resolved -- and pins nothing either:
+    the tests that hand source of their own to a backend's compiler, the way [test_shared_builtins]
+    compiles [Builtins_cc.source] and a probe of its own with [Cc_backend.compiler_command]
+    (gh-ocannl-1772). The scan recognises them by a fourth route, {b a compiler call}: a reference
+    to one of {!compiler_entries}, the values through which a test reaches a backend's compiler,
+    which names the backend. The entries are spellings, as the two seams above are; what keeps them
+    from going stale silently is [codegen_text_inventory]'s claim that each is still spelled by some
+    source it reads ({!entries_named}). A harness value calling a compiler puts its callers on the
+    list as it does for the other routes, and {!base_routes} tells the populations apart. *)
 
 open Base
 open Ppxlib.Parsetree
@@ -41,6 +54,7 @@ module Longident = Ppxlib.Longident
 type route =
   | Staged  (** constructs a [Staged_compilation] *)
   | Prelowered  (** passes [?prelowered] to [compile] / [compile_outcome] *)
+  | Compiles of string  (** references a {!compiler_entries} value of this backend *)
   | Through of string  (** references this harness value, as [Module.value] *)
 
 let compare_route : route -> route -> int = Poly.compare
@@ -48,7 +62,37 @@ let compare_route : route -> route -> int = Poly.compare
 let route_name = function
   | Staged -> "staged callback"
   | Prelowered -> "prelowered compile"
+  | Compiles backend -> "calls " ^ backend ^ "'s compiler"
   | Through value -> "through " ^ value
+
+(** Whether a base route is a kernel built outside the pipeline (the gh-ocannl-1685 population). *)
+let builds_kernel_text = function Staged | Prelowered -> true | Compiles _ | Through _ -> false
+
+(** The backend whose compiler a base route calls (the gh-ocannl-1772 population). *)
+let compiler_of = function
+  | Compiles backend -> Some backend
+  | Staged | Prelowered | Through _ -> None
+
+type entry = { entry_backend : string; entry_path : string list }
+(** A value through which a test reaches [entry_backend]'s compiler with source of its own, spelled
+    as the module path suffix that names it: [Cc.compiler_command] under
+    [module Cc = Context.Cc_backend] expands to a path ending in [Cc_backend.compiler_command]. *)
+
+(** The compiler entry points. cc's are the backend's own interface: the command its kernels are
+    built with and the flags passed after it, which a test pastes into a shell command of its own.
+    The GPU backends' are where a test reaches the runtime compiler: [Nvrtc]'s call, HIP's
+    production seam assembling hiprtc's options, and Metal's library-from-source. *)
+let compiler_entries =
+  [
+    { entry_backend = "cc"; entry_path = [ "Cc_backend"; "compiler_command" ] };
+    { entry_backend = "cc"; entry_path = [ "Cc_backend"; "kernel_compiler_flags" ] };
+    { entry_backend = "cc"; entry_path = [ "Cc_backend"; "kernel_link_flags" ] };
+    { entry_backend = "cuda"; entry_path = [ "Nvrtc"; "compile_to_ptx" ] };
+    { entry_backend = "hip"; entry_path = [ "Hip_backend"; "Impl"; "hip_to_code" ] };
+    { entry_backend = "metal"; entry_path = [ "Library"; "on_device" ] };
+  ]
+
+let entry_name entry = String.concat ~sep:"." entry.entry_path
 
 (** The spellings the two direct routes are recognized by. The constructor and the label are
     [Low_level.t]'s and [Context]'s own; the callee names keep [Context.link_delta]'s link-free
@@ -160,6 +204,18 @@ let expand scope path =
     [Test_utils.Generated] and a bare [Generated] answer alike. *)
 let harness_module_of ~known scope path = List.find (List.rev (expand scope path)) ~f:known
 
+(** The compiler entries an identifier [path], spelled in a file with [scope], names: those whose
+    path is a suffix of the identifier's with its leading alias expanded, or of the identifier
+    prefixed by a module the file opens -- so [compiler_command] under [open Cc_backend] counts, and
+    [Impl.hip_to_code] under [open Hip_backend]. *)
+let entries_at scope path =
+  let candidates =
+    expand scope path :: List.map scope.opened ~f:(fun opened -> expand scope opened @ path)
+  in
+  List.filter compiler_entries ~f:(fun entry ->
+      List.exists candidates ~f:(fun candidate ->
+          List.is_suffix candidate ~suffix:entry.entry_path ~equal:String.equal))
+
 type harness = {
   modules : Set.M(String).t;  (** every support module read, executing or not *)
   values : route list Map.M(String).t;
@@ -186,8 +242,9 @@ let resolve harness ~self scope path =
       | Some m -> Option.to_list (find m name)
       | None -> [])
 
-(* The routes found anywhere under a node, each reference resolved by [resolve_ref]. *)
-let collector resolve_ref =
+(* The routes found anywhere under a node, each reference resolved by [resolve_ref] and matched
+   against the compiler entries by [entries_of]. *)
+let collector resolve_ref entries_of =
   object
     inherit [route list] Ast_traverse.fold as super
 
@@ -205,14 +262,17 @@ let collector resolve_ref =
                    | Asttypes.Nolabel -> false) ->
             Prelowered :: acc
         | Pexp_ident { txt; _ } ->
-            List.map (resolve_ref (flatten txt)) ~f:(fun v -> Through v) @ acc
+            let path = flatten txt in
+            List.map (entries_of path) ~f:(fun entry -> Compiles entry.entry_backend)
+            @ List.map (resolve_ref path) ~f:(fun v -> Through v)
+            @ acc
         | _ -> acc
       in
       super#expression e acc
   end
 
 let routes_in harness ~self scope expr =
-  (collector (resolve harness ~self scope))#expression expr []
+  (collector (resolve harness ~self scope) (entries_at scope))#expression expr []
   |> List.dedup_and_sort ~compare:compare_route
 
 (** The harness frontier, closed under reference over [modules] -- each a module name with its
@@ -233,7 +293,7 @@ let harness modules =
               let routes =
                 List.filter (routes_in harness ~self:(Some m) scope body) ~f:(function
                   | Through other -> not (String.equal other key)
-                  | Staged | Prelowered -> true)
+                  | Staged | Prelowered | Compiles _ -> true)
               in
               if List.is_empty routes then values else Map.set values ~key ~data:routes)
         in
@@ -262,5 +322,47 @@ let harness modules =
     Raises if [contents] does not parse. *)
 let classify harness ~contents =
   let structure = Codegen_text_scan.structure_of contents in
-  (collector (resolve harness ~self:None (scope_of structure)))#structure structure []
+  let scope = scope_of structure in
+  (collector (resolve harness ~self:None scope) (entries_at scope))#structure structure []
   |> List.dedup_and_sort ~compare:compare_route
+
+(** The routes [routes] reach once every [Through] is followed to the harness values it names:
+    [Staged], [Prelowered] and [Compiles], deduplicated. *)
+let base_routes harness routes =
+  let rec go seen acc = function
+    | [] -> acc
+    | Through value :: rest ->
+        if Set.mem seen value then go seen acc rest
+        else
+          go (Set.add seen value) acc
+            (Option.value (Map.find harness.values value) ~default:[] @ rest)
+    | route :: rest -> go seen (route :: acc) rest
+  in
+  go (Set.empty (module String)) [] routes |> List.dedup_and_sort ~compare:compare_route
+
+(** [routes] restricted to those reaching a base route [keep] holds of: a direct route kept as it
+    is, a [Through] kept when the value it names reaches one. How one population is printed without
+    the other's routes. *)
+let restrict harness ~keep routes =
+  List.filter routes ~f:(fun route -> List.exists (base_routes harness [ route ]) ~f:keep)
+
+(** The compiler entries a source spells anywhere, as {!classify} would match them: the evidence
+    that an entry is still a name the tree uses, whether or not the file is a member. Raises if
+    [contents] does not parse. *)
+let entries_named ~contents =
+  let structure = Codegen_text_scan.structure_of contents in
+  let scope = scope_of structure in
+  let found = ref [] in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_ident { txt; _ } -> found := entries_at scope (flatten txt) @ !found
+        | _ -> ());
+        super#expression e
+    end
+  in
+  iterator#structure structure;
+  List.dedup_and_sort !found ~compare:Poly.compare
