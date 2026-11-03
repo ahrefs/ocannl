@@ -329,7 +329,9 @@
 #      flight once its first has run. A launch published before its supervisor
 #      recorded itself is no launch to come, and its verdict is not refused
 #      afterwards. A launch queued behind a run that died without a verdict
-#      is followed, never answered with that death. The slot this script takes itself is taken after
+#      is followed, never answered with that death. A run's shell forking a
+#      subshell is no second launch, and a launcher past its `cd` to the root
+#      (`cd tools && bash ./test-run.sh run`) still is one. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
 #      out on it.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
@@ -8763,7 +8765,7 @@ q_kill_all() {
     wait "$q_follow" 2>/dev/null
   fi
   # The runs this leg holds on a file: let them end on their own.
-  touch "$TMP/queued.hold" "$TMP/queued.hold2" "$TMP/queued.slot" "$TMP/queued.sup" 2>/dev/null
+  touch "$TMP/queued.hold" "$TMP/queued.hold2" "$TMP/queued.slot" "$TMP/queued.sup" "$TMP/queued.preflight" 2>/dev/null
   return 0
 }
 q_release_all() {
@@ -8981,6 +8983,10 @@ cat >"$q_perlbin/perl" <<EOF
 if [ -n "\${OCANNL_TOOL_TESTRUN_BG:-}" ] && [ -n "\${Q_SUP_DELAY:-}" ]; then
   while [ ! -e "\$Q_SUP_DELAY" ]; do sleep .1; done
 fi
+# The launcher's preflight, before anything is recorded (Q_PREFLIGHT_HOLD).
+if [ -n "\${Q_PREFLIGHT_HOLD:-}" ] && [ "\$*" = '-e use Fcntl ":flock"; exit 0' ]; then
+  while [ ! -e "\$Q_PREFLIGHT_HOLD" ]; do sleep .1; done
+fi
 exec "$(command -v perl)" "\$@"
 EOF
 chmod +x "$q_perlbin/perl"
@@ -9043,6 +9049,49 @@ if [ -z "$q_detail" ]; then
 fi
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_dead_label"; else report 1 "$q_dead_label" "$q_detail"; fi
+
+# Two readings of argv the scan makes beyond the word itself: a subshell is its
+# parent's fork, not a launch of its own; and a launcher that has already made
+# its `cd` to the root still names this worktree's script by its relative word.
+q_fork_label="a run's shell forking a subshell is no second launch; a launcher past its cd is still one"
+q_detail=
+q_before=$(q_last "$q_root")
+(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
+  tools/test-run.sh run build @ok >/dev/null 2>&1
+  (while [ ! -e "$1" ]; do sleep .1; done)' q-sub "$TMP/queued.release8") &
+q_wraps+=("$!:$TMP/queued.release8")
+if ! q_until 30 q_finished "$q_root" "$q_before"; then
+  q_detail="the forking shell's run never finished: last: $(q_last "$q_root")"
+else
+  q_forked=$(q_last "$q_root")
+  sleep .5
+  q_capture "$q_root" status last
+  { [ "$q_rc" = 0 ] && grep -qF "$q_forked" <<<"$q_out"; } ||
+    q_detail="status last, the run's shell in a subshell: exit $q_rc (want 0): $q_out"
+fi
+q_release_all
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 5
+  { [ "$q_rc" = 0 ] && grep -qF "$q_forked" <<<"$q_out"; } ||
+    q_detail="wait last once the subshell ended: exit $q_rc (want 0, not unpublished): $q_out"
+fi
+if [ -z "$q_detail" ]; then
+  q_before=$(q_last "$q_root")
+  (cd "$q_root/tools" && Q_PATH_PREFIX=$q_perlbin Q_PREFLIGHT_HOLD=$TMP/queued.preflight \
+    OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_perlbin:$q_bin:$PATH exec bash ./test-run.sh run build @red) >/dev/null 2>&1 &
+  q_wraps+=("$!:$TMP/queued.preflight")
+  q_relaunch() { ps -axww -o args= 2>/dev/null | grep -qF 'bash ./test-run.sh run build @red'; }
+  if ! q_until 30 q_relaunch; then
+    q_detail="the launcher from tools/ never showed in ps"
+  else
+    sleep .5
+    q_capture "$q_root" status last
+    { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out" && [ "$(q_last "$q_root")" = "$q_before" ]; } ||
+      q_detail="status last, a launcher from tools/ held at its preflight: exit $q_rc (want 3, queued): $q_out"
+  fi
+fi
+q_release_all
+if [ -z "$q_detail" ]; then report 0 "$q_fork_label"; else report 1 "$q_fork_label" "$q_detail"; fi
 
 # The other wait: the fleet slot this script takes itself, through a fake
 # fleet-worker.sh that holds the batch until a release file appears. The run

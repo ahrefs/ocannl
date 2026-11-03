@@ -2832,7 +2832,12 @@ group_identity_matches() {
 # launch to come. So a run's own chain living on after its verdict (an
 # attached launcher printing the digest, the slot's wrapper releasing it, a
 # shell that ran it and went on -- even once a later run has published) is
-# never read as a launch still to come. Out of reach, said so: a launch behind
+# never read as a launch still to come. Two more readings: a process whose
+# parent carries the very same argv is that parent's fork (a subshell), counted
+# through the parent and never again; and a relative word that names no file
+# from the process's directory, when that directory is this worktree, is this
+# script after its own `cd` to the root (`cd tools && bash ./test-run.sh run`).
+# A plan's directory (`unpublished`) credits nothing. Out of reach, said so: a launch behind
 # a word this cannot resolve (a `cd` inside a `-c` string its process has not
 # run yet, a variable), a loop's later passes over one word (counted once),
 # `bisect`'s steps (its frozen runner is another tree's), a launch on another
@@ -2900,6 +2905,7 @@ if (defined $runs && opendir(my $rd, $runs)) {
   for my $e (grep { /\A[0-9]{8}T[0-9]{6}Z-[0-9]+\z/ } readdir $rd) {
     my $w = slurp("$runs/$e/wt");
     next unless defined $w && $w eq "$root\n";
+    next if -e "$runs/$e/unpublished";
     next unless -e "$runs/$e/pid" || -e "$runs/$e/exit" || (defined $last && "$runs/$e" eq $last);
     my $c = slurp("$runs/$e/launchers");
     $known{$_}++ for split /\n/, defined $c ? $c : "";
@@ -2920,6 +2926,7 @@ sub cwd_of {
 }
 for my $p (sort { $a <=> $b } keys %args) {
   next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
+  next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
   my @w = grep { length } map { my $x = $_; $x =~ s/\A[\x27"(]+//; $x =~ s/[\x27";&|)]+\z//; $x } split " ", $args{$p};
   next unless @w && base($w[0]) =~ $prog;
   my $hit = 0;
@@ -2929,14 +2936,16 @@ for my $p (sort { $a <=> $b } keys %args) {
     next if $w[$i + 1] eq "prepush" && grep { /\A--list(?:=|\z)/ } @w[$i + 2 .. $#w];
     my $path = $w[$i];
     $path =~ s{\A~(?=/)}{$ENV{HOME}};
+    my $c;
     if ($path !~ m{\A/}) {
-      my $c = cwd_of($p);
+      $c = cwd_of($p);
       next unless defined $c && length $c;
       $path = "$c/$path";
     }
     (my $dir = $path) =~ s{/[^/]*\z}{};
     my $r = Cwd::abs_path("$dir/..");
-    $hit++ if defined $r && $r eq $root && -f $path;
+    if (-f $path) { $hit++ if defined $r && $r eq $root }
+    elsif (defined $c && (Cwd::abs_path($c) // "") eq $root) { $hit++ }
   }
   next unless $hit > ($known{"$p $tok{$p}"} || 0);
   print "$p ", substr($args{$p}, 0, 240), "\n";
@@ -4899,6 +4908,12 @@ case $sub in
     if [ -n "$expect" ]; then
       printf '%s\n' "$expect" >"$run_dir/expect-backend" ||
         { rm -rf "$run_dir"; die "cannot record the expected backends in $run_dir"; }
+    fi
+    # A plan's directory is never published, so its chain is no launch's
+    # (proc_table_perl): a shell whose words hold a plan and a run is still a
+    # launch to come while the plan runs.
+    if [ "$sub" = plan ]; then
+      : >"$run_dir/unpublished" || { rm -rf "$run_dir"; die "cannot record the plan's metadata in $run_dir"; }
     fi
     if [ "$sub" = fresh ]; then
       { printf '%s\n' fresh >"$run_dir/mode" &&
