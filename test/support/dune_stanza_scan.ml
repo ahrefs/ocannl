@@ -2701,8 +2701,9 @@ type stanza_programs = {
   runs_itself : bool;
       (** a [(test)]/[(tests)] stanza: dune runs each of its programs on its own alias, beside
           whatever [rule_runners] run it. Whether a caller counts the stanza, the rules or both is
-          the caller's question: [generated_lock_scan] counts both (every concurrent run sweeps the
-          same artifacts), [env_var_deps]' width pin the stanza's own runs alone. *)
+          the caller's question: [generated_lock_scan] and [env_var_deps]' width pin both count both
+          (every concurrent run sweeps the same artifacts; a rule re-running a test by name can
+          select cc where the stanza does not, ahrefs/ocannl#1901). *)
   programs : program list;  (** one per name, in [(names …)] order *)
 }
 

@@ -377,6 +377,7 @@ env_var_deps.ml: [scanner-refusal:490ac5e3405d328c2953c38df4f0974b] arguments th
 env_var_deps.ml: [scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:50ad2bbac7aab894b82d2525afd2aaf8] that stanza's marker (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:fa823e2140df2fbae2d15be1794a146b] can select cc (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:e96ac262e859176f6f0ec05d6f2f30cb] the wrong stanza (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:0a10ab654cc394b5f797d88ea889d086] inside the parentheses (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -418,7 +419,7 @@ env_var_deps.ml: [scanner-refusal:b9c87589aecbe6de4db58fc4671f7491] include_subd
 env_var_deps.ml: [scanner-refusal:eac17cf643d980bb15c3113087c863c4] names the module (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
-env_var_deps.ml: [scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:22289447396ba1e1150aeaeb5faefadc] starts a search (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:591d750b2330cdac197127abc39ce397] executable's own modules (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:f30ace350fdf01fcc307ea64e391a7bf] Test_utils.Generated (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -553,6 +554,13 @@ env_var_deps.ml: [scanner-refusal:585ea2db9ead892ec918b32c984e2d49] is_cpu (clai
 env_var_deps.ml: [scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:4cf5336639f62b774e8c76bc09d17120] re-running a test)`'s (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:146f0968d410f75502805f05d1a387b3] the program's marker (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:691a80247cf1c72faf9d7410cf67b33a] undoes the initializer's (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:416d761ba145a451f16c4913c93ec004] re-running the program (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:194c3da6b4172812b49f3a686fb02e5e] handed an executable (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:28d540b06acc9c02ad1d408123cc27ae] text-valued pform which (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:9b37c5d94470adf77d607d70645a584a] interpreter handed only (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 refused_action_streams.ml has exactly the explicitly assigned refusal controls: true

@@ -463,6 +463,7 @@ let raw_entries =
         "[scanner-refusal:2dc2479687a000324b3f828912a7f4a8] search derivation lost";
         "[scanner-refusal:a81eacf691e2faeada3ee2b79d5fd7a6] support values whose";
         "[scanner-refusal:50ad2bbac7aab894b82d2525afd2aaf8] that stanza's marker";
+        "[scanner-refusal:fa823e2140df2fbae2d15be1794a146b] can select cc";
         "[scanner-refusal:9de3b3fd1cd96a8d87e76bfa31534244] comment that does";
         "[scanner-refusal:e96ac262e859176f6f0ec05d6f2f30cb] the wrong stanza";
         "[scanner-refusal:0a10ab654cc394b5f797d88ea889d086] inside the parentheses";
@@ -504,7 +505,7 @@ let raw_entries =
         "[scanner-refusal:eac17cf643d980bb15c3113087c863c4] names the module";
         "[scanner-refusal:e47faeb8aa90e38e3dd7b698f6ac8998] carries more than";
         "[scanner-refusal:a45f7f9b519fd1f5ef3516593179eef6] cc vector file";
-        "[scanner-refusal:43edb2931bbdd95a9e49a3d134b34e9c] starts a search";
+        "[scanner-refusal:22289447396ba1e1150aeaeb5faefadc] starts a search";
         "[scanner-refusal:591d750b2330cdac197127abc39ce397] executable's own modules";
         "[scanner-refusal:f30ace350fdf01fcc307ea64e391a7bf] Test_utils.Generated";
         "[scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-test runner";
@@ -640,6 +641,13 @@ let raw_entries =
         "[scanner-refusal:c5e986988e4412345d94af936dabc9d7] helper's module which";
         "[scanner-refusal:b21f26c1c5b5c5f237aa3238bc586c52] run's invocations undoes";
         "[scanner-refusal:63f4eab503a1525a9de1686cfaca3b41] support value stating";
+        "[scanner-refusal:4cf5336639f62b774e8c76bc09d17120] re-running a test)`'s";
+        "[scanner-refusal:146f0968d410f75502805f05d1a387b3] the program's marker";
+        "[scanner-refusal:691a80247cf1c72faf9d7410cf67b33a] undoes the initializer's";
+        "[scanner-refusal:416d761ba145a451f16c4913c93ec004] re-running the program";
+        "[scanner-refusal:194c3da6b4172812b49f3a686fb02e5e] handed an executable";
+        "[scanner-refusal:28d540b06acc9c02ad1d408123cc27ae] text-valued pform which";
+        "[scanner-refusal:9b37c5d94470adf77d607d70645a584a] interpreter handed only";
         "[scanner-refusal:d29c340cf3960a26e7f234805bcebd18] the declaration checks";
         "[scanner-refusal:d896c784ca87717dc5c6d91befbce0e1] source is refused";
       ] );
@@ -1017,9 +1025,13 @@ let raw_direct_evidence =
       "an entry point renamed away is refused as a lost anchor, not read as no search: true" );
     ( "env_var_deps.ml:677d819fac904c64b7025b4f17c07b5a",
       "a marker on a program that starts no search is refused as stale: true" );
-    ( "env_var_deps.ml:43edb2931bbdd95a9e49a3d134b34e9c",
+    ( "env_var_deps.ml:22289447396ba1e1150aeaeb5faefadc",
       "a program starting a search with a run that can select cc is reported when it neither pins \
        the width nor carries the marker: true" );
+    ( "env_var_deps.ml:fa823e2140df2fbae2d15be1794a146b",
+      "a stanza that can select cc and runs a command naming no program in command position -- a \
+       shell line, a PATH tool handed an executable of ours -- is refused, not read as running \
+       none: true" );
     ( "env_var_deps.ml:9de3b3fd1cd96a8d87e76bfa31534244",
       "a marker declaring anything but `independent` is refused: true" );
     ( "env_var_deps.ml:a45f7f9b519fd1f5ef3516593179eef6",
