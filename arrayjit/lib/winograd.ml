@@ -512,6 +512,11 @@ let rewrite_site (s : site) : LL.t =
   in
   seq_of ([ kernel; input; product; output ] @ strips)
 
+(* Only the forward accumulation is rewritten. A data-gradient rewrite (the scatter as its
+   flipped-kernel gather) was implemented and measured in lukstafi/ocannl-staging#1639 and reverted:
+   cc step 1.20x slower, Metal 0.93x step but 1.59x compile, +57% peak memory on both (numbers:
+   ahrefs/ocannl#1548). Retry only with a fused input transform that drops the stored [V]/[M] and
+   measures a win on both cc and Metal. *)
 let rewrite (llc : LL.t) : LL.t =
   let stmts = LL.flat_lines [ llc ] in
   let changed = ref false in

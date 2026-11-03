@@ -701,6 +701,13 @@ files.
   segment (`fiss_sketch_candidates`, not `sketch_candidates`); (e) on bounded small-integer inputs
   the two forms agree BITWISE (every coefficient is dyadic and every partial sum representable),
   so the parity leg needs no tolerance to argue about; bound the fixture's magnitudes in the test.
+  **The data gradient stays direct, by measurement**: a rewrite of its scatter as the
+  flipped-kernel gather (guarded zero-extended reads, original-scatter remainder boxes) was
+  implemented and measured in lukstafi/ocannl-staging#1639 and reverted -- untuned `cifar_resnet`
+  under `approximate`: cc step 1.20x slower, Metal step 0.93x but compile 1.59x, peak memory +57%
+  on both (ahrefs/ocannl#1548, comments 6590711673 and 6591387951). Retry only with a fused input
+  transform that removes the stored transformed intermediates, measured as a win on both cc and
+  Metal; staging#1639's diff holds the recognizer, the remainder-box geometry and the error-bound test.
 - **`Prefix_scan` is the tier's triangular-mask member** (gh-ocannl-1758, key `prefix_scan`): a
   reduction whose operand is a 0/1 (or `where`-selected, or log-) mask along one axis times a
   payload that ignores the output position becomes one `Scan_loop` per row; the cumsum's backward
