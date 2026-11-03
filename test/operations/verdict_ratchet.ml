@@ -284,6 +284,10 @@ let exempt_quantified_helpers =
     ( "test/operations/backend_golden_family_scan.ml:complete",
       "empty incomplete/error lists are the passing evidence; the non-empty synthetic-control \
        population is guarded in the same binding" );
+    ( "test/operations/autotune_timing_modes.ml:kept",
+      "an empty probe list is the passing evidence for a prior depth kept without probes; the same \
+       binding requires the record's settle to name the prior, and the paired prior-less calls \
+       claim the same device does probe" );
     ( "test/operations/autotune_routine_name.ml:contributed",
       "a contended search may legitimately contribute no rows; its report counters separately \
        prove whether that absence came from refused timings rather than a lost result" );

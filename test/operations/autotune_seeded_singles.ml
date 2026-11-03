@@ -630,3 +630,71 @@ let () =
       p label
         (r.Autotune.seeded_hopeless = cut && r.timings_hopeless >= cut && is_seeded r.best_label
        && Float.equal r.best_ms 10.))
+
+(* gh-ocannl-1697: a seeded single calibrates at the seeded plan's settled depth
+   ({!Autotune.prior_depth_agrees}), on a scripted clock under [Queued] timing. Every launch is
+   linear in the batch depth: the plan 15 ms, over the batch target and under twice it, so its own
+   calibration takes the depth-2 probe and settles at depth 1; the seeded singles 15.5 ms, so none
+   joins; every other candidate 50 ms. Each timing call is attributed to the attempt in flight. *)
+let () =
+  let plan_ms = 15. and single_ms = 15.5 in
+  let attempts = ref [] and calls = ref [] in
+  let clock ~depth ~ordinal:_ _wall =
+    let ms =
+      match !attempts with
+      | label :: _ when is_seeded label -> plan_ms
+      | label :: _ when is_seeded_single label -> single_ms
+      | _ :: _ | [] -> 50.
+    in
+    ms *. Float.of_int depth
+  in
+  let search () =
+    let report = ref None in
+    let _ctx, _routine =
+      Autotune.Seam.with_value Autotune.on_candidate_attempt (fun label ->
+          attempts := label :: !attempts)
+      @@ fun () ->
+      Autotune.Seam.with_value Autotune.on_batch_wall clock @@ fun () ->
+      Autotune.with_timing_call_observer (fun (c : Autotune.timing_call) ->
+          Option.iter (List.hd !attempts) ~f:(fun label -> calls := (label, c) :: !calls))
+      @@ fun () ->
+      Scripted_search.with_settings [ ("autotune_finals_margin", "0") ] @@ fun () ->
+      Autotune.tune ~search:true ~beam_width:2 ~rounds:0 ~repeats:1 ~seed_block_sizes:[]
+        ~timing:Autotune.Queued ~cache_dir:"" ~log:false
+        ~report:(fun r -> report := Some r)
+        (Context.auto ()) comp Ir.Indexing.Empty
+    in
+    (Option.value_exn ~here:[%here] !report, List.rev !calls)
+  in
+  let searched = if seeds_here then Some (search ()) else None in
+  Option.iter searched ~f:(fun (_, calls) ->
+      List.iter calls ~f:(fun (label, (c : Autotune.timing_call)) ->
+          Stdio.eprintf
+            "prior-depth search (not part of the golden): %s settles %s at depth %d, %d probes\n%!"
+            label
+            (Autotune.batch_settle_name c.decision.settle)
+            c.decision.depth
+            (List.length c.calibration_probes)));
+  let claim = claim searched in
+  let of_kind kind calls = List.filter calls ~f:(fun (label, _) -> kind label) in
+  claim "the plan calibrates itself: its depth-2 probe settles depth 1" (fun label (_, calls) ->
+      p_exists label (of_kind is_seeded calls) ~f:(fun (_, (c : Autotune.timing_call)) ->
+          Poly.equal c.decision.settle Autotune.Singles_reach_target
+          && c.decision.depth = 1
+          && List.length c.calibration_probes = 1));
+  claim "every seeded single settles at the plan's depth with no probe" (fun label (_, calls) ->
+      p_all label (of_kind is_seeded_single calls) ~f:(fun (_, (c : Autotune.timing_call)) ->
+          Poly.equal c.decision.settle Autotune.Prior_depth
+          && c.decision.depth = 1
+          && List.is_empty c.calibration_probes));
+  claim "a segment single is timed" (fun label (_, calls) ->
+      p_exists label calls ~f:(fun (l, _) -> is_swap l));
+  claim "a split single is timed" (fun label (_, calls) ->
+      p_exists label calls ~f:(fun (l, _) -> is_resplit l));
+  claim "no other candidate settles at a prior depth" (fun label (_, calls) ->
+      p_none label
+        (List.filter calls ~f:(fun (l, _) -> not (is_seeded_single l)))
+        ~f:(fun (_, (c : Autotune.timing_call)) ->
+          Poly.equal c.decision.settle Autotune.Prior_depth));
+  claim "the search crowns the plan at its reading" (fun label (r, _) ->
+      p label (is_seeded r.Autotune.best_label && Float.equal r.best_ms plan_ms))

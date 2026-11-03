@@ -394,14 +394,14 @@ let unobserved_call ?(repeats = 3) ?walls ~timing ~cap ~fixed_ms ~launch_ms () =
   in
   (reading, log ())
 
-let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?walls ~timing ~cap ~fixed_ms
-    ~launch_ms () =
+let synthetic_call ?(repeats = 3) ?(retry_contended = false) ?prior_depth ?walls ~timing ~cap
+    ~fixed_ms ~launch_ms () =
   let batch, log = synthetic_device ?walls ~fixed_ms ~launch_ms () in
   let records = ref [] and retries_started = ref 0 in
   let record c = records := c :: !records in
   let reading =
-    if retry_contended then
-      Autotune.calibrate_and_time_with_retry_observer ~hopeless_against:None
+    if retry_contended || Option.is_some prior_depth then
+      Autotune.calibrate_and_time_with_retry_observer ~hopeless_against:None ~prior_depth
         ~on_retry:(fun () -> Int.incr retries_started)
         ~on_call:record ~phase:None ~retry_contended ~dispersion:Autotune.Refuse_dispersed ~timing
         ~repeats ~queue_depth_cap:cap ~batch
@@ -722,6 +722,90 @@ let () =
     (skipped.settled_depth = 1
     && skipped.calibration_launches = skipped.reading.samples
     && Float.equal skipped.reading.ms (at_ratio +. 1.))
+
+(* {1 A prior depth the singles agree with is kept without probes (gh-ocannl-1697)}
+
+   A seeded single passes its seeded plan's settled depth: singles that agree with it settle there
+   with no batch probe, and singles that do not calibrate as without it. Each agreeing call is
+   paired with the same device without the prior, which probes. The stated boundary is pinned on the
+   fixed-dominated device a probe batches: with a prior of 1, its singles alone keep depth 1. *)
+let () =
+  Stdio.printf "\n== a prior depth the singles agree with is kept without probes ==\n";
+  let gpu_cap = Autotune.queue_depth_cap_for_backend Ir.Backend_intf.hip_facts in
+  let settle c =
+    match c.decisions with [ (d : Autotune.batch_decision) ] -> Some d.settle | _ -> None
+  in
+  let call ?prior_depth what ~fixed_ms ~launch_ms =
+    let c =
+      synthetic_call ?prior_depth ~timing:Autotune.Queued ~cap:gpu_cap ~fixed_ms ~launch_ms ()
+    in
+    describe what c;
+    c
+  in
+  let kept c = Poly.equal (settle c) (Some Autotune.Prior_depth) && List.is_empty c.probes in
+  (* Singles over the target and under [slow_singles_ratio] times it: the band whose depth-2 probe
+     the prior skips. *)
+  let slow_ms = 1.5 *. Autotune.queued_batch_ms in
+  let slow_prior = call ~prior_depth:1 "slow singles, prior 1" ~fixed_ms:0. ~launch_ms:slow_ms in
+  let slow_own = call "slow singles, no prior" ~fixed_ms:0. ~launch_ms:slow_ms in
+  p "singles at the target with a prior of 1 settle at depth 1 on themselves, with no probe"
+    (kept slow_prior && slow_prior.settled_depth = 1
+    && slow_prior.calibration_launches = slow_prior.reading.samples
+    && slow_prior.fresh_launches = 0);
+  p "without the prior the same singles take the depth-2 probe and settle at depth 1"
+    (slow_own.settled_depth = 1
+    && List.equal Int.equal (List.map slow_own.probes ~f:(fun pr -> pr.depth)) [ 2 ]);
+  p "the prior leaves the reading the probed call's: the singles' minimum"
+    (Float.equal slow_prior.reading.ms slow_own.reading.ms
+    && Float.equal slow_prior.reading.ms slow_ms
+    && Option.is_some (Autotune.admitted_timing_ms slow_prior.reading));
+  (* A fast device, whose singles want a deep batch: 64 us of round trip over 7.8 us launches. *)
+  let fast ?prior_depth what = call ?prior_depth what ~fixed_ms:0.0625 ~launch_ms:0.0078125 in
+  let fast_own = fast "fast, no prior" in
+  let fast_prior = fast ~prior_depth:256 "fast, prior 256" in
+  p "a deep prior at or past the singles' provisional depth is kept, with no probe"
+    (kept fast_prior && fast_prior.settled_depth = 256
+    && fast_prior.calibration_launches < fast_own.calibration_launches);
+  p_all "its window's batches are all at that depth" fast_prior.loop_batches ~f:(fun (d, _) ->
+      d = 256);
+  p "a prior-depth window reads the batch's per-launch wall at that depth"
+    (Float.equal fast_prior.reading.ms ((0.0625 +. (256. *. 0.0078125)) /. 256.)
+    && Option.is_some (Autotune.admitted_timing_ms fast_prior.reading));
+  p "without the prior the same device probes"
+    (not
+       (List.is_empty fast_own.probes || Poly.equal (settle fast_own) (Some Autotune.Prior_depth)));
+  (* Disagreeing singles: the prior is ignored and the calibration is the prior-less one, batch for
+     batch. *)
+  let disagree what ~prior_depth ~fixed_ms ~launch_ms =
+    let with_prior = call ~prior_depth what ~fixed_ms ~launch_ms
+    and without = call (what ^ ", no prior") ~fixed_ms ~launch_ms in
+    (with_prior, without)
+  in
+  p_all "singles that disagree with the prior calibrate exactly as without it"
+    [
+      (* Singles under the target against a prior of 1. *)
+      disagree "sub-target singles, prior 1" ~prior_depth:1 ~fixed_ms:0. ~launch_ms:5.;
+      (* Singles at the target against a deep prior. *)
+      disagree "slow singles, prior 8" ~prior_depth:8 ~fixed_ms:0. ~launch_ms:slow_ms;
+      (* A deep prior shallower than the singles' provisional depth (143). *)
+      disagree "fast, prior 64" ~prior_depth:64 ~fixed_ms:0.0625 ~launch_ms:0.0078125;
+    ]
+    ~f:(fun (with_prior, without) ->
+      (not (Poly.equal (settle with_prior) (Some Autotune.Prior_depth)))
+      && List.equal Poly.equal with_prior.batch_walls without.batch_walls
+      && Poly.equal (settle with_prior) (settle without));
+  (* The stated boundary: 1 ms of launch work behind a fixed term just over the target, singles
+     under [slow_singles_ratio] times it, so without a prior the depth-2 probe exposes the fixed
+     term and batches it; a prior of 1 keeps depth 1. *)
+  let boundary_fixed = Autotune.queued_batch_ms +. 2. in
+  let boundary_own = call "fixed-dominated, no prior" ~fixed_ms:boundary_fixed ~launch_ms:1. in
+  let boundary_prior =
+    call ~prior_depth:1 "fixed-dominated, prior 1" ~fixed_ms:boundary_fixed ~launch_ms:1.
+  in
+  p "without a prior a fixed-dominated device's probe batches it" (boundary_own.settled_depth > 1);
+  p "with a prior of 1 the same device is timed at depth 1 (the stated boundary)"
+    (kept boundary_prior && boundary_prior.settled_depth = 1
+    && Float.equal boundary_prior.reading.ms (boundary_fixed +. 1.))
 
 (* {1 One fresh retry for Metal queued contention (gh-ocannl-1060)} *)
 

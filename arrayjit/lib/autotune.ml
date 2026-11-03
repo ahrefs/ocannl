@@ -233,6 +233,7 @@ type batch_settle =
   | Single_estimate
   | Singles_reach_target
   | Singles_far_over_target
+  | Prior_depth
   | Measured_batch
   | Affine_projection
   | Wall_scaled
@@ -248,6 +249,7 @@ let batch_settle_name = function
   | Single_estimate -> "single_estimate"
   | Singles_reach_target -> "singles_reach_target"
   | Singles_far_over_target -> "singles_far_over_target"
+  | Prior_depth -> "prior_depth"
   | Measured_batch -> "measured_batch"
   | Affine_projection -> "affine_projection"
   | Wall_scaled -> "wall_scaled"
@@ -1197,6 +1199,32 @@ let queued_batch_depth_with_cap ~max_depth { ms = est_ms; _ } =
 
 let queued_batch_depth = queued_batch_depth_with_cap ~max_depth:max_queue_depth
 
+(* gh-ocannl-1697: whether a CUDA/HIP calibration settles at [prior_depth], the depth its caller's
+   calibration of a near-identical routine settled at, on its synchronized singles alone. A seeded
+   single is its plan with one segment's or split site's choice changed, read against the running
+   composite, so its own probes re-learned the plan's synchronization cost -- on gpt2_mini_train/HIP
+   (minix, unified) the depth-2 probe was ~258 ms of a ~550 ms single, and settled where the plan
+   did. Reusing it also reads the single at its reference's depth, the objective it is ranked by.
+
+   The singles must agree with the prior: [prior_depth] 1 only on singles that reach the target
+   themselves (a provisional depth of 1), and a deeper prior only on singles that want a batch
+   ([provisional_depth > 1]) no deeper than it -- the singles' estimate holds the round trip in
+   every launch, so a candidate whose provisional depth exceeds the prior's would batch below the
+   target there. Any other reading, a clock that resolved nothing included, calibrates as without a
+   prior. The stated boundary: a single whose fixed synchronization term differs from its plan's by
+   the probe's own detection margin, inside the band the singles agree on, is timed at the plan's
+   depth -- the change is one segment's kernels, the launch structure the term belongs to is the
+   plan's. *)
+let prior_depth_agrees ~prior_depth single_estimate =
+  match prior_depth with
+  | None -> false
+  | Some prior ->
+      Float.is_finite single_estimate.ms
+      && Float.is_positive single_estimate.ms
+      &&
+      let provisional = queued_batch_depth_with_cap ~max_depth:max_queue_depth single_estimate in
+      if prior = 1 then provisional = 1 else prior > 1 && 1 < provisional && provisional <= prior
+
 (* Split the synchronized single-launch and provisional-batch minima into fixed synchronization and
    marginal launch terms. Dividing the provisional wall by its depth leaves a share of the fixed
    term in every launch, so a shallow probe can still select a batch below the contention scale.
@@ -1675,9 +1703,9 @@ let install_compile_observer f =
    returns the wall in milliseconds. Separated from [time_routine] so a test can drive the whole
    policy -- which depth a call settles on, which window it times, how many launches each costs --
    on an injected clock, with no device and no machine-dependent routine (gh-ocannl-1074). *)
-let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:ratio ~started
-    ~tagged ~on_retry ~on_call ~phase ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap
-    ~batch =
+let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:ratio ~prior_depth
+    ~started ~tagged ~on_retry ~on_call ~phase ~retry_contended ~dispersion ~timing ~repeats
+    ~queue_depth_cap ~batch =
   (* gh-ocannl-1527: the cut of a hopeless window, against the reading the caller ranks it by, at
      the caller's ratio (gh-ocannl-1697). *)
   let hopeless ?at_least_ms () =
@@ -1798,6 +1826,16 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
               1,
               Some single_estimate.ms,
               (Singles_far_over_target, None, None, None) )
+          else if prior_depth_agrees ~prior_depth single_estimate then
+            (* gh-ocannl-1697: the caller's settled depth, which the singles agree with
+               ({!prior_depth_agrees}), taken without the probes. At depth 1 the singles are the
+               reading, as at every depth-1 settle; deeper, the window below is a fresh one at that
+               depth, and the per-launch estimate is the singles'. *)
+            let depth = Int.min queue_depth_cap (Option.value_exn prior_depth) in
+            ( single_estimate.samples,
+              depth,
+              Some (single_estimate.ms *. Float.of_int depth),
+              (Prior_depth, None, None, None) )
           else
             let provisional_depth =
               queued_batch_depth_with_cap ~max_depth:queue_depth_cap single_estimate
@@ -2258,16 +2296,16 @@ let calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio:r
 
 (* Exposed for tests with an injected clock: the per-call observers [time_routine] gives a search,
    timed from this call's own start, and the dispersion policy it picks by backend. *)
-let calibrate_and_time_with_retry_observer ~hopeless_against ~on_retry ~on_call ~phase
+let calibrate_and_time_with_retry_observer ~hopeless_against ~prior_depth ~on_retry ~on_call ~phase
     ~retry_contended ~dispersion ~timing ~repeats ~queue_depth_cap ~batch =
-  calibrate_and_time_from ~window_bound_ms:None ~hopeless_against ~hopeless_ratio
+  calibrate_and_time_from ~window_bound_ms:None ~hopeless_against ~hopeless_ratio ~prior_depth
     ~started:(Mtime_clock.counter ()) ~tagged:false ~on_retry ~on_call ~phase ~retry_contended
     ~dispersion ~timing ~repeats ~queue_depth_cap ~batch
 
 (* Preserve the original all-labelled helper's source interface: an optional observer would not
    erase without adding a positional argument. *)
 let calibrate_and_time ~retry_contended ~timing ~repeats ~queue_depth_cap ~batch =
-  calibrate_and_time_with_retry_observer ~hopeless_against:None
+  calibrate_and_time_with_retry_observer ~hopeless_against:None ~prior_depth:None
     ~on_retry:(fun () -> ())
     ~on_call:(fun _ -> ())
     ~phase:None ~retry_contended ~dispersion:Refuse_dispersed ~timing ~repeats ~queue_depth_cap
@@ -6392,7 +6430,7 @@ module Make (D : Driver) = struct
      P2 on PR #103), or the returned winner would stay bound to the tuner's midpoint test values. *)
   let time_routine ?(on_retry = fun () -> ()) ?(on_call = fun _ -> ()) ?(tag_failures = false)
       ?phase ?(stop = fun () -> false) ?hopeless_against ?(hopeless_ratio = hopeless_ratio)
-      ?window_bound_ms ~timing ~repeats cctx routine =
+      ?window_bound_ms ?prior_depth ~timing ~repeats cctx routine =
     let check_stop () = if stop () then raise Timing_stopped in
     (* The call's [setup_ms] runs from here: the pre-dispatch validation, the warmup and the
        calibration. *)
@@ -6445,8 +6483,8 @@ module Make (D : Driver) = struct
           Int.incr ordinal;
           wall
         in
-        calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio ~started
-          ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing ~repeats
+        calibrate_and_time_from ~window_bound_ms ~hopeless_against ~hopeless_ratio ~prior_depth
+          ~started ~tagged:tag_failures ~on_retry ~on_call ~phase ~timing ~repeats
           ~retry_contended:(retry_contended_window_for_backend (D.backend_facts cctx))
           ~dispersion:(dispersion_policy_for_backend (D.backend_facts cctx))
           ~queue_depth_cap:(queue_depth_cap_for_backend (D.backend_facts cctx))
@@ -9796,6 +9834,12 @@ module Make (D : Driver) = struct
              default's. *)
           let seeded_seed_digest = ref None in
           let seeded_ms () = Option.bind !seeded_seed_digest ~f:(Hashtbl.find timed_ms_by_digest) in
+          (* gh-ocannl-1697: the depth each admitted timing settled at, by digest, for the seeded
+             singles' calibration ({!prior_depth_agrees}): the seeded plan's, which they reuse. *)
+          let timed_depth_by_digest = Hashtbl.create (module String) in
+          let seeded_depth () =
+            Option.bind !seeded_seed_digest ~f:(Hashtbl.find timed_depth_by_digest)
+          in
           (* A digest that was refused and later timed by an equivalent seed is not an unmeasured
              candidate, so the count is over the refusals that stuck. *)
           let candidates_contended () =
@@ -9979,6 +10023,13 @@ module Make (D : Driver) = struct
          without its staff, and a dedup carries the time its code was already measured at, if
          it was. *)
             let last_attempt = ref `Other in
+            (* gh-ocannl-1697: the depth the last candidate timing window settled at, from its own
+               call record (a contention retry's last), for [timed_depth_by_digest]. *)
+            let last_window_depth = ref None in
+            let on_window_call (call : timing_call) =
+              last_window_depth := Some call.decision.depth;
+              on_call call
+            in
             (* gh-ocannl-1409, gh-ocannl-1556, gh-ocannl-1604: the search's wall-clock budget,
                measured from the start of the call ([budget_clock]), so the base compile and the
                baseline's timing window are charged to it. Nothing in flight can be cancelled -- a
@@ -10075,7 +10126,7 @@ module Make (D : Driver) = struct
              classifier (gh-ocannl-564). Tagged [Launch] it was fatal on every C backend, so a
              scratch context missing one of the caller's initializations condemned the search
              instead of declining a candidate. *)
-            let timing_window ~label ~stop ?hopeless_against ?hopeless_ratio c =
+            let timing_window ~label ~stop ?hopeless_against ?hopeless_ratio ?prior_depth c =
               (* The lineage-wide validation is OUTSIDE the boundary (gh-ocannl-569): a poisoned
                  lineage, an uninitialized input and an unexecuted dependency are properties of the
                  context and the computation, so a genuine one fails every candidate of every arm at
@@ -10088,6 +10139,7 @@ module Make (D : Driver) = struct
                  Tagged, though not contained: the tag carries no boundary here, it only labels the
                  phase so the fallback handler at the end of [search] reports a pre-dispatch
                  validation failure as [Preflight] rather than as its [Transform] default. *)
+              last_window_depth := None;
               Outcome.tag Outcome.Preflight (fun () -> D.check_lineage_runnable c.cctx c.routine);
               (* gh-ocannl-1621: the state every window starts from, restored outside the boundary
                  for the same reason -- it is the lineage's, not this candidate's. *)
@@ -10099,8 +10151,9 @@ module Make (D : Driver) = struct
                          gh-ocannl-1527: [`Hopeless] a window cut as out of the running -- neither a
                          failure of the candidate, so caught inside the boundary. *)
                       match
-                        time_routine ~on_retry ~on_call ~tag_failures:true ~phase:!progress_phase
-                          ~stop ?hopeless_against ?hopeless_ratio ~timing ~repeats c.cctx c.routine
+                        time_routine ~on_retry ~on_call:on_window_call ~tag_failures:true
+                          ~phase:!progress_phase ~stop ?hopeless_against ?hopeless_ratio
+                          ?prior_depth ~timing ~repeats c.cctx c.routine
                       with
                       | timing_result -> `Timed timing_result
                       | exception Timing_stopped -> `Stopped
@@ -10111,7 +10164,8 @@ module Make (D : Driver) = struct
                     `Timed (apply_measurement_seam ~label ~digest:c.digest_after timing_result)
                 | (`Stopped | `Hopeless _) as other -> other)
             in
-            let try_spec ?(hopeless_against = fun () -> None) ?hopeless_ratio:ratio spec =
+            let try_spec ?(hopeless_against = fun () -> None) ?hopeless_ratio:ratio ?prior_depth
+                spec =
               last_attempt := `Other;
               Seam.get on_candidate_attempt (spec_label spec);
               let pruned_by_bound =
@@ -10216,7 +10270,7 @@ module Make (D : Driver) = struct
                         timing_window ~label:(spec_label spec) ~stop:(budget_stop spec)
                           ?hopeless_against:
                             (if measurement_is_physical () then hopeless_against () else None)
-                          ?hopeless_ratio:ratio c
+                          ?hopeless_ratio:ratio ?prior_depth c
                       with
                       | Ok (`Hopeless h) ->
                           (* gh-ocannl-1527: not ranked, and not a refusal -- the window proved the
@@ -10341,6 +10395,8 @@ module Make (D : Driver) = struct
                           | _ -> ());
                           if spec_expects_mma spec then Int.incr n_mma_timed;
                           Hashtbl.set timed_ms_by_digest ~key:c.digest_after ~data:ms;
+                          Option.iter !last_window_depth ~f:(fun depth ->
+                              Hashtbl.set timed_depth_by_digest ~key:c.digest_after ~data:depth);
                           Hashtbl.set label_by_digest ~key:c.digest_after ~data:(spec_label spec);
                           (* Structural, not label-promised, and deliberately a different population
                              from [n_mma_timed]: with [rounds > 0] the beam menu appends a
@@ -10465,8 +10521,8 @@ module Make (D : Driver) = struct
                accounting, which the census does not replace: it covers pools the shared seam does
                not allocate (the merge buffer) and, on [cc], counts host allocations whose GC
                finalizer has not yet run. *)
-            let try_spec ?hopeless_against ?hopeless_ratio spec =
-              let result = try_spec ?hopeless_against ?hopeless_ratio spec in
+            let try_spec ?hopeless_against ?hopeless_ratio ?prior_depth spec =
+              let result = try_spec ?hopeless_against ?hopeless_ratio ?prior_depth spec in
               (* Gated explicitly, not just by [logf]: [logf]'s arguments are evaluated whether or
                  not the flag is on, and both readings here fold a hashtable. *)
               if log_enabled () then
@@ -10523,7 +10579,7 @@ module Make (D : Driver) = struct
                leaves the candidate it was in, and the costs of everything before it. Counted before
                the attempt too, so a fatal candidate -- which writes [search_done] from inside
                itself and raises -- is in the closing record's [attempts]. *)
-            let try_spec ?hopeless_against ?hopeless_ratio spec =
+            let try_spec ?hopeless_against ?hopeless_ratio ?prior_depth spec =
               check_abandon ();
               if not (budget_allows ~what:(spec_label spec) ~floor:(budget_floor spec)) then (
                 last_attempt := `Other;
@@ -10536,7 +10592,7 @@ module Make (D : Driver) = struct
                 if progress_enabled () then
                   progress_line "candidate"
                     (Printf.sprintf "%s attempt=%S" (progress_where ()) (spec_label spec));
-                try_spec ?hopeless_against ?hopeless_ratio spec)
+                try_spec ?hopeless_against ?hopeless_ratio ?prior_depth spec)
             in
             (* The search's seeds for each lowering it seeds ({!search_seeding}, gh-ocannl-1490):
                the family seeds, then the coalesced layout's branch beside them (gh-ocannl-1165) —
@@ -10995,14 +11051,15 @@ module Make (D : Driver) = struct
                  the incumbent a staffed join's finals re-times. *)
               let running_src = ref None in
               (* gh-ocannl-1697: a seeded sweep's singles are whole seeded routines, each cut as
-                 hopeless against [seeded_cut] of the running composite's reading. *)
+                 hopeless against [seeded_cut] of the running composite's reading, and calibrated at
+                 the seeded plan's settled depth ({!prior_depth_agrees}). *)
               let try_single spec =
                 match seeded_cut with
                 | None -> try_spec spec
                 | Some reference ->
                     try_spec
                       ~hopeless_against:(fun () -> reference !running_ms)
-                      ~hopeless_ratio:seeded_hopeless_ratio spec
+                      ~hopeless_ratio:seeded_hopeless_ratio ?prior_depth:(seeded_depth ()) spec
               in
               let without key choices =
                 List.filter choices ~f:(fun (k, _) -> not (equal_key k key))
@@ -11366,7 +11423,8 @@ module Make (D : Driver) = struct
                               match
                                 try_spec
                                   ~hopeless_against:(fun () -> seeded_cut_reference !running_ms)
-                                  ~hopeless_ratio:seeded_hopeless_ratio spec
+                                  ~hopeless_ratio:seeded_hopeless_ratio
+                                  ?prior_depth:(seeded_depth ()) spec
                               with
                               | Some ((_, ms) as r) ->
                                   admit r;
