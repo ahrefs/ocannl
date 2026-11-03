@@ -1156,6 +1156,29 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`left only zombies ... inert, not reaped`), `run` keeps its verdict, and the stand-in must have
   held a zombie and nothing live; taking out the iteration shell's reaping trap, or that branch,
   makes the set refused (exit 2) under the same stand-in.
+- `last` is the worktree's newest PUBLISHED run, and a launch publishes only once the script runs
+  it (after the worktree lock, before the fleet slot it takes itself). A launch queued behind a
+  wrapper that waits first — `fleet-worker.sh execution slot --wait-window -- tools/test-run.sh
+  run ...` waiting out a measurement or a free slot — is no run yet, and `wait last` used to
+  answer with the previous run's verdict: a false green, three times in wave-20261102
+  (gh-ocannl-1830). So `status last` and `wait last` follow the worktree: while a launch of it is in
+  flight unpublished, a finished `last` is not their answer (`queued:`, status 3; `wait` waits
+  for the launch to publish and then for its run, 124 when the budget runs out, so the bounded
+  re-issue loop works unchanged), and once one they saw ends unpublished (its slot refused) they
+  refuse to answer for the run before it (`unpublished:`, status 1, wait 2) until a run publishes;
+  a named run (`wait RUN`) is waited for alone. Nothing on disk records a queued launch, so it is
+  read off the process table — every process of a launch's chain carries its words in argv until
+  the batch ends — under a fail-closed allowlist (`proc_table_perl`: a shell, env, perl or python
+  program; a `test-run.sh` word followed by a launching verb, naming THIS worktree's script; no
+  `ssh` or `execution leg` before it; not the reader's own ancestors), less the chain the current
+  `last` run recorded at launch (`launchers`: its launcher and ancestors, by pid and start token),
+  so a run's own wrapper winding down after the verdict is not mistaken for a launch to come. The
+  one fact stored is the sighting (`queued-<key>`, the run `last` named then), since a launch
+  that left without publishing leaves nothing else; a note naming another run is inert. This
+  does not settle gh-ocannl-607: the gap is before any publication, so deriving `last` from the
+  run directories would leave it exactly as it was. `list` lists this worktree's runs (by `wt`,
+  `--all` for the state root's): the newest entry of a shared root is as likely a sibling
+  checkout's, and an `ls -td` there read one. Legs 99-100 of `tools/test-test-run.sh`.
 - Every liveness question in that script — per pid and per process GROUP — reads process STATE and
   not only the signal, because `kill -0` succeeds on a ZOMBIE exactly as on a live process, and an
   identity token does not rescue the check either: a zombie leader still prints its recorded

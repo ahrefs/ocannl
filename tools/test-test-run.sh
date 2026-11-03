@@ -12,10 +12,11 @@
 # Each leg's body is a function, run by `harness_leg_run 'N: what it pins
 # #group' leg_N` (scripts/harness-support.sh), its name led by the leg numbers
 # below and closed by the one group it belongs to (gh-ocannl-1202):
-# #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83-85),
+# #group-alive (1-5), #stop (6-8, 67), #queries (39, 100), #repeat (9-25, 38, 83-85),
 # #options (26-28, 37, 89, 94-96, 98), #width (29-34, 48-52, 64, 70), #digest (35-36,
-# 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74, 97: the run/start
-# lifecycle with its signal legs, and both fork-window negative controls),
+# 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74, 97, 99: the run/start
+# lifecycle with its signal legs, both fork-window negative controls, and a
+# launch queued before it publishes),
 # #source (59-63, 66), #slot (53-58, 78, 88, 93), #device (75-77, 91), #credentials (79, 90),
 # #bisect (82), #harness (86). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
@@ -314,6 +315,22 @@
 #      affected; an affected failure, CROSS-CUTTING (either form), INCOMPLETE,
 #      and a line of no known family run nothing; a list with no runtest-
 #      member runs nothing, exit 0; no scratch list outlives any of them.
+#  99. `wait last` and `status last` follow a launch still in flight
+#      (gh-ocannl-1830): one queued behind a wrapper that waits before it runs
+#      this script (the fleet slot's `--wait-window`, stood in for) is `queued:`
+#      (status 3) and a wait for it times out (124), never the previous run's
+#      green verdict, which `wait RUN` still reads by name; released, the wait
+#      follows it to its own red verdict. One that ends without publishing (its
+#      slot refused) is refused (`unpublished:`, wait 2, status 1) until a run
+#      publishes, and so is one seen queued behind a live run. A run's own chain alive after its verdict is no launch in
+#      flight, and with its `launchers` record emptied it is (the negative
+#      control). The slot this script takes itself is taken after publication:
+#      a run waiting for it is `last`, live, and its wait times out on it.
+# 100. every `last` lookup stays in its own worktree: beside a sibling's newer
+#      red run in the same state root, `wait last`, `status last` and `paths
+#      run last` name the worktree's own, `list` lists only its runs (`--all`
+#      lists the sibling's too, the control), and a launch queued in the
+#      sibling holds no wait here.
 #  90. the runner's own OCANNL_TOOL_TESTRUN_BG, _RD and _OWN reach no dune: a
 #      run, a probed GPU run under a slot, a probed repeat's iterations.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
@@ -8667,6 +8684,312 @@ if [ -z "$pp_detail" ]; then report 0 "$pp_refuse_label"; else report 1 "$pp_ref
 rm -f "$pp_stub"
 }
 harness_leg_run '98: prepush runs affected'\''s list without slow-/train- members #options' leg_98
+
+# ---------------------------------------------------------------------------
+# Legs 99-100: `last` is this worktree's, and a launch still in flight is not
+# yet `last` (gh-ocannl-1830)
+# ---------------------------------------------------------------------------
+# A launch is published only once this script runs it, so one queued behind a
+# wrapper that waits first -- `fleet-worker.sh execution slot --wait-window --
+# tools/test-run.sh run ...`, waiting out a measurement or a slot -- left
+# `wait last` answering with the previous run's verdict: a false green. The
+# wrapper here is a bash that carries the launch's words in its argv, as the
+# slot's Python does, and waits for a release file before it execs them. The
+# previous run is green and the queued one red, so a stale answer is told from
+# the right one by its exit status alone. Two fixture checkouts share one
+# state root; their dune passes, or fails on `@red`.
+q_runs=$TMP/queued-runs
+q_bin=$TMP/queued-bin
+q_root=$TMP/queued-repo
+q_sib=$TMP/queued-sibling
+q_wraps=()
+mkdir -p "$q_runs" "$q_bin"
+for q_r in "$q_root" "$q_sib"; do
+  mkdir -p "$q_r/tools" "$q_r/test/config" "$q_r/arrayjit/test"
+  cp "$SRC" "$q_r/tools/test-run.sh"
+  stage_sourced "$q_r" || report 1 "queued: fixture" "$stage_error"
+done
+cat >"$q_bin/dune" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in
+  *" @red "*) echo 'built red'; exit 1 ;;
+  *" @hold "*) while [ ! -e "$Q_HOLD" ]; do sleep .1; done ;;
+esac
+echo 'built ok'
+EOF
+chmod +x "$q_bin/dune"
+q() { # root subcommand [argv...]: that checkout's script, against the shared state root
+  local root=$1
+  shift
+  OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH "$root/tools/test-run.sh" "$@"
+}
+q_capture() { # root subcommand [argv...]
+  q "$@" >"$TMP/queued.out" 2>&1
+  q_rc=$?
+  q_out=$(cat "$TMP/queued.out")
+}
+q_last() { q "$1" paths run last 2>/dev/null; }
+# A wrapper in ROOT that waits for RELEASE, then runs what follows it --
+# `exec`, or (for `refuse`) exits 75 having run nothing, as a refused slot does.
+q_wrap() { # root release exec|refuse argv...
+  local root=$1 release=$2 how=$3
+  shift 3
+  (cd "$root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
+    while [ ! -e "$1" ]; do sleep .1; done
+    [ "$2" = exec ] || exit 75
+    shift 2
+    exec "$@"' q-wrap "$release" "$how" "$@") >/dev/null 2>&1 &
+  q_wrap_pid=$!
+  q_wraps+=("$q_wrap_pid:$release")
+}
+q_release_all() {
+  local w
+  for w in ${q_wraps[@]+"${q_wraps[@]}"}; do
+    touch "${w#*:}"
+    wait "${w%%:*}" 2>/dev/null
+  done
+  q_wraps=()
+}
+q_until() { # seconds command...: 0 once the command succeeds
+  local n=$(( $1 * 10 ))
+  shift
+  while [ "$n" -gt 0 ]; do "$@" && return 0; sleep .1; n=$((n - 1)); done
+  return 1
+}
+q_finished() { local d; d=$(q_last "$1") && [ -f "$d/exit" ] && [ "$d" != "${2:-}" ]; }
+
+leg_99() {
+q_label="wait last and status last follow a launch queued before it publishes"
+q_unpub_label="a launch seen in flight that ends unpublished is refused, not answered with the run before it"
+q_own_label="a run's own launch chain alive after its verdict is no launch in flight"
+q_own_nc_label="negative control: with its launchers record emptied, that chain is a launch in flight"
+q_slot_label="the slot this script takes itself waits after the publication"
+q_detail=
+q_capture "$q_root" run build @ok
+q_green=$(q_last "$q_root")
+[ "$q_rc" = 0 ] && [ -n "$q_green" ] || { harness_abandon "the green run: exit $q_rc: $q_out"; return; }
+q_wrap "$q_root" "$TMP/queued.release1" exec tools/test-run.sh run build @red
+q_red_wrap=$q_wrap_pid
+# The stale answer is green, by name: what `wait last` used to return.
+q_capture "$q_root" wait "$q_green" --timeout 5
+[ "$q_rc" = 0 ] || q_detail="wait on the green run by name: exit $q_rc (want 0): $q_out"
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" status last
+  { [ "$q_rc" = 3 ] && grep -qF "queued: a launch in this worktree has not published its run yet: $q_red_wrap " <<<"$q_out" &&
+    grep -qF "not that launch's: $q_green" <<<"$q_out" && ! grep -qF 'verdict:' <<<"$q_out"; } ||
+    q_detail="status last while queued: exit $q_rc (want 3, queued, wrapper $q_red_wrap): $q_out"
+fi
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 1
+  { [ "$q_rc" = 124 ] && grep -qF 'wait timed out after 1s: a launch in this worktree has not published its run yet' <<<"$q_out" &&
+    ! grep -qF 'verdict:' <<<"$q_out"; } ||
+    q_detail="wait last while queued: exit $q_rc (want 124): $q_out"
+fi
+# One wait spans the queue, the publication and the run: started while the
+# launch is queued, it ends with the queued run's red verdict.
+if [ -z "$q_detail" ]; then
+  q "$q_root" wait last --timeout 60 >"$TMP/queued-follow.out" 2>&1 &
+  q_follow=$!
+  sleep 1
+  touch "$TMP/queued.release1"
+  wait "$q_follow"
+  q_rc=$?
+  q_out=$(cat "$TMP/queued-follow.out")
+  q_red=$(q_last "$q_root")
+  { [ "$q_rc" = 1 ] && [ -n "$q_red" ] && [ "$q_red" != "$q_green" ] && grep -qF "$q_red" <<<"$q_out" &&
+    grep -qF '@red' "$q_red/cmd"; } ||
+    q_detail="wait last across the release: exit $q_rc (want 1, the queued run's); last: ${q_red:-none}: $q_out"
+fi
+q_release_all
+if [ -z "$q_detail" ]; then report 0 "$q_label"; else report 1 "$q_label" "$q_detail"; fi
+
+# A launch refused before it ran -- its slot never came -- leaves `last` on the
+# run before it, green here: once it is gone, that verdict is still not its own.
+q_detail=
+q_capture "$q_root" run build @ok
+q_green=$(q_last "$q_root")
+[ "$q_rc" = 0 ] || q_detail="the second green run: exit $q_rc: $q_out"
+if [ -z "$q_detail" ]; then
+  q_wrap "$q_root" "$TMP/queued.release2" refuse tools/test-run.sh run build @red
+  q_refused=$q_wrap_pid
+  q_capture "$q_root" wait last --timeout 1
+  [ "$q_rc" = 124 ] || q_detail="wait last while the refused launch is queued: exit $q_rc (want 124): $q_out"
+  touch "$TMP/queued.release2"
+  wait "$q_refused"
+fi
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 5
+  { [ "$q_rc" = 2 ] && grep -qF "unpublished: a launch seen in flight in this worktree after $q_green ended without publishing a run" <<<"$q_out" &&
+    ! grep -qF 'verdict:' <<<"$q_out"; } ||
+    q_detail="wait last after the refused launch: exit $q_rc (want 2, unpublished): $q_out"
+fi
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" status last
+  { [ "$q_rc" = 1 ] && grep -qF 'unpublished:' <<<"$q_out"; } ||
+    q_detail="status last after the refused launch: exit $q_rc (want 1, unpublished): $q_out"
+fi
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait "$q_green" --timeout 5
+  [ "$q_rc" = 0 ] || q_detail="the run before it, by name: exit $q_rc (want 0): $q_out"
+fi
+# A run published since makes the note inert.
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" run build @ok
+  q_capture "$q_root" wait last --timeout 5
+  { [ "$q_rc" = 0 ] && grep -qF 'verdict: pass' <<<"$q_out"; } ||
+    q_detail="wait last after a later run: exit $q_rc (want 0): $q_out"
+fi
+# Queued behind a run still live, then refused (by the worktree lock that run
+# holds, say): seen while the run is live, so its verdict is not the launch's
+# either once both are over.
+if [ -z "$q_detail" ]; then
+  Q_HOLD=$TMP/queued.hold q_capture "$q_root" start build @hold
+  q_held=$(q_last "$q_root")
+  { [ "$q_rc" = 0 ] && [ -n "$q_held" ] && [ ! -f "$q_held/exit" ]; } ||
+    q_detail="the held run: exit $q_rc; last ${q_held:-none}: $q_out"
+fi
+if [ -z "$q_detail" ]; then
+  q_wrap "$q_root" "$TMP/queued.release5" refuse tools/test-run.sh run build @red
+  q_refused=$q_wrap_pid
+  q_capture "$q_root" wait last --timeout 1
+  { [ "$q_rc" = 124 ] && grep -qxF "wait timed out after 1s: $q_held" <<<"$q_out"; } ||
+    q_detail="wait last on the live run, a launch queued behind it: exit $q_rc (want 124 on $q_held): $q_out"
+  touch "$TMP/queued.release5"
+  wait "$q_refused"
+  touch "$TMP/queued.hold"
+  q_until 30 q_finished "$q_root" "" ||
+    q_detail="${q_detail:-the held run never finished: $q_held}"
+fi
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 10
+  { [ "$q_rc" = 2 ] && grep -qF "unpublished: a launch seen in flight in this worktree after $q_held ended" <<<"$q_out"; } ||
+    q_detail="wait last after the held run and the launch refused behind it: exit $q_rc (want 2, unpublished): $q_out"
+fi
+touch "$TMP/queued.hold"
+q_release_all
+if [ -z "$q_detail" ]; then report 0 "$q_unpub_label"; else report 1 "$q_unpub_label" "$q_detail"; fi
+
+# The chain a run recorded at launch: a shell that ran it and lives on after
+# its verdict carries its launch's words, and is that run's, not one to come.
+q_detail= q_nc_detail=
+q_before=$(q_last "$q_root")
+(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
+  tools/test-run.sh run build @ok >/dev/null 2>&1
+  while [ ! -e "$1" ]; do sleep .1; done' q-linger "$TMP/queued.release3") &
+q_wraps+=("$!:$TMP/queued.release3")
+if ! q_until 30 q_finished "$q_root" "$q_before"; then
+  q_detail="the lingering shell's run never finished: last: $(q_last "$q_root")"
+else
+  q_linger=$(q_last "$q_root")
+  q_capture "$q_root" wait last --timeout 2
+  { [ "$q_rc" = 0 ] && grep -qF "$q_linger" <<<"$q_out"; } ||
+    q_detail="wait last with the run's own shell alive: exit $q_rc (want 0): $q_out"
+  if [ -z "$q_detail" ]; then
+    q_capture "$q_root" status last
+    { [ "$q_rc" = 0 ] && grep -qF 'verdict: pass' <<<"$q_out"; } ||
+      q_detail="status last with the run's own shell alive: exit $q_rc (want 0): $q_out"
+  fi
+  grep -q . "$q_linger/launchers" ||
+    q_nc_detail="the run recorded no launch chain: $(cat "$q_linger/launchers" 2>&1)"
+  if [ -z "$q_nc_detail" ]; then
+    cp "$q_linger/launchers" "$TMP/queued-launchers"
+    : >"$q_linger/launchers"
+    q_capture "$q_root" wait last --timeout 1
+    [ "$q_rc" = 124 ] || q_nc_detail="wait last with no chain on record: exit $q_rc (want 124): $q_out"
+    cp "$TMP/queued-launchers" "$q_linger/launchers"
+  fi
+fi
+q_release_all
+# The control's own sighting noted the run; a run published since clears it.
+q "$q_root" run build @ok >/dev/null 2>&1
+if [ -z "$q_detail" ]; then report 0 "$q_own_label"; else report 1 "$q_own_label" "$q_detail"; fi
+if [ -z "$q_nc_detail" ] && [ -z "$q_detail" ]; then report 0 "$q_own_nc_label"
+else report 1 "$q_own_nc_label" "${q_nc_detail:-not reached: $q_detail}"; fi
+
+# The other wait: the fleet slot this script takes itself, through a fake
+# fleet-worker.sh that holds the batch until a release file appears. The run
+# is published before it asks for the slot, so `last` is that run, live.
+q_detail=
+q_fw=$TMP/queued-fleet-worker.sh
+cat >"$q_fw" <<'FAKE'
+#!/usr/bin/env bash
+if [ "$1 $2 $3" = "execution slot --probe" ]; then echo "EXECUTION SLOT PROBE fakebox 4 4"; exit 0; fi
+while [ "$1" != -- ]; do shift; done
+shift
+while [ ! -e "$Q_SLOT_RELEASE" ]; do sleep .1; done
+exec "$@"
+FAKE
+chmod +x "$q_fw"
+q_before=$(q_last "$q_root")
+OCANNL_TOOL_FLEET_WORKER=$q_fw Q_SLOT_RELEASE=$TMP/queued.slot q_capture "$q_root" start build @red
+q_slotted=$(q_last "$q_root")
+{ [ "$q_rc" = 0 ] && [ -n "$q_slotted" ] && [ "$q_slotted" != "$q_before" ] && [ ! -f "$q_slotted/exit" ]; } ||
+  q_detail="start under a held slot: exit $q_rc; last: ${q_slotted:-none} (before: $q_before): $q_out"
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 1
+  { [ "$q_rc" = 124 ] && grep -qxF "wait timed out after 1s: $q_slotted" <<<"$q_out"; } ||
+    q_detail="wait last on the run waiting for its slot: exit $q_rc (want 124 on $q_slotted): $q_out"
+fi
+touch "$TMP/queued.slot"
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 30
+  { [ "$q_rc" = 1 ] && grep -qF "$q_slotted" <<<"$q_out"; } ||
+    q_detail="wait last once the slot came: exit $q_rc (want 1): $q_out"
+else
+  q "$q_root" wait last --timeout 30 >/dev/null 2>&1
+fi
+if [ -z "$q_detail" ]; then report 0 "$q_slot_label"; else report 1 "$q_slot_label" "$q_detail"; fi
+}
+harness_leg_run '99: wait last and status last follow a launch still in flight #lifecycle' leg_99
+
+leg_100() {
+q_sib_label="every last lookup stays in its own worktree beside a sibling's newer run"
+q_detail=
+q_capture "$q_root" run build @ok
+q_own=$(q_last "$q_root")
+sleep 1 # the sibling's run is NEWER, by name too
+q_capture "$q_sib" run build @red
+q_theirs=$(q_last "$q_sib")
+{ [ "$q_rc" = 1 ] && [ -n "$q_own" ] && [ -n "$q_theirs" ] && [ "$q_own" != "$q_theirs" ]; } ||
+  { harness_abandon "the two runs: sibling exit $q_rc, own ${q_own:-none}, theirs ${q_theirs:-none}: $q_out"; return; }
+q_capture "$q_root" wait last --timeout 5
+{ [ "$q_rc" = 0 ] && grep -qF "$q_own" <<<"$q_out"; } || q_detail="wait last: exit $q_rc (want 0, $q_own): $q_out"
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" status last
+  { [ "$q_rc" = 0 ] && grep -qF "$q_own" <<<"$q_out" && ! grep -qF "$q_theirs" <<<"$q_out"; } ||
+    q_detail="status last: exit $q_rc (want its own $q_own): $q_out"
+fi
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" list
+  q_list=$q_out
+  q_capture "$q_root" list --all
+  q_all=$q_out
+  { grep -qF "$(basename "$q_own")" <<<"$q_list" && ! grep -qF "$(basename "$q_theirs")" <<<"$q_list" &&
+    grep -qF "$(basename "$q_theirs")" <<<"$q_all" && grep -qF "$(basename "$q_own")" <<<"$q_all"; } ||
+    q_detail="list: $q_list; list --all (the control: both): $q_all"
+fi
+if [ -z "$q_detail" ]; then
+  q_capture "$q_sib" list
+  { grep -qF "$(basename "$q_theirs")" <<<"$q_out" && ! grep -qF "$(basename "$q_own")" <<<"$q_out"; } ||
+    q_detail="the sibling's list: $q_out"
+fi
+# A launch queued in the sibling is the sibling's, and holds no wait here.
+if [ -z "$q_detail" ]; then
+  q_wrap "$q_sib" "$TMP/queued.release4" exec tools/test-run.sh run build @ok
+  q_capture "$q_root" wait last --timeout 2
+  { [ "$q_rc" = 0 ] && grep -qF "$q_own" <<<"$q_out"; } ||
+    q_detail="wait last here with the sibling's launch queued: exit $q_rc (want 0): $q_out"
+  if [ -z "$q_detail" ]; then
+    q_capture "$q_sib" status last
+    { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+      q_detail="the sibling's status last, its launch queued: exit $q_rc (want 3): $q_out"
+  fi
+fi
+q_release_all
+q "$q_sib" wait last --timeout 30 >/dev/null 2>&1
+if [ -z "$q_detail" ]; then report 0 "$q_sib_label"; else report 1 "$q_sib_label" "$q_detail"; fi
+}
+harness_leg_run '100: every last lookup stays in its own worktree #queries' leg_100
 
 # ---------------------------------------------------------------------------
 # Leg 90: the runner's own variables never reach dune (gh-ocannl-1448)
