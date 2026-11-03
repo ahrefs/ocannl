@@ -1558,6 +1558,67 @@ let program_runners_cases =
       [ "probe <- pinned [BAR FOO], half, helper, echo"; "helper <- helper [FOO]" ] );
   ]
 
+(* ahrefs/ocannl#1749: [Scan.stanza_programs], the per-program reading `env_var_deps` and
+   `generated_lock_scan` both take -- each program a stanza declares, with its own modules, the
+   modules the stanza says have no implementation, and who runs it. [sources] are the paths a scan
+   was handed; [Scan.directory_modules] keeps the `.ml` files directly in the stanza's directory.
+   Rendered "<head> <name>: modules …; no implementation …; run by …", where "itself" stands for a
+   test stanza's own run and every other runner is named by its alias. *)
+let render_programs ~sources source =
+  let placed = Scan.walk "" (Scan.stanzas source) ~f:(fun subdir stanza -> [ (subdir, stanza) ]) in
+  let group =
+    List.filter_map placed ~f:(fun (subdir, stanza) ->
+        Option.some_if (String.is_empty subdir) stanza)
+  in
+  let directory_modules = Scan.directory_modules ~dir:"" sources in
+  let words = function [] -> "-" | words -> String.concat ~sep:" " words in
+  List.concat_map group ~f:(fun stanza ->
+      match Scan.stanza_programs ~runner_stanzas:placed ~directory_modules group stanza with
+      | None -> []
+      | Some declared ->
+          List.map declared.Scan.programs ~f:(fun p ->
+              Printf.sprintf "%s %s: modules %s; no implementation %s; run by %s"
+                declared.Scan.programs_head p.Scan.program (words p.Scan.own_modules)
+                (words
+                   (List.filter p.Scan.own_modules ~f:(fun m -> not (Scan.needs_source declared m))))
+                (words
+                   ((if declared.Scan.runs_itself then [ "itself" ] else [])
+                   @ List.concat_map p.Scan.rule_runners ~f:(fun (runner, _) ->
+                       Scan.aliases_of runner)))))
+
+let stanza_programs_cases =
+  [
+    (* Two names, two programs: each links its own main and the modules no name owns, and a module
+       declared without implementation is one no source is owed for. *)
+    ( "an executables stanza is one program per name, sharing what no name owns",
+      [],
+      {dune|(executables (names alpha beta) (modules alpha beta shared iface)
+ (modules_without_implementation iface))
+(rule (alias run-beta) (action (run %{dep:beta.exe})))|dune},
+      [
+        "executables alpha: modules alpha iface shared; no implementation iface; run by -";
+        "executables beta: modules beta iface shared; no implementation iface; run by run-beta";
+      ] );
+    (* A test runs itself, and a rule running its executable by name is a runner of it as well --
+       which of the two a caller counts is the caller's. Its default module set is the directory's
+       `.ml` files: not a text file, not a subdirectory's source. *)
+    ( "a test runs itself beside any rule running it, over the directory's own modules",
+      [ "probe.ml"; "helper.ml"; "notes.txt"; "sub/deep.ml" ],
+      {dune|(test (name probe))
+(rule (alias probe-again) (action (run %{dep:probe.exe})))|dune},
+      [ "test probe: modules probe helper; no implementation -; run by itself probe-again" ] );
+    (* `(tests (names a b))` builds an executable per name, and the library beside it claims its own
+       module out of the default set and declares no program. *)
+    ( "a tests stanza is one program per name, each run by itself",
+      [ "first.ml"; "second.ml"; "common.ml"; "libmod.ml" ],
+      {dune|(tests (names first second))
+(library (name lib) (modules libmod))|dune},
+      [
+        "tests first: modules first common; no implementation -; run by itself";
+        "tests second: modules second common; no implementation -; run by itself";
+      ] );
+  ]
+
 (* The dumb reading against the placed one, in the contract's own three counts: the whole text, the
    comments the lexer finds, and the comments a stanza's parentheses contain. A marker written where
    the comment lexer does not look -- into a quoted argument, into a field -- shows up as the first
@@ -2151,6 +2212,14 @@ let () =
           []
       in
       check ("program runners -- " ^ name) expected found);
+  List.iter stanza_programs_cases ~f:(fun (name, sources, source, expected) ->
+      let found =
+        try render_programs ~sources source
+        with exn ->
+          fail "stanza programs -- %s: the scan raised: %s" name (Exn.to_string exn);
+          []
+      in
+      check ("stanza programs -- " ^ name) expected found);
   List.iter sentinel_counting_cases ~f:(fun (name, source, (in_text, in_comments, in_stanzas)) ->
       let contract = Scan.backend_marker_contract source in
       let render text comments stanzas =

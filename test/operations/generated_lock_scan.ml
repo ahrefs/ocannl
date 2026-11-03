@@ -13,14 +13,15 @@
 
    WHAT IT READS. Every dune file in the repository, and every OCaml source. The STANZA side is
    dune's own semantics as [Test_utils.Dune_stanza_scan] models them for the other per-program
-   checks, reused unchanged: a program is a name of a [(test)], [(tests)], [(executable)] or
-   [(executables)] stanza, in the directory the stanza applies to ([(subdir …)] resolved); its
-   modules are [Scan.modules_of] and [Scan.program_modules] (dune's default module set, ordered-set
-   subtraction, and the main-module rule that keeps [(executables (names a b))] apart), plus each
-   module's [(select …)] arms; its runners are [Scan.program_runners] over EVERY stanza of EVERY
-   dune file, so a rule in another directory naming [../x/probe.exe], a [%{bin:…}] public name and a
-   [chdir] are all resolved as the env-var and config checks resolve them -- plus, for a
-   [(test)]/[(tests)], the stanza itself, which dune runs. The SOURCE side is
+   checks, reused unchanged through [Scan.stanza_programs], which [env_var_deps] reads programs with
+   too: a program is a name of a [(test)], [(tests)], [(executable)] or [(executables)] stanza, in
+   the directory the stanza applies to ([(subdir …)] resolved); its modules are [Scan.modules_of]
+   and [Scan.program_modules] (dune's default module set, ordered-set subtraction, and the
+   main-module rule that keeps [(executables (names a b))] apart), plus each module's [(select …)]
+   arms; its runners are [Scan.program_runners] over EVERY stanza of EVERY dune file, so a rule in
+   another directory naming [../x/probe.exe], a [%{bin:…}] public name and a [chdir] are all
+   resolved as the env-var and config checks resolve them -- plus, for a [(test)]/[(tests)], the
+   stanza itself, which dune runs. The SOURCE side is
    [Config_key_scan.generated_init_calls_in_source], also reused unchanged: the parsed call, written
    out, through a module alias of any name or a chain of them, or bare under an [open]/[include] of
    the module, never a mention in a comment or a string. It reads a program's OWN modules only; that
@@ -65,7 +66,7 @@ module Sources = Test_utils.Config_key_scan
 
 let marker_sentinel = "generated-lock:"
 let marker_declaration = "none"
-let program_heads = [ "test"; "tests"; "executable"; "executables" ]
+let program_heads = Scan.program_heads
 
 (* One stanza of one dune file, in the directory dune applies it to. *)
 type stanza = {
@@ -203,7 +204,6 @@ let analyze ~fail ~dune_files ~sources =
     List.map sources ~f:(fun (path, content) -> (String.lowercase path, content))
     |> Map.of_alist_reduce (module String) ~f:(fun first _ -> first)
   in
-  let source_dir path = match Stdlib.Filename.dirname path with "." -> "" | dir -> dir in
   let all =
     List.concat_map dune_files ~f:(stanzas_of_dune_file ~fail)
     |> List.mapi ~f:(fun index s -> { s with index })
@@ -226,26 +226,16 @@ let analyze ~fail ~dune_files ~sources =
               if String.equal o.dune_file s.dune_file && String.equal o.dir s.dir then Some o.sexp
               else None)
         in
-        let directory_modules =
-          List.filter_map sources ~f:(fun (path, _) ->
-              if String.equal (source_dir path) s.dir && String.is_suffix path ~suffix:".ml" then
-                Some (Stdlib.Filename.chop_suffix (Stdlib.Filename.basename path) ".ml")
-              else None)
+        let directory_modules = Scan.directory_modules ~dir:s.dir (List.map sources ~f:fst) in
+        (* [Some] under the [program_heads] guard above, which is the list it answers for. *)
+        let programs =
+          Option.value_exn
+            (Scan.stanza_programs ~subdir:s.dir ~runner_stanzas ~directory_modules group s.sexp)
         in
-        let modules = Scan.modules_of ~directory_modules group s.sexp in
         let arms = Scan.select_arms s.sexp in
-        let without_implementation =
-          List.concat_map [ "modules_without_implementation"; "virtual_modules" ] ~f:(fun field ->
-              match Scan.field s.sexp field with
-              | Some args ->
-                  List.filter_map args ~f:(function
-                    | Sexp.Atom m -> Some (String.lowercase m)
-                    | _ -> None)
-              | None -> [])
-        in
         let runners_of =
-          Scan.program_runners ~subdir:s.dir ~runner_stanzas group s.sexp
-          |> List.map ~f:(fun (name, runners) -> (name, List.map runners ~f:fst))
+          List.map programs.Scan.programs ~f:(fun p ->
+              (p.Scan.program, p.Scan.own_modules, List.map p.Scan.rule_runners ~f:fst))
         in
         (* One marker per stanza, so on a stanza declaring several programs it would exempt every
            one of them, whichever it was written for. *)
@@ -258,10 +248,10 @@ let analyze ~fail ~dune_files ~sources =
                  (describe_stanza s) (List.length runners_of))
         | _ -> ());
         let marker_used = ref false in
-        List.iter runners_of ~f:(fun (name, runner_sexps) ->
+        List.iter runners_of ~f:(fun (name, own_modules, runner_sexps) ->
             let program = Scan.in_subdir s.dir (name ^ ".exe") in
             let calls =
-              List.concat_map (Scan.program_modules s.sexp ~modules ~name) ~f:(fun m ->
+              List.concat_map own_modules ~f:(fun m ->
                   let target = m ^ ".ml" in
                   let files =
                     target
@@ -275,11 +265,7 @@ let analyze ~fail ~dune_files ~sources =
                           (Map.find source_table (String.lowercase path))
                           ~f:(fun content -> (path, content)))
                   in
-                  if
-                    List.is_empty found
-                    && not
-                         (List.mem without_implementation (String.lowercase m) ~equal:String.equal)
-                  then
+                  if List.is_empty found && Scan.needs_source programs m then
                     fail
                       (Printf.sprintf
                          "%s names the module `%s` of %s, and this scan was handed no source for \
@@ -293,7 +279,7 @@ let analyze ~fail ~dune_files ~sources =
               Int.incr callers;
               let runners =
                 (List.filter_map runner_sexps ~f:stanza_of_sexp
-                @ if List.mem [ "test"; "tests" ] s.head ~equal:String.equal then [ s ] else [])
+                @ if programs.Scan.runs_itself then [ s ] else [])
                 |> List.dedup_and_sort ~compare:(fun a b -> Int.compare a.index b.index)
               in
               if List.length runners >= 2 then

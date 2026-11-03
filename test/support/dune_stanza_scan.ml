@@ -2665,3 +2665,77 @@ let modules_of ?(directory_modules = []) stanzas stanza =
         |> Set.of_list (module String)
       in
       List.filter directory_modules ~f:(fun m -> not (Set.mem claimed (String.lowercase m)))
+
+(** The modules a directory holds, from the repository-relative [paths] of the sources a scan was
+    handed: the basename of every [.ml] directly in [dir] ([""] or [.] for the root). What
+    {!modules_of} takes as [directory_modules]. *)
+let directory_modules ~dir paths =
+  let dir = in_subdir "" dir in
+  List.filter_map paths ~f:(fun path ->
+      let parent = in_subdir "" (Stdlib.Filename.dirname path) in
+      if String.equal parent dir then
+        String.chop_suffix (Stdlib.Filename.basename path) ~suffix:".ml"
+      else None)
+
+(** The modules a stanza tells dune have no implementation, lowercased: an [.mli] runs nothing, so a
+    scan handed no [.ml] for one of them is missing no input. *)
+let modules_without_implementation stanza =
+  List.concat_map [ "modules_without_implementation"; "virtual_modules" ] ~f:(fun name ->
+      match field stanza name with
+      | Some args ->
+          List.filter_map args ~f:(function Sexp.Atom m -> Some (String.lowercase m) | _ -> None)
+      | None -> [])
+
+type program = {
+  program : string;  (** the name dune builds [<program>.exe] from *)
+  own_modules : string list;  (** {!program_modules}: its main module and the shared ones *)
+  rule_runners : (Sexp.t * (string, String.comparator_witness) Set.t) list;
+      (** {!program_runners}: the stanzas that run it by name, each with what it pins *)
+}
+(** One program of a stanza that declares programs. *)
+
+type stanza_programs = {
+  programs_head : string;  (** [test], [tests], [executable] or [executables] *)
+  stanza_modules : string list;  (** {!modules_of}: every module the stanza links *)
+  without_implementation : string list;  (** {!modules_without_implementation} *)
+  runs_itself : bool;
+      (** a [(test)]/[(tests)] stanza: dune runs each of its programs on its own alias, beside
+          whatever [rule_runners] run it. Whether a caller counts the stanza, the rules or both is
+          the caller's question: [generated_lock_scan] counts both (every concurrent run sweeps the
+          same artifacts), [env_var_deps]' width pin the stanza's own runs alone. *)
+  programs : program list;  (** one per name, in [(names …)] order *)
+}
+
+(** The stanza heads that declare programs, which {!stanza_programs} answers for. *)
+let program_heads = [ "test"; "tests"; "executable"; "executables" ]
+
+(** The programs a [(test)], [(tests)], [(executable)] or [(executables)] stanza declares, or [None]
+    for any other stanza: its module set resolved against [directory_modules] and its [group] (the
+    stanzas dune applies in the same directory), each name's own modules, and the runners
+    {!program_runners} finds among [runner_stanzas] — whose coordinates [subdir] is in. The one
+    reading [env_var_deps] and [generated_lock_scan] each rebuilt (ahrefs/ocannl#1749). *)
+let stanza_programs ?subdir ?runner_stanzas ~directory_modules group stanza =
+  match head stanza with
+  | Some programs_head when List.mem program_heads programs_head ~equal:String.equal ->
+      let modules = modules_of ~directory_modules group stanza in
+      Some
+        {
+          programs_head;
+          stanza_modules = modules;
+          without_implementation = modules_without_implementation stanza;
+          runs_itself = List.mem [ "test"; "tests" ] programs_head ~equal:String.equal;
+          programs =
+            List.map (program_runners ?subdir ?runner_stanzas group stanza)
+              ~f:(fun (program, rule_runners) ->
+                {
+                  program;
+                  own_modules = program_modules stanza ~modules ~name:program;
+                  rule_runners;
+                });
+        }
+  | _ -> None
+
+(** Whether a scan handed no source for module [m] of the stanza is missing an input: false of a
+    module the stanza declares has no implementation. *)
+let needs_source programs m =
+  not (List.mem programs.without_implementation (String.lowercase m) ~equal:String.equal)

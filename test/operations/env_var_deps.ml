@@ -2577,25 +2577,15 @@ let main () =
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
           let directory = if String.is_empty here then "." else here in
-          let directory_modules =
-            List.filter_map source_files ~f:(fun (path, _) ->
-                if String.equal (Stdlib.Filename.dirname path) directory then
-                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
-                else None)
-          in
+          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
           List.iter group ~f:(fun stanza ->
-              let kind =
-                match Scan.head stanza with
-                | Some (("test" | "tests" | "executable" | "executables") as kind) -> Some kind
-                | _ -> None
-              in
-              match kind with
+              match
+                Scan.stanza_programs ~subdir ~runner_stanzas:all_group_runners ~directory_modules
+                  group stanza
+              with
               | None -> ()
-              | Some kind ->
-                  let modules = Scan.modules_of ~directory_modules group stanza in
-                  let named () =
-                    match Scan.names_of stanza with name :: _ -> name | [] -> "<unnamed>"
-                  in
+              | Some declared ->
+                  let kind = declared.Scan.programs_head in
                   (* Which rules run the program is dune's semantics: a `(test)` runs itself, while
                      an `(executable)` is run by every rule naming it, each under its own `(deps …)`
                      and `(setenv …)` scope. A stanza dune runs itself may still pin: `(test …
@@ -2607,16 +2597,23 @@ let main () =
                     | first :: rest -> List.fold rest ~init:first ~f:Set.inter
                   in
                   let programs =
-                    match kind with
-                    | "executable" | "executables" ->
-                        List.map
-                          (Scan.program_runners ~subdir ~runner_stanzas:all_group_runners group
-                             stanza) ~f:(fun (name, runners) ->
-                            (* The pins come with the runner, scoped to the runs of THIS program: a
-                               `setenv` around a helper beside the subject pins nothing here, and
-                               one around the subject is not undone by an unpinned helper. *)
-                            (name, Scan.program_modules stanza ~modules ~name, runners))
-                    | _ -> [ (named (), modules, [ (stanza, own_pins stanza) ]) ]
+                    if declared.Scan.runs_itself then
+                      (* One subject for the whole stanza, run by itself alone: the rules that also
+                         run one of its programs by name ([rule_runners]) are not counted here. Its
+                         programs are split again for the search below. *)
+                      [
+                        ( (match declared.Scan.programs with
+                          | p :: _ -> p.Scan.program
+                          | [] -> "<unnamed>"),
+                          declared.Scan.stanza_modules,
+                          [ (stanza, own_pins stanza) ] );
+                      ]
+                    else
+                      List.map declared.Scan.programs ~f:(fun p ->
+                          (* The pins come with the runner, scoped to the runs of THIS program: a
+                             `setenv` around a helper beside the subject pins nothing here, and one
+                             around the subject is not undone by an unpinned helper. *)
+                          (p.Scan.program, p.Scan.own_modules, p.Scan.rule_runners))
                   in
                   List.iter programs ~f:(fun (name, own_modules, run_stanzas) ->
                       let where =
@@ -2632,22 +2629,10 @@ let main () =
                          stated in the golden and reported by the gate half above. A module dune is
                          TOLD has no implementation is not a missing input: an `.mli` runs
                          nothing. *)
-                      let without_implementation =
-                        List.concat_map [ "modules_without_implementation"; "virtual_modules" ]
-                          ~f:(fun field ->
-                            match Scan.field stanza field with
-                            | Some args ->
-                                List.filter_map args ~f:(function
-                                  | Sexp.Atom m -> Some (String.lowercase m)
-                                  | _ -> None)
-                            | None -> [])
-                      in
                       List.iter own_modules ~f:(fun module_name ->
                           if
                             Option.is_none (source_of ~dir:here module_name)
-                            && (not
-                                  (List.mem without_implementation (String.lowercase module_name)
-                                     ~equal:String.equal))
+                            && Scan.needs_source declared module_name
                             && Set.mem scanned_dirs directory
                           then
                             fail
@@ -2668,11 +2653,10 @@ let main () =
                          executable per name, linking each one's main module and the shared ones but
                          not its siblings' mains (Codex P2, round 2). *)
                       let subjects =
-                        match (kind, Scan.names_of stanza) with
-                        | "tests", (_ :: _ :: _ as names) ->
-                            List.map names ~f:(fun n ->
-                                ( Printf.sprintf "%s (%s)" where n,
-                                  Scan.program_modules stanza ~modules:own_modules ~name:n ))
+                        match (kind, declared.Scan.programs) with
+                        | "tests", (_ :: _ :: _ as programs) ->
+                            List.map programs ~f:(fun p ->
+                                (Printf.sprintf "%s (%s)" where p.Scan.program, p.Scan.own_modules))
                         | _ -> [ (where, own_modules) ]
                       in
                       let cc_runs = List.filter run_stanzas ~f:(fun (r, _) -> runs_cc r) in
@@ -2863,13 +2847,7 @@ let main () =
          calling it passes, which is the point. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory = if String.is_empty here then "." else here in
-          let directory_modules =
-            List.filter_map source_files ~f:(fun (path, _) ->
-                if String.equal (Stdlib.Filename.dirname path) directory then
-                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
-                else None)
-          in
+          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
           List.iter group ~f:(fun stanza ->
               match Scan.head stanza with
               | Some "library" ->
@@ -2919,13 +2897,7 @@ let main () =
          tomorrow is asked for its alias the day it lands. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory = if String.is_empty here then "." else here in
-          let directory_modules =
-            List.filter_map source_files ~f:(fun (path, _) ->
-                if String.equal (Stdlib.Filename.dirname path) directory then
-                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
-                else None)
-          in
+          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
           let where =
             if String.is_empty subdir then dune_file
             else Printf.sprintf "%s, in `(subdir %s …)`" dune_file subdir
