@@ -898,8 +898,22 @@ let ptx_target_directive ptx =
 let active : (ptx_target * ptx_compile list ref) option ref = ref None
 let active_lock = Stdlib.Mutex.create ()
 
+(* Outside every extent, the [cuda_ptx_target] key (gh-ocannl-1705): [floor], what ships, or
+   [native], which reruns a whole suite at the device's own arch (the sweep's native-PTX leg). Read
+   per compile, like the other CUDA compile knobs, since settings are mutable within a process. *)
+let configured_ptx_target () =
+  match
+    String.lowercase
+    @@ String.strip (Utils.get_global_arg ~default:"floor" ~arg_name:"cuda_ptx_target")
+  with
+  | "floor" -> Floor
+  | "native" -> Native
+  | other -> invalid_arg ("Cuda_mma: cuda_ptx_target must be floor or native, found: " ^ other)
+
 let current_ptx_target () =
-  Stdlib.Mutex.protect active_lock (fun () -> Option.value_map !active ~default:Floor ~f:fst)
+  match Stdlib.Mutex.protect active_lock (fun () -> Option.map !active ~f:fst) with
+  | Some target -> target
+  | None -> configured_ptx_target ()
 
 let record_ptx_compile ~device_cc ptx =
   let entry = { device_cc; target = ptx_target_directive ptx } in

@@ -79,6 +79,9 @@ keyed: codegen -- a GPU compile knob (gh-ocannl-1710, gh-ocannl-1779): it picks 
   cuda_fast_math [read at codegen]
   hip_fast_math [read at codegen]
 
+keyed: codegen -- a CUDA compile knob (gh-ocannl-1705): it picks the nvrtc target arch, the floor that ships or the device's own, when a kernel is compiled, after the lowered code the digest names; the CUDA tag carries the native target as a component
+  cuda_ptx_target [read at codegen]
+
 keyed: codegen -- it changes the emitted code or the mechanics a search measures in, without being a property of the lowered code: an aliasing candidate's kernel parameter drops its [restrict] qualifier (the liveness planner may overlap its bytes, gh-ocannl-489), and GPU graph capture fires only for multi-segment routines, so it moves a fissioned candidate's launch overhead relative to a whole-routine one
   buffer_aliasing [read at codegen]
   gpu_graph_capture [read at codegen]

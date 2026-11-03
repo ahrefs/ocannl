@@ -279,7 +279,8 @@ type ptx_target =
           targets and compare what they compute. A miscompile or a data race that only nvrtc's code
           for one target exposes then shows as a difference, with no reference of its own needed
           (lukstafi/ocannl-staging#1430's lane-0 transfer was wrong at compute_80 to compute_90 and
-          right at compute_120). *)
+          right at compute_120). [cuda_ptx_target=native] selects it for a whole process, so a suite
+          reruns at it against the same goldens (gh-ocannl-1705). *)
 [@@deriving equal, sexp_of]
 
 val gpu_arch_options : ?target:ptx_target -> device_cc:int -> string -> string list
@@ -312,8 +313,13 @@ val with_ptx_target : ptx_target -> (unit -> 'a) -> 'a * ptx_compile list
     CUDA kernel code cache keys on the complete option list, so a kernel compiled at one target is
     never reused at the other (a cache hit compiles nothing, so records nothing). *)
 
+val configured_ptx_target : unit -> ptx_target
+(** The [cuda_ptx_target] setting: [floor] (the default) or [native] (gh-ocannl-1705), which reruns
+    every compile of a process -- a whole suite -- at the native target. Raises [Invalid_argument]
+    on any other value. *)
+
 val current_ptx_target : unit -> ptx_target
-(** [Floor] outside every {!with_ptx_target}. *)
+(** The innermost {!with_ptx_target}'s target; outside every extent, {!configured_ptx_target}. *)
 
 val ptx_target_directive : string -> string option
 (** The arch of a PTX module's [.target] directive, without its [, debug] suffix. *)

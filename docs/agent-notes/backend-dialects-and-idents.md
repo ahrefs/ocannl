@@ -115,7 +115,12 @@ files.
   `test/operations/ptx_target_parity` compares the two bitwise on the cm8w conv seeds under tf32
   and caught the restrict hazard above with no reference of its own (512 of 8192 cells, with
   `lane_restrict` reverted). To cover another kernel class, compile it under both targets the same
-  way.
+  way. To cover everything, `cuda_ptx_target=native` (gh-ocannl-1705) moves the target outside every
+  extent, so a whole suite reruns at it against the same goldens: `tools/cuda-native-ptx-rerun.sh`,
+  which the sweep runs after each green CUDA unit. The native target is a `/ptx-target:native`
+  component of the CUDA codegen tag, so no floor-crowned schedule replays under it. On rog's sm_120
+  every PTX module of `schedule_mma_matmul` targets `sm_120` under it (`sm_75`/`sm_80`/`sm_89` at
+  the floor), the sm_89 fp8 `mma.sync` arm included, and the test stays green.
 - Query optional `MTLCompileOptions` properties on an initialized object, not through the nominal
   class's `instancesRespondToSelector:`. On macOS 26.6.2 that class-level query returned false for
   the macOS-15 math properties even though the object accepted them, silently selecting the macOS-14
@@ -299,7 +304,9 @@ files.
   name with the backend's own compiler, settles each failing batch by the names its report blames
   (each confirmed ALONE) or by bisection, and prints the measurement, the missing and superfluous
   entries, and the module to paste. Exit 1 says the checked-in table no longer matches the
-  toolchain; `--names a,b` spot-checks entries. Reading the headers had been wrong in both
+  toolchain; `--names a,b` spot-checks entries. `tools/vendor-idents-check.sh <backend>` wraps the
+  check in a one-line verdict, and the sweep runs it after every CUDA and HIP unit whose suite ran
+  (gh-ocannl-1705), so an SDK upgrade is said the day it lands. Reading the headers had been wrong in both
   directions (gh-ocannl-1338): nvrtc accepts kernels named `float4`, `uint4`, `char4` (CUDA's
   vector types are structs, which a same-named function hides -- legal, though it would break a
   later use of the type in the same source; the emitter spells none in CUDA kernel bodies) and

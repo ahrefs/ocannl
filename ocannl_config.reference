@@ -1458,6 +1458,15 @@
 # identity. An explicit setting outranks the profile, as for every key.
 #hip_fast_math=true
 
+# The nvrtc target arch of every CUDA compile (gh-ocannl-1705): `floor` (the default, what ships)
+# compiles each kernel at the lowest arch its features need, forward-JIT-compiled by the driver on
+# a later GPU; `native` compiles at the device's own `compute_<cc>` instead. Native is a diagnostic,
+# not a shipping target: a suite rerun under it against the same goldens shows a miscompile or a
+# race that only one target's code exposes, with no reference of its own (tools/sweep.sh's
+# native-PTX leg, tools/cuda-native-ptx-rerun.sh). Inside `Cuda_mma.with_ptx_target` the extent's
+# target wins. The native target is part of the CUDA schedule cache's identity.
+#cuda_ptx_target=floor
+
 # Megabytes of compiled cc kernel libraries kept for reuse within a process (gh-ocannl-1525), the
 # cc counterpart of hip_kernel_cache_mib: a batch of kernels compiles only the kernels no earlier
 # compile in this process produced, as one library, and reuses the rest. A kernel is reused when its

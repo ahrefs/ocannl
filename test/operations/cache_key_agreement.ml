@@ -159,6 +159,7 @@ let keyed_flips =
     ("gpu_graph_capture", config ~scope:Cuda_hip flag);
     ("cuda_fast_math", config ~scope:Cuda flag);
     ("hip_fast_math", config ~scope:Hip flag);
+    ("cuda_ptx_target", config ~scope:Cuda [ "floor"; "native" ]);
     ("gpu_elide_covered_zeros", config ~scope:Gpu flag);
     ("gpu_default_seed_narrow_storage", config ~scope:Cuda_hip flag);
     ("autotune_timing", config [ "isolated"; "queued" ]);
