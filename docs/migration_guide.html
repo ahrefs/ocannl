@@ -1007,9 +1007,10 @@ with <code>~train_step</code> to split the randomness key</li>
 <div class="sourceCode" id="cb29"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Parameter init - happens once, deterministic is fine *)</span></span>
 <span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>{ w = uniform () }</span>
 <span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training randomness - needs train_step for proper key splitting *)</span></span>
-<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>dropout ~rate:<span class="fl">0.5</span> () ~train_step x</span>
-<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a><span class="co">(* internally uses: uniform_at !@train_step *)</span></span></code></pre></div>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="co">(* Training randomness - needs train_step for proper key splitting: the step counter as a tensor,</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a><span class="co">   e.g. ~train_step:(Some !@step_n); None for evaluation *)</span></span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>dropout ~rate:<span class="fl">0.5</span> () ~train_step x</span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a><span class="co">(* internally uses: uniform_at train_step *)</span></span></code></pre></div>
 <h2 id="further-resources">Further Resources</h2>
 <ul>
 <li><a href="../dev/neural_nets_lib/Ocannl/Shape/index.html">Shape

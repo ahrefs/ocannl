@@ -648,11 +648,15 @@ becomes more concise:</p>
 <p>When there is a function directly under the <code>%op</code>
 extension point, like in the example above, or directly under a function
 taking a unit parameter <code>()</code>, the function parameter (to the
-right of <code>()</code>) should be a tensor. That’s because
-<code>%op</code> uses this tensor’s (value’s) label to enrich the label
-of the resulting tensor, and because automatic shape schemes take such
-an unlabelled parameter to be a tensor (see <a href="#automatic-shape-schemes">Automatic shape schemes</a>). A labelled
-or optional parameter there may be anything.</p>
+right of <code>()</code>) should be a tensor. That’s because automatic
+shape schemes take such an unlabelled parameter to be a tensor (see <a href="#automatic-shape-schemes">Automatic shape schemes</a>), and
+because, in a function without <code>()</code>, <code>%op</code> uses
+this tensor’s (value’s) label to enrich the label of the resulting
+tensor (see <a href="#label-from-function-argument">Label from function
+argument</a>). A labelled parameter of a function without
+<code>()</code> must be a tensor for the same reason; an optional
+parameter may be anything, and so may a labelled one after
+<code>()</code>.</p>
 <p>When the declaration is followed by a literal float, the float
 provides the initial value to initialize the tensor. Otherwise, the
 tensor value cells are initialized with the default parameter
@@ -1402,8 +1406,16 @@ gradients included; unpadded (<code>&lt;+</code>) windows work the same
 way (gh-ocannl-1691). A padded window’s extents do not determine its
 kernel, so a padded kernel nothing sizes (not captured, or never set) is
 refused with a shape error naming it; an unpadded window’s kernel is
-solved from its extents like any other dimension. The pooling layers’
-constant kernel operand (<code>stretch 0.0</code> in
+solved from its extents like any other dimension. Solved, not refused,
+even when only the input size is known: one equation in two unknowns, so
+the solver’s least-commitment guess closes the output at 1 and the
+kernel takes the rest – an uncaptured
+<code>x ++ &quot;s, 2*o&lt;+k =&gt; s, o&quot;</code> over an input of 8 resolves
+to <code>o = 1</code>, <code>k = 8</code>, a full reduction rather than
+a pool. Size the kernel (capture <code>k</code> and
+<code>Shape.set_dim</code> it, or give the window a kernel operand of
+known extent) or the output (gh-ocannl-1741; pinned in the same test).
+The pooling layers’ constant kernel operand (<code>stretch 0.0</code> in
 <code>Nn_blocks.max_pool2d</code>) is the two-operand form of the same
 window. Executed in
 <code>test/einsum/padded_operand_offset_windows.ml</code>.</p></li>
@@ -1881,12 +1893,20 @@ also illustrates providing additional string list to populate the label
 of the tensor: <code>label</code> must be of type
 <code>string list</code>.</p>
 <h3 id="label-from-function-argument">Label from function argument</h3>
-<p>The resulting (primary) tensor’s label will also have incorporated
-the label of the input argument, if any. In our example, the resulting
-<code>mlp_layer</code> tensor will also include the label of the
-actually applied <code>x</code>. If the function has a unit parameter
-<code>()</code>, like <code>mlp_layer</code> above, only parameters to
-the right of <code>()</code> are considered for label extraction.</p>
+<p>When the function directly under <code>%op</code> has no unit
+parameter <code>()</code>, the resulting (primary) tensor’s label also
+incorporates the labels of its arguments: in
+<code>let%op scaled ~gamma x = gamma *. x</code>, the result’s label
+includes the labels of the applied <code>gamma</code> and
+<code>x</code>. Every parameter except an optional one is such a label
+source, so a labelled non-tensor parameter there is a type error at the
+parameter: give the function a <code>()</code> and put the parameter
+before it. An optional parameter (<code>?scale</code>,
+<code>?(stride = 2)</code>) is not a label source and may be anything
+(gh-ocannl-1787). If the function has a unit parameter <code>()</code>,
+like <code>mlp_layer</code> above, no parameter is a label source: the
+label comes from the binding’s name and the <code>~label</code>
+parameter.</p>
 <p>When there is the unit parameter, and a <code>~label</code> parameter
 (specifically a parameter with label <code>label</code>), this label is
 also incorporated.</p>
@@ -1968,10 +1988,8 @@ architectures:</p>
 <h3 id="automatic-shape-schemes">Automatic shape schemes</h3>
 <p>A <code>%op</code> function gets a <em>shape scheme</em>
 automatically (gh-ocannl-1751), on top of the explicit layer
-<code>Tensor.Scheme</code> (gh-ocannl-404, see <a href="./shape_inference.md#shape-schemes">shape inference</a>). By
-default its applications are checked against the scheme (<em>checking
-mode</em>, described first); <code>op_shape_schemes=guided</code> makes
-them register <em>guided</em> by it instead (gh-ocannl-1761, below):</p>
+<code>Tensor.Scheme</code> (gh-ocannl-404, see <a href="./shape_inference.md#shape-schemes">shape inference</a>), in
+<em>checking mode</em>:</p>
 <ul>
 <li><strong>When it is traced.</strong> The closure built at the
 <code>()</code> application traces the scheme of the function it
@@ -1985,14 +2003,22 @@ instead: tracing it at the definition would run at module
 initialization.</li>
 <li><strong>What an application does.</strong> It checks the scheme
 against its arguments’ shapes, in a window that is always rewound, then
-runs the body, which builds and registers the graph as it always has. In
-checking mode the scheme only checks; guided registration, below, lets
-it stand in for the body’s own constraint derivation.</li>
+runs the body, which builds and registers the graph as it always has.
+The scheme only checks; it never replaces the body’s own registration,
+which would not be cheaper (<a href="./shape_inference.md#what-schemes-buy-measured">shape
+inference</a>).</li>
 <li><strong>What it reports.</strong> A shape error that does not depend
 on the arguments raises when the closure is built, as
 <code>tracing the shape scheme &lt;function&gt;: ...</code>. One that
 does raises at the application, before the body runs, as
-<code>applying the shape scheme &lt;function&gt; to &lt;arguments&gt;: ...</code>.</li>
+<code>applying the shape scheme &lt;function&gt; to &lt;arguments&gt;: ...</code>.
+Printed (<code>Printexc.to_string</code>, as the toplevel prints it),
+the error lists the conflicting sizes, the failed constraint and the
+tensors it relates, with their axis kinds; the variables, and the
+tensors of the trace, are named by first appearance rather than by their
+reserved-range ids (<code>Shape.error_to_string_hum</code>;
+<code>shape_error_full_sexp=true</code> prints the raw constraint
+sexp).</li>
 </ul>
 <p>To see a function’s scheme, trace it explicitly with
 <code>Tensor.Scheme.trace</code> (the same trace the closure ran) and
@@ -2003,88 +2029,89 @@ a REPL session from a failed construction.</p>
 <p><strong>Which functions qualify.</strong> The returned function –
 right after <code>()</code>, or the function a unit body ends in,
 through <code>let</code>, <code>;</code> and <code>let open</code>, as
-in <code>Nn_blocks.mlp</code> – must take only tensors. The ppx has no
-types, so it decides syntactically:</p>
+in <code>Nn_blocks.mlp</code> – must take only tensors, or optional
+tensors. The ppx has no types, so it decides syntactically:</p>
 <ul>
 <li>an unlabelled variable parameter is a tensor (the convention
 above);</li>
-<li>a labelled <code>~x</code> is a tensor only when <code>x</code>
+<li>a parameter annotated <code>(x : Tensor.t)</code>, labelled or not,
+is a tensor;</li>
+<li>a labelled <code>~x</code> is a tensor also when <code>x</code>
 occurs directly as an operand of a tensor operation (an einsum or
 concatenation, <code>+</code>, <code>*</code>, <code>*.</code>,
 <code>relu</code>, …) and is never rebound in the body;</li>
-<li>an optional or defaulted parameter, and any other pattern, is
+<li>a parameter annotated <code>~(x : Tensor.t option)</code>,
+<code>?(x : Tensor.t option)</code> or
+<code>(x : Tensor.t option)</code> is an <em>option-valued</em> tensor
+(gh-ocannl-1792);</li>
+<li>any other optional or defaulted parameter, and any other pattern, is
 not.</li>
 </ul>
-<p>A function with a parameter that is not a tensor –
-<code>dropout ~rate () ~train_step x</code>,
+<p>The annotations are type-checked: by OCaml at the parameter, and
+again by the expansion, which passes the arguments to the scheme as
+<code>Tensor.t</code> values. A parameter that is only passed on
+(<code>fun ~train_step x -&gt; bn ~train_step x</code>) gives the ppx no
+evidence, so annotate it.</p>
+<p><strong>Option-valued tensors: one scheme per presence
+pattern.</strong> A function with option-valued tensor parameters gets
+one scheme per <em>presence pattern</em>, meaning which of them are
+<code>Some</code>: at most 2^k for k such parameters. Each is traced,
+checked and refused on its own, under the label
+<code>&lt;function&gt; [p, no q]</code>. This is how
+<code>nn_blocks</code> schemes the train/eval switch.
+<code>~(train_step : Tensor.t option)</code> is the training step
+counter as a tensor (<code>Some !@step_n</code> trains,
+<code>None</code> evaluates), so <code>dropout</code>,
 <code>multi_head_attention ... () ~train_step ?mask x</code>, the
-transformer blocks – stays unschemed, and expands exactly as before: its
-parameter’s value does not exist yet when the closure is built, and the
-body may branch on it. So do <code>let%op rec</code> and
+transformer blocks and the batch norms get a training scheme and an
+evaluation scheme (four for attention, with and without a mask). The
+closure built at <code>()</code> traces every pattern, so an error in a
+variant that does not depend on the arguments – a training-only one too
+– raises when the closure is built, naming the variant. A function
+without a <code>()</code> stage traces every pattern at its first
+application. After a session reset each pattern re-traces at its own
+next application. The traces cost 2^k body runs per closure; opt out if
+that is too many.</p>
+<p>A function with a parameter that is not a tensor –
+<code>fun ~train_step x</code> with <code>train_step</code> unannotated,
+a callback, a configuration value – stays unschemed, and expands exactly
+as before: its parameter’s value does not exist yet when the closure is
+built, and the body may branch on it. So do <code>let%op rec</code> and
 <code>function</code>-case bodies. An unlabelled parameter that is not a
-tensor, against the convention, is a compile error; opt out.</p>
-<p><strong>Refused traces degrade silently.</strong> A function whose
-trace a scheme cannot carry – random number generation inside it
+tensor, against the convention, is a compile error; opt out. The
+<code>nn_blocks</code> stacks (<code>transformer_encoder</code>,
+<code>transformer_decoder</code>, <code>decoder_only</code>) and the
+<code>demo_models</code> stay plain functions on purpose: their layers
+are schemed, and a scheme of the whole stack would trace the whole
+model, which costs superlinearly in depth.</p>
+<p><strong>Refused traces degrade, with a warning.</strong> A function
+whose trace a scheme cannot carry – random number generation inside it
 (including a closure built inside it whose parameters take the default
-random initialization), an external capture reference, forcing dims or
-projections, a body that cannot run on tracers – stays unschemed, once
-the trace’s rewind succeeded. It is a valid function, and its
-applications report what they always reported.</p>
+random initialization), <code>Shape.set_dim</code> or the like on a
+capture reference made outside it, forcing dims or projections, a body
+that cannot run on tracers – stays unschemed, once the trace’s rewind
+succeeded. It is a valid function, and its applications report what they
+always reported. The refusal is printed to stderr once per function and
+reason in a process
+(<code>OCANNL warning: the shape scheme of &lt;function&gt; was refused ...</code>),
+with the reason rendered as a shape error is. Opting out,
+<code>op_shape_schemes=off</code>, and a closure built inside another
+function’s trace (built again, and traced, when that function is
+applied) print nothing.</p>
+<p>A capture reference made outside the function – at its
+<code>()</code> stage, say, and passed to an operation’s
+<code>~capture_dims</code> in the returned function – is no refusal
+(gh-ocannl-1791): it is an input of the scheme, related at each
+application to what earlier applications bound it to, so an application
+conflicting with them is refused at that application, before the body
+runs.</p>
 <p><strong>Side effects.</strong> The trace runs the body once more per
-closure. Under the rewind it leaves no shape state, no tensor and no
-session id behind (traces and checks allocate tensor ids, node uids and
-shape-variable ids from reserved ranges, so printed ids and shapes,
-compilation choices, generated code and random draws are the same with
-or without schemes), but OCaml side effects of the body (a counter, a
-print) happen.</p>
-<p><strong>Guided registration (opt-in, gh-ocannl-1761).</strong> Under
-<code>op_shape_schemes=guided</code>, an application instantiates the
-scheme once against its arguments’ shapes – the trace’s constraints,
-renamed, solved together with the arguments – and then runs the body,
-whose shape registration follows the trace:</p>
-<ul>
-<li><strong>What is guided.</strong> Each update step the body builds
-that matches the trace’s next step – the same operation and spec, the
-same arguments and pre-existing tensors in the same operand positions,
-its own new tensors corresponding one-to-one with the trace’s, and a new
-result tensor created with the trace’s dimensions – registers without
-deriving or solving its own constraints: its new shapes are unified with
-the scheme’s rows for them, and the step is registered for closure and
-projections as inline. Closed shapes, projections, tensor ids, node
-uids, generated code and values are those of inline construction; only
-the ids of open shape variables (printed before the closure)
-differ.</li>
-<li><strong>What falls back.</strong> A matched step registers normally
-(still tied to the scheme) when its constraints read more than the
-shapes: capture references, a <code>uint4x32</code> conversion, a batch
-slice, a terminal whose constraints come from its data (a reshaped
-array, <code>Constant_fill</code>, a slice). A step the trace lacked
-registers normally; so do the gradient helpers an operation’s backprop
-code builds, which depend on which operands need gradients (the trace’s
-arguments take none) and are left out of the trace’s skeleton. A nested
-<code>%op</code> application runs its body plain, under the outer guide.
-An application whose trace applied a scheme explicitly, or one made
-where no checkpoint can be taken, is checked instead.</li>
-<li><strong>The determinism contract.</strong> The function’s graph must
-not depend on state outside its closure and its arguments’ shapes. A
-trace step the body does not build raises
-<code>applying the shape scheme &lt;function&gt; to &lt;arguments&gt;: the function built a different graph than at its trace ...</code>
-and taints the session. A body that closes inference (forcing dims),
-takes a checkpoint or rewinds is refused while guided: its trace could
-not have done that either. A registration that falls back runs beside
-the scheme’s constraints, so it does not make a graph that changes
-between applications supported: opt such a function out.</li>
-<li><strong>Errors.</strong> An argument-dependent error raises before
-the body runs, as in checking mode, and leaves the session as it was.
-<code>Tensor.Scheme.registration_counts</code> reports the guided,
-fallback and unmatched steps.</li>
-<li><strong>Cost.</strong> Guided registration is not cheaper than
-checking mode: the instantiated constraints stand beside the steps’ ties
-until the closure, and solving the ties re-solves them, so it is slower
-than inline registration, superlinearly in the model’s depth
-(gh-ocannl-1752’s measurement, <a href="./shape_inference.md#what-schemes-buy-measured">shape
-inference</a>). That is why it is not the default.</li>
-</ul>
+closure (once per presence pattern with option-valued tensors). Under
+the rewind it leaves no shape state, no tensor and no session id behind
+(traces and checks allocate tensor ids, node uids and shape-variable ids
+from reserved ranges, so printed ids and shapes, compilation choices,
+generated code and random draws are the same with or without schemes),
+but OCaml side effects of the body (a counter, a print) happen.</p>
 <p><strong>Opting out.</strong> <code>[@@ocannl.no_scheme]</code> on the
 binding, or <code>[@ocannl.no_scheme]</code> on a <code>fun</code>
 expression, leaves a function unschemed: for a body whose constraints
@@ -2105,7 +2132,7 @@ Ocannl.Nn_blocks.DSL_modules</p>
 hid_dim ] }) let () = ignore (Tensor.Scheme.check_definition
 ~name:“block” (fun () -&gt; ignore (block ~hid_dim:8 ())))</p>
 <pre><code>
-It catches the errors that hold for every configuration, and the configuration-dependent ones of the trial configuration only; it costs one trace (and the trial&#39;s construction) at program start. Prefer it to a bare `let _ = block conf ()`, which leaves the trial&#39;s parameters registered in the session. It does not reach the functions that stay unschemed (`~train_step` after `()`), beyond the sub-blocks their trial builds. `lib/nn_blocks.ml` does not run it at load time; `test/operations/nn_blocks_definitions` runs it over every schemed block.
+It catches the errors that hold for every configuration, and the configuration-dependent ones of the trial configuration only; it costs one trace (and the trial&#39;s construction) at program start. Prefer it to a bare `let _ = block conf ()`, which leaves the trial&#39;s parameters registered in the session. It traces every presence pattern of the closures the trial builds at `()`, so a training-only error is caught too. It does not reach the functions that stay unschemed, beyond the sub-blocks their trial builds, nor a function without a `()` stage that the trial only builds (that one traces at its first application). `lib/nn_blocks.ml` does not run it at load time; `test/operations/nn_blocks_definitions` runs it over every schemed block.
 
 ## The syntax extension %%extend_dsls
 
@@ -2166,7 +2193,12 @@ for embedded tensor expressions, which create new tensors. The
 translator puts the forward code in sequence just prior to the
 assignment that made use of the created tensor. The translator includes
 the forward code of tensors that are “forward roots” at the time the
-assigments are constructed (using <code>Tensor.is_fwd_root</code>).</li>
+assigments are constructed (using <code>Tensor.is_fwd_root</code>). A
+sequence of statements is constructed in source order, so the first
+statement that uses a forward-root tensor carries its forward code, and
+the statements after it read the computed value; an explicit
+<code>t.forward</code> should come before the statements that use
+<code>t</code>.</li>
 <li>For inline declarations of tensors, the translator needs to pick the
 right other tensor, if any, to enrich the label information of the
 created tensor. Mechanisms:

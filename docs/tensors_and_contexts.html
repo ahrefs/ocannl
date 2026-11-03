@@ -632,6 +632,20 @@ as <code>Train.grad_update</code> of a loss over their sum; or compile
 <code>Train.grad_update ~accum_steps:1</code> per objective, neither of
 which zeroes the shared leaf: after the reset and both runs, its
 gradient is the sum’s.</p>
+<p>A routine that accumulates into a gradient without zeroing it sums
+every run’s contribution until something resets the gradient.
+<code>Context.run</code> therefore refuses its run once it has run as
+many times as its computation allows since the gradient’s last reset –
+once, or <code>k</code> times for
+<code>Train.grad_update ~accum_steps:k</code>, the explicit opt-in for
+accumulating over micro-steps (gh-ocannl-1781). A reset is a run of a
+routine zeroing the gradient (<code>Train.zero_params_grads</code>, a
+plain <code>Train.grad_update</code> of the loss carrying the zeroing)
+or a write from outside a run (<code>Context.set_values</code>,
+<code>Context.from_host</code>, <code>Context.copy</code>). The refusal
+names the gradient and any routine of the lineage that zeroes it but has
+not run since. Counting is per routine, so the common reset above – one
+reset, then one run of each objective’s update – stays legal.</p>
 <h2 id="the-train-module">The Train Module</h2>
 <p>The <code>Train</code> module provides high-level utilities for
 training workflows.</p>
@@ -773,11 +787,20 @@ size – fails when the closure is built, and
 <code>Tensor.Scheme.check_definition</code> finds it at program start
 from a trial configuration:</p>
 <p><code>ocaml doc-excerpt=test/operations/reusable_tensor_programs.ml let%op two_layer ~hid ~out () x =   let h = relu (({ w1; o = [ hid ] } * x) + { b1 = 0.; o = [ hid ] }) in   ({ w2; o = [ out ] } * h) + { b2 = 0.; o = [ hid ] }</code></p>
-<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch   conflicting sizes: 2 vs 8</code></p>
+<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml Shape_error: checking the definition two_layer: tracing the shape scheme two_layer: solved dimensions for axis: mismatch   conflicting sizes: 2 vs 8   failed constraint: &#39;a = 8     from two_layer (output) with b2 (output): pointwise_binary</code></p>
+<p>That is what the toplevel prints for the exception
+(<code>Printexc.to_string</code>): the message, the sizes in conflict,
+the constraint that failed, and the tensors it relates with their axis
+kinds and the operation that related them. Variables are named by first
+appearance (<code>&#39;a</code>, <code>..&#39;b..</code>), and so is a tensor of
+a trace or a check (<code>n&#39;1</code>), whose id comes from a reserved
+range; <code>Shape.error_to_string_hum</code> gives the same text, and
+the setting <code>shape_error_full_sexp=true</code> restores the
+solver’s raw constraint sexp.</p>
 <p>One that depends on the argument fails at the application, before the
 body runs: a residual block whose layer is 4 wide, applied to 3
-features, reads</p>
-<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch   conflicting sizes: 4 vs 3</code></p>
+features, reads (the first lines)</p>
+<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch   conflicting sizes: 4 vs 3   failed constraint: 4 ⊑ 3     from residual_block (output) with (its trace&#39;s solution) (output): the trace of the shape scheme residual_block</code></p>
 <p>With the scheme opted out (<code>[@@ocannl.no_scheme]</code>), the
 same mistakes surface only inside the body, naming neither the function
 nor the argument, and leave the session tainted.</p>
@@ -874,13 +897,13 @@ cells.</p>
 inference</strong> from how the result is used (e.g., pointwise ops with
 shaped tensors) 2. <strong>Explicit dimensions</strong> via
 <code>TDSL.uniform_at ~output_dims:[...] counter ()</code></p>
-<div class="sourceCode" id="cb20"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Dropout with training-step-dependent randomness *)</span></span>
-<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op dropout ~rate () ~train_step x =</span>
-<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> train_step <span class="kw">with</span></span>
-<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  | <span class="dt">Some</span> train_step <span class="kw">when</span> Float.(rate &gt; <span class="fl">0.0</span>) -&gt;</span>
-<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* !@train_step embeds the step counter as a scalar tensor *)</span></span>
+<div class="sourceCode" id="cb20"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co">(* Dropout with training-step-dependent randomness. The caller passes the step counter as a</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="co">   scalar tensor, e.g. [~train_step:(Some !@step_n)] for a static symbol [step_n]. *)</span></span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op dropout ~rate () ~(train_step : Tensor.t <span class="dt">option</span>) x =</span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">match</span> train_step <span class="kw">with</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a>  | <span class="dt">Some</span> train_step <span class="kw">when</span> Float.(rate &gt; <span class="fl">0.0</span>) -&gt;</span>
 <span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a>      <span class="co">(* Shape is inferred from pointwise comparison with x *)</span></span>
-<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>      x *. (!.rate &lt; uniform_at !@train_step) /. (<span class="fl">1.0</span> - !.rate)</span>
+<span id="cb20-7"><a href="#cb20-7" aria-hidden="true" tabindex="-1"></a>      x *. (!.rate &lt; uniform_at train_step) /. (<span class="fl">1.0</span> - !.rate)</span>
 <span id="cb20-8"><a href="#cb20-8" aria-hidden="true" tabindex="-1"></a>  | _ -&gt; x</span></code></pre></div>
 <p><strong>Note on shapes</strong>: The packed <code>uniform</code>
 function (without <code>1</code>) is total over shapes: element
