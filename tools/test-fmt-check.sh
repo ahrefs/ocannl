@@ -306,7 +306,7 @@ slot_leg "an unreachable registry is SLOT REFUSED (exit 75), and nothing ran" \
   FAKE_FW_MODE=unreachable
 slot_leg "a check killed in the slot still ends in a verdict" \
   137 "fmt@slot " "execution slot --wait 600 --cpu" \
-  "fmt-check: FAILED (exit 137): the check under the fleet slot ended without a verdict" \
+  "fmt-check: FAILED (exit 137): the check under the fleet slot ended without a status" \
   FAKE_DUNE_KILL_CHECK=1
 slot_leg "the check's recorded status wins over the wrapper's own failure after it" \
   0 "fmt@slot scans@slot " "execution slot --wait 600 --cpu" "fmt-check: PASSED" FAKE_FW_MODE=wrapfail

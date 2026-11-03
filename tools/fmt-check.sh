@@ -75,56 +75,31 @@ EOF
 }
 
 # The fleet's run-time correctness slot, taken as tools/test-run.sh takes it
-# (plan_slot there, gh-ocannl-1004): the fleet-worker.sh that
-# tools/fleet-worker-candidates.sh's fleet_slot_probe finds -- the one probe
-# the slot-takers share (gh-ocannl-1576) -- runs this script again,
-# under `execution slot --wait <OCANNL_TOOL_SLOT_WAIT, 600> --cpu`. `--cpu`
-# because neither build holds a device: `@test/operations/scans` is on
-# `Slot_kind.config_free_aliases` (test/support/slot_kind.ml), whose closure the
-# `slot_kind_live` scan keeps free of any backend, so `tools/test-run.sh plan
-# build @test/operations/scans` resolves "no backend"; `@fmt` links nothing. A
-# caller's own enclosing `execution slot` is reused, not doubled (the fleet's
-# nested-slot rule, which the probe proves the deployed version has). No probe
-# answer -- CI, a machine outside the fleet, OCANNL_TOOL_FLEET_WORKER=none --
-# runs the builds directly, silently. One slot covers both builds; the copy
-# under it reports through $slot_record, so a slot that never ran it (refused,
-# or the registry unreachable) is told apart from a check that failed: exit 75,
-# `SLOT REFUSED`, as tools/test-run.sh reports it, and nothing ran.
+# (plan_slot there, gh-ocannl-1004): this script again, under
+# tools/fleet-worker-candidates.sh's fleet_slot_rerun -- the helper it shares
+# with tools/test-harnesses.sh, through the probe every slot-taker shares
+# (gh-ocannl-1576, gh-ocannl-1841), which says what each outcome prints and
+# exits. `--cpu` because neither build holds a device: `@test/operations/scans`
+# is on `Slot_kind.config_free_aliases` (test/support/slot_kind.ml), whose
+# closure the `slot_kind_live` scan keeps free of any backend, so
+# `tools/test-run.sh plan build @test/operations/scans` resolves "no backend";
+# `@fmt` links nothing. One slot covers both builds; the copy under it reports
+# through $slot_record, so a slot that never ran it is told apart from a check
+# that failed: exit 75, `fmt-check: FAILED (exit 75): SLOT REFUSED`, nothing
+# ran. No probe answer runs the builds directly, silently.
 take_fleet_slot() {
-  local candidates wait status recorded self
+  local candidates self
   candidates=$(dirname "$0")/fleet-worker-candidates.sh
   [ -r "$candidates" ] || verdict 2 "cannot read $candidates"
   # shellcheck source=fleet-worker-candidates.sh
   . "$candidates"
   slot_dir=$(mktemp -d "${TMPDIR:-/tmp}/ocannl-fmt-check-slot.XXXXXX") || verdict 2 "cannot make a scratch directory"
   trap 'rm -rf "$slot_dir"' EXIT
-  if ! fleet_slot_probe "$slot_dir/probe"; then
-    rm -rf "$slot_dir"
-    trap - EXIT
-    return 0
-  fi
-  wait=${OCANNL_TOOL_SLOT_WAIT:-600}
-  case $wait in '' | *[!0-9]*) wait=600 ;; esac
   # CDPATH cleared: a `cd` it resolves prints the directory, which would join the path.
   self=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0") || verdict 2 "cannot resolve $0"
-  echo "fmt-check: taking one of $fleet_slot_box's $fleet_slot_slots fleet correctness slots for both builds, as --cpu (gh-ocannl-1519); waiting at most ${wait}s, an enclosing slot reused"
-  OCANNL_TOOL_FMT_CHECK_IN_SLOT=$slot_dir/record "$fleet_slot_fw" execution slot --wait "$wait" --cpu -- \
-    "${BASH:-bash}" "$self"
-  status=$?
-  [ -e "$slot_dir/record" ] ||
-    verdict 75 "SLOT REFUSED: fleet-worker.sh exited $status without running the check; nothing ran"
-  recorded=
-  read -r recorded <"$slot_dir/record"
-  case $recorded in
-    '' | *[!0-9]*)
-      [ "$status" -ne 0 ] || status=1
-      verdict "$status" "the check under the fleet slot ended without a verdict"
-      ;;
-  esac
-  # The check's own verdict line was its last, so its status is the exit status, whatever
-  # fleet-worker.sh's own (a failure of its supervision after the check is not the check's);
-  # nothing is printed after it.
-  exit "$recorded"
+  fleet_slot_rerun OCANNL_TOOL_FMT_CHECK_IN_SLOT "$slot_dir" fmt-check "the check" -- "${BASH:-bash}" "$self"
+  rm -rf "$slot_dir"
+  trap - EXIT
 }
 
 case ${1-} in

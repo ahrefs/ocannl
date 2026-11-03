@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The fleet's GPU tokens as a sweep GPU unit meets them (gh-ocannl-1177), sourced by tools/sweep.sh
 # and driven directly by test/operations/sweep_components.sh. The caller provides `sq` (POSIX
-# single-quoting) by sourcing tools/sweep-supervisor.sh. Sourcing defines functions only; nothing
-# here opens an ssh or writes state the caller did not name.
+# single-quoting) by sourcing tools/sweep-supervisor.sh, and fleet_slot_probe by sourcing
+# tools/fleet-worker-candidates.sh. Sourcing defines functions only; nothing here opens an ssh or
+# writes state the caller did not name.
 #
 # A fleet box bounds how many batches hold its GPU with GPU TOKENS (lukstafi/ludics-lite#391): the
 # first T of the box's S run-time correctness slot files, each a real flock that an `fleet-worker.sh
@@ -30,10 +31,10 @@
 # THE READER'S BOUNDARY (a fail-closed allowlist of what it accepts). The flocks are the fleet's to
 # read -- which slot file is held, by which pid, from the kernel's lock table -- and this reader
 # reads none of them itself:
-#   - the box's fleet name, slots and tokens come only from a line of exactly the form
-#     `EXECUTION SLOT PROBE <box> <slots> <tokens>` (anything after a further space ignored), from the
-#     first fleet-worker.sh candidate that answers `execution slot --probe`; any other answer, or no
-#     candidate, is `status: unread` and nothing is counted;
+#   - the box's fleet name, slots and tokens come only from tools/fleet-worker-candidates.sh's
+#     fleet_slot_probe, run on the box (gh-ocannl-1841): the first fleet-worker.sh candidate whose
+#     answer to `execution slot --probe` is within that probe's own boundary, which this reader does
+#     not restate; no such candidate is `status: unread` and nothing is counted;
 #   - the holders come only from that same fleet-worker.sh's `execution slot --holders`, exiting 0
 #     with nothing but JSON objects, one per line, each naming the probe's box, an `event` of `held`
 #     or `untested`, a positive `slot` and a `kind` of `gpu` or `cpu`; a non-zero exit (a skills
@@ -60,21 +61,20 @@
 GPU_TOKEN_WAIT_DEFAULT=1800
 
 # The reader, run on the box with perl (Ubuntu's, which ships JSON::PP): one JSON line on stdout.
-# Arguments: event, the fleet-worker.sh that answered (empty for none), its probe line, and the
-# exit status and output of its `execution slot --holders`.
+# Arguments: event; the fleet-worker.sh that answered the probe (empty for none) and, for none, why
+# when it is not that no candidate answered; the probe's box, slots and tokens; and the exit status
+# and output of its `execution slot --holders`.
 gpu_tokens_reader='
   use strict;
   use warnings;
   use JSON::PP ();
   use POSIX ();
-  my ($event, $fw, $probe, $holders_rc, $holders) = @ARGV;
+  my ($event, $fw, $why, $box, $slots, $tokens, $holders_rc, $holders) = @ARGV;
   my %r = (event => $event, at => POSIX::strftime("%Y-%m-%dT%H:%M:%S+00:00", gmtime));
   my $json = JSON::PP->new->canonical;
   my $out = sub { print $json->encode(\%r), "\n"; exit 0 };
   my $unread = sub { $r{status} = "unread"; $r{detail} = shift; $out->() };
-  $unread->("no fleet-worker.sh answered \x27execution slot --probe\x27") if $fw eq "";
-  my ($box, $slots, $tokens) = $probe =~ /^EXECUTION SLOT PROBE (\S+) ([1-9][0-9]*) ([1-9][0-9]*)(?: |$)/;
-  $unread->("the probe answered: " . substr($probe, 0, 200)) unless defined $tokens;
+  $unread->($why ne "" ? $why : "no fleet-worker.sh answered \x27execution slot --probe\x27") if $fw eq "";
   @r{qw(box slots gpu_tokens fleet_worker)} = ($box, 0 + $slots, 0 + $tokens, $fw);
   $unread->("execution slot --holders exited $holders_rc: " . substr($holders, 0, 200))
     unless $holders_rc eq "0";
@@ -101,18 +101,33 @@ gpu_tokens_sidecar() { # log -> its readings' file
   printf '%s.gpu-tokens' "${1%.log}"
 }
 
-# The reading as shell text for the box: the fleet-worker.sh candidates (absolute paths on the box)
-# are asked in turn, as tools/fleet-worker-candidates.sh asks them here, and the one that answered
-# the probe is asked for the holders. Its stderr goes into the answer the reader checks: a warning
-# there is an answer that is not a list of holders, and reads as `unread`, never as no holders.
+# The reading as shell text for the box, run by the box's bash: tools/fleet-worker-candidates.sh's
+# own probe functions, shipped as text (`declare -f`) so the box asks its candidates -- absolute
+# paths on the box, which the caller lists -- exactly as this host asks its own, and the one that
+# answered the probe is asked for the holders. Its stderr goes into the answer the reader checks: a
+# warning there is an answer that is not a list of holders, and reads as `unread`, never as no
+# holders.
+gpu_tokens_probe_text='
+fw= box= slots= tokens= why= holders= hrc=0
+if answer=$(mktemp "${TMPDIR:-/tmp}/ocannl-gpu-tokens-probe.XXXXXX"); then
+  if fleet_slot_probe "$answer"; then
+    fw=$fleet_slot_fw box=$fleet_slot_box slots=$fleet_slot_slots tokens=$fleet_slot_tokens
+    holders=$("$fw" execution slot --holders 2>&1 </dev/null)
+    hrc=$?
+  fi
+else
+  why="cannot create the probe answer file under ${TMPDIR:-/tmp}"
+fi
+exec perl -e "$1" -- "$2" "$fw" "$why" "$box" "$slots" "$tokens" "$hrc" "$holders"
+'
 gpu_tokens_cmd() { # event candidate...
   local event=$1 c cands=
   shift
   for c; do cands="$cands $(sq "$c")"; done
-  printf 'fw=; probe=; for c in%s; do [ -x "$c" ] || continue; ' "$cands"
-  printf 'probe=$("$c" execution slot --probe 2>/dev/null </dev/null) || continue; fw=$c; break; done; '
-  printf 'holders=; hrc=0; [ -z "$fw" ] || { holders=$("$fw" execution slot --holders 2>&1 </dev/null); hrc=$?; }; '
-  printf 'exec perl -e %s -- %s "$fw" "$probe" "$hrc" "$holders"' "$(sq "$gpu_tokens_reader")" "$(sq "$event")"
+  printf 'exec bash -c %s bash %s %s' \
+    "$(sq "$(declare -f fleet_slot_alarm fleet_slot_count fleet_slot_probe)
+fleet_worker_candidates() { printf '%s\n'$cands; }
+$gpu_tokens_probe_text")" "$(sq "$gpu_tokens_reader")" "$(sq "$event")"
 }
 
 # Append one reading to a sidecar: the box's answer when it is one JSON object on one line, else an

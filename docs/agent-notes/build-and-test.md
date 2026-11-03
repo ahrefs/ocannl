@@ -914,13 +914,22 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/fmt-check.sh` it takes one of the box's correctness slots itself, as `--cpu`
   (gh-ocannl-1576): after its arguments and skip lists pass, it runs itself again under `fleet-worker.sh execution
   slot --wait <OCANNL_TOOL_SLOT_WAIT, 600> --cpu`; `--list` takes none, a refused slot exits 75
-  (`harnesses: SLOT REFUSED`, no member run), and an enclosing slot is reused (the nested-slot
-  rule). The three tools find the fleet-worker.sh through ONE probe,
-  `tools/fleet-worker-candidates.sh`'s `fleet_slot_probe`, so a change to the probe (its bound,
-  the capability check, the answer's fields) lands in all three at once; before it each carried a
-  copy of the loop, and the harness runner carried none and had to be wrapped by hand.
-  `tools/test-test-harnesses.sh` drives the slot with a fake fleet-worker.sh (one answering no
-  probe is the negative control) and checks no slot-taker asks `execution slot --probe` itself.
+  (`harnesses: FAILED (exit 75): SLOT REFUSED`, no member run), and an enclosing slot is reused
+  (the nested-slot rule). Every OCANNL asker -- the three slot-takers, the sweep's registry reader
+  and its GPU-token reading on the box -- finds the fleet-worker.sh through ONE probe,
+  `tools/fleet-worker-candidates.sh`'s `fleet_slot_probe`, whose header states the answer's grammar
+  as a fail-closed boundary, so a change to the probe (its bound, the capability check, the
+  answer's fields) lands everywhere at once (gh-ocannl-1576, gh-ocannl-1841). Its bound is a
+  caller's hook: the sweep passes its `run_capped`, so a cancellation reaches the ask, and the
+  token reading ships the functions to the box as `declare -f` text under the box's bash rather
+  than restating the loop in remote shell. The harness runner and `tools/fmt-check.sh` rerun
+  themselves in the slot through one helper beside it, `fleet_slot_rerun`, with a caller-named
+  environment variable for the record, a caller-given message prefix, and one set of outcome
+  lines; before gh-ocannl-1841 each carried a 30-line copy, and the sweep's probe parsed the line
+  more loosely than the token reader did. `tools/test-test-harnesses.sh` drives the slot with a
+  fake fleet-worker.sh (one answering no probe is the negative control) and checks that the askers
+  call the shared functions and no tool asks `execution slot --probe` itself (red against the
+  pre-gh-ocannl-1841 copies in all four files).
   It runs in the foreground or detached. Under `bg-run.sh spawn`, `execution slot --bg` or
   `nohup` it inherits SIGHUP ignored (and a background `&` SIGINT), which a non-interactive bash cannot trap: before gh-ocannl-1236
   `tools/test-test-run.sh`'s HUP lifecycle legs failed there, on master too, and the harness
@@ -1526,8 +1535,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   rule's last step reads as formatting, not as a build. It asks for `--cpu`
   (`@test/operations/scans` is on `Slot_kind.config_free_aliases`, `@fmt` links nothing), waits
   `OCANNL_TOOL_SLOT_WAIT` (600 s), and reuses an enclosing slot. The check reruns itself under
-  `execution slot` and reports back through a file, so a slot that never ran it is `fmt-check:
-  FAILED (exit 75): SLOT REFUSED`, nothing built, while a check the slot ran keeps its own
+  `execution slot` and reports back through a file (`fleet_slot_rerun`, shared with the harness
+  runner), so a slot that never ran it is `fmt-check: FAILED (exit 75): SLOT REFUSED`, nothing built, while a check the slot ran keeps its own
   verdict line as the last and its recorded status as the exit status, whatever the wrapper's. A command given as arguments takes no slot (the harness's form;
   wrap a caller's own formatter yourself), and `OCANNL_TOOL_FLEET_WORKER=none` turns it off as
   for the runner; `tools/test-fmt-check.sh` drives the slot through a fake fleet-worker.sh.

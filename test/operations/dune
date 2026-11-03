@@ -10515,6 +10515,8 @@
   sweep_components.sh
   ../../scripts/harness-support.sh
   ../../tools/lab-map.sh
+  ; the one probe fleet-registry.sh and gpu-tokens.sh ask through (gh-ocannl-1841)
+  ../../tools/fleet-worker-candidates.sh
   ../../tools/fleet-registry.sh
   ../../tools/sweep-fingerprint.sh
   ../../tools/sweep-unit-state.sh
