@@ -1970,6 +1970,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   contend; the chain the lock makes is not the suite's critical path (`runtest-sweep_harness`,
   ~400 s, is). Other locks in the tree (`cc_kept_library`, `schedule_conv_gemm`, …) are meant per
   directory and stay relative; `generated_lock_scan` already resolves both spellings as dune does.
+  `env_var_deps` refuses any relative lock spelling written in two or more directories (a
+  `(subdir …)` group counting as its own) that resolves to different paths there, naming each
+  directory and suggesting `/name` (staging#1593); `../shared/name` from two sibling directories is
+  one lock and passes, and a lock name built from a `%{…}` pform is refused as unreadable.
 
 ## Verdict claims
 

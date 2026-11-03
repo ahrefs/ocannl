@@ -482,6 +482,7 @@ let raw_entries =
         "[scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule";
         "[scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner";
         "[scanner-refusal:b7991c01507b15cea041c6066f07038b] names the training";
+        "[scanner-refusal:2a4ae5808191d606dc5b7b74dd4ef93e] names the lock";
         "[scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions";
         "[scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on";
         "[scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule";
@@ -510,6 +511,7 @@ let raw_entries =
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
         "[scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts";
+        "[scanner-refusal:77d0be0fe2fca9a97da8be7f833d9c6e] is spelled without";
         "[scanner-refusal:25657f61eca857f6fd2f34de66e81eaf] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
         "[scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads";
@@ -559,6 +561,11 @@ let raw_entries =
         "[scanner-refusal:248545b295fe9393f046d06407875db5] family alias defined";
         "[scanner-refusal:65fecdef5d771aadd55c653ca5f36ccd] group whose actions";
         "[scanner-refusal:3200824ccd2f1707a2ea135232ae64ed] per-directory lock and";
+        "[scanner-refusal:93882a7d0ee00a277420de73a0971879] refused naming both";
+        "[scanner-refusal:61d28abcff988cb53c2d14ed6a3c9b08] same relative lock";
+        "[scanner-refusal:9cf07fbca9351e2f1f3a8ec460854813] sibling directories resolve";
+        "[scanner-refusal:869d4851cd153a86c278696b8d6b4f89] spelling written in";
+        "[scanner-refusal:b4e757c29c3b7fcc02f6b6166b7321e1] compared across directories";
         "[scanner-refusal:84e456282a1ff74968abe67ae2fa4694] executable's public name";
         "[scanner-refusal:be7f67353f6c0f8782c3b867b1023af5] runtest-<name> dune generates";
         "[scanner-refusal:4a8965b97909e604cda0ce07fd679917] a lifecycle member";
@@ -936,6 +943,12 @@ let raw_direct_evidence =
        reported there too: true" );
     ( "env_var_deps.ml:b7991c01507b15cea041c6066f07038b",
       "the training lock spelled without its leading `/` is a per-directory lock, and is refused: \
+       true" );
+    ( "env_var_deps.ml:2a4ae5808191d606dc5b7b74dd4ef93e",
+      "a lock name built from a pform cannot be compared across directories, and is refused: true"
+    );
+    ( "env_var_deps.ml:77d0be0fe2fca9a97da8be7f833d9c6e",
+      "one relative lock name written in two directories is two locks, and is refused naming both: \
        true" );
     ( "env_var_deps.ml:eb5d5419b3bd18240469743cbabc58f2",
       "a rule on a `(test)`'s generated alias that runs ANOTHER directory's binary is not the \

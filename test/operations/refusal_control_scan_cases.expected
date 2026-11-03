@@ -394,6 +394,7 @@ env_var_deps.ml: [scanner-refusal:95919586e2a2b25eaaf13ca8093ab584] repository-w
 env_var_deps.ml: [scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:b7991c01507b15cea041c6066f07038b] names the training (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:2a4ae5808191d606dc5b7b74dd4ef93e] names the lock (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -422,6 +423,7 @@ env_var_deps.ml: [scanner-refusal:b0ff4d4e5709299b84685f0fc189cc63] the inline-t
 env_var_deps.ml: [scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:77d0be0fe2fca9a97da8be7f833d9c6e] is spelled without (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:25657f61eca857f6fd2f34de66e81eaf] scanner refusal (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads (direct failure) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
@@ -471,6 +473,11 @@ env_var_deps.ml: [scanner-refusal:7735cb3446daca7f4157aa26d3d583da] names the in
 env_var_deps.ml: [scanner-refusal:248545b295fe9393f046d06407875db5] family alias defined (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:65fecdef5d771aadd55c653ca5f36ccd] group whose actions (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:3200824ccd2f1707a2ea135232ae64ed] per-directory lock and (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:93882a7d0ee00a277420de73a0971879] refused naming both (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:61d28abcff988cb53c2d14ed6a3c9b08] same relative lock (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:9cf07fbca9351e2f1f3a8ec460854813] sibling directories resolve (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:869d4851cd153a86c278696b8d6b4f89] spelling written in (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
+env_var_deps.ml: [scanner-refusal:b4e757c29c3b7fcc02f6b6166b7321e1] compared across directories (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:84e456282a1ff74968abe67ae2fa4694] executable's public name (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:be7f67353f6c0f8782c3b867b1023af5] runtest-<name> dune generates (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
 env_var_deps.ml: [scanner-refusal:4a8965b97909e604cda0ce07fd679917] a lifecycle member (claim) is catalogued beside env_var_deps_control.expected, env_var_deps.expected: true
