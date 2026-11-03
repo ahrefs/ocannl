@@ -74,16 +74,11 @@ let () =
      output stays deterministic no matter which seed wins. [timing_ctx] gives the tuner a scratch
      lineage (with its own freshly initialized parameter buffers) to time candidates against, so the
      timing runs cannot perturb the real training state. *)
-  (* The crown and the finals outcome go to stderr ([Autotune.crown_fields]): a golden diff on another box is
-     traced to the seed that won without rerunning under [autotune_log]. *)
+  (* The crown and the finals outcome reach stderr through the [train-bigram] rule's
+     [--ocannl_autotune_log=crown] (gh-ocannl-1718). *)
   let scratch = Train.init_params (Context.auto ()) bindings batch_loss in
   let ctx, sgd_step =
-    Autotune.tune ~rounds:0 ~timing_ctx:scratch
-      ~report:(fun r ->
-        Stdio.eprintf "bigram: tune %s (not part of the golden)\n%!" (Autotune.crown_fields r))
-      ctx
-      (Asgns.sequence [ update; sgd ])
-      bindings
+    Autotune.tune ~rounds:0 ~timing_ctx:scratch ctx (Asgns.sequence [ update; sgd ]) bindings
   in
   (* Train.printf w ~with_grad:false; *)
 

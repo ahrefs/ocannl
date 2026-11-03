@@ -3163,7 +3163,9 @@ files.
   tests the beam finals swapped the crown; the `crown` level prints one `autotune-crown:` line per
   `tune` call (every arm and flip of `Train.tune_placements` included), from the report as it is
   delivered, and adds no work (no untuned control). A caller rendering its own `~report` uses
-  `Autotune.crown_fields`, so a test's or bench's line spells the same fields. A call's `~log`
+  `Autotune.crown_fields`, so a test's or bench's line spells the same fields; the `rounds:0`
+  training tests render none and pass `--ocannl_autotune_log=crown` in their `train-<name>`
+  rules instead. A call's `~log`
   still decides its own line: `false` silences it, `true` keeps it beside the rest.
 - **Seeding refusals are invisible to the decline census; `autotune_log_seeding=true` shows them**
   (gh-ocannl-1407). A refused seed never becomes a candidate, so neither the search report's
