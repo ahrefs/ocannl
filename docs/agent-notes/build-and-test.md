@@ -3616,9 +3616,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   for CI's 13.3 (gh-ocannl-1696; the exact version and target are printed and major 13 is
   enforced). `--toolchain DIR` keeps that GCC in DIR, staged on first use and reused unfetched
   afterwards: minix keeps one at `/home/lukstafi/.local/opt/x86_64-linux-gnu-gcc-13`, the census
-  leg is one run per `cc_march_census` piece (`tools/ci-compiler-test.sh --toolchain <dir>
-  @test/operations/runtest-cc_march_census-<piece>`), and a fresh-build-directory run costs
-  seconds to minutes once dune's cache is warm. Run it under the fleet's slot with `--cpu`. The
+  leg is one invocation, `tools/ci-compiler-test.sh --toolchain <dir> --pieces census`, which runs
+  every `cc_march_census` piece in turn (the list read from `test/operations/dune`'s rules) and
+  prints one verdict per piece, each held to its own exit status and its own calls to the fetched
+  GCC (gh-ocannl-1852), and a fresh-build-directory run costs
+  seconds to minutes once dune's cache is warm. Its isolated `apt-get update`s are capped and
+  retried as CI's are (gh-ocannl-1809, the workflows' apt entry below): a stalled mirror ends the run in
+  about 9 minutes, naming apt, rather than hanging the leg. Run it under the fleet's slot with `--cpu`. The
   clang leg has a Linux cross sysroot rather
   than the macOS SDK, ABI, linker or runtime. It therefore complements CI and the GPU boxes rather
   than replacing either. Fetches, extraction and the test harness are attached children: an outer

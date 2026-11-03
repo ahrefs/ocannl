@@ -4,6 +4,7 @@
 #
 # Usage:
 #   tools/ci-compiler-test.sh [OPTIONS] @DIR/runtest-NAME
+#   tools/ci-compiler-test.sh [OPTIONS] --pieces census
 #
 # Options:
 #   --aarch64-clang   Also fetch clang 21 and the arm64 cross headers, then set
@@ -20,7 +21,14 @@
 #                     run always keeps it, so the build tree's diagnostics --
 #                     e.g. cc_march_census_kernels/<piece>/rows.txt -- survive it;
 #                     otherwise cleanup precedes the exit sentinel).
+#   --pieces census   Instead of one alias, run every cc_march_census piece
+#                     (gh-ocannl-1852), one after another against the one staged
+#                     toolchain and build directory, and print one verdict per
+#                     piece; the run fails if any piece does. The pieces are the
+#                     ones test/operations/dune runs, read from its rules (the
+#                     census's emission piece holds that list to its own).
 #   --cap SECONDS     Named-test wall-clock cap; 0 disables it (default: 3600).
+#                     Under --pieces it caps each piece.
 #   -j, --jobs N      Dune concurrency, 1..4 (default: 4).
 #
 # Examples:
@@ -29,13 +37,19 @@
 #     @test/operations/runtest-cc_march_census-w16_native_foreign
 #   tools/ci-compiler-test.sh --dry-run --aarch64-clang \
 #     @test/operations/runtest-cc_march_census-w16_native_foreign
+#   tools/ci-compiler-test.sh --aarch64-clang --toolchain DIR --pieces census
 #
 # The real fetch is Linux/Debian-family only: it deliberately uses the
 # no-root recipe established by gh-ocannl-752, `apt-get download` followed by
 # `dpkg-deb -x` into a temporary prefix. The GCC 13 packages come from an
 # isolated scratch index over Ubuntu 24.04 (noble), the series ubuntu-latest
 # runs, so a newer host's own gcc-13 (resolute's 13.4) cannot stand in for
-# CI's 13.3 (gh-ocannl-1696). --dry-run is portable and is the
+# CI's 13.3 (gh-ocannl-1696). Each isolated `apt-get update` is capped the way
+# CI's are (gh-ocannl-1809): `timeout` (240s, apt's own retries and
+# per-connection timeouts inside it), one more fresh try, then a failure naming
+# apt -- unbounded, a stalled mirror hung a local leg (gh-ocannl-1852). The
+# downloads carry the same retries and per-connection timeouts, which end a
+# stalled transfer without capping a slow but moving one. --dry-run is portable and is the
 # supported way to inspect and validate the staging plan elsewhere. The real
 # host must be x86_64 because the fetched compiler produces executable x86_64
 # cc kernels, not merely cross-compiled assembly.
@@ -72,6 +86,7 @@ jobs=4
 cap=3600
 alias_name=
 toolchain=
+pieces=
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -91,6 +106,11 @@ while [ $# -gt 0 ]; do
     --keep)
       keep=1
       shift
+      ;;
+    --pieces)
+      [ $# -ge 2 ] || die "--pieces needs a piece set (census)"
+      pieces=$2
+      shift 2
       ;;
     --cap)
       [ $# -ge 2 ] || die "--cap needs a value"
@@ -118,11 +138,18 @@ case $toolchain in
   '' | /*) ;;
   *) die "--toolchain must be an absolute directory: $toolchain" ;;
 esac
-case $alias_name in
-  @*/runtest-?*) ;;
-  '') usage ;;
-  *) die "test must be a named Dune alias of the form @DIR/runtest-NAME" ;;
+case $pieces in
+  '') ;;
+  census) [ -z "$alias_name" ] || die "--pieces census runs its own aliases; name no test beside it" ;;
+  *) die "unknown piece set: $pieces (the one set is census)" ;;
 esac
+if [ -z "$pieces" ]; then
+  case $alias_name in
+    @*/runtest-?*) ;;
+    '') usage ;;
+    *) die "test must be a named Dune alias of the form @DIR/runtest-NAME" ;;
+  esac
+fi
 
 script_dir=$(cd "$(dirname "$0")" && pwd -P) || die "cannot resolve tools directory"
 repo=$(git -C "$script_dir/.." rev-parse --show-toplevel 2>/dev/null) ||
@@ -130,6 +157,30 @@ repo=$(git -C "$script_dir/.." rev-parse --show-toplevel 2>/dev/null) ||
 repo=$(cd "$repo" && pwd -P) || die "cannot resolve repository root"
 script_path="$repo/tools/ci-compiler-test.sh"
 [ -f "$script_path" ] || die "cannot find the script at $script_path"
+
+# The census pieces, read from the dune rules that run them: the word after each
+# `%{dep:cc_march_census.exe}`, the reading cc_march_census.ml's dune_pieces
+# makes, so the emission piece holds this list to the census's own. Each must
+# be a one-line rule argument with an alias of its own, or nothing is run.
+aliases=()
+if [ "$pieces" = census ]; then
+  census_dune="$repo/test/operations/dune"
+  [ -f "$census_dune" ] || die "cannot find the census's dune file at $census_dune"
+  census_rules=$(grep -c '%{dep:cc_march_census\.exe}' "$census_dune")
+  census_pieces=$(sed -n 's/.*%{dep:cc_march_census\.exe}[[:space:]]\{1,\}\([a-z0-9_-]\{1,\}\).*/\1/p' \
+    "$census_dune")
+  set -- $census_pieces
+  [ "$#" -gt 0 ] || die "found no cc_march_census piece in $census_dune"
+  [ "$#" -eq "$census_rules" ] ||
+    die "read $# census pieces from $census_rules lines running cc_march_census.exe in $census_dune"
+  for piece in "$@"; do
+    grep -q "^ *(alias runtest-cc_march_census-$piece)\$" "$census_dune" ||
+      die "census piece $piece has no runtest-cc_march_census-$piece alias in $census_dune"
+    aliases+=("@test/operations/runtest-cc_march_census-$piece")
+  done
+else
+  aliases=("$alias_name")
+fi
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/ocannl-ci-compiler.XXXXXX" 2>/dev/null) || scratch=
 [ -n "$scratch" ] && [ -d "$scratch" ] || die "cannot create a scratch directory"
@@ -211,6 +262,9 @@ gcc_keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg
 gcc_packages=(gcc-13-x86-64-linux-gnu cpp-13-x86-64-linux-gnu libgcc-13-dev)
 clang_packages=(clang-21 libclang-cpp21 libllvm21 libclang-common-21-dev)
 arm64_packages=(libc6-dev-arm64-cross linux-libc-dev-arm64-cross)
+# CI's apt bounds (gh-ocannl-1809): apt's retries and per-connection timeouts,
+# on every update and download; an update also runs under `timeout`.
+apt_bounds=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
 
 echo "=== ci-compiler-test plan ==="
 echo "repository:       $repo"
@@ -220,9 +274,14 @@ if [ -z "$(git -C "$repo" status --porcelain --untracked-files=all)" ]; then
 else
   echo "source state:     DIRTY (the working tree, not only the commit, will be tested)"
 fi
-echo "test alias:       $alias_name"
+if [ "$pieces" = census ]; then
+  echo "test aliases:     ${#aliases[@]} cc_march_census pieces, one verdict each:"
+  for alias in "${aliases[@]}"; do echo "                  $alias"; done
+else
+  echo "test alias:       $alias_name"
+fi
 echo "dune jobs:        $jobs"
-echo "test cap:         ${cap}s"
+echo "test cap:         ${cap}s$([ "$pieces" = census ] && echo ' per piece')"
 echo "scratch:          $scratch"
 echo "host toolchain:   GCC 13 x86_64-linux-gnu from Ubuntu $gcc_suite (Ubuntu CI proxy)"
 echo "toolchain prefix: ${toolchain:-scratch (pass --toolchain DIR to keep it)}"
@@ -245,35 +304,41 @@ if [ "$dry_run" -eq 1 ]; then
   else
     echo "ci-compiler-test: planned package download (host compiler):"
     echo "  source: isolated Ubuntu $gcc_suite index signed by $gcc_keyring"
-    print_command apt-get '<isolated noble options>' download "${gcc_packages[@]}"
+    print_command timeout --kill-after=15 240 apt-get -q '<isolated noble options>' \
+      "${apt_bounds[@]}" update
+    print_command apt-get '<isolated noble options>' "${apt_bounds[@]}" download "${gcc_packages[@]}"
     echo "ci-compiler-test: planned extraction:"
     print_command dpkg-deb -x '<each downloaded GCC .deb>' "$gcc_prefix"
   fi
   if [ "$aarch64_clang" -eq 1 ]; then
     echo "ci-compiler-test: planned package download (aarch64 clang proxy):"
     echo "  source: isolated https://apt.llvm.org/<VERSION_CODENAME>/ index with pinned signing key"
-    print_command apt-get '<isolated apt.llvm.org options>' update
-    print_command apt-get '<isolated apt.llvm.org options>' download "${clang_packages[@]}"
-    print_command apt-get download "${arm64_packages[@]}"
+    print_command timeout --kill-after=15 240 apt-get '<isolated apt.llvm.org options>' \
+      "${apt_bounds[@]}" update
+    print_command apt-get '<isolated apt.llvm.org options>' "${apt_bounds[@]}" download \
+      "${clang_packages[@]}"
+    print_command apt-get "${apt_bounds[@]}" download "${arm64_packages[@]}"
     echo "ci-compiler-test: planned cross invocation:"
     echo "  loader path: derived from the extracted libLLVM.so.21 multiarch directory"
     print_command "$prefix/usr/bin/clang-21" --target=aarch64-linux-gnu \
       "--sysroot=$prefix" -isystem "$prefix/usr/aarch64-linux-gnu/include" \
       -mllvm -aarch64-neon-syntax=apple
   fi
-  echo "ci-compiler-test: planned isolated test invocation:"
-  if [ "$aarch64_clang" -eq 1 ]; then
-    print_command env OCANNL_BACKEND=cc \
-      "OCANNL_CC_BACKEND_COMPILER_COMMAND=$(shell_quote "$wrapper_dir/gcc-13")" \
-      "AARCH64_CROSS_GCC=$(shell_quote "$wrapper_dir/clang-aarch64")" \
-      "DUNE_BUILD_DIR=$build_dir" "$repo/tools/test-run.sh" run --cap "$cap" \
-      build -j "$jobs" "$alias_name"
-  else
-    print_command env OCANNL_BACKEND=cc \
-      "OCANNL_CC_BACKEND_COMPILER_COMMAND=$(shell_quote "$wrapper_dir/gcc-13")" \
-      "DUNE_BUILD_DIR=$build_dir" "$repo/tools/test-run.sh" run --cap "$cap" \
-      build -j "$jobs" "$alias_name"
-  fi
+  echo "ci-compiler-test: planned isolated test invocation$([ "${#aliases[@]}" -gt 1 ] && echo 's, one per piece'):"
+  for alias in "${aliases[@]}"; do
+    if [ "$aarch64_clang" -eq 1 ]; then
+      print_command env OCANNL_BACKEND=cc \
+        "OCANNL_CC_BACKEND_COMPILER_COMMAND=$(shell_quote "$wrapper_dir/gcc-13")" \
+        "AARCH64_CROSS_GCC=$(shell_quote "$wrapper_dir/clang-aarch64")" \
+        "DUNE_BUILD_DIR=$build_dir" "$repo/tools/test-run.sh" run --cap "$cap" \
+        build -j "$jobs" "$alias"
+    else
+      print_command env OCANNL_BACKEND=cc \
+        "OCANNL_CC_BACKEND_COMPILER_COMMAND=$(shell_quote "$wrapper_dir/gcc-13")" \
+        "DUNE_BUILD_DIR=$build_dir" "$repo/tools/test-run.sh" run --cap "$cap" \
+        build -j "$jobs" "$alias"
+    fi
+  done
   echo "ci-compiler-test: dry-run: PASS (arguments and scratch staging only)"
   exit 0
 fi
@@ -282,7 +347,7 @@ fi
   die "real toolchain fetch is Linux/Debian-family only (this host is $(uname -s)); use --dry-run here"
 [ "$(uname -m)" = x86_64 ] ||
   die "real GCC 13 execution requires an x86_64 host (this host is $(uname -m)); use --dry-run here"
-for command_name in apt-get dpkg-deb git opam sed; do
+for command_name in apt-get dpkg-deb git opam sed timeout; do
   command -v "$command_name" >/dev/null 2>&1 || die "required command not found: $command_name"
 done
 if [ "$aarch64_clang" -eq 1 ]; then
@@ -295,9 +360,31 @@ download_packages() {
   label=$1
   shift
   echo "ci-compiler-test: apt download ($label):"
-  print_command apt-get download "$@"
-  run_tracked_in "$deb_dir" apt-get download "$@" ||
+  print_command apt-get "${apt_bounds[@]}" download "$@"
+  run_tracked_in "$deb_dir" apt-get "${apt_bounds[@]}" download "$@" ||
     die "apt-get could not download the $label packages"
+}
+
+# One isolated index refresh, capped and retried as CI's are (gh-ocannl-1809):
+# each attempt is a fresh apt-get session under `timeout`, attached like every
+# other child so a cancellation reaches it; the second failure ends the run,
+# saying whether the last attempt stalled. LABEL names the index; the rest are
+# apt-get's isolating options.
+update_index() {
+  label=$1
+  shift
+  last=
+  for attempt in 1 2; do
+    update_rc=0
+    run_tracked timeout --kill-after=15 240 apt-get "$@" "${apt_bounds[@]}" update || update_rc=$?
+    [ "$update_rc" -eq 0 ] && return 0
+    case $update_rc in
+      124 | 137) last="stalled past 240s (apt mirror stall)" ;;
+      *) last="failed with exit $update_rc" ;;
+    esac
+    echo "ci-compiler-test: apt-get update ($label): attempt $attempt of 2 $last" >&2
+  done
+  die "cannot update the isolated $label index in 2 capped attempts; the last $last"
 }
 
 gcc_binary="$gcc_prefix/usr/bin/x86_64-linux-gnu-gcc-13"
@@ -332,11 +419,11 @@ else
     -o APT::Get::List-Cleanup=0
   )
   echo "ci-compiler-test: GCC 13 source: Ubuntu $gcc_suite (isolated scratch index)"
-  run_tracked apt-get -q "${gcc_apt_options[@]}" update ||
-    die "cannot update the isolated $gcc_suite index"
+  update_index "$gcc_suite" -q "${gcc_apt_options[@]}"
   echo "ci-compiler-test: apt download (GCC 13 host):"
-  print_command apt-get '<isolated noble options>' download "${gcc_packages[@]}"
-  run_tracked_in "$gcc_deb_dir" apt-get "${gcc_apt_options[@]}" download "${gcc_packages[@]}" ||
+  print_command apt-get '<isolated noble options>' "${apt_bounds[@]}" download "${gcc_packages[@]}"
+  run_tracked_in "$gcc_deb_dir" apt-get "${gcc_apt_options[@]}" "${apt_bounds[@]}" download \
+    "${gcc_packages[@]}" ||
     die "apt-get could not download the GCC 13 host packages from $gcc_suite"
   set -- "$gcc_deb_dir"/*.deb
   [ -e "$1" ] || die "apt-get reported success but downloaded no GCC 13 .deb files"
@@ -386,11 +473,11 @@ if [ "$aarch64_clang" -eq 1 ]; then
   )
   echo "ci-compiler-test: apt.llvm.org source: $llvm_url $llvm_suite (isolated scratch index)"
   echo "ci-compiler-test: apt.llvm.org key sha256: $llvm_key_sha"
-  run_tracked apt-get "${llvm_apt_options[@]}" update ||
-    die "cannot update the isolated apt.llvm.org index for $llvm_codename"
+  update_index "apt.llvm.org ($llvm_codename)" "${llvm_apt_options[@]}"
   echo "ci-compiler-test: apt download (clang 21):"
-  print_command apt-get "${llvm_apt_options[@]}" download "${clang_packages[@]}"
-  run_tracked_in "$deb_dir" apt-get "${llvm_apt_options[@]}" download "${clang_packages[@]}" ||
+  print_command apt-get "${llvm_apt_options[@]}" "${apt_bounds[@]}" download "${clang_packages[@]}"
+  run_tracked_in "$deb_dir" apt-get "${llvm_apt_options[@]}" "${apt_bounds[@]}" download \
+    "${clang_packages[@]}" ||
     die "apt-get could not download clang 21 from apt.llvm.org"
   download_packages "arm64 sysroot" "${arm64_packages[@]}"
 fi
@@ -548,16 +635,76 @@ echo "ci-compiler-test: ambient dynamic-loader overrides: cleared"
 
 rm -f "$gcc_log"
 [ -z "$clang_log" ] || rm -f "$clang_log"
-echo "ci-compiler-test: test (unpiped): $alias_name"
-if [ "$aarch64_clang" -eq 1 ]; then
-  run_tracked env OCANNL_BACKEND=cc OCANNL_CC_BACKEND_COMPILER_COMMAND="$gcc_command" \
-    AARCH64_CROSS_GCC="$clang_command" DUNE_BUILD_DIR="$build_dir" \
-    "$repo/tools/test-run.sh" run --cap "$cap" build -j "$jobs" "$alias_name" || exit $?
-else
-  run_tracked env OCANNL_BACKEND=cc OCANNL_CC_BACKEND_COMPILER_COMMAND="$gcc_command" \
-    DUNE_BUILD_DIR="$build_dir" "$repo/tools/test-run.sh" run --cap "$cap" \
-    build -j "$jobs" "$alias_name" || exit $?
+# One alias through the capped harness, in the isolated build directory.
+run_test() {
+  if [ "$aarch64_clang" -eq 1 ]; then
+    run_tracked env OCANNL_BACKEND=cc OCANNL_CC_BACKEND_COMPILER_COMMAND="$gcc_command" \
+      AARCH64_CROSS_GCC="$clang_command" DUNE_BUILD_DIR="$build_dir" \
+      "$repo/tools/test-run.sh" run --cap "$cap" build -j "$jobs" "$1"
+  else
+    run_tracked env OCANNL_BACKEND=cc OCANNL_CC_BACKEND_COMPILER_COMMAND="$gcc_command" \
+      DUNE_BUILD_DIR="$build_dir" "$repo/tools/test-run.sh" run --cap "$cap" \
+      build -j "$jobs" "$1"
+  fi
+}
+
+log_lines() { if [ -s "$1" ]; then wc -l <"$1" | tr -d ' '; else echo 0; fi; }
+
+if [ "$pieces" = census ]; then
+  # Every piece runs, whatever the one before it did, and is judged as one
+  # named alias is below: its own exit status, and its own calls to the
+  # fetched GCC (the logs are emptied before each piece). The cross compiler
+  # is asked of the census as a whole: only the foreign pieces compile with it.
+  verdicts=()
+  failures=0
+  clang_total=0
+  for alias in "${aliases[@]}"; do
+    piece=${alias#@test/operations/runtest-cc_march_census-}
+    rm -f "$gcc_log"
+    [ -z "$clang_log" ] || rm -f "$clang_log"
+    echo "ci-compiler-test: piece $piece: test (unpiped): $alias"
+    piece_rc=0
+    run_test "$alias" || piece_rc=$?
+    gcc_calls=$(log_lines "$gcc_log")
+    detail="host compiler: $gcc_calls calls"
+    if [ "$aarch64_clang" -eq 1 ]; then
+      clang_calls=$(log_lines "$clang_log")
+      clang_total=$((clang_total + clang_calls))
+      detail="$detail; cross compiler: $clang_calls calls"
+    fi
+    case $piece_rc in
+      0)
+        if [ "$gcc_calls" -gt 0 ]; then
+          verdict=PASS
+        else
+          verdict="FAIL (passed without invoking the fetched GCC 13 compiler)"
+        fi
+        ;;
+      75) verdict="NOT RUN (exit 75: SLOT REFUSED, the slot's verdict, not the piece's)" ;;
+      *) verdict="FAIL (exit $piece_rc)" ;;
+    esac
+    [ "$verdict" = PASS ] || failures=$((failures + 1))
+    verdicts+=("$piece: $verdict; $detail")
+    echo "ci-compiler-test: piece ${verdicts[${#verdicts[@]} - 1]}"
+  done
+  echo "=== ci-compiler-test census verdicts ==="
+  for line in "${verdicts[@]}"; do echo "ci-compiler-test: piece $line"; done
+  echo "=== end census verdicts ==="
+  if [ "$aarch64_clang" -eq 1 ] && [ "$clang_total" -eq 0 ]; then
+    echo "ci-compiler-test: no census piece invoked the clang/aarch64 proxy; no cross result is certified" >&2
+    failures=$((failures + 1))
+  fi
+  if [ "$failures" -gt 0 ]; then
+    echo "ci-compiler-test: census: FAIL ($failures of ${#aliases[@]} pieces not passed or uncertified)" >&2
+    exit 1
+  fi
+  echo "ci-compiler-test: census: PASS (${#aliases[@]} pieces)"
+  echo "ci-compiler-test: verified host=$gcc_banner target=$gcc_target${clang_target:+ cross=$clang_target}"
+  exit 0
 fi
+
+echo "ci-compiler-test: test (unpiped): $alias_name"
+run_test "$alias_name" || exit $?
 
 [ -s "$gcc_log" ] ||
   die "$alias_name passed without invoking the fetched GCC 13 compiler; no compiler result is certified"
