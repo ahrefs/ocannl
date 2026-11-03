@@ -826,10 +826,10 @@ for signal_case in normal:INT normal:TERM normal:HUP fork:INT fork:TERM fork:HUP
   esac
   rm -f "$fixture/ready"
   export PROBE_MODE=sleep
-  perl - "$signal" "$fixture" <<'PERL'
+  perl - "$signal" "$fixture" "$signal_case" <<'PERL'
 use strict;
 use warnings;
-my ($signal, $dir) = @ARGV;
+my ($signal, $dir, $case) = @ARGV;
 my %rc = (INT => 130, TERM => 143, HUP => 129);
 my $pid = fork();
 die $! unless defined $pid;
@@ -846,13 +846,41 @@ my $ready = 0;
 # signal the runner ignored still reads as a timeout, never as a late clean exit.
 for (1..1200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
 kill($signal, $pid);
-local $SIG{ALRM} = sub { kill 'KILL', $pid; die "signal case timed out\n" };
+# A case that times out names itself and the process tree the signal left (gh-ocannl-1504).
+local $SIG{ALRM} = sub {
+    my (%kids, %line);
+    for (`ps -A -o pid= -o ppid= -o pgid= -o stat= -o wchan= -o command=`) {
+        my ($p, $pp) = /^\s*(\d+)\s+(\d+)/ or next;
+        push @{$kids{$pp}}, $p;
+        $line{$p} = substr($_, 0, 160) =~ s/\n?\z/\n/r;
+    }
+    my @tree = ($pid);
+    for (my $i = 0; $i < @tree; $i++) { push @tree, @{$kids{$tree[$i]} || []} }
+    print STDERR "$case: still running 45s after $signal (pid ppid pgid stat wchan command):\n",
+        map { "  $line{$_}" } grep { $line{$_} } @tree;
+    # Each process's signal state: pending, blocked, ignored, caught (Linux /proc; ps elsewhere, pending and blocked only).
+    for my $p (grep { $line{$_} } @tree) {
+        if (open my $st, '<', "/proc/$p/status") {
+            print STDERR "  $p ", join(' ', map { /^(\w+):\s*(\S+)/ ? "$1=$2" : () }
+                grep { /^(SigPnd|ShdPnd|SigBlk|SigIgn|SigCgt):/ } <$st>), "\n";
+        } else {
+            print STDERR "  $p ", "pending blocked: ", `ps -o pending= -o sigmask= -p $p`;
+        }
+    }
+    for my $log (glob "$dir/runs/*/log") {
+        open my $l, '<', $log or next;
+        my @l = <$l>;
+        print STDERR "$case: $log ends:\n", map { "  $_" } @l[($#l > 9 ? $#l - 9 : 0) .. $#l];
+    }
+    kill 'KILL', $pid;
+    die "$case: signal case timed out\n";
+};
 alarm 45;
 waitpid($pid, 0);
 my $got = $? >> 8;
 alarm 0;
-die "never ready within 60s (then exit $got)\n" unless $ready;
-die "wrong signal status: $got\n" unless $got == $rc{$signal};
+die "$case: never ready within 60s (then exit $got)\n" unless $ready;
+die "$case: wrong signal status: $got\n" unless $got == $rc{$signal};
 PERL
   cmp module.ml "$fixture/pristine"
   case $signal_case in
