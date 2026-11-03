@@ -1507,6 +1507,19 @@ let main () =
   (* gh-ocannl-1901: every run that can select cc, in every dune file, by the identity of the
      program it names and with what it pins around that run -- so a program's runs include those
      written in another dune file, which its own file's reading never sees. *)
+  (* The public names the workspace's program stanzas declare: a `%{bin:…}` naming one runs that
+     program, and one naming anything else resolves to a tool on PATH. *)
+  let declared_public_names =
+    List.concat_map dune_files ~f:(fun (_, on_disk) ->
+        Scan.walk ""
+          (Scan.stanzas (In_channel.read_all on_disk))
+          ~f:(fun _ stanza ->
+            match Scan.head stanza with
+            | Some head when List.mem Scan.program_heads head ~equal:String.equal ->
+                List.filter (Scan.public_names stanza) ~f:(fun p -> not (String.equal p "-"))
+            | _ -> []))
+    |> Set.of_list (module String)
+  in
   let cc_program_runs =
     List.concat_map dune_files ~f:(fun (dune_file, on_disk) ->
         let dir = match Stdlib.Filename.dirname dune_file with "." -> "" | dir -> dir in
@@ -1703,11 +1716,15 @@ let main () =
                 (Scan.classified_command_sites_with_pins_preserving_multiplicity runner)
                 ~f:(fun (_, _, site, command) ->
                   match (command, site) with
-                  | (Scan.Runs _ | Scan.Runs_dependency _ | Scan.Runs_public _), _ -> None
+                  | (Scan.Runs _ | Scan.Runs_dependency _), _ -> None
+                  | Scan.Runs_public name, _ when Set.mem declared_public_names name -> None
                   (* A PATH tool is one only while its arguments, too, provably name nothing of
                      ours: `(run cmd /c "probe.exe …")` launches one from a quoted line the shared
-                     classifier reads as no path (Codex P2, local review round 2). *)
-                  | Scan.External, _ ->
+                     classifier reads as no path (Codex P2, local review round 2). A public name no
+                     stanza of the workspace declares is such a tool too: `%{bin:env}` resolves to
+                     the system's `env`, which runs what it is handed (Codex P2, staging#1681 round
+                     1). *)
+                  | (Scan.External | Scan.Runs_public _), _ ->
                       let rec spelled = function
                         | Scan.Program (cmd, arguments) ->
                             if List.for_all arguments ~f:names_none_of_ours then None
@@ -5815,6 +5832,10 @@ let search_control () =
           (rerun
              ~rules:(rerun_rule ~marker:"" ~wrap:(fun _ -> "(run cmd /c \"probe.exe --x\")") ())
              named) );
+      ( "rerun_bin_tool",
+        refused ~why:unattributed
+          (rerun ~rules:(rerun_rule ~wrap:(fun _ -> "(run %{bin:env} %{dep:probe.exe})") ()) named)
+      );
       ( "rerun_read",
         refused ~why:unattributed
           (rerun ~rules:(rerun_rule ~wrap:(fun _ -> "(run env %{read:runner})") ()) named) );
@@ -5941,11 +5962,11 @@ let search_control () =
   attribute
     "a stanza that can select cc and runs a command naming no program in command position -- a \
      shell line, a PATH tool handed an executable of ours -- is refused, not read as running none"
-    (runs [ "rerun_shell"; "rerun_launcher" ]);
+    (runs [ "rerun_shell"; "rerun_launcher"; "rerun_bin_tool" ]);
   Verdict.p
     "a stanza that can select cc and runs a command naming no program in command position -- a \
      shell line, a PATH tool handed an executable of ours -- is refused, not read as running none"
-    (ok "rerun_shell" && ok "rerun_launcher");
+    (ok "rerun_shell" && ok "rerun_launcher" && ok "rerun_bin_tool");
   attribute
     "and so is one handing a PATH tool a text-valued pform, which may expand to one, or a line \
      spelling `.exe`"
