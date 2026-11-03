@@ -651,6 +651,7 @@ tools/merge-build-check.sh parses: true
 tools/mutation-run.sh parses: true
 tools/opam-env.sh parses: true
 tools/per-test-cap.sh parses: true
+tools/ppx-output-diff.sh parses: true
 tools/promote.sh parses: true
 tools/refusal-manifest-sync.sh parses: true
 tools/remote-verify.sh parses: true
@@ -686,6 +687,8 @@ tools/test-mutation-run.sh uses the shared harness contract: true
 tools/test-mutation-run.sh parses: true
 tools/test-pin-revisions.sh uses the shared harness contract: true
 tools/test-pin-revisions.sh parses: true
+tools/test-ppx-output-diff.sh uses the shared harness contract: true
+tools/test-ppx-output-diff.sh parses: true
 tools/test-promote.sh uses the shared harness contract: true
 tools/test-promote.sh parses: true
 tools/test-promotion-record.sh uses the shared harness contract: true

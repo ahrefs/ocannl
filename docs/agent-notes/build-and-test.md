@@ -1441,7 +1441,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   environment is applied, since a switch's environment updates could set one too:
   `tools/test-run.sh` scrubs at startup and again in `select_dune` after sourcing
   `tools/opam-env.sh`; `tools/promote.sh` and `tools/dune-quiet.sh` after their own opam-env
-  fallback; `tools/api-drift.sh` at startup; `tools/ci-shard.sh` in the subshells of its `dune show`
+  fallback; `tools/api-drift.sh` and `tools/ppx-output-diff.sh` at startup; `tools/ci-shard.sh` in the subshells of its `dune show`
   calls; `tools/fmt-check.sh` at startup and inside each `opam exec` of its default command (the
   formatter, then the scans); `tools/sweep.sh` starts
   every leg's dune as `opam exec -- sh -c <scrub; exec "$@"> dune ...` (`switch_dune_cmd`), in the
@@ -2922,6 +2922,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     literally: the alias must begin with the golden's name, since what a reader has in hand when
     they reach for the alias is the golden that just failed, and an alias that renames it is one
     they construct empty.
+- **The ppx goldens pin four fixtures; a ppx change's reach over the tree is
+  `tools/ppx-output-diff.sh BASE HEAD`** (gh-ocannl-1886). `test/ppx/*_expected.ml` hold the
+  expansion of the sources beside them, so a change that alters any other module's expansion passes
+  them. The script builds every `.pp.ml`/`.pp.mli` dune defines at both revisions, each in a
+  throwaway worktree, prints them back to source and diffs them; stderr tags each file `EXPANSION`
+  (its input unchanged: the preprocessors' own reach), `SOURCE`, `ADDED` or `REMOVED`, and
+  `-- DIR...` narrows it. The whole tree takes about 80 s on mac-studio (warm dune cache), as a
+  `--cpu` slot batch. It sees tracked modules only: a scan table's snippet (the `let%op` arm
+  gh-ocannl-1787's fix silently changed) is expanded by `tools/typecheck-scan-cases.sh` alone, and
+  over that fix's merge (staging#1599) the script reports its two edited files as `SOURCE` and no
+  `EXPANSION` anywhere. Harness: `tools/test-ppx-output-diff.sh`.
 - **Inline `%expect` tests get a per-MODULE alias too** (gh-ocannl-1037): the alias dune generates
   for an inline-test library, `runtest-operations_tutorials`, runs every module, so one tutorial
   checked on a GPU box used to cost the directory. Each module holding inline tests has a rule on
