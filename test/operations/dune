@@ -536,6 +536,20 @@
  (libraries base arrayjit.ir arrayjit.verdict ll_test))
 
 (test
+ ; ocannl-backend: none -- scans the builtin tables' and literal texts' tokens; it creates no
+ ; context and renders no kernel, so no configured backend can change what it reads.
+ (name source_tokens_joined)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules source_tokens_joined)
+ (libraries
+  base
+  arrayjit.ir
+  arrayjit.builtins_cc
+  arrayjit.builtins_metal
+  arrayjit.verdict))
+
+(test
  ; ocannl-backend: none -- renders IR documents through the pretty-printer and never creates a
  ; context, so no configured backend can change what it prints.
  (name ll_printer_constants)

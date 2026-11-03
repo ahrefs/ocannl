@@ -105,16 +105,23 @@ module Slab = struct
   let free_pool =
     Some (fun (device : device) ~pool_id -> Hashtbl.remove pools (device.device_id, pool_id))
 
-  let memset_zero (device : device) ~pool_id ~offset ~size_in_bytes =
-    let buffer = Hashtbl.find_exn pools (device.device_id, pool_id) in
-    let command_buffer = Me.CommandBuffer.on_queue device.runner.queue in
-    let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
-    Me.BlitCommandEncoder.fill_buffer blit_encoder buffer
-      { location = offset; length = size_in_bytes }
-      ~value:0;
-    Me.BlitCommandEncoder.end_encoding blit_encoder;
-    Me.CommandBuffer.commit command_buffer;
-    Me.CommandBuffer.wait_until_completed command_buffer
+  (* Every range filled by one blit pass in one command buffer, waited for once (gh-ocannl-1675): a
+     command buffer per range waited for a GPU round trip each, about 0.5 ms on the M4 Max, which
+     was a fifth of an all-hit link of a gpt2 train step (some 50 nodes zeroed). The wait stays: a
+     later command buffer on the queue may overlap this one (untracked resources), and the host may
+     write a neighbouring region of the same shared slab next. *)
+  let zero_ranges (device : device) ranges =
+    if not (List.is_empty ranges) then (
+      let command_buffer = Me.CommandBuffer.on_queue device.runner.queue in
+      let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
+      List.iter ranges ~f:(fun ({ pool_id; offset }, size_in_bytes) ->
+          let buffer = Hashtbl.find_exn pools (device.device_id, pool_id) in
+          Me.BlitCommandEncoder.fill_buffer blit_encoder buffer
+            { location = offset; length = size_in_bytes }
+            ~value:0);
+      Me.BlitCommandEncoder.end_encoding blit_encoder;
+      Me.CommandBuffer.commit command_buffer;
+      Me.CommandBuffer.wait_until_completed command_buffer)
 
   let resolve_pool (device : device) { pool_id; offset = _ } : buffer_ptr =
     (* Resolve the slab [Me.Buffer.t] for [pool_id]. Metal buffers are objects, not raw pointers, so
@@ -1838,6 +1845,12 @@ using namespace metal;|}
      same kernels cannot both miss and both compile them. *)
   let kernel_compile_lock = Stdlib.Mutex.create ()
 
+  (* Each device's registry ID, by ordinal, read once: [Me.Device.get_attributes] queries every
+     attribute and GPU family to answer it, and every resolve keys on it (gh-ocannl-1675). *)
+  let registry_ids =
+    lazy
+      (Array.map (Lazy.force metal_devices) ~f:(fun d -> (Me.Device.get_attributes d).registry_id))
+
   (* Removes the [<name>.part<k>.metal] artifacts an earlier link of this name left, which are not
      this link's. [.part<k>] is a spelling no routine name takes. *)
   let clear_part_artifacts name =
@@ -1886,7 +1899,7 @@ using namespace metal;|}
           let program, _ = compile_group ~group:0 ~n_groups:1 all in
           Array.map k.symbols ~f:(fun symbol -> (program, symbol)))
     else
-      let registry_id = (Me.Device.get_attributes device.dev).registry_id in
+      let registry_id = (Lazy.force registry_ids).(device.ordinal) in
       let options =
         [
           Compiler_options.render_metal option_state;
@@ -2016,6 +2029,7 @@ using namespace metal;|}
         match Hashtbl.find program.pipelines symbol with
         | Some func_and_pso -> func_and_pso
         | None ->
+            Compile_cost.time_pipeline @@ fun () ->
             let func = Me.Library.new_function_with_name program.library symbol in
             (* Over-limit threadgroup memory never reaches a pipeline to query: Metal refuses to
                create one, and the binding reports it as a bare [Failure] carrying the driver's

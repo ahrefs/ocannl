@@ -1297,8 +1297,12 @@ module type Slab_alloc = sig
   (** Frees the slab for [pool_id] and drops its table entry. [None] for backends that rely on GC.
   *)
 
-  val memset_zero : device -> pool_id:int -> offset:int -> size_in_bytes:int -> unit
-  (** Zero-initializes [size_in_bytes] at [base_of pool_id + offset]. *)
+  val zero_ranges : device -> (buffer_loc * int) list -> unit
+  (** Zero-initializes each [(loc, size_in_bytes)]: [size_in_bytes] at
+      [base_of loc.pool_id + loc.offset]. When it returns, every range reads as zero to a later host
+      write, transfer or kernel on [device]. One call for all of a context delta's ranges
+      (gh-ocannl-1675): Metal fills them in one command buffer and waits once, where a call per
+      range waited for a GPU round trip each. *)
 end
 
 type merge_buffer_use = No | Copy [@@deriving sexp_of]

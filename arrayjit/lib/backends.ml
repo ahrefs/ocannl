@@ -1373,6 +1373,18 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     let device = context.device in
     let plan = plan_delta context ~alias_spans lowered in
     let ctx_buffers = ref context.ctx_buffers in
+    (* The ranges to zero, gathered so the backend fills them in one call (gh-ocannl-1675): Metal
+       waited a GPU round trip per call. Filled before the next host upload, so a range is zero
+       before any later host write as it was when each was filled on the spot, and when the passes
+       end; ranges a failure leaves unfilled belong to pools the unwind frees. *)
+    let pending_zero = ref [] in
+    let fill_pending_zero () =
+      match !pending_zero with
+      | [] -> ()
+      | ranges ->
+          pending_zero := [];
+          zero_ranges device (List.rev ranges)
+    in
     let place (key, node) ~pool_id ~offset ~register =
       let size_in_bytes = size_in_bytes_of key in
       let alloc () : buffer_loc =
@@ -1380,9 +1392,10 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
         (* Zero-initialize unless the node will be copied from host immediately, or the lowered code
            already zero-initializes it. *)
         let zero_init = not (Option.is_some host_init || node.Low_level.zero_initialized_by_code) in
-        if zero_init then memset_zero device ~pool_id ~offset ~size_in_bytes;
         let loc = { pool_id; offset } in
+        if zero_init then pending_zero := (loc, size_in_bytes) :: !pending_zero;
         Option.iter host_init ~f:(fun nd ->
+            fill_pending_zero ();
             let nd = Lazy.force nd in
             (* Interval analysis, Phase B: [Host_inits] uploads are host writes; propose the scanned
                bounds lazily -- here, where the buffer is forced at link/upload time -- so [Reshape]
@@ -1461,7 +1474,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
                     cache_inserts := cache_key :: !cache_inserts;
                     alloc ())
               in
-              ctx_buffers := Map.add_exn !ctx_buffers ~key ~data))
+              ctx_buffers := Map.add_exn !ctx_buffers ~key ~data));
+      fill_pending_zero ()
     in
     (match passes () with
     | () -> ()
@@ -1713,7 +1727,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
       ~code_node:code.expected_merge_node;
     let (inputs, outputs), merge_buffer_input = Low_level.input_and_output_nodes code.lowered in
     let ctx_buffers =
-      allocate_delta context ~name:code.name ~alias_spans:code.alias_spans code.lowered
+      Compile_cost.time_link_delta (fun () ->
+          allocate_delta context ~name:code.name ~alias_spans:code.alias_spans code.lowered)
     in
     with_delta context ctx_buffers ~f:(fun () ->
         (* gh-ocannl-489: a routine reading a node whose buffer an earlier routine of this lineage

@@ -76,12 +76,80 @@ let () =
     Train.tune_placements ~report:(H.collect_arm arms) ~flip_report:(H.collect_search arms)
       ~on_ship:(H.collect_ship arms) ~rounds:0 ~timing_ctx:scratch ctx batch_loss comp bindings
   in
-  let ctx, routines =
-    Bench_splice.replay_guarded splice
-      ~counts:(fun () ->
-        (arms.H.searches, arms.H.replays, arms.H.no_searches, List.length arms.H.arm_reports))
-      (fun () -> H.compile_step ~tune ~tuned ctx bindings step_shape)
+  (* gh-ocannl-1675: BENCH_RECOMPILE=K is the probe of what a compile still pays when its kernels
+     are in the kernel code cache (each recompile's census says how many were: a few kernels of an
+     unchanged step can still miss), and of what a process's first compile pays. It times this
+     process's first compile of the step, then compiles the step K more times from the context the
+     step was compiled from -- fresh code values whose kernels the first compile published -- prints
+     each compile's census to stderr, emits the first compile's link and pipeline seconds and the
+     recompiles' medians as [bench-result] lines, and exits without measuring a step. *)
+  let recompile =
+    Option.map (Stdlib.Sys.getenv_opt "BENCH_RECOMPILE") ~f:(fun k ->
+        (* The recompiles are untuned, so a tuned first compile would have published another
+           schedule's kernels than the ones they look up. *)
+        if tune then failwith "BENCH_RECOMPILE recompiles the untuned step: unset BENCH_TUNE";
+        match Int.of_string_opt (String.strip k) with
+        | Some k when k > 0 -> k
+        | _ -> failwith ("BENCH_RECOMPILE must be a positive integer; found: " ^ k))
   in
+  let pre_step_ctx = ctx in
+  let (ctx, routines), first_cost =
+    let compile () =
+      Bench_splice.replay_guarded splice
+        ~counts:(fun () ->
+          (arms.H.searches, arms.H.replays, arms.H.no_searches, List.length arms.H.arm_reports))
+        (fun () -> H.compile_step ~tune ~tuned ctx bindings step_shape)
+    in
+    if Option.is_some recompile then Ir.Compile_cost.with_census compile
+    else (compile (), Ir.Compile_cost.empty)
+  in
+  Option.iter recompile ~f:(fun k ->
+      let report label wall_s (cost : Ir.Compile_cost.t) =
+        Stdio.eprintf
+          "bench: %s: %.3f s (lower %.3f, transform %.3f, codegen %.3f, link %.3f, of which delta \
+           %.3f and pipelines %.3f), %d of %d kernels compiled, %d reused, %d pipelines created\n\
+           %!"
+          label wall_s cost.lower_s cost.transform_s (Ir.Compile_cost.codegen_s cost) cost.link_s
+          cost.link_delta_s cost.pipeline_s cost.kernels_compiled cost.kernels cost.kernels_reused
+          cost.pipelines_created
+      in
+      report "first compile" (Ir.Compile_cost.total_s first_cost) first_cost;
+      let costs =
+        List.init k ~f:(fun i ->
+            let c = Mtime_clock.counter () in
+            let (recompiled, recompiled_routines), cost =
+              Ir.Compile_cost.with_census (fun () ->
+                  H.compile_step ~tune:false ~tuned pre_step_ctx bindings step_shape)
+            in
+            let wall_s = Mtime.Span.to_float_ns (Mtime_clock.count c) /. 1e9 in
+            report ("recompile " ^ Int.to_string (i + 1)) wall_s cost;
+            (* Leaf first: a host-gated step compiles its optimizer from the gradient routine's
+               context, whose pools releasing the leaf does not free. *)
+            Context.release recompiled;
+            List.iter
+              (List.rev (H.compiled_step_routines recompiled_routines))
+              ~f:(fun (r : Context.routine) ->
+                if not (phys_equal r.context pre_step_ctx) then Context.release r.context);
+            (wall_s, cost))
+      in
+      let median xs =
+        let a = List.sort xs ~compare:Float.compare |> Array.of_list in
+        a.(Array.length a / 2)
+      in
+      let emit variant seconds =
+        if Float.(seconds > 0.) then
+          Bench_out.result ~variant
+            ~check:(Bench_out.Unchecked "compile-cost probe: no output to check") ~seconds
+      in
+      emit "first_link" first_cost.link_s;
+      emit "first_pipelines" first_cost.pipeline_s;
+      emit "recompile_compile" (median (List.map costs ~f:fst));
+      emit "recompile_link" (median (List.map costs ~f:(fun (_, c) -> c.link_s)));
+      emit "recompile_link_delta" (median (List.map costs ~f:(fun (_, c) -> c.link_delta_s)));
+      emit "recompile_codegen"
+        (median (List.map costs ~f:(fun (_, c) -> Ir.Compile_cost.codegen_s c)));
+      Bench_out.flush ();
+      Stdlib.exit 0);
   (* What the timed artifact emitted, off the routines themselves (gh-ocannl-626): a flip refinement
      or a timing_ctx replay fallback ships something no arm report describes. *)
   H.collect_shipped arms routines;
