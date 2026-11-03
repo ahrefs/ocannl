@@ -333,7 +333,8 @@
 #      subshell is no second launch, and a launcher past its `cd` to the root
 #      (`cd tools && bash ./test-run.sh run`) still is one. A shell that execs
 #      a wrapper for its next launch after its run is a launch to come, and a
-#      script path holding a space still names its worktree. The slot this script takes itself is taken after
+#      script path holding a space still names its worktree. A prepush that
+#      launches is in flight beside another command's `--list`. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
 #      out on it.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
@@ -9135,6 +9136,41 @@ if [ -z "$q_detail" ]; then
 fi
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_exec_label"; else report 1 "$q_exec_label" "$q_detail"; fi
+
+# `prepush --list` runs nothing, and its `--list` is its own: a later command's
+# (after a `;` or on the next line) does not hide a prepush that launches. The
+# wrappers are never released, only killed, and a run published after them
+# clears the sighting they leave.
+q_pp_label="a prepush that launches is in flight beside another command's --list; a lone --list is not"
+q_detail=
+for q_sep in ';' $'\n'; do
+  (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c "
+    while [ ! -e \"\$1\" ]; do sleep .1; done
+    tools/test-run.sh prepush --since base build$q_sep tools/test-run.sh prepush --since base --list" \
+    q-pp "$TMP/queued.never") >/dev/null 2>&1 &
+  q_pp=$!
+  sleep .5
+  q_capture "$q_root" status last
+  kill -KILL "$q_pp" 2>/dev/null
+  wait "$q_pp" 2>/dev/null
+  { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+    { q_detail="status last, prepush then (${q_sep/$'\n'/newline}) a --list: exit $q_rc (want 3): $q_out"; break; }
+done
+q "$q_root" run build @ok >/dev/null 2>&1
+# The control: a wrapper holding only `prepush --list` launches nothing.
+if [ -z "$q_detail" ]; then
+  (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
+    while [ ! -e "$1" ]; do sleep .1; done
+    tools/test-run.sh prepush --since base --list' q-pp "$TMP/queued.never") >/dev/null 2>&1 &
+  q_pp=$!
+  sleep .5
+  q_capture "$q_root" status last
+  kill -KILL "$q_pp" 2>/dev/null
+  wait "$q_pp" 2>/dev/null
+  { [ "$q_rc" = 0 ] && grep -qF 'verdict: pass' <<<"$q_out"; } ||
+    q_detail="status last beside a lone prepush --list: exit $q_rc (want 0): $q_out"
+fi
+if [ -z "$q_detail" ]; then report 0 "$q_pp_label"; else report 1 "$q_pp_label" "$q_detail"; fi
 
 # The other wait: the fleet slot this script takes itself, through a fake
 # fleet-worker.sh that holds the batch until a release file appears. The run

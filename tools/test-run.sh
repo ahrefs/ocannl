@@ -2892,6 +2892,8 @@ if ($proc) {
     ($pp{$f[0]}, $uid{$f[0]}) = @f[1, 2];
     $tok{$f[0]} = join(" ", @f[3 .. 7]);
     $args{$f[0]} = join(" ", @f[8 .. $#f]);
+    # ps renders a control character (a newline in a -c string) as \NNN.
+    $args{$f[0]} =~ s/\\([0-7]{3})/chr(oct($1))/ge;
   }
   close $ps;
 }
@@ -2932,13 +2934,30 @@ sub cwd_of {
 for my $p (sort { $a <=> $b } keys %args) {
   next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
   next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
-  my @w = grep { length } map { my $x = $_; $x =~ s/\A[\x27"(]+//; $x =~ s/[\x27";&|)]+\z//; $x } split " ", $args{$p};
+  # Each word, its quotes and separators trimmed; @end marks the last word of
+  # a command (a trimmed `;`, `&`, `|`, or a line end), the bound of the
+  # `--list` that exempts a prepush.
+  my (@w, @end);
+  for my $line (split /\n/, $args{$p}) {
+    for my $raw (split " ", $line) {
+      (my $x = $raw) =~ s/\A[\x27"(]+//;
+      my $sep = $x =~ /[;&|]\)*[\x27"]*\z/;
+      $x =~ s/[\x27";&|)]+\z//;
+      if (length $x) { push @w, $x; push @end, $sep }
+      elsif ($sep && @end) { $end[-1] = 1 }
+    }
+    $end[-1] = 1 if @end;
+  }
   next unless @w && base($w[0]) =~ $prog;
   my $hit = 0;
   for my $i (0 .. $#w - 1) {
     last if base($w[$i]) eq "ssh" || ($w[$i] eq "execution" && $w[$i + 1] eq "leg");
     next unless base($w[$i]) eq "test-run.sh" && $verb{$w[$i + 1]};
-    next if $w[$i + 1] eq "prepush" && grep { /\A--list(?:=|\z)/ } @w[$i + 2 .. $#w];
+    if ($w[$i + 1] eq "prepush" && !$end[$i + 1]) {
+      my $listed = 0;
+      for my $k ($i + 2 .. $#w) { if ($w[$k] =~ /\A--list(?:=|\z)/) { $listed = 1; last } last if $end[$k] }
+      next if $listed;
+    }
     my ($c, $found);
     for my $j (reverse(($i > 8 ? $i - 8 : 0) .. $i)) {
       my $path = join(" ", @w[$j .. $i]);
