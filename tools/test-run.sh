@@ -47,7 +47,8 @@
 #   tools/test-run.sh status [RUN|last]                # one-shot, never blocks
 #   tools/test-run.sh wait   [RUN|last] [--timeout N]  # bounded; exits with the run's status
 #   tools/test-run.sh stop   [RUN|last]                # TERM the run's process group
-#   tools/test-run.sh list                             # recent runs and their states
+#   tools/test-run.sh list [--all]                     # this worktree's runs (--all: every
+#                                                      # worktree's) and their states
 #   tools/test-run.sh paths FIELD [RUN|last]          # one absolute path (see below)
 #   tools/test-run.sh lock-status [RUN|last]          # idle/held; exits 0/3 (2 error)
 #   tools/test-run.sh idle                             # 0 idle, 3 locked, 2 unreadable
@@ -131,6 +132,21 @@
 # graph. Exit 0, every PATH found; 1, some PATH found nothing (the others are
 # listed); 2, refused (a path outside the worktree or in no directory, a
 # listing that did not read as dune's, a run holding the worktree).
+#
+# `last` is the run this worktree published most recently, and a launch is
+# published only once this script runs it -- after the worktree lock, before the
+# fleet slot it takes itself. A launch queued behind a wrapper that waits first
+# (`fleet-worker.sh execution slot --wait-window -- tools/test-run.sh run ...`)
+# is no run yet, so `status last` and `wait last` FOLLOW (gh-ocannl-1830): while
+# a launch of this worktree is in flight unpublished (read off the process
+# table, see proc_table_perl), a finished `last` is not their answer -- `status
+# last` says `queued:` (exit 3), and `wait last` waits for the launch to
+# publish, then for its run, timing out as any wait does (124, re-issued). A
+# launch they saw that ended without publishing (its slot refused, the lock
+# held) leaves `last` on the run before it: then both refuse to answer for that
+# run (`unpublished:`; status 1, wait 2), which stays readable by name. A named
+# run (`wait RUN`) is waited for alone, as before. `list` lists this
+# worktree's runs only (`--all`: the whole state root's).
 #
 # Read-only queries: `paths run [RUN|last]` resolves a recorded run (default last).
 # `paths worktree|runs|lock|owner|last [RUN|last]` without a run names THIS
@@ -1449,6 +1465,7 @@ wt_key=$(wt_key_of "$PWD")
 LOCK=$RUNS/lock-$wt_key   # the flock target: fd 9 of every process of a run
 OWNER=$RUNS/owner-$wt_key # the run directory holding the lock (see take_lock)
 LAST=$RUNS/last-$wt_key   # the run this worktree published most recently
+QUEUED=$RUNS/queued-$wt_key # a launch seen in flight before this worktree's first run (see note_queued)
 
 # The supervisor: ONE perl process that owns a run from the instant it
 # inherits lock fd 9 until the verdict is on disk -- the second of a run's two
@@ -2533,6 +2550,7 @@ new_run() {
     printf '%s\n' "$cap" >"$run_dir/cap" &&
     printf '%s\n' "$PWD" >"$run_dir/wt" &&
     printf '%s\n' "$RUNS" >"$run_dir/runs" &&
+    { perl -e "$proc_table_perl" chain 2>/dev/null || :; } >"$run_dir/launchers" &&
     record_checkout &&
     if explicit_diff_command "$@"; then
       echo 'on the command line' >"$run_dir/diff-command"
@@ -2543,6 +2561,11 @@ new_run() {
   # `diff-command` records that the run chose its own diff presentation, on
   # dune's command line or through its environment -- a launch-time fact the
   # digest's reading of the log depends on (see `digest`).
+  # `launchers` is the launch's own chain -- this launcher and each ancestor,
+  # by pid and start token, empty where the process table cannot be read --
+  # which a reader of `last` discounts from the launches it sees in flight
+  # (see proc_table_perl). Written before the lock: a launch refused there
+  # removes its directory, and its chain with it.
   # `runs` is the state root this run's lock and pointers live under: `stop`
   # and retention read them from there, whichever OCANNL_TOOL_TEST_RUNS the
   # caller has -- and its absence marks a run of the version that kept them
@@ -2767,6 +2790,357 @@ legacy_owner_alive() { [ ! -f "$1/runs" ] && proc_alive "$1/wpid" "$1/wtoken"; }
 group_verified() { [ -s "$1/gtoken" ] && proc_alive "$1/pgid" "$1/gtoken"; }
 group_identity_matches() {
   [ -s "$1/gtoken" ] && proc_identity_matches "$1/pgid" "$1/gtoken"
+}
+
+# A launch that has not published its run yet (gh-ocannl-1830). `last` is the
+# run this worktree published most recently, and a launch is published only
+# once it runs: one queued behind a wrapper that waits first -- `fleet-worker.sh
+# execution slot --wait-window -- tools/test-run.sh run ...`, waiting out a
+# measurement or a free slot before it starts this script at all -- is no run
+# yet, so `wait last` used to return the previous run's verdict while the
+# caller's own batch was still queued: a false green, three times in one wave.
+# (The slot this script takes itself is no such wait: it is taken after the
+# publication, inside the run.) Nothing on disk says a launch is queued, so it
+# is read off the process table, the one record every wrapper keeps whole:
+# each process of a launch's chain -- the shell that spawned it, bg-run.sh,
+# fleet-worker.sh and its Python, this script's own launcher -- carries the
+# launch's words in its argv from its spawn until the batch ends, and none
+# exits before the next one exists.
+#
+# A process is one of THIS worktree's launches in flight when, as a fail-closed
+# allowlist read off its EXEC ARGV -- the command it runs, never shell text:
+# it is of this uid, and neither this reader nor an ancestor of it (the
+# caller's own shell may name a launch: `start ... && wait last`), nor a fork
+# of another (a subshell carries its parent's argv, and so does an orphan of
+# parent 1 -- the slot wrapper's double-forked guardian -- beside a process of
+# this uid with the very same argv in the same directory that is no orphan:
+# that one counts; orphans that all carry one argv there count once, credited
+# when any of them is); its
+# program (the first word, its basename) is a shell (sh, bash, zsh, dash,
+# ksh), env, perl, python or Python, or one of timeout, nohup, nice,
+# caffeinate or setsid -- an agent CLI holding a prompt that quotes a launch
+# never counts; and at a COMMAND POSITION of its argv -- its first word, or the
+# first after a `--` (the separator of every fleet wrapper: `fleet-worker.sh
+# execution slot ... -- CMD`, `bg-run.sh start DIR -- CMD`) that comes before
+# any script text (a `-c` or `-e` and what follows it), with env and its
+# assignments, nohup, setsid, nice, timeout and its duration, caffeinate --
+# each with its options and the operand of those that take one (`timeout -k 5
+# 60`, `nice -n 5`, `env -u NAME`) -- or an interpreter and its options peeled
+# off -- stands a word whose basename is
+# `test-run.sh`, followed by a launching verb (run, start, fresh, repeat, or
+# prepush without `--list`), with no `ssh` and no `execution leg` before it
+# (those launch on another box). That word names THIS worktree's script:
+# absolute, `~/`, or relative to the process's working directory
+# (/proc/PID/cwd, else lsof), its directory's parent being this worktree; one
+# that resolves to no file is tried again joined with up to eight words
+# before it (a path holding spaces, split by the table's flattening), and a
+# relative one that still names none, from a process whose directory IS this
+# worktree, is this script after its own `cd` to the root (`cd tools && bash
+# ./test-run.sh run`). A `-c` string is never parsed: a launch a shell's own
+# control flow holds (`run A; sleep 60; run B`) is seen once its own process
+# runs it, not before.
+#
+# It is NOT in flight when a run of this worktree recorded it in its launch
+# chain (`launchers`, below): the launcher of that run and every ancestor it
+# had, by pid, start token and an MD5 of its argv (a process that `exec`s
+# keeps the first two, and its new argv is a launch no run has credited) --
+# read only from a published run: the one `last` names, or one whose
+# supervisor recorded itself (`pid`) or that has a verdict, and never a
+# plan's (`unpublished`), so a launch between its directory and its
+# publication (the lock taken in between) is still in flight. So a run's own
+# chain living on after its verdict (an attached launcher printing the
+# digest, the slot's wrapper releasing it, a shell that ran it and went on --
+# even once a later run has published) is never read as a launch to come.
+# Out of reach, said so: a launch no live argv names yet, or names in a way
+# this cannot resolve (a variable, a path with two spaces in a row);
+# `bisect`'s steps (its frozen runner is another tree's); a launch on another
+# box. Over-read, loudly: a launch of this worktree under another
+# OCANNL_TOOL_TEST_RUNS (environments are not read) is in flight here, and
+# once gone, one that ended unpublished.
+#
+# The table comes from /proc where it exists (Linux, Cygwin/MSYS), from `ps`
+# elsewhere, and start tokens are ps_token's renderings (stat's starttime, or
+# lstart under C/UTC), so the chain a launcher recorded compares as strings.
+# Modes: `chain` prints "PID TOKEN ARGV-MD5" for this reader's parent and each ancestor
+# above it; `pending ROOT UID RUNS [LAST]` prints "PID ARGV" for each launch
+# in flight, RUNS being the state root whose run directories hold the chains
+# and LAST the run `last` names.
+# Exits 2 when the table cannot be read.
+proc_table_perl='
+use strict; use warnings; use Cwd (); use Digest::MD5 (); use POSIX (); use Time::Local ();
+my ($mode, $root, $uid, $runs, $last) = @ARGV;
+my (%pp, %uid, %tok, %args);
+sub slurp { open(my $f, "<", $_[0]) or return undef; local $/; my $s = <$f>; close $f; return $s }
+my $proc = -d "/proc/$$";
+if ($proc) {
+  opendir(my $d, "/proc") or exit 2;
+  for my $p (grep { /\A[0-9]+\z/ } readdir $d) {
+    my $st = slurp("/proc/$p/stat");
+    next unless defined $st && $st =~ /^(?s:.*)\)\s+(.*)$/;
+    my @f = split /\s+/, $1;
+    $pp{$p} = $f[1];
+    $tok{$p} = defined $f[19] ? $f[19] : "";
+    my $s = slurp("/proc/$p/status");
+    $uid{$p} = $1 if defined $s && $s =~ /^Uid:\s*([0-9]+)/m;
+    my $c = slurp("/proc/$p/cmdline");
+    $c = "" unless defined $c;
+    $c =~ s/\0+\z//;
+    $c =~ tr/\0/ /;
+    $args{$p} = $c;
+  }
+  closedir $d;
+} else {
+  $ENV{LC_ALL} = "C";
+  $ENV{TZ} = "UTC";
+  open(my $ps, "-|", "ps", "-axww", "-o", "pid=,ppid=,uid=,lstart=,args=") or exit 2;
+  while (my $l = <$ps>) {
+    my @f = split " ", $l;
+    next unless @f >= 8 && $f[0] =~ /\A[0-9]+\z/;
+    ($pp{$f[0]}, $uid{$f[0]}) = @f[1, 2];
+    $tok{$f[0]} = join(" ", @f[3 .. 7]);
+    $args{$f[0]} = join(" ", @f[8 .. $#f]);
+  }
+  close $ps;
+}
+exit 2 unless exists $pp{$$};
+if ($mode eq "chain") {
+  my %seen;
+  for (my $p = $pp{$$}; defined $p && $p > 1 && exists $pp{$p} && !$seen{$p}++; $p = $pp{$p}) {
+    print "$p $tok{$p} ", Digest::MD5::md5_hex($args{$p}), "\n";
+  }
+  exit 0;
+}
+my %anc;
+for (my $p = $$; defined $p && $p > 1 && !$anc{$p}; $p = $pp{$p}) { $anc{$p} = 1 }
+my (%known, %known_argv);
+if (defined $runs && opendir(my $rd, $runs)) {
+  for my $e (grep { /\A[0-9]{8}T[0-9]{6}Z-[0-9]+\z/ } readdir $rd) {
+    my $w = slurp("$runs/$e/wt");
+    next unless defined $w && $w eq "$root\n";
+    next if -e "$runs/$e/unpublished";
+    next unless -e "$runs/$e/pid" || -e "$runs/$e/exit" || (defined $last && "$runs/$e" eq $last);
+    my $c = slurp("$runs/$e/launchers");
+    # The verdict time bounds the argv credit (orphan_started, below).
+    my $until = -e "$runs/$e/exit" ? (stat "$runs/$e/exit")[9] : 9**9**9;
+    for my $l (split /\n/, defined $c ? $c : "") {
+      $known{$l} = 1;
+      next unless $l =~ / ([0-9a-f]{32})\z/;
+      $known_argv{$1} = $until if !defined $known_argv{$1} || $known_argv{$1} < $until;
+    }
+  }
+  closedir $rd;
+}
+my %verb = map { $_ => 1 } qw(run start fresh repeat prepush);
+my $prog = qr{\A-?(?:(?:ba|z|da|k)?sh|env|perl[0-9.]*|[Pp]ython[0-9.]*|g?timeout|nohup|nice|caffeinate|setsid)(?:\.exe)?\z};
+sub base { my $w = shift; $w =~ s{\A.*/}{}s; return $w }
+my %cwd;
+sub cwd_of {
+  my $p = shift;
+  return $cwd{$p} if exists $cwd{$p};
+  return $cwd{$p} = cwd_read($p);
+}
+sub cwd_read {
+  my $p = shift;
+  return readlink("/proc/$p/cwd") if $proc;
+  open(my $l, "-|", "lsof", "-a", "-p", $p, "-d", "cwd", "-Fn") or return undef;
+  my $c;
+  while (my $x = <$l>) { chomp $x; $c = substr($x, 1) if $x =~ /\An/ }
+  close $l;
+  return $c;
+}
+# The command positions of an exec argv: its first word, and the first word
+# after each `--` (the separator of the wrappers fleet-worker.sh, bg-run.sh); at
+# each, a prefix program (env and its assignments, nohup, setsid, nice,
+# timeout and its duration, caffeinate, or an interpreter and its options) is
+# peeled to the word it runs. A `-c` string is no command: never parsed.
+my %interp = map { $_ => 1 } qw(sh bash zsh dash ksh);
+sub positions {
+  my @w = @_;
+  my %at;
+  # Script text (after the first `-c` or `-e`) holds no separator.
+  my $text = (grep { $w[$_] eq "-c" || $w[$_] eq "-e" } 0 .. $#w)[0];
+  $text = @w unless defined $text;
+  my @starts = (0, grep { $w[$_ - 1] eq "--" } 1 .. $text - 1);
+  for my $j (@starts) {
+    while ($j <= $#w) {
+      (my $b = base($w[$j])) =~ s/\A-//;
+      $b =~ s/\.exe\z//;
+      if ($b eq "nohup" || $b eq "setsid") { $j++; next }
+      # A prefix program: its options, the operand of each that takes one
+      # (spaced; `--opt=V` is one word), then, for timeout, its duration.
+      my %takes = (env => "u|C|-unset|-chdir", nice => "n|-adjustment", caffeinate => "t|w",
+                   timeout => "k|s|-kill-after|-signal", gtimeout => "k|s|-kill-after|-signal");
+      if (exists $takes{$b}) {
+        my $op = qr/\A-(?:$takes{$b})\z/;
+        $j++;
+        while ($j <= $#w && ($w[$j] =~ /\A-/ || ($b eq "env" && $w[$j] =~ /=/))) {
+          last if $w[$j] eq "--";
+          $j++ if $w[$j] =~ $op;
+          $j++;
+        }
+        $j++ if $j <= $#w && $w[$j] eq "--";
+        $j++ if $b =~ /timeout\z/;
+        next;
+      }
+      if ($interp{$b}) {
+        $j++;
+        $j++ while $j <= $#w && $w[$j] =~ /\A-/ && $w[$j] ne "-c" && $w[$j] ne "--";
+        last if $j > $#w || $w[$j] eq "-c";
+        next if $w[$j] eq "--";
+      }
+      $at{$j} = 1;
+      last;
+    }
+  }
+  return \%at;
+}
+# Processes of this uid by argv: an orphan of parent 1 carrying the argv of a
+# process that is not one is a fork of that process (the guardian of a slot
+# wrapper); orphans that all carry one argv in one directory are one launch,
+# credited when any
+# is, or when a published run credited that argv and the orphan started no
+# later than the verdict of that run (a guardian outliving its wrapper by a moment
+# carries the argv its wrapper was credited for, and started before the
+# batch; a later launch with the same argv started after it).
+my (%byargs, %spoken);
+push @{$byargs{$args{$_}}}, $_ for grep { !defined $uid{$_} || $uid{$_} eq $uid } keys %args;
+sub orphan { my $p = shift; return !defined $pp{$p} || $pp{$p} <= 1 }
+# A start time in epoch seconds from the token: stat starttime ticks after the
+# boot time (whole seconds, so up to a second early), or lstart (rendered
+# under TZ=UTC); undef when unknown.
+my $btime;
+sub started {
+  my $t = $tok{$_[0]};
+  return undef unless defined $t && length $t;
+  if ($proc) {
+    unless (defined $btime) { my $st = slurp("/proc/stat"); $btime = (defined $st && $st =~ /^btime\s+([0-9]+)/m) ? $1 : -1 }
+    my $hz = POSIX::sysconf(POSIX::_SC_CLK_TCK()) || 100;
+    return $btime >= 0 && $t =~ /\A[0-9]+\z/ ? $btime + int($t / $hz) : undef;
+  }
+  my %mon = (Jan => 0, Feb => 1, Mar => 2, Apr => 3, May => 4, Jun => 5, Jul => 6, Aug => 7, Sep => 8, Oct => 9, Nov => 10, Dec => 11);
+  my (undef, $m, $d, $hms, $y) = split " ", $t;
+  return undef unless defined $y && exists $mon{$m} && $hms =~ /\A([0-9]+):([0-9]+):([0-9]+)\z/;
+  return eval { Time::Local::timegm($3, $2, $1, $d, $mon{$m}, $y) };
+}
+sub credited { my $p = shift; return $known{"$p $tok{$p} " . Digest::MD5::md5_hex($args{$p})} }
+for my $p (sort { $a <=> $b } keys %args) {
+  next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
+  next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
+  my @w = split " ", $args{$p};
+  next unless @w && base($w[0]) =~ $prog;
+  my $at = positions(@w);
+  my $hit = 0;
+  for my $i (0 .. $#w - 1) {
+    last if base($w[$i]) eq "ssh" || ($w[$i] eq "execution" && $w[$i + 1] eq "leg");
+    next unless base($w[$i]) eq "test-run.sh" && $verb{$w[$i + 1]};
+    next if $w[$i + 1] eq "prepush" && grep { /\A--list(?:=|\z)/ } @w[$i + 2 .. $#w];
+    my ($c, $found);
+    for my $j (reverse(($i > 8 ? $i - 8 : 0) .. $i)) {
+      my $path = join(" ", @w[$j .. $i]);
+      $path =~ s{\A~(?=/)}{$ENV{HOME}};
+      if ($path !~ m{\A/}) {
+        $c = cwd_of($p) unless defined $c;
+        next unless defined $c && length $c;
+        $path = "$c/$path";
+      }
+      next unless -f $path;
+      (my $dir = $path) =~ s{/[^/]*\z}{};
+      my $r = Cwd::abs_path("$dir/..");
+      $found = 1;
+      $hit = 1 if $at->{$j} && defined $r && $r eq $root;
+      last;
+    }
+    next if $found || $w[$i] =~ m{\A[/~]} || !$at->{$i};
+    $c = cwd_of($p) unless defined $c;
+    $hit = 1 if defined $c && length $c && (Cwd::abs_path($c) // "") eq $root;
+  }
+  next unless $hit && !credited($p);
+  # Asked only of a launch, as it reads directories (lsof on a Mac).
+  if (orphan($p)) {
+    # One argv in another directory is another launch (a relative word names
+    # another worktree there): the copies are those in this one.
+    my $here = cwd_of($p);
+    my @same = grep { $_ == $p || (cwd_of($_) // "") eq ($here // "") } @{$byargs{$args{$p}}};
+    next if grep { !orphan($_) } @same;
+    next if $spoken{($here // "") . "\0" . $args{$p}}++ || grep { credited($_) } @same;
+    my $credit = $known_argv{Digest::MD5::md5_hex($args{$p})};
+    my $born = started($p);
+    next if defined $credit && defined $born && $born <= $credit;
+  }
+  print "$p ", substr($args{$p}, 0, 240), "\n";
+}
+'
+# Sets pending_out to one "PID ARGV" line per launch of this worktree in flight
+# that no run of it recorded as its own chain. 1, with
+# pending_out empty, when the table cannot be read -- said once on stderr, and
+# then nothing is in flight: the reader degrades to the answer it gave before.
+pending_warned=
+pending_launches() { # [the run `last` names, published whether or not it has started]
+  pending_out=$(perl -e "$proc_table_perl" pending "$PWD" "$(id -u)" "$RUNS" "${1:-}" 2>/dev/null) && return 0
+  pending_out=
+  [ -n "$pending_warned" ] ||
+    echo "test-run: cannot read the process table here; a launch of this worktree still queued would not be seen" >&2
+  pending_warned=1
+  return 1
+}
+
+# What a reader of `last` asks first (gh-ocannl-1830): the launches in flight,
+# then the run `last` names -- asked in THAT order, the order a launch moves in
+# (in flight, then published), so none can pass between the two unseen; and
+# asked again when `last` moved meanwhile: a launch that published between the
+# two reads may have left the table already. Sets pending_out, and run_dir to that run
+# (empty when `last` names none this reader can use: never recorded, reaped,
+# not a run directory -- resolve_run says which, to a caller that needs to).
+# Every sighting is noted (note_queued), whatever state that run is in: a
+# launch queued behind a run still live can end unpublished too -- refused by
+# the worktree lock that run holds -- and the reader that waits the run out
+# must not then take its verdict for the launch's.
+follow_last() {
+  local before
+  last_quietly
+  while :; do
+    before=$run_dir
+    pending_launches "$run_dir" || :
+    last_quietly
+    [ "$run_dir" != "$before" ] || break
+  done
+  [ -z "$pending_out" ] || note_queued "$run_dir"
+}
+last_quietly() {
+  run_dir=$( (resolve_run last && printf '%s' "$run_dir") 2>/dev/null) || run_dir=
+}
+# A launch seen in flight that then ended without publishing a run -- refused
+# before it ran: the fleet slot never came, the worktree lock was held, a usage
+# error -- leaves `last` where it was, and a reader asking once it is gone
+# would take the run before it for the launch's own. So every reader that sees
+# one marks the run `last` named at that moment (`queued-after` in its
+# directory; $QUEUED before the first run), and a reader that finds nothing in
+# flight while `last` still names a marked run refuses to answer for it. A
+# mark is a file's existence, one per run, never a value two readers could
+# overwrite: a reader that saw a launch after A and marks A late, once B has
+# published, marks a run `last` no longer names, which `last` never moves back
+# to. The marked run's own verdict stays readable by name.
+note_queued() { # <run dir, empty for none>
+  if [ -n "$1" ]; then : >"$1/queued-after"; else : >"$QUEUED"; fi 2>/dev/null || :
+}
+queued_unpublished() { # <run dir, empty for none>; 0 iff a launch seen after it ended unpublished
+  if [ -n "$1" ]; then [ -e "$1/queued-after" ]; else [ -e "$QUEUED" ]; fi
+}
+queued_report() { # <run dir, empty for none>: the refusal's words
+  echo "unpublished: a launch seen in flight in this worktree after ${1:-no run} ended without publishing a run"
+  echo "  (refused before it ran: a fleet slot that never came, the worktree lock, a usage error -- its own output says which)"
+  [ -z "$1" ] || echo "  the run before it, by name: tools/test-run.sh $sub $(printf %q "$1")"
+}
+status_over() { # <run dir, empty for none>; 0 iff no run of it is still in flight
+  [ -z "$1" ] || [ -f "$1/exit" ] && return 0
+  sup_alive "$1" && return 1
+  # The milliseconds between a launcher's publication and its supervisor's
+  # first record (status's `launch in progress`).
+  [ ! -f "$1/pid" ] && lock_still_owned "$1" && return 1
+  return 0
+}
+pending_report() { # the first launch in flight, for a reader's message
+  printf '%s' "${pending_out%%$'\n'*}"
 }
 
 # "Is anything in this process group still RUNNING?" -- the group-scale twin of
@@ -4654,6 +5028,12 @@ case $sub in
       printf '%s\n' "$expect" >"$run_dir/expect-backend" ||
         { rm -rf "$run_dir"; die "cannot record the expected backends in $run_dir"; }
     fi
+    # A plan's directory is never published, so its chain is no launch's
+    # (proc_table_perl): a shell whose words hold a plan and a run is still a
+    # launch to come while the plan runs.
+    if [ "$sub" = plan ]; then
+      : >"$run_dir/unpublished" || { rm -rf "$run_dir"; die "cannot record the plan's metadata in $run_dir"; }
+    fi
     if [ "$sub" = fresh ]; then
       { printf '%s\n' fresh >"$run_dir/mode" &&
         printf '%s\n' "${fresh_aliases[@]}" >"$run_dir/fresh-aliases"; } ||
@@ -4796,7 +5176,27 @@ case $sub in
     ;;
   status)
     for arg do take_run_ref "status [RUN|last]" "$arg"; done
-    resolve_run "${query_ref:-last}"
+    if [ "${query_ref:-last}" = last ]; then
+      # `last` is the worktree's newest PUBLISHED run, and a launch still in
+      # flight -- queued behind a slot's wait, say -- is not one yet: while
+      # one is, a finished `last` is the run before it, never its answer
+      # (gh-ocannl-1830; see proc_table_perl). In flight is 3, like running.
+      follow_last
+      if status_over "$run_dir"; then
+        if [ -n "$pending_out" ]; then
+          echo "queued: a launch in this worktree has not published its run yet: $(pending_report)"
+          echo "  (the last published run, not that launch's: ${run_dir:-none})"
+          exit 3
+        fi
+        if queued_unpublished "$run_dir"; then
+          queued_report "$run_dir"
+          exit 1
+        fi
+      fi
+      [ -n "$run_dir" ] || resolve_run last
+    else
+      resolve_run "$query_ref"
+    fi
     # One-shot and honest -- no sleeping in `status`. Ordered by LIVENESS,
     # never by pid-file presence: a supervisor killed after recording itself
     # must read as dead, not as running forever. The explicit `exit 0` on the
@@ -4845,7 +5245,20 @@ case $sub in
         *) take_run_ref "wait [RUN|last] [--timeout N]" "$1"; shift ;;
       esac
     done
-    resolve_run "${query_ref:-$ref}"
+    # `last` is FOLLOWED (gh-ocannl-1830; see proc_table_perl): the run it
+    # names is waited for as any run is, and a verdict is the answer only
+    # once no launch of this worktree is in flight -- a launch queued behind
+    # a slot's wait is no run yet, and the run before it is not its answer.
+    # It waits for that launch to publish, and then for the run it published;
+    # a budget spent meanwhile is the timeout (124), re-issued as any is.
+    follow=
+    if [ "${query_ref:-$ref}" = last ]; then
+      follow=1
+      follow_last
+      [ -n "$run_dir" ] || [ -n "$pending_out" ] || resolve_run last
+    else
+      resolve_run "$query_ref"
+    fi
     if [ -n "${budget_given:-}" ]; then
       # Same traps --cap had: leading zeros reach bash arithmetic as octal,
       # and oversized values wrap. Gated on the option being GIVEN, so an
@@ -4858,21 +5271,32 @@ case $sub in
     # Bounded by construction: default budget is every capped iteration plus
     # one cleanup allowance, so a managed repeat does not time out merely
     # because `cap` is per iteration. Ordinary runs have an implicit count 1.
-    cap=$(cat "$run_dir/cap" 2>/dev/null) || cap=3600
-    [ -n "$cap" ] || cap=3600
-    cap=$(( 10#$cap )) # decimal, whatever an older run recorded
-    wait_repeats=1
-    if [ "$(cat "$run_dir/mode" 2>/dev/null)" = repeat ]; then
-      wait_repeats=$(cat "$run_dir/repeats" 2>/dev/null) || wait_repeats=1
-      case $wait_repeats in '' | *[!0-9]*) wait_repeats=1 ;; esac
-      wait_repeats=$(( 10#$wait_repeats ))
-      [ "$wait_repeats" -gt 0 ] || wait_repeats=1
-      # A direct set's build phase and plan are capped steps of their own.
-      [ "$(cat "$run_dir/direct" 2>/dev/null)" != 1 ] || wait_repeats=$(( wait_repeats + 2 ))
+    # A followed `last` that binds a run published since gets that run's
+    # allowance from then on, unless --timeout set the budget.
+    wait_allowance() { # <run dir, empty for none>: sets allowance
+      local cap wait_repeats
+      cap=
+      [ -z "$1" ] || cap=$(cat "$1/cap" 2>/dev/null) || cap=3600
+      [ -n "$cap" ] || cap=3600
+      cap=$(( 10#$cap )) # decimal, whatever an older run recorded
+      wait_repeats=1
+      if [ -n "$1" ] && [ "$(cat "$1/mode" 2>/dev/null)" = repeat ]; then
+        wait_repeats=$(cat "$1/repeats" 2>/dev/null) || wait_repeats=1
+        case $wait_repeats in '' | *[!0-9]*) wait_repeats=1 ;; esac
+        wait_repeats=$(( 10#$wait_repeats ))
+        [ "$wait_repeats" -gt 0 ] || wait_repeats=1
+        # A direct set's build phase and plan are capped steps of their own.
+        [ "$(cat "$1/direct" 2>/dev/null)" != 1 ] || wait_repeats=$(( wait_repeats + 2 ))
+      fi
+      allowance=$(( cap > 0 ? cap * wait_repeats + 120 : 7200 ))
+    }
+    if [ -z "$budget" ]; then
+      wait_allowance "$run_dir"
+      budget=$allowance
     fi
-    [ -n "$budget" ] || budget=$(( cap > 0 ? cap * wait_repeats + 120 : 7200 ))
-    waited=0
-    while [ ! -f "$run_dir/exit" ]; do
+    waited=0 bound=$run_dir dead=
+    while :; do
+    while [ -n "$run_dir" ] && [ ! -f "$run_dir/exit" ] && [ "$run_dir" != "$dead" ]; do
       # Every sleep here -- the poll AND the dead-supervisor grace -- is
       # bounded by the remaining budget, so a short --timeout is honored to
       # the second rather than rounded up to an interval.
@@ -4895,6 +5319,9 @@ case $sub in
         # Recomputed AFTER the settle: consuming the final second must report
         # the documented timeout, not slip through on the pre-sleep value.
         [ $(( budget - waited )) -le 0 ] && { echo "wait timed out after ${budget}s: $run_dir"; exit 124; }
+        # Followed, a launch in flight behind it is still to come: the dead
+        # run's missing verdict is not that launch's answer either.
+        [ -z "$follow" ] || { dead=$run_dir; break; }
         echo "run died without recording a verdict (killed externally?): $run_dir"
         exit 1
       fi
@@ -4902,6 +5329,40 @@ case $sub in
       step=$(( remaining < 5 ? remaining : 5 ))
       sleep "$step"
       waited=$(( waited + step ))
+    done
+    [ -n "$follow" ] || break
+    # A verdict, or no run yet: asked again in follow_last's order, and
+    # followed to a run published since, which is waited for above.
+    follow_last
+    if [ "$run_dir" != "$bound" ]; then
+      bound=$run_dir dead=
+      if [ -z "${budget_given:-}" ]; then
+        wait_allowance "$run_dir"
+        budget=$(( waited + allowance ))
+      fi
+    fi
+    [ -z "$run_dir" ] || [ -f "$run_dir/exit" ] || [ "$run_dir" = "$dead" ] || continue
+    if [ -z "$pending_out" ]; then
+      if queued_unpublished "$run_dir"; then
+        queued_report "$run_dir"
+        exit 2
+      fi
+      [ -n "$run_dir" ] || resolve_run last
+      if [ ! -f "$run_dir/exit" ]; then
+        echo "run died without recording a verdict (killed externally?): $run_dir"
+        exit 1
+      fi
+      break
+    fi
+    remaining=$(( budget - waited ))
+    if [ "$remaining" -le 0 ]; then
+      echo "wait timed out after ${budget}s: a launch in this worktree has not published its run yet: $(pending_report)"
+      echo "  (the last published run, not that launch's: ${run_dir:-none})"
+      exit 124
+    fi
+    step=$(( remaining < 5 ? remaining : 5 ))
+    sleep "$step"
+    waited=$(( waited + step ))
     done
     digest "$run_dir"
     exit "$digest_rc"
@@ -5132,19 +5593,33 @@ case $sub in
     fi
     ;;
   list)
-    [ $# -eq 0 ] || die "list takes no arguments"
+    # This worktree's runs, by the worktree each recorded (`wt`), and every
+    # worktree's only on request: the state root is shared, so its newest run
+    # is as likely a sibling checkout's, and a lookup of "the last run" by
+    # position there (`ls -td`) read one (gh-ocannl-1830).
+    list_all=
+    case $# in
+      0) ;;
+      1) [ "$1" = --all ] || die "list takes no arguments but --all" ; list_all=1 ;;
+      *) die "list takes no arguments but --all" ;;
+    esac
     found=0
     for d in "$RUNS"/2*/; do
       [ -d "$d" ] || continue
-      found=1
       d=${d%/}
+      [ -n "$list_all" ] || [ "$(cat "$d/wt" 2>/dev/null)" = "$PWD" ] || continue
+      found=1
       if [ -f "$d/exit" ]; then state="exit $(cat "$d/exit")"
       elif sup_alive "$d"; then state=running
       else state=dead
       fi
       printf '%s  %-8s  dune %s\n' "$(basename "$d")" "$state" "$(cat "$d/cmd" 2>/dev/null)"
     done
-    [ "$found" = 1 ] || echo "no recorded runs in $RUNS"
+    if [ "$found" != 1 ]; then
+      if [ -n "$list_all" ]; then echo "no recorded runs in $RUNS"
+      else echo "no recorded runs of this worktree in $RUNS (list --all: every worktree's)"
+      fi
+    fi
     ;;
   *) die "unknown subcommand: $sub (run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected|aliases|prepush)" ;;
 esac
