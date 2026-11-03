@@ -99,9 +99,41 @@ echo "=== OCANNL environment ==="
 # is not the one dune would root at. Asking the question dune asks covers every
 # arrangement — nested worktree, worktree of a worktree, worktree outside the
 # repo — without enumerating them.
+#
+# WHICH checkout: the one the current directory is in, when that is a worktree
+# of this script's own repository; otherwise the script's own. The hook runs
+# as "$CLAUDE_PROJECT_DIR"/scripts/setup-ocaml-env.sh, and in a desktop-app
+# session in `.claude/worktrees/<name>` that variable names the MAIN checkout
+# (it is the project root where the session started, and stays put), so the
+# script's own location would point every step here at the main checkout:
+# its staleness reported as the worktree's, and no `dune-workspace` written
+# in the worktree, which is the one checkout that needs it (gh-ocannl-1812).
+# Hook handlers run in the session's current directory, so $PWD is the
+# session's directory; the hook's stdin JSON `cwd` says the same but is not
+# read, since a hand run from a terminal would block on it. Adopting $PWD is
+# an allowlist of one case: a different toplevel of the SAME repository (equal
+# git common dirs, so a linked worktree or the main checkout of one) that holds
+# a `dune-project`. Anything else (outside any repository, another repository)
+# falls back to the script's own checkout, today's behaviour, as does every run
+# from the checkout the script lives in.
+canon_dir() { (cd "$1" 2>/dev/null && pwd -P) || true; }
+common_dir() { # common_dir TOPLEVEL -> its git common dir, physical, or nothing
+  # Asked from the toplevel, where every git's relative answer means the same.
+  (cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null \
+     && pwd -P) || true
+}
 self_top="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd || true)"
 wt_top="$(git -C "${self_top:-.}" rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$wt_top" ] || wt_top="$self_top"
+here_top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$here_top" ] && [ -n "$wt_top" ] && [ -e "$here_top/dune-project" ] \
+   && [ "$(canon_dir "$here_top")" != "$(canon_dir "$wt_top")" ]; then
+  here_common="$(common_dir "$here_top")"
+  if [ -n "$here_common" ] && [ "$here_common" = "$(common_dir "$wt_top")" ]; then
+    echo "  ok    checkout $here_top (the current directory's; this script is $wt_top's)"
+    wt_top="$here_top"
+  fi
+fi
 if [ -n "$wt_top" ] && [ -e "$wt_top/dune-project" ]; then
   # Walk outwards, keeping the LAST hit, so each variable ends at the outermost
   # ancestor holding that file — which is the one dune would pick.
@@ -431,7 +463,11 @@ fi
 # pins, so an installed-but-wrong release is as unusable as none; dune-project
 # pins the same release (move the two together). Only reported: the fix is an
 # opam install, and installing is not this script's to do on a workstation.
-fmt_pin="$(sed -n 's/^version *= *//p' "$script_dir/../.ocamlformat" 2>/dev/null | tr -d '[:space:]')"
+# The pin is the targeted checkout's (above), whose branch is what gets
+# formatted; the script's own is the fallback.
+fmt_rc="${wt_top:+$wt_top/.ocamlformat}"
+[ -n "$fmt_rc" ] && [ -e "$fmt_rc" ] || fmt_rc="$script_dir/../.ocamlformat"
+fmt_pin="$(sed -n 's/^version *= *//p' "$fmt_rc" 2>/dev/null | tr -d '[:space:]')"
 if printf '%s\n' "$installed" | grep -qx ocamlformat; then
   # tr -d '\r': ocamlformat.exe emits CRLF on Windows; substitution strips only the LF.
   fmt_have="$(opam exec -- ocamlformat --version 2>/dev/null | tr -d '\r' || true)"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the "staleness against origin/master" section of
-# scripts/setup-ocaml-env.sh (the SessionStart hook), and for the hand-off that
-# keeps a shell sourcing it alive.
+# scripts/setup-ocaml-env.sh (the SessionStart hook), for the hand-off that
+# keeps a shell sourcing it alive, and for which checkout it acts on.
 #
 #   scripts/test-setup-ocaml-env.sh          # run every leg
 #   scripts/test-setup-ocaml-env.sh --keep   # keep the temp dir for inspection
@@ -39,6 +39,10 @@
 #   4. sourcing — sourced from bash or zsh (or executed by zsh), the hook runs
 #      in a bash child: the caller survives its exit and no read-only `status`
 #      error appears; mutants without the hand-off are the negative controls.
+#   5. which checkout — run from a worktree nested under `.claude/worktrees/`
+#      with the project dir naming the outer checkout, the hook counts and
+#      roots the worktree; from the outer checkout, from outside any
+#      repository or from another repository it acts on the outer one.
 
 set -u
 
@@ -497,13 +501,16 @@ FAKEHOME="$TMP/home"; mkdir -p "$FAKEHOME"
 RUN_ENV=()
 RUN_PATH="$BIN"
 
-run_hook() { # run_hook CLONE OUTFILE   (extra env comes from the RUN_ENV array)
-  local clone="$1" out="$2"
+# run_hook CLONE OUTFILE [HOOK]: run HOOK (default: CLONE's own copy) with CLONE
+# as the current directory, as a session starting there runs it (extra env
+# comes from the RUN_ENV array).
+run_hook() {
+  local clone="$1" out="$2" hook="${3:-$1/scripts/setup-ocaml-env.sh}"
   ( cd "$clone" && env -i \
       HOME="$FAKEHOME" PATH="$RUN_PATH" \
       GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
       ${RUN_ENV[@]+"${RUN_ENV[@]}"} \
-      "$BASH_BIN" "$clone/scripts/setup-ocaml-env.sh" ) >"$out" 2>&1
+      "$BASH_BIN" "$hook" ) >"$out" 2>&1
   # Every run must have reached (and passed) the section under test. Without
   # this, a hook that died earlier would make the absence assertions pass.
   if ! grep -qF 'stopped: opam required' "$out"; then
@@ -1055,6 +1062,125 @@ else
 fi
 }
 harness_leg_run '4: sourcing from zsh and bash' leg_4
+
+# ---------------------------------------------------------------------------
+# Leg 5: which checkout
+# ---------------------------------------------------------------------------
+# The hook runs as "$CLAUDE_PROJECT_DIR"/scripts/setup-ocaml-env.sh, and in a
+# desktop-app session in a nested worktree (`.claude/worktrees/<name>`) that
+# variable names the OUTER checkout, while the session's directory is the
+# worktree (gh-ocannl-1812). The fixture is exactly that: an outer clone left 5
+# commits behind origin/master, holding the hook, with a worktree at
+# origin/master nested under its `.claude/worktrees/`. Run from the worktree,
+# the hook must report the worktree's staleness (none) and write the
+# worktree's `dune-workspace`; run from the outer checkout, from a directory
+# outside any repository, or from ANOTHER repository nested in the same place,
+# it must act on the outer checkout as before. A mutant that never adopts the
+# current directory's checkout is the negative control: it fails (a).
+leg_5() {
+local o5="$TMP/origin5" outer="$TMP/w-outer" hook wt other mutant n
+mkdir -p "$o5"
+git_q -C "$o5" init -q
+printf '(lang dune 3.18)\n' >"$o5/dune-project"
+git_q -C "$o5" add dune-project
+for n in 1 2 3 4 5 6; do
+  echo "$n" >"$o5/f"
+  git_q -C "$o5" add f
+  git_q -C "$o5" commit -q -m "w$n"
+done
+git_q clone -q "$o5" "$outer"
+mkdir -p "$outer/scripts"
+cp "$HOOK_SRC" "$outer/scripts/setup-ocaml-env.sh"
+stage_sourced "$HOOK_SRC" "$outer" || { harness_abandon "cannot stage the hook into $outer"; return; }
+git_q -C "$outer" checkout -q --detach refs/remotes/origin/master~5
+hook="$outer/scripts/setup-ocaml-env.sh"
+wt="$outer/.claude/worktrees/wt"
+git_q -C "$outer" worktree add -q --detach "$wt" refs/remotes/origin/master \
+  || { harness_abandon "git worktree add $wt failed"; return; }
+mkdir -p "$wt/sub"
+# Session-like: the project dir names the outer checkout, as the desktop app does.
+session_env() { RUN_ENV=(CLAUDE_PROJECT_DIR="$outer"); }
+# acts_on_outer OUTFILE: the outer checkout's count, and no adoption line.
+acts_on_outer() {
+  has "$1" 'WARNING HEAD is 5 commit(s) behind origin/master' \
+    && ! has "$1" '  ok    checkout ' && [ ! -e "$outer/dune-workspace" ]
+}
+
+# (a) from the nested worktree: its own count, its own dune-workspace.
+session_env; run_hook "$wt" "$TMP/out-wt" "$hook"
+if has "$TMP/out-wt" '  ok    up to date with origin/master' && ! has "$TMP/out-wt" 'WARNING' \
+   && has "$TMP/out-wt" "  ok    checkout " \
+   && has "$TMP/out-wt" '  fixed worktree dune root' && [ -s "$wt/dune-workspace" ] \
+   && [ ! -e "$outer/dune-workspace" ]; then
+  report 0 "checkout (a): from a nested worktree, the hook acts on the worktree, not the project dir"
+else
+  report 1 "checkout (a): from a nested worktree, the hook acts on the worktree, not the project dir" \
+    "$(tr '\n' '|' <"$TMP/out-wt")"
+fi
+
+# (b) from a subdirectory of the worktree: the same checkout, now rooted.
+session_env; run_hook "$wt/sub" "$TMP/out-wt-sub" "$hook"
+if has "$TMP/out-wt-sub" '  ok    up to date with origin/master' && ! has "$TMP/out-wt-sub" 'WARNING' \
+   && has "$TMP/out-wt-sub" '  ok    worktree dune root' && [ ! -e "$wt/sub/dune-workspace" ]; then
+  report 0 "checkout (b): from a worktree subdirectory, the same worktree, already rooted"
+else
+  report 1 "checkout (b): from a worktree subdirectory, the same worktree, already rooted" \
+    "$(tr '\n' '|' <"$TMP/out-wt-sub")"
+fi
+
+# (c) from the outer checkout itself: today's behaviour, unchanged.
+session_env; run_hook "$outer" "$TMP/out-outer" "$hook"
+if acts_on_outer "$TMP/out-outer"; then
+  report 0 "checkout (c): from the main checkout, its own count and no dune-workspace"
+else
+  report 1 "checkout (c): from the main checkout, its own count and no dune-workspace" \
+    "$(tr '\n' '|' <"$TMP/out-outer")"
+fi
+
+# (d) from outside any repository: the script's own checkout.
+mkdir -p "$TMP/w-elsewhere"
+session_env; run_hook "$TMP/w-elsewhere" "$TMP/out-elsewhere" "$hook"
+if acts_on_outer "$TMP/out-elsewhere"; then
+  report 0 "checkout (d): from outside any repository, the script's own checkout"
+else
+  report 1 "checkout (d): from outside any repository, the script's own checkout" \
+    "$(tr '\n' '|' <"$TMP/out-elsewhere")"
+fi
+
+# (e) from ANOTHER repository with a dune-project, nested where a worktree
+#     would be: not adopted, and nothing written into it.
+other="$outer/.claude/worktrees/other"
+mkdir -p "$other"
+git_q -C "$other" init -q
+printf '(lang dune 3.18)\n' >"$other/dune-project"
+session_env; run_hook "$other" "$TMP/out-other" "$hook"
+if acts_on_outer "$TMP/out-other" && [ ! -e "$other/dune-workspace" ]; then
+  report 0 "checkout (e): another repository's checkout is not adopted"
+else
+  report 1 "checkout (e): another repository's checkout is not adopted" \
+    "$(tr '\n' '|' <"$TMP/out-other")"
+fi
+
+# (f) negative control: the mutant drops the adoption, and (a)'s check fails
+#     on a fresh nested worktree.
+mutant="$outer/scripts/setup-ocaml-env-mutant.sh"
+sed '/^    wt_top="\$here_top"$/d' "$hook" >"$mutant"
+if cmp -s "$hook" "$mutant"; then
+  report 1 "checkout (f): the non-adopting mutant fails (a)" \
+    "the mutation matched nothing in the hook, so the control tests nothing"
+else
+  git_q -C "$outer" worktree add -q --detach "$outer/.claude/worktrees/wt2" refs/remotes/origin/master
+  session_env; run_hook "$outer/.claude/worktrees/wt2" "$TMP/out-mutant" "$mutant"
+  if has "$TMP/out-mutant" 'WARNING HEAD is 5 commit(s) behind origin/master' \
+     && [ ! -e "$outer/.claude/worktrees/wt2/dune-workspace" ]; then
+    report 0 "checkout (f): the non-adopting mutant fails (a)"
+  else
+    report 1 "checkout (f): the non-adopting mutant fails (a)" \
+      "$(tr '\n' '|' <"$TMP/out-mutant")"
+  fi
+fi
+}
+harness_leg_run '5: which checkout, from a nested worktree' leg_5
 
 # ---------------------------------------------------------------------------
 finish
