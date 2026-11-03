@@ -334,7 +334,8 @@
 #      launch to come, and a script path holding a space still names its
 #      worktree. A queued prepush is a launch, a queued `prepush --list` is
 #      not. A detached wrapper and its guardian (both orphans of parent 1,
-#      one argv) are one launch, and a `--` inside a `-c` string is no
+#      one argv) are one launch, a later one with that argv after the first
+#      run's verdict is another, and a `--` inside a `-c` string is no
 #      separator. The wrappers are the fleet's exec-argv shape (`q-slot.sh ... --
 #      CMD`): a `-c` string is never parsed. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
@@ -8745,7 +8746,7 @@ q_capture() { # root subcommand [argv...]
 }
 q_last() { q "$1" paths run last 2>/dev/null; }
 # The stand-in for the fleet's slot wrapper, in its shape: `q-slot.sh RELEASE
-# exec|refuse -- CMD...` waits for RELEASE, then runs CMD as its child and
+# exec|refuse -- CMD...` waits for RELEASE (and takes it: one release, one wrapper), then runs CMD as its child and
 # exits with its status -- or, for `refuse`, exits 75 having run nothing, as a
 # refused slot does. Like the real one it first double-forks a guardian that
 # lives as long as it does, and here a second longer: an orphan of parent 1
@@ -8759,7 +8760,7 @@ release=$1 how=$2
 shift 3
 main=$$
 ( (while kill -0 "$main" 2>/dev/null; do sleep .1; done; sleep 1) </dev/null >/dev/null 2>&1 & )
-while [ ! -e "$release" ]; do sleep .1; done
+while ! rm "$release" 2>/dev/null; do sleep .1; done
 [ "$how" = exec ] || exit 75
 "$@"
 EOF
@@ -9124,6 +9125,7 @@ for q_pp_case in "3|build" "0|--list"; do
   q_capture "$q_root" status last
   kill -KILL "$q_pp" 2>/dev/null
   wait "$q_pp" 2>/dev/null
+  sleep 1.5 # its guardian, alone for a second once its wrapper is gone
   [ "$q_rc" = "$q_pp_want" ] ||
     { q_detail="status last beside a queued prepush --since base $q_pp_arg: exit $q_rc (want $q_pp_want): $q_out"; break; }
   q "$q_root" run build @ok >/dev/null 2>&1
@@ -9133,10 +9135,10 @@ if [ -z "$q_detail" ]; then report 0 "$q_pp_label"; else report 1 "$q_pp_label" 
 # A wrapper detached from its caller is an orphan of parent 1 just as its
 # guardian is, the two carrying one argv: they are one launch, not none. And
 # a `--` inside a `-c` string is script text, no wrapper's separator.
-q_orphan_label="a detached wrapper and its guardian are one launch; a -- in script text is none"
+q_orphan_label="a detached wrapper and its guardian are one launch, a later identical one another; a -- in script text is none"
 q_detail=
-(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
-  bash "$q_slot" "$TMP/queued.release11" exec -- tools/test-run.sh run build @red </dev/null >/dev/null 2>&1 &
+( (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
+  exec bash "$q_slot" "$TMP/queued.release11" exec -- tools/test-run.sh run build @red) </dev/null >/dev/null 2>&1 &
   echo $! >"$TMP/queued.orphan")
 q_orphan=$(cat "$TMP/queued.orphan")
 q_wraps+=("$q_orphan:$TMP/queued.release11")
@@ -9169,6 +9171,39 @@ if [ -z "$q_detail" ]; then
     q_capture "$q_root" wait last --timeout 5
     [ "$q_rc" = 0 ] || q_detail="wait last once that shell ended: exit $q_rc (want 0, not unpublished): $q_out"
   fi
+fi
+# A later detached wrapper with the very argv of one whose run has its
+# verdict is a new launch: the argv credit is bounded by that verdict.
+if [ -z "$q_detail" ]; then
+  q_detached() { # [orphaned]: starts the detached wrapper, its pid in q_orphan
+    ( (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
+      exec bash "$q_slot" "$TMP/queued.release13" exec -- tools/test-run.sh run build @ok) </dev/null >/dev/null 2>&1 &
+      echo $! >"$TMP/queued.orphan")
+    q_orphan=$(cat "$TMP/queued.orphan")
+    q_wraps+=("$q_orphan:$TMP/queued.release13")
+    [ -z "${1:-}" ] || q_until 10 q_orphaned
+  }
+  q_before=$(q_last "$q_root")
+  touch "$TMP/queued.release13"
+  q_detached
+  q_gone() { ! kill -0 "$q_orphan" 2>/dev/null; }
+  if ! q_until 30 q_gone || ! q_finished "$q_root" "$q_before"; then
+    q_detail="the first detached wrapper never finished its run: last: $(q_last "$q_root")"
+  else
+    sleep 1.2
+    if ! q_detached orphaned; then
+      q_detail="the second detached wrapper is no orphan of parent 1: ppid $(ps -o ppid= -p "$q_orphan" 2>/dev/null)"
+    else
+      sleep .5
+      q_capture "$q_root" status last
+      { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+        q_detail="status last, an identical detached wrapper queued after the first run's verdict: exit $q_rc (want 3): $q_out"
+    fi
+  fi
+  # Released, it runs: no child of this shell, so it is waited out by pid.
+  q_release_all
+  q_until 30 q_gone || q_detail="${q_detail:-the second detached wrapper never ended}"
+  q "$q_root" wait last --timeout 30 >/dev/null 2>&1
 fi
 if [ -z "$q_detail" ]; then report 0 "$q_orphan_label"; else report 1 "$q_orphan_label" "$q_detail"; fi
 

@@ -2864,7 +2864,7 @@ group_identity_matches() {
 # and LAST the run `last` names.
 # Exits 2 when the table cannot be read.
 proc_table_perl='
-use strict; use warnings; use Cwd (); use Digest::MD5 ();
+use strict; use warnings; use Cwd (); use Digest::MD5 (); use POSIX (); use Time::Local ();
 my ($mode, $root, $uid, $runs, $last) = @ARGV;
 my (%pp, %uid, %tok, %args);
 sub slurp { open(my $f, "<", $_[0]) or return undef; local $/; my $s = <$f>; close $f; return $s }
@@ -2917,7 +2917,13 @@ if (defined $runs && opendir(my $rd, $runs)) {
     next if -e "$runs/$e/unpublished";
     next unless -e "$runs/$e/pid" || -e "$runs/$e/exit" || (defined $last && "$runs/$e" eq $last);
     my $c = slurp("$runs/$e/launchers");
-    for my $l (split /\n/, defined $c ? $c : "") { $known{$l} = 1; $known_argv{$1} = 1 if $l =~ / ([0-9a-f]{32})\z/ }
+    # The verdict time bounds the argv credit (orphan_started, below).
+    my $until = -e "$runs/$e/exit" ? (stat "$runs/$e/exit")[9] : 9**9**9;
+    for my $l (split /\n/, defined $c ? $c : "") {
+      $known{$l} = 1;
+      next unless $l =~ / ([0-9a-f]{32})\z/;
+      $known_argv{$1} = $until if !defined $known_argv{$1} || $known_argv{$1} < $until;
+    }
   }
   closedir $rd;
 }
@@ -2969,11 +2975,29 @@ sub positions {
 # Processes of this uid by argv: an orphan of parent 1 carrying the argv of a
 # process that is not one is a fork of that process (the guardian of a slot
 # wrapper); orphans that all carry one argv are one launch, credited when any
-# is, or when a published run credited that argv (a guardian outliving its
-# wrapper by a moment carries the argv the wrapper was credited for).
+# is, or when a published run credited that argv and the orphan started no
+# later than the verdict of that run (a guardian outliving its wrapper by a moment
+# carries the argv its wrapper was credited for, and started before the
+# batch; a later launch with the same argv started after it).
 my (%byargs, %spoken);
 push @{$byargs{$args{$_}}}, $_ for grep { !defined $uid{$_} || $uid{$_} eq $uid } keys %args;
 sub orphan { my $p = shift; return !defined $pp{$p} || $pp{$p} <= 1 }
+# A start time in epoch seconds from the token: stat starttime ticks after the
+# boot time, or lstart (rendered under TZ=UTC); undef when unknown.
+my $btime;
+sub started {
+  my $t = $tok{$_[0]};
+  return undef unless defined $t && length $t;
+  if ($proc) {
+    unless (defined $btime) { my $st = slurp("/proc/stat"); $btime = (defined $st && $st =~ /^btime\s+([0-9]+)/m) ? $1 : -1 }
+    my $hz = POSIX::sysconf(POSIX::_SC_CLK_TCK()) || 100;
+    return $btime >= 0 && $t =~ /\A[0-9]+\z/ ? $btime + int($t / $hz) : undef;
+  }
+  my %mon = (Jan => 0, Feb => 1, Mar => 2, Apr => 3, May => 4, Jun => 5, Jul => 6, Aug => 7, Sep => 8, Oct => 9, Nov => 10, Dec => 11);
+  my (undef, $m, $d, $hms, $y) = split " ", $t;
+  return undef unless defined $y && exists $mon{$m} && $hms =~ /\A([0-9]+):([0-9]+):([0-9]+)\z/;
+  return eval { Time::Local::timegm($3, $2, $1, $d, $mon{$m}, $y) };
+}
 sub credited { my $p = shift; return $known{"$p $tok{$p} " . Digest::MD5::md5_hex($args{$p})} }
 for my $p (sort { $a <=> $b } keys %args) {
   next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
@@ -2982,7 +3006,9 @@ for my $p (sort { $a <=> $b } keys %args) {
     my @same = @{$byargs{$args{$p}}};
     next if grep { !orphan($_) } @same;
     next if $spoken{$args{$p}}++ || grep { credited($_) } @same;
-    next if $known_argv{Digest::MD5::md5_hex($args{$p})};
+    my $credit = $known_argv{Digest::MD5::md5_hex($args{$p})};
+    my $born = started($p);
+    next if defined $credit && defined $born && $born <= $credit;
   }
   my @w = split " ", $args{$p};
   next unless @w && base($w[0]) =~ $prog;
