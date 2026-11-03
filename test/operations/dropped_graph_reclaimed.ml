@@ -17,12 +17,9 @@ open Base
 open Ocannl
 open Nn_blocks.DSL_modules
 open Verdict.Claims
+module LC = Lineage_claims
 module IDX = Train.IDX
 module Asgns = Ir.Assignments
-
-let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad
-let has msg substring = String.is_substring msg ~substring
-let exact name got want = p_close name got want ~tol:(fun _ -> 0.)
 
 let leaf name =
   Tensor.term_init [| 1.; 2.; 3. |] ~label:[ name ] ~output_dims:[ 3 ] ~grad_spec:Require_grad ()
@@ -32,26 +29,16 @@ let not_handed_out (t : Tensor.t) =
 
 let witness (t : Tensor.t) = Gc_witness.witness t
 
-(* The text of the [User_error] [f] raises; a failed claim when it raises none. *)
-let refusal name f =
-  match f () with
-  | _ ->
-      fail (name ^ ": was accepted");
-      ""
-  | exception Utils.User_error msg ->
-      Stdio.eprintf "%s: %s (not part of the golden)\n%!" name msg;
-      msg
-
 let unpropagated msg tn =
   let name = Ir.Tnode.label_name tn in
-  (has msg "no routine of its lineage carries" && has msg ("propagating from " ^ name))
-  || has msg ("no routine in this lineage propagates from " ^ name)
+  (LC.has msg "no routine of its lineage carries" && LC.has msg ("propagating from " ^ name))
+  || LC.has msg ("no routine in this lineage propagates from " ^ name)
 
 (* [t = w *. w] over a fresh [Require_grad] leaf, its forward run once. *)
 let[@inline never] evaluated prefix =
   let w = leaf (prefix ^ "_w") in
   let%op t = w *. w in
-  Train.set_materialized (grad_of w);
+  Train.set_materialized (LC.grad_of w);
   let ctx = Train.forward_once (Context.auto ()) t in
   (w, t, ctx)
 
@@ -108,7 +95,7 @@ let[@inline never] trunk_owner_dropped () =
   let ctx = Train.forward_once ~skip_init:true ctx l1 in
   p "trunk: before the drop, l1 is a backprop root and no longer a forward root"
     (Tensor.is_bprop_root l1 && not (Tensor.is_fwd_root l1));
-  (grad_of h, l2, ctx, witness l1)
+  (LC.grad_of h, l2, ctx, witness l1)
 
 (* The consumer [u] embeds the child [c]'s forward and backprop; [u] is evaluated and dropped, [c]
    is kept. *)
@@ -171,7 +158,7 @@ let consumed name t =
       Stdio.eprintf "%s: refused: %s (not part of the golden)\n%!" name msg;
       false
 
-let conflicting msg ~owner = has msg "found conflicting roots" && has msg owner
+let conflicting msg ~owner = LC.has msg "found conflicting roots" && LC.has msg owner
 
 (* The cell verdict, pinned to the live-root scan it replaced while every root is held. *)
 let verdicts_agree name t ~expected =
@@ -249,22 +236,22 @@ let () =
       p "leg B: the held t is still a backprop root after collections" (Tensor.is_bprop_root t);
       let%op loss = t *. 3. in
       let ctx = Train.update_once ctx loss in
-      exact "leg B: w.grad = 6 w" (Context.get_values ctx (grad_of w)) [| 6.; 12.; 18. |]);
+      LC.exact "leg B: w.grad = 6 w" (Context.get_values ctx (LC.grad_of w)) [| 6.; 12.; 18. |]);
   case "an ownership-preserving copy keeps the root" (fun () ->
       let w, copy, ctx = copy_kept () in
       Gc_witness.settle ();
       p "copy: the copy is still a backprop root after collections" (Tensor.is_bprop_root copy);
       let%op loss = copy *. 3. in
       let ctx = Train.update_once ctx loss in
-      exact "copy: w.grad = 6 w through the copy"
-        (Context.get_values ctx (grad_of w))
+      LC.exact "copy: w.grad = 6 w through the copy"
+        (Context.get_values ctx (LC.grad_of w))
         [| 6.; 12.; 18. |]);
   case "the lineage check survives its owner's reclamation" (fun () ->
       let h_grad, l2, ctx, l1 = trunk_owner_dropped () in
       p "trunk: the dropped owner l1 is reclaimed" (Gc_witness.reclaimed l1);
-      let msg = refusal "trunk" (fun () -> Train.update_once ~skip_init:true ctx l2) in
+      let msg = LC.refusal "trunk" (fun () -> Train.update_once ~skip_init:true ctx l2) in
       p "trunk: l2 is refused at run naming h's backprop fragment"
-        (unpropagated msg h_grad && has msg "accumulates into gradients"));
+        (unpropagated msg h_grad && LC.has msg "accumulates into gradients"));
   case "a held root survives scoped restoration and rewind" (fun () ->
       let _w, t, _ctx = evaluated "dg_rs" in
       Tensor.with_unchanged_roots ~f:(fun () ->
@@ -293,7 +280,7 @@ let () =
       let refused =
         match Tensor.consume_forward_code c with
         | _ -> false
-        | exception Tensor.Session_error (msg, _) -> has msg "is not a forward root"
+        | exception Tensor.Session_error (msg, _) -> LC.has msg "is not a forward root"
       in
       p "consumer: consuming the child's forward code is still refused" refused);
   case "the last closure's checkpoint does not hold a forward root it captured" (fun () ->

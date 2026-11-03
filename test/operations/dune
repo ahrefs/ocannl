@@ -11237,7 +11237,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules lineage_fragments)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11256,7 +11256,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules dropped_graph_reclaimed)
- (libraries base ocannl stdio arrayjit.verdict gc_witness)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11272,7 +11272,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules shared_grad_refusal)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11288,7 +11288,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules lacks_grad_reset_hint)
- (libraries base ocannl stdio arrayjit.verdict gc_witness)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11308,7 +11308,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules never_zeroed_grad)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11319,7 +11319,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules fragment_sequenced_twice)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

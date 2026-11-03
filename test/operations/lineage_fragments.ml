@@ -17,50 +17,28 @@ open Base
 open Ocannl
 open Nn_blocks.DSL_modules
 open Verdict.Claims
+module LC = Lineage_claims
 module IDX = Train.IDX
 module Asgns = Ir.Assignments
-
-let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad
-let has msg substring = String.is_substring msg ~substring
-let exact name got want = p_close name got want ~tol:(fun _ -> 0.)
 
 let leaf name =
   Tensor.term_init [| 1.; 2.; 3. |] ~label:[ name ] ~output_dims:[ 3 ] ~grad_spec:Require_grad ()
 
-(* The text of the [User_error] [f] raises; a failed claim when it raises none. *)
-let refusal name f =
-  match f () with
-  | _ ->
-      fail (name ^ ": was accepted");
-      ""
-  | exception Utils.User_error msg ->
-      Stdio.eprintf "%s: %s (not part of the golden)\n%!" name msg;
-      msg
-
-let accepted name f =
-  match f () with
-  | x ->
-      p name true;
-      Some x
-  | exception Utils.User_error msg ->
-      p (name ^ " (refused: " ^ msg ^ ")") false;
-      None
-
 let duplicate_named msg tn =
-  has msg "already compiled in this context's lineage" && has msg (Ir.Tnode.label_name tn)
+  LC.has msg "already compiled in this context's lineage" && LC.has msg (Ir.Tnode.label_name tn)
 
 (* Either refusal of an unpropagated gradient: [Context.run]'s requirement check, or -- when the
    dangling gradient is materialized, so the link fails first -- the link error's lineage hint. *)
 let unpropagated msg tn =
   let name = Ir.Tnode.label_name tn in
-  (has msg "no routine of its lineage carries" && has msg ("propagating from " ^ name))
-  || has msg ("no routine in this lineage propagates from " ^ name)
+  (LC.has msg "no routine of its lineage carries" && LC.has msg ("propagating from " ^ name))
+  || LC.has msg ("no routine in this lineage propagates from " ^ name)
 
 (* [t = w *. w] and [loss = t *. 3] over a fresh [Require_grad] leaf. *)
 let probe prefix =
   let w = leaf (prefix ^ "_w") in
   let%op t = w *. w in
-  Train.set_materialized (grad_of w);
+  Train.set_materialized (LC.grad_of w);
   (w, t)
 
 let () =
@@ -68,7 +46,7 @@ let () =
       let w, t = probe "lf_a" in
       let%op loss = t *. 3. in
       let ctx = Train.update_once (Context.auto ()) loss in
-      exact "A: w.grad = 6 w" (Context.get_values ctx (grad_of w)) [| 6.; 12.; 18. |]);
+      LC.exact "A: w.grad = 6 w" (Context.get_values ctx (LC.grad_of w)) [| 6.; 12.; 18. |]);
   (* B: [forward_once t], then a loss built on [t]. [forward_once] no longer drops [t]'s backprop
      (the once-contract retired, gh-ocannl-1724): the loss embeds it. Before, the gradient code for
      [w] was silently never compiled. That backprop reads [w] (d t / d w = 2 w). A differentiable
@@ -80,11 +58,11 @@ let () =
       let ctx = Train.forward_once (Context.auto ()) t in
       let%op loss = t *. 3. in
       Option.iter
-        (accepted "B: the loss compiles and runs in the once-run's lineage, w not materialized"
+        (LC.accepted "B: the loss compiles and runs in the once-run's lineage, w not materialized"
            (fun () -> Train.update_once ctx loss))
         ~f:(fun ctx ->
-          exact "B: w.grad equals the fresh graph's, w not materialized"
-            (Context.get_values ctx (grad_of w))
+          LC.exact "B: w.grad equals the fresh graph's, w not materialized"
+            (Context.get_values ctx (LC.grad_of w))
             [| 6.; 12.; 18. |]));
   case "B, w materialized" (fun () ->
       let w, t = probe "lf_bm" in
@@ -92,26 +70,26 @@ let () =
       let ctx = Train.forward_once (Context.auto ()) t in
       let%op loss = t *. 3. in
       Option.iter
-        (accepted "B: the loss compiles and runs in the once-run's lineage" (fun () ->
+        (LC.accepted "B: the loss compiles and runs in the once-run's lineage" (fun () ->
              Train.update_once ctx loss))
         ~f:(fun ctx ->
-          exact "B: w.grad equals the fresh graph's"
-            (Context.get_values ctx (grad_of w))
+          LC.exact "B: w.grad equals the fresh graph's"
+            (Context.get_values ctx (LC.grad_of w))
             [| 6.; 12.; 18. |]));
   case "B': B with t.grad materialized" (fun () ->
       let w, t = probe "lf_b2" in
       Train.set_materialized w.value;
-      Train.set_materialized (grad_of t);
+      Train.set_materialized (LC.grad_of t);
       let ctx = Train.forward_once (Context.auto ()) t in
       let%op loss = t *. 3. in
       Option.iter
-        (accepted "B': the loss compiles and runs" (fun () -> Train.update_once ctx loss))
+        (LC.accepted "B': the loss compiles and runs" (fun () -> Train.update_once ctx loss))
         ~f:(fun ctx ->
-          exact "B': w.grad equals the fresh graph's"
-            (Context.get_values ctx (grad_of w))
+          LC.exact "B': w.grad equals the fresh graph's"
+            (Context.get_values ctx (LC.grad_of w))
             [| 6.; 12.; 18. |];
-          exact "B': t.grad is the loss's seed times 3"
-            (Context.get_values ctx (grad_of t))
+          LC.exact "B': t.grad is the loss's seed times 3"
+            (Context.get_values ctx (LC.grad_of t))
             [| 3.; 3.; 3. |]));
   (* G1/G2: a parameter model evaluated with [forward_once], then trained. Before, G1 raised "the
      loss trains no parameters" and G2 a link error over [y.grad]. *)
@@ -135,21 +113,21 @@ let () =
       let ctx = Train.forward_once (Context.auto ()) y in
       let%op loss = y *. 3. in
       Option.iter
-        (accepted "G1: the step compiles and runs" (fun () -> train ctx loss))
+        (LC.accepted "G1: the step compiles and runs" (fun () -> train ctx loss))
         ~f:(fun ctx ->
           (* d loss / d w = 3 x = 3, so w - 0.5 * 3. *)
-          exact "G1: w is trained" (Context.get_values ctx w.value) [| -0.5; 0.5; 1.5 |]));
+          LC.exact "G1: w is trained" (Context.get_values ctx w.value) [| -0.5; 0.5; 1.5 |]));
   case "G2: G1 with a head parameter" (fun () ->
       let w, y = model "lf_g2" in
       let ctx = Train.forward_once (Context.auto ()) y in
       let v = TDSL.param ~values:[| 2.; 2.; 2. |] "lf_g2_v" ~output_dims:[ 3 ] () in
       let%op loss = v *. y in
       Option.iter
-        (accepted "G2: the step compiles and runs" (fun () -> train ctx loss))
+        (LC.accepted "G2: the step compiles and runs" (fun () -> train ctx loss))
         ~f:(fun ctx ->
           (* d loss / d w = v x = 2, d loss / d v = y = w x. *)
-          exact "G2: w is trained" (Context.get_values ctx w.value) [| 0.; 1.; 2. |];
-          exact "G2: v is trained" (Context.get_values ctx v.value) [| 1.5; 1.; 0.5 |]));
+          LC.exact "G2: w is trained" (Context.get_values ctx w.value) [| 0.; 1.; 2. |];
+          LC.exact "G2: v is trained" (Context.get_values ctx v.value) [| 1.5; 1.; 0.5 |]));
   (* The once-run's intermediate [u] is virtual in its routine; the loss's backprop through [t]
      reads it (d t / d u = 2 u), so the later routine must recompute it (the cross-routine splice,
      gh-ocannl-610/611). Held to a fresh graph that materializes [u]. *)
@@ -158,16 +136,16 @@ let () =
         let w = leaf (prefix ^ "_w") in
         let%op u = w *. 2. in
         let%op t = u *. u in
-        Train.set_materialized (grad_of w);
+        Train.set_materialized (LC.grad_of w);
         (w, u, t)
       in
       let w_ref, u_ref, t_ref = graph "lf_vi_ref" in
       Train.set_materialized u_ref.value;
       let%op loss_ref = t_ref *. 3. in
       let ctx_ref = Train.update_once (Context.auto ()) loss_ref in
-      let reference = Context.get_values ctx_ref (grad_of w_ref) in
+      let reference = Context.get_values ctx_ref (LC.grad_of w_ref) in
       (* loss = 3 (2 w)^2 = 12 w^2. *)
-      exact "the materialized reference: w.grad = 24 w" reference [| 24.; 48.; 72. |];
+      LC.exact "the materialized reference: w.grad = 24 w" reference [| 24.; 48.; 72. |];
       let w, u, t = graph "lf_vi" in
       (* [w] materialized, so only [u] is the once-run's unstored intermediate. *)
       Train.set_materialized w.value;
@@ -175,56 +153,60 @@ let () =
       p "u is not stored by the once-run" (not (Context.is_initialized ctx u.value));
       let%op loss = t *. 3. in
       Option.iter
-        (accepted "the loss over the once-run's virtual intermediate compiles and runs" (fun () ->
-             Train.update_once ctx loss))
+        (LC.accepted "the loss over the once-run's virtual intermediate compiles and runs"
+           (fun () -> Train.update_once ctx loss))
         ~f:(fun ctx ->
-          exact "w.grad equals the materialized reference's"
-            (Context.get_values ctx (grad_of w))
+          LC.exact "w.grad equals the materialized reference's"
+            (Context.get_values ctx (LC.grad_of w))
             reference));
   case "C: forward_once twice" (fun () ->
       let _w, t = probe "lf_c" in
       let ctx0 = Context.auto () in
       let ctx1 = Train.forward_once ctx0 t in
-      let msg = refusal "C" (fun () -> Train.forward_once ctx1 t) in
+      let msg = LC.refusal "C" (fun () -> Train.forward_once ctx1 t) in
       p "C: the second, on the returned context, is refused naming t's forward fragment"
         (duplicate_named msg t.value);
-      exact "C: the refusal left the first run's value" (Context.get_values ctx1 t.value)
+      LC.exact "C: the refusal left the first run's value" (Context.get_values ctx1 t.value)
         [| 1.; 4.; 9. |];
       Option.iter
-        (accepted "C: the same compile as a sibling is accepted" (fun () ->
+        (LC.accepted "C: the same compile as a sibling is accepted" (fun () ->
              Train.forward_once ctx0 t))
         ~f:(fun ctx ->
-          exact "C: the sibling computes t" (Context.get_values ctx t.value) [| 1.; 4.; 9. |]));
+          LC.exact "C: the sibling computes t" (Context.get_values ctx t.value) [| 1.; 4.; 9. |]));
   case "D: update_once twice" (fun () ->
       let w, t = probe "lf_d" in
       let%op loss = t *. 3. in
       let ctx0 = Context.auto () in
       let ctx1 = Train.update_once ctx0 loss in
-      let msg = refusal "D" (fun () -> Train.update_once ctx1 loss) in
+      let msg = LC.refusal "D" (fun () -> Train.update_once ctx1 loss) in
       p "D: the second, on the returned context, is refused naming loss's backprop fragment"
-        (duplicate_named msg (grad_of loss));
+        (duplicate_named msg (LC.grad_of loss));
       Option.iter
-        (accepted "D: the same compile as a sibling is accepted" (fun () ->
+        (LC.accepted "D: the same compile as a sibling is accepted" (fun () ->
              Train.update_once ctx0 loss))
         ~f:(fun ctx ->
-          exact "D: the sibling trains w" (Context.get_values ctx (grad_of w)) [| 6.; 12.; 18. |]));
+          LC.exact "D: the sibling trains w"
+            (Context.get_values ctx (LC.grad_of w))
+            [| 6.; 12.; 18. |]));
   case "E/F: Train.forward / Train.grad_update after a once-run" (fun () ->
       let _w, t = probe "lf_e" in
       let ctx0 = Context.auto () in
       let ctx1 = Train.forward_once ctx0 t in
-      let msg = refusal "E" (fun () -> Train.to_routine ctx1 IDX.empty (Train.forward t)) in
+      let msg = LC.refusal "E" (fun () -> Train.to_routine ctx1 IDX.empty (Train.forward t)) in
       p "E: Train.forward t in the once-run's lineage is refused" (duplicate_named msg t.value);
       ignore
-        (accepted "E: as a sibling it is accepted" (fun () ->
+        (LC.accepted "E: as a sibling it is accepted" (fun () ->
              Train.to_routine ctx0 IDX.empty (Train.forward t)));
       let _w, t = probe "lf_f" in
       let%op loss = t *. 3. in
       let ctx1 = Train.update_once ctx0 loss in
-      let msg = refusal "F" (fun () -> Train.to_routine ctx1 IDX.empty (Train.grad_update loss)) in
+      let msg =
+        LC.refusal "F" (fun () -> Train.to_routine ctx1 IDX.empty (Train.grad_update loss))
+      in
       p "F: Train.grad_update loss in the once-run's lineage is refused"
-        (duplicate_named msg (grad_of loss));
+        (duplicate_named msg (LC.grad_of loss));
       ignore
-        (accepted "F: as a sibling it is accepted" (fun () ->
+        (LC.accepted "F: as a sibling it is accepted" (fun () ->
              Train.to_routine ctx0 IDX.empty (Train.grad_update loss))));
   (* A shared non-parameter trunk [h]: [l1]'s construction embeds [h]'s backprop, so [l2]'s skips it
      and requires [(h.grad, Bprop)]. [h]'s forward is handed out first, as its own routine, so that
@@ -258,23 +240,23 @@ let () =
       let h, l1, l2, base = trunk "lf_st" in
       p "l2 requires h's backprop fragment"
         (Set.mem (Option.value_exn ~here:[%here] l2.diff).backprop.requires
-           (grad_of h, Asgns.Bprop));
+           (LC.grad_of h, Asgns.Bprop));
       let ctx0 = base () in
       (* The owner handed out but never compiled. *)
       let l1_update = Train.grad_update l1 in
-      let msg = refusal "trunk, owner absent" (fun () -> Train.update_once ctx0 l2) in
+      let msg = LC.refusal "trunk, owner absent" (fun () -> Train.update_once ctx0 l2) in
       p "with no owner compiled, l2 is refused at run naming h's backprop fragment"
-        (unpropagated msg (grad_of h)
-        && has msg "accumulates into gradients"
-        && has msg "no routine of this root context compiled it");
+        (unpropagated msg (LC.grad_of h)
+        && LC.has msg "accumulates into gradients"
+        && LC.has msg "no routine of this root context compiled it");
       let ctx_l1, r1 = Train.to_routine ctx0 IDX.empty l1_update in
       let ctx_l1 = Context.run ctx_l1 r1 in
-      let msg = refusal "trunk, sibling owner" (fun () -> Train.update_once ctx0 l2) in
+      let msg = LC.refusal "trunk, sibling owner" (fun () -> Train.update_once ctx0 l2) in
       p "an owner compiled -- and run -- in a sibling does not count, and is named"
-        (unpropagated msg (grad_of h) && has msg "compiled outside this lineage");
-      let msg = refusal "trunk, owner first" (fun () -> Train.update_once ctx_l1 l2) in
+        (unpropagated msg (LC.grad_of h) && LC.has msg "compiled outside this lineage");
+      let msg = LC.refusal "trunk, owner first" (fun () -> Train.update_once ctx_l1 l2) in
       p "l2 compiled after its owner in l1's lineage is refused: the propagation precedes it"
-        (has msg "already propagates from it" && has msg (Ir.Tnode.label_name (grad_of h))));
+        (LC.has msg "already propagates from it" && LC.has msg (Ir.Tnode.label_name (LC.grad_of h))));
   case "late owner" (fun () ->
       let h, l1, l2, base = trunk "lf_lo" in
       let ctx = base () in
@@ -290,11 +272,11 @@ let () =
       in
       let ctx_a, r2 = Train.to_routine ctx IDX.empty (Train.grad_update l2) in
       let ctx_b, _r1 = Train.to_routine ctx_a IDX.empty l1_update in
-      let msg = refusal "late owner, run before it" (fun () -> Context.run ctx_a r2) in
+      let msg = LC.refusal "late owner, run before it" (fun () -> Context.run ctx_a r2) in
       p "run from the context before the owner's compile, l2's routine is refused"
-        (unpropagated msg (grad_of h) && has msg "compiled outside this lineage");
+        (unpropagated msg (LC.grad_of h) && LC.has msg "compiled outside this lineage");
       ignore
-        (accepted "run from the owner's descendant, l2's routine is accepted" (fun () ->
+        (LC.accepted "run from the owner's descendant, l2's routine is accepted" (fun () ->
              Context.run ctx_b r2)));
   case "independent roots with coincident routine ids" (fun () ->
       let h, l1, l2, base = trunk "lf_ir" in
@@ -303,9 +285,9 @@ let () =
       let ctx_x, r1 = Train.to_routine (base ()) IDX.empty l1_update in
       let _ctx_y, r2 = Train.to_routine (base ()) IDX.empty (Train.grad_update l2) in
       p "the two roots' routines share an id" (r1.Context.routine_id = r2.Context.routine_id);
-      let msg = refusal "foreign root" (fun () -> Context.run ctx_x r2) in
+      let msg = LC.refusal "foreign root" (fun () -> Context.run ctx_x r2) in
       p "another root's owner with the same id lends nothing"
-        (unpropagated msg (grad_of h) && has msg "accumulates into gradients"));
+        (unpropagated msg (LC.grad_of h) && LC.has msg "accumulates into gradients"));
   case "legitimate compositions" (fun () ->
       let pw = TDSL.param ~values:[| 1.; 2. |] "lf_two_w" ~output_dims:[ 2 ] () in
       let%op a = pw *. 2. in
@@ -316,15 +298,15 @@ let () =
       (* [b]'s construction found [pw] no longer a backprop root and skipped its zeroing too, so
          [pw.grad] would accumulate both losses' contributions with [a]'s routine zeroing it: the
          shared-gradient check refuses it (gh-ocannl-1744, [shared_grad_refusal.ml]). *)
-      let msg = refusal "two losses, one parameter" (fun () -> Train.update_once ctx b) in
+      let msg = LC.refusal "two losses, one parameter" (fun () -> Train.update_once ctx b) in
       p "two losses over one parameter, one lineage, are refused"
-        (has msg "zeroes it itself" && has msg (Ir.Tnode.label_name (grad_of pw)));
+        (LC.has msg "zeroes it itself" && LC.has msg (Ir.Tnode.label_name (LC.grad_of pw)));
       let pv = TDSL.param ~values:[| 1.; 2. |] "lf_acc_w" ~output_dims:[ 2 ] () in
       let%op loss = pv *. pv in
       let ctx = Train.init_params (Context.auto ()) IDX.empty loss in
       let ctx, _ = Train.to_routine ctx IDX.empty (Train.zero_params_grads loss) in
       ignore
-        (accepted "zero_params_grads beside grad_update ~accum_steps" (fun () ->
+        (LC.accepted "zero_params_grads beside grad_update ~accum_steps" (fun () ->
              Train.to_routine ctx IDX.empty (Train.grad_update ~accum_steps:2 loss)));
       let pm = TDSL.param ~values:[| 1.; 2. |] "lf_sgd_w" ~output_dims:[ 2 ] () in
       let%op loss = pm *. 3. in
@@ -340,9 +322,9 @@ let () =
       let ctx = Context.run ctx step in
       let ctx = Context.run ctx step in
       (* momentum m = 3, then 0.5 * 3 + 3 = 4.5; w = 1 - 0.5 * 3 - 0.5 * 4.5. *)
-      exact "momentum SGD steps twice" (Context.get_values ctx pm.value) [| -2.75; -1.75 |];
+      LC.exact "momentum SGD steps twice" (Context.get_values ctx pm.value) [| -2.75; -1.75 |];
       ignore
-        (accepted "init_params ~reinit_all after training" (fun () ->
+        (LC.accepted "init_params ~reinit_all after training" (fun () ->
              Train.init_params ~reinit_all:true ctx IDX.empty loss)));
   case "metadata propagation" (fun () ->
       let w = leaf "lf_md_w" in
@@ -355,7 +337,7 @@ let () =
       p "a non-root operand whose gradient the operation does not write is not required"
         (not
            (Set.mem (Option.value_exn ~here:[%here] c.diff).backprop.requires
-              (grad_of t, Asgns.Bprop)));
+              (LC.grad_of t, Asgns.Bprop)));
       let fwd = u.forward.owned in
       p "forward owns its own and its embedded children's fragments, repeated operands once"
         (Set.equal fwd
@@ -364,7 +346,8 @@ let () =
               [ (u.value, Asgns.Fwd); (t.value, Asgns.Fwd); (w.value, Asgns.Fwd) ]));
       let bwd = (Option.value_exn ~here:[%here] u.diff).backprop in
       p "backprop owns its own and its embedded children's fragments"
-        (Set.mem bwd.owned (grad_of u, Asgns.Bprop) && Set.mem bwd.owned (grad_of t, Asgns.Bprop));
+        (Set.mem bwd.owned (LC.grad_of u, Asgns.Bprop)
+        && Set.mem bwd.owned (LC.grad_of t, Asgns.Bprop));
       let x = leaf "lf_md_x" in
       let%op y = x *. 2. in
       let acc = NTDSL.init ~l:"lf_md_acc" ~prec:Ir.Ops.single ~o:[ 3 ] ~f:(fun _ -> 0.) () in
@@ -381,7 +364,7 @@ let () =
   case "term exemption" (fun () ->
       let v = leaf "lf_leaf_v" in
       Train.set_materialized v.value;
-      Train.set_materialized (grad_of v);
+      Train.set_materialized (LC.grad_of v);
       let%op a = v *. 2. in
       let%op b = v *. 3. in
       p "a term owns no backprop fragment"
@@ -398,10 +381,10 @@ let () =
       let ctx, r = Train.to_routine ctx IDX.empty v_zero in
       let ctx = Context.run ctx r in
       Option.iter
-        (accepted
+        (LC.accepted
            "a second loss over a shared Require_grad leaf trains without the first's backprop"
            (fun () -> Train.update_once ctx b))
         ~f:(fun ctx ->
-          exact "the leaf's gradient is the second loss's"
-            (Context.get_values ctx (grad_of v))
+          LC.exact "the leaf's gradient is the second loss's"
+            (Context.get_values ctx (LC.grad_of v))
             [| 3.; 3.; 3. |]))
