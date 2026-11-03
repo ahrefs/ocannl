@@ -333,7 +333,8 @@
 #      shell that execs a slot wrapper for its next launch after its run is a
 #      launch to come, and a script path holding a space still names its
 #      worktree. A queued prepush is a launch, a queued `prepush --list` is
-#      not. A detached wrapper and its guardian (both orphans of parent 1,
+#      not, and a launch behind `timeout -k 5 60`, `env -u X` or `nice -n 5`
+#      is one. A detached wrapper and its guardian (both orphans of parent 1,
 #      one argv) are one launch, a later one with that argv after the first
 #      run's verdict is another, and a `--` inside a `-c` string is no
 #      separator. The wrappers are the fleet's exec-argv shape (`q-slot.sh ... --
@@ -9114,12 +9115,17 @@ if [ -z "$q_detail" ]; then report 0 "$q_exec_label"; else report 1 "$q_exec_lab
 # `prepush --list` runs nothing: queued behind a wrapper it is no launch, and
 # a prepush that launches is one. The wrappers are never released, only
 # killed, and a run published after them clears the sighting they leave.
-q_pp_label="a queued prepush is a launch in flight; a queued prepush --list is not"
+q_pp_label="a queued prepush or prefixed launch is in flight; a queued prepush --list is not"
 q_detail=
-for q_pp_case in "3|build" "0|--list"; do
+# Each: the status wanted, then the command queued behind the wrapper; the
+# prefixed ones peel their options and those options' operands.
+for q_pp_case in "3|tools/test-run.sh prepush --since base build" "0|tools/test-run.sh prepush --since base --list" \
+  "3|timeout -k 5 60 tools/test-run.sh run build @red" "3|env -u X A=1 tools/test-run.sh run build @red" \
+  "3|nice -n 5 bash tools/test-run.sh run build @red"; do
   IFS='|' read -r q_pp_want q_pp_arg <<<"$q_pp_case"
+  # shellcheck disable=SC2086 # the queued command's words, split on purpose
   (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
-    exec bash "$q_slot" "$TMP/queued.never" exec -- tools/test-run.sh prepush --since base "$q_pp_arg") >/dev/null 2>&1 &
+    exec bash "$q_slot" "$TMP/queued.never" exec -- $q_pp_arg) >/dev/null 2>&1 &
   q_pp=$!
   sleep .5
   q_capture "$q_root" status last
@@ -9127,7 +9133,7 @@ for q_pp_case in "3|build" "0|--list"; do
   wait "$q_pp" 2>/dev/null
   sleep 1.5 # its guardian, alone for a second once its wrapper is gone
   [ "$q_rc" = "$q_pp_want" ] ||
-    { q_detail="status last beside a queued prepush --since base $q_pp_arg: exit $q_rc (want $q_pp_want): $q_out"; break; }
+    { q_detail="status last beside a queued $q_pp_arg: exit $q_rc (want $q_pp_want): $q_out"; break; }
   q "$q_root" run build @ok >/dev/null 2>&1
 done
 if [ -z "$q_detail" ]; then report 0 "$q_pp_label"; else report 1 "$q_pp_label" "$q_detail"; fi

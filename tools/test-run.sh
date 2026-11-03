@@ -2822,8 +2822,10 @@ group_identity_matches() {
 # first after a `--` (the separator of every fleet wrapper: `fleet-worker.sh
 # execution slot ... -- CMD`, `bg-run.sh start DIR -- CMD`) that comes before
 # any script text (a `-c` or `-e` and what follows it), with env and its
-# assignments, nohup, setsid, nice, timeout and its duration, caffeinate, or an
-# interpreter and its options peeled off -- stands a word whose basename is
+# assignments, nohup, setsid, nice, timeout and its duration, caffeinate --
+# each with its options and the operand of those that take one (`timeout -k 5
+# 60`, `nice -n 5`, `env -u NAME`) -- or an interpreter and its options peeled
+# off -- stands a word whose basename is
 # `test-run.sh`, followed by a launching verb (run, start, fresh, repeat, or
 # prepush without `--list`), with no `ssh` and no `execution leg` before it
 # (those launch on another box). That word names THIS worktree's script:
@@ -2956,10 +2958,23 @@ sub positions {
     while ($j <= $#w) {
       (my $b = base($w[$j])) =~ s/\A-//;
       $b =~ s/\.exe\z//;
-      if ($b eq "env") { $j++; $j++ while $j <= $#w && $w[$j] =~ /\A-|=/; next }
       if ($b eq "nohup" || $b eq "setsid") { $j++; next }
-      if ($b eq "nice" || $b eq "caffeinate") { $j++; $j++ while $j <= $#w && $w[$j] =~ /\A-/; next }
-      if ($b =~ /\Ag?timeout\z/) { $j++; $j++ while $j <= $#w && $w[$j] =~ /\A-/; $j++; next }
+      # A prefix program: its options, the operand of each that takes one
+      # (spaced; `--opt=V` is one word), then, for timeout, its duration.
+      my %takes = (env => "u|C|-unset|-chdir", nice => "n|-adjustment", caffeinate => "t|w",
+                   timeout => "k|s|-kill-after|-signal", gtimeout => "k|s|-kill-after|-signal");
+      if (exists $takes{$b}) {
+        my $op = qr/\A-(?:$takes{$b})\z/;
+        $j++;
+        while ($j <= $#w && ($w[$j] =~ /\A-/ || ($b eq "env" && $w[$j] =~ /=/))) {
+          last if $w[$j] eq "--";
+          $j++ if $w[$j] =~ $op;
+          $j++;
+        }
+        $j++ if $j <= $#w && $w[$j] eq "--";
+        $j++ if $b =~ /timeout\z/;
+        next;
+      }
       if ($interp{$b}) {
         $j++;
         $j++ while $j <= $#w && $w[$j] =~ /\A-/ && $w[$j] ne "-c" && $w[$j] ne "--";
