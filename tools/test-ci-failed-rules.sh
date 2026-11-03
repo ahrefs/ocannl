@@ -371,6 +371,9 @@ build "$TMP/orchestrate.log" @r/runtest-orchestrate; orch_brc=$?
 build "$TMP/scan.log" @r/runtest-scan; scan_brc=$?
 build "$TMP/chatty.log" @r/runtest-chatty; chatty_brc=$?
 build "$TMP/unbuildable.log" @r/runtest-unbuildable; unb_brc=$?
+# A log's lines as the reader sees them: CI's environment forces dune's colour
+# (CLICOLOR_FORCE), which these legs' own reads of a raw log must look past.
+plain() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" "$1"; }
 claims_want='Failed dune rules (1), in the order dune reported them:
   r/dune:1-5  (rule) alias runtest-claims'
 claims_quoted='      | FAIL: claim 1: the gradient is finite
@@ -416,8 +419,8 @@ if harness_leg 'a scan'"'"'s FAIL: line is quoted under its golden #dune'; then
   r/scan.expected:1  output differs from this golden
       | +FAIL: arrayjit/lib/backends.ml:120: a label read the scan cannot place'
   if [ "$scan_brc" = 1 ] && [ "$rc" = 0 ] && [ "$out" = "$want" ] &&
-     grep -q '^ accepted position in use: an Error: payload$' "$TMP/scan.log" &&
-     grep -q '^-canary held: the scan reads FAIL: markers$' "$TMP/scan.log"; then
+     plain "$TMP/scan.log" | grep -q '^ accepted position in use: an Error: payload$' &&
+     plain "$TMP/scan.log" | grep -q '^-canary held: the scan reads FAIL: markers$'; then
     report 0 'a scan'"'"'s FAIL: line is quoted under its golden'
   else report 1 'a scan'"'"'s FAIL: line is quoted under its golden' "build exit $scan_brc, exit $rc; $out"; fi
   # The negative control: reading the whole diff quotes its context line and the line it removes.
@@ -450,9 +453,9 @@ if harness_leg 'another rule'"'"'s output and dune'"'"'s own error are not quote
   }
   out=$(cd "$proj" && subject "$TMP/after-pass.log" 2>&1); rc=$?
   out2=$(cd "$proj" && subject "$TMP/after-dune.log" 2>&1); rc2=$?
-  if [ "$chatty_brc" = 0 ] && [ "$unb_brc" = 1 ] && grep -q '^(cd .*printed by a rule that passes' "$TMP/chatty.log" &&
-     grep -q '^-> required by alias r/runtest-unbuildable' "$TMP/unbuildable.log" &&
-     grep -qx 'Error: No rule found for' "$TMP/unbuildable.log" &&
+  if [ "$chatty_brc" = 0 ] && [ "$unb_brc" = 1 ] && plain "$TMP/chatty.log" | grep -q '^(cd .*printed by a rule that passes' &&
+     plain "$TMP/unbuildable.log" | grep -q '^-> required by alias r/runtest-unbuildable' &&
+     plain "$TMP/unbuildable.log" | grep -qx 'Error: No rule found for' &&
      pass_ok "$out" "$rc" && dune_ok "$out2" "$rc2"; then
     report 0 'another rule'"'"'s output and dune'"'"'s own error are not quoted'
   else report 1 'another rule'"'"'s output and dune'"'"'s own error are not quoted' \
