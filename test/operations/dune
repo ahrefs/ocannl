@@ -10392,7 +10392,7 @@
  (libraries base stdio test_utils arrayjit.verdict fresh_process))
 
 (rule
- ; ocannl-backend: none -- links no backend: it reads .github/workflows YAML as text.
+ ; ocannl-backend: none -- links no backend: it reads .github/workflows YAML and an agent note as text.
  ; Two targets: the file list is written by dune's own `echo`, which spawns nothing and so has no
  ; length limit, and handed over as a `@<path>` response file rather than as argv -- the transport
  ; every repository-wide scan here uses, so no growth of the globbed set can reach Windows'
@@ -10406,7 +10406,10 @@
   ; workflow is one fact, and it lives in the scanner's `is_workflow`, where the controls exercise
   ; it. A second copy in this glob could only drift -- silently, since the repository has no
   ; `.yaml` workflow today for a dropped spelling to fail on.
-  (glob_files_rec ../../.github/workflows/*))
+  (glob_files_rec ../../.github/workflows/*)
+  ; The bisection-floor record the dispatched workflows' local actions are held to (gh-ocannl-1853),
+  ; which the exe finds among the arguments by its path.
+  ../../docs/agent-notes/build-and-test.md)
  (action
   (progn
    (with-stdout-to

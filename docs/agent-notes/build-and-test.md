@@ -3405,7 +3405,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   A ci-env red names its merge (one run per push). A full-matrix red on master comes from the
   schedule and covers a SPAN, about a day of merges.
   Narrow a red span of more than one merge by hand: dispatch `ci` on `master` with `expected_sha`
-  set to a commit inside it, bisecting. On master an ancestor of the head is accepted, the run is
+  set to a commit inside it, bisecting, down to the floor its local actions set
+  ([How far back a dispatch reaches](#how-far-back-a-dispatch-reaches)). On master an ancestor of the head is accepted, the run is
   named `ci at <sha>`, and its red fires no triage. A red only the OCaml-floor job shows bisects the
   same way with `ocaml_compiler: 5.3.x` added, which runs that one job instead of the ordinary
   matrix (which never builds the floor).
@@ -3881,7 +3882,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   stalled; `ci.yml`'s matrix-job copy carries the rationale. It is inline, not a local action, on
   purpose: a `ci.yml` dispatch with `expected_sha` checks out that commit, which may predate any
   new action under `.github/actions/`, so a step that `uses:` one fails the red-span bisection of
-  older commits.
+  older commits (the floor that sets: [How far back a dispatch reaches](#how-far-back-a-dispatch-reaches)).
 - **A Linux CI job that fills its disk is stopped, not left to hang** (gh-ocannl-1771). On a full
   disk dune does not fail: run 41203731123 (attempt 1) printed `dune_trace_write(): No space left on
   device` three minutes into an ubuntu main shard and then sat, `dune` and its `tee` alive, until the
@@ -4005,6 +4006,44 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   while a newer push of the other one would not (the path filters differ). The whole run
   in the shared queue, as before, put one docs build's 30-minute texlive fetch ahead of twelve
   later push runs, the base gate's `github pages api` verdict at the tip among them (gh-ocannl-1546).
+
+### How far back a dispatch reaches
+
+- A `ci.yml` dispatch with `expected_sha` runs the workflow as the dispatched ref spells it, over a
+  checkout of the named commit (gh-ocannl-1853). A step that `uses:` a local action
+  (`./.github/actions/<name>`) loads it from that checkout, so a commit older than the action, or
+  than the interface the workflow calls it with (the inputs it passes, the outputs it reads), fails
+  that step, and each such step runs before its job's build and tests. The newest such action is
+  the bisection FLOOR: below it, a dispatched job that uses one fails before it builds, which bounds
+  the red-span bisection under [What CI actually covers](#what-ci-actually-covers). A job-level
+  `uses:` of a reusable workflow is loaded from the dispatched ref, not the checkout, and bounds
+  nothing.
+- The record below lists each local action the dispatched workflows' steps use, oldest first, as
+  `` - `<action path>`: YYYY-MM-DD, lukstafi/ocannl-staging#N. `` -- the master merge that first
+  carried the action with the interface the workflows use, and that merge's date -- and then
+  `- Floor: YYYY-MM-DD, lukstafi/ocannl-staging#N.`, which is the newest entry's mark.
+  `workflow_job_timeouts` holds it to the workflows: the local actions the steps of every workflow
+  naming `expected_sha` use must be exactly the listed ones, each listed once, the dates must not
+  decrease, and the floor must equal the last entry. A new local `uses:` there therefore fails
+  until it is listed last and the floor moves to it; that is the cost which kept gh-ocannl-1809's
+  apt step inline (above). The scan reads no git, so it cannot tell a wrong date or merge, and it
+  does not compare interfaces: a change to a listed action that a workflow's new call depends on
+  moves that action's entry, and the floor, by hand.
+- The floor's merge is master's first-parent commit titled `Merge pull request #N from ...`, and a
+  candidate commit is at or above it when `git merge-base --is-ancestor <that merge> <candidate>`
+  succeeds. The floor bounds every job's setup, not its later steps: a `run:` step names tree
+  scripts, and the flags it passes them, as the dispatched ref spells them, while the scripts are
+  the checkout's. A dispatched job red on a missing file or an unknown flag is therefore no verdict
+  on the commit, and nothing holds those per-step bounds.
+- Below the floor, or below a step's bound, dispatch the commit's OWN workflow: push it to a
+  branch of its own (`git push origin <sha>:refs/heads/bisect/<short-sha>`), dispatch `ci.yml` on
+  that branch without `expected_sha`, so the checkout is the branch head and the workflow and the
+  tree agree, and delete the branch afterwards. That reaches back to the first `ci.yml` declaring
+  `workflow_dispatch` (`c83d67fbb`, 2026-08-12).
+- `./.github/actions/pin-revisions`: 2026-08-29, lukstafi/ocannl-staging#535.
+- `./.github/actions/setup-ocaml-debs`: 2026-10-23, lukstafi/ocannl-staging#1353.
+- `./.github/actions/apt-debs-cache`: 2026-10-23, lukstafi/ocannl-staging#1359.
+- Floor: 2026-10-23, lukstafi/ocannl-staging#1359.
 
 ### Windows CI
 
