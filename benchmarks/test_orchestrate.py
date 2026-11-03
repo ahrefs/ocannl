@@ -3586,7 +3586,7 @@ class FixtureDigestTest(unittest.TestCase):
                 code = fixture_digest.cli(argv)
         self.assertEqual(code, 2, err.getvalue())
         self.assertIn("RuntimeError: injected", err.getvalue())
-        self.assertIn("not a verdict", err.getvalue())
+        self.assertIn("not a verdict about any fixture: RuntimeError: injected", err.getvalue())
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(fixture_digest.cli(argv), 0, "control: the unpatched run is a verdict")
 

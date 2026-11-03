@@ -4570,14 +4570,15 @@ PY
   fi
   # Where the argv names a trace file of its own -- either spelling -- or its
   # first word is not a subcommand known to take one (a global option ahead of
-  # it included), dune is handed none: the caller's option is the only one,
+  # it included, which reaches dune only past the runner's own `--`: a leading
+  # option is refused before dune, gh-ocannl-1797), dune is handed none: the caller's option is the only one,
   # verbatim, and nothing is recorded. Past dune's own `--` the word is a
   # program's argument: the runner's own still goes before the separator, once,
   # and the program's reaches it untouched.
   if [ -z "$slow_detail" ]; then
     for probe in "build --trace-file $TMP/t.csexp @cheap|2 before --trace-file" \
                  "build --trace-file=$TMP/t.csexp @cheap|2 before $TMP/t.csexp" \
-                 "describe @cheap|" "--display=short build @cheap|" \
+                 "describe @cheap|" "-- --display=short build @cheap|" \
                  "exec ./prog.exe -- --trace-file=$TMP/p.csexp|OWN
 5 after $TMP/p.csexp"; do
       want=${probe#*|} probe=${probe%%|*}
@@ -4585,7 +4586,7 @@ PY
       # shellcheck disable=SC2086
       REPEAT_TEST_TRACE_ARGS=$slow_args argv_probe slow-elsewhere run $probe
       want=${want/OWN/2 before $(slow_physical "$argv_dir/trace.csexp")}
-      if [ "$(cat "$slow_args")" != "$want" ] || [ "$argv_calls" != "$probe" ] || [ -e "$argv_dir/slowest" ]; then
+      if [ "$(cat "$slow_args")" != "$want" ] || [ "$argv_calls" != "${probe#-- }" ] || [ -e "$argv_dir/slowest" ]; then
         slow_detail="$probe: trace options $(tr '\n' ';' <"$slow_args") (want ${want:-none}); calls: $argv_calls"
         break
       fi

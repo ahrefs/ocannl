@@ -1153,10 +1153,12 @@ def cli(argv=None):
         return _main(argv)
     except SystemExit:
         raise
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
-        print("fixture_digest.py: unexpected error, exit 2 -- not a verdict about any fixture",
-              file=sys.stderr)
+        # The last line names the error too: a caller that reports only the output's tail
+        # (check-box.sh) still says what went wrong.
+        print("fixture_digest.py: unexpected error, exit 2 -- not a verdict about any fixture: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
         return 2
 
 
