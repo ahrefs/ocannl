@@ -5,7 +5,12 @@ open Base
     are separate: one record construction or one recursive binding inspecting at least two distinct
     IR constructors warrants the harness. Quoted fixtures and comments are not AST nodes. Adoption
     is linking the harness AND calling into its IR surface ({!surface}); linking it for an operand
-    helper alone adopts nothing (gh-ocannl-1052). This does not ban test-specific match arms. *)
+    helper alone adopts nothing (gh-ocannl-1052). This does not ban test-specific match arms.
+
+    Beside that refusing census, a census-only column counts private traversals of [Assignments.t]
+    ({!assignments_census}), by the constructors recursive in that type's own declaration: one such
+    constructor in a recursive binding's patterns is a traversal, so a finder naming [Seq] alone is
+    counted. Nothing requires adopting a harness for it. *)
 
 open Ppxlib
 module Dune = Dune_stanza_scan
@@ -249,58 +254,182 @@ let constructors source =
       | _ -> ());
   (Set.of_list (module String) !names, Set.of_list (module String) !records)
 
-let census ~constructors:(constructors, record_constructors) source =
-  let known ident = Set.mem constructors (Longident.last_exn ident) in
-  let records = ref 0 and traversals = ref 0 in
-  let inspect bindings =
-    List.iter bindings ~f:(fun binding ->
-        let patterns = Hash_set.create (module String) in
-        let walker =
-          object (self)
-            inherit Ast_traverse.iter as super
+(** [recursive_constructors source]: the constructors of [source]'s top-level [type t] that carry a
+    [t] argument (unqualified, anywhere in the argument: [Seq of t * t],
+    [Block_comment of string * t]) -- the constructors a traversal of that type recurses through.
+    DERIVED from the declaration in [arrayjit/lib/assignments.ml], not listed, so a new nesting
+    constructor of [Assignments.t] joins the census without anyone deciding it. As for
+    {!constructors}, a [t] declared in a nested module and every other top-level type are not read.
+*)
+let recursive_constructors source =
+  let names = ref [] in
+  Parse.implementation (Lexing.from_string source)
+  |> List.iter ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_type (_, declarations) ->
+          List.iter declarations ~f:(fun declaration ->
+              match declaration.ptype_kind with
+              | Ptype_variant ctors when String.equal declaration.ptype_name.txt "t" ->
+                  List.iter ctors ~f:(fun c ->
+                      let carries_t = ref false in
+                      object
+                        inherit Ast_traverse.iter as super
 
-            method! structure_item item =
-              match item.pstr_desc with
-              | Pstr_value (Recursive, _) -> ()
-              | _ -> super#structure_item item
+                        method! core_type ty =
+                          (match ty.ptyp_desc with
+                          | Ptyp_constr ({ txt = Lident "t"; _ }, _) -> carries_t := true
+                          | _ -> ());
+                          super#core_type ty
+                      end
+                        #constructor_arguments
+                        c.pcd_args;
+                      if !carries_t then names := c.pcd_name.txt :: !names)
+              | _ -> ())
+      | _ -> ());
+  Set.of_list (module String) !names
 
-            method! expression expr =
-              match expr.pexp_desc with
-              | Pexp_let (Recursive, _, body) -> self#expression body
-              | _ -> super#expression expr
-
-            method! pattern p =
-              (match p.ppat_desc with
-              | Ppat_construct ({ txt; _ }, _) when known txt ->
-                  Hash_set.add patterns (Longident.last_exn txt)
-              | _ -> ());
-              (* Nested subpatterns matter; nested value definitions have their own census. *)
-              super#pattern p
-          end
-        in
-        walker#expression binding.pvb_expr;
-        if Hash_set.length patterns >= 2 then Int.incr traversals)
-  in
+(** Every binding of every recursive group in [structure], top-level or nested, each once. *)
+let recursive_bindings structure =
+  let found = ref [] in
   let walker =
     object
       inherit Ast_traverse.iter as super
 
       method! structure_item item =
-        (match item.pstr_desc with Pstr_value (Recursive, bindings) -> inspect bindings | _ -> ());
+        (match item.pstr_desc with
+        | Pstr_value (Recursive, bindings) -> found := List.rev_append bindings !found
+        | _ -> ());
         super#structure_item item
+
+      method! expression expr =
+        (match expr.pexp_desc with
+        | Pexp_let (Recursive, bindings, _) -> found := List.rev_append bindings !found
+        | _ -> ());
+        super#expression expr
+    end
+  in
+  walker#structure structure;
+  List.rev !found
+
+(** The constructor names (last component) the binding's own patterns inspect, among those whose
+    path [keep] accepts (any qualifier, by default). *)
+let pattern_constructors ?(keep = fun (_ : Longident.t) -> true) binding =
+  let names = Hash_set.create (module String) in
+  let walker =
+    object (self)
+      inherit Ast_traverse.iter as super
+
+      method! structure_item item =
+        match item.pstr_desc with Pstr_value (Recursive, _) -> () | _ -> super#structure_item item
+
+      method! expression expr =
+        match expr.pexp_desc with
+        | Pexp_let (Recursive, _, body) -> self#expression body
+        | _ -> super#expression expr
+
+      method! pattern p =
+        (match p.ppat_desc with
+        | Ppat_construct ({ txt; _ }, _) when keep txt ->
+            Hash_set.add names (Longident.last_exn txt)
+        | _ -> ());
+        (* Nested subpatterns matter; nested value definitions have their own census. *)
+        super#pattern p
+    end
+  in
+  walker#expression binding.pvb_expr;
+  Set.of_list (module String) (Hash_set.to_list names)
+
+(** The Low_level rule: a recursive binding whose patterns name at least two distinct constructors
+    of [Low_level]'s [t]/[scalar_t]. *)
+let low_level_traversal constructors binding =
+  Set.length (Set.inter (pattern_constructors binding) constructors) >= 2
+
+let census ~constructors:(constructors, record_constructors) source =
+  let records = ref 0 in
+  let structure = Parse.implementation (Lexing.from_string source) in
+  let walker =
+    object
+      inherit Ast_traverse.iter as super
 
       method! expression expr =
         (match expr.pexp_desc with
         | Pexp_construct ({ txt; _ }, Some { pexp_desc = Pexp_record _; _ })
           when Set.mem record_constructors (Longident.last_exn txt) ->
             Int.incr records
-        | Pexp_let (Recursive, bindings, _) -> inspect bindings
         | _ -> ());
         super#expression expr
     end
   in
-  walker#structure (Parse.implementation (Lexing.from_string source));
-  { records = !records; traversals = !traversals }
+  walker#structure structure;
+  {
+    records = !records;
+    traversals = List.count (recursive_bindings structure) ~f:(low_level_traversal constructors);
+  }
+
+(** The module names that denote [Low_level] in [structure]: [Low_level] itself (as the last
+    component of a path, [Ir.Low_level]) and every module alias bound in the file to such a path
+    ([module LL = Ir.Low_level], [let module L = LL in], through a signature constraint), to a
+    fixpoint. File-wide, not scoped: an alias name bound to [Low_level] anywhere counts everywhere,
+    which can only drop a pattern from the census-only column. *)
+let low_level_modules structure =
+  let aliases = ref [] in
+  let rec target = function
+    | { pmod_desc = Pmod_ident { txt; _ }; _ } -> Some (Longident.last_exn txt)
+    | { pmod_desc = Pmod_constraint (me, _); _ } -> target me
+    | _ -> None
+  in
+  let bind name me =
+    match (name, target me) with
+    | Some name, Some target -> aliases := (name, target) :: !aliases
+    | _ -> ()
+  in
+  let walker =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! module_binding mb =
+        bind mb.pmb_name.txt mb.pmb_expr;
+        super#module_binding mb
+
+      method! expression expr =
+        (match expr.pexp_desc with Pexp_letmodule ({ txt; _ }, me, _) -> bind txt me | _ -> ());
+        super#expression expr
+    end
+  in
+  walker#structure structure;
+  let rec close known =
+    let grown =
+      List.fold !aliases ~init:known ~f:(fun known (name, target) ->
+          if Set.mem known target then Set.add known name else known)
+    in
+    if Set.length grown = Set.length known then known else close grown
+  in
+  close (Set.singleton (module String) "Low_level")
+
+(** [assignments_census ~constructors ~recursive source]: the private traversals of [Assignments.t]
+    in [source], a census column that requires nothing (no harness exists for that type). A
+    recursive binding counts when its patterns name a constructor of [recursive] (the nesting
+    constructors {!recursive_constructors} derives) and the Low_level rule did NOT count it, so the
+    two columns are disjoint and the Low_level column reads exactly as without this one.
+    [Assignments.t] shares [Noop] and [Seq] with [Low_level.t], and a syntactic scan cannot tell
+    whose [Seq] a pattern names: a binding with two Low_level names stays the Low_level rule's (a
+    finder with [Noop] and [Seq] arms among them), since that column is the one that refuses and
+    reads a same-named constructor conservatively; what this column adds is the binding the
+    Low_level rule cannot see, such as a finder naming [Seq] alone. A constructor whose qualifier
+    denotes [Low_level] ({!low_level_modules}: [LL.Seq], [Ir.Low_level.Seq]) is that type's, so it
+    is no evidence here: a Low_level walker naming [LL.Seq] alone is in neither column. An
+    unqualified [Seq] (type-directed, or under an [open]) is read as [Assignments.t]'s. *)
+let assignments_census ~constructors:(constructors, _) ~recursive source =
+  let structure = Parse.implementation (Lexing.from_string source) in
+  let low_level = low_level_modules structure in
+  let keep = function
+    | Longident.Ldot (qualifier, _) -> not (Set.mem low_level (Longident.last_exn qualifier))
+    | _ -> true
+  in
+  recursive_bindings structure
+  |> List.count ~f:(fun binding ->
+      (not (low_level_traversal constructors binding))
+      && not (Set.is_empty (Set.inter (pattern_constructors ~keep binding) recursive)))
 
 let needs_harness { records; traversals } = records >= 1 || traversals >= 1
 

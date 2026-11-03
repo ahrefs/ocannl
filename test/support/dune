@@ -143,6 +143,18 @@
  (package neural_nets_lib)
  (modules gc_witness))
 
+; The claim helpers of the lineage-refusal tests (gh-ocannl-1797): a refusal's text, an accepted
+; call, an exact readback, a tensor's gradient node. Their own library, linking the tensor layer
+; those tests already link, so an edit reaches them and not every [test_utils] dependant.
+
+(library
+ (name lineage_claims)
+ (package neural_nets_lib)
+ (modules lineage_claims)
+ (libraries base stdio ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here)))
+
 ; The integer-power domain shared by the backend test and the GPU-free emulation test, stdlib
 ; only (gh-ocannl-1185, gh-ocannl-1240).
 

@@ -288,6 +288,9 @@ ok: program runners -- a nested dependency expansion under chdir keeps its subdi
 ok: program runners -- a rule in a sibling subdirectory is not this program's runner
 ok: program runners -- a shell line is no named runner
 ok: program runners -- the variables pinned around every run of the program
+ok: stanza programs -- an executables stanza is one program per name, sharing what no name owns
+ok: stanza programs -- a test runs itself beside any rule running it, over the directory's own modules
+ok: stanza programs -- a tests stanza is one program per name, each run by itself
 ok: backend marker sentinel -- in a comment
 ok: backend marker sentinel -- inside a quoted argument, where it declares nothing
 ok: backend marker sentinel -- in a comment above every stanza, which encloses it in none

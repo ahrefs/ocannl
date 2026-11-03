@@ -1156,11 +1156,22 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
        non-tree DAGs. For repeating subtensors, the first one to-be-included should actually be
        included! That's why we reverse the order up-front prior to processing. *)
     let ordered_ts = List.rev ordered_ts in
+    (* A backprop that would add nothing to the sequence but a [Noop]: no code, nothing embedded,
+       owned, required, zeroed or accumulated. That is exactly a parameter's ([force_param_diff]'s
+       [empty_comp]); a term built by [op] embeds its own gradient, so it never is. Leaving it out
+       keeps a parameter operand from adding a [Noop] leaf to the assembled backprop
+       (gh-ocannl-1797: the parameter test this replaces had no other effect). *)
+    let inert (c : Asgns.comp) =
+      (match c.asgns with Asgns.Noop -> true | _ -> false)
+      && Set.is_empty c.embedded_nodes && Set.is_empty c.owned && Set.is_empty c.requires
+      && Set.is_empty c.zeroes && Set.is_empty c.accumulates && Map.is_empty c.accumulation_runs
+    in
     let bprop ti =
-      Option.map ti.diff ~f:(fun diff ->
+      Option.bind ti.diff ~f:(fun diff ->
+          (* The gradient is embedded even when the child's backprop is terminal. *)
           embedded_nodes :=
             Set.add (Set.union !embedded_nodes diff.backprop.embedded_nodes) diff.grad;
-          diff.backprop)
+          Option.some_if (not (inert diff.backprop)) diff.backprop)
     in
     (* The backprop fragments this one's gradient writes flow into without carrying them
        (gh-ocannl-1724): a differentiable non-parameter child that is no longer a backprop root had
@@ -1172,18 +1183,10 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     let requires = ref Asgns.no_fragments in
     let bcks =
       List.filter_map ordered_ts ~f:(fun ti ->
-          if is_bck_root ti then
-            if Set.mem t.params ti then (
-              (* Parameter's backprop is terminal, but we still need its gradient embedded *)
-              Option.iter ti.diff ~f:(fun diff ->
-                  embedded_nodes := Set.add !embedded_nodes diff.grad);
-              None)
-            else bprop ti
+          if is_bck_root ti then bprop ti
           else (
             (match ti.diff with
-            | Some diff
-              when (not (Set.mem t.params ti))
-                   && Set.mem diff.backprop.owned (diff.grad, Asgns.Bprop) ->
+            | Some diff when Set.mem diff.backprop.owned (diff.grad, Asgns.Bprop) ->
                 requires := Set.add !requires (diff.grad, Asgns.Bprop)
             | _ -> ());
             None))

@@ -246,8 +246,8 @@ if harness_leg 'driver path: the shared venv'; then
 fi
 if harness_leg 'fixture records: judged nothing'; then
   # A by-name check that cannot answer (here: a workload spec it cannot read, which the subject's
-  # own spec listing never parses) exits 2 before any item. Its traceback exits 1, the status of a
-  # name not recorded, so only the missing `not recorded` lines tell the two apart.
+  # own spec listing never parses) exits 2 before any item. fixture_digest.py exits 2 on such an
+  # unexpected error (gh-ocannl-1797), its last line naming the error, which check-box quotes.
   broken=$TMP/broken/benchmarks
   mkdir -p "$broken/workloads"
   cp "$SUBJECT" "$here/bench_venv.py" "$here/fixture_digest.py" "$broken/"
@@ -257,7 +257,7 @@ if harness_leg 'fixture records: judged nothing'; then
   bash "$broken/check-box.sh" --venv "$venv" --fixture-dir "$TMP/fixtures" --digests "$TMP/DIGESTS.txt" \
     --box rog-nv >"$TMP/runs/records-broken" 2>&1 || rc=$?
   usage_leg 'a by-name check that judged nothing exits 2' records-broken \
-    '^check-box: fixture_digest.py --check-names --expect-recorded rog-nv judged nothing \(exit 1\): ValueError: '
+    '^check-box: fixture_digest.py --check-names --expect-recorded rog-nv judged nothing \(exit 2\): fixture_digest.py: unexpected error, exit 2 -- not a verdict about any fixture: ValueError: '
   ! grep -q '^check-box: [a-z-]*: \(ok\|GAP\|skip\) -- ' "$TMP/runs/records-broken"
   report $? 'and prints no item first'
 fi

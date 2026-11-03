@@ -7,98 +7,85 @@
    pins that message in full; the suggested remedy (a [Train.zero_params_grads] routine compiled
    first) is run here with exact values, and a step skipping it is refused (gh-ocannl-1781); and the
    other "lacks node" refusals keep their text: the bare one over a non-gradient node, and
-   gh-ocannl-1724's hint over an unpropagated intermediate gradient. Values are small integers,
-   compared bitwise. *)
+   gh-ocannl-1724's hint over an unpropagated intermediate gradient. When a routine compiled outside
+   the lineage -- a sibling's update -- zeroes the gradient, the hint names it (gh-ocannl-1797); the
+   first case, where no routine zeroes it, is the control that keeps the wording without one. Values
+   are small integers, compared bitwise. *)
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules
 open Verdict.Claims
+module LC = Lineage_claims
 module IDX = Train.IDX
 
-let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad
-let has msg substring = String.is_substring msg ~substring
-let exact name got want = p_close name got want ~tol:(fun _ -> 0.)
 let one t = Set.singleton (module Tensor) t
 let compile ctx comp = Train.to_routine ctx IDX.empty comp
 let run_all ctx routines = List.fold routines ~init:ctx ~f:Context.run
 let reset_hint = "without zeroing it, and no routine of its lineage zeroes it"
 
-(* A [Weak] observer on a record, read with [Weak.check] after up to three collections. *)
-let witness (t : Tensor.t) =
-  let w = Stdlib.Weak.create 1 in
-  Stdlib.Weak.set w 0 (Some t);
-  w
-
-let reclaimed w =
-  let rec go rounds =
-    Stdlib.Gc.full_major ();
-    Stdlib.Gc.full_major ();
-    Stdlib.Gc.compact ();
-    (not (Stdlib.Weak.check w 0)) || (rounds > 1 && go (rounds - 1))
-  in
-  go 3
-
-(* The text of the [User_error] [f] raises; a failed claim when it raises none. *)
-let refusal name f =
-  match f () with
-  | _ ->
-      fail (name ^ ": was accepted");
-      ""
-  | exception Utils.User_error msg -> msg
-
+(* The clause naming a zeroing compiled outside the lineage, after the routine's name. *)
+let outside_zeroer = "zeroes it, compiled outside this lineage -- in a sibling"
 let param prefix = TDSL.param ~values:[| 1.; 2.; 3. |] (prefix ^ "_w") ~output_dims:[ 3 ] ()
 
 (* #1558's first consumer: built, evaluated forward-only, and dropped -- it carried [w]'s zeroing.
    Returns the context and an observer on the consumer. *)
 let[@inline never] forward_only_consumer ctx w =
   let%op c = w *. 2. in
-  (Train.forward_once ctx c, witness c)
+  (Train.forward_once ctx c, Gc_witness.witness c)
 
 let () =
   case "a parameter whose first consumer was evaluated forward-only and dropped" (fun () ->
       let w = param "lh" in
       let ctx, c = forward_only_consumer (Context.auto ()) w in
-      p "the forward-only first consumer is dropped and reclaimed" (reclaimed c);
+      p "the forward-only first consumer is dropped and reclaimed" (Gc_witness.reclaimed c);
+      claim "control: the parameter the case still holds is kept"
+        (Gc_witness.kept (Gc_witness.witness w));
       let%op l = w *. w in
-      let msg = refusal "a loss over the parameter" (fun () -> Train.update_once ctx l) in
+      let msg = LC.refusal "a loss over the parameter" (fun () -> Train.update_once ctx l) in
       Stdio.printf "The refusal:\n%s\n%!" msg;
       p "names the parameter's gradient, the missing reset and the remedy"
-        (has msg ("The linked context lacks node " ^ Ir.Tnode.label_name (grad_of w))
-        && has msg reset_hint
-        && has msg "Train.zero_params_grads ~params");
+        (LC.has msg ("The linked context lacks node " ^ Ir.Tnode.label_name (LC.grad_of w))
+        && LC.has msg reset_hint
+        && LC.has msg "Train.zero_params_grads ~params");
+      p "no routine of the root zeroes the gradient: the hint names none"
+        (not (LC.has msg outside_zeroer));
       (* The remedy the message suggests. [l]'s [zero_grads] does not zero [w.grad] (its first
          consumer's did), so [Train.grad_update l] accumulates over the reset compiled before it. *)
       let ctx, zero = compile ctx (Train.zero_params_grads ~params:(one w) l) in
       let ctx, step = compile ctx (Train.grad_update l) in
       let ctx = run_all ctx [ zero; step; zero; step ] in
-      exact "reset before each step: w.grad = 2 w"
-        (Context.get_values ctx (grad_of w))
+      LC.exact "reset before each step: w.grad = 2 w"
+        (Context.get_values ctx (LC.grad_of w))
         [| 2.; 4.; 6. |];
       (* Without the reset the step would sum two steps' gradients: refused (gh-ocannl-1781). *)
-      let msg = refusal "a step without the reset" (fun () -> Context.run ctx step) in
+      let msg = LC.refusal "a step without the reset" (fun () -> Context.run ctx step) in
       p "a step without the reset is refused, naming the reset routine"
-        (has msg (Ir.Tnode.label_name (grad_of w)) && has msg "has not run since");
-      exact "the refusal dispatched nothing" (Context.get_values ctx (grad_of w)) [| 2.; 4.; 6. |]);
+        (LC.has msg (Ir.Tnode.label_name (LC.grad_of w)) && LC.has msg "has not run since");
+      LC.exact "the refusal dispatched nothing"
+        (Context.get_values ctx (LC.grad_of w))
+        [| 2.; 4.; 6. |]);
   case "a parameter whose first consumer's update was compiled in a sibling" (fun () ->
       let w = param "lh_sib" in
       let%op c = w *. 2. in
       let%op l = w *. w in
       let ctx0 = Train.init_params (Context.auto ()) IDX.empty c in
-      let _sibling = compile ctx0 (Train.grad_update c) in
+      let _, (sibling : Context.routine) = compile ctx0 (Train.grad_update c) in
       let msg =
-        refusal "a loss over the parameter, from the common ancestor" (fun () ->
+        LC.refusal "a loss over the parameter, from the common ancestor" (fun () ->
             compile ctx0 (Train.grad_update l))
       in
       p "a reset compiled in a sibling does not count, and the hint names it"
-        (has msg ("The linked context lacks node " ^ Ir.Tnode.label_name (grad_of w))
-        && has msg reset_hint));
+        (LC.has msg ("The linked context lacks node " ^ Ir.Tnode.label_name (LC.grad_of w))
+        && LC.has msg reset_hint);
+      p "the hint names the sibling's update as the routine zeroing the gradient"
+        (LC.has msg (sibling.name ^ " (id=") && LC.has msg outside_zeroer));
   case "a node that is not a gradient: the bare message" (fun () ->
       let x = Tensor.term_init [| 1.; 2.; 3. |] ~label:[ "lh_x" ] ~output_dims:[ 3 ] () in
       let%op a = x *. 2. in
       let _ctx_a, _ = compile (Context.auto ()) (Train.forward a) in
       let%op b = a *. 3. in
       let msg =
-        refusal "a reader of [a] on a fresh context" (fun () ->
+        LC.refusal "a reader of [a] on a fresh context" (fun () ->
             compile (Context.auto ()) (Train.forward b))
       in
       p "the refusal is exactly the bare message"
@@ -115,11 +102,11 @@ let () =
       let%op l1 = h *. 2. in
       let%op l2 = h *. 3. in
       let _l1_update = Train.grad_update l1 in
-      Train.set_materialized (grad_of h);
+      Train.set_materialized (LC.grad_of h);
       let ctx, r = compile (Context.auto ()) h_fwd in
       let ctx = Context.run ctx r in
-      let msg = refusal "a loss over the trunk" (fun () -> Train.update_once ctx l2) in
+      let msg = LC.refusal "a loss over the trunk" (fun () -> Train.update_once ctx l2) in
       p "names the unpropagated gradient, and not the reset"
-        (has msg ("The linked context lacks node " ^ Ir.Tnode.label_name (grad_of h))
-        && has msg "no routine in this lineage propagates from"
-        && not (has msg reset_hint)))
+        (LC.has msg ("The linked context lacks node " ^ Ir.Tnode.label_name (LC.grad_of h))
+        && LC.has msg "no routine in this lineage propagates from"
+        && not (LC.has msg reset_hint)))

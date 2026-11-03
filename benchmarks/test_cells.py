@@ -757,9 +757,9 @@ class Gh1051AbDriverTest(StubRunTest):
     def test_four_interleaved_arms_validated_and_tabled(self):
         proc, raw = self.measure()
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        # (wc -l pads its count on macOS.)
+        # One space exactly: the driver strips the padding macOS's wc -l puts before its count.
         self.assertRegex(proc.stdout,
-                         r"drift control: +1 generated f32 kernels byte-identical across arms")
+                         r"drift control: 1 generated f32 kernels byte-identical across arms")
         self.assertIn("| stub | 64 | mma_pd1 |", proc.stdout)
         records = self.records(raw / "n64")
         self.assertEqual(len(records), 16)

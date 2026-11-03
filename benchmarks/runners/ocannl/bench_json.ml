@@ -106,7 +106,17 @@ let string s =
     tensorized. [mma_statements] is the denominator [mma_scalar_fallbacks] is a count out of. An arm
     with [tensorized: true] and a [tensorization] other than ["tensorized"] measured scalar code
     under a tensorized label; [orchestrate.py] marks that cell rather than letting the number stand.
-*)
+
+    [grid] is the same pairing for a [Grid] placement (gh-ocannl-1702), as
+    [{"asked": b, "census": <census>|null, "serial_timed": N}]: [asked] says the crowned SCHEDULE
+    places a loop on the [Grid] axis ({!Autotune.schedule_asks_grid}), [census] is what the renderer
+    did with the crowned candidate's outermost [Grid] loops ({!grid_census_object}, [null] when
+    there was no crowned candidate to consult), and [serial_timed] counts the RANKED candidates that
+    asked for a [Grid] loop and were timed with one rendered serially on the CPU pool
+    ({!Autotune.report}'s [grid_serial_timed]; [0] on a replay, which timed nothing). An arm with
+    [asked] and a census whose [rendered_serially] holds was timed, at least in part, as a serial
+    loop under a parallel label; [orchestrate.py] announces it (not a gate: the serial loop computes
+    the same values). *)
 let decision_counts_object counts =
   (* Grouped by settle in first-appearance order, so the caller's order is the rendering's. *)
   let settles =
@@ -125,12 +135,34 @@ let decision_counts_object counts =
            Printf.sprintf {|"%s":{%s}|} (string settle) (String.concat ~sep:"," (cells settle))))
   ^ "}"
 
+type grid_census = {
+  pool : bool;  (** Pool-parallel [Grid] rendering was available at all; [false] on a GPU. *)
+  loops : int;  (** Outermost [Grid] loops the census recorded. *)
+  pool_rendered : int;  (** Of those, rendered on the CPU pool. *)
+  serial : int;  (** Of those, rendered serially. *)
+  rendered_serially : bool;
+      (** {!Autotune.grid_rendered_serially}'s verdict, carried rather than re-derived downstream.
+      *)
+  summary : string;  (** The one-line census, naming the rule that kept each serial loop serial. *)
+}
+(** A compiled routine's Grid census as the result line carries it (gh-ocannl-1702): the fields of
+    {!Ir.C_syntax.grid_summary} this module can take without linking the compiler, the verdict
+    {!Autotune.grid_rendered_serially} reached on it, and its {!Ir.C_syntax.grid_summary_string}. *)
+
+let grid_census_object = function
+  | None -> "null"
+  | Some c ->
+      Printf.sprintf
+        {|{"pool":%b,"loops":%d,"pool_rendered":%d,"serial":%d,"rendered_serially":%b,"summary":"%s"}|}
+        c.pool c.loops c.pool_rendered c.serial c.rendered_serially (string c.summary)
+
 let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~budget_cut ~budget_s
     ~call_budget_s ~call_share_s ~timings_contended ~timings_unbatched ~timings_unreadable
     ~timing_decisions ~best_ms ~best_label ~tensorized ~tensorization ~mma_statements
-    ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms ~terminal_failure =
+    ~mma_scalar_fallbacks ~mma_seeded ~mma_timed ~mma_best_ms ~grid_asked ~grid_census
+    ~grid_serial_timed ~terminal_failure =
   Printf.sprintf
-    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"budget_s":%s,"call_budget_s":%s,"call_share_s":%s,"timings_contended":%d,"timings_unbatched":%d,"timings_unreadable":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"terminal_failure":%s,"timing_decisions":%s}|}
+    {|{"arm":"%s","state":"%s","searched":%b,"cache_hit":%b,"timing":"%s","rounds_run":%d,"beam_width":%d,"budget_cut":%b,"budget_s":%s,"call_budget_s":%s,"call_share_s":%s,"timings_contended":%d,"timings_unbatched":%d,"timings_unreadable":%d,"best_ms":%s,"best_label":"%s","tensorized":%b,"tensorization":%s,"mma_statements":%d,"mma_scalar_fallbacks":%d,"mma_seeded":%d,"mma_timed":%d,"mma_best_ms":%s,"grid":{"asked":%b,"census":%s,"serial_timed":%d},"terminal_failure":%s,"timing_decisions":%s}|}
     (string name) (string state) searched cache_hit (string timing) rounds_run beam_width budget_cut
     (Option.value_map budget_s ~default:"null" ~f:(fun b -> num b))
     (Option.value_map call_budget_s ~default:"null" ~f:(fun b -> num b))
@@ -138,7 +170,8 @@ let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~
     timings_contended timings_unbatched timings_unreadable (num best_ms) (string best_label)
     tensorized
     (Option.value_map tensorization ~default:"null" ~f:(fun t -> Printf.sprintf {|"%s"|} (string t)))
-    mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms)
+    mma_statements mma_scalar_fallbacks mma_seeded mma_timed (num mma_best_ms) grid_asked
+    (grid_census_object grid_census) grid_serial_timed
     (Option.value_map terminal_failure ~default:"null" ~f:(fun detail ->
          Printf.sprintf {|"%s"|} (string detail)))
     (decision_counts_object timing_decisions)
@@ -175,7 +208,13 @@ let tune_arm ~name ~state ~searched ~cache_hit ~timing ~rounds_run ~beam_width ~
     whose crown was discarded. [substituted_from] is that discarded crown's [best_label], [null]
     when nothing was substituted or on the last resort (which ships no search's crown). The
     substitute is always the untuned default, so it needs no field. Both [null] when the harness
-    recorded no ship. *)
+    recorded no ship.
+
+    [grid] is the shipped artifact's Grid census ({!grid_census_object}, gh-ocannl-1702), merged
+    over the routine(s) this cell's step times ran, and authoritative over the arms' for the reason
+    [shipped_mma] is. [null] when the harness recorded none. Unlike an arm's it carries no [asked]:
+    a Grid loop the default pipeline placed is in it too, so a serial one here is a fact about the
+    timed code, not a label it contradicts. *)
 let mma_object = function
   | None -> "null"
   | Some (tensorization, statements, scalar_fallbacks) ->
@@ -183,16 +222,16 @@ let mma_object = function
         (string tensorization) statements scalar_fallbacks
 
 let tune_object ~shipped ?placement_replay ?shipped_digest ?ship_substituted ?substituted_from
-    ~searches ~replays ~no_searches ~shipped_mma ~arms () =
+    ~searches ~replays ~no_searches ~shipped_mma ?grid ~arms () =
   let quoted = Option.value_map ~default:"null" ~f:(fun d -> Printf.sprintf {|"%s"|} (string d)) in
   Printf.sprintf
-    {|{"shipped":"%s","placement_replay":%s,"shipped_digest":%s,"ship_substituted":%s,"substituted_from":%s,"searches":%d,"replays":%d,"no_searches":%d,"shipped_mma":%s,"arms":[%s]}|}
+    {|{"shipped":"%s","placement_replay":%s,"shipped_digest":%s,"ship_substituted":%s,"substituted_from":%s,"searches":%d,"replays":%d,"no_searches":%d,"shipped_mma":%s,"grid":%s,"arms":[%s]}|}
     (string shipped)
     (Option.value_map placement_replay ~default:"null" ~f:Bool.to_string)
     (quoted shipped_digest)
     (Option.value_map ship_substituted ~default:"null" ~f:Bool.to_string)
     (quoted substituted_from) searches replays no_searches (mma_object shipped_mma)
-    (String.concat ~sep:"," arms)
+    (grid_census_object grid) (String.concat ~sep:"," arms)
 
 (** The [regime_knobs] object: where each key of the approximate profile's payload resolved from in
     this process, keyed by the setting's name -- [{"source":"default"}] for a key nothing set,

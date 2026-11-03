@@ -534,6 +534,21 @@ let calls scope e ~target ~name =
       | Some Opaque | None -> false)
   | _ -> false
 
+(** Whether [callee] is [Verdict]'s leg claim, [in_leg] or [in_legf] (gh-ocannl-1703): qualified by
+    a module that resolves to [Verdict] or [Claims] where it is spelled ([Verdict.in_leg],
+    [Verdict.Claims.in_legf], an alias of either), or unqualified and bound by nothing in the file
+    -- the spelling a test writes after [open Verdict.Claims]. A file's own [in_leg] is no leg
+    claim. *)
+let leg_claim scope callee =
+  List.exists [ "in_leg"; "in_legf" ] ~f:(fun name ->
+      calls scope callee ~target:"Verdict" ~name
+      || calls scope callee ~target:"Claims" ~name
+      ||
+      match callee.pexp_desc with
+      | Pexp_ident { txt = Lident spelled; _ } ->
+          String.equal spelled name && not (Hashtbl.mem scope.values (span callee.pexp_loc))
+      | _ -> false)
+
 (** The reader that hands a test its generated source: [read] on {!Test_utils.Generated} under any
     prefix or alias. *)
 let mentions_generated_read scope expr =
@@ -2294,7 +2309,19 @@ let classify_source ~emitters ~helpers ~path ~contents =
                               match Hashtbl.find functions id with
                               | Some [ (name, { destination = At_position 0; _ }) ] ->
                                   add_input id name (uncertain Unresolved Untraced_callback input)
-                              | _ -> ())))
+                              | _ -> ())));
+              (* A leg claim hands its make function the claim's own label, a plain string with no
+                 provenance, so the function is the leg's body, read as ordinary code
+                 (gh-ocannl-1703). *)
+              if leg_claim scope callee then
+                Option.iter
+                  (List.last (positional args))
+                  ~f:(fun make ->
+                    List.iter (!provenance make).functions ~f:(fun id ->
+                        match Hashtbl.find functions id with
+                        | Some ((name, { destination = At_position 0; _ }) :: _) ->
+                            add_input id name no_provenance
+                        | _ -> ()))
           | _ -> ());
           super#expression e
       end

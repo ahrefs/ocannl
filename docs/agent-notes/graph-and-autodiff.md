@@ -63,7 +63,8 @@ files.
   consumer is not compiled in the lineage (evaluated forward-only, since dropped, or a sibling's
   update) accumulates into a gradient it neither zeroes nor embeds, so no routine allocates it: the
   LINK fails before this check sees anything, and `Context.lacks_node_error` names the missing reset
-  and `zero_params_grads` (`lacks_grad_reset_hint.ml`).
+  and `zero_params_grads`, plus any routine of the root compiled outside the lineage that zeroes it
+  (the ledger's `zeroing_registry`, gh-ocannl-1797; `lacks_grad_reset_hint.ml`).
 - Past the link, a gradient a routine accumulates into without zeroing is a RUN-history question
   (gh-ocannl-1781): the ledger's `accumulated` counts, per gradient buffer and per routine, the runs
   since the buffer's last reset (a run of a routine whose `zeroes` holds it, or

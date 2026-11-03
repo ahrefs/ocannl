@@ -47,20 +47,9 @@ let synthetic = Ll_test.synthetic_gpu ()
 let fission opt = snd (Ll_test.tuner_segments ~target:synthetic opt)
 let unfolded opt = snd (Ll_test.tuner_segments_unfolded ~target:synthetic opt)
 
-(* A synthetic matrix-unit capability (as [launch_predicate_parity]'s), so the tensorized seeds are
-   proposed and validated whatever the host backend. *)
-let mma_limits =
-  let module BI = Ir.Backend_intf in
-  {
-    BI.no_hardware_limits with
-    mma =
-      Some
-        {
-          BI.minimal_mma_capability with
-          mma_tile = (8, 8, 8);
-          mma_format_tiles = [ ((BI.Mma_f32, BI.Mma_f32, BI.Mma_f32), (8, 8, 8)) ];
-        };
-  }
+(* The shared synthetic matrix-unit capability, so the tensorized seeds are proposed and validated
+   whatever the host backend. *)
+let mma_limits = Ll_test.f32_mma_limits
 
 let gpu_seeds ~limits pre =
   Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits pre

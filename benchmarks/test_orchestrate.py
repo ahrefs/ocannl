@@ -1739,6 +1739,71 @@ class SubstitutionTest(unittest.TestCase):
         self.assertEqual(orchestrate.substitution_check(flipped), flipped)
 
 
+class GridNoticeTest(unittest.TestCase):
+    """gh-ocannl-1702: a tuned cell that timed an asked-for Grid loop rendered serially is announced.
+
+    The serial loop computes the same values, so nothing else in the record says the timing is a
+    serial loop's under a parallel placement. Not a gate: quiet off a CPU pool and when nothing
+    serial was asked for.
+    """
+
+    def census(self, pool=True, serial=1, summary="grid: 0 of 1 on the pool; i0 serial: why"):
+        return {
+            "pool": pool, "loops": serial + 1 if pool else 0,
+            "pool_rendered": 1 if pool else 0, "serial": serial if pool else 0,
+            "rendered_serially": pool and serial > 0, "summary": summary,
+        }
+
+    def cell(self, *grids):
+        arms = []
+        for name, grid in zip("ABC", grids):
+            arm = TensorizationTest.arm(self, name, False, "not-requested")
+            if grid is not ...:
+                arm["grid"] = grid
+            arms.append(arm)
+        return TensorizationTest.cell(self, arms)
+
+    def test_a_serial_crown_and_serial_rivals_print_the_notice(self):
+        crown = self.cell(
+            {"asked": True, "census": self.census(), "serial_timed": 0},
+            {"asked": False, "census": self.census(serial=0), "serial_timed": 3},
+        )
+        flagged = orchestrate.grid_check([crown])
+        self.assertEqual(flagged, [crown])
+        notice = orchestrate.grid_notice(flagged)
+        self.assertIn("GRID NOTICE: 1 tuned cell(s)", notice)
+        self.assertIn("metal/tuned", notice)
+        self.assertIn("arm A: crown grid: 0 of 1 on the pool; i0 serial: why", notice)
+        self.assertIn("arm B: 3 ranked candidate(s)", notice)
+
+    def test_quiet_off_the_pool_unasked_or_unrecorded(self):
+        # A GPU census (no pool), a default-pipeline serial Grid loop no schedule asked for, and a
+        # runner predating the field: none is a serial loop under a parallel ask.
+        gpu = self.cell({"asked": True, "census": self.census(pool=False), "serial_timed": 0})
+        unasked = self.cell({"asked": False, "census": self.census(), "serial_timed": 0})
+        pooled = self.cell({"asked": True, "census": self.census(serial=0), "serial_timed": 0})
+        uncensused = self.cell({"asked": True, "census": None, "serial_timed": 0})
+        legacy = self.cell(...)
+        cells = [gpu, unasked, pooled, uncensused, legacy]
+        self.assertEqual(orchestrate.grid_check(cells), [])
+        for r in cells:
+            self.assertNotIn("grid_serial", r)
+
+    def test_the_runners_own_spelling_is_what_is_read(self):
+        # On the line the OCaml emitter built (the bench_result_line golden): arm B's crown asked
+        # for a Grid loop the pool kept serial, with two ranked rivals; D asked off a pool and E
+        # never asked. A renamed key on either side fails here.
+        golden = [strict_loads(line) for line in OcannlResultLineTest.lines(OcannlResultLineTest)]
+        tuned = [r for r in golden if r.get("tune")]
+        self.assertTrue(tuned, "no golden line carries a tune object")
+        flagged = orchestrate.grid_check(tuned)
+        self.assertEqual(len(flagged), 1)
+        [arm] = flagged[0]["grid_serial"]
+        self.assertEqual(arm["arm"], "B")
+        self.assertEqual(arm["serial_timed"], 2)
+        self.assertTrue(arm["crown"].startswith("grid: 1 of 2 on the pool"), arm["crown"])
+
+
 class PeakMemoryTest(unittest.TestCase):
     """gh-ocannl-1006: the report's peak-device-memory column, and the probes behind it.
 
@@ -3506,6 +3571,24 @@ class FixtureDigestTest(unittest.TestCase):
                     self.names_cli(digests, *names, extra=extra)
             self.assertEqual(refused.exception.code, 2, f"{what}: {err.getvalue()}")
         self.assertEqual(self.names_cli(digests, "gpt2_mini")[0], 0, "control: the name exists")
+
+    def test_unexpected_error_exits_2_not_the_verdict_1(self):
+        # gh-ocannl-1797: 1 is a verdict ("not recorded"), so a crash must not exit with Python's
+        # default 1. The control: the same command, unpatched, still exits with its verdict.
+        digests = self.dir / fixture_digest.DIGEST_FILE
+        fixture_digest.record(digests, [self.fixture("gpt2_mini.safetensors")], "m4-max")
+        argv = ["--check-names", "gpt2_mini", "--digests", str(digests),
+                "--workloads-dir", str(self.dir / "no-workloads")]
+        with unittest.mock.patch.object(fixture_digest, "read_digests",
+                                        side_effect=RuntimeError("injected")):
+            with contextlib.redirect_stderr(io.StringIO()) as err, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                code = fixture_digest.cli(argv)
+        self.assertEqual(code, 2, err.getvalue())
+        self.assertIn("RuntimeError: injected", err.getvalue())
+        self.assertIn("not a verdict about any fixture: RuntimeError: injected", err.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(fixture_digest.cli(argv), 0, "control: the unpatched run is a verdict")
 
     def record_matching_cli(self, digests, *fixtures, origin):
         """`--record-matching` as `origin`: (exit status or SystemExit message, stdout)."""

@@ -67,6 +67,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   bullet at a time, each rule carrying its mechanism and failure story with it. The September 2026
   trim moved the mechanisms into these notes and left the rules as one sentence plus a pointer,
   which is the shape to keep: a new rule in `AGENTS.md` is a line, and what it rests on goes here.
+- When `agents_md_size` prints its stderr `WARNING:` (the band from 31 KiB to the cap; the golden
+  does not move), trim before the next rule lands rather than after it crosses. How to trim: find
+  the bullets that carry their mechanism or failure story (a "because", a gh-number history, a
+  second example) and move that text into the matching note under `docs/agent-notes/`, leaving the
+  rule as one sentence plus a `<note>.md#<anchor>` pointer, which `agent_notes_structure` checks
+  names a real heading; merge two bullets that state one rule; and drop a rule a scan now enforces
+  down to its name and the scan's. Never trim by deleting the Pull Requests, Configuration or Syntax
+  sections at the end, which are what truncation would lose first.
 - The repository's PROSE is checkable where its structure carries meaning, and the agent notes are
   the case in point: `agent_notes_structure` (gh-ocannl-691) reads `docs/agent-notes.md` and
   `docs/agent-notes/` as structure rather than as text. It holds five things true — no bullet cut
@@ -1606,7 +1614,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   bound, an unjudged `%{read:...}` and an action head the scan does not place are refused too. A
   `(test)` stanza may declare no targets, so it writes its response file under `(no-infer ...)` and
   lists its own `<name>.exe` in `deps`, which `no-infer` stops `%{test}` declaring
-  (`slot_kind_live` is the pattern).
+  (`slot_kind_live` is the pattern). Leave that dependency out and the build does not fail where the
+  mistake is: the action runs the bare executable before dune has built it, and `posix_spawn` fails
+  with ENOENT naming `<name>.exe` (gh-ocannl-1748).
 - A Windows checkout with `core.symlinks=false` (git's default there without Developer Mode) writes
   every git symlink as a small TEXT FILE holding the link target. The repository has around twenty —
   `docs/in-progress/` and `docs/research/` are views onto `docs/proposals/` — so any scan that reads
@@ -1960,6 +1970,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   contend; the chain the lock makes is not the suite's critical path (`runtest-sweep_harness`,
   ~400 s, is). Other locks in the tree (`cc_kept_library`, `schedule_conv_gemm`, …) are meant per
   directory and stay relative; `generated_lock_scan` already resolves both spellings as dune does.
+  `env_var_deps` refuses any relative lock spelling written in two or more directories (a
+  `(subdir …)` group counting as its own) that resolves to different paths there, naming each
+  directory and suggesting `/name` (staging#1593); `../shared/name` from two sibling directories is
+  one lock and passes, and a lock name built from a `%{…}` pform is refused as unreadable.
 
 ## Verdict claims
 
@@ -2072,7 +2086,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   second family. What stays on the unguarded spelling is the claim whose passing reading IS
   emptiness — "no candidate declines", "no key is undocumented", a scan over a tree that is usually
   clean — and those want a companion claim that the population was there at all, which is what the
-  `p_empty ~over` form is.
+  `p_empty ~over` form is. In short, the scan refuses a `List.for_all` (or `for_alli`,
+  `for_all2_exn`) over a population it cannot prove non-empty, written as `p_all` (`p_alli`,
+  `p_all2`) instead, and a bare `List.is_empty xs` claim, written as `p_empty name ~over:population
+  xs` (or `p_none` for an `is_empty (filter …)`).
   `verdict_ratchet` enforces the guard mechanically, for a quantifier (`for_all`/`for_alli`,
   `for_all2_exn`, `is_empty`, a negated `exists`/`existsi`, in Base's or `Stdlib`'s spelling)
   written directly into a
@@ -2758,8 +2775,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   callback input have distinct uncertainty states. A named fragment requires generated-source
   evidence; an untraced callback parameter alone keeps only the partial mark. Unary callbacks
   for `List.iter`, `map`, `exists`, `for_all`, `filter`, `filter_map` and `count` receive generated evidence
-  only from their actual collection argument, with unresolved execution. Other combinators and
-  callback shapes remain unsupported. Symbolic components
+  only from their actual collection argument, with unresolved execution. A leg claim's make
+  function (`in_leg`/`in_legf` qualified by `Verdict` or `Claims`, or unqualified and bound by
+  nothing in the file) receives its claim's label, a known plain string, so its body reads as
+  ordinary code (gh-ocannl-1703). Other combinators and callback shapes remain unsupported. Symbolic components
   of opaque aggregate inputs and results flowing through explicit writes are uncorrelated, so
   substituting a generated argument cannot pretend that the selected component contains it.
   Discarded ref, field, array and byte writes preserve source dependencies as uncertain effects;
@@ -3151,7 +3170,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     --targets-file F build -j 4` needs no shell expansion of a 75-alias list (a zsh `${(f)...}` of
     one was refused by an agent harness's safety check and cost a wrapper script). A line that is
     not one `@` operand, or a file naming none (`dune build` with no target builds the default
-    alias), is refused before anything runs. `tools/test-run.sh aliases PATH...` answers the
+    alias), is refused before anything runs. `start`, `plan`, `fresh`, `repeat` (`--direct` too, whose
+    operand check then reads the file's aliases) and `bisect` take the same option (gh-ocannl-1797;
+    a bisect's targets may all come from the file). `tools/test-run.sh aliases PATH...` answers the
     narrower question of a test's OWN aliases, by name from `dune show aliases`, grouped
     `runtest`/`slow`/`train` as `#` comment headers -- itself a valid targets file. It exists because
     a batch built from the test files a change touched asked for `runtest-NAME` where only
@@ -3410,8 +3431,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   own `select`. An arm compiled as a library module is checked slightly more permissively than in
   its executable (an unused top-level value is an error only under the executable's empty
   interface). A stub is a check of signatures only: it proves nothing about the vendor library's
-  behavior, so a change to a backend's runtime behavior still needs its box. Nothing yet refuses a
-  NEW vendor-gated `select` arm that `arms/dune` does not copy: add its library there by hand.
+  behavior, so a change to a backend's runtime behavior still needs its box. A NEW vendor-gated
+  `select` arm that no library under `arrayjit/vendor_stubs/` copies and compiles is refused by
+  `test/operations/vendor_stub_arms_scan` (a `@scans` member), naming its dune file: copy it into
+  `arms/dune` as its siblings are. The vendor libraries are derived from the stand-in tree.
   Verify on the box carrying the toolchain — rog for cudajit, minix for hipjit, through whichever
   boot is up (`rog-nv-linux`/`minix-amd-linux` on native Ubuntu, `rog-nv-wsl`/`minix-amd-wsl` on
   WSL; the site's `kind_of` says which) —
@@ -5419,7 +5442,10 @@ box.
   (or `window_sees_allocation`) that must read alive, since a witness observing nothing makes
   every "reclaimed" and every upper bound true. A control that is not already a golden row is a
   silent `Verdict.claim`. Its own library, stdlib only, so an edit reaches the GC-reading tests
-  and not every `test_utils` dependant.
+  and not every `test_utils` dependant. `gc_witness_scan` holds every `.ml` under `test/` to it:
+  a `Gc.full_major`, `Gc.major`, `Gc.compact` or `Weak.create` outside `gc_witness.ml`, qualified,
+  through a module alias or under an open, is refused, so a collection a test needs is
+  `Gc_witness.settle` (`arrayjit/test/` is another package, outside the corpus).
 
 - `ll_test_ratchet` (gh-ocannl-964) derives test sources from `Source_inventory`, harness membership
   from owning Dune stanza groups (including parent `subdir` blocks and `select` target-to-arm

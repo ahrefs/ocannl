@@ -340,9 +340,9 @@ let skipped_callees = [ "skipped" ]
 type ownership = Verdict_callee.ownership = Verdicts | Ambiguous | Free | Not_verdicts
 
 (* One application whose callee is a path ending in a name of [callees], with a positional argument:
-   its last path component, whether that callee is [Verdict]'s (below), and the site its first
-   positional argument -- the label -- keys. Shared by {!dialect_census} and {!line_break_census},
-   so both key a label one way.
+   its last path component, whether that callee is [Verdict]'s (below), the site its first
+   positional argument -- the label -- keys, and the arguments as written. Shared by
+   {!dialect_census} and {!line_break_census}, so both key a label one way.
 
    Whether the callee is [Verdict]'s is {!Verdict_callee}'s answer, the resolver every Verdict
    reader shares; its header lists what it reads as [Verdict]'s and why a name past an [open] of
@@ -467,7 +467,7 @@ let claim_calls ~callees content =
                       line = expr.pexp_loc.loc_start.pos_lnum;
                     }
                   in
-                  calls := (name, verdicts, site) :: !calls
+                  calls := (name, verdicts, site, arguments) :: !calls
             | _ -> ())
         | _ -> ());
         super#expression env expr
@@ -481,7 +481,7 @@ let claim_calls ~callees content =
 let dialect_census content =
   let calls = claim_calls ~callees:(pass_fail_callees @ skipped_callees) content in
   let sites_of callees =
-    List.filter_map calls ~f:(fun (name, _, site) ->
+    List.filter_map calls ~f:(fun (name, _, site, _) ->
         Option.some_if (List.mem callees name ~equal:String.equal) site)
   in
   let pass_fails = sites_of pass_fail_callees and skips = sites_of skipped_callees in
@@ -559,7 +559,7 @@ let has_line_break text = String.exists text ~f:(fun c -> Char.equal c '\n' || C
 let line_break_census content =
   let sites =
     claim_calls ~callees:labelled_claims content
-    |> List.filter_map ~f:(fun (_, ownership, site) ->
+    |> List.filter_map ~f:(fun (_, ownership, site, _) ->
         match ownership with
         | Verdicts -> Some { site; ambiguous = false }
         | Ambiguous -> Some { site; ambiguous = true }
@@ -570,6 +570,111 @@ let line_break_census content =
         match site.key with Literal text -> has_line_break text | Named _ | Computed _ -> false)
   in
   { broken; label_sites = List.length sites }
+
+(** {1 A literal floor below one (post-1-task-4 of staging#1578)}
+
+    A quantified claim's [?min] only RAISES its floor: [Verdict.check_floor] refuses a value below
+    one with an [Invalid_argument] where the claim is evaluated, since [~min:0] reads as "emptiness
+    passes" and no floor can grant that (gh-ocannl-729). That refusal fires only on a run that
+    reaches the claim -- a claim in a leg whose gate is closed, or on a branch only another backend
+    takes, carries its [~min:0] through every run that does not. A floor written as an integer
+    LITERAL needs no run to judge, so this reader refuses it where it is written.
+
+    What it reads is the [~min] argument of every claim of {!floor_claims} that is [Verdict]'s or
+    {!Ambiguous} (resolved as {!claim_calls} resolves the callee), when that argument is an integer
+    constant, under any type constraints or coercions: [~min:0], [~min:(-1)] (which the parser folds
+    into one constant), [~min:0x0], [~min:0_0], each by the value [Int.of_string] gives it. A floor
+    COMPUTED from anything ([~min:(List.length xs)], a name bound to a literal) is left to the
+    runtime refusal, which sees its value; so is a [?min:(Some 0)] forwarding, and a claim applied
+    through [|>] or [@@] or named as a value, which {!claim_calls} does not read. [Verdict.within]
+    is no claim and is not read either: its floor is refused at run time, where its claim is. *)
+
+(** The [Verdict.Claims] members whose definition takes a [?min] floor. Held equal by
+    [verdict_ratchet] to the members whose definition in [test/support/verdict.ml] takes one. *)
+let floor_claims =
+  [
+    "p_all";
+    "p_all2";
+    "pf_all2";
+    "p_close";
+    "pf_close";
+    "p_none";
+    "p_alli";
+    "p_empty";
+    "p_exists";
+    "gated_all";
+    "gated_alli";
+    "gated_exists";
+    "pass_fail_all2";
+    "pass_fail_close";
+  ]
+
+(** The top-level values of a source whose definition is a function taking a [?min] -- read from
+    [test/support/verdict.ml], what {!floor_claims} is held equal to. *)
+let floored_definitions content =
+  let rec takes_min expr =
+    match expr.pexp_desc with
+    | Pexp_function (params, _, body) -> (
+        List.exists params ~f:(fun param ->
+            match param.pparam_desc with
+            | Pparam_val (Optional "min", _, _) -> true
+            | Pparam_val _ | Pparam_newtype _ -> false)
+        || match body with Pfunction_body inner -> takes_min inner | Pfunction_cases _ -> false)
+    | Pexp_constraint (inner, _) | Pexp_newtype (_, inner) -> takes_min inner
+    | _ -> false
+  in
+  List.concat_map (Read.structure_of content) ~f:(fun item ->
+      match item.pstr_desc with
+      | Pstr_value (_, bindings) ->
+          List.filter_map bindings ~f:(fun binding ->
+              match binding.pvb_pat.ppat_desc with
+              | Ppat_var { txt; _ } when takes_min binding.pvb_expr -> Some txt
+              | _ -> None)
+      | _ -> [])
+
+type floor_site = {
+  floor_site : dialect_site;  (** The claim, keyed by its label as {!dialect_census} keys one. *)
+  floor : int;  (** The literal's value: below one. *)
+  floor_ambiguous : bool;  (** The callee reaches [Verdict]'s only past another [open]. *)
+}
+
+type floor_census = {
+  below_one : floor_site list;
+  literal_floors : int;  (** Every [Verdict] (or ambiguous) claim whose [~min] is a literal. *)
+}
+
+let floor_census content =
+  let rec peel expr =
+    match expr.pexp_desc with
+    | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
+    | _ -> expr
+  in
+  let literal_floor arguments =
+    List.find_map arguments ~f:(function
+      | Ppxlib.Asttypes.Labelled "min", argument -> (
+          match (peel argument).pexp_desc with
+          | Pexp_constant (Pconst_integer (digits, None)) ->
+              Option.try_with (fun () -> Int.of_string digits)
+          | _ -> None)
+      | _ -> None)
+  in
+  let floors =
+    claim_calls ~callees:floor_claims content
+    |> List.filter_map ~f:(fun (_, ownership, site, arguments) ->
+        let ambiguous =
+          match ownership with
+          | Verdicts -> Some false
+          | Ambiguous -> Some true
+          | Free | Not_verdicts -> None
+        in
+        Option.both ambiguous (literal_floor arguments)
+        |> Option.map ~f:(fun (floor_ambiguous, floor) ->
+            { floor_site = site; floor; floor_ambiguous }))
+  in
+  {
+    below_one = List.filter floors ~f:(fun site -> site.floor < 1);
+    literal_floors = List.length floors;
+  }
 
 (** {1 A float tolerance hand-rolled into a claim (gh-ocannl-1224, gh-ocannl-1470)}
 

@@ -4,3 +4,9 @@ the rest of the ship's identity still names the discarded crown's search: true
 a last-resort ship is substituted and names no crown: true
 a measured ship says false and names no crown: true
 without an on_ship record the substitution is unknown (null), not false: true
+an arm's Grid ask is the report's schedule's, as Autotune reads it: true
+an arm's census verdict is Autotune's own on the crowned record: true
+the census line is the renderer's: true
+an arm counts its ranked Grid-serial rivals: true
+an arm with no crowned record carries a null census: true
+a harness that recorded no shipped routines carries a null shipped Grid census: true

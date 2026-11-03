@@ -30,9 +30,11 @@
    and a device claiming 64-lane shuffles gets the retype the renderer renders as two 32-lane
    simdgroups; 7. the same nest over an ordinary scope local, not the fused backward's [dp]: the
    plain plan in every mode -- the reassociation's license is the gate that minted [dp], not the
-   shape; 8. a [Workgroup_reduce] hand-retyped over such a local keeps the hardware binding a staged
-   reduction relies on (compiled, and read on GPU backends); 9. the configured [auto] resolves from
-   the device's economics -- cooperative where per-lane recompute is cheap (Metal, CUDA), refused
+   shape -- and so is leg 1's minted nest with a look-alike of its [dp] planted in place of it
+   ([Ll_test.substitute_optimized]): the license is the minted identity, not the node's fields; 8. a
+   [Workgroup_reduce] hand-retyped over such a local keeps the hardware binding a staged reduction
+   relies on (compiled, and read on GPU backends); 9. the configured [auto] resolves from the
+   device's economics -- cooperative where per-lane recompute is cheap (Metal, CUDA), refused
    elsewhere (HIP, cc, unmeasured) -- and the default schedule equals the resolved explicit
    mode's. *)
 
@@ -78,6 +80,7 @@ type case = {
   s_sym : Ir.Indexing.symbol;  (** The serial query loop. *)
   flag_lane : Ir.Indexing.symbol option;
       (** [`Lane_flag]'s workgroup loop computing the lane-dependent flag. *)
+  dp_tn : Ir.Tnode.t;  (** The preamble's [dp] local: minted, or an ordinary one. *)
   seed : (Ir.Tnode.t * float array) list;
   k_tn : Ir.Tnode.t;
   expected : float array;
@@ -205,6 +208,7 @@ let dk_nest ?(minted = true) ?guard ?(flag_below = 32) ~name ~e_n ~d_n () =
     hw_syms = [ b; t; h; d ];
     s_sym = s;
     flag_lane;
+    dp_tn = dp_node;
     seed =
       [
         (a_tn, fill ~dims:a_dims (fun i -> a_value i.(0) i.(1) i.(2) i.(3)));
@@ -393,6 +397,34 @@ let () =
     && not (Ir.Online_softmax.reassociable_local forged));
   run ~lanes:false ~reduction_axis:LL.Serial ~emits_all_reduce:false
     (dk_nest ~minted:false ~name:"lred_plain32" ~e_n:32 ~d_n:32 ());
+  (* End to end: leg 1's minted nest (which takes lanes and the all-reduce) with a look-alike of its
+     [dp] planted in every position the IR names it, the node's per-node records carried over -- the
+     program differs from leg 1's by the local's identity alone, so the plain plan here is the
+     recognizer declining the forgery, not the shape. Executed against the serial reference and the
+     materialized run: a declined rewrite must leave the value alone. *)
+  let minted = dk_nest ~name:"lred_forged32" ~e_n:32 ~d_n:32 () in
+  let look_alike = L.look_alike ~id:1124998 minted.dp_tn in
+  let forged_opt = L.substitute_optimized ~from:minted.dp_tn ~to_:look_alike minted.opt in
+  let names_local tn llc =
+    let hit = ref false in
+    let check (id : LL.scope_id) = if Ir.Tnode.equal id.LL.tn tn then hit := true in
+    L.walk llc
+      ~on_stmt:(function LL.Declare_local { id; _ } | LL.Set_local (id, _) -> check id | _ -> ())
+      ~on_scalar:(function LL.Get_local id -> check id | _ -> ());
+    !hit
+  in
+  p
+    "lred_forged32: the forged nest names the look-alike, never the minted dp, and is the minted \
+     nest up to that node"
+    (Ir.Online_softmax.reassociable_local minted.dp_tn
+    && (not (Ir.Online_softmax.reassociable_local look_alike))
+    && names_local look_alike forged_opt.LL.llc
+    && (not (names_local minted.dp_tn forged_opt.LL.llc))
+    && LL.equal
+         (L.substitute ~from:look_alike ~to_:minted.dp_tn forged_opt.LL.llc)
+         minted.opt.LL.llc);
+  run ~lanes:false ~materialized:true ~reduction_axis:LL.Serial ~emits_all_reduce:false
+    { minted with opt = forged_opt };
   printf "--- leg 8: a hand-retyped Workgroup_reduce over an ordinary local keeps its binding ---\n";
   (* The renderer's all-reduce keys on the local's provenance, not on the local target: a staged
      reduction may bind such a loop to leave each lane its own partial. Compiled only -- under the

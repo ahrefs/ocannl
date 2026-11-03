@@ -227,7 +227,7 @@ let reference = Scripted_search.untuned (fst chain) (snd chain)
    ms), reads its first window at 1.9 ms: the slower schedule's lucky window. *)
 let search ?(refuse_best_finals = false) ?(lucky = false) ~settings ~tag () =
   let seen = ref [] in
-  let windows_of = Hashtbl.create (module String) in
+  let window_index = Scripted_search.window_index () in
   let rank label =
     match List.findi (List.rev !seen) ~f:(fun _ l -> String.equal l label) with
     | Some (j, _) -> j
@@ -240,8 +240,7 @@ let search ?(refuse_best_finals = false) ?(lucky = false) ~settings ~tag () =
     else if is_floor w.label then 100.
     else
       let j = rank w.label in
-      let k = Hashtbl.find windows_of w.label |> Option.value ~default:0 in
-      Hashtbl.set windows_of ~key:w.label ~data:(k + 1);
+      let k = window_index w in
       match j with
       | 0 when k = 0 && not lucky -> 2.0 *. 1.08
       | 0 when refuse_best_finals -> Float.nan

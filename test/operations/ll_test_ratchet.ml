@@ -59,6 +59,17 @@ let scan ~exemptions root generated =
     Scan.constructors
       (In_channel.read_all (Stdlib.Filename.concat root "arrayjit/lib/low_level.ml"))
   in
+  let assignments_path = "arrayjit/lib/assignments.ml" in
+  let recursive =
+    Scan.recursive_constructors (In_channel.read_all (Stdlib.Filename.concat root assignments_path))
+  in
+  (* Without a nesting constructor the Assignments column would count nothing, whatever the tests
+     hold: a renamed type or a moved declaration must not read as an empty census. *)
+  if Set.is_empty recursive then
+    Verdict.fail
+      (assignments_path
+     ^ ": its type t declares no constructor carrying a t, so no Assignments.t traversal could be \
+        counted");
   let dune_files =
     Inventory.select inventory ~f:(fun path -> String.equal (Stdlib.Filename.basename path) "dune")
     |> List.map ~f:(fun (file : Inventory.file) -> (file.path, In_channel.read_all file.on_disk))
@@ -89,8 +100,13 @@ let scan ~exemptions root generated =
             if Scan.needs_harness counts then
               eprintf "%s records=%d traversals=%d%s\n" file.path counts.records counts.traversals
                 (match adoption with Linked_unused -> " (linked, IR surface unused)" | _ -> ""));
-        (file.path, counts, adoption))
+        (file.path, counts, adoption, Scan.assignments_census ~constructors ~recursive source))
   in
+  let assignments =
+    List.filter_map rows ~f:(fun (path, _, _, count) -> Option.some_if (count >= 1) (path, count))
+    |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  in
+  let rows = List.map rows ~f:(fun (path, counts, adoption, _) -> (path, counts, adoption)) in
   let problems = Scan.violations ~exemptions rows in
   if List.is_empty ownership_problems then List.iter problems ~f:Verdict.fail;
   List.iter
@@ -116,7 +132,15 @@ let scan ~exemptions root generated =
       match kind with
       | Scan.Permanent -> printf "%s -- permanent: %s\n" path reason
       | Scan.Migration cap ->
-          printf "%s -- records<=%d traversals<=%d: %s\n" path cap.records cap.traversals reason)
+          printf "%s -- records<=%d traversals<=%d: %s\n" path cap.records cap.traversals reason);
+  (* Census only: Ll_test is the Low_level harness, and nothing is required of these files. The
+     constructor set is derived from Assignments.t, so it is printed. *)
+  printf
+    "Assignments.t traversals the Low_level rule does not count (census only, no harness required; \
+     constructors recursive in Assignments.t: %s):\n"
+    (String.concat ~sep:", " (Set.to_list recursive));
+  List.iter assignments ~f:(fun (path, count) ->
+      printf "%s -- assignments_traversals=%d\n" path count)
 
 (* Binary streams: the fixture cases match multi-line reports byte for byte, and Windows' text mode
    would end each line "\r\n". Dune's diff of this scanner's own golden ignores the line ending. *)

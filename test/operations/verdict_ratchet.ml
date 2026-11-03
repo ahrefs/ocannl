@@ -5573,6 +5573,111 @@ let run_tolerance_refusal_control () =
   ( "refuses a planted hand-rolled tolerance, and names a tolerance reader that raised",
     !refused_site && !refused_raise )
 
+(* {1 A literal floor below one, refused where it is written (post-1-task-4 of staging#1578)}
+
+   [Verdict.check_floor] refuses a [?min] below one where the claim is EVALUATED, so a claim on a
+   path a run does not take -- a closed leg, another backend's branch -- carries its [~min:0]
+   through that run unrefused. A literal floor needs no run to judge; the reader is
+   [Verdict_scan.floor_census], whose header lists what it reads, and its cases are
+   [verdict_scan_cases]' floor rows. The sites exempted here are the runtime refusal's own controls,
+   keyed by source, callee as written and label, and each must still be exactly one site. *)
+let runtime_floor_control =
+  "a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child \
+   process and expects to raise"
+
+let exempt_floors =
+  List.map
+    [
+      "Verdict.p_all:every seed is even";
+      "Verdict.p_none:no seed is odd";
+      "Verdict.p_alli:every seed exceeds its index";
+      "Verdict.p_empty:no seed is odd";
+      "Verdict.p_exists:some seed is even";
+      "Verdict.p_all2:the readback matches";
+      "Verdict.pass_fail_all2:the readback matches";
+      "p_close:the readback is close";
+      "pass_fail_close:the readback is close";
+      "gated_all:every seed is even";
+      "gated_alli:every seed exceeds its index";
+      "gated_exists:some seed is even";
+      "gated_all:the gated claim";
+    ] ~f:(fun claim -> ("test/operations/verdict_quantified.ml:" ^ claim, runtime_floor_control))
+
+let floor_key ~source (site : Scan.floor_site) =
+  Printf.sprintf "%s:%s:%s" source site.floor_site.callee (Scan.label_key_text site.floor_site.key)
+
+let refuse_floor ~fail ~source (site : Scan.floor_site) =
+  fail
+    (Printf.sprintf
+       "%s:%d passes `~min:%d` to `%s` -- a quantified claim's floor is at least 1, and \
+        Verdict.check_floor refuses this one only on a run that reaches it (gh-ocannl-729). Drop \
+        the `~min` for the default floor of one; where emptiness is the passing case, write \
+        `Verdict.p_empty ~over:<the population that must exist> <the derived subset>`%s"
+       source site.floor_site.line site.floor site.floor_site.callee
+       (ambiguity_remedy ~ambiguous:site.floor_ambiguous ~callee:(Some site.floor_site.callee)))
+
+let refuse_stale_floors ~fail stale_floors =
+  if not (List.is_empty stale_floors) then
+    fail
+      (Printf.sprintf
+         "exempted literal floors below one that are no longer exactly one site -- drop a key no \
+          source carries from exempt_floors, and give a site added under a key its own: %s"
+         (String.concat ~sep:", " stale_floors))
+
+(* The floor reader over one source, its failures told apart as {!read_gates} tells the gate
+   reader's apart. *)
+let read_floors ~fail ~source ~census content =
+  match Test_utils.Scan_attempt.run (fun () -> census content) with
+  | Test_utils.Scan_attempt.Scanned census -> census
+  | Unparsed _ -> { Scan.below_one = []; literal_floors = 0 }
+  | Raised exn ->
+      fail
+        (Printf.sprintf
+           "the floor reader raised %s on %s, which parses -- a defect of \
+            Verdict_scan.floor_census, not of the source, and the source's literal floors went \
+            unread"
+           exn source);
+      { Scan.below_one = []; literal_floors = 0 }
+
+(* The wiring from a finding to the failure, exercised on a planted floor, a stale exemption and a
+   reader that raised. *)
+let run_floor_refusal_control () =
+  let source = "test/operations/verdict_ratchet.ml" in
+  let site_format =
+    "%s:%d passes `~min:%d` to `%s` -- a quantified claim's floor is at least 1, and \
+     Verdict.check_floor refuses this one only on a run that reaches it (gh-ocannl-729). Drop the \
+     `~min` for the default floor of one; where emptiness is the passing case, write \
+     `Verdict.p_empty ~over:<the population that must exist> <the derived subset>`%s"
+  and stale_format =
+    "exempted literal floors below one that are no longer exactly one site -- drop a key no source \
+     carries from exempt_floors, and give a site added under a key its own: %s"
+  and raised_format =
+    "the floor reader raised %s on %s, which parses -- a defect of Verdict_scan.floor_census, not \
+     of the source, and the source's literal floors went unread"
+  in
+  let refused_site = ref false and refused_stale = ref false and refused_raise = ref false in
+  List.iter
+    (Scan.floor_census {ocaml|let () = Verdict.p_all ~min:0 "every row holds" rows ~f:holds|ocaml})
+      .Scan.below_one
+    ~f:
+      (refuse_floor ~source:"fixture.ml" ~fail:(fun _ ->
+           refused_site := true;
+           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:site_format));
+  refuse_stale_floors [ "fixture.ml:Verdict.p_all:gone (found 0)" ] ~fail:(fun _ ->
+      refused_stale := true;
+      Test_utils.Refusal_control_manifest.observe_failure ~source ~format:stale_format);
+  ignore
+    (read_floors ~source:"fixture.ml"
+       ~fail:(fun _ ->
+         refused_raise := true;
+         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+       ~census:(fun _ -> raise Stdlib.Exit)
+       "let () = ()"
+      : Scan.floor_census);
+  ( "refuses a planted literal floor below one, a stale floor exemption, and a floor reader that \
+     raised",
+    !refused_site && !refused_stale && !refused_raise )
+
 (* {1 One resolver: every reader agrees whose a claim is (gh-ocannl-1361)}
 
    Whether a callee is [Verdict]'s is decided once, by [Test_utils.Verdict_callee], and every reader
@@ -5799,6 +5904,9 @@ let () =
   in
   let skip_lists_exempted = Hashtbl.create (module String) in
   let tolerance_offenders = ref 0 and parity_sites = ref 0 in
+  let floor_offenders = ref 0 and literal_floors = ref 0 in
+  let floor_exemptions = Map.of_alist_exn (module String) exempt_floors in
+  let floors_exempted = Hashtbl.create (module String) in
   let manifest =
     List.find_map arguments ~f:(fun (relative, path) ->
         if String.is_suffix relative ~suffix:("/" ^ manifest_file) then
@@ -5819,7 +5927,7 @@ let () =
     @ run_folded_gate_controls ()
     @ [ run_folded_gate_refusal_control () ]
     @ run_tolerance_controls ()
-    @ [ run_tolerance_refusal_control () ]
+    @ [ run_tolerance_refusal_control (); run_floor_refusal_control () ]
     @ run_agreement_controls () @ run_ambiguous_remedy_controls ()
   in
   let matrix_rows = run_syntax_matrix () in
@@ -5883,6 +5991,14 @@ let () =
       List.iter tolerances.Scan.hand_rolled ~f:(fun site ->
           Int.incr tolerance_offenders;
           refuse_hand_rolled_tolerance ~fail ~source site);
+      let floors = read_floors ~fail ~source ~census:Scan.floor_census content in
+      literal_floors := !literal_floors + floors.Scan.literal_floors;
+      List.iter floors.Scan.below_one ~f:(fun site ->
+          let key = floor_key ~source site in
+          if Map.mem floor_exemptions key then Hashtbl.incr floors_exempted key
+          else (
+            Int.incr floor_offenders;
+            refuse_floor ~fail ~source site));
       skipped_sites := !skipped_sites + dialects.Scan.skipped_sites;
       pass_fail_sites := !pass_fail_sites + dialects.Scan.pass_fail_sites;
       List.iter dialects.Scan.pairings ~f:(fun pairing ->
@@ -5978,6 +6094,8 @@ let () =
   else
     List.iter exempt_skip_lists ~f:(fun (key, sites, why) ->
         printf "  %s (%d site%s) -- %s\n" key sites (if sites = 1 then "" else "s") why);
+  printf "\nLiteral floors below one exempted, with the reason each keeps its floor:\n";
+  List.iter exempt_floors ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);
   printf "\nSynthetic helper-rule controls:\n";
   List.iter control_results ~f:(fun (label, ok) -> Verdict.pf "%s" label ok);
   print_syntax_matrix matrix_rows;
@@ -6019,6 +6137,12 @@ let () =
           added under an exempted key needs its own exemption, a removed one drops it from \
           exempt_skip_lists: %s"
          (String.concat ~sep:", " (Set.to_list stale_skip_lists)));
+  let stale_floors =
+    List.filter_map exempt_floors ~f:(fun (key, _) ->
+        let found = Option.value (Hashtbl.find floors_exempted key) ~default:0 in
+        if found = 1 then None else Some (Printf.sprintf "%s (found %d)" key found))
+  in
+  refuse_stale_floors ~fail stale_floors;
   refuse_colliding_sites ~fail colliding_sites;
   refuse_colliding_quantified ~fail colliding_quantified;
   (* An exempted source that carries no claim-shaped literal is either a file that stopped being a
@@ -6059,6 +6183,7 @@ let () =
   eprintf "Skips read for a hand-written skip list: %d.\n" !skips_read;
   eprintf "Verdict claims whose arguments were read for a hand-rolled tolerance: %d.\n"
     !parity_sites;
+  eprintf "Verdict claims whose ~min floor is an integer literal: %d.\n" !literal_floors;
   printf "\n";
   (* Stated so that `true` is the passing reading, as every line of a golden should be. *)
   Verdict.p "every test source decides its claims through Verdict" (!offenders = 0);
@@ -6107,6 +6232,27 @@ let () =
       (String.concat ~sep:"; " Scan.labelled_claims);
   Verdict.p "and it reads the label of every claim form Verdict.Claims exports"
     reads_every_label_form;
+  Verdict.p "no quantified claim passes a literal floor below one" (!floor_offenders = 0);
+  Verdict.p "and the floor reader read the literal floors of Verdict claims" (!literal_floors > 0);
+  (* The claims whose floors it reads, held equal to the [Verdict.Claims] members whose definition
+     in test/support/verdict.ml takes a [?min]: a new floored claim it did not read would carry a
+     literal [~min:0] past this check. *)
+  let floored_members =
+    Option.value_map (Map.find on_disk "test/support/verdict.ml") ~default:[] ~f:(fun path ->
+        let floored = Scan.floored_definitions (In_channel.read_all path) in
+        List.filter claims_members ~f:(List.mem floored ~equal:String.equal))
+    |> List.sort ~compare:String.compare
+  in
+  let read_floored = List.sort Scan.floor_claims ~compare:String.compare in
+  let reads_every_floor =
+    (not (List.is_empty floored_members)) && List.equal String.equal floored_members read_floored
+  in
+  if not reads_every_floor then
+    eprintf "Verdict.Claims members taking a ?min: [%s]; the floor reader reads [%s]\n"
+      (String.concat ~sep:"; " floored_members)
+      (String.concat ~sep:"; " read_floored);
+  Verdict.p "and it reads the floor of every claim Verdict.Claims exports with one"
+    reads_every_floor;
   Verdict.p "no gated claim's gate reads the population it quantifies" (!gate_offenders = 0);
   (* The forms the gate reader recognizes, held equal to the gated forms [Verdict.Claims] exports --
      [gated] and the quantified [gated_*]: a new one the reader did not know would be a claim it

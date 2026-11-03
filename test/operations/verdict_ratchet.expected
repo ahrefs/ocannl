@@ -80,6 +80,21 @@ Hand-written skip lists exempted, with the reason each keeps the form:
   test/operations/reduction_forms.ml:form_claim (1 site) -- the tile-mma fallback's three claims off a CPU backend; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (Metal, CUDA, HIP)
   test/operations/tile_mma_narrow.ml:parity_name (1 site) -- a toolchain that rejects the half kernel skips both pure-f16 claims from the exception handler, a judgment only the compile itself makes; predates this rule; its migration to a leg waits on a run on the backends whose side it changes (an exotic toolchain)
 
+Literal floors below one exempted, with the reason each keeps its floor:
+  test/operations/verdict_quantified.ml:Verdict.p_all:every seed is even -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:Verdict.p_none:no seed is odd -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:Verdict.p_alli:every seed exceeds its index -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:Verdict.p_empty:no seed is odd -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:Verdict.p_exists:some seed is even -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:Verdict.p_all2:the readback matches -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:Verdict.pass_fail_all2:the readback matches -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:p_close:the readback is close -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:pass_fail_close:the readback is close -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:gated_all:every seed is even -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:gated_alli:every seed exceeds its index -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:gated_exists:some seed is even -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+  test/operations/verdict_quantified.ml:gated_all:the gated claim -- a control of Verdict.check_floor's runtime refusal, which verdict_quantified runs in a child process and expects to raise
+
 Synthetic helper-rule controls:
 refuses an unguarded for_all2_exn helper behind a local Verdict alias: true
 refuses an unguarded helper behind an open of Verdict.Claims: true
@@ -758,6 +773,7 @@ accepts a scalar bound in the claim, a discrimination margin, a maximum-error he
 does not read the closure of a leg or a case, whose claims are read where written: true
 does not read a p the source binds itself: true
 refuses a planted hand-rolled tolerance, and names a tolerance reader that raised: true
+refuses a planted literal floor below one, a stale floor exemption, and a floor reader that raised: true
 the readers agree on a claim qualified by Verdict: true
 the readers agree on a claim an open of Verdict.Claims brings in: true
 the readers agree on a claim through a module alias of Verdict: true
@@ -850,6 +866,9 @@ no parity claim hand-rolls a float tolerance into its predicate: true
 and the tolerance reader read the predicates of Verdict parity claims: true
 and the claim-name resolver decides every member Verdict.Claims exports: true
 and it reads the label of every claim form Verdict.Claims exports: true
+no quantified claim passes a literal floor below one: true
+and the floor reader read the literal floors of Verdict claims: true
+and it reads the floor of every claim Verdict.Claims exports with one: true
 no gated claim's gate reads the population it quantifies: true
 and it recognizes every gated form Verdict.Claims exports: true
 and the gate reader completed gated claims to compare: true
@@ -889,6 +908,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised
   [scanner-refusal:0599e4e661e8f3457de44f5cb1b23a1a] compares float readbacks
   [scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised
+  [scanner-refusal:085cfc1230ac1435b3930c2de950d243] passes `~min
+  [scanner-refusal:fccffb542fab0ec734024940e42605cc] exempt_floors
+  [scanner-refusal:4dde956f3421b7ae6e9cff871b40d8b4] floor reader raised
   [scanner-refusal:b3bbed986e758647a2db67f9428972c6] claims through Verdict
   [scanner-refusal:63d9475f3df44af6baac8bdc03a3310b] every quantified binding
   [scanner-refusal:d4d40c92b012f9347593f527cb7ad30d] pass_fail
@@ -899,6 +921,9 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read
   [scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims
   [scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims
+  [scanner-refusal:43f45dea7e13ae71ff6e05054baafcca] quantified claim passes
+  [scanner-refusal:e7253c1a7a914e2fb31ae0576e3b56eb] the literal floors
+  [scanner-refusal:72bcef9d9ddc2338fe8af8ef65990041] Verdict.Claims
   [scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies
   [scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims
   [scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated

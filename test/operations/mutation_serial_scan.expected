@@ -53,6 +53,7 @@ tensor/tensor.ml: session_state.backprop_roots (mutable field) -- accounted: eve
 tensor/tensor.ml: closure_epoch (ref) -- exempt: a closure counter: it only grows, and no rewind restores an older one
 tensor/tensor.ml: unchanged_roots_depth (ref) -- exempt: the nesting of with_unchanged_roots scopes, restored by the scope's own finally
 tensor/tensor.ml: next_cell_uid (ref) -- exempt: a fresh-id counter for owner cells: ids are never reused
+tensor/tensor.ml: owner_cells (Ephemeron) -- exempt: a weak registry of each node's owner cell: constructions add entries for the nodes they create, which a rewind discards with their nodes, so it restores nothing
 tensor/tensor.ml: random_seed (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/tensor.ml: random_seeds_created (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/tensor.ml: open_nodes (ref) -- exempt: a record of what the open work allocated: an entry left by a failure that did not taint is a node nobody holds, which a later rewind discards and a closure forgets; captured by capture_globals
@@ -66,7 +67,6 @@ tensor/tensor.ml: default_value_prec (ref) -- exempt: user configuration read wh
 tensor/tensor.ml: default_grad_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state
 tensor/tensor.ml: max_sublabel_length (ref) -- exempt: user configuration of label printing, not inference state
 tensor/tensor.ml: param_postprocess (ref) -- exempt: a user-installed hook applied to new parameters, not inference state
-tensor/tensor.ml: owner_cells (unread state) -- exempt
 tensor/tensor.ml: applications (unread state) -- exempt
 tensor/tensor.ml: reserved_next_id (unread state) -- exempt
 tensor/tensor.ml: id_neutral_sabotaged (unread state) -- exempt

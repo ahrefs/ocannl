@@ -110,9 +110,16 @@ let () =
     "reading and matching an update step, a capture reference and its variable_ref, a static \
      symbol and a node's delayed precision compiles, and so do their public constructors"
     (Poly.equal frontier (Unix.WEXITED 0));
-  let rejected name code expected =
+  (* By default the diagnostic's words must follow [Error] directly. [~anywhere:true] matches them
+     anywhere in the log, apart from an [Error] that is still required: for a refusal printed among
+     other lines whose wording before the run varies across compiler releases. *)
+  let rejected ?(anywhere = false) name code expected =
     let status, log = compile ~compiler ~include_dirs (prelude ^ code) in
-    let ok = Poly.equal status (Unix.WEXITED 2) && contains_run log ("Error" :: expected) in
+    let matched =
+      if anywhere then contains_run log [ "Error" ] && contains_run log expected
+      else contains_run log ("Error" :: expected)
+    in
+    let ok = Poly.equal status (Unix.WEXITED 2) && matched in
     if not ok then eprintf "%s:\n%s\n" name log;
     p name ok
   in
@@ -183,35 +190,16 @@ let () =
     "let copy (s : ssym) : ssym = { s with used_as_extent = true }\n" private_construction;
   (* The setters' first argument is the writer: a call without it is a type error naming it. The
      words before the expected type vary across compiler releases, so the run is matched alone. *)
-  let rejected_wanting_writer name code =
-    let status, log = compile ~compiler ~include_dirs (prelude ^ code) in
-    let ok =
-      Poly.equal status (Unix.WEXITED 2)
-      && contains_run log [ "Error" ]
-      && contains_run log
-           [
-             "but";
-             "an";
-             "expression";
-             "was";
-             "expected";
-             "of";
-             "type";
-             "Ir";
-             "Indexing";
-             "shape_writer";
-           ]
-    in
-    if not ok then eprintf "%s:\n%s\n" name log;
-    p name ok
+  let wanting_writer =
+    [ "but"; "an"; "expression"; "was"; "expected"; "of"; "type"; "Ir"; "Indexing"; "shape_writer" ]
   in
-  rejected_wanting_writer "solving a variable_ref without the shape writer is a type error"
-    "let write (v : vref) = Ir.Indexing.set_solved_dim v 3\n";
-  rejected_wanting_writer
+  rejected ~anywhere:true "solving a variable_ref without the shape writer is a type error"
+    "let write (v : vref) = Ir.Indexing.set_solved_dim v 3\n" wanting_writer;
+  rejected ~anywhere:true
     "solving a variable_ref to a symbol without the shape writer is a type error"
-    "let write (v : vref) (s : ssym) = Ir.Indexing.set_solved_sym v s\n";
-  rejected_wanting_writer "committing a role without the shape writer is a type error"
-    "let write (s : ssym) = Ir.Indexing.commit_role s `Extent\n";
+    "let write (v : vref) (s : ssym) = Ir.Indexing.set_solved_sym v s\n" wanting_writer;
+  rejected ~anywhere:true "committing a role without the shape writer is a type error"
+    "let write (s : ssym) = Ir.Indexing.commit_role s `Extent\n" wanting_writer;
   rejected "the shape writer has no constructor to forge it with"
     "let forge : Ir.Indexing.shape_writer = Ir.Indexing.Shape_writer\n"
     [ "Unbound"; "constructor"; "Ir"; "Indexing"; "Shape_writer" ];

@@ -2190,6 +2190,71 @@ def tensorization_notice(mismatches):
     )
 
 
+def grid_check(results):
+    """Annotate each tuned cell whose arms timed an asked-for Grid loop serially; return those cells.
+
+    The CPU renderer keeps an outermost `Grid` loop serial when a rule refuses it the pool (the
+    per-chunk privatization cap, the launch floor, a sharing rule), and the serial loop computes the
+    same values -- so a candidate whose schedule asked for a Grid loop is timed and ranked under a
+    parallel placement that never ran in parallel (gh-ocannl-1702). The runner carries, per arm,
+    `grid.asked` (the crowned schedule asked), `grid.census.rendered_serially` (Autotune's verdict on
+    the crowned routine's census) and `grid.serial_timed` (ranked rivals timed that way). An arm
+    counts when its crown asked and rendered serially, or when any ranked rival did.
+
+    Off a CPU pool (the GPU backends) a Grid loop is a hardware grid, the census records nothing and
+    both halves are false, so such a cell never counts; nor does a runner predating the field.
+    """
+    flagged = []
+    for r in results:
+        tune = r.get("tune")
+        if not isinstance(tune, dict):
+            continue
+        arms = []
+        for arm in tune.get("arms") or []:
+            grid = arm.get("grid") if isinstance(arm, dict) else None
+            if not isinstance(grid, dict):
+                continue
+            census = grid.get("census")
+            crown = (
+                grid.get("asked") is True
+                and isinstance(census, dict)
+                and census.get("rendered_serially") is True
+            )
+            rivals = grid.get("serial_timed") or 0
+            if crown or rivals:
+                arms.append(
+                    {
+                        "arm": arm.get("arm"),
+                        "crown": census.get("summary") if crown else None,
+                        "serial_timed": rivals,
+                    }
+                )
+        if arms:
+            r["grid_serial"] = arms
+            flagged.append(r)
+    return flagged
+
+
+def grid_notice(flagged):
+    """Name the cells whose arms timed an asked-for Grid loop serially, arm by arm."""
+
+    def arm_text(a):
+        parts = []
+        if a["crown"]:
+            parts.append(f"crown {a['crown']}")
+        if a["serial_timed"]:
+            parts.append(f"{a['serial_timed']} ranked candidate(s)")
+        return f"arm {a['arm']}: " + "; ".join(parts)
+
+    labels = ", ".join(
+        f"{gate_label(r)} ({' | '.join(arm_text(a) for a in r['grid_serial'])})" for r in flagged
+    )
+    return (
+        f"GRID NOTICE: {len(flagged)} tuned cell(s) timed a schedule that asked for a Grid loop "
+        f"with that loop rendered serially on the CPU pool: {labels}"
+    )
+
+
 def substitution_check(results):
     """Annotate each cell whose timed process shipped the untuned default; return those cells.
 
@@ -3497,6 +3562,7 @@ def main():
     provenance_violations = provenance_check(results)
     tensorization_mismatches = tensorization_check(results)
     substituted = substitution_check(results)
+    grid_serial = grid_check(results)
     regime_mismatches = regime_check(results)
     shadowing_mismatched = shadowing_check(results)
     precision_mismatches = precision_check(results)
@@ -3560,6 +3626,12 @@ def main():
         # about a scalar kernel, and the row's variant name says otherwise (gh-ocannl-626) — the
         # failure mode is a reader quoting it as a tensor-core measurement.
         print(log_line(tensorization_notice(tensorization_mismatches)), flush=True)
+    if grid_serial:
+        # Not a gate either, for the same reason: the serial loop computes the same values, and the
+        # renderer keeps it serial deliberately (a launch under the floor, tiles over the cap). It is
+        # announced because the timing is a serial loop's under a parallel placement
+        # (gh-ocannl-1702), and the row's variant says nothing about it.
+        print(log_line(grid_notice(grid_serial)), flush=True)
     if substituted:
         # Not a gate, like the tensorization notice: the substitute computes the right thing, and
         # the tuner substitutes deliberately when its winner cannot ship as measured. It is

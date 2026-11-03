@@ -16,26 +16,13 @@ open Base
 open Ocannl
 open Nn_blocks.DSL_modules
 open Verdict.Claims
+module LC = Lineage_claims
 module IDX = Train.IDX
 module Asgns = Ir.Assignments
 
-let grad_of t = (Option.value_exn ~here:[%here] t.Tensor.diff).Tensor.grad
-let has msg substring = String.is_substring msg ~substring
-let exact name got want = p_close name got want ~tol:(fun _ -> 0.)
-
-(* The text of the [User_error] [f] raises; a failed claim when it raises none. *)
-let refusal name f =
-  match f () with
-  | _ ->
-      fail (name ^ ": was accepted");
-      ""
-  | exception Utils.User_error msg ->
-      Stdio.eprintf "%s: %s (not part of the golden)\n%!" name msg;
-      msg
-
 let shared_named msg tn ~side =
-  has msg "occurs in more than one member of this sequence"
-  && has msg (side ^ " " ^ Ir.Tnode.label_name tn)
+  LC.has msg "occurs in more than one member of this sequence"
+  && LC.has msg (side ^ " " ^ Ir.Tnode.label_name tn)
 
 let probe prefix =
   let w =
@@ -45,12 +32,12 @@ let probe prefix =
   in
   let%op t = w *. w in
   let%op loss = t *. 3. in
-  Train.set_materialized (grad_of w);
+  Train.set_materialized (LC.grad_of w);
   (w, loss)
 
 let w_grad_after w comp =
   let ctx, routine = Train.to_routine (Context.auto ()) IDX.empty comp in
-  Context.get_values (Context.run ctx routine) (grad_of w)
+  Context.get_values (Context.run ctx routine) (LC.grad_of w)
 
 let () =
   case "B: a backprop fragment sequenced twice" (fun () ->
@@ -58,22 +45,24 @@ let () =
       let update = Train.grad_update loss in
       (* [grad_update] took the loss's backprop; a later consumption hands the same comp out. *)
       let replay = Tensor.consume_backprop_code loss in
-      let msg = refusal "B" (fun () -> Asgns.sequence [ update; replay ]) in
+      let msg = LC.refusal "B" (fun () -> Asgns.sequence [ update; replay ]) in
       p "B: refused, naming the loss's backprop fragment"
-        (shared_named msg (grad_of loss) ~side:"propagating from" && has msg "members 1, 2");
-      exact "B: the update carrying it once computes 6 w" (w_grad_after w update) [| 6.; 12.; 18. |];
+        (shared_named msg (LC.grad_of loss) ~side:"propagating from" && LC.has msg "members 1, 2");
+      LC.exact "B: the update carrying it once computes 6 w" (w_grad_after w update)
+        [| 6.; 12.; 18. |];
       (* What the refusal prevents: the same two members run in sequence, past [sequence]. *)
       let doubled =
         Asgns.comp ~owned:update.owned ~requires:update.requires
           ~embedded:(Set.union update.embedded_nodes replay.embedded_nodes)
           (Asgns.Seq (update.asgns, replay.asgns))
       in
-      exact "B: run twice, it double-counts into 18 w" (w_grad_after w doubled) [| 18.; 36.; 54. |]);
+      LC.exact "B: run twice, it double-counts into 18 w" (w_grad_after w doubled)
+        [| 18.; 36.; 54. |]);
   case "F: a forward fragment sequenced twice" (fun () ->
       let x = TDSL.ndarray [| 1.; 2.; 3. |] ~label:[ "fst_f_x" ] ~output_dims:[ 3 ] () in
       let%op y = x *. x in
       let fwd = Train.forward y in
-      let msg = refusal "F" (fun () -> Asgns.sequence [ fwd; Train.forward y ]) in
+      let msg = LC.refusal "F" (fun () -> Asgns.sequence [ fwd; Train.forward y ]) in
       p "F: refused, naming the forward fragment" (shared_named msg y.value ~side:"forward code of"));
   (* The members are different comps: [z] embeds [a]'s forward code, and [a.forward] carries it too.
      The check is on fragments, not on comps. *)
@@ -81,7 +70,7 @@ let () =
       let x = TDSL.ndarray [| 1.; 2.; 3. |] ~label:[ "fst_e_x" ] ~output_dims:[ 3 ] () in
       let%op a = x *. x in
       let%op z = a + 1. in
-      let msg = refusal "E" (fun () -> Asgns.sequence [ Train.forward z; a.Tensor.forward ]) in
+      let msg = LC.refusal "E" (fun () -> Asgns.sequence [ Train.forward z; a.Tensor.forward ]) in
       p "E: refused, naming the embedded fragment"
         (shared_named msg a.value ~side:"forward code of"));
   case "O: an op_asn naming its operand" (fun () ->
@@ -96,6 +85,6 @@ let () =
       p "O: and was not marked taken: consuming it is refused"
         (match Tensor.consume_forward_code x2 with
         | _ -> false
-        | exception Tensor.Session_error (msg, _) -> has msg "is not a forward root");
+        | exception Tensor.Session_error (msg, _) -> LC.has msg "is not a forward root");
       let ctx = Train.forward_once (Context.auto ()) even in
-      exact "O: the even positions of 2 x" (Context.get_values ctx even.value) [| 2.; 6.; 10. |])
+      LC.exact "O: the even positions of 2 x" (Context.get_values ctx even.value) [| 2.; 6.; 10. |])

@@ -67,3 +67,4 @@ test/operations/test_bounds_folded_gather.ml -- records<=0 traversals<=2: existi
 test/operations/test_one_hot_embedding_backward.ml -- records<=0 traversals<=4: existing migration debt; adopt ll_test when touched
 test/operations/test_one_hot_embedding_lookup.ml -- records<=0 traversals<=6: existing migration debt; adopt ll_test when touched
 test/support/ll_builders.ml -- permanent: canonical pure IR builders shared by both packages
+Assignments.t traversals the Low_level rule does not count (census only, no harness required; constructors recursive in Assignments.t: Block_comment, Seq):

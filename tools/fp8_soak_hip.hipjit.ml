@@ -4,8 +4,9 @@
 
    Like the CUDA arm, this file holds the kernel source and the calls into hipjit and nothing else:
    which spellings this platform has, what they are called in a claim, and what the reported macros
-   MEAN all live in fp8_soak.ml ([ARM] and [hip_vendor]), because THIS FILE IS COMPILED ONLY ON A
-   ROCm BOX and every edit to it is made blind everywhere else (gh-ocannl-758).
+   MEAN all live in fp8_soak.ml ([ARM] and [hip_vendor]), because THIS FILE IS LINKED AND RUN ONLY
+   ON A ROCm BOX (gh-ocannl-758): every other box type-checks it against arrayjit/vendor_stubs
+   (gh-ocannl-1688), but only a ROCm box learns whether an edit still drives the vendor correctly.
 
    The two spellings are not the same conversion on ROCm:
 
@@ -27,8 +28,9 @@
 open Base
 module H = Hip
 
-(* Update this whenever you compile this file on a box that has hipjit -- the run header prints it,
-   and it is what tells the next editor whether they are editing blind (gh-ocannl-758). *)
+(* Update this whenever you run this file on a box that has hipjit -- the run header prints it, and
+   it is what tells the next editor how long the arm has gone without a real run (gh-ocannl-758);
+   type-checking happens everywhere through arrayjit/vendor_stubs. *)
 let last_compiled =
   "on minix-amd-wsl (Radeon 8060S, gfx1151, ROCm 7.14), 2026-08-27, staging PR #490"
 

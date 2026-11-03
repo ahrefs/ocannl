@@ -265,6 +265,18 @@ let rec misspelled_training_locks = function
   | Sexp.List l -> List.concat_map l ~f:misspelled_training_locks
   | Sexp.Atom _ -> []
 
+(* The lock names in a stanza's [(locks …)] fields written without a leading [/]: the ones dune
+   resolves against the directory the stanza applies to. The same mechanism as the training lock's,
+   asked of every lock: one relative spelling in two directories is two locks, which is rarely what
+   its author meant (staging#1593). *)
+let rec relative_locks = function
+  | Sexp.List (Sexp.Atom "locks" :: args) ->
+      List.filter_map args ~f:(function
+        | Sexp.Atom a when not (String.is_prefix a ~prefix:"/") -> Some a
+        | _ -> None)
+  | Sexp.List l -> List.concat_map l ~f:relative_locks
+  | Sexp.Atom _ -> []
+
 (* The alias vocabulary -- what a stanza attaches to, what its `deps` build, what an `(alias …)`
    stanza defines -- lives in the shared scanner, which tools/batch-backends.sh's reachability
    question (Test_utils.Slot_kind) reads too: two readers of one dune grammar must not drift. *)
@@ -1526,6 +1538,10 @@ let main () =
      member of [@scans], but their directory descent comes from [per_directory] below. A new scan
      therefore joins the diagnostic check with no source list to update. *)
   let scanner_sources = ref (Set.empty (module String)) in
+  (* Every relative lock name of the walk -- as spelled, the directory it applies to, the path dune
+     resolves it to, and where it was written -- compared across directories once every dune file is
+     read. *)
+  let relative_lock_sites = ref [] in
   (* Every `(env_var ...)` under a sexp, at any depth. *)
   let rec env_vars_in = function
     | Sexp.List [ Sexp.Atom "env_var"; Sexp.Atom name ] -> [ name ]
@@ -1932,6 +1948,32 @@ let main () =
                        | [] -> "a stanza on no alias"
                        | aliases -> String.concat ~sep:", " aliases)
                        training_lock)));
+          (* Every other relative lock name, for the cross-directory comparison after the walk. A
+             misspelled training lock is refused above already. A pform is refused here: dune
+             expands it before resolving the name, so which lock it is -- and whether another
+             directory's spelling is the same one -- cannot be read from the file. *)
+          List.iter here ~f:(fun s ->
+              List.iter (relative_locks s) ~f:(fun spelled ->
+                  if String.is_substring spelled ~substring:"%{" then
+                    fail
+                      (Printf.sprintf
+                         "%s%s names the lock `%s`, built from a pform this scan does not expand \
+                          -- whether it is one lock with another directory's cannot be read; spell \
+                          the lock literally"
+                         dune_file
+                         (if String.is_empty subdir then ""
+                          else Printf.sprintf ", in `(subdir %s …)`" subdir)
+                         spelled)
+                  else if not (String.equal (Stdlib.Filename.basename spelled) training_lock_name)
+                  then
+                    let directory = Scan.in_subdir dir subdir in
+                    relative_lock_sites :=
+                      ( spelled,
+                        directory,
+                        normalize_path (Scan.in_subdir directory spelled),
+                        if String.is_empty subdir then dune_file
+                        else Printf.sprintf "%s, in `(subdir %s …)`" dune_file subdir )
+                      :: !relative_lock_sites));
           (* The lock (Codex P1 round 4): a gate in a directory whose actions take it has to take it
              too. Since this check receives a directory group, a group's unlocked gate cannot hide
              behind the outer [(subdir ...)] form (Codex P2, round 5). *)
@@ -2535,25 +2577,15 @@ let main () =
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
           let directory = if String.is_empty here then "." else here in
-          let directory_modules =
-            List.filter_map source_files ~f:(fun (path, _) ->
-                if String.equal (Stdlib.Filename.dirname path) directory then
-                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
-                else None)
-          in
+          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
           List.iter group ~f:(fun stanza ->
-              let kind =
-                match Scan.head stanza with
-                | Some (("test" | "tests" | "executable" | "executables") as kind) -> Some kind
-                | _ -> None
-              in
-              match kind with
+              match
+                Scan.stanza_programs ~subdir ~runner_stanzas:all_group_runners ~directory_modules
+                  group stanza
+              with
               | None -> ()
-              | Some kind ->
-                  let modules = Scan.modules_of ~directory_modules group stanza in
-                  let named () =
-                    match Scan.names_of stanza with name :: _ -> name | [] -> "<unnamed>"
-                  in
+              | Some declared ->
+                  let kind = declared.Scan.programs_head in
                   (* Which rules run the program is dune's semantics: a `(test)` runs itself, while
                      an `(executable)` is run by every rule naming it, each under its own `(deps …)`
                      and `(setenv …)` scope. A stanza dune runs itself may still pin: `(test …
@@ -2565,16 +2597,23 @@ let main () =
                     | first :: rest -> List.fold rest ~init:first ~f:Set.inter
                   in
                   let programs =
-                    match kind with
-                    | "executable" | "executables" ->
-                        List.map
-                          (Scan.program_runners ~subdir ~runner_stanzas:all_group_runners group
-                             stanza) ~f:(fun (name, runners) ->
-                            (* The pins come with the runner, scoped to the runs of THIS program: a
-                               `setenv` around a helper beside the subject pins nothing here, and
-                               one around the subject is not undone by an unpinned helper. *)
-                            (name, Scan.program_modules stanza ~modules ~name, runners))
-                    | _ -> [ (named (), modules, [ (stanza, own_pins stanza) ]) ]
+                    if declared.Scan.runs_itself then
+                      (* One subject for the whole stanza, run by itself alone: the rules that also
+                         run one of its programs by name ([rule_runners]) are not counted here. Its
+                         programs are split again for the search below. *)
+                      [
+                        ( (match declared.Scan.programs with
+                          | p :: _ -> p.Scan.program
+                          | [] -> "<unnamed>"),
+                          declared.Scan.stanza_modules,
+                          [ (stanza, own_pins stanza) ] );
+                      ]
+                    else
+                      List.map declared.Scan.programs ~f:(fun p ->
+                          (* The pins come with the runner, scoped to the runs of THIS program: a
+                             `setenv` around a helper beside the subject pins nothing here, and one
+                             around the subject is not undone by an unpinned helper. *)
+                          (p.Scan.program, p.Scan.own_modules, p.Scan.rule_runners))
                   in
                   List.iter programs ~f:(fun (name, own_modules, run_stanzas) ->
                       let where =
@@ -2590,22 +2629,10 @@ let main () =
                          stated in the golden and reported by the gate half above. A module dune is
                          TOLD has no implementation is not a missing input: an `.mli` runs
                          nothing. *)
-                      let without_implementation =
-                        List.concat_map [ "modules_without_implementation"; "virtual_modules" ]
-                          ~f:(fun field ->
-                            match Scan.field stanza field with
-                            | Some args ->
-                                List.filter_map args ~f:(function
-                                  | Sexp.Atom m -> Some (String.lowercase m)
-                                  | _ -> None)
-                            | None -> [])
-                      in
                       List.iter own_modules ~f:(fun module_name ->
                           if
                             Option.is_none (source_of ~dir:here module_name)
-                            && (not
-                                  (List.mem without_implementation (String.lowercase module_name)
-                                     ~equal:String.equal))
+                            && Scan.needs_source declared module_name
                             && Set.mem scanned_dirs directory
                           then
                             fail
@@ -2626,11 +2653,10 @@ let main () =
                          executable per name, linking each one's main module and the shared ones but
                          not its siblings' mains (Codex P2, round 2). *)
                       let subjects =
-                        match (kind, Scan.names_of stanza) with
-                        | "tests", (_ :: _ :: _ as names) ->
-                            List.map names ~f:(fun n ->
-                                ( Printf.sprintf "%s (%s)" where n,
-                                  Scan.program_modules stanza ~modules:own_modules ~name:n ))
+                        match (kind, declared.Scan.programs) with
+                        | "tests", (_ :: _ :: _ as programs) ->
+                            List.map programs ~f:(fun p ->
+                                (Printf.sprintf "%s (%s)" where p.Scan.program, p.Scan.own_modules))
                         | _ -> [ (where, own_modules) ]
                       in
                       let cc_runs = List.filter run_stanzas ~f:(fun (r, _) -> runs_cc r) in
@@ -2821,13 +2847,7 @@ let main () =
          calling it passes, which is the point. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory = if String.is_empty here then "." else here in
-          let directory_modules =
-            List.filter_map source_files ~f:(fun (path, _) ->
-                if String.equal (Stdlib.Filename.dirname path) directory then
-                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
-                else None)
-          in
+          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
           List.iter group ~f:(fun stanza ->
               match Scan.head stanza with
               | Some "library" ->
@@ -2877,13 +2897,7 @@ let main () =
          tomorrow is asked for its alias the day it lands. *)
       check_per_directory (fun subdir group ->
           let here = Scan.in_subdir dir subdir in
-          let directory = if String.is_empty here then "." else here in
-          let directory_modules =
-            List.filter_map source_files ~f:(fun (path, _) ->
-                if String.equal (Stdlib.Filename.dirname path) directory then
-                  Some (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path))
-                else None)
-          in
+          let directory_modules = Scan.directory_modules ~dir:here (List.map source_files ~f:fst) in
           let where =
             if String.is_empty subdir then dune_file
             else Printf.sprintf "%s, in `(subdir %s …)`" dune_file subdir
@@ -2969,6 +2983,37 @@ let main () =
                       a run that can select cc -- drop the marker"
                      (width_marker_where marker.Scan.contained_line))));
       check_family_members ());
+  (* One relative lock spelling, many locks (staging#1593): dune keys a relative name by the
+     directory it resolves in, so the same spelling written in two directories serializes each
+     directory's actions and nothing across them -- the training lock's failure, for any lock.
+     Judged on the RESOLVED paths, so `../shared/name` written from two sibling directories, which
+     is one lock, stays accepted. *)
+  List.sort !relative_lock_sites ~compare:(fun (a, _, _, _) (b, _, _, _) -> String.compare a b)
+  |> List.group ~break:(fun (a, _, _, _) (b, _, _, _) -> not (String.equal a b))
+  |> List.iter ~f:(fun sites ->
+      let spelled, _, _, _ = List.hd_exn sites in
+      let resolved =
+        List.map sites ~f:(fun (_, _, path, _) -> path)
+        |> List.dedup_and_sort ~compare:String.compare
+      in
+      if List.length resolved > 1 then
+        let places =
+          List.map sites ~f:(fun (_, directory, _, where) ->
+              Printf.sprintf "%s (directory `%s`)" where
+                (if String.is_empty directory then "." else directory))
+          |> List.dedup_and_sort ~compare:String.compare
+        in
+        fail
+          (Printf.sprintf
+             "the lock `%s` is spelled without a leading `/` in %s -- dune resolves a relative \
+              lock name against the directory the stanza applies to, so these are %d locks (%s) \
+              and the actions under them overlap across the directories; spell it `/%s` for one \
+              global lock, or give each directory's lock a name of its own"
+             spelled
+             (String.concat ~sep:" and " places)
+             (List.length resolved)
+             (String.concat ~sep:", " (List.map resolved ~f:(Printf.sprintf "`%s`")))
+             (Stdlib.Filename.basename spelled)));
   (* Every static format a repository scanner hands to a Verdict refusal or claim, related to all
      permanent control goldens. The filename conventions are the repository's existing control
      vocabulary; a scan whose live golden embeds its controls announces the same thing with the
@@ -4382,6 +4427,57 @@ let family_control () =
            ~with_:"(locks ocannl_training_test)")
       ~metal:true ~lifecycle:false ~family:None ()
   in
+  (* Any other lock, under one relative spelling (staging#1593). Written on the top-level gate and
+     on the group's gate it is two locks, `t/probe_lock` and `t/child/probe_lock`, and refused; on
+     the top-level gate and its rule, one directory, it is one lock; and `../shared_lock` from the
+     group and from a sibling group resolves to the one `t/shared_lock` from both. *)
+  let lock_on (indent, pattern) lock content =
+    String.substr_replace_all content ~pattern ~with_:(pattern ^ indent ^ "(locks " ^ lock ^ ")\n")
+  in
+  let top_gate = (" ", " (name gate)\n") and top_rule = (" ", " (alias runtest-gate)\n") in
+  let child_gate = ("  ", "  (name childgate)\n") in
+  let lock_two_directories =
+    run ~shape:Subdir_member
+      ~transform:(fun content ->
+        lock_on top_gate "probe_lock" content |> lock_on child_gate "probe_lock")
+      ~metal:true ~lifecycle:false ~family:None ()
+  in
+  let lock_one_directory =
+    run ~shape:Subdir_member
+      ~transform:(fun content ->
+        lock_on top_gate "probe_lock" content |> lock_on top_rule "probe_lock")
+      ~metal:true ~lifecycle:false ~family:None ()
+  in
+  let lock_pform =
+    run ~shape:Subdir_member
+      ~transform:(lock_on top_gate "%{env:PROBE_LOCK=probe_lock}")
+      ~metal:true ~lifecycle:false ~family:None ()
+  in
+  let sibling_group =
+    "\n\
+     (subdir\n\
+    \ sibling\n\
+    \ (rule\n\
+    \  (targets sibling_out)\n\
+    \  (locks ../shared_lock)\n\
+    \  (action\n\
+    \   (with-stdout-to sibling_out (echo sibling)))))\n"
+  in
+  let lock_one_resolved_path =
+    run ~shape:Subdir_member
+      ~transform:(fun content -> lock_on child_gate "../shared_lock" content ^ sibling_group)
+      ~metal:true ~lifecycle:false ~family:None ()
+  in
+  (* The same tree with the spelling written at the top level too, where it resolves to
+     `shared_lock`: refused, naming the sibling group as well -- so the group the passing run relies
+     on is one the walk reads. *)
+  let lock_shared_and_top =
+    run ~shape:Subdir_member
+      ~transform:(fun content ->
+        (lock_on child_gate "../shared_lock" content |> lock_on top_gate "../shared_lock")
+        ^ sibling_group)
+      ~metal:true ~lifecycle:false ~family:None ()
+  in
   (* And a `(test)` stanza as the runner of a lifecycle executable. *)
   let test_stanza_runner =
     run ~shape:Test_stanza_runner ~metal:false ~lifecycle:true ~family:lifecycle ()
@@ -4484,6 +4580,28 @@ let family_control () =
     && String.is_substring (snd relative_lock) ~substring:"(subdir child"
     && not (String.is_substring (snd relative_lock) ~substring:"does not take the lock")
   in
+  let lock_two_directories_ok =
+    exited 1 lock_two_directories
+    && String.is_substring (snd lock_two_directories)
+         ~substring:"the lock `probe_lock` is spelled without a leading `/`"
+    && String.is_substring (snd lock_two_directories) ~substring:"(directory `t`)"
+    && String.is_substring (snd lock_two_directories) ~substring:"(directory `t/child`)"
+    && String.is_substring (snd lock_two_directories) ~substring:"spell it `/probe_lock`"
+  in
+  let lock_one_directory_ok = listed_ok lock_one_directory in
+  let lock_pform_ok =
+    exited 1 lock_pform
+    && String.is_substring (snd lock_pform)
+         ~substring:"names the lock `%{env:PROBE_LOCK=probe_lock}`, built from a pform"
+  in
+  let lock_one_resolved_path_ok = listed_ok lock_one_resolved_path in
+  let lock_shared_and_top_ok =
+    exited 1 lock_shared_and_top
+    && String.is_substring (snd lock_shared_and_top) ~substring:"(directory `t`)"
+    && String.is_substring (snd lock_shared_and_top) ~substring:"(directory `t/child`)"
+    && String.is_substring (snd lock_shared_and_top) ~substring:"(directory `t/sibling`)"
+    && String.is_substring (snd lock_shared_and_top) ~substring:"`shared_lock`, `t/shared_lock`"
+  in
   let public_by_path_ok = omitted_ok lifecycle_family.family_alias public_by_path in
   let test_stanza_runner_ok = listed_ok test_stanza_runner in
   let sibling_defaults_ok = listed_ok sibling_defaults in
@@ -4520,6 +4638,15 @@ let family_control () =
   if not subdir_ungated_ok then report "family alias in a group with no gate" subdir_ungated;
   if not subdir_unlocked_ok then report "locked group whose gate takes no lock" subdir_unlocked;
   if not relative_lock_ok then report "the training lock spelled relative" relative_lock;
+  if not lock_two_directories_ok then
+    report "one relative lock name in two directories" lock_two_directories;
+  if not lock_one_directory_ok then
+    report "one relative lock name in one directory" lock_one_directory;
+  if not lock_shared_and_top_ok then
+    report "one relative lock name, two siblings and the parent" lock_shared_and_top;
+  if not lock_pform_ok then report "a relative lock name built from a pform" lock_pform;
+  if not lock_one_resolved_path_ok then
+    report "one relative lock name resolving to one path" lock_one_resolved_path;
   if not public_by_path_ok then report "a file sharing the public name" public_by_path;
   if not test_stanza_runner_ok then report "a test stanza as the runner" test_stanza_runner;
   if not sibling_defaults_ok then report "two default-module stanzas" sibling_defaults;
@@ -4623,6 +4750,30 @@ let family_control () =
     "the training lock spelled without its leading `/` is a per-directory lock, and is refused"
     relative_lock_ok;
 
+  attribute
+    "one relative lock name written in two directories is two locks, and is refused naming both"
+    [ lock_two_directories ];
+  Verdict.p
+    "one relative lock name written in two directories is two locks, and is refused naming both"
+    lock_two_directories_ok;
+  Verdict.p "the same relative lock name written twice in one directory is one lock, and passes"
+    lock_one_directory_ok;
+  Verdict.p
+    "one relative lock name that two sibling directories resolve to the same path is one lock, and \
+     passes"
+    lock_one_resolved_path_ok;
+  attribute
+    "the same `../` spelling written in the parent as well resolves to a second lock there, and is \
+     refused naming the parent and both siblings"
+    [ lock_shared_and_top ];
+  Verdict.p
+    "the same `../` spelling written in the parent as well resolves to a second lock there, and is \
+     refused naming the parent and both siblings"
+    lock_shared_and_top_ok;
+  attribute "a lock name built from a pform cannot be compared across directories, and is refused"
+    [ lock_pform ];
+  Verdict.p "a lock name built from a pform cannot be compared across directories, and is refused"
+    lock_pform_ok;
   Verdict.p
     "a rule running a file that shares the executable's public name is not its runner, however \
      alike the two strings are"

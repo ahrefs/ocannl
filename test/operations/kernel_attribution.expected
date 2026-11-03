@@ -16,6 +16,7 @@ a HIP cell that states no memory model: refused
 a HIP cell whose kernels ran on two agents: refused
 a cell with two trace exports: refused
 an incomplete table, a missing trace or result, a short window, an unmapped segment: refused
+a table re-timed under queued timing, or stating no timing: refused
 a report with a refused cell, or with no cell, fails: true
 back-to-back kernels: the summed durations are the device's busy time, nothing overlaps: true
 overlapping stamps: the union counts the overlap once, the durations stay each dispatch's own: true

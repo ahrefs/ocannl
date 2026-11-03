@@ -53,23 +53,21 @@ let scratch (o : LL.optimized) =
     LL.optimize_ctx = LL.copy_optimize_ctx o.LL.optimize_ctx;
   }
 
-(* Synthetic GPU limits, so the structural legs are backend-independent: 8x8x8 tiles in the (f16,
-   f16, f32) format every tensorizing GPU backend advertises, for the independent matmul, and in
-   f32, for the attention's scores. *)
+(* Synthetic GPU limits, so the structural legs are backend-independent: the shared stand-in
+   ({!Ll_test.f32_mma_limits}, 8x8x8 f32 tiles, for the attention's scores) with one more format,
+   the (f16, f16, f32) every tensorizing GPU backend advertises, for the independent matmul. *)
 let synthetic_limits =
+  let module BI = Ir.Backend_intf in
+  let base = Ll_test.f32_mma_limits in
   {
-    Ir.Backend_intf.no_hardware_limits with
+    base with
     mma =
-      Some
-        {
-          Ir.Backend_intf.minimal_mma_capability with
-          mma_tile = (8, 8, 8);
-          mma_format_tiles =
-            [
-              (Ir.Backend_intf.(Mma_f16, Mma_f16, Mma_f32), (8, 8, 8));
-              (Ir.Backend_intf.(Mma_f32, Mma_f32, Mma_f32), (8, 8, 8));
-            ];
-        };
+      Option.map base.mma ~f:(fun (m : BI.mma_capability) ->
+          {
+            m with
+            mma_format_tiles =
+              ((BI.Mma_f16, BI.Mma_f16, BI.Mma_f32), m.mma_tile) :: m.mma_format_tiles;
+          });
   }
 
 let has_scan (llc : LL.t) =

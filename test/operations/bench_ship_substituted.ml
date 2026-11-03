@@ -77,3 +77,58 @@ let () =
   p "without an on_ship record the substitution is unknown (null), not false"
     (Yojson.Safe.equal (member "ship_substituted" t) `Null
     && Yojson.Safe.equal (member "substituted_from" t) `Null)
+
+(* gh-ocannl-1702: the same collector and renderer carry each arm's Grid record -- what the crowned
+   schedule asked, the crowned routine's census, and how many ranked rivals asked for a Grid loop
+   and were timed with one serial -- from the report fields that hold them. *)
+let () =
+  let serial_census =
+    {
+      Ir.C_syntax.loops =
+        [
+          {
+            Ir.C_syntax.kernel = "bss_k";
+            loop = "i0";
+            site = Ir.C_syntax.Grid_serial (Grid_below_min_updates { updates = 64; floor = 4096 });
+          };
+        ];
+      pool = true;
+      pool_rendered = 0;
+      serial = 1;
+    }
+  in
+  let flagged =
+    {
+      (searched ~label:"grid 128" ~digest:"cccc") with
+      Autotune.best_grid = Some serial_census;
+      grid_serial_timed =
+        [ { Autotune.grid_label = "grid 64"; grid_ms = 0.75; grid_record = serial_census } ];
+    }
+  in
+  let plain = searched ~label:"tile 32x32" ~digest:"dddd" in
+  let t = tune_of ~reports:[ flagged; plain ] () in
+  let arms = Yojson.Safe.Util.to_list (member "arms" t) in
+  let grid name =
+    member "grid"
+      (List.find_exn arms ~f:(fun a -> Yojson.Safe.equal (member "arm" a) (`String name)))
+  in
+  let census name = member "census" (grid name) in
+  p "an arm's Grid ask is the report's schedule's, as Autotune reads it"
+    (Yojson.Safe.equal
+       (member "asked" (grid "A"))
+       (`Bool (Autotune.schedule_asks_grid flagged.Autotune.best_schedule)));
+  p "an arm's census verdict is Autotune's own on the crowned record"
+    (Yojson.Safe.equal
+       (member "rendered_serially" (census "A"))
+       (`Bool (Autotune.grid_rendered_serially serial_census))
+    && Yojson.Safe.equal (member "serial" (census "A")) (`Int 1));
+  p "the census line is the renderer's"
+    (Yojson.Safe.equal
+       (member "summary" (census "A"))
+       (`String (Ir.C_syntax.grid_summary_string serial_census)));
+  p "an arm counts its ranked Grid-serial rivals"
+    (Yojson.Safe.equal (member "serial_timed" (grid "A")) (`Int 1)
+    && Yojson.Safe.equal (member "serial_timed" (grid "B")) (`Int 0));
+  p "an arm with no crowned record carries a null census" (Yojson.Safe.equal (census "B") `Null);
+  p "a harness that recorded no shipped routines carries a null shipped Grid census"
+    (Yojson.Safe.equal (member "grid" t) `Null)

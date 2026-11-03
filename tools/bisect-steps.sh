@@ -6,7 +6,11 @@
 # probe_locks); never executed.
 #
 #   tools/test-run.sh bisect [--cap N] [--test-cap N] [--build TARGET]...
-#                            [--no-first-parent] GOOD BAD TARGET...
+#                            [--targets-file FILE]... [--no-first-parent] GOOD BAD [TARGET...]
+#
+# TARGETs come from the arguments, from each `--targets-file` (one alias per
+# line, read as `run` reads one: tools/test-run.sh's read_targets_files), or
+# both, the file's after the arguments' -- at least one in all.
 #
 # Finding gh-ocannl-1222's cause took a hand-rolled first-parent bisect on tuf, and
 # three parts of its step script were easy to get wrong. Each is encoded here
@@ -76,7 +80,7 @@
 # the harness's background mode (bg-run.sh on the fleet); a TERM to it stops
 # the current step's run, as `stop` would, and removes the tree.
 
-bisect_usage='bisect [--cap N] [--test-cap N] [--build TARGET]... [--no-first-parent] GOOD BAD TARGET...'
+bisect_usage='bisect [--cap N] [--test-cap N] [--build TARGET]... [--targets-file FILE]... [--no-first-parent] GOOD BAD [TARGET...]'
 
 bisect_lines() { # <file> -> the array bisect_read_out, one element per line
   local line
@@ -140,13 +144,15 @@ bisect_drain() {
 
 bisect_main() {
   local cap= test_cap= first_parent=1 builds=() good bad good_sha bad_sha backend arg
-  local dir tree lang anc outcome result rc first line
+  local dir tree lang anc outcome result rc first line targets_files=()
   while [ $# -gt 0 ]; do
     case $1 in
       --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; shift "$opt_shift" ;;
       --test-cap | --test-cap=*) opt_value "a value" "$@"; test_cap=$opt_value; shift "$opt_shift" ;;
       --build | --build=*) opt_value "a target" "$@"; builds+=("$opt_value"); shift "$opt_shift" ;;
       --no-first-parent | --no-first-parent=*) opt_flag "$1"; first_parent=; shift ;;
+      --targets-file | --targets-file=*)
+        opt_value "a file" "$@"; targets_files+=("$opt_value"); shift "$opt_shift" ;;
       --cpu | --cpu=* | --gpu | --gpu=*) refuse_slot_option "$1" ;;
       --) shift; break ;;
       -*) die "bisect: unknown option $1
@@ -156,7 +162,7 @@ bisect_main() {
   done
   [ -z "$cap" ] || normalize_cap
   [ -z "$test_cap" ] || normalize_cap test_cap --test-cap
-  [ $# -ge 3 ] || die "usage: tools/test-run.sh $bisect_usage"
+  [ $# -ge 2 ] || die "usage: tools/test-run.sh $bisect_usage"
   good=$1 bad=$2
   shift 2
   # The targets are dune's argv after `build`: this script's options among
@@ -170,6 +176,15 @@ bisect_main() {
   tools/test-run.sh $bisect_usage" ;;
     esac
   done
+  # The listed targets join the arguments' (gh-ocannl-1797), before dune's
+  # own `--` where there is one, as `run` splices them.
+  if [ ${#targets_files[@]} -gt 0 ]; then
+    read_targets_files "${targets_files[@]}"
+    targets_splice "$@"
+    set -- "${targets_spliced[@]}"
+  fi
+  [ $# -ge 1 ] || die "bisect needs at least one TARGET, from the arguments or a --targets-file:
+  tools/test-run.sh $bisect_usage"
   for arg in "$@" ${builds[@]+"${builds[@]}"}; do
     case $arg in '' | *$'\n'* | *$'\r'*) die "bisect: a target must be one non-empty line" ;; esac
   done

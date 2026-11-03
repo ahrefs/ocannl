@@ -1,0 +1,22 @@
+a vendor arm copied and compiled under the stand-ins is accepted, its fallback undemanded: true
+a vendor arm copied by a copy_files glob into a default-module library is accepted: true
+an arm gated on no vendor library is not demanded: true
+an arm that only forbids a vendor library is not demanded: true
+a vendor arm nothing copies is refused, naming its dune file: true
+an arm gated on a vendor backend's public name alone is demanded: true
+a copy of a same-named file from another directory does not count: true
+a copy outside arrayjit/vendor_stubs does not count: true
+a copied arm no library compiles is refused: true
+a tree with no package stand-in is refused: true
+a tree with no backend stand-in is refused: true
+a dune file that does not read is refused: true
+an empty dune-file corpus is refused: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:99b67dac359b15961fd222795ccfdc9b] does not read
+  [scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-file glob matches
+  [scanner-refusal:513451a79c3ecc3b1fb18f6fee5ee404] arrayjit/vendor_stubs/<package>/dune
+  [scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/
+  [scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into
+  [scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/
+End of synthetic controls.

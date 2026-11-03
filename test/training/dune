@@ -186,6 +186,7 @@
 
 (rule
  (alias train-bigram)
+ ; gh-ocannl-1718: autotune_log=crown puts the step tune's crown-and-finals line on stderr.
  (package neural_nets_lib)
  (locks /ocannl_training_test)
  (deps
@@ -199,7 +200,7 @@
    (progn
     (with-stdout-to
      bigram.actual
-     (run %{dep:bigram.exe}))
+     (run %{dep:bigram.exe} "--ocannl_autotune_log=crown"))
     (diff bigram.expected bigram.actual)))))
 
 (test
@@ -316,6 +317,7 @@
 
 (rule
  (alias train-circles_conv)
+ ; gh-ocannl-1718: autotune_log=crown puts the step tune's crown-and-finals line on stderr.
  (package neural_nets_lib)
  (locks /ocannl_training_test)
  (deps
@@ -329,7 +331,7 @@
    (progn
     (with-stdout-to
      circles_conv.actual
-     (run %{dep:circles_conv.exe}))
+     (run %{dep:circles_conv.exe} "--ocannl_autotune_log=crown"))
     (diff circles_conv.expected circles_conv.actual)))))
 
 (library
@@ -411,6 +413,7 @@
 
 (rule
  (alias train-fsm_transformer)
+ ; gh-ocannl-1718: autotune_log=crown puts the step tune's crown-and-finals line on stderr.
  (package neural_nets_lib)
  (locks /ocannl_training_test)
  (deps
@@ -424,7 +427,7 @@
    (progn
     (with-stdout-to
      fsm_transformer.actual
-     (run %{dep:fsm_transformer.exe}))
+     (run %{dep:fsm_transformer.exe} "--ocannl_autotune_log=crown"))
     (diff fsm_transformer.expected fsm_transformer.actual)))))
 
 ; transformer_names is a transformer training integration run on the `train` tier (see
@@ -457,6 +460,7 @@
 
 (rule
  (alias train-transformer_names)
+ ; gh-ocannl-1718: autotune_log=crown puts the step tune's crown-and-finals line on stderr.
  (package neural_nets_lib)
  (locks /ocannl_training_test)
  (deps
@@ -471,7 +475,7 @@
    (progn
     (with-stdout-to
      transformer_names.actual
-     (run %{dep:transformer_names.exe}))
+     (run %{dep:transformer_names.exe} "--ocannl_autotune_log=crown"))
     (diff transformer_names.expected transformer_names.actual)))))
 
 ; tokenizer_roundtrip is a fast integration test for the dataprep BPE tokenizer -> tensor bridge

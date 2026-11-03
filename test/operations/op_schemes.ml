@@ -324,12 +324,12 @@ let () =
         (Tensor.For_testing.checkpoint_differences ck));
   Verdict.case "a trace's discards are held weakly" (fun () ->
       Tensor.unsafe_reinitialize ();
-      Stdlib.Gc.full_major ();
+      Gc_witness.settle ();
       let sizes0 = Tensor.For_testing.discarded_registry_sizes () in
       for _ = 1 to 20 do
         ignore (layer () : Tensor.t -> Tensor.t)
       done;
-      Stdlib.Gc.full_major ();
+      Gc_witness.settle ();
       let sizes1 = Tensor.For_testing.discarded_registry_sizes () in
       p_all "twenty traces leave no record in any discard registry once unreachable"
         (List.zip_exn sizes0 sizes1) ~f:(fun ((_, n0), (_, n1)) -> n1 = n0);

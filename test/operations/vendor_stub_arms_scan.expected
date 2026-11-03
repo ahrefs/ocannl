@@ -1,0 +1,33 @@
+every vendor-gated select arm the census finds is compiled by a stand-in copy: true
+
+Vendor packages with a stand-in: cudajit, hipjit, metal
+Vendor backend libraries: arrayjit.cuda_backend, arrayjit.hip_backend, arrayjit.metal_backend, cuda_backend, hip_backend, metal_backend
+
+Vendor-gated select arms, each with the stand-in copy that compiles it:
+  arrayjit/lib/cuda_backend_impl.cudajit.ml -> arrayjit/vendor_stubs/cudajit/typecheck/cuda_backend_impl.ml
+  arrayjit/lib/hip_backend_impl.hipjit.ml -> arrayjit/vendor_stubs/hipjit/typecheck/hip_backend_impl.ml
+  arrayjit/lib/metal_backend_impl.metal.ml -> arrayjit/vendor_stubs/metal/typecheck/metal_backend_impl.ml
+  arrayjit/test/test_cuda_classify_failure.real.ml -> arrayjit/vendor_stubs/arms/test_cuda_classify_failure.ml
+  arrayjit/test/test_hip_compile_failure_options.real.ml -> arrayjit/vendor_stubs/arms/test_hip_compile_failure_options.ml
+  arrayjit/test/test_hip_driver_init_deadline.real.ml -> arrayjit/vendor_stubs/arms/test_hip_driver_init_deadline.ml
+  arrayjit/test/test_metal_alloc.real.ml -> arrayjit/vendor_stubs/arms/test_metal_alloc.ml
+  arrayjit/test/test_metal_storage_mode.real.ml -> arrayjit/vendor_stubs/arms/test_metal_storage_mode.ml
+  test/operations/metal_gpu_core_count.real.ml -> arrayjit/vendor_stubs/arms/metal_gpu_core_count.ml
+  test/operations/test_cuda_pool_offset.real.ml -> arrayjit/vendor_stubs/arms/test_cuda_pool_offset.ml
+  test/operations/test_metal_guarded_gather_codegen.real.ml -> arrayjit/vendor_stubs/arms/test_metal_guarded_gather_codegen.ml
+  test/operations/test_metal_pool_bindings.real.ml -> arrayjit/vendor_stubs/arms/test_metal_pool_bindings.ml
+  test/operations/test_metal_pool_slot_width.real.ml -> arrayjit/vendor_stubs/arms/test_metal_pool_slot_width.ml
+  tools/fp8_soak_cuda.cudajit.ml -> arrayjit/vendor_stubs/arms/fp8_soak_cuda.ml
+  tools/fp8_soak_hip.hipjit.ml -> arrayjit/vendor_stubs/arms/fp8_soak_hip.ml
+  tools/vendor_idents_arm_cuda.cudajit.ml -> arrayjit/vendor_stubs/arms/vendor_idents_arm_cuda.ml
+  tools/vendor_idents_arm_hip.hipjit.ml -> arrayjit/vendor_stubs/arms/vendor_idents_arm_hip.ml
+  tools/vendor_idents_arm_metal.metal.ml -> arrayjit/vendor_stubs/arms/vendor_idents_arm_metal.ml
+
+Select arms gated on no vendor library (no copy demanded):
+  (none)
+
+OK: every vendor-gated select arm is type-checked off its box, against the stand-ins.
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select
+End of synthetic controls.

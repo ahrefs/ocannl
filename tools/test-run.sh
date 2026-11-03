@@ -34,14 +34,15 @@
 #                           [DUNE ARGS...]             # detached; survives the session
 #   tools/test-run.sh plan  [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]...
 #                           [DUNE ARGS...]             # what `run` would inject and take; runs nothing
-#   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] N [DUNE ARGS...]
-#                                                      # compare N isolated runs
-#   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] --direct N @DIR/KIND-NAME... [-j N]
-#                                                      # build once, replay the tests N times
+#   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] [--targets-file FILE]... N
+#                            [DUNE ARGS...]            # compare N isolated runs
+#   tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] [--targets-file FILE]... --direct N
+#                            [@DIR/KIND-NAME...] [-j N] # build once, replay the tests N times
 #   tools/test-run.sh fresh [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]...
 #                           @DIR/KIND-NAME... [-j N]   # one fresh, timed run of named tests
-#   tools/test-run.sh bisect [--cap N] [--test-cap N] [--build TARGET]... [--no-first-parent]
-#                            GOOD BAD TARGET...      # the first commit that turns TARGETs red
+#   tools/test-run.sh bisect [--cap N] [--test-cap N] [--build TARGET]... [--targets-file FILE]...
+#                            [--no-first-parent] GOOD BAD [TARGET...]
+#                                                    # the first commit that turns TARGETs red
 #                                                    # (tools/bisect-steps.sh says how)
 #   tools/test-run.sh status [RUN|last]                # one-shot, never blocks
 #   tools/test-run.sh wait   [RUN|last] [--timeout N]  # bounded; exits with the run's status
@@ -416,17 +417,13 @@ reject_misplaced_options() {
   # executable (`run exec foo.exe -- --cap 900` passes its cap to foo.exe).
   for arg do
     [ "$arg" != -- ] || return 0
-    case $sub:$arg in
-      repeat:--targets-file | repeat:--targets-file=* | bisect:--targets-file | bisect:--targets-file=*)
-        die "--targets-file is an option of run, start, plan and fresh, not of $sub" ;;
-    esac
     case $arg in
       --) return 0 ;;
       --cpu | --cpu=* | --gpu | --gpu=*) refuse_slot_option "$arg" ;;
       --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=* | --direct | --direct=* | \
         --expect-backend | --expect-backend=* | --targets-file | --targets-file=*)
         case $sub in
-          repeat) form='repeat [--cap N] [--test-cap N] [--alone] [--direct] N [DUNE ARGS...]' ;;
+          repeat) form='repeat [--cap N] [--test-cap N] [--alone] [--direct] [--targets-file FILE]... N [DUNE ARGS...]' ;;
           fresh) form='fresh [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]... @DIR/KIND-NAME... [-j N]' ;;
           bisect) form=$bisect_usage ;;
           *) form="$sub [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]... [DUNE ARGS...]" ;;
@@ -3441,18 +3438,23 @@ case $sub in
     test_cap=${OCANNL_TOOL_PER_TEST_CAP:-}
     alone=0
     direct=0
+    targets_files=()
     while [ $# -gt 0 ]; do
       case $1 in
         --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; shift "$opt_shift" ;;
         --test-cap | --test-cap=*) opt_value "a value" "$@"; test_cap=$opt_value; shift "$opt_shift" ;;
         --alone | --alone=*) opt_flag "$1"; alone=1; shift ;;
         --direct | --direct=*) opt_flag "$1"; direct=1; shift ;;
+        --targets-file | --targets-file=*)
+          opt_value "a file" "$@"
+          targets_files+=("$opt_value")
+          shift "$opt_shift" ;;
         --cpu | --cpu=* | --gpu | --gpu=*) refuse_slot_option "$1" ;;
         --) shift; break ;;
         # Before the count, an option repeat does not take: read as the count,
         # it was refused as one that is not an integer, naming neither.
         -*) die "repeat: unknown option $1
-  usage: tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] [--direct] N [DUNE ARGS...]" ;;
+  usage: tools/test-run.sh repeat [--cap N] [--test-cap N] [--alone] [--direct] [--targets-file FILE]... N [DUNE ARGS...]" ;;
         *) break ;;
       esac
     done
@@ -3466,6 +3468,19 @@ case $sub in
     repeats=$(( 10#$repeats ))
     [ "$repeats" -ge 2 ] || die "repeat count must be at least 2"
     reject_misplaced_options "$@"
+    # The listed targets join the argv after the count, as `run` splices them
+    # (gh-ocannl-1797): `--direct` then validates them as `fresh`'s operands,
+    # and a plain repeat holds them to dune's build, the only verb taking aliases.
+    if [ ${#targets_files[@]} -gt 0 ]; then
+      read_targets_files "${targets_files[@]}"
+      if [ "$direct" = 0 ]; then
+        [ $# -gt 0 ] || set -- build
+        [ "$1" = build ] ||
+          die "--targets-file lists aliases, which only dune's build takes: tools/test-run.sh repeat --targets-file FILE N [build [DUNE OPTIONS...]], not $1"
+      fi
+      targets_splice "$@"
+      set -- "${targets_spliced[@]}"
+    fi
     if [ "$direct" = 1 ]; then
       # The operands `fresh` takes (fresh_argv): the replay plans per-test aliases only.
       fresh_argv "$@"
@@ -4412,6 +4427,19 @@ case $sub in
           shift "$opt_shift" ;;
         --cpu | --cpu=* | --gpu | --gpu=*) refuse_slot_option "$1" ;;
         --) shift; break ;;
+        # `fresh` reads `-j N` anywhere among its operands (fresh_argv).
+        -j | -j*) [ "$sub" = fresh ] && break
+          die "$sub: $1 is dune's option, and dune reads its first word as the subcommand: write it after the verb, tools/test-run.sh $sub [OPTIONS...] build -j N @TARGET..." ;;
+        # Any other leading dash word is an option this script does not take
+        # (gh-ocannl-1797): handed on, dune would read it as its subcommand
+        # (`unknown command`) after the lock, the readers and the slot.
+        -*)
+          case $sub in
+            fresh) form='fresh [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]... @DIR/KIND-NAME... [-j N]' ;;
+            *) form="$sub [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]... [DUNE ARGS...]" ;;
+          esac
+          die "$sub: unknown option $1
+  usage: tools/test-run.sh $form" ;;
         *) break ;;
       esac
     done

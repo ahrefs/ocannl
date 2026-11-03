@@ -123,14 +123,11 @@ let () =
      [timing_ctx] gives the tuner a scratch lineage (with its own freshly initialized parameter
      buffers) to time candidates against, so the timing runs cannot perturb the real training state
      (a step timed on all-zero data inputs poisons parameters with inf/NaN through log 0). *)
-  (* The crown and the finals outcome go to stderr ([Autotune.crown_fields]): a golden diff on another box is
-     traced to the seed that won without rerunning under [autotune_log]. *)
+  (* The crown and the finals outcome reach stderr through the [train-circles_conv] rule's
+     [--ocannl_autotune_log=crown] (gh-ocannl-1718). *)
   let scratch = Train.init_params (Context.auto ()) bindings batch_loss in
   let ctx, sgd_routine =
-    Autotune.tune ~rounds:0 ~seed_block_sizes:[] ~timing_ctx:scratch
-      ~report:(fun r ->
-        Stdio.eprintf "circles_conv: tune %s (not part of the golden)\n%!" (Autotune.crown_fields r))
-      ctx
+    Autotune.tune ~rounds:0 ~seed_block_sizes:[] ~timing_ctx:scratch ctx
       (Asgns.sequence [ update; sgd ])
       bindings
   in

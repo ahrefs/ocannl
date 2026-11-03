@@ -262,15 +262,21 @@ let () =
      report still answers "did tuning beat the default?". The default seed's own window can be the
      refused one, which leaves no measurement to be the reference — admitted only against the
      refusal count (gh-ocannl-892). *)
+  (* The winner beats the default it is reported against, unless the beam finals (gh-ocannl-1635)
+     crowned it over the default -- judged on the report's own default and finals. *)
+  let beats_default (r : Autotune.report) =
+    match r.Autotune.default_ms with
+    | Some d -> Float.(r.Autotune.best_ms <= d) || Autotune.finals_outranked r ~search_ms:d
+    | None -> true
+  in
   p
     "the default reference is measured and survives the cache round-trip, or is contention-refused \
      (gh-ocannl-552)"
-    (reference_measured r1 && reference_measured r2
-    &&
-    match r1.Autotune.default_ms with
-    (* Unless the beam finals (gh-ocannl-1635) crowned the winner over the default. *)
-    | Some d1 -> Float.(r1.Autotune.best_ms <= d1) || Autotune.finals_outranked r1 ~search_ms:d1
-    | None -> true);
+    (reference_measured r1 && reference_measured r2 && beats_default r1);
+  (* The second call's report, a cache replay (whose best, default and finals are the first search's
+     stored entry, gh-ocannl-1725) or a search of its own, is held to the same judgement. *)
+  p "the second call's winner beats its default, or the finals outranked it (gh-ocannl-1725)"
+    (beats_default r2);
   (* Codex P2 on PR #279: the cache key covers neither the scheduling gates nor the preset
      thresholds, so a config change can redefine the default pipeline without missing the cache.
      Simulated by rewriting the stored entry's fingerprint: the entry still hits — the winner replay

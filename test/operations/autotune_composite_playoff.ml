@@ -436,10 +436,9 @@ let () =
    windows. *)
 let () =
   let search ?(refuse_r_finals = false) ?(lucky_r = false) ?cache_dir ~finals_margin ~tag () =
-    let r = ref None and windows_of = Hashtbl.create (module String) and calls = ref [] in
+    let r = ref None and window_index = Scripted_search.window_index () and calls = ref [] in
     let composite (w : Scripted_search.window) =
-      let k = Option.value (Hashtbl.find windows_of w.label) ~default:0 in
-      Hashtbl.set windows_of ~key:w.label ~data:(k + 1);
+      let k = window_index w in
       if Option.is_none !r then r := Some w.label;
       let r = Option.value_exn !r in
       if String.equal w.label r then

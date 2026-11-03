@@ -124,6 +124,9 @@ let raw_entries =
         "[scanner-refusal:b9a291d865e79e74582ef22daf02fd3a] AGENTS.md";
         "[scanner-refusal:2bd517cf99304ae6d8358f4bfc6d3995] synthesized guide of";
         "[scanner-refusal:6e5c887df5f7f65a45a232ef22d04e62] synthesized guide one";
+        "[scanner-refusal:6f380ec6130d7d24a10cfd39521bdaec] synthesized guide at";
+        "[scanner-refusal:2c8e54e9bdb6518252759d38c07973aa] synthesized guide one";
+        "[scanner-refusal:c32f3dd124b270ba497cf74ca1bc7e77] synthesized guide of";
       ] );
     ( "agent_notes_structure.ml",
       [
@@ -213,6 +216,27 @@ let raw_entries =
         "[scanner-refusal:90a5bf8d781c4ed0a5407b52bd9fa3cd] arguments the rule's";
         "[scanner-refusal:a02da6b10b325cc5503fe4adf61da286] reaches the scanner-defect";
         "[scanner-refusal:01eec44b44e6e6a758bc7e95ef545443] Generated.init";
+      ] );
+    ( "vendor_stub_arms_scan.ml",
+      [
+        "[scanner-refusal:99b67dac359b15961fd222795ccfdc9b] does not read";
+        "[scanner-refusal:e62fde2478073ff697b31a8548df54f1] dune-file glob matches";
+        "[scanner-refusal:513451a79c3ecc3b1fb18f6fee5ee404] arrayjit/vendor_stubs/<package>/dune";
+        "[scanner-refusal:b079d32e59c7b93562738e4061682b90] arrayjit/vendor_stubs/";
+        "[scanner-refusal:ec6cead6a475041460ddead2715a32a1] copies it into";
+        "[scanner-refusal:b420bc79cbc7a037b600c9d47c9b2525] arrayjit/vendor_stubs/";
+        "[scanner-refusal:90b26d38400dc5a37ed715269ba3cfbe] every vendor-gated select";
+      ] );
+    ( "gc_witness_scan.ml",
+      [
+        "[scanner-refusal:bb492e73ce6ee9658023c7166722ae26] does not parse";
+        "[scanner-refusal:a141110d8dafdb095f38e629e190938e] GC-read reader raised";
+        "[scanner-refusal:cfb5bf5a45572766fd5b7e992f5def00] tree matches nothing";
+        "[scanner-refusal:cc1c10dcb5499a78d5036fdb6d119347] test/support/gc_witness.ml";
+        "[scanner-refusal:ca35f91c4bd8f24f92904bf594065571] test/support/gc_witness.ml";
+        "[scanner-refusal:9f04461988176709dae4ee0369affcf2] test/support/gc_witness.ml";
+        "[scanner-refusal:36666810510239397bacb5a2cf2ba433] test/support/gc_witness.ml";
+        "[scanner-refusal:e5296137466c1af2ac14a5d6fa9717fb] still forces collections";
       ] );
     ( "cache_dir_ignores.ml",
       [
@@ -458,6 +482,7 @@ let raw_entries =
         "[scanner-refusal:be41f253ce4b808b6b4ec587c304ec08] repository-wide scan rule";
         "[scanner-refusal:b040632469771b25abb3469878413be3] the repository scanner";
         "[scanner-refusal:b7991c01507b15cea041c6066f07038b] names the training";
+        "[scanner-refusal:2a4ae5808191d606dc5b7b74dd4ef93e] names the lock";
         "[scanner-refusal:bbadfd8513559355fedbc54dc3dc678a] serializes its actions";
         "[scanner-refusal:eb5d5419b3bd18240469743cbabc58f2] has actions on";
         "[scanner-refusal:a06dccc27afe2153a7700609691d3c8d] attaches a rule";
@@ -486,6 +511,7 @@ let raw_entries =
         "[scanner-refusal:5893c6332b1f903470ec51cad4f20e8f] holds inline tests";
         "[scanner-refusal:5f2b09efad6e397fb5bd77b84255d0bf] runs inline tests";
         "[scanner-refusal:677d819fac904c64b7025b4f17c07b5a] its stanza starts";
+        "[scanner-refusal:77d0be0fe2fca9a97da8be7f833d9c6e] is spelled without";
         "[scanner-refusal:25657f61eca857f6fd2f34de66e81eaf] scanner refusal";
         "[scanner-refusal:fe4c53f899eb08a9ae67e7a797a5a841] scanner-refusal exemptions no";
         "[scanner-refusal:05b0b536b88908d4ef277447d7e82ae3] exempt_reads";
@@ -535,6 +561,11 @@ let raw_entries =
         "[scanner-refusal:248545b295fe9393f046d06407875db5] family alias defined";
         "[scanner-refusal:65fecdef5d771aadd55c653ca5f36ccd] group whose actions";
         "[scanner-refusal:3200824ccd2f1707a2ea135232ae64ed] per-directory lock and";
+        "[scanner-refusal:93882a7d0ee00a277420de73a0971879] refused naming both";
+        "[scanner-refusal:61d28abcff988cb53c2d14ed6a3c9b08] same relative lock";
+        "[scanner-refusal:9cf07fbca9351e2f1f3a8ec460854813] sibling directories resolve";
+        "[scanner-refusal:869d4851cd153a86c278696b8d6b4f89] spelling written in";
+        "[scanner-refusal:b4e757c29c3b7fcc02f6b6166b7321e1] compared across directories";
         "[scanner-refusal:84e456282a1ff74968abe67ae2fa4694] executable's public name";
         "[scanner-refusal:be7f67353f6c0f8782c3b867b1023af5] runtest-<name> dune generates";
         "[scanner-refusal:4a8965b97909e604cda0ce07fd679917] a lifecycle member";
@@ -723,6 +754,9 @@ let raw_entries =
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:0599e4e661e8f3457de44f5cb1b23a1a] compares float readbacks";
         "[scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised";
+        "[scanner-refusal:085cfc1230ac1435b3930c2de950d243] passes `~min";
+        "[scanner-refusal:fccffb542fab0ec734024940e42605cc] exempt_floors";
+        "[scanner-refusal:4dde956f3421b7ae6e9cff871b40d8b4] floor reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
         "[scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that";
@@ -739,6 +773,9 @@ let raw_entries =
         "[scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read";
         "[scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims";
         "[scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims";
+        "[scanner-refusal:43f45dea7e13ae71ff6e05054baafcca] quantified claim passes";
+        "[scanner-refusal:e7253c1a7a914e2fb31ae0576e3b56eb] the literal floors";
+        "[scanner-refusal:72bcef9d9ddc2338fe8af8ef65990041] Verdict.Claims";
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
         "[scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims";
         "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";
@@ -906,6 +943,12 @@ let raw_direct_evidence =
        reported there too: true" );
     ( "env_var_deps.ml:b7991c01507b15cea041c6066f07038b",
       "the training lock spelled without its leading `/` is a per-directory lock, and is refused: \
+       true" );
+    ( "env_var_deps.ml:2a4ae5808191d606dc5b7b74dd4ef93e",
+      "a lock name built from a pform cannot be compared across directories, and is refused: true"
+    );
+    ( "env_var_deps.ml:77d0be0fe2fca9a97da8be7f833d9c6e",
+      "one relative lock name written in two directories is two locks, and is refused naming both: \
        true" );
     ( "env_var_deps.ml:eb5d5419b3bd18240469743cbabc58f2",
       "a rule on a `(test)`'s generated alias that runs ANOTHER directory's binary is not the \

@@ -16,7 +16,10 @@
     - {b Tracked binding}: a [let x = e] of the file's own top-level structure whose [e], under type
       constraints, is an allocation: [ref _] (also [Stdlib.ref], [Base.ref]), or [M.create _] /
       [M.make _] for [M] one of [Hashtbl], [Hashtbl.Poly], [Hash_set], [Hash_set.Poly], [Queue],
-      [Stack], [Array].
+      [Stack], [Array], or [M.create _] for [M] a module the file binds at top level to an ephemeron
+      table (gh-ocannl-1797): [module M = Ephemeron.K1.Make (…)] (also [Stdlib.], [K2], [Kn],
+      [MakeSeeded]), the [Ephemeron] or [Stdlib] it names not one the file binds. Any other
+      functor's result stays unread.
     - {b Tracked record value} (gh-ocannl-1573): a [let x = { … }] of the top-level structure whose
       record literal, under constraints, resolves to exactly one record type the file declares at
       top level with a [mutable] field -- by a type constraint naming it (on the binding or the
@@ -32,8 +35,11 @@
       is a write, [Hash_set.mem] a read; [a.(i) <- v] is [Array.set]). A [Stdlib.] or [Base.]
       qualifier is dropped first. The function must be the library's: a name or head module the file
       binds in scope (a local [module Hash_set], a [let ( := )]) classifies nothing, so the
-      occurrence is refused as unclassified. A write must be saturated -- at least its listed arity
-      in arguments -- since a partial application is a closure that writes later.
+      occurrence is refused as unclassified -- except that an ephemeron table is read or written
+      through [M.f] for [M] a module bound in scope, at the occurrence, to an ephemeron table
+      functor's application (any such module: the type checker ties the table to one), never an
+      alias of one. A write must be saturated -- at least its listed arity in arguments -- since a
+      partial application is a closure that writes later.
     - {b Accounting}: a write is accounted for when its nearest enclosing let-bound function (any
       [let f … = fun …] at any depth; the top-level definition when none encloses it) contains a
       call [note_mutation ()] in its own body, callbacks included -- a function literal passed as an
@@ -68,7 +74,7 @@
     - any other use of a tracked name: passed to a helper, aliased, a container function outside the
       lists, a ref given to a container function;
     - an allocation at a binding head outside the list above ([Foo.create], [Foo.make] for any other
-      [Foo]) -- unread, so name it or extend the list;
+      [Foo], including a module made by any other functor) -- unread, so name it or extend the list;
     - module-level state the scan does not resolve: an allocation bound by a non-variable pattern,
       one evaluated at module initialization but hidden under a local [let] of a top-level value
       ([let fresh = let uid = ref 0 in fun () -> …]) or in the body of a function the initializer
@@ -144,6 +150,8 @@ let container_modules =
     [ "Array" ];
   ]
 
+(* The container family of a table made by an ephemeron table functor ({!ephemeron_table}). *)
+let ephemeron_family = "Ephemeron"
 let ref_reads = [ [ "!" ] ]
 
 (* A write's arity is the number of arguments a saturated call passes (labelled ones included,
@@ -259,6 +267,20 @@ let family_functions =
     ( "Array",
       ( [ "get"; "unsafe_get"; "length"; "iter"; "iteri"; "fold"; "exists"; "for_all"; "to_list" ],
         [ ("set", 3); ("unsafe_set", 3); ("fill", 4); ("blit", 5); ("sort", 2); ("swap", 3) ] ) );
+    (* Stdlib's [Ephemeron.S]/[Ephemeron.SeededS], through a module {!ephemeron_table} recognizes:
+       [clean] drops dead bindings, a write like any other. *)
+    ( ephemeron_family,
+      ( [ "find"; "find_opt"; "find_all"; "mem"; "length"; "stats"; "stats_alive" ],
+        [
+          ("add", 3);
+          ("replace", 3);
+          ("remove", 2);
+          ("clear", 1);
+          ("reset", 1);
+          ("clean", 1);
+          ("add_seq", 2);
+          ("replace_seq", 2);
+        ] ) );
   ]
 
 let kind_name = function
@@ -306,11 +328,42 @@ let record_literal (vb : value_binding) =
   in
   go vb.pvb_expr from_pattern
 
-let allocation (e : expression) =
+(* The functors whose result is a weak-keyed hash table, [Ephemeron.S] or [Ephemeron.SeededS]. *)
+let ephemeron_table_functors =
+  List.concat_map [ "K1"; "K2"; "Kn" ] ~f:(fun k ->
+      List.map [ "Make"; "MakeSeeded" ] ~f:(fun f -> [ "Ephemeron"; k; f ]))
+
+(* Whether a module expression, under constraints, applies one of [ephemeron_table_functors] (to one
+   argument or, [K2]'s, two), spelled [Ephemeron.…] or [Stdlib.Ephemeron.…] -- the library's only
+   when [bound], whether the file binds a module of that name in scope, says the head is not the
+   file's own. *)
+let ephemeron_table ~bound (me : module_expr) =
+  let rec applied (me : module_expr) =
+    match me.pmod_desc with
+    | Pmod_constraint (me, _) -> applied me
+    | Pmod_apply (f, _) -> functor_path f
+    | _ -> None
+  and functor_path (f : module_expr) =
+    match f.pmod_desc with
+    | Pmod_ident { txt; _ } -> flatten txt
+    | Pmod_apply (f, _) | Pmod_constraint (f, _) -> functor_path f
+    | _ -> None
+  in
+  match applied me with
+  | Some ("Stdlib" :: path) when not (bound "Stdlib") ->
+      List.mem ephemeron_table_functors path ~equal:(List.equal String.equal)
+  | Some ("Ephemeron" :: _ as path) when not (bound "Ephemeron") ->
+      List.mem ephemeron_table_functors path ~equal:(List.equal String.equal)
+  | _ -> false
+
+(* [ephemeral m]: whether the module name [m] denotes an ephemeron table module at the
+   allocation. *)
+let allocation ~ephemeral (e : expression) =
   match (strip e).pexp_desc with
   | Pexp_apply ({ pexp_desc = Pexp_ident { txt; _ }; _ }, _) -> (
       match Option.map (flatten txt) ~f:unqualified with
       | Some [ "ref" ] -> `Alloc Ref
+      | Some [ m; "create" ] when ephemeral m -> `Alloc (Container ephemeron_family)
       | Some path -> (
           match List.rev path with
           | ("create" | "make") :: (_ :: _ as rev_module) ->
@@ -464,6 +517,11 @@ let scan ~file ?(serial_owner = false) ?(require_capture = false) ?interface sou
         None
   in
   (* {2 Discovery} *)
+  (* The modules the top-level structure has bound so far, each with whether it is an ephemeron
+     table module ({!ephemeron_table}); a later binding of the name replaces it. Discovery walks the
+     items in order, so a binding head sees the modules in scope where it is spelled. *)
+  let top_modules = Hashtbl.create (module String) in
+  let ephemeral m = Option.value (Hashtbl.find top_modules m) ~default:false in
   (* The record types the file declares at top level, by name: what a module-level record value is
      resolved against. *)
   let record_types =
@@ -516,7 +574,7 @@ let scan ~file ?(serial_owner = false) ?(require_capture = false) ?interface sou
               self#expression body
           | _ ->
               (if not (phys_equal (strip e) (strip vb.pvb_expr)) then
-                 match allocation e with
+                 match allocation ~ephemeral e with
                  | `Alloc _ | `Unknown _ -> found := line_of e.pexp_loc :: !found
                  | `No -> ());
               super#expression e
@@ -530,8 +588,19 @@ let scan ~file ?(serial_owner = false) ?(require_capture = false) ?interface sou
         match item.pstr_desc with
         | Pstr_value (_, vbs) -> List.iter vbs ~f:(discover_binding ~nested)
         | Pstr_extension ((_, PStr items), _) -> discover ~nested:true items
-        | Pstr_module { pmb_expr; _ } -> discover_module pmb_expr
-        | Pstr_recmodule mbs -> List.iter mbs ~f:(fun mb -> discover_module mb.pmb_expr)
+        | Pstr_module { pmb_name; pmb_expr; _ } -> (
+            discover_module pmb_expr;
+            match pmb_name.txt with
+            | Some name when not nested ->
+                Hashtbl.set top_modules ~key:name
+                  ~data:(ephemeron_table ~bound:(Hashtbl.mem top_modules) pmb_expr)
+            | _ -> ())
+        | Pstr_recmodule mbs ->
+            List.iter mbs ~f:(fun mb ->
+                if not nested then
+                  Option.iter mb.pmb_name.txt ~f:(fun name ->
+                      Hashtbl.set top_modules ~key:name ~data:false));
+            List.iter mbs ~f:(fun mb -> discover_module mb.pmb_expr)
         | Pstr_include { pincl_mod; _ } -> discover_module pincl_mod
         | _ -> ())
   and discover_module me =
@@ -545,7 +614,7 @@ let scan ~file ?(serial_owner = false) ?(require_capture = false) ?interface sou
   and discover_binding ~nested vb =
     let line = line_of vb.pvb_loc in
     let name = binding_name vb in
-    let head = allocation vb.pvb_expr in
+    let head = allocation ~ephemeral vb.pvb_expr in
     let hidden = hidden_allocations vb in
     let cls = classification_of vb.pvb_attributes in
     let exempt = match cls with Some (A_exempt _, a) -> Some a | _ -> None in
@@ -560,9 +629,9 @@ let scan ~file ?(serial_owner = false) ?(require_capture = false) ?interface sou
         unread_exempt := Option.value name ~default:"<pattern>" :: !unread_exempt
     | `Unknown path ->
         finding line
-          "%s is not a constructor the scan reads (the closed list: ref, and create/make of \
-           Hashtbl, Hashtbl.Poly, Hash_set, Hash_set.Poly, Queue, Stack, Array); extend the list \
-           or bind something it reads"
+          "%s is not a constructor the scan reads (the closed list: ref, create/make of Hashtbl, \
+           Hashtbl.Poly, Hash_set, Hash_set.Poly, Queue, Stack, Array, and create of a module made \
+           by Ephemeron.K1/K2/Kn.Make or MakeSeeded); extend the list or bind something it reads"
           path
     | `No -> (
         match (record_literal vb, name, nested) with
@@ -730,13 +799,18 @@ let scan ~file ?(serial_owner = false) ?(require_capture = false) ?interface sou
   in
   let scanner =
     object (self)
-      inherit [denotation, [ `Local ]] Lexical_scope.scoped as super
+      inherit [denotation, [ `Local | `Ephemeron_table ]] Lexical_scope.scoped as super
       method local = `Local
 
       (* Every module binding the file makes is local: a [Row] bound anywhere in scope -- a module,
-         a functor parameter, an unpack -- is not the library's. *)
+         a functor parameter, an unpack -- is not the library's. One applying an ephemeron table
+         functor is local too, and is also what its tables' reads and writes go through. *)
       method module_path _ _ = Some `Local
       method! shadowed = Some `Local
+
+      method! module_of env me =
+        if ephemeron_table ~bound:(Map.mem env.Lexical_scope.modules) me then Some `Ephemeron_table
+        else super#module_of env me
 
       method! binding_denotes _ vb =
         let key = vb.pvb_loc.loc_start.pos_cnum in
@@ -859,12 +933,26 @@ let scan ~file ?(serial_owner = false) ?(require_capture = false) ?interface sou
                             | Some arity -> `Write arity
                             | None -> `Unlisted)
                       | Container family -> (
+                          (* An ephemeron table's functions are its module's: [M.f] for [M] an
+                             ephemeron table module in scope here. *)
+                          let fname =
+                            if String.equal family ephemeron_family then
+                              match flatten fn with
+                              | Some [ m; fname ] -> (
+                                  match Map.find env.Lexical_scope.modules m with
+                                  | Some `Ephemeron_table -> Some fname
+                                  | Some `Local | None -> None)
+                              | _ -> None
+                            else
+                              match path with
+                              | head :: (_ :: _ as rest) when String.equal head family ->
+                                  Some (List.last_exn rest)
+                              | _ -> None
+                          in
                           match
-                            (path, List.Assoc.find family_functions family ~equal:String.equal)
+                            (fname, List.Assoc.find family_functions family ~equal:String.equal)
                           with
-                          | head :: (_ :: _ as rest), Some (reads, writes)
-                            when String.equal head family -> (
-                              let fname = List.last_exn rest in
+                          | Some fname, Some (reads, writes) -> (
                               if List.mem reads fname ~equal:String.equal then `Read
                               else
                                 match List.Assoc.find writes fname ~equal:String.equal with

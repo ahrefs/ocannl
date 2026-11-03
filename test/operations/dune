@@ -128,6 +128,10 @@
   (alias runtest-cache_dir_ignores_control)
   (alias runtest-generated_lock_scan)
   (alias runtest-generated_lock_scan_control)
+  (alias runtest-vendor_stub_arms_scan)
+  (alias runtest-vendor_stub_arms_scan_control)
+  (alias runtest-gc_witness_scan)
+  (alias runtest-gc_witness_scan_control)
   (alias runtest-atomic_file_rename_scan)
   (alias runtest-atomic_file_rename_scan_control)
   (alias runtest-dead_export_scan)
@@ -339,6 +343,10 @@
   (alias runtest-cache_dir_ignores_control)
   (alias runtest-generated_lock_scan)
   (alias runtest-generated_lock_scan_control)
+  (alias runtest-vendor_stub_arms_scan)
+  (alias runtest-vendor_stub_arms_scan_control)
+  (alias runtest-gc_witness_scan)
+  (alias runtest-gc_witness_scan_control)
   (alias runtest-atomic_file_rename_scan)
   (alias runtest-atomic_file_rename_scan_control)
   (alias runtest-dead_export_scan)
@@ -477,6 +485,11 @@
  (libraries ocannl)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; Every backend has a log golden, CUDA's included, but CUDA's is DELIBERATELY a two-line skip
+; notice, not a log: micrograd_demo_logging.ml exits early on CUDA because its routine logs print
+; inline expressions differently and read unstable intermediate debug values (commit d63701452;
+; docs/proposals/cuda-runtest-divergences.md lists it as an accepted divergence).
 
 (rule
  (target "backend-0-0.log.actual")
@@ -4183,6 +4196,12 @@
   generated_lock_scan.ml
   generated_lock_scan.expected
   generated_lock_scan_control.expected
+  vendor_stub_arms_scan.ml
+  vendor_stub_arms_scan.expected
+  vendor_stub_arms_scan_control.expected
+  gc_witness_scan.ml
+  gc_witness_scan.expected
+  gc_witness_scan_control.expected
   census_total_ratchet.ml
   census_total_ratchet.expected
   codegen_text_inventory.ml
@@ -4278,6 +4297,10 @@
    cache_dir_scan_cases.expected,cache_dir_ignores.expected,cache_dir_ignores_control.expected
    generated_lock_scan.ml
    generated_lock_scan.expected,generated_lock_scan_control.expected
+   vendor_stub_arms_scan.ml
+   vendor_stub_arms_scan.expected,vendor_stub_arms_scan_control.expected
+   gc_witness_scan.ml
+   gc_witness_scan.expected,gc_witness_scan_control.expected
    census_total_ratchet.ml
    census_total_ratchet.expected
    codegen_text_inventory.ml
@@ -4636,6 +4659,120 @@
   (diff
    generated_lock_scan_control.expected
    generated_lock_scan_control.actual)))
+
+; gh-ocannl-1688 follow-up: every vendor-gated `select` arm of every dune file is copied under
+; `arrayjit/vendor_stubs/` and compiled there by a library, so that `@check` type-checks it off the
+; vendor's box; an arm left uncopied is type-checked nowhere, silently. Which libraries are vendor
+; ones is derived from the stand-in tree itself (the scan's header says how). `--control` holds the
+; rule to synthetic trees.
+
+(executable
+ (name vendor_stub_arms_scan)
+ (modules vendor_stub_arms_scan)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- links no backend: it reads dune files as text.
+ ; Two targets: the file list goes over as a `@<path>` response file, see `test/support/scan_argv.ml`.
+ (targets vendor_stub_arms_scan.actual vendor_stub_arms_scan.filelist)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (glob_files_rec ../../dune))
+ (action
+  (progn
+   (with-stdout-to
+    vendor_stub_arms_scan.filelist
+    (echo "%{deps}"))
+   (with-stdout-to
+    vendor_stub_arms_scan.actual
+    (run
+     %{dep:vendor_stub_arms_scan.exe}
+     %{workspace_root}
+     @vendor_stub_arms_scan.filelist)))))
+
+(rule
+ (alias runtest-vendor_stub_arms_scan)
+ (package neural_nets_lib)
+ (action
+  (diff vendor_stub_arms_scan.expected vendor_stub_arms_scan.actual)))
+
+(rule
+ ; ocannl-backend: none -- runs the scan over synthetic trees held in its own source.
+ (target vendor_stub_arms_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  vendor_stub_arms_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:vendor_stub_arms_scan.exe} --control))))
+
+(rule
+ (alias runtest-vendor_stub_arms_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff
+   vendor_stub_arms_scan_control.expected
+   vendor_stub_arms_scan_control.actual)))
+
+; Post-wave task post-1-task-12 follow-up (lukstafi/ocannl-staging#1581): a test reads the GC
+; through Gc_witness. Every .ml under test/ is parsed, and a forced major collection or a weak
+; observer outside test/support/gc_witness.ml is refused; the reader's closed list of forms, and
+; what it does not read (arrayjit/test/ is another package), are in the scan's header. `--control`
+; holds the rule to synthetic sources.
+
+(executable
+ (name gc_witness_scan)
+ (modules gc_witness_scan)
+ (libraries base stdio ppxlib test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- parses test sources without running a backend.
+ (target gc_witness_scan.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../../test))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:gc_witness_scan.exe}
+    %{workspace_root}
+    %{dep:gc_witness_scan.exe}
+    %{target}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-gc_witness_scan)
+ (package neural_nets_lib)
+ (action
+  (diff gc_witness_scan.expected gc_witness_scan.actual)))
+
+(rule
+ ; ocannl-backend: none -- runs the scan over synthetic sources held in its own source.
+ (target gc_witness_scan_control.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  gc_witness_scan.ml)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:gc_witness_scan.exe} --control))))
+
+(rule
+ (alias runtest-gc_witness_scan_control)
+ (package neural_nets_lib)
+ (action
+  (diff gc_witness_scan_control.expected gc_witness_scan_control.actual)))
 
 ; gh-ocannl-803/862: raw OCaml rename publication belongs in Utils.Atomic_file. The source glob is
 ; recursive over the whole repository, so a new top-level directory joins the scan without another
@@ -7840,7 +7977,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules conv_detection_boundary)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11100,7 +11237,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules lineage_fragments)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11119,7 +11256,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules dropped_graph_reclaimed)
- (libraries base ocannl stdio arrayjit.verdict gc_witness)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11135,7 +11272,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules shared_grad_refusal)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11151,7 +11288,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules lacks_grad_reset_hint)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11171,7 +11308,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules never_zeroed_grad)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11182,7 +11319,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules fragment_sequenced_twice)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -11867,6 +12004,7 @@
         %{dep:bench_line_samples.exe}
         harness
         --ocannl_backend=cc
+        --ocannl_autotune_timing=isolated
         --ocannl_schedule_log_launches=true))))
     (with-stdout-to
      bench_lines_trace.out
@@ -13016,7 +13154,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules op_schemes)
- (libraries base ocannl stdio arrayjit.verdict stderr_capture)
+ (libraries base ocannl stdio arrayjit.verdict gc_witness stderr_capture)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -13046,7 +13184,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules rewind_registries_bounded)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

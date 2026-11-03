@@ -259,6 +259,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-foreign_c_stderr
   test/operations/dune                     @runtest-foreign_c_stderr_noise
   test/operations/dune                     @runtest-fp_contract_pin_scan
+  test/operations/dune                     @runtest-gc_witness_scan
+  test/operations/dune                     @runtest-gc_witness_scan_control
   test/operations/dune                     @runtest-generated_lock_scan
   test/operations/dune                     @runtest-generated_lock_scan_control
   test/operations/dune                     @runtest-generated_provenance
@@ -324,6 +326,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-top_down_prec-extension
   test/operations/dune                     @runtest-top_down_prec-unoptimized
   test/operations/dune                     @runtest-unary_math_special_values-reproducible
+  test/operations/dune                     @runtest-vendor_stub_arms_scan
+  test/operations/dune                     @runtest-vendor_stub_arms_scan_control
   test/operations/dune                     @runtest-verdict_quantified
   test/operations/dune                     @runtest-verdict_ratchet
   test/operations/dune                     @runtest-workflow_job_timeouts

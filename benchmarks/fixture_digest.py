@@ -59,6 +59,7 @@ import platform
 import re
 import struct
 import sys
+import traceback
 from collections import namedtuple
 from pathlib import Path
 
@@ -1142,5 +1143,24 @@ def _main(argv=None):
     return 0
 
 
+def cli(argv=None):
+    """The command line's exit status. 0 and 1 are verdicts (1: a fixture not recorded, not of the
+    expected origin, or a refusal), 2 a usage error -- argparse's, and also, never 1, an UNEXPECTED
+    error: a traceback exiting with Python's default 1 would read as the "not recorded" verdict to
+    every caller that branches on the status (gh-ocannl-1797). SystemExit, the verdicts' and the
+    refusals' own channel, passes through unchanged, and so does a KeyboardInterrupt."""
+    try:
+        return _main(argv)
+    except SystemExit:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        # The last line names the error too: a caller that reports only the output's tail
+        # (check-box.sh) still says what went wrong.
+        print("fixture_digest.py: unexpected error, exit 2 -- not a verdict about any fixture: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(_main())
+    sys.exit(cli())

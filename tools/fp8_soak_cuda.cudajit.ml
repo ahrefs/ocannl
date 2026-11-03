@@ -1,9 +1,11 @@
 (* The CUDA arm of the fp8 soak (gh-ocannl-657): narrow every input with [__nv_fp8_e5m2] and hand
    the codes back. Nothing here knows what the answers are compared against, what the vendor type is
    called in a claim, or which narrowing spellings this platform has -- fp8_soak.ml owns all of that
-   (its [ARM] signature and [cuda_vendor] record), because THIS FILE IS COMPILED ONLY ON A BOX WITH
-   cudajit and every edit to it is made blind everywhere else (gh-ocannl-758). What belongs here is
-   the kernel source and the calls into cudajit; anything else belongs in fp8_soak.ml.
+   (its [ARM] signature and [cuda_vendor] record), because THIS FILE IS LINKED AND RUN ONLY ON A BOX
+   WITH cudajit (gh-ocannl-758): every other box type-checks it against arrayjit/vendor_stubs
+   (gh-ocannl-1688), but only that box learns whether an edit still drives the vendor correctly.
+   What belongs here is the kernel source and the calls into cudajit; anything else belongs in
+   fp8_soak.ml.
 
    The kernel casts to the vendor type exactly as [Cuda_backend]'s [convert_precision] emits it:
    [(__nv_fp8_e5m2)x] for a float and for a double, which is a saturating round-to-nearest-even
@@ -15,8 +17,9 @@
 open Base
 module Cu = Cuda
 
-(* Update this whenever you compile this file on a box that has cudajit -- the run header prints it,
-   and it is what tells the next editor whether they are editing blind (gh-ocannl-758). *)
+(* Update this whenever you run this file on a box that has cudajit -- the run header prints it, and
+   it is what tells the next editor how long the arm has gone without a real run (gh-ocannl-758);
+   type-checking happens everywhere through arrayjit/vendor_stubs. *)
 let last_compiled = "on rog-nv-wsl (RTX 5070 Ti Laptop, CUDA 13.3), 2026-08-27, staging PR #490"
 let built = true
 

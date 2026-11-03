@@ -1387,7 +1387,9 @@ files.
   `Context.routine.grid`, and `grid_serial_timed` lists every ranked candidate whose schedule asks
   for a `Grid` loop (`Autotune.schedule_asks_grid`, read off the saved schedule) while its census
   records a serial one (`Autotune.grid_rendered_serially`); each also gets a `NOTE grid-serial`
-  line in `autotune_log`. Keyed on the schedule because the label under-promises: the whole-triple
+  line in `autotune_log`. Downstream, `Train.tune_placements`' arm line appends the crown's census
+  when it asked on a pool, the bench result line carries a per-arm `grid` object and the shipped
+  routines' `tune.grid`, and `orchestrate.py` prints a `GRID NOTICE` (not a gate). Keyed on the schedule because the label under-promises: the whole-triple
   `W_sketch[mma-cpu 16x0x0]` carries no ` grid` token yet Grid-splits its row loop (at 64^3 that
   loop is on the pool; its zeroing nest's Grid, 64^2 updates, is under the launch floor). The
   seeding pre-filter weighs a Grid shape's known per-chunk locals against the cap: its in-kernel
@@ -3161,7 +3163,9 @@ files.
   tests the beam finals swapped the crown; the `crown` level prints one `autotune-crown:` line per
   `tune` call (every arm and flip of `Train.tune_placements` included), from the report as it is
   delivered, and adds no work (no untuned control). A caller rendering its own `~report` uses
-  `Autotune.crown_fields`, so a test's or bench's line spells the same fields. A call's `~log`
+  `Autotune.crown_fields`, so a test's or bench's line spells the same fields; the `rounds:0`
+  training tests render none and pass `--ocannl_autotune_log=crown` in their `train-<name>`
+  rules instead. A call's `~log`
   still decides its own line: `false` silences it, `true` keeps it beside the rest.
 - **Seeding refusals are invisible to the decline census; `autotune_log_seeding=true` shows them**
   (gh-ocannl-1407). A refused seed never becomes a candidate, so neither the search report's

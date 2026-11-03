@@ -610,6 +610,8 @@ type tune_arms = {
       (** The census of the routine(s) this cell actually times (gh-ocannl-626), recorded by
           {!collect_shipped}. Kept apart from the arms' because the crowned candidate of an arm is
           not always the shipped artifact — see {!collect_shipped}. *)
+  mutable shipped_grid : Ir.C_syntax.grid_summary option;
+      (** The same routines' Grid census (gh-ocannl-1702), recorded beside [shipped_mma]. *)
 }
 
 let tune_arms () =
@@ -624,6 +626,7 @@ let tune_arms () =
     replays = 0;
     no_searches = 0;
     shipped_mma = None;
+    shipped_grid = None;
   }
 
 (** Counts one reported search by its provenance (gh-ocannl-644). Kept separate from {!collect_arm}
@@ -672,6 +675,30 @@ let step_census routines =
   Ir.C_syntax.merge_mma_summaries
     (List.map (compiled_step_routines routines) ~f:(fun r -> r.Context.mma))
 
+(** The Grid census of the same routines (gh-ocannl-1702), concatenated as
+    {!Ir.C_syntax.with_grid_census} nests compiles: the loops in order, the pool available when any
+    compile had it. *)
+let step_grid_census routines =
+  let grids = List.map (compiled_step_routines routines) ~f:(fun r -> r.Context.grid) in
+  let sum f = List.sum (module Int) grids ~f in
+  {
+    Ir.C_syntax.loops = List.concat_map grids ~f:(fun g -> g.Ir.C_syntax.loops);
+    pool = List.exists grids ~f:(fun g -> g.Ir.C_syntax.pool);
+    pool_rendered = sum (fun g -> g.Ir.C_syntax.pool_rendered);
+    serial = sum (fun g -> g.Ir.C_syntax.serial);
+  }
+
+(** A Grid census as {!Bench_json.grid_census} carries it. *)
+let grid_wire (g : Ir.C_syntax.grid_summary) =
+  {
+    Bench_json.pool = g.Ir.C_syntax.pool;
+    loops = List.length g.Ir.C_syntax.loops;
+    pool_rendered = g.Ir.C_syntax.pool_rendered;
+    serial = g.Ir.C_syntax.serial;
+    rendered_serially = Autotune.grid_rendered_serially g;
+    summary = Ir.C_syntax.grid_summary_string g;
+  }
+
 let mma_wire (m : Ir.C_syntax.mma_summary) =
   ( Ir.C_syntax.tensorization_name m.Ir.C_syntax.tensorization,
     m.Ir.C_syntax.statements,
@@ -690,7 +717,9 @@ let mma_wire (m : Ir.C_syntax.mma_summary) =
     that was discarded. In both cases the arm's label can claim tensorized over a routine that
     emitted no mma, which is the exact failure this whole field exists to prevent — so the fact is
     taken from the compiled routine, which cannot be wrong about itself. *)
-let collect_shipped t routines = t.shipped_mma <- Some (step_census routines)
+let collect_shipped t routines =
+  t.shipped_mma <- Some (step_census routines);
+  t.shipped_grid <- Some (step_grid_census routines)
 
 (** Whether this process ran a schedule search rather than replaying cached winners throughout — the
     [searched] field of the result line. See {!measure_and_emit}. *)
@@ -794,6 +823,9 @@ let tune_json t =
           ~mma_scalar_fallbacks:r.Autotune.best_mma_scalar_fallbacks
           ~mma_seeded:r.Autotune.mma_candidates ~mma_timed:r.Autotune.mma_timed
           ~mma_best_ms:r.Autotune.mma_best_ms
+          ~grid_asked:(Autotune.schedule_asks_grid r.Autotune.best_schedule)
+          ~grid_census:(Option.map r.Autotune.best_grid ~f:grid_wire)
+          ~grid_serial_timed:(List.length r.Autotune.grid_serial_timed)
           ~terminal_failure:
             (Option.map (Autotune.terminal_failure r) ~f:(fun tf -> tf.Autotune.detail))
       in
@@ -803,6 +835,7 @@ let tune_json t =
            ?substituted_from:t.substituted_from ~searches:t.searches ~replays:t.replays
            ~no_searches:t.no_searches
            ~shipped_mma:(Option.map t.shipped_mma ~f:mma_wire)
+           ?grid:(Option.map t.shipped_grid ~f:grid_wire)
            ~arms:(List.map named ~f:arm) ())
 
 let floats_of_gen g =

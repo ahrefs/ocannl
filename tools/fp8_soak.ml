@@ -30,8 +30,9 @@
 
    Exit status is a verdict: nonzero if any claim failed, so it can gate a release check.
 
-   WHAT LIVES WHERE (gh-ocannl-758): this module is compiled on every box, the per-vendor arms only
-   where their jit library is installed, so everything that is not a call into a vendor's jit
+   WHAT LIVES WHERE (gh-ocannl-758): this module is linked on every box, the per-vendor arms only
+   where their jit library is installed (every box still type-checks them against the stub libraries
+   of arrayjit/vendor_stubs, gh-ocannl-1688), so everything that is not a call into a vendor's jit
    library lives here -- the [vendor] records below hold each platform's name, C type, narrowing
    spellings and labels, and the reading of what its kernel macros mean. An arm holds its kernel
    source, its compile/load/launch/copy calls, and data extractors; its [last_compiled] says where
@@ -58,23 +59,24 @@ type arch_policy = [ `Device | `Backend ]
    clause in tools/dune -- not a second program, which is how the CUDA sweep and the HIP sweep
    drifted apart the first time.
 
-   THE SIGNATURE IS DELIBERATELY THIN (gh-ocannl-758). An arm file is compiled only on a box that
-   has its vendor's jit library, so an edit to one is made blind everywhere else and is first
-   typechecked by whichever session next runs on the right hardware -- which happened twice in two
-   days. So everything an arm could hold but does not have to CALL THE JIT LIBRARY FOR lives here
-   instead: the vendor's name and C type, its narrowing spellings and their labels, the probe and
-   header wording, the thresholds that decide which conversion path a macro reading means, and every
-   claim label. What remains in an arm is: the vendor kernel source, the compile/load/launch/copy
-   calls, and data extractors that read a vendor struct field or a kernel's own report. A change to
-   how the soak BEHAVES then never touches an arm; a change to an arm is a change to how this vendor
-   is driven. *)
+   THE SIGNATURE IS DELIBERATELY THIN (gh-ocannl-758). An arm file is linked and run only on a box
+   that has its vendor's jit library: every box type-checks it against the stub libraries of
+   arrayjit/vendor_stubs (gh-ocannl-1688), but whether it still drives the vendor correctly is first
+   learned by whichever session next runs on the right hardware. So everything an arm could hold but
+   does not have to CALL THE JIT LIBRARY FOR lives here instead: the vendor's name and C type, its
+   narrowing spellings and their labels, the probe and header wording, the thresholds that decide
+   which conversion path a macro reading means, and every claim label. What remains in an arm is:
+   the vendor kernel source, the compile/load/launch/copy calls, and data extractors that read a
+   vendor struct field or a kernel's own report. A change to how the soak BEHAVES then never touches
+   an arm; a change to an arm is a change to how this vendor is driven. *)
 module type ARM = sig
   val last_compiled : string
-  (** Where and when this arm's source was last really compiled: the box, the date, and where the
-      evidence lives — the PR that carried it rather than a commit, since the sha a session verifies
-      does not survive the rebase before merge. Printed in the run header, and updated by whoever
-      compiles it on a box that has the vendor library: it is what tells the next editor whether
-      they are editing blind. *)
+  (** Where and when this arm's source was last really linked and run: the box, the date, and where
+      the evidence lives — the PR that carried it rather than a commit, since the sha a session
+      verifies does not survive the rebase before merge. Printed in the run header, and updated by
+      whoever runs it on a box that has the vendor library: type-checking happens on every box
+      through arrayjit/vendor_stubs, so this is what tells the next editor how long the arm has gone
+      without a real run. *)
 
   val built : bool
   (** [false] in the [.missing] stub that the `select` picks where the vendor's jit library is
@@ -622,9 +624,10 @@ let () =
       A.set_arch_policy !arch;
       (* Flushed, so the arm header cannot land after a skip notice on the other stream. *)
       Stdio.printf "%s arm: %s\n%!" v.name (describe v arm);
-      (* Which file was swept and when it last saw a compiler (gh-ocannl-758): this arm's source is
-         built only where its vendor library is, so a run is also the record that the file in the
-         repository still compiles somewhere. *)
+      (* Which file was swept and when it last really ran (gh-ocannl-758): this arm's source is
+         type-checked everywhere through arrayjit/vendor_stubs but linked only where its vendor
+         library is, so a run is also the record that the file in the repository still drives the
+         vendor somewhere. *)
       Stdio.printf "  arm source: %s, last compiled %s\n" (arm_source v) A.last_compiled;
       Stdio.printf "  codec: builtins.c single_to_fp8 / double_to_fp8 (%s); vendor: %s\n"
         (codec_landmarks ()) v.vendor_type;

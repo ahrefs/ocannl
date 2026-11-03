@@ -27,9 +27,10 @@
 
    A point-in-time measurement of ONE toolchain on ONE box: a name an SDK adds later, or a header
    only another configuration includes, fails through [C_syntax.attribute_routine_name_failure]
-   instead (gh-ocannl-707). Vendor calls live in the arms ([vendor_idents_arm_<backend>]), compiled
-   only where the vendor library is installed; everything else lives here, which every box
-   compiles. *)
+   instead (gh-ocannl-707). Vendor calls live in the arms ([vendor_idents_arm_<backend>]), linked
+   only where the vendor library is installed and type-checked everywhere else against the stub
+   libraries of arrayjit/vendor_stubs (gh-ocannl-1688); everything else lives here, which every box
+   links. *)
 
 open Base
 

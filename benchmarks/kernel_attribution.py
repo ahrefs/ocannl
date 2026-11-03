@@ -158,6 +158,18 @@ def memory_model(path):
     return None
 
 
+def table_timing(path):
+    """The autotune_timing the cell's kernel table was re-timed under, read by
+    bench_output.kernel_table_timing off its opening legend; None when the .err has no legend (a
+    cell from before gh-ocannl-1694, or one whose table never opened)."""
+    with open(path) as f:
+        text = f.read()
+    try:
+        return bench_output.kernel_table_timing(text)
+    except ValueError as e:
+        raise Refused("%s: %s" % (Path(path).name, e))
+
+
 def export(out, stem):
     """The cell's one trace export: (path, tracer). Refuses none, and two (which would be read as
     one cell's in-step durations twice over)."""
@@ -218,6 +230,17 @@ def attribute(out, name):
     rec = result_line(out / name)
     stem = name[:-4]
     rows = table(out / (stem + ".err"))
+    # Isolated timing is what makes the isolated column a set of synchronized singles the trace can
+    # join one for one (gh-ocannl-1694); under queued timing the re-timed runs overlap and their
+    # device durations are not the kernel alone, so a cell that does not state it is refused
+    # rather than attributed (gh-ocannl-1797).
+    timing = table_timing(out / (stem + ".err"))
+    if timing is None:
+        raise Refused("%s: the kernel table states no autotune_timing (its legend is missing); a kprof"
+                      " cell pins --ocannl_autotune_timing=isolated" % name)
+    if timing != "isolated":
+        raise Refused("%s: the kernel table was re-timed under autotune_timing=%s, not isolated"
+                      % (name, timing))
     csv_path, tracer = export(out, stem)
     model = memory_model(out / (stem + ".err"))
     if tracer == "rocprofv3" and model is None:

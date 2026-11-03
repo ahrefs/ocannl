@@ -79,7 +79,7 @@ for arm in false true; do
   mkdir -p "$OUT/identity_$arm"
   cp "$OUT/identity_run_$arm/build_files/$prefix"/*.hip "$OUT/identity_$arm/" 2>/dev/null
 done
-n_src=$(find "$OUT/identity_false" -name '*.hip' | wc -l)
+n_src=$(find "$OUT/identity_false" -name '*.hip' | wc -l | tr -d ' ')
 if [ "$n_src" -eq 0 ] || ! diff -r "$OUT/identity_false" "$OUT/identity_true" >/dev/null; then
   echo "DRIFT CONTROL INVALID: the f32 control's generated HIP differs across arms (or none was written: $n_src files)"
   exit 1

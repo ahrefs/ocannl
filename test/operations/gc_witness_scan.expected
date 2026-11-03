@@ -1,0 +1,11 @@
+The sanctioned site, test/support/gc_witness.ml, uses:
+  Gc.compact
+  Gc.full_major
+  Weak.create
+every test source outside test/support/gc_witness.ml neither forces a collection nor makes a weak observer: true
+the sanctioned site still forces collections and makes the weak observer: true
+
+Synthetic controls: scanner refusal diagnostics exercised by this control golden:
+  [scanner-refusal:36666810510239397bacb5a2cf2ba433] test/support/gc_witness.ml
+  [scanner-refusal:e5296137466c1af2ac14a5d6fa9717fb] still forces collections
+End of synthetic controls.

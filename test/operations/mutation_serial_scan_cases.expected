@@ -39,6 +39,16 @@ state hidden under a local let of a module-level value is refused: true
 hidden state on an exempt binding is admitted: true
 state inside a nested module is refused: true
 an allocation by a constructor outside the closed list is refused: true
+an unnoted write to an ephemeron table is refused: true
+the same write after note_mutation (), beside its reads, is accounted for: true
+the inventory names an ephemeron table's family: true
+Stdlib.Ephemeron.K2.MakeSeeded's table is tracked too: true
+an ephemeron table function outside the lists is refused: true
+an ephemeron table written through an alias of its module is refused: true
+an ephemeron table written through its rebound module name is refused: true
+a partial application of an ephemeron table mutator is refused: true
+a table made by any other functor is still refused: true
+a file's own Ephemeron module's functor is not the library's: true
 a mutable allocation bound by a pattern is refused: true
 a table the interface exports is refused: true
 a table exported through an included signature is refused: true

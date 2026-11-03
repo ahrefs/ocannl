@@ -276,7 +276,9 @@
 #      `build` by default; repeatable; before dune's `--`), and refuses, dune
 #      never invoked, an empty list, a line that is not one `@` operand, a
 #      missing file, a subcommand other than build, the option after the dune
-#      arguments or on repeat; `--cpu`/`--gpu` are refused pointing at the
+#      arguments; repeat (plain, and --direct through fresh's operand check)
+#      and bisect read the file too, and bisect wants a target from one side
+#      (gh-ocannl-1797); `--cpu`/`--gpu` are refused pointing at the
 #      slot; a refused `runtest-NAME` names the directory's `slow-NAME`, and a
 #      refusal with no sibling names none; `aliases PATH...` lists a test's
 #      aliases by family from dune's listing (a source, a golden, a variant, a
@@ -299,7 +301,10 @@
 #      arguments are refused, while a run's directory, `last` and wait's
 #      timeout in either spelling still answer; a mutant cutting opt_flag's
 #      refusal, and one cutting take_run_ref's option arm, turns every probe
-#      of its set red.
+#      of its set red. The launchers (run, start, plan, fresh) refuse an
+#      unknown leading option by name before dune (gh-ocannl-1797), and a
+#      leading -j with the order to write it in, except fresh's, which reaches
+#      its operands; a mutant cutting that arm turns its probes red.
 #  90. the runner's own OCANNL_TOOL_TESTRUN_BG, _RD and _OWN reach no dune: a
 #      run, a probed GPU run under a slot, a probed repeat's iterations.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
@@ -4565,14 +4570,15 @@ PY
   fi
   # Where the argv names a trace file of its own -- either spelling -- or its
   # first word is not a subcommand known to take one (a global option ahead of
-  # it included), dune is handed none: the caller's option is the only one,
+  # it included, which reaches dune only past the runner's own `--`: a leading
+  # option is refused before dune, gh-ocannl-1797), dune is handed none: the caller's option is the only one,
   # verbatim, and nothing is recorded. Past dune's own `--` the word is a
   # program's argument: the runner's own still goes before the separator, once,
   # and the program's reaches it untouched.
   if [ -z "$slow_detail" ]; then
     for probe in "build --trace-file $TMP/t.csexp @cheap|2 before --trace-file" \
                  "build --trace-file=$TMP/t.csexp @cheap|2 before $TMP/t.csexp" \
-                 "describe @cheap|" "--display=short build @cheap|" \
+                 "describe @cheap|" "-- --display=short build @cheap|" \
                  "exec ./prog.exe -- --trace-file=$TMP/p.csexp|OWN
 5 after $TMP/p.csexp"; do
       want=${probe#*|} probe=${probe%%|*}
@@ -4580,7 +4586,7 @@ PY
       # shellcheck disable=SC2086
       REPEAT_TEST_TRACE_ARGS=$slow_args argv_probe slow-elsewhere run $probe
       want=${want/OWN/2 before $(slow_physical "$argv_dir/trace.csexp")}
-      if [ "$(cat "$slow_args")" != "$want" ] || [ "$argv_calls" != "$probe" ] || [ -e "$argv_dir/slowest" ]; then
+      if [ "$(cat "$slow_args")" != "$want" ] || [ "$argv_calls" != "${probe#-- }" ] || [ -e "$argv_dir/slowest" ]; then
         slow_detail="$probe: trace options $(tr '\n' ';' <"$slow_args") (want ${want:-none}); calls: $argv_calls"
         break
       fi
@@ -8042,6 +8048,7 @@ done
 printf '# nothing but comments\n\n' >"$tf_dir/empty.txt"
 printf '@x/runtest-a\n-j 4\n' >"$tf_dir/option.txt"
 printf '@x/runtest-a\ntest/x\n' >"$tf_dir/bare.txt"
+printf '@x/scans\n' >"$tf_dir/aggregate.txt"
 for probe in "empty|run --targets-file $tf_dir/empty.txt build|no alias listed" \
              "option|run --targets-file $tf_dir/option.txt build|option.txt:2: one alias per line" \
              "bare|run --targets-file $tf_dir/bare.txt build|bare.txt:2: not an alias operand" \
@@ -8049,7 +8056,12 @@ for probe in "empty|run --targets-file $tf_dir/empty.txt build|no alias listed" 
              "runtest|run --targets-file $tf_dir/list.txt runtest|which only dune's build takes" \
              "valueless|run --targets-file|requires a file" \
              "after|run build @w --targets-file $tf_dir/list.txt|belongs before the dune arguments" \
-             "repeat|repeat 2 build @w --targets-file $tf_dir/list.txt|not of repeat"; do
+             "repeat|repeat 2 build @w --targets-file $tf_dir/list.txt|belongs before the dune arguments" \
+             "repeat-verb|repeat --targets-file $tf_dir/list.txt 2 runtest|which only dune's build takes" \
+             "repeat-direct|repeat --direct --targets-file $tf_dir/aggregate.txt 2|repeat --direct: not a per-test alias: @x/scans" \
+             "repeat-empty|repeat --targets-file $tf_dir/empty.txt 2 build|no alias listed" \
+             "bisect-empty|bisect --targets-file $tf_dir/empty.txt good bad|no alias listed" \
+             "bisect-none|bisect good bad|at least one TARGET"; do
   [ -z "$tf_detail" ] || break
   IFS='|' read -r tag args want <<<"$probe"
   # shellcheck disable=SC2086 # the probe's operands, split on purpose
@@ -8057,6 +8069,13 @@ for probe in "empty|run --targets-file $tf_dir/empty.txt build|no alias listed" 
   { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -qF -- "$want" <<<"$argv_err"; } ||
     tf_detail="refused $tag: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; stderr: $argv_err"
 done
+# Accepted by repeat too (gh-ocannl-1797): every iteration builds the listed
+# aliases after dune's own words.
+if [ -z "$tf_detail" ]; then
+  fixture_probe tf-repeat stable "$TMP/tf-runs-repeat" repeat --targets-file "$tf_dir/sub/more.txt" 2 build -j 2
+  { [ "$fixture_rc" = 0 ] && [ "$(grep -c '^build -j 2 @y/train-c' <<<"$fixture_calls")" = 2 ]; } ||
+    tf_detail="repeat --targets-file F 2 build -j 2: exit $fixture_rc; dune calls: ${fixture_calls:-<none>}"
+fi
 if [ -z "$tf_detail" ]; then report 0 "$tf_label"; else report 1 "$tf_label" "$tf_detail"; fi
 
 tf_detail=
@@ -8350,6 +8369,8 @@ fl_nc_label="negative control: with opt_flag's refusal cut, every flag probe goe
 qr_label="queries: an option-shaped word is refused as unknown by status, wait, stop, paths and lock-status, never looked up as a run"
 qr_nc_label="negative control: with take_run_ref's option arm cut, every option-shaped query probe goes red"
 qr_ok_label="queries: a run's directory, last, and wait's timeout spaced or with = still answer; a second run, an unknown repeat option and list's arguments are refused"
+lo_label="launchers: an unknown leading option is refused by run, start, plan and fresh before dune; a leading -j is refused with the order, except by fresh"
+lo_nc_label="negative control: with the launchers' unknown-option arm cut, every unknown-option probe goes red"
 unset OCANNL_BACKEND
 fl_probes=("--alone|repeat --alone=1 2 build @cheap" "--direct|repeat --direct=1 2 build @cheap"
            "--alone|repeat --cap 900 --alone=yes 2 build @cheap"
@@ -8437,6 +8458,32 @@ if [ -z "$qr_ok_all" ]; then
 fi
 if [ -z "$qr_ok_all" ]; then report 0 "$qr_ok_label"; else report 1 "$qr_ok_label" "$qr_ok_all"; fi
 
+# The launchers' intake (gh-ocannl-1797): `run --cpa=1 build @x` once reached
+# dune as its subcommand ("unknown command") after the lock, the readers and
+# the slot. Each unknown option is refused by name with no dune call; a
+# leading -j is refused with the order to write it in, except by `fresh`,
+# whose operands take -j anywhere -- the acceptance probe proves the -j
+# reached fresh_argv by the refusal of the aggregate after it.
+lo_probes=("run: unknown option --cpa=1|run --cpa=1 build @cheap"
+           "start: unknown option --bogus|start --bogus build @cheap"
+           "plan: unknown option -x|plan -x build @cheap"
+           "fresh: unknown option --bogus|fresh --bogus @x/runtest-a")
+lo_check() { # WANT|ARGV: runs it; lo_detail is empty iff it holds
+  local want=${1%%|*} args=${1#*|}
+  lo_detail=
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  argv_probe lo-probe $args
+  { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && grep -qF -- "$want" <<<"$argv_err"; } ||
+    lo_detail="$args: exit $argv_rc (want 2); dune calls: ${argv_calls:-<none>}; stderr: $argv_err"
+}
+lo_all=
+for probe in "${lo_probes[@]}" "run: -j is dune's option|run -j 4 build @cheap" \
+             "fresh: not a per-test alias: @x/scans|fresh -j 2 @x/scans"; do
+  lo_check "$probe"
+  [ -z "$lo_detail" ] || { lo_all=$lo_detail; break; }
+done
+if [ -z "$lo_all" ]; then report 0 "$lo_label"; else report 1 "$lo_label" "$lo_all"; fi
+
 # The mutants replace the fixture's copies (bisect's parser is bisect-steps.sh)
 # and are put back after each set; each must rewrite what it names.
 fq_mutate() { # PERL-0-PROGRAM: sets fq_made to 1 iff it rewrote test-run.sh
@@ -8471,6 +8518,18 @@ else
     [ -n "$qr_detail" ] || qr_survivors="$qr_survivors [${probe%%|*} ${probe#*|}]"
   done
   if [ -z "$qr_survivors" ]; then report 0 "$qr_nc_label"; else report 1 "$qr_nc_label" "held under the mutant:$qr_survivors"; fi
+fi
+fq_restore
+fq_mutate 's/\n        -\*\)\n          case \$sub in\n            fresh\) form=/\n        --cut-unknown-arm)\n          case \$sub in\n            fresh) form=/'
+if [ "$fq_made" != 1 ]; then
+  report 1 "$lo_nc_label" "the mutant was not made"
+else
+  lo_survivors=
+  for probe in "${lo_probes[@]}"; do
+    lo_check "$probe"
+    [ -n "$lo_detail" ] || lo_survivors="$lo_survivors [${probe#*|}]"
+  done
+  if [ -z "$lo_survivors" ]; then report 0 "$lo_nc_label"; else report 1 "$lo_nc_label" "held under the mutant:$lo_survivors"; fi
 fi
 fq_restore
 }
@@ -8669,6 +8728,26 @@ EOF
     bi_detail="the invoking checkout changed, or the tree was left: $(bi_git -C "$bi_root" worktree list)"
   fi
   if [ -z "$bi_detail" ]; then report 0 "$l_found"; else report 1 "$l_found" "$bi_detail"; fi
+
+  # (a2) the targets from a --targets-file (gh-ocannl-1797), with none in the
+  # arguments: recorded as the bisect's targets and handed to every test run.
+  l_tfile="bisect: --targets-file supplies the targets, recorded and run at every step"
+  bi_detail=
+  printf '# the bisect target\n@t\n' >"$TMP/bisect-targets.txt"
+  bi_repo pass fail || bi_detail="fixture"
+  [ -n "$bi_detail" ] ||
+    bi_run OCANNL_BACKEND=cc OCANNL_TOOL_FLEET_WORKER=none -- --targets-file "$TMP/bisect-targets.txt" "$bi_base" range
+  if [ -n "$bi_detail" ]; then :
+  elif [ "$bi_rc" != 0 ]; then bi_detail="exit $bi_rc: $bi_out $bi_err"
+  elif ! grep -q "^result: FIRST BAD COMMIT ${bi_shas[1]} fail\$" <<<"$bi_out"; then
+    bi_detail="result: $(grep '^result:' <<<"$bi_out") (want ${bi_shas[1]})"
+  elif [ "$(cat "$bi_dir/targets" 2>/dev/null)" != @t ]; then
+    bi_detail="recorded targets: $(cat "$bi_dir/targets" 2>&1) (want @t)"
+  elif ! grep -q ' @t$' "$TMP/bisect.calls"; then
+    bi_detail="no test run was handed the listed target: $(cat "$TMP/bisect.calls")"
+  elif ! bi_clean; then bi_detail="the tree was left, or the checkout changed"
+  fi
+  if [ -z "$bi_detail" ]; then report 0 "$l_tfile"; else report 1 "$l_tfile" "$bi_detail"; fi
 
   # (b) a range whose only untested commits did not build ends without a
   # first bad commit (exit 1, the candidates listed) -- a skip read as bad

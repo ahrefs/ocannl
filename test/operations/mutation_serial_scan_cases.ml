@@ -197,6 +197,51 @@ let () =
     (says "module M = struct\n  let t = ref 0\nend" "inside a nested module");
   p "an allocation by a constructor outside the closed list is refused"
     (says "let t = Weak.create 4" "not a constructor the scan reads");
+  (* gh-ocannl-1797: a table made by an ephemeron table functor is tracked like a Hashtbl. *)
+  let key = "(struct type t = int let equal = Int.equal let hash = Int.hash end)" in
+  let ephemeron =
+    "let note_mutation () = ()\nmodule M = Ephemeron.K1.Make " ^ key
+    ^ "\nlet t : string M.t = M.create 16\n"
+  in
+  p "an unnoted write to an ephemeron table is refused"
+    (says (ephemeron ^ "let add k v = M.replace t k v") "add writes t without note_mutation");
+  p "the same write after note_mutation (), beside its reads, is accounted for"
+    (count
+       (ephemeron
+      ^ "let add k v =\n\
+        \  note_mutation ();\n\
+        \  if not (M.mem t k) then M.replace t k v\n\
+         let get k = M.find_opt t k\n\
+         let size () = M.length t")
+    = 0);
+  p_exists "the inventory names an ephemeron table's family"
+    (Scan.scan ~file:"x.ml" ~serial_owner:true ("open Base\n" ^ ephemeron)).inventory
+    ~f:(String.equal "x.ml: t (Ephemeron) -- accounted: every write noted or at a boundary");
+  p "Stdlib.Ephemeron.K2.MakeSeeded's table is tracked too"
+    (says
+       ("module M = Stdlib.Ephemeron.K2.MakeSeeded " ^ key ^ " " ^ key
+      ^ "\nlet t : string M.t = M.create 16\nlet drop () = M.reset t")
+       "drop writes t without note_mutation");
+  p "an ephemeron table function outside the lists is refused"
+    (says (ephemeron ^ "let f () = M.copy t") "does not classify");
+  p "an ephemeron table written through an alias of its module is refused"
+    (says
+       (ephemeron ^ "module N = M\nlet f () =\n  note_mutation ();\n  N.clear t")
+       "does not classify");
+  p "an ephemeron table written through its rebound module name is refused"
+    (says
+       (ephemeron ^ "module M = Hashtbl\nlet f () =\n  note_mutation ();\n  M.clear t")
+       "does not classify");
+  p "a partial application of an ephemeron table mutator is refused"
+    (says (ephemeron ^ "let f () =\n  note_mutation ();\n  M.replace t") "a partial application");
+  p "a table made by any other functor is still refused"
+    (says
+       ("module M = Foo.Make " ^ key ^ "\nlet t = M.create 16")
+       "not a constructor the scan reads");
+  p "a file's own Ephemeron module's functor is not the library's"
+    (says
+       ("module Ephemeron = Foo\nmodule M = Ephemeron.K1.Make " ^ key ^ "\nlet t = M.create 16")
+       "not a constructor the scan reads");
   p "a mutable allocation bound by a pattern is refused"
     (says "let a, b = (ref 0, ref 1)" "bound by a pattern");
   p "a table the interface exports is refused"

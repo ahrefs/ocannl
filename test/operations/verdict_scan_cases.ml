@@ -388,6 +388,51 @@ let () = List.iter labels ~f:skipped|ocaml},
         fail "skip list -- %s: expected [%s], found [%s]" name
           (String.concat ~sep:"; " expected)
           (String.concat ~sep:"; " found));
+  (* A literal floor below one (post-1-task-4 of staging#1578): each finding as
+     [<line>:<callee>:<value>], then how many literal floors the reader read, so a reader that
+     stopped parsing literals (and found nothing) cannot pass an accepting case. *)
+  List.iter
+    [
+      ( "a floor of zero on an opened p_all",
+        {ocaml|open Verdict.Claims
+let () = p_all ~min:0 "every row holds" rows ~f:holds|ocaml},
+        [ "2:p_all:0"; "1 read" ] );
+      ( "a negative floor, which the parser folds into one constant",
+        {ocaml|let () = Verdict.p_alli ~min:(-1) "every row exceeds its index" rows ~f:above|ocaml},
+        [ "1:Verdict.p_alli:-1"; "1 read" ] );
+      ( "a zero written in hexadecimal, with underscores, and under a type constraint",
+        {ocaml|let () =
+  Verdict.p_exists ~min:0x0 "some row holds" rows ~f:holds;
+  Verdict.gated_all ~min:0_0 ~when_ ~on "every row holds" rows ~f:holds;
+  Verdict.pf_all2 ~min:(0 : int) "%s matches" leg got want ~f:Float.equal|ocaml},
+        [ "2:Verdict.p_exists:0"; "3:Verdict.gated_all:0"; "4:Verdict.pf_all2:0"; "3 read" ] );
+      ( "a hexadecimal floor above one, and a floor of one",
+        {ocaml|let () =
+  Verdict.p_all ~min:0x10000 "every row holds" rows ~f:holds;
+  Verdict.p_none ~min:1 "no row fails" rows ~f:fails|ocaml},
+        [ "2 read" ] );
+      ( "a computed floor, which the runtime refusal judges",
+        {ocaml|let () = Verdict.p_all ~min:(List.length xs) "every row holds" rows ~f:holds|ocaml},
+        [ "0 read" ] );
+      ( "a p_all the source binds itself",
+        {ocaml|let p_all ~min _ _ ~f = ignore (min, f)
+let () = p_all ~min:0 "every row holds" rows ~f:holds|ocaml},
+        [ "0 read" ] );
+    ]
+    ~f:(fun (name, source, expected) ->
+      let found =
+        Attempt.attempted ~what:"floor source" ~name ~default:[ "<raised>" ] (fun () ->
+            let census = Scan.floor_census source in
+            List.map census.Scan.below_one ~f:(fun site ->
+                Printf.sprintf "%d:%s:%d" site.Scan.floor_site.line site.Scan.floor_site.callee
+                  site.Scan.floor)
+            @ [ Printf.sprintf "%d read" census.Scan.literal_floors ])
+      in
+      if List.equal String.equal found expected then printf "ok: floor -- %s\n" name
+      else
+        fail "floor -- %s: expected [%s], found [%s]" name
+          (String.concat ~sep:"; " expected)
+          (String.concat ~sep:"; " found));
   (* The census the ratchet leans on to tell "nothing to report" from "nothing read": on a source
      with literals it must count them, and it must place the ones an application receives. *)
   let counted = Scan.scan {ocaml|let unapplied = "c"

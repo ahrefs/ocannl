@@ -22,7 +22,8 @@ The text lines (gh-ocannl-1767), each with ONE reader here, listed in `FORMATS`:
   `<variant> <ms> ms <rate> GFLOP/s (<detail>)  [<mma census>] [<grid census>]` -- `timing_lines`;
   and narrow_gebp_bench's `GEBP n=...` header -- `gebp_header`.
 - The per-kernel table's rows (`bench: kernel i/n ...`, Bench_harness.time_shipped_kernels) --
-  `kernel_rows`.
+  `kernel_rows`; and its opening legend (`bench: per-kernel table (...; each kernel alone)`,
+  Bench_harness.kernel_timing_legend), whose `autotune_timing=` it states -- `kernel_table_timing`.
 - `bench_rank_site`'s `rank-site: <kind> key=value ...` lines -- `rank_site_lines`.
 - The launch-geometry trace (`schedule: <routine> seg i/n grid=[..] block=[..] stmts=..`, config
   `schedule_log_launches`) -- `schedule_launches`.
@@ -295,6 +296,25 @@ KERNEL_FAILURE = re.compile(r"^bench: kernel (?P<i>\d+)/(?P<n>\d+) "
                             r"(?:grid=\[(?P<grid>[0-9;]+)\] block=\[(?P<block>[0-9;]+)\] )?"
                             r"(?P<failure>DECLINED|UNTIMED) \(")
 _KERNEL_ROW_HEAD = re.compile(r"^bench: kernel \d+/\d+ ")
+_KERNEL_TABLE_LEGEND = re.compile(r"^bench: per-kernel table \((?P<legend>.*); each kernel alone\)$",
+                                  re.M)
+_LEGEND_TIMING = re.compile(r"\bautotune_timing=(\w+)")
+
+
+def kernel_table_timing(text):
+    """The `autotune_timing` the per-kernel table was re-timed under, as its opening legend states it
+    (`isolated` or `queued`), or None when the text has no legend: a cell from before gh-ocannl-1694,
+    or one whose table never opened. ValueError for a legend that states no timing, and for two
+    legends that disagree."""
+    timings = set()
+    for m in _KERNEL_TABLE_LEGEND.finditer(text):
+        t = _LEGEND_TIMING.search(m["legend"])
+        if t is None:
+            raise ValueError(f"the per-kernel table's legend states no autotune_timing: {m[0]}")
+        timings.add(t[1])
+    if len(timings) > 1:
+        raise ValueError(f"the per-kernel table's legends disagree: {sorted(timings)}")
+    return next(iter(timings), None)
 
 
 def kernel_rows(text):
@@ -458,6 +478,11 @@ FORMATS = {
     "kernel_row": {"readers": ("kernel_rows",), "anchor": r"bench: kernel",
                    "producers": {"benchmarks/runners/ocannl/bench_harness.ml":
                                  '"bench: kernel %d/%d %s %s'}, "pinned": True},
+    "kernel_table_legend": {"readers": ("kernel_table_timing",),
+                            "anchor": r"bench: per-kernel table \\?\(",
+                            "producers": {"benchmarks/runners/ocannl/bench_harness.ml":
+                                          '"bench: per-kernel table (%s; each kernel alone)'},
+                            "pinned": True},
     "timing_trace": {"readers": ("compile_traces", "trace_summary", "trace_events"),
                      "anchor": r"timing-trace:",
                      "producers": {"benchmarks/runners/ocannl/bench_harness.ml": '"timing-trace: '},

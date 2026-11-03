@@ -947,7 +947,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
     | Ok _ ->
         logf "arm %s best: %.4f ms (%s)" arm best_ms
           (Option.value_map r ~default:"no report" ~f:(fun r ->
-               Printf.sprintf "%s%s, best tensorized %s"
+               Printf.sprintf "%s%s%s, best tensorized %s%s"
                  (if String.is_empty r.Autotune.best_label then "nothing timed"
                   else r.Autotune.best_label)
                  (* What the schedule asked for, and next to it what the emission delivered
@@ -958,8 +958,25 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                       (Option.value_map r.Autotune.best_tensorization ~default:"no census"
                          ~f:Ir.C_syntax.tensorization_name)
                   else "")
+                 (* The same pairing for a Grid placement (gh-ocannl-1702): the crown asked for a
+                    Grid loop, and its routine's census says which outermost Grid loops the CPU pool
+                    rendered and why each other one stayed serial. Only when it asked, as for
+                    tensorization -- a Grid loop the default pipeline placed is not a claim the
+                    label makes -- and only on a pool backend: on a GPU a Grid loop is a hardware
+                    grid and the census is empty. *)
+                 (match r.Autotune.best_grid with
+                 | Some grid
+                   when grid.Ir.C_syntax.pool
+                        && Autotune.schedule_asks_grid r.Autotune.best_schedule ->
+                     Printf.sprintf " [%s]" (Ir.C_syntax.grid_summary_string grid)
+                 | _ -> "")
                  (if Float.is_inf r.Autotune.mma_best_ms then "none"
-                  else Printf.sprintf "%.4f ms" r.Autotune.mma_best_ms))));
+                  else Printf.sprintf "%.4f ms" r.Autotune.mma_best_ms)
+                 (* Ranked candidates that asked for a Grid loop and were timed with one serial: the
+                    crown may be pool-rendered while its rivals were not. *)
+                 (match List.length r.Autotune.grid_serial_timed with
+                 | 0 -> ""
+                 | n -> Printf.sprintf ", %d ranked Grid-asking candidate(s) rendered serially" n))));
     (result, best_ms, r)
   in
   (* gh-ocannl-550 asked what becomes of every arm and flip result that does not ship: dropping the

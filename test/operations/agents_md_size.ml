@@ -32,6 +32,15 @@ let floor = 8 * 1024
     documented, and a margin of one byte is not a margin. *)
 let fits ~bytes = bytes < cap
 
+(** The warning band's lower edge: about a kilobyte below the cap, which is a few bullets of
+    headroom -- enough to trim deliberately rather than under a red build. A guide in the band still
+    passes (the band is advice, not a second cap), and the warning goes to stderr with the count, so
+    the golden does not move when the file enters or leaves the band. *)
+let warn_at = 31 * 1024
+
+(** Whether [bytes] sits in the warning band: under the cap, at or above [warn_at]. *)
+let warns ~bytes = fits ~bytes && bytes >= warn_at
+
 let () =
   let path =
     match Array.to_list Stdlib.Sys.argv |> List.tl_exn with
@@ -43,7 +52,13 @@ let () =
   in
   let content = Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all in
   let bytes = String.length content in
-  eprintf "AGENTS.md: %d bytes; cap %d, floor %d (not part of the golden)\n" bytes cap floor;
+  eprintf "AGENTS.md: %d bytes; cap %d, warning band from %d, floor %d (not part of the golden)\n"
+    bytes cap warn_at floor;
+  if warns ~bytes then
+    eprintf
+      "WARNING: AGENTS.md is %d bytes, within %d bytes of the 32 KiB cap; trim it before the next \
+       rule lands (docs/agent-notes/build-and-test.md#repository-scans, the AGENTS.md bullet)\n"
+      bytes (cap - bytes);
   (* The guide's identity, held independently of its size: the file dune handed over is named
      AGENTS.md and opens with the guide's own title line. A floor alone accepts any prose of the
      right size, and a misrouted rule would then measure the wrong document forever. *)
@@ -64,4 +79,10 @@ let () =
      fails here first. *)
   p "a synthesized guide of exactly 32 KiB is refused" (not (fits ~bytes:32_768));
   p "a synthesized guide one byte under the cap is accepted" (fits ~bytes:32_767);
+  (* The warning band's controls, literal for the same reason: its lower edge warns, one byte below
+     it does not, and a guide at the cap is refused rather than warned about. *)
+  p "a synthesized guide at the warning band's lower edge is warned about" (warns ~bytes:31_744);
+  p "a synthesized guide one byte below the warning band is not warned about"
+    (not (warns ~bytes:31_743));
+  p "a synthesized guide of exactly 32 KiB is refused, not warned about" (not (warns ~bytes:32_768));
   Test_utils.Refusal_control_manifest.print "agents_md_size.ml"

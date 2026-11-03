@@ -139,6 +139,21 @@ listed = [(r["i"], r["ms"], r["writes"]) for r in rows]
 claim("gh1161_sites reads every kernel as listed, the refused two untimed",
       gh1161.complete(listed, n) and sum(ms is None for _, ms, _ in listed) == 2)
 exercised.add("kernel_row")
+# The table's opening legend states the timing the run pinned (as a kprof cell pins it), and
+# kernel_attribution reads it through the same reader (gh-ocannl-1797).
+claim("the table's legend states the autotune_timing the run pinned",
+      bench_output.kernel_table_timing(err) == "isolated", repr(bench_output.kernel_table_timing(err)))
+with tempfile.TemporaryDirectory() as scratch:
+    base = Path(scratch) / "cell.err"
+    base.write_text(err)
+    claim("kernel_attribution reads the legend's timing off the cell's .err",
+          kattr.table_timing(base) == "isolated")
+    base.write_text(err.replace("autotune_timing=isolated", "autotune_timing=queued"))
+    claim("a legend stating queued timing reads as queued", kattr.table_timing(base) == "queued")
+    base.write_text("".join(line for line in err.splitlines(keepends=True)
+                            if not line.startswith("bench: per-kernel table (")))
+    claim("an .err with the legend removed states no timing", kattr.table_timing(base) is None)
+exercised.add("kernel_table_legend")
 
 # ---------------------------------------------------------------------------------------------
 print("== the launch-geometry trace (schedule_log_launches)")

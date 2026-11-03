@@ -43,22 +43,26 @@ def node_writes(i):
 def write_cell(out, stem, in_step=IN_STEP, isolated=ISOLATED, table_rows=None, trace=True,
                result=True, early=2, tracer="nsys", model=None, agent_of=lambda name: "Agent 1",
                routines=ROUTINES, writes=node_writes, io=None, step_ms=6.0, back_ns=0,
-               queue_of=None):
+               queue_of=None, timing="isolated"):
     """A kprof cell: the result line, the kernel table (with an init routine's segments in the
     trace that no isolated kernel names), and the trace export -- nsys's cuda_gpu_trace, or
     rocprofv3's kernel_trace (with the HIP runtime's own fill kernels in it, and each dispatch's
     agent from agent_of), whose .err states the memory model when one is given. Dispatches run back
     to back 1 us apart, except that an in-step segment after a step's first starts back_ns before
     its predecessor ends; queue_of names a dispatch's queue/stream column, absent when None. io
-    gives a table row its `io:` field."""
+    gives a table row its `io:` field. timing is the autotune_timing the table's opening legend
+    states, the legend left out when None."""
     n = len(isolated)
     if result:
         (out / (stem + ".out")).write_text(
             json.dumps({"step_ms": {"p10": step_ms, "p50": step_ms, "p90": step_ms},
                         "queued_step_ms": step_ms, "timed_steps": TIMED}) + "\n")
     header = "backend=hip fixture=gpt2_mini\nkprof: tracer rocprofv3 --kernel-trace (1.0.0)\n"
+    legend = ("" if timing is None else
+              "bench: per-kernel table (median of 5 timing calls with their range, ms per launch, "
+              "autotune_timing=%s; each kernel alone)\n" % timing)
     (out / (stem + ".err")).write_text(
-        (header + "kprof: memory model %s\n" % model if model is not None else "") + "".join(
+        (header + "kprof: memory model %s\n" % model if model is not None else "") + legend + "".join(
             # The row as gh-ocannl-1694 prints it: the median, then its range and admission count.
             "bench: kernel %d/%d %.4f ms ms_lo=%.6f ms_hi=%.6f ms_retimed=6/6 grid=[1;1;1] "
             "block=[32;1;1] %smma:none vol:0 w: %s\n"
@@ -274,6 +278,13 @@ with tempfile.TemporaryDirectory() as scratch:
     write_cell(out, "e-kprof1", in_step=gap)
     refused(out, "e-kprof1.out", "do not match its isolated kernels")
     print("an incomplete table, a missing trace or result, a short window, an unmapped segment: refused")
+    # The isolated column is a set of synchronized singles only under isolated timing
+    # (gh-ocannl-1797): a table re-timed queued, or one stating no timing at all, is refused.
+    write_cell(out, "f-kprof1", timing="queued")
+    refused(out, "f-kprof1.out", "re-timed under autotune_timing=queued, not isolated")
+    write_cell(out, "g-kprof1", timing=None)
+    refused(out, "g-kprof1.out", "states no autotune_timing")
+    print("a table re-timed under queued timing, or stating no timing: refused")
 
     # report: a refused cell fails the report, and no cell at all is no attribution.
     name = "cuda-gpt2_mini_train-base-kprof1"
