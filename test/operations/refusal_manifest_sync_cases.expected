@@ -54,7 +54,10 @@ nor one its row does not list yet: that is the row's sync, not an entry's: true
 an offer line is read back as it was written, and no other line is: true
 a line carrying an offer only after other text is no offer: offers start their line: true
 a label spanning lines is never offered on a line: true
-a failure one claim answers for is offered as the entry naming that claim, under one heading: true
+a failure one claim answers for is offered as the entry naming that claim, under one heading, with the argument accepting it: true
 several claims, from one run or several, are offered once each, as alternatives: true
 a failure no run's claim answers for is named with what settles it, with no entry: true
 an offer for a key needing no entry renders nothing: a synced manifest is quiet: true
+an accepted offer is the table's last entry, its claim's text verbatim, the rest unchanged: true
+two accepted at once land in the order given, into an empty table too: true
+an offer for no row's source, for no current direct failure, for a catalogue-only key, an entry already held or given twice, or an empty claim, is refused, naming why: true

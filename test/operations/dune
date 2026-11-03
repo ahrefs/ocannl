@@ -4185,6 +4185,7 @@
  (deps
   ocannl_config
   ../support/verdict.ml
+  ../support/refusal_section_heads.ml
   doc_examples_extract.ml
   doc_examples_scan_cases.expected
   doc_examples_compile_control.expected

@@ -321,6 +321,16 @@ let dynamic reason = Verdict.fail reason
     (match answer [ control ] with
     | Some (_, remaining) -> List.equal String.equal remaining [ control ]
     | None -> false);
+  (* gh-ocannl-1840: several entries under one key are meaningful (gh-ocannl-1572); the same key and
+     claim twice is a slip, named once however often it repeats. *)
+  let sibling = "a sibling claim: true" and own = control ^ ": true" in
+  Verdict.p_empty "entries under one key naming different claims repeat no pair"
+    ~over:[ (key, own); (key, sibling) ]
+    (Manifest.repeated_pairs [ (key, own); (key, sibling) ]);
+  Verdict.p "an exact pair written twice is named, once, however often it repeats"
+    (Poly.equal
+       (Manifest.repeated_pairs [ (key, own); (key, sibling); (key, own); (key, own) ])
+       [ (key, own) ]);
   let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
   Verdict.p "a manifest source missing from the argument list is named as uncatalogued"
     (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], [], []));
@@ -421,7 +431,15 @@ let dynamic reason = Verdict.fail reason
          "%s: in both `raw_direct_evidence` and `raw_catalogue_only` (not part of the golden)\n");
   Verdict.p_empty
     "no direct failure is both answered by a control and catalogued as answered by none"
-    ~over:Manifest.direct_evidence Manifest.doubly_classified
+    ~over:Manifest.direct_evidence Manifest.doubly_classified;
+  List.iter Manifest.repeated_evidence ~f:(fun (key, claim) ->
+      eprintf
+        "%s: its `raw_direct_evidence` entry naming %S is written more than once; drop the copy \
+         (not part of the golden)\n"
+        (Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key)
+        claim);
+  Verdict.p_empty "no `raw_direct_evidence` entry repeats another's key and claim"
+    ~over:Manifest.direct_evidence Manifest.repeated_evidence
 
 (* Which callees refuse is judged against the claim forms [Verdict.Claims] declares, read from its
    source, so the judgment cannot lag the module. The mutations below edit that same source: a
@@ -483,3 +501,42 @@ let () =
        (Option.bind
           (edit ~pattern:"module Claims = struct" ~with_:"module Other = struct")
           ~f:mismatch))
+
+(* gh-ocannl-1840: tools/mutation-run.sh reads the section printer's fixed text from
+   [Refusal_section_heads]'s source, one line [let <name> = "<text>"] per value with no double quote
+   or backslash in the text. Each compiled value is held to that line, so a binding the formatter
+   wraps, an escape, or a second binding of a name refuses here, not only at the runner's
+   startup. *)
+let () =
+  let module Heads = Test_utils.Refusal_section_heads in
+  let source = In_channel.read_all "../support/refusal_section_heads.ml" in
+  let values =
+    [
+      ("closing_row", Heads.closing_row);
+      ("not_printed_head", Heads.not_printed_head);
+      ("offer_head", Heads.offer_head);
+      ("offer_answered_by", Heads.offer_answered_by);
+    ]
+  in
+  let one_line source (name, value) =
+    let binds line = String.is_prefix (String.lstrip line) ~prefix:("let " ^ name ^ " ") in
+    (not (String.exists value ~f:(fun c -> Char.equal c '"' || Char.equal c '\\')))
+    && List.equal String.equal
+         (List.filter (String.split_lines source) ~f:binds)
+         [ Printf.sprintf "let %s = \"%s\"" name value ]
+  in
+  Verdict.p_all ~min:4
+    "each section head is bound once, on one line holding its compiled value verbatim, with no \
+     quote or backslash in it"
+    values ~f:(one_line source);
+  let closing = List.hd_exn values in
+  let line = Printf.sprintf "let closing_row = \"%s\"" Heads.closing_row in
+  Verdict.p_none ~min:3 "a head wrapped onto two lines, bound twice, or holding an escape is not"
+    [
+      (source, ("closing_row", "a \\ b"));
+      ( String.substr_replace_first source ~pattern:line
+          ~with_:(Printf.sprintf "let closing_row =\n  \"%s\"" Heads.closing_row),
+        closing );
+      (source ^ line ^ "\n", closing);
+    ]
+    ~f:(fun (source, value) -> one_line source value)

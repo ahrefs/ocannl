@@ -122,13 +122,13 @@ let () =
     String.concat ~sep:"\n"
       ([ "the malformed tree is refused: true"; "the malformed tree is refused but not here: true" ]
       @ List.map (markers before) ~f:(fun m -> "  " ^ m)
-      @ [ "End of synthetic controls."; "" ])
+      @ [ Test_utils.Refusal_section_heads.closing_row; "" ])
   in
   let golden_after =
     String.concat ~sep:"\n"
       ([ "a malformed tree is refused: true"; "the malformed tree is refused but not here: true" ]
       @ List.map (markers after) ~f:(fun m -> "  " ^ m)
-      @ [ "End of synthetic controls."; "" ])
+      @ [ Test_utils.Refusal_section_heads.closing_row; "" ])
   in
   p "a golden's replaced markers and reworded claim rows are rewritten, and nothing else"
     (String.equal (Sync.rewrite_golden plan golden_before) golden_after);
@@ -507,10 +507,16 @@ let () =
     Sync.render_offers ~manifest_path:"manifest.ml" ~needing offered
   in
   let one = render (read logged) in
-  p "a failure one claim answers for is offered as the entry naming that claim, under one heading"
+  p
+    "a failure one claim answers for is offered as the entry naming that claim, under one heading, \
+     with the argument accepting it"
     (List.equal String.equal
        (String.split_lines one |> List.tl_exn)
-       [ Printf.sprintf "    ( %s, %s );" (quote (key second)) (quote (control ^ ": true")) ]);
+       [
+         Printf.sprintf "    ( %s, %s );" (quote (key second)) (quote (control ^ ": true"));
+         Printf.sprintf "  or: tools/refusal-manifest-sync.sh --accept-offer '%s=%s'" (key second)
+           control;
+       ]);
   let several =
     render
       (read
@@ -518,11 +524,56 @@ let () =
          @ Manifest.offer_lines ~key:(key second) [ control ]))
   in
   p "several claims, from one run or several, are offered once each, as alternatives"
-    (List.length (String.split_lines several) = 3
+    (List.length (String.split_lines several) = 5
     && String.is_substring several ~substring:"answered by 2 passed claims");
   p "a failure no run's claim answers for is named with what settles it, with no entry"
     (let none = render [] in
      String.is_substring none ~substring:"answered by no passed claim"
      && not (String.is_substring none ~substring:"    ( "));
   p "an offer for a key needing no entry renders nothing: a synced manifest is quiet"
-    (String.is_empty (render ~needing:[] (read logged)))
+    (String.is_empty (render ~needing:[] (read logged)));
+  (* gh-ocannl-1840: --accept-offer writes the entry an offer names, through [quote], after the
+     table's last entry -- and refuses what the text decides cannot be one. *)
+  let diagnostics_of source =
+    Option.some_if (String.equal source "synthetic_scan.ml") (Scan.diagnostics before)
+  in
+  let accept ?(text = text ()) offers = Sync.accept_offers ~text ~diagnostics_of offers in
+  let entries text =
+    List.map (Sync.read_tables text).direct_evidence ~f:(fun e -> (e.key.value, e.value.value))
+  in
+  let tricky = "a claim with \"quotes\", a \\ and an = sign" in
+  p "an accepted offer is the table's last entry, its claim's text verbatim, the rest unchanged"
+    (match accept [ (key second, tricky) ] with
+    | Ok edit ->
+        let accepted = Sync.apply (text ()) [ edit ] in
+        Poly.equal (entries accepted) (entries (text ()) @ [ (key second, tricky ^ ": true") ])
+        && Poly.equal (Sync.read_tables accepted).rows (Sync.read_tables (text ())).rows
+    | Error _ -> false);
+  p "two accepted at once land in the order given, into an empty table too"
+    (let empty = text ~evidence:[] () in
+     match accept ~text:empty [ (key second, control); (key second, sibling) ] with
+     | Ok edit ->
+         Poly.equal
+           (entries (Sync.apply empty [ edit ]))
+           [ (key second, control ^ ": true"); (key second, sibling ^ ": true") ]
+     | Error _ -> false);
+  let refused ?text offers =
+    match accept ?text offers with Ok _ -> None | Error reasons -> Some reasons
+  in
+  p_all ~min:6
+    "an offer for no row's source, for no current direct failure, for a catalogue-only key, an \
+     entry already held or given twice, or an empty claim, is refused, naming why"
+    [
+      (refused [ ("other_scan.ml:" ^ second, control) ], "no `<source>:<md5>` key");
+      ( refused [ (key (identity_of before "the malformed tree is refused"), control) ],
+        "no current direct failure" );
+      ( refused ~text:(text ~catalogue:[ (key second, "unreachable") ] ()) [ (key second, control) ],
+        "`raw_catalogue_only`" );
+      (refused [ (key first, "the malformed tree is refused") ], "already an entry");
+      (refused [ (key second, control); (key second, control) ], "already an entry");
+      (refused [ (key second, "") ], "empty or spans lines");
+    ]
+    ~f:(fun (reasons, why) ->
+      match reasons with
+      | Some reasons -> List.exists reasons ~f:(String.is_substring ~substring:why)
+      | None -> false)

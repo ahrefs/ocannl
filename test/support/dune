@@ -63,6 +63,7 @@
   cache_dir_scan
   refusal_control_scan
   refused_action_scan
+  refusal_section_heads
   refusal_control_manifest
   refusal_manifest_sync
   optional_arg_scan

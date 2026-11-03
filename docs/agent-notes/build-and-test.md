@@ -467,7 +467,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   runs let a key stand mapped to a claim whose own run never printed it. A key may carry several
   entries, one per claim whose run prints it, and every entry is consulted -- any one answering is
   enough, and a marker that did not print names each of its claims that failed (gh-ocannl-1572:
-  a first-match lookup once left a key's later entries dead). A
+  a first-match lookup once left a key's later entries dead); the same key and claim twice is a
+  copy-paste slip the audit refuses (`Refusal_control_manifest.repeated_pairs`, gh-ocannl-1840). A
   refusal no control can reach -- a library constant, a walk defect the raw-text floor exists for
   -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
   heading, so it stays catalogued without claiming execution; a key in both tables is refused by
@@ -476,8 +477,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   malformed input (`config_scan_lexing`, `dune_scan_cases`, `verdict_scan_cases`, codegen's
   `--refusal-control`; env_var_deps' `malformed_tree_control` builds its tree beside the shared
   `control_context` through `run_checker`). Every section ends on the unconditional closing row
-  `End of synthetic controls.` (`Refusal_control_manifest.closing_row`; gh-ocannl-1251,
+  `End of synthetic controls.` (`Refusal_section_heads.closing_row`; gh-ocannl-1251,
   gh-ocannl-1318), which is how `tools/mutation-run.sh` tells a complete run from a cut one;
+  that row and the stderr heads below have one owner, `test/support/refusal_section_heads.ml`,
+  whose source the Perl runner reads at startup by a one-line grammar its header states, failing
+  closed (gh-ocannl-1840: they were once held as copies);
   a marker of the row a run leaves out because a claim behind it failed gets a stderr line naming
   that claim, which the runner lists beside it, and one with none did not run (gh-ocannl-1499).
   Claim markers are consumed as a multiset, so two
@@ -493,7 +497,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the row lists such a failure, its run writes an offer line on stderr naming each passed claim
   whose own refused runs printed it (`Refusal_control_manifest.answering_claims`, the test
   `standing` applies to an entry's claim), or saying none did, and the sync tool prints the entry
-  ready to paste (gh-ocannl-1571; it never writes one: which claim answers is a judgment). After a rewording,
+  ready to paste (gh-ocannl-1571), never written unasked: which claim answers is a judgment, so the
+  reader names it, `--accept-offer KEY=CLAIM` as the offer prints it, and the tool writes exactly
+  that entry and re-runs its source's goldens (gh-ocannl-1840). After a rewording,
   one `tools/refusal-manifest-sync.sh` does the rest (gh-ocannl-1429; `--dry-run` shows the plan):
   it rewrites each stale row, re-keys the `raw_direct_evidence`/`raw_catalogue_only` entry of a
   reworded direct failure, relabels an evidence entry whose control claim was reworded in its
@@ -2289,7 +2295,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   continuation is skipped too rather than read as a row the golden lacks), and Verdict's teardown ended the process; a run missing or swapping a row, or with no
   teardown, still exits 4. Each omitted marker is listed with why it did not print (gh-ocannl-1499):
   the failed claim behind it, as `print_section` named it on stderr in a `Refusal marker not
-  printed (not part of the golden): <marker> -- <reason>` line (`not_printed_head`) -- `its claim
+  printed (not part of the golden): <marker> -- <reason>` line (`Refusal_section_heads.not_printed_head`) -- `its claim
   failed: "<label>"`, or for a direct failure `the claim answering for it failed: "<label>"`, its
   `raw_direct_evidence` claim (`the claims answering for it failed: "<a>", "<b>"` when several of
   its entries' claims failed) -- or, with no such line, `no failed check of this run is behind it:

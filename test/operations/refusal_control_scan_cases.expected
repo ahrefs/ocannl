@@ -41,6 +41,8 @@ and names every entry's failed claim, in table order: true
 a claim's marker consumes the failure it names, so a second identical claim's marker names none: true
 while two identical claims' markers both name a failure when both claims failed: true
 a direct failure's marker leaves its control claim's failure for the next refusal: true
+entries under one key naming different claims repeat no pair: true
+an exact pair written twice is named, once, however often it repeats: true
 a manifest source missing from the argument list is named as uncatalogued: true
 an argument-list source outside the manifest is named as extra: true
 a source catalogued twice is a mismatch, not a match: true
@@ -840,9 +842,12 @@ workflow_job_timeouts.ml: [scanner-refusal:18034cc42c5fded559e7a29c1c57a615] scr
 workflow_job_timeouts.ml: [scanner-refusal:6b6eff6eb802894930d7281d3548beb2] composite action's unbounded (claim) is catalogued beside workflow_job_timeouts.expected: true
 every `raw_direct_evidence` and `raw_catalogue_only` key names a current direct failure of a catalogued scanner source: true
 no direct failure is both answered by a control and catalogued as answered by none: true
+no `raw_direct_evidence` entry repeats another's key and claim: true
 every Verdict.Claims member is judged refusing or not, once, and every judged name is a member: true
 the paired, formatted-paired and pairwise-distinct claims refuse through their label: true
 a combinator Verdict.Claims gains that neither list judges is named as unjudged: true
 a judged combinator Verdict.Claims no longer binds is named as not a member: true
 a Claims item other than a plain binding is unreadable, never assumed judged: true
 a Verdict source declaring no Claims structure is refused, not read as empty: true
+each section head is bound once, on one line holding its compiled value verbatim, with no quote or backslash in it: true
+a head wrapped onto two lines, bound twice, or holding an escape is not: true
