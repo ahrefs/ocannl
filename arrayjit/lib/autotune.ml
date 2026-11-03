@@ -3326,6 +3326,29 @@ type seg_key = { key_units : int list; key_digest : string }
 let equal_seg_key a b =
   List.equal Int.equal a.key_units b.key_units && String.equal a.key_digest b.key_digest
 
+(* A running composite over keys ['k], each with one choice ['p] (gh-ocannl-1138): what the search's
+   [sweeper] returns. *)
+type ('k, 'p) sweeper = {
+  running : ('k * 'p) list ref;  (** The composite: one choice per key, in key order. *)
+  running_ms : float option ref;  (** Its time, when a window timed exactly it. *)
+  swept_against : ('k * ('k * 'p) list) list ref;
+      (** Per swept key, the staff its sweep ran against (for the playoff), latest first. *)
+  start : ('k * 'p) list -> unit;  (** Sets the composite to these choices, in key order. *)
+  sweep_key : 'k * 'p list -> ('p * float) list;
+      (** The sweep of one key over its choices: that key's results, in its own backdrop. *)
+}
+
+(* A segmentation's sketch sweeper: the composite, and the sweep of every key of a menu ([pre_of]:
+   each key's pre-schedule segment; [start]: the composite's starting choices). *)
+type sketch_sweeper = {
+  composite : (seg_key, sketch_params) sweeper;
+  sweep :
+    pre_of:(seg_key * LL.optimized) list ->
+    start:(seg_key * sketch_params) list ->
+    (seg_key * sketch_params list) list ->
+    unit;
+}
+
 (* Each segment's first unit in a segmentation, by position. *)
 let segment_starts (plan : Sched.segmentation) =
   Array.of_list (List.folding_map plan ~init:0 ~f:(fun at (_, n) -> (at + n, at)))
@@ -10960,11 +10983,12 @@ module Make (D : Driver) = struct
               List.filter choices ~f:(fun (k, _) -> not (equal_seg_key k key))
             in
             (* One running composite over [keys], each with one choice: a segmentation's sketches
-               (coarse, or fine: gh-ocannl-574), or the split-reduce sites' block counts. The
-               composite, its time when a window timed exactly it, per swept key the staff its sweep
-               ran against (for the playoff), and the sweep of one key, which returns that key's
-               results in its own backdrop. [single key staff choice] is the candidate; [describe]
-               names a choice for the log. Keys compare by [equal_key] and choices structurally. *)
+               (coarse, or fine: gh-ocannl-574), or the split-reduce sites' block counts, returned
+               as a [sweeper] record: the composite, its time when a window timed exactly it, per
+               swept key the staff its sweep ran against (for the playoff), and the sweep of one
+               key, which returns that key's results in its own backdrop. [single key staff choice]
+               is the candidate; [describe] names a choice for the log. Keys compare by [equal_key]
+               and choices structurally. *)
             let sweeper ?seeded_cut ~finals ~equal_key ~keys ~single ~describe ~fallbacks () =
               let running = ref [] and running_ms = ref None and swept_against = ref [] in
               (* The schedule whose window took [running_ms], with the digest it timed when known:
@@ -11156,7 +11180,7 @@ module Make (D : Driver) = struct
                   ~f:(fun (p, ms, _) -> (p, ms))
               in
               let start choices = running := in_key_order choices in
-              (running, running_ms, swept_against, start, sweep_key)
+              { running; running_ms; swept_against; start; sweep_key }
             in
             (* The order a sweep decides its keys in. Heaviest key first: its weight is its segment
                count times the roofline score of its best-scored sketch, so the keys whose
@@ -11193,7 +11217,7 @@ module Make (D : Driver) = struct
             in
             (* A segmentation's sketch sweeper, its keys in [heaviest_first] order. *)
             let sketch_sweeper ~plan ~fine ~keys =
-              let running, running_ms, swept_against, start, sweep_key =
+              let ({ running; start; sweep_key; _ } as composite) =
                 sweeper ~finals:true ~equal_key:equal_seg_key ~keys ~fallbacks:n_backdrop_fallbacks
                   ~single:(fun key staff p ->
                     Fiss (F_sketch { plan; entries = [ (key, p) ]; staff; fine }))
@@ -11219,7 +11243,7 @@ module Make (D : Driver) = struct
                       List.rev_map results ~f:(fun (p, ms) -> (key, fine, (p, ms)))
                       @ !fiss_single_results)
               in
-              (running, running_ms, swept_against, sweep)
+              { composite; sweep }
             in
             (* gh-ocannl-1664: the seeded sweep. Every single is [plan] with the key's choice swapped
              and the other keys' changed choices as its staff ([F_swap]); a key the sweep has not
@@ -11260,7 +11284,7 @@ module Make (D : Driver) = struct
                     Option.map beam_bar ~f:(Float.max running))
             in
             let seeded_sweep_run ~start_ms plan entries pre =
-              let running, running_ms, _, _, sweep_key =
+              let { running; running_ms; sweep_key; _ } =
                 sweeper ~seeded_cut:seeded_cut_reference ~finals:false ~equal_key:equal_seg_key
                   ~keys:(List.map entries ~f:fst) ~fallbacks:n_seeded_single_fallbacks
                   ~single:(fun key staff p -> Fiss (F_swap { plan; entries = [ (key, p) ]; staff }))
@@ -11380,11 +11404,20 @@ module Make (D : Driver) = struct
                       Option.bind (List.Assoc.find pre_of ~equal:equal_seg_key key) ~f:(fun pre ->
                           Option.map (start.decide pre) ~f:(fun p -> (key, p)))))
             in
-            let running, running_ms, swept_against, sweep =
+            let { composite = { running; running_ms; swept_against; _ }; sweep } =
               sketch_sweeper ~plan:coarse_plan ~fine:false
                 ~keys:(List.map fiss_sketch_entries ~f:fst)
             in
-            let fine_running, fine_running_ms, fine_swept_against, fine_sweep =
+            let {
+              composite =
+                {
+                  running = fine_running;
+                  running_ms = fine_running_ms;
+                  swept_against = fine_swept_against;
+                  _;
+                };
+              sweep = fine_sweep;
+            } =
               sketch_sweeper ~plan:fine_plan ~fine:true ~keys:(List.map fine_all_entries ~f:fst)
             in
             (* The split-reduce sites' running composite: each site's block count, swept over the
@@ -11395,7 +11428,7 @@ module Make (D : Driver) = struct
                its sites, detected on the pristine lowering, would match the search's only by target
                and extents. *)
             let same_site a b = Idx.equal_symbol a.sr_axis b.sr_axis in
-            let sr_running, sr_running_ms, _, _, sr_sweep_key =
+            let { running = sr_running; running_ms = sr_running_ms; sweep_key = sr_sweep_key; _ } =
               sweeper ~finals:true ~equal_key:same_site ~keys:sr_sites
                 ~fallbacks:n_sr_backdrop_fallbacks
                 ~single:(fun s staff b -> Fiss (F_split { sites = [ (s, b) ]; staff }))
