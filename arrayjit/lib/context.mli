@@ -295,6 +295,8 @@ val lowered_for_decisions :
   ?materialized:Ir.Tnode.t list ->
   ?inline:Ir.Tnode.t list ->
   ?footprint:Ir.Tnode.t list ->
+  ?facts:Ir.Backend_intf.backend_facts ->
+  ?limits:Ir.Backend_intf.hardware_limits ->
   t ->
   Ir.Assignments.comp ->
   Ir.Indexing.unit_bindings ->
@@ -311,7 +313,11 @@ val lowered_for_decisions :
     {!Ir.Cost_model.completion_floor} bounds partial placement vectors on. It passes the compile's
     frontend gate first, as does {!decision_surface}: a tainted session or a program over a node the
     frontend discarded is refused before lowering forces any dims (gh-ocannl-1301, gh-ocannl-1505).
-*)
+    [facts] and [limits] (default: the context's {!backend_facts} and {!hardware_limits}) are the
+    target the lowering decides for: the facts' [blends_value_selects] and the limits'
+    [online_softmax_auto_block], as a compile on that target would lower. A decision-only reader
+    judging another target than the context's passes its own (gh-ocannl-1780,
+    [Autotune.model_target]); the optimize context and its placements stay the context's. *)
 
 val decision_surface :
   ?name:string ->
@@ -817,6 +823,13 @@ val link_floor : ?name:string -> ?prelowered:bool -> t -> Ir.Low_level.optimized
     sequence can overlap plus the largest overlap-eligible node of each precision class
     ({!field-lf_overlap_bytes} is what that leaves out). Link-free and hermetic, like {!link_delta}.
 *)
+
+val lowered_transform_input : Ir.Low_level.optimized -> Ir.Low_level.optimized
+(** The form of a {!lowered_for_decisions} lowering that a compile hands its [lowered_transform]:
+    the compile's preparation before scheduling (zeros sunk under [buffer_aliasing]), which moves
+    statements and so fission boundaries. A decision-only reader that runs a compile's transform on
+    a hermetic lowering applies it first, to see what the compile's transform would
+    ([Autotune.model_pick], gh-ocannl-1780). *)
 
 val probe_link_floor : ?name:string -> ?prelowered:bool -> t -> Ir.Low_level.optimized -> link_floor
 (** gh-ocannl-1554: {!link_floor}, then a trial allocation of its pools -- each group's bytes in one

@@ -119,13 +119,7 @@ let () =
       ~facts:(Context.backend_facts_of_name backend)
       ~limits ~accum_prec:Fn.id ~static_indices:[] opt
   in
-  let rated =
-    {
-      Ir.Backend_intf.no_hardware_limits with
-      peak_flops = Some 2e13;
-      peak_memory_bandwidth = Some 9e11;
-    }
-  in
+  let rated = Ll_test.rated_limits in
   let plan ~backend ~min_reduction = Ll_test.seeded_census (derive ~min_reduction backend) in
   let cuda = plan ~backend:"cuda" ~min_reduction:128 in
   p "structural: the plan derived for cuda seeds a segment at the threshold of 128"
@@ -301,4 +295,59 @@ let () =
   Verdict.gated_all ~when_:seeds_here ~on:backend_name
     "on CUDA/HIP the model's bias gradient is bitwise the default pipeline's"
     (List.zip_exn (Array.to_list b_model) (Array.to_list b_default))
-    ~f:(fun (m, d) -> bitwise m d)
+    ~f:(fun (m, d) -> bitwise m d);
+  (* gh-ocannl-1780: [model_pick] is [model_default]'s decision without the compile, the link the
+     structural legs below rest on. Where this backend rates an envelope (the GPUs), the model ranks
+     and the two must name the same pick; elsewhere both report the default pipeline unranked. *)
+  let limits = Context.hardware_limits (Context.auto ()) in
+  Verdict.gated
+    ~when_:(Option.is_some limits.peak_flops || Option.is_some limits.peak_memory_bandwidth)
+    ~on:backend_name
+    "where the backend rates an envelope, model_pick names model_default's pick without compiling"
+    (String.equal
+       (Autotune.model_pick ~name:"sd_pick_here" (Context.auto ()) comp Ir.Indexing.Empty)
+         .Autotune.mc_label
+       r.Autotune.mc_label)
+
+(* gh-ocannl-1780: the model claims' premise on every backend. [Autotune.model_pick] decides what
+   [model_default] would compile, for a CUDA stand-in target ([Ll_test.cuda_model_target]: CUDA's
+   facts, the CUDA dialect's capabilities, rated ceilings), on this host's hermetic lowering; the
+   bitwise claims stay the device's. The leg is the configuration's: where the untuned seeding is
+   off for that target, [model_default] starts from the default pipeline there too. The control
+   takes the envelope away: without rated ceilings the model ranks nothing and picks the default. *)
+let () =
+  let target = Ll_test.cuda_model_target () in
+  let seeds_for_target =
+    Option.is_some
+      (Autotune.model_seeding ~facts:target.Autotune.mt_facts ~limits:target.Autotune.mt_limits)
+  in
+  let leg =
+    Verdict.leg ~aggregation:`Environment ~when_:seeds_for_target
+      ~on:(backend_name ^ ", untuned seeding off for the cuda stand-in")
+      ()
+  in
+  let pick =
+    lazy (Autotune.model_pick ~name:"sd_pick" ~target (Context.auto ()) comp Ir.Indexing.Empty)
+  in
+  Verdict.in_leg ~leg
+    "structural: for the cuda stand-in the model starts from the seeded plan: its pick is never \
+     the plain default pipeline" (fun label ->
+      let r = Lazy.force pick in
+      Stdio.eprintf "structural: model_pick for cuda: %s (not part of the golden)\n"
+        r.Autotune.mc_label;
+      p label (not (String.equal r.Autotune.mc_label "default")));
+  Verdict.in_leg ~leg
+    "structural: for the cuda stand-in the model's pick is no tensor-core or conv form"
+    (fun label ->
+      let r = Lazy.force pick in
+      p label
+        (not
+           (String.is_substring r.Autotune.mc_label ~substring:"mma-"
+           || String.is_substring r.Autotune.mc_label ~substring:"conv-")));
+  p "structural control: without rated ceilings the cuda stand-in's pick is the default pipeline"
+    (String.equal
+       (Autotune.model_pick ~name:"sd_pick_unrated"
+          ~target:{ target with mt_limits = Ir.Backend_intf.no_hardware_limits }
+          (Context.auto ()) comp Ir.Indexing.Empty)
+         .Autotune.mc_label
+       "default")

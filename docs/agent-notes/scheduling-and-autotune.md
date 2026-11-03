@@ -909,6 +909,15 @@ files.
   incumbent stays the default pipeline and the whole family competes. The census claim
   (`test/operations/seeded_default`) pins capacity 0, no cache tier, against threshold 32 and is
   CUDA/HIP only; on cc the seeded default is off altogether.
+- **A model decision for another target is asked without a compile** (gh-ocannl-1780):
+  `Autotune.model_pick` is `model_default`'s choice, decided and not compiled (one `model_selection`
+  feeds both; only the compile-level fallback is the compile's), and it and `model_explain` take a
+  `?target:Autotune.model_target` (facts, limits, capabilities) for the context's own, the lowering
+  included (`Context.lowered_for_decisions ?facts ?limits`). A record on the decision-only entry
+  points, not driver members: a driver overriding the target would redirect every compile of its
+  `Make` instance, and a GPU-scheduled pick would be compiled by the context's backend.
+  `Ll_test.cuda_model_target` is CUDA without a device (rated ceilings: `Ll_test.rated_limits`);
+  `model_seeded_anchor` and `seeded_default` judge the seeded model's premises for it on cc.
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only

@@ -99,6 +99,11 @@ val finalize :
 
     {!Context.release} is the front-end entry point; prefer it over calling this directly. *)
 
+val maybe_sink_zeros : Ir.Low_level.optimized -> Ir.Low_level.optimized
+(** What a compile does to its lowering before scheduling it -- before its [lowered_transform] runs:
+    under [buffer_aliasing], whole-node initializations sunk toward their first use
+    ({!Ir.Low_level.sink_zero_outs}); the lowering itself otherwise. *)
+
 val lower_assignments :
   facts:Ir.Backend_intf.backend_facts ->
   limits:Ir.Backend_intf.hardware_limits ->

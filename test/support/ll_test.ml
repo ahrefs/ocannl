@@ -1509,6 +1509,30 @@ module Cuda_like_driver = Ir.C_syntax.Compile_driver (Cuda_like_syntax)
 let cuda_like_binding_race ?(bindings = Idx.Empty) ~name (o : LL.optimized) =
   Cuda_like_driver.binding_race ~name bindings o
 
+(** Stand-in rated ceilings at no other hardware limit: 20 TFLOP/s and 900 GB/s. The envelope the
+    analytic model ranks under ({!Autotune.model_default}'s early exit is a target without them), on
+    a host whose own backend rates none (cc). *)
+let rated_limits =
+  {
+    Ir.Backend_intf.no_hardware_limits with
+    peak_flops = Some 2e13;
+    peak_memory_bandwidth = Some 9e11;
+  }
+
+(** CUDA as the analytic model judges it, without a device: CUDA's backend facts, the codegen
+    capabilities {!Cuda_like_syntax} derives, and [limits] (default {!rated_limits}). The target a
+    structural leg hands {!Autotune.model_explain} and {!Autotune.model_pick} to check a CUDA/HIP
+    model claim's premise on every host (gh-ocannl-1780). *)
+let cuda_model_target ?(limits = rated_limits) () : Autotune.model_target =
+  let module Syntax = Cuda_like_syntax (struct
+    let procs = [||]
+  end) in
+  {
+    mt_facts = Context.backend_facts_of_name "cuda";
+    mt_limits = limits;
+    mt_capabilities = Ir.C_syntax.codegen_capabilities (module Syntax);
+  }
+
 (** {1 Cross-reduction accumulator residency in emitted source}
 
     The persistent-fragment scopes a backend's fragment hook emits mark their reduction body with a

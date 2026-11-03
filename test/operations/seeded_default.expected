@@ -24,3 +24,7 @@ on CUDA/HIP the model starts from the seeded plan: its pick is the seeded plan o
 on CUDA/HIP the model's pick is no tensor-core or conv form: true
 on CUDA/HIP the model's weight gradient is bitwise the default pipeline's: true
 on CUDA/HIP the model's bias gradient is bitwise the default pipeline's: true
+where the backend rates an envelope, model_pick names model_default's pick without compiling: true
+structural: for the cuda stand-in the model starts from the seeded plan: its pick is never the plain default pipeline: true
+structural: for the cuda stand-in the model's pick is no tensor-core or conv form: true
+structural control: without rated ceilings the cuda stand-in's pick is the default pipeline: true

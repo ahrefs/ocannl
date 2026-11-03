@@ -9595,7 +9595,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules model_seeded_anchor)
- (libraries base ocannl stdio unix arrayjit.verdict)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
