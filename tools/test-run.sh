@@ -1467,6 +1467,150 @@ OWNER=$RUNS/owner-$wt_key # the run directory holding the lock (see take_lock)
 LAST=$RUNS/last-$wt_key   # the run this worktree published most recently
 QUEUED=$RUNS/queued-$wt_key # a launch seen in flight before this worktree's first run (see note_queued)
 
+# The census of a lock's holders, one helper for its two callers
+# (gh-ocannl-1906): the supervisor's cancellation, which reaps what dune left
+# holding lock fd 9 before it publishes the verdict, and `stop`, which reaps
+# the leftovers of a run that finished or died while they still hold its
+# lock. Perl subs: prepended to the supervisor's program, and run by `stop`
+# with a line of its own after them.
+#
+# lock_census(LOCK, BOUND, SKIP...) lists the holders of LOCK but SKIP, as
+# pairs of a pid and its start token (a hash's list). The token is sampled
+# BEFORE the census saw the pid hold the lock, and the pid counts only while
+# it still carries it after: a token taken later could be a recycled pid's,
+# and the check at signal time would then authenticate an unrelated process
+# (a process born during the census is left to the next one).
+# Where /proc has fdinfo (Linux, Cygwin) it sweeps every process's
+# descriptors for a FLOCK on LOCK's device AND inode -- holders, not openers;
+# inode numbers repeat across filesystems. /proc/locks is not read: it names
+# the pid that TOOK a flock, and the lock lives on the shared description.
+# take_lock's perl, every run's acquirer, exits at once, so for every lock of
+# this script the pid named there is dead, recycled, or 0 from inside a pid
+# namespace, while the supervisor, dune and whatever dune left behind hold
+# the lock through inherited fd 9 (gh-ocannl-1107: `stop` trusted that name
+# and reaped none of them). Elsewhere lsof lists the OPENERS of the file --
+# the accepted approximation, there being no portable flock-holder API -- in
+# a child of its own, in a group of its own and holding no descriptor past
+# stdio, its answer used only once it ends within BOUND seconds; past that
+# it is KILLed, and a census cut short -- or one with no lsof -- finds
+# nobody, which its caller reports as a lock still held.
+#
+# census_token(PID) is PID's start token in ps_token's rendering, empty once
+# PID is gone. census_same(PID, TOKEN) is the identity check at signal time:
+# a census is a snapshot, and a holder that exited since could have had its
+# pid recycled by an unrelated process -- the lock does not stop pid reuse --
+# so only a PID still carrying the TOKEN the census paired it with is
+# signalled.
+lock_census_perl='
+use POSIX ();
+use Time::HiRes ();
+sub census_token {
+  my $p = shift;
+  return "" unless defined $p && $p =~ /\A[0-9]+\z/;
+  my $tok = "";
+  if (-d "/proc/self") {
+    if (open my $sf, "<", "/proc/$p/stat") {
+      my $s = <$sf>;
+      if (defined $s && $s =~ /^(?s:.*)\)\s+(.*)$/) {
+        my @f = split /\s+/, $1;
+        $tok = defined $f[19] ? $f[19] : "";
+      }
+    }
+  } else {
+    local $ENV{LC_ALL} = "C";
+    local $ENV{TZ} = "UTC";
+    $tok = qx{ps -o lstart= -p $p 2>/dev/null};
+    $tok =~ s/\s+\z//;
+    $tok =~ s/\A\s+//;
+    $tok =~ s/ +/ /g;
+  }
+  $tok;
+}
+sub census_same {
+  my ($p, $tok) = @_;
+  defined $tok && length $tok && census_token($p) eq $tok;
+}
+sub lock_census {
+  my ($lock, $bound, @skip) = @_;
+  my @st = stat($lock) or return ();
+  my %skip = map { ($_ => 1) } @skip;
+  my %before;
+  my $paired = sub {
+    my @pairs;
+    for my $p (@_) {
+      my $tok = $before{$p};
+      push @pairs, $p, $tok if defined $tok && length $tok && census_same($p, $tok);
+    }
+    @pairs;
+  };
+  if (-d "/proc/self/fdinfo") {
+    opendir(my $pd, "/proc") or return ();
+    my @found;
+    for my $p (grep { /\A[0-9]+\z/ && !$skip{$_} } readdir $pd) {
+      $before{$p} = census_token($p);
+      opendir(my $fdh, "/proc/$p/fd") or next;
+      FD: for my $fd (grep { /\A[0-9]+\z/ } readdir $fdh) {
+        my @fs = stat("/proc/$p/fd/$fd") or next;
+        next unless $fs[0] == $st[0] && $fs[1] == $st[1];
+        open(my $fi, "<", "/proc/$p/fdinfo/$fd") or next;
+        while (<$fi>) {
+          if (/^lock:.*FLOCK/) { push @found, $p; last FD }
+        }
+      }
+    }
+    return $paired->(@found);
+  }
+  {
+    # Every token at once, before lsof looks, rendered as census_token does.
+    local $ENV{LC_ALL} = "C";
+    local $ENV{TZ} = "UTC";
+    for (split /\n/, qx{ps -axo pid=,lstart= 2>/dev/null}) {
+      my ($p, @t) = split " ";
+      $before{$p} = join(" ", @t) if defined $p && $p =~ /\A[0-9]+\z/ && @t;
+    }
+  }
+  pipe(my $r, my $w) or return ();
+  my $c = fork();
+  unless (defined $c) { close $r; close $w; return () }
+  if (!$c) {
+    $SIG{$_} = "DEFAULT" for qw(ALRM INT TERM HUP);
+    eval { setpgrp(0, 0) };
+    POSIX::dup2(fileno($w), 1) or POSIX::_exit(126);
+    POSIX::close($_) for 3 .. 255;
+    open(STDIN, "<", "/dev/null");
+    open(STDERR, ">", "/dev/null");
+    exec("lsof", "-t", "--", $lock);
+    POSIX::_exit(127);
+  }
+  close $w;
+  my ($out, $eof) = ("", 0);
+  my $end = Time::HiRes::time() + $bound;
+  while (!$eof && Time::HiRes::time() < $end) {
+    my $rin = "";
+    vec($rin, fileno($r), 1) = 1;
+    next unless select(my $rout = $rin, undef, undef, 0.1) > 0;
+    my $n = sysread($r, $out, 4096, length $out);
+    unless (defined $n) { next if $!{EINTR}; last }
+    $eof = 1 if $n == 0;
+  }
+  close $r;
+  my $done;
+  for (1 .. ($eof ? 10 : 0)) {
+    if (waitpid($c, POSIX::WNOHANG()) != 0) { $done = 1; last }
+    select undef, undef, undef, 0.1;
+  }
+  unless ($done) {
+    kill("KILL", -$c) or kill("KILL", $c);
+    for (1 .. 5) {
+      last if waitpid($c, POSIX::WNOHANG()) != 0;
+      select undef, undef, undef, 0.1;
+    }
+  }
+  return () unless $done;
+  $paired->(grep { /\A[0-9]+\z/ && !$skip{$_} } split /\s+/, $out);
+}
+'
+
 # The supervisor: ONE perl process that owns a run from the instant it
 # inherits lock fd 9 until the verdict is on disk -- the second of a run's two
 # parties, the launching shell being the first. It caps the run, relays
@@ -1520,7 +1664,7 @@ QUEUED=$RUNS/queued-$wt_key # a launch seen in flight before this worktree's fir
 # iteration's). OCANNL_TOOL_TESTRUN_OWN: the run directory whose identity and
 # verdict this process owns -- unset for a repeat iteration, whose coordinator
 # owns both and reads this process's exit status instead.
-supervisor_perl='
+supervisor_perl=$lock_census_perl'
   use POSIX ();
   my $cap = shift;
   # The root of the runner, where the slowest-actions reader lives -- not
@@ -1541,28 +1685,6 @@ supervisor_perl='
   # lstart under the same pinned locale/TZ and squeeze. Sampled by the process
   # itself, never by a parent that could catch a recycled pid after a fast
   # exit.
-  # Also asked of another pid (the census of a cancellation, below): empty
-  # once that pid is gone.
-  my $token_of = sub {
-    my $p = shift;
-    my $tok = "";
-    if (-d "/proc/self") {
-      if (open my $sf, "<", "/proc/$p/stat") {
-        my $s = <$sf>;
-        if (defined $s && $s =~ /^(?s:.*)\)\s+(.*)$/) {
-          my @f = split /\s+/, $1;
-          $tok = defined $f[19] ? $f[19] : "";
-        }
-      }
-    } else {
-      local $ENV{LC_ALL} = "C";
-      local $ENV{TZ} = "UTC";
-      $tok = qx{ps -o lstart= -p $p 2>/dev/null};
-      $tok =~ s/\s+$//;
-      $tok =~ s/ +/ /g;
-    }
-    $tok;
-  };
   my $self_token = sub {
     my $tok = "";
     if (open my $sf, "<", "/proc/self/stat") {
@@ -1739,84 +1861,29 @@ supervisor_perl='
     }
     exit $code;
   };
-  # The holders of the run lock other than this process and its launcher, for the
-  # census of a cancellation (gh-ocannl-1808): what dune left behind outside the
-  # group it led -- a setsid escapee, a descendant that changed its group --
+  # The census of a cancellation (gh-ocannl-1808), by the helper `stop` shares
+  # (lock_census_perl, prepended to this program): the holders of the run lock
+  # other than this process and its launcher -- what dune left behind outside
+  # the group it led, a setsid escapee, a descendant that changed its group,
   # still holding lock fd 9. This process holds the lock throughout, so every
-  # holder shares the description of this run: none can belong to another run.
-  # Linux reads the fdinfo of each process for a FLOCK on the device and
-  # inode of the lock file (holders, not openers); elsewhere lsof lists the openers of the file
-  # -- the approximation `stop` accepts -- in a child of its own, bounded to 2
-  # seconds and KILLed past it. Only a run/start supervisor is handed the lock
-  # (OCANNL_TOOL_TESTRUN_LOCK): a repeat coordinator holds it too, and is no
-  # leftover.
-  my $holders = sub {
-    return () unless defined $lock && length $lock;
-    my @st = stat($lock) or return ();
-    my %skip = ($$ => 1, getppid() => 1);
-    my @found;
-    if (-d "/proc/self/fdinfo" && opendir(my $pd, "/proc")) {
-      for my $p (grep { /^\d+$/ && !$skip{$_} } readdir $pd) {
-        opendir(my $fdh, "/proc/$p/fd") or next;
-        FD: for my $fd (grep { /^\d+$/ } readdir $fdh) {
-          my @fs = stat("/proc/$p/fd/$fd") or next;
-          next unless $fs[0] == $st[0] && $fs[1] == $st[1];
-          open(my $fi, "<", "/proc/$p/fdinfo/$fd") or next;
-          while (<$fi>) {
-            if (/^lock:.*FLOCK/) { push @found, $p; last FD }
-          }
-        }
-      }
-      return @found;
-    }
-    return () unless $own;
-    my $out = "$own/holders.tmp";
-    my $c = fork();
-    return () unless defined $c;
-    if (!$c) {
-      $SIG{$_} = "DEFAULT" for qw(ALRM INT TERM HUP);
-      POSIX::close($_) for 3 .. 255;
-      eval { setpgrp(0, 0) };
-      open(STDIN, "<", "/dev/null");
-      open(STDERR, ">", "/dev/null");
-      open(STDOUT, ">", $out) or POSIX::_exit(126);
-      exec("lsof", "-t", "--", $lock);
-      POSIX::_exit(127);
-    }
-    my $done;
-    for (1 .. 20) {
-      if (waitpid($c, POSIX::WNOHANG()) == $c) { $done = 1; last }
-      select undef, undef, undef, 0.1;
-    }
-    unless ($done) {
-      kill("KILL", -$c) or kill("KILL", $c);
-      for (1 .. 5) {
-        last if waitpid($c, POSIX::WNOHANG()) != 0;
-        select undef, undef, undef, 0.1;
-      }
-    }
-    if ($done && open(my $hf, "<", $out)) {
-      @found = grep { /^\d+$/ && !$skip{$_} } map { s/\s+//gr } <$hf>;
-      close $hf;
-    }
-    unlink $out;
-    @found;
-  };
+  # holder shares the description of this run: none can belong to another
+  # run. lsof, where it is the census, is bounded to 2 seconds. Only a
+  # run/start supervisor is handed the lock (OCANNL_TOOL_TESTRUN_LOCK): a
+  # repeat coordinator holds it too, and is no leftover.
+  #
   # TERM the census, one second of grace, then KILL whoever of it is left
-  # -- each pid only while it still carries the start token sampled with the
-  # census, so a holder that exited and whose pid was recycled meanwhile is
-  # never signalled: the lock does not stop pid reuse.
+  # -- each pid only while census_same finds it the process the census saw.
   my $reap_holders = sub {
-    my %tok = map { ($_, $token_of->($_)) } $holders->();
-    my $same = sub { my $p = shift; $tok{$p} ne "" && $token_of->($p) eq $tok{$p} };
-    my @h = grep { $tok{$_} ne "" } keys %tok;
+    return unless defined $lock && length $lock;
+    my %tok = lock_census($lock, 2, $$, getppid());
+    my @h = keys %tok;
     return unless @h;
     kill("TERM", @h);
     for (1 .. 10) {
       last unless grep { kill(0, $_) } @h;
       select undef, undef, undef, 0.1;
     }
-    my @left = grep { kill(0, $_) && $same->($_) } @h;
+    my @left = grep { kill(0, $_) && census_same($_, $tok{$_}) } @h;
     kill("KILL", @left) if @left;
   };
   my $blast = sub { my $sig = shift; kill($sig, -$pid) or kill($sig, $pid) };
@@ -5379,109 +5446,49 @@ case $sub in
     # the lock is HELD with the owner pointer naming THIS run, so whatever
     # holds it is this run's leftovers. The recorded group is signaled only
     # under a matching leader token (a recycled numeric pgid is never
-    # trusted); the lsof census on the lock file covers detached holders
-    # the group cannot see. reap_cycle reports honestly when the lock is
-    # STILL held afterwards (no lsof on this system, or unkillable holders).
+    # trusted); the census of the lock's holders covers detached ones the
+    # group cannot see. reap_cycle reports honestly when the lock is STILL
+    # held afterwards (no lsof on this system, an lsof that did not answer,
+    # or unkillable holders).
     lock_paths_of "$run_dir" || {
       # No worktree on record: nothing can attribute leftovers to this run,
       # so the leftover branches below stay closed and only the recorded
       # owner and group can be signalled.
       run_wt=$PWD run_lock= run_owner=
     }
-    # The census prefers /proc/locks (the flock matched by device AND inode
-    # -- inode numbers repeat across filesystems); lsof is the fallback and
-    # lists any process with the file open. But /proc/locks names the pid
-    # that TOOK the flock, not the ones holding it now: the lock lives on the
-    # shared description, and our take_lock perl, its acquirer, exits at
-    # once, so for a run's lock the named pid is dead -- or recycled by an
-    # unrelated process -- while the supervisor, dune and whatever dune left
-    # behind hold it through inherited fd 9. So a named pid counts only once
-    # fd_holds_lock confirms it holds the lock now, and when none is left
-    # the census sweeps every process's fdinfo rather than concluding
-    # "nobody" (gh-ocannl-1107: trusting any named pid returned the dead
-    # perl, and `stop` reaped none of the live holders). A confirmed named
-    # pid is returned alone, missing whatever inherited from it: only an
-    # acquirer still running can be one, and test-run's never is.
-    lock_holder_pids() {
-      local out p live=
-      out=$(perl -e '
-        my @st = stat($ARGV[0]) or exit 1;
-        my $dev = $st[0];
-        my ($maj, $min) = (($dev >> 8) & 0xfff, ($dev & 0xff) | (($dev >> 12) & ~0xff));
-        open my $fh, "<", "/proc/locks" or exit 1;
-        while (<$fh>) {
-          my @f = split;
-          next unless defined $f[1] && $f[1] eq "FLOCK";
-          my ($lmaj, $lmin, $ino) = split /:/, $f[5];
-          print "$f[4]\n"
-            if defined $ino && $ino == $st[1] &&
-               hex($lmaj) == $maj && hex($lmin) == $min;
-        }
-      ' "$run_lock" 2>/dev/null)
-      for p in $out; do
-        fd_holds_lock "$p" && live="$live$p
-"
-      done
-      if [ -n "$live" ]; then
-        printf '%s' "$live"
-        return 0
-      fi
-      if [ -d /proc ]; then
-        # /proc/locks named no live holder, yet the lock may be held -- sweep
-        # every process's fdinfo instead of depending on lsof, which need
-        # not be installed.
-        for pd in /proc/[0-9]*; do
-          p=${pd#/proc/}
-          fd_holds_lock "$p" && printf '%s\n' "$p"
-        done
-        return 0
-      fi
-      # macOS: lsof lists OPENERS -- the accepted approximation, there being
-      # no portable flock-holder API.
-      lsof -t -- "$run_lock" 2>/dev/null
-    }
-    fd_holds_lock() { # Linux: does <pid> hold a FLOCK on the lock file NOW?
-      perl -e '
-        my ($pid, $target) = @ARGV;
-        my @st = stat($target) or exit 1;
-        opendir(my $dh, "/proc/$pid/fd") or exit 1;
-        for my $fd (readdir $dh) {
-          next if $fd =~ /^\./;
-          my @fs = stat("/proc/$pid/fd/$fd") or next;
-          next unless $fs[0] == $st[0] && $fs[1] == $st[1];
-          open(my $fi, "<", "/proc/$pid/fdinfo/$fd") or next;
-          while (<$fi>) { exit 0 if /^lock:.*FLOCK/ }
-        }
-        exit 1
-      ' "$1" "$run_lock" 2>/dev/null
-    }
-    holds_lock_now() { # revalidated at SIGNAL time, not census time
-      if [ -d /proc ]; then
-        fd_holds_lock "$1"
-      else
-        lsof -t -- "$run_lock" 2>/dev/null | grep -qx "$1"
-      fi
+    # The census is the supervisor's (lock_census_perl, gh-ocannl-1906): the
+    # holders of the run's lock -- on Linux every process whose fdinfo shows
+    # the FLOCK, elsewhere lsof's openers, bounded to 10 seconds here -- each
+    # paired with the start token it carried from before the census saw it
+    # until after, and before each signal the same identity check
+    # (census_same): a holder that exited since the census could have had its
+    # pid recycled by an unrelated process.
+    lock_census() { # "PID TOKEN" per holder of the run's lock
+      perl -e "$lock_census_perl"'my %h = lock_census($ARGV[0], 10); print "$_ $h{$_}\n" for keys %h' \
+        "$run_lock" 2>/dev/null
     }
     reap_leftovers() { # <signal>
+      local census p tok
       # Ownership rechecked at entry (and per census kill below): if the
       # lock changed hands since the caller's gate, nothing here may fire.
       lock_still_owned "$run_dir" || return 0
       if group_verified "$run_dir"; then
         kill "-$1" -- "-$(cat "$run_dir/pgid")" 2>/dev/null
       fi
-      for p in $(lock_holder_pids); do
+      census=$(lock_census)
+      while read -r p tok; do
         case $p in '' | *[!0-9]* | 0) continue ;; esac
         # Re-verified per pid immediately before the signal: the census ran
-        # as one batch, and a holder that exited meanwhile could have had
-        # its pid recycled by an unrelated process. The ownership recheck
+        # as one batch (an empty token: gone already). The ownership recheck
         # closes the handoff race too -- if a NEW launch acquired the lock
         # mid-reap, take_lock pointed the owner at the new run atomically
         # with acquisition, so the pointer can no longer name this run and
         # the new run's holders are never signaled.
-        holds_lock_now "$p" || continue
+        [ -n "$tok" ] || continue
+        perl -e "$lock_census_perl"'exit(census_same(@ARGV) ? 0 : 1)' "$p" "$tok" 2>/dev/null || continue
         lock_still_owned "$run_dir" || return 0
         kill "-$1" "$p" 2>/dev/null
-      done
+      done <<<"$census"
     }
     reap_cycle() { # exits 0 iff this run's hold on the lock is gone
       lock_still_owned "$run_dir" || return 0
@@ -5498,7 +5505,8 @@ case $sub in
         echo "$1, but its leftover processes held the worktree lock; reaped them"
       else
         echo "$1, but leftover processes STILL hold $run_wt's lock" \
-             "(no lsof on this system, or unkillable holders); inspect with:" \
+             "(no lsof on this system, an lsof that did not answer, or unkillable" \
+             "holders); inspect with:" \
              "lsof $(printf %q "$run_lock")"
       fi
     }
