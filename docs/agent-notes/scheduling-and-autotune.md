@@ -1387,7 +1387,9 @@ files.
   `Context.routine.grid`, and `grid_serial_timed` lists every ranked candidate whose schedule asks
   for a `Grid` loop (`Autotune.schedule_asks_grid`, read off the saved schedule) while its census
   records a serial one (`Autotune.grid_rendered_serially`); each also gets a `NOTE grid-serial`
-  line in `autotune_log`. Keyed on the schedule because the label under-promises: the whole-triple
+  line in `autotune_log`. Downstream, `Train.tune_placements`' arm line appends the crown's census
+  when it asked on a pool, the bench result line carries a per-arm `grid` object and the shipped
+  routines' `tune.grid`, and `orchestrate.py` prints a `GRID NOTICE` (not a gate). Keyed on the schedule because the label under-promises: the whole-triple
   `W_sketch[mma-cpu 16x0x0]` carries no ` grid` token yet Grid-splits its row loop (at 64^3 that
   loop is on the pool; its zeroing nest's Grid, 64^2 updates, is under the launch floor). The
   seeding pre-filter weighs a Grid shape's known per-chunk locals against the cap: its in-kernel

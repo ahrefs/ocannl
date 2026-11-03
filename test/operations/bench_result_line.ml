@@ -46,7 +46,45 @@ let () =
    [null] that says no census was consulted. B is the case the field exists for: [tensorized: true]
    — the crowned schedule carries a [Tensorize] — with every one of its [Tile_mma] statements
    rendered as the lane-0 scalar fallback, so its 0.75 ms is a scalar timing under a tensorized
-   label. *)
+   label.
+
+   The arms' [grid] objects carry the same pairing for a Grid placement (gh-ocannl-1702): B's crown
+   asked for a Grid loop the CPU pool kept serial, with two ranked rivals like it; D asked on a GPU,
+   whose census records no pool rendering; E's default-pipeline Grid loop rendered on the pool,
+   which no label promised; A and C consulted no census. *)
+let pool_serial =
+  {
+    Bench_json.pool = true;
+    loops = 2;
+    pool_rendered = 1;
+    serial = 1;
+    rendered_serially = true;
+    (* The census line names a local, which can carry the characters the line must scrub. *)
+    summary =
+      "grid: 1 of 2 on the pool; i0 serial: local \"acc\" fails the shared rule, and its first \
+       access per iteration is not a standalone covering write (fails the privatization rule)";
+  }
+
+let no_pool =
+  {
+    Bench_json.pool = false;
+    loops = 0;
+    pool_rendered = 0;
+    serial = 0;
+    rendered_serially = false;
+    summary = "grid: no pool-parallel rendering";
+  }
+
+let pool_rendered =
+  {
+    Bench_json.pool = true;
+    loops = 1;
+    pool_rendered = 1;
+    serial = 0;
+    rendered_serially = false;
+    summary = "grid: 1 of 1 on the pool";
+  }
+
 let tune =
   (* [shipped_mma] is the shipped ARTIFACT's census, and it disagrees with arm B's on purpose: this
      cell shipped a flip refinement or a replay fallback, so the arm describes a schedule that was
@@ -58,6 +96,7 @@ let tune =
   Bench_json.tune_object ~shipped:"B" ~placement_replay:true ~shipped_digest:"0123abcd"
     ~ship_substituted:false ~searches:3 ~replays:1 ~no_searches:1
     ~shipped_mma:(Some ("tensorized", 4, 0))
+    ~grid:pool_rendered
     ~arms:
       [
         Bench_json.tune_arm ~name:"A" ~state:"search-died" ~searched:true
@@ -69,6 +108,7 @@ let tune =
           ~timings_unreadable:0 ~timing_decisions:[] ~best_ms:Float.infinity
           ~best_label:"tile 32x32" ~tensorized:false ~tensorization:None ~mma_statements:0
           ~mma_scalar_fallbacks:0 ~mma_seeded:4 ~mma_timed:0 ~mma_best_ms:Float.infinity
+          ~grid_asked:false ~grid_census:None ~grid_serial_timed:0
           ~terminal_failure:
             (Some
                (Printf.sprintf "compile failed: \"kernel\" \\ path%c%c ESC" (Char.of_int_exn 0)
@@ -80,6 +120,7 @@ let tune =
           ~timings_unbatched:0 ~timings_unreadable:0 ~timing_decisions:[] ~best_ms:0.75
           ~best_label:"grid 128" ~tensorized:true ~tensorization:(Some "scalar-fallback")
           ~mma_statements:2 ~mma_scalar_fallbacks:2 ~mma_seeded:6 ~mma_timed:3 ~mma_best_ms:0.8
+          ~grid_asked:true ~grid_census:(Some pool_serial) ~grid_serial_timed:2
           ~terminal_failure:None;
         (* Neither searched nor replayed: every counter zero, no winner to name. *)
         Bench_json.tune_arm ~name:"C" ~state:"search-disabled" ~searched:false ~cache_hit:false
@@ -87,7 +128,8 @@ let tune =
           ~call_budget_s:None ~call_share_s:None ~timings_contended:0 ~timings_unbatched:0
           ~timings_unreadable:0 ~timing_decisions:[] ~best_ms:Float.infinity ~best_label:""
           ~tensorized:false ~tensorization:None ~mma_statements:0 ~mma_scalar_fallbacks:0
-          ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
+          ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~grid_asked:false ~grid_census:None
+          ~grid_serial_timed:0 ~terminal_failure:None;
         (* An honestly tensorized winner, and an ordinary one that never asked. *)
         Bench_json.tune_arm ~name:"D" ~state:"searched" ~searched:true ~cache_hit:false
           ~timing:"queued" ~rounds_run:1 ~beam_width:4 ~budget_cut:false ~budget_s:None
@@ -104,7 +146,8 @@ let tune =
             ]
           ~best_ms:0.5 ~best_label:"mma-gpu 16x16x16" ~tensorized:true
           ~tensorization:(Some "tensorized") ~mma_statements:4 ~mma_scalar_fallbacks:0 ~mma_seeded:6
-          ~mma_timed:5 ~mma_best_ms:0.5 ~terminal_failure:None;
+          ~mma_timed:5 ~mma_best_ms:0.5 ~grid_asked:true ~grid_census:(Some no_pool)
+          ~grid_serial_timed:0 ~terminal_failure:None;
         Bench_json.tune_arm ~name:"E" ~state:"searched" ~searched:true
           ~cache_hit:false
             (* The other objective, so the golden shows both spellings on one line. *)
@@ -116,7 +159,8 @@ let tune =
           ~timing_decisions:[ ("isolated", "admitted", 3); ("isolated", "refused_unreadable", 1) ]
           ~best_ms:1.25 ~best_label:"grid 64" ~tensorized:false
           ~tensorization:(Some "not-requested") ~mma_statements:0 ~mma_scalar_fallbacks:0
-          ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~terminal_failure:None;
+          ~mma_seeded:0 ~mma_timed:0 ~mma_best_ms:Float.infinity ~grid_asked:false
+          ~grid_census:(Some pool_rendered) ~grid_serial_timed:0 ~terminal_failure:None;
       ]
     ()
 
@@ -329,6 +373,31 @@ let () =
     && Yojson.Safe.equal (member "scalar_fallbacks" shipped_mma) (`Int 0)
     (* And it is free to disagree with the arm named as shipped: that is the case it exists for. *)
     && Yojson.Safe.equal (member "tensorization" (arm "B")) (`String "scalar-fallback"));
+  (* gh-ocannl-1702: the Grid pairing -- what the crowned schedule asked, what the renderer did with
+     it, and how many ranked rivals were timed serial under a Grid ask. *)
+  let grid name = member "grid" (arm name) in
+  let census name = member "census" (grid name) in
+  p "a Grid ask the pool kept serial is visible as the pair, with its ranked rivals"
+    (Yojson.Safe.equal (member "asked" (grid "B")) (`Bool true)
+    && Yojson.Safe.equal (member "rendered_serially" (census "B")) (`Bool true)
+    && Yojson.Safe.equal (member "serial" (census "B")) (`Int 1)
+    && Yojson.Safe.equal (member "loops" (census "B")) (`Int 2)
+    && Yojson.Safe.equal (member "serial_timed" (grid "B")) (`Int 2));
+  p "the census line survives as a scrubbed string"
+    (match member "summary" (census "B") with
+    | `String s -> String.is_substring s ~substring:"local 'acc' fails the shared rule"
+    | _ -> false);
+  p "a Grid ask off a CPU pool records no pool and nothing serial"
+    (Yojson.Safe.equal (member "asked" (grid "D")) (`Bool true)
+    && Yojson.Safe.equal (member "pool" (census "D")) (`Bool false)
+    && Yojson.Safe.equal (member "rendered_serially" (census "D")) (`Bool false));
+  p_all "an arm with no crowned candidate reports a null Grid census" [ "A"; "C" ] ~f:(fun n ->
+      Yojson.Safe.equal (census n) `Null);
+  p "the shipped artifact's Grid census is carried apart from the arms'"
+    (let g = member "grid" (member "tune" j) in
+     Yojson.Safe.equal (member "pool_rendered" g) (`Int 1)
+     && Yojson.Safe.equal (member "rendered_serially" g) (`Bool false)
+     && Yojson.Safe.equal (member "asked" g) `Null);
   (* gh-ocannl-1006: a cell with no counter reports [null] for both halves of the memory column --
      the bytes AND the counter's name -- so the report can print a dash. A zero here would read as a
      workload with no footprint, which is the one wrong answer this pair exists to exclude. *)
@@ -392,6 +461,13 @@ let () =
      in
      Yojson.Safe.equal (member "ship_substituted" t) `Null
      && Yojson.Safe.equal (member "substituted_from" t) `Null);
+  p "a tune object that recorded no shipped Grid census says null"
+    (Yojson.Safe.equal
+       (member "grid"
+          (Yojson.Safe.from_string
+             (Bench_json.tune_object ~shipped:"A" ~searches:1 ~replays:0 ~no_searches:0
+                ~shipped_mma:None ~arms:[] ())))
+       `Null);
   p "a tune object that recorded no shipped census says null, not a label"
     (Yojson.Safe.equal
        (member "shipped_mma"
