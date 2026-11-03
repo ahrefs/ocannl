@@ -327,7 +327,7 @@ jobs:
         }
         echo "$(free_mb) MB" > "$state/before" || true
         { sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
-          /opt/hostedtoolcache/CodeQL; echo "$(free_mb) MB" > "$state/cleaned"; } </dev/null >/dev/null 2>&1 &
+          /opt/hostedtoolcache/CodeQL || true; echo "$(free_mb) MB" > "$state/cleaned"; } </dev/null >/dev/null 2>&1 &
         disk_watch() {
           floor_mb=1024 poll=5 grace=15 min= tripped= cleaned=
           while :; do

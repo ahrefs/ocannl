@@ -652,10 +652,11 @@ for name, body in (
         ('df', 'echo "$*" >> "$WATCH_LOG/df"\n'
                'echo "Filesystem 1M-blocks Used Available Capacity Mounted on"\n'
                'for a in "$@"; do case $a in -*) ;; *) echo "stub 99999 1 $(cat "$DF_AVAIL") 1% $a" ;; esac; done\n'),
-        # sudo: the cleanup, held until the test releases it, then freeing space (atomically, as below).
+        # sudo: the cleanup, held until the test releases it, then freeing space (atomically, as below)
+        # and failing, as an rm -rf that could not delete everything does.
         ('sudo', 'echo "$*" >> "$WATCH_LOG/sudo"\n'
                  'while [ ! -e "$WATCH_LOG/release" ]; do sleep 0.02; done\n'
-                 'echo 50000 > "$DF_AVAIL.new" && mv "$DF_AVAIL.new" "$DF_AVAIL"\n'),
+                 'echo 50000 > "$DF_AVAIL.new" && mv "$DF_AVAIL.new" "$DF_AVAIL"\nexit 1\n'),
         ('pkill', 'echo "$*" >> "$WATCH_LOG/pkill"\n')):
     (watch_bin / name).write_text('#!/usr/bin/env bash\n' + body)
     (watch_bin / name).chmod(0o755)
@@ -732,6 +733,8 @@ print('PASS the disk watchdog stops dune under its floor and the report names di
 for label, start, report in (
         ('a floor never reached', watch_start.replace('-lt "$floor_mb"', '-lt 0'), watch_report),
         ('a low counted before the cleanup ends', watch_start.replace('[ -n "$cleaned" ] && ', ''), watch_report),
+        ('a failed cleanup that never marks its end',
+         watch_start.replace('/opt/hostedtoolcache/CodeQL || true;', '/opt/hostedtoolcache/CodeQL;'), watch_report),
         ('a watchdog that stops dune only once',
          watch_start.replace('pkill -KILL -x dune || true\n', 'pkill -KILL -x dune || true\n  return 0\n'),
          watch_report),
