@@ -582,25 +582,6 @@ jobs:
       continue-on-error: true
       working-directory: test/config
       run: opam exec -- dune exec --root ../.. ./tools/host_caps.exe -- "--save=${{ runner.temp }}/host-caps.txt"
-    # On the first ubuntu `main` shard only: one leg answers the question.
-    - name: Check non-default module log level and trace semantics
-      if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main' && startsWith(matrix.shard, '1/')
-      # `shell: bash` for pipefail, as on the build steps below.
-      shell: bash
-      env:
-        OCANNL_LOG_LEVEL_CC_BACKEND: 3
-      run: opam exec -- dune build "@check" "@test/operations/runtest-cc_backend_trace_name" 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
-    # The scan-case type check's project-syntax legs (gh-ocannl-1587): `let%op`
-    # and other extension arms of the scan tables, type-checked in their owning
-    # modules' contexts, which need the project's libraries the fmt job's
-    # toolchain step lacks (it expects these legs' skips). Strict, so a skip
-    # here is red; after the @check above, the owning modules are built.
-    - name: Type-check the scan tables' project-syntax arms
-      if: matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main' && startsWith(matrix.shard, '1/')
-      shell: bash
-      env:
-        OCANNL_TOOL_HARNESS_STRICT: 1
-      run: opam exec -- tools/test-typecheck-scan-cases.sh --only '#project'
     # cc_march_census's two aarch64 columns skip without an aarch64 cross gcc,
     # and until gh-ocannl-1120 no runner had one: gh-ocannl-1112's bf16 spill reached
     # master unseen. The script stages gcc 13, the runner's own
@@ -628,26 +609,49 @@ jobs:
     # listing of exactly this kernel by exactly this compiler, so a restored
     # entry can only be the listing this runner would have produced: a
     # codegen change or a runner-image compiler update misses, correctly. That
-    # is why the key below decides only WHICH snapshot is restored, never
-    # whether an entry is valid: per shard, so a shard restores the listings
-    # its own share compiled last time, then any of this OS's, all from a
-    # unique key per run, since an actions/cache entry is immutable and the
-    # census adds to the directory every run. The census bounds the directory
-    # itself (30 days since an entry's last use, 512 MiB). A miss is still
-    # the cold run a codegen-changing PR pays, which the census's pieces keep
-    # within the job ceiling on their own.
+    # is why the key decides only WHICH snapshot is restored, never whether an
+    # entry is valid -- and so ONE snapshot serves every job (gh-ocannl-1575):
+    # each job restores the newest entry under this OS's prefix, whichever
+    # shard saved it. Keyed per shard, a piece the deal moved found its
+    # listings in the other shard's snapshot and recompiled cold (241 s for
+    # w64_native_host). And a job saves only what the next one could use:
+    # an actions/cache entry is immutable, so a save is a new entry of the
+    # whole directory (17-37 MB), and saving on every run filled the
+    # repository's 10 GB with ~90 of them (staging#1464), where LRU eviction
+    # reaches the opam switch caches. "Decide whether to save" below says
+    # when. Two jobs saving in one run each save their own key; the next run
+    # restores the newer, and the other's additions miss once more and are
+    # saved then. The census bounds the directory itself (30 days since an
+    # entry's last use, 512 MiB). A miss is still the cold run a
+    # codegen-changing PR pays, which the census's pieces keep within the job
+    # ceiling on their own.
     - name: Name the cc census listing cache
+      id: census-cache
       if: runner.os == 'Linux' && matrix.suite == 'main'
-      run: echo "OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR=$RUNNER_TEMP/cc-march-census" >> "$GITHUB_ENV"
-    - name: Keep the cc census listings between runs
+      run: |
+        echo "OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR=$RUNNER_TEMP/cc-march-census" >> "$GITHUB_ENV"
+        echo "day=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+    - name: Restore the cc census listings
+      id: census-restore
       if: runner.os == 'Linux' && matrix.suite == 'main'
-      uses: actions/cache@v6
+      uses: actions/cache/restore@v6
       with:
         path: ${{ env.OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR }}
-        key: cc-march-census-v1-${{ matrix.os }}-${{ matrix.shard && format('shard{0}', matrix.shard) || 'whole' }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: cc-march-census-v1-${{ matrix.os }}-${{ steps.census-cache.outputs.day }}-${{ github.run_id }}-${{ github.run_attempt }}-job${{ strategy.job-index }}
         restore-keys: |
-          cc-march-census-v1-${{ matrix.os }}-${{ matrix.shard && format('shard{0}', matrix.shard) || 'whole' }}-
           cc-march-census-v1-${{ matrix.os }}-
+    # The entry files the restore brought, which the save decision compares
+    # the directory against after the build.
+    - name: List the restored cc census listings
+      if: runner.os == 'Linux' && matrix.suite == 'main'
+      shell: bash
+      run: |
+        dir=$OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR
+        mkdir -p "$dir"
+        find "$dir" -type f -printf '%P\n' | LC_ALL=C sort >"$RUNNER_TEMP/cc-march-census.restored"
+        echo "restored $(wc -l <"$RUNNER_TEMP/cc-march-census.restored") listing file(s) from ${MATCHED:-nothing}"
+      env:
+        MATCHED: ${{ steps.census-restore.outputs.cache-matched-key }}
     # One walk, not `dune build` then `dune runtest`: as two commands, the
     # `(test)` stanzas and inline-test runners only start after every file
     # target -- including the golden-rule test executions `@default` carries and
@@ -738,6 +742,41 @@ jobs:
         tools/ci-shard.sh weigh --wall _build/trace.csexp | sed "s|^|ci-shard-wall $SHARD |" ||
           echo "::warning::tools/ci-shard.sh weigh --wall could not read this shard's dune trace"
         echo "::endgroup::"
+    # On the first ubuntu `main` shard only: one leg answers the question.
+    # AFTER the shard's build and its weighing, not before (gh-ocannl-1575):
+    # the module log level is read at preprocessing time, so this step builds
+    # cc_backend and everything above it under a configuration the suite does
+    # not use, and the suite's build then recompiled that whole cone first.
+    # Run before it, the recompile held back tools/host_caps.exe and with it
+    # the ocannl_config every test copies, so the ambient gate -- and every
+    # rule waiting on it, the scans and the ~400 s runtest-sweep_harness
+    # among them -- queued behind the shard's whole compile (dune hands out
+    # job slots first come, first served): sweep_harness started ~70% into
+    # main 1/2's dune step and ran as its last 2-6 minutes, while main 2/2,
+    # which runs no such step, ran its gate 25 s in. Moved here, it started
+    # 13 s in and the step went from 21.2 to 17.9 minutes on the same CPU
+    # model (EPYC 7763). The weighing above has read the build's trace by
+    # now; a later dune overwrites _build/trace.csexp.
+    # `!cancelled()`: the question is the suite's build's to answer on its
+    # own, red or green.
+    - name: Check non-default module log level and trace semantics
+      if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main' && startsWith(matrix.shard, '1/') }}
+      # `shell: bash` for pipefail, as on the build steps below.
+      shell: bash
+      env:
+        OCANNL_LOG_LEVEL_CC_BACKEND: 3
+      run: opam exec -- dune build "@check" "@test/operations/runtest-cc_backend_trace_name" 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
+    # The scan-case type check's project-syntax legs (gh-ocannl-1587): `let%op`
+    # and other extension arms of the scan tables, type-checked in their owning
+    # modules' contexts, which need the project's libraries the fmt job's
+    # toolchain step lacks (it expects these legs' skips). Strict, so a skip
+    # here is red; after the @check above, the owning modules are built.
+    - name: Type-check the scan tables' project-syntax arms
+      if: ${{ !cancelled() && matrix.os == 'ubuntu-latest' && matrix.ocaml-compiler == '5.5.x' && matrix.suite == 'main' && startsWith(matrix.shard, '1/') }}
+      shell: bash
+      env:
+        OCANNL_TOOL_HARNESS_STRICT: 1
+      run: opam exec -- tools/test-typecheck-scan-cases.sh --only '#project'
     # cc_march_census writes its per-row table to a file rather than to stderr,
     # which dune truncates in the middle -- one per piece, in the piece's own
     # directory; the files live in `_build` and die with the runner, so a
@@ -751,6 +790,47 @@ jobs:
         name: cc-march-census-rows-${{ matrix.os }}-${{ matrix.ocaml-compiler }}-${{ matrix.suite }}-job${{ strategy.job-index }}-attempt${{ github.run_attempt }}
         path: _build/default/test/operations/cc_march_census_kernels/*/rows.txt
         if-no-files-found: ignore
+    # Whether this job leaves the next one something: a listing file the
+    # restore did not bring (a miss the census compiled and published), or --
+    # off pull requests -- a snapshot restored from an earlier UTC day. A hit
+    # refreshes its entry's mtime, which the census's 30-day expiry reads; a
+    # snapshot only hits ever restore keeps the mtimes it was saved with, so
+    # without the daily save its entries would expire while in daily use.
+    # Pull-request entries are visible only to their own PR, so a PR saves
+    # only what it added. Any finished build, red or green: every entry is
+    # whole (published through Utils.Atomic_file) and only ever the listing
+    # its key names.
+    - name: Decide whether to save the cc census listings
+      id: census-save
+      if: ${{ !cancelled() && runner.os == 'Linux' && matrix.suite == 'main' }}
+      shell: bash
+      env:
+        MATCHED: ${{ steps.census-restore.outputs.cache-matched-key }}
+        TODAY: cc-march-census-v1-${{ matrix.os }}-${{ steps.census-cache.outputs.day }}-
+        EVENT: ${{ github.event_name }}
+      run: |
+        dir=$OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR
+        find "$dir" -type f -printf '%P\n' | LC_ALL=C sort >"$RUNNER_TEMP/cc-march-census.final"
+        added=$(LC_ALL=C comm -13 "$RUNNER_TEMP/cc-march-census.restored" "$RUNNER_TEMP/cc-march-census.final" | wc -l)
+        if [ "$added" -gt 0 ]; then
+          why="$added listing file(s) the restore did not bring"
+        elif [ "$EVENT" != pull_request ] && [ -s "$RUNNER_TEMP/cc-march-census.final" ] &&
+          case $MATCHED in "$TODAY"*) false ;; *) true ;; esac; then
+          why="the restored snapshot (${MATCHED:-none}) is from an earlier day"
+        fi
+        if [ -n "${why-}" ]; then
+          echo "save=true" >> "$GITHUB_OUTPUT"
+          echo "cc census listings: saving -- $why"
+        else
+          echo "save=false" >> "$GITHUB_OUTPUT"
+          echo "cc census listings: not saving -- nothing new beside ${MATCHED:-nothing}"
+        fi
+    - name: Save the cc census listings
+      if: ${{ !cancelled() && steps.census-save.outputs.save == 'true' }}
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ env.OCANNL_TOOL_CC_MARCH_CENSUS_CACHE_DIR }}
+        key: ${{ steps.census-restore.outputs.cache-primary-key }}
     # `tools/test-run.sh` carries branches that ONLY execute under MSYS: it
     # sources `tools/opam-env.sh` unconditionally and fatally (a dune on PATH
     # does not imply rewritten cygwin paths there), routes dune through

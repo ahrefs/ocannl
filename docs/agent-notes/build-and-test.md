@@ -2001,8 +2001,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   by a comment line in `test/config/ocannl_config`), `dune build @runtest @train` took 869.7 s and
   874.2 s with the relative spelling and 781.4 s and 773.0 s with the global one, rounds ordered
   ABBA — about 11% faster, plausibly because two OpenMP pools that each claim every core no longer
-  contend; the chain the lock makes is not the suite's critical path (`runtest-sweep_harness`,
-  ~400 s, is). Other locks in the tree (`cc_kept_library`, `schedule_conv_gemm`, …) are meant per
+  contend; the chain the lock makes is not the suite's critical path. Other locks in the tree (`cc_kept_library`, `schedule_conv_gemm`, …) are meant per
   directory and stay relative; `generated_lock_scan` already resolves both spellings as dune does.
   `env_var_deps` refuses any relative lock spelling written in two or more directories (a
   `(subdir …)` group counting as its own) that resolves to different paths there, naming each
@@ -3773,7 +3772,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   shard while the other hit the job's 45-minute timeout. A Mac-measured table drifts as badly
   (gh-ocannl-1464 saw 26/12): measure on the runner. A single unit whose own wall-clock outlasts
   the rest of its shard is the one cost CPU hides, so CI also prints `ci-shard-wall` lines and
-  `plan` names each shard's longest unit by the script's `WALL_WEIGHTS` (`merge-weights --wall`). Every
+  `plan` names each shard's longest unit by the script's `WALL_WEIGHTS` (`merge-weights --wall`).
+  WHEN a unit starts no table shows, and dune hands out job slots first come, first served: a rule
+  becomes ready only with its dependencies, so one that depends on a late-built input queues behind
+  the whole compile. `runtest-sweep_harness` (~400 s) was main 1/2's tail that way, in every run,
+  until gh-ocannl-1575: a shard-1-only step before the build compiled cc_backend's cone under a
+  module log level, the build recompiled it, `tools/host_caps.exe` and the `ocannl_config` behind
+  the ambient gate came ~80 s late, and the gate's dependents (the scans, sweep_harness) ran ~70%
+  into the step. A step that builds under another configuration runs AFTER the shard's build (and
+  its weighing, whose trace a later dune overwrites); the job log's output timestamps show a late
+  cluster, since dune prints an action's output as it finishes. Every
   `main` shard job weighs its own build's trace, crediting each process to the unit its TARGET
   names -- an alias action's `runtest-<name>`, a rule's `<name>.<ext>` file -- never to its
   executable, which several tests share (`online_softmax.exe` runs three,
@@ -4054,6 +4062,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the cache disabled rebuilds everything; the second walk has to stay `enabled` against a
   throwaway `DUNE_CACHE_ROOT` instead, which also loses the single-walk overlap of compilation
   with the serialized training chain. That design is gh-ocannl-901.
+- **The cc census listing cache is one snapshot for every job, saved only when useful**
+  (gh-ocannl-1575). A census entry is valid whoever restores it (`ci.yml`'s comment above the step
+  says why), so each ubuntu `main` job restores the newest `cc-march-census-v1-<os>-` entry,
+  whichever shard saved it -- keyed per shard, a piece the deal moved recompiled cold (241 s). A
+  job saves (a new immutable entry of the whole directory) only when it published a listing file
+  the restore did not bring, or, off pull requests, when the snapshot it restored is from an
+  earlier UTC day: a hit refreshes its entry's mtime, which the census's 30-day expiry reads, and
+  a snapshot nothing re-saves keeps the old ones. Saving every run had left 159 entries, 5.3 of the
+  repository's 10.7 GB of caches, most of them pull-request-scoped (staging#1464 first saw the
+  repository over its 10 GB). The job log's `cc census listings:` line says which way it went.
 - `gh-pages-api.yml` runs for pull requests and `workflow_dispatch` as well as pushes to master, but
   only a push deploys; validation runs receive their own concurrency group and exercise the build
   and cache topology without publishing. Both Pages workflows split a push run into `build` and

@@ -115,8 +115,12 @@
 # The one thing CPU hides is a single unit whose own wall-clock outlasts the
 # rest of its shard, so `weigh --wall` measures wall-clock too, CI prints it
 # as `ci-shard-wall` lines, and `plan` names each shard's longest unit by the
-# WALL_WEIGHTS table they refresh. CPU is only meaningful measured on the
-# runner's own processor, so measure it in CI.
+# WALL_WEIGHTS table they refresh. Neither table shows WHEN a unit starts,
+# which its dependencies decide (dune hands out job slots first come, first
+# served): sweep_harness ran as main 1/2's tail because a step before the
+# build made the ambient gate's inputs late (gh-ocannl-1575, ci.yml's comment
+# on that step). CPU is only meaningful measured on the runner's own
+# processor, so measure it in CI.
 #
 # CI does it: each `main` shard
 # job weighs its own build's trace (ci.yml's "Weigh the shard's units" step)
