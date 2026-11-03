@@ -29,8 +29,8 @@ jobs:
   clean-room:
     name: Clean-room build
     runs-on: ubuntu-latest
-    # A cold switch (~180 packages from source) plus two full compiles and one
-    # test; the apt steps carry caps of their own inside this.
+    # A cold switch (~180 packages from source), one compile of each module,
+    # and one test; the apt steps carry caps of their own inside this.
     timeout-minutes: 40
     steps:
     - uses: actions/checkout@v7
@@ -67,12 +67,18 @@ jobs:
         opam install . -y --deps-only --with-test
     - name: Release build, as opam builds the packages
       run: opam exec -- dune build -p arrayjit,neural_nets_lib
+    # The two steps below stay in the release profile `-p` built in: `--release`
+    # is `-p` without the package filter, so the packages' objects are reused
+    # and only what lies outside them (tests, bin/, benchmarks, tools) compiles
+    # here. The dev profile would recompile every module under its own flags
+    # (gh-ocannl-1907). What dev adds -- warnings as errors -- the PR head's
+    # ci.yml run gates, in dev.
     - name: Type-check everything
-      run: opam exec -- dune build @check
+      run: opam exec -- dune build --release @check
     # One tensor graph compiled through the default cc backend, run, and
     # printed against its golden.
     - name: Smoke test
-      run: opam exec -- dune build @test/operations/runtest-hello_world_dim1x1
+      run: opam exec -- dune build --release @test/operations/runtest-hello_world_dim1x1
 
   # A merge's red here is a master red: fire the CI-red triage routine as
   # ci.yml's `notify-triage-routine` does (it says why, and why the fire is

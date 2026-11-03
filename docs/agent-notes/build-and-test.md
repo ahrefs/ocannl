@@ -3316,8 +3316,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   merge gate reads the PR head's run -- daily on the schedule, and by dispatch; NEVER on a master
   push. `ci-env.yml` runs on every master push and every PR: the clean room, a fresh checkout and a
   fresh dependency switch solved from the opam files alone (no CI-side pins, no dependency cache),
-  `dune build -p arrayjit,neural_nets_lib` as opam builds them, `dune build @check`, and one smoke
-  test (`hello_world_dim1x1` on cc). That is master's per-merge verdict, in minutes: each push run
+  `dune build -p arrayjit,neural_nets_lib` as opam builds them, `dune build --release @check`, and
+  one smoke test (`hello_world_dim1x1` on cc), also `--release`: `-p` minus its package filter, so
+  the two later steps reuse the packages' objects and each module compiles once, where the dev
+  profile recompiled all of them (gh-ocannl-1907; dev's warnings-as-errors stays the PR head's
+  `ci.yml` gate). That is master's per-merge verdict, in minutes: each push run
   keys its concurrency group on its own commit, so none is cancelled or replaced. What the fleet's
   boxes cannot prove is exactly this, since they share one opam switch, local pins, warm `_build`
   directories and ignored fixtures; what the hosted full matrix would add on a merged commit
