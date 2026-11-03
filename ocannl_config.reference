@@ -2072,10 +2072,8 @@
 # fewer multiplies, plus the transforms and three stored intermediates (about 4x the input and
 # 4x the output). An odd output extent keeps its last row and column in the direct form. The
 # transformed-domain arithmetic changes rounding beyond reassociation, so it is a numerics gate:
-# off by default, on in the `approximate` profile, pinned off in `reproducible`. The data
-# gradient is rewritten too (gh-ocannl-1548), as the full convolution it is: the upstream gradient,
-# zero-extended by guarded reads, against the flipped kernel. The weight gradient keeps the direct
-# form.
+# off by default, on in the `approximate` profile, pinned off in `reproducible`. Only the
+# forward convolution is rewritten; its gradients keep the direct form.
 # Programmatic override: `Ir.Winograd.set_enabled`.
 #winograd_conv=false
 

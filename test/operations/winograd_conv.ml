@@ -25,12 +25,9 @@
    (the transformed-domain arithmetic rounds differently, not just in another order); the digits go
    to stderr. 3. The kernel transform is recomputed every call: one compiled routine, run, the
    kernel's values replaced through [Context.set_values], run again -- a transform computed once (or
-   cached across calls) would serve the old kernel. 4. Training: a two-conv padded network's whole
-   step, gate on against gate off: both forward convs and the second conv's data gradient
-   (gh-ocannl-1548) are rewritten -- the hidden activation's gradient is written from a minted
-   product buffer -- and the loss and parameter gradients agree within tolerance (the weight
-   gradients stay direct; the relu gates between the convs keep the error bound from composing, so
-   the tolerance is the leg's own). 5. The tuned path: [Autotune.tune] over a rewritten conv seeds
+   cached across calls) would serve the old kernel. 4. Training: a two-conv padded network's
+   parameter gradients, gate on against gate off, within tolerance (the backward stays direct; the
+   forward it reads is rewritten). 5. The tuned path: [Autotune.tune] over a rewritten conv seeds
    matmul sketches for the contractions, and the tuned routine matches the direct form within
    tolerance. 6. Declines: 5x5, stride 2, dilation 2, a 3x1 window and an f16 conv keep their direct
    nest and mint nothing; on hand-built raw lowerings, a conv whose batch axis also reads the window
@@ -351,55 +348,26 @@ let () =
     in
     List.iter params ~f:(fun p ->
         Train.set_materialized (Option.value_exn ~here:[%here] p.Tensor.diff).Tensor.grad);
-    let step = Train.grad_update loss in
-    let ctx = Train.run_once ~f:(fun _ -> step) (Context.auto ()) loss in
+    let ctx = Train.update_once (Context.auto ()) loss in
     let grads =
       List.map params ~f:(fun p ->
           ( Tn.label_name p.Tensor.value,
             Context.get_values ctx (Option.value_exn ~here:[%here] p.Tensor.diff).Tensor.grad ))
     in
     let loss_value = (Context.get_values ctx loss.Tensor.value).(0) in
-    let step_llc =
-      (Ir.Assignments.lower (LL.empty_optimize_ctx ()) ~unoptim_ll_source:None ~ll_source:None
-         ~cd_source:None ~name:"wino_step_probe" [] step.Ir.Assignments.asgns)
-        .LL.llc
-    in
     let minted =
       List.length
         (List.dedup_and_sort ~compare:Tn.compare
-           (List.filter (written step_llc) ~f:(fun tn -> Option.is_some (Winograd.minted_role tn))))
+           (List.filter (written (optimized_of loss).LL.llc) ~f:(fun tn ->
+                Option.is_some (Winograd.minted_role tn))))
     in
-    (* Whether the hidden activation's gradient (the second conv's data gradient) is written by a
-       statement reading a minted product buffer: the inverse transform. *)
-    let h1_grad = (Option.value_exn ~here:[%here] h1.Tensor.diff).Tensor.grad in
-    let rec reads_product (sc : LL.scalar_t) =
-      match sc with
-      | LL.Get (tn, _) -> Poly.equal (Winograd.minted_role tn) (Some `Product)
-      | LL.Binop (_, (a, _), (b, _)) -> reads_product a || reads_product b
-      | LL.Ternop (_, (a, _), (b, _), (c, _)) ->
-          reads_product a || reads_product b || reads_product c
-      | LL.Unop (_, (a, _)) -> reads_product a
-      | _ -> false
-    in
-    let rec from_product (llc : LL.t) =
-      match llc with
-      | LL.Seq (a, b) -> from_product a || from_product b
-      | LL.For_loop { body; _ } -> from_product body
-      | LL.Set { tn; llsc; _ } -> Tn.equal tn h1_grad && reads_product llsc
-      | _ -> false
-    in
-    let h1_rewritten = from_product step_llc in
     Winograd.set_enabled None;
-    (loss_value, grads, minted, h1_rewritten)
+    (loss_value, grads, minted)
   in
-  let loss_d, grads_d, minted_d, h1_d = train ~on:false in
-  let loss_w, grads_w, minted_w, h1_w = train ~on:true in
-  p "the direct step mints nothing" (minted_d = 0 && not h1_d);
-  p
-    "the rewritten step writes both forward convs' and the second conv's data-gradient transforms \
-     (9 minted buffers)"
-    (minted_w = 9);
-  p "the rewritten step writes the hidden activation's gradient from a minted product buffer" h1_w;
+  let loss_d, grads_d, minted_d = train ~on:false in
+  let loss_w, grads_w, minted_w = train ~on:true in
+  p "the direct step's forward mints nothing" (minted_d = 0);
+  p "the rewritten step's forward writes both convs' transforms (6 minted buffers)" (minted_w = 6);
   eprintf "loss: direct %.9g winograd %.9g (not part of the golden)\n%!" loss_d loss_w;
   p "the loss agrees within 1e-4 relative"
     Float.(abs (loss_w - loss_d) <= close_tol ~tol:1e-4 loss_d);

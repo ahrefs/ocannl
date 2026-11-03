@@ -97,20 +97,8 @@ let nest_of (stmt : LL.t) =
   go [] stmt
 
 (* One spatial axis of the conv: the output iterator [o] (extent [n_o]), the window iterator [k]
-   (which the kernel reads plainly), and the axis of [a] reading [o + k]. A data-gradient site (the
-   gather form of the scatter, below) reads its source at [o + k - 2] ([shift = -2]), zero outside
-   the source loop's domain [0, src_n). *)
-type conv_axis = {
-  o : Idx.symbol;
-  n_o : int;
-  k : Idx.symbol;
-  a_axis : int;
-  shift : int;
-  src_n : int option;
-}
-
-(* A loop restriction of the original nest: the symbol and its new [from_, to_]. *)
-type box = (Idx.symbol * int * int) list
+   (which the kernel reads plainly), and the axis of [a] reading [o + k]. *)
+type conv_axis = { o : Idx.symbol; n_o : int; k : Idx.symbol; a_axis : int }
 
 type site = {
   loops : loop list;
@@ -124,14 +112,9 @@ type site = {
   h : conv_axis;
   w : conv_axis;
   ic : Idx.symbol;
-  flip : bool;  (** The kernel is read at the flipped taps [2 - i] (a data-gradient site). *)
-  orig_loops : loop list;  (** The matched nest's loops, for the remainder. *)
-  orig_di : Idx.axis_index array;  (** The matched statement's write, for the remainder. *)
   rebuild : (Idx.axis_index array -> Idx.axis_index array) -> LL.scalar_t;
       (** The statement's right-hand side with every index map passed through the substitution: the
           direct form, for the remainder strips. *)
-  remainder : box list;
-      (** The disjoint restrictions of the original nest that cover what the tiles do not. *)
   key : string;
 }
 
@@ -177,42 +160,6 @@ let plain_at s (idcs : Idx.axis_index array) =
     | Idx.Iterator s' when Idx.equal_symbol s s' -> Some i
     | _ -> None)
 
-(* The memo key of a site: the whole matched statement -- its nodes, index maps and loop domains --
-   with the nest's loop symbols alpha-normalized. Loop symbol [i] of the nest becomes [Symbol (-1 -
-   i)], which no lowering mints; a symbol the nest does not bind (a static index) stays itself, as
-   it is stable across lowerings. [tag] keeps the two directions apart. *)
-let site_key ~tag ~loops ~(d : Tn.t) ~di ~(a : Tn.t) ~ai ~(b : Tn.t) ~bi =
-  let loop_syms = List.map loops ~f:(fun l -> l.index) in
-  let canon sym =
-    match List.findi loop_syms ~f:(fun _ s -> Idx.equal_symbol s sym) with
-    | Some (i, _) -> Idx.Symbol (-1 - i)
-    | None -> sym
-  in
-  let canon_idx (idcs : Idx.axis_index array) =
-    Array.map idcs ~f:(function
-      | Idx.Iterator sym -> Idx.Iterator (canon sym)
-      | Idx.Affine { symbols; offset } ->
-          Idx.affine ~offset ~symbols:(List.map symbols ~f:(fun (c, sym) -> (c, canon sym)))
-      | idx -> idx)
-  in
-  tag ^ "|"
-  ^ Sexp.to_string
-      ([%sexp_of:
-         int
-         * Idx.axis_index array
-         * int
-         * Idx.axis_index array
-         * int
-         * Idx.axis_index array
-         * int list]
-         ( d.Tn.uid,
-           canon_idx di,
-           a.Tn.uid,
-           canon_idx ai,
-           b.Tn.uid,
-           canon_idx bi,
-           List.map loops ~f:(fun l -> l.to_) ))
-
 let find_site (stmt : LL.t) : site option =
   let* loops, d, di, llsc = nest_of stmt in
   let* (a0, ai0), (b0, bi0), rebuild = match_rhs ~d ~di llsc in
@@ -255,7 +202,7 @@ let find_site (stmt : LL.t) : site option =
     let* _ = plain_at k bi in
     let* n_o = extent o in
     let* n_k = extent k in
-    if n_k = 3 && n_o >= 2 then Some { o; n_o; k; a_axis = i; shift = 0; src_n = None } else None
+    if n_k = 3 && n_o >= 2 then Some { o; n_o; k; a_axis = i } else None
   in
   let* h, w =
     match conv_components ai with
@@ -317,182 +264,41 @@ let find_site (stmt : LL.t) : site option =
     && all_plain ai ~except:[ h.a_axis; w.a_axis ]
     && roles_ok () && one_oc && all_mentioned && f32 d && f32 a && f32 b
   then
-    let even n = n / 2 * 2 in
-    let remainder =
-      (if h.n_o % 2 = 1 then [ [ (h.o, h.n_o - 1, h.n_o - 1) ] ] else [])
-      @ if w.n_o % 2 = 1 then [ [ (h.o, 0, even h.n_o - 1); (w.o, w.n_o - 1, w.n_o - 1) ] ] else []
+    let prec = Ops.single in
+    let key =
+      (* Loop symbol [i] of the nest becomes [Symbol (-1 - i)], which no lowering mints; a symbol
+         the nest does not bind (a static index) stays itself, as it is stable across lowerings. *)
+      let canon sym =
+        match List.findi loop_syms ~f:(fun _ s -> Idx.equal_symbol s sym) with
+        | Some (i, _) -> Idx.Symbol (-1 - i)
+        | None -> sym
+      in
+      let canon_idx (idcs : Idx.axis_index array) =
+        Array.map idcs ~f:(function
+          | Idx.Iterator sym -> Idx.Iterator (canon sym)
+          | Idx.Affine { symbols; offset } ->
+              Idx.affine ~offset ~symbols:(List.map symbols ~f:(fun (c, sym) -> (c, canon sym)))
+          | idx -> idx)
+      in
+      Sexp.to_string
+        ([%sexp_of:
+           int
+           * Idx.axis_index array
+           * int
+           * Idx.axis_index array
+           * int
+           * Idx.axis_index array
+           * int list]
+           ( d.Tn.uid,
+             canon_idx di,
+             a.Tn.uid,
+             canon_idx ai,
+             b.Tn.uid,
+             canon_idx bi,
+             List.map loops ~f:(fun l -> l.to_) ))
     in
-    Some
-      {
-        loops;
-        d;
-        di;
-        a;
-        ai;
-        b;
-        bi;
-        prec = Ops.single;
-        h;
-        w;
-        ic;
-        flip = false;
-        orig_loops = loops;
-        orig_di = di;
-        rebuild;
-        remainder;
-        key = site_key ~tag:"fwd" ~loops ~d ~di ~a ~ai ~b ~bi;
-      }
+    Some { loops; d; di; a; ai; b; bi; prec; h; w; ic; rebuild; key }
   else None
-
-(* {1 The data gradient}
-
-   A conv's data gradient lowers to the SCATTER [dx[.., o + k, ..] += gy[.., o, ..] * w[.., k, ..]]:
-   the destination carries the two [o + k] axes, both operands read plainly. It equals the gather
-   [dx[.., j, ..] = sum_{i} gy~[.., j + i - 2, ..] * w[.., 2 - i, ..]] over [j] in [0, n + 2) --
-   exactly the scatter's write range -- where [gy~] is [gy] extended by zero outside the source
-   loop's domain [0, n): a 3x3 stride-1 conv with the kernel flipped and the channel roles exchanged
-   (the kernel's channel the destination reads is the result channel, the one [gy] reads the
-   reduction). The recognizer returns that gather as a [site] whose input reads are shifted and
-   guarded and whose kernel taps are flipped; the remainder of an odd gather extent is the original
-   scatter restricted to disjoint boxes. *)
-
-let find_bwd_site (stmt : LL.t) : site option =
-  let* loops, d, di, llsc = nest_of stmt in
-  let* (x, xi), (y, yi), rebuild = match_rhs ~d ~di llsc in
-  let loop_syms = List.map loops ~f:(fun l -> l.index) in
-  let is_loop s = List.mem loop_syms s ~equal:Idx.equal_symbol in
-  let extent s =
-    List.find_map loops ~f:(fun l -> if Idx.equal_symbol l.index s then Some (l.to_ + 1) else None)
-  in
-  let comps =
-    Array.to_list di
-    |> List.filter_mapi ~f:(fun i -> function
-      | Idx.Affine { symbols = [ (1, s1); (1, s2) ]; offset = 0 } -> Some (i, s1, s2)
-      | _ -> None)
-  in
-  let all_plain idcs ~except =
-    Array.for_alli idcs ~f:(fun i -> function
-      | Idx.Iterator _ | Idx.Fixed_idx _ -> true
-      | _ -> List.mem except i ~equal:Int.equal)
-  in
-  let* c1, c2 = match comps with [ c1; c2 ] -> Some (c1, c2) | _ -> None in
-  let mem l s = List.mem l s ~equal:Idx.equal_symbol in
-  let f32 (tn : Tn.t) = Ops.equal_prec (Lazy.force tn.Tn.storage_prec) Ops.single in
-  let plain_ok =
-    all_plain di ~except:[ (fun (i, _, _) -> i) c1; (fun (i, _, _) -> i) c2 ]
-    && all_plain xi ~except:[] && all_plain yi ~except:[]
-    && List.for_all loops ~f:(fun l -> l.from_ = 0)
-    && (not (Tn.equal x d))
-    && (not (Tn.equal y d))
-    && (not (Tn.equal x y))
-    && f32 d && f32 x && f32 y
-  in
-  (* One orientation: [g] is the upstream gradient (reading the [o]s), [kn] the kernel (reading the
-     [k]s). *)
-  let orient (g, gi) (kn, ki) =
-    let axis_of (i, s1, s2) =
-      let* o, k =
-        match (plain_at s1 gi, plain_at s2 ki, plain_at s2 gi, plain_at s1 ki) with
-        | Some _, Some _, _, _ -> Some (s1, s2)
-        | _, _, Some _, Some _ -> Some (s2, s1)
-        | _ -> None
-      in
-      let* a_axis = plain_at o gi in
-      let* n_src = extent o in
-      let* n_k = extent k in
-      if n_k = 3 && n_src >= 1 then
-        Some ({ o; n_o = n_src + 2; k; a_axis; shift = -2; src_n = Some n_src }, i)
-      else None
-    in
-    let* h, h_d = axis_of c1 in
-    let* w, w_d = axis_of c2 in
-    let specials = [ h.o; h.k; w.o; w.k ] in
-    let is_special s = List.mem specials s ~equal:Idx.equal_symbol in
-    let separable =
-      List.for_all [ h; w ] ~f:(fun cx ->
-          mentions cx.o di = 1
-          && mentions cx.o gi = 1
-          && mentions cx.o ki = 0
-          && mentions cx.k di = 1
-          && mentions cx.k ki = 1
-          && mentions cx.k gi = 0)
-      && (not (Idx.equal_symbol h.o w.o))
-      && (not (Idx.equal_symbol h.k w.k))
-      && List.for_all specials ~f:is_loop
-    in
-    let others idcs =
-      Array.to_list idcs
-      |> List.filter_map ~f:(function
-        | Idx.Iterator s when not (is_special s) -> Some s
-        | _ -> None)
-    in
-    let d_o = others di and g_o = others gi and k_o = others ki in
-    let no_dups l = not (List.contains_dup l ~compare:Idx.compare_symbol) in
-    (* Every other loop is the result channel (in [dx] and the kernel), the reduction channel (in
-       [gy] and the kernel) or a batch axis (in [dx] and [gy]); a static index never enters the
-       kernel. *)
-    let roles_ok =
-      no_dups d_o && no_dups g_o && no_dups k_o && List.for_all k_o ~f:is_loop
-      && List.for_all loop_syms ~f:(fun s ->
-          is_special s
-          || (mem d_o s && mem k_o s && not (mem g_o s))
-          || (mem g_o s && mem k_o s && not (mem d_o s))
-          || (mem d_o s && mem g_o s && not (mem k_o s)))
-    in
-    let channel ~in1 ~in2 ~out =
-      List.filter loop_syms ~f:(fun s -> mem in1 s && mem in2 s && not (mem out s))
-    in
-    let* red = match channel ~in1:g_o ~in2:k_o ~out:d_o with [ c ] -> Some c | _ -> None in
-    let one_res = List.length (channel ~in1:d_o ~in2:k_o ~out:g_o) = 1 in
-    if separable && roles_ok && one_res then
-      (* The gather: the output iterators range over [0, n + 2), the write reads them plainly. *)
-      let g_loops =
-        List.map loops ~f:(fun l ->
-            if Idx.equal_symbol l.index h.o then { l with to_ = h.n_o - 1 }
-            else if Idx.equal_symbol l.index w.o then { l with to_ = w.n_o - 1 }
-            else l)
-      in
-      let g_di =
-        Array.mapi di ~f:(fun i idx ->
-            if i = h_d then Idx.Iterator h.o else if i = w_d then Idx.Iterator w.o else idx)
-      in
-      (* The original scatter on what the 2x2 tiles leave: the last gather row is the scatter's [o =
-         n - 1, k = 2]; the last column, over the rows above it, is [o_w = n_w - 1, k_w = 2] with
-         [o_h + k_h <= n_h] -- [o_h <= n_h - 2], or [o_h = n_h - 1, k_h <= 1]. *)
-      let src cx = Option.value_exn cx.src_n in
-      let last cx = (cx.o, src cx - 1, src cx - 1) in
-      let tap2 cx = (cx.k, 2, 2) in
-      let remainder =
-        (if h.n_o % 2 = 1 then [ [ last h; tap2 h ] ] else [])
-        @
-        if w.n_o % 2 = 0 then []
-        else if h.n_o % 2 = 0 then [ [ last w; tap2 w ] ]
-        else [ [ last w; tap2 w; (h.o, 0, src h - 2) ]; [ last w; tap2 w; last h; (h.k, 0, 1) ] ]
-      in
-      Some
-        {
-          loops = g_loops;
-          d;
-          di = g_di;
-          a = g;
-          ai = gi;
-          b = kn;
-          bi = ki;
-          prec = Ops.single;
-          h;
-          w;
-          ic = red;
-          flip = true;
-          orig_loops = loops;
-          orig_di = di;
-          rebuild;
-          remainder;
-          key = site_key ~tag:"bwd" ~loops ~d ~di ~a:g ~ai:gi ~b:kn ~bi:ki;
-        }
-    else None
-  in
-  if not plain_ok then None
-  else match orient (x, xi) (y, yi) with Some s -> Some s | None -> orient (y, yi) (x, xi)
 
 (* {1 Emission} *)
 
@@ -590,49 +396,21 @@ let rewrite_site (s : site) : LL.t =
               let terms =
                 List.concat_map (List.range 0 3) ~f:(fun i ->
                     List.map (List.range 0 3) ~f:(fun j ->
-                        let tap t = fix (if s.flip then 2 - t else t) in
-                        let idcs = subst_idx ((s.h.k, tap i) :: (s.w.k, tap j) :: sub) s.bi in
+                        let idcs = subst_idx ((s.h.k, fix i) :: (s.w.k, fix j) :: sub) s.bi in
                         (g.(xi).(i) *. g.(nu).(j), get s.b idcs)))
               in
               set u (node_idx fm ~xi:(fix xi) ~nu:(fix nu) u_axes) (lin_comb p terms)))
     in
     nest_around (loops_of fm (in_order u_axes)) (seq_of body)
   in
-  (* 2. The input transform [V = B^T x B], per 4x4 tile at [(2 th + shift, 2 tw + shift)]. A shifted
-     (data-gradient) read that can leave the source loop's domain is guarded, contributing zero
-     there: the gh-504 clamp's shape, an index comparison, so the select never evaluates the read
-     out of range. *)
+  (* 2. The input transform [V = B^T x B], per 4x4 tile at [(2 th, 2 tw)]. *)
   let input =
     let fm = fresh v_axes in
     let sub =
       List.filter_map fm ~f:(fun (o, n) -> if is_o o then None else Some (o, Idx.Iterator n))
     in
     let tile cx i =
-      Idx.affine
-        ~symbols:[ (2, List.Assoc.find_exn fm cx.o ~equal:Idx.equal_symbol) ]
-        ~offset:(i + cx.shift)
-    in
-    let iprec = Ops.index_prec () in
-    let embed idx = (LL.Embed_index idx, iprec) in
-    (* The guards tap [i] of axis [cx] needs: [0 <= 2 t + i + shift] where its least value is
-       negative, [2 t + i + shift < src_n] where its greatest reaches [src_n]. *)
-    let guards cx i =
-      match cx.src_n with
-      | None -> []
-      | Some n ->
-          let idx = tile cx i in
-          let lo = i + cx.shift and hi = (2 * ((cx.n_o / 2) - 1)) + i + cx.shift in
-          (if lo < 0 then [ LL.Binop (Ops.Cmple, embed (Idx.Fixed_idx 0), embed idx) ] else [])
-          @ if hi >= n then [ LL.Binop (Ops.Cmplt, embed idx, embed (Idx.Fixed_idx n)) ] else []
-    in
-    let guarded conds read =
-      match conds with
-      | [] -> read
-      | c :: cs ->
-          let cond =
-            List.fold cs ~init:c ~f:(fun acc c -> LL.Binop (Ops.And, (acc, iprec), (c, iprec)))
-          in
-          LL.Ternop (Ops.Where, (cond, iprec), (read, p), (LL.Constant 0., p))
+      Idx.affine ~symbols:[ (2, List.Assoc.find_exn fm cx.o ~equal:Idx.equal_symbol) ] ~offset:i
     in
     let body =
       List.concat_map (List.range 0 4) ~f:(fun xi ->
@@ -643,8 +421,7 @@ let rewrite_site (s : site) : LL.t =
                         let idcs = subst_idx sub s.ai in
                         idcs.(s.h.a_axis) <- tile s.h i;
                         idcs.(s.w.a_axis) <- tile s.w j;
-                        ( b_t.(xi).(i) *. b_t.(nu).(j),
-                          guarded (guards s.h i @ guards s.w j) (get s.a idcs) )))
+                        (b_t.(xi).(i) *. b_t.(nu).(j), get s.a idcs)))
               in
               set v (node_idx fm ~xi:(fix xi) ~nu:(fix nu) v_axes) (lin_comb p terms)))
     in
@@ -700,10 +477,10 @@ let rewrite_site (s : site) : LL.t =
     in
     nest_around (loops_of fm m_axes) (seq_of body)
   in
-  (* 5. Odd output extents: the original statement over fresh symbols, restricted to each box of
-     [s.remainder] (disjoint, and empty boxes skipped). *)
-  let strip (box : box) =
-    let fm = fresh (List.map s.orig_loops ~f:(fun l -> l.index)) in
+  (* 5. Odd output extents: the last row, then the last column of the rows above it, in the direct
+     form -- the original statement over fresh symbols and restricted ranges, disjoint strips. *)
+  let strip ~h_range ~w_range =
+    let fm = fresh (List.map s.loops ~f:(fun l -> l.index)) in
     let sub = List.map fm ~f:(fun (o, n) -> (o, Idx.Iterator n)) in
     let f idcs =
       Array.map idcs ~f:(function
@@ -715,25 +492,24 @@ let rewrite_site (s : site) : LL.t =
                      (c, Option.value ~default:sym (List.Assoc.find fm sym ~equal:Idx.equal_symbol))))
         | idx -> idx)
     in
-    let range l =
-      match List.find box ~f:(fun (sym, _, _) -> Idx.equal_symbol sym l.index) with
-      | Some (_, from_, to_) -> (from_, to_)
-      | None -> (l.from_, l.to_)
-    in
-    if
-      List.exists s.orig_loops ~f:(fun l ->
-          let from_, to_ = range l in
-          from_ > to_)
-    then None
-    else
-      let body = set s.d (f s.orig_di) (s.rebuild f) in
-      Some
-        (List.fold_right s.orig_loops ~init:body ~f:(fun l body ->
-             let index = List.Assoc.find_exn fm l.index ~equal:Idx.equal_symbol in
-             let from_, to_ = range l in
-             LL.For_loop { index; from_; to_; body; axis = LL.Serial }))
+    let body = set s.d (f s.di) (s.rebuild f) in
+    List.fold_right s.loops ~init:body ~f:(fun l body ->
+        let index = List.Assoc.find_exn fm l.index ~equal:Idx.equal_symbol in
+        let from_, to_ =
+          if Idx.equal_symbol l.index s.h.o then h_range
+          else if Idx.equal_symbol l.index s.w.o then w_range
+          else (l.from_, l.to_)
+        in
+        LL.For_loop { index; from_; to_; body; axis = LL.Serial })
   in
-  let strips = List.filter_map s.remainder ~f:strip in
+  let strips =
+    (if s.h.n_o % 2 = 1 then [ strip ~h_range:(s.h.n_o - 1, s.h.n_o - 1) ~w_range:(0, s.w.n_o - 1) ]
+     else [])
+    @
+    if s.w.n_o % 2 = 1 then
+      [ strip ~h_range:(0, (2 * nth) - 1) ~w_range:(s.w.n_o - 1, s.w.n_o - 1) ]
+    else []
+  in
   seq_of ([ kernel; input; product; output ] @ strips)
 
 let rewrite (llc : LL.t) : LL.t =
@@ -741,7 +517,7 @@ let rewrite (llc : LL.t) : LL.t =
   let changed = ref false in
   let stmts =
     List.map stmts ~f:(fun stmt ->
-        match match find_site stmt with Some s -> Some s | None -> find_bwd_site stmt with
+        match find_site stmt with
         | Some site ->
             changed := true;
             rewrite_site site
