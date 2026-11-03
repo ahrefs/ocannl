@@ -3975,7 +3975,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (Linux)` deletes the preinstalled toolchains nothing uses (Android, .NET, GHC, CodeQL) in the
   background and leaves a watchdog polling free space every 5s; under a 1 GiB floor it kills every
   dune from then on, and `Report the disk headroom (Linux)` (always run) prints the end headroom and
-  the lowest reading, and fails with `::error title=disk space::` on a trip. The tell of a trip: that
+  the lowest reading, and fails with `::error title=disk space::` on a trip. The lowest reading
+  counts only from the cleanup's end, and prints next to the free space before and right after the
+  cleanup (gh-ocannl-1870): the cleanup frees more than a build uses, so a low taken during it reads
+  the runner's starting disk, and after-cleanup minus the low is the build's peak use (an
+  underestimate by what the switch setup wrote while the cleanup ran). The tell of a trip: that
   annotation, and a build step ending in a killed dune. The watchdog's state is in `/dev/shm`, and
   its output is detached, or the step would wait on it; `test/operations/ci_matrix.sh` runs both
   steps against stub `df`/`sudo`/`pkill`; a dispatched drill that filled a shard's disk mid-build

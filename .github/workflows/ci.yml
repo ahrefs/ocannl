@@ -306,7 +306,11 @@ jobs:
     # stops every dune, then and for the rest of the job (TERM, then KILL 15s
     # later), so the build step fails within about half a minute, and `Report
     # the disk headroom` near the end of the job turns the trip into an error
-    # naming disk space. Its state lives in /dev/shm (RAM), writable when the
+    # naming disk space. The lowest reading counts only from the cleanup's end
+    # (gh-ocannl-1870): before it, the low is the runner's preinstalled
+    # toolchains, not the build, and the report prints it next to the free
+    # space before and right after the cleanup: after minus lowest is the
+    # build's peak use. Its state lives in /dev/shm (RAM), writable when the
     # disk is full; its output goes nowhere, so the step ends at once. Inline
     # for the apt refresh's reason. test/operations/ci_matrix.sh runs this step
     # and the report against stubs.
@@ -318,15 +322,19 @@ jobs:
         echo "::group::Disk headroom before the cleanup"
         df -h "$GITHUB_WORKSPACE" /tmp
         echo "::endgroup::"
-        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
-          /opt/hostedtoolcache/CodeQL </dev/null >/dev/null 2>&1 &
+        free_mb() {
+          df -Pm "$GITHUB_WORKSPACE" /tmp | awk 'NR > 1 && (m == "" || $4 + 0 < m) { m = $4 + 0 } END { print m }'
+        }
+        echo "$(free_mb) MB" > "$state/before" || true
+        { sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+          /opt/hostedtoolcache/CodeQL; echo "$(free_mb) MB" > "$state/cleaned"; } </dev/null >/dev/null 2>&1 &
         disk_watch() {
-          floor_mb=1024 poll=5 grace=15 min= tripped=
+          floor_mb=1024 poll=5 grace=15 min= tripped= cleaned=
           while :; do
-            avail=$(df -Pm "$GITHUB_WORKSPACE" /tmp |
-              awk 'NR > 1 && (m == "" || $4 + 0 < m) { m = $4 + 0 } END { print m }') || avail=
+            [ ! -e "$state/cleaned" ] || cleaned=1
+            avail=$(free_mb) || avail=
             if [ -n "$avail" ]; then
-              if [ -z "$min" ] || [ "$avail" -lt "$min" ]; then
+              if [ -n "$cleaned" ] && { [ -z "$min" ] || [ "$avail" -lt "$min" ]; }; then
                 min=$avail
                 echo "$min MB at $(date -u +%H:%M:%SZ)" > "$state/min" || true
               fi
@@ -939,7 +947,8 @@ jobs:
         # run still holding the lock when the second arrives -- i.e. minutes of
         # real build, against a step meant to cost seconds.
     # The end of the disk watchdog (gh-ocannl-1771; its start says why): every
-    # Linux job prints its headroom now and the lowest the watchdog saw, and a
+    # Linux job prints its headroom now and the lowest the watchdog saw after
+    # the cleanup, next to the free space before and after it, and a
     # trip is an error naming disk space, red even when the build step was
     # cancelled rather than failed.
     - name: Report the disk headroom (Linux)
@@ -950,9 +959,9 @@ jobs:
         df -h "$GITHUB_WORKSPACE" /tmp
         echo "::endgroup::"
         if [ -s "$state/min" ]; then
-          echo "Lowest free disk space the watchdog saw: $(cat "$state/min")"
+          echo "Lowest free disk space the watchdog saw after the cleanup: $(cat "$state/min"); before the cleanup: $(cat "$state/before"), after it: $(cat "$state/cleaned")"
         else
-          echo "::warning title=disk space::the disk watchdog recorded no reading"
+          echo "::warning title=disk space::the disk watchdog recorded no reading after the cleanup"
         fi
         if [ -s "$state/tripped" ]; then
           echo "::error title=disk space::$(cat "$state/tripped")"

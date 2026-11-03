@@ -648,10 +648,14 @@ watch_root = Path(sys.argv[2]) / 'disk-watch'
 watch_bin = watch_root / 'bin'
 watch_bin.mkdir(parents=True)
 for name, body in (
-        # df: one line per path argument, every filesystem with $DF_AVAIL MB free.
-        ('df', 'echo "Filesystem 1M-blocks Used Available Capacity Mounted on"\n'
+        # df: one line per path argument, every filesystem with $DF_AVAIL MB free; each call logged.
+        ('df', 'echo "$*" >> "$WATCH_LOG/df"\n'
+               'echo "Filesystem 1M-blocks Used Available Capacity Mounted on"\n'
                'for a in "$@"; do case $a in -*) ;; *) echo "stub 99999 1 $(cat "$DF_AVAIL") 1% $a" ;; esac; done\n'),
-        ('sudo', 'echo "$*" >> "$WATCH_LOG/sudo"\n'),
+        # sudo: the cleanup, held until the test releases it, then freeing space (atomically, as below).
+        ('sudo', 'echo "$*" >> "$WATCH_LOG/sudo"\n'
+                 'while [ ! -e "$WATCH_LOG/release" ]; do sleep 0.02; done\n'
+                 'echo 50000 > "$DF_AVAIL.new" && mv "$DF_AVAIL.new" "$DF_AVAIL"\n'),
         ('pkill', 'echo "$*" >> "$WATCH_LOG/pkill"\n')):
     (watch_bin / name).write_text('#!/usr/bin/env bash\n' + body)
     (watch_bin / name).chmod(0o755)
@@ -664,7 +668,7 @@ def watch_run(start, report):
     state, log = run / 'state', run / 'log'
     log.mkdir(parents=True)
     avail = run / 'avail'
-    avail.write_text('50000\n')
+    avail.write_text('20000\n')
     env = dict(os.environ, PATH=str(watch_bin) + os.pathsep + os.environ['PATH'], DF_AVAIL=str(avail),
                WATCH_LOG=str(log), GITHUB_WORKSPACE=str(run))
     start = start.replace(state_dir, str(state)).replace(timing, 'floor_mb=1024 poll=0.05 grace=0 min= tripped=')
@@ -688,6 +692,13 @@ def watch_run(start, report):
     try:
         out, _ = proc.communicate(timeout=5)
         assert proc.returncode == 0, 'watchdog start step: ' + out
+        # Polls while the cleanup still runs (the step's own two df calls, then the watchdog's), and
+        # only then the cleanup ends: a low counted before its end reads 20000.
+        for _ in range(100):
+            if (log / 'df').exists() and len((log / 'df').read_text().splitlines()) >= 4:
+                break
+            time.sleep(0.05)
+        (log / 'release').touch()
         wait_for(state / 'min')
         healthy = report_run()
         early = (state / 'tripped').exists()
@@ -708,7 +719,8 @@ def watch_run(start, report):
 
 def watch_ok(start, report):
     early, healthy, after, pkill, sudo, low = watch_run(start, report)
-    return (not early and healthy[0] == 0 and 'watchdog saw: 50000 MB at ' in healthy[1]
+    return (not early and healthy[0] == 0 and 'watchdog saw after the cleanup: 50000 MB at ' in healthy[1]
+            and '; before the cleanup: 20000 MB, after it: 50000 MB\n' in healthy[1]
             and '::error' not in healthy[1] and after[0] == 1
             and '::error title=disk space::Free disk space fell to 600 MB' in after[1]
             and pkill.startswith('-TERM -x dune\n-KILL -x dune\n-TERM -x dune\n') and low.startswith('600 MB at ')
@@ -719,6 +731,7 @@ assert watch_ok(watch_start, watch_report), watch_run(watch_start, watch_report)
 print('PASS the disk watchdog stops dune under its floor and the report names disk space, red')
 for label, start, report in (
         ('a floor never reached', watch_start.replace('-lt "$floor_mb"', '-lt 0'), watch_report),
+        ('a low counted before the cleanup ends', watch_start.replace('[ -n "$cleaned" ] && ', ''), watch_report),
         ('a watchdog that stops dune only once',
          watch_start.replace('pkill -KILL -x dune || true\n', 'pkill -KILL -x dune || true\n  return 0\n'),
          watch_report),
