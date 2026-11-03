@@ -1333,18 +1333,22 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`
   leftover hold it through fd 9.
-  `stop`'s census counts a named pid only once its own fdinfo shows the FLOCK, and otherwise sweeps
-  every `/proc/<pid>/fdinfo`; trusting the name reported `STILL hold` and reaped nothing. Leg 67
-  pins it with a lock whose acquirer exited, against the unfiltered census as negative control
-  (skipped on a kernel that names nobody, where no census can trust a name).
+  Trusting the name, `stop` reported `STILL hold` and reaped nothing. The census `stop` and the
+  supervisor share, `lock_census_perl` in `tools/test-run.sh` (gh-ocannl-1906), never reads
+  `/proc/locks`: on Linux it sweeps every `/proc/<pid>/fdinfo` for the FLOCK on the lock's device
+  and inode, elsewhere it takes `lsof`'s openers, bounded (2 s in the supervisor, 10 s in `stop`).
+  Each pid is paired with the start token it carried from before the census saw it until after,
+  and signalled only while it still carries that token.
+  Leg 67 pins it with a lock whose acquirer exited, on Linux and macOS. Its negative control
+  (Linux) is a census that goes by the pids `/proc/locks` names.
 - **A cancelled run settles inside the fleet wrappers' 10 s grace** (gh-ocannl-1808).
   `fleet-worker.sh execution slot` and `bg-run.sh stop` send KILL 10 s after their TERM, so a
   supervisor that spent 5 s reaping and then up to 30 s in the slowest-actions reader was KILLed
   with no `exit:` sentinel (the run reads as died) and with a session-escaped dune descendant still
   holding the worktree lock (gh-ocannl-1727's incident). On INT/TERM/HUP the supervisor now reaps
   on a short grace (2 s TERM, 1 s for a KILLed leader, 0.5 s for the corpses). It then KILLs every
-  other holder of the lock, found by a census of its own (Linux fdinfo FLOCK rows, otherwise
-  `lsof` openers bounded to 2 s, never itself or its launcher), and only then writes the verdict.
+  other holder of the lock, found by the census it shares with `stop` (the bullet above; never
+  itself or its launcher), and only then writes the verdict.
   Next it closes fd 9, and last, best-effort, removes a `fresh` run's build directory (renamed to
   `build.discard` before the verdict) and runs the reader on a 3 s bound. `wait` can digest such a
   run before its slowest-actions record lands. A cancellation that arrives while a normal finish is
@@ -1352,7 +1356,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   reader ran). The cap's own expiry (142) keeps the long order, since no wrapper is counting down
   then. Only a `run`/`start` supervisor runs the census (`OCANNL_TOOL_TESTRUN_LOCK`), because a
   repeat coordinator also holds the lock. `tools/test-test-run.sh` leg 97 TERMs a run during
-  `_resolve`, during a TERM-ignoring dune, and during a `fresh` run, each with an escapee. It has
+  `_resolve`, during a TERM-ignoring dune, and during a `fresh` run, each with an escapee, and
+  HUPs the launcher of a foreground `run` during that dune (relayed as TERM; gh-ocannl-1906). It has
   two controls: one cuts the census (the lock stays held) and one restores the reader-first order
   (no verdict within 10 s). Leg 74's fixture copies cut the census too. It is a second defence
   against the unmasked fork child, and leaving it in would let that leg's legs pass without the

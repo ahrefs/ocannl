@@ -214,9 +214,11 @@
 #      grace (gh-ocannl-1808): verdict 143, the log ending `exit: 143`, the
 #      escapee and the group gone, the lock idle; the slowest-actions reader
 #      runs after, bounded to 3 s; a `fresh` run's own build directory goes
-#      with it all the same. Mutation controls: no lock census leaves
-#      the escapee holding the lock; the reader before the verdict misses
-#      the 10 s.
+#      with it all the same. A HUP to the attached launcher of a `run`
+#      in the foreground, relayed as TERM, settles the same way and the
+#      launcher returns 143, CANCELLED (gh-ocannl-1906). Mutation controls:
+#      no lock census leaves the escapee holding the lock; the reader before
+#      the verdict misses the 10 s.
 #  53-58 sit at the end: the fleet's run-time slot, taken by the runner
 #      (gh-ocannl-1004), against a fake fleet-worker.sh and the fake readers
 #      every leg runs with.
@@ -363,11 +365,11 @@
 #      record never pairs the older HEAD with the newer tree's status.
 #  66 sits after leg 63: the digest's `source:` line reads the record -- the
 #      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
-#  67 sits after leg 8 (Linux only): a lock whose acquirer exited, held
-#      through the description it shared, is found by `stop`'s census and
-#      reaped, though /proc/locks names only the dead acquirer, or nobody
-#      (gh-ocannl-1107); the negative control, the census trusting that
-#      name, leaves the holder running (skipped where nothing is named).
+#  67 sits after leg 8: a lock whose acquirer exited, held through the
+#      description it shared, is found by `stop`'s census and reaped, though
+#      /proc/locks names only the dead acquirer, or nobody (gh-ocannl-1107);
+#      the negative control (Linux only), the census going by that name,
+#      leaves the holder running.
 #  84 sits after leg 36: a red run carrying, at a line's start, the line a
 #      GPU backend's device-init deadline writes before its process dies by
 #      SIGALRM is WEDGED DEVICE (exit 1) quoting it; indented, it is FAIL
@@ -1252,24 +1254,28 @@ stage_shared() { # <fixture root most later legs run against>
 # dune's leftovers hold. On Linux /proc/locks may keep naming the ACQUIRER --
 # dead, or 0 from inside a pid namespace -- and a census that trusted any name
 # it gave returned that pid, never swept fdinfo, and `stop` reaped none of the
-# live holders. Other kernels drop the row once the acquirer exits; the census
-# then sweeps anyway, so the reap is asserted everywhere and only the negative
-# control needs a named acquirer. The fixture is that shape: a run directory
-# with no pid, no pgid and no verdict (only the lock can attribute anything),
-# the owner pointer naming it, and a perl HOLDER -- this shell's own child, so
-# it stays reapable under a PID 1 that reaps nothing -- that opens the lock
-# file, forks the ACQUIRER to flock the shared description, and reaps it. The
-# negative control runs the census that trusted the name -- the shipping
-# script with the liveness filter taken out -- and must leave the holder
-# running.
+# live holders; other kernels drop the row once the acquirer exits. The census
+# `stop` shares with the supervisor (lock_census_perl, gh-ocannl-1906) reads
+# no name: it sweeps fdinfo on Linux, and elsewhere asks lsof for the file's
+# openers, so the reap is asserted wherever either answers. The fixture is
+# that shape: a run directory with no pid, no pgid and no verdict (only the
+# lock can attribute anything), the owner pointer naming it, and a perl
+# HOLDER -- this shell's own child, so it stays reapable under a PID 1 that
+# reaps nothing -- that opens the lock file, forks the ACQUIRER to flock the
+# shared description, and reaps it. The negative control (Linux) runs the
+# census that went by the name -- the shipping script with the sweep's
+# processes replaced by the pids /proc/locks names -- and must leave the
+# holder running.
 leg_67() {
 l_inherit="stop: a leftover holding the lock through an inherited descriptor, its acquirer gone, is reaped"
-l_inherit_nc="negative control: a census that trusts /proc/locks' named acquirer misses that holder"
-inherit_skip=
-if [ ! -r /proc/locks ] || [ ! -d /proc/self/fdinfo ]; then
-  inherit_skip="no /proc/locks and fdinfo here (Linux only): the census reads lsof, which lists openers"
+l_inherit_nc="negative control: a census that goes by /proc/locks' named acquirer misses that holder"
+inherit_skip= inherit_nc_skip=
+if [ ! -d /proc/self/fdinfo ] && ! command -v lsof >/dev/null 2>&1; then
+  inherit_skip="neither /proc fdinfo nor lsof here: \`stop\` has no lock census"
 elif [ "$have_state" = 0 ]; then
   inherit_skip="no way to read a process's state, so a reaped holder cannot be told from a zombie"
+elif [ ! -r /proc/locks ] || [ ! -d /proc/self/fdinfo ]; then
+  inherit_nc_skip="no /proc/locks and fdinfo here (Linux only): the census reads lsof's openers, and no name"
 fi
 inherit_dir=$STOP_RUNS/19700101-000000-inherited
 mkdir -p "$inherit_dir" "$STOP_WT"
@@ -1379,27 +1385,28 @@ else
   fi
   inherit_kill
 
-  # The census before gh-ocannl-1107: every named pid, live or not. The line
-  # is replaced whole, and checked to be the only change, so a filter that
-  # moved leaves this control failing rather than testing the shipping code.
+  # The census before gh-ocannl-1107, near enough: the processes /proc/locks
+  # names for any FLOCK, each still asked for the FLOCK in its fdinfo. The
+  # sweep's line is replaced whole, and checked to be the only change, so a
+  # sweep that moved leaves this control failing rather than testing the
+  # shipping code. A kernel that names nobody once the acquirer exits gives
+  # that census nothing to ask, which is the miss all the same.
   inherit_root=$TMP/inherit-repo
   mkdir -p "$inherit_root/tools"
   stage_sourced "$inherit_root" || { harness_abandon "$stage_error"; return; }
-  awk '
-    $0 == "        fd_holds_lock \"$p\" && live=\"$live$p" { print "        live=\"$live$p"; n++; next }
+  awk -v named='    for my $p (do { my @n; if (open my $lf, "<", "/proc/locks") { @n = map { (split)[4] } grep { ((split)[1] // "") eq "FLOCK" } <$lf> } @n }) {' '
+    $0 == "    for my $p (grep { /\\A[0-9]+\\z/ && !$skip{$_} } readdir $pd) {" { print named; n++; next }
     { print }
     END { exit n == 1 ? 0 : 1 }
   ' "$SRC" >"$inherit_root/tools/test-run.sh" && chmod +x "$inherit_root/tools/test-run.sh"
   inherit_mut_rc=$?
   inherit_changed=$(diff "$SRC" "$inherit_root/tools/test-run.sh" | grep -c '^[<>]')
-  if [ "$inherit_mut_rc" != 0 ] || [ "$inherit_changed" != 2 ]; then
-    report 1 "$l_inherit_nc" "the liveness filter's line was not found once in $SRC"
+  if [ -n "$inherit_nc_skip" ]; then
+    skip "$l_inherit_nc" "$inherit_nc_skip"
+  elif [ "$inherit_mut_rc" != 0 ] || [ "$inherit_changed" != 2 ]; then
+    report 1 "$l_inherit_nc" "the census sweep's line was not found once in $SRC"
   elif ! inherit_start; then
     report 1 "$l_inherit_nc" "$inherit_err"
-  elif [ -z "$inherit_named_pids" ]; then
-    # Nothing named, so the unfiltered census sweeps fdinfo too, and the
-    # control could not tell it from the fix.
-    skip "$l_inherit_nc" "this kernel's /proc/locks drops the row once its acquirer exits, so no census trusts a name here"
   else
     inherit_stop "$inherit_root/tools/test-run.sh"
     if inherit_gone; then
@@ -3730,14 +3737,19 @@ harness_leg_run '65: a stop while the backends resolve cancels the run #lifecycl
 # holder of the lock -- here a session-escaped descendant, TERM ignored,
 # still holding inherited fd 9 -- found by the census and KILLed, then the
 # verdict, then the lock, and only after them the slowest-actions reader,
-# bounded (a stuck one stands in). Two phases: TERM while the batch's
-# backends resolve (the reader that spawned the escapee asleep), and while a
-# TERM-ignoring dune runs. Within ten seconds of the TERM: the verdict is 143,
-# the log ends with `exit: 143`, the escapee and the group are gone, the lock
-# is idle. Two mutation controls, each one line of the shipping supervisor
-# replaced: a census cut out leaves the escapee holding the lock in either
-# phase, and the cancellation finished in the old order (reader before
-# verdict) publishes no verdict within ten seconds of a TERM to dune.
+# bounded (a stuck one stands in). The phases: TERM while the batch's
+# backends resolve (the reader that spawned the escapee asleep), while a
+# TERM-ignoring dune runs, and while a `fresh` one does; and a HUP to the
+# launcher of a `run` started in the foreground while that dune runs -- a
+# closed terminal, which the launcher relays to the supervisor as TERM
+# (gh-ocannl-1906), so the same census has to reap the escapee there. Within
+# ten seconds of the signal: the verdict is 143, the log ends with `exit:
+# 143`, the escapee and the group are gone, the lock is idle; the HUPed
+# launcher itself returns 143 with the cancellation. Two mutation controls,
+# each one line of the shipping supervisor replaced: a census cut out leaves
+# the escapee holding the lock in every phase but `fresh`'s, and the
+# cancellation finished in the old order (reader before verdict) publishes no
+# verdict within ten seconds of a TERM to dune.
 leg_97() {
 local label="a TERMed run publishes its verdict and frees the lock within ten seconds, the reader after"
 local nc_census="negative control: a supervisor without the lock census leaves the escapee holding the lock"
@@ -3760,11 +3772,10 @@ printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$$" >"$TERM_GRACE_READER_PID"\nexe
 local trace=$TMP/term-grace-trace.csexp
 printf 'not a trace; the stand-in reader never reads it\n' >"$trace"
 local detail= census_detail= order_detail=
-local phase variant tag runs pre esc run_dir pg sup t0 i ok took last launcher
+local phase variant tag runs pre esc run_dir pg sup t0 i ok took last launcher launch_rc
 for variant in fix census order; do
-  for phase in resolve dune fresh; do
-    [ "$variant" = order ] && [ "$phase" = resolve ] && continue
-    [ "$variant" != fix ] && [ "$phase" = fresh ] && continue
+  for phase in resolve dune fresh hup; do
+    case $variant/$phase in order/resolve | order/hup | census/fresh | order/fresh) continue ;; esac
     tag=term-grace-$variant-$phase
     runs=$TMP/argv-runs-$tag
     pre=$TMP/$tag
@@ -3783,9 +3794,12 @@ for variant in fix census order; do
           { report 1 "$label" "the $variant control line was not found once in $SRC"; cp "$SRC" "$repeat_root/tools/test-run.sh"; return; }
         ;;
     esac
-    local mode=stable reach_sleep= reach_escape= launch=(start build @cheap)
+    local mode=stable reach_sleep= reach_escape= launch=(start build @cheap) attach=()
     if [ "$phase" = resolve ]; then reach_sleep=30 reach_escape=$esc; else mode=term_escape; fi
     [ "$phase" != fresh ] || launch=(fresh @test/operations/runtest-alpha)
+    # The foreground launcher traps HUP only if it did not start with HUP
+    # ignored, which a harness under nohup or bg-run.sh would hand it.
+    [ "$phase" != hup ] || { launch=(run build @cheap); attach=(perl -e '$SIG{HUP} = "DEFAULT"; exec @ARGV'); }
     FAKE_REACH_CALLS=$pre.reach FAKE_REACH_SLEEP=$reach_sleep FAKE_REACH_ESCAPE=$reach_escape \
     REPEAT_TEST_MODE=$mode REPEAT_TEST_COUNTER=$pre.counter REPEAT_TEST_CALLS=$pre.calls \
     REPEAT_TEST_ESCAPE_PID=$esc REPEAT_TEST_ESCAPE_READY=$pre.ready REPEAT_TEST_TRACE=$trace \
@@ -3794,10 +3808,11 @@ for variant in fix census order; do
     TERM_GRACE_READER_PID=$pre.reader OCANNL_TOOL_SLOWEST_READER=$slow_reader REPEAT_TEST_MKBUILD=1 \
     OCANNL_TOOL_TEST_RUNS=$runs OCANNL_TOOL_DXG_DEVICE=$dxg_present OCANNL_BACKEND=cuda \
     OCANNL_TOOL_KFD_TOPOLOGY=$kfd_absent OCANNL_TOOL_NVIDIA_DEVICE=$nv_absent PATH=$repeat_bin:$PATH \
-      "$repeat_root/tools/test-run.sh" "${launch[@]}" >"$pre.out" 2>"$pre.err" &
+      ${attach[@]+"${attach[@]}"} "$repeat_root/tools/test-run.sh" "${launch[@]}" >"$pre.out" 2>"$pre.err" &
     launcher=$!
-    # The launch returns once the batch has resolved, so it is not waited on
-    # here: the run is found by its supervisor's record.
+    # A `start` returns once the batch has resolved, and a `run` stays
+    # attached, so neither is waited on here: the run is found by its
+    # supervisor's record.
     ok= run_dir=
     for ((i = 0; i < 300; i++)); do
       run_dir=$(ls -d "$runs"/2*/ 2>/dev/null | head -n 1)
@@ -3817,7 +3832,7 @@ for variant in fix census order; do
     sup=$(cat "$run_dir/pid")
     pg=$(cat "$run_dir/pgid" 2>/dev/null)
     t0=$SECONDS
-    kill -TERM "$sup"
+    if [ "$phase" = hup ]; then kill -HUP "$launcher"; else kill -TERM "$sup"; fi
     took=
     # Ten seconds, measured from the TERM: 100 polls, each at least 0.1s.
     for ((i = 0; i < 100; i++)); do
@@ -3829,6 +3844,13 @@ for variant in fix census order; do
       sleep 0.1
     done
     [ -n "$took" ] && [ $((SECONDS - t0)) -gt 10 ] && took=
+    # The attached launcher returns once the supervisor has gone, digesting
+    # its verdict.
+    launch_rc=
+    if [ "$phase" = hup ]; then
+      for ((i = 0; i < 100; i++)); do term_grace_dead "$launcher" && break; sleep 0.1; done
+      if term_grace_dead "$launcher"; then wait "$launcher"; launch_rc=$?; fi
+    fi
     case $variant in
       fix)
         if [ -z "$took" ]; then
@@ -3837,6 +3859,8 @@ for variant in fix census order; do
           detail="$variant/$phase: verdict $(cat "$run_dir/exit"), log ends: $(tail -n 1 "$run_dir/log")"
         elif [ "$phase" = resolve ] && { [ -s "$pre.calls" ] || ! grep -q "dune was not started" "$run_dir/log"; }; then
           detail="$variant/$phase: dune ran, or the log does not say it did not: calls $(cat "$pre.calls"); $(cat "$run_dir/log")"
+        elif [ "$phase" = hup ] && { [ "$launch_rc" != 143 ] || ! grep -q 'verdict: CANCELLED' "$pre.out"; }; then
+          detail="$variant/$phase: the HUPed launcher returned ${launch_rc:-nothing within ten seconds} (want 143, CANCELLED): $(tail -n 3 "$pre.out" "$pre.err" 2>/dev/null)"
         fi
         # The supervisor itself outlives the verdict only by its bounded tail:
         # the stuck reader is KILLed past three seconds, and says so.

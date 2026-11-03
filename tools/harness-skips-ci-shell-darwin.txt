@@ -9,8 +9,7 @@
 # Linux-only process facts: /proc/locks and fdinfo, a child subreaper
 # (prctl PR_SET_CHILD_SUBREAPER), and a killpg that still answers alive for a
 # group holding only a zombie.
-tools/test-test-run.sh	stop: a leftover holding the lock through an inherited descriptor, its acquirer gone, is reaped
-tools/test-test-run.sh	negative control: a census that trusts /proc/locks' named acquirer misses that holder
+tools/test-test-run.sh	negative control: a census that goes by /proc/locks' named acquirer misses that holder
 tools/test-test-run.sh	zombie-only groups under a parent that reaps no orphans: repeat keeps TIMEOUT and a GPU set passes, run keeps its verdict, nothing refused
 tools/test-test-run.sh	negative control: without the iteration shell's reaping trap, a capped repeat under that parent is refused
 tools/test-test-run.sh	negative control: without the resolution's inert-zombie branch, a GPU set under that parent is refused
