@@ -133,6 +133,7 @@ shell benchmarks/test-check-box.sh
 shell benchmarks/test-box-gate.sh
 toolchain tools/test-fmt-check.sh
 toolchain tools/test-typecheck-scan-cases.sh
+toolchain tools/test-ppx-output-diff.sh
 promotion tools/test-promote.sh
 promotion tools/test-promotion-record.sh
 promotion tools/test-affected-tests.sh
