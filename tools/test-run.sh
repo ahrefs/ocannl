@@ -2812,14 +2812,16 @@ group_identity_matches() {
 # it is of this uid, and neither this reader nor an ancestor of it (the
 # caller's own shell may name a launch: `start ... && wait last`), nor a fork
 # of another (a subshell carries its parent's argv, and so does an orphan of
-# parent 1 -- the slot wrapper's double-forked guardian -- beside a live
-# process of this uid with the very same argv: that other one counts); its
+# parent 1 -- the slot wrapper's double-forked guardian -- beside a process of
+# this uid with the very same argv that is no orphan: that one counts; orphans
+# that all carry one argv count once, credited when any of them is); its
 # program (the first word, its basename) is a shell (sh, bash, zsh, dash,
 # ksh), env, perl, python or Python, or one of timeout, nohup, nice,
 # caffeinate or setsid -- an agent CLI holding a prompt that quotes a launch
 # never counts; and at a COMMAND POSITION of its argv -- its first word, or the
 # first after a `--` (the separator of every fleet wrapper: `fleet-worker.sh
-# execution slot ... -- CMD`, `bg-run.sh start DIR -- CMD`), with env and its
+# execution slot ... -- CMD`, `bg-run.sh start DIR -- CMD`) that comes before
+# any script text (a `-c` or `-e` and what follows it), with env and its
 # assignments, nohup, setsid, nice, timeout and its duration, caffeinate, or an
 # interpreter and its options peeled off -- stands a word whose basename is
 # `test-run.sh`, followed by a launching verb (run, start, fresh, repeat, or
@@ -2907,7 +2909,7 @@ if ($mode eq "chain") {
 }
 my %anc;
 for (my $p = $$; defined $p && $p > 1 && !$anc{$p}; $p = $pp{$p}) { $anc{$p} = 1 }
-my %known;
+my (%known, %known_argv);
 if (defined $runs && opendir(my $rd, $runs)) {
   for my $e (grep { /\A[0-9]{8}T[0-9]{6}Z-[0-9]+\z/ } readdir $rd) {
     my $w = slurp("$runs/$e/wt");
@@ -2915,7 +2917,7 @@ if (defined $runs && opendir(my $rd, $runs)) {
     next if -e "$runs/$e/unpublished";
     next unless -e "$runs/$e/pid" || -e "$runs/$e/exit" || (defined $last && "$runs/$e" eq $last);
     my $c = slurp("$runs/$e/launchers");
-    $known{$_} = 1 for split /\n/, defined $c ? $c : "";
+    for my $l (split /\n/, defined $c ? $c : "") { $known{$l} = 1; $known_argv{$1} = 1 if $l =~ / ([0-9a-f]{32})\z/ }
   }
   closedir $rd;
 }
@@ -2940,7 +2942,10 @@ my %interp = map { $_ => 1 } qw(sh bash zsh dash ksh);
 sub positions {
   my @w = @_;
   my %at;
-  my @starts = (0, grep { $w[$_ - 1] eq "--" } 1 .. $#w);
+  # Script text (after the first `-c` or `-e`) holds no separator.
+  my $text = (grep { $w[$_] eq "-c" || $w[$_] eq "-e" } 0 .. $#w)[0];
+  $text = @w unless defined $text;
+  my @starts = (0, grep { $w[$_ - 1] eq "--" } 1 .. $text - 1);
   for my $j (@starts) {
     while ($j <= $#w) {
       (my $b = base($w[$j])) =~ s/\A-//;
@@ -2961,12 +2966,24 @@ sub positions {
   }
   return \%at;
 }
-my %same;
-$same{$args{$_}}++ for grep { !defined $uid{$_} || $uid{$_} eq $uid } keys %args;
+# Processes of this uid by argv: an orphan of parent 1 carrying the argv of a
+# process that is not one is a fork of that process (the guardian of a slot
+# wrapper); orphans that all carry one argv are one launch, credited when any
+# is, or when a published run credited that argv (a guardian outliving its
+# wrapper by a moment carries the argv the wrapper was credited for).
+my (%byargs, %spoken);
+push @{$byargs{$args{$_}}}, $_ for grep { !defined $uid{$_} || $uid{$_} eq $uid } keys %args;
+sub orphan { my $p = shift; return !defined $pp{$p} || $pp{$p} <= 1 }
+sub credited { my $p = shift; return $known{"$p $tok{$p} " . Digest::MD5::md5_hex($args{$p})} }
 for my $p (sort { $a <=> $b } keys %args) {
   next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
   next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
-  next if (!defined $pp{$p} || $pp{$p} <= 1) && $same{$args{$p}} > 1;
+  if (orphan($p)) {
+    my @same = @{$byargs{$args{$p}}};
+    next if grep { !orphan($_) } @same;
+    next if $spoken{$args{$p}}++ || grep { credited($_) } @same;
+    next if $known_argv{Digest::MD5::md5_hex($args{$p})};
+  }
   my @w = split " ", $args{$p};
   next unless @w && base($w[0]) =~ $prog;
   my $at = positions(@w);
@@ -2995,7 +3012,7 @@ for my $p (sort { $a <=> $b } keys %args) {
     $c = cwd_of($p) unless defined $c;
     $hit = 1 if defined $c && length $c && (Cwd::abs_path($c) // "") eq $root;
   }
-  next unless $hit && !$known{"$p $tok{$p} " . Digest::MD5::md5_hex($args{$p})};
+  next unless $hit && !credited($p);
   print "$p ", substr($args{$p}, 0, 240), "\n";
 }
 '

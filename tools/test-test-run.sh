@@ -333,7 +333,9 @@
 #      shell that execs a slot wrapper for its next launch after its run is a
 #      launch to come, and a script path holding a space still names its
 #      worktree. A queued prepush is a launch, a queued `prepush --list` is
-#      not. The wrappers are the fleet's exec-argv shape (`q-slot.sh ... --
+#      not. A detached wrapper and its guardian (both orphans of parent 1,
+#      one argv) are one launch, and a `--` inside a `-c` string is no
+#      separator. The wrappers are the fleet's exec-argv shape (`q-slot.sh ... --
 #      CMD`): a `-c` string is never parsed. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
 #      out on it.
@@ -8746,7 +8748,8 @@ q_last() { q "$1" paths run last 2>/dev/null; }
 # exec|refuse -- CMD...` waits for RELEASE, then runs CMD as its child and
 # exits with its status -- or, for `refuse`, exits 75 having run nothing, as a
 # refused slot does. Like the real one it first double-forks a guardian that
-# lives as long as it does: an orphan of parent 1 carrying its very argv. And one that
+# lives as long as it does, and here a second longer: an orphan of parent 1
+# carrying its very argv, alone once the wrapper is gone. And one that
 # runs CMD first and then lives on, in a subshell, until RELEASE: the shape of
 # a wrapper winding down after its batch (the subshell is its fork).
 q_slot=$TMP/q-slot.sh q_linger_sh=$TMP/q-linger.sh
@@ -8755,7 +8758,7 @@ cat >"$q_slot" <<'EOF'
 release=$1 how=$2
 shift 3
 main=$$
-( (while kill -0 "$main" 2>/dev/null; do sleep .1; done) </dev/null >/dev/null 2>&1 & )
+( (while kill -0 "$main" 2>/dev/null; do sleep .1; done; sleep 1) </dev/null >/dev/null 2>&1 & )
 while [ ! -e "$release" ]; do sleep .1; done
 [ "$how" = exec ] || exit 75
 "$@"
@@ -9126,6 +9129,48 @@ for q_pp_case in "3|build" "0|--list"; do
   q "$q_root" run build @ok >/dev/null 2>&1
 done
 if [ -z "$q_detail" ]; then report 0 "$q_pp_label"; else report 1 "$q_pp_label" "$q_detail"; fi
+
+# A wrapper detached from its caller is an orphan of parent 1 just as its
+# guardian is, the two carrying one argv: they are one launch, not none. And
+# a `--` inside a `-c` string is script text, no wrapper's separator.
+q_orphan_label="a detached wrapper and its guardian are one launch; a -- in script text is none"
+q_detail=
+(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
+  bash "$q_slot" "$TMP/queued.release11" exec -- tools/test-run.sh run build @red </dev/null >/dev/null 2>&1 &
+  echo $! >"$TMP/queued.orphan")
+q_orphan=$(cat "$TMP/queued.orphan")
+q_wraps+=("$q_orphan:$TMP/queued.release11")
+q_orphaned() { [ "$(ps -o ppid= -p "$q_orphan" 2>/dev/null | tr -d ' ')" = 1 ]; }
+if ! q_until 10 q_orphaned; then
+  q_detail="the detached wrapper is no orphan of parent 1: ppid $(ps -o ppid= -p "$q_orphan" 2>/dev/null)"
+else
+  sleep .5
+  q_capture "$q_root" status last
+  { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+    q_detail="status last, a detached wrapper queued: exit $q_rc (want 3): $q_out"
+fi
+touch "$TMP/queued.release11"
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 30
+  [ "$q_rc" = 1 ] || q_detail="wait last once the detached wrapper ran: exit $q_rc (want 1): $q_out"
+fi
+q_release_all
+if [ -z "$q_detail" ]; then
+  q "$q_root" run build @ok >/dev/null 2>&1
+  (cd "$q_root" && exec bash -c ': -- tools/test-run.sh run build @red
+    while [ ! -e "$1" ]; do sleep .1; done' q-text "$TMP/queued.release12") >/dev/null 2>&1 &
+  q_wraps+=("$!:$TMP/queued.release12")
+  sleep .5
+  q_capture "$q_root" status last
+  { [ "$q_rc" = 0 ] && grep -qF 'verdict: pass' <<<"$q_out"; } ||
+    q_detail="status last beside a -- in script text: exit $q_rc (want 0): $q_out"
+  q_release_all
+  if [ -z "$q_detail" ]; then
+    q_capture "$q_root" wait last --timeout 5
+    [ "$q_rc" = 0 ] || q_detail="wait last once that shell ended: exit $q_rc (want 0, not unpublished): $q_out"
+  fi
+fi
+if [ -z "$q_detail" ]; then report 0 "$q_orphan_label"; else report 1 "$q_orphan_label" "$q_detail"; fi
 
 # The other wait: the fleet slot this script takes itself, through a fake
 # fleet-worker.sh that holds the batch until a release file appears. The run
