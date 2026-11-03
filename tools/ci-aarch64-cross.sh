@@ -28,6 +28,12 @@
 # compile below fails the step loudly instead of the census skipping its
 # columns quietly.
 #
+# The index refresh is capped and retried as the workflows' are (gh-ocannl-1809,
+# gh-ocannl-1852): each attempt a fresh apt-get under `timeout` (240s, apt's own
+# retries and per-connection timeouts inside it), a second try, then a failure
+# naming apt -- unbounded, a stalled mirror would hold the job to its ceiling.
+# The download carries the same retries and per-connection timeouts.
+#
 # Only `cc1` runs: the census compiles to assembly (`-S`), so no binutils are
 # staged, and the arm64 libc headers come from the same index.
 
@@ -58,7 +64,7 @@ packages=(
   linux-libc-dev-arm64-cross
 )
 
-for command_name in apt-get dpkg-deb; do
+for command_name in apt-get dpkg-deb timeout; do
   command -v "$command_name" >/dev/null 2>&1 || die "$command_name is not on PATH"
 done
 [ -r "$keyring" ] || die "the Ubuntu archive keyring is absent: $keyring"
@@ -83,9 +89,23 @@ apt_options=(
   -o APT::Architectures=amd64
   -o Acquire::Languages=none
   -o APT::Get::List-Cleanup=0
+  -o Acquire::Retries=3
+  -o Acquire::http::Timeout=30
+  -o Acquire::https::Timeout=30
 )
 echo "ci-aarch64-cross: resolving gcc $major aarch64 cross from Ubuntu $suite (isolated index)" >&2
-apt-get -q "${apt_options[@]}" update >&2 || die "cannot update the isolated $suite index"
+for attempt in 1 2; do
+  rc=0
+  timeout --kill-after=15 240 apt-get -q "${apt_options[@]}" update >&2 || rc=$?
+  [ "$rc" -eq 0 ] && break
+  case $rc in
+    124 | 137) last="stalled past 240s (apt mirror stall)" ;;
+    *) last="failed with exit $rc" ;;
+  esac
+  echo "ci-aarch64-cross: apt-get update: attempt $attempt of 2 $last" >&2
+  [ "$attempt" -lt 2 ] ||
+    die "cannot update the isolated $suite index in 2 capped attempts; the last $last"
+done
 (cd "$debs" && apt-get -q "${apt_options[@]}" download "${packages[@]}") >&2 ||
   die "apt-get could not download: ${packages[*]}"
 for deb in "$debs"/*.deb; do

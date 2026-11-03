@@ -10384,7 +10384,9 @@
 ; job someone adds to the same rule. It reads the workflow files as lines -- no YAML library is a
 ; dependency here -- and decides only the block-mapping shape these files are written in: the
 ; top-level `jobs:` key, the job keys under it, and the keys under each job, with block scalars
-; (`run: |`) skipped so a shell script contributes no keys.
+; (`run: |`) skipped so a shell script contributes no keys. gh-ocannl-1852 adds a second rule over
+; the same files and the composite actions: every apt index refresh runs under a `timeout` written
+; directly in front of apt (the grammar it reads as shell is in the scanner's header).
 
 (executable
  (name workflow_job_timeouts)
@@ -10392,7 +10394,8 @@
  (libraries base stdio test_utils arrayjit.verdict fresh_process))
 
 (rule
- ; ocannl-backend: none -- links no backend: it reads .github/workflows YAML and an agent note as text.
+ ; ocannl-backend: none -- links no backend: it reads .github/workflows and .github/actions YAML,
+ ; the *.sh scripts and an agent note as text.
  ; Two targets: the file list is written by dune's own `echo`, which spawns nothing and so has no
  ; length limit, and handed over as a `@<path>` response file rather than as argv -- the transport
  ; every repository-wide scan here uses, so no growth of the globbed set can reach Windows'
@@ -10405,8 +10408,12 @@
   ; Every file under the workflows directory, with no suffix list here: WHICH of them is a
   ; workflow is one fact, and it lives in the scanner's `is_workflow`, where the controls exercise
   ; it. A second copy in this glob could only drift -- silently, since the repository has no
-  ; `.yaml` workflow today for a dropped spelling to fail on.
+  ; `.yaml` workflow today for a dropped spelling to fail on. The same holds for the actions,
+  ; whose files only the apt rule reads (`is_action`), and for the shell scripts it reads too
+  ; (`is_shell_script`), the suffix glob shell_scripts_parse discovers them by.
   (glob_files_rec ../../.github/workflows/*)
+  (glob_files_rec ../../.github/actions/*)
+  (glob_files_rec ../../*.sh)
   ; The bisection-floor record the dispatched workflows' local actions are held to (gh-ocannl-1853),
   ; which the exe finds among the arguments by its path.
   ../../docs/agent-notes/build-and-test.md)

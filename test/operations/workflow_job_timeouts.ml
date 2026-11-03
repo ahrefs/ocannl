@@ -461,6 +461,293 @@ let describe job =
     | Some value -> "timeout-minutes: " ^ value
     | None -> "NO timeout-minutes"
 
+(* {1 Bounded apt index refreshes}
+
+   The second rule (gh-ocannl-1852). The job ceiling above bounds a job; it does not tell a stalled
+   apt mirror from a hung test, and an unbounded [apt-get update] held four job attempts to their
+   45-minute ceilings on 2026-11-01 (gh-ocannl-1809). So every apt index refresh in a checked-in
+   workflow, composite action or shell script ([*.sh], which is where the one refresh gh-ocannl-1809
+   missed lived: [tools/ci-aarch64-cross.sh], run by every ubuntu [main] shard) must run under
+   [timeout], written DIRECTLY in front of apt: [sudo timeout --kill-after=15 240 apt-get update
+   ...]. [timeout 240 sudo apt-get update] is refused, because the signal then reaches sudo and can
+   orphan apt holding the lists lock (the rationale [ci.yml]'s copy carries), and so is a zero
+   duration, which disables the timeout.
+
+   The reader is a fail-closed allowlist, and this is its whole grammar. Every line of every file is
+   read as shell, whatever YAML field it sits in, after joining a line that ends in a backslash with
+   the next. A line is split into words by unquoted whitespace and the unquoted separators [; & | (
+   ) < >] and the backquote; an unquoted [#] starting a word ends the line (a YAML or a shell
+   comment, whose text runs nothing). A REFRESH is a word that is [apt-get] or [apt] (or a path
+   ending in either) followed by its options and then the word [update]; apt's options that take a
+   separate argument ([-o], [-c], [-t], [-a] and their long forms) skip that argument too, and a
+   word that is an expansion ([$...]) is skipped as options it may hold. A refresh passes when the
+   words in front of it, with no separator between, are [timeout], its options ([-k]/[-s] and their
+   long forms taking an argument) and a positive duration. Inside quotes, the same reading is
+   applied to the quoted text, and a quoted refresh passes when it is bounded there, or when it is
+   MESSAGE TEXT: an argument of [echo] or [printf] holding no command substitution ([$(] or a
+   backquote). Anything else naming a refresh is refused -- a quoted one handed to [bash -c], a step
+   name spelling the command -- so a shape this reader cannot place costs a rewording, never a pass.
+   Outside it: a program or subcommand spelled through a variable (the scan reads literal spellings,
+   and nothing here names apt any other way), and a shell script not named [*.sh]. *)
+
+type apt_reading =
+  | Bounded of string  (** the duration [timeout] was given *)
+  | Message  (** text an [echo] or [printf] prints *)
+  | Unbounded
+  | Quoted_unreadable
+
+type apt_refresh = { apt_file : string; apt_line : int; program : string; reading : apt_reading }
+
+(* [None] is a separator; [Some (text, quoted)] a word, its text with the quotes removed, and the
+   quoted segments it carries. *)
+type shell_token = (string * string list) option
+
+let shell_separators = [ ';'; '&'; '|'; '('; ')'; '<'; '>'; '`' ]
+
+(* Quotes are closed at the end of a logical line: a string left open there is read to the end of
+   its line and the next line starts unquoted, so a refresh on it is read as a command -- the
+   stricter of the two readings. *)
+let lex_shell line : shell_token list =
+  let tokens = ref [] in
+  let word = Buffer.create 16 in
+  let segment = Buffer.create 16 in
+  let segments = ref [] in
+  let in_word = ref false in
+  let flush () =
+    if !in_word then tokens := Some (Buffer.contents word, List.rev !segments) :: !tokens;
+    Buffer.clear word;
+    segments := [];
+    in_word := false
+  in
+  let close_segment () =
+    segments := Buffer.contents segment :: !segments;
+    Buffer.clear segment
+  in
+  let n = String.length line in
+  let add c =
+    Buffer.add_char word c;
+    in_word := true
+  in
+  let add_quoted c =
+    Buffer.add_char word c;
+    Buffer.add_char segment c
+  in
+  let rec plain i =
+    if i < n then
+      match line.[i] with
+      | ' ' | '\t' ->
+          flush ();
+          plain (i + 1)
+      | '#' when not !in_word -> ()
+      | c when List.mem shell_separators c ~equal:Char.equal ->
+          flush ();
+          tokens := None :: !tokens;
+          plain (i + 1)
+      | '\'' ->
+          in_word := true;
+          single (i + 1)
+      | '"' ->
+          in_word := true;
+          double (i + 1)
+      | '\\' when i + 1 < n ->
+          add line.[i + 1];
+          plain (i + 2)
+      | c ->
+          add c;
+          plain (i + 1)
+  and single i =
+    if i >= n then close_segment ()
+    else if Char.equal line.[i] '\'' then (
+      close_segment ();
+      plain (i + 1))
+    else (
+      add_quoted line.[i];
+      single (i + 1))
+  and double i =
+    if i >= n then close_segment ()
+    else
+      match line.[i] with
+      | '"' ->
+          close_segment ();
+          plain (i + 1)
+      | '\\' when i + 1 < n && List.mem [ '"'; '\\'; '$'; '`' ] line.[i + 1] ~equal:Char.equal ->
+          add_quoted line.[i + 1];
+          double (i + 2)
+      | c ->
+          add_quoted c;
+          double (i + 1)
+  in
+  plain 0;
+  flush ();
+  List.rev !tokens
+
+(* Quoted text read for the refreshes it names: split on whitespace and the separators, with every
+   quote character dropped, since a nested quote cannot make a refresh it spells any less of one. *)
+let text_words text =
+  let words = ref [] in
+  let word = Buffer.create 16 in
+  let flush () =
+    if Buffer.length word > 0 then words := Some (Buffer.contents word) :: !words;
+    Buffer.clear word
+  in
+  String.iter text ~f:(fun c ->
+      if Char.is_whitespace c then flush ()
+      else if List.mem shell_separators c ~equal:Char.equal then (
+        flush ();
+        words := None :: !words)
+      else if not (Char.equal c '\'' || Char.equal c '"') then Buffer.add_char word c);
+  flush ();
+  Array.of_list (List.rev !words)
+
+let basename_of word =
+  match String.rsplit2 word ~on:'/' with Some (_, base) -> base | None -> word
+
+let apt_program word =
+  match basename_of word with ("apt-get" | "apt") as program -> Some program | _ -> None
+
+let apt_options_with_argument =
+  [ "-o"; "-c"; "-t"; "-a"; "--option"; "--config-file"; "--target-release"; "--host-architecture" ]
+
+let timeout_options_with_argument = [ "-k"; "-s"; "--kill-after"; "--signal" ]
+
+(* Skips option words from [k] on, an option in [with_argument] taking the next word with it; the
+   index of the first non-option word, or [None] at a separator or the end. *)
+let rec past_options ~with_argument (words : string option array) k =
+  if k >= Array.length words then None
+  else
+    match words.(k) with
+    | None -> None
+    (* A word that is an expansion may be holding options -- [apt-get -q "${opts[@]}" update] is how
+       a script spells an isolated index -- so it is skipped like one, the stricter reading. *)
+    | Some w when String.is_prefix w ~prefix:"-" || String.is_prefix w ~prefix:"$" ->
+        if List.mem with_argument w ~equal:String.equal then
+          if k + 1 < Array.length words && Option.is_some words.(k + 1) then
+            past_options ~with_argument words (k + 2)
+          else None
+        else past_options ~with_argument words (k + 1)
+    | Some _ -> Some k
+
+(* The indices of the refreshes in [words], with the program each one names. *)
+let refreshes (words : string option array) =
+  List.filter_map
+    (List.range 0 (Array.length words))
+    ~f:(fun i ->
+      match Option.bind words.(i) ~f:apt_program with
+      | None -> None
+      | Some program -> (
+          match past_options ~with_argument:apt_options_with_argument words (i + 1) with
+          | Some k when Option.equal String.equal words.(k) (Some "update") -> Some (i, program)
+          | _ -> None))
+
+let positive_duration word =
+  let number =
+    if (not (String.is_empty word)) && String.mem "smhd" word.[String.length word - 1] then
+      String.drop_suffix word 1
+    else word
+  in
+  (not (String.is_empty number))
+  && String.for_all number ~f:(fun c -> Char.is_digit c || Char.equal c '.')
+  && match Float.of_string_opt number with Some f -> Float.(f > 0.) | None -> false
+
+(* The duration of the [timeout] written directly in front of the refresh at [i], if one is. *)
+let timeout_in_front (words : string option array) i =
+  List.find_map (List.range 0 i) ~f:(fun j ->
+      match words.(j) with
+      | Some w when String.equal (basename_of w) "timeout" -> (
+          match past_options ~with_argument:timeout_options_with_argument words (j + 1) with
+          | Some k when k + 1 = i -> Option.find words.(k) ~f:positive_duration
+          | _ -> None)
+      | _ -> None)
+
+(* The command word of the simple command holding token [t]: the first word after the separator
+   before it, past the YAML sequence and [run:] prefixes and the shell keywords that lead a
+   command. *)
+let command_word (words : string option array) t =
+  let rec start k = if k > 0 && Option.is_some words.(k - 1) then start (k - 1) else k in
+  let leading = [ "-"; "run:"; "then"; "do"; "else"; "{"; "!" ] in
+  let rec first k =
+    if k > t then None
+    else
+      match words.(k) with
+      | Some w when List.mem leading w ~equal:String.equal -> first (k + 1)
+      | w -> w
+  in
+  first (start t)
+
+let apt_refreshes_of ~file text =
+  let raw = String.split_lines text |> List.mapi ~f:(fun index raw -> (index + 1, strip_cr raw)) in
+  let raw = match raw with (n, first) :: rest -> (n, strip_bom first) :: rest | [] -> [] in
+  (* Logical lines: a line ending in a backslash continues on the next, numbered by its first. *)
+  let rec logical acc = function
+    | [] -> List.rev acc
+    | (number, line) :: rest when String.is_suffix line ~suffix:"\\" -> (
+        let joined = String.drop_suffix line 1 in
+        match rest with
+        | (_, next) :: rest -> logical acc ((number, joined ^ " " ^ next) :: rest)
+        | [] -> List.rev ((number, joined) :: acc))
+    | line :: rest -> logical (line :: acc) rest
+  in
+  List.concat_map (logical [] raw) ~f:(fun (apt_line, line) ->
+      let tokens = Array.of_list (lex_shell line) in
+      let words = Array.map tokens ~f:(Option.map ~f:fst) in
+      let commands =
+        List.map (refreshes words) ~f:(fun (i, program) ->
+            let reading =
+              match timeout_in_front words i with Some d -> Bounded d | None -> Unbounded
+            in
+            { apt_file = file; apt_line; program; reading })
+      in
+      let quoted =
+        List.concat_mapi (Array.to_list tokens) ~f:(fun t token ->
+            match token with
+            | None -> []
+            | Some (_, segments) ->
+                List.concat_map segments ~f:(fun segment ->
+                    let inner = text_words segment in
+                    List.map (refreshes inner) ~f:(fun (i, program) ->
+                        let message () =
+                          (match command_word words t with
+                            | Some ("echo" | "printf") -> true
+                            | _ -> false)
+                          && (not (String.is_substring segment ~substring:"$("))
+                          && not (String.mem segment '`')
+                        in
+                        let reading =
+                          match timeout_in_front inner i with
+                          | Some d -> Bounded d
+                          | None -> if message () then Message else Quoted_unreadable
+                        in
+                        { apt_file = file; apt_line; program; reading })))
+      in
+      commands @ quoted)
+
+let apt_acceptable refresh =
+  match refresh.reading with Bounded _ | Message -> true | Unbounded | Quoted_unreadable -> false
+
+let describe_refresh { program; reading; _ } =
+  match reading with
+  | Bounded d -> Printf.sprintf "%s update, bounded by timeout %s" program d
+  | Message -> Printf.sprintf "%s update named in echo/printf text" program
+  | Unbounded -> Printf.sprintf "%s update UNBOUNDED" program
+  | Quoted_unreadable -> Printf.sprintf "%s update inside a quoted string, UNREADABLE" program
+
+let explain_refresh { apt_file; apt_line; program; reading } =
+  match reading with
+  | Bounded _ | Message -> None
+  | Unbounded ->
+      Some
+        (Printf.sprintf
+           "%s:%d: `%s update` runs with no `timeout` directly in front of %s, so a stalled mirror \
+            would hang it (gh-ocannl-1809); put `timeout --kill-after=15 240` directly in front of \
+            %s, inside any sudo"
+           apt_file apt_line program program program)
+  | Quoted_unreadable ->
+      Some
+        (Printf.sprintf
+           "%s:%d: `%s update` sits inside a quoted string this scan reads neither as a bounded \
+            command nor as message text (an echo or printf argument with no command substitution)"
+           apt_file apt_line program)
+
 (* GitHub discovers workflows directly inside `.github/workflows`; a YAML file in a subdirectory
    under it is a fixture or a supporting file that no job ever runs. The globs are recursive because
    that is what makes this a repository-wide scan in dune's eyes, so the depth is decided here. *)
@@ -587,14 +874,34 @@ let read_record note =
 
 let describe_mark { date; merge } = date ^ ", " ^ merge
 
+(* The apt rule also reads the composite actions, at any depth under `.github/actions`: a refresh
+   moved out of a workflow into a local action (gh-ocannl-1574 routes apt fetches through one) runs
+   in the same job, and a scan of the workflows alone would lose sight of it. Every YAML file there
+   is read, an action's own [action.yml] and anything beside it: reading a data file as shell can
+   only refuse, never pass, a refresh. *)
+let is_action relative =
+  String.is_prefix relative ~prefix:".github/actions/"
+  && (String.is_suffix relative ~suffix:".yml" || String.is_suffix relative ~suffix:".yaml")
+
+(* And the shell scripts, every [*.sh] in the tree: a workflow step that calls one runs its refresh
+   in the job as surely as an inline one, which is how [tools/ci-aarch64-cross.sh]'s went unbounded
+   past gh-ocannl-1809. Which scripts a workflow calls is not decided: a refresh in a script no job
+   runs is held to the same rule, and costs the same [timeout]. *)
+let is_shell_script relative = String.is_suffix relative ~suffix:".sh"
+
 let scan workspace_root paths =
   let base = Test_utils.Dune_stanza_scan.base_dir workspace_root in
-  let files =
+  let discovered ~f =
     List.filter paths ~f:(fun path -> not (Stdlib.Sys.is_directory path))
     |> List.filter_map ~f:(fun path ->
         let relative = Test_utils.Dune_stanza_scan.repo_relative base path in
-        Option.some_if (is_workflow relative) (relative, path))
+        Option.some_if (f relative) (relative, path))
     |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  in
+  let files = discovered ~f:is_workflow in
+  let apt_files =
+    discovered ~f:(fun relative ->
+        is_workflow relative || is_action relative || is_shell_script relative)
   in
   let scanned =
     List.map files ~f:(fun (relative, path) ->
@@ -721,7 +1028,25 @@ let scan workspace_root paths =
              with the entry that raised it\n"
             floor_note (describe_mark floor) newest_path (describe_mark newest);
         in_order && at_newest);
-  eprintf "Scanned %d workflow files and %d jobs.\n" (List.length files) (List.length jobs)
+  let apt =
+    List.concat_map apt_files ~f:(fun (relative, path) ->
+        apt_refreshes_of ~file:relative (In_channel.read_all path))
+  in
+  eprintf "apt index refreshes the workflows, actions and scripts name (not part of the golden):\n";
+  List.iter apt ~f:(fun refresh ->
+      eprintf "  %s:%d: %s\n" refresh.apt_file refresh.apt_line (describe_refresh refresh));
+  List.iter apt ~f:(fun refresh -> Option.iter (explain_refresh refresh) ~f:(eprintf "%s\n"));
+  (* Emptiness passes: a tree whose jobs refresh no apt index has nothing to bound, and the
+     population that must exist is the files read. That the reader SEES a refresh is the controls'
+     claim, over refreshes planted in each spelling. *)
+  p_empty
+    "no apt index refresh in a workflow, an action or a shell script runs without a timeout \
+     directly in front"
+    ~over:apt_files
+    (List.filter apt ~f:(fun refresh -> not (apt_acceptable refresh)));
+  eprintf
+    "Scanned %d workflow files and %d jobs; %d workflow, action and script files for apt refreshes.\n"
+    (List.length files) (List.length jobs) (List.length apt_files)
 
 (* {1 Synthetic controls} *)
 
@@ -1285,6 +1610,94 @@ let control () =
       (workflow [ sound_job ~name:"plain" ])
   in
   let floor_note_not_handed = run ~note:None (workflow [ sound_job ~name:"plain" ]) in
+  (* The apt rule's fixtures: one job whose run block holds [lines], the first of them on line 9 of
+     its workflow, which is where each refusal below is expected to point. *)
+  let apt_job lines =
+    "  refresh:\n    runs-on: ubuntu-latest\n    timeout-minutes: 10\n    steps:\n      - run: |\n"
+    ^ String.concat (List.map lines ~f:(fun line -> "          " ^ line ^ "\n"))
+  in
+  let apt_run ?extra lines = run ?extra (workflow [ apt_job lines ]) in
+  let unbounded ?(file = ".github/workflows/subject.yml") ?(line = 9) program =
+    Printf.sprintf "%s:%d: `%s update` runs with no `timeout` directly in front of %s" file line
+      program program
+  in
+  let quoted_unreadable line =
+    Printf.sprintf
+      ".github/workflows/subject.yml:%d: `apt-get update` sits inside a quoted string this scan \
+       reads neither as a bounded command nor as message text"
+      line
+  in
+  (* ci.yml's own shape, its messages naming the command included, then the other bounded spellings
+     the grammar admits. *)
+  let apt_legitimate =
+    apt_run
+      ~extra:
+        [
+          ( ".github/actions/refresh/action.yml",
+            "name: refresh\n\
+             description: fixture\n\
+             runs:\n\
+            \  using: composite\n\
+            \  steps:\n\
+            \    - shell: bash\n\
+            \      run: sudo timeout 4m apt-get update\n" );
+          ( "tools/refresh.sh",
+            "#!/usr/bin/env bash\n\
+             opts=(-o Dir::State::lists=/tmp/lists)\n\
+             timeout --kill-after=15 240 apt-get -q \"${opts[@]}\" update >&2 || exit 2\n\
+             echo \"refresh: apt-get update failed\" >&2\n" );
+        ]
+      [
+        "for attempt in 1 2; do";
+        "  rc=0";
+        "  sudo timeout --kill-after=15 240 apt-get update -o Acquire::Retries=3 \\";
+        "    -o Acquire::http::Timeout=30 || rc=$?";
+        "  [ \"$rc\" -eq 0 ] && exit 0";
+        "  echo \"::warning title=apt-get update::attempt $attempt of 2\"";
+        "done";
+        "echo \"::error title=apt-get update::sudo apt-get update did not complete\"";
+        "printf '%s\\n' 'apt-get update failed'";
+        "# a comment naming apt-get update runs nothing";
+        "sudo timeout -k 15 1.5m apt -q update";
+        "sudo timeout 240 \\";
+        "  /usr/bin/apt-get -o Debug::NoLocking=1 update";
+        "sudo bash -c 'timeout 240 apt-get update'";
+      ]
+  in
+  let apt_bare = apt_run [ "sudo apt-get update && sudo apt-get install -y zsh" ] in
+  let apt_timeout_outside_sudo = apt_run [ "timeout 240 sudo apt-get update" ] in
+  let apt_zero_duration = apt_run [ "sudo timeout 0 apt-get update" ] in
+  let apt_separated = apt_run [ "sudo timeout 240 true; sudo apt-get update" ] in
+  let apt_options = apt_run [ "sudo apt-get -q -o Acquire::Retries=3 update" ] in
+  let apt_front_end = apt_run [ "echo refreshing"; "sudo apt update" ] in
+  let apt_bash_c = apt_run [ "sudo bash -c \"apt-get update\"" ] in
+  let apt_substitution = apt_run [ "echo \"$(apt-get update)\"" ] in
+  let apt_script =
+    apt_run
+      ~extra:
+        [
+          ( "tools/refresh.sh",
+            "#!/usr/bin/env bash\n\
+             opts=(-o Dir::State::lists=/tmp/lists)\n\
+             apt-get -q \"${opts[@]}\" update >&2 || exit 2\n" );
+        ]
+      [ "echo hi" ]
+  in
+  let apt_action =
+    apt_run
+      ~extra:
+        [
+          ( ".github/actions/refresh/action.yml",
+            "name: refresh\n\
+             description: fixture\n\
+             runs:\n\
+            \  using: composite\n\
+            \  steps:\n\
+            \    - shell: bash\n\
+            \      run: sudo apt-get update\n" );
+        ]
+      [ "echo hi" ]
+  in
   printf
     "\n\
      Synthetic controls run this same scanner over workflow trees differing from a legitimate one\n\
@@ -1486,6 +1899,34 @@ let control () =
     (refused "note not handed"
        ~messages:[ no_record "nothing: the note was not handed to this scan" ]
        floor_note_not_handed);
+  p
+    "apt index refreshes bounded by a timeout directly in front, in a workflow, an action and a \
+     script, beside echo and printf text naming the command, pass"
+    (passed "bounded apt refreshes" apt_legitimate);
+  p "an apt-get update with no timeout is refused, its file and line named"
+    (refused "bare apt refresh" ~messages:[ unbounded "apt-get" ] apt_bare);
+  p "a timeout in front of sudo rather than of apt-get does not bound the refresh"
+    (refused "timeout outside sudo" ~messages:[ unbounded "apt-get" ] apt_timeout_outside_sudo);
+  p "a zero duration, which disables the timeout, does not bound the refresh"
+    (refused "zero timeout" ~messages:[ unbounded "apt-get" ] apt_zero_duration);
+  p "a timeout ending at a separator before the refresh does not bound it"
+    (refused "separated timeout" ~messages:[ unbounded "apt-get" ] apt_separated);
+  p "apt's options between the program and update hide nothing"
+    (refused "refresh behind options" ~messages:[ unbounded "apt-get" ] apt_options);
+  p "the apt front end's refresh is held to the same rule"
+    (refused "apt front end" ~messages:[ unbounded ~line:10 "apt" ] apt_front_end);
+  p "an unbounded refresh quoted for bash -c is refused, not read as text"
+    (refused "quoted for bash -c" ~messages:[ quoted_unreadable 9 ] apt_bash_c);
+  p "a command substitution inside echo text runs its refresh, and is refused"
+    (refused "substituted in echo" ~messages:[ quoted_unreadable 9 ] apt_substitution);
+  p "a shell script's unbounded refresh is found and refused, an expansion standing for its options"
+    (refused "unbounded script refresh"
+       ~messages:[ unbounded ~file:"tools/refresh.sh" ~line:3 "apt-get" ]
+       apt_script);
+  p "a composite action's unbounded refresh is found and refused"
+    (refused "unbounded action refresh"
+       ~messages:[ unbounded ~file:".github/actions/refresh/action.yml" ~line:7 "apt-get" ]
+       apt_action);
   Test_utils.Refusal_control_manifest.print "workflow_job_timeouts.ml";
   remove_tree fixture
 

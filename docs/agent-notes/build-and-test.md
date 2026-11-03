@@ -3887,6 +3887,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   purpose: a `ci.yml` dispatch with `expected_sha` checks out that commit, which may predate any
   new action under `.github/actions/`, so a step that `uses:` one fails the red-span bisection of
   older commits (the floor that sets: [How far back a dispatch reaches](#how-far-back-a-dispatch-reaches)).
+  `workflow_job_timeouts` holds every refresh in the workflows, the composite actions and the
+  `*.sh` scripts to it (gh-ocannl-1852): `timeout` written directly in front of apt, a positive
+  duration; a quoted mention passes only as `echo`/`printf` text (its header states the grammar).
 - **A Linux CI job that fills its disk is stopped, not left to hang** (gh-ocannl-1771). On a full
   disk dune does not fail: run 41203731123 (attempt 1) printed `dune_trace_write(): No space left on
   device` three minutes into an ubuntu main shard and then sat, `dune` and its `tee` alive, until the

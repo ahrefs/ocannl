@@ -803,6 +803,7 @@ let raw_entries =
         "[scanner-refusal:a1cbed1bccff6a63840ed1fcbe8731d7] docs/agent-notes/build-and-test.md";
         "[scanner-refusal:0615ba230c2da562231c908bacb9d100] expected_sha-dispatched";
         "[scanner-refusal:1d23389c61196c5055abc91e2b7abe75] bisection-floor record lists";
+        "[scanner-refusal:406e6c8f86b40c87a97b7caa4d7a79cf] script runs without";
         "[scanner-refusal:e2fcdedf2103db72a9b3c2b933471215] reusable-workflow call passes";
         "[scanner-refusal:d19a5eafc27ec268076c5d7ca7dbe979] GitHub's 6-hour default";
         "[scanner-refusal:5df256dd2c78f0fb5ea7e3a3c757c976] ceiling declared after";
@@ -859,6 +860,17 @@ let raw_entries =
         "[scanner-refusal:712f345271549ed4685da1a3cd914be3] entries are refused";
         "[scanner-refusal:97d4a9653aa56f3e6bf1d8cf7d273969] entry-shaped bullets unread";
         "[scanner-refusal:6fa59f2fcd334d1052d38d22c80f0a56] refused rather than";
+        "[scanner-refusal:65f565042e69ddfbe03cc3c16b4ce893] index refreshes bounded";
+        "[scanner-refusal:5425097dabc07fb6e6b617116a50408e] apt-get update with";
+        "[scanner-refusal:778d0df15ba4633969ee5e75dfca77fd] bound the refresh";
+        "[scanner-refusal:1d8676bb4dc33dec91e877e77b2bb3e4] duration which disables";
+        "[scanner-refusal:6c6f804218c9e80bc1011ef8b235342a] separator before the";
+        "[scanner-refusal:25a0771237987c37fd4f7b8481290619] apt's options between";
+        "[scanner-refusal:fc33c8d3ecfe78254790472f5fed3b0a] front end's refresh";
+        "[scanner-refusal:b2d928c764e587d21c62d0d1bdfaaa22] unbounded refresh quoted";
+        "[scanner-refusal:fe8df2a7976b0441fb78a41a8ee07af0] command substitution inside";
+        "[scanner-refusal:18034cc42c5fded559e7a29c1c57a615] script's unbounded refresh";
+        "[scanner-refusal:6b6eff6eb802894930d7281d3548beb2] composite action's unbounded";
       ] );
   ]
 
