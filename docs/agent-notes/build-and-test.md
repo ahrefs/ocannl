@@ -1766,7 +1766,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   and the worktree is invisible to dune: targeted commands fail with `Don't know about directory
   .claude/worktrees/...`, while a bare `dune build`/`dune runtest` quietly builds and tests the
   PARENT branch. `scripts/setup-ocaml-env.sh` writes a one-line `dune-workspace` at the worktree
-  root, restoring it as the root with its own `_build`. The step tests the ancestor DIRECTORIES
+  root, restoring it as the root with its own `_build`. The checkout it acts on is the CURRENT
+  DIRECTORY's when that is a worktree of the script's own repository (equal git common dirs, with
+  a `dune-project`), else the script's own: the hook runs as `"$CLAUDE_PROJECT_DIR"/scripts/...`,
+  and in a desktop-app worktree session that variable names the MAIN checkout, while hook handlers
+  run in the session's directory, so going by the script's location reported the main checkout's
+  staleness and wrote no `dune-workspace` (gh-ocannl-1812; it prints `ok    checkout <dir>` when it
+  adopts one). The step tests the ancestor DIRECTORIES
   rather than git topology, since a checkout can nest inside another checkout that is itself a
   linked worktree living anywhere, and `--git-common-dir` then names the primary checkout, not the
   one dune would root at. That file is generated per worktree and gitignored, never committed —
@@ -1792,7 +1798,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   process GROUP, rc preservation, no orphans), the counting wording and its two recovery commands,
   the offline `skip` with the count taken as of the last successful fetch, a branch and a tag both
   named `origin/master` not displacing the tracking ref, `FETCH_HEAD` left byte-identical, and
-  which SSH launcher git ends up invoking with or without the appended OpenSSH options. Both
+  which SSH launcher git ends up invoking with or without the appended OpenSSH options, and which
+  checkout a run from a nested worktree acts on when the project dir names the outer one. Both
   harness bugs it exists to prevent were live during staging#430's review rounds: a throwaway clone
   that silently tested the COMMITTED script, and a `run` helper that executed its label as a
   command. When adding a leg, add the negative control too — mutate the hook and check that leg,
