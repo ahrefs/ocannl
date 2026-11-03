@@ -454,6 +454,11 @@ if [ "$aarch64_clang" -eq 1 ]; then
   llvm_suite="llvm-toolchain-$llvm_codename-21"
   printf 'deb %s %s main\n' "$llvm_url" "$llvm_suite" >"$llvm_source" ||
     die "cannot write the isolated apt.llvm.org source"
+  # An empty dpkg status, as the GCC index has: a host with its distribution's
+  # own clang-21 installed (resolute's 1:21.1.8-6ubuntu1 on minix) would offer
+  # that version as the candidate, which apt.llvm.org's index cannot serve
+  # ("Can't find a source to download version ...", gh-ocannl-1852).
+  : >"$llvm_apt/status" || die "cannot write the isolated apt.llvm.org status"
   echo "ci-compiler-test: fetching pinned apt.llvm.org signing key"
   run_tracked curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o "$llvm_key" ||
     die "cannot fetch the apt.llvm.org signing key"
@@ -468,6 +473,7 @@ if [ "$aarch64_clang" -eq 1 ]; then
     -o "Dir::Etc::trusted=/dev/null"
     -o "Dir::Etc::trustedparts=$llvm_trustedparts"
     -o "Dir::State::lists=$llvm_lists"
+    -o "Dir::State::status=$llvm_apt/status"
     -o "Dir::Cache::archives=$llvm_archives"
     -o APT::Get::List-Cleanup=0
   )
