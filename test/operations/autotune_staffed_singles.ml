@@ -674,10 +674,9 @@ let () =
       else if String.equal entry !b0 then 5.
       else 20.
     in
-    let seen = Hash_set.create (module String) in
+    let window_index = Scripted_search.window_index () in
     let offset (w : Scripted_search.window) =
-      let first = not (Hash_set.mem seen w.label) in
-      Hash_set.add seen w.label;
+      let first = window_index w = 0 in
       if first && is_sketch w.label && List.equal String.equal (focus w.label) [ !a0 ] then 0.3
       else 0.
     in

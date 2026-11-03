@@ -33,6 +33,17 @@ type record = {
 (* The admitted windows' labels, in order. *)
 let measured windows = List.map windows ~f:(fun (w, _) -> w.label)
 
+(* [window_index ()] is a fresh per-label window count for a script: applied to each admitted window
+   in turn, it returns how many windows of that label came before it, so [0] marks the label's first
+   window -- the one a script reads contended, or lucky, before the label's re-timings. Apply it to
+   every window the script reads, so a label's count is its windows'. *)
+let window_index () =
+  let counts = Hashtbl.create (module String) in
+  fun (w : window) ->
+    let k = Option.value (Hashtbl.find counts w.label) ~default:0 in
+    Hashtbl.set counts ~key:w.label ~data:(k + 1);
+    k
+
 (* [with_settings settings f] runs [f] with each [(key, value)] of [settings] stated at the
    config-file level, restoring what the file level held before on return or exception. *)
 let with_settings settings f =
