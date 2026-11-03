@@ -1167,14 +1167,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   re-issue loop works unchanged), and once one they saw ends unpublished (its slot refused) they
   refuse to answer for the run before it (`unpublished:`, status 1, wait 2) until a run publishes;
   a named run (`wait RUN`) is waited for alone. Nothing on disk records a queued launch, so it is
-  read off the process table — every process of a launch's chain carries its words in argv until
-  the batch ends — under a fail-closed allowlist (`proc_table_perl`: a shell, env, perl or python
-  program; a `test-run.sh` word followed by a launching verb, naming THIS worktree's script; no
-  `ssh` or `execution leg` before it; not the reader's own ancestors), less the chains this
-  worktree's published runs recorded at launch (`launchers`: each launcher and its ancestors, by
-  pid and start token; a process counted once per launch its words name), so a run's own wrapper
-  living on after its verdict is not mistaken for a launch to come, while a shell whose words
-  hold a second launch still is. The
+  read off the process table, from each process's EXEC ARGV and never from shell text: a
+  fail-closed allowlist (`proc_table_perl`: a shell, env, perl or python program; at a command
+  position -- the first word, or the first after a `--`, the separator of every fleet wrapper,
+  with env/nohup/timeout/interpreter prefixes peeled -- a `test-run.sh` word naming THIS
+  worktree's script, followed by a launching verb; no `ssh` or `execution leg` before it; not the
+  reader's ancestors, nor a fork carrying another live process's argv, such as the slot wrapper's
+  double-forked guardian), less the chains this worktree's published runs recorded at launch
+  (`launchers`: each launcher and its ancestors, by pid, start token and an MD5 of the argv), so a
+  run's own wrapper living on after its verdict is not mistaken for a launch to come. A `-c`
+  string is never parsed (staging#1678 spent rounds 2-7 on a shell-text reader, one corner per
+  round, before it was cut back to argv): a launch a shell's own control flow still holds is
+  seen once its own process runs it. The
   one fact stored is the sighting (a `queued-after` mark in the run `last` named then, or
   `queued-<key>` before the first run), since a launch that left without publishing leaves
   nothing else; a mark is a file's existence per run, so no late reader can overwrite a newer

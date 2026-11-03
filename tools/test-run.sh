@@ -2808,48 +2808,50 @@ group_identity_matches() {
 # exits before the next one exists.
 #
 # A process is one of THIS worktree's launches in flight when, as a fail-closed
-# allowlist: it is of this uid, and neither this reader nor an ancestor of it
-# (the caller's own shell may hold the words: `start ... && wait last`); its
-# program (the first word, its basename) is a shell (sh, bash, zsh, dash, ksh),
-# env, perl, python or Python, or one of timeout, nohup, nice, caffeinate or
-# setsid -- no other program launches, and an agent CLI holding a prompt that
-# quotes a launch never counts; among its whitespace-separated words, quotes
-# and `;&|()` trimmed off their ends, a word whose basename is `test-run.sh` is
-# followed by a launching verb (run, start, fresh, repeat, or prepush without
-# `--list`), with no `ssh` and no `execution leg` before it (those launch on
-# another box); and that word names THIS worktree's script: absolute, `~/`, or
-# relative to the process's working directory (/proc/PID/cwd, else lsof),
-# its directory's parent being this worktree. It is NOT in flight when it is
-# one of the processes a run of this worktree recorded as its launch chain
-# (`launchers`, below, in every run directory whose `wt` is this worktree): the
-# launcher of that run and every ancestor it had, by pid and start token --
-# read only from a run that is published: the one `last` names, or one whose
-# supervisor recorded itself (`pid`) or that has a verdict, so a launch
-# between its directory and its publication (the lock taken in between) is
-# still in flight -- as many times as its words name launches: a process
-# whose argv names two (`run A; ...; run B` in one `-c` string) and that two
-# runs recorded is spent, and one that only the first recorded still has a
-# launch to come. So a run's own chain living on after its verdict (an
-# attached launcher printing the digest, the slot's wrapper releasing it, a
-# shell that ran it and went on -- even once a later run has published) is
-# never read as a launch still to come. Two more readings: a process whose
-# parent carries the very same argv is that parent's fork (a subshell), counted
-# through the parent and never again; and a relative word that names no file
-# from the process's directory, when that directory is this worktree, is this
-# script after its own `cd` to the root (`cd tools && bash ./test-run.sh run`).
-# A word that resolves to no file is tried again joined with up to eight words
-# before it, as a path holding spaces that the table's flattening split. And a
-# credit binds the argv it was recorded under (an MD5 of it, beside the pid and
-# start token): a process that `exec`s keeps both and changes its words, and
-# its new words are a launch no run has credited.
-# A plan's directory (`unpublished`) credits nothing. Out of reach, said so: a launch behind
-# a word this cannot resolve (a `cd` inside a `-c` string its process has not
-# run yet, a variable), a loop's later passes over one word (counted once),
-# `bisect`'s steps (its frozen runner is another tree's), a launch on another
-# box. Over-read, loudly: a word on a branch never taken (`if ...; then run A;
-# else run B; fi`) is a launch to come until its process exits, and then one
-# that ended unpublished; and so is a launch of this worktree under another
-# OCANNL_TOOL_TEST_RUNS (environments are not read).
+# allowlist read off its EXEC ARGV -- the command it runs, never shell text:
+# it is of this uid, and neither this reader nor an ancestor of it (the
+# caller's own shell may name a launch: `start ... && wait last`), nor a fork
+# of another (a subshell carries its parent's argv, and so does an orphan of
+# parent 1 -- the slot wrapper's double-forked guardian -- beside a live
+# process of this uid with the very same argv: that other one counts); its
+# program (the first word, its basename) is a shell (sh, bash, zsh, dash,
+# ksh), env, perl, python or Python, or one of timeout, nohup, nice,
+# caffeinate or setsid -- an agent CLI holding a prompt that quotes a launch
+# never counts; and at a COMMAND POSITION of its argv -- its first word, or the
+# first after a `--` (the separator of every fleet wrapper: `fleet-worker.sh
+# execution slot ... -- CMD`, `bg-run.sh start DIR -- CMD`), with env and its
+# assignments, nohup, setsid, nice, timeout and its duration, caffeinate, or an
+# interpreter and its options peeled off -- stands a word whose basename is
+# `test-run.sh`, followed by a launching verb (run, start, fresh, repeat, or
+# prepush without `--list`), with no `ssh` and no `execution leg` before it
+# (those launch on another box). That word names THIS worktree's script:
+# absolute, `~/`, or relative to the process's working directory
+# (/proc/PID/cwd, else lsof), its directory's parent being this worktree; one
+# that resolves to no file is tried again joined with up to eight words
+# before it (a path holding spaces, split by the table's flattening), and a
+# relative one that still names none, from a process whose directory IS this
+# worktree, is this script after its own `cd` to the root (`cd tools && bash
+# ./test-run.sh run`). A `-c` string is never parsed: a launch a shell's own
+# control flow holds (`run A; sleep 60; run B`) is seen once its own process
+# runs it, not before.
+#
+# It is NOT in flight when a run of this worktree recorded it in its launch
+# chain (`launchers`, below): the launcher of that run and every ancestor it
+# had, by pid, start token and an MD5 of its argv (a process that `exec`s
+# keeps the first two, and its new argv is a launch no run has credited) --
+# read only from a published run: the one `last` names, or one whose
+# supervisor recorded itself (`pid`) or that has a verdict, and never a
+# plan's (`unpublished`), so a launch between its directory and its
+# publication (the lock taken in between) is still in flight. So a run's own
+# chain living on after its verdict (an attached launcher printing the
+# digest, the slot's wrapper releasing it, a shell that ran it and went on --
+# even once a later run has published) is never read as a launch to come.
+# Out of reach, said so: a launch no live argv names yet, or names in a way
+# this cannot resolve (a variable, a path with two spaces in a row);
+# `bisect`'s steps (its frozen runner is another tree's); a launch on another
+# box. Over-read, loudly: a launch of this worktree under another
+# OCANNL_TOOL_TEST_RUNS (environments are not read) is in flight here, and
+# once gone, one that ended unpublished.
 #
 # The table comes from /proc where it exists (Linux, Cygwin/MSYS), from `ps`
 # elsewhere, and start tokens are ps_token's renderings (stat's starttime, or
@@ -2892,8 +2894,6 @@ if ($proc) {
     ($pp{$f[0]}, $uid{$f[0]}) = @f[1, 2];
     $tok{$f[0]} = join(" ", @f[3 .. 7]);
     $args{$f[0]} = join(" ", @f[8 .. $#f]);
-    # ps renders a control character (a newline in a -c string) as \NNN.
-    $args{$f[0]} =~ s/\\([0-7]{3})/chr(oct($1))/ge;
   }
   close $ps;
 }
@@ -2915,7 +2915,7 @@ if (defined $runs && opendir(my $rd, $runs)) {
     next if -e "$runs/$e/unpublished";
     next unless -e "$runs/$e/pid" || -e "$runs/$e/exit" || (defined $last && "$runs/$e" eq $last);
     my $c = slurp("$runs/$e/launchers");
-    $known{$_}++ for split /\n/, defined $c ? $c : "";
+    $known{$_} = 1 for split /\n/, defined $c ? $c : "";
   }
   closedir $rd;
 }
@@ -2931,33 +2931,50 @@ sub cwd_of {
   close $l;
   return $c;
 }
+# The command positions of an exec argv: its first word, and the first word
+# after each `--` (the separator of the wrappers fleet-worker.sh, bg-run.sh); at
+# each, a prefix program (env and its assignments, nohup, setsid, nice,
+# timeout and its duration, caffeinate, or an interpreter and its options) is
+# peeled to the word it runs. A `-c` string is no command: never parsed.
+my %interp = map { $_ => 1 } qw(sh bash zsh dash ksh);
+sub positions {
+  my @w = @_;
+  my %at;
+  my @starts = (0, grep { $w[$_ - 1] eq "--" } 1 .. $#w);
+  for my $j (@starts) {
+    while ($j <= $#w) {
+      (my $b = base($w[$j])) =~ s/\A-//;
+      $b =~ s/\.exe\z//;
+      if ($b eq "env") { $j++; $j++ while $j <= $#w && $w[$j] =~ /\A-|=/; next }
+      if ($b eq "nohup" || $b eq "setsid") { $j++; next }
+      if ($b eq "nice" || $b eq "caffeinate") { $j++; $j++ while $j <= $#w && $w[$j] =~ /\A-/; next }
+      if ($b =~ /\Ag?timeout\z/) { $j++; $j++ while $j <= $#w && $w[$j] =~ /\A-/; $j++; next }
+      if ($interp{$b}) {
+        $j++;
+        $j++ while $j <= $#w && $w[$j] =~ /\A-/ && $w[$j] ne "-c" && $w[$j] ne "--";
+        last if $j > $#w || $w[$j] eq "-c";
+        next if $w[$j] eq "--";
+      }
+      $at{$j} = 1;
+      last;
+    }
+  }
+  return \%at;
+}
+my %same;
+$same{$args{$_}}++ for grep { !defined $uid{$_} || $uid{$_} eq $uid } keys %args;
 for my $p (sort { $a <=> $b } keys %args) {
   next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
   next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
-  # Each word, its quotes and separators trimmed; @end marks the last word of
-  # a command (a trimmed `;`, `&`, `|`, or a line end), the bound of the
-  # `--list` that exempts a prepush.
-  my (@w, @end);
-  for my $line (split /\n/, $args{$p}) {
-    for my $raw (split " ", $line) {
-      (my $x = $raw) =~ s/\A[\x27"(]+//;
-      my $sep = $x =~ /[;&|]\)*[\x27"]*\z/;
-      $x =~ s/[\x27";&|)]+\z//;
-      if (length $x) { push @w, $x; push @end, $sep }
-      elsif ($sep && @end) { $end[-1] = 1 }
-    }
-    $end[-1] = 1 if @end;
-  }
+  next if (!defined $pp{$p} || $pp{$p} <= 1) && $same{$args{$p}} > 1;
+  my @w = split " ", $args{$p};
   next unless @w && base($w[0]) =~ $prog;
+  my $at = positions(@w);
   my $hit = 0;
   for my $i (0 .. $#w - 1) {
     last if base($w[$i]) eq "ssh" || ($w[$i] eq "execution" && $w[$i + 1] eq "leg");
     next unless base($w[$i]) eq "test-run.sh" && $verb{$w[$i + 1]};
-    if ($w[$i + 1] eq "prepush" && !$end[$i + 1]) {
-      my $listed = 0;
-      for my $k ($i + 2 .. $#w) { if ($w[$k] =~ /\A--list(?:=|\z)/) { $listed = 1; last } last if $end[$k] }
-      next if $listed;
-    }
+    next if $w[$i + 1] eq "prepush" && grep { /\A--list(?:=|\z)/ } @w[$i + 2 .. $#w];
     my ($c, $found);
     for my $j (reverse(($i > 8 ? $i - 8 : 0) .. $i)) {
       my $path = join(" ", @w[$j .. $i]);
@@ -2971,14 +2988,14 @@ for my $p (sort { $a <=> $b } keys %args) {
       (my $dir = $path) =~ s{/[^/]*\z}{};
       my $r = Cwd::abs_path("$dir/..");
       $found = 1;
-      $hit++ if defined $r && $r eq $root;
+      $hit = 1 if $at->{$j} && defined $r && $r eq $root;
       last;
     }
-    next if $found || $w[$i] =~ m{\A[/~]};
+    next if $found || $w[$i] =~ m{\A[/~]} || !$at->{$i};
     $c = cwd_of($p) unless defined $c;
-    $hit++ if defined $c && length $c && (Cwd::abs_path($c) // "") eq $root;
+    $hit = 1 if defined $c && length $c && (Cwd::abs_path($c) // "") eq $root;
   }
-  next unless $hit > ($known{"$p $tok{$p} " . Digest::MD5::md5_hex($args{$p})} || 0);
+  next unless $hit && !$known{"$p $tok{$p} " . Digest::MD5::md5_hex($args{$p})};
   print "$p ", substr($args{$p}, 0, 240), "\n";
 }
 '

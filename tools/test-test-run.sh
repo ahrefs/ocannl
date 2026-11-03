@@ -325,16 +325,16 @@
 #      publishes, and so is one seen queued behind a live run. A run's own
 #      chain alive after its verdict is no launch in flight, a later run
 #      published or not; with its `launchers` record emptied it is (the
-#      negative control). A shell whose words hold a second launch is in
-#      flight once its first has run. A launch published before its supervisor
+#      negative control). A launch published before its supervisor
 #      recorded itself is no launch to come, and its verdict is not refused
 #      afterwards. A launch queued behind a run that died without a verdict
-#      is followed, never answered with that death. A run's shell forking a
-#      subshell is no second launch, and a launcher past its `cd` to the root
-#      (`cd tools && bash ./test-run.sh run`) still is one. A shell that execs
-#      a wrapper for its next launch after its run is a launch to come, and a
-#      script path holding a space still names its worktree. A prepush that
-#      launches is in flight beside another command's `--list`. The slot this script takes itself is taken after
+#      is followed, never answered with that death. A launcher past its `cd`
+#      to the root (`cd tools && bash ./test-run.sh run`) is still a launch. A
+#      shell that execs a slot wrapper for its next launch after its run is a
+#      launch to come, and a script path holding a space still names its
+#      worktree. A queued prepush is a launch, a queued `prepush --list` is
+#      not. The wrappers are the fleet's exec-argv shape (`q-slot.sh ... --
+#      CMD`): a `-c` string is never parsed. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
 #      out on it.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
@@ -8742,16 +8742,37 @@ q_capture() { # root subcommand [argv...]
   q_out=$(cat "$TMP/queued.out")
 }
 q_last() { q "$1" paths run last 2>/dev/null; }
-# A wrapper in ROOT that waits for RELEASE, then runs what follows it --
-# `exec`, or (for `refuse`) exits 75 having run nothing, as a refused slot does.
+# The stand-in for the fleet's slot wrapper, in its shape: `q-slot.sh RELEASE
+# exec|refuse -- CMD...` waits for RELEASE, then runs CMD as its child and
+# exits with its status -- or, for `refuse`, exits 75 having run nothing, as a
+# refused slot does. Like the real one it first double-forks a guardian that
+# lives as long as it does: an orphan of parent 1 carrying its very argv. And one that
+# runs CMD first and then lives on, in a subshell, until RELEASE: the shape of
+# a wrapper winding down after its batch (the subshell is its fork).
+q_slot=$TMP/q-slot.sh q_linger_sh=$TMP/q-linger.sh
+cat >"$q_slot" <<'EOF'
+#!/usr/bin/env bash
+release=$1 how=$2
+shift 3
+main=$$
+( (while kill -0 "$main" 2>/dev/null; do sleep .1; done) </dev/null >/dev/null 2>&1 & )
+while [ ! -e "$release" ]; do sleep .1; done
+[ "$how" = exec ] || exit 75
+"$@"
+EOF
+cat >"$q_linger_sh" <<'EOF'
+#!/usr/bin/env bash
+release=$1
+shift 2
+"$@" >/dev/null 2>&1
+(while [ ! -e "$release" ]; do sleep .1; done)
+EOF
+chmod +x "$q_slot" "$q_linger_sh"
 q_wrap() { # root release exec|refuse argv...
   local root=$1 release=$2 how=$3
   shift 3
-  (cd "$root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
-    while [ ! -e "$1" ]; do sleep .1; done
-    [ "$2" = exec ] || exit 75
-    shift 2
-    exec "$@"' q-wrap "$release" "$how" "$@") >/dev/null 2>&1 &
+  (cd "$root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash "$q_slot" "$release" "$how" -- "$@") \
+    >/dev/null 2>&1 &
   q_wrap_pid=$!
   q_wraps+=("$q_wrap_pid:$release")
 }
@@ -8900,13 +8921,13 @@ touch "$TMP/queued.hold"
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_unpub_label"; else report 1 "$q_unpub_label" "$q_detail"; fi
 
-# The chain a run recorded at launch: a shell that ran it and lives on after
-# its verdict carries its launch's words, and is that run's, not one to come.
+# The chain a run recorded at launch: a wrapper that ran it and lives on after
+# its verdict (in a subshell, its fork) carries its launch's words, and is that
+# run's, not one to come.
 q_detail= q_nc_detail=
 q_before=$(q_last "$q_root")
-(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
-  tools/test-run.sh run build @ok >/dev/null 2>&1
-  while [ ! -e "$1" ]; do sleep .1; done' q-linger "$TMP/queued.release3") &
+(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
+  exec bash "$q_linger_sh" "$TMP/queued.release3" -- tools/test-run.sh run build @ok) &
 q_wraps+=("$!:$TMP/queued.release3")
 if ! q_until 30 q_finished "$q_root" "$q_before"; then
   q_detail="the lingering shell's run never finished: last: $(q_last "$q_root")"
@@ -8945,33 +8966,6 @@ if [ -z "$q_detail" ]; then report 0 "$q_own_label"; else report 1 "$q_own_label
 if [ -z "$q_nc_detail" ] && [ -z "$q_detail" ]; then report 0 "$q_own_nc_label"
 else report 1 "$q_own_nc_label" "${q_nc_detail:-not reached: $q_detail}"; fi
 
-# One shell, two launches in its words: once the first has run, the shell is
-# that run's chain AND a launch still to come, and the first run's green is
-# not the second's answer.
-q_seq_label="a shell whose words hold a second launch is in flight after its first run"
-q_detail=
-q_before=$(q_last "$q_root")
-(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
-  tools/test-run.sh run build @ok >/dev/null 2>&1
-  while [ ! -e "$1" ]; do sleep .1; done
-  tools/test-run.sh run build @red >/dev/null 2>&1' q-seq "$TMP/queued.release6") &
-q_wraps+=("$!:$TMP/queued.release6")
-if ! q_until 30 q_finished "$q_root" "$q_before"; then
-  q_detail="the shell's first run never finished: last: $(q_last "$q_root")"
-else
-  q_first=$(q_last "$q_root")
-  q_capture "$q_root" wait last --timeout 1
-  { [ "$q_rc" = 124 ] && grep -qF 'has not published its run yet' <<<"$q_out"; } ||
-    q_detail="wait last after the shell's first run: exit $q_rc (want 124): $q_out"
-  touch "$TMP/queued.release6"
-  if [ -z "$q_detail" ]; then
-    q_capture "$q_root" wait last --timeout 30
-    { [ "$q_rc" = 1 ] && ! grep -qF "$q_first" <<<"$q_out"; } ||
-      q_detail="wait last once the second launch ran: exit $q_rc (want 1): $q_out"
-  fi
-fi
-q_release_all
-if [ -z "$q_detail" ]; then report 0 "$q_seq_label"; else report 1 "$q_seq_label" "$q_detail"; fi
 
 # The milliseconds between a launch's publication and its supervisor's first
 # record, held open: a perl on PATH that waits for a release file before it
@@ -9054,31 +9048,10 @@ fi
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_dead_label"; else report 1 "$q_dead_label" "$q_detail"; fi
 
-# Two readings of argv the scan makes beyond the word itself: a subshell is its
-# parent's fork, not a launch of its own; and a launcher that has already made
-# its `cd` to the root still names this worktree's script by its relative word.
-q_fork_label="a run's shell forking a subshell is no second launch; a launcher past its cd is still one"
+# A launcher that has already made its `cd` to the root still names this
+# worktree's script by its relative word.
+q_fork_label="a launcher past its cd to the root is still a launch in flight"
 q_detail=
-q_before=$(q_last "$q_root")
-(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
-  tools/test-run.sh run build @ok >/dev/null 2>&1
-  (while [ ! -e "$1" ]; do sleep .1; done)' q-sub "$TMP/queued.release8") &
-q_wraps+=("$!:$TMP/queued.release8")
-if ! q_until 30 q_finished "$q_root" "$q_before"; then
-  q_detail="the forking shell's run never finished: last: $(q_last "$q_root")"
-else
-  q_forked=$(q_last "$q_root")
-  sleep .5
-  q_capture "$q_root" status last
-  { [ "$q_rc" = 0 ] && grep -qF "$q_forked" <<<"$q_out"; } ||
-    q_detail="status last, the run's shell in a subshell: exit $q_rc (want 0): $q_out"
-fi
-q_release_all
-if [ -z "$q_detail" ]; then
-  q_capture "$q_root" wait last --timeout 5
-  { [ "$q_rc" = 0 ] && grep -qF "$q_forked" <<<"$q_out"; } ||
-    q_detail="wait last once the subshell ended: exit $q_rc (want 0, not unpublished): $q_out"
-fi
 if [ -z "$q_detail" ]; then
   q_before=$(q_last "$q_root")
   (cd "$q_root/tools" && Q_PATH_PREFIX=$q_perlbin Q_PREFLIGHT_HOLD=$TMP/queued.preflight \
@@ -9097,8 +9070,8 @@ fi
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_fork_label"; else report 1 "$q_fork_label" "$q_detail"; fi
 
-# A run's credit is for the words it was recorded under: a shell that ran one
-# batch and then `exec`s a wrapper for the next keeps its pid and start token,
+# A run's credit is for the argv it was recorded under: a shell that ran one
+# batch and then `exec`s a slot wrapper for the next keeps its pid and start token,
 # and its new words are a launch no run has credited. And a script path that
 # holds a space, flattened apart in the table, still names its worktree.
 q_exec_label="a shell that execs a wrapper after its run is a launch to come; a spaced path still resolves"
@@ -9106,10 +9079,9 @@ q_detail=
 q_before=$(q_last "$q_root")
 (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
   tools/test-run.sh run build @ok >/dev/null 2>&1
-  exec bash -c "while [ ! -e \"\$1\" ]; do sleep .1; done; exec tools/test-run.sh run build @red" q-exec2 "$1"' \
-  q-exec "$TMP/queued.release9") >/dev/null 2>&1 &
+  exec bash "$2" "$1" exec -- tools/test-run.sh run build @red' q-exec "$TMP/queued.release9" "$q_slot") >/dev/null 2>&1 &
 q_wraps+=("$!:$TMP/queued.release9")
-q_execed() { ps -axww -o args= 2>/dev/null | grep -qF 'q-exec2'; }
+q_execed() { ps -axww -o args= 2>/dev/null | grep -qF "q-slot.sh $TMP/queued.release9"; }
 if ! q_until 30 q_finished "$q_root" "$q_before" || ! q_until 30 q_execed; then
   q_detail="the exec'ing shell's first run never finished, or it never exec'd: last: $(q_last "$q_root")"
 else
@@ -9124,10 +9096,8 @@ if [ -z "$q_detail" ]; then
 fi
 q_release_all
 if [ -z "$q_detail" ]; then
-  (cd "$TMP" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
-    while [ ! -e "$1" ]; do sleep .1; done
-    shift
-    exec "$@"' q-spaced "$TMP/queued.release10" "$q_spaced/tools/test-run.sh" run build @red) >/dev/null 2>&1 &
+  (cd "$TMP" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
+    exec bash "$q_slot" "$TMP/queued.release10" exec -- "$q_spaced/tools/test-run.sh" run build @red) >/dev/null 2>&1 &
   q_wraps+=("$!:$TMP/queued.release10")
   sleep .5
   q_capture "$q_spaced" status last
@@ -9137,39 +9107,24 @@ fi
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_exec_label"; else report 1 "$q_exec_label" "$q_detail"; fi
 
-# `prepush --list` runs nothing, and its `--list` is its own: a later command's
-# (after a `;` or on the next line) does not hide a prepush that launches. The
-# wrappers are never released, only killed, and a run published after them
-# clears the sighting they leave.
-q_pp_label="a prepush that launches is in flight beside another command's --list; a lone --list is not"
+# `prepush --list` runs nothing: queued behind a wrapper it is no launch, and
+# a prepush that launches is one. The wrappers are never released, only
+# killed, and a run published after them clears the sighting they leave.
+q_pp_label="a queued prepush is a launch in flight; a queued prepush --list is not"
 q_detail=
-for q_sep in ';' $'\n'; do
-  (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c "
-    while [ ! -e \"\$1\" ]; do sleep .1; done
-    tools/test-run.sh prepush --since base build$q_sep tools/test-run.sh prepush --since base --list" \
-    q-pp "$TMP/queued.never") >/dev/null 2>&1 &
+for q_pp_case in "3|build" "0|--list"; do
+  IFS='|' read -r q_pp_want q_pp_arg <<<"$q_pp_case"
+  (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
+    exec bash "$q_slot" "$TMP/queued.never" exec -- tools/test-run.sh prepush --since base "$q_pp_arg") >/dev/null 2>&1 &
   q_pp=$!
   sleep .5
   q_capture "$q_root" status last
   kill -KILL "$q_pp" 2>/dev/null
   wait "$q_pp" 2>/dev/null
-  { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
-    { q_detail="status last, prepush then (${q_sep/$'\n'/newline}) a --list: exit $q_rc (want 3): $q_out"; break; }
+  [ "$q_rc" = "$q_pp_want" ] ||
+    { q_detail="status last beside a queued prepush --since base $q_pp_arg: exit $q_rc (want $q_pp_want): $q_out"; break; }
+  q "$q_root" run build @ok >/dev/null 2>&1
 done
-q "$q_root" run build @ok >/dev/null 2>&1
-# The control: a wrapper holding only `prepush --list` launches nothing.
-if [ -z "$q_detail" ]; then
-  (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
-    while [ ! -e "$1" ]; do sleep .1; done
-    tools/test-run.sh prepush --since base --list' q-pp "$TMP/queued.never") >/dev/null 2>&1 &
-  q_pp=$!
-  sleep .5
-  q_capture "$q_root" status last
-  kill -KILL "$q_pp" 2>/dev/null
-  wait "$q_pp" 2>/dev/null
-  { [ "$q_rc" = 0 ] && grep -qF 'verdict: pass' <<<"$q_out"; } ||
-    q_detail="status last beside a lone prepush --list: exit $q_rc (want 0): $q_out"
-fi
 if [ -z "$q_detail" ]; then report 0 "$q_pp_label"; else report 1 "$q_pp_label" "$q_detail"; fi
 
 # The other wait: the fleet slot this script takes itself, through a fake
