@@ -13020,6 +13020,21 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-1820: cifar_resnet's downsampling residual block (valid stride-2 pool, padded stride-2
+;; 1x1 shortcut, residual add) under op_shape_schemes=check: the trace's symbolic widths met a
+;; stride-1 kernel-1 identity window as an occurs-check cycle. Traces, checks, and agrees with off.
+
+(test
+ (name scheme_strided_residual)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules scheme_strided_residual)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ;; gh-ocannl-1789: what rewinds record of the work they discarded stays bounded by what is still
 ;; reachable, over a thousand explicit rewinds, rewinds to the last closure and schemed closures'
 ;; traces; held stale handles stay refused.

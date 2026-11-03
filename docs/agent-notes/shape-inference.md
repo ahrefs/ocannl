@@ -325,3 +325,15 @@ files.
   solution maps over the whole environment (`Utils.Tree_map.map` in `unify_row`/`unify_dim`), so
   anything per-entry there (the `from_` provenance of `s_dim_one_in_entry`, now lazy) multiplies.
   Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy.
+- A trace solves symbolically what inline construction solves numerically (gh-ocannl-1820): a
+  scheme's tracer widths are unsolved variables, so an `Affine` the `Dim` arms would collapse to a
+  number stays a term. `unify_dim`'s mixed padded/valid arm reduces a valid stride-2 pool against a
+  padded stride-2 shortcut to a stride-1 valid window of kernel 1 -- the identity -- and the residual
+  add equating the two outputs then read `o = conv(o+1)` as an occurs-check cycle. Such a window
+  over an unsolved extent collapses in `unify_dim`'s stride-1 arm and in `s_dim_one`
+  (`is_identity_window`); accepting only the self-reference is not enough, since a later block
+  composing the kept window into the mixed arm derives `2*o - 1` where concrete solving gives
+  `2*o` (that arm reads a padded side's span as 1, not its stride). Over a solved `Dim` the
+  solved arms keep it, deriving the extent's basis from the kernel's. The occurs check is
+  unchanged. Pinned by `test/operations/scheme_strided_residual`, which compares `check` with `off`
+  on a schemed block.

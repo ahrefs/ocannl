@@ -1,0 +1,31 @@
+under check, the network builds without a shape error: true
+control (off): the network builds: true
+its scheme is traced: true
+and its application is checked against the scheme: true
+no scheme event leaves it unschemed: true
+control (off): no scheme event, where check had some: true
+output dims: single prec 2x4x6x4
+check and off give the same output dims: true
+check and off give the same output, loss, parameters and gradients, bitwise: true
+under check, the network builds without a shape error: true
+control (off): the network builds: true
+its scheme is traced: true
+and its application is checked against the scheme: true
+no scheme event leaves it unschemed: true
+control (off): no scheme event, where check had some: true
+output dims: single prec 2x4x6x4
+check and off give the same output dims: true
+check and off give the same output, loss, parameters and gradients, bitwise: true
+the scheme or the body raises a shape error: true
+v = conv(v + kernel 1): true
+conv(v + kernel 1) = v: true
+v = conv(v + dilation 3, kernel 1): true
+control: v = conv(v + kernel 3) is still refused: true
+control: v = conv(v + dilation 2, kernel 2) is still refused: true
+a solved window still merges its kernel's basis: default 4 = conv(bcast 4 + kernel 1): true
+shortcut first: the residual equation o_p = o_sc holds on unsolved widths: true
+shortcut first: then w = 12 gives both outputs 6, as solving concretely does: true
+shortcut first: control: different concrete outputs are refused: true
+pool first: the residual equation o_p = o_sc holds on unsolved widths: true
+pool first: then w = 12 gives both outputs 6, as solving concretely does: true
+pool first: control: different concrete outputs are refused: true
