@@ -2,8 +2,10 @@
    labels of test/support/refusal_control_manifest.ml from the scanners' current diagnostics, and
    names the goldens to re-run. Run from the repository root; the wrapper does that, reformats the
    manifest and runs the goldens. Usage: refusal_manifest_sync.exe [--dry-run] [--base REV]
-   [SOURCE.ml ...], or refusal_manifest_sync.exe --offers LOG... to print the evidence entries the
-   golden runs logged in LOG... offer (gh-ocannl-1571). *)
+   [--accept-offer KEY=CLAIM ...] [SOURCE.ml ...], or refusal_manifest_sync.exe --offers LOG... to
+   print the evidence entries the golden runs logged in LOG... offer (gh-ocannl-1571). Each
+   --accept-offer writes one of them, as an offer line names it: the [raw_direct_evidence] entry for
+   KEY naming CLAIM, its source's goldens then re-run like any other (gh-ocannl-1840). *)
 
 open Base
 open Stdio
@@ -123,7 +125,7 @@ let () =
       offers logs;
       Stdlib.exit 0
   | _ -> ());
-  let dry_run = ref false and base = ref "HEAD" and named = ref [] in
+  let dry_run = ref false and base = ref "HEAD" and named = ref [] and accepted = ref [] in
   let rec parse = function
     | "--dry-run" :: rest ->
         dry_run := true;
@@ -131,6 +133,14 @@ let () =
     | "--base" :: rev :: rest ->
         base := rev;
         parse rest
+    | "--accept-offer" :: offer :: rest -> (
+        (* A key is [<source>:<md5>], so its first [=] ends it; a claim may hold more. *)
+        match String.lsplit2 offer ~on:'=' with
+        | Some (key, claim) ->
+            accepted := (key, claim) :: !accepted;
+            parse rest
+        | None -> refuse "--accept-offer %s is no KEY=CLAIM" offer)
+    | [ "--accept-offer" ] -> refuse "--accept-offer needs KEY=CLAIM, as an offer line names them"
     | source :: rest when not (String.is_prefix source ~prefix:"-") ->
         named := Stdlib.Filename.basename source :: !named;
         parse rest
@@ -146,8 +156,20 @@ let () =
       if not (List.Assoc.mem catalogue source ~equal:String.equal) then
         refuse "%s is no source the refusal_control_scan_cases stanza catalogues" source);
   let renamed_claims, unpaired_claims = claim_changes !base in
-  let text = In_channel.read_all manifest_path in
+  let accepted = List.rev !accepted in
+  (* The accepted entries go in first, and the plan reads the text they are in: its edits are spans
+     of that text, and its sources then include theirs. *)
+  let text =
+    let text = In_channel.read_all manifest_path in
+    if List.is_empty accepted then text
+    else
+      match Sync.accept_offers ~text ~diagnostics_of accepted with
+      | Ok edit -> Sync.apply text [ edit ]
+      | Error refusals -> refuse "--accept-offer: %s" (String.concat ~sep:"; " refusals)
+  in
   let plan = Sync.plan ~text ~diagnostics_of ~renamed_claims ~unpaired_claims () in
+  List.iter accepted ~f:(fun (key, claim) ->
+      printf "accepted into raw_direct_evidence: %s answered by: %s\n" key claim);
   List.iter plan.changes ~f:(function
     | Sync.Row { source; added; removed } ->
         printf "row %s: %d marker(s) added, %d removed\n" source (List.length added)
@@ -162,7 +184,7 @@ let () =
   (* Anything unresolved writes nothing at all: a partial sync would leave the settled part's
      sources looking unchanged to the next run, whose goldens it would then never re-run. *)
   let write = (not !dry_run) && List.is_empty plan.unresolved in
-  if write && not (List.is_empty plan.edits) then
+  if write && not (List.is_empty plan.edits && List.is_empty accepted) then
     Out_channel.write_all manifest_path ~data:(Sync.apply text plan.edits);
   (* The scanner sources whose manifest entries differ from [base]'s: a hand edit settling an
      UNRESOLVED item is one, and the next run must still re-run its goldens and the audit. *)
@@ -190,7 +212,10 @@ let () =
                 ~f:(fun (key, _) -> source_of key))
   in
   let sources =
-    List.dedup_and_sort (Sync.touched_sources plan @ !named @ since_base) ~compare:String.compare
+    List.dedup_and_sort
+      (Sync.touched_sources plan @ !named @ since_base
+      @ List.map accepted ~f:(fun (key, _) -> fst (String.rsplit2_exn key ~on:':')))
+      ~compare:String.compare
     |> List.filter ~f:(fun source -> List.Assoc.mem catalogue source ~equal:String.equal)
   in
   (* The goldens the rewording's text reaches, rewritten in place unless this is a dry run. *)

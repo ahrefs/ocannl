@@ -30,6 +30,8 @@
 #      through a `dune exec --no-build`: a build there would replace dune's promotion list.
 #   7. --rounds refuses anything but a number of at least 2, before anything runs.
 #   8. a plan naming no golden runs nothing and hands nothing to the offers.
+#   9. --accept-offer hands the engine its KEY=CLAIM as ONE argument, spaces and `=` in the claim
+#      and all, and refuses a missing one before anything runs (gh-ocannl-1840).
 #   1b. leg 1 under the host's /bin/bash, which on macOS is Bash 3.2: an empty array expanded under
 #      `set -u` is an unbound variable there, which ended the second round. Not applicable
 #      (gh-ocannl-1839) where the probe sees that /bin/bash expand one, as Bash 4.4 on does (CI's
@@ -74,6 +76,7 @@ case $1 in
     while [ "$1" != -- ]; do shift; done
     shift
     if [ "${1-}" = --offers ]; then shift; echo "offers $*" >>"$repo/calls"; exit 0; fi
+    printf '%s\n' "$@" >"$repo/engine-args"
     cat "$repo/plan" ;;
 esac
 STUB
@@ -302,5 +305,23 @@ leg_8() {
   fi
 }
 harness_leg_run '8: a plan naming no golden runs nothing' leg_8
+
+leg_9() {
+  local r=$TMP/9 offer='scan.ml:0123=a claim, with spaces = and more' ok=1
+  fixture "$r" "$chain" 'nothing to sync
+'
+  sync "$r" --dry-run --accept-offer "$offer"
+  [ "$(cat "$r/rc")" = 0 ] &&
+    printf -- '--dry-run\n--accept-offer\n%s\n' "$offer" | cmp -s - "$r/engine-args" || ok=0
+  rm -f "$r/calls" "$r/engine-args"
+  sync "$r" --accept-offer
+  [ "$(cat "$r/rc")" = 2 ] && [ ! -e "$r/calls" ] && grep -q 'needs KEY=CLAIM' "$r/stdout" || ok=0
+  if [ "$ok" = 1 ]; then
+    report 0 "9: --accept-offer reaches the engine as one argument, and a missing one refuses"
+  else
+    report 1 "9: --accept-offer reaches the engine as one argument, and a missing one refuses" "see $r"
+  fi
+}
+harness_leg_run '9: --accept-offer reaches the engine as one argument' leg_9
 
 finish

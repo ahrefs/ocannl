@@ -37,6 +37,15 @@ stage_sources() { # DEST-ROOT: what the shipping test-run.sh sources, under DEST
     { echo "only $staged sourced file(s) found in tools/test-run.sh; the scan is broken" >&2; exit 2; }
 }
 stage_sources "$fixture/repo"
+# The section printer's fixed text, which the runner reads from its owner's source at startup
+# (gh-ocannl-1840): staged as it ships, and read back by the stand-in test below, so the fixture
+# writes what the real printer writes.
+heads=test/support/refusal_section_heads.ml
+stage_heads() { # DEST-ROOT
+  mkdir -p "$1/$(dirname "$heads")"
+  cp "$root/$heads" "$1/$heads"
+}
+stage_heads "$fixture/repo"
 cat > "$fixture/bin/dune" <<'DUNE'
 #!/usr/bin/env bash
 set -eu
@@ -94,8 +103,9 @@ rows() { rm -f "$out/$name.exe.output"; printf "$1" > "$out/$name.exe.output"; }
 m1='  [scanner-refusal:00000000000000000000000000000001] first refusal\n'
 m2='  [scanner-refusal:00000000000000000000000000000002] last refusal\n'
 section='\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n'
-closing='End of synthetic controls.\n'
-why='Refusal marker not printed (not part of the golden): '
+section_head() { sed -n "s/^let $1 = \"\\(.*\\)\"\$/\\1/p" test/support/refusal_section_heads.ml; }
+closing="$(section_head closing_row)\n"
+why=$(section_head not_printed_head)
 case "$PROBE_MODE" in
   # A mutant that does not compile, its failed compile step in the run's own trace: test-run's
   # BUILD FAILED, exit 65 (gh-ocannl-1547), which is no evidence either.
@@ -252,17 +262,20 @@ export PATH="$fixture/bin:$PATH" PROBE_HOME="$fixture" OCANNL_TOOL_TEST_RUNS="$f
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_DXG_DEVICE="$fixture/no-such-dxg" \
   OCANNL_TOOL_KFD_TOPOLOGY="$fixture/no-such-kfd" OCANNL_TOOL_NVIDIA_DEVICE="$fixture/no-such-nvidia"
 cd "$fixture/repo"
+# The closing row as the staged owner binds it, which the stand-in test prints too.
+closing_row=$(sed -n 's/^let closing_row = "\(.*\)"$/\1/p' "$heads")
+[ -n "$closing_row" ] || { echo "no closing_row binding read from $heads" >&2; exit 2; }
 printf 'first: true\nnested: label: true\nlast: true\n' > probe.expected
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > manifest.expected
-printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nEnd of synthetic controls.\n' \
+printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\n%s\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
-  '  [scanner-refusal:00000000000000000000000000000002] last refusal' > tail.expected
+  '  [scanner-refusal:00000000000000000000000000000002] last refusal' "$closing_row" > tail.expected
 printf 'FAIL: the first diagnostic\nFAIL: the second diagnostic\n' > capture.expected
-printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\nEnd of synthetic controls.\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\nEnd of synthetic controls.\n' \
-  '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
-  '  [scanner-refusal:00000000000000000000000000000002] last refusal' > sections.expected
+printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\n' \
+  '  [scanner-refusal:00000000000000000000000000000001] first refusal' "$closing_row" \
+  '  [scanner-refusal:00000000000000000000000000000002] last refusal' "$closing_row" > sections.expected
 printf 'first: true\n\nOK: every claim held.\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
   '  [scanner-refusal:00000000000000000000000000000001] first refusal' \
   '  [scanner-refusal:00000000000000000000000000000002] last refusal' > trailer.expected
@@ -285,6 +298,7 @@ harness_leg_restore() {
   rm -f "$fixture/bin/cmp" peer.ml .test-run.lock
   [ ! -d module.ml ] || rm -rf module.ml
   cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" tools/
+  stage_heads .
   for saved in "$fixture"/runs/lock-*.saved; do
     [ -e "$saved" ] || continue
     rm -rf "${saved%.saved}"
@@ -1263,6 +1277,7 @@ mkdir -p "$self/tools" "$self/scripts"
 cp "$root/scripts/harness-support.sh" "$self/scripts/"
 cp "$root/tools/mutation-run.sh" "$root/tools/test-run.sh" "$self/tools/"
 stage_sources "$self"
+stage_heads "$self"
 self_copy() { # FROM TO [FROM TO]...: the harness, each FROM replaced by its TO, exactly once
   perl -e '
     local $/; open my $f, "<", shift or die $!; my $s = <$f>;
@@ -1311,5 +1326,34 @@ grep -q '^FAIL  18: idle returns 0/3/2 without creating or replacing lock state:
 printf 'PASS an abandoned leg fails alone, naming its check, and the leg after it passes on the restored fixture; uncontained or unrestored, it does not\n'
 }
 harness_leg_run_errexit '22: an abandoned leg fails alone, and the fixture it left is restored' leg_22
+leg_23() {
+# The runner reads the section printer's fixed text from its owner's source by a one-line grammar
+# (gh-ocannl-1840), and a source it cannot read so refuses at startup, exit 2, before the baseline
+# runs or anything is mutated: the file absent, a head wrapped onto a second line, written with an
+# escape, or bound twice. Then the staged file as it ships runs again.
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
+export PROBE_MODE=pass
+local shape before line
+line=$(grep '^let not_printed_head = ' "$heads")
+for shape in absent wrapped escaped twice; do
+  stage_heads .
+  case $shape in
+    absent) rm "$heads" ;;
+    wrapped) perl -0pi -e 's/^let not_printed_head = /let not_printed_head =\n  /m' "$heads" ;;
+    escaped) perl -0pi -e 's/^(let not_printed_head = ".*)(")$/$1\\t$2/m' "$heads" ;;
+    twice) printf '%s\n' "$line" >> "$heads" ;;
+  esac
+  before=$(wc -l < "$fixture/invocations")
+  run_case 2
+  [ "$(wc -l < "$fixture/invocations")" = "$before" ] ||
+    { cat "$fixture/result"; echo "heads $shape: the runner ran a test"; exit 1; }
+  grep -q 'refusal_section_heads.ml' "$fixture/result" ||
+    { cat "$fixture/result"; echo "heads $shape: the refusal does not name the file"; exit 1; }
+done
+stage_heads .
+run_case 0
+printf 'PASS a section-heads source the runner cannot read by its grammar refuses before anything runs\n'
+}
+harness_leg_run_errexit '23: an unreadable section-heads source refuses before anything runs' leg_23
 
 finish

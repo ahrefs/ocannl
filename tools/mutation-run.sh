@@ -190,15 +190,32 @@ my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
 # (gh-ocannl-1216). tools/test-mutation-run.sh replays a run that printer ended, so this shape is
 # pinned on its output, not its source.
 my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
+# That printer's fixed text, read from its one owner, test/support/refusal_section_heads.ml
+# (gh-ocannl-1840), by the grammar that file's header states and refusal_control_scan_cases holds
+# its compiled values to: a value is exactly one line `let <name> = "<text>"`, the text free of `"`
+# and `\`, so the line is the value byte for byte. Anything else -- the file absent, a name bound on
+# no line or on two, a binding wrapped or escaped -- refuses before anything is mutated, never
+# guessed at. Read before any mutant is written, so a mutant of that file is read unmutated; the
+# replay of verdict_teardown's real transcripts (tools/test-mutation-run.sh) pins what it reads.
+my $heads_file = "$root/test/support/refusal_section_heads.ml";
+my %head;
+{
+    my @lines = split /\r?\n/, bytes($heads_file);
+    for my $name (qw(closing_row not_printed_head)) {
+        my @bound = grep { /^\s*let\s+\Q$name\E\b/ } @lines;
+        @bound == 1 && $bound[0] =~ /^let \Q$name\E = "([^"\\]*)"$/
+            or refuse("$heads_file: `$name` is not bound on exactly one line "
+                . "`let $name = \"<text>\"` with no quote or backslash in the text");
+        $head{$name} = $1;
+    }
+}
 # The row that section ends on, printed unconditionally after its markers (gh-ocannl-1251,
-# gh-ocannl-1318); pinned, like the marker shape, on the printer's output that
-# tools/test-mutation-run.sh replays.
-my $closing_row = qr/^End of synthetic controls\.$/;
+# gh-ocannl-1318).
+my $closing_row = qr/^\Q$head{closing_row}\E$/;
 # The stderr line that printer writes for a marker of its row it did not print because a claim
 # behind it failed (or its diagnostic left the source): this head, the marker, ` -- ` and why. A
-# marker with no such line had nothing behind it run (gh-ocannl-1499). Pinned the same way, on
-# verdict_teardown's transcripts.
-my $not_printed_head = 'Refusal marker not printed (not part of the golden): ';
+# marker with no such line had nothing behind it run (gh-ocannl-1499).
+my $not_printed_head = $head{not_printed_head};
 # A `FAIL: ` row is Verdict.fail's (every line of a multi-line message carries the prefix): the
 # run's own report of what went wrong, no row the golden has -- unless the golden has some, as a
 # golden capturing a refusing child's diagnostics does (config_usage_scan_script_hint's is nothing

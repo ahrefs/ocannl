@@ -463,6 +463,70 @@ let apply text edits =
   in
   result
 
+(** The edit adding to the manifest [text]'s [raw_direct_evidence] the entry [(key, claim: true)]
+    for each of [accepted], [(key, claim)] pairs as a run's offer names them
+    ({!Refusal_control_manifest.offer}), after the table's last entry and through {!quote}
+    (gh-ocannl-1840): [tools/refusal-manifest-sync.sh --accept-offer KEY=CLAIM]. Which claim answers
+    is the reader's judgment, named on the command line; what is checked here is only what the text
+    decides, each refusal one sentence, and any refusal accepts nothing: a key that is no
+    [<source>:<md5>] of a source with a row, or whose source's current diagnostics
+    ([diagnostics_of]) hold no direct failure of that identity; a key [raw_catalogue_only] holds (it
+    would be classified both ways); a pair the table already holds, or given twice (the audit's
+    {!Refusal_control_manifest.repeated_pairs}); a claim that is empty or spans lines. Whether the
+    claim answers is the confirming run's to say: its golden prints the marker, or the audit names
+    it uncovered. *)
+let accept_offers ~text ~diagnostics_of accepted =
+  let tables = read_tables text in
+  let held = List.map tables.direct_evidence ~f:(fun e -> (e.key.value, e.value.value)) in
+  let refusals =
+    List.concat_mapi accepted ~f:(fun i (key, claim) ->
+        let entry = (key, claim ^ evidence_suffix) in
+        let failure =
+          match String.rsplit2 key ~on:':' with
+          | Some (source, identity)
+            when List.exists tables.rows ~f:(fun r -> String.equal r.source source) -> (
+              match diagnostics_of source with
+              | Some diagnostics
+                when List.exists diagnostics ~f:(fun d ->
+                         String.equal d.Scan.identity identity
+                         && match d.Scan.kind with Scan.Fail -> true | Scan.Claim -> false) ->
+                  []
+              | _ -> [ Printf.sprintf "%s names no current direct failure of its source" key ])
+          | _ ->
+              [
+                Printf.sprintf
+                  "%s is no `<source>:<md5>` key of a source `raw_entries` has a row for" key;
+              ]
+        in
+        List.concat
+          [
+            failure;
+            (if List.exists tables.catalogue_only ~f:(fun e -> String.equal e.key.value key) then
+               [ Printf.sprintf "%s is in `raw_catalogue_only`: drop that entry first" key ]
+             else []);
+            (if
+               List.mem held entry ~equal:Poly.equal
+               || List.mem (List.take accepted i) (key, claim) ~equal:Poly.equal
+             then [ Printf.sprintf "%s answered by %S is already an entry" key claim ]
+             else []);
+            (if String.is_empty claim || String.mem claim '\n' then
+               [ Printf.sprintf "%s: the claim is empty or spans lines" key ]
+             else []);
+          ])
+  in
+  if not (List.is_empty refusals) then Error refusals
+  else
+    let entry (key, claim) = "( " ^ quote key ^ ", " ^ quote (claim ^ evidence_suffix) ^ " )" in
+    let list = Option.value_exn (bound_list (Read.structure_of text) "raw_direct_evidence") in
+    (* After the last entry, so the table keeps its order; into the brackets of an empty one. *)
+    match Option.bind (elements list) ~f:List.last with
+    | Some last ->
+        let at = snd (span last) in
+        Ok (at, at, String.concat (List.map accepted ~f:(fun a -> "; " ^ entry a)))
+    | None ->
+        let at = fst (span list) + 1 in
+        Ok (at, at, String.concat (List.map accepted ~f:(fun a -> entry a ^ "; ")))
+
 (** A golden's [text] as the rewording prints it: each replaced marker swapped for its successor,
     and each row [<label>: true] or [<label>: PASS] of a reworded claim -- the label's identity the
     old claim's, the new format free of substitutions -- swapped for the new label. Nothing else
@@ -540,7 +604,8 @@ let needing_entries ~text ~diagnostics_of ~goldens_of =
     printed once, several claims are each printed as the alternatives they are, and a key no run's
     claim answered for is named with what settles it. An offer for a key needing nothing -- one
     another golden prints, or one an entry already classifies -- is no entry to add. Which claim the
-    entry names stays the reader's choice, so nothing is written. *)
+    entry names stays the reader's choice, so nothing is written unasked: each entry comes with the
+    [--accept-offer] argument that writes it (gh-ocannl-1840), one shell word. *)
 let render_offers ~manifest_path ~needing offered =
   let buffer = Buffer.create 256 in
   let add fmt = Printf.bprintf buffer fmt in
@@ -550,7 +615,11 @@ let render_offers ~manifest_path ~needing offered =
             Option.some_if (String.equal o.Refusal_control_manifest.key key) o.claim)
         |> List.stable_dedup ~compare:String.compare
       in
-      let entry claim = add "    ( %s, %s );\n" (quote key) (quote (claim ^ evidence_suffix)) in
+      let entry claim =
+        add "    ( %s, %s );\n" (quote key) (quote (claim ^ evidence_suffix));
+        add "  or: tools/refusal-manifest-sync.sh --accept-offer '%s'\n"
+          (String.substr_replace_all (key ^ "=" ^ claim) ~pattern:"'" ~with_:"'\\''")
+      in
       match claims with
       | [] ->
           add
@@ -562,13 +631,14 @@ let render_offers ~manifest_path ~needing offered =
       | [ claim ] ->
           add
             "offer: %s, a direct failure with no entry, is answered by the passed claim below; \
-             paste the entry into `raw_direct_evidence` in %s:\n"
+             paste the entry into `raw_direct_evidence` in %s, or accept it:\n"
             key manifest_path;
           entry claim
       | claims ->
           add
             "offer: %s, a direct failure with no entry, is answered by %d passed claims; paste \
-             into `raw_direct_evidence` in %s the ONE entry whose claim asserts on this refusal:\n"
+             into `raw_direct_evidence` in %s, or accept, the ONE entry whose claim asserts on \
+             this refusal:\n"
             key (List.length claims) manifest_path;
           List.iter claims ~f:entry);
   Buffer.contents buffer

@@ -33,6 +33,10 @@ module Cache_dir_scan = Cache_dir_scan
 module Refused_action_scan = Refused_action_scan
 module Refusal_control_scan = Refusal_control_scan
 
+module Refusal_section_heads = Refusal_section_heads
+(** The fixed text the refusal-control section printer writes for readers outside its process,
+    [tools/mutation-run.sh] among them, which reads it from the source (gh-ocannl-1840). *)
+
 module Refusal_control_manifest = Refusal_control_manifest
 (** Extracting static refusal-diagnostic fragments from repository scanners and relating them to
     permanent control goldens. *)

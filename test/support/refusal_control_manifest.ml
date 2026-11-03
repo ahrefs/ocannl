@@ -1479,19 +1479,17 @@ let doubly_classified =
   List.filter_map direct_evidence ~f:(fun (key, _) ->
       Option.some_if (List.Assoc.mem catalogue_only key ~equal:String.equal) key)
 
-(** The last row of every section {!print_section} prints, unconditionally. [tools/mutation-run.sh]
-    reads it by this text, taken from [verdict_teardown]'s transcripts of real runs rather than from
-    this source: a golden ending on it is complete exactly when a run's stdout ends on it. *)
-let closing_row = "End of synthetic controls."
+(** The [(key, claim)] pairs [entries] holds more than once, each named once, in table order
+    (gh-ocannl-1840). A key may carry several entries, one per claim whose run prints it
+    (gh-ocannl-1572), but the same pair twice says nothing the first did not: it is a copy-paste
+    slip, which the catalogue audit refuses rather than reads past. *)
+let repeated_pairs entries =
+  List.filter_mapi entries ~f:(fun i pair ->
+      let earlier = List.take entries i in
+      Option.some_if (List.count earlier ~f:(Poly.equal pair) = 1) pair)
 
-(** The head of the stderr line {!print_section} writes for a marker of the row that it does not
-    print because a claim behind it failed, followed by the marker, [" -- "] and
-    {!why_not_printed}'s reason -- or because its diagnostic is gone from the source.
-    [tools/mutation-run.sh] lists each marker a run omitted with the reason this line gives, and one
-    with no such line as one whose claim or refusal did not run (gh-ocannl-1499), reading the line,
-    as it reads {!closing_row}, from [verdict_teardown]'s transcripts rather than from this source.
-*)
-let not_printed_head = "Refusal marker not printed (not part of the golden): "
+(** The [raw_direct_evidence] pairs written more than once ({!repeated_pairs}). *)
+let repeated_evidence = repeated_pairs direct_evidence
 
 type offer = { key : string; claim : string }
 (** A run's offer for a direct failure its row lists with no [raw_direct_evidence] or
@@ -1500,29 +1498,31 @@ type offer = { key : string; claim : string }
     {!print_section} writes one per answering claim on stderr ({!offer_lines}), and
     [tools/refusal-manifest-sync.sh]'s engine reads them back from the runs' logs ({!parse_offer})
     to print the entry ready to paste for each failure the audit would refuse -- printed by none of
-    its goldens. Which claim answers is still the manifest's judgment, so an entry is offered, never
-    written; and since a scan whose control runs in another process observes its refusals there, a
-    run whose claims answer for nothing says nothing: what no run answers for is the engine's to
-    name, from the goldens. *)
-
-let offer_head = "Refusal evidence offer (not part of the golden): "
-let offer_answered_by = " answered by: "
+    its goldens. Which claim answers is still the manifest's judgment, so an entry is offered, and
+    written only when its reader accepts it by name ([--accept-offer], gh-ocannl-1840); and since a
+    scan whose control runs in another process observes its refusals there, a run whose claims
+    answer for nothing says nothing: what no run answers for is the engine's to name, from the
+    goldens. *)
 
 (** One stderr line per answering claim of [claims]. A label spanning lines cannot travel on one, so
     it is never offered: an entry naming it is a hand edit. *)
 let offer_lines ~key claims =
   List.filter_map claims ~f:(fun claim ->
-      Option.some_if (not (String.mem claim '\n')) (offer_head ^ key ^ offer_answered_by ^ claim))
+      Option.some_if
+        (not (String.mem claim '\n'))
+        (Refusal_section_heads.offer_head ^ key ^ Refusal_section_heads.offer_answered_by ^ claim))
 
 (** The offer a log [line] carries, or [None] for any other line. *)
 let parse_offer line =
   Option.bind
-    (String.chop_prefix (String.rstrip line) ~prefix:offer_head)
+    (String.chop_prefix (String.rstrip line) ~prefix:Refusal_section_heads.offer_head)
     ~f:(fun rest ->
-      Option.map (String.substr_index rest ~pattern:offer_answered_by) ~f:(fun at ->
+      Option.map (String.substr_index rest ~pattern:Refusal_section_heads.offer_answered_by)
+        ~f:(fun at ->
           {
             key = String.prefix rest at;
-            claim = String.drop_prefix rest (at + String.length offer_answered_by);
+            claim =
+              String.drop_prefix rest (at + String.length Refusal_section_heads.offer_answered_by);
           }))
 
 (** The section [print] ends a scan's golden with: its heading, then the marker of each of
@@ -1534,21 +1534,22 @@ let parse_offer line =
     [tools/test-mutation-run.sh] replays through [tools/mutation-run.sh], are of runs ending here
     (gh-ocannl-1364).
 
-    The section ends on {!closing_row}, printed whatever came before it (gh-ocannl-1251,
-    gh-ocannl-1318): every golden that prints a section pins it, so a run that printed it decided
-    every marker above it. Without it a run cut inside the markers read the same as a complete run
-    whose claim failed, and a run whose only shortfall was one silenced refusal -- every claim
-    passing, so no teardown line -- read as cut short.
+    The section ends on {!Refusal_section_heads.closing_row}, printed whatever came before it
+    (gh-ocannl-1251, gh-ocannl-1318): every golden that prints a section pins it, so a run that
+    printed it decided every marker above it. Without it a run cut inside the markers read the same
+    as a complete run whose claim failed, and a run whose only shortfall was one silenced refusal --
+    every claim passing, so no teardown line -- read as cut short.
 
     A marker of [expected] it does not print because a claim behind it failed ({!why_not_printed}),
-    or because [diagnostics] no longer holds its diagnostic, gets a {!not_printed_head} line on
-    stderr saying so; any other marker it does not print had nothing behind it run. So a golden diff
-    short of a marker reads as a failed claim or as a refusal that never ran (gh-ocannl-1499), and a
-    run with no failed check writes no such line. *)
+    or because [diagnostics] no longer holds its diagnostic, gets a
+    {!Refusal_section_heads.not_printed_head} line on stderr saying so; any other marker it does not
+    print had nothing behind it run. So a golden diff short of a marker reads as a failed claim or
+    as a refusal that never ran (gh-ocannl-1499), and a run with no failed check writes no such
+    line. *)
 let print_section ~source ~expected diagnostics =
   let passed_labels = ref (Verdict.passed_labels ()) in
   let not_printed marker reason =
-    eprintf "%s%s -- %s\n" not_printed_head marker (Verdict.one_line reason)
+    eprintf "%s%s -- %s\n" Refusal_section_heads.not_printed_head marker (Verdict.one_line reason)
   in
   let failed = ref (Verdict.failed_checks ()) in
   let why marker diagnostic =
@@ -1619,7 +1620,7 @@ let print_section ~source ~expected diagnostics =
     printf
       "Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):\n";
     List.iter (List.rev !catalogued) ~f:(printf "  %s\n"));
-  printf "%s\n" closing_row
+  printf "%s\n" Refusal_section_heads.closing_row
 
 let print source =
   let source_path =

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Regenerate the refusal-control manifest and its goldens after a scanner diagnostic is reworded
 # (gh-ocannl-1429): one command where a rewording used to cost three or four test runs.
-# Usage: tools/refusal-manifest-sync.sh [--dry-run] [--rounds N] [--base REV] [SOURCE.ml ...]
+# Usage: tools/refusal-manifest-sync.sh [--dry-run] [--rounds N] [--base REV]
+#          [--accept-offer KEY=CLAIM ...] [SOURCE.ml ...]
 #
 # 1. tools/refusal_manifest_sync.exe extracts every catalogued scanner's diagnostics and rewrites,
 #    in test/support/refusal_control_manifest.ml, each stale `raw_entries` row (the extraction, in
@@ -34,7 +35,12 @@
 # 5. Each direct failure a row lists with no `raw_direct_evidence` or `raw_catalogue_only` entry
 #    is offered (Refusal_control_manifest.offer_lines, read back from the runs' logs): the entry
 #    naming each passed claim whose refused run printed it, ready to paste, or the word that no
-#    claim of the run answers for it. Which claim answers is a judgment, so it is never written.
+#    claim of the run answers for it. Which claim answers is a judgment, so it is never written
+#    unasked: each offered entry comes with the `--accept-offer KEY=CLAIM` that writes it
+#    (gh-ocannl-1840). Given that, step 1 first adds exactly that entry to `raw_direct_evidence`
+#    (KEY a current direct failure of a catalogued source, the pair new, the key not catalogue-only;
+#    else exit 2, nothing written), and KEY's source has its goldens re-run like any other -- the
+#    re-run is the second invocation an offer used to cost, and it says whether the claim answers.
 # --dry-run prints the plan and changes nothing. The plan is a point-in-time reading of the source
 # text: what a run prints is the golden's business, and the confirming run is what says it held.
 set -u
@@ -49,6 +55,10 @@ while [ $# -gt 0 ]; do
       esac
       [ "$2" -ge 2 ] || { echo "refusal-manifest-sync.sh: --rounds is at least 2 (run, promote, run)" >&2; exit 2; }
       rounds=$2
+      shift 2 ;;
+    --accept-offer)
+      [ $# -ge 2 ] || { echo "refusal-manifest-sync.sh: --accept-offer needs KEY=CLAIM, as an offer names them" >&2; exit 2; }
+      engine_args+=("$1" "$2")
       shift 2 ;;
     *)
       [ "$1" != --dry-run ] || dry_run=1
