@@ -69,6 +69,7 @@ test/operations/schedule_pack_mma_matmul.ml -- exact-operands: dyadic cycles tim
 test/operations/schedule_pad.ml -- gated: the non-dyadic serial-twin claim reads the kernel flags and the FMA ISA first
 test/operations/schedule_pipelined_matmul.ml -- not-cc: the bitwise legs need shared placement, which the C backends refuse
 test/operations/schedule_split_reduce.ml -- pinned off
+test/operations/scheme_strided_residual.ml -- same-shape: check and off build the same graph, so both arms compile the same kernel code and contract alike
 test/operations/scope_collapse_rounding.ml -- pinned off
 test/operations/seeded_default.ml -- same-shape: cc seeds no untuned default, so both sides are the plain compile
 test/operations/seeded_narrow_storage.ml -- same-shape: on cc both seeded and model defaults compile the plain default pipeline

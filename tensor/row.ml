@@ -256,6 +256,24 @@ let kernel_size_of_span ~dilation ~span =
      we have: span - 1 = (kernel_size - 1) * dilation kernel_size = (span - 1) / dilation + 1 *)
   if (span - 1) % dilation <> 0 then None else Some (((span - 1) / dilation) + 1)
 
+(* A stride-1 valid window of effective span 1 -- [input = 1 * (output - 1) + 1] -- is the identity
+   on its output extent, as a stride-1 padded window or a plain stride-1 affine is. The mixed
+   padded/valid arm of [unify_dim] builds one as a helper (a valid stride-2 pool against a padded
+   stride-2 shortcut, gh-ocannl-1820). On a shape-scheme trace's unsolved extents it must collapse:
+   kept, a residual add equating its [over] with it reads as an occurs-check cycle, and a later
+   block composing it into the mixed arm again derives wrong extents there. A window over a solved
+   extent, or with a kernel carrying a named basis, is left to the solved arms, which derive the
+   extent's basis from the kernel's. *)
+let is_identity_window ~stride ~over ~conv =
+  stride = 1
+  &&
+  match (conv, over) with
+  | (None | Some { use_padding = true; _ }), _ -> true
+  | Some { use_padding = false; _ }, Dim _ -> false
+  | Some { dilation; kernel = Dim k; use_padding = false }, (Var _ | Sym _ | Affine _ | Concat _) ->
+      effective_kernel_span ~dilation ~kernel_size:k.d = 1 && is_reserved_basis k.basis
+  | Some { kernel = Var _ | Sym _ | Affine _ | Concat _; use_padding = false; _ }, _ -> false
+
 type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 
 let dim_hashtbl () = Hashtbl.create (module Dim_var)
@@ -616,6 +634,9 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
           Dim { d = s.d * stride; basis; proj_id = None }
       | Affine { stride; over = Dim s; conv = None; stride_offset = _ } ->
           Dim { d = s.d * stride; basis = s.basis; proj_id = None }
+      | Affine { stride; over; conv; stride_offset = _ } when is_identity_window ~stride ~over ~conv
+        ->
+          over
       | res -> res)
   | Concat dims -> (
       let dims = List.map dims ~f:(fun d -> s_dim_one ~keep_affine v ~value ~in_:d) in
@@ -2164,11 +2185,12 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
         @@ Shape_error
              ("solved dimensions for axis: different bases", [ Dim_mismatch [ dim1; dim2 ] ])
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
-  | ( Affine { stride = 1; over; conv = Some { use_padding = true; _ } | None; stride_offset = _ },
-      dim )
-  | ( dim,
-      Affine { stride = 1; over; conv = Some { use_padding = true; _ } | None; stride_offset = _ } )
-    ->
+  (* Two arms, not an or-pattern: a guard failing on the first alternative would skip the second. *)
+  | Affine { stride; over; conv; stride_offset = _ }, dim
+    when is_identity_window ~stride ~over ~conv ->
+      unify_dim ~stage origin (over, dim) env
+  | dim, Affine { stride; over; conv; stride_offset = _ }
+    when is_identity_window ~stride ~over ~conv ->
       unify_dim ~stage origin (over, dim) env
   | ( Affine
         {
