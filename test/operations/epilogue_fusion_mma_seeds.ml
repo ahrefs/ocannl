@@ -227,7 +227,9 @@ let census tag ~m ~n ~k =
    no enclosing loop of extent > 1 betrays the first segment's fragment store-back as partial; a
    fused twin that relocated its tail there computed the tail from the first k block alone, and the
    edge segment's later store-back never reached it. Every CPU mma epilogue twin that compiles must
-   match the untuned reference; on cc the packed ones refuse. *)
+   match the untuned reference. On cc [Fuse_epilogue] refuses the packed 16x16 ones (the batch loop
+   encloses both segments), so the family tree no longer offers them (gh-ocannl-1612); the unfused
+   seeds' flag-flipped twins keep the refusal itself pinned. *)
 let ksplit_tail () =
   Tensor.unsafe_reinitialize ();
   let b = 4 and m = 15 and k = 28 and n = 16 in
@@ -258,9 +260,25 @@ let ksplit_tail () =
       ctx fwd Ir.Indexing.Empty
   in
   let opt = Option.value_exn ~here:[%here] !capture in
-  let ep_params =
-    List.filter (Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt) ~f:(fun q ->
-        q.Autotune.sk_mma && q.Autotune.sk_epilogue)
+  let seeds = Autotune.sketch_seed_params ~is_gpu ~is_cpu ~limits opt in
+  let ep_params = List.filter seeds ~f:(fun q -> q.Autotune.sk_mma && q.Autotune.sk_epilogue) in
+  let packed16 (q : Autotune.sketch_params) = q.sk_mma && q.sk_bm = 16 && q.sk_bk = 16 in
+  let flipped =
+    List.filter_map seeds ~f:(fun q ->
+        if packed16 q && not q.sk_epilogue then Some { q with Autotune.sk_epilogue = true }
+        else None)
+  in
+  let fuse_refused q =
+    let scratch =
+      {
+        opt with
+        LL.traced_store = Hashtbl.copy opt.LL.traced_store;
+        LL.optimize_ctx = LL.copy_optimize_ctx opt.LL.optimize_ctx;
+      }
+    in
+    match Sched.apply (Autotune.sketch_schedule ~accum_prec ~p:q scratch) scratch with
+    | _ -> false
+    | exception Invalid_argument msg -> String.is_prefix msg ~prefix:"Schedule.Fuse_epilogue"
   in
   let rctx = Context.auto () in
   let rctx, rroutine = Context.compile rctx fwd Ir.Indexing.Empty in
@@ -282,8 +300,13 @@ let ksplit_tail () =
               (Autotune.sketch_params_label q) msg;
             None)
   in
-  gated ~when_:is_cpu ~on:backend_name "ksplit: the site seeds packed 16x16 epilogue twins"
-    (List.exists ep_params ~f:(fun q -> q.Autotune.sk_bm = 16 && q.Autotune.sk_bk = 16));
+  gated_exists ~when_:is_cpu ~on:backend_name "ksplit: the site seeds unfused packed 16x16 seeds"
+    flipped ~f:(fun _ -> true);
+  gated_all ~when_:is_cpu ~on:backend_name
+    "ksplit: Fuse_epilogue refuses their flag-flipped epilogue twins" flipped ~f:fuse_refused;
+  gated_all ~when_:is_cpu ~on:backend_name
+    "ksplit: the tree offers no packed 16x16 epilogue twin (gh-ocannl-1612)" ep_params ~f:(fun q ->
+      not (packed16 q));
   (* Gated like [census]'s claims, on the site's advertised tensorized pipeline: where the backend
      advertises none (CUDA/HIP at f32 without tf32), no mma twin exists to run. On cc the
      whole-extent twin always runs, so the population is never empty there. *)

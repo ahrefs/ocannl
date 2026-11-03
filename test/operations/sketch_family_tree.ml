@@ -1070,10 +1070,37 @@ let () =
         (* The flavors' companion demands differ by the tail the fusion relocates, so the fused
            flavor can keep leaves the unfused one does not offer -- on the C backends, the
            tensorized shapes binding a hardware dimension, which the unfused flavor excludes beside
-           the tail as search economy (gh-ocannl-1609; valid on the fork-join model). Every unfused
-           leaf still has its fused twin, in order, and any fused leaf without one is such a shape,
-           with the unfused flavor's exclusion naming why. *)
-        let twins = List.map unfused ~f:(fun u -> show { u with Autotune.sk_epilogue = true }) in
+           the tail as search economy (gh-ocannl-1609; valid on the fork-join model). And the fused
+           flavor drops the k-blocked packed geometries whose every fused completion [Fuse_epilogue]
+           refuses on exactly-once (gh-ocannl-1612, [Autotune.cpu_pack_fused_partial_witness]), with
+           a refutation saying so. Every other unfused leaf still has its fused twin, in order, and
+           any fused leaf without one is a hardware-binding shape, with the unfused flavor's
+           exclusion naming why. *)
+        let site =
+          match fst (Autotune.family_seeding ~is_gpu ~is_cpu ~limits opt) with
+          | Autotune.Seeding_matmul { site; _ } -> Some site
+          | Autotune.Seeding_conv _ | Autotune.Seeding_none -> None
+        in
+        let dropped, kept =
+          List.partition_tf unfused ~f:(fun u ->
+              Option.exists site ~f:(fun site ->
+                  Option.is_some
+                    (Autotune.cpu_pack_fused_partial_witness site
+                       { u with Autotune.sk_epilogue = true })))
+        in
+        Stdio.printf "unfused leaves whose fused twin is refuted on exactly-once: %d\n"
+          (List.length dropped);
+        (* Emptiness is the GPU section's passing case: no CPU packed geometry there. *)
+        if not (List.is_empty dropped) then (
+          Verdict.p_exists "the fused flavor refutes those geometries naming gh-ocannl-1612"
+            (Sspace.refutations tree) ~f:(fun (path, w) ->
+              List.exists path ~f:(fun (_, d) -> FD.equal d (FD.Fusion `Fused))
+              && String.is_substring w ~substring:"gh-ocannl-1612");
+          Verdict.p_none "no such twin is a fused leaf" dropped ~f:(fun u ->
+              List.mem (List.map fused ~f:show)
+                (show { u with Autotune.sk_epilogue = true })
+                ~equal:String.equal));
+        let twins = List.map kept ~f:(fun u -> show { u with Autotune.sk_epilogue = true }) in
         let rec subsequence xs ys =
           match (xs, ys) with
           | [], _ -> true

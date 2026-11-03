@@ -1,0 +1,28 @@
+tail: premise: the CPU trees offer seeds: true
+tail: premise: fused tensorized twins are offered: true
+tail: no offered fused twin is refused by Fuse_epilogue: true
+tail: every offered seed applies and passes fork-join validation: true
+conv3: premise: the conv family claims the site: true
+conv3: premise: the CPU trees offer seeds: true
+conv3: no offered fused twin is refused by Fuse_epilogue: true
+conv3: every offered seed applies and passes fork-join validation: true
+diag: premise: the CPU trees offer seeds: true
+diag: no offered fused twin is refused by Fuse_epilogue: true
+diag: every offered seed applies and passes fork-join validation: true
+k32: premise: unfused packed seeds apply: true
+ksplit1: premise: unfused packed seeds apply: true
+ksplit1b: premise: unfused packed seeds apply: true
+ksplit4: premise: unfused packed seeds apply: true
+ksplit4b: premise: unfused packed seeds apply: true
+kone: premise: unfused packed seeds apply: true
+ksub: premise: unfused packed seeds apply: true
+rowedge: premise: unfused packed seeds apply: true
+colblocks: premise: unfused packed seeds apply: true
+relationship: Fuse_epilogue refuses a fused packed twin exactly where the witness says so: true
+relationship: no witnessed twin is offered by the fused flavor: true
+relationship: the repeating reduction-block clause fires: true
+relationship: the clause for a loop enclosing both k segments fires: true
+relationship: the clause fires on a column-block loop alone: true
+relationship: the row-edge clause fires: true
+relationship: a partitioned twin of a row-sinking shape is admitted: true
+cpu_seed_validity: done

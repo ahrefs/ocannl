@@ -1920,7 +1920,7 @@ let cpu_companion_exclusion ~what companions (child : unit -> ('l, 'a) Sspace.ch
       Sspace.Excluded
         ( Printf.sprintf
             "%s %s binds a hardware dimension beside %s; valid on the fork-join model, excluded as \
-             search economy until a measurement shows it winning"
+             search economy -- measured: no win (M4 Pro, see ahrefs/ocannl#1609)"
             cpu_companion_witness_prefix what c,
           lazy (child ()) )
 
@@ -2553,6 +2553,84 @@ let cpu_pack_fragment_bytes (site : matmul_site) ~shape ~bm ~bn ~bk =
     let bn_eff = if bn = 0 then site.m_nj else bn in
     bm * bn_eff * Ir.Ops.prec_in_bytes (Lazy.force site.m_d.Ir.Tnode.storage_prec)
   else 0
+
+(* gh-ocannl-1612: why [Sched.Fuse_epilogue] refuses the fused twin of EVERY completion of a CPU
+   packed geometry, or [None] where it may admit one. Only the shapes that sink the row-block loop
+   under the reduction-block loops are concerned ([cpu_pack_grid_outermost] false: Serial, Hoisted
+   and the plain Grid shape): there [i_o] sits inside every reduction-block loop, so no contraction
+   mints a fragment above them, and the micro-kernel writes the accumulator once per reduction
+   block. The grid-outermost shapes contract at the outermost repeating reduction loop and store
+   back once per output tile. Each clause mirrors one of [fuse_at_fragment]'s exactly-once rules;
+   [cpu_seed_validity] pins the verdict two-sided against the op itself.
+
+   - No k [Partition] ([Sched.pad_edge_partition], the builder's own k split, which these shapes
+   always take with the k pad since they stage both operands): the last writer is one nest whose
+   site sits under every reduction-block loop, so one running twice ([reduction_blocks_repeat]) is a
+   surplus loop. - With the Partition, the edge segment is single-trip and, unenclosed, the last
+   writer, whose store-back follows the whole reduction (gh-ocannl-1733). A loop enclosing both
+   segments that runs twice -- a batch loop, an outer contraction loop, the column-block loop --
+   keeps that segment from being descended, and the earlier segment's site, fused, is written again.
+   - So is a row-block edge: under the reduction loop [Tensorize]'s statement-site contraction
+   splits a Serial row-block loop at its last full block ([full_block_split]), and the site
+   [fuse_at_fragment] reaches covers only part of the rows. *)
+let cpu_pack_fused_partial_witness (site : matmul_site)
+    ({ sk_bm = bm; sk_bn = bn; sk_bk = bk; sk_hoist; sk_grid; sk_pack_rest; _ } as p :
+      sketch_params) : string option =
+  if
+    (not p.sk_mma) || p.sk_gpu || p.sk_conv || Option.is_some p.sk_coalesce || bk <= 0
+    || cpu_pack_grid_outermost ~sk_grid ~sk_hoist ~sk_pack_rest
+  then None
+  else
+    let partitioned =
+      not
+        (List.is_empty (Sched.pad_edge_partition ~block_loop:site.m_k ~extent:site.m_nk ~block:bk))
+    in
+    let why =
+      if not partitioned then
+        if reduction_blocks_repeat site ~bk then
+          Some
+            (Printf.sprintf
+               "the micro-kernel writes the accumulator once per reduction block (%s in blocks of \
+                %d%s), under loops that do not index it"
+               (k_extent_label site) bk
+               (if List.is_empty site.m_ko then "" else ", below the outer contraction loops"))
+        else None
+      else
+        let enclosing =
+          List.filter_map
+            (matmul_batch_loops site @ site.m_ko)
+            ~f:(fun (s, e) -> if e > 1 then Some (Idx.symbol_ident s) else None)
+          @
+          if bn > 0 && blocks_of site.m_nj bn > 1 then
+            [ Printf.sprintf "the column-block loop (%d blocks)" (blocks_of site.m_nj bn) ]
+          else []
+        in
+        if not (List.is_empty enclosing) then
+          Some
+            (Printf.sprintf
+               "the k-block loop is partitioned at its last full block (%s, bk=%d), and loop(s) %s \
+                enclose both segments, so the first segment's site would be written again"
+               (k_extent_label site) bk
+               (String.concat ~sep:", " enclosing))
+        else if
+          (not sk_grid) && site.m_ni > bm
+          && site.m_ni % bm <> 0
+          && (bn = 0 || block_divides bn site.m_nj)
+        then
+          Some
+            (Printf.sprintf
+               "the k-block loop is partitioned (%s, bk=%d) and the serial row-block loop's edge \
+                (m=%d, bm=%d) is split off from the full blocks, so no one site's store-back \
+                covers the output"
+               (k_extent_label site) bk site.m_ni bm)
+        else None
+    in
+    Option.map why ~f:(fun why ->
+        Printf.sprintf
+          "fused epilogue (gh-ocannl-1612): %s; Fuse_epilogue's exactly-once rule refuses every \
+           completion -- the tail needs the whole-K accumulation, which this packing shape's loop \
+           order completes only after the last reduction block"
+          why)
 
 (* Cache-blocked, operand-packed tensorized CPU matmul: [Tile_mma] composed with the S4 packing
    pipeline (the remaining piece of gh-ocannl-469). GEBP loop structure, all-Serial: [j_o? { k_o {
@@ -4290,6 +4368,18 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                 cpu_companion_exclusion ~what:"the packed Grid shape's row-block loop"
                   (Lazy.force cpu_companions) child
               in
+              (* The fused flavor's packed shapes that sink the row-block loop under the
+                 reduction-block loops (gh-ocannl-1612): a geometry whose every fused completion
+                 [Fuse_epilogue] refuses on exactly-once ({!cpu_pack_fused_partial_witness}) is not
+                 offered. The unfused flavor and the grid-outermost shapes are untouched. *)
+              let fused_partial ~shape p (ok : unit -> family_child) : family_child =
+                match
+                  if fused then cpu_pack_fused_partial_witness site (with_packing_shape shape p)
+                  else None
+                with
+                | Some w -> Sspace.Refuted w
+                | None -> ok ()
+              in
               let grid_ok p = blocks_of site.m_ni p.sk_bm >= 2 in
               let too_few_blocks p =
                 Printf.sprintf "bm=%d gives %d row block(s); a Grid split needs at least 2" p.sk_bm
@@ -4374,10 +4464,16 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
               choice
                 [
                   ( Family_decision.Packing_shape `Serial,
-                    subt (fun () -> geoms ~f:(fun p _ _ -> leaf (with_packing_shape `Serial p))) );
+                    subt (fun () ->
+                        geoms ~f:(fun p _ _ ->
+                            fused_partial ~shape:`Serial p (fun () ->
+                                leaf (with_packing_shape `Serial p)))) );
                   ( Family_decision.Packing_shape `Hoisted,
                     if any_hoistable then
-                      subt (fun () -> geoms ~f:(fun p _ _ -> leaf (with_packing_shape `Hoisted p)))
+                      subt (fun () ->
+                          geoms ~f:(fun p _ _ ->
+                              fused_partial ~shape:`Hoisted p (fun () ->
+                                  leaf (with_packing_shape `Hoisted p))))
                     else Sspace.Refuted no_constant );
                   ( Family_decision.Packing_shape `Hoisted_grid,
                     if not any_hoistable then Sspace.Refuted no_constant
@@ -4513,6 +4609,7 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                                 let a_tile = p.sk_bm * p.sk_bk * prec_bytes in
                                 if not (grid_ok p) then Sspace.Refuted (too_few_blocks p)
                                 else
+                                  fused_partial ~shape:`Grid p @@ fun () ->
                                   match
                                     over_chunk_cap ~shape:`Grid ~what:"per-chunk privatized A~ tile"
                                       ~tiles:a_tile p

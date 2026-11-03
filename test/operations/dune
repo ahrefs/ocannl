@@ -13112,6 +13112,18 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ ; gh-ocannl-1612: every seed the CPU family trees offer applies and passes the cc compile path's
+ ; fork-join validation; the fused flavor's k-blocked packed refutation pinned against Fuse_epilogue.
+ (name cpu_seed_validity)
+ ; ocannl-backend: cc -- Context.cpu (); seeding reads synthetic limits, no routine is compiled
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules cpu_seed_validity)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1527: a timing window ends early once it proves its candidate out of the running --
 ; the rule pure, one timing call per objective shape, and an executed cc search, on a scripted
 ; clock; each leg pins a cut window and a near one that is not cut.

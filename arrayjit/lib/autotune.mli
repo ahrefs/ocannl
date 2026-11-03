@@ -866,6 +866,17 @@ val cpu_pack_grid_outermost : sk_grid:bool -> sk_hoist:bool -> sk_pack_rest:bool
     per-chunk packing shapes. The loop order [cpu_mma_pack_sketch_schedule] builds, and what the
     certain-traffic floor reads off a path's packing shape (gh-ocannl-1676). *)
 
+val cpu_pack_fused_partial_witness : matmul_site -> sketch_params -> string option
+(** Why [Schedule.Fuse_epilogue] refuses the fused twin of every completion of the CPU packed
+    geometry and packing shape [p] carries (gh-ocannl-1612), or [None] where it may admit one. Only
+    the shapes that sink the row-block loop under the reduction-block loops are concerned (not
+    {!cpu_pack_grid_outermost}): there the micro-kernel writes the accumulator once per reduction
+    block, so a repeating reduction-block loop, a k-block [Partition] whose segments share an
+    enclosing loop that runs twice, or a row-block edge split off beside a k [Partition] leaves no
+    exactly-once store-back. [None] off the CPU packed matmul sketches. The family tree refutes the
+    fused flavor's geometries with it. Exposed for tests, which check it two-sided against the
+    applied fused schedules. *)
+
 val matmul_fragment_certain : Ir.Low_level.optimized -> sketch_params -> bool
 (** Whether every application of the matmul tensorized sketch [p] to [opt] has
     [Schedule.contract_tensorized_accumulator] mint the fresh [bm x bn] accumulator fragment, at the
