@@ -3631,9 +3631,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   for CI's 13.3 (gh-ocannl-1696; the exact version and target are printed and major 13 is
   enforced). `--toolchain DIR` keeps that GCC in DIR, staged on first use and reused unfetched
   afterwards: minix keeps one at `/home/lukstafi/.local/opt/x86_64-linux-gnu-gcc-13`, the census
-  leg is one run per `cc_march_census` piece (`tools/ci-compiler-test.sh --toolchain <dir>
-  @test/operations/runtest-cc_march_census-<piece>`), and a fresh-build-directory run costs
-  seconds to minutes once dune's cache is warm. Run it under the fleet's slot with `--cpu`. The
+  leg is one invocation, `tools/ci-compiler-test.sh --toolchain <dir> --pieces census`, which runs
+  every `cc_march_census` piece in turn (the list read from `test/operations/dune`'s rules) and
+  prints one verdict per piece, each held to its own exit status and its own calls to the fetched
+  GCC (gh-ocannl-1852), and a fresh-build-directory run costs
+  seconds to minutes once dune's cache is warm. Its isolated `apt-get update`s are capped and
+  retried as CI's are (gh-ocannl-1809, the workflows' apt entry below): a stalled mirror ends the run in
+  about 9 minutes, naming apt, rather than hanging the leg. Run it under the fleet's slot with `--cpu`. The
   clang leg has a Linux cross sysroot rather
   than the macOS SDK, ABI, linker or runtime. It therefore complements CI and the GPU boxes rather
   than replacing either. Fetches, extraction and the test harness are attached children: an outer
@@ -3898,6 +3902,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   purpose: a `ci.yml` dispatch with `expected_sha` checks out that commit, which may predate any
   new action under `.github/actions/`, so a step that `uses:` one fails the red-span bisection of
   older commits (the floor that sets: [How far back a dispatch reaches](#how-far-back-a-dispatch-reaches)).
+  `workflow_job_timeouts` holds every refresh in the workflows, the composite actions and the
+  `*.sh` scripts to it (gh-ocannl-1852): `timeout` written directly in front of apt, a positive
+  duration; a quoted mention passes only as `echo`/`printf` text (its header states the grammar).
 - **A Linux CI job that fills its disk is stopped, not left to hang** (gh-ocannl-1771). On a full
   disk dune does not fail: run 41203731123 (attempt 1) printed `dune_trace_write(): No space left on
   device` three minutes into an ubuntu main shard and then sat, `dune` and its `tee` alive, until the
