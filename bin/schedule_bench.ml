@@ -246,14 +246,7 @@ let () =
   let operand_prec = !Tensor.default_value_prec in
   let exact_reduction =
     let significand_bits =
-      match operand_prec with
-      | Ir.Ops.Double_prec _ -> 53
-      | Ir.Ops.Single_prec _ -> 24
-      | Ir.Ops.Half_prec _ -> 11
-      | Ir.Ops.Bfloat16_prec _ -> 8
-      (* e5m2: two stored mantissa bits. *)
-      | Ir.Ops.Fp8_prec _ -> 3
-      | _ -> 0
+      if Ir.Ops.is_float operand_prec then Ir.Ops.significand_bits operand_prec else 0
     in
     (* Integers up to 2^bits are exact; the bound, in units of 1/a_step. *)
     let bound = Float.of_int k *. Float.of_int (a_levels * b_max) in

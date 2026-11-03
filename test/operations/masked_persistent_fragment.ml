@@ -393,12 +393,12 @@ let () =
      rendering returns the reference's bits. *)
   p_all "matmul: every partial sum is exact in f32"
     (Ll_test.matmul_products ~m:n ~n ~k:n ma_f mb_f)
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   p_all "conv: every partial sum is exact in f32"
     (Ll_test.reduction_cells ~out:[| 2; rows; rows; oc |] ~over:[| 3; 3; ic |] (fun o r ->
          cx_f [| o.(0); o.(1) + r.(0); o.(2) + r.(1); r.(2) |]
          *. ck_f [| o.(3); r.(0); r.(1); r.(2) |]))
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   List.iter
     [ ("mm", make_matmul ~d_prec:single); ("cv", make_conv) ]
     ~f:(fun (tag, make) ->

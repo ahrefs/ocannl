@@ -288,4 +288,4 @@ let () =
   let fa, fb = operand_inits n in
   p_all "agr: every reference cell's partial sums are exact at an f32 accumulator"
     (Ll_test.matmul_products ~m:n ~n ~k:n fa fb)
-    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:24)
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single))

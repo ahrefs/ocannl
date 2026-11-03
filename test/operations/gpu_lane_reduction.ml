@@ -136,16 +136,18 @@ let dk_nest ?(minted = true) ?guard ?(flag_below = 32) ~name ~e_n ~d_n () =
         let flag = LL.get_scope flag_node and a = L.sym () in
         (* The flag is a [single] local, so its comparisons compute at [single] and say so:
            {!Ll_test.lt}'s index-precision annotation would be refused there (gh-ocannl-1709). *)
+        let flag_cmp = L.cmp_at Ir.Ops.single in
         let cond =
           match g with
           | `Lane_flag -> LL.Get_local flag
           | `First_or_flag ->
-              L.binop Ir.Ops.Or (L.binop Ir.Ops.Cmplt (L.embed s) (L.ic 1)) (LL.Get_local flag)
+              flag_cmp Ir.Ops.Or (flag_cmp Ir.Ops.Cmplt (L.embed s) (L.ic 1)) (LL.Get_local flag)
         in
         ( Some a,
           [
             L.declare_local flag;
-            L.loop_n a e_n (LL.Set_local (flag, L.binop Ir.Ops.Cmplt (L.embed a) (L.ic flag_below)));
+            L.loop_n a e_n
+              (LL.Set_local (flag, flag_cmp Ir.Ops.Cmplt (L.embed a) (L.ic flag_below)));
             L.if_ cond reduction;
           ] )
   in
@@ -195,7 +197,7 @@ let dk_nest ?(minted = true) ?guard ?(flag_below = 32) ~name ~e_n ~d_n () =
     (Printf.sprintf "%s: every partial sum of every dp and every K cell is exact in f32" name)
     (List.map (cells [| b_n; s_n; t_n; h_n |]) ~f:(fun i -> dp_terms i.(0) i.(1) i.(2) i.(3))
     @ List.map (cells k_dims) ~f:k_terms)
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   {
     name;
     opt;

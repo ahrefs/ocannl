@@ -300,7 +300,12 @@ val consume_forward_code : t -> comp
     path), without checking or modifying roots constructed since the first handout. This is
     equivalent to retaining the original comp; the caller still owns execution order and the
     availability of non-embedded inputs. Parameters and subtensors embedded in a tensor consumer
-    remain rejected. *)
+    remain rejected.
+
+    The conflicting-roots check carries correctness, not just an early diagnosis (gh-ocannl-1741):
+    no lineage check backs it, since a computation's [requires] names backprop fragments only, and
+    the run-time initialization check accepts a read the owner never computed when the node is
+    zero-valid or was written by other means ([set_values], an earlier routine). *)
 
 val consume_backprop_code : t -> comp
 (** A backprop root is a differentiable tensor not currently receiving gradients from another
@@ -309,7 +314,13 @@ val consume_backprop_code : t -> comp
     modifying newer roots, as for {!consume_forward_code}; compiling the replayed code a second time
     in one compilation lineage is refused by [Context.compile] (gh-ocannl-1724). Non-differentiable
     tensors and embedded subtensors remain rejected. The returned code does not include [zero_grads]
-    or seeding the output gradient; callers must still arrange those for each run. *)
+    or seeding the output gradient; callers must still arrange those for each run.
+
+    The conflicting-roots check is an early diagnostic (gh-ocannl-1741): a gradient write into
+    another root's propagation is a backprop fragment the returned comp [requires], which
+    [Context.run] refuses unless the routine's own lineage owns it (gh-ocannl-1724). It stays
+    because it fires at the handout, naming the root to consume first, and refuses the order
+    outright where the lineage check would wait for the run. *)
 
 val iter_embedded : f:(tn -> unit) -> t -> unit
 (** [iter_embedded t] iterates over all descendant nodes that are embedded, i.e. are members of

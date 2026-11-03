@@ -159,7 +159,7 @@ let out_seed = Array.init rows ~f:seed_value
 let () =
   p_all "every partial sum of every row's seed and cells is exact in f32"
     (List.init rows ~f:(fun r -> seed_value r :: List.init cols ~f:(cell r)))
-    ~f:(Ll_test.exact_partials ~sig_bits:24)
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single))
 
 (* Host references, per storage precision. [round] is the library's own conversion, so these are the
    kernel's roundings and not an approximation of them. *)

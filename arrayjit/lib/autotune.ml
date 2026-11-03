@@ -499,7 +499,12 @@ let finals_outranked r ~search_ms =
       | [] -> false
       | readings ->
           let crown_ms = Option.value_exn (List.min_elt readings ~compare:Float.compare) in
+          let holds_crown c = Option.exists c.contender_finals_ms ~f:(Float.equal crown_ms) in
+          (* gh-ocannl-1741: the fastest finals reading is the reported winner's -- the crown's
+             search reading is [best_ms] -- or the report explains nothing. *)
           List.exists r.finals ~f:(fun c ->
+              holds_crown c && Float.equal c.contender_search_ms r.best_ms)
+          && List.exists r.finals ~f:(fun c ->
               Float.equal c.contender_search_ms search_ms
               && Option.exists c.contender_finals_ms ~f:(fun f -> Float.(f >= crown_ms))))
   | Finals_not_run | Finals_kept | Finals_inconclusive -> false

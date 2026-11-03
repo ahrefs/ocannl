@@ -786,7 +786,7 @@ let () =
              List.init (hb * eb) ~f:(fun t ->
                  let h = t / eb and e = t % eb in
                  wb_f [| j; h; e |] *. attb_f [| bs / ss; bs % ss; h; e |]))))
-    ~f:(Ll_test.exact_partials ~sig_bits:8);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.bfloat16));
   let wb () = NTDSL.init ~l:"cn_wb" ~prec:Ir.Ops.bfloat16 ~o:[ jj ] ~i:[ hb; eb ] ~f:wb_f () in
   let attb () =
     NTDSL.init ~l:"cn_attb" ~prec:Ir.Ops.bfloat16 ~b:[ bb; ss ] ~o:[ hb; eb ] ~f:attb_f ()

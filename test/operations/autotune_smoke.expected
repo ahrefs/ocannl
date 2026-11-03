@@ -30,6 +30,7 @@ band claim: the undercut is explained when the finals ranked that contender behi
 band claim negative control: the undercut with no finals run is refused: true
 band claim negative control: finals that kept the search's head explain no undercut: true
 band claim negative control: a swap over other contenders does not explain the undercut: true
+band claim negative control: finals crowning an entry other than the reported winner explain nothing: true
 band claim: an undercut inside the round band needs no finals: true
 second report names its winner, or the load refused it every timing: true
 cached schedule replays to correct elementwise values: true

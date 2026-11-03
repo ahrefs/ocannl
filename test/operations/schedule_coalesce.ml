@@ -150,7 +150,7 @@ let () =
     (L.reduction_cells ~out:[| bb; ss; hh; ee |] ~over:[| kk |] (fun o r ->
          seeded seed w ~dims:[| hh; ee; kk |] [| o.(2); o.(3); r.(0) |]
          *. seeded seed x ~dims:[| bb; ss; kk |] [| o.(0); o.(1); r.(0) |]))
-    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let run name o = List.hd_exn (L.execute ~name o ~seed:(List.take seed 2) ~read:[ d ]) in
   let want = run "co_plain_run" o in
   let got = run "co_merged_run" oc in
@@ -257,7 +257,7 @@ let () =
   p_all "split-reduce: every partial sum of every cell is exact in f32"
     (L.reduction_cells ~out:[| hh; ee |] ~over:[| kk |] (fun o r ->
          seeded seed x ~dims:[| kk; hh; ee |] [| r.(0); o.(0); o.(1) |]))
-    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let want = run "cs_plain_run" o (fun o -> [ o ]) in
   let got =
     run "cs_split_run" os
@@ -342,7 +342,7 @@ let () =
   p_all "stage+privatize: every partial sum of every cell is exact in f32"
     (L.reduction_cells ~out:[| hh; ee |] ~over:[| kk |] (fun o r ->
          seeded seed x ~dims:[| kk; hh; ee |] [| r.(0); o.(0); o.(1) |]))
-    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   (* [Privatize] drops [d]'s zero and opens its tile at zero instead; fresh buffers are zero and
      would hide a tile opened from [d] (gh-ocannl-1625), so [d] starts off its every result. *)
   let d_prefill = Array.init (hh * ee) ~f:(fun c -> Float.of_int (1000 + c)) in
@@ -486,7 +486,7 @@ let () =
     (L.reduction_cells ~out:[| ss; jj |] ~over:[| hh; ee |] (fun o r ->
          seeded seed w ~dims:[| jj; hh; ee |] [| o.(1); r.(0); r.(1) |]
          *. seeded seed x ~dims:[| ss; hh; ee |] [| o.(0); r.(0); r.(1) |]))
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let want_d, want_r, got_d, got_r =
     match
       ( L.execute ~name:"ck_plain_run" o ~seed ~read:[ d; r ],
@@ -599,7 +599,7 @@ let () =
     (L.reduction_cells ~out:[| jj |] ~over:[| hh; ee |] (fun o r ->
          seeded seed w ~dims:[| jj; hh; ee |] [| o.(0); r.(0); r.(1) |]
          *. seeded seed x ~dims:[| hh; ee |] [| r.(0); r.(1) |]))
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let want = run "cks_plain_run" o (fun o -> [ o ]) in
   let got =
     run "cks_split_run" os
@@ -720,7 +720,7 @@ let () =
   p_all "projection: every partial sum of every cell is exact in f32"
     (Ll_test.reduction_cells ~out:[| bb; ss; hh; ee |] ~over:[| kk |] (fun o r ->
          x_f [| o.(0); o.(1); r.(0) |] *. w_f [| o.(2); o.(3); r.(0) |]))
-    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:24)
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single))
 
 (* The gpt2 q/k/v projection's own layout: [d[b,s,h,e] += x[b,s,k] * w[h,e,k]]. *)
 let projection () =
@@ -994,7 +994,7 @@ let contraction_leg ~tag ~bb ~ss ~jj ~hh ~ee =
     (Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
          out_proj_w ~jj ~hh ~ee [| o.(2); r.(0); r.(1) |]
          *. out_proj_att ~bb ~ss ~hh ~ee [| o.(0); o.(1); r.(0); r.(1) |]))
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let reference, _, _ = out_proj ~tag:(tag ^ "_ref") ~bb ~ss ~jj ~hh ~ee () in
   let want = run_with (named (tag ^ "_ref") (Train.forward reference)) reference Fn.id in
   p
@@ -1332,7 +1332,7 @@ let tensorized_leg ~tag ~prec =
     (Ll_test.reduction_cells ~out:[| bb; ss; jj |] ~over:[| hh; ee |] (fun o r ->
          int_out_proj_w ~jj ~hh ~ee [| o.(2); r.(0); r.(1) |]
          *. int_out_proj_att ~bb ~ss ~hh ~ee [| o.(0); o.(1); r.(0); r.(1) |]))
-    ~f:(Ll_test.exact_partials ~sig_bits:11);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.half));
   let saved = Ir.Numerics.get () in
   Ir.Numerics.set_policy { saved with tf32_matmuls = true };
   Exn.protect

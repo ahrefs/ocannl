@@ -119,7 +119,7 @@ let gpu_annotated o = [ Ir.Schedule.apply (Ir.Schedule.default_gpu ~min_parallel
 
 let () =
   p_all "the operands' products sum exactly in f32" products
-    ~f:(L.exact_partials ~any_sign:true ~sig_bits:24);
+    ~f:(L.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   (* The explicit prefill, and its own distance from the result: a seed that read the node instead
      of opening from zero adds a prefill cell to every result cell. *)
   let pre = Array.init (m * n) ~f:(fun i -> 1000.5 +. Float.of_int i) in

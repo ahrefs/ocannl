@@ -104,7 +104,7 @@ struct
        every partial sum of those, in any association, is exact in f32. *)
     p_all "every partial sum of every cell's uploads is exact in f32"
       (List.init len ~f:(fun i -> List.init n ~f:(fun k -> value k i)))
-      ~f:(Ll_test.exact_partials ~sig_bits:24);
+      ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
     let expected_sum =
       Array.init len ~f:(fun i ->
           List.sum (module Float) (List.init n ~f:Fn.id) ~f:(fun k -> value k i))

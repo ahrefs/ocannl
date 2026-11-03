@@ -48,18 +48,10 @@ let undefined_symbol = "ocannl_gh1077_undefined_expf"
 (* The mode names the injected failure; the stage is the one it is rejected at. *)
 let mode = Stdlib.Sys.argv.(1)
 
-(* arm64 macOS refuses to map unsigned code; other hosts load an unsigned library. Read off the
-   host, never off the run under test. *)
-let enforces_code_signatures =
-  let ask command =
-    try
-      let ic = Unix.open_process_in command in
-      let answer = String.strip (Stdio.In_channel.input_all ic) in
-      ignore (Unix.close_process_in ic : Unix.process_status);
-      answer
-    with _ -> ""
-  in
-  (not Sys.win32) && String.equal (ask "uname -s") "Darwin" && String.equal (ask "uname -m") "arm64"
+(* arm64 macOS refuses to map unsigned code; other hosts load an unsigned library. Read off the host
+   -- the predicate the cc backend's link flags read (gh-ocannl-1741) -- never off the run under
+   test. *)
+let enforces_code_signatures = Utils.host_is_darwin_arm64
 
 let expected_stage, detail_substring, expected_severity, applicable, skip_reason =
   let unix_fixture = "Windows, where the Unix shell fixtures cannot run" in

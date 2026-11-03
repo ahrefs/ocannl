@@ -190,7 +190,11 @@ let () =
      integer data -- in either form, in any association -- is exact in f32. *)
   (* cc-fp-contract: exact-operands -- every product multiplies by an exact 0/1 selector, and the
      integer data's sums are derived exact below *)
-  let exact xs = Ll_test.exact_partials ~any_sign:true ~sig_bits:24 (Array.to_list xs) in
+  let exact xs =
+    Ll_test.exact_partials ~any_sign:true
+      ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single)
+      (Array.to_list xs)
+  in
   p "the integer input's partial sums are exact in f32" (exact ints);
   p "the gradient's partial sums are exact in f32" (exact (Array.append weights weights2));
   p_pairwise_distinct "the suffix sums of the weights differ from their prefix sums"
@@ -424,7 +428,9 @@ let hand_built ~name ~op_fn ~fill ?(inclusive = true) ?(direction = `Prefix) ?nr
 let () =
   printf "--- leg 3: hand-built raw lowerings, executed ---\n";
   p "the hand-built payloads' partial sums are exact in f32"
-    (Ll_test.exact_partials ~any_sign:true ~sig_bits:24 (Array.to_list (payload ~rws:2 ~len:n)));
+    (Ll_test.exact_partials ~any_sign:true
+       ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single)
+       (Array.to_list (payload ~rws:2 ~len:n)));
   hand_built ~name:"ps_min" ~op_fn:Float.min ~fill:Float.infinity ~mask:le ~op:Ir.Ops.Min
     ~operand:where_v ();
   hand_built ~name:"ps_min_order" ~op_fn:Float.min ~fill:Float.infinity ~order:`R_row_q ~mask:le

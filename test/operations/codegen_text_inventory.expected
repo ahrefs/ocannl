@@ -770,6 +770,7 @@ test/operations/matmul_interchange.ml [through Ll_test.execute_with_census; run 
 test/operations/metal_routine_log_delivery.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_routine_log_delivery]
 test/operations/narrow_storage_compute.ml [through Ll_test.link; run by @test/operations/runtest-narrow_storage_compute]
 test/operations/narrow_uniform_bound.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-narrow_uniform_bound]
+test/operations/observability_query.ml [through Ll_test.link; run by @test/operations/runtest-observability_query]
 test/operations/online_softmax.ml [staged callback; through Ll_test.execute; run by @test/operations/runtest-online_softmax, @test/operations/runtest-online_softmax_fast_math, @test/operations/runtest-online_softmax_fp_licences]
 test/operations/op_table_compile.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-op_table_compile]
 test/operations/operand_precision_annotation.ml [through Ll_test.link; run by @test/operations/runtest-operand_precision_annotation]
@@ -885,6 +886,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-metal_routine_log_delivery
 @test/operations/runtest-narrow_storage_compute
 @test/operations/runtest-narrow_uniform_bound
+@test/operations/runtest-observability_query
 @test/operations/runtest-online_softmax
 @test/operations/runtest-online_softmax_fast_math
 @test/operations/runtest-online_softmax_fp_licences

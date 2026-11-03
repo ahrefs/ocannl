@@ -966,7 +966,6 @@
  (libraries
   base
   stdio
-  unix
   ctypes
   ctypes.foreign
   arrayjit.ir
@@ -1979,7 +1978,7 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
- ; ocannl-backend: cc -- `Context.cpu ()`: the query reads metadata, nothing here depends on the backend.
+ ; ocannl-backend: cc,multidev_cc -- `Context.cpu ()` and, for the merge-buffer leg, `Context.cpu ~threads:2 ()`: the query reads metadata.
  (name observability_query)
  (package neural_nets_lib)
  (deps ocannl_config)
@@ -3072,7 +3071,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_execution_deps)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

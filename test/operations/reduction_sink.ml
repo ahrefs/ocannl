@@ -139,7 +139,23 @@ let () =
      in
      let render sched = Sexp.to_string (Sched.sexp_of_schedule sched) in
      (not (List.is_empty admitted))
-     && String.equal (render admitted) (render (Autotune.reduction_sink ~accum_prec:Fn.id opt)))
+     && String.equal (render admitted) (render (Autotune.reduction_sink ~accum_prec:Fn.id opt)));
+  (* gh-ocannl-1741: [Ll_test.schedule_op_lines], the debugging print of an op list -- the admitted
+     chain and a [Privatize] targeting a node, which prints as its label and id rather than the
+     node's record. The lines go to stderr: their fresh symbols' numbering is no part of the
+     claim. *)
+  let target = node "rs_ops_target" in
+  let sched =
+    Autotune.reduction_sink ~admit_narrow:true ~accum_prec:(fun _ -> Ir.Ops.single) opt
+    @ [ Sched.Privatize { target; over = Ll_test.sym (); acc_prec = Ir.Ops.single } ]
+  in
+  let shown = Ll_test.schedule_op_lines sched in
+  List.iter shown ~f:(Stdio.eprintf "schedule_op_lines (not part of the golden): %s\n");
+  p "schedule_op_lines prints one line per op, a node as its label#id and never its record"
+    (List.length shown = List.length sched
+    && List.exists shown
+         ~f:(String.is_substring ~substring:(Printf.sprintf "rs_ops_target#%d" target.Ir.Tnode.id))
+    && not (List.exists shown ~f:(String.is_substring ~substring:"storage_prec")))
 
 (* {2 Executed: a backpropagated dense layer} *)
 

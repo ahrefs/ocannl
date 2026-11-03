@@ -4,6 +4,8 @@ if_ over a value-read flag is accepted: true
 if_idx over a cmp comparison is accepted: true
 if_ and if_idx build the same guard over a cmp comparison: true
 the old if_'s form -- a cmp comparison annotated single -- is refused under every store: true
+a comparison stored to a flag at its own precision via cmp_at is accepted: true
+the same comparison built with cmp (index precision) is refused: true
 add_own accumulating a load is accepted: true
 mul_own of a load and a constant is accepted: true
 where_own over a cmp comparison with a constant arm is accepted: true

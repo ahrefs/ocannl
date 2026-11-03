@@ -413,6 +413,20 @@ let () =
        (undercut_explained ~search_ms:t
           (scripted Autotune.Finals_swapped
              ~finals:[ contender "other" 0.0018 0.0019; contender "crown" w 0.00175 ])));
+  (* gh-ocannl-1741: a malformed report, whose fastest finals reading is not the reported winner's
+     (search reading [best_ms]), explains no undercut even where the contender ranked behind it. *)
+  p
+    "band claim negative control: finals crowning an entry other than the reported winner explain \
+     nothing"
+    (not
+       (undercut_explained ~search_ms:t
+          (scripted Autotune.Finals_swapped
+             ~finals:
+               [
+                 contender "tensorized" t 0.0019;
+                 contender "other" 0.0018 0.0017;
+                 contender "crown" w 0.00175;
+               ])));
   p "band claim: an undercut inside the round band needs no finals"
     (undercut_explained
        ~search_ms:(w *. (1. -. (Autotune.min_progress /. 2.)))

@@ -617,7 +617,7 @@ let () =
     "half inputs: every cell's products share a sign and every partial sum is exact in f16 (so in \
      f32 too)"
     (Ll_test.matmul_products ~m:n ~n ~k:n mah_f mbh_f)
-    ~f:(Ll_test.exact_partials ~sig_bits:11);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.half));
   let mah = NTDSL.init ~l:"mah" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:mah_f () in
   let mbh = NTDSL.init ~l:"mbh" ~prec:Ir.Ops.half ~i:[ n ] ~o:[ n ] ~f:mbh_f () in
   let%op mch0 = mah * mbh in
@@ -734,7 +734,7 @@ let () =
     "f16->f32 direct inputs: every cell's products share a sign and every partial sum is exact in \
      f32"
     (Ll_test.matmul_products ~m:n ~n ~k:n h32a h32b)
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   (let leg = Verdict.leg ~when_:(not on_cuda) ~on:backend_name () in
    let h32 =
      lazy
@@ -983,7 +983,7 @@ let () =
     (* [bfu_ta]'s "ki;kj=>ij" and [bfu_tb]'s "ik;jk=>ij". *)
     @ Ll_test.matmul_products ~m:n ~n ~k:n (fun ik -> bfa_f [| ik.(1); ik.(0) |]) bfb_f
     @ Ll_test.matmul_products ~m:n ~n ~k:n bfa_f (fun kj -> bfb_f [| kj.(1); kj.(0) |]))
-    ~f:(Ll_test.exact_partials ~sig_bits:8);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.bfloat16));
   let mab = NTDSL.init ~l:"mab" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:bfa_f () in
   let mbb = NTDSL.init ~l:"mbb" ~prec:Ir.Ops.bfloat16 ~i:[ n ] ~o:[ n ] ~f:bfb_f () in
   let mtab = NTDSL.init ~l:"mtab" ~prec:Ir.Ops.bfloat16 ~o:[ n; n ] ~f:bfa_f () in
@@ -1220,7 +1220,7 @@ let () =
     "the width-sensitive inputs keep each cell's products of one sign and every f32 partial sum \
      exact, so the narrowing is the one rounding the Bf16_wide bound allows for"
     (Ll_test.matmul_products ~m:n ~n ~k:n fwa fwb)
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   p_all2 "Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise" want_bw
     wide_ref_bw ~f:Float.equal;
   p "Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone"
@@ -2102,7 +2102,7 @@ let () =
     "f16->f32 k-split inputs: every cell's products share a sign and every partial sum is exact in \
      f32"
     (Ll_test.matmul_products ~m:n ~n ~k:kw ksa_f ksb_f)
-    ~f:(Ll_test.exact_partials ~sig_bits:24);
+    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   let h32k_leg =
     Verdict.leg
       ~when_:(on_metal || Lazy.force cuda_h32_wmma || (on_hip && Lazy.force hip_mma))

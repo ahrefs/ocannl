@@ -24,6 +24,7 @@ the 16-wide row's first bf16-inexact partial sum is the eleventh, at 275/64: tru
 exact_partials is sound: where it accepts a cell, every partial sum of every association is exact at that width: true
 exact_partials accepts some of those cells, and refuses some, at every width: true
 exact_partials' bound is tight: it accepts 2^p grains and refuses 2^p + 1, whose sum is inexact at p bits: true
+Ops.significand_bits is each format's width: 2^p - 1 and 2^p round-trip, 2^p + 1 does not: true
 exact_partials refuses mixed signs even where every partial sum is exact (gfx11's WMMA premise): true
 exact_partials ~any_sign:true is sound: where it accepts a cell of mixed signs, every partial sum of every association is exact at that width: true
 exact_partials ~any_sign:true accepts some cells of mixed signs at every width: true

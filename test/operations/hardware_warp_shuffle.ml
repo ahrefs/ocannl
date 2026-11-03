@@ -420,7 +420,8 @@ let () =
     LL.unflat_lines
       ([
          L.declare_local flag;
-         L.loop_n ~axis:lanes i n (LL.Set_local (flag, L.binop Ir.Ops.Cmplt (L.embed i) (L.ic 32)));
+         L.loop_n ~axis:lanes i n
+           (LL.Set_local (flag, L.cmp_at Ir.Ops.single Ir.Ops.Cmplt (L.embed i) (L.ic 32)));
        ]
       @ (if also_unguarded then [ tree ~i:tree_i reduce ] else [])
       @ [ L.if_ (LL.Get_local flag) (tree ~i:tree_i reduce) ])
@@ -573,7 +574,7 @@ let () =
       [
         L.declare_local flag;
         L.loop_n ~axis:lanes i n
-          (LL.Set_local (flag, L.binop Ir.Ops.Cmplt (L.embed i) (L.ic (n / 2))));
+          (LL.Set_local (flag, L.cmp_at Ir.Ops.single Ir.Ops.Cmplt (L.embed i) (L.ic (n / 2))));
         L.if_ (LL.Get_local flag)
           (L.loop_n ~axis:reduce tree_i n
              (L.set_at acc f0 (L.add (L.get acc [| f0 |]) (L.get u [| it tree_i |]))));

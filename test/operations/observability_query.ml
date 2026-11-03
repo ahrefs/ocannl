@@ -11,8 +11,10 @@
    several leaves, deduplicated over a diamond), [Launch_bound], [Slice_view], [Not_computed] -- and
    the replay filter the walk reads through ([Ir.Low_level.replay_facts]): the sibling setters of a
    shared-loop body contribute neither a read nor a launch symbol, a dead loop replays nothing, and
-   a merge-buffer read is reported. The merge answer is pinned at that level only: building a
-   lineage whose stored computation reads a merge buffer needs a multi-device transfer setup.
+   a merge-buffer read is reported. The merge answer is also pinned through real contexts, one cc
+   device and a multidev_cc pair, filled by [Context.copy ~into_merge_buffer] (gh-ocannl-1741), and
+   the walk's internal error -- a stored computation reading an undecided node -- on a hand-built
+   lineage whose stored component is replaced after its link.
 
    Each placement is asserted before the claim that depends on it, so no claim passes vacuously, and
    the query is pinned as pure: it decides no placement, stores no computation and compiles
@@ -167,3 +169,72 @@ let () =
   p "a merge-buffer read in self's setter is reported" facts.replay_merge_reads;
   let dead = loop ~from_:1 ~upto:0 i (set self [| iter i |] (get src [| iter i |])) in
   p "a dead loop replays nothing" (Set.is_empty (Ll.replay_facts ~self dead).replay_reads)
+
+(* --- A stored computation reading a merge buffer, through a real context (gh-ocannl-1741) --- [mv]
+   is written from [mt]'s merge buffer, filled by a [Context.copy ~into_merge_buffer], and read
+   within the same routine by the materialized [mo], so the lineage stores [mv]'s merge-reading
+   computation. A merge buffer holds one transfer, so no other context can serve the read. The leg
+   runs on one cc device and on a multidev_cc pair. *)
+let () =
+  let merge_leg ~tag make_ctx =
+    let%op mt = [ 1.; 2. ] + [ 10.; 20. ] in
+    let%op mv = [ 0.; 0. ] + [ 0.; 0. ] in
+    let%op mo = [ 0.; 0. ] + [ 0.; 0. ] in
+    Train.set_materialized mo.Tensor.value;
+    let src = Train.forward_once (make_ctx ()) mt in
+    let dst = Train.forward_once (make_ctx ()) mt in
+    let dst = Context.copy ~into_merge_buffer:Copy ~src ~dst mt.Tensor.value in
+    let consumer =
+      [%cd
+        mv =: mt.merge;
+        mo =: mv + mv]
+    in
+    let consumer =
+      { consumer with asgns = Ir.Assignments.Block_comment ("oq_merge_" ^ tag, consumer.asgns) }
+    in
+    let ctx, routine = Context.compile dst consumer IDX.empty in
+    let ctx = Context.run ctx routine in
+    p (tag ^ ": the merge reader mv is virtual") (is_mode Tn.Virtual ctx mv);
+    p
+      (tag ^ ": the consumer read the transferred values")
+      (Array.equal Float.equal (Context.get_values ctx mo.Tensor.value) [| 22.; 44. |]);
+    p
+      (tag ^ ": mv, whose stored computation reads a merge buffer, is unobservable")
+      (match obs ctx mv with Unobservable_merge path -> same_path path [ mv ] | _ -> false);
+    show ctx (tag ^ " mv") mv
+  in
+  merge_leg ~tag:"cc" (fun () -> Context.cpu ());
+  merge_leg ~tag:"multidev_cc" (fun () -> Context.cpu ~threads:2 ())
+
+(* --- The internal-error branch, on a hand-built lineage (gh-ocannl-1741) --- A compile that stores
+   a computation decides every node it reads, so no pipeline reaches the branch; a stored component
+   replaced after the link, reading a node no placement was decided for, does. Before the
+   replacement the same query answers. *)
+let () =
+  let open Ll_test in
+  let mk = node_factory ~first_id:9100 ~dims:[| 4 |] () in
+  let src = mk "ie_src" and v = mk "ie_v" and out = mk "ie_out" and ghost = mk "ie_ghost" in
+  let i = sym () and j = sym () and k = sym () in
+  let code =
+    seq
+      (loop_n i 4 (set v [| iter i |] (add (get src [| iter i |]) (c 1.))))
+      (loop_n j 4 (set out [| iter j |] (mul (get v [| iter j |]) (c 2.))))
+  in
+  let o =
+    optimize_in ~materialized:[ src; out ] (Ll.empty_optimize_ctx ()) ~name:"oq_internal" code
+  in
+  p "the hand-built v is virtual" (known_virtual o v);
+  let ctx, _ = link ~ctx:(Context.cpu ()) ~name:"oq_internal" o in
+  let internal_error () =
+    match Context.observability ctx v with
+    | exception Failure msg -> String.is_substring msg ~substring:"internal error"
+    | _ -> false
+  in
+  p "before the replacement, v's query answers" (not (internal_error ()));
+  let comps = o.Ll.optimize_ctx.Ll.computations in
+  Hashtbl.update comps v ~f:(function
+    | Some ((idx, _) :: _) -> [ (idx, loop_n k 4 (set v [| iter k |] (get ghost [| iter k |]))) ]
+    | _ -> []);
+  p "a stored computation reading an undecided node is an internal error" (internal_error ());
+  Hashtbl.set comps ~key:v ~data:[];
+  p "a virtual node with an empty stored computation is an internal error" (internal_error ())

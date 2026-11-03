@@ -694,10 +694,10 @@ let vector_file_setting () =
   in
   { Ir.Vector_file.bytes; registers }
 
-(* Whether the kernel .so is a macOS bundle or an ELF/PE shared object. Distinguishing the two BSDs
-   from Darwin needs [uname], and this used to shell out once per kernel compile -- on a machine
-   compiling thousands of kernels per build, an entirely redundant `sh -c` plus `uname` plus `grep`
-   each time. The answer cannot change within a process. *)
+(* Whether the kernel .so is a macOS bundle or an ELF/PE shared object. [Sys.os_type] does not tell
+   the BSDs from Darwin, so this reads [Utils.host_is_darwin], the build target's answer, shared
+   with the tests that gate on macOS (gh-ocannl-1741); it once shelled out to [uname] per kernel
+   compile. *)
 (* [-Wl,-Bsymbolic] on ELF (gh-ocannl-754): a kernel's references to its OWN builtins bind to its
    own definitions. Without it, a [-fPIC] call to a global function goes through the PLT and the
    dynamic linker resolves it FIRST against the executable — and the OCaml executable carries a host
@@ -725,8 +725,7 @@ let kernel_link_flags =
   lazy
     (match Sys.os_type with
     | "Unix" ->
-        if Stdlib.Sys.command "uname -s | grep -q Darwin" = 0 then
-          "-bundle -undefined dynamic_lookup"
+        if Utils.host_is_darwin then "-bundle -undefined dynamic_lookup"
         else "-shared -fPIC -Wl,-Bsymbolic -lm"
     | "Win32" | "Cygwin" -> "-shared"
     | _ -> "-shared -fPIC -Wl,-Bsymbolic -lm")

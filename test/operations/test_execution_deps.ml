@@ -205,13 +205,9 @@ let test_merge_buffer_read_dependency () =
   Train.set_materialized merge_output.Tensor.value;
   Train.set_materialized destination_tick.Tensor.value;
   let source_write = [%cd merge_value =: source_values] in
-  (* Unowned copies (the same assignments, no fragment metadata): the test compiles the writer twice
-     along one lineage, which a lineage refuses for the tensor fragments it embeds
-     (gh-ocannl-1724). *)
-  let named_source_write name =
-    Ir.Assignments.comp ~embedded:source_write.embedded_nodes
-      (Ir.Assignments.Block_comment (name, source_write.asgns))
-  in
+  (* Unowned copies ([Ll_test.unowned_copy]): the test compiles the writer twice along one lineage,
+     which a lineage refuses for the tensor fragments it embeds (gh-ocannl-1724). *)
+  let named_source_write name = Ll_test.unowned_copy ~name source_write in
   let source_root = Context.auto () in
   let source_ctx, source_writer =
     Context.compile source_root (named_source_write "merge_source_writer_1") IDX.empty
@@ -253,10 +249,7 @@ let test_merge_buffer_read_dependency () =
   in
   let consumer_comp = [%cd merge_output =: merge_value.merge] in
   (* Unowned, like the source writer: the consumer is compiled again along its lineage below. *)
-  let consumer_comp =
-    Ir.Assignments.comp ~embedded:consumer_comp.embedded_nodes
-      (Ir.Assignments.Block_comment ("merge_dep_consumer", consumer_comp.asgns))
-  in
+  let consumer_comp = Ll_test.unowned_copy ~name:"merge_dep_consumer" consumer_comp in
   let consumer_ctx, consumer = Context.compile merge_ctx consumer_comp IDX.empty in
   Verdict.p "merge consumer has exactly the transfer dependency"
     (Set.length consumer.Context.execution_deps = 1

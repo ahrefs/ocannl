@@ -224,6 +224,26 @@ let () =
       accepts ~bits [ top -. 1.; 1. ]
       && (not (accepts ~bits [ top; 1. ]))
       && not (representable ~bits (top +. 1.)));
+  (* The width the sites pass, [Ir.Ops.significand_bits], against the host's own conversions
+     (gh-ocannl-1741): at [p] bits the integers [2^p - 1] and [2^p] survive a round trip through the
+     format and [2^p + 1] does not, so a wrong table entry in either direction fails here. Each
+     integer enters as an OCaml [int], so f64's own [2^53 + 1] is not rounded before the trip. *)
+  let through_single to_ from n =
+    let x = Float.of_int n in
+    Float.equal (from (to_ x)) x
+  in
+  p_all "Ops.significand_bits is each format's width: 2^p - 1 and 2^p round-trip, 2^p + 1 does not"
+    Ir.Ops.
+      [
+        (double, fun n -> Int.equal (Float.to_int (Float.of_int n)) n);
+        (single, through_single Stdlib.Int32.bits_of_float Stdlib.Int32.float_of_bits);
+        (half, through_single single_to_half half_to_single);
+        (bfloat16, through_single single_to_bfloat16 bfloat16_to_single);
+        (fp8, through_single single_to_fp8 fp8_to_single);
+      ]
+    ~f:(fun (prec, survives) ->
+      let top = Int.shift_left 1 (Ir.Ops.significand_bits prec) in
+      survives (top - 1) && survives top && not (survives (top + 1)));
   p
     "exact_partials refuses mixed signs even where every partial sum is exact (gfx11's WMMA \
      premise)"

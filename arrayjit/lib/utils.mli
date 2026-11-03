@@ -440,6 +440,14 @@ val c_stderr_detached : bool
 external c_stderr_replaceable : unit -> bool = "ocannl_c_stderr_replaceable"
 (** Whether this C runtime's [stderr] can be replaced at all (glibc, Darwin). *)
 
+val host_is_darwin : bool
+(** Whether the host is macOS (Darwin), as this library's build target says (gh-ocannl-1741): the
+    one predicate behind the cc backend's kernel link flags and the tests gating on Darwin, read
+    without shelling out to [uname]. *)
+
+val host_is_darwin_arm64 : bool
+(** Whether the host is arm64 macOS, which refuses to map unsigned code (gh-ocannl-1741). *)
+
 external collapse_c_stderr_noise : unit -> bool = "ocannl_collapse_c_stderr_noise"
 (** Collapses ROCm's per-event C [stderr] lines into a count; the stub behind
     {!c_stderr_noise_collapsed}, unused in-tree. *)

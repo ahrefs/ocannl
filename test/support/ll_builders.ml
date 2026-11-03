@@ -276,9 +276,14 @@ let embed_idx idx : LL.scalar_t = LL.Embed_index idx
 (** [ic n] is the integer constant [n] as a scalar. *)
 let ic n : LL.scalar_t = LL.Constant (Float.of_int n)
 
-(** [cmp op a b] applies an index-precision binary operator — a comparison ([Cmplt], [Cmple],
-    [Cmpeq], [Cmpne]) or a connective ([And], [Or]). *)
-let cmp op a b : LL.scalar_t = LL.Binop (op, (a, iprec ()), (b, iprec ()))
+(** [cmp_at prec op a b] applies a comparison ([Cmplt], [Cmple], [Cmpeq], [Cmpne]) or a connective
+    ([And], [Or]) computed at [prec] (gh-ocannl-1741): the precision of the store it feeds, as a
+    homogeneous binop's operands are, so a flag kept in a [single] local is built with
+    [cmp_at single] where {!cmp}'s index-precision annotation would be refused. *)
+let cmp_at prec op a b : LL.scalar_t = LL.Binop (op, (a, prec), (b, prec))
+
+(** [cmp op a b] is {!cmp_at} at index precision: a guard's comparison or connective. *)
+let cmp op a b = cmp_at (iprec ()) op a b
 
 let lt a b = cmp Ops.Cmplt a b
 let le a b = cmp Ops.Cmple a b

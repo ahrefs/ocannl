@@ -169,18 +169,10 @@ let () =
         loads = 1 && pauses = 0
     | _ -> false)
 
-(* arm64 macOS refuses to map unsigned code; other hosts load an unsigned library. Read off the
-   host, never off the run under test. *)
-let enforces_code_signatures =
-  let ask command =
-    try
-      let ic = Unix.open_process_in command in
-      let answer = String.strip (Stdio.In_channel.input_all ic) in
-      ignore (Unix.close_process_in ic : Unix.process_status);
-      answer
-    with _ -> ""
-  in
-  (not Sys.win32) && String.equal (ask "uname -s") "Darwin" && String.equal (ask "uname -m") "arm64"
+(* arm64 macOS refuses to map unsigned code; other hosts load an unsigned library. Read off the host
+   -- the predicate the cc backend's link flags read (gh-ocannl-1741) -- never off the run under
+   test. *)
+let enforces_code_signatures = Utils.host_is_darwin_arm64
 
 (* The real leg: a refused library, a pause that either re-signs it in place or does nothing, and
    the retry. [None] where the host enforces no signatures. *)

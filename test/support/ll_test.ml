@@ -334,13 +334,14 @@ let grain_exponent x =
     Some (e - 53 + Int.ctz bits)
 
 (** [exact_partials ~sig_bits products] is whether a reduction summing [products] returns their
-    EXACT sum whatever association it chooses, at an accumulator of [sig_bits] significant bits (24
-    for f32, 11 for f16, 8 for bf16), on a tensor unit whose exactness also needs one sign: gfx11's
-    WMMA returns the exact sum only when every product shares a sign (gh-ocannl-1420), and on an
-    inexact sum it is not correctly rounded (gh-ocannl-1509), so a HIP bitwise claim rests on both
-    conditions together (docs/agent-notes/backend-precision-and-simd.md). Derived from the products
-    themselves — a site passes the products of its own init functions ({!matmul_products}) rather
-    than restating their grid and range in prose (gh-ocannl-1693):
+    EXACT sum whatever association it chooses, at an accumulator of [sig_bits] significant bits
+    ([Ir.Ops.significand_bits] of its precision, which a site passes rather than a literal), on a
+    tensor unit whose exactness also needs one sign: gfx11's WMMA returns the exact sum only when
+    every product shares a sign (gh-ocannl-1420), and on an inexact sum it is not correctly rounded
+    (gh-ocannl-1509), so a HIP bitwise claim rests on both conditions together
+    (docs/agent-notes/backend-precision-and-simd.md). Derived from the products themselves — a site
+    passes the products of its own init functions ({!matmul_products}) rather than restating their
+    grid and range in prose (gh-ocannl-1693):
 
     - every nonzero product has the same sign; and
     - with [2^g] the finest grain of any product ({!grain_exponent}), the sum of their magnitudes is
@@ -550,6 +551,52 @@ let link_finalized ?ctx ~placements ~name (o : LL.optimized) =
              (Printf.sprintf "Ll_test.link_finalized: backend compile left %s undecided"
                 (Tn.debug_name tn))));
   linked
+
+(** [unowned_copy ?name c] is [c]'s program without its tensor metadata (gh-ocannl-1741): the same
+    assignments and embedded nodes, no [owned] or [requires] fragments, and with them none of the
+    accumulation records ([zeroes], [accumulates], [accumulation_runs]) the gh-ocannl-1744 checks
+    read. A lineage refuses a tensor fragment compiled twice (gh-ocannl-1724), so a test that
+    compiles one program more than once along one lineage compiles this copy instead, opting out of
+    those checks too. [?name] wraps the assignments in a [Block_comment], which names the routine.
+*)
+let unowned_copy ?name (c : Ir.Assignments.comp) =
+  let asgns =
+    match name with None -> c.asgns | Some n -> Ir.Assignments.Block_comment (n, c.asgns)
+  in
+  Ir.Assignments.comp ~embedded:c.embedded_nodes asgns
+
+(** {2 Printing a schedule} *)
+
+(** [schedule_op_lines sched] is [sched]'s op list, one line per op, for debugging which seed op
+    order produced a shape (gh-ocannl-1741): each op's sexp with every tensor node collapsed to
+    [label#id] in place of the full record [Tn.t]'s sexp dumps. Derived from
+    [Ir.Schedule.sexp_of_optop], so a new constructor or field prints with no change here. A node's
+    record is recognized as a list of [(field value)] pairs among which [id] and [label], two fields
+    [Tn.t]'s derived sexp always prints. *)
+let schedule_op_lines (sched : Ir.Schedule.schedule) =
+  let tnode_record_name = function
+    | Sexp.List fields -> (
+        let field name =
+          List.find_map fields ~f:(function
+            | Sexp.List [ Sexp.Atom n; v ] when String.equal n name -> Some v
+            | _ -> None)
+        in
+        let all_pairs =
+          List.for_all fields ~f:(function Sexp.List [ Sexp.Atom _; _ ] -> true | _ -> false)
+        in
+        match (field "id", field "label") with
+        | Some (Sexp.Atom id), Some (Sexp.List label) when all_pairs ->
+            let words = List.filter_map label ~f:(function Sexp.Atom w -> Some w | _ -> None) in
+            Some (String.concat ~sep:"_" words ^ "#" ^ id)
+        | _ -> None)
+    | Sexp.Atom _ -> None
+  in
+  let rec collapse s =
+    match tnode_record_name s with
+    | Some name -> Sexp.Atom name
+    | None -> ( match s with Sexp.List l -> Sexp.List (List.map l ~f:collapse) | a -> a)
+  in
+  List.map sched ~f:(fun op -> Sexp.to_string (collapse (Ir.Schedule.sexp_of_optop op)))
 
 (** {2 The default prefill}
 

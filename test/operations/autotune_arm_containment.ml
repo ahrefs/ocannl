@@ -125,11 +125,8 @@ let () =
   let comp = Train.forward t2 in
   (* gh-ocannl-1724: a lineage refuses a tensor fragment compiled twice. This test's recompiles in
      one lineage exercise unexecuted-dependency validation and tuning over a lineage holding the
-     same computation, which an unowned copy of the program -- the same assignments, no fragment
-     metadata -- still does. *)
-  let comp =
-    Ir.Assignments.comp ~embedded:comp.Ir.Assignments.embedded_nodes comp.Ir.Assignments.asgns
-  in
+     same computation, which an unowned copy of the program ([Ll_test.unowned_copy]) still does. *)
+  let comp = Ll_test.unowned_copy comp in
   (* Reference values from a plain compile. *)
   let ctx_ref, routine_ref = Context.compile (Context.auto ()) comp Ir.Indexing.Empty in
   let ctx_ref = Context.run ctx_ref routine_ref in
