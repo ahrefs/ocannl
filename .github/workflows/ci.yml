@@ -521,6 +521,41 @@ jobs:
     - name: Install opam dependencies (Windows)
       if: runner.os == 'Windows' && steps.windows-opam-cache.outputs.cache-hit != 'true'
       run: opam install . -y --deps-only --with-test --with-doc --no-depexts
+    # opam's depexts from a cache too (gh-ocannl-1574): the install below
+    # fetches them from the same runner mirror as setup-ocaml's packages, at its
+    # pace on a slow run. The list is opam's own answer -- `--external` over the
+    # solution the install's request and flags select, as pin-revisions solves
+    # it -- so a dependency gaining or dropping a depext needs no edit here.
+    # Only the missing ones are passed on, as opam's depext step installs only
+    # those: `apt-get install` of an installed package would upgrade it. Every
+    # part is best-effort, and the install below stays the fallback. Inline,
+    # and passing apt-debs-cache only the inputs it had at its recorded merge,
+    # so a dispatch's bisection floor stays put (build-and-test.md, "How far
+    # back a dispatch reaches").
+    - name: List opam's missing system dependencies (Linux)
+      id: depexts
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        request=$(printf '%s\n' ./*.opam | sed 's#^\./##; s#\.opam$##' | paste -sd, -)
+        if ! listed=$(opam --cli=2.1 list --safe --color=never --external \
+            --resolve="$request" --with-test --with-doc); then
+          echo "::warning::could not list opam's system dependencies; the install below fetches them itself"
+          exit 0
+        fi
+        missing=
+        for p in $listed; do
+          status=$(dpkg-query -W -f='${Status}\n' "$p" 2>/dev/null) || status=
+          case $status in *'install ok installed'*) ;; *) missing="$missing $p" ;; esac
+        done
+        echo "opam's system dependencies: $(echo $listed); missing:${missing:- none}"
+        echo "packages=${missing# }" >>"$GITHUB_OUTPUT"
+    - name: Pre-install opam's system dependencies from a cache (Linux)
+      if: steps.depexts.outputs.packages != ''
+      uses: ./.github/actions/apt-debs-cache
+      with:
+        packages: ${{ steps.depexts.outputs.packages }}
+        key: opam-depexts-debs-v1
     # Depexts are SYSTEM packages: they live on the runner, not in the cached
     # `_opam`, so on a cache hit the install step below is skipped and they are
     # simply absent. The restored switch then has the OCaml `curl` bindings while

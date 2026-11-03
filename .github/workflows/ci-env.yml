@@ -61,10 +61,35 @@ jobs:
       run: opam option 'archive-mirrors="https://opam.ocaml.org/cache"'
     # Pinning the checkout's own packages is what makes opam honour their
     # `pin-depends`, which are part of what the repository declares.
-    - name: Install dependencies from the opam files
+    - name: Pin the checkout's packages
+      run: opam pin -n .
+    # The depexts the install below would fetch, from a cache: ci.yml's "List
+    # opam's missing system dependencies (Linux)" says how (gh-ocannl-1574).
+    # An apt mitigation, so kept (above). `--with-test` alone, as the install.
+    - name: List opam's missing system dependencies
+      id: depexts
       run: |
-        opam pin -n .
-        opam install . -y --deps-only --with-test
+        request=$(printf '%s\n' ./*.opam | sed 's#^\./##; s#\.opam$##' | paste -sd, -)
+        if ! listed=$(opam --cli=2.1 list --safe --color=never --external \
+            --resolve="$request" --with-test); then
+          echo "::warning::could not list opam's system dependencies; the install below fetches them itself"
+          exit 0
+        fi
+        missing=
+        for p in $listed; do
+          status=$(dpkg-query -W -f='${Status}\n' "$p" 2>/dev/null) || status=
+          case $status in *'install ok installed'*) ;; *) missing="$missing $p" ;; esac
+        done
+        echo "opam's system dependencies: $(echo $listed); missing:${missing:- none}"
+        echo "packages=${missing# }" >>"$GITHUB_OUTPUT"
+    - name: Pre-install opam's system dependencies from a cache
+      if: steps.depexts.outputs.packages != ''
+      uses: ./.github/actions/apt-debs-cache
+      with:
+        packages: ${{ steps.depexts.outputs.packages }}
+        key: opam-depexts-debs-v1
+    - name: Install dependencies from the opam files
+      run: opam install . -y --deps-only --with-test
     - name: Release build, as opam builds the packages
       run: opam exec -- dune build -p arrayjit,neural_nets_lib
     # The two steps below stay in the release profile `-p` built in: `--release`
