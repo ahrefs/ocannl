@@ -180,11 +180,14 @@ harness_leg() { # NAME
 harness_leg_run() { # NAME FUNCTION
   harness_leg "$1" || return 0
   harness_leg_running=$1 harness_leg_na= harness_leg_checks_at=${harness_checks:-0} harness_leg_level=$BASH_SUBSHELL
-  rm -f "$TMP/.harness-na-nested"
+  # Where a declaration from a subshell of the body says so: the harness's
+  # scratch directory (harness_scratch), none in a harness that has none.
+  harness_na_nested=${TMP:+$TMP/.harness-na-nested}
+  [ -z "$harness_na_nested" ] || rm -f "$harness_na_nested"
   "$2"
-  if [ -e "$TMP/.harness-na-nested" ]; then
+  if [ -n "$harness_na_nested" ] && [ -e "$harness_na_nested" ]; then
     harness_leg_na=
-    report 1 "$1: declared not applicable in a subshell of its own, which cannot end the leg" "$(cat "$TMP/.harness-na-nested")"
+    report 1 "$1: declared not applicable in a subshell of its own, which cannot end the leg" "$(cat "$harness_na_nested")"
   fi
   harness_leg_na_settle
   harness_leg_running= harness_leg_na=
@@ -208,7 +211,13 @@ harness_leg_run() { # NAME FUNCTION
 harness_not_applicable() { # REASON
   local leg=${harness_leg_running:-}
   if [ -n "$leg" ] && [ "$BASH_SUBSHELL" != "${harness_leg_level:-0}" ]; then
-    printf '%s\n' "${1:-(no reason)}" >"$TMP/.harness-na-nested"
+    # Its outcome cannot reach the leg from here; without a scratch directory
+    # to say so in, the FAIL below prints in the subshell alone.
+    if [ -n "${harness_na_nested:-}" ]; then
+      printf '%s\n' "${1:-(no reason)}" >"$harness_na_nested"
+    else
+      report 1 "$leg: declared not applicable in a subshell of its own, which cannot end the leg" "${1:-(no reason)}"
+    fi
   elif [ -z "$leg" ]; then
     report 1 "not applicable outside a leg: ${1:-(no reason)}" \
       'a leg outcome needs its leg: declare it from a harness_leg_run or harness_leg_run_errexit body'
