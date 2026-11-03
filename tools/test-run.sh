@@ -2564,7 +2564,8 @@ new_run() {
   # `launchers` is the launch's own chain -- this launcher and each ancestor,
   # by pid and start token, empty where the process table cannot be read --
   # which a reader of `last` discounts from the launches it sees in flight
-  # (see proc_table_perl).
+  # (see proc_table_perl). Written before the lock: a launch refused there
+  # removes its directory, and its chain with it.
   # `runs` is the state root this run's lock and pointers live under: `stop`
   # and retention read them from there, whichever OCANNL_TOOL_TEST_RUNS the
   # caller has -- and its absence marks a run of the version that kept them
@@ -2819,11 +2820,16 @@ group_identity_matches() {
 # another box); and that word names THIS worktree's script: absolute, `~/`, or
 # relative to the process's working directory (/proc/PID/cwd, else lsof),
 # its directory's parent being this worktree. It is NOT in flight when it is
-# one of the processes the current `last` run recorded as its launch chain
-# (`launchers`, below): the launcher of that run and every ancestor it had, by
-# pid and start token, so a run's own chain winding down after its verdict
-# (an attached launcher printing the digest, the slot's wrapper releasing it)
-# is never read as a launch still to come. Out of reach, said so: a launch
+# one of the processes a run of this worktree recorded as its launch chain
+# (`launchers`, below, in every run directory whose `wt` is this worktree): the
+# launcher of that run and every ancestor it had, by pid and start token --
+# read only from a run whose supervisor recorded itself (`pid`) or that has a
+# verdict, so a launch between its directory and its publication (the lock
+# taken in between) is still in flight -- so a run's own chain living on after
+# its verdict (an attached launcher printing
+# the digest, the slot's wrapper releasing it, a shell that ran it and went on
+# -- even once a later run has published) is never read as a launch still to
+# come. Out of reach, said so: a launch
 # behind a word this cannot resolve (a `cd` inside a `-c` string its process
 # has not run yet, a variable), `bisect`'s steps (its frozen runner is another
 # tree's), a launch on another box.
@@ -2832,11 +2838,12 @@ group_identity_matches() {
 # elsewhere, and start tokens are ps_token's renderings (stat's starttime, or
 # lstart under C/UTC), so the chain a launcher recorded compares as strings.
 # Modes: `chain` prints "PID TOKEN" for this reader's parent and each ancestor
-# above it; `pending ROOT UID CHAIN-FILE` prints "PID ARGV" for each launch in
-# flight. Exits 2 when the table cannot be read.
+# above it; `pending ROOT UID RUNS` prints "PID ARGV" for each launch in
+# flight, RUNS being the state root whose run directories hold the chains.
+# Exits 2 when the table cannot be read.
 proc_table_perl='
 use strict; use warnings; use Cwd ();
-my ($mode, $root, $uid, $chain) = @ARGV;
+my ($mode, $root, $uid, $runs) = @ARGV;
 my (%pp, %uid, %tok, %args);
 sub slurp { open(my $f, "<", $_[0]) or return undef; local $/; my $s = <$f>; close $f; return $s }
 my $proc = -d "/proc/$$";
@@ -2881,8 +2888,14 @@ if ($mode eq "chain") {
 my %anc;
 for (my $p = $$; defined $p && $p > 1 && !$anc{$p}; $p = $pp{$p}) { $anc{$p} = 1 }
 my %known;
-if (defined $chain && open(my $f, "<", $chain)) {
-  while (my $l = <$f>) { chomp $l; $known{$l} = 1 }
+if (defined $runs && opendir(my $rd, $runs)) {
+  for my $e (grep { /\A[0-9]{8}T[0-9]{6}Z-[0-9]+\z/ } readdir $rd) {
+    my $w = slurp("$runs/$e/wt");
+    next unless defined $w && $w eq "$root\n" && (-e "$runs/$e/pid" || -e "$runs/$e/exit");
+    my $c = slurp("$runs/$e/launchers");
+    $known{$_} = 1 for split /\n/, defined $c ? $c : "";
+  }
+  closedir $rd;
 }
 my %verb = map { $_ => 1 } qw(run start fresh repeat prepush);
 my $prog = qr{\A-?(?:(?:ba|z|da|k)?sh|env|perl[0-9.]*|[Pp]ython[0-9.]*|g?timeout|nohup|nice|caffeinate|setsid)(?:\.exe)?\z};
@@ -2921,14 +2934,12 @@ for my $p (sort { $a <=> $b } keys %args) {
 }
 '
 # Sets pending_out to one "PID ARGV" line per launch of this worktree in flight
-# that the run in RUN-DIR (empty: none) did not record as its own chain. 1, with
+# that no run of it recorded as its own chain. 1, with
 # pending_out empty, when the table cannot be read -- said once on stderr, and
 # then nothing is in flight: the reader degrades to the answer it gave before.
 pending_warned=
-pending_launches() { # [RUN-DIR]
-  local chain=/dev/null
-  [ -z "${1:-}" ] || chain=$1/launchers
-  pending_out=$(perl -e "$proc_table_perl" pending "$PWD" "$(id -u)" "$chain" 2>/dev/null) && return 0
+pending_launches() {
+  pending_out=$(perl -e "$proc_table_perl" pending "$PWD" "$(id -u)" "$RUNS" 2>/dev/null) && return 0
   pending_out=
   [ -n "$pending_warned" ] ||
     echo "test-run: cannot read the process table here; a launch of this worktree still queued would not be seen" >&2
@@ -2939,8 +2950,8 @@ pending_launches() { # [RUN-DIR]
 # What a reader of `last` asks first (gh-ocannl-1830): the launches in flight,
 # then the run `last` names -- asked in THAT order, the order a launch moves in
 # (in flight, then published), so none can pass between the two unseen; and
-# asked again when `last` moved meanwhile, since the launches are discounted
-# by the chain of the run it names. Sets pending_out, and run_dir to that run
+# asked again when `last` moved meanwhile: a launch that published between the
+# two reads may have left the table already. Sets pending_out, and run_dir to that run
 # (empty when `last` names none this reader can use: never recorded, reaped,
 # not a run directory -- resolve_run says which, to a caller that needs to).
 # Every sighting is noted (note_queued), whatever state that run is in: a
@@ -2952,7 +2963,7 @@ follow_last() {
   last_quietly
   while :; do
     before=$run_dir
-    pending_launches "$run_dir" || :
+    pending_launches || :
     last_quietly
     [ "$run_dir" != "$before" ] || break
   done

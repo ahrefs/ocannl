@@ -323,7 +323,8 @@
 #      follows it to its own red verdict. One that ends without publishing (its
 #      slot refused) is refused (`unpublished:`, wait 2, status 1) until a run
 #      publishes, and so is one seen queued behind a live run. A run's own chain alive after its verdict is no launch in
-#      flight, and with its `launchers` record emptied it is (the negative
+#      flight, a later run published or not, and with its `launchers` record
+#      emptied it is (the negative
 #      control). The slot this script takes itself is taken after publication:
 #      a run waiting for it is `last`, live, and its wait times out on it.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
@@ -620,6 +621,7 @@ cleanup_fixture() {
     wait "$legacy_holder" 2>/dev/null
   fi
   if declare -F inherit_kill >/dev/null; then inherit_kill; fi
+  if declare -F q_kill_all >/dev/null; then q_kill_all; fi
   [ -z "${escape_release:-}" ] || touch "$escape_release"
   if [ -n "${escape_pid:-}" ] && kill -0 "$escape_pid" 2>/dev/null; then
     kill -KILL "$escape_pid" 2>/dev/null
@@ -8742,6 +8744,23 @@ q_wrap() { # root release exec|refuse argv...
   q_wrap_pid=$!
   q_wraps+=("$q_wrap_pid:$release")
 }
+# The leg's own processes, for the harness's interrupted exit (cleanup_fixture):
+# a wrapper still waiting would poll a release file the cleanup deletes, forever.
+q_kill_all() {
+  local w
+  for w in ${q_wraps[@]+"${q_wraps[@]}"}; do
+    kill -KILL "${w%%:*}" 2>/dev/null
+    wait "${w%%:*}" 2>/dev/null
+  done
+  q_wraps=()
+  if [ -n "${q_follow:-}" ]; then
+    kill -KILL "$q_follow" 2>/dev/null
+    wait "$q_follow" 2>/dev/null
+  fi
+  # The runs this leg holds on a file: let them end on their own.
+  touch "$TMP/queued.hold" "$TMP/queued.slot" 2>/dev/null
+  return 0
+}
 q_release_all() {
   local w
   for w in ${q_wraps[@]+"${q_wraps[@]}"}; do
@@ -8794,6 +8813,7 @@ if [ -z "$q_detail" ]; then
   touch "$TMP/queued.release1"
   wait "$q_follow"
   q_rc=$?
+  q_follow=
   q_out=$(cat "$TMP/queued-follow.out")
   q_red=$(q_last "$q_root")
   { [ "$q_rc" = 1 ] && [ -n "$q_red" ] && [ "$q_red" != "$q_green" ] && grep -qF "$q_red" <<<"$q_out" &&
@@ -8888,6 +8908,14 @@ else
     q_capture "$q_root" status last
     { [ "$q_rc" = 0 ] && grep -qF 'verdict: pass' <<<"$q_out"; } ||
       q_detail="status last with the run's own shell alive: exit $q_rc (want 0): $q_out"
+  fi
+  # Still that run's once a later run has published: every run's chain counts.
+  if [ -z "$q_detail" ]; then
+    q_capture "$q_root" run build @ok
+    q_later=$(q_last "$q_root")
+    q_capture "$q_root" wait last --timeout 2
+    { [ "$q_rc" = 0 ] && [ "$q_later" != "$q_linger" ] && grep -qF "$q_later" <<<"$q_out"; } ||
+      q_detail="wait last after a later run, the earlier run's shell alive: exit $q_rc (want 0 on ${q_later:-none}): $q_out"
   fi
   grep -q . "$q_linger/launchers" ||
     q_nc_detail="the run recorded no launch chain: $(cat "$q_linger/launchers" 2>&1)"
