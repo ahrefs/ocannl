@@ -51,7 +51,7 @@ let () = Utils.settings.output_debug_files_in_build_directory <- true
 
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 
 (* The execution claims, open on a GPU backend and skipped by name elsewhere: written once

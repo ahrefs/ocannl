@@ -29,7 +29,7 @@ module Outcome = Ir.Schedule_outcome
 module Ll = Ll_test
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 let scratch (seg : LL.optimized) =
   {

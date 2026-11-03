@@ -39,7 +39,7 @@ open Ocannl.Operation.DSL_modules
 module Tn = Ir.Tnode
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Test_utils.Generated.init ~backend_name
 let facts = Context.backend_facts_of_name backend_name
 let rows = 6

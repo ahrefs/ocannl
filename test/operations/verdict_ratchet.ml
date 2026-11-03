@@ -5116,7 +5116,7 @@ let run_leg_and_skip_list_refusal_control () =
    the backend on its way, which is how a census reads. *)
 let folded_gate_prelude =
   {ocaml|open Verdict.Claims
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 let is_metal = String.equal backend_name "metal"

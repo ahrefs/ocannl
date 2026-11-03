@@ -40,7 +40,7 @@ module LL = Ir.Low_level
 module Sched = Ir.Schedule
 module Tn = Ir.Tnode
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let is_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 
 (* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)

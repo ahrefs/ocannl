@@ -27,7 +27,7 @@ open Verdict.Claims
 
 let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
 let () = Unix.putenv "OCANNL_CC_VECTOR_BYTES" "0"
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cc = List.mem [ "cc"; "multidev_cc" ] backend_name ~equal:String.equal
 let accum_prec = Ll_test.backend_accum_prec
 

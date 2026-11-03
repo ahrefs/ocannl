@@ -25,7 +25,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let codegen_capabilities = Context.codegen_capabilities (Context.auto ())
 let skipped = Verdict.skipped ~backend:backend_name
 

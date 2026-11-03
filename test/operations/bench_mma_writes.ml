@@ -64,7 +64,9 @@ let () =
                 [ [ out ]; [ out ] ]);
           let text = census [ rc; rd ] in
           Stdio.eprintf "bench_mma_writes: backend=%s\n%s%!"
-            (Utils.get_global_arg ~arg_name:"backend" ~default:"auto")
+            (match Utils.get_global_arg ~arg_name:"backend" ~default:"" with
+            | "" -> "auto"
+            | name -> name)
             text;
           let rows =
             String.split_lines text

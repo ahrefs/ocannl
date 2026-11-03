@@ -64,7 +64,7 @@ let nonzero name (a : float array) =
     failwith (name ^ ": the reference is all zeros — the parity checks against it are vacuous");
   a
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* Intentional dialect identity: these branches count the exact MSL versus CUDA/HIP array and
    barrier tokens. Async-copy availability is queried separately through codegen capabilities. *)

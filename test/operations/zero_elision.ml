@@ -43,7 +43,7 @@ module LL = Ir.Low_level
 module Tn = Ir.Tnode
 module Sched = Ir.Schedule
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* Bitwise parity between two kernel shapes is a claim about the program's arithmetic, so the
    accumulations are explicit FMAs on every backend (the contraction licence, gh-ocannl-998) and the

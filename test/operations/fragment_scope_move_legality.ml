@@ -56,7 +56,7 @@ module Asgns = Ir.Assignments
 module Tn = Ir.Tnode
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_gpu = Ir.Backend_intf.binds_hardware_grid (Context.backend_facts_of_name backend_name)
 
 let named name (comp : Asgns.comp) : Asgns.comp =

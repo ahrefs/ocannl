@@ -73,6 +73,12 @@ files.
   on it and rejects a line with two, which rules out payload/config values like `-mcpu=native`; a
   setting that needs one gets a word spelling instead (`cc_backend_arch_flags=none`). A value can
   never be the empty string either: empty means "unset" at every source.
+- One key has one default, in every process (gh-ocannl-1861): `Utils.get_global_arg` raises
+  `Invalid_argument` on a read under a default other than the key's first in the process, whatever
+  its source, so a config file that sets the key does not hide the pair. A site that means
+  something else by an unset key reads the common default and maps it (`Backends.get_backend`),
+  and a fallback key is taken on the source, not passed in as a default (`large_models`).
+  Tests read the backend under `""` like the library; every test directory's `ocannl_config` sets it.
 - A configuration key has exactly ONE environment spelling, `OCANNL_<KEY>` — gh-ocannl-605 dropped
   the dash-prefixed pair, and gh-ocannl-652 the lowercase `ocannl_<key>`, whose setting is now a
   fatal startup error rather than a silent no-op on case-sensitive environments; native Windows's

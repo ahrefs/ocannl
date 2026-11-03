@@ -20,7 +20,7 @@ open Base
 module LL = Ir.Low_level
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let n = 8
 
 (* The stream log's lines that record a store into [label]: the value lines, ["<label>[<i>]..."],

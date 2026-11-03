@@ -349,7 +349,7 @@ let rec rm_rf path =
 
 let build (emit_dir : string) =
   Utils.settings.output_debug_files_in_build_directory <- true;
-  let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
+  let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"") in
   (* Into the emit directory before the first artifact: [build_files/<exe>/] is relative to the
      working directory, and the census's pieces run concurrently (gh-ocannl-1502), so in the dune
      action's own directory every child of every piece would share one artifact directory --

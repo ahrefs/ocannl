@@ -22,7 +22,7 @@ open Ocannl.Nn_blocks.DSL_modules
 module Train = Ocannl.Train
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let dims = [ 3; 5 ]
 let n = List.fold dims ~init:1 ~f:( * )
 

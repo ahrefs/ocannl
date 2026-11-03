@@ -36,7 +36,7 @@ open Verdict.Claims
 module Tn = Ir.Tnode
 module LL = Ir.Low_level
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let key = "gpu_default_seed_narrow_storage"
 
 (* As in seeded_default: every product accumulation an explicit FMA, so that the bitwise claims are

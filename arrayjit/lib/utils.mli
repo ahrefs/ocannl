@@ -296,7 +296,8 @@ val get_global_arg_with_source : default:String.t -> arg_name:string -> String.t
 
 val get_global_arg : default:String.t -> arg_name:string -> String.t
 (** The value of config key [arg_name] from the command line, environment, config file or profile,
-    else [default]. *)
+    else [default]. Raises [Invalid_argument] when this process already read [arg_name] under
+    another [default], whatever the key's source: one key has one default (gh-ocannl-1861). *)
 
 exception Invalid_config_value of { key : string; value : string; expected : string }
 (** Raised by a typed getter when a setting's value does not parse as its key's kind. *)

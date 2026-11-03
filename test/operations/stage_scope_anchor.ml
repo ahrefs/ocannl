@@ -128,7 +128,7 @@ let claim_holder_exec =
   "that Stage executes to the unscheduled program's value, on both copy counts (a backend with \
    workgroup-shared memory)"
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* The C backends emit no workgroup-shared storage ([C_syntax.compile_proc] refuses a shared tile),
    so a shared stage executes only on a GPU backend. *)

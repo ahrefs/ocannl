@@ -277,7 +277,7 @@ let ac_debug_guard () =
   if
     not
       (String.is_substring ~substring:"hip"
-         (String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")))
+         (String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")))
   then Utils.settings.debug_log_from_routines <- true;
   Utils.settings.output_debug_files_in_build_directory <- true;
   let out, dst_virtual =

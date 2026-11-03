@@ -637,7 +637,7 @@ type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
     the golden line; only the indistinguishable bare [true] is the one to reject.
 
     [~backend] is the run's backend name, as each test already derives it for its own gating
-    ([String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")]). It is passed in
+    ([String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")]). It is passed in
     rather than read here so that this library keeps depending on no OCANNL library, only [base],
     [stdio] and [unix]: reporting a verdict is not a reason to link OCANNL's configuration
     machinery. *)

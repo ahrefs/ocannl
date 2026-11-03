@@ -27,7 +27,7 @@ let cross_entropy_loss = Nn_blocks.cross_entropy_loss
 
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 let () =
   let n_batches = 4 and batch = 16 and d_in = 8 and d_hid = 16 and classes = 4 in

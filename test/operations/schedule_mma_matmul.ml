@@ -72,7 +72,7 @@ let nonzero name (a : float array) =
 
 let approx_tol _ = 1e-2
 let approx_rel_tol b = Float.(1e-2 * max 1. (abs b))
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let skipped = Verdict.skipped ~backend:backend_name
 
 (* Intentional dialect identity: after the tf32 capability gate, the remaining name branches pin

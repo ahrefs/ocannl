@@ -23,7 +23,7 @@ module Tn = Ir.Tnode
 module Idx = Ir.Indexing
 module Prefix_scan = Ir.Prefix_scan
 
-let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:"cc"
+let backend_name = Utils.get_global_arg ~arg_name:"backend" ~default:""
 let fp_licences = Ir.Low_level.Fp_licence.(fields (of_config ()))
 
 (* Above the constant-fill limit (16), so inputs are host-initialized data, and distinct from every

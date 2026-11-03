@@ -42,7 +42,7 @@ module LL = Ir.Low_level
 module Ops = Ir.Ops
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let () = Stdio.eprintf "division-special-values backend: %s\n" backend_name
 let is_metal = String.equal backend_name "metal"
 let is_cuda = String.equal backend_name "cuda"

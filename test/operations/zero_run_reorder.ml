@@ -37,7 +37,7 @@ module LL = Ir.Low_level
 module S = Ir.Schedule
 module Tn = Ir.Tnode
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* The GPU pipeline is built (and executed, its hardware loops rendered serially) on a C backend
    under a GPU backend's name, as in [gpu_fission_mapping]. *)

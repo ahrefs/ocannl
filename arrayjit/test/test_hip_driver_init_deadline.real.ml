@@ -16,7 +16,7 @@ let claim =
   "a stuck HIP driver initialization that a direct Impl.hip_to_code call forces dies by the \
    device-init deadline, with the diagnostic naming hip"
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 let child () =
   Utils.driver_init_test_stall :=

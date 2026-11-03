@@ -6,7 +6,7 @@
 
 open Base
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* The options hiprtc is expected to report, once the runtime is initialized. *)
 let expected_suffix =

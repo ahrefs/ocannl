@@ -38,7 +38,7 @@ let expected =
   Array.concat_map (Array.of_list id_ints) ~f:(fun idx ->
       Array.init embed ~f:(fun o -> Float.of_int ((o * vocab) + idx)))
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 module Generated = Test_utils.Generated
 

@@ -52,7 +52,7 @@ open Verdict.Claims
 module SC = Ir.Schedule_cache
 module Cache_plant = Test_utils.Cache_plant
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* gh-ocannl-1253: the seeding gate is pinned at threshold 32, the default before [auto]. Every
    claim below needs a plan that seeds, and the ranked [auto] gate seeds nothing on this fixture on

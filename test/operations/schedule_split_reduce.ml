@@ -50,7 +50,7 @@ let nonzero name (a : float array) =
   a
 
 let approx_tol b = Float.(1e-3 *. (1. +. abs b))
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 
 let named name (comp : Asgns.comp) : Asgns.comp =

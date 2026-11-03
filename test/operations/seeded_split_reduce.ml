@@ -24,7 +24,7 @@ open Ocannl
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let splits_here = Autotune.seeded_split_backend (Context.backend_facts_of_name backend_name)
 
 let nb = 128

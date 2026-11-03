@@ -420,7 +420,7 @@ let () =
   let rendered_label =
     "conv+bias coverage: every GPU sketch renders tensorized per its mma census"
   in
-  let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc") in
+  let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"") in
   let real_limits = Context.hardware_limits (Context.auto ()) in
   (* Gated on the seeder's own capability judgment for the site's operand and destination
      precisions, never on the seed list under test (gh-ocannl-1115, gh-ocannl-1283): where the

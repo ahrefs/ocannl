@@ -48,7 +48,7 @@ module Asm = Test_utils.Asm_census
 module Cc_backend = Context.Cc_backend
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 (* The C backends are the ones whose syntax config is cc's. *)
 let on_cc = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)

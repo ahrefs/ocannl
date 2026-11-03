@@ -57,7 +57,7 @@ open Verdict.Claims
 (* The backend's accumulator residency, which a [Privatize] tile is minted at (gh-ocannl-1116). *)
 let accum_prec = Ll_test.backend_accum_prec
 let () = Utils.settings.output_debug_files_in_build_directory <- true
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
 let skipped = Verdict.skipped ~backend:backend_name
 

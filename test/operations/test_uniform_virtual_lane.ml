@@ -16,7 +16,7 @@ open Ocannl.Nn_blocks.DSL_modules
    backend-generic, fp8 included.) *)
 
 let () = Utils.settings.output_debug_files_in_build_directory <- true
-let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"cc")
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
 
 module Generated = Test_utils.Generated
 

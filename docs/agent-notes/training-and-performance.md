@@ -949,7 +949,8 @@ files.
   `config_records.py expect FILE KEY=VALUE...` is the check over a stderr a driver kept itself, and
   `test_cells.py` refuses a driver that names the prose trace. The reader refuses a key resolved
   two ways in one process, which an unset key read under two defaults would be:
-  `test_config_consistency` holds every key's literal defaults to one value (gh-ocannl-1766). A
+  `test_config_consistency` holds every key's literal defaults to one value (gh-ocannl-1766), and
+  the runtime refuses the second default (conventions.md, gh-ocannl-1861). A
   driver that measures revisions older than the stream (gh-ocannl-1566) cannot use it at all
   (`gh1051_boundary_split.sh`, README).
 - **Interleaved timing visits arms in `Bench_design`'s spread mirrored rotation** (`bin/bench_design.ml`,
