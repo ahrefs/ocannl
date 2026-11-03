@@ -10,7 +10,8 @@ module Tn = Ir.Tnode
 
    Part 1 exercises the host-level [Parallel.shard_along] / [Parallel.gather] round-trip: splitting
    a batch tensor into shards and gathering must reconstruct the original row order exactly, and
-   invalid configurations must raise.
+   invalid configurations must raise; a shard's label, like [Train.forward]'s block comment, spells
+   its source's [label_name] even once a repeated label has moved the source's debug name.
 
    Part 2 exercises the raw-backend merge-buffer all-reduce that [Parallel.grad_sync] is built on:
    two context trees hold distinct values of the same tnode; a [device_to_device
@@ -69,6 +70,50 @@ let () =
     (raises (fun () -> ignore (Parallel.shard_along ~axis:0 ~n_shards:4 batch)));
   Verdict.p "axis<>0 raises"
     (raises (fun () -> ignore (Parallel.shard_along ~axis:1 ~n_shards:2 batch)));
+
+  (* Names stored, not shown, spell [label_name] (post-wave task post-1-task-6, after
+     gh-ocannl-1686): a node whose label its routine repeats is minted the [n<id>_<label>] code
+     name, and the debug name follows it -- but [shard_along]'s shard labels and [Train.forward]'s
+     block comment are what an unminted twin with the same label gets, so they do not depend on what
+     a renderer minted first. The minting is forced as the renderer does it for a repeated label
+     ([Tn.styled_ident] under a repeating-idents table naming it). *)
+  let minted = make_batch "rows" [| 0.; 1.; 2.; 3. |] in
+  let twin = make_batch "rows" [| 0.; 1.; 2.; 3. |] in
+  let label_name = Tn.label_name minted.Tensor.value in
+  let repeating = Hashtbl.create (module String) in
+  Hashtbl.set repeating ~key:label_name ~data:();
+  Tn.update_code_name minted.Tensor.value
+    (Tn.styled_ident ~repeating_nograd_idents:repeating
+       ~repeating_grad_idents:(Hashtbl.create (module String))
+       (`Heuristic_ocannl `Under_grad) minted.Tensor.value);
+  let shown =
+    (Tn.debug_name minted.Tensor.value
+     [@rendered_name "the precondition compares the minted display name with label_name"])
+  in
+  Verdict.p "precondition: the repeated label moved the debug name away from label_name"
+    (String.equal (Tn.label_name twin.Tensor.value) label_name
+    && not (String.equal shown label_name));
+  let shard_labels t =
+    Array.to_list
+      (Array.map (Parallel.shard_along ~axis:0 ~n_shards:2 t) ~f:(fun s ->
+           Tn.label_name s.Tensor.value))
+  in
+  Verdict.p "shard_along labels a minted node's shards as it labels its unminted twin's"
+    (List.equal String.equal (shard_labels minted) (shard_labels twin));
+  Verdict.p_all "each shard label of the minted node starts with label_name, not the debug name"
+    (shard_labels minted) ~f:(fun l ->
+      String.is_prefix l ~prefix:label_name && not (String.is_substring l ~substring:shown));
+  let fwd_comment t =
+    match (Train.forward t).Ir.Assignments.asgns with
+    | Ir.Assignments.Block_comment (s, _) -> Some s
+    | _ -> None
+  in
+  let minted_comment = fwd_comment minted in
+  Verdict.p "Train.forward comments a minted node's block as its unminted twin's, from label_name"
+    (Option.is_some minted_comment
+    && Option.equal String.equal minted_comment (fwd_comment twin)
+    && Option.for_all minted_comment ~f:(fun s ->
+        String.is_prefix s ~prefix:label_name && not (String.is_substring s ~substring:shown)));
 
   (* --- Part 2: raw-backend merge-buffer all-reduce (grad_sync core) --- *)
   let backend = Backends.backend_module (Backends.get_backend ~backend_name:"cc" ()) in

@@ -7,5 +7,9 @@ round-trip identity: true
 n_shards<=0 raises: true
 uneven batch raises: true
 axis<>0 raises: true
+precondition: the repeated label moved the debug name away from label_name: true
+shard_along labels a minted node's shards as it labels its unminted twin's: true
+each shard label of the minted node starts with label_name, not the debug name: true
+Train.forward comments a minted node's block as its unminted twin's, from label_name: true
 all-reduce sum = [4 6]
 done
