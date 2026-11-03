@@ -2813,8 +2813,9 @@ group_identity_matches() {
 # caller's own shell may name a launch: `start ... && wait last`), nor a fork
 # of another (a subshell carries its parent's argv, and so does an orphan of
 # parent 1 -- the slot wrapper's double-forked guardian -- beside a process of
-# this uid with the very same argv that is no orphan: that one counts; orphans
-# that all carry one argv count once, credited when any of them is); its
+# this uid with the very same argv in the same directory that is no orphan:
+# that one counts; orphans that all carry one argv there count once, credited
+# when any of them is); its
 # program (the first word, its basename) is a shell (sh, bash, zsh, dash,
 # ksh), env, perl, python or Python, or one of timeout, nohup, nice,
 # caffeinate or setsid -- an agent CLI holding a prompt that quotes a launch
@@ -2932,7 +2933,13 @@ if (defined $runs && opendir(my $rd, $runs)) {
 my %verb = map { $_ => 1 } qw(run start fresh repeat prepush);
 my $prog = qr{\A-?(?:(?:ba|z|da|k)?sh|env|perl[0-9.]*|[Pp]ython[0-9.]*|g?timeout|nohup|nice|caffeinate|setsid)(?:\.exe)?\z};
 sub base { my $w = shift; $w =~ s{\A.*/}{}s; return $w }
+my %cwd;
 sub cwd_of {
+  my $p = shift;
+  return $cwd{$p} if exists $cwd{$p};
+  return $cwd{$p} = cwd_read($p);
+}
+sub cwd_read {
   my $p = shift;
   return readlink("/proc/$p/cwd") if $proc;
   open(my $l, "-|", "lsof", "-a", "-p", $p, "-d", "cwd", "-Fn") or return undef;
@@ -2989,7 +2996,8 @@ sub positions {
 }
 # Processes of this uid by argv: an orphan of parent 1 carrying the argv of a
 # process that is not one is a fork of that process (the guardian of a slot
-# wrapper); orphans that all carry one argv are one launch, credited when any
+# wrapper); orphans that all carry one argv in one directory are one launch,
+# credited when any
 # is, or when a published run credited that argv and the orphan started no
 # later than the verdict of that run (a guardian outliving its wrapper by a moment
 # carries the argv its wrapper was credited for, and started before the
@@ -3017,14 +3025,6 @@ sub credited { my $p = shift; return $known{"$p $tok{$p} " . Digest::MD5::md5_he
 for my $p (sort { $a <=> $b } keys %args) {
   next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
   next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
-  if (orphan($p)) {
-    my @same = @{$byargs{$args{$p}}};
-    next if grep { !orphan($_) } @same;
-    next if $spoken{$args{$p}}++ || grep { credited($_) } @same;
-    my $credit = $known_argv{Digest::MD5::md5_hex($args{$p})};
-    my $born = started($p);
-    next if defined $credit && defined $born && $born <= $credit;
-  }
   my @w = split " ", $args{$p};
   next unless @w && base($w[0]) =~ $prog;
   my $at = positions(@w);
@@ -3054,6 +3054,18 @@ for my $p (sort { $a <=> $b } keys %args) {
     $hit = 1 if defined $c && length $c && (Cwd::abs_path($c) // "") eq $root;
   }
   next unless $hit && !credited($p);
+  # Asked only of a launch, as it reads directories (lsof on a Mac).
+  if (orphan($p)) {
+    # One argv in another directory is another launch (a relative word names
+    # another worktree there): the copies are those in this one.
+    my $here = cwd_of($p);
+    my @same = grep { $_ == $p || (cwd_of($_) // "") eq ($here // "") } @{$byargs{$args{$p}}};
+    next if grep { !orphan($_) } @same;
+    next if $spoken{($here // "") . "\0" . $args{$p}}++ || grep { credited($_) } @same;
+    my $credit = $known_argv{Digest::MD5::md5_hex($args{$p})};
+    my $born = started($p);
+    next if defined $credit && defined $born && $born <= $credit;
+  }
   print "$p ", substr($args{$p}, 0, 240), "\n";
 }
 '

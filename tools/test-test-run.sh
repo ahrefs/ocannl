@@ -344,8 +344,9 @@
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
 #      red run in the same state root, `wait last`, `status last` and `paths
 #      run last` name the worktree's own, `list` lists only its runs (`--all`
-#      lists the sibling's too, the control), and a launch queued in the
-#      sibling holds no wait here.
+#      lists the sibling's too, the control), a launch queued in the sibling
+#      holds no wait here, and one queued there with the very argv of a
+#      detached one queued here hides nothing here.
 #  90. the runner's own OCANNL_TOOL_TESTRUN_BG, _RD and _OWN reach no dune: a
 #      run, a probed GPU run under a slot, a probed repeat's iterations.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
@@ -9192,7 +9193,8 @@ if [ -z "$q_detail" ]; then
   q_before=$(q_last "$q_root")
   touch "$TMP/queued.release13"
   q_detached
-  q_gone() { ! kill -0 "$q_orphan" 2>/dev/null; }
+  # Gone, or a zombie a PID 1 that reaps nothing keeps (a container's).
+  q_gone() { case $(ps -o state= -p "$q_orphan" 2>/dev/null | tr -d ' ') in '' | Z*) return 0 ;; esac; return 1; }
   if ! q_until 30 q_gone || ! q_finished "$q_root" "$q_before"; then
     q_detail="the first detached wrapper never finished its run: last: $(q_last "$q_root")"
   else
@@ -9294,6 +9296,31 @@ if [ -z "$q_detail" ]; then
 fi
 q_release_all
 q "$q_sib" wait last --timeout 30 >/dev/null 2>&1
+# One argv in two worktrees is two launches: a wrapper queued in the sibling
+# with the very argv of a detached one queued here hides nothing here. Never
+# released: killed, and a run published after clears the sightings.
+if [ -z "$q_detail" ]; then
+  ( (cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH \
+    exec bash "$q_slot" "$TMP/queued.never2" exec -- tools/test-run.sh run build @red) </dev/null >/dev/null 2>&1 &
+    echo $! >"$TMP/queued.orphan2")
+  q_here=$(cat "$TMP/queued.orphan2")
+  q_wrap "$q_sib" "$TMP/queued.never2" exec tools/test-run.sh run build @red
+  q_there=$q_wrap_pid
+  q_orphan2() { [ "$(ps -o ppid= -p "$q_here" 2>/dev/null | tr -d ' ')" = 1 ]; }
+  if ! q_until 10 q_orphan2; then
+    q_detail="the detached wrapper here is no orphan of parent 1"
+  else
+    sleep .5
+    q_capture "$q_root" status last
+    { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+      q_detail="status last here, the sibling queuing the very same argv: exit $q_rc (want 3): $q_out"
+  fi
+  kill -KILL "$q_here" "$q_there" 2>/dev/null
+  wait "$q_there" 2>/dev/null
+  sleep 1.5 # their guardians, alone for a second
+  q "$q_root" run build @ok >/dev/null 2>&1
+  q "$q_sib" run build @ok >/dev/null 2>&1
+fi
 if [ -z "$q_detail" ]; then report 0 "$q_sib_label"; else report 1 "$q_sib_label" "$q_detail"; fi
 }
 harness_leg_run '100: every last lookup stays in its own worktree #queries' leg_100
