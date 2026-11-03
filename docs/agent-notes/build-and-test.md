@@ -3932,14 +3932,22 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   It hit the Formatting and Dune-floor jobs as hard as the build shards, and once put a main shard
   at 37.5 minutes. `.github/actions/setup-ocaml-debs` now pre-installs that list from `.deb` files
   in actions/cache, keyed by apt's own `--print-uris` (file names, sizes, hashes), before every
-  ubuntu setup-ocaml step in `ci.yml`, so the action's install finds nothing to fetch; the list
+  ubuntu setup-ocaml step in the workflows, so the action's install finds nothing to fetch; the list
   restates setup-ocaml's, so a change there costs only the speed back, and every step of it is
   best-effort. The mechanics live in `.github/actions/apt-debs-cache` (gh-ocannl-1546), which
   `gh-pages-docs.yml` uses for its 180 MB of texlive, the same slow mirror having held that job at
   its 30-minute ceiling: the key carries the runner image (`ImageOS`) and a prefix restore of the
   previous digest's files, so a changed dependency refetches only itself; the caller refreshes the
   apt index first if it needs a current one, and keeps its own plain install of the same list
-  after the action as the fallback. The fill is a step of its own with its own cap (gh-ocannl-1649):
+  after the action as the fallback. opam's depexts take the same route before each ubuntu depext
+  install (`ci.yml`, `ci-env.yml`, `gh-pages-api.yml`; gh-ocannl-1574): a step asks opam for them
+  (`opam list --external --resolve=<project packages>` under the install's own test/doc flags),
+  keeps those no installed package is or `Provides`, as opam's depext step does (an `apt-get
+  install` of an installed package upgrades it, and of a provided name replaces its provider:
+  22.04's `pkgconf` provides `pkg-config`, and the first run of lukstafi/ocannl-staging#1683
+  removed `pkgconf` and `r-base-dev` by installing the real one), and hands the rest to the
+  action under `opam-depexts-debs-v1`, whose plan is `--no-remove`, so a filter miss warns
+  rather than removes. The fill is a step of its own with its own cap (gh-ocannl-1649):
   `apt-get --download-only` in fresh attempts of `fetch-attempt-minutes` each, keeping finished
   files, since the slowness is per apt session, not per runner -- so a 15-minute job ceiling
   never has to clear a slow fill. **`actions/cache`'s post step inside a composite action that
