@@ -84,6 +84,12 @@ ok: skip list -- a lazy sequence a map only builds
 ok: skip list -- a partial skip a loop body only builds
 ok: skip list -- a lazy a branch only builds
 ok: skip list -- an Option iteration, which runs at most once
+ok: floor -- a floor of zero on an opened p_all
+ok: floor -- a negative floor, which the parser folds into one constant
+ok: floor -- a zero written in hexadecimal, with underscores, and under a type constraint
+ok: floor -- a hexadecimal floor above one, and a floor of one
+ok: floor -- a computed floor, which the runtime refusal judges
+ok: floor -- a p_all the source binds itself
 the walk counts every string literal it passes: true
 and places the ones a named function receives: true
 verdict_ratchet refuses a corpus built to trip its refusals, exiting 1: true

@@ -747,6 +747,9 @@ let raw_entries =
         "[scanner-refusal:bff7d0c903bdd22694f18ebeaf0d916f] folded-gate reader raised";
         "[scanner-refusal:0599e4e661e8f3457de44f5cb1b23a1a] compares float readbacks";
         "[scanner-refusal:e10fe49d52c241506e850ae9e6766dc9] tolerance reader raised";
+        "[scanner-refusal:085cfc1230ac1435b3930c2de950d243] passes `~min";
+        "[scanner-refusal:fccffb542fab0ec734024940e42605cc] exempt_floors";
+        "[scanner-refusal:4dde956f3421b7ae6e9cff871b40d8b4] floor reader raised";
         "[scanner-refusal:0f307832357ee7ca58b9798a86530dac] arguments the rule's";
         "[scanner-refusal:53b71ea33a69d24c941985f4eb35406b] prints the claim";
         "[scanner-refusal:7d1962ff34bbe1ed7b89a535dc0cfd7e] exempted literals that";
@@ -763,6 +766,9 @@ let raw_entries =
         "[scanner-refusal:d36bcdb919d2b79b23dc1e15969fde60] tolerance reader read";
         "[scanner-refusal:2d867210446f1449a6beebc663d207c6] Verdict.Claims";
         "[scanner-refusal:20d88fc03901bcbdfbc113ed14029a7a] Verdict.Claims";
+        "[scanner-refusal:43f45dea7e13ae71ff6e05054baafcca] quantified claim passes";
+        "[scanner-refusal:e7253c1a7a914e2fb31ae0576e3b56eb] the literal floors";
+        "[scanner-refusal:72bcef9d9ddc2338fe8af8ef65990041] Verdict.Claims";
         "[scanner-refusal:b42517e6f02cc3aa2ca5691ebdd70c62] population it quantifies";
         "[scanner-refusal:ccb1c4138577d668c45762104c7e40a4] Verdict.Claims";
         "[scanner-refusal:a51e429cf1070db9d057a59d7b50c801] reader completed gated";

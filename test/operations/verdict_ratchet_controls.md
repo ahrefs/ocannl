@@ -903,3 +903,32 @@ two batches' baselines exited 0 (`20261102T215754Z-24690`, `20261102T215951Z-744
 | A maximum-error helper is no tolerance name outside a parity predicate | `verdict_scan.ml`: a parity-only name resolves as a tolerance in any claim | Failed: accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and within, and the corpus claim | `20261102T220034Z-92761` |
 | A leg's or a case's closure is not read as the claim's value | `verdict_scan.ml`: `in_leg`, `in_legf` and `case` read as claims | Failed: `does not read the closure of a leg or a case, whose claims are read where written`, and the corpus claim | `20261102T215852Z-51469` |
 | Only Verdict's claims are read, plain ones included | `verdict_scan.ml`: every claim-named callee read as Verdict's | Failed: `does not read a p the source binds itself`, does not read a p_all2 the source binds itself, and the corpus claim | `20261102T215912Z-56632` |
+
+## Literal floor mutation runs (post-1-task-4 of staging#1578)
+
+The floor reader (`Verdict_scan.floor_census`) refuses a `~min` written as an integer literal below
+one on a Verdict claim whose definition takes a floor (`Verdict_scan.floor_claims`, held equal to
+the `Verdict.Claims` members whose definition in `test/support/verdict.ml` takes a `?min`), where
+`Verdict.check_floor` refuses it only on a run that reaches the claim. A computed floor stays the
+runtime refusal's. The runtime refusal's own controls in `verdict_quantified.ml` are exempted site by
+site in `exempt_floors`, keyed by source, callee as written and label, each required to be exactly
+one site. Every run used tools/mutation-run.sh `--batch` on the named module and focused alias, and
+restored the source byte-for-byte; each batch's baseline exited 0 (`20261103T015616Z-84194`, `20261103T020006Z-91857`, `20261103T015832Z-47630`).
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A floor written as a literal below one refuses the run | `verdict_ratchet.ml`: `refuse_floor` reports nothing | Failed: `refuses a planted literal floor below one, a stale floor exemption, and a floor reader that raised` | `20261103T015630Z-96296` |
+| A stale floor exemption refuses the run | `verdict_ratchet.ml`: `refuse_stale_floors` reports nothing | Failed: refuses a planted literal floor below one, a stale floor exemption, and a floor reader that raised | `20261103T015659Z-8366` |
+| A floor reader that raises on a source that parses refuses as a reader defect | `verdict_ratchet.ml`: the raised arm of `read_floors` reports nothing | Failed: refuses a planted literal floor below one, a stale floor exemption, and a floor reader that raised | `20261103T015727Z-21044` |
+| The exemptions are live: each is a site the reader finds | `verdict_ratchet.ml`: one `exempt_floors` entry dropped | Failed: the corpus claim that no quantified claim passes a literal floor below one, on the dropped site | `20261103T015756Z-31769` |
+| The floored claims are held equal to Verdict's | `verdict_scan.ml`: `gated_exists` dropped from `floor_claims` | Failed: the claim that it reads the floor of every claim Verdict.Claims exports with one, and the stale-exemption refusal for the gated_exists site it no longer finds | `20261103T020037Z-99810` |
+
+The floor reader's cases are `verdict_scan_cases`' floor rows, run under the
+`runtest-verdict_scan_cases` alias:
+
+| Mechanism | Mutation | Cases that failed | Run |
+|---|---|---|---|
+| An integer literal floor is read | `verdict_scan.ml`: no integer constant read as a floor | a floor of zero on an opened p_all; a negative floor, which the parser folds into one constant; a zero written in hexadecimal, with underscores, and under a type constraint; a hexadecimal floor above one, and a floor of one (its read count) | `20261103T015847Z-55302` |
+| A literal is read under a type constraint | `verdict_scan.ml`: the argument is not peeled | a zero written in hexadecimal, with underscores, and under a type constraint | `20261103T015904Z-64405` |
+| A literal is read by its value | `verdict_scan.ml`: only its first character parsed | a negative floor, which the parser folds into one constant; a hexadecimal floor above one, and a floor of one | `20261103T015921Z-73563` |
+| Only Verdict's claims are read | `verdict_scan.ml`: a claim the source binds read as Verdict's | a p_all the source binds itself | `20261103T015939Z-83071` |
