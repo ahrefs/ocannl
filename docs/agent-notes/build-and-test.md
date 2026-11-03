@@ -1304,6 +1304,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   sends the group TERM from inside the wait's first probe, against a plain-`sup_alive` control;
   the unshimmed GROUP_TERM leg hit it only under load (one run in 25 at background QoS on a busy
   mac-studio, none in 35 at normal priority).
+- **A trapped signal can be held in front of `wait PID` until PID exits** (gh-ocannl-1504). Bash
+  checks for pending traps between commands; a signal landing after the last check and before
+  `wait` blocks has its trap run only once PID exits. A shell relaying its signals to a child it
+  waits on (the attached `run` launcher, the `repeat` coordinator) then relays the cancellation
+  after the run it was meant to stop is over. Isolated (a trapped-TERM relay looping a probe and a
+  `wait`), bash 3.2 held 2 TERMs in 4000, bash 5.2 1 in 20000 under CPU load; in
+  `tools/test-mutation-run.sh` leg 10 it was the 45-second timeout about once in 1400 runs on the
+  hosted runner (once in 70 on mac-studio beside `tools/test-harnesses.sh`), which a kernel signal
+  trace pinned to the launcher: TERM delivered to its handler, nothing relayed for 45 seconds. Those waits go through `wait_tick`, a
+  `wait` on a one-second perl tick that ends early when the child does, so a held trap runs
+  within a second. A signal relayed this way needs no deadline sized for load; a leg timing out on
+  one is a lost relay first.
 - **A short bound that kills a stand-in cannot also be the time it gets to start** (gh-ocannl-1366).
   The device-probe hang legs (`tools/test-test-run.sh` 76 and 83) ran their never-answering
   stand-in under a 1 s bound and then read the call and pid it records first thing; on a loaded

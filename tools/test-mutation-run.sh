@@ -841,9 +841,10 @@ if (!$pid) {
 }
 my $ready = 0;
 # Both waits end as soon as their condition holds, so their bounds are paid only by a failing run
-# and are sized for a loaded box (gh-ocannl-1504: this leg timed out under test-harnesses.sh on
-# mac-studio when they were ten and fifteen seconds). The signal's stays under the fake test's 60-second sleep, so a
-# signal the runner ignored still reads as a timeout, never as a late clean exit.
+# and are sized for a loaded box. The signal's stays under the fake test's 60-second sleep, so a
+# signal the runner ignored still reads as a timeout, never as a late clean exit -- which is how
+# this leg caught test-run's launcher holding the relayed TERM in front of its wait until the run
+# ended (gh-ocannl-1504, about once in a thousand runs of this leg; wait_tick in tools/test-run.sh).
 for (1..1200) { if (-e "$dir/ready") { $ready = 1; last } select undef, undef, undef, .05; }
 kill($signal, $pid);
 # A case that times out names itself and the process tree the signal left (gh-ocannl-1504).
