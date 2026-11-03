@@ -591,6 +591,11 @@ let () =
        has "simdgroup_load"
        && has "simdgroup_multiply_accumulate"
        && has "simdgroup_store" && has "threadgroup_barrier"
+     else if Ll_test.backend_contraction_off () then
+       (* A compile pinning contraction off renders the fallback (and the register tiling) unfused,
+          the serial loop's two roundings (gh-ocannl-1457; [tile_fallback_unfused] pins the values),
+          so there is no fused chain to look for. *)
+       true
      else
        (* Fused per-element chains, in the register tiling and the fallback alike, are what makes
           the C backends' bitwise parity above hold. *)

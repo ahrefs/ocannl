@@ -67,6 +67,21 @@ let hip_math_options ~fast_math =
       "-fno-gpu-approx-transcendentals";
     ]
 
+(* gh-ocannl-1457: whether a clang-family option vector (cc's kernel flags, hiprtc's) pins
+   contraction off. Clang applies floating-point switches left to right and [-ffast-math] implies
+   [-ffp-contract=fast], so the last of the two decides; a vector naming neither leaves contraction
+   to the toolchain's default, which is never a pin. *)
+let clang_contraction_off options =
+  List.fold_left
+    (fun off option ->
+      match option with
+      | "-ffp-contract=off" -> true
+      | "-ffast-math" | "-ffp-contract=fast" | "-ffp-contract=on"
+      | "-ffp-contract=fast-honor-pragmas" ->
+          false
+      | _ -> off)
+    false options
+
 let hiprtc ~target_archs ~hip_include_options ~rocwmma_include_options ~uses_rocwmma ~fast_math
     ~with_debug ?(with_line_info = false) () =
   hip_include_options
@@ -122,6 +137,10 @@ let nvrtc_reassociation_opt_in = "--fassociative-math"
 let nvrtc_math_options ~fast_math =
   if fast_math then [ "--use_fast_math" ]
   else [ "--ftz=false"; "--prec-div=true"; "--prec-sqrt=true"; "--fmad=false" ]
+
+(* gh-ocannl-1457: whether an nvrtc option vector pins contraction off. [--use_fast_math] implies
+   [--fmad=true], so only the spelled-out [--fmad=false] counts. *)
+let nvrtc_contraction_off options = List.mem "--fmad=false" options
 
 let nvrtc ~cuda_include_options ~arch_options ~fast_math ~with_device_debug
     ?(with_line_info = false) () =
@@ -192,6 +211,16 @@ let render_metal options =
          | Math_functions_fast -> "math-functions=fast"
          | Enable_logging -> "enable-logging=true")
        options)
+
+(* gh-ocannl-1457: the Metal math regime as schedule-cache identity. The two option sequences are
+   two arithmetic regimes (Legacy's [fastMathEnabled=false] also makes the math functions precise),
+   picked by what the running OS's compile options accept, so a crown from one is not evidence for
+   the other. Only the legacy regime adds a component, so every key crowned on macOS 15 or later
+   stays valid; derived from the same builder the compile uses. *)
+let metal_regime_tag math_api =
+  match math_api with
+  | Modern_split -> None
+  | Legacy -> Some ("metal-math:" ^ render_metal (metal ~routine_logging:false ~math_api))
 
 (* One line, for diagnostics that have to travel through a log or an exception message: a compile's
    effective option vector is the state a numeric mismatch is reproducible against, and reading it

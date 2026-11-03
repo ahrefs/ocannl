@@ -503,6 +503,12 @@ let backend_accum_prec =
   let caps = lazy (Context.codegen_capabilities (Lazy.force base_ctx)) in
   fun p -> (Lazy.force caps).accum_prec p
 
+(** Whether the selected backend's kernel compile pins contraction off
+    ([Backend_intf.codegen_capabilities.compiler_contraction_off], gh-ocannl-1457): then a
+    tensorized accumulation renders unfused, the serial loop's two roundings. *)
+let backend_contraction_off () =
+  (Context.codegen_capabilities (Lazy.force base_ctx)).compiler_contraction_off ()
+
 (** [link ~name o] compiles the optimized record AS WRITTEN through the [?prelowered] seam,
     returning the advanced context and the compiled routine — so a test can assert on the
     [inputs]/[outputs] the link actually computed, read straight off the routine record, instead of

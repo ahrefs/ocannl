@@ -83,6 +83,7 @@ test/operations/test_uniform_odd_sizes.ml -- no-contraction: uniform draws: bit 
 test/operations/test_uniform_virtual_lane.ml -- no-contraction: uniform draws times one, converted with an exact power-of-two scale
 test/operations/tf32_reference_rounding.ml -- exact-operands: weights of one and zero and an explicit-fma split; the hardware leg is GPU-only
 test/operations/tile_bf16_row_groups.ml -- exact-operands: an explicit fma by one and minus zero for every bf16 code, exact for every input
+test/operations/tile_fallback_unfused.ml -- pinned off
 test/operations/tile_mma_declines.ml -- exact-operands: quarters times small integers, every sum exact in f32
 test/operations/tile_mma_geometry.ml -- exact-operands: quarter, integer and half-step cycles, exact at f32, bf16 and half
 test/operations/tile_mma_narrow.ml -- exact-operands: dyadic operands keep every product and sum exact, the native f16 accumulators included

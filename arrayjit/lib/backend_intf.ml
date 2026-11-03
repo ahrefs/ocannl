@@ -614,6 +614,11 @@ type codegen_capabilities = {
   asynchronous_staging_copy : bool;
       (** Whether eligible pipelined staging copies use a dialect-specific asynchronous copy arm. A
           portable synchronous depth-2 pipeline is not this capability. *)
+  compiler_contraction_off : unit -> bool;
+      (** Whether the backend's kernel compile pins contraction off, from the same
+          [C_syntax_config.compiler_contraction_off] code generation reads (gh-ocannl-1457): then a
+          [Tile_mma] fallback, and the register tile, keep the serial loop's two roundings. Read per
+          call, since the settings behind it are mutable within a process. *)
   mma_arm :
     a_prec:Ops.prec ->
     b_prec:Ops.prec ->
@@ -728,6 +733,7 @@ let no_codegen_capabilities =
     compute_prec = Fn.id;
     accum_prec = Fn.id;
     asynchronous_staging_copy = false;
+    compiler_contraction_off = (fun () -> false);
     mma_arm = (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ -> None);
     mma_operand_loads =
       (fun ~a_prec:_ ~b_prec:_ ~d_prec:_ ~scope:_ ~ta:_ ~tb:_ ~a:_ ~b:_ -> (false, false));
@@ -785,6 +791,9 @@ let codegen_capabilities_fingerprint
       compute_prec;
       accum_prec;
       asynchronous_staging_copy;
+      (* Keyed by each backend's own [codegen_tag] (its [mma-fallback-unfused] component,
+         gh-ocannl-1457), only in the pinned regime, so default keys stay as they were. *)
+      compiler_contraction_off = _;
       mma_arm;
       mma_operand_loads = _;
       mma_accepts = _;

@@ -841,6 +841,20 @@ val serial_accum_widths :
     [Schedule.Privatize] reads its tile width off this, asked of the program its schedule was
     applied to (gh-ocannl-1151). *)
 
+val fused_accumulation : d:Tnode.t -> di:Indexing.axis_index array -> scalar_t -> scalar_t option
+(** gh-ocannl-998: the accumulation into [d[di]] in the fused form a tile multiply-accumulate
+    computes. An [FMA] accumulating into [d[di]] is returned as is and a floating plain add of a
+    product is returned as the [FMA]; [None] for an integer accumulation (gh-ocannl-824) or no
+    product accumulated into [d[di]]. The sketch seeding asks it whether the register tile can
+    render a site (both forms can be tiled), and {!fuse_tile_fallback} applies it. *)
+
+val fuse_tile_fallback : d:Tnode.t -> t -> t
+(** A [Tile_mma] fallback with every accumulation into [d] in its {!fused_accumulation} form: what
+    [C_syntax] renders a fallback as unless the backend's compile pins contraction off
+    ([C_syntax_config.compiler_contraction_off], gh-ocannl-1457). [Schedule.Tensorize] leaves the
+    fallback in the form the contraction licence left it, so under a contraction-off compile the
+    tile and its fallback compute the serial loop's two roundings. *)
+
 val zero_initializer_target : t -> Tnode.t option
 (** A whole-node zero, or its unconditional covering positive-zero [Expand_zero] loop nest. *)
 

@@ -13,6 +13,11 @@ val kernel_compiler_flags : unit -> string
     [test/operations/bridge_arm_coverage] (gh-ocannl-1145), which preprocesses retained kernel
     sources under exactly these flags to read which storage-bridge arm each one compiled into. *)
 
+val contraction_off : unit -> bool
+(** Whether the kernel compile pins contraction off ([cc_backend_fp_contract=off], placed after any
+    [-ffast-math]; {!Compiler_options.clang_contraction_off} over the flags in compile order): the
+    cc [C_syntax_config.compiler_contraction_off] (gh-ocannl-1457). *)
+
 val compiler_executable_identity : string -> string
 (** Resolves every executable token in a compiler command and fingerprints its path, size and
     modification time. Exposed for the generated-kernel census's persistent listing identity: an

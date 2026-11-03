@@ -595,6 +595,21 @@ module type C_syntax_config = sig
   (** Declaration prefix for workgroup-shared placements ([__shared__ ] / [threadgroup ]); [None]
       makes a non-empty [workgroup_shared] set a compile-time error. *)
 
+  val compiler_contraction_off : unit -> bool
+  (** Whether this backend's kernel compile is pinned so its compiler never contracts a [a * b + c]
+      into a fused multiply-add on its own (gh-ocannl-1457), derived from the same option builder
+      the compile uses: cc's [cc_backend_fp_contract=off] ([-ffp-contract=off], placed after any
+      [-ffast-math]), CUDA's [--fmad=false] ([cuda_fast_math=false]), HIP's [-ffp-contract=off]
+      ([hip_fast_math=false]). Only an explicit pin counts, never a toolchain default; Metal exposes
+      no contraction switch, so it is [false] there (the {!Pure_C_config} default). Read per call:
+      the settings behind it are mutable within a process.
+
+      When [true], a [Tile_mma] fallback renders in the form the contraction licence left it, and
+      the register-tiled rendering spells a plain-add fallback as an unfused vector multiply then
+      add -- both the serial loop's two roundings, which the compiler is forbidden to fuse. When
+      [false], the fallback renders fused ({!Low_level.fuse_tile_fallback}), as every tile
+      multiply-accumulate computes. *)
+
   val volatile_serial_accumulation : bool
   (** Workaround for a Metal shader-compiler miscompilation of serial accumulations (observed on
       macOS 15/Metal 3.1-3.2 through macOS 26/Metal 4), in both spellings a reduction can take.
@@ -1149,6 +1164,12 @@ module C_syntax (_ : C_syntax_config) : sig
     prec:Ops.prec -> lanes:int -> dst:string -> a:string -> b:string -> PPrint.document
   (** Render [dst = fma(a, b, dst)] over [lanes]-lane vectors, rounding once as the scalar path
       does. *)
+
+  val vec_acc_muladd :
+    prec:Ops.prec -> lanes:int -> dst:string -> a:string -> b:string -> PPrint.document
+  (** Render [dst = dst + a * b] over [lanes]-lane vectors, unfused: the register tile's update
+      under a contraction-off compile ({!C_syntax_config.compiler_contraction_off}, gh-ocannl-1457).
+  *)
 
   val compile_main : render_ctx -> Low_level.t -> PPrint.document
   (** Render a statement under the given rendering context. *)

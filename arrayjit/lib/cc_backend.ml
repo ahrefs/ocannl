@@ -400,6 +400,15 @@ let fp_contract_flag () =
   | ("on" | "fast") as mode -> with_chains (Some ("-ffp-contract=" ^ mode))
   | other -> invalid_arg ("cc_backend_fp_contract: expected auto | off | on | fast, got " ^ other)
 
+(* gh-ocannl-1457: whether the kernel compile pins contraction off, read off the floating-point
+   flags in the order [kernel_compiler_flag_settings] passes them (the other settings name no
+   contraction switch, and computing them would run the target probes). *)
+let contraction_off () =
+  Compiler_options.clang_contraction_off
+    (List.concat_map
+       (List.filter_opt [ fast_math_flag (); fp_contract_flag () ])
+       ~f:(String.split ~on:' '))
+
 let simd_flags =
   let probed =
     lazy
@@ -1037,6 +1046,10 @@ let codegen_tag () =
             "mma-macs-per-update=" ^ Int.to_string C_syntax.tile_mma_macs_per_update;
           ]
   in
+  (* gh-ocannl-1457: a contraction-off compile renders a plain-add [Tile_mma] fallback, and its
+     register tile, unfused, so a crown timed with the fused tile is not evidence for it. Only that
+     regime adds a component, so every other key stays valid. *)
+  let parts = if contraction_off () then parts @ [ "mma-fallback-unfused" ] else parts in
   String.prefix (Stdlib.Digest.to_hex (Stdlib.Digest.string (String.concat ~sep:"\000" parts))) 8
 
 (* gh-ocannl-1371: which kind of host a run had, from the probes and settings the renderer itself
@@ -1156,7 +1169,8 @@ let kernel_compiler_flag_settings () =
     Option.map (fast_math_flag ()) ~f:(fun flag -> ("cc_backend_fast_math", flag));
     (* AFTER [-ffast-math], which itself sets contraction to fast: clang documents that the last of
        the two wins, so the explicit knob has to come last or [cc_backend_fp_contract=off] would
-       silently do nothing in the one combination where it is load-bearing (Codex P2 on PR #291). *)
+       silently do nothing in the one combination where it is load-bearing (Codex P2 on PR #291).
+       [contraction_off] below reads this same order. *)
     Option.map (fp_contract_flag ()) ~f:(fun flag -> ("cc_backend_fp_contract", flag));
     Option.map parallel_flag ~f:(fun flag -> ("cc_parallel_grid", flag));
   ]
@@ -1695,6 +1709,7 @@ struct
   end)
 
   let node_ident_prefix = Backend_intf.cc_facts.node_ident_prefix
+  let compiler_contraction_off = contraction_off
 
   (* The prelude's linkage macro and the outlined parts' attribute (gh-ocannl-1603) are macros: a
      node or routine spelled like one would expand. *)

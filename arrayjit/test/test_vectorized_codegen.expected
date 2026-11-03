@@ -649,15 +649,580 @@
   /* Main logic. */
   for (int32_t i14 = 0; i14 <= 0; ++i14) {
     if (i14 == 0) {
-      for (int32_t i15 = 0; i15 <= 5; ++i15) {
-        for (int32_t i16 = 0; i16 <= 28; ++i16) {
-          {
-            float v2_td2;
-            v2_td2 = td2[(i15) * 29 + i16];
-            for (int32_t i17 = 0; i17 <= 4; ++i17) {
-              v2_td2 = (v2_td2 + (ta2[(i15) * 5 + i17] * tb2[(i17) * 29 + i16]));
+      { /* Tile_mma register tiling: 4x2 C-tile of 8-lane float held across the k-loop (full blocks 4x16 of 6x29; column tail 13 in 2 vectors; row tail 2). */
+        typedef float ocannl_vec8f __attribute__((vector_size(32)));
+        float *tmma_d__ = (td2 + (0) * 29 + 0);
+        const float *tmma_a__ = (ta2 + (0) * 5 + 0);
+        const float *tmma_b__ = (tb2 + (0) * 29 + 0);
+        for (int32_t tmma_i__ = 0; tmma_i__ + 4 <= 6; tmma_i__ += 4) {
+          for (int32_t tmma_j__ = 0; tmma_j__ + 16 <= 29; tmma_j__ += 16) {
+            ocannl_vec8f tmma_c_0_0__;
+            __builtin_memcpy(&tmma_c_0_0__, &tmma_d__[(tmma_i__ + 0) * 29 + tmma_j__ + 0], sizeof(tmma_c_0_0__));
+            ocannl_vec8f tmma_c_0_1__;
+            __builtin_memcpy(&tmma_c_0_1__, &tmma_d__[(tmma_i__ + 0) * 29 + tmma_j__ + 8], sizeof(tmma_c_0_1__));
+            ocannl_vec8f tmma_c_1_0__;
+            __builtin_memcpy(&tmma_c_1_0__, &tmma_d__[(tmma_i__ + 1) * 29 + tmma_j__ + 0], sizeof(tmma_c_1_0__));
+            ocannl_vec8f tmma_c_1_1__;
+            __builtin_memcpy(&tmma_c_1_1__, &tmma_d__[(tmma_i__ + 1) * 29 + tmma_j__ + 8], sizeof(tmma_c_1_1__));
+            ocannl_vec8f tmma_c_2_0__;
+            __builtin_memcpy(&tmma_c_2_0__, &tmma_d__[(tmma_i__ + 2) * 29 + tmma_j__ + 0], sizeof(tmma_c_2_0__));
+            ocannl_vec8f tmma_c_2_1__;
+            __builtin_memcpy(&tmma_c_2_1__, &tmma_d__[(tmma_i__ + 2) * 29 + tmma_j__ + 8], sizeof(tmma_c_2_1__));
+            ocannl_vec8f tmma_c_3_0__;
+            __builtin_memcpy(&tmma_c_3_0__, &tmma_d__[(tmma_i__ + 3) * 29 + tmma_j__ + 0], sizeof(tmma_c_3_0__));
+            ocannl_vec8f tmma_c_3_1__;
+            __builtin_memcpy(&tmma_c_3_1__, &tmma_d__[(tmma_i__ + 3) * 29 + tmma_j__ + 8], sizeof(tmma_c_3_1__));
+            for (int32_t tmma_l__ = 0; tmma_l__ < 5; ++tmma_l__) {
+              ocannl_vec8f tmma_b_0__;
+              __builtin_memcpy(&tmma_b_0__, &tmma_b__[tmma_l__ * 29 + tmma_j__ + 0], sizeof(tmma_b_0__));
+              ocannl_vec8f tmma_b_1__;
+              __builtin_memcpy(&tmma_b_1__, &tmma_b__[tmma_l__ * 29 + tmma_j__ + 8], sizeof(tmma_b_1__));
+              float tmma_as_0__ = tmma_a__[(tmma_i__ + 0) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_0__ = (ocannl_vec8f){tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_0_0__ = __builtin_elementwise_fma(tmma_a_0__, tmma_b_0__, tmma_c_0_0__);
+              #elif defined(__FMA__)
+              tmma_c_0_0__ = __builtin_ia32_vfmaddps256(tmma_a_0__, tmma_b_0__, tmma_c_0_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_0__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_0_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_0_1__ = __builtin_elementwise_fma(tmma_a_0__, tmma_b_1__, tmma_c_0_1__);
+              #elif defined(__FMA__)
+              tmma_c_0_1__ = __builtin_ia32_vfmaddps256(tmma_a_0__, tmma_b_1__, tmma_c_0_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_1__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_0_1__[ocannl_l__]);
+              #endif
+              OCANNL_TILE_FENCE();
+              float tmma_as_1__ = tmma_a__[(tmma_i__ + 1) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_1_0__ = __builtin_elementwise_fma(tmma_a_1__, tmma_b_0__, tmma_c_1_0__);
+              #elif defined(__FMA__)
+              tmma_c_1_0__ = __builtin_ia32_vfmaddps256(tmma_a_1__, tmma_b_0__, tmma_c_1_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_0__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_1_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_1_1__ = __builtin_elementwise_fma(tmma_a_1__, tmma_b_1__, tmma_c_1_1__);
+              #elif defined(__FMA__)
+              tmma_c_1_1__ = __builtin_ia32_vfmaddps256(tmma_a_1__, tmma_b_1__, tmma_c_1_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_1__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_1_1__[ocannl_l__]);
+              #endif
+              OCANNL_TILE_FENCE();
+              float tmma_as_2__ = tmma_a__[(tmma_i__ + 2) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_2__ = (ocannl_vec8f){tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_2_0__ = __builtin_elementwise_fma(tmma_a_2__, tmma_b_0__, tmma_c_2_0__);
+              #elif defined(__FMA__)
+              tmma_c_2_0__ = __builtin_ia32_vfmaddps256(tmma_a_2__, tmma_b_0__, tmma_c_2_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_2_0__[ocannl_l__] = fmaf(tmma_a_2__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_2_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_2_1__ = __builtin_elementwise_fma(tmma_a_2__, tmma_b_1__, tmma_c_2_1__);
+              #elif defined(__FMA__)
+              tmma_c_2_1__ = __builtin_ia32_vfmaddps256(tmma_a_2__, tmma_b_1__, tmma_c_2_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_2_1__[ocannl_l__] = fmaf(tmma_a_2__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_2_1__[ocannl_l__]);
+              #endif
+              OCANNL_TILE_FENCE();
+              float tmma_as_3__ = tmma_a__[(tmma_i__ + 3) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_3__ = (ocannl_vec8f){tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_3_0__ = __builtin_elementwise_fma(tmma_a_3__, tmma_b_0__, tmma_c_3_0__);
+              #elif defined(__FMA__)
+              tmma_c_3_0__ = __builtin_ia32_vfmaddps256(tmma_a_3__, tmma_b_0__, tmma_c_3_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_3_0__[ocannl_l__] = fmaf(tmma_a_3__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_3_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_3_1__ = __builtin_elementwise_fma(tmma_a_3__, tmma_b_1__, tmma_c_3_1__);
+              #elif defined(__FMA__)
+              tmma_c_3_1__ = __builtin_ia32_vfmaddps256(tmma_a_3__, tmma_b_1__, tmma_c_3_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_3_1__[ocannl_l__] = fmaf(tmma_a_3__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_3_1__[ocannl_l__]);
+              #endif
             }
-            td2[(i15) * 29 + i16] = v2_td2;
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 0) * 29 + tmma_j__ + 0], &tmma_c_0_0__, sizeof(tmma_c_0_0__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 0) * 29 + tmma_j__ + 8], &tmma_c_0_1__, sizeof(tmma_c_0_1__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 1) * 29 + tmma_j__ + 0], &tmma_c_1_0__, sizeof(tmma_c_1_0__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 1) * 29 + tmma_j__ + 8], &tmma_c_1_1__, sizeof(tmma_c_1_1__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 2) * 29 + tmma_j__ + 0], &tmma_c_2_0__, sizeof(tmma_c_2_0__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 2) * 29 + tmma_j__ + 8], &tmma_c_2_1__, sizeof(tmma_c_2_1__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 3) * 29 + tmma_j__ + 0], &tmma_c_3_0__, sizeof(tmma_c_3_0__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 3) * 29 + tmma_j__ + 8], &tmma_c_3_1__, sizeof(tmma_c_3_1__));
+          }
+          {
+            ocannl_vec8f tmma_c_0_0__;
+            __builtin_memcpy(&tmma_c_0_0__, &tmma_d__[(tmma_i__ + 0) * 29 + 16 + 0], sizeof(tmma_c_0_0__));
+            ocannl_vec8f tmma_c_0_1__ = {(&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[0],
+              (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[1],
+              (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[2],
+              (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[3],
+              (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[4]};
+            ocannl_vec8f tmma_c_1_0__;
+            __builtin_memcpy(&tmma_c_1_0__, &tmma_d__[(tmma_i__ + 1) * 29 + 16 + 0], sizeof(tmma_c_1_0__));
+            ocannl_vec8f tmma_c_1_1__ = {(&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[0],
+              (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[1],
+              (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[2],
+              (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[3],
+              (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[4]};
+            ocannl_vec8f tmma_c_2_0__;
+            __builtin_memcpy(&tmma_c_2_0__, &tmma_d__[(tmma_i__ + 2) * 29 + 16 + 0], sizeof(tmma_c_2_0__));
+            ocannl_vec8f tmma_c_2_1__ = {(&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[0],
+              (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[1],
+              (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[2],
+              (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[3],
+              (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[4]};
+            ocannl_vec8f tmma_c_3_0__;
+            __builtin_memcpy(&tmma_c_3_0__, &tmma_d__[(tmma_i__ + 3) * 29 + 16 + 0], sizeof(tmma_c_3_0__));
+            ocannl_vec8f tmma_c_3_1__ = {(&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[0],
+              (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[1],
+              (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[2],
+              (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[3],
+              (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[4]};
+            for (int32_t tmma_l__ = 0; tmma_l__ < 5; ++tmma_l__) {
+              ocannl_vec8f tmma_b_0__;
+              __builtin_memcpy(&tmma_b_0__, &tmma_b__[tmma_l__ * 29 + 16 + 0], sizeof(tmma_b_0__));
+              ocannl_vec8f tmma_b_1__ = {(&tmma_b__[tmma_l__ * 29 + 16 + 8])[0],
+                (&tmma_b__[tmma_l__ * 29 + 16 + 8])[1], (&tmma_b__[tmma_l__ * 29 + 16 + 8])[2],
+                (&tmma_b__[tmma_l__ * 29 + 16 + 8])[3], (&tmma_b__[tmma_l__ * 29 + 16 + 8])[4]};
+              float tmma_as_0__ = tmma_a__[(tmma_i__ + 0) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_0__ = (ocannl_vec8f){tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_0_0__ = __builtin_elementwise_fma(tmma_a_0__, tmma_b_0__, tmma_c_0_0__);
+              #elif defined(__FMA__)
+              tmma_c_0_0__ = __builtin_ia32_vfmaddps256(tmma_a_0__, tmma_b_0__, tmma_c_0_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_0__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_0_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_0_1__ = __builtin_elementwise_fma(tmma_a_0__, tmma_b_1__, tmma_c_0_1__);
+              #elif defined(__FMA__)
+              tmma_c_0_1__ = __builtin_ia32_vfmaddps256(tmma_a_0__, tmma_b_1__, tmma_c_0_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_1__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_0_1__[ocannl_l__]);
+              #endif
+              OCANNL_TILE_FENCE();
+              float tmma_as_1__ = tmma_a__[(tmma_i__ + 1) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_1_0__ = __builtin_elementwise_fma(tmma_a_1__, tmma_b_0__, tmma_c_1_0__);
+              #elif defined(__FMA__)
+              tmma_c_1_0__ = __builtin_ia32_vfmaddps256(tmma_a_1__, tmma_b_0__, tmma_c_1_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_0__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_1_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_1_1__ = __builtin_elementwise_fma(tmma_a_1__, tmma_b_1__, tmma_c_1_1__);
+              #elif defined(__FMA__)
+              tmma_c_1_1__ = __builtin_ia32_vfmaddps256(tmma_a_1__, tmma_b_1__, tmma_c_1_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_1__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_1_1__[ocannl_l__]);
+              #endif
+              OCANNL_TILE_FENCE();
+              float tmma_as_2__ = tmma_a__[(tmma_i__ + 2) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_2__ = (ocannl_vec8f){tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_2_0__ = __builtin_elementwise_fma(tmma_a_2__, tmma_b_0__, tmma_c_2_0__);
+              #elif defined(__FMA__)
+              tmma_c_2_0__ = __builtin_ia32_vfmaddps256(tmma_a_2__, tmma_b_0__, tmma_c_2_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_2_0__[ocannl_l__] = fmaf(tmma_a_2__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_2_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_2_1__ = __builtin_elementwise_fma(tmma_a_2__, tmma_b_1__, tmma_c_2_1__);
+              #elif defined(__FMA__)
+              tmma_c_2_1__ = __builtin_ia32_vfmaddps256(tmma_a_2__, tmma_b_1__, tmma_c_2_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_2_1__[ocannl_l__] = fmaf(tmma_a_2__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_2_1__[ocannl_l__]);
+              #endif
+              OCANNL_TILE_FENCE();
+              float tmma_as_3__ = tmma_a__[(tmma_i__ + 3) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_3__ = (ocannl_vec8f){tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_3_0__ = __builtin_elementwise_fma(tmma_a_3__, tmma_b_0__, tmma_c_3_0__);
+              #elif defined(__FMA__)
+              tmma_c_3_0__ = __builtin_ia32_vfmaddps256(tmma_a_3__, tmma_b_0__, tmma_c_3_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_3_0__[ocannl_l__] = fmaf(tmma_a_3__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_3_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_3_1__ = __builtin_elementwise_fma(tmma_a_3__, tmma_b_1__, tmma_c_3_1__);
+              #elif defined(__FMA__)
+              tmma_c_3_1__ = __builtin_ia32_vfmaddps256(tmma_a_3__, tmma_b_1__, tmma_c_3_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_3_1__[ocannl_l__] = fmaf(tmma_a_3__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_3_1__[ocannl_l__]);
+              #endif
+            }
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 0], &tmma_c_0_0__, sizeof(tmma_c_0_0__));
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[0] = tmma_c_0_1__[0];
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[1] = tmma_c_0_1__[1];
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[2] = tmma_c_0_1__[2];
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[3] = tmma_c_0_1__[3];
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[4] = tmma_c_0_1__[4];
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 0], &tmma_c_1_0__, sizeof(tmma_c_1_0__));
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[0] = tmma_c_1_1__[0];
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[1] = tmma_c_1_1__[1];
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[2] = tmma_c_1_1__[2];
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[3] = tmma_c_1_1__[3];
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[4] = tmma_c_1_1__[4];
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 0], &tmma_c_2_0__, sizeof(tmma_c_2_0__));
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[0] = tmma_c_2_1__[0];
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[1] = tmma_c_2_1__[1];
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[2] = tmma_c_2_1__[2];
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[3] = tmma_c_2_1__[3];
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[4] = tmma_c_2_1__[4];
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 0], &tmma_c_3_0__, sizeof(tmma_c_3_0__));
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[0] = tmma_c_3_1__[0];
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[1] = tmma_c_3_1__[1];
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[2] = tmma_c_3_1__[2];
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[3] = tmma_c_3_1__[3];
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[4] = tmma_c_3_1__[4];
+          }
+        }
+        {
+          for (int32_t tmma_j__ = 0; tmma_j__ + 16 <= 29; tmma_j__ += 16) {
+            ocannl_vec8f tmma_c_0_0__;
+            __builtin_memcpy(&tmma_c_0_0__, &tmma_d__[(4 + 0) * 29 + tmma_j__ + 0], sizeof(tmma_c_0_0__));
+            ocannl_vec8f tmma_c_0_1__;
+            __builtin_memcpy(&tmma_c_0_1__, &tmma_d__[(4 + 0) * 29 + tmma_j__ + 8], sizeof(tmma_c_0_1__));
+            ocannl_vec8f tmma_c_1_0__;
+            __builtin_memcpy(&tmma_c_1_0__, &tmma_d__[(4 + 1) * 29 + tmma_j__ + 0], sizeof(tmma_c_1_0__));
+            ocannl_vec8f tmma_c_1_1__;
+            __builtin_memcpy(&tmma_c_1_1__, &tmma_d__[(4 + 1) * 29 + tmma_j__ + 8], sizeof(tmma_c_1_1__));
+            for (int32_t tmma_l__ = 0; tmma_l__ < 5; ++tmma_l__) {
+              ocannl_vec8f tmma_b_0__;
+              __builtin_memcpy(&tmma_b_0__, &tmma_b__[tmma_l__ * 29 + tmma_j__ + 0], sizeof(tmma_b_0__));
+              ocannl_vec8f tmma_b_1__;
+              __builtin_memcpy(&tmma_b_1__, &tmma_b__[tmma_l__ * 29 + tmma_j__ + 8], sizeof(tmma_b_1__));
+              float tmma_as_0__ = tmma_a__[(4 + 0) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_0__ = (ocannl_vec8f){tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_0_0__ = __builtin_elementwise_fma(tmma_a_0__, tmma_b_0__, tmma_c_0_0__);
+              #elif defined(__FMA__)
+              tmma_c_0_0__ = __builtin_ia32_vfmaddps256(tmma_a_0__, tmma_b_0__, tmma_c_0_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_0__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_0_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_0_1__ = __builtin_elementwise_fma(tmma_a_0__, tmma_b_1__, tmma_c_0_1__);
+              #elif defined(__FMA__)
+              tmma_c_0_1__ = __builtin_ia32_vfmaddps256(tmma_a_0__, tmma_b_1__, tmma_c_0_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_1__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_0_1__[ocannl_l__]);
+              #endif
+              OCANNL_TILE_FENCE();
+              float tmma_as_1__ = tmma_a__[(4 + 1) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_1_0__ = __builtin_elementwise_fma(tmma_a_1__, tmma_b_0__, tmma_c_1_0__);
+              #elif defined(__FMA__)
+              tmma_c_1_0__ = __builtin_ia32_vfmaddps256(tmma_a_1__, tmma_b_0__, tmma_c_1_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_0__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_1_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_1_1__ = __builtin_elementwise_fma(tmma_a_1__, tmma_b_1__, tmma_c_1_1__);
+              #elif defined(__FMA__)
+              tmma_c_1_1__ = __builtin_ia32_vfmaddps256(tmma_a_1__, tmma_b_1__, tmma_c_1_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_1__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_1_1__[ocannl_l__]);
+              #endif
+            }
+            __builtin_memcpy(&tmma_d__[(4 + 0) * 29 + tmma_j__ + 0], &tmma_c_0_0__, sizeof(tmma_c_0_0__));
+            __builtin_memcpy(&tmma_d__[(4 + 0) * 29 + tmma_j__ + 8], &tmma_c_0_1__, sizeof(tmma_c_0_1__));
+            __builtin_memcpy(&tmma_d__[(4 + 1) * 29 + tmma_j__ + 0], &tmma_c_1_0__, sizeof(tmma_c_1_0__));
+            __builtin_memcpy(&tmma_d__[(4 + 1) * 29 + tmma_j__ + 8], &tmma_c_1_1__, sizeof(tmma_c_1_1__));
+          }
+          {
+            ocannl_vec8f tmma_c_0_0__;
+            __builtin_memcpy(&tmma_c_0_0__, &tmma_d__[(4 + 0) * 29 + 16 + 0], sizeof(tmma_c_0_0__));
+            ocannl_vec8f tmma_c_0_1__ = {(&tmma_d__[(4 + 0) * 29 + 16 + 8])[0],
+              (&tmma_d__[(4 + 0) * 29 + 16 + 8])[1], (&tmma_d__[(4 + 0) * 29 + 16 + 8])[2],
+              (&tmma_d__[(4 + 0) * 29 + 16 + 8])[3], (&tmma_d__[(4 + 0) * 29 + 16 + 8])[4]};
+            ocannl_vec8f tmma_c_1_0__;
+            __builtin_memcpy(&tmma_c_1_0__, &tmma_d__[(4 + 1) * 29 + 16 + 0], sizeof(tmma_c_1_0__));
+            ocannl_vec8f tmma_c_1_1__ = {(&tmma_d__[(4 + 1) * 29 + 16 + 8])[0],
+              (&tmma_d__[(4 + 1) * 29 + 16 + 8])[1], (&tmma_d__[(4 + 1) * 29 + 16 + 8])[2],
+              (&tmma_d__[(4 + 1) * 29 + 16 + 8])[3], (&tmma_d__[(4 + 1) * 29 + 16 + 8])[4]};
+            for (int32_t tmma_l__ = 0; tmma_l__ < 5; ++tmma_l__) {
+              ocannl_vec8f tmma_b_0__;
+              __builtin_memcpy(&tmma_b_0__, &tmma_b__[tmma_l__ * 29 + 16 + 0], sizeof(tmma_b_0__));
+              ocannl_vec8f tmma_b_1__ = {(&tmma_b__[tmma_l__ * 29 + 16 + 8])[0],
+                (&tmma_b__[tmma_l__ * 29 + 16 + 8])[1], (&tmma_b__[tmma_l__ * 29 + 16 + 8])[2],
+                (&tmma_b__[tmma_l__ * 29 + 16 + 8])[3], (&tmma_b__[tmma_l__ * 29 + 16 + 8])[4]};
+              float tmma_as_0__ = tmma_a__[(4 + 0) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_0__ = (ocannl_vec8f){tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_0_0__ = __builtin_elementwise_fma(tmma_a_0__, tmma_b_0__, tmma_c_0_0__);
+              #elif defined(__FMA__)
+              tmma_c_0_0__ = __builtin_ia32_vfmaddps256(tmma_a_0__, tmma_b_0__, tmma_c_0_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_0__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_0_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_0_1__ = __builtin_elementwise_fma(tmma_a_0__, tmma_b_1__, tmma_c_0_1__);
+              #elif defined(__FMA__)
+              tmma_c_0_1__ = __builtin_ia32_vfmaddps256(tmma_a_0__, tmma_b_1__, tmma_c_0_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_0_1__[ocannl_l__] = fmaf(tmma_a_0__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_0_1__[ocannl_l__]);
+              #endif
+              OCANNL_TILE_FENCE();
+              float tmma_as_1__ = tmma_a__[(4 + 1) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_1_0__ = __builtin_elementwise_fma(tmma_a_1__, tmma_b_0__, tmma_c_1_0__);
+              #elif defined(__FMA__)
+              tmma_c_1_0__ = __builtin_ia32_vfmaddps256(tmma_a_1__, tmma_b_0__, tmma_c_1_0__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_0__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_0__[ocannl_l__], tmma_c_1_0__[ocannl_l__]);
+              #endif
+              #if OCANNL_HAS_ELEMENTWISE_FMA
+              tmma_c_1_1__ = __builtin_elementwise_fma(tmma_a_1__, tmma_b_1__, tmma_c_1_1__);
+              #elif defined(__FMA__)
+              tmma_c_1_1__ = __builtin_ia32_vfmaddps256(tmma_a_1__, tmma_b_1__, tmma_c_1_1__);
+              #else
+              for (int ocannl_l__ = 0; ocannl_l__ < 8; ++ocannl_l__) tmma_c_1_1__[ocannl_l__] = fmaf(tmma_a_1__[ocannl_l__], tmma_b_1__[ocannl_l__], tmma_c_1_1__[ocannl_l__]);
+              #endif
+            }
+            __builtin_memcpy(&tmma_d__[(4 + 0) * 29 + 16 + 0], &tmma_c_0_0__, sizeof(tmma_c_0_0__));
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[0] = tmma_c_0_1__[0];
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[1] = tmma_c_0_1__[1];
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[2] = tmma_c_0_1__[2];
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[3] = tmma_c_0_1__[3];
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[4] = tmma_c_0_1__[4];
+            __builtin_memcpy(&tmma_d__[(4 + 1) * 29 + 16 + 0], &tmma_c_1_0__, sizeof(tmma_c_1_0__));
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[0] = tmma_c_1_1__[0];
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[1] = tmma_c_1_1__[1];
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[2] = tmma_c_1_1__[2];
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[3] = tmma_c_1_1__[3];
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[4] = tmma_c_1_1__[4];
+          }
+        }
+      }
+    }
+  }
+}
+ void tile_mma_unfused_kernel(
+    float *restrict td3,
+    float *restrict ta3,
+    float *restrict tb3) {
+
+  /* Local declarations and initialization. */
+
+  /* Main logic. */
+  for (int32_t i18 = 0; i18 <= 0; ++i18) {
+    if (i18 == 0) {
+      { /* Tile_mma register tiling: 4x2 C-tile of 8-lane float held across the k-loop (full blocks 4x16 of 6x29; column tail 13 in 2 vectors; row tail 2). */
+        typedef float ocannl_vec8f __attribute__((vector_size(32)));
+        float *tmma_d__ = (td3 + (0) * 29 + 0);
+        const float *tmma_a__ = (ta3 + (0) * 5 + 0);
+        const float *tmma_b__ = (tb3 + (0) * 29 + 0);
+        for (int32_t tmma_i__ = 0; tmma_i__ + 4 <= 6; tmma_i__ += 4) {
+          for (int32_t tmma_j__ = 0; tmma_j__ + 16 <= 29; tmma_j__ += 16) {
+            ocannl_vec8f tmma_c_0_0__;
+            __builtin_memcpy(&tmma_c_0_0__, &tmma_d__[(tmma_i__ + 0) * 29 + tmma_j__ + 0], sizeof(tmma_c_0_0__));
+            ocannl_vec8f tmma_c_0_1__;
+            __builtin_memcpy(&tmma_c_0_1__, &tmma_d__[(tmma_i__ + 0) * 29 + tmma_j__ + 8], sizeof(tmma_c_0_1__));
+            ocannl_vec8f tmma_c_1_0__;
+            __builtin_memcpy(&tmma_c_1_0__, &tmma_d__[(tmma_i__ + 1) * 29 + tmma_j__ + 0], sizeof(tmma_c_1_0__));
+            ocannl_vec8f tmma_c_1_1__;
+            __builtin_memcpy(&tmma_c_1_1__, &tmma_d__[(tmma_i__ + 1) * 29 + tmma_j__ + 8], sizeof(tmma_c_1_1__));
+            ocannl_vec8f tmma_c_2_0__;
+            __builtin_memcpy(&tmma_c_2_0__, &tmma_d__[(tmma_i__ + 2) * 29 + tmma_j__ + 0], sizeof(tmma_c_2_0__));
+            ocannl_vec8f tmma_c_2_1__;
+            __builtin_memcpy(&tmma_c_2_1__, &tmma_d__[(tmma_i__ + 2) * 29 + tmma_j__ + 8], sizeof(tmma_c_2_1__));
+            ocannl_vec8f tmma_c_3_0__;
+            __builtin_memcpy(&tmma_c_3_0__, &tmma_d__[(tmma_i__ + 3) * 29 + tmma_j__ + 0], sizeof(tmma_c_3_0__));
+            ocannl_vec8f tmma_c_3_1__;
+            __builtin_memcpy(&tmma_c_3_1__, &tmma_d__[(tmma_i__ + 3) * 29 + tmma_j__ + 8], sizeof(tmma_c_3_1__));
+            for (int32_t tmma_l__ = 0; tmma_l__ < 5; ++tmma_l__) {
+              ocannl_vec8f tmma_b_0__;
+              __builtin_memcpy(&tmma_b_0__, &tmma_b__[tmma_l__ * 29 + tmma_j__ + 0], sizeof(tmma_b_0__));
+              ocannl_vec8f tmma_b_1__;
+              __builtin_memcpy(&tmma_b_1__, &tmma_b__[tmma_l__ * 29 + tmma_j__ + 8], sizeof(tmma_b_1__));
+              float tmma_as_0__ = tmma_a__[(tmma_i__ + 0) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_0__ = (ocannl_vec8f){tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__};
+              tmma_c_0_0__ = tmma_c_0_0__ + tmma_a_0__ * tmma_b_0__;
+              tmma_c_0_1__ = tmma_c_0_1__ + tmma_a_0__ * tmma_b_1__;
+              OCANNL_TILE_FENCE();
+              float tmma_as_1__ = tmma_a__[(tmma_i__ + 1) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
+              tmma_c_1_0__ = tmma_c_1_0__ + tmma_a_1__ * tmma_b_0__;
+              tmma_c_1_1__ = tmma_c_1_1__ + tmma_a_1__ * tmma_b_1__;
+              OCANNL_TILE_FENCE();
+              float tmma_as_2__ = tmma_a__[(tmma_i__ + 2) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_2__ = (ocannl_vec8f){tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__};
+              tmma_c_2_0__ = tmma_c_2_0__ + tmma_a_2__ * tmma_b_0__;
+              tmma_c_2_1__ = tmma_c_2_1__ + tmma_a_2__ * tmma_b_1__;
+              OCANNL_TILE_FENCE();
+              float tmma_as_3__ = tmma_a__[(tmma_i__ + 3) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_3__ = (ocannl_vec8f){tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__};
+              tmma_c_3_0__ = tmma_c_3_0__ + tmma_a_3__ * tmma_b_0__;
+              tmma_c_3_1__ = tmma_c_3_1__ + tmma_a_3__ * tmma_b_1__;
+            }
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 0) * 29 + tmma_j__ + 0], &tmma_c_0_0__, sizeof(tmma_c_0_0__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 0) * 29 + tmma_j__ + 8], &tmma_c_0_1__, sizeof(tmma_c_0_1__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 1) * 29 + tmma_j__ + 0], &tmma_c_1_0__, sizeof(tmma_c_1_0__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 1) * 29 + tmma_j__ + 8], &tmma_c_1_1__, sizeof(tmma_c_1_1__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 2) * 29 + tmma_j__ + 0], &tmma_c_2_0__, sizeof(tmma_c_2_0__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 2) * 29 + tmma_j__ + 8], &tmma_c_2_1__, sizeof(tmma_c_2_1__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 3) * 29 + tmma_j__ + 0], &tmma_c_3_0__, sizeof(tmma_c_3_0__));
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 3) * 29 + tmma_j__ + 8], &tmma_c_3_1__, sizeof(tmma_c_3_1__));
+          }
+          {
+            ocannl_vec8f tmma_c_0_0__;
+            __builtin_memcpy(&tmma_c_0_0__, &tmma_d__[(tmma_i__ + 0) * 29 + 16 + 0], sizeof(tmma_c_0_0__));
+            ocannl_vec8f tmma_c_0_1__ = {(&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[0],
+              (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[1],
+              (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[2],
+              (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[3],
+              (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[4]};
+            ocannl_vec8f tmma_c_1_0__;
+            __builtin_memcpy(&tmma_c_1_0__, &tmma_d__[(tmma_i__ + 1) * 29 + 16 + 0], sizeof(tmma_c_1_0__));
+            ocannl_vec8f tmma_c_1_1__ = {(&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[0],
+              (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[1],
+              (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[2],
+              (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[3],
+              (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[4]};
+            ocannl_vec8f tmma_c_2_0__;
+            __builtin_memcpy(&tmma_c_2_0__, &tmma_d__[(tmma_i__ + 2) * 29 + 16 + 0], sizeof(tmma_c_2_0__));
+            ocannl_vec8f tmma_c_2_1__ = {(&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[0],
+              (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[1],
+              (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[2],
+              (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[3],
+              (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[4]};
+            ocannl_vec8f tmma_c_3_0__;
+            __builtin_memcpy(&tmma_c_3_0__, &tmma_d__[(tmma_i__ + 3) * 29 + 16 + 0], sizeof(tmma_c_3_0__));
+            ocannl_vec8f tmma_c_3_1__ = {(&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[0],
+              (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[1],
+              (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[2],
+              (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[3],
+              (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[4]};
+            for (int32_t tmma_l__ = 0; tmma_l__ < 5; ++tmma_l__) {
+              ocannl_vec8f tmma_b_0__;
+              __builtin_memcpy(&tmma_b_0__, &tmma_b__[tmma_l__ * 29 + 16 + 0], sizeof(tmma_b_0__));
+              ocannl_vec8f tmma_b_1__ = {(&tmma_b__[tmma_l__ * 29 + 16 + 8])[0],
+                (&tmma_b__[tmma_l__ * 29 + 16 + 8])[1], (&tmma_b__[tmma_l__ * 29 + 16 + 8])[2],
+                (&tmma_b__[tmma_l__ * 29 + 16 + 8])[3], (&tmma_b__[tmma_l__ * 29 + 16 + 8])[4]};
+              float tmma_as_0__ = tmma_a__[(tmma_i__ + 0) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_0__ = (ocannl_vec8f){tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__};
+              tmma_c_0_0__ = tmma_c_0_0__ + tmma_a_0__ * tmma_b_0__;
+              tmma_c_0_1__ = tmma_c_0_1__ + tmma_a_0__ * tmma_b_1__;
+              OCANNL_TILE_FENCE();
+              float tmma_as_1__ = tmma_a__[(tmma_i__ + 1) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
+              tmma_c_1_0__ = tmma_c_1_0__ + tmma_a_1__ * tmma_b_0__;
+              tmma_c_1_1__ = tmma_c_1_1__ + tmma_a_1__ * tmma_b_1__;
+              OCANNL_TILE_FENCE();
+              float tmma_as_2__ = tmma_a__[(tmma_i__ + 2) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_2__ = (ocannl_vec8f){tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__, tmma_as_2__};
+              tmma_c_2_0__ = tmma_c_2_0__ + tmma_a_2__ * tmma_b_0__;
+              tmma_c_2_1__ = tmma_c_2_1__ + tmma_a_2__ * tmma_b_1__;
+              OCANNL_TILE_FENCE();
+              float tmma_as_3__ = tmma_a__[(tmma_i__ + 3) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_3__ = (ocannl_vec8f){tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__, tmma_as_3__};
+              tmma_c_3_0__ = tmma_c_3_0__ + tmma_a_3__ * tmma_b_0__;
+              tmma_c_3_1__ = tmma_c_3_1__ + tmma_a_3__ * tmma_b_1__;
+            }
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 0], &tmma_c_0_0__, sizeof(tmma_c_0_0__));
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[0] = tmma_c_0_1__[0];
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[1] = tmma_c_0_1__[1];
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[2] = tmma_c_0_1__[2];
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[3] = tmma_c_0_1__[3];
+            (&tmma_d__[(tmma_i__ + 0) * 29 + 16 + 8])[4] = tmma_c_0_1__[4];
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 0], &tmma_c_1_0__, sizeof(tmma_c_1_0__));
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[0] = tmma_c_1_1__[0];
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[1] = tmma_c_1_1__[1];
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[2] = tmma_c_1_1__[2];
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[3] = tmma_c_1_1__[3];
+            (&tmma_d__[(tmma_i__ + 1) * 29 + 16 + 8])[4] = tmma_c_1_1__[4];
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 0], &tmma_c_2_0__, sizeof(tmma_c_2_0__));
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[0] = tmma_c_2_1__[0];
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[1] = tmma_c_2_1__[1];
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[2] = tmma_c_2_1__[2];
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[3] = tmma_c_2_1__[3];
+            (&tmma_d__[(tmma_i__ + 2) * 29 + 16 + 8])[4] = tmma_c_2_1__[4];
+            __builtin_memcpy(&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 0], &tmma_c_3_0__, sizeof(tmma_c_3_0__));
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[0] = tmma_c_3_1__[0];
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[1] = tmma_c_3_1__[1];
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[2] = tmma_c_3_1__[2];
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[3] = tmma_c_3_1__[3];
+            (&tmma_d__[(tmma_i__ + 3) * 29 + 16 + 8])[4] = tmma_c_3_1__[4];
+          }
+        }
+        {
+          for (int32_t tmma_j__ = 0; tmma_j__ + 16 <= 29; tmma_j__ += 16) {
+            ocannl_vec8f tmma_c_0_0__;
+            __builtin_memcpy(&tmma_c_0_0__, &tmma_d__[(4 + 0) * 29 + tmma_j__ + 0], sizeof(tmma_c_0_0__));
+            ocannl_vec8f tmma_c_0_1__;
+            __builtin_memcpy(&tmma_c_0_1__, &tmma_d__[(4 + 0) * 29 + tmma_j__ + 8], sizeof(tmma_c_0_1__));
+            ocannl_vec8f tmma_c_1_0__;
+            __builtin_memcpy(&tmma_c_1_0__, &tmma_d__[(4 + 1) * 29 + tmma_j__ + 0], sizeof(tmma_c_1_0__));
+            ocannl_vec8f tmma_c_1_1__;
+            __builtin_memcpy(&tmma_c_1_1__, &tmma_d__[(4 + 1) * 29 + tmma_j__ + 8], sizeof(tmma_c_1_1__));
+            for (int32_t tmma_l__ = 0; tmma_l__ < 5; ++tmma_l__) {
+              ocannl_vec8f tmma_b_0__;
+              __builtin_memcpy(&tmma_b_0__, &tmma_b__[tmma_l__ * 29 + tmma_j__ + 0], sizeof(tmma_b_0__));
+              ocannl_vec8f tmma_b_1__;
+              __builtin_memcpy(&tmma_b_1__, &tmma_b__[tmma_l__ * 29 + tmma_j__ + 8], sizeof(tmma_b_1__));
+              float tmma_as_0__ = tmma_a__[(4 + 0) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_0__ = (ocannl_vec8f){tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__};
+              tmma_c_0_0__ = tmma_c_0_0__ + tmma_a_0__ * tmma_b_0__;
+              tmma_c_0_1__ = tmma_c_0_1__ + tmma_a_0__ * tmma_b_1__;
+              OCANNL_TILE_FENCE();
+              float tmma_as_1__ = tmma_a__[(4 + 1) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
+              tmma_c_1_0__ = tmma_c_1_0__ + tmma_a_1__ * tmma_b_0__;
+              tmma_c_1_1__ = tmma_c_1_1__ + tmma_a_1__ * tmma_b_1__;
+            }
+            __builtin_memcpy(&tmma_d__[(4 + 0) * 29 + tmma_j__ + 0], &tmma_c_0_0__, sizeof(tmma_c_0_0__));
+            __builtin_memcpy(&tmma_d__[(4 + 0) * 29 + tmma_j__ + 8], &tmma_c_0_1__, sizeof(tmma_c_0_1__));
+            __builtin_memcpy(&tmma_d__[(4 + 1) * 29 + tmma_j__ + 0], &tmma_c_1_0__, sizeof(tmma_c_1_0__));
+            __builtin_memcpy(&tmma_d__[(4 + 1) * 29 + tmma_j__ + 8], &tmma_c_1_1__, sizeof(tmma_c_1_1__));
+          }
+          {
+            ocannl_vec8f tmma_c_0_0__;
+            __builtin_memcpy(&tmma_c_0_0__, &tmma_d__[(4 + 0) * 29 + 16 + 0], sizeof(tmma_c_0_0__));
+            ocannl_vec8f tmma_c_0_1__ = {(&tmma_d__[(4 + 0) * 29 + 16 + 8])[0],
+              (&tmma_d__[(4 + 0) * 29 + 16 + 8])[1], (&tmma_d__[(4 + 0) * 29 + 16 + 8])[2],
+              (&tmma_d__[(4 + 0) * 29 + 16 + 8])[3], (&tmma_d__[(4 + 0) * 29 + 16 + 8])[4]};
+            ocannl_vec8f tmma_c_1_0__;
+            __builtin_memcpy(&tmma_c_1_0__, &tmma_d__[(4 + 1) * 29 + 16 + 0], sizeof(tmma_c_1_0__));
+            ocannl_vec8f tmma_c_1_1__ = {(&tmma_d__[(4 + 1) * 29 + 16 + 8])[0],
+              (&tmma_d__[(4 + 1) * 29 + 16 + 8])[1], (&tmma_d__[(4 + 1) * 29 + 16 + 8])[2],
+              (&tmma_d__[(4 + 1) * 29 + 16 + 8])[3], (&tmma_d__[(4 + 1) * 29 + 16 + 8])[4]};
+            for (int32_t tmma_l__ = 0; tmma_l__ < 5; ++tmma_l__) {
+              ocannl_vec8f tmma_b_0__;
+              __builtin_memcpy(&tmma_b_0__, &tmma_b__[tmma_l__ * 29 + 16 + 0], sizeof(tmma_b_0__));
+              ocannl_vec8f tmma_b_1__ = {(&tmma_b__[tmma_l__ * 29 + 16 + 8])[0],
+                (&tmma_b__[tmma_l__ * 29 + 16 + 8])[1], (&tmma_b__[tmma_l__ * 29 + 16 + 8])[2],
+                (&tmma_b__[tmma_l__ * 29 + 16 + 8])[3], (&tmma_b__[tmma_l__ * 29 + 16 + 8])[4]};
+              float tmma_as_0__ = tmma_a__[(4 + 0) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_0__ = (ocannl_vec8f){tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__, tmma_as_0__};
+              tmma_c_0_0__ = tmma_c_0_0__ + tmma_a_0__ * tmma_b_0__;
+              tmma_c_0_1__ = tmma_c_0_1__ + tmma_a_0__ * tmma_b_1__;
+              OCANNL_TILE_FENCE();
+              float tmma_as_1__ = tmma_a__[(4 + 1) * 5 + tmma_l__];
+              ocannl_vec8f tmma_a_1__ = (ocannl_vec8f){tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__, tmma_as_1__};
+              tmma_c_1_0__ = tmma_c_1_0__ + tmma_a_1__ * tmma_b_0__;
+              tmma_c_1_1__ = tmma_c_1_1__ + tmma_a_1__ * tmma_b_1__;
+            }
+            __builtin_memcpy(&tmma_d__[(4 + 0) * 29 + 16 + 0], &tmma_c_0_0__, sizeof(tmma_c_0_0__));
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[0] = tmma_c_0_1__[0];
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[1] = tmma_c_0_1__[1];
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[2] = tmma_c_0_1__[2];
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[3] = tmma_c_0_1__[3];
+            (&tmma_d__[(4 + 0) * 29 + 16 + 8])[4] = tmma_c_0_1__[4];
+            __builtin_memcpy(&tmma_d__[(4 + 1) * 29 + 16 + 0], &tmma_c_1_0__, sizeof(tmma_c_1_0__));
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[0] = tmma_c_1_1__[0];
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[1] = tmma_c_1_1__[1];
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[2] = tmma_c_1_1__[2];
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[3] = tmma_c_1_1__[3];
+            (&tmma_d__[(4 + 1) * 29 + 16 + 8])[4] = tmma_c_1_1__[4];
           }
         }
       }

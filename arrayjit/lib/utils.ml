@@ -1529,8 +1529,8 @@ cc_backend_fp_contract=off
 # The lowered code's own licences of the same kinds (gh-ocannl-998), pinned at their defaults: it
 # contracts no a*b+c into an fma, reassociates no constant, sum or product, and folds no zero
 # identity that infinities, NaNs or the sign of zero would contradict. What remains is the
-# arithmetic the program wrote, rounded where it wrote it (explicit FMAs, such as a tensorized
-# accumulation's, stay).
+# arithmetic the program wrote, rounded where it wrote it: explicit FMAs stay, and a tensorized
+# accumulation keeps the serial loop's two roundings (gh-ocannl-1457).
 fp_contract=false
 fp_reassociate=false
 fp_finite_math=false

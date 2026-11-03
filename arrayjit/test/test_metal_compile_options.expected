@@ -1,1 +1,3 @@
 the selector seam drives every Metal API/debug option sequence: true
+the modern Metal math regime adds no schedule-cache component: true
+the legacy Metal math regime adds a schedule-cache component: true

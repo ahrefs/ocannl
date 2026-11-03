@@ -52,4 +52,11 @@ let () =
       in
       List.equal Ir.Compiler_options.equal_metal_option
         (Ir.Compiler_options.metal ~routine_logging ~math_api)
-        want)
+        want);
+  (* gh-ocannl-1457: the math regime enters the schedule-cache key from the same builder: nothing on
+     the default modern regime (its keys stay valid), and the legacy sequence itself on the
+     other. *)
+  Verdict.p "the modern Metal math regime adds no schedule-cache component"
+    (Option.is_none (Ir.Compiler_options.metal_regime_tag Modern_split));
+  Verdict.p "the legacy Metal math regime adds a schedule-cache component"
+    (Option.is_some (Ir.Compiler_options.metal_regime_tag Legacy))
