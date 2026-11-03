@@ -7,8 +7,10 @@
    pins that message in full; the suggested remedy (a [Train.zero_params_grads] routine compiled
    first) is run here with exact values, and a step skipping it is refused (gh-ocannl-1781); and the
    other "lacks node" refusals keep their text: the bare one over a non-gradient node, and
-   gh-ocannl-1724's hint over an unpropagated intermediate gradient. Values are small integers,
-   compared bitwise. *)
+   gh-ocannl-1724's hint over an unpropagated intermediate gradient. When a routine compiled outside
+   the lineage -- a sibling's update -- zeroes the gradient, the hint names it (gh-ocannl-1797); the
+   first case, where no routine zeroes it, is the control that keeps the wording without one. Values
+   are small integers, compared bitwise. *)
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules
@@ -20,6 +22,9 @@ let one t = Set.singleton (module Tensor) t
 let compile ctx comp = Train.to_routine ctx IDX.empty comp
 let run_all ctx routines = List.fold routines ~init:ctx ~f:Context.run
 let reset_hint = "without zeroing it, and no routine of its lineage zeroes it"
+
+(* The clause naming a zeroing compiled outside the lineage, after the routine's name. *)
+let outside_zeroer = "zeroes it, compiled outside this lineage -- in a sibling"
 let param prefix = TDSL.param ~values:[| 1.; 2.; 3. |] (prefix ^ "_w") ~output_dims:[ 3 ] ()
 
 (* #1558's first consumer: built, evaluated forward-only, and dropped -- it carried [w]'s zeroing.
@@ -42,6 +47,8 @@ let () =
         (LC.has msg ("The linked context lacks node " ^ Ir.Tnode.label_name (LC.grad_of w))
         && LC.has msg reset_hint
         && LC.has msg "Train.zero_params_grads ~params");
+      p "no routine of the root zeroes the gradient: the hint names none"
+        (not (LC.has msg outside_zeroer));
       (* The remedy the message suggests. [l]'s [zero_grads] does not zero [w.grad] (its first
          consumer's did), so [Train.grad_update l] accumulates over the reset compiled before it. *)
       let ctx, zero = compile ctx (Train.zero_params_grads ~params:(one w) l) in
@@ -62,14 +69,16 @@ let () =
       let%op c = w *. 2. in
       let%op l = w *. w in
       let ctx0 = Train.init_params (Context.auto ()) IDX.empty c in
-      let _sibling = compile ctx0 (Train.grad_update c) in
+      let _, (sibling : Context.routine) = compile ctx0 (Train.grad_update c) in
       let msg =
         LC.refusal "a loss over the parameter, from the common ancestor" (fun () ->
             compile ctx0 (Train.grad_update l))
       in
       p "a reset compiled in a sibling does not count, and the hint names it"
         (LC.has msg ("The linked context lacks node " ^ Ir.Tnode.label_name (LC.grad_of w))
-        && LC.has msg reset_hint));
+        && LC.has msg reset_hint);
+      p "the hint names the sibling's update as the routine zeroing the gradient"
+        (LC.has msg (sibling.name ^ " (id=") && LC.has msg outside_zeroer));
   case "a node that is not a gradient: the bare message" (fun () ->
       let x = Tensor.term_init [| 1.; 2.; 3. |] ~label:[ "lh_x" ] ~output_dims:[ 3 ] () in
       let%op a = x *. 2. in

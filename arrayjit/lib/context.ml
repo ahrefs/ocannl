@@ -154,6 +154,13 @@ type execution_ledger = {
           (gh-ocannl-1724). Diagnostic only: it lets a requirement refusal name an owner compiled in
           a sibling lineage. Ownership itself is the frontier's [owners] -- a sibling never
           satisfies a requirement. *)
+  mutable zeroing_registry : (int * string) list Map.M(Int).t;
+      (** Every routine (id, name) of this root whose computation zeroes each gradient, by the
+          gradient's node uid ({!Asgns.field-zeroes}), sibling lineages included (gh-ocannl-1797).
+          Diagnostic only, like [fragment_registry], and bounded the same way, by the root's
+          compiles: it lets the missing-reset hint of [lacks_node_error] name a zeroing compiled
+          outside the lineage. Whether a lineage resets a gradient is its frontier's [grad_roles].
+      *)
   grad_buffers : grad_buffers Hashtbl.M(Int).t;
       (** Per routine id, the gradient buffers its computation resets and the ones it accumulates
           into without resetting (gh-ocannl-1781), resolved at link -- buffer keys and names, so the
@@ -268,6 +275,7 @@ let create_ledger () =
     observed_tokens = Map.empty (module Buffer_key);
     token_undo = Hashtbl.create (module Int);
     fragment_registry = Map.empty (module Fragment_key);
+    zeroing_registry = Map.empty (module Int);
     grad_buffers = Hashtbl.create (module Int);
     accumulated = Map.empty (module Buffer_key);
     accumulation_undo = Hashtbl.create (module Int);
@@ -638,6 +646,9 @@ let finish_link ctx comp wrapped
   ctx.ledger.fragment_registry <-
     Set.fold comp.Asgns.owned ~init:ctx.ledger.fragment_registry ~f:(fun registry fragment ->
         Map.add_multi registry ~key:(Fragment_key.of_fragment fragment) ~data:(id, name));
+  ctx.ledger.zeroing_registry <-
+    Set.fold comp.Asgns.zeroes ~init:ctx.ledger.zeroing_registry ~f:(fun registry grad ->
+        Map.add_multi registry ~key:grad.Tn.uid ~data:(id, name));
   let grad_roles =
     Set.fold (Set.union comp.Asgns.zeroes comp.Asgns.accumulates) ~init:frontier.grad_roles
       ~f:(fun roles grad ->
@@ -974,6 +985,23 @@ let lacks_node_error ctx (comp : Asgns.comp) tn =
     && not
          (List.exists (Map.find_multi ctx.frontier.grad_roles tn.Tn.uid) ~f:(fun r -> r.gr_zeroes))
   then
+    (* gh-ocannl-1797: the root's routines zeroing it outside this lineage, as [sibling_owners]
+       finds a fragment's owners (the lineage's own zero none of it, by the test above). *)
+    let outside =
+      match
+        Map.find_multi ctx.ledger.zeroing_registry tn.Tn.uid
+        |> List.filter ~f:(fun (id, _) -> not (Set.mem ctx.frontier.lineage_routines id))
+      with
+      | [] -> ""
+      | zeroers ->
+          Printf.sprintf
+            " %s %s %s it, compiled outside this lineage -- in a sibling, or after the context \
+             this routine is compiled from -- which does not count: a sibling is an alternative, \
+             not a part of this computation."
+            (match zeroers with [ _ ] -> "Routine" | _ -> "Routines")
+            (describe_owners zeroers)
+            (match zeroers with [ _ ] -> "zeroes" | _ -> "zero")
+    in
     Utils.User_error
       (Printf.sprintf
          "%s: this computation's backprop accumulates into the gradient %s without zeroing it, and \
@@ -981,10 +1009,10 @@ let lacks_node_error ctx (comp : Asgns.comp) tn =
           consumer of its tensor, beside that consumer's backprop (gh-ocannl-1744), and that \
           consumer is not compiled in this lineage -- typically a parameter's first consumer that \
           was evaluated forward-only (Train.forward_once, Train.forward), whether or not it has \
-          since been dropped, or one compiled outside this lineage. Compile a zeroing of the \
+          since been dropped, or one compiled outside this lineage.%s Compile a zeroing of the \
           gradient first -- Train.zero_params_grads ~params for a parameter's -- then compile this \
           routine from the context that compile returned, and run the zeroing before each step."
-         base (Tn.debug_name tn))
+         base (Tn.debug_name tn) outside)
   else Utils.User_error base
 
 let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?candidate ?retain ctx
