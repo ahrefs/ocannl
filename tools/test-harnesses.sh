@@ -26,7 +26,10 @@
 #     `SKIP  ` -- non-empty, with no further tab and no carriage return, and
 #     listed once.
 # Without the option the list variables are cleared, so no ambient list
-# relaxes a strict run.
+# relaxes a strict run. A leg that declares itself not applicable here
+# (harness_not_applicable, scripts/harness-support.sh: its subject is absent
+# from this platform, so no coverage is lost) is no skip: it prints `N/A   `,
+# a strict run passes it, and no list names it (gh-ocannl-1839).
 #
 # --ci-shell runs the shell tier as the toolchain-free `harnesses` CI job
 # does, which is the job's own command, so any Linux or macOS box reproduces

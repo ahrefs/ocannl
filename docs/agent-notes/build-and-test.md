@@ -1013,6 +1013,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   skip set and macOS adds the Linux-only legs `tools/harness-skips-ci-shell-darwin.txt` lists. A
   leg that needs a real dune takes it from `harness_real_dune`, never a probe of its own: one
   `--ci-shell` cannot hide runs green here and skips, unlisted, only on the job.
+- A leg whose subject does not exist on this platform declares itself not applicable rather than
+  skipping (gh-ocannl-1839): `harness_not_applicable REASON; return` as the first decision of a
+  `harness_leg_run` or `harness_leg_run_errexit` body prints `N/A   LEG` with the reason, is counted
+  apart in the footer (`all legs passed (0 skipped, 1 leg(s) not applicable)`), and passes a strict
+  run with no list naming it, since nothing was lost; a skip is coverage the host lost, so the
+  lists stay strict and per-platform skip lists are not the tool for it. Decide it from a probe
+  that OBSERVED the subject absent, never one that could not tell: leg 1b of
+  `tools/test-refusal-manifest-sync.sh` is N/A only where the host's `/bin/bash` expanded an empty
+  array under `set -u` (Bash 4.4 on, CI's Ubuntu), and its leg 1c is the probe's negative control.
+  A declaration outside a function leg body or in a subshell of one, with no reason, after a
+  check, twice or followed by one is a FAIL, never counted. `scripts/test-harness-support.sh` pins the primitive, and
+  `tools/test-test-harnesses.sh` that `--ci-shell` still refuses an undeclared skip beside one.
 - The real-dune checks run per PR on a job of their own (gh-ocannl-1650), not by giving the shell
   job a dune: its no-dune skip set stays a test of its own. Their skips under `--ci-shell` live in
   `tools/harness-skips-ci-shell-dune.txt`, which `--ci-shell` joins to the job's list and holds to

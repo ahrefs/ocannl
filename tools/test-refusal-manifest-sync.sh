@@ -31,7 +31,11 @@
 #   7. --rounds refuses anything but a number of at least 2, before anything runs.
 #   8. a plan naming no golden runs nothing and hands nothing to the offers.
 #   1b. leg 1 under the host's /bin/bash, which on macOS is Bash 3.2: an empty array expanded under
-#      `set -u` is an unbound variable there, which ended the second round.
+#      `set -u` is an unbound variable there, which ended the second round. Not applicable
+#      (gh-ocannl-1839) where the probe sees that /bin/bash expand one, as Bash 4.4 on does (CI's
+#      Ubuntu): the failure it pins cannot occur there, and a skip would be coverage lost.
+#   1c. the negative control of that probe: only a bash that expanded the empty array makes 1b not
+#      applicable; one that refused it, answered otherwise or is missing leaves 1b to run.
 
 set -u
 
@@ -143,8 +147,47 @@ leg_1() {
 }
 harness_leg_run '1: a two-step correction chain converges in one invocation' leg_1
 
-leg_1b() { SUBJECT_BASH=/bin/bash leg_1; }
+# Whether BASH can show what leg 1b pins: prints `expands` when it expanded an empty array under
+# `set -u`, which Bash before 4.4 refuses as an unbound variable. That answer alone makes 1b not
+# applicable; any other -- the refusal, a missing BASH, a crash -- leaves 1b to run, so a probe that
+# cannot tell never drops the leg.
+empty_array_probe() { # BASH
+  "$1" -uc 'a=(); : "${a[@]}"; echo expands' 2>/dev/null
+}
+leg_1b() {
+  local version
+  if [ "$(empty_array_probe /bin/bash)" = expands ]; then
+    version=$(/bin/bash -c 'echo "$BASH_VERSION"' 2>/dev/null)
+    harness_not_applicable "the host's /bin/bash (Bash ${version:-of unknown version}) expands an empty array under set -u, so the Bash 3.2 failure this leg pins cannot occur here"
+    return
+  fi
+  SUBJECT_BASH=/bin/bash leg_1
+}
 harness_leg_run "1b: the chain converges under the host's /bin/bash" leg_1b
+
+leg_1c() {
+  local d=$TMP/1c ok=1 want=
+  mkdir -p "$d"
+  # Stand-ins for the answers a /bin/bash gives: Bash 3.2's refusal, an answer of nothing.
+  printf '#!/bin/sh\necho "sh: a[@]: unbound variable" >&2\nexit 1\n' >"$d/refuses"
+  printf '#!/bin/sh\nexit 0\n' >"$d/silent"
+  chmod +x "$d/refuses" "$d/silent"
+  for stand_in in "$d/refuses" "$d/silent" "$d/missing"; do
+    [ "$(empty_array_probe "$stand_in")" != expands ] || ok=0
+  done
+  # And the bash running this harness, whose version says what the probe must answer.
+  if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" = 4 ] && [ "${BASH_VERSINFO[1]}" -ge 4 ]; }; then
+    want=expands
+  fi
+  [ "$(empty_array_probe "$BASH")" = "$want" ] || ok=0
+  if [ "$ok" = 1 ]; then
+    report 0 "1c: only a bash that expanded the empty array makes 1b not applicable (negative control)"
+  else
+    report 1 "1c: only a bash that expanded the empty array makes 1b not applicable (negative control)" \
+      "the probe answered a refusing, silent or missing bash, or $BASH ($BASH_VERSION), wrongly"
+  fi
+}
+harness_leg_run '1c: only a bash that expanded the empty array makes 1b not applicable' leg_1c
 
 leg_2() {
   local r=$TMP/2

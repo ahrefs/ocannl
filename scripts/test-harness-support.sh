@@ -2,8 +2,9 @@
 # Exercise shared harness lifecycle, counted skips (and a strict run's list of
 # expected ones), the shared real-dune probe and its hiding switch, the --only
 # leg filter with its coverage account, function leg bodies that abandon
-# themselves or are abandoned at a failed errexit check, and reason-specific
-# rejection.
+# themselves or are abandoned at a failed errexit check, legs that declare
+# themselves not applicable (and the shapes of that declaration it refuses),
+# and reason-specific rejection.
 # Usage: scripts/test-harness-support.sh [--keep] [--help]
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -80,6 +81,40 @@ case $MODE in
     harness_leg_run_errexit 'theta leg #even' theta
     for leg in iota kappa lambda mu nu; do harness_leg_run_errexit "$leg leg" "$leg"; done
     if harness_leg_run_errexit 'xi leg' xi; then :; fi ;;
+  na)
+    # Legs that declare themselves not applicable (gh-ocannl-1839): omicron, a
+    # function body, and pi, an errexit one, each as its first decision, no
+    # `late` line past it; NA_SKIP adds a plain skip beside them, and NA_BAD
+    # the shapes refused: a declaration outside every leg and in an
+    # `if harness_leg` gate, after a check (rho; phi under errexit), with a
+    # check after it (sigma), with no reason (tau; psi under errexit), twice
+    # (upsilon), and in a subshell of the body, a function one (omega) and an
+    # errexit one whose next check then failed (chi).
+    omicron() { echo omicron >>"$RECORD.ran"; harness_not_applicable 'no omicron here'; return; echo late >>"$RECORD.ran"; }
+    pi() { echo pi >>"$RECORD.ran"; harness_not_applicable 'no pi here'; echo late >>"$RECORD.ran"; }
+    rho() { report 0 'rho body'; harness_not_applicable 'rho after a check'; }
+    sigma() { harness_not_applicable 'sigma first'; report 0 'sigma body'; }
+    tau() { harness_not_applicable ''; }
+    upsilon() { harness_not_applicable 'upsilon once'; harness_not_applicable 'upsilon again'; }
+    phi() { report 0 'phi body'; harness_not_applicable 'phi after a check'; echo late >>"$RECORD.ran"; }
+    psi() { harness_not_applicable ''; echo late >>"$RECORD.ran"; }
+    chi() { inner=$(harness_not_applicable 'chi inner') || :; false; }
+    omega() { inner=$(harness_not_applicable 'omega inner'); }
+    harness_leg_run 'omicron leg #odd' omicron
+    harness_leg_run_errexit 'pi leg #even' pi
+    [ -z "${NA_SKIP:-}" ] || skip 'na check' 'no na host'
+    if [ -n "${NA_BAD:-}" ]; then
+      harness_not_applicable 'outside every leg'
+      if harness_leg 'gated leg'; then harness_not_applicable 'in an if gate'; fi
+      harness_leg_run 'rho leg' rho
+      harness_leg_run 'sigma leg' sigma
+      harness_leg_run 'tau leg' tau
+      harness_leg_run 'upsilon leg' upsilon
+      harness_leg_run_errexit 'phi leg' phi
+      harness_leg_run_errexit 'psi leg' psi
+      harness_leg_run_errexit 'chi leg' chi
+      harness_leg_run 'omega leg' omega
+    fi ;;
 esac
 finish
 PROBE
@@ -399,6 +434,69 @@ errexit_probe 'theta' --only '#even'; rc=$?
 if [ "$rc" = 0 ] && grep -qx 'FILTERED  eta leg #odd' "$TMP/out" && grep -qx '  RAN   theta leg #even' "$TMP/out"; then
   report 0 'harness_leg_run_errexit gates a body as harness_leg does'
 else report 1 'harness_leg_run_errexit gates a body as harness_leg does' "exit $rc; $(cat "$TMP/out")"; fi
+# A leg that declares itself not applicable (gh-ocannl-1839) is counted
+# apart from skips, printed with its reason, and ends its body; a strict run
+# with no list passes it, while the plain skip beside it is still refused --
+# and with a list naming that skip, only the skip is recorded: no list names
+# or needs an N/A. A filtered run accounts for it, and each refused shape is a
+# FAIL of its leg, never counted.
+na_probe() { # expected bodies run, then probe arguments
+  local want=$1 rc=0
+  shift
+  rm -f "$RECORD.ran"
+  MODE=na probe "$@" || rc=$?
+  ran=
+  [ ! -f "$RECORD.ran" ] || ran=$(tr '\n' ' ' <"$RECORD.ran" | sed 's/ $//')
+  [ "$ran" = "$want" ] || { printf 'bodies run: "%s", wanted "%s"\n' "$ran" "$want" >>"$TMP/out"; rc=99; }
+  return "$rc"
+}
+na_both() { # both legs printed N/A with their reasons, and nothing else of them
+  grep -qx 'N/A   omicron leg #odd' "$TMP/out" && grep -qx '      no omicron here' "$TMP/out" \
+    && grep -qx 'N/A   pi leg #even' "$TMP/out" && grep -qx '      no pi here' "$TMP/out" \
+    && [ "$(grep -c '^N/A ' "$TMP/out")" = 2 ] && ! grep -q '^[A-Z]*  \(omicron\|pi\) leg' "$TMP/out"
+}
+na_probe 'omicron pi'; rc=$?
+if [ "$rc" = 0 ] && na_both && grep -qx 'all legs passed (0 skipped, 2 leg(s) not applicable)' "$TMP/out" \
+   && ! grep -q '^SKIP' "$TMP/out"; then
+  report 0 'a leg declared not applicable is counted apart from skips, and ends its body'
+else report 1 'a leg declared not applicable is counted apart from skips, and ends its body' "exit $rc; $(cat "$TMP/out")"; fi
+OCANNL_TOOL_HARNESS_STRICT=1 NA_SKIP=1 na_probe 'omicron pi'; rc=$?
+if [ "$rc" = 1 ] && na_both && grep -qx 'FAIL  na check' "$TMP/out" \
+   && grep -qx '1 leg(s) failed (0 skipped, 2 leg(s) not applicable)' "$TMP/out"; then
+  report 0 'negative control: strict mode passes the not-applicable legs and still refuses the unlisted skip beside them'
+else report 1 'negative control: strict mode passes the not-applicable legs and still refuses the unlisted skip beside them' "exit $rc; $(cat "$TMP/out")"; fi
+printf 'probe\tna check\n' >"$TMP/expected-na"
+: >"$TMP/skip-record"
+OCANNL_TOOL_HARNESS_STRICT=1 OCANNL_TOOL_HARNESS_EXPECTED_SKIPS=$TMP/expected-na OCANNL_TOOL_HARNESS_NAME=probe \
+  OCANNL_TOOL_HARNESS_SKIP_RECORD=$TMP/skip-record NA_SKIP=1 na_probe 'omicron pi'; rc=$?
+if [ "$rc" = 0 ] && na_both && grep -qx 'all legs passed (1 skipped, 2 leg(s) not applicable)' "$TMP/out" \
+   && [ "$(cat "$TMP/skip-record")" = "probe	na check" ]; then
+  report 0 'a strict list names the skip alone: no not-applicable leg is recorded as one'
+else report 1 'a strict list names the skip alone: no not-applicable leg is recorded as one' "exit $rc; $(cat "$TMP/out")"; fi
+na_probe 'pi' --only '#even'; rc=$?
+if [ "$rc" = 0 ] && grep -qx 'not applicable here, 1 leg(s):' "$TMP/out" \
+   && grep -qx '  N/A   pi leg #even -- no pi here' "$TMP/out" \
+   && grep -qx "FILTERED RUN, not a full pass: 1 leg(s) selected, 1 filtered out by --only '#even'; no failure (0 skipped, 1 leg(s) not applicable)" "$TMP/out"; then
+  report 0 'a filtered run accounts for the legs not applicable'
+else report 1 'a filtered run accounts for the legs not applicable' "exit $rc; $(cat "$TMP/out")"; fi
+NA_BAD=1 na_probe 'omicron pi'; rc=$?
+if [ "$rc" = 1 ] && na_both \
+   && grep -qx 'FAIL  not applicable outside a leg: outside every leg' "$TMP/out" \
+   && grep -qx 'FAIL  not applicable outside a leg: in an if gate' "$TMP/out" \
+   && grep -qx 'FAIL  rho leg: declared not applicable after it decided a check' "$TMP/out" \
+   && grep -qx 'PASS  sigma body' "$TMP/out" \
+   && grep -qx 'FAIL  sigma leg: decided checks after declaring itself not applicable' "$TMP/out" \
+   && grep -qx 'FAIL  tau leg: declared not applicable with no reason' "$TMP/out" \
+   && grep -qx 'FAIL  upsilon leg: declared not applicable twice' "$TMP/out" \
+   && grep -qx '      upsilon once; then: upsilon again' "$TMP/out" \
+   && abandoned phi 'declared not applicable after it decided a check: phi after a check' \
+   && abandoned psi 'declared not applicable with no reason' \
+   && abandoned chi 'it declared itself not applicable in a subshell of its own, which cannot end the leg: chi inner' \
+   && grep -qx 'FAIL  omega leg: declared not applicable in a subshell of its own, which cannot end the leg' "$TMP/out" \
+   && grep -qx '      omega inner' "$TMP/out" \
+   && grep -qx '10 leg(s) failed (0 skipped, 2 leg(s) not applicable)' "$TMP/out"; then
+  report 0 'a not-applicable declaration outside a leg body or in a subshell of one, after or before a check, without a reason or twice is a FAIL, never counted'
+else report 1 'a not-applicable declaration outside a leg body or in a subshell of one, after or before a check, without a reason or twice is a FAIL, never counted' "exit $rc; $(cat "$TMP/out")"; fi
 # Leg naming (gh-ocannl-1367), on a probe whose header declares its groups:
 # #odd lists legs 1, 3 and 5, #even 2 and 4, #free none. Each case gates the
 # legs LEGS names, one per line; every gate is checked, selected or not.
