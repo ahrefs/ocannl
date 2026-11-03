@@ -1007,7 +1007,24 @@ let width_key = "cc_vector_bytes"
    program names them by, under an alias or an `open` too, or any path ending in one, whatever
    qualifies it. "Can select cc" is the backend rule's own answer for the run: `(env_var
    OCANNL_BACKEND)`, or a backend marker naming cc or multidev_cc, the two backends rendering
-   through `Cc_backend`. *)
+   through `Cc_backend`.
+
+   "A run" is read from a fail-closed allowlist of shapes (gh-ocannl-1901). A program's runs are:
+   for a `(test)`/`(tests)` program, the stanza's own run AND every stanza running that program by
+   name; for an `(executable)`, every stanza running it by name -- in its own dune file
+   (`Scan.program_runners`) or in any other ([cc_program_runs]). "By name" is that reading of
+   command position: a literal path ending in `.exe`, a
+   `%{dep:…}`/`%{exe:…}`/`%{path:…}`/`%{file:…}` of one, a named dependency binding one, or
+   `%{bin:<public name>}`, resolved through `(subdir …)` and `(chdir …)`. A stanza that can select
+   cc -- by the backend rule's reading, or because that rule reads it as running nothing and so it
+   names no backend at all -- and runs anything else this reading cannot attribute to a program -- a
+   shell line, a text-valued pform in command position, a PATH tool handed an executable of ours
+   (`env probe.exe`), a bare command under a rewritten PATH, an action head off dune's vocabulary --
+   is refused, never read as running nothing. The one shape accepted without a program is a PATH
+   tool handed only arguments this reading can show name no executable of ours -- literals spelling
+   no `.exe`, path pforms of files that are not one, `%{target}` (`python3 %{dep:reader.py}`): what
+   a script launches is past what dune's text says, and stated here as the boundary. A text-valued
+   pform (`%{read:…}`, `%{deps}`) may name one, so it is refused. *)
 let search_home = "arrayjit/lib/autotune.ml"
 let search_value = [ "Autotune"; "tune" ]
 
@@ -1068,6 +1085,34 @@ let vector_file_stating_reach ~key content =
   Sources.stating_reach ~literals:(vector_file_literals key) ~tables:width_pin_tables
     ~table_writes:width_pin_table_writes ~env_writes:width_pin_env_writes
     ~pins:(vector_file_pins key) content
+
+(* The identities a run can name one program of a stanza under (gh-ocannl-1901), workspace-relative:
+   its executable's path, as {!Scan.program_runners} resolves it within the dune file in [dir], and
+   its public name where it has one. *)
+let program_identities ~dir ~subdir stanza (p : Scan.program) =
+  let path =
+    `File
+      (Scan.normalize_path (Scan.in_subdir dir (Scan.in_subdir subdir (p.Scan.program ^ ".exe"))))
+  in
+  match List.findi (Scan.names_of stanza) ~f:(fun _ name -> String.equal name p.Scan.program) with
+  | Some (index, _) -> (
+      match Scan.program_public_name stanza ~index with
+      | Some public -> [ path; `Public public ]
+      | None -> [ path ])
+  | None -> [ path ]
+
+(* gh-ocannl-1368: whether a run can select cc, by the backend rule's own reading of the stanza
+   running it, in the marker contract of its own dune file. *)
+let runs_cc_in marker_contract runner =
+  List.exists marker_contract.Scan.contract_stanzas ~f:(fun m ->
+      Sexp.equal m.Scan.marker_stanza.Scan.marked_sexp runner
+      &&
+      match Scan.backend_rule_of m with
+      | Scan.Declares_variable -> true
+      | Scan.Names_backend (_, body) ->
+          List.exists (String.split body.Scan.backend ~on:',') ~f:(fun word ->
+              List.mem width_cc_backends word ~equal:String.equal)
+      | _ -> false)
 
 (* A value named by its module and its name. *)
 let compare_names (m, v) (m', v') =
@@ -1459,6 +1504,26 @@ let main () =
     |> Map.of_alist_reduce (module String) ~f:(fun a _ -> a)
   in
   let search_table = ref [] in
+  (* gh-ocannl-1901: every run that can select cc, in every dune file, by the identity of the
+     program it names and with what it pins around that run -- so a program's runs include those
+     written in another dune file, which its own file's reading never sees. *)
+  let cc_program_runs =
+    List.concat_map dune_files ~f:(fun (dune_file, on_disk) ->
+        let dir = match Stdlib.Filename.dirname dune_file with "." -> "" | dir -> dir in
+        let marker_contract = Scan.backend_marker_contract (In_channel.read_all on_disk) in
+        List.concat_map marker_contract.Scan.contract_stanzas ~f:(fun m ->
+            let marked = m.Scan.marker_stanza in
+            let runner = marked.Scan.marked_sexp in
+            if not (runs_cc_in marker_contract runner) then []
+            else
+              List.map (Scan.runs_of ~subdir:marked.Scan.marked_subdir runner)
+                ~f:(fun (identity, pins) ->
+                  ( (match identity with
+                    | `File path -> `File (Scan.normalize_path (Scan.in_subdir dir path))
+                    | `Public name -> `Public name),
+                    dune_file,
+                    (runner, pins, Printf.sprintf "%s:%d" dune_file marked.Scan.marked_line) ))))
+  in
   (* Whether this run was handed the repository, established the way the sibling scans establish it:
      every scan root the globs are written for contributed its floor of sources. The relationship
      below is about whatever tree is in front of the scan and is checked either way; the CENSUS
@@ -1590,19 +1655,92 @@ let main () =
                dune_file
                (if String.is_empty subdir then "" else Printf.sprintf " in `(subdir %s …)`" subdir)
                Scan.backend_env_var));
-      (* gh-ocannl-1368: whether a run can select cc, by the backend rule's own reading of the
-         stanza running it. *)
-      let runs_cc runner =
-        List.exists marker_contract.Scan.contract_stanzas ~f:(fun m ->
-            Sexp.equal m.Scan.marker_stanza.Scan.marked_sexp runner
-            &&
-            match Scan.backend_rule_of m with
-            | Scan.Declares_variable -> true
-            | Scan.Names_backend (_, body) ->
-                List.exists (String.split body.Scan.backend ~on:',') ~f:(fun word ->
-                    List.mem width_cc_backends word ~equal:String.equal)
-            | _ -> false)
+      let runs_cc = runs_cc_in marker_contract in
+      (* Where a stanza of this file sits, for naming a run. *)
+      let runner_where runner =
+        match
+          List.find marker_contract.Scan.contract_stanzas ~f:(fun m ->
+              phys_equal m.Scan.marker_stanza.Scan.marked_sexp runner)
+        with
+        | Some m -> Printf.sprintf "%s:%d" dune_file m.Scan.marker_stanza.Scan.marked_line
+        | None -> dune_file
       in
+      (* gh-ocannl-1901: a program's runs are read off the command sites naming it (the boundary in
+         the rule's header, above [search_home]). A stanza that can select cc and runs a command
+         this reading cannot attribute to a program may be running any program, a searching one
+         included, so it is refused rather than read as running none. A PATH tool handed only what
+         provably names no executable of ours -- `python3 %{dep:reader.py}` -- is not such a
+         command: what a script launches is beyond any reading of dune text, and the backend rule
+         already holds the stanza to a declaration of what it can select. *)
+      List.iter marker_contract.Scan.contract_stanzas ~f:(fun m ->
+          let marked = m.Scan.marker_stanza in
+          let runner = marked.Scan.marked_sexp in
+          (* A stanza the backend rule reads as running nothing names no backend either, so a
+             program it launches unseen runs on the configured one, cc by default (Codex P2, local
+             review round 2). *)
+          let runs_nothing =
+            match Scan.backend_rule_of m with Scan.Runs_nothing -> true | _ -> false
+          in
+          if runs_cc runner || runs_nothing then
+            let named_deps = Scan.named_deps_of runner in
+            (* An argument this reading can say names no executable of ours: every piece of it a
+               literal spelling no `.exe`, a path pform naming a file that is not one, or the target
+               the rule writes. Anything else -- a text-valued pform such as `%{read:runner}`,
+               `%{deps}`, a named binding -- may expand to one, so it is not (Codex P2, local
+               review). *)
+            let names_none_of_ours argument =
+              List.for_all (Scan.pieces argument) ~f:(function
+                | Scan.Literal text -> not (String.is_substring text ~substring:".exe")
+                | Scan.Pform pform -> (
+                    match String.lsplit2 pform ~on:':' with
+                    | Some (prefix, path) ->
+                        List.mem Scan.path_pforms prefix ~equal:String.equal
+                        && not (String.is_substring path ~substring:".exe")
+                    | None -> List.mem [ "target"; "targets" ] pform ~equal:String.equal))
+            in
+            let unattributed =
+              List.filter_map
+                (Scan.classified_command_sites_with_pins_preserving_multiplicity runner)
+                ~f:(fun (_, _, site, command) ->
+                  match (command, site) with
+                  | (Scan.Runs _ | Scan.Runs_dependency _ | Scan.Runs_public _), _ -> None
+                  (* A PATH tool is one only while its arguments, too, provably name nothing of
+                     ours: `(run cmd /c "probe.exe …")` launches one from a quoted line the shared
+                     classifier reads as no path (Codex P2, local review round 2). *)
+                  | Scan.External, _ ->
+                      let rec spelled = function
+                        | Scan.Program (cmd, arguments) ->
+                            if List.for_all arguments ~f:names_none_of_ours then None
+                            else Some (String.concat ~sep:" " (cmd :: arguments))
+                        | Scan.Shell line -> Some line
+                        | Scan.Elsewhere (_, site) | Scan.Unnameable (_, site) -> spelled site
+                      in
+                      Option.map (spelled site) ~f:(fun line -> "`" ^ line ^ "`")
+                  | Scan.Unknown_directory _, Scan.Program (cmd, arguments)
+                    when (match Scan.classify_command ~named_deps cmd with
+                           | Scan.External -> true
+                           | _ -> false)
+                         && List.for_all arguments ~f:names_none_of_ours ->
+                      None
+                  | ( ( Scan.Unrecognized what
+                      | Scan.Unknown_directory what
+                      | Scan.Path_rewritten what ),
+                      _ ) ->
+                      Some ("`" ^ what ^ "`"))
+              @ List.map (Scan.unclassified_action_heads runner) ~f:(fun (_, head) ->
+                  Printf.sprintf "the action `%s`" head)
+              |> List.dedup_and_sort ~compare:String.compare
+            in
+            if not (List.is_empty unattributed) then
+              fail
+                (Printf.sprintf
+                   "%s:%d, the %s, can select cc and runs %s, which this check cannot attribute to \
+                    a program -- it may run one that starts a search, and nothing then asks that \
+                    run to pin the cc vector file. Name the program in command position, `(run \
+                    %%{dep:<name>.exe} …)`, so the width rule can read which program the run is \
+                    (gh-ocannl-1901)"
+                   dune_file marked.Scan.marked_line marked.Scan.marked_head
+                   (String.concat ~sep:", " unattributed)));
       (* And the width marker, on the stanza naming the program's modules. *)
       let width_contract =
         Scan.contained_marker_contract content ~sentinel:width_marker_sentinel
@@ -2598,9 +2736,11 @@ let main () =
                   in
                   let programs =
                     if declared.Scan.runs_itself then
-                      (* One subject for the whole stanza, run by itself alone: the rules that also
-                         run one of its programs by name ([rule_runners]) are not counted here. Its
-                         programs are split again for the search below. *)
+                      (* One subject for the whole stanza, run by itself: the reading of its modules
+                         below is per stanza. The rules that also run one of its programs by name
+                         ([rule_runners]) are runs of that program alone, so the search below, which
+                         splits the stanza per program again, adds each program's own
+                         (gh-ocannl-1901). *)
                       [
                         ( (match declared.Scan.programs with
                           | p :: _ -> p.Scan.program
@@ -2651,15 +2791,55 @@ let main () =
                       in
                       (* One subject per program: a `(tests (names a b))` stanza builds a separate
                          executable per name, linking each one's main module and the shared ones but
-                         not its siblings' mains (Codex P2, round 2). *)
+                         not its siblings' mains (Codex P2, round 2). A stanza dune runs itself has
+                         each program's runs completed by the rules that re-run it by name: a `(rule
+                         (alias runtest-probe-cc) … (run %{dep:probe.exe}))` beside a metal-only
+                         `(test)` selects cc on a run the stanza's own reading never sees
+                         (gh-ocannl-1901). A rule naming one program of a plural stanza runs that
+                         one, not its siblings. *)
+                      let reruns (p : Scan.program) =
+                        if declared.Scan.runs_itself then
+                          List.filter p.Scan.rule_runners ~f:(fun (r, _) ->
+                              not (phys_equal r stanza))
+                        else []
+                      in
                       let subjects =
                         match (kind, declared.Scan.programs) with
                         | "tests", (_ :: _ :: _ as programs) ->
                             List.map programs ~f:(fun p ->
-                                (Printf.sprintf "%s (%s)" where p.Scan.program, p.Scan.own_modules))
-                        | _ -> [ (where, own_modules) ]
+                                ( Printf.sprintf "%s (%s)" where p.Scan.program,
+                                  p.Scan.own_modules,
+                                  [ p ],
+                                  run_stanzas @ reruns p ))
+                        | _ ->
+                            let mine =
+                              if declared.Scan.runs_itself then declared.Scan.programs
+                              else
+                                List.filter declared.Scan.programs ~f:(fun p ->
+                                    String.equal p.Scan.program name)
+                            in
+                            [
+                              ( where,
+                                own_modules,
+                                mine,
+                                run_stanzas @ List.concat_map mine ~f:reruns );
+                            ]
                       in
-                      let cc_runs = List.filter run_stanzas ~f:(fun (r, _) -> runs_cc r) in
+                      (* A program's runs that can select cc: those of this file, and those of every
+                         other dune file naming it ([cc_program_runs]), each with where it is
+                         written. *)
+                      let cc_runs_of runs mine =
+                        List.filter_map runs ~f:(fun (r, pins) ->
+                            if runs_cc r then Some (r, pins, runner_where r) else None)
+                        @ List.concat_map mine ~f:(fun p ->
+                            let identities = program_identities ~dir ~subdir stanza p in
+                            List.filter_map cc_program_runs ~f:(fun (identity, run_file, run) ->
+                                if
+                                  (not (String.equal run_file dune_file))
+                                  && List.mem identities identity ~equal:Poly.equal
+                                then Some run
+                                else None))
+                      in
                       (* The pin set names the variable a `setenv` fixes, not the value it fixes it
                          to, and `""` or `-1` leaves the key on the host's probe: every `setenv` of
                          it in the run's stanza has to set a value (Codex P2, round 1). *)
@@ -2754,12 +2934,12 @@ let main () =
                          run, by precedence: a command-line setting leaves it unpinned, then a
                          `setenv` around the run decides -- a `-1` there undoes the initializer's
                          pin (round 2) -- and only without either, the initializer. *)
-                      let pinned_by modules =
+                      let pinned_by modules cc_runs =
                         let init = init_pin modules in
                         let answers =
                           List.concat_map vector_file_keys ~f:(fun (key, _) ->
                               let var = Utils.env_var_name key in
-                              List.map cc_runs ~f:(fun (r, pins) ->
+                              List.map cc_runs ~f:(fun (r, pins, _) ->
                                   (* A `setenv` of the key anywhere in the stanza that sets no
                                      pinning value leaves this run unpinned, even one wrapping only
                                      some of its invocations: the pin set it is read from intersects
@@ -2775,7 +2955,7 @@ let main () =
                               (List.dedup_and_sort hows ~compare:String.compare))
                       in
                       let searching =
-                        List.filter_map subjects ~f:(fun (subject, modules) ->
+                        List.filter_map subjects ~f:(fun (subject, modules, mine, runs) ->
                             match
                               List.filter_map modules ~f:(fun m ->
                                   Map.find search_reach (in_here m))
@@ -2783,11 +2963,19 @@ let main () =
                               |> List.dedup_and_sort ~compare:String.compare
                             with
                             | [] -> None
-                            | searches ->
-                                Some (subject, String.concat ~sep:", " searches, pinned_by modules))
+                            | searches -> (
+                                match cc_runs_of runs mine with
+                                | [] -> None
+                                | cc_runs ->
+                                    Some
+                                      ( subject,
+                                        String.concat ~sep:", " searches,
+                                        pinned_by modules cc_runs,
+                                        List.map cc_runs ~f:(fun (_, _, where) -> where)
+                                        |> List.dedup_and_sort ~compare:String.compare )))
                       in
                       let markers = width_markers_of stanza in
-                      if not (List.is_empty searching || List.is_empty cc_runs) then (
+                      if not (List.is_empty searching) then (
                         List.iter markers ~f:(fun m ->
                             width_markers_used := m.Scan.contained_line :: !width_markers_used);
                         let record subject via answer =
@@ -2801,7 +2989,9 @@ let main () =
                                   say it once"
                                  where second.Scan.contained_line)
                         | [ marker ] -> (
-                            match List.filter_map searching ~f:(fun (_, _, pinned) -> pinned) with
+                            match
+                              List.filter_map searching ~f:(fun (_, _, pinned, _) -> pinned)
+                            with
                             | hows when List.length hows = List.length searching ->
                                 fail
                                   (Printf.sprintf
@@ -2810,30 +3000,30 @@ let main () =
                                       program's runs see one width, so keep whichever is true"
                                      where (String.concat ~sep:"; " hows) marker.Scan.contained_line)
                             | _ ->
-                                List.iter searching ~f:(fun (subject, via, pinned) ->
+                                List.iter searching ~f:(fun (subject, via, pinned, _) ->
                                     record subject via
                                       (match pinned with
                                       | Some how -> "pinned: " ^ how
                                       | None -> "independent, by its marker")))
                         | [] ->
-                            List.iter searching ~f:(fun (subject, via, pinned) ->
+                            List.iter searching ~f:(fun (subject, via, pinned, runs) ->
                                 match pinned with
                                 | Some how -> record subject via ("pinned: " ^ how)
                                 | None ->
                                     fail
                                       (Printf.sprintf
-                                         "%s starts a search (%s) with a run that can select cc, \
-                                          at the width the host auto-probes -- 16 bytes on ARM, 32 \
-                                          or 64 on the x86 runners CI draws at random, with a \
-                                          register count that differs again -- so a claim on what \
-                                          the search seeds or keeps passes on one host and fails \
-                                          on the next. Pin the vector file (%s) by calling \
+                                         "%s starts a search (%s) with a run that can select cc \
+                                          (%s), at the width the host auto-probes -- 16 bytes on \
+                                          ARM, 32 or 64 on the x86 runners CI draws at random, \
+                                          with a register count that differs again -- so a claim \
+                                          on what the search seeds or keeps passes on one host and \
+                                          fails on the next. Pin the vector file (%s) by calling \
                                           `Fissioned_chain.small_menu` or `small_menu_envelope` in \
                                           a top-level item before the first search, or with \
                                           `(setenv …)` of each on every such run, or add `; %s %s \
                                           -- <why its claims hold at every width>` inside the \
                                           stanza"
-                                         subject via
+                                         subject via (String.concat ~sep:", " runs)
                                          (String.concat ~sep:", "
                                             (List.map vector_file_keys ~f:(fun (key, _) ->
                                                  Printf.sprintf "`%s`" key)))
@@ -5383,7 +5573,8 @@ let search_helper_stub ?(envelope_keys = [ (width_key, "32"); (registers_key, "1
 
 (* How the probe's stanza answers. *)
 let search_subject ?(marker = "") ?(action = "") ?(backend = `Selects) ?(rule_marker = "")
-    ?(preamble = "") ?(head = "test") ?(programs = "(name probe)\n (modules probe)") () =
+    ?(preamble = "") ?(head = "test") ?(programs = "(name probe)\n (modules probe)") ?(rules = "")
+    () =
   Printf.sprintf
     "%s(%s\n\
     \ %s\n\
@@ -5401,14 +5592,24 @@ let search_subject ?(marker = "") ?(action = "") ?(backend = `Selects) ?(rule_ma
     \ (name ambient)\n\
     \ (modules ambient)\n\
     \ (link_flags -linkall)\n\
-    \ (libraries arrayjit.utils))\n"
+    \ (libraries arrayjit.utils))\n\
+     %s"
     preamble head
     (match backend with
     | `Selects -> marker
     | `None -> "; ocannl-backend: none -- the probe runs on no device at all.\n " ^ marker)
     programs
     (match backend with `Selects -> " (env_var OCANNL_BACKEND)" | `None -> "")
-    action rule_marker
+    action rule_marker rules
+
+(* gh-ocannl-1901: a rule re-running the probe by name, on cc, with [action] around the run; written
+   from [dir] relative to `t/`. *)
+let rerun_rule ?(dir = ".")
+    ?(marker = "\n ; ocannl-backend: cc -- re-runs the probe on cc by name.")
+    ?(wrap = fun run -> run) () =
+  Printf.sprintf "\n(rule%s\n (alias runtest)\n (deps ocannl_config (universe))\n (action\n  %s))\n"
+    marker
+    (wrap (Printf.sprintf "(run %%{dep:%s/probe.exe})" dir))
 
 let search_control () =
   let exe =
@@ -5429,7 +5630,7 @@ let search_control () =
     :: vector_file_pin_home :: List.map context ~f:fst
   in
   let run ?(home = "let tune () = ()\n") ?(stub = search_helper_stub ()) ?marker ?action ?backend
-      ?rule_marker ?preamble ?head ?programs ?(extra = []) ~probe () =
+      ?rule_marker ?preamble ?head ?programs ?rules ?(extra = []) ~probe () =
     write_file (Stdlib.Filename.concat root search_home) home;
     write_file (Stdlib.Filename.concat root vector_file_pin_home) stub;
     write_file (Stdlib.Filename.concat root "t/probe.ml") probe;
@@ -5437,7 +5638,7 @@ let search_control () =
         write_file (Stdlib.Filename.concat root file) content);
     write_file
       (Stdlib.Filename.concat root "t/dune")
-      (search_subject ?marker ?action ?backend ?rule_marker ?preamble ?head ?programs ());
+      (search_subject ?marker ?action ?backend ?rule_marker ?preamble ?head ?programs ?rules ());
     let result = run_checker ~root ~exe (("." :: paths) @ List.map extra ~f:fst) in
     List.iter extra ~f:(fun (file, _) -> Stdlib.Sys.remove (Stdlib.Filename.concat root file));
     result
@@ -5475,6 +5676,13 @@ let search_control () =
   let refused ?(why = diagnostic) result = (result, exited 1 result && says why result) in
   let passed result = (result, exited 0 result && not (says diagnostic result)) in
   let unblessed = "are not the blessed pin helpers" in
+  (* gh-ocannl-1901: the probe's own run names no cc, and a rule beside it re-runs it on cc. *)
+  let rerun ?marker ?(rules = rerun_rule ()) ?extra probe =
+    run ?marker ~backend:`None ~rules ?extra ~probe ()
+  in
+  let pinning run = Printf.sprintf "(setenv %s 32 (setenv %s 16 %s))" var registers_var run in
+  let unattributed = "which this check cannot attribute to a program" in
+  let foreign = [ ("u/dune", rerun_rule ~dir:"../t" ()) ] in
   let arms =
     [
       ("unanswered", refused (run ~probe:named ()));
@@ -5591,6 +5799,36 @@ let search_control () =
           (run
              ~stub:(search_helper_stub ~extra:"let other_pin () = small_menu_envelope ()\n" ())
              ~marker ~probe:named ()) );
+      (* gh-ocannl-1901: a rule re-running a `(test)`'s program by name is one of its runs. *)
+      ("rerun_unanswered", refused ~why:"select cc (t/dune:" (rerun named));
+      ("rerun_marked", passed (rerun ~marker named));
+      ("rerun_pinned", passed (rerun ~rules:(rerun_rule ~wrap:pinning ()) named));
+      ( "rerun_override",
+        refused (rerun ~rules:(rerun_rule ~wrap:(Printf.sprintf "(setenv %s -1 %s)" var) ()) helper)
+      );
+      ("rerun_foreign", refused ~why:"select cc (u/dune:" (rerun ~rules:"" ~extra:foreign named));
+      ( "rerun_shell",
+        refused ~why:unattributed
+          (rerun ~rules:(rerun_rule ~wrap:(fun _ -> "(system \"./probe.exe\")") ()) named) );
+      ( "rerun_quoted",
+        refused ~why:unattributed
+          (rerun
+             ~rules:(rerun_rule ~marker:"" ~wrap:(fun _ -> "(run cmd /c \"probe.exe --x\")") ())
+             named) );
+      ( "rerun_read",
+        refused ~why:unattributed
+          (rerun ~rules:(rerun_rule ~wrap:(fun _ -> "(run env %{read:runner})") ()) named) );
+      ( "rerun_launcher",
+        refused ~why:unattributed
+          (rerun ~rules:(rerun_rule ~wrap:(fun _ -> "(run env %{dep:probe.exe})") ()) named) );
+      ( "script",
+        passed
+          (rerun ~marker
+             ~rules:
+               (rerun_rule
+                  ~wrap:(fun run -> "(progn (run python3 %{dep:reader.py}) " ^ run ^ ")")
+                  ())
+             named) );
     ]
   in
   List.iter arms ~f:(fun (label, (result, ok)) -> if not ok then report label result);
@@ -5684,6 +5922,39 @@ let search_control () =
     "a blessed helper that stops stating a key, and a support value stating every key unblessed, \
      are both refused"
     (ok "lapsed" && ok "unblessed");
+  attribute
+    "a rule re-running a `(test)`'s program by name on cc is a run of it: unanswered, it is \
+     reported, naming the rule"
+    (runs [ "rerun_unanswered" ]);
+  Verdict.p
+    "a rule re-running a `(test)`'s program by name on cc is a run of it: unanswered, it is \
+     reported, naming the rule"
+    (ok "rerun_unanswered");
+  Verdict.p "while the program's marker, or a `setenv` pin around the rule's run, answers for it"
+    (ok "rerun_marked" && ok "rerun_pinned");
+  Verdict.p "and a `setenv` of `-1` around the rule's run undoes the initializer's pin"
+    (ok "rerun_override");
+  attribute "a rule in another dune file re-running the program on cc is a run of it too"
+    (runs [ "rerun_foreign" ]);
+  Verdict.p "a rule in another dune file re-running the program on cc is a run of it too"
+    (ok "rerun_foreign");
+  attribute
+    "a stanza that can select cc and runs a command naming no program in command position -- a \
+     shell line, a PATH tool handed an executable of ours -- is refused, not read as running none"
+    (runs [ "rerun_shell"; "rerun_launcher" ]);
+  Verdict.p
+    "a stanza that can select cc and runs a command naming no program in command position -- a \
+     shell line, a PATH tool handed an executable of ours -- is refused, not read as running none"
+    (ok "rerun_shell" && ok "rerun_launcher");
+  attribute
+    "and so is one handing a PATH tool a text-valued pform, which may expand to one, or a line \
+     spelling `.exe`"
+    (runs [ "rerun_read"; "rerun_quoted" ]);
+  Verdict.p
+    "and so is one handing a PATH tool a text-valued pform, which may expand to one, or a line \
+     spelling `.exe`"
+    (ok "rerun_read" && ok "rerun_quoted");
+  Verdict.p "while an interpreter handed only a script passes" (ok "script");
   try remove_tree root with Unix.Unix_error _ -> ()
 
 (* gh-ocannl-1500: the tracing walk's two ways of failing on one module, each reaching its own

@@ -1742,7 +1742,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   held equal to a derivation (`Config_key_scan.stating_reach`: the support values whose bodies
   write every key), so a new pinning helper is blessed in review. Each program of a plural
   `(tests)` stanza answers on its own, and a support value reaching `Autotune.tune` starts a search
-  as the entry point does. The narrowness is deliberate: three review rounds of proving arbitrary
+  as the entry point does. A program's runs are its `(test)` stanza's own plus every stanza, in
+  ANY dune file, naming it in command position (gh-ocannl-1901): a metal-only `(test)` re-run on cc
+  by a rule beside it, or by `test/operations/dune`'s bench-line rule from across the tree, answers
+  as any cc run does. A stanza that can select cc (or names no backend, read as running nothing)
+  whose command names no program the reader can place (a shell line, `env probe.exe`,
+  `env %{read:runner}`, `cmd /c "probe.exe …"`, an unknown action) is refused rather than read
+  as running none; a PATH tool handed only arguments provably naming no `.exe` (a script) is the
+  stated boundary, what it launches being past dune's text. The narrowness is deliberate: three review rounds of proving arbitrary
   statements of a setting each found a new way to write one. The reason has to be TRUE: a claim on what a search seeds, keeps or
   crowns pins instead. A marker on a pinned program, a stale one, a second one and one on a rule
   are refused. A test pruning any cc search with an envelope gets the pin from

@@ -12013,11 +12013,19 @@
         (setenv
          BENCH_PICK
          1
-         (run
-          %{dep:../../benchmarks/runners/ocannl/bench_rank_site.exe}
-          --ocannl_backend=cc
-          --ocannl_model_peak_flops=1e11
-          --ocannl_model_peak_memory_bandwidth=5e10))))))
+         ; bench_rank_site starts a search: its vector file is pinned rather than left to the
+         ; host's probe (gh-ocannl-1368's rule, which weighs this run since gh-ocannl-1901).
+         (setenv
+          OCANNL_CC_VECTOR_BYTES
+          32
+          (setenv
+           OCANNL_CC_VECTOR_REGISTERS
+           16
+           (run
+            %{dep:../../benchmarks/runners/ocannl/bench_rank_site.exe}
+            --ocannl_backend=cc
+            --ocannl_model_peak_flops=1e11
+            --ocannl_model_peak_memory_bandwidth=5e10))))))))
     (with-stdout-to
      bench_lines_harness.out
      (with-stderr-to
