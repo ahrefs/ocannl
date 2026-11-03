@@ -331,7 +331,9 @@
 #      afterwards. A launch queued behind a run that died without a verdict
 #      is followed, never answered with that death. A run's shell forking a
 #      subshell is no second launch, and a launcher past its `cd` to the root
-#      (`cd tools && bash ./test-run.sh run`) still is one. The slot this script takes itself is taken after
+#      (`cd tools && bash ./test-run.sh run`) still is one. A shell that execs
+#      a wrapper for its next launch after its run is a launch to come, and a
+#      script path holding a space still names its worktree. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
 #      out on it.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
@@ -8711,9 +8713,10 @@ q_runs=$TMP/queued-runs
 q_bin=$TMP/queued-bin
 q_root=$TMP/queued-repo
 q_sib=$TMP/queued-sibling
+q_spaced="$TMP/queued spaced/repo"
 q_wraps=()
 mkdir -p "$q_runs" "$q_bin"
-for q_r in "$q_root" "$q_sib"; do
+for q_r in "$q_root" "$q_sib" "$q_spaced"; do
   mkdir -p "$q_r/tools" "$q_r/test/config" "$q_r/arrayjit/test"
   cp "$SRC" "$q_r/tools/test-run.sh"
   stage_sourced "$q_r" || report 1 "queued: fixture" "$stage_error"
@@ -9092,6 +9095,46 @@ if [ -z "$q_detail" ]; then
 fi
 q_release_all
 if [ -z "$q_detail" ]; then report 0 "$q_fork_label"; else report 1 "$q_fork_label" "$q_detail"; fi
+
+# A run's credit is for the words it was recorded under: a shell that ran one
+# batch and then `exec`s a wrapper for the next keeps its pid and start token,
+# and its new words are a launch no run has credited. And a script path that
+# holds a space, flattened apart in the table, still names its worktree.
+q_exec_label="a shell that execs a wrapper after its run is a launch to come; a spaced path still resolves"
+q_detail=
+q_before=$(q_last "$q_root")
+(cd "$q_root" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
+  tools/test-run.sh run build @ok >/dev/null 2>&1
+  exec bash -c "while [ ! -e \"\$1\" ]; do sleep .1; done; exec tools/test-run.sh run build @red" q-exec2 "$1"' \
+  q-exec "$TMP/queued.release9") >/dev/null 2>&1 &
+q_wraps+=("$!:$TMP/queued.release9")
+q_execed() { ps -axww -o args= 2>/dev/null | grep -qF 'q-exec2'; }
+if ! q_until 30 q_finished "$q_root" "$q_before" || ! q_until 30 q_execed; then
+  q_detail="the exec'ing shell's first run never finished, or it never exec'd: last: $(q_last "$q_root")"
+else
+  q_capture "$q_root" wait last --timeout 1
+  { [ "$q_rc" = 124 ] && grep -qF 'has not published its run yet' <<<"$q_out"; } ||
+    q_detail="wait last after the shell exec'd its next wrapper: exit $q_rc (want 124): $q_out"
+fi
+touch "$TMP/queued.release9"
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 30
+  [ "$q_rc" = 1 ] || q_detail="wait last once the exec'd launch ran: exit $q_rc (want 1): $q_out"
+fi
+q_release_all
+if [ -z "$q_detail" ]; then
+  (cd "$TMP" && OCANNL_TOOL_TEST_RUNS=$q_runs PATH=$q_bin:$PATH exec bash -c '
+    while [ ! -e "$1" ]; do sleep .1; done
+    shift
+    exec "$@"' q-spaced "$TMP/queued.release10" "$q_spaced/tools/test-run.sh" run build @red) >/dev/null 2>&1 &
+  q_wraps+=("$!:$TMP/queued.release10")
+  sleep .5
+  q_capture "$q_spaced" status last
+  { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+    q_detail="status last in a spaced worktree, its launch queued elsewhere: exit $q_rc (want 3): $q_out"
+fi
+q_release_all
+if [ -z "$q_detail" ]; then report 0 "$q_exec_label"; else report 1 "$q_exec_label" "$q_detail"; fi
 
 # The other wait: the fleet slot this script takes itself, through a fake
 # fleet-worker.sh that holds the batch until a release file appears. The run

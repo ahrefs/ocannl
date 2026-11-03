@@ -2837,6 +2837,11 @@ group_identity_matches() {
 # through the parent and never again; and a relative word that names no file
 # from the process's directory, when that directory is this worktree, is this
 # script after its own `cd` to the root (`cd tools && bash ./test-run.sh run`).
+# A word that resolves to no file is tried again joined with up to eight words
+# before it, as a path holding spaces that the table's flattening split. And a
+# credit binds the argv it was recorded under (an MD5 of it, beside the pid and
+# start token): a process that `exec`s keeps both and changes its words, and
+# its new words are a launch no run has credited.
 # A plan's directory (`unpublished`) credits nothing. Out of reach, said so: a launch behind
 # a word this cannot resolve (a `cd` inside a `-c` string its process has not
 # run yet, a variable), a loop's later passes over one word (counted once),
@@ -2849,13 +2854,13 @@ group_identity_matches() {
 # The table comes from /proc where it exists (Linux, Cygwin/MSYS), from `ps`
 # elsewhere, and start tokens are ps_token's renderings (stat's starttime, or
 # lstart under C/UTC), so the chain a launcher recorded compares as strings.
-# Modes: `chain` prints "PID TOKEN" for this reader's parent and each ancestor
+# Modes: `chain` prints "PID TOKEN ARGV-MD5" for this reader's parent and each ancestor
 # above it; `pending ROOT UID RUNS [LAST]` prints "PID ARGV" for each launch
 # in flight, RUNS being the state root whose run directories hold the chains
 # and LAST the run `last` names.
 # Exits 2 when the table cannot be read.
 proc_table_perl='
-use strict; use warnings; use Cwd ();
+use strict; use warnings; use Cwd (); use Digest::MD5 ();
 my ($mode, $root, $uid, $runs, $last) = @ARGV;
 my (%pp, %uid, %tok, %args);
 sub slurp { open(my $f, "<", $_[0]) or return undef; local $/; my $s = <$f>; close $f; return $s }
@@ -2894,7 +2899,7 @@ exit 2 unless exists $pp{$$};
 if ($mode eq "chain") {
   my %seen;
   for (my $p = $pp{$$}; defined $p && $p > 1 && exists $pp{$p} && !$seen{$p}++; $p = $pp{$p}) {
-    print "$p $tok{$p}\n";
+    print "$p $tok{$p} ", Digest::MD5::md5_hex($args{$p}), "\n";
   }
   exit 0;
 }
@@ -2934,20 +2939,27 @@ for my $p (sort { $a <=> $b } keys %args) {
     last if base($w[$i]) eq "ssh" || ($w[$i] eq "execution" && $w[$i + 1] eq "leg");
     next unless base($w[$i]) eq "test-run.sh" && $verb{$w[$i + 1]};
     next if $w[$i + 1] eq "prepush" && grep { /\A--list(?:=|\z)/ } @w[$i + 2 .. $#w];
-    my $path = $w[$i];
-    $path =~ s{\A~(?=/)}{$ENV{HOME}};
-    my $c;
-    if ($path !~ m{\A/}) {
-      $c = cwd_of($p);
-      next unless defined $c && length $c;
-      $path = "$c/$path";
+    my ($c, $found);
+    for my $j (reverse(($i > 8 ? $i - 8 : 0) .. $i)) {
+      my $path = join(" ", @w[$j .. $i]);
+      $path =~ s{\A~(?=/)}{$ENV{HOME}};
+      if ($path !~ m{\A/}) {
+        $c = cwd_of($p) unless defined $c;
+        next unless defined $c && length $c;
+        $path = "$c/$path";
+      }
+      next unless -f $path;
+      (my $dir = $path) =~ s{/[^/]*\z}{};
+      my $r = Cwd::abs_path("$dir/..");
+      $found = 1;
+      $hit++ if defined $r && $r eq $root;
+      last;
     }
-    (my $dir = $path) =~ s{/[^/]*\z}{};
-    my $r = Cwd::abs_path("$dir/..");
-    if (-f $path) { $hit++ if defined $r && $r eq $root }
-    elsif (defined $c && (Cwd::abs_path($c) // "") eq $root) { $hit++ }
+    next if $found || $w[$i] =~ m{\A[/~]};
+    $c = cwd_of($p) unless defined $c;
+    $hit++ if defined $c && length $c && (Cwd::abs_path($c) // "") eq $root;
   }
-  next unless $hit > ($known{"$p $tok{$p}"} || 0);
+  next unless $hit > ($known{"$p $tok{$p} " . Digest::MD5::md5_hex($args{$p})} || 0);
   print "$p ", substr($args{$p}, 0, 240), "\n";
 }
 '
