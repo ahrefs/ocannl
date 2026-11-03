@@ -91,7 +91,6 @@ test/operations/tune_footprint_default.ml -- exact-operands: small integer opera
 test/operations/uint4x32_fixed_index_parity.ml -- no-contraction: threefry draws from an inlined and a materialized counter: bit operations only
 test/operations/vec_signed_zero.ml -- exact-operands: eighths and signed zeros; the fma leg is an explicit fma in both kernels
 test/operations/verdict_ratchet.ml -- not-executed: the bitwise text is a scan's fixture sources and justification prose
-test/operations/winograd_backward.ml -- exact-operands: bounded integer fixtures with dyadic transforms, every sum exact in f32; the tolerance leg's bound holds under any contraction (an FMA only removes roundings)
 test/operations/winograd_conv.ml -- exact-operands: bounded integer fixtures with dyadic transforms, every sum exact in f32
 test/operations/wrap_prec_convert.ml -- no-contraction: a same-precision wrap readback compared with host data is a pure copy
 test/operations/zero_elision.ml -- pinned off

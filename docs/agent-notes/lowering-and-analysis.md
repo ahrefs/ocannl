@@ -701,18 +701,13 @@ files.
   segment (`fiss_sketch_candidates`, not `sketch_candidates`); (e) on bounded small-integer inputs
   the two forms agree BITWISE (every coefficient is dyadic and every partial sum representable),
   so the parity leg needs no tolerance to argue about; bound the fixture's magnitudes in the test.
-  The data gradient (gh-ocannl-1548) is the scatter `dx[o+k] += gy[o] * w[k]`, rewritten as its
-  gather (flipped taps, channel roles exchanged, `gy` read at `2t+i-2`). Traps: (f) zero-extend by
-  the MATCHED LOOP DOMAIN under gh-504-style index guards (`Where` over `Embed_index` comparisons
-  stays short-circuiting, `Low_level.speculable_select`), not by a padded copy and not by the
-  node's storage; (g) the odd-extent remainder is the original scatter on boxes, and the last
-  column's rows above the last row are `o_h + k_h <= n_h`, which is TWO boxes, not one -- a
-  dropped box shows only on both-odd shapes (`winograd_backward`'s coordinate-multiplicity
-  enumeration catches it; the forward test's `direct_cells` divides by a uniform reduction count a
-  scatter's border does not have); (h) a spatial extent of one lowers as `Fixed_idx 0` (an
-  un-iterated axis), so its `o + k` axis collapses to the window iterator and the site declines.
-  The error bound for tolerance legs: per cell `(gamma_{C+22} 64 + gamma_{9C+1} 9) C mg mk`, with
-  F(2,3)'s absolute amplification 8 per axis (`winograd_backward` leg 2 derives it).
+  **The data gradient stays direct, by measurement**: a rewrite of its scatter as the
+  flipped-kernel gather (guarded zero-extended reads, original-scatter remainder boxes) was
+  implemented and measured in lukstafi/ocannl-staging#1639 and reverted -- untuned `cifar_resnet`
+  under `approximate`: cc step 1.20x slower, Metal step 0.93x but compile 1.59x, peak memory +57%
+  on both (ahrefs/ocannl#1548, comments 6590711673 and 6591387951). Retry only with a fused input
+  transform that removes the stored transformed intermediates, measured as a win on both cc and
+  Metal; staging#1639's diff holds the recognizer, the remainder-box geometry and the error-bound test.
 - **`Prefix_scan` is the tier's triangular-mask member** (gh-ocannl-1758, key `prefix_scan`): a
   reduction whose operand is a 0/1 (or `where`-selected, or log-) mask along one axis times a
   payload that ignores the output position becomes one `Scan_loop` per row; the cumsum's backward
