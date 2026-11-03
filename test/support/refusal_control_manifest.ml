@@ -800,6 +800,9 @@ let raw_entries =
         "[scanner-refusal:ad8d2fa1c69a86cbbb71c86de6fa1311] checked-in GitHub workflow";
         "[scanner-refusal:5c0ba3bcf03da17c20f587f737d8937b] job-level runtime ceiling";
         "[scanner-refusal:60c7ecc729f54888b5505b2a62d74bc5] workflow job states";
+        "[scanner-refusal:a1cbed1bccff6a63840ed1fcbe8731d7] docs/agent-notes/build-and-test.md";
+        "[scanner-refusal:0615ba230c2da562231c908bacb9d100] expected_sha-dispatched";
+        "[scanner-refusal:1d23389c61196c5055abc91e2b7abe75] bisection-floor record lists";
         "[scanner-refusal:e2fcdedf2103db72a9b3c2b933471215] reusable-workflow call passes";
         "[scanner-refusal:d19a5eafc27ec268076c5d7ca7dbe979] GitHub's 6-hour default";
         "[scanner-refusal:5df256dd2c78f0fb5ea7e3a3c757c976] ceiling declared after";
@@ -837,6 +840,25 @@ let raw_entries =
         "[scanner-refusal:501e8a68f00d9f02dc169f32d4980a9f] reader measuring indentation";
         "[scanner-refusal:de56c44843177e1b1a86d6d0970e8ec9] refused rather than";
         "[scanner-refusal:ea2e7502608bb8e1195b7ec15868624a] nested under github/workflows";
+        "[scanner-refusal:a557763ee03b78a87affc426156201bd] bisection-floor record does";
+        "[scanner-refusal:c673d72de1101d58abd6fa2f4919dca8] action without moving";
+        "[scanner-refusal:011823d18c83a1683a6ff1b57e7825a6] moving the floor";
+        "[scanner-refusal:b8e01bb6fdcc84fd7c2e1ff184f818cc] entry wrapped across";
+        "[scanner-refusal:b3b483b08fd6c863771924a83e02fc81] to it notwithstanding";
+        "[scanner-refusal:57be0a3b386aed33500f9de691473802] and passes unlisted";
+        "[scanner-refusal:8ff369030da0c9f0cc29b387b587a4af] job-level reusable-workflow call";
+        "[scanner-refusal:d06f17413610f7c10892e31c144519ff] expected_sha";
+        "[scanner-refusal:4dbaace6e8cda6a093513e7813af97d8] dispatched workflow's job";
+        "[scanner-refusal:e45cc713244741cef9282e6770731b91] action refused unlisted";
+        "[scanner-refusal:877cf35a722e5c81029167e73f54926f] flow-mapping step spelling";
+        "[scanner-refusal:18bcee09d444d55d3cc60dbc9a241313] action no dispatched";
+        "[scanner-refusal:4306dbe1b75e8925da9b4f3d5bf5b785] with their repetitions";
+        "[scanner-refusal:0ad72760b2d1df6b8cf53b7485391ccf] refused never read";
+        "[scanner-refusal:8763942273d7a3ad21572f947831fe2c] thirteenth month is";
+        "[scanner-refusal:a81382ae52d8d269d1f22355d0bf21d1] entry in another";
+        "[scanner-refusal:712f345271549ed4685da1a3cd914be3] entries are refused";
+        "[scanner-refusal:97d4a9653aa56f3e6bf1d8cf7d273969] entry-shaped bullets unread";
+        "[scanner-refusal:6fa59f2fcd334d1052d38d22c80f0a56] refused rather than";
       ] );
   ]
 
