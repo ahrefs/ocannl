@@ -3032,9 +3032,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/test-run.sh affected --since BASE | REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`)
   prints them, one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh
   run build` or `fresh`; stderr says what each changed path reached and gives per-directory counts.
-  Run it before the pre-push batch as `--since <base>`, where `<base>` is the remote-tracking
-  `master` of `lukstafi/ocannl-staging` (`git remote -v` names it: remote names are not the
-  contract): it compares the worktree with `git merge-base HEAD <base>` (gh-ocannl-1379). A bare REV
+  The pre-push batch is `prepush --since <base>` (below), which runs it, where `<base>` is the
+  remote-tracking `master` of `lukstafi/ocannl-staging` (`git remote -v` names it: remote names
+  are not the contract): it compares the worktree with `git merge-base HEAD <base>` (gh-ocannl-1379). A bare REV
   that is not an ancestor of HEAD is warned about, since the base branch's tip would also count
   every commit it gained since (gh-ocannl-1235: a branch eight commits behind listed 446 aliases
   for a 69-alias change). It reads dune's own description, never a hand-kept map: `dune describe
@@ -3135,7 +3135,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     is those plus the tests exercising the change (AGENTS.md).
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
-    mid-change, never for the pre-push run, which takes the full default list.
+    mid-change, never for the pre-push run, which takes the full default list (`prepush`, below,
+    leaves off only its `slow-`/`train-` members).
   - `--why ALIAS` (repeatable; `--why all` for every listed alias) explains a rank on stderr, in
     `affected: why @ALIAS:` lines, stdout untouched (gh-ocannl-1711): a verdict (REFERENCED,
     BLIND, LINK-ONLY, NOT LISTED), then each reason with the changed path behind it -- a dune file
@@ -3180,6 +3181,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `autotune_mma_companion`); the ALIAS REFUSED digest now also names a refused per-test alias's
     siblings under the other families. It reads names, not the build graph: a helper module names no
     test (exit 1, pointing at `affected --files`).
+  - The pre-push run is one command (gh-ocannl-1829): `tools/test-run.sh prepush --since BASE
+    [--cap N] [--test-cap N] [--expect-backend B]... [build -j 4]` asks `affected --since BASE`
+    for its default list (link-only aliases included), leaves off the `slow-` and `train-` members
+    and runs the rest as `run --targets-file` would: same digest, verdict and exit status. `train-`
+    members run in CI's `@train` shards on every PR; no CI job runs `@slow`, so each `slow-` member
+    left off is named on a `prepush: slow:` stderr line, for the caller to run those the change
+    exercises and name them in the PR body. Before it, five workers filtered by a hand grep or a
+    targets file computed inside `bash -c`, which a fleet leg's backend-pin check refuses. A leg on
+    another box takes the list computed here: `prepush --since BASE --list >F` (it runs nothing;
+    one alias per line), then `fleet-worker.sh execution leg ... --file F -- env OCANNL_BACKEND=B
+    tools/test-run.sh run --expect-backend B --targets-file '{file}'` (ludics#864), so the runner
+    stays one plain command line with its pin a word of it. It reads `affected`'s lines by an
+    allowlist (one `@` operand, a `runtest-`/`slow-`/`train-` alias), and runs nothing when a line
+    is anything else (exit 2), when `affected` fails (exit 2) or says CROSS-CUTTING (exit 2: the
+    run is then CI's, above), or when its list is INCOMPLETE (exit 3: a changed path is UNMAPPED,
+    such as `cuda_backend.ml` on a Mac; `--list` still prints what it found, exit 3, to extend
+    with the OFF-BUILD aliases on a box that builds them). A list with no `runtest-` member runs
+    nothing, exit 0, and `--list` then prints nothing, which `run --targets-file` refuses: check
+    the list before shipping it. Harness: leg 98 of `tools/test-test-run.sh`.
 
 ## OCaml and dune traps
 

@@ -13,7 +13,7 @@
 # #group' leg_N` (scripts/harness-support.sh), its name led by the leg numbers
 # below and closed by the one group it belongs to (gh-ocannl-1202):
 # #group-alive (1-5), #stop (6-8, 67), #queries (39), #repeat (9-25, 38, 83-85),
-# #options (26-28, 37, 89, 94-96), #width (29-34, 48-52, 64, 70), #digest (35-36,
+# #options (26-28, 37, 89, 94-96, 98), #width (29-34, 48-52, 64, 70), #digest (35-36,
 # 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74, 97: the run/start
 # lifecycle with its signal legs, and both fork-window negative controls),
 # #source (59-63, 66), #slot (53-58, 78, 88, 93), #device (75-77, 91), #credentials (79, 90),
@@ -305,6 +305,15 @@
 #      unknown leading option by name before dune (gh-ocannl-1797), and a
 #      leading -j with the order to write it in, except fresh's, which reaches
 #      its operands; a mutant cutting that arm turns its probes red.
+#  98. `prepush --since BASE` (gh-ocannl-1829), against a stand-in
+#      `affected`: its list's runtest- members reach dune as run's batch, in
+#      order (a root alias, a NAME holding `slow-`, a `train-` directory kept),
+#      its slow- and train- members left off and the slow- ones named; run
+#      options pass through; --list prints the list and runs nothing (and exits
+#      3, still printing, on INCOMPLETE); usage errors run nothing and ask no
+#      affected; an affected failure, CROSS-CUTTING (either form), INCOMPLETE,
+#      and a line of no known family run nothing; a list with no runtest-
+#      member runs nothing, exit 0; no scratch list outlives any of them.
 #  90. the runner's own OCANNL_TOOL_TESTRUN_BG, _RD and _OWN reach no dune: a
 #      run, a probed GPU run under a slot, a probed repeat's iterations.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
@@ -8534,6 +8543,130 @@ fi
 fq_restore
 }
 harness_leg_run '96: a flag refuses a value; a query refuses an option-shaped run #options' leg_96
+
+# ---------------------------------------------------------------------------
+# Leg 98: `prepush`, the pre-push run as one command (gh-ocannl-1829)
+# ---------------------------------------------------------------------------
+# Every worker ran `affected --since BASE`'s list without its slow- and train-
+# members by a hand-written grep or a targets file computed inside `bash -c`,
+# which a fleet leg's backend-pin check refuses. Here `affected` is a stand-in
+# (the fixture's tools/affected-tests.sh, which `affected` execs) printing a
+# list, a stderr and a status the probe chooses, so what is pinned is prepush's
+# own work: which members reach dune (both ways), what --list prints, and every
+# case that runs nothing.
+leg_98() {
+pp_label="prepush: affected's list without slow-/train- reaches dune as run's; --list prints it"
+pp_refuse_label="prepush: usage errors, CROSS-CUTTING, INCOMPLETE and an unknown line run nothing"
+pp_stub=$repeat_root/tools/affected-tests.sh
+if [ -e "$pp_stub" ]; then
+  harness_abandon "the fixture root already has $pp_stub: it is no stand-in of this leg's"; return
+fi
+cat >"$pp_stub" <<'STUB'
+printf '%s\n' "$*" >>"$PP_AFFECTED_CALLS"
+cat "$PP_AFFECTED_OUT"
+cat "$PP_AFFECTED_ERR" >&2
+exit "${PP_AFFECTED_RC:-0}"
+STUB
+pp_tmp=$TMP/prepush-tmp
+mkdir -p "$pp_tmp"
+pp_out=$TMP/prepush-affected.out pp_err=$TMP/prepush-affected.err
+# The scratch list prepush makes, which no probe may leave behind.
+pp_left() { find "$pp_tmp" -name 'test-run-prepush.*' -prune -print; }
+# Kept: runtest- members, a root one, one whose NAME holds `slow-`, one in a
+# directory named `train-...`. Left off: slow- and train- members.
+printf '%s\n' '@a/runtest-x' '@a/slow-y' '@b/train-z' '@@runtest-root' '@a/runtest-slow-ish' \
+  '@train-dir/runtest-q' '@test/training/slow-w' >"$pp_out"
+printf 'affected: 7 alias(es) from 2 changed path(s)\n' >"$pp_err"
+pp_probe() { # tag rc argv...: prepush against the stand-in's list
+  local tag=$1 rc=$2
+  shift 2
+  : >"$TMP/$tag.affected"
+  PP_AFFECTED_CALLS=$TMP/$tag.affected PP_AFFECTED_OUT=$pp_out PP_AFFECTED_ERR=$pp_err PP_AFFECTED_RC=$rc \
+    TMPDIR=$pp_tmp argv_probe "$tag" prepush "$@"
+  pp_asked=$(cat "$TMP/$tag.affected")
+}
+pp_detail=
+pp_want='build -j 2 @a/runtest-x @@runtest-root @a/runtest-slow-ish @train-dir/runtest-q'
+pp_probe pp-run 0 --since base build -j 2
+{ [ "$argv_rc" = 0 ] && [ "$argv_calls" = "$pp_want" ] && [ "$pp_asked" = "--since base" ] &&
+  grep -qF 'prepush: 4 of the 7 alias(es) affected --since base lists; left off: 1 train-' <<<"$argv_err" &&
+  grep -qxF 'test-run: prepush: slow: @a/slow-y' <<<"$argv_err" &&
+  grep -qxF 'test-run: prepush: slow: @test/training/slow-w' <<<"$argv_err" &&
+  grep -qxF 'affected: 7 alias(es) from 2 changed path(s)' <<<"$argv_err" &&
+  [ -z "$(pp_left)" ]; } ||
+  pp_detail="run: exit $argv_rc; dune calls: ${argv_calls:-<none>} (want $pp_want); affected asked: $pp_asked; scratch left: $(pp_left); stderr: $argv_err"
+# Run options pass through in either spelling, `build` is the default verb,
+# and the recorded command is the batch's.
+if [ -z "$pp_detail" ]; then
+  pp_probe pp-opts 0 --cap=900 --since=base --test-cap 50
+  pp_want='build @a/runtest-x @@runtest-root @a/runtest-slow-ish @train-dir/runtest-q'
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "$pp_want" ] && [ "$(cat "$argv_dir/cap" 2>/dev/null)" = 900 ] &&
+    grep -qF '@train-dir/runtest-q' "$argv_dir/cmd"; } ||
+    pp_detail="options: exit $argv_rc; dune calls: ${argv_calls:-<none>} (want $pp_want); cap: $(cat "$argv_dir/cap" 2>/dev/null); stderr: $argv_err"
+fi
+# --list prints the same list and runs nothing.
+if [ -z "$pp_detail" ]; then
+  pp_probe pp-list 0 --list --since base
+  { [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ] &&
+    [ "$argv_out" = "$(printf '%s\n' '@a/runtest-x' '@@runtest-root' '@a/runtest-slow-ish' '@train-dir/runtest-q')" ]; } ||
+    pp_detail="--list: exit $argv_rc; dune calls: ${argv_calls:-<none>}; out: $argv_out; stderr: $argv_err"
+fi
+# INCOMPLETE: --list still prints what was found and exits 3.
+if [ -z "$pp_detail" ]; then
+  pp_probe pp-list-incomplete 3 --since base --list
+  { [ "$argv_rc" = 3 ] && [ -z "$argv_calls" ] && grep -qxF '@a/runtest-x' <<<"$argv_out" &&
+    ! grep -qF '/slow-' <<<"$argv_out" && grep -qF 'INCOMPLETE' <<<"$argv_err"; } ||
+    pp_detail="--list incomplete: exit $argv_rc (want 3); out: $argv_out; stderr: $argv_err"
+fi
+if [ -z "$pp_detail" ]; then report 0 "$pp_label"; else report 1 "$pp_label" "$pp_detail"; fi
+
+# Refused, or nothing to run: dune never invoked; a usage error asks no affected.
+pp_detail=
+for probe in "usage|0|build -j 2|--since BASE is required" \
+             "usage|0|--since base --list build|--list prints the list and runs nothing" \
+             "usage|0|--since base --list --cap 9|--list prints the list and runs nothing" \
+             "usage|0|--since base --targets-file f|the list is affected's" \
+             "usage|0|--since base --referenced-only|unknown option --referenced-only" \
+             "usage|0|--since base runtest|only dune's build takes" \
+             "usage|0|--since base --cpu|fleet-worker.sh execution slot --" \
+             "usage|0|--since base --list=1|is a flag and takes no value" \
+             "usage|0|--since base build @w --cap 9|tools/test-run.sh prepush --since BASE [--list |" \
+             "asked|2|--since base|exited 2" \
+             "asked|3|--since base|the list is INCOMPLETE"; do
+  IFS='|' read -r kind rc args want <<<"$probe"
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  pp_probe pp-refused "$rc" $args
+  pp_want_rc=2
+  [ "$rc" != 3 ] || pp_want_rc=3
+  { [ "$argv_rc" = "$pp_want_rc" ] && [ -z "$argv_calls" ] && grep -qF -- "$want" <<<"$argv_err" &&
+    { [ "$kind" = asked ] || [ -z "$pp_asked" ]; } && [ -z "$(pp_left)" ]; } ||
+    { pp_detail="$args (affected exit $rc): exit $argv_rc (want $pp_want_rc); dune calls: ${argv_calls:-<none>}; affected asked: ${pp_asked:-<none>}; stderr: $argv_err"; break; }
+done
+# CROSS-CUTTING refuses both forms; a line of no known family refuses the list;
+# a list with no runtest- member runs nothing, green.
+pp_cc_err=$TMP/prepush-affected-cc.err
+printf 'affected: CROSS-CUTTING: 9 of the 10 per-test aliases rank first\n' >"$pp_cc_err"
+for probe in "cc|$pp_out|$pp_cc_err|--since base|2|is CROSS-CUTTING" \
+             "cc-list|$pp_out|$pp_cc_err|--since base --list|2|is CROSS-CUTTING" \
+             "aggregate|$TMP/prepush-aggregate.out|$pp_err|--since base|2|no per-test alias of runtest, slow or train: '@x/scans'" \
+             "spaced|$TMP/prepush-spaced.out|$pp_err|--since base --list|2|no per-test alias of runtest, slow or train: '@x/runtest-a @x/runtest-b'" \
+             "none|$TMP/prepush-none.out|$pp_err|--since base|0|no runtest- alias to run"; do
+  [ -z "$pp_detail" ] || break
+  IFS='|' read -r tag out err args want_rc want <<<"$probe"
+  printf '%s\n' '@x/runtest-a' '@x/scans' >"$TMP/prepush-aggregate.out"
+  printf '%s\n' '@x/runtest-a @x/runtest-b' >"$TMP/prepush-spaced.out"
+  printf '%s\n' '@x/slow-a' '@y/train-b' >"$TMP/prepush-none.out"
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  PP_AFFECTED_OUT=$out PP_AFFECTED_ERR=$err PP_AFFECTED_CALLS=$TMP/pp-$tag.affected TMPDIR=$pp_tmp \
+    argv_probe "pp-$tag" prepush $args
+  { [ "$argv_rc" = "$want_rc" ] && [ -z "$argv_calls" ] && [ -z "$argv_out" ] && grep -qF -- "$want" <<<"$argv_err" &&
+    [ -z "$(pp_left)" ]; } ||
+    pp_detail="$tag: exit $argv_rc (want $want_rc); dune calls: ${argv_calls:-<none>}; out: $argv_out; stderr: $argv_err"
+done
+if [ -z "$pp_detail" ]; then report 0 "$pp_refuse_label"; else report 1 "$pp_refuse_label" "$pp_detail"; fi
+rm -f "$pp_stub"
+}
+harness_leg_run '98: prepush runs affected'\''s list without slow-/train- members #options' leg_98
 
 # ---------------------------------------------------------------------------
 # Leg 90: the runner's own variables never reach dune (gh-ocannl-1448)
