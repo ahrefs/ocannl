@@ -328,7 +328,8 @@
 #      negative control). A shell whose words hold a second launch is in
 #      flight once its first has run. A launch published before its supervisor
 #      recorded itself is no launch to come, and its verdict is not refused
-#      afterwards. The slot this script takes itself is taken after
+#      afterwards. A launch queued behind a run that died without a verdict
+#      is followed, never answered with that death. The slot this script takes itself is taken after
 #      publication: a run waiting for it is `last`, live, and its wait times
 #      out on it.
 # 100. every `last` lookup stays in its own worktree: beside a sibling's newer
@@ -8762,7 +8763,7 @@ q_kill_all() {
     wait "$q_follow" 2>/dev/null
   fi
   # The runs this leg holds on a file: let them end on their own.
-  touch "$TMP/queued.hold" "$TMP/queued.slot" "$TMP/queued.sup" 2>/dev/null
+  touch "$TMP/queued.hold" "$TMP/queued.hold2" "$TMP/queued.slot" "$TMP/queued.sup" 2>/dev/null
   return 0
 }
 q_release_all() {
@@ -9004,6 +9005,44 @@ if [ -z "$q_detail" ]; then
     q_detail="wait last once the run passed: exit $q_rc (want 0, not unpublished): $q_out"
 fi
 if [ -z "$q_detail" ]; then report 0 "$q_window_label"; else report 1 "$q_window_label" "$q_detail"; fi
+
+# A run that died without a verdict, a launch queued behind it: the dead run's
+# missing verdict is not that launch's answer, and the wait follows on.
+q_dead_label="a launch queued behind a run that died without a verdict is followed"
+q_detail=
+Q_HOLD=$TMP/queued.hold2 q_capture "$q_root" start build @hold
+q_dead=$(q_last "$q_root")
+q_grouped() { [ -s "$q_dead/pgid" ] && [ -s "$q_dead/pid" ]; }
+if [ "$q_rc" != 0 ] || ! q_until 30 q_grouped; then
+  q_detail="the run to kill: exit $q_rc; last ${q_dead:-none}: $q_out"
+else
+  kill -KILL -- "-$(cat "$q_dead/pgid")" 2>/dev/null
+  kill -KILL "$(cat "$q_dead/pid")" 2>/dev/null
+  q_idle() { q "$q_root" idle >/dev/null 2>&1; }
+  q_until 30 q_idle || q_detail="the killed run's lock never cleared"
+fi
+if [ -z "$q_detail" ]; then
+  [ ! -f "$q_dead/exit" ] || q_detail="the killed run recorded a verdict: $(cat "$q_dead/exit")"
+fi
+if [ -z "$q_detail" ]; then
+  q_wrap "$q_root" "$TMP/queued.release7" exec tools/test-run.sh run build @red
+  q_capture "$q_root" status last
+  { [ "$q_rc" = 3 ] && grep -qF 'queued:' <<<"$q_out"; } ||
+    q_detail="status last, the dead run then a queued launch: exit $q_rc (want 3, queued): $q_out"
+fi
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 3
+  { [ "$q_rc" = 124 ] && grep -qF 'has not published its run yet' <<<"$q_out"; } ||
+    q_detail="wait last, the dead run then a queued launch: exit $q_rc (want 124): $q_out"
+fi
+touch "$TMP/queued.release7"
+if [ -z "$q_detail" ]; then
+  q_capture "$q_root" wait last --timeout 30
+  { [ "$q_rc" = 1 ] && ! grep -qF "$q_dead" <<<"$q_out" && grep -qF 'verdict:' <<<"$q_out"; } ||
+    q_detail="wait last once the queued launch ran: exit $q_rc (want 1, its own verdict): $q_out"
+fi
+q_release_all
+if [ -z "$q_detail" ]; then report 0 "$q_dead_label"; else report 1 "$q_dead_label" "$q_detail"; fi
 
 # The other wait: the fleet slot this script takes itself, through a fake
 # fleet-worker.sh that holds the batch until a release file appears. The run

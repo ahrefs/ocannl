@@ -1175,8 +1175,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   pid and start token; a process counted once per launch its words name), so a run's own wrapper
   living on after its verdict is not mistaken for a launch to come, while a shell whose words
   hold a second launch still is. The
-  one fact stored is the sighting (`queued-<key>`, the run `last` named then), since a launch
-  that left without publishing leaves nothing else; a note naming another run is inert. This
+  one fact stored is the sighting (a `queued-after` mark in the run `last` named then, or
+  `queued-<key>` before the first run), since a launch that left without publishing leaves
+  nothing else; a mark is a file's existence per run, so no late reader can overwrite a newer
+  sighting. This
   does not settle gh-ocannl-607: the gap is before any publication, so deriving `last` from the
   run directories would leave it exactly as it was. `list` lists this worktree's runs (by `wt`,
   `--all` for the state root's): the newest entry of a shared root is as likely a sibling

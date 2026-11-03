@@ -1465,7 +1465,7 @@ wt_key=$(wt_key_of "$PWD")
 LOCK=$RUNS/lock-$wt_key   # the flock target: fd 9 of every process of a run
 OWNER=$RUNS/owner-$wt_key # the run directory holding the lock (see take_lock)
 LAST=$RUNS/last-$wt_key   # the run this worktree published most recently
-QUEUED=$RUNS/queued-$wt_key # the run `last` named when a launch was seen in flight (see note_queued)
+QUEUED=$RUNS/queued-$wt_key # a launch seen in flight before this worktree's first run (see note_queued)
 
 # The supervisor: ONE perl process that owns a run from the instant it
 # inherits lock fd 9 until the verdict is on disk -- the second of a run's two
@@ -2985,24 +2985,31 @@ last_quietly() {
 # before it ran: the fleet slot never came, the worktree lock was held, a usage
 # error -- leaves `last` where it was, and a reader asking once it is gone
 # would take the run before it for the launch's own. So every reader that sees
-# one notes, in $QUEUED, the run `last` named at that moment (`none` before the
-# first), and a reader that finds nothing in flight while `last` still names
-# the noted run refuses to answer for it. A note naming any other run is a
-# launch that did publish: inert, and left in place (a reader removing it could
-# race another's fresh note), since `last` never moves back. The noted run's
-# own verdict stays readable by name.
+# one marks the run `last` named at that moment (`queued-after` in its
+# directory; $QUEUED before the first run), and a reader that finds nothing in
+# flight while `last` still names a marked run refuses to answer for it. A
+# mark is a file's existence, one per run, never a value two readers could
+# overwrite: a reader that saw a launch after A and marks A late, once B has
+# published, marks a run `last` no longer names, which `last` never moves back
+# to. The marked run's own verdict stays readable by name.
 note_queued() { # <run dir, empty for none>
-  { printf '%s\n' "${1:-none}" >"$QUEUED.tmp.$$" &&
-    perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$QUEUED.tmp.$$" "$QUEUED"; } 2>/dev/null ||
-    rm -f "$QUEUED.tmp.$$"
+  if [ -n "$1" ]; then : >"$1/queued-after"; else : >"$QUEUED"; fi 2>/dev/null || :
 }
 queued_unpublished() { # <run dir, empty for none>; 0 iff a launch seen after it ended unpublished
-  [ "$(cat "$QUEUED" 2>/dev/null)" = "${1:-none}" ]
+  if [ -n "$1" ]; then [ -e "$1/queued-after" ]; else [ -e "$QUEUED" ]; fi
 }
 queued_report() { # <run dir, empty for none>: the refusal's words
   echo "unpublished: a launch seen in flight in this worktree after ${1:-no run} ended without publishing a run"
   echo "  (refused before it ran: a fleet slot that never came, the worktree lock, a usage error -- its own output says which)"
   [ -z "$1" ] || echo "  the run before it, by name: tools/test-run.sh $sub $(printf %q "$1")"
+}
+status_over() { # <run dir, empty for none>; 0 iff no run of it is still in flight
+  [ -z "$1" ] || [ -f "$1/exit" ] && return 0
+  sup_alive "$1" && return 1
+  # The milliseconds between a launcher's publication and its supervisor's
+  # first record (status's `launch in progress`).
+  [ ! -f "$1/pid" ] && lock_still_owned "$1" && return 1
+  return 0
 }
 pending_report() { # the first launch in flight, for a reader's message
   printf '%s' "${pending_out%%$'\n'*}"
@@ -5041,7 +5048,7 @@ case $sub in
       # one is, a finished `last` is the run before it, never its answer
       # (gh-ocannl-1830; see proc_table_perl). In flight is 3, like running.
       follow_last
-      if [ -z "$run_dir" ] || [ -f "$run_dir/exit" ]; then
+      if status_over "$run_dir"; then
         if [ -n "$pending_out" ]; then
           echo "queued: a launch in this worktree has not published its run yet: $(pending_report)"
           echo "  (the last published run, not that launch's: ${run_dir:-none})"
@@ -5130,23 +5137,32 @@ case $sub in
     # Bounded by construction: default budget is every capped iteration plus
     # one cleanup allowance, so a managed repeat does not time out merely
     # because `cap` is per iteration. Ordinary runs have an implicit count 1.
-    cap=
-    [ -z "$run_dir" ] || cap=$(cat "$run_dir/cap" 2>/dev/null) || cap=3600
-    [ -n "$cap" ] || cap=3600
-    cap=$(( 10#$cap )) # decimal, whatever an older run recorded
-    wait_repeats=1
-    if [ -n "$run_dir" ] && [ "$(cat "$run_dir/mode" 2>/dev/null)" = repeat ]; then
-      wait_repeats=$(cat "$run_dir/repeats" 2>/dev/null) || wait_repeats=1
-      case $wait_repeats in '' | *[!0-9]*) wait_repeats=1 ;; esac
-      wait_repeats=$(( 10#$wait_repeats ))
-      [ "$wait_repeats" -gt 0 ] || wait_repeats=1
-      # A direct set's build phase and plan are capped steps of their own.
-      [ "$(cat "$run_dir/direct" 2>/dev/null)" != 1 ] || wait_repeats=$(( wait_repeats + 2 ))
+    # A followed `last` that binds a run published since gets that run's
+    # allowance from then on, unless --timeout set the budget.
+    wait_allowance() { # <run dir, empty for none>: sets allowance
+      local cap wait_repeats
+      cap=
+      [ -z "$1" ] || cap=$(cat "$1/cap" 2>/dev/null) || cap=3600
+      [ -n "$cap" ] || cap=3600
+      cap=$(( 10#$cap )) # decimal, whatever an older run recorded
+      wait_repeats=1
+      if [ -n "$1" ] && [ "$(cat "$1/mode" 2>/dev/null)" = repeat ]; then
+        wait_repeats=$(cat "$1/repeats" 2>/dev/null) || wait_repeats=1
+        case $wait_repeats in '' | *[!0-9]*) wait_repeats=1 ;; esac
+        wait_repeats=$(( 10#$wait_repeats ))
+        [ "$wait_repeats" -gt 0 ] || wait_repeats=1
+        # A direct set's build phase and plan are capped steps of their own.
+        [ "$(cat "$1/direct" 2>/dev/null)" != 1 ] || wait_repeats=$(( wait_repeats + 2 ))
+      fi
+      allowance=$(( cap > 0 ? cap * wait_repeats + 120 : 7200 ))
+    }
+    if [ -z "$budget" ]; then
+      wait_allowance "$run_dir"
+      budget=$allowance
     fi
-    [ -n "$budget" ] || budget=$(( cap > 0 ? cap * wait_repeats + 120 : 7200 ))
-    waited=0
+    waited=0 bound=$run_dir dead=
     while :; do
-    while [ -n "$run_dir" ] && [ ! -f "$run_dir/exit" ]; do
+    while [ -n "$run_dir" ] && [ ! -f "$run_dir/exit" ] && [ "$run_dir" != "$dead" ]; do
       # Every sleep here -- the poll AND the dead-supervisor grace -- is
       # bounded by the remaining budget, so a short --timeout is honored to
       # the second rather than rounded up to an interval.
@@ -5169,6 +5185,9 @@ case $sub in
         # Recomputed AFTER the settle: consuming the final second must report
         # the documented timeout, not slip through on the pre-sleep value.
         [ $(( budget - waited )) -le 0 ] && { echo "wait timed out after ${budget}s: $run_dir"; exit 124; }
+        # Followed, a launch in flight behind it is still to come: the dead
+        # run's missing verdict is not that launch's answer either.
+        [ -z "$follow" ] || { dead=$run_dir; break; }
         echo "run died without recording a verdict (killed externally?): $run_dir"
         exit 1
       fi
@@ -5181,13 +5200,24 @@ case $sub in
     # A verdict, or no run yet: asked again in follow_last's order, and
     # followed to a run published since, which is waited for above.
     follow_last
-    [ -z "$run_dir" ] || [ -f "$run_dir/exit" ] || continue
+    if [ "$run_dir" != "$bound" ]; then
+      bound=$run_dir dead=
+      if [ -z "${budget_given:-}" ]; then
+        wait_allowance "$run_dir"
+        budget=$(( waited + allowance ))
+      fi
+    fi
+    [ -z "$run_dir" ] || [ -f "$run_dir/exit" ] || [ "$run_dir" = "$dead" ] || continue
     if [ -z "$pending_out" ]; then
       if queued_unpublished "$run_dir"; then
         queued_report "$run_dir"
         exit 2
       fi
       [ -n "$run_dir" ] || resolve_run last
+      if [ ! -f "$run_dir/exit" ]; then
+        echo "run died without recording a verdict (killed externally?): $run_dir"
+        exit 1
+      fi
       break
     fi
     remaining=$(( budget - waited ))
