@@ -5577,8 +5577,8 @@ if [ "$life_posix" = 1 ] && [ "$have_state" = 1 ] && [ "$have_pgid" = 1 ]; then
   for probe_case in settled control; do
     cp "$SRC" "$life_root/tools/test-run.sh"
     if [ "$probe_case" = control ]; then
-      probe_n=$(grep -c 'while sup_alive_settled "\$run_dir"; do wait "\$sup"' "$SRC")
-      sed 's/while sup_alive_settled "\$run_dir"; do wait "\$sup"/while sup_alive "$run_dir"; do wait "$sup"/' \
+      probe_n=$(grep -c 'while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"' "$SRC")
+      sed 's/while sup_alive_settled "\$run_dir"; do wait_tick "\$sup"/while sup_alive "$run_dir"; do wait_tick "$sup"/' \
         "$SRC" >"$life_root/tools/test-run.sh"
       if [ "$probe_n" != 1 ] ||
          grep -q 'while sup_alive_settled "\$run_dir"; do wait' "$life_root/tools/test-run.sh"; then
