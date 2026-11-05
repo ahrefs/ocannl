@@ -37,6 +37,17 @@ files.
   `tools/test-typecheck-scan-cases.sh` plants to be rejected through the ppx (its `#project` legs,
   CI's main shard 1): `affected --harnesses` names no harness for `tensor/ppx_op.ml`, so run
   that one by hand.
+- Evaluation order (gh-ocannl-1869): where `%op` gives a literal a meaning of its own -- a block
+  tensor's components, a concat's operand tuple, an einsum's capture list -- the expansion runs
+  the members in source order (`Ppx_shared.in_source_order` let-binds each one that is not a
+  variable or a constant, but the last; `collect_capture_labels` keeps the written order), so
+  ids and capture uids ascend left to right (`test/ppx/test_eval_order.ml`, both compiled and
+  run). Where it keeps OCaml's meaning the order is OCaml's, right to left: the operands of an
+  operator or function application (`f x + g y` creates `g y` first, as `TDSL.O.(f x + g y)`
+  does outside the ppx) and an argument tuple `f (a, b)`. Inline declarations are not affected
+  by either: they are lifted and bound in source order ahead of the expression. A new builder
+  that splices several effectful expressions into one literal or argument list owes
+  `in_source_order`.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`

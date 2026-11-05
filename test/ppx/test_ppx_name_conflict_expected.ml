@@ -31,8 +31,8 @@ let test_inline_defs =
 let test_variable_capture =
   let open! TDSL.O in
     let __ocannl_body x =
-      let b = Shape.get_variable_ref "b" in
       let a = Shape.get_variable_ref "a" in
+      let b = Shape.get_variable_ref "b" in
       Shape.set_equal a b;
       einsum1
         ?label:(Some
@@ -41,8 +41,8 @@ let test_variable_capture =
                      (x.Tensor.value).Ir.Tnode.label]))
         ~capture_dims:[[%ocaml.error
                          "ppx_ocannl %op: repeated variable capture 'a'"];
-                      b;
-                      a] "a, b => b, a" x in
+                      a;
+                      b] "a, b => b, a" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"test_variable_capture" ~arity:1
         (function
@@ -57,16 +57,16 @@ let test_mixed =
       (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
          "b") () in
     let __ocannl_body x =
+      let a = Shape.get_variable_ref "a" in
       let b =
         [%ocaml.error
           "ppx_ocannl: name clash for inline definition or variable capture 'b' - the name is already defined"] in
-      let a = Shape.get_variable_ref "a" in
       Shape.set_equal a b;
       einsum
         ?label:(Some
                   (List.concat
                      [["test_mixed"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[b; a] "a, b; b, c => a, c" x b in
+        ~capture_dims:[a; b] "a, b; b, c => a, c" x b in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"test_mixed" ~arity:1
         (function

@@ -86,6 +86,16 @@ val no_vbs : 'a list
 val reduce_vbss : 'a list list -> 'a list
 (** Concatenates lists of collected bindings. *)
 
+val in_source_order :
+  loc:location ->
+  prefix:string ->
+  expression list ->
+  f:(expression list -> expression) ->
+  expression
+(** [f exprs'] under [let]s that run the effects of [exprs] in source order: every member but a
+    variable, a constant or the last is bound to [prefix ^ "<position>"], [prefix] extended with
+    underscores until no identifier in [exprs] starts with it. *)
+
 val expr_expander_with_punning :
   (?ident_label:pattern -> expression -> value_binding list * expression) ->
   loc:location ->

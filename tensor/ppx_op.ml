@@ -94,6 +94,12 @@ let rec is_ndarray_constant_expr expr =
       | Pexp_tuple (e :: _) | Pexp_array (e :: _) -> is_ndarray_constant_expr e
       | _ -> false)
 
+(* The components of a block tensor, and the operands of a concat, are let-bound to this prefix and
+   their position where they can have an effect, so that their tensors are created in source order
+   ([in_source_order], gh-ocannl-1869), which lengthens the prefix where a component already
+   mentions such a name -- a nested literal's bindings, or a variable of the user's. *)
+let component_prefix = "__op_component"
+
 (* Desugars a block tensor literal into a call to the named [stack] operation (which composes
    [einsum1] unsqueeze + [concat] along a fresh leading axis). [axis_kind] selects the axis the new
    dimension is inserted into: list -> output, array -> batch, top-level tuple -> input. *)
@@ -106,7 +112,6 @@ let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
              "ppx_ocannl %%op: block tensor requires at least one component" )
   | _ ->
       let vbss, translated = List.unzip (List.map elems ~f:loop) in
-      let rhses_array = Ast_builder.Default.pexp_array ~loc translated in
       let axis_expr =
         match axis_kind with
         | `Output -> [%expr `Output]
@@ -114,7 +119,10 @@ let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
         | `Batch -> [%expr `Batch]
       in
       ( reduce_vbss vbss,
-        [%expr stack ?label:[%e opt_expr ~loc label] [%e axis_expr] [%e rhses_array]] )
+        in_source_order ~loc ~prefix:component_prefix translated ~f:(fun components ->
+            [%expr
+              stack ?label:[%e opt_expr ~loc label] [%e axis_expr]
+                [%e Ast_builder.Default.pexp_array ~loc components]]) )
 
 (* {2 Automatic shape schemes (gh-ocannl-1751)}
 
@@ -531,17 +539,21 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         [%e? { pexp_desc = Pexp_constant (Pconst_string (spec_str, _, _)); _ }]]
     when String.contains spec_str '>'
          && String.equal op_ident Einsum_parser.concat_operator_with_generated_specs ->
-      let vbs1, rhses_expr =
+      let vbs1, rhses =
         match expr1.pexp_desc with
         | Pexp_tuple elems ->
             let vbss, elems = List.unzip (List.map elems ~f:loop) in
-            (reduce_vbss vbss, Ast_builder.Default.pexp_array ~loc elems)
+            (reduce_vbss vbss, elems)
         | _ ->
             let vbs, e = loop expr1 in
-            (vbs, Ast_builder.Default.pexp_array ~loc [ e ])
+            (vbs, [ e ])
       in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
-      (vbs1, [%expr concat ?label:[%e opt_expr ~loc label] [%e spec] [%e rhses_expr]])
+      ( vbs1,
+        in_source_order ~loc ~prefix:component_prefix rhses ~f:(fun rhses ->
+            [%expr
+              concat ?label:[%e opt_expr ~loc label] [%e spec]
+                [%e Ast_builder.Default.pexp_array ~loc rhses]]) )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
@@ -550,21 +562,22 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
     when String.contains spec_str '>'
          && String.equal op_ident Einsum_parser.concat_operator_with_generated_specs ->
       let capture_vbs, capture_dims_expr = collect_capture_labels ~loc head rest in
-      let vbs1, rhses_expr =
+      let vbs1, rhses =
         match expr1.pexp_desc with
         | Pexp_tuple elems ->
             let vbss, elems = List.unzip (List.map elems ~f:loop) in
-            (reduce_vbss vbss, Ast_builder.Default.pexp_array ~loc elems)
+            (reduce_vbss vbss, elems)
         | _ ->
             let vbs, e = loop expr1 in
-            (vbs, Ast_builder.Default.pexp_array ~loc [ e ])
+            (vbs, [ e ])
       in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       let combined_vbs = reduce_vbss [ vbs1; capture_vbs ] in
       ( combined_vbs,
-        [%expr
-          concat ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec]
-            [%e rhses_expr]] )
+        in_source_order ~loc ~prefix:component_prefix rhses ~f:(fun rhses ->
+            [%expr
+              concat ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec]
+                [%e Ast_builder.Default.pexp_array ~loc rhses]]) )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]

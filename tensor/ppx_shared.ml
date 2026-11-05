@@ -696,6 +696,9 @@ include (
                 :: errors )
             else (arg :: labels, errors))
       in
+      (* In the order written (gh-ocannl-1869): the references are minted, and passed on, first
+         capture first. *)
+      let capture_labels = List.rev capture_labels in
       let capture_refs, capture_bindings =
         List.map capture_labels ~f:(fun (loc, label) ->
             let ref_expr =
@@ -728,6 +731,61 @@ include (
 
 let no_vbs = []
 let reduce_vbss vbss = List.concat vbss
+
+(** [in_source_order ~loc ~prefix exprs ~f] is [f exprs'], with the effects of [exprs] run in source
+    order (gh-ocannl-1770, gh-ocannl-1869). OCaml evaluates the elements of a list, array or tuple
+    literal, and the arguments of an application, right to left, so effectful expressions spliced
+    into one run in reverse: tensors get their ids, and capture references their uids, back to
+    front, and a [%cd] sequence's members take a root's forward code in the wrong order. So every
+    member that can have an effect -- anything but a variable or a constant -- is let-bound, in
+    order, to [prefix ^ "<position>"], and [exprs'] names it; the last member stays in place, since
+    it is evaluated after the bindings anyway. [f] must put every one of [exprs'] in ONE literal or
+    argument list, with nothing effectful beside them.
+
+    A binding scopes over the members after it, so its name must be one none of them mentions: a
+    variable of the user's, or the binding of a nested literal, named alike would be captured. So
+    [prefix] is extended with underscores until no identifier in [exprs] starts with it. *)
+let in_source_order ~loc ~prefix exprs ~f =
+  let prefix =
+    let mentioned = ref [] in
+    let visitor =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression e =
+          (match e.pexp_desc with
+          | Pexp_ident { txt = Lident name; _ } -> mentioned := name :: !mentioned
+          | _ -> ());
+          super#expression e
+      end
+    in
+    List.iter exprs ~f:visitor#expression;
+    let rec unmentioned prefix =
+      if List.exists !mentioned ~f:(String.is_prefix ~prefix) then unmentioned (prefix ^ "_")
+      else prefix
+    in
+    unmentioned prefix
+  in
+  let last = List.length exprs - 1 in
+  let has_no_effect e =
+    match e.pexp_desc with Pexp_ident _ | Pexp_constant _ -> true | _ -> false
+  in
+  let named =
+    List.mapi exprs ~f:(fun i e ->
+        if i = last || has_no_effect e then (None, e)
+        else
+          let name = prefix ^ Int.to_string (i + 1) in
+          (Some (name, e), Ast_builder.Default.evar ~loc name))
+  in
+  List.fold_right named
+    ~init:(f (List.map named ~f:snd))
+    ~f:(fun (binding, _) body ->
+      match binding with
+      | None -> body
+      | Some (name, e) ->
+          [%expr
+            let [%p Ast_builder.Default.pvar ~loc name] = [%e e] in
+            [%e body]])
 
 let expr_expander_with_punning translate ~loc ~path:_ payload =
   match payload with
