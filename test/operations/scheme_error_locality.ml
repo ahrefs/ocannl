@@ -4,7 +4,11 @@
    applied to an argument, and records, under op_shape_schemes=off|check, where the error surfaces:
    at the definition (the [()] application, which traces the scheme), at the application (by the
    scheme's instantiation, or by the body's own registration), or only at the closure that forcing
-   the result's dims runs. The table is the catalogue in docs/shape_inference.md. *)
+   the result's dims runs. The table is the catalogue in docs/shape_inference.md.
+
+   gh-ocannl-1814: the catalogue again with each function nested in a schemed one, whose check
+   stands for the nested application's. The second table puts it beside the control that checks the
+   nested application as well, and beside an opted-out outer function, which vouches for nothing. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -83,6 +87,16 @@ let%op rotation () x =
 (* A window kernel no operand axis sizes. *)
 let%op kernel_unsized () x = x ++ "s, 2*o=+1+k => s, o"
 
+(* [def]'s closure, applied in the body of a schemed function, and of an opted-out one. *)
+let%op nested def () =
+  let f = def () in
+  fun x -> f x
+
+let%op nested_plain def () =
+  let f = def () in
+  fun x -> f x
+[@@ocannl.no_scheme]
+
 type case = {
   name : string;
   depends : string;
@@ -104,7 +118,9 @@ let unit_case name depends def arg =
 
 let x23 () = leaf ~batch:[ 2 ] ~output:[ 3 ] "x"
 
-let cases =
+(* The catalogue, each function passed through [wrap]. *)
+let catalogue wrap =
+  let unit_case name depends def arg = unit_case name depends (wrap def) arg in
   [
     unit_case "bias of the wrong width" "arg" bias5 x23;
     unit_case "contradicting parameters" "int" internal_mismatch x23;
@@ -124,7 +140,7 @@ let cases =
       name = "set_dim twice, no () stage";
       depends = "int";
       define = None;
-      apply = (fun () -> set_dim_twice (x23 ()));
+      apply = (fun () -> wrap (fun () -> set_dim_twice) () (x23 ()));
     };
     unit_case "cyclic row permutation, abstract argument" "arg" rotation (fun () -> leaf "x");
     unit_case "cyclic row permutation, concrete argument" "arg" rotation (fun () ->
@@ -132,6 +148,8 @@ let cases =
     unit_case "window kernel nothing sizes" "int" kernel_unsized (fun () ->
         leaf ~output:[ 1; 8 ] "x");
   ]
+
+let cases = catalogue Fn.id
 
 (* Where an error surfaced, in the order a program meets the places. *)
 type phase = Definition | Application | Closure | Accepted
@@ -203,6 +221,63 @@ let () =
     let phase, _, _ = List.Assoc.find_exn row mode ~equal:Poly.equal in
     phase
   in
+  (* gh-ocannl-1814. Rows in the catalogue's order; "re-checked" is the control. *)
+  let nested_outcome ?(recheck = false) case =
+    let run () = outcome `Check case in
+    if recheck then Tensor.For_testing.with_nested_rechecks run else run ()
+  in
+  let nested_table =
+    List.map (catalogue nested) ~f:(fun case ->
+        (case, nested_outcome case, nested_outcome ~recheck:true case))
+  in
+  let plain_table = List.map (catalogue nested_plain) ~f:(fun case -> nested_outcome case) in
+  Tensor.For_testing.set_op_shape_schemes None;
+  let cell (phase, who, _) =
+    match phase with
+    | Accepted | Closure -> phase_name phase
+    | Definition | Application -> phase_name phase ^ ":" ^ who
+  in
+  Stdio.printf "nested case | depends | check | re-checked | under an opted-out function\n";
+  List.iter2_exn nested_table plain_table ~f:(fun (case, skipped, control) plain ->
+      Stdio.printf "%s | %s | %s | %s | %s\n" case.name case.depends (cell skipped) (cell control)
+        (cell plain));
+  let phase_in (phase, _, _) = phase in
+  (* A message spells the session's variable ids ([$214]), which go on growing between the runs. *)
+  let message_in (_, _, msg) =
+    let without_ids m =
+      let after_dollar = ref false in
+      String.filter m ~f:(fun c ->
+          after_dollar := (!after_dollar && Char.is_digit c) || Char.equal c '$';
+          not !after_dollar)
+    in
+    Option.map msg ~f:without_ids
+  in
+  let named_by who (_, reporter, _) = String.equal who reporter in
+  let names name o = Option.exists (message_in o) ~f:(String.is_substring ~substring:name) in
+  let refused_by_scheme = List.filter nested_table ~f:(fun (_, o, _) -> named_by "scheme" o) in
+  Verdict.case "a nested application's errors under the outer check" (fun () ->
+      p_all "skipping the nested checks moves no error: phase, reporter and message" nested_table
+        ~f:(fun (_, skipped, control) ->
+          equal_phase (phase_in skipped) (phase_in control)
+          && String.equal (cell skipped) (cell control)
+          && Option.equal String.equal (message_in skipped) (message_in control));
+      p_all "nesting accepts and refuses what the function alone does"
+        (List.zip_exn table nested_table) ~f:(fun ((_, row), (_, nested, _)) ->
+          Bool.equal
+            (equal_phase (phase_of `Check row) Accepted)
+            (equal_phase (phase_in nested) Accepted));
+      p_all "no nested error surfaces later than the function's own"
+        (List.zip_exn table nested_table) ~f:(fun ((_, row), (_, nested, _)) ->
+          compare_phase (phase_in nested) (phase_of `Check row) <= 0);
+      p "some nested error is refused by the outer application's scheme"
+        (not (List.is_empty refused_by_scheme));
+      p_all "each such error names the outer function" refused_by_scheme ~f:(fun (_, o, _) ->
+          names "applying the shape scheme nested to" o);
+      p_exists "an opted-out outer function leaves the nested function's own name" plain_table
+        ~f:(fun o ->
+          named_by "scheme" o
+          && (not (names "scheme nested" o))
+          && names "applying the shape scheme" o));
   Verdict.case "where schemes move shape errors" (fun () ->
       p_all "every mode accepts and refuses the same programs" table ~f:(fun (_, row) ->
           List.for_all modes ~f:(fun m ->

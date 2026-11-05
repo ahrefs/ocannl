@@ -39,7 +39,22 @@ after a session reset, the scheme is traced again: true
 after the closure, an application with the shared feature size succeeds: true
 after the closure, a conflicting feature size is refused, naming the function: true
 inside the outer trace, the inner closure stays unschemed: true
-at the application, the inner closure is traced and checked, after the outer check: true
+at the application, the inner closure is traced after the outer check, which entails its: true
+a contradiction in a closure built and never applied still raises, naming the closure: true
+the outer application is checked, once: true
+and the layers in its body are not: true
+a nested argument error is still refused, naming the outer function: true
+the control checks the layers too: true
+and its nested error names the same function: the outer check came first: true
+under an opted-out outer function, the layers are checked: true
+and an argument error names the layer: true
+an opted-out function under a checked one: its layers are entailed all the same: true
+under a refused outer function, the layer is checked: true
+the skip ends with the body: a later application is checked: true
+and with a body that raises: true
+a function without a [()] stage, applied in a checked body: the outer one is checked: true
+and the entailed one is neither traced nor checked: true
+and its own application traces and checks it: true
 the session hands out the same ids with schemes on and off: true
 and the same node uids, relative to the run's first node: true
 and the same shape variable ids, relative to the run's start: true

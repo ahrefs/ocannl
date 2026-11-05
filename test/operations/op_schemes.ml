@@ -92,6 +92,44 @@ let%op outer () x =
   let inner = const_layer () in
   inner x
 
+(* gh-ocannl-1814: who checks a nested application. [stack] above is the checked outer function. *)
+let%op stack_plain () =
+  let l1 = layer () in
+  let l2 = layer () in
+  fun x -> l2 (l1 x)
+[@@ocannl.no_scheme]
+
+(* A checked function reaching a schemed layer through an opted-out one. *)
+let%op through_plain () =
+  let middle = stack_plain () in
+  fun x -> middle x
+
+(* The outer trace is refused: its applications check nothing, so [layer]'s checks stay. *)
+let%op refused_outer r () =
+  let l = layer () in
+  fun x ->
+    [%oc Shape.set_dim r 4];
+    l x
+
+(* Without a [()] stage: traced at its first application, but not when that one is entailed. *)
+let%op nested_late x = x + x
+let%op over_late () x = nested_late x
+
+(* A body that raises once its check has passed. *)
+let raise_in_body = ref false
+
+let%op raising_outer () =
+  let l = layer () in
+  fun x ->
+    let y = l x in
+    [%oc if !raise_in_body then failwith "the body raised"];
+    y
+
+(* A closure built in a body and never applied: no window but its own holds its contradiction. *)
+let%op builds_broken () x =
+  let (_ : Tensor.t -> Tensor.t) = broken () in
+  x
+
 (* Random number generation (gh-ocannl-1890): a scheme carries a draw with its coefficient as a
    hole, which the conversion node each application's body registers fills. *)
 let%op noisy () x = x + uniform ()
@@ -460,10 +498,81 @@ let () =
               && String.is_substring why ~substring:"inside a shape-scheme trace"
           | _ -> false));
       let (_ : Tensor.t), at_apply = events (fun () -> f (leaf ~batch:[ 2 ] "x" [ 3 ])) in
-      p "at the application, the inner closure is traced and checked, after the outer check"
+      p "at the application, the inner closure is traced after the outer check, which entails its"
         (match List.filter at_apply ~f:(fun e -> about "const_layer" e || about "outer" e) with
-        | [ a; b; c ] -> checked "outer" a && traced "const_layer" b && checked "const_layer" c
-        | _ -> false));
+        | [ a; b ] -> checked "outer" a && traced "const_layer" b
+        | _ -> false);
+      Tensor.unsafe_reinitialize ();
+      let f = builds_broken () in
+      p "a contradiction in a closure built and never applied still raises, naming the closure"
+        (has_substring ~substring:"tracing the shape scheme broken"
+           (error_message (fun () -> f (leaf "x" [ 3 ])))));
+  Verdict.case "a checked application vouches for the applications in its body" (fun () ->
+      let count name evs = List.count evs ~f:(checked name) in
+      let x () = leaf ~batch:[ 2 ] "x" [ 4 ] in
+      Tensor.unsafe_reinitialize ();
+      let s = stack () in
+      let (_ : Tensor.t), evs = events (fun () -> s (x ())) in
+      p "the outer application is checked, once" (count "stack" evs = 1);
+      p "and the layers in its body are not" (count "layer" evs = 0);
+      let refused_message app =
+        Tensor.unsafe_reinitialize ();
+        let f = app () in
+        let y = f (x ()) in
+        ignore (Shape.to_dims y.Tensor.shape : int array);
+        error_message (fun () -> f (leaf ~batch:[ 7 ] "y" [ 5 ]))
+      in
+      p "a nested argument error is still refused, naming the outer function"
+        (has_substring ~substring:"applying the shape scheme stack to y" (refused_message stack));
+      Tensor.For_testing.with_nested_rechecks (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let s = stack () in
+          let (_ : Tensor.t), evs = events (fun () -> s (x ())) in
+          p "the control checks the layers too" (count "stack" evs = 1 && count "layer" evs = 2);
+          p "and its nested error names the same function: the outer check came first"
+            (has_substring ~substring:"applying the shape scheme stack to y" (refused_message stack)));
+      Tensor.unsafe_reinitialize ();
+      let plain = stack_plain () in
+      let (_ : Tensor.t), evs = events (fun () -> plain (x ())) in
+      p "under an opted-out outer function, the layers are checked" (count "layer" evs = 2);
+      p "and an argument error names the layer"
+        (has_substring ~substring:"applying the shape scheme layer to y"
+           (refused_message stack_plain));
+      Tensor.unsafe_reinitialize ();
+      let through = through_plain () in
+      let (_ : Tensor.t), evs = events (fun () -> through (x ())) in
+      p "an opted-out function under a checked one: its layers are entailed all the same"
+        (count "through_plain" evs = 1 && count "layer" evs = 0);
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "r" in
+      let refused, _ = events (fun () -> refused_outer r ()) in
+      let (_ : Tensor.t), evs = events (fun () -> refused (x ())) in
+      p "under a refused outer function, the layer is checked"
+        (count "refused_outer" evs = 0 && count "layer" evs = 1);
+      Tensor.unsafe_reinitialize ();
+      let f = stack () in
+      let (_ : Tensor.t), evs = events (fun () -> f (x ())) in
+      let lay = layer () in
+      let (_ : Tensor.t), after = events (fun () -> lay (x ())) in
+      p "the skip ends with the body: a later application is checked"
+        (count "stack" evs = 1 && count "layer" after = 1);
+      Tensor.unsafe_reinitialize ();
+      let f = raising_outer () in
+      let lay = layer () in
+      raise_in_body := true;
+      let raised = Result.is_error (Or_error.try_with (fun () -> f (x ()))) in
+      raise_in_body := false;
+      let (_ : Tensor.t), after = events (fun () -> lay (x ())) in
+      p "and with a body that raises" (raised && count "layer" after = 1);
+      Tensor.unsafe_reinitialize ();
+      let f = over_late () in
+      let (_ : Tensor.t), evs = events (fun () -> f (x ())) in
+      p "a function without a [()] stage, applied in a checked body: the outer one is checked"
+        (count "over_late" evs = 1);
+      p_none "and the entailed one is neither traced nor checked" evs ~f:(about "nested_late");
+      let (_ : Tensor.t), evs = events (fun () -> nested_late (x ())) in
+      p "and its own application traces and checks it"
+        (List.exists evs ~f:(traced "nested_late") && count "nested_late" evs = 1));
   Verdict.case "schemes change no id and no value" (fun () ->
       let run ~on =
         Tensor.For_testing.set_op_shape_schemes (Some (if on then `Check else `Off));

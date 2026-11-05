@@ -24,6 +24,12 @@ let%op residual_block ~hid () =
   let layer = mlp_layer ~hid () in
   fun x -> x + layer x
 
+(* The same residual, opted out: nothing vouches for the layer, which names itself. *)
+let%op residual_block_unchecked ~hid () =
+  let layer = mlp_layer ~hid () in
+  fun x -> x + layer x
+[@@ocannl.no_scheme]
+
 (* The second bias has the hidden size instead of the output size: no argument can fix it. *)
 let%op two_layer ~hid ~out () x =
   let h = relu (({ w1; o = [ hid ] } * x) + { b1 = 0.; o = [ hid ] }) in
@@ -65,6 +71,24 @@ let cases =
       name = "an argument the scheme refuses, at the application";
       scheme = Some "residual_block";
       run = (fun () -> ignore (residual_block ~hid:4 () (input ~batch:[ 2 ] "x" [ 3 ]) : Tensor.t));
+    };
+    {
+      name = "a nested layer refusing a closed feature size: the outer function is named";
+      scheme = Some "residual_block";
+      run =
+        (fun () ->
+          let block = residual_block ~hid:4 () in
+          ignore (Shape.to_dims (block (input ~batch:[ 2 ] "x" [ 4 ])).Tensor.shape : int array);
+          ignore (block (input ~batch:[ 2 ] "y" [ 3 ]) : Tensor.t));
+    };
+    {
+      name = "the same layer under an opted-out function: the layer is named";
+      scheme = Some "mlp_layer";
+      run =
+        (fun () ->
+          let block = residual_block_unchecked ~hid:4 () in
+          ignore (Shape.to_dims (block (input ~batch:[ 2 ] "x" [ 4 ])).Tensor.shape : int array);
+          ignore (block (input ~batch:[ 2 ] "y" [ 3 ]) : Tensor.t));
     };
     {
       name = "an argument with too few axes for the spec";
@@ -187,6 +211,10 @@ let () =
   let printed (exn, _, _) = Stdlib.Printexc.to_string exn in
   Verdict.case "readable shape errors" (fun () ->
       p "every case raised a shape error" (List.length errors = List.length cases);
+      p_all "every application error names the scheme that refused it" in_scheme
+        ~f:(fun (label, (_, msg, _)) ->
+          (not (String.is_prefix msg ~prefix:"applying the shape scheme"))
+          || String.is_prefix msg ~prefix:("applying the shape scheme " ^ label ^ " to"));
       p_exists "the raw constraint sexp of an error in a scheme spells a reserved-range id"
         in_scheme ~f:(fun (_, (_, msg, trace)) -> spells_reserved_id (raw (msg, trace)));
       if full_sexp then (

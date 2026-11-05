@@ -2161,8 +2161,10 @@
 # returned function takes only tensors is traced when its closure is built (at its `()`
 # application, or at the first application without a `()` stage); an application error that
 # depends on the arguments is reported naming the function, before the body runs.
-# `check` (the default): each application checks the scheme in a rewound window, then the body
-#   registers as without schemes. Shape inference takes about twice as long (gh-ocannl-1752).
+# `check` (the default): each outermost application checks the scheme in a rewound window, then
+#   the body registers as without schemes; the scheme holds the constraints of the applications in
+#   that body, which are not checked again (gh-ocannl-1814). Shape inference takes about twice as
+#   long (gh-ocannl-1752).
 # `off`: every function builds as before, unchecked.
 # Either way the graph, its tensor ids and node uids, the generated code and the values are the
 # same. Read once per process. See docs/syntax_extensions.md.
