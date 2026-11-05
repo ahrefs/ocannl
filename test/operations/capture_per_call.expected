@@ -32,16 +32,12 @@ solved first: the open operand takes the solved size: true
 solved first: a different size after the reference is solved is a shape error: true
 after a closure: w2 is 5
 after a closure: the later operand takes the closed size: true
-after a valueless closure, captured again by a row: the reference is still unsolved when the operations have registered: true
-after a valueless closure, captured again by a row: refused: capturing it in spec "..d.. => ..d..": the row variable reference d was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent has no numeric product -- so the closure kept nothing of it and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
-after a valueless closure, captured again by a row: the reuse is refused, naming the reference and the closure: true
-after a valueless closure, captured again by a row: fresh work after the refusal ties as before: true
 after a valueless closure, captured again by a dimension: the reference is still unsolved when the operations have registered: true
-after a valueless closure, captured again by a dimension: refused: capturing it in spec "d=>d": the row variable reference d was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent has no numeric product -- so the closure kept nothing of it and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
+after a valueless closure, captured again by a dimension: refused: capturing it in spec "d=>d": the row variable reference d was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent keeps its axes but has no numeric product -- so the closure kept nothing this use can relate, and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
 after a valueless closure, captured again by a dimension: the reuse is refused, naming the reference and the closure: true
 after a valueless closure, captured again by a dimension: fresh work after the refusal ties as before: true
 after a valueless closure, set_dim: the reference is still unsolved when the operations have registered: true
-after a valueless closure, set_dim: refused: Shape.set_dim: the row variable reference d was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent has no numeric product -- so the closure kept nothing of it and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
+after a valueless closure, set_dim: refused: Shape.set_dim: the row variable reference d was bound by shape inference that has since closed (or by a session since reset) without a solved value -- a row holding a symbolic extent keeps its axes but has no numeric product -- so the closure kept nothing this use can relate, and relating it now would constrain a dead variable. Capture it afresh in an operation of the open work.
 after a valueless closure, set_dim: the reuse is refused, naming the reference and the closure: true
 after a valueless closure, set_dim: fresh work after the refusal ties as before: true
 symbolic, set before the registrations: both operands carry the symbolic extent: true
@@ -66,13 +62,51 @@ row then dim: the other operand has the fixed operand's product: true
 rows, solved first: the first registration solved the reference: true
 rows, solved first: w2 is 2x3
 rows, solved first: the open operand takes the solved row: true
-rows, after a closure: w2 is 6
-rows, after a closure: the later operand takes the closed product: true
+rows, after a closure: w2 is 2x3
+rows, after a closure: the later operand takes the closed row: true
+rows, after a closure: the closure carried the row's axes: true
 rows holding a symbolic extent: w is 6
 rows holding a symbolic extent: two captures of one row close without a shape error: true
 executed: the reference is still unsolved when the operations have registered: true
 executed: y1 computes all 5 cells of the shared width: true
 executed: y2 computes all 5 cells of the shared width: true
+a 2x3 row, rebound as a row: within one inference 2x3 (2,3); across closures 2x3 (2,3)
+a 2x3 row, rebound as a row: across closures as within one inference: true
+a 2x3 row, rebound as a row: the expected outcome: true
+a 2x3 row, rebound as a row fixed to 2x3: within one inference 2x3 (2,3); across closures 2x3 (2,3)
+a 2x3 row, rebound as a row fixed to 2x3: across closures as within one inference: true
+a 2x3 row, rebound as a row fixed to 2x3: the expected outcome: true
+a 2x3 row, rebound as a row fixed to 3x2: within one inference refused; across closures refused
+a 2x3 row, rebound as a row fixed to 3x2: across closures as within one inference: true
+a 2x3 row, rebound as a row fixed to 3x2: the expected outcome: true
+a 2x3 row, rebound as a row fixed to 6: within one inference refused; across closures refused
+a 2x3 row, rebound as a row fixed to 6: across closures as within one inference: true
+a 2x3 row, rebound as a row fixed to 6: the expected outcome: true
+the empty row, rebound as a row: within one inference no axes (); across closures no axes ()
+the empty row, rebound as a row: across closures as within one inference: true
+the empty row, rebound as a row: the expected outcome: true
+the empty row, rebound as a row fixed to 1: within one inference refused; across closures refused
+the empty row, rebound as a row fixed to 1: across closures as within one inference: true
+the empty row, rebound as a row fixed to 1: the expected outcome: true
+a row set_dim'd to 6 before it resolved to 2x3, rebound as a row: within one inference 2x3 (2,3); across closures 2x3 (2,3)
+a row set_dim'd to 6 before it resolved to 2x3, rebound as a row: across closures as within one inference: true
+a row set_dim'd to 6 before it resolved to 2x3, rebound as a row: the expected outcome: true
+a row set_dim'd to 6 before it resolved to 2x3, rebound as a row fixed to 3x2: within one inference refused; across closures refused
+a row set_dim'd to 6 before it resolved to 2x3, rebound as a row fixed to 3x2: across closures as within one inference: true
+a row set_dim'd to 6 before it resolved to 2x3, rebound as a row fixed to 3x2: the expected outcome: true
+a row holding a symbolic extent, rebound as a row: within one inference 6 (S<=6); across closures 6 (S<=6)
+a row holding a symbolic extent, rebound as a row: across closures as within one inference: true
+a row holding a symbolic extent, rebound as a row: the expected outcome: true
+a row holding a symbolic extent, rebound as a row fixed to 6: within one inference refused; across closures refused
+a row holding a symbolic extent, rebound as a row fixed to 6: across closures as within one inference: true
+a row holding a symbolic extent, rebound as a row fixed to 6: the expected outcome: true
+a 2x3 row, then a dimension, rebound as a row fixed to 3x2: within one inference 3x2 (3,2); across closures 3x2 (3,2)
+a 2x3 row, then a dimension, rebound as a row fixed to 3x2: across closures as within one inference: true
+a 2x3 row, then a dimension, rebound as a row fixed to 3x2: the expected outcome: true
+a 2x3 row, a closure, then a dimension, rebound as a row fixed to 3x2: within one inference 3x2 (3,2); across closures 3x2 (3,2)
+a 2x3 row, a closure, then a dimension, rebound as a row fixed to 3x2: across closures as within one inference: true
+a 2x3 row, a closure, then a dimension, rebound as a row fixed to 3x2: the expected outcome: true
+across a closure, executed: each of the 2 rows sums its 3 cells: true
 symbol at the closure: the reference is still unsolved when the operations have registered: true
 symbol at the closure: the closure records the operand's symbol, and no size: true
 symbol at the closure: w2 is seq<=6

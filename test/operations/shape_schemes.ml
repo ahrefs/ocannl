@@ -508,23 +508,38 @@ let () =
             (Result.is_ok bad)))
 
 (* A row reference: rows, not products, are related -- and a dimension bound outside meets a row
-   bound inside by its product, as two operations sharing the reference do. *)
+   bound inside by its product, as two operations sharing the reference do. Across a closure the
+   reference carries its row (gh-ocannl-1689), so the application relates that row; a scheme traced
+   after the closure still reads the reference as an input, not as the row it carries. *)
 let () =
   Verdict.case "capture references: rows and mixed kinds" (fun () ->
       let row_body r = function [ x ] -> [ capture_row r x ] | _ -> assert false in
-      let rows ?sabotage arg =
+      let rows ?sabotage ?(close = false) ?(trace_after = false) arg =
         Tensor.unsafe_reinitialize ();
         let r = Shape.get_variable_ref "q" in
-        let s = Tensor.Scheme.trace ~label:"row_capture" 1 (row_body r) in
-        ignore (capture_row r (leaf "x1" [ 2; 6 ]) : Tensor.t);
+        let trace () = Tensor.Scheme.trace ~label:"row_capture" 1 (row_body r) in
+        let s = if trace_after then None else Some (trace ()) in
+        let y = capture_row r (leaf "x1" [ 2; 6 ]) in
+        if close then ignore (dims y.Tensor.shape : int list);
+        let s = match s with Some s -> s | None -> trace () in
         outcome (fun () -> instantiate ?sabotage s [ arg () ])
       in
-      p "a row reference bound to 2x6: an application to 2x6 succeeds"
-        (Result.is_ok (rows (fun () -> leaf "same" [ 2; 6 ])));
-      p "an application to 3x4, of the same product, is refused: the rows are related"
-        (Result.is_error (rows (fun () -> leaf "other" [ 3; 4 ])));
-      p "control (no reference inputs): the application to 3x4 is accepted"
-        (Result.is_ok (rows ~sabotage:No_ref_inputs (fun () -> leaf "other" [ 3; 4 ])));
+      List.iter
+        [
+          (false, false, ""); (true, false, " across a closure"); (true, true, ", traced after it");
+        ]
+        ~f:(fun (close, trace_after, when_) ->
+          p
+            ("a row reference bound to 2x6" ^ when_ ^ ": an application to 2x6 succeeds")
+            (Result.is_ok (rows ~close ~trace_after (fun () -> leaf "same" [ 2; 6 ])));
+          p
+            ("an application to 3x4" ^ when_
+           ^ ", of the same product, is refused: the rows are related")
+            (Result.is_error (rows ~close ~trace_after (fun () -> leaf "other" [ 3; 4 ])));
+          p
+            ("control (no reference inputs)" ^ when_ ^ ": the application to 3x4 is accepted")
+            (Result.is_ok
+               (rows ~sabotage:No_ref_inputs ~close ~trace_after (fun () -> leaf "other" [ 3; 4 ]))));
       let mixed arg =
         Tensor.unsafe_reinitialize ();
         let r = Shape.get_variable_ref "b" in

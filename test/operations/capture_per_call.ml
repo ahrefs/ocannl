@@ -124,6 +124,7 @@ let fix t sizes =
   let axes = String.concat labels in
   ignore (NTDSL.einsum1 ~capture_dims:refs (axes ^ "=>" ^ axes) t () : Tensor.t)
 
+let fix_sizes = fix
 let dims t = Array.to_list (Lazy.force t.Tensor.value.dims)
 let product t = List.fold (dims t) ~init:1 ~f:( * )
 let dims_str t = String.concat ~sep:"x" (List.map (dims t) ~f:Int.to_string)
@@ -232,9 +233,10 @@ let () =
       p (name ^ ": the later operand takes the closed size") (List.equal Int.equal (dims w2) [ 5 ]));
   (* A row holding a symbolic extent has no numeric product, so its closure records neither
      [solved_dim] nor [solved_sym], and the row variable the reference was bound to belongs to the
-     reset environment: nothing carries the row across the closure. Reusing the reference -- a new
-     capture, by a row or by a dimension, or [set_dim] -- is refused, naming the closure
-     (gh-ocannl-1655); before, the next capture was silently left untied. *)
+     reset environment. The closure carries the row itself (gh-ocannl-1689), so a new capture by a
+     row is the same row (the cases after [rebind_scenarios] below); but a use needing a number -- a
+     capture by a dimension, or [set_dim] -- has nothing to relate and is refused, naming the
+     closure (gh-ocannl-1655); before, the next capture was silently left untied. *)
   let closed_without_value name =
     let module Idx = Ir.Indexing in
     let seq, _bindings = Idx.get_static_symbol ~static_range:6 Idx.Empty in
@@ -250,8 +252,6 @@ let () =
   in
   List.iter
     [
-      ( "captured again by a row",
-        fun d -> ignore (capture ~spec:"..d.. => ..d.." d (open_leaf "w2") : Tensor.t) );
       ( "captured again by a dimension",
         fun d -> ignore (capture ~spec:"d=>d" d (open_leaf "w2") : Tensor.t) );
       ("set_dim", fun d -> Shape.set_dim d 6);
@@ -308,7 +308,8 @@ let () =
       check "set after both open registrations" false);
   (* Within one inference, a row reference names one row: two row bindings are [Row_eq]-tied, in
      whichever order they resolve. A dimension and a row share only a number, the row's product.
-     Across a closure only the product survives (the reference's [solved_dim]). *)
+     Across a closure the reference carries the row itself (gh-ocannl-1689; [rebind_scenarios]
+     below). *)
   Verdict.case "shared reference, rows" (fun () ->
       Tensor.unsafe_reinitialize ();
       let row = "..d.. => ..d.." in
@@ -353,7 +354,12 @@ let () =
       let w2 = open_leaf "w2" in
       let _y2 = capture ~spec:row d w2 in
       show name [ ("w2", w2) ];
-      p (name ^ ": the later operand takes the closed product") (product w2 = 6));
+      p
+        (name ^ ": the later operand takes the closed row")
+        (List.equal Int.equal (dims w2) [ 2; 3 ]);
+      p
+        (name ^ ": the closure carried the row's axes")
+        (Option.exists d.carried_row ~f:(fun row -> List.length row = 2)));
   Verdict.case "shared reference, rows holding a symbolic extent" (fun () ->
       Tensor.unsafe_reinitialize ();
       let name = "rows holding a symbolic extent" in
@@ -388,6 +394,156 @@ let () =
             (Printf.sprintf "%s: %s computes all 5 cells of the shared width" name label)
             (Array.to_list (Context.get_values ctx y.Tensor.value))
             ~f:(Float.equal 2.));
+      Context.release ctx)
+
+(* A row reference rebound across a closure is the row its closure carried (gh-ocannl-1689), not
+   only that row's product: each scenario binds the reference, then captures it as a row over an
+   open operand, optionally fixed. Run once within one inference and once with a closure where the
+   scenario marks one, the two outcomes must agree -- the carried row stands in for the row binding
+   the closure made dead -- and match the expected one. Before the fix, across a closure the open
+   operand was tied by product only: 3x2 and 6 were accepted after 2x3, and a row holding a symbolic
+   extent could not be rebound at all. A dimension binding at the closure carries only its number,
+   as a row captured after a dimension within one inference is tied to it by product. *)
+type rebind_outcome = Closed of int list * string | Refused
+
+let equal_rebind_outcome o1 o2 =
+  match (o1, o2) with
+  | Closed (d1, s1), Closed (d2, s2) -> List.equal Int.equal d1 d2 && String.equal s1 s2
+  | Refused, Refused -> true
+  | Closed _, Refused | Refused, Closed _ -> false
+
+let rebind_outcome_str = function
+  | Closed (ds, s) ->
+      let ds =
+        if List.is_empty ds then "no axes"
+        else String.concat ~sep:"x" (List.map ds ~f:Int.to_string)
+      in
+      Printf.sprintf "%s (%s)" ds s
+  | Refused -> "refused"
+
+let rebind_scenarios =
+  let module Idx = Ir.Indexing in
+  let row = "..d.. => ..d.." in
+  let c23 () = NTDSL.init ~l:"c23" ~prec:Ir.Ops.single ~b:[] ~o:[ 2; 3 ] ~f:(fun _ -> 2.) () in
+  let scalar () = NTDSL.init ~l:"c" ~prec:Ir.Ops.single ~b:[] ~o:[] ~f:(fun _ -> 2.) () in
+  (* Each step binds [d] and returns the tensor whose dims a closure after it forces; [true] marks a
+     closure after the step. [sym] names the symbol a step made, for the printed shapes. *)
+  let sym = ref None in
+  let symbolic_row d =
+    let seq, _bindings = Idx.get_static_symbol ~static_range:6 Idx.Empty in
+    sym := Some (Idx.symbol_ident seq.static_symbol);
+    let e = Shape.get_variable_ref "e" in
+    Shape.set_sym_dim e seq;
+    let w1 = open_leaf "w1" in
+    ignore (capture ~spec:"e=>e" e w1 : Tensor.t);
+    capture ~spec:row d w1
+  in
+  let set_dim_then_row d =
+    Shape.set_dim d 6;
+    let w1 = open_leaf "w1" in
+    let y = capture ~spec:row d w1 in
+    fix w1 [ 2; 3 ];
+    y
+  in
+  let row_of t d = capture ~spec:row d (t ()) in
+  let dim_capture d = capture ~spec:"d=>d" d (open_leaf "wd") in
+  [
+    ( "a 2x3 row",
+      [ (row_of c23, true) ],
+      [
+        (None, `Dims [ 2; 3 ]);
+        (Some [ 2; 3 ], `Dims [ 2; 3 ]);
+        (Some [ 3; 2 ], `Refused);
+        (Some [ 6 ], `Refused);
+      ] );
+    ("the empty row", [ (row_of scalar, true) ], [ (None, `Dims []); (Some [ 1 ], `Refused) ]);
+    ( "a row set_dim'd to 6 before it resolved to 2x3",
+      [ (set_dim_then_row, true) ],
+      [ (None, `Dims [ 2; 3 ]); (Some [ 3; 2 ], `Refused) ] );
+    ( "a row holding a symbolic extent",
+      [ (symbolic_row, true) ],
+      [ (None, `Symbolic); (Some [ 6 ], `Refused) ] );
+    ( "a 2x3 row, then a dimension",
+      [ (row_of c23, false); (dim_capture, true) ],
+      [ (Some [ 3; 2 ], `Dims [ 3; 2 ]) ] );
+    ( "a 2x3 row, a closure, then a dimension",
+      [ (row_of c23, true); (dim_capture, true) ],
+      [ (Some [ 3; 2 ], `Dims [ 3; 2 ]) ] );
+  ]
+  |> List.map ~f:(fun (name, steps, fixes) -> (name, steps, fixes, sym))
+
+let rebind ~closures steps fix =
+  Tensor.unsafe_reinitialize ();
+  let d = Shape.get_variable_ref "d" in
+  match
+    List.iter steps ~f:(fun (step, close) ->
+        let y = step d in
+        if closures && close then ignore (dims y : int list));
+    let w2 = open_leaf "w2" in
+    let _y2 = capture ~spec:"..d.. => ..d.." d w2 in
+    Option.iter fix ~f:(fix_sizes w2);
+    let ds = dims w2 in
+    Closed (ds, Shape.to_string_hum ~style:Axis_size w2.Tensor.shape)
+  with
+  | outcome -> outcome
+  | exception Row.Shape_error _ ->
+      Tensor.rewind_to_last_closure ~reason:"gh-1689 refusal case" ();
+      Refused
+
+let () =
+  List.iter rebind_scenarios ~f:(fun (name, steps, fixes, sym) ->
+      List.iter fixes ~f:(fun (fix, want) ->
+          let name =
+            name
+            ^
+            match fix with
+            | None -> ", rebound as a row"
+            | Some sizes ->
+                ", rebound as a row fixed to "
+                ^ String.concat ~sep:"x" (List.map sizes ~f:Int.to_string)
+          in
+          Verdict.case ("shared reference across a closure: " ^ name) (fun () ->
+              (* The symbol's identity depends on the process's symbol counter: printed as [S]. *)
+              let run closures =
+                sym := None;
+                let o = rebind ~closures steps fix in
+                match (o, !sym) with
+                | Closed (ds, s), Some ident ->
+                    Closed (ds, String.substr_replace_all s ~pattern:ident ~with_:"S")
+                | o, _ -> o
+              in
+              let inline = run false and across = run true in
+              Stdio.printf "%s: within one inference %s; across closures %s\n" name
+                (rebind_outcome_str inline) (rebind_outcome_str across);
+              p
+                (name ^ ": across closures as within one inference")
+                (equal_rebind_outcome inline across);
+              p (name ^ ": the expected outcome")
+                (match (want, across) with
+                | `Dims want, Closed (ds, _) -> List.equal Int.equal ds want
+                | `Symbolic, Closed (_, s) -> String.is_substring s ~substring:"S<=6"
+                | `Refused, Refused -> true
+                | (`Dims _ | `Symbolic), Refused | `Refused, Closed _ -> false))))
+
+(* The rebound row computes over the carried axes: summing the innermost axis of the open operand,
+   which holds 2 in every cell, gives 6 in each of 2 cells (exact). Over a row of product 6 tied by
+   product alone the einsum would have no innermost axis of 3 to sum. *)
+let () =
+  Verdict.case "shared reference across a closure, executed" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let name = "across a closure, executed" in
+      let d = Shape.get_variable_ref "d" in
+      let c23 = NTDSL.init ~l:"c23" ~prec:Ir.Ops.single ~b:[] ~o:[ 2; 3 ] ~f:(fun _ -> 2.) () in
+      ignore (dims (capture ~spec:"..d.. => ..d.." d c23) : int list);
+      let w2 = open_leaf "w2" in
+      let y2 = capture ~spec:"..d.. => ..d.." d w2 in
+      let z = NTDSL.einsum1 "ab => a" y2 () in
+      observe z;
+      let ctx = Train.forward_once (Context.auto ()) z in
+      p_all ~min:2
+        (name ^ ": each of the 2 rows sums its 3 cells")
+        (Array.to_list (Context.get_values ctx z.Tensor.value))
+        ~f:(Float.equal 6.);
       Context.release ctx)
 
 (* A reference the operands solve to a symbolic extent records the symbol (gh-ocannl-1616), as one

@@ -127,26 +127,117 @@ let () =
                     set_equal ~swap r1 r2;
                     ignore (dims y1 : int list);
                     ignore (dims y2 : int list))))));
-  (* Across a closure a row reference holds only its product, and its variable belongs to the reset
-     environment: the row itself is gone, so the call is refused rather than tied by product. *)
+  (* Across a closure a row reference's variable belongs to the reset environment, but the reference
+     carries its row (gh-ocannl-1689): the call equates the other row with it, not with its product.
+     Before, the call was refused. *)
   List.iter [ false; true ] ~f:(fun swap ->
+      List.iter
+        [ None; Some [ 2; 3 ]; Some [ 3; 2 ] ]
+        ~f:(fun later ->
+          let name =
+            Printf.sprintf "one reference closed, set_equal %s%s"
+              (if swap then "s r" else "r s")
+              (match later with
+              | None -> ""
+              | Some sizes ->
+                  ", the open row fixed to "
+                  ^ String.concat ~sep:"x" (List.map sizes ~f:Int.to_string))
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r1 = Shape.get_variable_ref "r" and r2 = Shape.get_variable_ref "s" in
+              let x = fixed "x" [ 2; 3 ] in
+              (* Reading the capturing operation's dims closes the inference that bound [r]. *)
+              ignore (dims (capture_row r1 x) : int list);
+              p
+                (name ^ ": the closure carried r's row and its product")
+                (Option.equal Int.equal r1.var_ref.solved_dim (Some 6)
+                && Option.exists r1.carried_row ~f:(fun row -> List.length row = 2));
+              let w = open_leaf "w" in
+              ignore (capture_row r2 w : Tensor.t);
+              let outcome =
+                shape_error (fun () ->
+                    set_equal ~swap r1 r2;
+                    Option.iter later ~f:(fix w);
+                    ignore (dims w : int list))
+              in
+              match (later, outcome) with
+              | (None | Some [ 2; 3 ]), None ->
+                  show name [ ("w", w) ];
+                  p
+                    (name ^ ": the open row takes the closed row")
+                    (List.equal Int.equal (dims w) [ 2; 3 ])
+              | Some [ 3; 2 ], refused ->
+                  Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+                  p (name ^ ": a row of the same product is refused") (Option.is_some refused)
+              | _, refused ->
+                  Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+                  p (name ^ ": the open row takes the closed row") false)));
+  (* The kind of a closed reference is that of its binding at the closure, not of [var]: projection
+     derivation rebinds [var] after the closure, newest step first, so a reference bound as a
+     dimension and then as a row is left holding the dimension's projection-local variable. Bound
+     last as a row, it carries the row; bound last as a dimension, it carries a number. *)
+  List.iter
+    [ (`Dim_then_row, [ 3; 2 ], false); (`Row_then_dim, [ 3; 2 ], true) ]
+    ~f:(fun (order, sizes, accepted) ->
+      List.iter [ false; true ] ~f:(fun swap ->
+          let name =
+            Printf.sprintf "closed after a %s, set_equal %s, the open row fixed to %s"
+              (match order with
+              | `Dim_then_row -> "dimension then a row capture"
+              | `Row_then_dim -> "row then a dimension capture")
+              (if swap then "s r" else "r s")
+              (String.concat ~sep:"x" (List.map sizes ~f:Int.to_string))
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r1 = Shape.get_variable_ref "r" and r2 = Shape.get_variable_ref "s" in
+              let dim_capture () = NTDSL.einsum1 ~capture_dims:[ r1 ] "r => r" (open_leaf "v") () in
+              let ys =
+                match order with
+                | `Dim_then_row ->
+                    let y = dim_capture () in
+                    [ y; capture_row r1 (fixed "x" [ 2; 3 ]) ]
+                | `Row_then_dim ->
+                    let y = capture_row r1 (fixed "x" [ 2; 3 ]) in
+                    [ y; dim_capture () ]
+              in
+              List.iter ys ~f:(fun y -> ignore (dims y : int list));
+              let w = open_leaf "w" in
+              ignore (capture_row r2 w : Tensor.t);
+              let refused =
+                shape_error (fun () ->
+                    set_equal ~swap r1 r2;
+                    fix w sizes;
+                    ignore (dims w : int list))
+              in
+              Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+              if accepted then
+                p
+                  (name ^ ": tied by product, a row of the same product is accepted")
+                  (Option.is_none refused)
+              else p (name ^ ": a row of the same product is refused") (Option.is_some refused))));
+  (* Both closed: each carries its row, and the solver compares the two when it next runs. *)
+  List.iter
+    [ ([ 2; 3 ], true); ([ 3; 2 ], false) ]
+    ~f:(fun (sizes, equal) ->
       let name =
-        Printf.sprintf "one reference closed, set_equal %s" (if swap then "s r" else "r s")
+        Printf.sprintf "both references closed, rows 2x3 and %s"
+          (String.concat ~sep:"x" (List.map sizes ~f:Int.to_string))
       in
       Verdict.case name (fun () ->
           Tensor.unsafe_reinitialize ();
           let r1 = Shape.get_variable_ref "r" and r2 = Shape.get_variable_ref "s" in
-          let x = fixed "x" [ 2; 3 ] in
-          (* Reading the capturing operation's dims closes the inference that bound [r]. *)
-          ignore (dims (capture_row r1 x) : int list);
-          p
-            (name ^ ": r is solved to its product by the closure")
-            (Option.equal Int.equal r1.var_ref.solved_dim (Some 6));
-          let w = open_leaf "w" in
-          ignore (capture_row r2 w : Tensor.t);
-          let refused = shape_error (fun () -> set_equal ~swap r1 r2) in
+          ignore (dims (capture_row r1 (fixed "x" [ 2; 3 ])) : int list);
+          ignore (dims (capture_row r2 (fixed "y" sizes)) : int list);
+          let refused =
+            shape_error (fun () ->
+                Shape.set_equal r1 r2;
+                ignore (dims (open_leaf "z") : int list))
+          in
           Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
-          p (name ^ ": the call is refused") (Option.is_some refused)));
+          if equal then p (name ^ ": equal rows are accepted") (Option.is_none refused)
+          else p (name ^ ": different rows are refused") (Option.is_some refused)));
   (* An unbound reference [set_equal] relates to a row reference is a number to the call -- the
      row's product, given to it or taken from it -- so bound to a row afterwards it would leave the
      two rows tied by product only, where binding it first makes the same call a [Row_eq] (the cases
@@ -236,6 +327,30 @@ let () =
           refused_with (name ^ ": the call is refused, naming the closure") refused ~f:(fun msg ->
               String.is_substring msg ~substring:"reference r was bound by shape inference"
               && String.is_substring msg ~substring:"has since closed"));
+      let name =
+        "closed row holding a symbolic extent, set_equal with a row, "
+        ^ if swap then "s r" else "r s"
+      in
+      Verdict.case name (fun () ->
+          (* A row holding a symbolic extent has no product, but its closure carries the row
+             (gh-ocannl-1689): a Row-Row call relates it. *)
+          Tensor.unsafe_reinitialize ();
+          let r = closed_row ~symbolic:true in
+          let s = Shape.get_variable_ref "s" in
+          let w = open_leaf "w" in
+          ignore (capture_row s w : Tensor.t);
+          let refused =
+            shape_error (fun () ->
+                set_equal ~swap r s;
+                ignore (dims w : int list))
+          in
+          Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+          p
+            (name ^ ": the open row takes the symbolic row")
+            (Option.is_none refused
+            && String.is_substring
+                 (Shape.to_string_hum ~style:Axis_size w.Tensor.shape)
+                 ~substring:"<=6"));
       let name = "closed row that kept its product, set_equal " ^ order in
       Verdict.case name (fun () ->
           Tensor.unsafe_reinitialize ();

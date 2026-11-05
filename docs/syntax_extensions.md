@@ -676,16 +676,20 @@ The ppx never shares a capture between calls, but a reference made by hand with
 names one dimension, whichever order shape inference solves them in (gh-ocannl-1545): until
 inference closes, their dimension variables are equated, as are their row variables, and a
 dimension with a row has the row's product. Across a closure (say a `Train.forward_once` between
-the operations) the reference carries its solved value, which for a row variable is the product.
+the operations) the reference carries its solved value: a dimension's size, and a row variable's
+axes (gh-ocannl-1689) together with their product. A row captured again after the closure is the
+same row -- after `2, 3`, an operand of `3, 2` or `6` is refused -- and a dimension captured again
+has the row's product. A reference whose last binding before the closure was a dimension carries
+only the number, so a row captured from it later is tied by product, as within one inference.
 
 `Shape.set_equal` on two row references equates the rows themselves, not their products, whatever
 either reference has been solved to so far (gh-ocannl-1617): rows `2, 3` and `6` do not unify.
 Product equality is what relates a dimension to a row (`set_equal` on a dimension and a row
-reference, or `Shape.set_dim` on a row reference). A row reference bound before a closure has kept
-only its product, so `set_equal` refuses it in a Row-Row pair; relate rows before the closure.
-A reference whose closure kept no value at all (a row holding a symbolic extent has no numeric
-product) is refused in any later capture, `set_dim` or `set_equal`, naming the closure
-(gh-ocannl-1655). And a reference made by `Shape.get_variable_ref` that `set_equal` relates to a
+reference, or `Shape.set_dim` on a row reference). A row reference bound before a closure takes
+part in a Row-Row pair with the row it carried. A row holding a symbolic extent has no numeric
+product: after its closure it can be captured again as a row, or `set_equal`-ed with a row
+reference, but a capture as a dimension, `set_dim` or a dimension `set_equal` is refused, naming
+the closure (gh-ocannl-1655). And a reference made by `Shape.get_variable_ref` that `set_equal` relates to a
 row reference before it is bound is a number, the row's product: binding it to a row afterwards is
 refused, since the rows would be tied by product only; pass it to `~capture_dims` first.
 
