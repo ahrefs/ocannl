@@ -909,7 +909,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   an ordinary failure; the footer counts failed harnesses and exits 1 if any failed. A member
   interrupted by HUP, INT or TERM stops the aggregate and preserves exit 129, 130 or 143. Individual
   harnesses retain their counted capability skips; the formatter's real cache control and
-  promotion fixtures need the local toolchain. For a shell change, run this command beside
+  promotion fixtures need the local toolchain. For a shell change, run the harness commands
+  `tools/test-run.sh prepush` names (gh-ocannl-1929, below: the members and legs the change
+  reaches, the whole tier being CI's) beside
   `tools/test-run.sh run build @test/operations/scans`: the latter includes configuration
   usage and shell parsing, which standalone process fixtures cannot cover (gh-ocannl-988).
   `tools/test-test-harnesses.sh` drives an isolated copy with derived member stubs, including
@@ -3277,8 +3279,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     sources or imports, to a fixpoint) names, with the program of each script named; what a named
     script names in turn is not followed, so a harness driving a script through another names it
     itself. stderr gives each changed path's harnesses with the step that reached each, then
-    `affected: harness: CMD` lines; `--harnesses` prints only those commands, on stdout, and asks
-    dune nothing (under a second here). A header declares the legs that read files its code does
+    `affected: harness: CMD` lines, counted in the closing summary when there are any (`..., and N
+    harness command(s), named above`, gh-ocannl-1929); `--harnesses` prints only those commands,
+    on stdout, and asks dune nothing (under a second here). A header declares the legs that read files its code does
     not name, `# affected-reads: GLOB... [--only 'ERE']`; a declaration only adds, never narrowing
     what the text reaches: `tools/test-typecheck-scan-cases.sh` sends the scan-case tables and
     `scan_case_stubs/*` to its legs 1 and 10, its engine to every leg, so a stub edit is mapped
@@ -3334,6 +3337,24 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     with the OFF-BUILD aliases on a box that builds them). A list with no `runtest-` member runs
     nothing, exit 0, and `--list` then prints nothing, which `run --targets-file` refuses: check
     the list before shipping it. Harness: leg 98 of `tools/test-test-run.sh`.
+  - `prepush` names the harness commands the change reaches and runs none (gh-ocannl-1929): a
+    change to `scripts/harness-support.sh` listed 18 aliases and no word of the shell tier, and
+    its fixture break reached CI (gh-ocannl-1839). It asks `affected --harnesses --since BASE`
+    (stdout is the commands; the `affected: harness:` stderr lines are not parsed, a changed path
+    named `harness` printing one of that shape) and prints, as the LAST lines of stderr, a count
+    line and one `test-run: prepush: harness: CMD` each: after the run's verdict, after `--list`'s
+    list, and after a cross-cutting or incomplete refusal or a list with nothing to run, since
+    the commands are the caller's to run in each case. They change no exit status; a change
+    reaching no harness prints no line (`tensor/shape.ml` beside `AGENTS.md`: none; this note
+    reaches `tools/test-test-run.sh`, which names it), and a failed ask runs nothing (exit 2). Named rather than run, by design: the run is ONE supervised dune
+    invocation whose cap, slot kind, device probe, digest and verdict are all read from dune's
+    argv and log, a harness is another program with its own verdict lines and minutes of its own
+    (`tools/test-test-run.sh` whole), a harness of the runner starts runs of its own in fixture
+    worktrees, and `--list` -- a fleet leg's form -- can only carry aliases. So a shell change's
+    pre-push is `prepush`, then each named command (on a fleet box inside a slot,
+    `fleet-worker.sh execution slot --cpu -- CMD`: a single harness takes none itself, only
+    `tools/test-harnesses.sh` does), and the rule to run that whole tier before pushing a shell
+    change is retired to CI, which runs it on every PR.
 
 ## OCaml and dune traps
 

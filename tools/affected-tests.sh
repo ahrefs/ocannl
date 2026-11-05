@@ -216,7 +216,10 @@
 # so what they read is read from their own text, never from dune. Their
 # membership is `tools/test-harnesses.sh --list`, CI's sole list of them; each
 # changed path reaching one is named on stderr with the reason, and
-# `affected: harness: CMD` gives the command that runs what it reaches. With
+# `affected: harness: CMD` gives the command that runs what it reaches; the
+# closing summary counts those commands when there are any (gh-ocannl-1929:
+# `..., and N harness command(s), named above`), and says nothing of them
+# when no changed path reaches a harness. With
 # `--harnesses` those commands are stdout instead of the aliases, one per line
 # (`HARNESS` for every leg, `HARNESS --only 'ERE'` for some), and dune is not
 # asked at all. Boundary, as an allowlist:
@@ -2917,11 +2920,16 @@ if (@link_only) {
 }
 print STDERR "$_\n" for @why_lines;
 # The harness legs (gh-ocannl-1900): what each changed path reached, and the
-# commands; `--harnesses` prints those on stdout instead.
+# commands; `--harnesses` prints those on stdout instead. The closing summary
+# counts the commands (gh-ocannl-1929).
+my $n_harness = 0;
 {
   for my $f ("harness-err", "harness-cmds") {
     open my $fh, "<", "$tmp/$f" or next;
-    while (my $l = <$fh>) { print STDERR $f eq "harness-cmds" ? "affected: harness: $l" : $l }
+    while (my $l = <$fh>) {
+      print STDERR $f eq "harness-cmds" ? "affected: harness: $l" : $l;
+      $n_harness++ if $f eq "harness-cmds";
+    }
     close $fh;
   }
 }
@@ -2951,8 +2959,9 @@ my %verdict;
     (@slow ? sprintf(" but its %d slow- alias(es), which no CI job runs: run those locally too", scalar @slow) : "")
     if $verdict{"cross-cutting"};
 }
-printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s\n", scalar(keys %out) + ($referenced_only ? 0 : @link_only),
+printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s%s\n", scalar(keys %out) + ($referenced_only ? 0 : @link_only),
   scalar(@changed), (@link_only ? sprintf(", %d of them link-only%s", scalar(@link_only), $referenced_only ? " and left off" : "") : ""),
+  ($n_harness ? sprintf(", and %d harness command(s), named above", $n_harness) : ""),
   $verdict{incomplete} ? "; INCOMPLETE, see UNMAPPED above" : "";
 # The trailer: the last line of stderr, one line, in this order.
 printf STDERR "affected: verdict=%s\n", join(",", grep { $verdict{$_} } qw(cross-cutting incomplete)) || "ok";
