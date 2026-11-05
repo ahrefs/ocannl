@@ -115,3 +115,16 @@ let%op _no_unit_optional ?(stride = 2) ?scale x =
   let y = match scale with None -> x | Some s -> x *. s in
   ignore (stride : int);
   y + 1.0
+
+(* gh-ocannl-1885: without [()], a labelled parameter is a label source by tensor evidence only -- a
+   direct operand use ([gamma]) or a [Tensor.t] annotation ([beta], only passed on); [scale] stays a
+   float and [label] a string list, neither read as a tensor. *)
+let%op _late_gamma ~gamma x = gamma *. x
+let%op _late_beta ~(beta : Tensor.t) x = _late_gamma ~gamma:beta x
+let%op _late_scale ~scale x = x *. !.scale
+let%op _late_label ~label x = mlp_layer ~label:("late" :: label) ~hid_dim:2 () ~x
+
+(* gh-ocannl-1885: [?label] before [()] enriches the inline declarations' labels as [~label] does;
+   un-defaulted it is the option itself, defaulted the list. *)
+let%op _opt_label ?label ~hid_dim () x = ({ olw } * x) + { olb; o = [ hid_dim ] }
+let%op _opt_label_default ?(label = [ "dflt" ]) () x = { odw } * x

@@ -14,11 +14,7 @@ let dsl_open_o ~loc dsl_name expr =
     expr
 
 let make_p ~dsl_name ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
-  let more_label =
-    match opt_label with
-    | Some label_pat -> [%expr Some [%e pat2expr label_pat]]
-    | None -> [%expr None]
-  in
+  let more_label = match opt_label with Some more_label -> more_label | None -> [%expr None] in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let param_init =
@@ -810,9 +806,15 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             Some (List.rev acc, unit_param, rest)
         | hd :: rest -> find_unit (hd :: acc) rest
       in
+      (* The [string list option] the inline declarations take as [?more_label]: [~label] and a
+         defaulted [?(label = ...)] bind the list, an un-defaulted [?label] the option itself
+         (gh-ocannl-1885). *)
       let rec find_label_param = function
         | [] -> None
-        | { pparam_desc = Pparam_val (Labelled "label", _, pat); _ } :: _ -> Some pat
+        | { pparam_desc = Pparam_val (Optional "label", None, pat); _ } :: _ -> Some (pat2expr pat)
+        | { pparam_desc = Pparam_val ((Labelled "label" | Optional "label"), _, pat); _ } :: _ ->
+            let loc = pat.ppat_loc in
+            Some [%expr Some [%e pat2expr pat]]
         | _ :: rest -> find_label_param rest
       in
       match find_unit [] args with
@@ -849,10 +851,20 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
               pexp_attributes = drop_attr_named no_scheme_attr expr.pexp_attributes;
             } )
       | None ->
-          (* No unit parameter, everything is "after_unit": each parameter is a label source, except
-             an optional one (gh-ocannl-1787). [?x] is an option in the body, never a tensor, and a
-             defaulted one is configuration ([?(stride = 2)]): read as a tensor, it failed to
-             type-check at its default, with nothing naming the missing [()]. *)
+          (* No unit parameter, everything is "after_unit": each tensor parameter is a label source.
+             An optional one is not (gh-ocannl-1787): [?x] is an option in the body, never a tensor,
+             and a defaulted one is configuration ([?(stride = 2)]). A labelled one is by the
+             evidence [tensor_params] asks for -- a [Tensor.t] annotation, or a direct operand use
+             (gh-ocannl-1885): read as a tensor, [~hid_dim] failed to type-check at the parameter
+             ("not a record type"), with nothing naming the missing [()]. *)
+          let labelled_tensor_evidence name =
+            let body =
+              match body with
+              | Pfunction_body body -> body
+              | Pfunction_cases _ -> { expr with pexp_desc = Pexp_function ([], None, body) }
+            in
+            tensor_operand_evidence name body && not (rebinds name body)
+          in
           let labels =
             Option.to_list label
             @ List.filter_map args ~f:(function
@@ -861,6 +873,12 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
                  or a non-tensor (gh-ocannl-1792) -- not a label source. *)
               | { pparam_desc = Pparam_val (_, _, { ppat_desc = Ppat_constraint (_, t); _ }); _ }
                 when match annotated_kind t with Some Required -> false | _ -> true ->
+                  None
+              | {
+                  pparam_desc = Pparam_val (Labelled _, _, { ppat_desc = Ppat_var { txt; _ }; _ });
+                  _;
+                }
+                when not (labelled_tensor_evidence txt) ->
                   None
               | { pparam_desc = Pparam_val (_, _, pat); _ } ->
                   let loc = pat.ppat_loc in

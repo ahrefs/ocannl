@@ -23,12 +23,17 @@ files.
   fails inference (gh-ocannl-1507). A lifted initializer cannot name one; a capture that would
   shadow a lifted name is a clash, found through the `ocannl.bound_capture` marker `let_opt` checks.
 - Label sources: only a toplevel `%op` function WITHOUT `()` reads its parameters' labels into
-  the result's (the no-unit arm of `translate`); after `()`, no parameter is one. There every
-  parameter except an optional one is read as `p.Tensor.value.Ir.Tnode.label`, so a labelled or
-  unlabelled non-tensor parameter is a type error at the parameter ("not a record type"), never a
+  the result's (the no-unit arm of `translate`); after `()`, no parameter is one. There an
+  unlabelled parameter is read as `p.Tensor.value.Ir.Tnode.label`, so an unlabelled non-tensor is
+  a type error at the parameter ("not a record type", or the mismatch at its first use), never a
   ppx message; optional ones are skipped (gh-ocannl-1787) since `?x` is an option and a default
-  marks configuration. This is separate from `tensor_params`' scheme classification, which
-  requires operand evidence for a labelled parameter.
+  marks configuration; a labelled one is a source on `tensor_params`' evidence only -- a
+  `Tensor.t` annotation, or an operand use with no rebinding (gh-ocannl-1885) -- so a
+  forwarded-only labelled tensor contributes no label unless annotated, and `~hid_dim`/`~label`
+  type-check. Before `()`, `find_label_param` takes `~label`, `?(label = ..)` (as `Some label`)
+  and `?label` (the option itself) for the inline declarations' `?more_label`; before
+  gh-ocannl-1885 an optional one was silently ignored, so `Demo_models.lenet`'s `w_logits` and
+  `b_logits` lacked the `lenet` label.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`

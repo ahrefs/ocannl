@@ -473,3 +473,77 @@ let _no_unit_optional =
                        [["_no_unit_optional"];
                        (x.Tensor.value).Ir.Tnode.label]))
         y (TDSL.number ?label:None 1.0)
+let _late_gamma =
+  let open! TDSL.O in
+    let __ocannl_body ~gamma x =
+      ( *.
+        ) ?label:(Some
+                    (List.concat
+                       [["_late_gamma"];
+                       (gamma.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        gamma x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_late_gamma" ~arity:2
+        (function
+         | gamma::x::[] -> let (_ : _) = __ocannl_body ~gamma x in ()
+         | _ -> assert false) in
+    fun ~gamma x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [gamma; x]
+        (fun () -> __ocannl_body ~gamma x)
+let _late_beta =
+  let open! TDSL.O in
+    let __ocannl_body ~beta:(beta : Tensor.t) x = _late_gamma ~gamma:beta x in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_late_beta" ~arity:2
+        (function
+         | beta::x::[] -> let (_ : _) = __ocannl_body ~beta x in ()
+         | _ -> assert false) in
+    fun ~beta x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [beta; x]
+        (fun () -> __ocannl_body ~beta x)
+let _late_scale =
+  let open! TDSL.O in
+    fun ~scale x ->
+      ( *.
+        ) ?label:(Some
+                    (List.concat
+                       [["_late_scale"]; (x.Tensor.value).Ir.Tnode.label]))
+        x (TDSL.O.(!.) scale)
+let _late_label =
+  let open! TDSL.O in
+    fun ~label x -> mlp_layer ~label:("late" :: label) ~hid_dim:2 () ~x
+let _opt_label =
+  let open! TDSL.O in
+    fun ?label ~hid_dim () ->
+      let olw =
+        (TDSL.param ?more_label:label ?value:None ?values:None
+           ?param_init:None "olw") () in
+      let olb =
+        ((TDSL.param ?more_label:label ?value:None ?values:None
+            ?param_init:None "olb") ~output_dims:[hid_dim]) () in
+      let __ocannl_body x =
+        (+) ?label:(Some ["_opt_label"]) (( * ) ?label:None olw x) olb in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"_opt_label" ~arity:1
+          (function
+           | x::[] -> let (_ : _) = __ocannl_body x in ()
+           | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let _opt_label_default =
+  let open! TDSL.O in
+    fun ?(label= ["dflt"]) () ->
+      let odw =
+        (TDSL.param ?more_label:(Some label) ?value:None ?values:None
+           ?param_init:None "odw") () in
+      let __ocannl_body x = ( * ) ?label:(Some ["_opt_label_default"]) odw x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"_opt_label_default" ~arity:1
+          (function
+           | x::[] -> let (_ : _) = __ocannl_body x in ()
+           | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
