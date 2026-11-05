@@ -13,3 +13,7 @@ Finding key 4: four
 Finding key 10: not found
 
 As alist (in-order): ((2 two) (3 three) (4 four) (5 five) (6 six) (7 seven) (8 eight))
+sparse_mapi calls f on the targets in mapi's order: true
+sparse_mapi leaves the entries mapi restricted to the targets leaves: true
+sparse_mapi keeps the tree's shape: true
+sparse_mapi without targets returns the tree itself: true
