@@ -31,7 +31,8 @@ conv(v + kernel 1) = v: true
 v = conv(v + dilation 3, kernel 1): true
 control: v = conv(v + kernel 3) is still refused: true
 control: v = conv(v + dilation 2, kernel 2) is still refused: true
-a solved window still merges its kernel's basis: default 4 = conv(bcast 4 + kernel 1): true
+a solved identity window keeps its extent's basis: bcast 4 = conv(bcast 4 + kernel 1): true
+control: default 4 = conv(bcast 4 + kernel 1) is refused: true
 shortcut first: the residual equation o_p = o_sc holds on unsolved widths: true
 shortcut first: then w = 12 gives both outputs 6, as solving concretely does: true
 shortcut first: control: different concrete outputs are refused: true
@@ -60,3 +61,24 @@ o1's window first: padded stride 1 against a valid window of 3: o1 = 7 gives o2 
 o1's window first: and o2 = 5 gives o1 = 7: true
 o2's window first: padded stride 1 against a valid window of 3: o1 = 7 gives o2 = 5: true
 o2's window first: and o2 = 5 gives o1 = 7: true
+window first, window on the left, one batch: v = 4 of bcast_if_1: true
+window first, window on the left, one at a time: v = 4 of bcast_if_1: true
+window first, window on the right, one batch: v = 4 of bcast_if_1: true
+window first, window on the right, one at a time: v = 4 of bcast_if_1: true
+extent first, window on the left, one batch: v = 4 of bcast_if_1: true
+extent first, window on the left, one at a time: v = 4 of bcast_if_1: true
+extent first, window on the right, one batch: v = 4 of bcast_if_1: true
+extent first, window on the right, one at a time: v = 4 of bcast_if_1: true
+extent first: the window resolves to its extent, size and basis: true
+extent first: control: the other reserved tag at the same size is refused: true
+window first: the window resolves to its extent, size and basis: true
+window first: control: the other reserved tag at the same size is refused: true
+w = conv(v + kernel k), k = 1, v = 4 of bcast_if_1: w = 4 of bcast_if_1: true
+control: and w = 4 of default besides is refused: true
+a named span-1 kernel still converts: 4 of h = conv(default 4 + kernel 1 of h): true
+and default 4 = conv(default 4 + kernel 1 of h) is refused: true
+a size-changing window still derives the kernel's tag: default 3 = conv(bcast 1 + kernel 3): true
+a padded stride-1 window over bcast 4 is bcast 4: true
+window first: a padded stride-1 window resolves v = 4 of bcast_if_1: true
+extent first: a padded stride-1 window resolves v = 4 of bcast_if_1: true
+a different size is refused: v = bcast 4, conv(v + kernel 1) = bcast 5: true

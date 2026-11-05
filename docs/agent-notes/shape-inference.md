@@ -391,10 +391,19 @@ files.
   difference the smaller stride does not divide has no solution and is refused, not truncated.
   A stride-1 valid window of span 1 over an unsolved extent is the identity and collapses in
   `unify_dim`'s stride-1 arm and in `s_dim_one` (`is_identity_window`); kept, a residual add
-  equating its `over` with it reads as an occurs-check cycle. Over a solved `Dim` the solved arms
-  keep it, deriving the extent's basis from the kernel's. The occurs check is unchanged. Pinned by
+  equating its `over` with it reads as an occurs-check cycle. Collapsed, nothing constrains the
+  extent's basis later, so the identity passes the basis through over a solved `Dim` too
+  (gh-ocannl-1824): the solved arms' `merge_derived_basis` turned the other reserved tag into the
+  kernel's (`bcast_if_1` into `default`), and `conv(v + kernel 1) = 4_(bcast_if_1)` solved before
+  `v = 4_(bcast_if_1)` but not after. `s_dim_one` applies `is_identity_window` before its solved
+  arms for the same reason, and `unify_dim`'s kernel-inference arm (a window over a solved extent
+  whose kernel is a variable, against a solved `Dim`) re-unifies the equation once it has bound
+  the kernel: it picks the kernel from the sizes alone, and used to skip the basis check a kernel
+  solved earlier would have met. A named kernel tag still converts (its window is no identity), and
+  size-changing windows keep `merge_derived_basis`. The occurs check is unchanged. Pinned by
   `test/operations/scheme_strided_residual`: `check` against `off` on schemed blocks with equal
-  and unequal strides, and the window-pair equations solved directly in both orders.
+  and unequal strides, the window-pair equations solved directly in both orders, and the identity's
+  basis over every reserved tag pair, constraint order and a kernel solved late.
 - Every benchmark model builds under `check` with `off`'s dims (gh-ocannl-1908):
   `test/operations/bench_model_schemes` builds each conv and gpt workload of `benchmarks/workloads`
   from a synthetic zero-valued fixture, through `Bench_conv_model`/`Bench_gpt_model` as the runners
