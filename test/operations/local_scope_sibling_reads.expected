@@ -1,0 +1,43 @@
+lsr_literal: lsr_literal_x virtualizes: true
+lsr_literal: lsr_literal_d virtualizes: true
+lsr_literal: lsr_literal_r virtualizes: true
+lsr_literal_mat: lsr_literal_x stays a buffer: true
+lsr_literal_mat: lsr_literal_d stays a buffer: true
+lsr_literal_mat: lsr_literal_r stays a buffer: true
+lsr_literal: a body reads a sibling's local of a higher id: true
+lsr_literal: the virtual run gives the closed form: true
+lsr_literal: it matches the materialized run: true
+lsr_computed: lsr_computed_x virtualizes: true
+lsr_computed: lsr_computed_d virtualizes: true
+lsr_computed: lsr_computed_r virtualizes: true
+lsr_computed_mat: lsr_computed_x stays a buffer: true
+lsr_computed_mat: lsr_computed_d stays a buffer: true
+lsr_computed_mat: lsr_computed_r stays a buffer: true
+lsr_computed: a body reads a sibling's local of a higher id: true
+lsr_computed: the virtual run gives the closed form: true
+lsr_computed: it matches the materialized run: true
+lsr_nested: lsr_nested_x virtualizes: true
+lsr_nested: lsr_nested_e virtualizes: true
+lsr_nested: lsr_nested_d virtualizes: true
+lsr_nested: lsr_nested_r virtualizes: true
+lsr_nested_mat: lsr_nested_x stays a buffer: true
+lsr_nested_mat: lsr_nested_e stays a buffer: true
+lsr_nested_mat: lsr_nested_d stays a buffer: true
+lsr_nested_mat: lsr_nested_r stays a buffer: true
+lsr_nested: a body reads a sibling's local of a higher id: true
+lsr_nested: the virtual run gives the closed form: true
+lsr_nested: it matches the materialized run: true
+lsr_hoisted: lsr_hoisted_x virtualizes: true
+lsr_hoisted: lsr_hoisted_d1 virtualizes: true
+lsr_hoisted: lsr_hoisted_d2 virtualizes: true
+lsr_hoisted_mat: lsr_hoisted_x stays a buffer: true
+lsr_hoisted_mat: lsr_hoisted_d1 stays a buffer: true
+lsr_hoisted_mat: lsr_hoisted_d2 stays a buffer: true
+lsr_hoisted: the shared scope is hoisted to a declared local: true
+lsr_hoisted: every local a body reads has a binder: true
+lsr_hoisted: the virtual run gives the closed form: true
+lsr_hoisted: it matches the materialized run: true
+lsr_unrolled: the loop is gone: true
+lsr_unrolled: every local a body reads has a binder: true
+lsr_unrolled: the unrolled run gives the closed form: true
+lsr_discarded: the discarded read leaves the order alone: true

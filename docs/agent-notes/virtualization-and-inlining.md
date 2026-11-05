@@ -53,8 +53,8 @@ files.
   `Declare_local`d lexically within it (gh-ocannl-584). Not a tensor node, not a sibling's or
   enclosing scope's local, no `Workgroup_barrier`, no `Staged_compilation`. The reason is that a body
   does not execute where it is written, in three different ways: `C_syntax.pp_scalar` returns it as
-  a local definition that `pp_local_defs` emits ahead of the enclosing statement ordered by
-  `scope_id`; `simplify_llc` collapses a single-assignment scope into the expression, moving its
+  a local definition that `pp_local_defs` emits ahead of the enclosing statement in its own order;
+  `simplify_llc` collapses a single-assignment scope into the expression, moving its
   reads the other way; and `hoist_cross_statement_cse` lifts a body shared by sibling statements to a
   top-level `Declare_local` + body, running ONCE ahead of the first user. Purity makes all three
   placements unobservable from outside the body, which is exactly what `Affine.path_before` assumes
@@ -78,10 +78,16 @@ files.
   (`pp_local_defs` sorts by `scope_id`, per-statement def blocks, `Set_dynamic` concatenating two
   operands' defs), and every divergence is a FALSE REJECTION of valid IR — three surfaced in one
   review round, one of them rejecting CSE output inside a scope body, which the pipeline really
-  produces. What the rule would have caught (a hand-built read of a sibling emitted later) fails
-  loudly as a backend "use of undeclared identifier", not silently. If the guarantee is ever wanted,
-  it belongs in `pp_local_defs`, which HAS the emission order in hand and so cannot diverge from
-  it.
+  produces. The guarantee lives in `pp_local_defs` instead, which HAS the emission order in hand and
+  so cannot diverge from it (gh-ocannl-1895): definitions run by ascending `scope_id`, except that
+  one follows the siblings its body reads (`Low_level.local_reads`), so a kernel whose ids already
+  respect the reads keeps its text. CSE produces the other order whenever a collapsed relay leaves
+  an older scope beside a fresh one: a read's id is minted when it is walked, so a gradient chain's
+  `v25_d.grad` reads `v27_rw_x`. The hoist has the same obligation one level up: its stale
+  `Get_local` remap has to reach scope bodies, or a body reads a local nothing declares. A local read
+  by its own single assignment is a different failure (`simplify_llc` collapses it out from under
+  its declaration); that one is refused earlier, as `158`. `local_scope_sibling_reads` pins all of
+  this but the last.
   `Low_level.validate_scope_bodies` enforces it at BOTH ends of the pipeline: `optimize_proc` on the
   way in (ahead of the analysis cache, so a digest hit cannot skip it — and before the hoist can
   launder a body write into a top-level statement that no later gate would recognize) and

@@ -221,8 +221,8 @@ and scalar_t =
           {b Scope purity} (gh-ocannl-584): [body]'s only effect is on the locals it owns — its own
           [id], plus ids [Declare_local]d lexically within it. Never a tensor node, never a sibling
           or enclosing scope's local, and no barrier or staged callback. A scope body does not
-          execute where it is written: codegen hoists it ahead of the enclosing statement ordered by
-          [scope_id] rather than by the operand's syntactic position, [simplify_llc] collapses a
+          execute where it is written: codegen hoists it ahead of the enclosing statement in an
+          order of its own rather than the operand's syntactic position, [simplify_llc] collapses a
           single-assignment scope into the expression (moving its reads the other way), and
           [hoist_cross_statement_cse] lifts a body shared by sibling statements out of the statement
           entirely, to run once ahead of the first user. Purity is what makes all three placements
@@ -1736,6 +1736,10 @@ val clear_analysis_cache : unit -> unit
     ([Tensor.unsafe_reinitialize]) clear it to release the nodes promptly. Never needed for
     correctness: entries keyed by stale nodes cannot alias fresh ones ([Tnode.uid] is never reused).
 *)
+
+val local_reads : t -> int list
+(** The scope locals a statement reads when rendered, by [scope_id], ascending: at any depth, locals
+    bound inside the statement included, a projection's discarded operand excluded. *)
 
 val reads_scope_before_set : scope_id -> t -> bool
 (** [reads_scope_before_set id body] returns [true] if [id] is read (via [Get_local]) before the

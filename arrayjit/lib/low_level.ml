@@ -6543,12 +6543,22 @@ let collect_local_scopes_in_stmt (stmt : t) : (scalar_t * scope_id) list =
 
 (** Replace all [Local_scope] nodes alpha-equivalent to [target] with [Get_local replacement] in a
     scalar expression tree. Also remaps [Get_local] nodes whose [scope_id] is in [stale_ids] to
-    point to [replacement], since their original [Local_scope] is being hoisted. *)
+    point to [replacement], since their original [Local_scope] is being hoisted -- inside the bodies
+    of the scopes that stay as well: CSE replaces a copy nested in a sibling's body with a read of
+    the statement's own scope, and left behind, such a read names a local nothing declares
+    (gh-ocannl-1895). Only the reads move: a nested scope alpha-equivalent to [target] keeps its
+    copy, like any nested scope [collect_local_scopes_in_scalar] does not report. *)
 let replace_local_scope_in_scalar ~target ~(replacement : scope_id) ~(stale_ids : scope_id list)
     (llsc : scalar_t) : scalar_t =
+  let remap_reads body =
+    List.fold stale_ids ~init:body ~f:(fun body stale ->
+        substitute_proc ~var:(Get_local stale) ~value:(Get_local replacement) body)
+  in
   let rec loop (llsc : scalar_t) : scalar_t =
     match llsc with
-    | Local_scope _ -> if cse_equal_scalar llsc target then Get_local replacement else llsc
+    | Local_scope scope ->
+        if cse_equal_scalar llsc target then Get_local replacement
+        else Local_scope { scope with body = remap_reads scope.body }
     | Get_local id ->
         if List.exists stale_ids ~f:(fun stale -> equal_scope_id id stale) then
           Get_local replacement
@@ -6629,6 +6639,29 @@ let statement_changes (stmt : t) : (Set.M(Tn).t * scope_id list) option =
           | Affine.Local_write _ | Affine.Local_read _ | Affine.Local_declare | Affine.Scope_body
           | Affine.Merge_read _ ->
               Some (writes, locals)))
+
+(** The scope locals [llc] reads when rendered, by [scope_id], ascending: at any depth, including a
+    local bound inside [llc], and excluding a projection's discarded operand, which
+    [C_syntax.pp_scalar] never renders: a dependency it does not have could reverse a valid order.
+*)
+let local_reads (llc : t) : int list =
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Visit;
+    }
+  in
+  let scalar _ reads = function
+    | Get_local id -> Continue (id.scope_id :: reads)
+    | _ -> Continue reads
+  in
+  fold ~policy ~hooks:{ (hooks ()) with scalar } ~init:[] llc
+  |> List.dedup_and_sort ~compare:Int.compare
 
 (** Returns [true] if the given [scope_id] is read (via [Get_local]) before the first definitely
     executed [Set_local] to that id in [body]. Used to decide whether a [Local_scope] or hoisted
@@ -6784,8 +6817,8 @@ exception Impure_scope of string
 
     The rule exists because a scope body does not execute where it is written. [C_syntax.pp_scalar]
     returns it as a local definition, which [pp_local_defs] emits ahead of the enclosing statement,
-    ordered by [scope_id] rather than by the operand's syntactic position; [simplify_llc] collapses
-    a single-assignment scope into the expression, moving its reads the other way; and
+    in its own order rather than by the operand's syntactic position; [simplify_llc] collapses a
+    single-assignment scope into the expression, moving its reads the other way; and
     [hoist_cross_statement_cse] lifts a body shared by sibling statements out of the statement
     altogether, to run ONCE ahead of the first user. An effect in a body is therefore placed by none
     of the rules a reader of the expression would expect. Confining bodies to the locals they own
