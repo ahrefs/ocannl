@@ -1183,9 +1183,10 @@ type path_comp =
           operand's [Stmt] sorted before an earlier operand's [Rhs]). Sibling positions are
           deliberately {e incomparable} in the visibility rule ([path_before]): evaluation order
           among one statement's operands is not modeled, so no cross-operand ordering is claimed.
-          Codegen does order them (hoisted, by [scope_id]), but that order is unobservable under the
-          scope-purity contract — a body writes only scope locals ([Low_level.Local_scope],
-          gh-ocannl-584) — so the two views agree rather than merely erring apart. *)
+          Codegen does order them (hoisted, a body after the siblings it reads, otherwise by
+          [scope_id]), but that order is unobservable under the scope-purity contract — a body
+          writes only scope locals ([Low_level.Local_scope], gh-ocannl-584) — so the two views agree
+          rather than merely erring apart. *)
   | Cond  (** Inside an [If] statement's condition. *)
   | Body  (** Inside an [If] statement's guarded body. *)
   | Rhs  (** Inside a [Set]-family statement's right-hand side (or a [Set_local]'s). *)

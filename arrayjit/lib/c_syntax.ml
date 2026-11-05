@@ -3232,6 +3232,10 @@ let with_compiler_options ~compiler ~options ~enrich compile =
     let exn = Option.value (enrich exn ~suffix) ~default:exn in
     Stdlib.Printexc.raise_with_backtrace exn backtrace
 
+type local_def = { scope : int; reads : int list Lazy.t; doc : PPrint.document }
+(** A scope's definition, emitted ahead of the statement reading it ({!C_syntax.pp_local_defs}): the
+    local's [scope] id, the locals its body reads, and the rendered declaration and body. *)
+
 module C_syntax (B : C_syntax_config) = struct
   (* The backend's renderings must implement the operand-evaluation contract that
      [Low_level.affine_accesses] and both [Cost_model] walks read off {!Ops.binop_conditionality} /
@@ -3514,7 +3518,7 @@ module C_syntax (B : C_syntax_config) = struct
     | _ -> group (B.binop_syntax prec op e1 e2)
 
   let pp_scalar_op_at ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
-      (int * PPrint.document) list * PPrint.document =
+      local_def list * PPrint.document =
     let open PPrint in
     match vcomp with
     | Ternop (Ops.FMA, _, _, _) when not (Ops.is_float prec) ->
@@ -3626,8 +3630,7 @@ module C_syntax (B : C_syntax_config) = struct
      ([blend_for]), and this one is an integer. An operator with no float-valued operand renders
      through the integer tables as it always did, so the integer tables only ever meet integer
      operands. *)
-  let rec integer_op ~operand p (vcomp : Low_level.scalar_t) :
-      (int * PPrint.document) list * PPrint.document =
+  let rec integer_op ~operand p (vcomp : Low_level.scalar_t) : local_def list * PPrint.document =
     let f = int_math_prec in
     let fv = Low_level.float_valued in
     let is_op : Low_level.scalar_t -> bool = function
@@ -3712,7 +3715,7 @@ module C_syntax (B : C_syntax_config) = struct
   (* The operator arms of [pp_scalar]: at an integer compute precision through {!integer_op},
      converting a float-valued result to the precision once, here. *)
   let pp_scalar_op ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
-      (int * PPrint.document) list * PPrint.document =
+      local_def list * PPrint.document =
     if Ops.is_integer prec then
       let defs, doc = integer_op ~operand prec vcomp in
       if Low_level.float_valued vcomp then (defs, convert_doc ~from:int_math_prec ~to_:prec doc)
@@ -4415,10 +4418,28 @@ module C_syntax (B : C_syntax_config) = struct
     | Uint4x32_prec _ -> List.init 4 ~f:(fun lane -> guarded (B.uint4x32_log_lane doc lane))
     | _ -> [ B.styled_log_arg (guarded doc) ]
 
-  let pp_local_defs (local_defs : (int * PPrint.document) list) =
-    let open PPrint in
-    List.dedup_and_sort local_defs ~compare:(fun (a, _) (b, _) -> Int.compare a b)
-    |> List.map ~f:snd |> separate hardline
+  (* The definitions run by ascending [scope_id], except that a definition follows the sibling
+     definitions its body reads (gh-ocannl-1895). The scalar CSE replaces a copy nested in a body
+     with a read of the statement's own scope, whose id can be the higher one: a gradient chain's
+     [v25_d.grad] reads [v27_rw_x]. Scope purity leaves that dependency as the only thing the order
+     can change, and ascending ids are kept wherever they already respect it, so such a kernel is
+     the only one whose text moves. A cycle needs hand-built IR, and renders as it reads: a C
+     compiler's undeclared identifier. *)
+  let pp_local_defs (local_defs : local_def list) =
+    let sorted = List.dedup_and_sort local_defs ~compare:(fun a b -> Int.compare a.scope b.scope) in
+    let by_scope = Hashtbl.create (module Int) in
+    List.iter sorted ~f:(fun def -> Hashtbl.set by_scope ~key:def.scope ~data:def);
+    let emitted = Hash_set.create (module Int) in
+    let rec emit docs def =
+      if Hash_set.mem emitted def.scope then docs
+      else (
+        Hash_set.add emitted def.scope;
+        let siblings = List.filter_map (Lazy.force def.reads) ~f:(Hashtbl.find by_scope) in
+        def.doc :: List.fold siblings ~init:docs ~f:emit)
+    in
+    match sorted with
+    | [ { doc; _ } ] -> doc
+    | _ -> PPrint.separate PPrint.hardline (List.rev (List.fold sorted ~init:[] ~f:emit))
 
   let pp_scope_id Low_level.{ scope_id; tn } =
     let open PPrint in
@@ -8722,7 +8743,7 @@ module C_syntax (B : C_syntax_config) = struct
     | None -> (serial_loop ctx loop) ()
 
   and pp_scalar ctx (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
-      (int * PPrint.document) list * PPrint.document =
+      local_def list * PPrint.document =
     (* Returns (local definitions, value expression) *)
     let open PPrint in
     match vcomp with
@@ -8746,7 +8767,7 @@ module C_syntax (B : C_syntax_config) = struct
         let def_doc = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
-        ([ (scope_id, def_doc) ], expr)
+        ([ { scope = scope_id; reads = lazy (Low_level.local_reads body); doc = def_doc } ], expr)
     | Get_local id ->
         let scope_prec = (scope_prec_of ctx) id in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in

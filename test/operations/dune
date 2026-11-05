@@ -2829,6 +2829,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name local_scope_sibling_reads)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules local_scope_sibling_reads)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name virtual_guarded_setter)
  (package neural_nets_lib)
  (deps
