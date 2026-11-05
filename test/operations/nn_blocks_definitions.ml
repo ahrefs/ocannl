@@ -96,28 +96,28 @@ let () =
       p "the checks allocated no session id" (Tensor.get_next_id () = next_id);
       p_empty "the checks left the session as it was" ~over:Tensor.For_testing.restore_categories
         (Tensor.For_testing.checkpoint_differences ck));
-  Verdict.case "live dropout: the training pattern alone is left unschemed" (fun () ->
-      (* With [rate > 0] the training pattern draws random numbers, which a trace refuses
-         (gh-ocannl-1791); the evaluation pattern keeps its scheme. *)
+  Verdict.case "live dropout: both patterns are schemed" (fun () ->
+      (* With [rate > 0] the training pattern draws random numbers, which a scheme carries
+         (gh-ocannl-1890). *)
       Tensor.unsafe_reinitialize ();
-      let unschemed = ref [] in
+      let events = ref [] in
       let traced =
         Tensor.For_testing.observe_schemes
           (fun () ->
             Tensor.Scheme.check_definition ~name:"dropout"
               (ignore_ (fun () -> Nn.dropout ~rate:0.5 ())))
-          ~on_event:(function
-            | Tensor.Scheme.Unschemed (l, reason) -> unschemed := (l, reason) :: !unschemed
-            | _ -> ())
+          ~on_event:(fun e -> events := e :: !events)
       in
-      List.iter !unschemed ~f:(fun (l, reason) ->
-          Stdio.eprintf "(not part of the golden) %s unschemed: %s\n%!" l reason);
+      let is_unschemed = function Tensor.Scheme.Unschemed _ -> true | _ -> false in
+      List.iter !events ~f:(function
+        | Tensor.Scheme.Unschemed (l, reason) ->
+            Stdio.eprintf "(not part of the golden) %s unschemed: %s\n%!" l reason
+        | _ -> ());
       p "the evaluation pattern was traced"
         (List.mem traced "dropout [no train_step]" ~equal:String.equal);
-      p "the training pattern was not traced"
-        (not (List.mem traced "dropout [train_step]" ~equal:String.equal));
-      p "the training pattern was left unschemed"
-        (List.Assoc.mem !unschemed "dropout [train_step]" ~equal:String.equal));
+      p "the training pattern, which draws random numbers, was traced"
+        (List.mem traced "dropout [train_step]" ~equal:String.equal);
+      p_none "of the trial's scheme events, none leaves a pattern unschemed" !events ~f:is_unschemed);
   Verdict.case "a step counter nothing reads stays a forward root of its own" (fun () ->
       (* At dropout rate 0 (attention's default) the training pattern draws nothing: the caller's
          [Some counter] is a tensor no graph consumes. It must not get in the way of the graph. *)

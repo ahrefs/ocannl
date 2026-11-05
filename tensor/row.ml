@@ -3781,11 +3781,32 @@ let add_constraint_origin o = function
   | Terminal_row (b, r, origin) -> Terminal_row (b, r, o :: origin)
   | Shape_row (r, origin) -> Shape_row (r, o :: origin)
 
-(* A [Strided_var] coefficient is a lazy over the precision of the trace's own nodes: a scheme
-   cannot carry it past the rewind. *)
+(* A packed conversion's draw: only [Uint4x32_to_prec] mints a round-up [Strided_var], whose
+   coefficient is a lazy over its result node's precision. *)
+let map_draw_row_constraint ~f = function
+  | Total_elems ({ numerator = Strided_var ({ round_up = true; coeff; _ } as s); _ } as t) ->
+      Total_elems { t with numerator = Strided_var { s with coeff = f coeff } }
+  | (Total_elems _ | Unconstrained | Exact _) as c -> c
+
+let map_draw_coefficients ~f = function
+  | Rows_constr r -> Rows_constr { r with constr = map_draw_row_constraint ~f r.constr }
+  | c -> c
+
+let map_env_draw_coefficients ~f env =
+  {
+    env with
+    row_env =
+      Utils.Tree_map.map env.row_env ~f:(function
+        | Bounds_row b -> Bounds_row { b with constr = map_draw_row_constraint ~f b.constr }
+        | Solved_row _ as e -> e);
+  }
+
+(* Any other lazy coefficient is of unknown provenance: a scheme cannot tell what it reads. The
+   product ties of capture references are constants (a [Utils.safe_value]). *)
 let has_lazy_coefficient c =
   let lazy_constr = function
-    | Total_elems { numerator = Strided_var _; _ } -> true
+    | Total_elems { numerator = Strided_var { round_up = false; coeff; _ }; _ } ->
+        not (Utils.is_safe_val coeff)
     | Total_elems _ | Unconstrained | Exact _ -> false
   in
   match c with Rows_constr { constr; _ } -> lazy_constr constr | _ -> false

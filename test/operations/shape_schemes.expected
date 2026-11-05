@@ -79,7 +79,24 @@ an outer scheme applying the inner one carries its input: a conflicting applicat
 control (the inner application drops its input): the outer scheme accepts it: true
 a function setting a reference made outside it is refused at the trace, naming the call: true
 control: the same function applied inline sets the reference: true
-a function binding a reference made outside it both as a row and as a dimension is refused: true
+made outside, row first: the trace is accepted and a fitting application closes: true
+made outside, row first, fitting: inline 1x6 1, scheme 1x6 1
+made outside, row first, fitting: the scheme's application closes as the inline one does: true
+made outside, row first: inline, a conflicting product is refused: true
+made outside, row first, conflicting: inline refused, scheme refused
+made outside, row first, conflicting: the scheme's application closes as the inline one does: true
+made outside, dimension first: the trace is accepted and a fitting application closes: true
+made outside, dimension first, fitting: inline 1x6 1, scheme 1x6 1
+made outside, dimension first, fitting: the scheme's application closes as the inline one does: true
+made outside, dimension first: inline, a conflicting product is refused: true
+made outside, dimension first, conflicting: inline refused, scheme refused
+made outside, dimension first, conflicting: the scheme's application closes as the inline one does: true
+made inside: the trace is accepted and a fitting application closes: true
+made inside, fitting: inline 1x6 1, scheme 1x6 1
+made inside, fitting: the scheme's application closes as the inline one does: true
+made inside: inline, a conflicting product is refused: true
+made inside, conflicting: inline refused, scheme refused
+made inside, conflicting: the scheme's application closes as the inline one does: true
 the application changes the session: true
 after the rewind, the session is as at the checkpoint: true
 the rewound application's result shape is a discarded handle: true

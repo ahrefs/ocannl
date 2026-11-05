@@ -24,8 +24,8 @@ vgg_block: every presence pattern's scheme was traced: true
 the checks allocated no session id: true
 the checks left the session as it was: true
 the evaluation pattern was traced: true
-the training pattern was not traced: true
-the training pattern was left unschemed: true
+the training pattern, which draws random numbers, was traced: true
+of the trial's scheme events, none leaves a pattern unschemed: true
 the result's forward code is consumed, the counter beside it: true
 the result is no longer a forward root: true
 the counter stays a forward root, unconsumed: true

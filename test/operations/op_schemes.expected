@@ -15,9 +15,15 @@ rebound: no scheme, the function applies as before: true
 layer_plain: no scheme, the function applies as before: true
 labelled tensor parameters proven by their operand use get a scheme: true
 a returned function after its sub-layers is traced once they exist: true
-random number generation: unschemed, by the trace's refusal: true
+setting a capture reference made outside: unschemed, by the trace's refusal: true
 and the application ran unchecked: true
 control: the explicit trace of the same function still raises a shape error: true
+the closure's trace succeeds: true
+and nothing is left unschemed: true
+the application checks the scheme: true
+the explicit trace succeeds: true
+its explicit instance is refused, naming the scheme and the remedy: true
+control (no refusal): the closure fails at the draw's hole, settling no precision: true
 the check of a fitting argument ran: true
 and left the session as it was: true
 the check of a conflicting argument raises, naming the scheme: true
@@ -58,8 +64,7 @@ check_definition reports it, naming the definition and the pattern: true
 control (opted out): the closure builds, and an unmasked application succeeds: true
 picky: the training pattern is unschemed: true
 picky: the evaluation pattern is traced at () and checked at its application: true
-noisy_step: the training pattern is unschemed: true
-noisy_step: the evaluation pattern is traced at () and checked at its application: true
+noisy_step: both patterns, the random draw's included, are traced at () (gh-ocannl-1890): true
 a training application runs unchecked: true
 without a () stage, the first application traces every pattern: true
 the other pattern's first application checks: true
@@ -93,3 +98,12 @@ with the trace's reason: true
 no warning for the opted-out function: true
 nor for a closure built inside a trace: true
 nor with the schemes off: true
+inline: 12 values take 3 blocks at single precision and 2 at half: true
+schemed: the function is traced once and each application checked: true
+schemed: each application's counter has inline construction's block count: true
+and draws inline construction's values: true
+control (one coefficient memoized from the trace): the half application loses its block count: true
+the function is traced and its application checked: true
+the precision of the tensor in the draw's precision chain is still unsettled: true
+the trace's draw node is reclaimed while its scheme is held: true
+control (the trace's own coefficients kept): the node is kept: true

@@ -475,11 +475,15 @@ What a scheme holds:
 **Refused, by design:**
 
 - forcing dims during a trace: `finish_inference` raises before committing anything;
-- a precision-dependent total-elements constraint (random number generation inside `f`, or one capture reference bound both as a dimension and as a row inside it);
+- a total-elements constraint whose coefficient is a lazy of unknown provenance;
 - `Shape.set_dim`, `set_sym_dim`, `set_equal` or `set_scale` on a capture reference made outside `f`;
 - after a closure, a scheme that depends on open state no shape it used holds.
 
 **Capture references made outside `f`** (gh-ocannl-1791). A reference made before the trace that `f`'s operations bind (`~capture_dims`) is an input of the scheme. The trace sees it as unbound and unsolved, so the scheme does not depend on its state at trace time. Each application relates the variable of its first binding in `f` to the reference's state at that application, exactly as the body's own first binding would: an open binding (dimension, row, or the product of a row and a dimension), or a solution held across a closure. A reference shared by several applications therefore keeps them consistent, and an application that conflicts with what an earlier one bound it to is refused at `instantiate`. An explicit `instantiate` also binds the reference, so its solution is published, after the application's Stage-1 solve and at the closure. The scheme's printout lists each input as `capture <label> = <its first binding>`.
+
+**Random draws in `f`** (gh-ocannl-1890). A packed uint4x32 conversion (`uniform`, `uniform_at`, dropout's mask, a default-initialized `{ w }` declared inside `f`) registers a total-elements constraint whose coefficient, the values per 128-bit block, depends on the conversion result's precision. That coefficient is a lazy over the result node's own `storage_prec` (`Tensor.op` passes it to `Uint4x32_to_prec`). The node's consumers set the precision top-down (`update_infer_prec`) as they register, and only Stage 2 and later stages read a lazy coefficient, so it is forced at the closure and reads its call site's precision with no step of its own. A scheme never reads it: its trace, checks and instances solve Stage 1 only. The scheme therefore carries a hole in its place, holding none of the trace's nodes (the trace's final environment, kept for printing, is scrubbed too), and the conversion node each application's body registers fills it. An automatic `%op` scheme checks the shapes around the draw, and its body then registers the draw against its own precision. An explicit `instantiate` has no body and no conversion node, so it refuses a scheme with draws.
+
+A capture reference bound both as a dimension and as a row inside `f` is carried as well: the product tie between the two is a constant (`Utils.safe_value`).
 
 A failed application taints the session, as a failed construction does.
 

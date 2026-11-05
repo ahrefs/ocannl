@@ -25,6 +25,7 @@ tensor/shape.ml: open_refs (ref) -- accounted: every write noted or at a boundar
 tensor/shape.ml: trace_touches (ref) -- exempt: the shape-scheme trace's own record, saved and restored by the trace
 tensor/shape.ml: row_numbered_refs (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/shape.ml: trace_ref_frame (ref) -- exempt: the shape-scheme trace's own record, saved and restored by the trace
+tensor/shape.ml: memoized_draw_coefficient (ref) -- exempt: a negative control's switch, set by tests only
 tensor/shape.ml: update_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/shape.ml: with_error_trace (ref) -- accounted; kept by rewinds: user configuration of error messages, not inference state
 tensor/shape.ml: unused_shapes (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
