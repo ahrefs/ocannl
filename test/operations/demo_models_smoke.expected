@@ -12,3 +12,15 @@ sokoban_cnn value dims: 2x1
 sokoban_cnn value: every value is finite: true
 mobile_cnn logits dims: 2x3
 mobile_cnn logits: every value is finite: true
+sokoban_cnn: both presence patterns are traced: true
+sokoban_cnn: evaluation checks the evaluation scheme: true
+sokoban_cnn: training checks the training scheme: true
+sokoban_cnn: no pattern was left unschemed: true
+sokoban_cnn: evaluating under its scheme closes the shapes it closes without one: true
+sokoban_cnn: its own scheme reports an argument without spatial axes, before the body runs: true
+mobile_cnn: both presence patterns are traced: true
+mobile_cnn: evaluation checks the evaluation scheme: true
+mobile_cnn: training checks the training scheme: true
+mobile_cnn: no pattern was left unschemed: true
+mobile_cnn: evaluating under its scheme closes the shapes it closes without one: true
+mobile_cnn: its own scheme reports an argument without spatial axes, before the body runs: true
