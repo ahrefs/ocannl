@@ -8,8 +8,10 @@
    in a control session that never took the detour (and, for one fixed scenario, computes the same
    values as a FRESH process). Each restore category is then omitted in turn
    ([Tensor.For_testing.rewind_omitting]): one of those oracles must fail, or the category is
-   restoring nothing the oracles see. [For_testing.checkpoint_differences], the machinery's own
-   observer, is checked too, but only as a diagnostic: it reads the snapshots it is judging. *)
+   restoring nothing the oracles see. For a step's projections, which only a closure writes, the
+   oracle is the dims they iterate, after a closure that fails having published some
+   (gh-ocannl-1827). [For_testing.checkpoint_differences], the machinery's own observer, is checked
+   too, but only as a diagnostic: it reads the snapshots it is judging. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -215,6 +217,118 @@ let leg_holds ~control leg =
   leg.restored && leg.stale && leg.seed_live && leg.ref_unsolved && leg.no_role
   && leg.window_ref_refused && same_dims leg.dims control
 
+(* {2 The projections a failed closure published} *)
+
+(* gh-ocannl-1827: the oracle of the "steps" restore category. *)
+
+(* A product-accumulating window: its neutral element is 1, finite, so unlike the max family
+   (gh-504) its padded window demands margins on the operand, committed to 1. *)
+let prod_window spec t1 t2 =
+  let%cd op_asn ~t ~t1 ~t2 ~projections = v =:* v1 + v2 in
+  let grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Ir.Assignments.empty_comp in
+  Tensor.binop ~op_label:"ck_prod_window"
+    ~compose_op:(Shape.Einsum (spec, []))
+    ~op_asn ~grad_asn ~grad_spec:Tensor.Prohibit_grad t1 t2 ()
+
+let accum_projections (t : Tensor.t) =
+  Ir.Assignments.fold_leaves t.forward.asgns ~init:None ~f:(fun found leaf ->
+      match leaf with
+      | Ir.Assignments.Accum_op { projections; _ } -> Option.first_some found (Some projections)
+      | _ -> found)
+
+type steps_leg = {
+  closure_failed : bool;  (** The window's closure failed on the older step's neutral. *)
+  published : bool;
+      (** The checkpoint's own observer saw projections published before it failed. *)
+  proj_dims : (int array, string) Result.t;  (** The dims the newer step's projections iterate. *)
+  shape_dims : (int array, string) Result.t;  (** The dims its shape closed to. *)
+}
+
+(* A closure derives projections newest step first, and fails partway: the window's product window
+   commits the margins of [x] to 1, the step of [a] -- made before the checkpoint -- gets its
+   projections, over the size the window gave its captured axis, and then the older sum window over
+   [x], demanding margins of 0, fails. With [detour = false], the control: no window. *)
+let window_size = 5
+
+let steps_leg ?omit ~detour ~size () =
+  Tensor.unsafe_reinitialize ();
+  let x = leaf "ck_sx" 6 in
+  let b = TDSL.einsum "o=+k; k => o" x (leaf "ck_sk" 3) () in
+  let%op wq = { wq = 0.5 } in
+  let%op a = wq ++ "u => u" [ "u" ] in
+  let ck = Tensor.checkpoint ~label:"ck_steps" () in
+  let closure_failed, published =
+    if not detour then (false, false)
+    else (
+      Shape.set_dim u window_size;
+      let c = prod_window "o=+k; k => o" x (leaf "ck_sk2" 3) in
+      let closure_failed =
+        refused_with
+          (fun () -> Shape.to_dims c.shape)
+          ~substrings:[ "Conflicting padding neutral elements" ]
+      in
+      let published =
+        List.mem
+          (Tensor.For_testing.checkpoint_differences ck)
+          "an update step's projections" ~equal:String.equal
+      in
+      (match omit with
+      | None -> Tensor.rewind ck
+      | Some omit -> Tensor.For_testing.rewind_omitting ~omit ck);
+      (closure_failed, published))
+  in
+  let read f = match f () with dims -> Ok dims | exception exn -> Error (Exn.to_string exn) in
+  let shape_dims =
+    read (fun () ->
+        Shape.set_dim u size;
+        ignore (Shape.to_dims b.shape : int array);
+        Shape.to_dims a.shape)
+  in
+  let proj_dims =
+    read (fun () ->
+        match accum_projections a with
+        | Some projections -> (Lazy.force projections).Ir.Indexing.lhs_dims
+        | None -> failwith "no accumulation in the forward code")
+  in
+  { closure_failed; published; proj_dims; shape_dims }
+
+let dims_to_string = function
+  | Ok dims -> String.concat ~sep:" " (List.map (Array.to_list dims) ~f:Int.to_string)
+  | Error msg -> "ERROR " ^ msg
+
+let same_dims1 a b = match (a, b) with Ok a, Ok b -> Array.equal Int.equal a b | _ -> false
+
+let steps () =
+  let control = steps_leg ~detour:false ~size:3 () in
+  Stdio.printf "steps, control: the step's projections iterate %s, its shape closes to %s\n"
+    (dims_to_string control.proj_dims)
+    (dims_to_string control.shape_dims);
+  let l = steps_leg ~detour:true ~size:3 () in
+  p "steps: the window's closure fails on the older step's padding neutral" l.closure_failed;
+  p "steps: the failed closure had published projections of a step older than the checkpoint"
+    l.published;
+  p "steps, a failed closure rewound: the step's projections iterate the control's dims"
+    (same_dims1 l.proj_dims control.proj_dims);
+  p "steps, a failed closure rewound: its shape closes to the control's dims"
+    (same_dims1 l.shape_dims control.shape_dims)
+
+(* The "steps" category restores only projections, which a window cannot write without a closure:
+   the soak's constructions never reach it (gh-ocannl-1827). Its oracle is the projections' own
+   dims; omitted, the step keeps the projections the failed closure derived, over the window's size,
+   since a closure derives none for a step that has them. *)
+let steps_negative_control ~omit =
+  let control = steps_leg ~detour:false ~size:3 () in
+  let l = steps_leg ~omit ~detour:true ~size:3 () in
+  Stdio.eprintf "(not part of the golden) omitting %S: projections over %s, shape %s\n%!" omit
+    (dims_to_string l.proj_dims) (dims_to_string l.shape_dims);
+  p
+    (Printf.sprintf "negative control: omitting %S fails an independent oracle" omit)
+    (l.closure_failed && not (same_dims1 l.proj_dims control.proj_dims));
+  p
+    (Printf.sprintf "negative control: omitting %S leaves the projections over the window's size"
+       omit)
+    (same_dims1 l.proj_dims (Ok [| window_size |]) && same_dims1 l.shape_dims control.shape_dims)
+
 let soak () =
   let seeds = List.init 24 ~f:(fun i -> i + 1) in
   let controls = List.map seeds ~f:(fun seed -> (seed, control_dims ~seed)) in
@@ -243,11 +357,12 @@ let soak () =
       p_all
         (Printf.sprintf "soak, %s rewound: the checkpoint's own observer sees no difference" what)
         legs ~f:(fun (l, _) -> List.is_empty l.differences));
-  (* Negative controls: each restore category omitted in turn must fail an independent oracle on
-     some seed. "steps" restores only projections, which a window cannot write without closing (a
-     closure ends the checkpoint) -- it is exercised by the failed-closure case below, not here. *)
+  (* Negative controls: each restore category omitted in turn must fail an independent oracle: on
+     some seed here, or for "steps" -- which no construction of the soak writes -- in the
+     failed-closure scenario of [steps_negative_control]. *)
   List.iter Tensor.For_testing.restore_categories ~f:(fun omit ->
-      if not (String.equal omit "steps") then
+      if String.equal omit "steps" then steps_negative_control ~omit
+      else
         p_exists (Printf.sprintf "negative control: omitting %S fails an independent oracle" omit)
           controls ~f:(fun (seed, control) ->
             not (leg_holds ~control (rewound_leg ~seed ~fail:true ~omit ()))))
@@ -522,6 +637,7 @@ let () =
   | [ _; "fresh" ] -> fresh_leg ()
   | _ ->
       soak ();
+      steps ();
       lifecycle ();
       wrappers ();
       handouts ();

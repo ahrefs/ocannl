@@ -270,6 +270,13 @@ files.
   (`Tensor.For_testing.rewind_omitting`): `test/operations/checkpoint_rewind.ml`. A window op that
   rewrites an older shape's rows in place needs an equation: pointwise ops only add broadcasting
   inequalities, an einsum (`+*`) equates.
+  The "steps" category restores only projections, which only a closure writes, so its control
+  needs a closure failing PARTWAY through derivation (gh-ocannl-1827): `finish_inference` derives
+  newest step first, so the step that keeps stale projections sits between the window's step and
+  an older one that the window makes fail -- there a sum window whose operand's margins a window
+  op with another FINITE neutral (a product accumulation; the max family is clamped, gh-504)
+  committed first -- with the closure forced through a window shape, which leaves the rewind
+  available.
 - What a rewind discarded is recorded where it lasts only as long as someone can present it
   (gh-ocannl-1789): a shape's, a capture reference's and an update step's own `discarded_by` field,
   and a node's entry in `Tensor`'s weak `discarded_nodes` (an ephemeron table). A schemed closure's

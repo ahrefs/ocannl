@@ -13149,7 +13149,8 @@
   (pps ppx_here ppx_ocannl)))
 
 ; gh-ocannl-903: explicit checkpoints over the open inference session -- a seeded soak of open
-; prefixes rewound after failing and succeeding constructions, restore-omission negative controls,
+; prefixes rewound after failing and succeeding constructions, restore-omission negative controls
+; (the "steps" one over a closure failing partway through deriving projections, gh-ocannl-1827),
 ; the lifecycle refusals, the wrappers, and one compiled scenario against a fresh process.
 
 (test
