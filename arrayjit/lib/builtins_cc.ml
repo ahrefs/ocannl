@@ -1891,6 +1891,28 @@ ARRAYJIT_BUILTIN_LINKAGE uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, 
 #endif
 |},
       [] );
+    (* Integer-precision [Max] / [Min] / [Relu] / [Satur01] (gh-ocannl-1883): the comparison in the
+       operands' common type -- C's usual arithmetic conversions, what [?:] itself applies -- and
+       typed that, so the value is exact at every width and an integer-only consumer ([%]) takes it.
+       [fmax]/[fmin], the spelling before, returned a [double]: [Mod(Max(a, b), c)] did not compile,
+       and an int64 above 2^53 rounded. A statement expression rather than a bare [?:], which would
+       spell (and evaluate) the selected operand twice; [__auto_type] rather than [__typeof__], so
+       each operand's text appears once however deep the nest. The same rule as [Builtins_metal]'s
+       [ocannl_max] templates and the CUDA/HIP ones. *)
+    ( "OCANNL_MAX",
+      {|
+#define OCANNL_MAX(A, B) __extension__ ({ \
+    __auto_type ocannl_max_x__ = (A); __auto_type ocannl_max_y__ = (B); \
+    ocannl_max_x__ > ocannl_max_y__ ? ocannl_max_x__ : ocannl_max_y__; })
+|},
+      [] );
+    ( "OCANNL_MIN",
+      {|
+#define OCANNL_MIN(A, B) __extension__ ({ \
+    __auto_type ocannl_min_x__ = (A); __auto_type ocannl_min_y__ = (B); \
+    ocannl_min_x__ < ocannl_min_y__ ? ocannl_min_x__ : ocannl_min_y__; })
+|},
+      [] );
   ]
 
 let builtins =

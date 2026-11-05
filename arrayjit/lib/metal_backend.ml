@@ -1267,8 +1267,8 @@ module Impl = struct
        MSL lacks, so a large integer operand can round differently here (and on CUDA/HIP) than on
        cc. Since gh-ocannl-1785 the shared renderer computes a real-valued operator at an integer
        precision through the FLOAT arms itself ([C_syntax]'s [integer_op]), so the real-valued
-       integer arms below are reached only by name harvesting; [Trunc] and [Satur01] over an integer
-       operand still render through here, a float-typed integral value. *)
+       integer arms below are reached only by name harvesting. The arms over an integer operand
+       ([Trunc], [Satur01], [Relu], [Max], [Min]) are integer-typed (gh-ocannl-1883). *)
     let int_via_f32 fn v = group (string (fn ^ "((float)") ^^ parens v ^^ rparen)
 
     (* The integer arms the C reference ({!Ops.binop_c_syntax} / {!Ops.unop_c_syntax}) refuses,
@@ -1376,6 +1376,16 @@ module Impl = struct
                  (group (parens (v1 ^^ string " > 0"))
                  ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0"
                  ))
+      (* Integer-typed, as CUDA's and HIP's integer arms are (gh-ocannl-1883): the float literals of
+         the arm below made the select a float, which [%] does not take. No integer lies in the open
+         unit interval, so the gate never passes; the operand stays gated. *)
+      | Satur01_gate, p when Ops.is_integer p ->
+          fun v1 v2 ->
+            group
+              (parens
+                 (group (parens (v1 ^^ string " > 0 && " ^^ v1 ^^ string " < 1"))
+                 ^^ space ^^ string "?" ^^ space ^^ v2 ^^ space ^^ string ":" ^^ space ^^ string "0"
+                 ))
       | Satur01_gate, p_res ->
           let s = metal_prec_suffix_float p_res in
           fun v1 v2 ->
@@ -1454,8 +1464,13 @@ module Impl = struct
           (* Like [Relu], spelled out rather than bridged: [clamp(bfloat, 0.0bf, 1.0bf)] — the
              suffixed form the generic arm below would emit — is itself ambiguous in MSL. *)
           fun v -> group (string "(bfloat)clamp((float)" ^^ parens v ^^ string ", 0.0f, 1.0f)")
+      (* Integer-typed, like [Relu] (gh-ocannl-1883): [clamp((float)v, 0.0f, 1.0f)] was a float,
+         which [%] does not take. *)
       | Satur01, p when Ops.is_integer p ->
-          fun v -> group (string "clamp((float)" ^^ parens v ^^ string ", 0.0f, 1.0f)")
+          fun v ->
+            func_doc "ocannl_max"
+              (separate comma_sep
+                 [ string "0"; func_doc "ocannl_min" (separate comma_sep [ string "1"; v ]) ])
       | Satur01, p ->
           let s = metal_prec_suffix_float p in
           fun v ->
@@ -1465,10 +1480,10 @@ module Impl = struct
           fun v -> infix_binop "/" (string @@ "1.0" ^ s) v
       | Recip_sqrt, p when Ops.is_integer p -> int_refusal p "Recip_sqrt"
       | Recip_sqrt, _ -> math_doc "rsqrt"
-      (* Reached with an integer operand only: the shared renderer truncates a float-valued operand
-         at the float arm (gh-ocannl-1785). [truncf] on the widened operand is what cc's C reference
-         renders, an integral value typed float. *)
-      | Trunc, p when Ops.is_integer p -> int_via_f32 "trunc"
+      (* Reached with an integer operand only, which is its own truncation: the shared renderer
+         truncates a float-valued operand at the float arm (gh-ocannl-1785). [trunc((float)v)] was a
+         float, which [%] does not take and which rounds an int32 above 2^24 (gh-ocannl-1883). *)
+      | Trunc, p when Ops.is_integer p -> parens
       | Trunc, _ -> math_doc "trunc"
       | Tanh_approx, Ops.Half_prec _ -> math_doc "tanh"
       (* gh-ocannl-1435: the fast f32 [tanh] the production policy selects returns 0 for x from

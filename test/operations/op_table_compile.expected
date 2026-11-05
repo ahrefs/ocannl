@@ -30,5 +30,50 @@ float sum under a byte product: the virtualized run agrees with the materialized
 byte root under a byte product: the producer was virtualized: true
 byte root under a byte product: the materialized run gives the worked value: true
 byte root under a byte product: the virtualized run agrees with the materialized one: true
+byte Max under Mod is an integer: true
+byte Min under Mod is an integer: true
+byte Relu under Mod is an integer: true
+byte Satur01 under Mod is an integer: true
+byte Trunc under Mod is an integer: true
+byte Not under Mod is an integer: true
+byte Not is an integer truth, dividing as an integer: true
+uint16 Max under Mod is an integer: true
+uint16 Min under Mod is an integer: true
+uint16 Relu under Mod is an integer: true
+uint16 Satur01 under Mod is an integer: true
+uint16 Trunc under Mod is an integer: true
+uint16 Not under Mod is an integer: true
+uint16 Not is an integer truth, dividing as an integer: true
+int32 Max under Mod is an integer: true
+int32 Min under Mod is an integer: true
+int32 Relu under Mod is an integer: true
+int32 Satur01 under Mod is an integer: true
+int32 Trunc under Mod is an integer: true
+int32 Not under Mod is an integer: true
+int32 Not is an integer truth, dividing as an integer: true
+uint32 Max under Mod is an integer: true
+uint32 Min under Mod is an integer: true
+uint32 Relu under Mod is an integer: true
+uint32 Satur01 under Mod is an integer: true
+uint32 Trunc under Mod is an integer: true
+uint32 Not under Mod is an integer: true
+uint32 Not is an integer truth, dividing as an integer: true
+int64 Max under Mod is an integer: true
+int64 Min under Mod is an integer: true
+int64 Relu under Mod is an integer: true
+int64 Satur01 under Mod is an integer: true
+int64 Trunc under Mod is an integer: true
+int64 Not under Mod is an integer: true
+int64 Not is an integer truth, dividing as an integer: true
+uint64 Max under Mod is an integer: true
+uint64 Min under Mod is an integer: true
+uint64 Relu under Mod is an integer: true
+uint64 Satur01 under Mod is an integer: true
+uint64 Trunc under Mod is an integer: true
+uint64 Not under Mod is an integer: true
+uint64 Not is an integer truth, dividing as an integer: true
+int32 Trunc is exact above 2^24: true
+int64 Max is exact above 2^53: true
+int64 Relu is exact above 2^53: true
 every function of the cc and Metal tables is guarded or named as skipped: true
 every function named as skipped is one the guards skip: true

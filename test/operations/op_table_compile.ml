@@ -35,8 +35,9 @@
    take a [uint4x32] block and produce every scalar precision. Each homogeneous arithmetic arm is
    swept twice, over buffer reads and with an inlined [a + b] as its first operand ([Inlined]),
    since integer promotion types the two differently; at an integer storage precision, a third time
-   over an inlined real-valued [Sqrt(a)] ([Inlined_real], gh-ocannl-1785). Conversions are every
-   ordered pair of distinct storage precisions the backend can store
+   over an inlined real-valued [Sqrt(a)] ([Inlined_real], gh-ocannl-1785), and a fourth as the first
+   operand of [Mod] ([Under_mod], gh-ocannl-1883), which takes integer-typed operands only.
+   Conversions are every ordered pair of distinct storage precisions the backend can store
    ({!Ir.Backend_intf.codegen_capabilities}'s [supports_f64]).
 
    gh-ocannl-1768 extended the sweep in three directions.
@@ -82,6 +83,11 @@ type arm =
           precision, which the renderer computes in float and converts once (gh-ocannl-1785), so an
           integer arm never meets a float operand -- no mixed [min(uchar, double)], no [%] over a
           double. *)
+  | Under_mod of arm
+      (** A homogeneous arithmetic arm at an integer storage precision as the first operand of
+          [Mod], the one operator whose integer spelling takes integers only: an arm that is
+          float-TYPED over its integral value (cc's [fmax], [truncf] and [? 1.0 : 0.0], Metal's
+          [clamp((float)...)]) compiles into a store and fails here (gh-ocannl-1883). *)
   | Lanes of arm
       (** A homogeneous arithmetic arm applied cell by cell over a [Vectorized] loop, every operand
           read at the loop index: what the explicit-SIMD rendering takes (gh-ocannl-1768). *)
@@ -100,6 +106,7 @@ let rec arm_name = function
   | Convert_from q -> "convert from " ^ Ops.prec_string q
   | Inlined arm -> arm_name arm ^ " over an inlined operand"
   | Inlined_real arm -> arm_name arm ^ " over an inlined real-valued operand"
+  | Under_mod arm -> arm_name arm ^ " under Mod"
   | Lanes arm -> arm_name arm ^ " over vector lanes"
   | Lanes_uniform arm -> arm_name arm ^ " over vector lanes, its last operand uniform"
   | Reduce op -> "vector reduction " ^ Sexp.to_string (Ops.sexp_of_binop op)
@@ -107,7 +114,9 @@ let rec arm_name = function
 
 let is_vector_arm = function
   | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma -> true
-  | Unary _ | Binary _ | Ternary _ | Vector _ | Convert_from _ | Inlined _ | Inlined_real _ -> false
+  | Unary _ | Binary _ | Ternary _ | Vector _ | Convert_from _ | Inlined _ | Inlined_real _
+  | Under_mod _ ->
+      false
 
 (* A value select: an operator that yields one of its operands, the other evaluated only
    conditionally, which the backend's [select_blend_syntax] may render branchless (gh-ocannl-1622).
@@ -123,7 +132,7 @@ let rec is_select = function
       match Ops.binop_conditionality op with
       | Ops.Gated_second -> true
       | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> false)
-  | Inlined arm | Inlined_real arm -> is_select arm
+  | Inlined arm | Inlined_real arm | Under_mod arm -> is_select arm
   | Unary _ | Vector _ | Convert_from _ | Lanes _ | Lanes_uniform _ | Reduce _ | Reduce_fma -> false
 
 type verdict =
@@ -205,8 +214,8 @@ let arms_at ~precs store =
       | Unary op -> Ops.is_homogeneous_prec_unop op
       | Binary op -> Ops.is_homogeneous_prec_binop op
       | Ternary op -> Ops.is_homogeneous_prec_ternop op
-      | Vector _ | Convert_from _ | Inlined _ | Inlined_real _ | Lanes _ | Lanes_uniform _
-      | Reduce _ | Reduce_fma ->
+      | Vector _ | Convert_from _ | Inlined _ | Inlined_real _ | Under_mod _ | Lanes _
+      | Lanes_uniform _ | Reduce _ | Reduce_fma ->
           false
     in
     arithmetic
@@ -214,6 +223,8 @@ let arms_at ~precs store =
         if homogeneous arm then Some (Inlined arm) else None)
     @ List.filter_map arithmetic ~f:(fun arm ->
         if homogeneous arm && Ops.is_integer store then Some (Inlined_real arm) else None)
+    @ List.filter_map arithmetic ~f:(fun arm ->
+        if homogeneous arm && Ops.is_integer store then Some (Under_mod arm) else None)
     @ List.map Ops.all_of_vec_unop ~f:(fun op -> Vector op)
     @ conversions
 
@@ -320,6 +331,13 @@ let rec statement o k arm : LL.t =
   | Inlined_real (Binary op) -> store (LL.Binop (op, real, read o.c s))
   | Inlined_real (Ternary op) -> store (LL.Ternop (op, real, read o.b s, read o.c s))
   | Inlined_real arm -> statement o k arm
+  | Under_mod (Unary op) -> store (LL.Binop (Ops.Mod, (LL.Unop (op, read o.a s), s), read o.c s))
+  | Under_mod (Binary op) ->
+      store (LL.Binop (Ops.Mod, (LL.Binop (op, read o.a s, read o.b s), s), read o.c s))
+  | Under_mod (Ternary op) ->
+      store
+        (LL.Binop (Ops.Mod, (LL.Ternop (op, read o.a s, read o.b s, read o.c s), s), read o.c s))
+  | Under_mod arm -> statement o k arm
   | Unary op when Ops.is_homogeneous_prec_unop op -> store (LL.Unop (op, read o.a s))
   | Unary op -> store (LL.Unop (op, read o.block Ops.uint4x32))
   | Binary op when Ops.is_homogeneous_prec_binop op -> store (LL.Binop (op, read o.a s, read o.b s))
@@ -442,7 +460,7 @@ let rec c_reference_refuses ~store ~compute arm =
   | Ternary op -> raises (fun () -> Ops.ternop_c_syntax compute op)
   | Vector op -> raises (fun () -> Ops.vec_unop_c_syntax compute op)
   | Convert_from from -> raises (fun () -> Ops.c_convert_precision ~from ~to_:store)
-  | Inlined arm | Inlined_real arm | Lanes arm | Lanes_uniform arm ->
+  | Inlined arm | Inlined_real arm | Under_mod arm | Lanes arm | Lanes_uniform arm ->
       c_reference_refuses ~store ~compute arm
   | Reduce op -> c_reference_refuses ~store ~compute (Binary op)
   | Reduce_fma -> c_reference_refuses ~store ~compute (Ternary Ops.FMA)
@@ -929,6 +947,87 @@ let () =
     ~producer:(function [ a ] -> LL.Unop (Ops.Sqrt, a) | _ -> assert false)
     ~inputs:[ (byte, "a", [| 8.; 15.; 3.; 24. |]) ]
     ~k:3. ~want:[| 6.; 9.; 3.; 12. |]
+
+(* gh-ocannl-1883: the integer table arms are integer-typed, so their values are exact and an
+   integer-only consumer takes them. Every case runs at each integer precision the backend holds,
+   over operands and results small enough for a byte, and is exact by construction.
+
+   Each arm under [Mod], over [a = 7, b = 5, c = 4, z = 0]: [Max] 7 % 4 = 3, [Min] 5 % 4 = 1, [Relu]
+   7 % 4 = 3, [Satur01] 1 % 4 = 1, [Trunc] 7 % 4 = 3, [Not(z)] 1 % 4 = 1. On cc these did not
+   compile ([%] over [fmax]'s double); Metal's [Satur01] and [Trunc] were floats too.
+
+   [b * (Not(z) / c)] over [z = 0, c = 4] is 0: [Not] is an integer truth, so 1 / 4 is integer
+   division, where cc's [? 1.0 : 0.0] divided in double, 5 * 0.25 = 1.25, stored 1.
+
+   The wide cases have operands a float-typed arm rounds. int32 [Trunc(k * k + one) - k * k] over [k
+   = 4096] is 1: [truncf] of 2^24 + 1 is 2^24. int64 [Max(m * m + one, m * m) - m * m] and [Relu(m *
+   m + one) - m * m] over [m = 2^27] are 1: [fmax] of 2^54 + 1 is 2^54. The operands are built in
+   the kernel because a seed is a float. *)
+let () =
+  let run ~prec ~name claim llsc seed want =
+    let out = node ~prec (name ^ "_out") in
+    let llc = Ll_test.set out at0 llsc in
+    let inputs = List.map seed ~f:fst in
+    let got =
+      Ll_test.execute ~name
+        { (Ll_test.optimize ~materialized:(out :: inputs) ~name llc) with LL.llc }
+        ~seed:(List.map seed ~f:(fun (tn, v) -> (tn, [| v |])))
+        ~read:[ out ]
+    in
+    p claim (Ll_test.same got [ [| want |] ])
+  in
+  List.iter Ops.integer_precs ~f:(fun prec ->
+      let tag = Ops.prec_string prec in
+      let mk label = node ~prec (Printf.sprintf "intv_%s_%s" tag label) in
+      let a = mk "a" and b = mk "b" and c = mk "c" and z = mk "z" in
+      let r tn = read tn prec in
+      let unop op v = (LL.Unop (op, v), prec) in
+      let binop op v1 v2 = (LL.Binop (op, v1, v2), prec) in
+      let seed = [ (a, 7.); (b, 5.); (c, 4.); (z, 0.) ] in
+      List.iter
+        [
+          ("max", "Max", binop Ops.Max (r a) (r b), 3.);
+          ("min", "Min", binop Ops.Min (r a) (r b), 1.);
+          ("relu", "Relu", unop Ops.Relu (r a), 3.);
+          ("sat01", "Satur01", unop Ops.Satur01 (r a), 1.);
+          ("trunc", "Trunc", unop Ops.Trunc (r a), 3.);
+          ("not", "Not", unop Ops.Not (r z), 1.);
+        ]
+        ~f:(fun (short, op, arm, want) ->
+          run ~prec
+            ~name:(Printf.sprintf "optbl_intv_%s_mod_%s" tag short)
+            (Printf.sprintf "%s %s under Mod is an integer" tag op)
+            (fst (binop Ops.Mod arm (r c)))
+            seed want);
+      run ~prec
+        ~name:(Printf.sprintf "optbl_intv_%s_not_div" tag)
+        (Printf.sprintf "%s Not is an integer truth, dividing as an integer" tag)
+        (fst (binop Ops.Mul (r b) (binop Ops.Div (unop Ops.Not (r z)) (r c))))
+        seed 0.);
+  let wide ~prec ~base =
+    let tag = Ops.prec_string prec in
+    let k = node ~prec (Printf.sprintf "intv_%s_k" tag) in
+    let one = node ~prec (Printf.sprintf "intv_%s_one" tag) in
+    let r tn = read tn prec in
+    let binop op v1 v2 = (LL.Binop (op, v1, v2), prec) in
+    let square = binop Ops.Mul (r k) (r k) in
+    let above = binop Ops.Add square (r one) in
+    let seed = [ (k, base); (one, 1.) ] in
+    fun short claim arm ->
+      run ~prec
+        ~name:(Printf.sprintf "optbl_intv_%s_wide_%s" tag short)
+        claim
+        (fst (binop Ops.Sub (arm ~square ~above) square))
+        seed 1.
+  in
+  let wide32 = wide ~prec:Ops.int32 ~base:4096. in
+  wide32 "trunc" "int32 Trunc is exact above 2^24" (fun ~square:_ ~above ->
+      (LL.Unop (Ops.Trunc, above), Ops.int32));
+  let wide64 = wide ~prec:Ops.int64 ~base:134217728. in
+  wide64 "max" "int64 Max is exact above 2^53" (fun ~square ~above ->
+      (LL.Binop (Ops.Max, above, square), Ops.int64));
+  wide64 "relu" "int64 Relu is exact above 2^53" (fun ~square:_ ~above ->
+      (LL.Unop (Ops.Relu, above), Ops.int64))
 
 (* gh-ocannl-1768: what the parameter guards cover in the two tables they guard. An entry the guard
    cannot read is either not a function -- a macro, a type, a constant, which have no parameter

@@ -409,9 +409,22 @@ files.
   evaluation precision. The rule was chosen over rounding at every integer operator's operand,
   which would have overturned the C-promotion values gh-ocannl-1731 pinned on four backends. The
   executed cases and the virtualized/materialized parity legs live in `op_table_compile`. Out of
-  scope: integer arms whose spelling is float-TYPED over integral values (cc's `fmax`/`truncf`
-  arms, Metal's `int_via_f32` `Trunc`), so `Mod(Max(a, b), c)` still fails to compile on cc; and
-  C's integer promotion of inlined integer arithmetic against the storage width.
+  scope: C's integer promotion of inlined integer arithmetic against the storage width.
+- **An integer table arm is integer-TYPED, in its operands' common type** (gh-ocannl-1883). cc's
+  integer `Max`/`Min`/`Relu`/`Satur01` were `fmax`/`fmin` calls, `Trunc` a `truncf` and `Not` a
+  `? 1.0 : 0.0`; CUDA's and HIP's `Relu`/`Satur01`/`Trunc`/`Not`, and Metal's `Trunc`, `Satur01`
+  and `Satur01_gate`, were float-typed too. The values were integral, but `Mod(Max(a, b), c)` did
+  not compile, an int64 `Max` above 2^53 and an int32 `Trunc` above 2^24 rounded, and
+  `Not(a) / b` divided in float. Now `Max`/`Min` and the two clamps go through one rule spelled
+  three ways, a comparison under C's usual arithmetic conversions typed its common type:
+  `Builtins_cc`'s `OCANNL_MAX`/`OCANNL_MIN` (a statement expression over `__auto_type`, so each
+  operand is spelled and evaluated once), and the `ocannl_max`/`ocannl_min` templates of
+  `Builtins_cuda`, `Builtins_hip` and `Builtins_metal`. Integer `Trunc` is its operand and integer
+  `Not` a `== 0` truth. `op_table_compile`'s `Under_mod` family compiles every homogeneous arm as
+  the first operand of `Mod` at each integer precision, the one consumer that rejects a
+  float-typed arm, and its executed cases pin the values. Not covered: cc's `Satur01_gate` passes
+  at 0 where the other backends and `Ops.interpret_binop` do not, at float and integer precisions
+  alike, and its integer spelling tests `abs()`, an `int` function.
 - **A plain conversion out of `uint4x32` is refused on every backend** (gh-ocannl-1785), with one
   message, `Ops.no_plain_uint4x32_conversion`, from every `convert_precision`. Metal used to read
   it as the uniform conversion and CUDA/HIP as lane 0's bits. Random bits reach a scalar through
