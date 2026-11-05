@@ -353,10 +353,13 @@ let node_ident ~(facts : Ir.Backend_intf.backend_facts) label =
 (* An identifier spelled with a number a compile mints afresh: a loop symbol ([i<digits>],
    [Indexing.symbol_ident]), a node identifier spelling its id ([n<digits>], optionally followed by
    [_<label>]: [Tnode.styled_ident] for an unlabeled node or one whose label repeats in the kernel),
-   or a scope-local scalar spelling its scope id ([v<digits>_<ident>]), or a pool-chunked [Grid]
-   loop's chunk index and bounds, which derive from its loop symbol
-   ([Ir.C_syntax.grid_chunk_derivations], gh-ocannl-1877). A type or builtin whose name ends in a
-   digit ([uint3], [float4], [__half2]) is none of these shapes and stays as written. *)
+   likewise a schedule-minted tile in the schedule's namespace ([tile__n<digits>_<label>]), or a
+   scope-local scalar spelling its scope id ([v<digits>_<ident>]), or a pool-chunked [Grid] loop's
+   chunk index and bounds, which derive from its loop symbol ([Ir.C_syntax.grid_chunk_derivations],
+   gh-ocannl-1877). A type or builtin whose name ends in a digit ([uint3], [float4], [__half2]) is
+   none of these shapes and stays as written. *)
+let tile_ident_prefix = Ir.Tnode.ident_prefix Ir.Schedule.tile_namespace
+
 let rec is_minted_ident ~(facts : Ir.Backend_intf.backend_facts) ident =
   let numbered ~prefix =
     match String.chop_prefix ident ~prefix with
@@ -377,9 +380,15 @@ let rec is_minted_ident ~(facts : Ir.Backend_intf.backend_facts) ident =
               && is_minted_ident ~facts base
           | None -> false))
   || Option.is_some (numbered ~prefix:"n")
+  (* A schedule-minted tile or accumulator, spelling its id in the schedule's own namespace
+     ([tile__n24_tile_relu]): a process-wide counter, so a second compile of one program numbers its
+     tiles afresh (gh-ocannl-1877). *)
+  || Option.is_some (numbered ~prefix:tile_ident_prefix)
   (* A node identifier behind a GPU dialect's prefix ([t_n12_x], gh-ocannl-1338). *)
   || (match !backend with
-    | Some _ -> Option.is_some (numbered ~prefix:(facts.node_ident_prefix ^ "n"))
+    | Some _ ->
+        Option.is_some (numbered ~prefix:(facts.node_ident_prefix ^ "n"))
+        || Option.is_some (numbered ~prefix:(facts.node_ident_prefix ^ tile_ident_prefix))
     | None -> false)
   || match numbered ~prefix:"v" with Some rest -> String.mem rest '_' | None -> false
 

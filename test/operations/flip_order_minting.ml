@@ -118,6 +118,17 @@ let flips_to_strings flips =
 let shipped ~name ~nodes ((compiled : Context.t), (routine : Context.routine)) =
   (* A fissioned routine emits its segments into one [<name>__seg] source. *)
   let source = if List.length routine.segments > 1 then name ^ "__seg" else name in
+  (* The nodes the schedule minted (staged tiles, moved accumulators): their ids come from a
+     process-wide counter, so they differ from build to build and are compared by position in the
+     source only. *)
+  let minted =
+    List.concat_map routine.segments ~f:(fun seg -> Hashtbl.keys seg.LL.traced_store)
+    |> List.filter ~f:(fun tn -> not (List.mem nodes tn ~equal:Tn.equal))
+    |> List.dedup_and_sort ~compare:Tn.compare
+  in
+  eprintf "%s (not part of the golden): %d segment(s), schedule-minted nodes: %s\n%!" name
+    (List.length routine.segments)
+    (String.concat ~sep:" " (List.map minted ~f:Tn.debug_name));
   ( Generated.normalize_minted ~facts:(Context.backend_facts compiled) (Generated.read source),
     List.map nodes ~f:(fun tn ->
         Printf.sprintf "%d %s" tn.Tn.id
