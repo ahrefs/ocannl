@@ -5,8 +5,8 @@
 
    The deterministic counts are claimed (stdout); the full count and timing tables go to stderr,
    which is not part of the golden. [--bench REPS N...] times the workloads instead: the measurement
-   behind docs/shape_inference.md's numbers; [--bench-result N...] is its form for the A/B
-   driver. *)
+   behind docs/shape_inference.md's numbers; [--bench-result N...] is its form for the A/B driver;
+   [--stacks REPS N...] measures whole-stack traces against one build. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -368,6 +368,32 @@ let bench_result cells =
             ~check:(Unchecked "an inference timing: the test claims the shapes it closes")
             ~seconds:r.total_s))
 
+(* The whole-stack measurement: per stack and depth, one warm-up and the median of [reps] traces and
+   builds, each in a fresh session. The stack's closure is built outside the trace's window. *)
+let stacks_bench reps cells =
+  Stdio.printf "stack depth | trace_ms build_ms | trace_words build_words trace/build\n%!";
+  List.iter cells ~f:(fun (s, ns) ->
+      List.iter ns ~f:(fun n ->
+          ignore (stack_trace s n : stack_run);
+          ignore (stack_build s n : stack_run);
+          let rs = List.init reps ~f:(fun _ -> (stack_trace s n, stack_build s n)) in
+          let med f = median (List.map rs ~f) in
+          let trace_words = med (fun (t, _) -> t.t_words)
+          and build_words = med (fun (_, b) -> b.t_words) in
+          Stdio.printf "%s %d | %s %s | %.0f %.0f %.3f\n%!" s.s_name n
+            (ms (med (fun (t, _) -> t.t_s)))
+            (ms (med (fun (_, b) -> b.t_s)))
+            trace_words build_words (trace_words /. build_words)));
+  Tensor.For_testing.set_op_shape_schemes None
+
+let parse_stacks =
+  List.map ~f:(fun cell ->
+      match String.lsplit2 cell ~on:'=' with
+      | Some (s, ns) ->
+          ( List.find_exn stacks ~f:(fun x -> String.equal x.s_name s),
+            List.map (String.split ns ~on:',') ~f:Int.of_string )
+      | None -> failwith ("scheme_payoff: expected stack=depths, got " ^ cell))
+
 let parse_cells =
   List.map ~f:(fun cell ->
       match String.lsplit2 cell ~on:'=' with
@@ -392,6 +418,9 @@ let () =
       (* [--bench REPS distinct=1,4,16 shared=1,4,16 decoder=1,4,8] *)
       bench (Int.of_string reps) (parse_cells cells)
   | _ :: "--bench-result" :: cells -> bench_result (parse_cells cells)
+  | _ :: "--stacks" :: reps :: cells ->
+      (* [--stacks REPS decoder=2,4,8,16,32,64 resnet=2,4,8,16,32] *)
+      stacks_bench (Int.of_string reps) (parse_stacks cells)
   | _ ->
       let results =
         List.concat_map workloads ~f:(fun w ->
