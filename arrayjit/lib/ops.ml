@@ -812,15 +812,18 @@ let binop_c_syntax prec v =
       (* This disagrees at 0 with the semantics. *)
       ("(fabsf(floorf(", ")) > 0.0 ? 0.0 : (", "))")
   | Satur01_gate, _ -> ("(fabs(floor(", ")) > 0.0 ? 0.0 : (", "))")
-  | ( Max,
-      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
-      | Uint64_prec _ | Fp8_prec _ ) ) ->
-      ("fmax(", ",", ")")
+  (* An integer [Max]/[Min] compares in the operands' common type and is typed that ([Builtins_cc]'s
+     [OCANNL_MAX]/[OCANNL_MIN], gh-ocannl-1883): [fmax] returned a [double], which [%] does not take
+     and which rounds an int64 above 2^53. *)
+  | Max, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
+    ->
+      ("OCANNL_MAX(", ",", ")")
+  | Min, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
+    ->
+      ("OCANNL_MIN(", ",", ")")
+  | Max, (Double_prec _ | Fp8_prec _) -> ("fmax(", ",", ")")
   | Max, _ -> ("fmaxf(", ",", ")")
-  | ( Min,
-      ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
-      | Uint64_prec _ | Fp8_prec _ ) ) ->
-      ("fmin(", ",", ")")
+  | Min, (Double_prec _ | Fp8_prec _) -> ("fmin(", ",", ")")
   | Min, _ -> ("fminf(", ",", ")")
   (* C's [%] takes integer operands only; a float remainder is [fmod], which truncates the quotient
      as [%] does on integers (gh-ocannl-1684). *)
@@ -922,15 +925,18 @@ let unop_c_syntax prec op =
   in
   match (op, prec) with
   | Identity, _ -> ("", "")
-  | ( Relu,
-      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
-      | Fp8_prec _ ) ) ->
-      ("fmax(0, ", ")")
+  (* The integer arms are integer-typed (gh-ocannl-1883), through the common-type comparisons of the
+     binary [Max]/[Min] arms; their operand is never float-valued (C_syntax's [integer_op]). *)
+  | Relu, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
+    ->
+      ("OCANNL_MAX(0, ", ")")
+  | Relu, Fp8_prec _ -> ("fmax(0, ", ")")
   | Relu, _ -> (fmax () ^ "(0.0, ", ")")
   | ( Satur01,
-      ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
-      | Fp8_prec _ ) ) ->
-      ("fmax(0, fmin(1, ", "))")
+      (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) )
+    ->
+      ("OCANNL_MAX(0, OCANNL_MIN(1, ", "))")
+  | Satur01, Fp8_prec _ -> ("fmax(0, fmin(1, ", "))")
   | Satur01, _ -> (fmax () ^ "(0.0, " ^ fmin () ^ "(1.0, ", "))")
   | ( Exp,
       ( Double_prec _ | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
@@ -980,12 +986,24 @@ let unop_c_syntax prec op =
   | Recip_sqrt, _ -> ("(1.0 / sqrtf(", "))")
   | Neg, _ -> ("(-(", "))")
   | Trunc, Double_prec _ -> ("trunc(", ")")
+  (* An integer operand is its own truncation: [truncf] returned a [float], which [%] does not take
+     and which rounds an int32 above 2^24 (gh-ocannl-1883). A float-valued operand truncates at the
+     float arm above (C_syntax's [integer_op]). *)
+  | ( Trunc,
+      (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) )
+    ->
+      ("(", ")")
   | Trunc, _ -> ("truncf(", ")")
   | ( Tanh_approx,
       ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
       | Fp8_prec _ ) ) ->
       invalid_arg "Ops.unop_c_syntax: Tanh_approx not supported for integer precisions"
   | Tanh_approx, _ -> ("tanhf(", ")")
+  (* An integer truth, as a comparison's is: [? 1.0 : 0.0] typed it [double], so [Not(a) / b] was a
+     float division (gh-ocannl-1883). *)
+  | Not, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
+    ->
+      ("(", " == 0)")
   | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
   | Uint4x32_to_prec_uniform1, Uint4x32_prec _ ->
       invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform1 not supported for Uint4x32"

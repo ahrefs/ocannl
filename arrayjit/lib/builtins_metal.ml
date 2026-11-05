@@ -557,13 +557,14 @@ using namespace metal;|}, []);
       [] );
     (* Integer-precision [Max] / [Min] / [Relu] (gh-ocannl-1731). MSL's [fmax]/[fmin] are float-only
        and its integer [max]/[min] need both operands of one type, while an operand at an integer
-       precision is a [uchar] read, an integer-promoted [int] sum, or a float-typed integral value
-       ([Metal_backend]'s [int_via_f32] [Trunc]). These take C's usual arithmetic conversions
-       instead: the comparison happens in the operands' common type, so an [int] sum is not
-       narrowed. A float-VALUED operand never reaches them: the shared renderer computes such a
-       [Max]/[Min] at the float precision (gh-ocannl-1785). A floating common type goes to
-       [fmax]/[fmin] themselves, the float [Max]/[Min] arms' own calls, NaN handling included
-       ([fmin(1, NaN)] is 1); an integer one to the exact comparison. *)
+       precision is a [uchar] read, an integer-promoted [int] sum, or a [bool] truth. These take C's
+       usual arithmetic conversions instead: the comparison happens in the operands' common type, so
+       an [int] sum is not narrowed, and the result is typed that, so [%] takes it (gh-ocannl-1883;
+       [Builtins_cc]'s [OCANNL_MAX] and the CUDA/HIP templates are the same rule). A float-VALUED
+       operand never reaches them: the shared renderer computes such a [Max]/[Min] at the float
+       precision (gh-ocannl-1785), and since gh-ocannl-1883 no integer arm is float-TYPED either, so
+       the floating overloads below are a guard, not a path: a floating common type would go to
+       [fmax]/[fmin] themselves, NaN handling included. *)
     ( "ocannl_max",
       {|template <typename T> inline T ocannl_max_in(T a, T b) { return a > b ? a : b; }
 inline float ocannl_max_in(float a, float b) { return fmax(a, b); }

@@ -217,7 +217,9 @@ files.
   never reaches an integer table arm: the shared renderer computes it in float (the rule:
   backend-precision-and-simd.md, gh-ocannl-1785). Metal's integer `Max`/`Min`/`Relu` go through
   `Builtins_metal`'s `ocannl_max` / `ocannl_min`, which compare in the operands' common type, for
-  the integer-promoted sums.
+  the integer-promoted sums. Since gh-ocannl-1883 every backend's do, and each homogeneous arm is
+  swept a fourth time at the integer precisions, as the first operand of `Mod` (`Under_mod`):
+  the rule is in backend-precision-and-simd.md.
 - Tensor-node debug names become identifiers verbatim in the emitted kernel, so anything the
   backend also emits as a *name* must be reserved (`ident_blacklist`). Reserve it from the
   backend's own syntax functions, never from the C spellings: `C_syntax.op_syntax_idents` renders

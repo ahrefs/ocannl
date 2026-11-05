@@ -515,22 +515,26 @@ struct
                     (nest 2
                        (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
                       ^^ string "__float2bfloat16(0.0f)"))))
-    | Max, Byte_prec _ -> func "max"
+    (* Through the builtins' [ocannl_max] / [ocannl_min] templates, which compare in the operands'
+       common type and are typed that (gh-ocannl-1883): the overloaded [max]/[min] resolve for the
+       operand pairs they list only, and an integer arm's operand is a read, an integer-promoted
+       sum, or a [bool] truth. *)
+    | ( Max,
+        (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
+      ) ->
+        func "ocannl_max"
+    | ( Min,
+        (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
+      ) ->
+        func "ocannl_min"
     | Max, Half_prec _ -> func "__hmax"
     | Max, Double_prec _ -> func "fmax"
     | Max, Single_prec _ -> func "fmaxf"
-    | Max, Uint16_prec _ -> func "max"
-    | Max, Int32_prec _ -> func "max"
-    | Max, Int64_prec _ -> func "max"
     | Max, Uint4x32_prec _ -> func "max"
     | Max, Bfloat16_prec _ -> func "__hmax"
-    | Min, Byte_prec _ -> func "min"
     | Min, Half_prec _ -> func "__hmin"
     | Min, Double_prec _ -> func "fmin"
     | Min, Single_prec _ -> func "fminf"
-    | Min, Uint16_prec _ -> func "min"
-    | Min, Int32_prec _ -> func "min"
-    | Min, Int64_prec _ -> func "min"
     | Min, Uint4x32_prec _ -> func "min"
     | Min, Bfloat16_prec _ -> func "__hmin"
     | ( Mod,
@@ -605,10 +609,6 @@ struct
                     (nest 2
                        (break 1 ^^ string "?" ^^ space ^^ v2 ^^ break 1 ^^ string ":" ^^ space
                       ^^ string "0ULL"))))
-    | Max, Uint32_prec _ -> func "max"
-    | Max, Uint64_prec _ -> func "max"
-    | Min, Uint32_prec _ -> func "min"
-    | Min, Uint64_prec _ -> func "min"
 
   let rec unop_syntax prec v =
     let open PPrint in
@@ -636,6 +636,13 @@ struct
            (float, double, int, char, ... in amd_hip_fp8.h) make the built-in operators ambiguous,
            so bridge fp8 math through float, mirroring the CC backend's fp8 handling. *)
         fun expr -> fp8_from_float (unop_syntax Ops.single v (string "(float)" ^^ parens expr))
+    (* The integer arms are integer-typed (gh-ocannl-1883): [fmax(0.0, v)], [truncf(v)] and [v ==
+       0.0 ? 1.0 : 0.0] were float-typed over integral values, which [%] does not take and which
+       round a wide operand. Their operand is never float-valued (C_syntax's [integer_op]). *)
+    | Relu, p when Ops.is_integer p -> f "ocannl_max(0, " ")"
+    | Satur01, p when Ops.is_integer p -> f "ocannl_max(0, ocannl_min(1, " "))"
+    | Trunc, p when Ops.is_integer p -> f "(" ")"
+    | Not, p when Ops.is_integer p -> f "(" " == 0)"
     | Relu, Ops.Single_prec _ -> f "fmaxf(0.0, " ")"
     | Relu, Ops.Half_prec _ -> f "__hmax_nan(__ushort_as_half((unsigned short)0x0000U), " ")"
     (* Mixing a [__hip_bfloat16] with a literal of another arithmetic type is ambiguous under hiprtc
