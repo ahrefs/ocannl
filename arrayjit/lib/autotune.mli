@@ -2620,6 +2620,12 @@ type model_choice = {
           tensorized, conv, coalesced and the other forms {!model_default}'s restriction leaves out,
           or any sketch at a site accumulating wider than its storage); never scored, so neither in
           [mc_skipped] nor in [mc_rejected]. *)
+  mc_placement_rank_ms : float option;
+      (** The ranking score in ms the placement pre-search (config [model_default_placements]) gave
+          the leaf it won with -- the picked placements', or the default placements' where no flip
+          beat them -- [None] where it ran no search or scored none, and where {!model_default}'s
+          compile abandoned the pick. Where the compile's own selection ran on that leaf it is
+          [mc_rank_ms]: the search ranks the lowering the compile prepares (gh-ocannl-1878). *)
 }
 
 type model_target = {
@@ -4192,12 +4198,13 @@ module Make (D : Driver) : sig
     model_choice
   (** {!model_default}'s choice for one computation, decided and not compiled (gh-ocannl-1780): the
       same selection -- the placement pre-search where configured, then the in-compile selection run
-      on {!Context.lowered_for_decisions}' hermetic lowering under the placements it picked --
-      reported as {!model_default} reports it before its compile. What it cannot see is the
-      compile-level fallback, which only a backend compile triggers: where {!model_default}'s
-      compile of the pick fails, it reports ["default"] and this reports the pick. The context is
-      untouched. [target] (default: the context's) is the target the selection judges for
-      ({!model_target}): a host judging a GPU's pick on cc, which no compile could. *)
+      on {!Context.lowered_for_decisions}' hermetic lowering under the placements it picked,
+      prepared as the compile prepares its own ({!Context.lowered_transform_input}) -- reported as
+      {!model_default} reports it before its compile. What it cannot see is the compile-level
+      fallback, which only a backend compile triggers: where {!model_default}'s compile of the pick
+      fails, it reports ["default"] and this reports the pick. The context is untouched. [target]
+      (default: the context's) is the target the selection judges for ({!model_target}): a host
+      judging a GPU's pick on cc, which no compile could. *)
 
   val model_explain :
     ?name:string ->

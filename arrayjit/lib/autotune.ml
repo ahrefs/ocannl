@@ -5073,6 +5073,7 @@ type model_choice = {
       (** Candidates excluded from the ranking because their scheduled form fails
           {!Ir.Low_level.validate_parallel} — it could not have compiled (gh-ocannl-522). *)
   mc_excluded : int;
+  mc_placement_rank_ms : float option;
       (** Sketch candidates kept out of the ranking on a GPU backend as not numerics-preserving
           (gh-ocannl-1253). *)
 }
@@ -5094,18 +5095,21 @@ let no_selection =
     mc_skipped = 0;
     mc_rejected = 0;
     mc_excluded = 0;
+    mc_placement_rank_ms = None;
   }
 
 (* [model_default]'s selection, as its compile and {!model_pick} consume it: the transform the
    compile hands its lowering to (it runs the selection and records it in [sel_choice]), whether the
    applied segments came from a pick ([sel_applied_pick], the compile-level fallback's condition),
-   the fallback's report, and the placement pre-search's pick. *)
+   the fallback's report, the placement pre-search's pick, and the rank it gave the leaf it won with
+   -- the pick's, or the default placements' where those won. *)
 type model_selection = {
   sel_transforms : LL.optimized -> LL.optimized list;
   sel_choice : model_choice ref;
   sel_applied_pick : bool ref;
   sel_on_fallback : exn -> unit;
   sel_placement_pick : (Ir.Tnode.t list * Ir.Tnode.t list * Ir.Tnode.t list) option;
+  sel_placement_rank_ms : float option;
 }
 
 let model_default_enabled =
@@ -7060,6 +7064,15 @@ module Make (D : Driver) = struct
         emit ();
         result
 
+  (* The hermetic lowering under [readings] (materialized, inline, footprint), in the form a compile
+     under those placements hands its transform ([D.lowered_transform_input]): what a decision-only
+     reader must run [model_default]'s selection on for its verdict to be the compile's. *)
+  let selection_input ?name ?(readings = ([], [], [])) ~target ctx comp bindings =
+    let materialized, inline, footprint = readings in
+    D.lowered_transform_input
+      (D.lowered_for_decisions ?name ~materialized ~inline ~footprint ~facts:target.mt_facts
+         ~limits:target.mt_limits ctx comp bindings)
+
   (* gh-ocannl-1780: [model_default]'s selection for one computation, up to the compile it hands
      [sel_transforms] to, under [target] -- the context's own for [model_default], a stand-in's for
      {!model_pick}. [None] where it ranks nothing (no envelope constants, or the default annotator
@@ -7393,6 +7406,7 @@ module Make (D : Driver) = struct
             mc_skipped = !n_skipped;
             mc_rejected = !n_rejected;
             mc_excluded = !n_excluded;
+            mc_placement_rank_ms = None;
           };
         let apply_action () =
           (* Schedule application uses the typed seam. Backend validation is deliberately left to
@@ -7469,24 +7483,27 @@ module Make (D : Driver) = struct
          ranked flip candidates of the decision surface — one node per level, kept at its default
          reading or flipped to one of its alternatives, the all-keep leaf visited first so the
          default placements' own selection score is the running incumbent (ties stay with the
-         default placements), [select] pricing each leaf's hermetic lowering
-         ([Context.lowered_for_decisions]), and the partial-vector roofline floor
-         ([placement_surface.ps_floor_ms], monotone in the committed materializations) fathoming
-         subtrees that cannot beat it. This is where the bound differentiates {e within} the tree:
-         the family levels' floor is schedule-invariant, the placement levels' is not (phase 3). *)
+         default placements), [select] pricing each leaf's hermetic lowering in the form the compile
+         would hand it ([selection_input], gh-ocannl-1878: the leaf's fission is the one that
+         ships), and the partial-vector roofline floor ([placement_surface.ps_floor_ms], monotone in
+         the committed materializations) fathoming subtrees that cannot beat it. The floor is read
+         off the unprepared lowering: it folds per-node access images, no statement order, so the
+         compile's preparation leaves it a bound. This is where the bound differentiates {e within}
+         the tree: the family levels' floor is schedule-invariant, the placement levels' is not
+         (phase 3). *)
       let placement_budget =
         Int.of_string
           (String.strip (Utils.get_global_arg ~arg_name:"model_default_placements" ~default:"0"))
       in
-      let placement_pick =
-        if placement_budget <= 0 then None
+      let placement_pick, placement_rank_ms =
+        if placement_budget <= 0 then (None, None)
         else
           match
             let surface = placement_surface ?name ~target ctx comp bindings in
             (* The cut counts nodes (gh-ocannl-1017): a candidate is the whole node, so a level
                always decides every reading it has. *)
             let cands = List.take surface.ps_candidates placement_budget in
-            if List.is_empty cands then None
+            if List.is_empty cands then (None, None)
             else
               let level_name (fc : LL.flip_candidate) =
                 Printf.sprintf "placement#%d %s %s" fc.LL.fc_tn.Ir.Tnode.uid
@@ -7517,10 +7534,9 @@ module Make (D : Driver) = struct
                       }
               in
               let score vector =
-                let mat, inl, fp = LL.partition_readings vector in
                 match
-                  D.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp ~facts
-                    ~limits ctx comp bindings
+                  selection_input ?name ~readings:(LL.partition_readings vector) ~target ctx comp
+                    bindings
                 with
                 | opt_v ->
                     let _lbl, s, _act = select opt_v in
@@ -7564,8 +7580,9 @@ module Make (D : Driver) = struct
                     "model_default: placement pick: materialize [%s], inline [%s], footprint [%s] \
                      (model %.6f ms)"
                     (names mat) (names inl) (names fp) (s *. 1e3);
-                  Some (mat, inl, fp)
-              | _ -> None
+                  (Some (mat, inl, fp), Some (s *. 1e3))
+              | Some (_, s) -> (None, Some (s *. 1e3))
+              | None -> (None, None)
           with
           | pick -> pick
           | exception Outcome.Cause_at (_, cause) ->
@@ -7573,7 +7590,7 @@ module Make (D : Driver) = struct
                 "model_default: placement search declined (%s); selecting from the default \
                  placements"
                 (Outcome.detail_of_cause cause);
-              None
+              (None, None)
       in
       Some
         {
@@ -7582,6 +7599,7 @@ module Make (D : Driver) = struct
           sel_applied_pick = applied_pick;
           sel_on_fallback = on_fallback;
           sel_placement_pick = placement_pick;
+          sel_placement_rank_ms = placement_rank_ms;
         }
 
   (* The label a placement pick prefixes the in-compile selection's with: that selection only names
@@ -7607,6 +7625,7 @@ module Make (D : Driver) = struct
           sel_applied_pick = applied_pick;
           sel_on_fallback = on_fallback;
           sel_placement_pick = placement_pick;
+          sel_placement_rank_ms = placement_rank_ms;
         } ->
         (* With the model on the default pipeline (no sketch strictly improved on it, or the pick
            failed validation above), the compile that just failed IS the fallback: retrying it would
@@ -7619,7 +7638,10 @@ module Make (D : Driver) = struct
         in
         let result =
           match placement_pick with
-          | None -> compile_from ctx
+          | None ->
+              let result = compile_from ctx in
+              choice := { !choice with mc_placement_rank_ms = placement_rank_ms };
+              result
           | Some (mat, inl, fp) ->
               (* Every reading gets its call, empty or not — the historical context lineage of this
                  path, kept as is; skipping would change only context identity, not the
@@ -7648,7 +7670,11 @@ module Make (D : Driver) = struct
               (* The emitted label carries the placement decision. *)
               if !picked then
                 choice :=
-                  { !choice with mc_label = placements_label (mat, inl, fp) !choice.mc_label };
+                  {
+                    !choice with
+                    mc_label = placements_label (mat, inl, fp) !choice.mc_label;
+                    mc_placement_rank_ms = placement_rank_ms;
+                  };
               result
         in
         emit !choice;
@@ -7658,18 +7684,14 @@ module Make (D : Driver) = struct
     let target = match target with Some t -> t | None -> model_target_of ctx in
     match model_selection ?name ~target ctx comp bindings with
     | None -> no_selection
-    | Some { sel_transforms; sel_choice; sel_placement_pick; _ } ->
-        let mat, inl, fp = Option.value sel_placement_pick ~default:([], [], []) in
-        (* The transform runs on what the compile would hand it: the hermetic lowering prepared as
-           the compile prepares its own ([D.lowered_transform_input]). *)
+    | Some { sel_transforms; sel_choice; sel_placement_pick; sel_placement_rank_ms; _ } ->
         ignore
           (sel_transforms
-             (D.lowered_transform_input
-                (D.lowered_for_decisions ?name ~materialized:mat ~inline:inl ~footprint:fp
-                   ~facts:target.mt_facts ~limits:target.mt_limits ctx comp bindings))
+             (selection_input ?name ?readings:sel_placement_pick ~target ctx comp bindings)
             : LL.optimized list);
-        Option.value_map sel_placement_pick ~default:!sel_choice ~f:(fun readings ->
-            { !sel_choice with mc_label = placements_label readings !sel_choice.mc_label })
+        let choice = { !sel_choice with mc_placement_rank_ms = sel_placement_rank_ms } in
+        Option.value_map sel_placement_pick ~default:choice ~f:(fun readings ->
+            { choice with mc_label = placements_label readings choice.mc_label })
 
   let model_explain ?name ?(coalesced = false) ?target ctx comp bindings =
     let target = match target with Some t -> t | None -> model_target_of ctx in
@@ -7681,9 +7703,7 @@ module Make (D : Driver) = struct
     let accum_prec = caps.Ir.Backend_intf.accum_prec in
     let static_indices = Idx.bound_symbols bindings in
     let peak_flops, peak_memory_bandwidth = envelope ~limits in
-    let opt =
-      D.lowered_transform_input (D.lowered_for_decisions ?name ~facts ~limits ctx comp bindings)
-    in
+    let opt = selection_input ?name ~target ctx comp bindings in
     let ms = Option.map ~f:(fun s -> s *. 1e3) in
     let explain ?(ex_admitted = true) ?(ex_anchor = false) segs =
       let ex_operand_loads =

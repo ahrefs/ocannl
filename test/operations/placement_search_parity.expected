@@ -1,0 +1,46 @@
+[aliasing off] picked: the compile's preparation moves the zeros exactly under the gate: true
+[aliasing off] picked: the floor fathoming reads is the same on the prepared lowering: true
+[aliasing off] picked: cuda stand-in: the winner is the expected kind: true
+[aliasing off] picked: cuda stand-in: the search's rank is the selection's: true
+[aliasing off] picked: own target, uncompiled: the search's rank is the selection's: true
+[aliasing off] picked: compiled: the search's rank is the selection's: true
+[aliasing off] picked: compiled: model_pick names model_default's pick: true
+[aliasing off] picked: compiled: the pick computes the plain compile's loss: true
+[aliasing off] picked: compiled: the pick computes the plain compile's parameter 0's gradient: true
+[aliasing off] picked: compiled: the pick computes the plain compile's parameter 1's gradient: true
+[aliasing off] kept: the compile's preparation moves the zeros exactly under the gate: true
+[aliasing off] kept: the floor fathoming reads is the same on the prepared lowering: true
+[aliasing off] kept: cuda stand-in: the winner is the expected kind: true
+[aliasing off] kept: cuda stand-in: the search's rank is the selection's: true
+[aliasing off] kept: own target, uncompiled: the search's rank is the selection's: true
+[aliasing off] kept: compiled: the search's rank is the selection's: true
+[aliasing off] kept: compiled: model_pick names model_default's pick: true
+[aliasing off] kept: compiled: the pick computes the plain compile's loss: true
+[aliasing off] kept: compiled: the pick computes the plain compile's parameter 0's gradient: true
+[aliasing off] kept: compiled: the pick computes the plain compile's parameter 1's gradient: true
+[aliasing off] kept: compiled: the pick computes the plain compile's parameter 2's gradient: true
+[aliasing off] kept: compiled: the pick computes the plain compile's parameter 3's gradient: true
+[aliasing off] kept: compiled: the pick computes the plain compile's parameter 4's gradient: true
+[aliasing on] picked: the compile's preparation moves the zeros exactly under the gate: true
+[aliasing on] picked: the floor fathoming reads is the same on the prepared lowering: true
+[aliasing on] picked: cuda stand-in: the winner is the expected kind: true
+[aliasing on] picked: cuda stand-in: the search's rank is the selection's: true
+[aliasing on] picked: own target, uncompiled: the search's rank is the selection's: true
+[aliasing on] picked: compiled: the search's rank is the selection's: true
+[aliasing on] picked: compiled: model_pick names model_default's pick: true
+[aliasing on] picked: compiled: the pick computes the plain compile's loss: true
+[aliasing on] picked: compiled: the pick computes the plain compile's parameter 0's gradient: true
+[aliasing on] picked: compiled: the pick computes the plain compile's parameter 1's gradient: true
+[aliasing on] kept: the compile's preparation moves the zeros exactly under the gate: true
+[aliasing on] kept: the floor fathoming reads is the same on the prepared lowering: true
+[aliasing on] kept: cuda stand-in: the winner is the expected kind: true
+[aliasing on] kept: cuda stand-in: the search's rank is the selection's: true
+[aliasing on] kept: own target, uncompiled: the search's rank is the selection's: true
+[aliasing on] kept: compiled: the search's rank is the selection's: true
+[aliasing on] kept: compiled: model_pick names model_default's pick: true
+[aliasing on] kept: compiled: the pick computes the plain compile's loss: true
+[aliasing on] kept: compiled: the pick computes the plain compile's parameter 0's gradient: true
+[aliasing on] kept: compiled: the pick computes the plain compile's parameter 1's gradient: true
+[aliasing on] kept: compiled: the pick computes the plain compile's parameter 2's gradient: true
+[aliasing on] kept: compiled: the pick computes the plain compile's parameter 3's gradient: true
+[aliasing on] kept: compiled: the pick computes the plain compile's parameter 4's gradient: true

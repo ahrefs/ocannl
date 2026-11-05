@@ -1158,8 +1158,9 @@
 # this set to N > 0, `Autotune.model_default` first branch-and-bounds over the top-N ranked flip
 # candidates of the placement decision surface (see tune_flip_ordering), N counting nodes — each
 # level one node, kept at its default reading or flipped to exactly one of its alternatives, each
-# leaf a placement vector whose hermetic lowering is scored by the same selection that scores the
-# pipelines (so the search is joint over placements and sketch families), the all-keep leaf
+# leaf a placement vector whose hermetic lowering, prepared as the compile prepares its own, is
+# scored by the same selection that scores the pipelines (so the search is joint over placements
+# and sketch families, and a leaf's fission is the one that would ship), the all-keep leaf
 # scored first so ties stay with the default placements, and subtrees fathomed by the partial
 # vector's roofline floor, which unlike the sketch levels' schedule-invariant floor tightens as
 # materialize commitments accumulate (gh-ocannl-514 phase 3). The picked vector is
