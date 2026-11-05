@@ -88,10 +88,11 @@ let () =
       Row.Row_ineq { res = { r2 with dims = [ dim 4 ] }; opnd = r1; origin };
     ]
 
-(* gh-ocannl-1802: the rank-cycle search is bounded by the levels of the new edge's endpoints. On
-   random constraint sets it must reach the verdicts of the unbounded walk it replaced. Each solve
-   mints its own row variables: the rank graph is persistent, so a set solved twice over the same
-   variables would meet its own earlier edges. *)
+(* gh-ocannl-1891: a rank potential answers the rank-cycle check, without a search unless the edge
+   breaks it. On random constraint sets it must reach the verdicts of the walk it replaced, which
+   [with_unbounded_rank_search] also compares edge by edge. Each solve mints its own row variables:
+   the rank graph is persistent, so a set solved twice over the same variables would meet its own
+   earlier edges. *)
 let () =
   let open Verdict.Claims in
   let rng = Random.State.make [| 1802 |] in
@@ -124,14 +125,14 @@ let () =
   in
   let bounded, bounded_visits = run () in
   let unbounded, unbounded_visits = Row.with_unbounded_rank_search run in
-  Stdio.eprintf "(not part of the golden) rank-search visits: bounded %d, unbounded %d\n"
+  Stdio.eprintf "(not part of the golden) rank-cycle check visits: potentials %d, walk %d\n"
     bounded_visits unbounded_visits;
-  p_all2 "on random constraint sets, the bounded search reaches the unbounded one's verdicts"
+  p_all2 "on random constraint sets, the rank potentials reach the walk's verdicts"
     (Array.of_list bounded) (Array.of_list unbounded) ~f:String.equal;
   p_exists "some random set closes a rank cycle" bounded
     ~f:(String.equal "Infinite number of axes by rank cycle among row variables");
   p_exists "some random set solves" bounded ~f:(String.equal "solved");
-  p "the bounded search visits fewer states than the unbounded one"
+  p "the rank potentials move fewer variables than the walk visits"
     (bounded_visits < unbounded_visits)
 
 (* gh-ocannl-1891: [Dim_ineq]'s cycle search on [layers] diamonds of dimension variables, each

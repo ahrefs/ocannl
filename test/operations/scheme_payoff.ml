@@ -99,11 +99,11 @@ type run = {
 
 let seconds started = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9
 
-(* [~unbounded]: with the rank-cycle search walking everything a new edge's target reaches, as
-   before gh-ocannl-1802 bounded it by the edge's endpoints: the reference for its work counter.
-   [~whole_env]: with every solution substituted into the whole environment, as before
-   gh-ocannl-1904 indexed the entries it can change. [~alloc]: counting the heap words construction
-   and closure allocate, in a window opened after the earlier garbage's finalisers ran. *)
+(* [~unbounded]: with every new rank edge also walked from its target, the check before
+   gh-ocannl-1802 and gh-ocannl-1891: the reference for its work counter. [~whole_env]: with every
+   solution substituted into the whole environment, as before gh-ocannl-1904 indexed the entries it
+   can change. [~alloc]: counting the heap words construction and closure allocate, in a window
+   opened after the earlier garbage's finalisers ran. *)
 let run_one ?(unbounded = false) ?(whole_env = false) ?(alloc = false) (mode : mode) w n =
   Tensor.For_testing.set_op_shape_schemes (Some mode);
   Tensor.unsafe_reinitialize ();
@@ -418,13 +418,13 @@ let () =
       in
       (* The dimension-cycle walk's control: depths 2 and 3 of the decoder only, since it grows by
          tens of times per layer. *)
-      let decoder_stack_cell = List.hd_exn stacks in
-      let walk_depths = [ 2; 3 ] in
+      let decoder_cell = List.hd_exn stacks in
       let cycle_walk =
-        List.map walk_depths ~f:(fun n ->
+        List.map [ 2; 3 ] ~f:(fun n ->
             ( n,
-              (stack_trace decoder_stack_cell n, stack_trace ~unmemoized:true decoder_stack_cell n)
-            ))
+              ( stack_trace decoder_cell n,
+                stack_trace ~unmemoized:true decoder_cell n,
+                stack_build decoder_cell n ) ))
       in
       Tensor.For_testing.set_op_shape_schemes None;
       Stdio.eprintf "(not part of the golden) %s\n" row_header;
@@ -443,7 +443,7 @@ let () =
              words %.1f ms | trace/build %.3f\n"
             (count_row w n `Check t.t_counts) t.t_words (t.t_s *. 1000.) b.t_words (b.t_s *. 1000.)
             (t.t_words /. b.t_words));
-      List.iter cycle_walk ~f:(fun (n, (t, u)) ->
+      List.iter cycle_walk ~f:(fun (n, (t, u, _)) ->
           Stdio.eprintf
             "(not part of the golden) dimension-cycle search at depth %d: %d visits, walking paths \
              %d\n"
@@ -487,28 +487,27 @@ let () =
             ];
           p_all "schemes off: no application is checked" results ~f:(fun ((_, _, mode), r) ->
               Poly.equal mode `Check || List.is_empty r.checked));
-      (* gh-ocannl-1802: the rank-cycle search bounded by the new edge's endpoints' levels, against
-         the unbounded walk it replaced. *)
+      (* gh-ocannl-1891: the rank-cycle check by potentials, against the walk it replaced. *)
       let unbounded_visits w n =
         (List.Assoc.find_exn unbounded (w, n) ~equal:Poly.equal).counts.rank_search_visits
       in
       let saving w n = unbounded_visits w n - (get w n `Off).counts.rank_search_visits in
-      Verdict.case "the rank-cycle search, bounded by the new edge's endpoints" (fun () ->
-          p_all "the bounded search closes the shapes the unbounded one closes" unbounded
+      Verdict.case "the rank-cycle check, by potentials" (fun () ->
+          p_all "the rank potentials close the shapes the walk closes" unbounded
             ~f:(fun ((w, n), r) -> List.equal (List.equal Int.equal) r.dims (get w n `Off).dims);
-          p_all "the bounded search visits fewer states than the unbounded one" unbounded
+          p_all "the rank potentials move fewer variables than the walk visits" unbounded
             ~f:(fun ((w, n), _) -> saving w n > 0);
           let deeper =
             List.cartesian_product workloads
               (List.zip_exn (List.drop_last_exn depths) (List.tl_exn depths))
           in
-          p_all "the bounded search's saving grows with depth" deeper ~f:(fun (w, (n, n')) ->
+          p_all "the rank potentials' saving grows with depth" deeper ~f:(fun (w, (n, n')) ->
               saving w.w_name n < saving w.w_name n'));
       (* gh-ocannl-1904: a solution visits the entries it can change, not the whole environment. Per
          depth doubling, the indexed substitution's work doubles and the inference's allocation
          stays well below the whole environment's growth, which the control shows near 4x. The
-         rank-cycle search still grows about 4x per doubling, which is what keeps the allocation's
-         ratio above 2 here and is why it is bounded only to the depths below. *)
+         allocation's ratio stays above 2 in deep stacks through tensor construction, whose per-op
+         parameter sets grow with depth in every mode. *)
       let scaled w n whole_env = List.Assoc.find_exn scaling (w, n, whole_env) ~equal:Poly.equal in
       let doublings =
         List.concat_map scaling_cells ~f:(fun (w, ns) ->
@@ -548,13 +547,58 @@ let () =
              substitution" (fun label ->
               p_all label doublings ~f:(fun (w, n, n') -> Float.(ratio words w n n' true >= 3.))));
       (* gh-ocannl-1891: a trace leaves every dimension unsolved, so its end validation repeats each
-         inequality over the whole bounds graph. *)
+         inequality over the whole bounds graph, and nothing about the body's shapes is known while
+         it runs. What holds a whole-stack trace to its depth is the cost of one build of the same
+         model: the solver's work counters double, and the trace stays a fraction of the build.
+         Neither alone says so: the build's own allocation grows above 2x per doubling, through the
+         per-op parameter sets of tensor construction in every stack, and through the row bounds'
+         transitive closure in [resnet], whose build grows 2.9x-3.6x -- which is why [resnet] has no
+         allocation band of its own. *)
+      let stack_doublings =
+        List.concat_map stacks ~f:(fun s ->
+            List.map
+              (List.zip_exn (List.drop_last_exn s.depths) (List.tl_exn s.depths))
+              ~f:(fun (n, n') -> (s.s_name, n, n')))
+      in
+      let trace_of w n = fst (List.Assoc.find_exn traced (w, n) ~equal:Poly.equal) in
+      let trace_ratio f (w, n, n') = f (trace_of w n') /. f (trace_of w n) in
+      let rank_visits t = Float.of_int t.t_counts.rank_search_visits in
+      let cycle_visits t = Float.of_int t.t_counts.dim_cycle_visits in
+      let over_build (t, b) = t.t_words /. b.t_words in
       Verdict.case "a whole-stack trace" (fun () ->
           p_all "a whole stack's scheme, applied, closes the shapes one build closes" traced
             ~f:(fun (_, (t, b)) -> List.equal (List.equal Int.equal) t.t_dims b.t_dims);
-          let cycle_visits (t : stack_run) = Float.of_int t.t_counts.dim_cycle_visits in
+          p_all "per depth doubling, the trace's rank-cycle check moves 1.8x-2.5x" stack_doublings
+            ~f:(fun d -> Float.between (trace_ratio rank_visits d) ~low:1.8 ~high:2.5);
+          (* The residual: a visited variable is cheap, but a query reaches what the stack built. *)
+          p_all "per depth doubling, the trace's dimension-cycle search visits 1.8x-4.6x"
+            stack_doublings ~f:(fun d ->
+              Float.between (trace_ratio cycle_visits d) ~low:1.8 ~high:4.6);
           let grown f = function [ (_, a); (_, b) ] -> f b /. f a | _ -> assert false in
           p "one more layer: the dimension-cycle search visits at most 3x"
-            Float.(grown (fun (t, _) -> cycle_visits t) cycle_walk <= 3.);
+            Float.(grown (fun (t, _, _) -> cycle_visits t) cycle_walk <= 3.);
           p "one more layer: walking every path visits at least 10x"
-            Float.(grown (fun (_, u) -> cycle_visits u) cycle_walk >= 10.))
+            Float.(grown (fun (_, u, _) -> cycle_visits u) cycle_walk >= 10.);
+          in_leg ~leg "per depth doubling, a decoder stack's trace allocates 2.0x-2.7x"
+            (fun label ->
+              p_all label
+                (List.filter stack_doublings ~f:(fun (w, _, _) -> not (String.equal w "resnet")))
+                ~f:(fun d -> Float.between (trace_ratio (fun t -> t.t_words) d) ~low:2.0 ~high:2.7));
+          in_leg ~leg "at every depth, a trace allocates 0.45x-0.95x of one build" (fun label ->
+              p_all label traced ~f:(fun (_, cell) ->
+                  Float.between (over_build cell) ~low:0.45 ~high:0.95));
+          in_leg ~leg "over its depths, a stack's trace-to-build ratio moves at most 1.5x"
+            (fun label ->
+              p_all label stacks ~f:(fun s ->
+                  let ratios =
+                    List.map s.depths ~f:(fun n ->
+                        over_build (List.Assoc.find_exn traced (s.s_name, n) ~equal:Poly.equal))
+                  in
+                  let extreme f = List.reduce_exn ratios ~f in
+                  Float.(extreme Float.max /. extreme Float.min <= 1.5)));
+          in_leg ~leg "one more layer: walking every path, the trace outgrows the build at least 3x"
+            (fun label ->
+              p label
+                Float.(
+                  grown (fun (_, u, b) -> over_build (u, b)) cycle_walk
+                  >= 3. * grown (fun (t, _, b) -> over_build (t, b)) cycle_walk)))

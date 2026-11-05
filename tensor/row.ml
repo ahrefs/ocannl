@@ -2986,18 +2986,18 @@ let is_resolve_at_use v = Set.mem !resolve_at_use v
    divergence detection needs this side table. *)
 let global_rank_edges : (row_var * int) list Map.M(Row_var).t ref = ref (Map.empty (module Row_var))
 
-(* gh-ocannl-1802: a level per variable of the rank graph, kept so that every edge [v -> w] has
-   [level v <= level w] -- a topological order up to ties, which the zero-weight cycles of equal
-   ranks need. A path [w ~> v] climbs levels, so it stays within [[level w, level v]]: a new edge
-   with [level v < level w] closes no cycle, and otherwise the search from [w] need not leave the
-   levels up to [level v]. That bounds it by the new edge's endpoints, where it used to walk
-   everything [w] reaches, all the inference's history below it. *)
-let global_rank_levels : int Map.M(Row_var).t ref = ref (Map.empty (module Row_var))
+(* gh-ocannl-1891: a potential per variable of the rank graph, kept so that every edge [v -> w] of
+   weight [k] has [p v >= p w + k]. Summed around a cycle, that bounds the cycle's total weight by
+   0, so holding it is a proof that no cycle is positive: an edge that already satisfies it needs no
+   search, however the variables tie, and one that does not moves only the variables that must move.
+   A forward build places each new variable next to its operand, so that is the rare case. *)
+let global_rank_potentials : int Map.M(Row_var).t ref = ref (Map.empty (module Row_var))
 
-(* The rank-cycle search's work counter (gh-ocannl-1802): the states it visited since the last
-   reset, reported by [Shape.registration_counts]. *)
+(* The rank-cycle check's work counter (gh-ocannl-1802): the variables whose potentials it moved,
+   and the states a reference walk visited, since the last reset, reported by
+   [Shape.registration_counts]. *)
 let rank_search_visit_count = ref 0
-[@@mutation_serial.exempt "a work counter of the rank-cycle search, not inference state"]
+[@@mutation_serial.exempt "a work counter of the rank-cycle check, not inference state"]
 
 let rank_search_visits () = !rank_search_visit_count
 let reset_rank_search_visits () = rank_search_visit_count := 0
@@ -3024,35 +3024,77 @@ let with_unbounded_rank_search f =
   unbounded_rank_search := true;
   Exn.protect ~f ~finally:(fun () -> unbounded_rank_search := false)
 
-(* The levels of a new edge's endpoints, placing a variable new to the graph next to the other. *)
-let rank_levels v w =
-  let levels = !global_rank_levels in
-  let place v l =
+(* The potentials of a new edge's endpoints, placing a variable new to the graph so that the edge
+   holds. *)
+let rank_potentials v w k =
+  let potentials = !global_rank_potentials in
+  let place v p =
     note_mutation ();
-    global_rank_levels := Map.set !global_rank_levels ~key:v ~data:l
+    global_rank_potentials := Map.set !global_rank_potentials ~key:v ~data:p
   in
-  match (Map.find levels v, Map.find levels w) with
-  | Some lv, Some lw -> (lv, lw)
-  | Some lv, None ->
-      place w (lv + 1);
-      (lv, lv + 1)
-  | None, Some lw ->
-      place v (lw - 1);
-      (lw - 1, lw)
+  match (Map.find potentials v, Map.find potentials w) with
+  | Some pv, Some pw -> (pv, pw)
+  | Some pv, None ->
+      place w (pv - k);
+      (pv, pv - k)
+  | None, Some pw ->
+      place v (pw + k);
+      (pw + k, pw)
   | None, None ->
-      place v 0;
-      place w 1;
-      (0, 1)
+      place v k;
+      place w 0;
+      (k, 0)
 
-(* Would adding [rank v >= rank w + k] close a cycle of positive total weight? A path [w ~> v] of
-   total weight [s] entails [rank v >= rank v + s + k]: contradiction iff [s + k > 0]. Stored
-   weights are nonnegative, so for [k > 0] reachability suffices, and for [k = 0] the path must
-   contain a positive edge; DFS over (node, still-needs-positive) states, within the levels up to
-   [max_level]. [Error ()] when the cycle closes, else the variables the search reached. *)
-let rank_cycle_search ~src:v ~dst:w ~max_level k =
+(* Restores [p v >= p w + k] for a new edge that breaks it by [delta], lowering [w] and what must
+   follow it, and returns [false], committing nothing, when the edge closes a positive cycle. A path
+   [w ~> v] of weight [s] holds [p w >= p v + s], so [delta = p w + k - p v] reaching [v] means [s +
+   k > 0], and a cycle of positive weight means it reaches [v]. How much of [delta] crosses an edge
+   [u -> x] is what its slack [p u - p x - k'] leaves: nonnegative, so taking the largest pending
+   amount first settles each variable once, as in Dijkstra's algorithm. *)
+let lower_rank_potentials ~src:v ~dst:w ~delta =
+  let potentials = ref !global_rank_potentials in
+  let pending = Hashtbl.create (module Row_var) in
+  let settled = Hash_set.create (module Row_var) in
+  Hashtbl.set pending ~key:w ~data:delta;
+  let rec settle queue =
+    match Set.min_elt queue with
+    | None -> true
+    | Some ((neg_amount, u) as first) ->
+        let queue = Set.remove queue first in
+        let amount = -neg_amount in
+        if Hash_set.mem settled u || Hashtbl.find_exn pending u <> amount then settle queue
+        else if equal_row_var u v then false
+        else (
+          Hash_set.add settled u;
+          Int.incr rank_search_visit_count;
+          let pu = Map.find_exn !potentials u in
+          potentials := Map.set !potentials ~key:u ~data:(pu - amount);
+          settle
+            (List.fold (Map.find_multi !global_rank_edges u) ~init:queue ~f:(fun queue (x, k') ->
+                 let crossing = amount - (pu - Map.find_exn !potentials x - k') in
+                 if
+                   crossing > 0
+                   && (not (Hash_set.mem settled x))
+                   && crossing > Option.value (Hashtbl.find pending x) ~default:0
+                 then (
+                   Hashtbl.set pending ~key:x ~data:crossing;
+                   Set.add queue (-crossing, x))
+                 else queue)))
+  in
+  let holds = settle (Set.Poly.singleton (-delta, w)) in
+  if holds then (
+    note_mutation ();
+    global_rank_potentials := !potentials);
+  holds
+
+(* The reference walk, for tests: would adding [rank v >= rank w + k] close a cycle of positive
+   total weight? A path [w ~> v] of total weight [s] entails [rank v >= rank v + s + k]:
+   contradiction iff [s + k > 0]. Stored weights are nonnegative, so for [k > 0] reachability
+   suffices, and for [k = 0] the path must contain a positive edge; DFS over (node,
+   still-needs-positive) states. *)
+let rank_cycle_walk ~src:v ~dst:w k =
   let visited_need = Hash_set.create (module Row_var) in
   let visited_done = Hash_set.create (module Row_var) in
-  let levels = !global_rank_levels in
   let rec dfs u need_positive =
     (equal_row_var u v && not need_positive)
     ||
@@ -3062,9 +3104,9 @@ let rank_cycle_search ~src:v ~dst:w ~max_level k =
     (Hash_set.add visited u;
      Int.incr rank_search_visit_count;
      List.exists (Map.find_multi !global_rank_edges u) ~f:(fun (u', k') ->
-         Map.find_exn levels u' <= max_level && dfs u' (need_positive && k' = 0)))
+         dfs u' (need_positive && k' = 0)))
   in
-  if dfs w (k = 0) then Error () else Ok (Hash_set.union visited_need visited_done)
+  dfs w (k = 0)
 
 (* Record the entailed fact [rank v >= rank w + k]; raise if it makes the ranks unsatisfiable, which
    would otherwise diverge by minting ever-fresh template variables (rank-cycle check, transitive
@@ -3075,25 +3117,18 @@ let add_rank_edge ~rows v w k =
       raise @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch rows ]))
   else
     let edges = Map.find_multi !global_rank_edges v in
-    (* A recorded edge passed the search when it was added, and repeating it adds no path. *)
+    (* A recorded edge passed the check when it was added, and repeating it adds no path. *)
     if not (List.mem edges (w, k) ~equal:(fun (w1, k1) (w2, k2) -> equal_row_var w1 w2 && k1 = k2))
     then (
       note_mutation ();
-      let level_v, level_w = rank_levels v w in
-      (if !unbounded_rank_search || level_v >= level_w then
-         let max_level = if !unbounded_rank_search then Int.max_value else level_v in
-         match rank_cycle_search ~src:v ~dst:w ~max_level k with
-         | Error () ->
-             raise
-             @@ Shape_error
-                  ( "Infinite number of axes by rank cycle among row variables",
-                    [ Row_mismatch rows ] )
-         | Ok reached ->
-             (* Restore the order for the new edge: what [w] reaches up to [level v] rises to it
-                (anything it reaches higher up was not visited, and is already above). *)
-             global_rank_levels :=
-               Hash_set.fold reached ~init:!global_rank_levels ~f:(fun levels u ->
-                   Map.update levels u ~f:(fun l -> Int.max level_v (Option.value_exn l))));
+      let pv, pw = rank_potentials v w k in
+      let holds = pv >= pw + k || lower_rank_potentials ~src:v ~dst:w ~delta:(pw + k - pv) in
+      if !unbounded_rank_search && Bool.(rank_cycle_walk ~src:v ~dst:w k = holds) then
+        failwith "add_rank_edge: the potentials and the reference walk disagree on a rank cycle";
+      if not holds then
+        raise
+        @@ Shape_error
+             ("Infinite number of axes by rank cycle among row variables", [ Row_mismatch rows ]);
       global_rank_edges := Map.add_multi !global_rank_edges ~key:v ~data:(w, k))
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
@@ -3848,7 +3883,7 @@ type globals = {
   g_concat_component_vars : Set.M(Dim_var).t;
   g_resolve_at_use : Set.M(Row_var).t;
   g_rank_edges : (row_var * int) list Map.M(Row_var).t;
-  g_rank_levels : int Map.M(Row_var).t;
+  g_rank_potentials : int Map.M(Row_var).t;
   g_template_cache : (row_var * int * int, row_var) Map.Poly.t;
 }
 
@@ -3862,7 +3897,7 @@ let capture_globals () =
     g_concat_component_vars = !concat_component_vars;
     g_resolve_at_use = !resolve_at_use;
     g_rank_edges = !global_rank_edges;
-    g_rank_levels = !global_rank_levels;
+    g_rank_potentials = !global_rank_potentials;
     g_template_cache = !global_template_cache;
   }
 
@@ -3876,7 +3911,7 @@ let restore_globals
       g_concat_component_vars;
       g_resolve_at_use;
       g_rank_edges;
-      g_rank_levels;
+      g_rank_potentials;
       g_template_cache;
     } =
   pending_roles := g_pending_roles;
@@ -3887,7 +3922,7 @@ let restore_globals
   concat_component_vars := g_concat_component_vars;
   resolve_at_use := g_resolve_at_use;
   global_rank_edges := g_rank_edges;
-  global_rank_levels := g_rank_levels;
+  global_rank_potentials := g_rank_potentials;
   global_template_cache := g_template_cache
 [@@mutation_serial.boundary
   "part of a rewind: puts back the solver's inference sets as a checkpoint captured them"]
@@ -3903,7 +3938,7 @@ let globals_differences
       g_concat_component_vars = a6;
       g_resolve_at_use = a7;
       g_rank_edges = a8;
-      g_rank_levels = a10;
+      g_rank_potentials = a10;
       g_template_cache = a9;
     }
     {
@@ -3915,7 +3950,7 @@ let globals_differences
       g_concat_component_vars = b6;
       g_resolve_at_use = b7;
       g_rank_edges = b8;
-      g_rank_levels = b10;
+      g_rank_potentials = b10;
       g_template_cache = b9;
     } =
   List.filter_map
@@ -3928,7 +3963,7 @@ let globals_differences
       ("Row.concat_component_vars", phys_equal a6 b6);
       ("Row.resolve_at_use", phys_equal a7 b7);
       ("Row.global_rank_edges", phys_equal a8 b8);
-      ("Row.global_rank_levels", phys_equal a10 b10);
+      ("Row.global_rank_potentials", phys_equal a10 b10);
       ("Row.global_template_cache", phys_equal a9 b9);
     ]
     ~f:(fun (name, same) -> if same then None else Some name)

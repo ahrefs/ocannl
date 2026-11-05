@@ -2,10 +2,10 @@ two-variable rank cycle: Shape_error: Infinite number of axes by rank cycle amon
 three-variable rank cycle: Shape_error: Infinite number of axes by rank cycle among row variables
 two-variable rank cycle via leading flank: Shape_error: Infinite number of axes by rank cycle among row variables
 mixed-sign rank cycle via cap discharge: Shape_error: Infinite number of axes by rank cycle among row variables
-on random constraint sets, the bounded search reaches the unbounded one's verdicts: true
+on random constraint sets, the rank potentials reach the walk's verdicts: true
 some random set closes a rank cycle: true
 some random set solves: true
-the bounded search visits fewer states than the unbounded one: true
+the rank potentials move fewer variables than the walk visits: true
 repeating recorded edges takes no cycle search: true
 walking every path repeats them at more than 2^layers visits: true
 closing the chain equates its joints: true
