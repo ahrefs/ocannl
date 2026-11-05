@@ -16,3 +16,6 @@ per depth doubling, whole-environment substitution's visits grow at least 3x: tr
 the allocation window counts a known allocation: true
 per depth doubling, the inference allocates 1.8x-2.6x with indexed substitution: true
 per depth doubling, the inference allocates at least 3x with whole-environment substitution: true
+a whole stack's scheme, applied, closes the shapes one build closes: true
+one more layer: the dimension-cycle search visits at most 3x: true
+one more layer: walking every path visits at least 10x: true

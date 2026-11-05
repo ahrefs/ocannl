@@ -132,6 +132,17 @@ val with_unbounded_rank_search : (unit -> 'a) -> 'a
 (** Runs the function with the rank-cycle search walking everything the new edge's target reaches,
     as it did before gh-ocannl-1802 bounded it by the endpoints' levels: a test's reference. *)
 
+val dim_cycle_visits : unit -> int
+(** The variables the dimension-cycle search of [Dim_ineq] visited since the last reset
+    (gh-ocannl-1891): its work counter, process-wide. *)
+
+val reset_dim_cycle_visits : unit -> unit
+
+val with_unmemoized_cycle_search : (unit -> 'a) -> 'a
+(** Runs the function with the dimension-cycle search walking every path and repeating a recorded
+    edge's search, as it did before gh-ocannl-1891: a test's reference, exponential in the residual
+    connections of a body traced on unsized arguments. *)
+
 val subst_visits : unit -> int
 (** The environment entries solutions visited to substitute themselves since the last reset
     (gh-ocannl-1904): substitution's work counter, process-wide. *)

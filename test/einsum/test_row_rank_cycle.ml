@@ -133,3 +133,53 @@ let () =
   p_exists "some random set solves" bounded ~f:(String.equal "solved");
   p "the bounded search visits fewer states than the unbounded one"
     (bounded_visits < unbounded_visits)
+
+(* gh-ocannl-1891: [Dim_ineq]'s cycle search on [layers] diamonds of dimension variables, each
+   residual connection of a stack on unsized arguments: a chain with two ways through every layer.
+   The search visits each variable once, and an edge already recorded repeats without one, which is
+   what a trace's end validation does to every inequality. Closing the chain still finds the cycle,
+   over the paths the visited set cuts short. *)
+let () =
+  let open Verdict.Claims in
+  let layers = 10 in
+  let var () = Row.Var (Row.get_var ()) in
+  let joint_vars = Array.init (layers + 1) ~f:(fun _ -> Row.get_var ()) in
+  let joints = Array.map joint_vars ~f:(fun v -> Row.Var v) in
+  let ineq ~res ~opnd = Row.Dim_ineq { res; opnd; from_ = Sexp.List []; origin } in
+  let diamonds =
+    List.concat_map (List.range 0 layers) ~f:(fun i ->
+        let left = var () and right = var () in
+        [
+          ineq ~res:joints.(i + 1) ~opnd:left;
+          ineq ~res:joints.(i + 1) ~opnd:right;
+          ineq ~res:left ~opnd:joints.(i);
+          ineq ~res:right ~opnd:joints.(i);
+        ])
+  in
+  let visits f =
+    Row.reset_dim_cycle_visits ();
+    let result = f () in
+    (result, Row.dim_cycle_visits ())
+  in
+  let solve ineqs env = snd (Row.solve_inequalities ~stage:Stage1 ineqs env) in
+  let env, first = visits (fun () -> solve diamonds Row.empty_env) in
+  let _, repeated = visits (fun () -> solve diamonds env) in
+  let _, walked =
+    Row.with_unmemoized_cycle_search (fun () -> visits (fun () -> solve diamonds env))
+  in
+  Stdio.eprintf "(not part of the golden) cycle-search visits: first %d, repeated %d, walked %d\n"
+    first repeated walked;
+  p "repeating recorded edges takes no cycle search" (repeated = 0);
+  p "walking every path repeats them at more than 2^layers visits" (walked > 1 lsl layers);
+  (* The bottom of the chain above its top: everything is equal, whichever path the search took. *)
+  let closed = solve [ ineq ~res:joints.(0) ~opnd:joints.(layers) ] env in
+  let rec representative v =
+    match Row.get_dim_from_env closed v with
+    | Some (Row.Var u) -> representative u
+    | Some _ -> -1
+    | None -> Row.dim_var_id v
+  in
+  let representatives = Array.to_list joint_vars |> List.map ~f:representative in
+  p "closing the chain equates its joints"
+    (List.length (List.dedup_and_sort representatives ~compare:Int.compare) = 1
+    && not (List.mem representatives (-1) ~equal:Int.equal))

@@ -17,6 +17,8 @@ tensor/row.ml: resolve_at_use (ref) -- accounted: every write noted or at a boun
 tensor/row.ml: global_rank_edges (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: global_rank_levels (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: rank_search_visit_count (ref) -- exempt: a work counter of the rank-cycle search, not inference state
+tensor/row.ml: dim_cycle_visit_count (ref) -- exempt: a work counter of the dimension-cycle search, not inference state
+tensor/row.ml: unmemoized_cycle_search (ref) -- exempt: a test switch, set only around a test's own run
 tensor/row.ml: unbounded_rank_search (ref) -- exempt: a test switch, set only around a test's own run
 tensor/row.ml: global_template_cache (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: fresh (unread state) -- exempt

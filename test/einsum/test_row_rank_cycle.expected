@@ -6,3 +6,6 @@ on random constraint sets, the bounded search reaches the unbounded one's verdic
 some random set closes a rank cycle: true
 some random set solves: true
 the bounded search visits fewer states than the unbounded one: true
+repeating recorded edges takes no cycle search: true
+walking every path repeats them at more than 2^layers visits: true
+closing the chain equates its joints: true

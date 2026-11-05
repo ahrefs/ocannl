@@ -3002,6 +3002,21 @@ let rank_search_visit_count = ref 0
 let rank_search_visits () = !rank_search_visit_count
 let reset_rank_search_visits () = rank_search_visit_count := 0
 
+(* The dimension-cycle search's work counter (gh-ocannl-1891): the variables it visited since the
+   last reset, reported by [Shape.registration_counts]. *)
+let dim_cycle_visit_count = ref 0
+[@@mutation_serial.exempt "a work counter of the dimension-cycle search, not inference state"]
+
+let dim_cycle_visits () = !dim_cycle_visit_count
+let reset_dim_cycle_visits () = dim_cycle_visit_count := 0
+
+let unmemoized_cycle_search = ref false
+[@@mutation_serial.exempt "a test switch, set only around a test's own run"]
+
+let with_unmemoized_cycle_search f =
+  unmemoized_cycle_search := true;
+  Exn.protect ~f ~finally:(fun () -> unmemoized_cycle_search := false)
+
 let unbounded_rank_search = ref false
 [@@mutation_serial.exempt "a test switch, set only around a test's own run"]
 
@@ -3411,17 +3426,26 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
       (List.dedup_and_sort ~compare:compare_dim_var (v :: vs))
       more
   in
-  let rec cyclic ~opnd_v ~ress =
-    (* TODO: it's somewhat inefficient *)
-    List.exists ress ~f:(fun res_v ->
-        equal_dim_var opnd_v res_v
-        ||
-        match find_dim env.dim_env res_v with
-        | None | Some (Solved_dim (Dim _)) | Some (Solved_dim (Sym _)) -> false
-        | Some (Solved_dim (Var v)) -> equal_dim_var opnd_v v
-        | Some (Solved_dim (Affine _)) -> false (* Affine dimensions can't be cyclic *)
-        | Some (Solved_dim (Concat _)) -> false (* Concat dimensions can't be cyclic *)
-        | Some (Bounds_dim { res = ress; _ }) -> cyclic ~opnd_v ~ress)
+  (* Would [res ⊑ opnd] close a cycle: is [opnd_v] below some of [ress]? Nothing here depends on the
+     path taken, so each variable is visited once: the walk this replaces enumerated paths, which
+     every residual connection multiplies (gh-ocannl-1891). *)
+  let cyclic ~opnd_v ~ress =
+    let visited = Hash_set.create (module Dim_var) in
+    let rec below ress =
+      List.exists ress ~f:(fun res_v ->
+          equal_dim_var opnd_v res_v
+          || (!unmemoized_cycle_search || not (Hash_set.mem visited res_v))
+             &&
+             (Hash_set.add visited res_v;
+              Int.incr dim_cycle_visit_count;
+              match find_dim env.dim_env res_v with
+              | None | Some (Solved_dim (Dim _)) | Some (Solved_dim (Sym _)) -> false
+              | Some (Solved_dim (Var v)) -> equal_dim_var opnd_v v
+              | Some (Solved_dim (Affine _)) -> false (* Affine dimensions can't be cyclic *)
+              | Some (Solved_dim (Concat _)) -> false (* Concat dimensions can't be cyclic *)
+              | Some (Bounds_dim { res = ress; _ }) -> below ress))
+    in
+    (not (List.is_empty ress)) && below ress
   in
   (* The relation enforced here is [res ⊑ opnd] (res the result side that refines, opnd the
      broadcastable operand side). The broadcast order is now a flat partial order: [res ⊑ opnd] iff
@@ -3557,8 +3581,13 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
              prefer resolving to the minimal dimension (broadcast into consumers), and equating them
              with a consumer's axis would irreversibly adopt the consumer's dimension instead. *)
           ([ Dim_eq { d1 = opnd; d2 = res; origin } ], env)
-      | Some (Bounds_dim { res = ress; origin = origin1; _ }), Some (Bounds_dim _)
-        when cyclic ~opnd_v ~ress ->
+      | ( Some (Bounds_dim { res = ress; origin = origin1; _ }),
+          Some (Bounds_dim { res = recorded; _ }) )
+      (* A recorded edge passed this search when it was added, and repeating it adds no path: a
+         merge re-emits a solved variable's bounds as inequalities, so what a merge adds comes
+         through here too. A trace's end validation repeats every edge. *)
+        when (!unmemoized_cycle_search || not (List.mem recorded res_v ~equal:equal_dim_var))
+             && cyclic ~opnd_v ~ress ->
           let origin = merge_origins origin origin1 in
           ([ Dim_eq { d1 = opnd; d2 = res; origin } ], env)
       | ( None,

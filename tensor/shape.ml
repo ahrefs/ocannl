@@ -4358,6 +4358,7 @@ type registration_counts = {
   closures : int;
   closure_constraints : int;
   rank_search_visits : int;
+  dim_cycle_visits : int;
   subst_visits : int;
 }
 [@@deriving sexp_of]
@@ -4373,6 +4374,7 @@ let zero_counts =
     closures = 0;
     closure_constraints = 0;
     rank_search_visits = 0;
+    dim_cycle_visits = 0;
     subst_visits = 0;
   }
 
@@ -4383,12 +4385,14 @@ let registration_counts () =
   {
     !counts with
     rank_search_visits = Row.rank_search_visits ();
+    dim_cycle_visits = Row.dim_cycle_visits ();
     subst_visits = Row.subst_visits ();
   }
 
 let reset_registration_counts () =
   counts := zero_counts;
   Row.reset_rank_search_visits ();
+  Row.reset_dim_cycle_visits ();
   Row.reset_subst_visits ()
 
 (* Where shape-registration time goes (gh-ocannl-1752), process-wide since the last reset. *)
