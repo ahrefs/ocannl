@@ -1,0 +1,27 @@
+an oldest-first chain ending concrete: the indexed and the whole-environment substitution agree: true
+an oldest-first chain ending concrete solves every link: true
+a newest-first chain ending concrete: the indexed and the whole-environment substitution agree: true
+a newest-first chain ending concrete solves every link: true
+a chain ending symbolic: the indexed and the whole-environment substitution agree: true
+a chain ending symbolic solves every link to the symbol: true
+a concatenation and a window over alias chains: the indexed and the whole-environment substitution agree: true
+the concatenation sums its resolved components, the strided window doubles its, and the valid window adds its kernel's span: true
+a stored concatenation an unrelated solution normalizes: the indexed and the whole-environment substitution agree: true
+a stored concatenation of solved parts is summed by the next solution, related or not: true
+an indirect cycle: the indexed and the whole-environment substitution agree: true
+the cycle closed through the alias chain fails the occurs check: true
+an oldest-first row chain: the indexed and the whole-environment substitution agree: true
+an oldest-first row chain composes both flanks in order: true
+a newest-first row chain: the indexed and the whole-environment substitution agree: true
+a newest-first row chain composes both flanks in order: true
+a compatible bound: the indexed and the whole-environment substitution agree: true
+a bound met by the endpoint's eventual value holds: true
+an incompatible bound: the indexed and the whole-environment substitution agree: true
+a bound the endpoint's eventual value violates fails: true
+a Total_elems row: the indexed and the whole-environment substitution agree: true
+the constraint survives the unrelated solutions and solves the row once its divisor is known: true
+two continuations: the indexed and the whole-environment substitution agree: true
+each continuation solves the chain its own way, and the saved environment stays unsolved: true
+a newest-first chain twice as long takes 1.8x-2.2x the indexed visits: true
+and at least 3x the whole-environment visits: true
+an oldest-first chain, the eager environment's worst case, takes no more indexed visits than whole-environment ones: true

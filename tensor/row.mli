@@ -132,6 +132,26 @@ val with_unbounded_rank_search : (unit -> 'a) -> 'a
 (** Runs the function with the rank-cycle search walking everything the new edge's target reaches,
     as it did before gh-ocannl-1802 bounded it by the endpoints' levels: a test's reference. *)
 
+val subst_visits : unit -> int
+(** The environment entries solutions visited to substitute themselves since the last reset
+    (gh-ocannl-1904): substitution's work counter, process-wide. *)
+
+val reset_subst_visits : unit -> unit
+
+val with_whole_env_substitution : (unit -> 'a) -> 'a
+(** Runs the function with every solution visiting the whole environment, as it did before
+    gh-ocannl-1904 indexed the entries a solution can change: a test's reference, which leaves the
+    same environments and constraints. *)
+
+val with_substitution_cross_check : (unit -> 'a) -> 'a
+(** Runs the function with every solution cross-checked, as under the
+    [shape_substitution_cross_check] setting: substituted both through the index and into the whole
+    environment, failing ([Failure], not a [Shape_error]) unless the two leave the same environment
+    and emit the same constraints. *)
+
+val substitution_cross_checked : unit -> bool
+(** Whether solutions are cross-checked now: by the setting or {!with_substitution_cross_check}. *)
+
 val sym_dim_extent_exn : sym_dim -> int
 
 (** The maximum extent of a symbolic dimension: the declared range of its static symbol. *)

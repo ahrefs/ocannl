@@ -2139,6 +2139,12 @@
 # prints) and the exception's sexp (`Exn.to_string`). Read at each printing.
 #shape_error_full_sexp=false
 
+# A debug check of the shape solver (gh-ocannl-1904): every solution substitutes itself both into
+# the entries its index says it can change and into the whole environment, as it did before, and
+# fails unless the two leave the same environment and constraints. It makes inference quadratic in
+# the number of shape variables again. Read once per process.
+#shape_substitution_cross_check=false
+
 # Automatic shape schemes of `%op` functions (gh-ocannl-1751). The scheme of a `%op` function whose
 # returned function takes only tensors is traced when its closure is built (at its `()`
 # application, or at the first application without a `()` stage); an application error that

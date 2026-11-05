@@ -195,6 +195,22 @@ module Tree_map = struct
     | Empty -> Empty
     | Node n -> create n.key (f ~key:n.key ~data:n.value) (mapi n.left ~f) (mapi n.right ~f)
 
+  (** [sparse_mapi ~compare ~targets t ~f] is [mapi t ~f] restricted to the keys in [targets]: every
+      other entry keeps its value, and subtrees holding no target are shared, not copied. The tree's
+      shape is unchanged, and [f] runs on the targets in the order [mapi] would run it on them: the
+      expression below has [mapi]'s shape, so it inherits its evaluation order. [targets] needs no
+      order or uniqueness; keys absent from [t] are ignored. *)
+  let rec sparse_mapi ~compare ~targets t ~f =
+    match (targets, t) with
+    | [], _ | _, Empty -> t
+    | _, Node n ->
+        let lt, ge = List.partition_tf targets ~f:(fun k -> compare k n.key < 0) in
+        let here, gt = List.partition_tf ge ~f:(fun k -> compare k n.key = 0) in
+        create n.key
+          (if List.is_empty here then n.value else f ~key:n.key ~data:n.value)
+          (sparse_mapi ~compare ~targets:lt n.left ~f)
+          (sparse_mapi ~compare ~targets:gt n.right ~f)
+
   let to_alist t = List.rev (fold t ~init:[] ~f:(fun ~key ~data acc -> (key, data) :: acc))
 
   let of_alist ~compare lst =
