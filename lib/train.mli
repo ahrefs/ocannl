@@ -200,7 +200,9 @@ val sgd_update :
     Such a leaf must be data-backed ([Operation.init ~grad_spec:Require_grad]): a stepped tensor
     whose value [loss]'s forward code re-establishes with a fetch on every run -- a
     [Tensor.term_init] or literal with at most [limit_constant_fill_size] values -- raises
-    [Session_error] naming it, since the next forward pass would undo each step (gh-ocannl-1776). *)
+    [Session_error] naming it, since the next forward pass would undo each step (gh-ocannl-1776).
+    {!sgd_one} sees no loss, so stepping such a tensor directly is refused later, by
+    [Context.compile] (gh-ocannl-1876). *)
 
 val sequential_loop : f:(unit -> unit) -> (Ir.Indexing.static_symbol * int ref) list -> unit
 (** All and only bindings with associated ranges are iterated, with the binding's initial value

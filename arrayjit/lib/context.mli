@@ -246,7 +246,21 @@ val compile :
     [Train.grad_update ~accum_steps] per objective. Hand-written [%cd] writes to a gradient neither
     contribute nor reset, siblings are alternatives and never collide, and the check is compile-time
     compatibility only: the order of later {!run}s stays the caller's. [Context.join]
-    (gh-ocannl-1742) is to lift the refusal by hoisting the zeroing. *)
+    (gh-ocannl-1742) is to lift the refusal by hoisting the zeroing.
+
+    Also refuses, the same way, a [comp] writing a node a forward fetch re-establishes in this
+    lineage (gh-ocannl-1876), naming the node and the routines involved: a fetch-defined node -- a
+    [Tensor.term_init] or literal with at most [limit_constant_fill_size] values, a range, an
+    embedded symbol -- is code, not data, so each run of the routine carrying its forward code
+    fetches its value again and silently undoes any other write. The write can be in that routine or
+    another one of the lineage, compiled before or after it; [Train.sgd_one] and hand-written [%cd]
+    steps are what this catches. The remedy the refusal names: build the node data-backed, with
+    [Operation.init], or make it a parameter. A forward fetch is a {!Ir.Assignments.Fetch} into a
+    node whose forward fragment ({!Ir.Assignments.field-owned}) the comp carries, so a parameter's
+    initializer (which owns no fragment) and a gradient's zeroing do not count. A slice takes after
+    its parent: a write through a view of data reaches the parent and stays, while over a
+    fetch-defined parent it is undone like any other. A host write ({!set_values}) is not a
+    routine's and is not checked, and siblings never collide. *)
 
 type retained
 (** Compiled code that a successful {!compile_outcome} handed to its [retain] callback: the

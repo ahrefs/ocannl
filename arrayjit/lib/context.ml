@@ -69,6 +69,14 @@ type compile_frontier = {
           through tensor-generated code ({!Asgns.field-zeroes}, {!Asgns.field-accumulates}), those
           routines, latest first (gh-ocannl-1744). Like [owners], only a successful link adds to it.
       *)
+  fetch_defined : (int * string) Map.M(Int).t;
+      (** For each node (by uid) whose forward code a routine of this lineage carries as a [Fetch]
+          ([forward_fetched]), that routine (id, name) (gh-ocannl-1876): every run of it
+          re-establishes the node. Like [owners], only a successful link adds to it. *)
+  overwriters : (int * string) Map.M(Int).t;
+      (** For each node (by uid) that a routine of this lineage writes other than by a [Fetch]
+          ([overwritten]), the latest such routine (gh-ocannl-1876). Like [owners], only a
+          successful link adds to it. *)
 }
 (** Immutable compile-time frontier for execution dependency tracking. Each context carries its own
     frontier; only the context returned by [compile] receives the updated frontier. The original
@@ -257,6 +265,8 @@ let empty_frontier =
     owners = Map.empty (module Fragment_key);
     lineage_routines = Set.empty (module Int);
     grad_roles = Map.empty (module Int);
+    fetch_defined = Map.empty (module Int);
+    overwriters = Map.empty (module Int);
   }
 
 let create_ledger () =
@@ -564,6 +574,37 @@ type retained = {
    device compile it defers to link time. *)
 let backend_compiles = Utils.backend_compiles
 
+(* gh-ocannl-1876: the nodes whose forward code [comp] carries as a [Fetch] -- a [Fetch] into a node
+   whose forward fragment [comp] owns. Only [Tensor.term] emits a forward [Fetch] (a fetch-defined
+   leaf: a [Tensor.term_init] or literal with at most [limit_constant_fill_size] values, a range, an
+   embedded symbol or id), as that leaf's whole forward code; a gradient's zeroing [Fetch] has no
+   forward fragment, and a parameter's initializer owns none ([Tensor.init_params]). A [Slice] takes
+   after its parent, which forward code orders before it: over data a write through an
+   alias-eligible view reaches the parent and stays, and over a fetch-defined parent it is undone
+   whichever way lowering settles eligibility -- an alias's parent is fetched again, a copy is
+   copied again. [frontier] answers for a parent another routine of the lineage fetches. *)
+let forward_fetched frontier (comp : Asgns.comp) =
+  let fetch_defined acc (tn : Tn.t) = Set.mem acc tn || Map.mem frontier.fetch_defined tn.uid in
+  Asgns.fold_leaves comp.asgns
+    ~init:(Set.empty (module Tn))
+    ~f:(fun acc -> function
+      | Asgns.Fetch { array; fetch_op; _ } when Set.mem comp.owned (array, Asgns.Fwd) -> (
+          match fetch_op with
+          | Slice { sliced; _ } when not (fetch_defined acc sliced) -> acc
+          | _ -> Set.add acc array)
+      | _ -> acc)
+
+(* The nodes [comp] writes other than by a [Fetch]: [Rev_sides]' buffers, any other [Accum_op]'s and
+   [Set_vec_unop]'s [lhs]. *)
+let overwritten (comp : Asgns.comp) =
+  let add acc = function Asgns.Node tn -> Set.add acc tn | Asgns.Merge_buffer _ -> acc in
+  Asgns.fold_leaves comp.asgns
+    ~init:(Set.empty (module Tn))
+    ~f:(fun acc -> function
+      | Asgns.Accum_op { rhs = Rev_sides { lhses; _ }; _ } -> Array.fold lhses ~init:acc ~f:add
+      | Asgns.Accum_op { lhs; _ } | Asgns.Set_vec_unop { lhs; _ } -> Set.add acc lhs
+      | Asgns.Fetch _ | Asgns.Noop | Asgns.Seq _ | Asgns.Block_comment _ -> acc)
+
 (* The ledger, frontier and routine record of a link, shared by a compile and a relink. *)
 let finish_link ctx comp wrapped
     {
@@ -661,6 +702,10 @@ let finish_link ctx comp wrapped
               gr_accumulates = Set.mem comp.Asgns.accumulates grad;
             })
   in
+  (* gh-ocannl-1876: likewise the nodes this routine fetch-defines and the ones it overwrites. *)
+  let record nodes map =
+    Set.fold nodes ~init:map ~f:(fun map tn -> Map.set map ~key:tn.Tn.uid ~data:(id, name))
+  in
   let new_frontier =
     {
       frontier with
@@ -669,6 +714,8 @@ let finish_link ctx comp wrapped
       owners;
       lineage_routines = Set.add frontier.lineage_routines id;
       grad_roles;
+      fetch_defined = record (forward_fetched frontier comp) frontier.fetch_defined;
+      overwriters = record (overwritten comp) frontier.overwriters;
     }
   in
 
@@ -780,6 +827,58 @@ let frontend_gate ?prelowered comp =
 (* The stale-node check alone, for the entry points over one node (host transfers, copies): run
    before anything of [tn] is forced, for the same reason (gh-ocannl-1505). *)
 let check_node_valid tn = Option.iter !Tn.validity_check ~f:(fun check -> check tn)
+
+(* gh-ocannl-1876: a routine's forward [Fetch] re-establishes a fetch-defined node on every run, so
+   any other write to it in the lineage -- an optimizer step ([Train.sgd_one], which sees no loss to
+   check against), a hand-written [%cd] update -- is silently undone the next time that routine
+   runs, or at once when the write precedes the fetch. Refused in either compile order, and within
+   one routine, before lowering. Siblings are alternatives and never collide. A host write
+   ([set_values]) is not a routine and is not checked. *)
+let check_no_fetch_overwrite ?name ctx (comp : Asgns.comp) =
+  let fetched = forward_fetched ctx.frontier comp and written = overwritten comp in
+  let routine (id, name) = Printf.sprintf "routine %s (id=%d)" name id in
+  let conflicts =
+    Set.to_list (Set.union fetched written)
+    |> List.filter_map ~f:(fun tn ->
+        let uid = tn.Tn.uid in
+        match
+          ( Set.mem fetched tn,
+            Set.mem written tn,
+            Map.find ctx.frontier.fetch_defined uid,
+            Map.find ctx.frontier.overwriters uid )
+        with
+        | true, true, _, _ ->
+            Some
+              (Tn.debug_name tn
+             ^ ": this computation carries its forward code, a fetch, and also writes it")
+        | false, true, Some owner, _ ->
+            Some
+              (Printf.sprintf
+                 "%s: %s carries its forward code, a fetch, and this computation writes it"
+                 (Tn.debug_name tn) (routine owner))
+        | true, false, _, Some writer ->
+            Some
+              (Printf.sprintf
+                 "%s: %s writes it, and this computation carries its forward code, a fetch"
+                 (Tn.debug_name tn) (routine writer))
+        | _ -> None)
+  in
+  if not (List.is_empty conflicts) then
+    raise
+    @@ Utils.User_error
+         (Printf.sprintf
+            "Context.compile%s: this computation and this context's lineage write nodes that a \
+             forward fetch re-establishes on every run (gh-ocannl-1876): %s. A fetch-defined node \
+             -- a Tensor.term_init or literal with at most limit_constant_fill_size values, a \
+             range, an embedded symbol -- is code, not data: each run of the routine carrying its \
+             forward code fetches its value again, silently undoing the write (an optimizer step \
+             on it never accumulates). Build a node that is to be updated data-backed, with \
+             Operation.init (~grad_spec:Require_grad for an optimized input), or make it a \
+             parameter, whose initializer runs once (Train.init_params). A sibling, compiled from \
+             a context that does not descend from the other routine, is an alternative and is not \
+             refused."
+            (match name with None -> "" | Some n -> " (" ^ n ^ ")")
+            (String.concat ~sep:"; " conflicts))
 
 (* gh-ocannl-1724: every tensor-generated fragment is compiled into exactly one routine of a
    lineage. A backprop fragment is a [+=], so a second copy double-counts a gradient; a second
@@ -1024,6 +1123,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?can
   (* Likewise lineage-wide, and after the gate, so a discarded node is reported as such. *)
   check_no_duplicate_fragments ?name ctx comp;
   check_shared_gradient_reset ?name ctx comp;
+  check_no_fetch_overwrite ?name ctx comp;
   (* Compile and link on the backend context; only backend-independent routine components (and the
      rewrapped context) escape the dispatch. Unwrapped rather than through [Backends.with_backend]
      so that a [retain]ed link (gh-ocannl-1440) can rewrap the context it links later. *)

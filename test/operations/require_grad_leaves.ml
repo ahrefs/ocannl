@@ -22,10 +22,14 @@
    input's gradient too, so the second cycle starts clean.
 
    3. A fetch-defined leaf (gh-ocannl-1776): [sgd_update ~params:{x}] refuses a [Tensor.term_init]
-   leaf below [limit_constant_fill_size], naming it and [Operation.init] as the fix. The trap it
-   guards is shown executed by bypassing the refusal through [sgd_one]: the second step lands where
-   the first did, because the forward re-fetched [x]. The data-backed twin, same values, same loss,
-   is accepted and steps along the host oracle.
+   leaf below [limit_constant_fill_size], naming it and [Operation.init] as the fix. Bypassing that
+   refusal no longer reaches the trap (gh-ocannl-1876): [Context.compile] refuses a routine writing
+   a node a forward fetch in its lineage re-establishes -- the per-tensor [sgd_one] in the forward's
+   own routine, a hand-written [%cd] step compiled after the forward's routine or before it, and a
+   write through a slice of a fetch-defined parent. Writes [Context.compile] accepts: the
+   data-backed twin, same values, same loss, steps along the host oracle; and a literal-initialized
+   WEIGHT steps along its oracle beside the fetch-defined [x] (a parameter's initializer runs once,
+   and the forward that re-fetches [x] writes nothing into it).
 
    (A loss with no parameters at all -- the default stepped set empty, the refusal naming [?params],
    the default reset still selecting the leaf -- is pinned in test/training/loop_utils.ml, beside
@@ -154,14 +158,30 @@ let two_steps l x step =
   let ctx = Context.run ctx routine in
   (first, values ctx x.Tensor.value)
 
-let fetch_defined_leaf () =
-  printf "=== 3. Fetch-defined leaf ===\n";
-  Tensor.unsafe_reinitialize ();
+(* A fresh fetch-defined leaf [x] and the loss over it, per leg: [Train.grad_update] consumes the
+   loss's forward code, so no two compiles share one. *)
+let fetch_problem () =
   let x =
     Tensor.term_init [| 1.; 2. |] ~label:[ "xfetch" ] ~output_dims:[ 2 ]
       ~grad_spec:Tensor.Require_grad ()
   in
   let%op l = { wfetch = [ 2.; 3. ] } *. x *. x in
+  (x, l)
+
+(* [compile] raises the refusal of gh-ocannl-1876, naming [node] and [Operation.init] as the fix. *)
+let refused leg ?(node = "xfetch") ?(names = []) compile =
+  match compile () with
+  | () -> Verdict.p (leg ^ ": refused") false
+  | exception Utils.User_error msg ->
+      eprintf "%s: %s (not part of the golden)\n" leg msg;
+      Verdict.p (leg ^ ": refused") true;
+      List.iter (node :: "Operation.init" :: "gh-ocannl-1876" :: names) ~f:(fun substring ->
+          Verdict.p (leg ^ ": the refusal names " ^ substring) (String.is_substring msg ~substring))
+
+let fetch_defined_leaf () =
+  printf "=== 3. Fetch-defined leaf ===\n";
+  Tensor.unsafe_reinitialize ();
+  let x, l = fetch_problem () in
   let learning_rate = fresh_learning_rate () in
   (match Train.sgd_update ~learning_rate ~params:(Set.singleton (module Tensor) x) l with
   | _ -> Verdict.p "sgd_update ~params:{x} refuses the fetch-defined leaf" false
@@ -173,13 +193,59 @@ let fetch_defined_leaf () =
         (String.is_substring msg ~substring:"Operation.init");
       Verdict.p "the refusal carries the leaf"
         (Option.exists culprit ~f:(fun c -> Ir.Tnode.equal c.Tensor.value x.Tensor.value)));
-  (* The trap, executed: [sgd_one] is the per-tensor step [sgd_update] maps, and it sees no loss to
-     check against. Step 1 at x = (1, 2) gives (0.5, 0.5) as in section 1; the data-backed leaf
-     would then reach (0.25, 0.125), but the forward re-fetches x = (1, 2) first. *)
-  let first, second = two_steps l x (Train.sgd_one ~learning_rate x) in
-  close "bypassed: step 1 moves x by lr * 2 w x" first [| 0.5; 0.5 |];
-  close "bypassed: step 2 lands where step 1 did -- the forward re-fetched x" second [| 0.5; 0.5 |];
-  (* The negative control: the data-backed twin. *)
+  (* The bypass: [sgd_one] is the per-tensor step [sgd_update] maps, and it sees no loss to check
+     against. Before gh-ocannl-1876 this compiled, and its second step landed where the first did
+     (0.5, 0.5) -- the forward re-fetched x = (1, 2) first. *)
+  refused "sgd_one in the forward's routine" (fun () ->
+      ignore (two_steps l x (Train.sgd_one ~learning_rate x) : float array * float array));
+  (* A hand-written step, compiled after the routine carrying x's forward fetch... *)
+  let x, l = fetch_problem () in
+  let ctx = Train.init_params (Context.auto ()) IDX.empty l in
+  let ctx, _ = Context.compile ~name:"fwd_first" ctx (Train.grad_update l) IDX.empty in
+  let%cd step = x =- x.grad in
+  refused "a %cd step after the forward's routine" ~names:[ "fwd_first" ] (fun () ->
+      ignore (Context.compile ~name:"xstep" ctx step IDX.empty : Context.t * Context.routine));
+  (* ... and before it: the forward's routine is refused, naming the step's. *)
+  let x, l = fetch_problem () in
+  let ctx = Train.init_params (Context.auto ()) IDX.empty l in
+  (* The step reads x and its gradient, which no routine has defined yet: seeded from the host. *)
+  let ctx = Context.set_values ctx x.Tensor.value [| 1.; 2. |] in
+  let ctx = Context.set_values ctx (grad_of x) [| 0.; 0. |] in
+  let%cd step = x =- x.grad in
+  let update = Train.grad_update l in
+  let stepped, _ = Context.compile ~name:"step_first" ctx step IDX.empty in
+  refused "the forward's routine after a %cd step" ~names:[ "step_first" ] (fun () ->
+      ignore (Context.compile stepped update IDX.empty : Context.t * Context.routine));
+  (* A sibling is an alternative: the same forward's routine, compiled from the context that does
+     not descend from the step, is accepted. *)
+  (match Context.compile ~name:"sibling" ctx update IDX.empty with
+  | _ -> Verdict.p "the forward's routine, as a sibling of the step, is accepted" true
+  | exception Utils.User_error msg ->
+      Verdict.p ("the forward's routine, as a sibling of the step, is accepted: " ^ msg) false);
+  (* A view takes after its parent: over a fetch-defined one the write is undone whether the slice
+     lowers to an alias (the parent is fetched again) or a copy (it is copied again).
+     [test_slice_alias] pins the accepted write-through, over a data-backed parent. *)
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let parent =
+    Tensor.term_init [| 1.; 2.; 3.; 4. |] ~label:[ "pfetch" ] ~batch_dims:[ 2 ] ~output_dims:[ 2 ]
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
+  let%op view = parent @| batch_n in
+  let%op doubled = view *. 2 in
+  let ctx, _ = Train.to_routine (Context.auto ()) bindings (Train.forward doubled) in
+  let%cd through_view = view =: !.99.0 in
+  refused "a write through a view of a fetch-defined parent" ~node:"view" (fun () ->
+      ignore (Train.to_routine ctx bindings through_view : Context.t * Context.routine));
+  (* Accepted: the weight, literal-initialized, stepped beside the fetch-defined x. Per cell dl/dw =
+     x^2 = (1, 4) at the re-fetched x every step: w <- (2, 3) - (1, 4)/8 = (1.875, 2.5), then (1.75,
+     2). *)
+  let _, l = fetch_problem () in
+  let w = Set.min_elt_exn l.Tensor.params in
+  let learning_rate = fresh_learning_rate () in
+  let first, second = two_steps l w (Train.sgd_update ~learning_rate l) in
+  close "the literal-initialized weight: step 1 moves w by lr * x^2" first [| 1.875; 2.5 |];
+  close "the literal-initialized weight: step 2 moves w again" second [| 1.75; 2. |];
+  (* The data-backed twin. *)
   let xd = data_leaf ~l:"xdata" [| 1.; 2. |] in
   let%op ld = { wdata = [ 2.; 3. ] } *. xd *. xd in
   let learning_rate = fresh_learning_rate () in

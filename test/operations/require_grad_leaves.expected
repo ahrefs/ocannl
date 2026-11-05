@@ -22,8 +22,27 @@ sgd_update ~params:{x} refuses the fetch-defined leaf: true
 the refusal names the leaf: true
 the refusal names Operation.init as the fix: true
 the refusal carries the leaf: true
-bypassed: step 1 moves x by lr * 2 w x: true
-bypassed: step 2 lands where step 1 did -- the forward re-fetched x: true
+sgd_one in the forward's routine: refused: true
+sgd_one in the forward's routine: the refusal names xfetch: true
+sgd_one in the forward's routine: the refusal names Operation.init: true
+sgd_one in the forward's routine: the refusal names gh-ocannl-1876: true
+a %cd step after the forward's routine: refused: true
+a %cd step after the forward's routine: the refusal names xfetch: true
+a %cd step after the forward's routine: the refusal names Operation.init: true
+a %cd step after the forward's routine: the refusal names gh-ocannl-1876: true
+a %cd step after the forward's routine: the refusal names fwd_first: true
+the forward's routine after a %cd step: refused: true
+the forward's routine after a %cd step: the refusal names xfetch: true
+the forward's routine after a %cd step: the refusal names Operation.init: true
+the forward's routine after a %cd step: the refusal names gh-ocannl-1876: true
+the forward's routine after a %cd step: the refusal names step_first: true
+the forward's routine, as a sibling of the step, is accepted: true
+a write through a view of a fetch-defined parent: refused: true
+a write through a view of a fetch-defined parent: the refusal names view: true
+a write through a view of a fetch-defined parent: the refusal names Operation.init: true
+a write through a view of a fetch-defined parent: the refusal names gh-ocannl-1876: true
+the literal-initialized weight: step 1 moves w by lr * x^2: true
+the literal-initialized weight: step 2 moves w again: true
 the data-backed twin is accepted: true
 data-backed: step 1 moves x by lr * 2 w x: true
 data-backed: step 2 moves x by the gradient taken at the updated x: true

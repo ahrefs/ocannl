@@ -322,7 +322,8 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
    Refused, naming the fix, rather than promoted to a data-backed node behind the user's back: a
    hidden memory-mode change is the kind of semantics gh-ocannl-1743's audit removed. Only a [Fetch]
    re-establishes; a read-modify-write the forward makes (a running statistic) builds on the stepped
-   value instead. *)
+   value instead. This is the early, tensor-naming refusal; [Context.compile]'s (gh-ocannl-1876)
+   covers what never reaches here: [sgd_one], hand-written [%cd] steps. *)
 let refuse_fetch_defined ~fn_name loss stepped =
   let fetched =
     Asgns.fold_leaves loss.Tensor.forward.Asgns.asgns
