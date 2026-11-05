@@ -7,6 +7,14 @@ Shape_error: applying the shape scheme residual_block to x: dimension comparison
     from residual_block (output) with x (output): the shape scheme residual_block applied to x
     from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
     from residual_block (output) with n'1 (output): pointwise_binary
+--- a nested layer refusing a closed feature size: the outer function is named
+Shape_error: applying the shape scheme residual_block to y: dimension comparison for axis: mismatch
+  conflicting sizes: 4 vs 3
+  failed constraint: 4 ⊑ 3
+    from residual_block (output) with y (output): the shape scheme residual_block applied to y
+    from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
+    from residual_block (output) with n'1 (output): pointwise_binary
+--- the same layer under an opted-out function: the layer is named
 --- an argument with too few axes for the spec
 --- a dimension and a row variable sharing a name
 --- an empty concatenation component
@@ -14,6 +22,7 @@ Shape_error: applying the shape scheme residual_block to x: dimension comparison
 --- a failed total-elements constraint (hand-built: the solver raises it on divisibility)
 --- the first mistake without a scheme (session ids, for contrast)
 every case raised a shape error: true
+every application error names the scheme that refused it: true
 the raw constraint sexp of an error in a scheme spells a reserved-range id: true
 no rendering spells a reserved-range id: true
 every rendering fits one screen (at most 24 lines): true
