@@ -371,16 +371,18 @@ files.
   Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy.
 - A trace solves symbolically what inline construction solves numerically (gh-ocannl-1820): a
   scheme's tracer widths are unsolved variables, so an `Affine` the `Dim` arms would collapse to a
-  number stays a term. `unify_dim`'s mixed padded/valid arm reduces a valid stride-2 pool against a
-  padded stride-2 shortcut to a stride-1 valid window of kernel 1 -- the identity -- and the residual
-  add equating the two outputs then read `o = conv(o+1)` as an occurs-check cycle. Such a window
-  over an unsolved extent collapses in `unify_dim`'s stride-1 arm and in `s_dim_one`
-  (`is_identity_window`); accepting only the self-reference is not enough, since a later block
-  composing the kept window into the mixed arm derives `2*o - 1` where concrete solving gives
-  `2*o` (that arm reads a padded side's span as 1, not its stride). Over a solved `Dim` the
-  solved arms keep it, deriving the extent's basis from the kernel's. The occurs check is
-  unchanged. Pinned by `test/operations/scheme_strided_residual`, which compares `check` with `off`
-  on a schemed block.
+  number stays a term, and each symbolic arm of `unify_dim` must agree with the concrete
+  arithmetic. Two windows over one extent reduce through `window_pair_equation` (`tensor/row.ml`),
+  which writes both as `stride * (o - 1) + span`: a padded window or plain affine of stride `s`
+  has span `s`, not 1 (read as 1, a padded stride-4 shortcut against a stride-2 pool derived
+  `2*o - 1` where concrete solving gives `2*o`, gh-ocannl-1823; equal strides hid it). A span
+  difference the smaller stride does not divide has no solution and is refused, not truncated.
+  A stride-1 valid window of span 1 over an unsolved extent is the identity and collapses in
+  `unify_dim`'s stride-1 arm and in `s_dim_one` (`is_identity_window`); kept, a residual add
+  equating its `over` with it reads as an occurs-check cycle. Over a solved `Dim` the solved arms
+  keep it, deriving the extent's basis from the kernel's. The occurs check is unchanged. Pinned by
+  `test/operations/scheme_strided_residual`: `check` against `off` on schemed blocks with equal
+  and unequal strides, and the window-pair equations solved directly in both orders.
 - Every benchmark model builds under `check` with `off`'s dims (gh-ocannl-1908):
   `test/operations/bench_model_schemes` builds each conv and gpt workload of `benchmarks/workloads`
   from a synthetic zero-valued fixture, through `Bench_conv_model`/`Bench_gpt_model` as the runners
