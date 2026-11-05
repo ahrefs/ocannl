@@ -133,6 +133,11 @@ let () =
   check ~name:"half draw into single n=9" ~prec:Ir.Ops.half ~consumer_prec:Ir.Ops.single [ 9 ];
   check ~name:"fp8 draw into single n=17" ~prec:Ir.Ops.fp8 ~consumer_prec:Ir.Ops.single [ 17 ];
   check ~name:"single draw into half n=9" ~prec:Ir.Ops.single ~consumer_prec:Ir.Ops.half [ 9 ];
+  (* gh-ocannl-1867: an integer draw into a float reader is the row only [rng_collapsible] keeps
+     (gh-ocannl-1788's exact-collapse rule, which also keeps the float draws above, lets an integer
+     scope collapse): with that guard disabled this row alone loses parity, reading lanes 4..7 of a
+     4-lane block, and aborts in the [-lane_checked] run. *)
+  check ~name:"uint16 draw into single n=9" ~prec:Ir.Ops.uint16 ~consumer_prec:Ir.Ops.single [ 9 ];
   if outlined then (
     let whole = List.count !kernels ~f:not in
     Stdio.eprintf "%d of %d kernels rendered whole (not part of the golden)\n" whole

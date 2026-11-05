@@ -281,6 +281,7 @@
   (alias runtest-launch_predicate_parity-tf32)
   (alias runtest-schedule_conv_gemm-tf32)
   (alias runtest-test_uniform_virtual_lane-outlined)
+  (alias runtest-test_uniform_virtual_lane-lane_checked)
   (alias runtest-thread_private_gate-outlined)
   (alias runtest-branchless_select-outlined)
   (alias runtest-scheme_error_rendering-trimmed)
@@ -8705,6 +8706,61 @@
   (diff
    test_uniform_virtual_lane.expected
    test_uniform_virtual_lane-outlined.actual)))
+
+; gh-ocannl-1867: the same claims with every lane extract's lane operand bound-checked
+; (`debug_check_lane_bounds`), under the plain run's golden: the lowering's own lane indices are in
+; range at every precision, the mismatched draw-into-consumer rows included, and the checked kernels
+; draw the same bits. Were gh-ocannl-1769's guard to go, those rows would abort here rather than
+; read past the block.
+
+(rule
+ ; ocannl-backend: cc -- the lane check is the cc renderer's; the command line pins the backend.
+ (target test_uniform_virtual_lane-lane_checked.actual)
+ (package neural_nets_lib)
+ (enabled_if
+  (<> %{env:OCANNL_BACKEND=cc} metal))
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (locks test_uniform_virtual_lane)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:test_uniform_virtual_lane.exe}
+    --ocannl_backend=cc
+    --ocannl_debug_check_lane_bounds=true))))
+
+(rule
+ (alias runtest-test_uniform_virtual_lane-lane_checked)
+ (package neural_nets_lib)
+ (enabled_if
+  (<> %{env:OCANNL_BACKEND=cc} metal))
+ (action
+  (diff
+   test_uniform_virtual_lane.expected
+   test_uniform_virtual_lane-lane_checked.actual)))
+
+; gh-ocannl-1867: the check itself, on a hand-built kernel in the form gh-ocannl-1769's miscompile
+; left (a lane index sized for half beneath a single-precision extract). The out-of-range leg aborts,
+; so every leg runs in a child of this executable and the parent reads its fate.
+
+(test
+ ; ocannl-backend: cc -- the parent passes --ocannl_backend=cc to every child, and only the children
+ ; create a context or compile.
+ (name lane_bounds_check)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules lane_bounds_check)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  fresh_process
+  ll_test
+  test_utils
+  arrayjit.verdict))
 
 (test
  (name test_uniform_odd_sizes)
