@@ -14,7 +14,11 @@
    broadcasts, so its shape closed smaller than the param and the random values repeated along the
    fan-in axis (50 unique values for a [100 -> 50] weight). The counter's shape is now pinned to the
    result's by equality specs on [threefry4x32], [uint4x32_to_prec_uniform1] and
-   [Nn_blocks.box_muller], so these lines must report full uniqueness. *)
+   [Nn_blocks.box_muller], so these lines must report full uniqueness.
+
+   The packed [uniform] (the default since gh-ocannl-509) ties its counter to the result by a
+   round-up total rather than an equality spec, and had its own way to repeat values
+   (gh-ocannl-1868): see [bigram_weight_values] below. *)
 
 open Base
 open Ocannl
@@ -111,3 +115,51 @@ let () =
         ~expected:(Float.sqrt (6. /. 100.))
         ~tol:0.05 (std values);
       printf "inline kaiming unique values: %d of %d\n" (unique values) (Array.length values))
+
+let () =
+  Verdict.case "default packed uniform" (fun () ->
+      (* What [TDSL.default_param_init] holds unless a test replaces it: the packed [uniform], whose
+         result shape is tied to its counter's by a round-up total instead of an equality spec. *)
+      let values = default_init_weight_values Operation.default_uniform_param_init in
+      check ~name:"default packed uniform [-0.25,0.25): std"
+        ~expected:(0.5 /. Float.sqrt 12.)
+        ~tol:0.03 (std values);
+      check ~name:"default packed uniform [-0.25,0.25): mean" ~expected:0. ~tol:0.04 (mean values);
+      printf "default packed uniform unique values: %d of %d\n" (unique values)
+        (Array.length values))
+
+(* gh-ocannl-1868: the model of test/training/bigram.ml. Its [{ w }] reaches the matmul through a
+   pointwise [+ 1], so the bound on its output row arrives late (stage 6), after its input row has
+   closed to [28] -- a product the packed sampler's block size divides. The sampler's total used to
+   be settled from that product alone: 28 draws for a [28 -> 28] weight, broadcast along the other
+   axis. [uniform1] is the control: its equality specs never had the defect. *)
+let bigram_weight_values init =
+  Tensor.unsafe_reinitialize ();
+  TDSL.default_param_init := init;
+  let%op mk_probs () input =
+    let counts = exp (({ w } + 1) * input) in
+    counts /. (counts ++ "... => 0")
+  in
+  let probs = mk_probs () in
+  let input = TDSL.range_of_shape ~label:[ "input" ] ~batch_dims:[ 4 ] ~output_dims:[ 28 ] () in
+  let target = TDSL.range_of_shape ~label:[ "target" ] ~batch_dims:[ 4 ] ~output_dims:[ 28 ] () in
+  let%op y = probs input *. target in
+  let ctx = Train.forward_once (Context.auto ()) y in
+  let values = weight_values ~ctx y in
+  TDSL.default_param_init := Operation.default_uniform1_param_init;
+  values
+
+let all_distinct ~name values =
+  let n = Array.length values in
+  Verdict.pass_fail
+    (Printf.sprintf "%s: all %d values distinct" name n)
+    (n > 0 && unique values = n)
+    ~detail:(fun () -> Printf.sprintf "%d unique of %d" (unique values) n)
+
+let () =
+  Verdict.case "bigram packed uniform" (fun () ->
+      all_distinct ~name:"bigram w, default packed uniform"
+        (bigram_weight_values Operation.default_uniform_param_init));
+  Verdict.case "bigram uniform1" (fun () ->
+      all_distinct ~name:"bigram w, default uniform1"
+        (bigram_weight_values Operation.default_uniform1_param_init))

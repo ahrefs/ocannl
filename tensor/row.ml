@@ -4513,7 +4513,17 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
          proper constraint resolution. *)
       let glb, glb_pending =
         match glb with
-        | Some _ -> (glb, false)
+        | Some ctx_glb ->
+            (* gh-ocannl-1868: a GLB handed down by the caller can be as unresolved as one read from
+               the environment below. It stays available to the arms that only inspect its shape,
+               but the round-up arms must not take it for settled. *)
+            let ctx_glb = subst_row env ctx_glb in
+            let pending =
+              match collect_factors (ctx_glb.beg_dims @ ctx_glb.dims) with
+              | Some (_, []) -> false
+              | _ -> true
+            in
+            (glb, pending)
         | None -> (
             match find_row env.row_env v with
             | Some (Bounds_row { glb = Some env_glb; _ }) -> (
@@ -4529,6 +4539,9 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                        wait for them to resolve rather than committing prematurely. *)
                     (None, true))
             | _ -> (None, false))
+      in
+      let glb_has_axes =
+        Option.exists glb ~f:(fun glb -> not (List.is_empty (glb.beg_dims @ glb.dims)))
       in
       let opt_row_error () =
         if row_var_is_in_param v env && not (is_safe_to_guess v) then
@@ -4625,8 +4638,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                 else Row_eq { r1; r2; origin }
               in
               (row_eq :: [ Dim_eq { d1 = Var v; d2 = get_default_dim ~d:(d / d2) (); origin } ], env)
-          | Strided_var { round_up = true; _ }, [], None when glb_pending && not (is_stage7 stage)
-            ->
+          | Strided_var { round_up = true; _ }, [], _ when glb_pending && not (is_stage7 stage) ->
               (* gh-509 task 5: the row variable has registered bounds that have not resolved yet
                  (e.g. a composite parameter initializer over an inferred shape, where the bounds
                  settle only once the surrounding shapes do). Guessing the counter now would commit
@@ -4663,8 +4675,15 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                     };
                 ],
                 env )
-          | Strided_var { coeff; var; denom; _ }, [], _
-            when is_stage6_up stage && denom % Utils.safe_force coeff = 0 ->
+          | Strided_var { coeff; var; denom; round_up }, [], _
+            when is_stage6_up stage
+                 && denom % Utils.safe_force coeff = 0
+                 && not (round_up && (not glb_pending) && glb_has_axes) ->
+              (* gh-ocannl-1868: a round-up total (packed uniform) whose use sites give the row
+                 variable axes belongs to the GLB arm below, also when the already-closed axes'
+                 product [denom] happens to be a multiple of [coeff]: closing the variable empty
+                 here left a [28 -> 28] parameter's draw at 28 elements, broadcast along the other
+                 axis. *)
               let d2 = get_default_dim ~d:(denom / Utils.safe_force coeff) () in
               if dim_var_is_in_param var env then
                 raise
