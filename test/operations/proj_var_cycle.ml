@@ -15,39 +15,14 @@
 
    No route through [Shape] is known to produce these equations: the dimension solver's own
    bookkeeping keeps such variables apart. So the constraints are built here by hand, as in
-   [affine_dim_index_kernel]. Each case runs on its own domain under a deadline: a solver that never
-   returns is a failed claim, not a stalled test, and the run stops there (the looping domain cannot
-   be cancelled). *)
+   [affine_dim_index_kernel]. Each case runs on its own domain under a deadline ([Bounded_run], in
+   [test/support]): a solver that never returns is a failed claim, not a stalled test, and the run
+   stops there (the looping domain cannot be cancelled). *)
 
 open Base
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 module Idx = Ir.Indexing
-
-let deadline_seconds = 30.
-
-let bounded label f =
-  let outcome = Atomic.make None in
-  let worker =
-    Domain.spawn (fun () ->
-        Atomic.set outcome (Some (match f () with v -> Ok v | exception e -> Error e)))
-  in
-  let deadline = Unix.gettimeofday () +. deadline_seconds in
-  let rec wait () =
-    match Atomic.get outcome with
-    | Some result ->
-        Domain.join worker;
-        result
-    | None when Float.( > ) (Unix.gettimeofday ()) deadline ->
-        Stdio.eprintf "%s: still running after %.0f s; stopping the run here\n%!" label
-          deadline_seconds;
-        pf "%s: returns" label false;
-        Stdlib.exit 1
-    | None ->
-        Unix.sleepf 0.01;
-        wait ()
-  in
-  match wait () with Ok v -> v | Error e -> raise e
 
 let x_dim = Row.get_default_dim ~d:5 ~proj_id:1_790_001 ()
 let var name : Row.dim = Var (Row.get_var ~name ())
@@ -66,7 +41,7 @@ let index_to_string i = Sexp.to_string_hum (Idx.sexp_of_axis_index i)
 let resolves label constraints ~a ~b =
   case label (fun () ->
       let indices =
-        bounded label (fun () ->
+        Bounded_run.run label (fun () ->
             let env = solve constraints in
             List.map [ x_dim; a; b ] ~f:(Row.get_dim_index env))
       in
@@ -81,7 +56,7 @@ let resolves label constraints ~a ~b =
 let refuses label constraints ~indexed ~names =
   case label (fun () ->
       match
-        bounded label (fun () ->
+        Bounded_run.run label (fun () ->
             let env = solve constraints in
             Row.get_dim_index env indexed)
       with
