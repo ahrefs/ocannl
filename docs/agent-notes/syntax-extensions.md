@@ -33,7 +33,10 @@ files.
   type-check. Before `()`, `find_label_param` takes `~label`, `?(label = ..)` (as `Some label`)
   and `?label` (the option itself) for the inline declarations' `?more_label`; before
   gh-ocannl-1885 an optional one was silently ignored, so `Demo_models.lenet`'s `w_logits` and
-  `b_logits` lacked the `lenet` label.
+  `b_logits` lacked the `lenet` label. A change to what `%op` accepts also reaches the arm
+  `tools/test-typecheck-scan-cases.sh` plants to be rejected through the ppx (its `#project` legs,
+  CI's main shard 1): `affected --harnesses` names no harness for `tensor/ppx_op.ml`, so run
+  that one by hand.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`
