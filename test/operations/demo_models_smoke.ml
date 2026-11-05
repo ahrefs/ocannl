@@ -157,10 +157,14 @@ let () =
       in
       let evaluated, y_eval = session `Check (fun () -> model ~grid_state:(img ()) None) in
       let dims_eval = closed_dims y_eval in
-      (* The training graph is checked, not closed: [batch_norm2d] with a [train_step] does not
-         close in a session that has not closed since its first use, with or without schemes. *)
-      let trained, _ = session `Check (fun () -> model ~grid_state:(img ()) (Some (step ()))) in
+      let trained, y_train =
+        session `Check (fun () -> model ~grid_state:(img ()) (Some (step ())))
+      in
+      let dims_train = closed_dims y_train in
       let dims_off = closed_dims (snd (session `Off (fun () -> model ~grid_state:(img ()) None))) in
+      let dims_train_off =
+        closed_dims (snd (session `Off (fun () -> model ~grid_state:(img ()) (Some (step ())))))
+      in
       Verdict.case (name ^ "'s own schemes") (fun () ->
           let p what = p (name ^ ": " ^ what) in
           p "both presence patterns are traced"
@@ -172,6 +176,10 @@ let () =
             | _ -> false);
           p "evaluating under its scheme closes the shapes it closes without one"
             (List.equal (List.equal Int.equal) dims_eval dims_off);
+          p "training closes, in a fresh session, the shapes evaluation closes"
+            (List.equal (List.equal Int.equal) dims_train dims_eval);
+          p "training under its scheme closes the shapes it closes without one"
+            (List.equal (List.equal Int.equal) dims_train dims_train_off);
           p "its own scheme reports an argument without spatial axes, before the body runs"
             (List.mem refusals name ~equal:String.equal)));
   Tensor.For_testing.set_op_shape_schemes None

@@ -6,6 +6,7 @@ on random constraint sets, the rank potentials reach the walk's verdicts: true
 some random set closes a rank cycle: true
 some random set solves: true
 the rank potentials move fewer variables than the walk visits: true
+a GLB the ranks refute is not closed to: solved
 repeating recorded edges takes no cycle search: true
 walking every path repeats them at more than 2^layers visits: true
 closing the chain equates its joints: true
