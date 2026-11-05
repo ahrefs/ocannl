@@ -135,6 +135,31 @@ let () =
   p "the rank potentials move fewer variables than the walk visits"
     (bounded_visits < unbounded_visits)
 
+(* gh-ocannl-1955: a terminal row is closed to its GLB by choice, so the choice yields to the rank
+   facts. Both bounds below are true of rho = [], and [rho = [4; 4].<rho2>] contradicts the
+   first. *)
+let () =
+  let rho = Row.get_row_var () and rho2 = Row.get_row_var () in
+  let r = Row.get_row_for_var (Row.provenance ~sh_id:9 ~kind:`Output) rho in
+  let r2 = Row.get_row_for_var (Row.provenance ~sh_id:10 ~kind:`Output) rho2 in
+  let constraints =
+    [
+      Row.Row_ineq { res = r2; opnd = r; origin };
+      Row.Row_ineq { res = { r2 with beg_dims = [ dim 4; dim 4 ] }; opnd = r; origin };
+      Row.Terminal_row (false, r, origin);
+    ]
+  in
+  let solved =
+    match
+      List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ]
+        ~init:(constraints, Row.empty_env) ~f:(fun (pending, env) stage ->
+          Row.solve_inequalities ~stage pending env)
+    with
+    | _ -> "solved"
+    | exception Row.Shape_error (msg, _) -> msg
+  in
+  Stdio.printf "a GLB the ranks refute is not closed to: %s\n" solved
+
 (* gh-ocannl-1891: [Dim_ineq]'s cycle search on [layers] diamonds of dimension variables, each
    residual connection of a stack on unsized arguments: a chain with two ways through every layer.
    The search visits each variable once, and an edge already recorded repeats without one, which is

@@ -394,6 +394,19 @@ files.
   re-solved by every tie solve. Count before claiming a solver win: `registration_counts` splits the store by
   source, and `closure_constraints` is the store at closure. Error locality is the payoff that
   holds (`scheme_error_locality` is the catalogue).
+- A rank-cycle error is usually a consequence: find the commitment that made it (gh-ocannl-1955).
+  Two sit in the closing path. An equation left with `beg_handled = false` solves neither variable,
+  and `value` there is the rest of the other side, so `visit_rows_for_row_solution` (which reads
+  `v = value` into every bound through `v`) runs only on the arm recording the solution. And closing
+  a row to its GLB is a choice, so the terminal close takes it through `rank_refutes_glb`, a
+  read-only query of the rank graph, and so does `eliminate_row_constraint` when it re-reads the GLB
+  from the environment (`collect_factors` looks at flanks only, so `4,4,..w..` counts as settled).
+  `process_shape_row`'s stage-6 arms close non-terminal rows without asking. The bound itself was
+  true: `pointdiv`'s `grad_asn` builds `-1 *. t1 /. (t2 **. 2)` on the primal, a pointwise result
+  over both operands, so dividing `h, w, ..c..` by `..c..` bounds the statistic by a spatial row.
+  A fresh evaluation never meets that GLB: its bound stays between variables, and stage 2 discharges
+  `Total_elems` with no GLB. A compile before training hides both, as the rows arrive solved.
+  `batch_norm_closure` pins it; a leaf closes rows at once, a result only bounds them, so test both.
 - Where inference time goes: profile before blaming a term, per trace kind. `scheme_payoff`'s
   `tracing` column is per-block traces; a trace of a whole body is `--stacks`, a window of its own
   (gh-ocannl-1891). The rank-cycle check is `Row.add_rank_edge` over `global_rank_potentials`,
