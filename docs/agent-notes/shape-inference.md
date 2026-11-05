@@ -328,6 +328,13 @@ files.
   part in reading order with explicit `let`s: a `[%string]` or list literal evaluates its parts
   back to front, which would name the variables right to left. A golden prints the rendering, not
   the sexp (`scheme_error_rendering` pins it with a reserved-id control).
+- Which origins an error keeps (gh-ocannl-1903): `Row.merge_origins` interleaves the incoming
+  constraint's origins with the entry's in arrival order (never sorted: a sort by name made the
+  `max_shape_error_origins` cap keep the alphabetically first), then ranks by the focus stack
+  `Row.with_origin_focus` -- `Scheme.trace` and `instantiate_core` push the scheme's tensors
+  (`Shape.traced_names`, filled by `Shape.make`/`of_spec` while a trace runs, and a scheme's
+  `tensor_names`) -- before the cap. A new window that should own its errors' origins pushes a
+  focus; ranking at a rethrow handler instead would come too late, after the cap has trimmed.
 - Scheme cost (gh-ocannl-1752, `test/operations/scheme_payoff.ml`, `Shape.registration_times`):
   a scheme only checks; it cannot stand in for the body's registration. An instantiation carries
   about as many constraints as the body's inline registration produces (C' + E' vs the steps'

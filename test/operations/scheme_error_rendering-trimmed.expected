@@ -1,0 +1,23 @@
+--- a mistake no argument can fix, at the trace
+--- the same mistake, found by a definition check
+--- an argument the scheme refuses, at the application
+Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
+  conflicting sizes: 4 vs 3
+  failed constraint: 4 ⊑ 3
+    from residual_block (output) with x (output): the shape scheme residual_block applied to x
+    from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
+    from residual_block (output) with n'1 (output): pointwise_binary
+--- an argument with too few axes for the spec
+--- a dimension and a row variable sharing a name
+--- an empty concatenation component
+--- undetermined concatenation components, at the closure (a variable in the message)
+--- a failed total-elements constraint (hand-built: the solver raises it on divisibility)
+--- the first mistake without a scheme (session ids, for contrast)
+every case raised a shape error: true
+the raw constraint sexp of an error in a scheme spells a reserved-range id: true
+no rendering spells a reserved-range id: true
+every rendering fits one screen (at most 24 lines): true
+the exception's sexp carries the rendering's lines: true
+every scheme error lists the origins naming the scheme's tensors first: true
+no error holds more origins than the cap: true
+the cap trimmed some scheme error's origins to the scheme's own: true

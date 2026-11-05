@@ -555,28 +555,50 @@ exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
 type source = Direct | Equation | Res | Opnd [@@deriving equal, sexp]
 
-(* Utility for merging origin lists - interleave and limit *)
+(* Which origins explain an error best (gh-ocannl-1903): those of the shape scheme being traced or
+   applied, innermost scheme first -- [Shape] pushes one predicate per scheme in progress. *)
+let origin_focus : (constraint_origin -> bool) list ref = ref []
+[@@mutation_serial.exempt
+  "the shape schemes in progress, restored by with_origin_focus's own finally"]
+
+let with_origin_focus focus f =
+  let outer = !origin_focus in
+  origin_focus := focus :: outer;
+  Exn.protect ~f ~finally:(fun () -> origin_focus := outer)
+
+(* Stable: the origins of the innermost scheme in progress, then the next one's, ..., then the rest,
+   each group in its given order. *)
+let rank_origins origins =
+  match !origin_focus with
+  | [] -> origins
+  | focus ->
+      let unfocused = List.length focus in
+      let rank o =
+        Option.value_map ~default:unfocused ~f:fst (List.findi focus ~f:(fun _ p -> p o))
+      in
+      List.map origins ~f:(fun o -> (rank o, o))
+      |> List.stable_sort ~compare:(fun (r1, _) (r2, _) -> Int.compare r1 r2)
+      |> List.map ~f:snd
+
 let rec interleave l1 l2 =
   match (l1, l2) with [], l | l, [] -> l | h1 :: t1, h2 :: t2 -> h1 :: h2 :: interleave t1 t2
 
+(* [o1] is the incoming constraint's origins, [o2] those an entry of the environment accumulated.
+   Both are in arrival order, each one's most direct first: interleaved, so that neither crowds the
+   other out, without duplicates, ranked by relevance, and capped -- the cap keeps the most relevant
+   (gh-ocannl-1903; before, each was sorted by its names, so the cap kept the alphabetically
+   first). *)
 let merge_origins o1 o2 =
   let n = Int.of_string @@ Utils.get_global_arg ~default:"20" ~arg_name:"max_shape_error_origins" in
-  (* First deduplicate each source independently to get unique items *)
-  let unique1 = List.dedup_and_sort ~compare:compare_constraint_origin o1 in
-  let unique2 = List.dedup_and_sort ~compare:compare_constraint_origin o2 in
-  (* Interleave the unique items to preserve fairness *)
-  let interleaved = interleave unique1 unique2 in
-  (* Remove duplicates that appear in both sources while preserving order *)
   let seen = ref [] in
   let deduplicated =
-    List.filter interleaved ~f:(fun item ->
+    List.filter (interleave o1 o2) ~f:(fun item ->
         if List.mem !seen item ~equal:equal_constraint_origin then false
         else (
           seen := item :: !seen;
           true))
   in
-  (* Take at most n items *)
-  List.take deduplicated n
+  List.take (rank_origins deduplicated) n
 
 let rec dim_to_int_exn = function
   | Dim { d; _ } -> d

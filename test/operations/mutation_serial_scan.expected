@@ -2,6 +2,7 @@ tensor/row.ml: uid (ref) -- exempt: a fresh-id counter: ids are never reused, so
 tensor/row.ml: reserved_uid (ref) -- exempt: a fresh-id counter of the id-neutral windows: never reused, so never restored
 tensor/row.ml: serial (ref) -- exempt: the serial itself: note_mutation is its writer
 tensor/row.ml: pending_roles (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
+tensor/row.ml: origin_focus (ref) -- exempt: the shape schemes in progress, restored by with_origin_focus's own finally
 tensor/row.ml: reapply_rows_constr (ref) -- exempt: a transient flag of one constraint substitution, cleared before it returns or raises
 tensor/row.ml: ineqs_from_reapply_rows_constr (ref) -- exempt: a transient carrier within one solver pass, drained by unify_dim; reset_transient clears it at a rewind
 tensor/row.ml: resolve_at_use_dim (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
@@ -33,6 +34,7 @@ tensor/shape.ml: active_update_steps (ref) -- fingerprinted by mutated_since; ca
 tensor/shape.ml: active_constraints (ref) -- fingerprinted by mutated_since; captured by capture_globals
 tensor/shape.ml: active_instances (ref) -- fingerprinted by mutated_since; captured by capture_globals
 tensor/shape.ml: tracing (ref) -- exempt: the shape-scheme traces in progress, restored by the trace's own finally
+tensor/shape.ml: traced_names (ref) -- exempt: the tensor names of the shape-scheme traces in progress, restored by the trace's own finally
 tensor/shape.ml: taint (ref) -- exempt: the taint itself: a record of the first failure, not inference state
 tensor/shape.ml: on_closure (ref) -- exempt: a hook Tensor installs once at module initialization, not inference state
 tensor/shape.ml: closure_count (ref) -- exempt: a count of commits, which only ends checkpoints: never restored

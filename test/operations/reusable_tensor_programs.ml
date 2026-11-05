@@ -174,13 +174,13 @@ let%expect_test "a shape mistake reported at the definition or the first use" =
     Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
       conflicting sizes: 4 vs 3
       failed constraint: 4 ⊑ 3
-        from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
-        from n64 (batch) with threefry4x32_light (output): Uint4x32_to_prec RESULT total elements
         from residual_block (output) with x (output): the shape scheme residual_block applied to x
-        from n66 (input) with n64 (input): pointwise_binary
+        from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
         from residual_block (output) with n'1 (output): pointwise_binary
         from w (input) with n'1 (output): compose
         from w (input) with n66 (input): pointwise_binary
+        from n66 (input) with n64 (input): pointwise_binary
+        from n64 (batch) with threefry4x32_light (output): Uint4x32_to_prec RESULT total elements
     |}];
   (* So is an application that contradicts what an earlier one fixed: [layer]'s first application
      made [w]'s input size 3. *)
@@ -218,13 +218,13 @@ let%expect_test "a failed construction rewound to a checkpoint, and the session 
     Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
       conflicting sizes: 4 vs 3
       failed constraint: 4 ⊑ 3
-        from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
-        from n6 (batch) with threefry4x32_light (output): Uint4x32_to_prec RESULT total elements
         from residual_block (output) with x (output): the shape scheme residual_block applied to x
-        from n8 (input) with n6 (input): pointwise_binary
+        from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
         from residual_block (output) with n'1 (output): pointwise_binary
         from w (input) with n'1 (output): compose
         from w (input) with n8 (input): pointwise_binary
+        from n8 (input) with n6 (input): pointwise_binary
+        from n6 (batch) with threefry4x32_light (output): Uint4x32_to_prec RESULT total elements
     |}];
   (* A second try, written without a tensor function, fails inside the construction: that leaves the
      session tainted, and every later construction is refused, naming the first failure. *)
