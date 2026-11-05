@@ -104,7 +104,7 @@ files.
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity
   (padded convs lower offset-free). The padded dim equation requires the input divisible by the
-  stride, and a stride-2 window only clips on the right for window ≥ 5. A padded window in the
+  stride, and a stride-2 window only clips on the right for window ≥ 4. A padded window in the
   RESULT slot is refused before elaboration (gh-ocannl-1550, `refuse_result_side_padded_window`,
   called from `einsum_n_constraints` and the `Permute` branch); a padded window's backward writes
   through the same window but reuses the forward projections, so it never comes through there.
@@ -130,9 +130,12 @@ files.
   `test/einsum/result_side_affine_forms` executes every accepted result-side form against an
   oracle — extend it when adding one. The `%op`/`%cd` renderer (`Ppx_shared`) re-renders specs, so
   a grammar form it renders wrong is a parse error of a spec the user never wrote.
-- A padded window's margins total the DILATED kernel extent, `left = span / 2` (the `Conv_input`
-  arm of `Row`'s projection derivation); sizing them by the undilated kernel left dilated windows
-  off-center, a wrong value no structural test saw (gh-ocannl-1657). Taps past the margins are
+- A padded window's margins follow the DILATED kernel extent, `left = (span - 1) / 2` and
+  `right = (span + 1) / 2` (the `Conv_input` arm of `Row`'s projection derivation): PyTorch's
+  `padding='same'`, the extra tap of an even span on the right (gh-ocannl-1692; the
+  `padded_operand_offset_windows` oracle's numbers are torch's); sizing them by the undilated
+  kernel left dilated windows off-center, a wrong value no structural test saw (gh-ocannl-1657).
+  Taps past the margins are
   range-guarded in `Assignments` (`clamp_conds`), so any padded offset reads zero there.
   `refuse_nonpositive_coefficient` refuses a stride or dilation below 1 at the same spot as the
   offset refusal. `test/einsum/padded_operand_offset_windows` is the operand-side oracle audit.

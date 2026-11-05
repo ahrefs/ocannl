@@ -149,16 +149,17 @@ let () =
   p_close "partitioned pool matches reference" got_part want ~tol;
 
   (* === 3: Backward — the argmax scatter transposes the clamp (guarded writes). Non-overlapping
-     windows (stride 2 = window 2, left margin 1): y_0 = x_0 (left-clipped), y_1 = max(x_1, x_2),
-     y_2 = max(x_3, x_4); increasing values put the argmax at the window's last element. === *)
+     windows (stride 3 = window 3, left margin 1): y_0 = max(x_0, x_1) (left-clipped), y_1 =
+     max(x_2, x_3, x_4); increasing values put the argmax at the window's last element. A 2/2 window
+     would not do: its anchor tiles the operand, so nothing clips and no guard is emitted. === *)
   Tensor.unsafe_reinitialize ();
   let bx =
     Operation.init ~l:"cw_bx" ~prec:Ir.Ops.single ~b:[] ~o:[ 6 ]
       ~f:(fun idcs -> Float.of_int idcs.(0) -. 16.)
       ~grad_spec:Tensor.Require_grad ()
   in
-  let%op by = bx @^+ "2*o=+w; w => o" [ "w" ] (stretch 0.0) in
-  Shape.set_dim w 2;
+  let%op by = bx @^+ "3*o=+w; w => o" [ "w" ] (stretch 0.0) in
+  Shape.set_dim w 3;
   let%op loss = by ++ "o => 0" in
   let update = Train.grad_update loss in
   let bwd_census = ref (-1, -1, -1) in
@@ -177,7 +178,7 @@ let () =
   let ctx = Context.run ctx routine in
   let bxg = Context.get_values ctx (Option.value_exn ~here:[%here] bx.Tensor.diff).grad in
   pr "pool input gradient = [%s]\n" (fa bxg);
-  p_close "gradient lands on each clipped window's argmax" bxg [| 1.; 0.; 1.; 0.; 1.; 0. |] ~tol;
+  p_close "gradient lands on each clipped window's argmax" bxg [| 0.; 1.; 0.; 0.; 1.; 0. |] ~tol;
   (let ifs, _, _ = !bwd_census in
    p "backward scatter writes are If-guarded" (ifs > 0));
   p "differentiable operand stays unpadded"

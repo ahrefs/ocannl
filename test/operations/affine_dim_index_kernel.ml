@@ -9,8 +9,8 @@
    through [get_proj_equations] first, which sizes or refuses the kernel, and a closed shape's
    window axes have been evaluated to plain extents. So the projection environment is built here by
    hand: a window over an axis of 5 whose kernel variable is equated to an axis of 4. The kernel is
-   even, so a misread extent moves the padded window's offset: the margins total the kernel extent,
-   the left one [4 / 2 = 2], where an extent read as 1 would give 0. *)
+   even, so a misread extent moves the padded window's offset: the left margin is [(4 - 1) / 2 = 1],
+   where an extent read as 1 would give 0. *)
 
 open Base
 open Ocannl.Operation.DSL_modules
@@ -83,7 +83,7 @@ let refuses label kernel ~substring =
 
 let () =
   resolves "unpadded window, kernel variable" ~use_padding:false ~offset:0;
-  resolves "padded window, kernel variable" ~use_padding:true ~offset:(-2);
+  resolves "padded window, kernel variable" ~use_padding:true ~offset:(-1);
   refuses "padded window, kernel variable nothing sizes"
     (Var (Row.get_var ~name:"j" ()))
     ~substring:"the window kernel j has no size";

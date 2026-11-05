@@ -5759,13 +5759,15 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
         (* Subtract padding if use_padding is true *)
         let offset =
           if use_padding then (
-            (* The margins total the DILATED kernel extent, left smaller than right when split
-               needed, so a dilated window is centered like a dense one: [o=+2*k] over a kernel of 3
-               reads [o - 2], [o], [o + 2]. Sizing them by the undilated kernel left a dilated
-               window off-center, its right taps past the margins (gh-ocannl-1657). *)
+            (* The margins follow the DILATED kernel extent, so a dilated window is centered like a
+               dense one: [o=+2*k] over a kernel of 3 reads [o - 2], [o], [o + 2]. Sizing them by
+               the undilated kernel left a dilated window off-center, its right taps past the
+               margins (gh-ocannl-1657). [left] is PyTorch's [padding='same'], so an even span's
+               extra tap goes on the right: [o=+k] over a kernel of 4 reads [o - 1] to [o + 2], and
+               a 2/2 pool tiles its operand, [2*o], [2*o + 1] (gh-ocannl-1692). *)
             let span = effective_kernel_span ~dilation ~kernel_size in
+            let left_padding = (span - 1) / 2 in
             let right_padding = (span + 1) / 2 in
-            let left_padding = span - right_padding in
             let operation_padding : axis_padding =
               Ir.Ops.{ left = left_padding; right = right_padding }
             in
