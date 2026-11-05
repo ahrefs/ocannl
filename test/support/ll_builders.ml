@@ -150,6 +150,11 @@ let scope ?(orig_indices = [||]) tn v : LL.scalar_t =
   let id = LL.get_scope tn in
   LL.Local_scope { id; body = LL.Set_local (id, v); orig_indices; mint = LL.Inlined_computation }
 
+(** [scope_of id body] is the inlined computation over [id] (see {!scope}) with its body spelled
+    out, for a body that is not a single assignment. *)
+let scope_of ?(orig_indices = [||]) id body : LL.scalar_t =
+  LL.Local_scope { id; body; orig_indices; mint = LL.Inlined_computation }
+
 (** {2 Dynamic indexing}
 
     The gather/scatter pair ({!Ir.Low_level.Get_dynamic} / {!Ir.Low_level.Set_dynamic}): a read or

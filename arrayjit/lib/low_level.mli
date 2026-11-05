@@ -1794,11 +1794,14 @@ val simplify_llc : Indexing.static_symbol list -> t -> t
     licence. A single-assignment [Local_scope] is collapsed into its reader only where its rounding
     to its own precision is not part of the value (gh-ocannl-1788): the slot evaluates at the
     scope's precision, or the value is a load whose storage precision the scope's widens exactly
-    ([Ops.widens_exactly]). A leaf it does not rewrite keeps its annotation, so a [?prelowered]
-    routine's request on a load still reaches {!validate_operand_precisions} at codegen. The
-    licensed floating-point algebra runs once, on the raw lowering, in the rewrite tier member
-    [Fp_algebra] (gh-ocannl-998), so neither this pass nor the schedule transforms that rerun it can
-    contract or reassociate across an inlining boundary. *)
+    ([Ops.widens_exactly]). An integer scope collapses only where the value provably stays the same
+    (gh-ocannl-1884): such a load, the same unpromoted type with no truth in it, or machine values
+    that agree at the scope's precision and at the slot's, so a sum C's integer promotion would
+    carry past its storage width stays a scope. A leaf it does not rewrite keeps its annotation, so
+    a [?prelowered] routine's request on a load still reaches {!validate_operand_precisions} at
+    codegen. The licensed floating-point algebra runs once, on the raw lowering, in the rewrite tier
+    member [Fp_algebra] (gh-ocannl-998), so neither this pass nor the schedule transforms that rerun
+    it can contract or reassociate across an inlining boundary. *)
 
 val without_node_bounds : (unit -> 'a) -> 'a
 (** Runs the thunk with interval folding ({!simplify_llc} and the transforms' trailing

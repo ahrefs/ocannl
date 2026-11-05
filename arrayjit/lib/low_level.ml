@@ -6006,6 +6006,139 @@ let narrowing_read ~scope_prec (llsc : scalar_t) =
   in
   Ops.is_narrow_float scope_prec && read llsc
 
+(* gh-ocannl-1884: whether collapsing a [Local_scope] of integer precision [scope_prec], over [v],
+   into a slot evaluating at [eval] leaves its value alone. A collapse drops two things: the
+   conversion to the scope's precision, where C's integer promotion computes byte and uint16
+   arithmetic in [int] (a byte [a + b] holds 44 where the expression gives 300), and the evaluation
+   at it, since the body renders at the slot's precision instead (a byte [a / b] in a float slot
+   gives 3.5 where the scope gives 3). The materialized node is the oracle, and a kept scope already
+   is its rounded form, so what cannot be proven stays a scope.
+
+   Same type: at [eval = scope_prec], unpromoted, it is the same expression of the same type -- the
+   leaves render through a conversion to the precision -- unless it holds a truth, which C types
+   [int] (Metal [bool]) at any precision: [Cmplt(Neg(c1), Neg(c2))] at uint32 compares signed
+   collapsed and unsigned kept. Such a value falls through to the walk.
+
+   Otherwise [value q v] is the exact integer interval of [v]'s machine value when rendered at [q],
+   or [None]. It is not {!interval_of}: that bounds a value as if the operands were exact, so at
+   double it misses a leaf's conversion to byte (an embedded index of 256 compares equal to 0), and
+   at byte it wraps a result to the storage width, which is the question here. Each leaf must
+   convert to [q] without changing value, and each operator's result must fit what [q] computes in.
+   Exact integers then compute the same in C integer arithmetic and in float. The operators are a
+   list, not a default: a range says nothing of an operator's domain ([FMA] has a range and no
+   integer spelling, an integer [Div] truncates).
+
+   A comparison at a float [q] also holds with one operand exact there and the other an integer read
+   converted once: the exact one lies strictly inside [float_exact_int_limit], and an integer past
+   the limit rounds monotonically to at least the limit, so no decision flips. That is the gh-343
+   one-hot comparison, a uint32 [ids] against an embedded class index in a single product, whose
+   collapse the gather rewrite depends on.
+
+   Only precisions and loop extents are read: a decision resting on a node's bounds candidate would
+   have to settle it, and a collapse is not worth refusing a later upload. *)
+let integer_scope_exact ~ienv ~(scope_prec : Ops.prec) ~(eval : Ops.prec) (v : scalar_t) =
+  let holds q (iv : Interval.t) =
+    iv.integral && iv.exact
+    &&
+    match (Ops.integer_range q, Ops.float_exact_int_limit q) with
+    | Some (lo, hi), _ -> Float.(lo <= iv.lo && iv.hi <= hi)
+    | None, Some limit -> Float.(abs iv.lo < limit && abs iv.hi < limit)
+    | None, None -> false
+  in
+  let computes_in q = if Ops.promoted_to_int q then Ops.int32 else q in
+  let read q ~from =
+    let iv = Interval.dtype_range from in
+    Option.some_if (Ops.is_integer from && (holds q iv || Ops.widens_exactly ~from ~to_:q)) iv
+  in
+  let tn_prec tn = Lazy.force tn.Tn.storage_prec in
+  let integer_read = function
+    | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } -> Ops.is_integer (tn_prec tn)
+    | Get_local { tn; _ } | Local_scope { id = { tn; _ }; _ } -> Ops.is_integer (tn_prec tn)
+    | _ -> false
+  in
+  let rec value q v =
+    let result iv = Option.some_if (holds (computes_in q) iv) iv in
+    let unary rule a = Option.bind (value q a) ~f:(fun i -> result (rule i)) in
+    let binary rule a b =
+      match (value q a, value q b) with Some i, Some j -> result (rule i j) | _ -> None
+    in
+    let truth operands =
+      Option.some_if
+        (List.for_all operands ~f:(fun a -> Option.is_some (value q a)))
+        Interval.bool_range
+    in
+    let comparison a b =
+      match (value q a, value q b) with
+      | Some _, Some _ -> Some Interval.bool_range
+      | Some _, None when Ops.is_float q && integer_read b -> Some Interval.bool_range
+      | None, Some _ when Ops.is_float q && integer_read a -> Some Interval.bool_range
+      | _ -> None
+    in
+    match v with
+    | Constant c ->
+        let iv = Interval.point c in
+        Option.some_if (holds q iv) iv
+    | Embed_index idx ->
+        let iv = interval_of_index ienv idx in
+        Option.some_if (holds q iv) iv
+    | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } | Get_local { tn; _ } ->
+        read q ~from:(tn_prec tn)
+    | Local_scope { id; body; _ } -> (
+        (* Top-down simplification still sees an inner scope here. Its local holds the body's value
+           where that fits, and otherwise something of its own precision. *)
+        let from = tn_prec id.tn in
+        let held =
+          match body with
+          | Set_local (id2, w) when equal_scope_id id id2 && Ops.is_integer from ->
+              Option.filter (value from w) ~f:(holds from)
+          | _ -> None
+        in
+        match held with Some iv -> Option.some_if (holds q iv) iv | None -> read q ~from)
+    | Unop (op, (a, _)) -> (
+        match op with
+        | Identity | Trunc -> value q a
+        | Neg -> unary Interval.neg a
+        | Relu -> unary Interval.relu a
+        | Satur01 -> unary Interval.satur01 a
+        | Not -> truth [ a ]
+        | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Recip | Recip_sqrt | Tanh_approx
+        | Uint4x32_to_prec_uniform1 ->
+            None)
+    | Binop (op, (a, _), (b, _)) -> (
+        match op with
+        | Arg1 -> value q a
+        | Arg2 -> value q b
+        | Add -> binary Interval.add a b
+        | Sub -> binary Interval.sub a b
+        | Mul -> binary Interval.mul a b
+        | Max -> binary Interval.max_ a b
+        | Min -> binary Interval.min_ a b
+        | Mod -> binary Interval.mod_ a b
+        | Cmplt | Cmple | Cmpeq | Cmpne -> comparison a b
+        | And | Or -> truth [ a; b ]
+        | Div | Relu_gate | Satur01_gate | ToPowOf | Threefry4x32_crypto | Threefry4x32_light
+        | Uint4x32_to_prec_uniform_lane ->
+            None)
+    | Ternop (Where, _, (a, _), (b, _)) -> binary Interval.join a b
+    | Ternop ((FMA | Mul3), _, _, _) | Constant_bits _ -> None
+  in
+  let rec holds_a_truth v =
+    match v with
+    | Unop (op, (a, _)) ->
+        Ops.(equal_integer_valuation (unop_integer_valuation op) Truth) || holds_a_truth a
+    | Binop (op, (a, _), (b, _)) ->
+        Ops.(equal_integer_valuation (binop_integer_valuation op) Truth)
+        || holds_a_truth a || holds_a_truth b
+    | Ternop (Where, _, (a, _), (b, _)) -> holds_a_truth a || holds_a_truth b
+    | Ternop (_, (a, _), (b, _), (c, _)) -> holds_a_truth a || holds_a_truth b || holds_a_truth c
+    | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_merge_buffer _ | Get_dynamic _
+    | Get_local _ | Local_scope _ ->
+        false
+  in
+  let fits q = Option.exists (value q v) ~f:(holds q) in
+  (Ops.equal_prec eval scope_prec && (not (Ops.promoted_to_int scope_prec)) && not (holds_a_truth v))
+  || (fits scope_prec && fits eval)
+
 let simplify_llc static_indices llc =
   let licence = Fp_licence.exact in
   let positive_zero c = Float.(c = 0.) && not (Stdlib.Float.sign_bit c) in
@@ -6109,6 +6242,12 @@ let simplify_llc static_indices llc =
        conversion. *)
     let collapsible (id : scope_id) (v : scalar_t) =
       let scope_prec = Lazy.force id.tn.Tn.storage_prec in
+      let exact_load =
+        match v with
+        | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } ->
+            Ops.widens_exactly ~from:(Lazy.force tn.Tn.storage_prec) ~to_:scope_prec
+        | _ -> false
+      in
       ((not packed) || Ops.equal_prec scope_prec prec)
       (* gh-ocannl-1788: a scope also rounds its value to its own precision. Collapsing it is exact
          only when the slot evaluates at that same precision, or when the value is a load whose
@@ -6116,21 +6255,15 @@ let simplify_llc static_indices llc =
          Otherwise a narrow scope collapsed into a wider slot would skip its rounding (a bfloat16
          cast read in a single sum, wherever the scope's local is declared narrow: the GPU backends,
          and cc under [narrow_compute_f32=false]), and a wide scope collapsed into a narrower slot
-         would evaluate its arithmetic narrow. The rule covers a float scope in a float slot; a
-         scope or slot of an integer precision collapses as before (a one-hot comparison scope read
-         in a float product is what the gh-343 gather rewrite then recognizes).
+         would evaluate its arithmetic narrow. This clause covers a float scope; an integer scope
+         has its own, last.
 
          gh-ocannl-1785 extends the rule to a float scope read where the slot evaluates at an
          INTEGER precision: collapsed, its arithmetic would be evaluated at the integer precision,
          every operand converted first ([(uchar)0.5 + (uchar)0.75] where the scope holds 1.25);
          kept, it is computed in float and converted once, where it is read. *)
       && ((not (Ops.is_float scope_prec && (Ops.is_float eval || Ops.is_integer eval)))
-         || Ops.equal_prec scope_prec eval
-         ||
-         match v with
-         | Get (tn, _) | Get_merge_buffer (tn, _) | Get_dynamic { tn; _ } ->
-             Ops.widens_exactly ~from:(Lazy.force tn.Tn.storage_prec) ~to_:scope_prec
-         | _ -> false)
+         || Ops.equal_prec scope_prec eval || exact_load)
       (* gh-ocannl-1785: an integer scope holding a float-valued value ({!float_valued}) rounds it
          to the scope's precision, as the materialized node's store would. Collapsed, the value
          would reach its consumer unrounded wherever the consumer computes in float -- under an
@@ -6143,7 +6276,11 @@ let simplify_llc static_indices llc =
          materialized node holds the rounded value. So a narrowing read stays a scope on every
          backend, and {!C_syntax} rounds it. Only a read: narrow ARITHMETIC computes wide on purpose
          (gh-ocannl-517). *)
-      && not (narrowing_read ~scope_prec v)
+      && (not (narrowing_read ~scope_prec v))
+      (* gh-ocannl-1884: an integer scope collapses only where the value provably stays the same. *)
+      && ((not (Ops.is_integer scope_prec))
+         || exact_load
+         || integer_scope_exact ~ienv ~scope_prec ~eval v)
     in
     (* gh-ocannl-1769: an RNG conversion renders at the precision of the store holding it
        ({!is_rng_conversion}), and a scope body is a store at the scope's precision -- the one a
@@ -6195,7 +6332,7 @@ let simplify_llc static_indices llc =
         ignore (Lazy.force id.tn.Tn.dims);
         (fst (loop_scalar (v, Lazy.force id.tn.Tn.storage_prec)), prec)
     | Local_scope { id; body = Seq (Set_local (id1, v1), Set_local (id2, v2)); _ }
-      when equal_scope_id id id1 && equal_scope_id id id2
+      when equal_scope_id id id1 && equal_scope_id id id2 && collapsible id v1
            && collapsible id (substitute_float ~var:(Get_local id) ~value:v1 v2)
            && rng_collapsible id v1 && rng_collapsible id v2 ->
         ignore (Lazy.force id.tn.Tn.dims);
