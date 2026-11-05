@@ -447,9 +447,18 @@ val row_vars : t -> dim_var list * row_var list
 val add_constraint_origin : constraint_origin -> constraint_ -> constraint_
 (** Prepends a provenance entry. *)
 
+val map_draw_coefficients :
+  f:(int Utils.safe_lazy -> int Utils.safe_lazy) -> constraint_ -> constraint_
+(** Maps the coefficient of a packed conversion's draw: a round-up [Strided_var] total, which only
+    [Uint4x32_to_prec] mints, whose coefficient is a lazy over its result node's precision. *)
+
+val map_env_draw_coefficients :
+  f:(int Utils.safe_lazy -> int Utils.safe_lazy) -> environment -> environment
+(** {!map_draw_coefficients} over the row constraints the environment's bounds hold. *)
+
 val has_lazy_coefficient : constraint_ -> bool
-(** Whether the constraint holds a [Strided_var] total, whose coefficient is a lazy over a node's
-    precision. *)
+(** Whether the constraint holds a lazy [Strided_var] coefficient that is not a draw's: of unknown
+    provenance. The product ties of capture references are constants. *)
 
 type marks
 (** The additions to the per-variable policy sets (and the pending symbol-role claims) since a

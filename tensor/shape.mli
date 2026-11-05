@@ -571,6 +571,12 @@ val closure_checkpoint : id_mark:int -> Checkpoint.t
 (** The last closure's checkpoint (empty frontier), which stays valid until the next closure. *)
 
 val discarded_registry_sizes : unit -> (string * int) list
+
+val with_memoized_draw_coefficient : (unit -> 'a) -> 'a
+(** A negative control for tests (gh-ocannl-1890): while [f] runs, every packed uint4x32 conversion
+    reuses the first coefficient registered, instead of a lazy over its own result node's precision.
+*)
+
 (** The records the session holds of what rewinds discarded, by kind: a diagnostic for tests. *)
 
 val get_projections : update_step -> Ir.Indexing.projections
@@ -620,6 +626,10 @@ module Scheme : sig
     | No_end_validation  (** Skip the end-of-trace solve of the whole window ([trace] only). *)
     | No_ref_inputs
         (** Relate and bind none of the scheme's capture inputs ([instantiate] and [check]). *)
+    | No_draw_holes
+        (** Keep the trace's own draw coefficients, and their nodes, in the scheme ([trace] only).
+        *)
+    | No_draw_refusal  (** Instantiate a scheme with random draws ([instantiate] only). *)
 
   val label : t -> string
   val arity : t -> int
@@ -640,17 +650,25 @@ module Scheme : sig
       [Row.var_mark] (so their variables are generalized) and before this call (so their own
       constraints are not the scheme's). Must run inside a rewound window ([Tensor.with_rewind]),
       which undoes the trace. While [f] runs, [finish_inference] raises. Refuses, with
-      [Untraceable_scheme] on what a scheme cannot carry: a precision-dependent total-elements
-      constraint, a capture reference made outside the window and set or related in it ([set_dim]
-      and the like), or forcing dims or projections; and [Row.Shape_error] on a contradiction among
-      the window's constraints (solved at Stage1 once more at the end, so a trailing [set_dim] is
-      checked too). Both are prefixed ["tracing the shape scheme <label>: "].
+      [Untraceable_scheme] on what a scheme cannot carry: a total-elements constraint with a lazy
+      coefficient of unknown provenance, a capture reference made outside the window and set or
+      related in it ([set_dim] and the like), or forcing dims or projections; and [Row.Shape_error]
+      on a contradiction among the window's constraints (solved at Stage1 once more at the end, so a
+      trailing [set_dim] is checked too). Both are prefixed ["tracing the shape scheme <label>: "].
 
       A capture reference made outside the window that [f]'s operations bind ([~capture_dims]) is an
       input of the scheme (gh-ocannl-1791): during the trace it reads as unbound and unsolved, so
       the scheme does not depend on its state then, and each application relates the variable of its
       first binding in [f] to its state at that application -- an open binding, or a solution held
-      across a closure -- as the body's own first binding of it would. *)
+      across a closure -- as the body's own first binding of it would.
+
+      A random draw in [f] (a packed uint4x32 conversion, gh-ocannl-1890) is carried with its
+      coefficient -- values per 128-bit block -- as a hole. The coefficient is a lazy over the
+      conversion node's own [storage_prec], which the node's consumers set top-down
+      ([update_infer_prec]) as they register, and which only Stage2 and later stages force: so it
+      reads its call site's precision at closure, with no step of its own. A scheme never forces it,
+      since its trace, its checks and its instances solve Stage1 only; the conversion node the body
+      registers at an application fills it there. The hole holds none of the trace's nodes. *)
 
   val instantiate :
     ?sabotage:sabotage -> t -> application:string -> args:shape list -> results:shape list -> unit
@@ -665,7 +683,9 @@ module Scheme : sig
       (tainting the session, as a failed construction does), on a contradiction. The scheme's
       capture inputs are related to the references' current state and bound, to the variable of
       their last binding in the trace, so their solutions are published -- after the Stage1 solve
-      and at the closure -- as the body's would be. *)
+      and at the closure -- as the body's would be. A scheme with random draws is refused before
+      anything is written: the closure forces a draw's coefficient, which only the conversion node
+      of the body's own application settles (raised as [Untraceable_scheme] while a trace runs). *)
 
   val check : ?sabotage:sabotage -> t -> application:string -> args:shape list -> unit
   (** [instantiate] against [args] with no results, binding no capture reference (its capture inputs

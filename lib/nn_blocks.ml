@@ -190,8 +190,8 @@ let%op mlp_layer ~label ~hid_dim () x = relu (({ w } * x) + { b = 0.; o = [ hid_
 (** Masks and scales by 1/keep_prob to maintain expected value. [train_step] is the training step
     counter, e.g. [Some !@step_n] for a static symbol [step_n]: it seeds the dropout mask. When
     [train_step = None] (evaluation), the dropout rate is ignored and the tensor is returned
-    unmodified. Each case has its own shape scheme (gh-ocannl-1792); with [rate > 0] the training
-    case's random draw leaves that case unschemed. *)
+    unmodified. Each case has its own shape scheme (gh-ocannl-1792), the training case's random draw
+    included (gh-ocannl-1890). *)
 let%op dropout ~rate () ~(train_step : Tensor.t option) x =
   match train_step with
   | Some train_step when Float.(rate > 0.0) ->

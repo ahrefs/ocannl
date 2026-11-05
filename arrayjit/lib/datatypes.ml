@@ -29,6 +29,9 @@ type 'a safe_lazy = {
 
 let safe_lazy unique_id f = { value = `Callback f; unique_id }
 
+(** A value known at construction: [is_safe_val] holds from the start. *)
+let safe_value unique_id v = { value = `Value v; unique_id }
+
 let safe_force gated =
   match gated.value with
   | `Value v -> v

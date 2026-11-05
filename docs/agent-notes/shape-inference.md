@@ -332,7 +332,19 @@ files.
   state; an explicit instance binds it to the LAST (what the body leaves it bound to). Setters on
   such a reference refuse at entry (`refuse_external_in_trace`): a satisfied `set_dim` and the
   row/row `set_equal` touch nothing, so `trace_touches` alone would miss them. A dim/row mixed
-  binding inside a trace stays refused by `has_lazy_coefficient` (its product tie's coefficient).
+  binding traces (gh-ocannl-1890): both product ties (`Shape.product_tie`) have a constant
+  coefficient (`Utils.safe_value`), which Stage1's cancellation arm may now use early -- its
+  `is_safe_val` disjunct exists for constants.
+- Random draws in schemes (gh-ocannl-1890): a packed conversion's `Strided_var` coefficient is a
+  lazy over its result node's `storage_prec`, set top-down by consumers as they register
+  (`update_infer_prec`). Every arm that reads a lazy coefficient is gated on Stage2+ (`late` in the
+  merge arms, `is_stage2_up`/`is_stage5_up` elsewhere), so it is forced at closure, at its call
+  site's precision. A scheme never forces it (trace, check and instance are Stage1): the trace
+  swaps it for a hole that raises if read (`Row.map_draw_coefficients`; the kept `env` too, or the
+  scheme pins the trace's nodes), and the body's own conversion node fills it per application. An
+  explicit `instantiate` has no node and refuses. A new Stage1 arm reading a lazy coefficient
+  would break this, and inline precision too. A round-up `Strided_var` is the draw marker: only
+  `Uint4x32_to_prec` mints one.
 - Printing a scheme (gh-ocannl-1753, `Shape.Scheme.to_string`): substituted boundary rows alone
   say almost nothing -- after a trace an argument's and its result's rows are distinct unsolved
   variables, related only by broadcasting bounds -- so the scheme keeps the trace's final

@@ -466,11 +466,11 @@ module Scheme : sig
       Raises [Row.Shape_error] prefixed ["tracing the shape scheme <label>: "] on a shape error in
       [f] (including one only the end-of-trace check of [f]'s trailing [Shape.set_dim] and the like
       finds), when [f] forces dims or projections (inference cannot close during a trace), and for
-      what a scheme cannot carry: a precision-dependent total-elements constraint (random number
-      generation inside [f]), or [Shape.set_dim] and the like on a capture reference made outside
-      [f]. A capture reference made outside [f] that [f]'s operations bind is an input of the scheme
-      (gh-ocannl-1791): each application relates it to the reference's state then, and
-      {!instantiate} binds it, as the body would. *)
+      what a scheme cannot carry: [Shape.set_dim] and the like on a capture reference made outside
+      [f]. Random number generation inside [f] is carried (gh-ocannl-1890): see [Shape.Scheme.trace]
+      for how its coefficient reads each call site's precision. A capture reference made outside [f]
+      that [f]'s operations bind is an input of the scheme (gh-ocannl-1791): each application
+      relates it to the reference's state then, and {!instantiate} binds it, as the body would. *)
 
   val instantiate : ?application:string -> t -> args:Shape.t list -> results:Shape.t list -> unit
   (** [instantiate s ~args ~results] adds [s]'s constraints for one application of its function to
@@ -480,7 +480,9 @@ module Scheme : sig
       the session, as a failed construction does; the constraints carry the application's name, so a
       failure at the closure names it too. The next closure applies the solution to [args] and
       [results] and closes them. Valid across closures, unless the scheme depends on open state no
-      shape it used holds (then refused after a closure: trace again). *)
+      shape it used holds (then refused after a closure: trace again). A scheme whose function draws
+      random numbers is refused: the size of a draw's counter is the precision its conversion node
+      settles, and an instance, unlike the function's own application, has none. *)
 
   (** {3 Automatic schemes of [%op] functions (gh-ocannl-1751)}
 
@@ -495,13 +497,12 @@ module Scheme : sig
       A shape error that does not depend on the arguments raises at the trace, prefixed
       ["tracing the shape scheme <function>: "]; one that does raises at the application, before the
       body runs, prefixed ["applying the shape scheme <function> to <arguments>: "]. A trace a
-      scheme cannot carry (random number generation, setting a capture reference made outside the
-      function, forcing dims, or a body that cannot run on tracers) leaves the function unschemed,
-      as it was before, once its rewind succeeded, and says so on stderr -- once per function and
-      reason in a process (gh-ocannl-1791). A capture reference made outside the function that its
-      operations bind is a scheme input, checked against each application's state of it. Ids are
-      unaffected: traces and checks allocate tensor ids, node uids and shape-variable ids from
-      reserved ranges.
+      scheme cannot carry (setting a capture reference made outside the function, forcing dims, or a
+      body that cannot run on tracers) leaves the function unschemed, as it was before, once its
+      rewind succeeded, and says so on stderr -- once per function and reason in a process
+      (gh-ocannl-1791). A capture reference made outside the function that its operations bind is a
+      scheme input, checked against each application's state of it. Ids are unaffected: traces and
+      checks allocate tensor ids, node uids and shape-variable ids from reserved ranges.
 
       Option-valued tensor parameters (gh-ocannl-1792), annotated [~(p : Tensor.t option)] or
       [?(p : Tensor.t option)]: the function gets one scheme per presence pattern -- which of them

@@ -596,9 +596,7 @@ let () =
       p "control (the inner application drops its input): the outer scheme accepts it"
         (Result.is_ok (nested ~sabotage:No_ref_inputs ())))
 
-(* What stays refused: an outside reference set or related, not bound, inside the function; and one
-   reference bound both as a dimension and as a row inside it (its product tie is a total-elements
-   constraint with a lazy coefficient). *)
+(* What stays refused: an outside reference set or related, not bound, inside the function. *)
 let () =
   Verdict.case "capture references: what stays refused" (fun () ->
       Tensor.unsafe_reinitialize ();
@@ -613,18 +611,63 @@ let () =
         (raises ~substrings:[ "tracing the shape scheme sets"; "Shape.set_dim"; "made outside it" ]
            (fun () -> Tensor.Scheme.trace ~label:"sets" 1 sets));
       p "control: the same function applied inline sets the reference"
-        (succeeds (fun () -> ignore (sets [ leaf "x" [ 2; 5 ] ] : Tensor.t list)));
-      Tensor.unsafe_reinitialize ();
-      let r = Shape.get_variable_ref "b" in
-      let mixed = function
-        | [ x ] ->
-            ignore (capture_row r x : Tensor.t);
-            external_ r [ x ]
-        | _ -> assert false
+        (succeeds (fun () -> ignore (sets [ leaf "x" [ 2; 5 ] ] : Tensor.t list))))
+
+(* One reference bound both as a row and as a dimension inside the function (gh-ocannl-1890): the
+   product tie between the two is a constant, so the trace carries it. The row of [x]'s output axes
+   and its last axis are then one product: only a leading axis of 1 fits. *)
+let mixed_row_first r = function
+  | [ x ] ->
+      ignore (capture_row r x : Tensor.t);
+      external_ r [ x ]
+  | _ -> assert false
+
+let mixed_dim_first r = function
+  | [ x ] ->
+      let ys = external_ r [ x ] in
+      ignore (capture_row r x : Tensor.t);
+      ys
+  | _ -> assert false
+
+let mixed_inside args = mixed_row_first (Shape.get_variable_ref "b") args
+
+let () =
+  Verdict.case "capture references: one bound both as a row and as a dimension" (fun () ->
+      let inline_mixed body arg =
+        Tensor.unsafe_reinitialize ();
+        let r = Shape.get_variable_ref "b" in
+        let x = arg () in
+        match body r [ x ] with
+        | results -> close_all (List.map (x :: results) ~f:(fun t -> t.Tensor.shape))
+        | exception Row.Shape_error (msg, _) ->
+            Stdio.eprintf "(not part of the golden) inline refused: %s\n%!" msg;
+            Error msg
       in
-      p "a function binding a reference made outside it both as a row and as a dimension is refused"
-        (raises ~substrings:[ "tracing the shape scheme mixed"; "both as a dimension and as a row" ]
-           (fun () -> Tensor.Scheme.trace ~label:"mixed" 1 mixed)))
+      let schemed_mixed body arg =
+        Tensor.unsafe_reinitialize ();
+        let r = Shape.get_variable_ref "b" in
+        match Tensor.Scheme.trace ~label:"mixed" 1 (body r) with
+        | s -> instantiate_closed s [ arg ]
+        | exception Row.Shape_error (msg, _) ->
+            Stdio.eprintf "(not part of the golden) trace refused: %s\n%!" msg;
+            Error ("trace: " ^ msg)
+      in
+      let fits () = leaf "fits" [ 1; 6 ] and conflicts () = leaf "conflicts" [ 2; 6 ] in
+      List.iter
+        [
+          ("made outside, row first", mixed_row_first);
+          ("made outside, dimension first", mixed_dim_first);
+          ("made inside", fun _ -> mixed_inside);
+        ]
+        ~f:(fun (name, body) ->
+          let scheme = schemed_mixed body fits in
+          p
+            (name ^ ": the trace is accepted and a fitting application closes")
+            (Result.is_ok scheme);
+          same_closure (name ^ ", fitting") ~inline:(inline_mixed body fits) ~scheme;
+          let inline = inline_mixed body conflicts in
+          p (name ^ ": inline, a conflicting product is refused") (Result.is_error inline);
+          same_closure (name ^ ", conflicting") ~inline ~scheme:(schemed_mixed body conflicts)))
 
 (* {2 Rollback and delayed diagnostics} *)
 

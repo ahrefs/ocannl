@@ -81,17 +81,28 @@ let%op stack () =
   let l2 = layer () in
   fun x -> l2 (l1 x)
 
-(* A closure built inside the body: inside the outer trace, it stays unschemed. Its parameter has a
-   constant initialization: a random one would make the outer trace refused (random number
-   generation inside it). *)
+(* A closure built inside the body: inside the outer trace, it stays unschemed. *)
 let%op const_layer () x = { cw = 0.5; o = [ 4 ] } * x
 
 let%op outer () x =
   let inner = const_layer () in
   inner x
 
-(* Random number generation: a trace a scheme cannot carry. *)
+(* Random number generation (gh-ocannl-1890): a scheme carries a draw with its coefficient as a
+   hole, which the conversion node each application's body registers fills. *)
 let%op noisy () x = x + uniform ()
+
+(* A draw whose precision comes from its call site: the pointwise product takes [x]'s. *)
+let%op drawn () x = x *. uniform ()
+let drawn_plain x = TDSL.O.(x *. uniform ())
+
+(* A draw beside a tensor made before the closure: its precision chain reaches [c]. *)
+let%op drawn_with c () x = x + (c *. uniform ())
+
+(* A body setting a capture reference made outside it: a trace a scheme cannot carry. *)
+let%op sets_outside r () x =
+  [%oc Shape.set_dim r 4];
+  x + x
 
 (* A capture reference made outside the function (gh-ocannl-1791), by its caller: an input of the
    scheme, bound per application -- the sum over [x]'s last axis, whose size [r] captures. *)
@@ -108,9 +119,19 @@ let%op summed_plain r () x =
 
 (* Refusals the warning reports, each used by the warning's case alone: the warning is printed once
    per function and reason in a process. *)
-let%op rng_warned () x = x + uniform ()
-let%op rng_quiet () x = x + uniform () [@@ocannl.no_scheme]
-let%op rng_off () x = x + uniform ()
+let%op sets_warned r () x =
+  [%oc Shape.set_dim r 4];
+  x + x
+
+let%op sets_quiet r () x =
+  [%oc Shape.set_dim r 4];
+  x + x
+[@@ocannl.no_scheme]
+
+let%op sets_off r () x =
+  [%oc Shape.set_dim r 4];
+  x + x
+
 let%op const_inner () x = { cw2 = 0.5; o = [ 4 ] } * x
 
 let%op outer_quiet () x =
@@ -165,8 +186,8 @@ let%op broken_when_masked_plain () ?(mask : Tensor.t option) x =
   match mask with None -> x | Some m -> x + m + ({ c3 = 0.; o = [ 3 ] } + { c4 = 0.; o = [ 4 ] })
 [@@ocannl.no_scheme]
 
-(* Refusals confined to the training pattern: a deterministic one (the body refuses to run on
-   tracers) and random number generation. *)
+(* A refusal confined to the training pattern (the body refuses to run on tracers), and a random
+   draw confined to it, which is schemed (gh-ocannl-1890). *)
 let%op picky () ~(train_step : Tensor.t option) x =
   match train_step with
   | None -> x
@@ -280,28 +301,72 @@ let () =
         (List.equal String.equal names [ "layer"; "layer"; "stack" ]));
   Verdict.case "a refused trace leaves the function unschemed" (fun () ->
       Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
       let (), evs =
         events (fun () ->
-            let f = noisy () in
+            let f = sets_outside r () in
             ignore (f (leaf "x" [ 4 ]) : Tensor.t))
       in
-      p "random number generation: unschemed, by the trace's refusal"
+      p "setting a capture reference made outside: unschemed, by the trace's refusal"
         (List.exists evs ~f:(function
           | Tensor.Scheme.Unschemed (n, why) ->
-              String.equal n "noisy" && String.is_substring why ~substring:"precision-dependent"
+              String.equal n "sets_outside" && String.is_substring why ~substring:"made outside it"
           | _ -> false));
       p_none "and the application ran unchecked" evs ~f:(fun e ->
-          traced "noisy" e || checked "noisy" e);
+          traced "sets_outside" e || checked "sets_outside" e);
       Tensor.unsafe_reinitialize ();
-      let f = noisy () in
+      let r = Shape.get_variable_ref "b" in
       let msg =
         error_message (fun () ->
             Tensor.Scheme.trace ~label:"explicit" 1 (function
-              | [ x ] -> [ f x ]
+              | [ x ] -> [ sets_outside r () x ]
               | _ -> assert false))
       in
       p "control: the explicit trace of the same function still raises a shape error"
-        (has_substring ~substring:"precision-dependent" msg));
+        (has_substring ~substring:"made outside it" msg));
+  Verdict.case "random number generation is schemed; an explicit instance refuses it" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let f, at_unit = events (fun () -> noisy ()) in
+      let (_ : Tensor.t), at_apply = events (fun () -> f (leaf "x" [ 4 ])) in
+      p "the closure's trace succeeds" (List.exists at_unit ~f:(traced "noisy"));
+      p_none "and nothing is left unschemed" at_unit ~f:(function
+        | Tensor.Scheme.Unschemed _ -> true
+        | _ -> false);
+      p "the application checks the scheme" (List.exists at_apply ~f:(checked "noisy"));
+      let instance ?sabotage () =
+        Tensor.unsafe_reinitialize ();
+        let body = function [ x ] -> [ drawn_plain x ] | _ -> assert false in
+        let s = Tensor.Scheme.trace ~label:"explicit" 1 body in
+        let x = leaf "x" [ 12 ] in
+        let r = Shape.make ~debug_name:"r" ~id:(-1) () in
+        let inst () =
+          match sabotage with
+          | None -> Tensor.Scheme.instantiate s ~args:[ x.shape ] ~results:[ r ]
+          | Some sabotage ->
+              Tensor.For_testing.instantiate_scheme ~sabotage s ~args:[ x.shape ] ~results:[ r ]
+        in
+        match outcome inst with
+        | Error msg -> `Refused msg
+        | Ok () -> (
+            match outcome (fun () -> ignore (Shape.to_dims r : int array)) with
+            | Ok () -> `Closed
+            | Error msg -> `Closure_failed msg)
+      in
+      p "the explicit trace succeeds" (Result.is_ok (outcome (fun () -> instance ())));
+      p "its explicit instance is refused, naming the scheme and the remedy"
+        (match instance () with
+        | `Refused msg ->
+            Stdio.eprintf "(not part of the golden) refused: %s\n%!" msg;
+            String.is_substring msg ~substring:"applying the shape scheme explicit"
+            && String.is_substring msg ~substring:"draws random numbers"
+            && String.is_substring msg ~substring:"apply the function inline"
+        | `Closed | `Closure_failed _ -> false);
+      p "control (no refusal): the closure fails at the draw's hole, settling no precision"
+        (match instance ~sabotage:No_draw_refusal () with
+        | `Closure_failed msg ->
+            Stdio.eprintf "(not part of the golden) closure refused: %s\n%!" msg;
+            String.is_substring msg ~substring:"read the coefficient of one of its random draws"
+        | `Refused _ | `Closed -> false));
   Verdict.case "a check leaves the session as it was" (fun () ->
       Tensor.unsafe_reinitialize ();
       let lay = layer () in
@@ -548,7 +613,11 @@ let () =
           && List.exists at_apply ~f:(checked (name ^ " [no train_step]")))
       in
       refused "picky" picky (fun g -> g ~train_step:None (leaf "x" [ 3 ]));
-      refused "noisy_step" noisy_step (fun g -> g ~train_step:None (leaf "x" [ 3 ]));
+      Tensor.unsafe_reinitialize ();
+      let (_ : _), at_unit = events noisy_step in
+      p "noisy_step: both patterns, the random draw's included, are traced at () (gh-ocannl-1890)"
+        (List.exists at_unit ~f:(traced "noisy_step [train_step]")
+        && List.exists at_unit ~f:(traced "noisy_step [no train_step]"));
       Tensor.unsafe_reinitialize ();
       let g = picky () in
       let lay = layer () in
@@ -716,18 +785,19 @@ let () =
 let () =
   Verdict.case "a refused trace warns, once" (fun () ->
       Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "b" in
       let evs = ref [] in
       let (), lines =
         Stderr_capture.lines (fun () ->
             Tensor.For_testing.observe_schemes
               (fun () ->
-                ignore ((rng_warned ()) (leaf "x" [ 4 ]) : Tensor.t);
-                ignore ((rng_warned ()) (leaf "y" [ 4 ]) : Tensor.t);
-                ignore ((rng_quiet ()) (leaf "z" [ 4 ]) : Tensor.t);
+                ignore ((sets_warned r ()) (leaf "x" [ 4 ]) : Tensor.t);
+                ignore ((sets_warned r ()) (leaf "y" [ 4 ]) : Tensor.t);
+                ignore ((sets_quiet r ()) (leaf "z" [ 4 ]) : Tensor.t);
                 ignore ((outer_quiet ()) (leaf ~batch:[ 2 ] "w" [ 3 ]) : Tensor.t);
                 Tensor.For_testing.set_op_shape_schemes (Some `Off);
                 Exn.protect
-                  ~f:(fun () -> ignore ((rng_off ()) (leaf "v" [ 4 ]) : Tensor.t))
+                  ~f:(fun () -> ignore ((sets_off r ()) (leaf "v" [ 4 ]) : Tensor.t))
                   ~finally:(fun () -> Tensor.For_testing.set_op_shape_schemes check_mode))
               ~on_event:(fun e -> evs := e :: !evs))
       in
@@ -735,16 +805,130 @@ let () =
       let about name l = String.is_substring l ~substring:("the shape scheme of " ^ name ^ " ") in
       p "the refused function was left unschemed twice"
         (List.count !evs ~f:(function
-           | Tensor.Scheme.Unschemed (n, _) -> String.equal n "rng_warned"
+           | Tensor.Scheme.Unschemed (n, _) -> String.equal n "sets_warned"
            | _ -> false)
         = 2);
-      p "one warning names it, on stderr" (List.count warnings ~f:(about "rng_warned") = 1);
+      p "one warning names it, on stderr" (List.count warnings ~f:(about "sets_warned") = 1);
       p_exists "with the trace's reason" warnings ~f:(fun l ->
-          about "rng_warned" l && String.is_substring l ~substring:"precision-dependent");
-      p "no warning for the opted-out function" (List.count warnings ~f:(about "rng_quiet") = 0);
+          about "sets_warned" l && String.is_substring l ~substring:"made outside it");
+      p "no warning for the opted-out function" (List.count warnings ~f:(about "sets_quiet") = 0);
       p "nor for a closure built inside a trace"
         (List.exists !evs ~f:(function
            | Tensor.Scheme.Unschemed (n, _) -> String.equal n "const_inner"
            | _ -> false)
         && List.count warnings ~f:(about "const_inner") = 0);
-      p "nor with the schemes off" (List.count warnings ~f:(about "rng_off") = 0))
+      p "nor with the schemes off" (List.count warnings ~f:(about "sets_off") = 0))
+
+(* {2 Random draws (gh-ocannl-1890)}
+
+   A packed conversion's coefficient (values per 128-bit block) is a lazy over its result node's
+   precision, which consumers set top-down as they register and closure forces: it reads the call
+   site's precision. The scheme carries a hole in its place, never read; each application's body
+   registers its own conversion node, which fills it. *)
+
+let draw_counter_blocks (y : Tensor.t) (x : Tensor.t) =
+  let u =
+    List.find_map_exn y.Tensor.children ~f:(fun c ->
+        if phys_equal c.Tensor.subtensor x then None else Some c.subtensor)
+  in
+  let counter = (List.hd_exn u.Tensor.children).subtensor in
+  Array.fold (Shape.to_dims counter.Tensor.shape) ~init:1 ~f:( * )
+
+let () =
+  Verdict.case "a random draw reads its call site's precision, schemed as inline" (fun () ->
+      let n = 12 in
+      let run ~schemed () =
+        Tensor.For_testing.set_op_shape_schemes (Some (if schemed then `Check else `Off));
+        Exn.protect
+          ~finally:(fun () -> Tensor.For_testing.set_op_shape_schemes check_mode)
+          ~f:(fun () ->
+            Tensor.unsafe_reinitialize ();
+            let f, at_unit = events (fun () -> drawn ()) in
+            let xv = Array.init n ~f:(fun i -> Float.of_int (i + 1)) in
+            let x1 = TDSL.ndarray xv ~label:[ "x1" ] ~output_dims:[ n ] () in
+            let x2 = TDSL.ndarray xv ~label:[ "x2" ] ~output_dims:[ n ] () in
+            Ir.Tnode.update_prec x2.value Ir.Ops.half;
+            let y1, at1 = events (fun () -> f x1) in
+            let y2, at2 = events (fun () -> f x2) in
+            let ctx = Ocannl.Train.forward_once (Context.auto ()) y1 in
+            let ctx = Ocannl.Train.forward_once ctx y2 in
+            let values t = Array.to_list (Context.get_values ctx t.Tensor.value) in
+            let evs = at_unit @ at1 @ at2 in
+            ( (draw_counter_blocks y1 x1, draw_counter_blocks y2 x2),
+              (values y1, values y2),
+              (List.count evs ~f:(traced "drawn"), List.count evs ~f:(checked "drawn")) ))
+      in
+      let blocks_off, vals_off, _ = run ~schemed:false () in
+      let blocks_on, vals_on, (traces, checks) = run ~schemed:true () in
+      let show (a, b) = Int.to_string a ^ " and " ^ Int.to_string b in
+      Stdio.eprintf "(not part of the golden) blocks: inline %s, schemed %s\n%!" (show blocks_off)
+        (show blocks_on);
+      p "inline: 12 values take 3 blocks at single precision and 2 at half"
+        (Poly.equal blocks_off (3, 2));
+      p "schemed: the function is traced once and each application checked"
+        (traces = 1 && checks = 2);
+      p "schemed: each application's counter has inline construction's block count"
+        (Poly.equal blocks_on blocks_off);
+      p "and draws inline construction's values"
+        (Poly.equal (fst vals_on) (fst vals_off) && Poly.equal (snd vals_on) (snd vals_off));
+      let blocks_memo =
+        match Shape.with_memoized_draw_coefficient (run ~schemed:true) with
+        | blocks, _, _ -> `Blocks blocks
+        | exception (Row.Shape_error (msg, _) | Tensor.Session_error (msg, _) | Utils.User_error msg)
+          ->
+            `Failed msg
+      in
+      p
+        "control (one coefficient memoized from the trace): the half application loses its block \
+         count"
+        (match blocks_memo with
+        | `Blocks b ->
+            Stdio.eprintf "(not part of the golden) memoized blocks: %s\n%!" (show b);
+            not (Poly.equal b blocks_off)
+        | `Failed msg ->
+            Stdio.eprintf "(not part of the golden) memoized run refused: %s\n%!" msg;
+            false));
+  Verdict.case "tracing and checking a draw settle no precision" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let c0 = leaf "c0" [ 4 ] in
+      (* An operation's result: its precision is a lazy that the product's forces. *)
+      let c = TDSL.O.(c0 + c0) in
+      let f, at_unit = events (fun () -> drawn_with c ()) in
+      let (_ : Tensor.t), at_apply = events (fun () -> f (leaf "x" [ 4 ])) in
+      p "the function is traced and its application checked"
+        (List.exists at_unit ~f:(traced "drawn_with")
+        && List.exists at_apply ~f:(checked "drawn_with"));
+      p "the precision of the tensor in the draw's precision chain is still unsettled"
+        (not (Lazy.is_val c.Tensor.value.Ir.Tnode.storage_prec)))
+
+(* The trace's own nodes die with its rewind: a held scheme keeps none of them. *)
+let[@inline never] held_draw_scheme ?sabotage () =
+  let w = ref None in
+  let body = function
+    | [ x ] ->
+        let y = drawn_plain x in
+        let u =
+          List.find_map_exn y.Tensor.children ~f:(fun c ->
+              if phys_equal c.Tensor.subtensor x then None else Some c.subtensor)
+        in
+        w := Some (Gc_witness.witness u.Tensor.value);
+        [ y ]
+    | _ -> assert false
+  in
+  let s =
+    match sabotage with
+    | None -> Tensor.Scheme.trace ~label:"held" 1 body
+    | Some sabotage -> Tensor.For_testing.trace_scheme ~sabotage ~label:"held" 1 body
+  in
+  (s, Option.value_exn !w)
+
+let () =
+  Verdict.case "a held scheme with a draw keeps none of its trace's nodes" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let s, w = held_draw_scheme () in
+      p "the trace's draw node is reclaimed while its scheme is held" (Gc_witness.reclaimed w);
+      ignore (Sys.opaque_identity s : Tensor.Scheme.t);
+      Tensor.unsafe_reinitialize ();
+      let s, w = held_draw_scheme ~sabotage:No_draw_holes () in
+      p "control (the trace's own coefficients kept): the node is kept" (Gc_witness.kept w);
+      ignore (Sys.opaque_identity s : Tensor.Scheme.t))

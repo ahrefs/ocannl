@@ -695,6 +695,16 @@ end
 
 type update_id = Update_id.t [@@deriving equal, compare, hash, sexp]
 
+(* A negative control's switch (gh-ocannl-1890): while set, every packed conversion reuses the first
+   coefficient registered -- one coefficient memoized across call sites, and for a scheme's
+   applications owned by its trace. *)
+let memoized_draw_coefficient : int Utils.safe_lazy option ref option ref = ref None
+[@@mutation_serial.exempt "a negative control's switch, set by tests only"]
+
+let with_memoized_draw_coefficient f =
+  memoized_draw_coefficient := Some (ref None);
+  Exn.protect ~f ~finally:(fun () -> memoized_draw_coefficient := None)
+
 let update_uid = ref 0
 [@@mutation_serial.exempt
   "a fresh-id counter: ids are never reused, so a rewind need not restore it"]
@@ -1173,6 +1183,29 @@ let check_before_binding ~where ~error_shapes ~is_row (delayed_ref : delayed_var
 let previous_of (r : delayed_var_ref) =
   if bound_before_closure r then (`Not_set_yet, r.carried_row) else (r.var, None)
 
+(* A row's product equals a dimension: a dimension/row tie between capture references. Its
+   coefficient is a constant, which a shape-scheme trace can carry (gh-ocannl-1890). *)
+let product_tie ~origin row_var dim_var =
+  Row.Rows_constr
+    {
+      r = [ Row.get_row_for_var Row.empty_provenance row_var ];
+      constr =
+        Total_elems
+          {
+            numerator =
+              Strided_var
+                {
+                  coeff = Utils.safe_value "capture_product_tie" 1;
+                  var = dim_var;
+                  denom = 1;
+                  round_up = false;
+                };
+            divided_by = [];
+            keep_axis = false;
+          };
+      origin;
+    }
+
 (* The constraints binding [delayed_ref] to [binding] implies, given [previous_binding] and the
    reference's solution: equality with a value already solved for the reference, and a tie to the
    variable another operation bound the reference to (gh-ocannl-1545). [carried_row]: the row the
@@ -1199,27 +1232,7 @@ let binding_constraints ~for_projections ~as_input ~error_shapes ~previous_bindi
   in
   let shared_origin = origin "shared capture reference" in
   let row_of var = Row.get_row_for_var Row.empty_provenance var in
-  let product_is row_var dim_var =
-    Row.Rows_constr
-      {
-        r = [ row_of row_var ];
-        constr =
-          Total_elems
-            {
-              numerator =
-                Strided_var
-                  {
-                    coeff = Utils.safe_lazy "shared_capture_reference" (fun () -> 1);
-                    var = dim_var;
-                    denom = 1;
-                    round_up = false;
-                  };
-              divided_by = [];
-              keep_axis = false;
-            };
-        origin = shared_origin;
-      }
-  in
+  let product_is row_var dim_var = product_tie ~origin:shared_origin row_var dim_var in
   let unsolved = Option.is_none solved_dim && Option.is_none solved_sym in
   match binding with
   | `Dim var ->
@@ -2268,9 +2281,20 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
           ] )
   | Transpose (Uint4x32_to_prec target_prec, sh) ->
       let var = get_var () in
-      let coeff =
+      let own_coeff () =
         Utils.safe_lazy [%string "Uint4x32 %{sh.id#Int} to_prec_of %{cur_sh.id#Int}"] (fun () ->
             16 / Ir.Ops.prec_in_bytes (Lazy.force target_prec))
+      in
+      let coeff =
+        match !memoized_draw_coefficient with
+        | None -> own_coeff ()
+        | Some memo -> (
+            match !memo with
+            | Some c -> c
+            | None ->
+                let c = own_coeff () in
+                memo := Some c;
+                c)
       in
       defaults
       @@ [
@@ -3428,34 +3452,17 @@ let set_equal delayed_ref1 delayed_ref2 =
   | { var = `Row row_var; _ }, { var = `Dim dim_var; _ } ->
       (* One is dim var, one is row var - equality via Total_elems constraint *)
       active_constraints :=
-        Row.Rows_constr
-          {
-            r = [ Row.get_row_for_var Row.empty_provenance row_var ];
-            constr =
-              Total_elems
-                {
-                  numerator =
-                    Strided_var
-                      {
-                        coeff = Utils.safe_lazy "set_equal_dim_row" (fun () -> 1);
-                        var = dim_var;
-                        denom = 1;
-                        round_up = false;
-                      };
-                  divided_by = [];
-                  keep_axis = false;
-                };
-            origin =
-              [
-                {
-                  lhs_name = delayed_ref1.var_ref.ref_label;
-                  lhs_kind = `Output;
-                  rhs_name = delayed_ref2.var_ref.ref_label;
-                  rhs_kind = `Output;
-                  operation = Some "Shape.set_equal Dim-Row or Row-Dim";
-                };
-              ];
-          }
+        product_tie row_var dim_var
+          ~origin:
+            [
+              {
+                lhs_name = delayed_ref1.var_ref.ref_label;
+                lhs_kind = `Output;
+                rhs_name = delayed_ref2.var_ref.ref_label;
+                rhs_kind = `Output;
+                operation = Some "Shape.set_equal Dim-Row or Row-Dim";
+              };
+            ]
         :: !active_constraints
 
 let set_scale ~factor delayed_ref_large delayed_ref_small =
@@ -5064,6 +5071,8 @@ module Scheme = struct
     | No_internal_rows
     | No_end_validation
     | No_ref_inputs
+    | No_draw_holes
+    | No_draw_refusal
 
   type nonrec t = {
     label : string;
@@ -5092,6 +5101,9 @@ module Scheme = struct
         (** The scheme's own tensors, by debug name (gh-ocannl-1903): its label, its arguments, the
             shapes its trace made and the tensors of the schemes the trace applied. An error at an
             application ranks the origins naming them first. *)
+    draws : int;
+        (** The random draws (packed uint4x32 conversions) the trace registered (gh-ocannl-1890):
+            their coefficients are holes, which an explicit instance cannot fill. *)
   }
 
   let label s = s.label
@@ -5283,10 +5295,33 @@ module Scheme = struct
       let constraints = List.rev (window ~mark:constraints_mark !active_constraints) in
       if List.exists constraints ~f:Row.has_lazy_coefficient then
         refuse
-          "the function registers a precision-dependent total-elements constraint (a uint4x32 \
-           conversion, e.g. random number generation, or one capture reference bound both as a \
-           dimension and as a row): its coefficient is a lazy over the trace's own nodes, which a \
-           scheme cannot carry past the trace -- apply the function inline";
+          "the function registers a total-elements constraint whose coefficient is a lazy of \
+           unknown provenance, which a scheme cannot carry past the trace -- apply the function \
+           inline";
+      (* Random draws (gh-ocannl-1890): a packed conversion's coefficient is a lazy over its result
+         node's precision, which the node's consumers set as they register and closure forces. The
+         scheme never reads it -- a trace, a check and an instance solve Stage1 only, which reads no
+         lazy coefficient -- so it carries a hole in its place, holding none of the trace's nodes;
+         an application's own conversion node, registered by the body, is what fills it. *)
+      let holes = Hashtbl.create (module String) in
+      let hole (coeff : int Utils.safe_lazy) =
+        if sabotaged No_draw_holes then coeff
+        else
+          (* Only the id is kept: the hole must not close over [coeff], a lazy over the trace's
+             node. *)
+          let id = coeff.unique_id in
+          Hashtbl.find_or_add holes id ~default:(fun () ->
+              Utils.safe_lazy ("draw hole of " ^ id) (fun () ->
+                  raise
+                  @@ Row.Shape_error
+                       ( [%string
+                           "the shape scheme %{label} read the coefficient of one of its random \
+                            draws (%{id}): a scheme carries a hole in its place, which only the \
+                            conversion node an application's body registers fills"],
+                         [] )))
+      in
+      let constraints = List.map constraints ~f:(Row.map_draw_coefficients ~f:hole) in
+      let draws = Hashtbl.length holes in
       (* A backstop: the setters refuse an outside reference themselves, and a binding is an
          input. *)
       if
@@ -5429,9 +5464,10 @@ module Scheme = struct
         unmarked_unused = Set.to_list (Set.diff unused_start unused_end);
         closure_bound;
         closure_at_trace = !closure_count;
-        env = env_end;
+        env = Row.map_env_draw_coefficients ~f:hole env_end;
         ref_inputs;
         tensor_names = Set.of_list (module String) (Hash_set.to_list names);
+        draws;
       }
     with
     | Row.Shape_error (msg, trace) ->
@@ -5465,6 +5501,17 @@ module Scheme = struct
     in
     check_count "arguments" (arity s) (List.length args);
     check_count "results" (num_results s) (List.length results);
+    (* An explicit instance stands for the body until closure, which forces every draw's
+       coefficient; it has no conversion node to fill the scheme's holes with. A check ([bind_refs]
+       false) solves Stage1 only and is put back before the body registers its own. *)
+    (if bind_refs && s.draws > 0 && not (sabotaged No_draw_refusal) then
+       let msg =
+         [%string
+           "the scheme draws random numbers (%{s.draws#Int} packed conversion(s)), whose counter \
+            size is the precision the conversion node of the body's own application settles; an \
+            explicit instance has no such node -- apply the function inline"]
+       in
+       if tracing_in_progress () then raise @@ Untraceable_scheme (prefix ^ msg) else fail msg);
     List.iter
       (args @ results @ List.map s.anchors ~f:fst)
       ~f:(fun (sh : shape) ->
