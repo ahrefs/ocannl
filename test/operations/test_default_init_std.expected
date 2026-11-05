@@ -9,3 +9,8 @@ default xavier uniform1 scale_sq 6 fans 100+50: mean: expected 0.1000 (tol 0.020
 default xavier unique values: 5000 of 5000
 inline kaiming normal1 default scale_sq 6 fan_in 100: std: expected 0.2449 (tol 0.0500): PASS
 inline kaiming unique values: 5000 of 5000
+default packed uniform [-0.25,0.25): std: expected 0.1443 (tol 0.0300): PASS
+default packed uniform [-0.25,0.25): mean: expected 0.0000 (tol 0.0400): PASS
+default packed uniform unique values: 5000 of 5000
+bigram w, default packed uniform: all 784 values distinct: PASS
+bigram w, default uniform1: all 784 values distinct: PASS

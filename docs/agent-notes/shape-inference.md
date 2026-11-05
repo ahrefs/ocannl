@@ -156,6 +156,17 @@ files.
   chains and an eager stage-6 guess-to-1 conflicts with a dim arriving in the same stage
   (box_muller's interior axes were the canary). `At_least_dim` axes always meet their use sites
   (direct indexing is a dim-carrying use).
+- The packed sampler's round-up total (`Total_elems` over a `Strided_var { round_up = true }`,
+  minted by `Uint4x32_to_prec`) has to wait for the same use-site bound, in
+  `Row.eliminate_row_constraint`: an arm that settles the counter from the already-closed axes
+  alone is a guess, valid only when no bound gives the leftover row variable axes
+  (gh-ocannl-1868). The stage-6 arm for `denom % coeff = 0` took any GLB for absent, so a param
+  whose bound arrives late — bigram's `{ w } + 1`, reaching the matmul through a pointwise op —
+  drew 28 values for `28 -> 28` whenever the closed axes' product was a multiple of the block size
+  (4 at single precision), repeated along the axis constraint order happened to leave open. A GLB
+  the caller passes in counts as pending while its dims are unresolved, like one read from the
+  environment. Symptom to recognize: `range_over_offsets` smaller than the param by a whole axis;
+  `test_default_init_std.ml` claims distinctness on the executed values.
 - That spurious axis is also how a shape defect reaches the SCHEDULER, which is where it actually
   got noticed: `Tensorize`'s role check rejects an operand mentioning the third micro symbol, and
   `Stage`'s insertion point L\* is "the deepest loop carrying an outer-part symbol", so an operand

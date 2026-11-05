@@ -96,7 +96,6 @@ let exempt_zero_reference_exports =
     "Operation.concat";
     "Operation.concat_sum";
     "Operation.cos";
-    "Operation.default_uniform_param_init";
     "Operation.deinterleave_even";
     "Operation.deinterleave_odd";
     "Operation.einmax1";
