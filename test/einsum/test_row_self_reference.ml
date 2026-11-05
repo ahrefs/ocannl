@@ -195,3 +195,34 @@ let () =
   let rho1 = Row.get_row_var () and rho2 = Row.get_row_var () in
   check_list "eq, balanced conflicting flanks (family solution, accepted)"
     [ balanced_conflict_pair ~sh_id:33 rho1 rho2 ]
+
+(* gh-ocannl-1955: an equation waiting for the rank solves neither of its variables, so what is
+   bounded through one of them must not meet the other side's remainder as that variable's value.
+   Here rho1 closes to [] with rho = [], while rho >= rho0 >= rho1 read through rho1 = <rho2>.[4; 4]
+   would demand two axes of an empty row. The empty row arrives in a later solve, as the store
+   settles the bounds first. *)
+let () =
+  let row sh_id = Row.get_row_for_var (Row.provenance ~sh_id ~kind:`Output) (Row.get_row_var ()) in
+  let r = row 35 and r0 = row 36 and r1 = row 37 and r2 = row 38 in
+  let name = "eq waiting for the rank, then bounds through its variable (satisfiable)" in
+  match
+    let leftover, env =
+      Row.solve_inequalities ~stage:Stage1
+        [
+          Row.Row_ineq { res = r; opnd = r0; origin };
+          Row.Row_ineq { res = r0; opnd = r1; origin };
+          Row.Row_eq
+            {
+              r1 = { r1 with beg_dims = [ dim 4; dim 4 ] };
+              r2 = { r2 with dims = [ dim 4; dim 4 ] };
+              origin;
+            };
+        ]
+        Row.empty_env
+    in
+    let closed = Row.Row_eq { r1 = r; r2 = closed_row ~sh_id:39 ~beg_dims:[] ~dims:[]; origin } in
+    let leftover, env = Row.solve_inequalities ~stage:Stage1 (closed :: leftover) env in
+    Row.solve_inequalities ~stage:Stage7 leftover env
+  with
+  | _ -> Stdio.printf "%s: no error\n" name
+  | exception Row.Shape_error (msg, _) -> Stdio.printf "%s: Shape_error: %s\n" name msg

@@ -3299,10 +3299,13 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         let r2 : row = value in
         let ineqs : constraint_ list ref = ref ineqs in
         let result env =
-          let row_env, more, visited = visit_rows_for_row_solution env v ~value in
-          ineqs := more @ !ineqs;
           let unsolved, env =
             if beg_handled then (
+              (* Substituting reads [v = value] into every entry bounded by [v], so it belongs to
+                 this arm alone: below, [value] is what is left of the other side, and [v] is not it
+                 (gh-ocannl-1955). *)
+              let row_env, more, visited = visit_rows_for_row_solution env v ~value in
+              ineqs := more @ !ineqs;
               (match value.bcast with
               | Row_var u ->
                   add_rank_edge ~rows:orig_rows v u
