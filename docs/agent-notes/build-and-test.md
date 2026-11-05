@@ -3232,6 +3232,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     run owns the full list then, but for its `slow-` aliases, which no CI job runs (CI builds
     `@train` or `@default @runtest @bin-smoke`; `@check` only compiles `@slow`), so the local run
     is those plus the tests exercising the change (AGENTS.md).
+    The machine-readable form is the trailer (gh-ocannl-1921): whenever the list is printed, the
+    last line of stderr is `affected: verdict=V`, V one of `ok`, `cross-cutting`, `incomplete`
+    (a changed path is UNMAPPED, exit 3) or `cross-cutting,incomplete`. A caller reads that line,
+    never the prose; both conditions are decided in one place, `verdict` in `affected-tests.sh`,
+    which is where a different cross-cutting rule goes (link-only aliases are not counted today:
+    `low_level.ml` lists about 790 aliases, most of them link-only, and is `ok`).
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
     mid-change, never for the pre-push run, which takes the full default list (`prepush`, below,
@@ -3308,8 +3314,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     tools/test-run.sh run --expect-backend B --targets-file '{file}'` (ludics#864), so the runner
     stays one plain command line with its pin a word of it. It reads `affected`'s lines by an
     allowlist (one `@` operand, a `runtest-`/`slow-`/`train-` alias), and runs nothing when a line
-    is anything else (exit 2), when `affected` fails (exit 2) or says CROSS-CUTTING (exit 2: the
-    run is then CI's, above), or when its list is INCOMPLETE (exit 3: a changed path is UNMAPPED,
+    is anything else (exit 2), when `affected` fails (exit 2) or its verdict trailer says
+    `cross-cutting` (exit 2: the run is then CI's, above), is missing, unknown or at odds with its
+    exit status (exit 2), or when it says `incomplete` (exit 3: a changed path is UNMAPPED,
     such as `cuda_backend.ml` on a Mac; `--list` still prints what it found, exit 3, to extend
     with the OFF-BUILD aliases on a box that builds them). A list with no `runtest-` member runs
     nothing, exit 0, and `--list` then prints nothing, which `run --targets-file` refuses: check

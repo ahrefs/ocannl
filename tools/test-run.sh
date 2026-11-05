@@ -81,9 +81,13 @@
 # --file LIST -- env OCANNL_BACKEND=B tools/test-run.sh run --expect-backend B
 # --targets-file '{file}'`. Every line `affected` prints must be one `@`
 # operand naming a `runtest-`, `slow-` or `train-` alias (an allowlist): any
-# other line refuses the whole list (exit 2). Nothing runs when `affected`
-# fails (exit 2) or says CROSS-CUTTING (exit 2: the PR's CI run owns the list
-# then, AGENTS.md), nor when its list is INCOMPLETE (exit 3: a changed path is
+# other line refuses the whole list (exit 2). The verdict is read from
+# `affected`'s trailer, the last line of its stderr (`affected: verdict=ok|
+# cross-cutting|incomplete|cross-cutting,incomplete`, gh-ocannl-1921), never
+# from its prose: a stderr without that line, or one disagreeing with its exit
+# status, refuses too (exit 2). Nothing runs when `affected`
+# fails (exit 2) or says cross-cutting (exit 2: the PR's CI run owns the list
+# then, AGENTS.md), nor when its list is incomplete (exit 3: a changed path is
 # UNMAPPED); `--list` then still prints what it found and exits 3. A list with
 # no `runtest-` alias runs nothing and exits 0. `--targets-file` is refused
 # (the list is affected's): name any further alias after `build`.
@@ -3781,10 +3785,11 @@ shift
 # by an allowlist, and then BECOMES that run: `sub` is `run` from here on and
 # the list reaches the run's own intake as a targets file in a scratch
 # directory this launcher removes as it exits (the run records the argv it
-# read; no launch path sets an EXIT trap of its own). Nothing runs when the change is
-# CROSS-CUTTING (exit 2: the pre-push run is then not this list), nor when the
-# list is INCOMPLETE (exit 3: a path reached what this build cannot place), so
-# no green verdict ever stands for a list that was not the pre-push one.
+# read; no launch path sets an EXIT trap of its own). Nothing runs when the
+# verdict `affected` ends its stderr with is cross-cutting (exit 2: the pre-push
+# run is then not this list), nor when it is incomplete (exit 3: a path reached
+# what this build cannot place), nor without a verdict (exit 2), so no green
+# verdict ever stands for a list that was not the pre-push one.
 if [ "$sub" = prepush ]; then
   pp_usage='prepush --since BASE [--list | [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
   pp_base= pp_print=0 pp_run_opts=()
@@ -3823,7 +3828,25 @@ if [ "$sub" = prepush ]; then
     0 | 3) ;;
     *) die "prepush: affected --since $pp_base exited $pp_rc (above); nothing run" ;;
   esac
-  grep -q '^affected: CROSS-CUTTING:' "$pp_dir/affected.err" &&
+  # The verdict is affected's trailer (gh-ocannl-1921; tools/affected-tests.sh
+  # states it), never its prose: the one `affected: verdict=` line, which is
+  # the last line of its stderr, and which agrees with its exit status. A
+  # stderr without one, with two, or naming a verdict not known here is no
+  # verdict to run on.
+  pp_verdict=$(sed -n 's/^affected: verdict=//p' "$pp_dir/affected.err")
+  [ "$(tail -n 1 "$pp_dir/affected.err")" = "affected: verdict=$pp_verdict" ] ||
+    die "prepush: affected --since $pp_base printed no verdict trailer (one 'affected: verdict=...' line, the last of its stderr, above); nothing run"
+  pp_cross=0 pp_incomplete=0
+  case $pp_verdict in
+    ok) ;;
+    cross-cutting) pp_cross=1 ;;
+    incomplete) pp_incomplete=1 ;;
+    cross-cutting,incomplete) pp_cross=1 pp_incomplete=1 ;;
+    *) die "prepush: affected --since $pp_base printed a verdict this runner does not know: '$pp_verdict' (ok, cross-cutting, incomplete or cross-cutting,incomplete); nothing run" ;;
+  esac
+  [ "$pp_rc" = $((pp_incomplete * 3)) ] ||
+    die "prepush: affected --since $pp_base exited $pp_rc with the verdict '$pp_verdict' (incomplete is exit 3, and only it); nothing run"
+  [ "$pp_cross" = 0 ] ||
     die "prepush: this change is CROSS-CUTTING (above), so the pre-push run is not this list: the PR's CI run owns it but its slow- aliases; run those and the tests that exercise the change, named in the PR body, then dune build @check (AGENTS.md, gh-ocannl-1765); nothing run"
   # The allowlist: one `@` operand per line, its last component a per-test
   # alias of one of the three families; any other line stops it.
@@ -3853,11 +3876,11 @@ if [ "$sub" = prepush ]; then
   } >&2
   if [ "$pp_print" = 1 ]; then
     [ ${#pp_keep[@]} -eq 0 ] || printf '%s\n' "${pp_keep[@]}"
-    [ "$pp_rc" = 0 ] ||
+    [ "$pp_incomplete" = 0 ] ||
       echo "test-run: prepush: the list is INCOMPLETE (UNMAPPED above): extend it with what those paths reach (the OFF-BUILD aliases, on a box that builds them)" >&2
     exit "$pp_rc"
   fi
-  if [ "$pp_rc" = 3 ]; then
+  if [ "$pp_incomplete" = 1 ]; then
     echo "test-run: prepush: the list is INCOMPLETE (UNMAPPED above): a changed path reaches what this build cannot place, so this is not the pre-push list; nothing run. prepush --since $pp_base --list prints what was found, to extend (the OFF-BUILD aliases, on a box that builds them) and run as run --targets-file F" >&2
     exit 3
   fi
