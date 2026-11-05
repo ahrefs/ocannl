@@ -46,6 +46,15 @@
  (modules stderr_capture)
  (libraries base stdio unix))
 
+; A possibly non-returning call on its own domain under a deadline, a hang reported as a failed
+; [Verdict] claim (gh-ocannl-1790's helper, shared by the projection-solver tests, gh-ocannl-1889).
+
+(library
+ (name bounded_run)
+ (package neural_nets_lib)
+ (modules bounded_run)
+ (libraries base stdio unix arrayjit.verdict))
+
 (library
  (name test_utils)
  (package neural_nets_lib)

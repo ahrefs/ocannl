@@ -738,7 +738,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules proj_var_cycle)
- (libraries base ocannl stdio unix arrayjit.verdict))
+ (libraries base ocannl stdio bounded_run arrayjit.verdict))
 
 (test
  ; ocannl-backend: none -- hand-built Dim_ineq/Dim_eq through Row.solve_inequalities; the solver
