@@ -373,6 +373,7 @@
   (alias runtest-flip_twins)
   (alias runtest-config_class_fingerprint)
   (alias runtest-model_default_placements)
+  (alias runtest-placement_search_parity)
   (alias runtest-agent_notes_structure)
   (alias runtest-doc_examples)
   (alias runtest-doc_examples_scan_cases)
@@ -9314,6 +9315,42 @@
  (package neural_nets_lib)
  (action
   (diff model_default_placements.expected model_default_placements.actual)))
+
+; gh-ocannl-1878: the placement pre-search ranks the lowering the compile prepares, under both
+; buffer_aliasing settings (the test flips the gate). The envelope is one where kernel boundaries
+; show in the rank, so the zeros' position does.
+
+(executable
+ (name placement_search_parity)
+ (modules placement_search_parity)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (target placement_search_parity.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:placement_search_parity.exe}
+    "--ocannl_model_default_schedule=true"
+    "--ocannl_model_default_placements=3"
+    "--ocannl_model_peak_flops=1e10"
+    "--ocannl_model_peak_memory_bandwidth=1e9"
+    "--ocannl_model_cache_capacity=none"
+    "--ocannl_model_cache_bandwidth=none"))))
+
+(rule
+ (alias runtest-placement_search_parity)
+ (package neural_nets_lib)
+ (action
+  (diff placement_search_parity.expected placement_search_parity.actual)))
 
 (test
  (name prelowered_seam)

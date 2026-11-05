@@ -829,7 +829,7 @@ val lowered_transform_input : Ir.Low_level.optimized -> Ir.Low_level.optimized
     the compile's preparation before scheduling (zeros sunk under [buffer_aliasing]), which moves
     statements and so fission boundaries. A decision-only reader that runs a compile's transform on
     a hermetic lowering applies it first, to see what the compile's transform would
-    ([Autotune.model_pick], gh-ocannl-1780). *)
+    ([Autotune.model_pick], gh-ocannl-1780; the placement pre-search's leaves, gh-ocannl-1878). *)
 
 val probe_link_floor : ?name:string -> ?prelowered:bool -> t -> Ir.Low_level.optimized -> link_floor
 (** gh-ocannl-1554: {!link_floor}, then a trial allocation of its pools -- each group's bytes in one

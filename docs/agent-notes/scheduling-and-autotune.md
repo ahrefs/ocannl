@@ -937,6 +937,16 @@ files.
   `Make` instance, and a GPU-scheduled pick would be compiled by the context's backend.
   `Ll_test.cuda_model_target` is CUDA without a device (rated ceilings: `Ll_test.rated_limits`);
   `model_seeded_anchor` and `seeded_default` judge the seeded model's premises for it on cc.
+- **A decision-only reader ranks what the compile hands its transform** (gh-ocannl-1878): a compile
+  sinks zeros under `buffer_aliasing` before scheduling, which moves fission boundaries and so
+  kernels, so running `select` on a bare `Context.lowered_for_decisions` prices a fission that never
+  ships. `model_pick`, `model_explain` and the placement pre-search's leaves all go through
+  `selection_input` (`Context.lowered_transform_input`). `model_choice.mc_placement_rank_ms`
+  reports the rank the pre-search gave its winner, so `test/operations/placement_search_parity`
+  pins it to the compile's `mc_rank_ms`, on the CUDA stand-in too, where kernels are what the
+  zeros move: rank is a sum over kernels of the larger leg, and cc's single kernel hides it. The
+  pre-search's floor stays on the unprepared lowering: `completion_floor` folds per-node access
+  images, no statement order.
 ## Dispatch bindings and device properties
 - **A dispatch's launch parameters are read on the HOST, at `Context.run`, and carried to the
   device** — never re-read from the caller's refs when the device gets around to the task. Only
