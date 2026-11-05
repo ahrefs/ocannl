@@ -103,6 +103,10 @@ block_components_structural_cells: the two placements agree: true
 block_components_two_terms: inlined: true
 block_components_two_terms: executed values are the reference: true
 block_components_two_terms: the two placements agree: true
+block_components_two_terms_contained: the replay keeps no producer loop: true
+block_components_two_terms_contained: inlined: true
+block_components_two_terms_contained: executed values are the reference: true
+block_components_two_terms_contained: the two placements agree: true
 unit_axis_fixed_producer: the candidate is committed virtual as a scalar constexpr: true
 unit_axis_fixed_producer: inlined: true
 unit_axis_fixed_producer: executed values are the reference: true
