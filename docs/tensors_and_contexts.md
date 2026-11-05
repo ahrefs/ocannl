@@ -548,14 +548,15 @@ uses them; the input size of `w` is left to inference:
 let%op mlp_layer ~hid () x = relu (({ w; o = [ hid ] } * x) + { b = 0.; o = [ hid ] })
 ```
 
-`Tensor.Scheme.to_string` prints a scheme like a type, `batch|input->output` for the argument,
-then `=>` and the result. A row variable `..'a..` stands for any number of axes and is
+`Tensor.Scheme.traced_by` returns the schemes the closures built while it ran traced -- the ones
+their applications are checked against -- and `Tensor.Scheme.to_string` prints one like a type,
+`batch|input->output` for the argument, then `=>` and the result. A row variable `..'a..` stands for any number of axes and is
 generalized: each application gets its own. `..'_a..` is fixed, shared by every application
 (here, the input row of `w`), the way OCaml prints a weak type variable. The indented lines are
 the broadcasting relations, `r ⊑ o` reading "the result row `r` refines the operand row `o`":
 
 ```text doc-excerpt=test/operations/reusable_tensor_programs.ml
-layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
+mlp_layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
   ..'_a.. ⊑ ..'c..
   ..'d.. ⊑ ..'a..
   ..'e.. ⊑ ..'_b..

@@ -449,15 +449,15 @@ module Scheme : sig
   val to_string : t -> string
   (** [to_string s] prints [s]'s boundary: [<label> : <arguments> => <results>], each shape as
       [batch|input->output] under the trace's solution, with [..v..] for a row variable and [()] for
-      an empty row. Variables are named by first appearance, so the text does not depend on the
-      session's id counters: a generalized variable (renamed per application) as ['a], ['b], ...; a
-      fixed one (shared with what the function closes over, such as a parameter lifted to its [()]
-      scope) as ['_a], ['_b], ..., the way OCaml prints weak type variables. Then, one per indented
-      line, the broadcasting inequalities [r ⊑ o] (the result side refines the operand side) among
-      the boundary's variables and the fixed ones, and the lower bounds of the boundary's variables,
-      under the trace's final environment, with the function's intermediate variables eliminated
-      along monotone chains. Other constraints (totals, concatenations) are not printed.
-      [test/operations/reusable_tensor_programs.ml] shows one. *)
+      an empty row, and [_] for a scheme with no results. Variables are named by first appearance,
+      so the text does not depend on the session's id counters: a generalized variable (renamed per
+      application) as ['a], ['b], ...; a fixed one (shared with what the function closes over, such
+      as a parameter lifted to its [()] scope) as ['_a], ['_b], ..., the way OCaml prints weak type
+      variables. Then, one per indented line, the broadcasting inequalities [r ⊑ o] (the result side
+      refines the operand side) among the boundary's variables and the fixed ones, and the lower
+      bounds of the boundary's variables, under the trace's final environment, with the function's
+      intermediate variables eliminated along monotone chains. Other constraints (totals,
+      concatenations) are not printed. [test/operations/reusable_tensor_programs.ml] shows one. *)
 
   val trace : label:string -> int -> (tensor list -> tensor list) -> t
   (** [trace ~label n f] applies [f] to [n] tracing tensors whose shapes are fresh row variables,
@@ -509,7 +509,15 @@ module Scheme : sig
       are [Some] -- each traced, checked and refused on its own, under the label
       [<function> [p, no q]] (just [<function>] without such parameters). The closure built at [()]
       traces every pattern; a function without a [()] stage traces every pattern at its first
-      application; afterwards each pattern re-traces on its own when stale. *)
+      application; afterwards each pattern re-traces on its own when stale.
+
+      An automatic scheme's results (gh-ocannl-1801) are what the traced body returns, when it is a
+      tensor the body made (or a copy of its record, [{ t with forward = ... }]) or one of its
+      arguments, or a tuple (or record) of such: one result per component. Any other value -- a
+      function, a list, a tensor made before the body ran -- gives the scheme no results. The checks
+      relate the arguments only, so the results serve {!to_string} and {!instantiate}. {!traced_by}
+      returns the schemes a closure traced: the ones its applications are checked against, not a
+      re-trace. *)
 
   type handle
   (** A function's scheme slots: one handle per closure, one slot per presence pattern. *)
@@ -519,7 +527,9 @@ module Scheme : sig
       ["<label>: <status>"] per pattern, separated by ["; "]. *)
 
   type event =
-    | Traced of string  (** A function's scheme (a pattern's, by its label) was traced. *)
+    | Traced of t
+        (** A function's scheme (a pattern's, under its label) was traced: the scheme its
+            applications are checked against. *)
     | Unschemed of string * string
         (** A function (a pattern, by its label) was left unschemed, with the reason. *)
     | Checked of string  (** An application was checked against its pattern's scheme. *)
@@ -536,24 +546,33 @@ module Scheme : sig
 
   val reset_registration_times : unit -> unit
 
-  val check_definition : name:string -> (unit -> unit) -> string list
+  val traced_by : (unit -> 'a) -> 'a * t list
+  (** [traced_by (fun () -> block conf ())] runs the function and returns its result with the
+      automatic schemes traced while it ran, innermost first: those of the closures it built at
+      their [()] stage (every presence pattern of each), of the functions without a [()] stage it
+      first applied, and of the stale ones it re-traced. They are the schemes the closures use --
+      their applications are checked against them -- so [to_string] prints the scheme in use, with
+      no re-trace (gh-ocannl-1801). The scheme's {!label} names its function (and pattern). *)
+
+  val check_definition : name:string -> (unit -> unit) -> t list
   (** [check_definition ~name (fun () -> ignore (block conf ()))] runs a trial application of a
       [%op] block definition inside a window that is always rewound and allocates no session ids, so
       the [()] traces of the block and of the sub-blocks it builds run, and with them any shape
       error that does not depend on the arguments, prefixed ["checking the definition <name>: "].
-      Returns the labels of the schemes traced (every presence pattern of a closure built at [()] in
-      the trial: see above), innermost first; the session is unchanged afterwards. A function
-      without a [()] stage that the trial only builds is not traced. It catches errors that hold for
-      every configuration and those of the trial configuration only; it costs the trial's
-      construction and traces. Prefer it to a bare [block conf ()], which leaves the trial's
-      parameters in the session. *)
+      Returns the schemes traced, as {!traced_by} does (every presence pattern of a closure built at
+      [()] in the trial: see above), innermost first; the session is unchanged afterwards, and the
+      schemes stay printable. A function without a [()] stage that the trial only builds is not
+      traced. It catches errors that hold for every configuration and those of the trial
+      configuration only; it costs the trial's construction and traces. Prefer it to a bare
+      [block conf ()], which leaves the trial's parameters in the session. *)
 
   (** The runtime the [%op] expansion calls. Not for direct use. *)
   module For_ppx : sig
-    val closure : name:string -> arity:int -> (tensor list -> unit) -> handle
-    (** Traces now, the body applied to tracers: the [()] stage of a [%op] function. *)
+    val closure : name:string -> arity:int -> (tensor list -> 'r) -> handle
+    (** Traces now, the body applied to tracers: the [()] stage of a [%op] function. Its value gives
+        the scheme's results (see above), then is dropped. *)
 
-    val deferred : name:string -> arity:int -> (tensor list -> unit) -> handle
+    val deferred : name:string -> arity:int -> (tensor list -> 'r) -> handle
     (** Traces at the first application: a [%op] function without a [()] stage. *)
 
     val apply : handle -> tensor list -> (unit -> 'a) -> 'a
@@ -561,13 +580,13 @@ module Scheme : sig
         against [args], then runs [body]. Inside a trace, and when unschemed, only runs [body]. *)
 
     val closure_variants :
-      name:string -> optional:string option list -> (tensor option list -> unit) -> handle
+      name:string -> optional:string option list -> (tensor option list -> 'r) -> handle
     (** {!closure} for a function with option-valued tensor parameters: [optional] names each
         position's option-valued parameter ([None]: a required tensor, passed as [Some]). Traces
         every presence pattern now. *)
 
     val deferred_variants :
-      name:string -> optional:string option list -> (tensor option list -> unit) -> handle
+      name:string -> optional:string option list -> (tensor option list -> 'r) -> handle
     (** {!deferred} likewise: every presence pattern is traced at the first application. *)
 
     val apply_variants : handle -> tensor option list -> (unit -> 'a) -> 'a

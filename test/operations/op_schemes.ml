@@ -33,11 +33,15 @@ let events f =
   let result = Tensor.For_testing.observe_schemes f ~on_event:(fun e -> log := e :: !log) in
   (result, List.rev !log)
 
-let traced name = function Tensor.Scheme.Traced n -> String.equal n name | _ -> false
+let traced name = function
+  | Tensor.Scheme.Traced s -> String.equal (Tensor.Scheme.label s) name
+  | _ -> false
+
 let checked name = function Tensor.Scheme.Checked n -> String.equal n name | _ -> false
 
 let about name = function
-  | Tensor.Scheme.Traced n | Checked n | Unschemed (n, _) -> String.equal n name
+  | Tensor.Scheme.Traced s -> String.equal (Tensor.Scheme.label s) name
+  | Checked n | Unschemed (n, _) -> String.equal n name
 
 (* This test is about checking mode. *)
 let check_mode = Some `Check
@@ -295,7 +299,9 @@ let () =
             ignore (f (leaf ~batch:[ 2 ] "x" [ 3 ]) : Tensor.t))
       in
       let names =
-        List.filter_map evs ~f:(function Tensor.Scheme.Traced n -> Some n | _ -> None)
+        List.filter_map evs ~f:(function
+          | Tensor.Scheme.Traced s -> Some (Tensor.Scheme.label s)
+          | _ -> None)
       in
       p "a returned function after its sub-layers is traced once they exist"
         (List.equal String.equal names [ "layer"; "layer"; "stack" ]));
@@ -585,7 +591,7 @@ let () =
             ignore
               (Tensor.Scheme.check_definition ~name:"broken_when_masked" (fun () ->
                    ignore (broken_when_masked () : ?mask:Tensor.t -> Tensor.t -> Tensor.t))
-                : string list))
+                : Tensor.Scheme.t list))
       in
       p "check_definition reports it, naming the definition and the pattern"
         (has_substring
@@ -659,14 +665,14 @@ let () =
         (Tensor.Scheme.check_definition ~name:"stepped" (fun () ->
              ignore
                (stepped () : train_step:Tensor.t option -> ?mask:Tensor.t -> Tensor.t -> Tensor.t))
-          : string list);
+          : Tensor.Scheme.t list);
       (* The failing one inside a definition check too: its closure's [()] parameters are session
          tensors. *)
       (try
          ignore
            (Tensor.Scheme.check_definition ~name:"broken_when_masked" (fun () ->
                 ignore (broken_when_masked () : ?mask:Tensor.t -> Tensor.t -> Tensor.t))
-             : string list)
+             : Tensor.Scheme.t list)
        with Row.Shape_error _ -> ());
       p "the traces allocated no session id" (Tensor.get_next_id () = next_id);
       p_empty "successful and failed variant traces left the session as it was"

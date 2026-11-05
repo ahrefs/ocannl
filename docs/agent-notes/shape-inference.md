@@ -352,6 +352,15 @@ files.
   intermediate variables (`res` side: refines; `opnd` side: refined). Names go by first appearance
   in reading order, never by id: a trace's ids come from the reserved range, and so do the ids in
   its errors' constraint sexps, which a golden must not pin.
+- The results of an automatic scheme (gh-ocannl-1801, `Tensor.Scheme.traced_results`): the ppx
+  cannot name a function's result type, so its tracer hands the body's value over untyped and the
+  runtime finds the tensors in it by physical identity, among the tensors `add_fwd_root` saw while
+  the body ran (`made_by_traced_body`) and the tracers. Not by the forward roots a body leaves: the
+  backprop `%cd` of `@^^`/`@^+` makes inline tensors (`cond_pspace`, `sum_rhs1`) that stay roots
+  nothing forward consumes, a tuple's intermediate is no root at all, and roots are weak, so a
+  dropped tensor's presence would depend on the GC. A `{ t with forward = ... }` copy
+  (`Nn_blocks`' batch norm in training) is matched by holding `t`'s node in the same field.
+  `Scheme.check` passes `~results:None` to `instantiate_core`: results only print and instantiate.
 - Printing a shape error (gh-ocannl-1799, `Shape.error_to_string_hum`): `Printexc.to_string`
   (the toplevel) and `Exn.to_string` render a `Row.Shape_error` readably by default, naming
   variables and reserved-range tensors (`n'1`) by first appearance, also inside the message text

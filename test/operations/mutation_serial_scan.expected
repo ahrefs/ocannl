@@ -60,6 +60,7 @@ tensor/tensor.ml: closure_epoch (ref) -- exempt: a closure counter: it only grow
 tensor/tensor.ml: unchanged_roots_depth (ref) -- exempt: the nesting of with_unchanged_roots scopes, restored by the scope's own finally
 tensor/tensor.ml: next_cell_uid (ref) -- exempt: a fresh-id counter for owner cells: ids are never reused
 tensor/tensor.ml: owner_cells (Ephemeron) -- exempt: a weak registry of each node's owner cell: constructions add entries for the nodes they create, which a rewind discards with their nodes, so it restores nothing
+tensor/tensor.ml: made_by_traced_body (ref) -- exempt: the result candidates of a running trace, restored by Scheme.traced_results
 tensor/tensor.ml: random_seed (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/tensor.ml: random_seeds_created (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/tensor.ml: open_nodes (ref) -- exempt: a record of what the open work allocated: an entry left by a failure that did not taint is a node nobody holds, which a later rewind discards and a closure forgets; captured by capture_globals

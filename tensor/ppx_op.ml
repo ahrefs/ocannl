@@ -391,14 +391,9 @@ let wrap_schemed ~loc ~at_unit ~name ~params (fn : expression) =
                    let n = match l with Nolabel -> v | Labelled n | Optional n -> n in
                    [%expr Some [%e estring ~loc n]])) )
   in
-  let tracer =
-    [%expr
-      function
-      | [%p tracer_pat] ->
-          let (_ : _) = [%e call] in
-          ()
-      | _ -> assert false]
-  in
+  (* The body's value is returned, for the runtime to keep alive while it reads the tensors the body
+     made as the scheme's results (gh-ocannl-1801). *)
+  let tracer = [%expr function [%p tracer_pat] -> [%e call] | _ -> assert false] in
   let make_call = pexp_apply ~loc make [ (Labelled "name", name); shape_arg; (Nolabel, tracer) ] in
   let returned =
     pexp_function ~loc

@@ -13329,6 +13329,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-1801: the scheme an %op closure traced, exposed by Tensor.Scheme.traced_by, with its
+;; results read off what the traced body returns.
+
+(test
+ (name op_scheme_exposure)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules op_scheme_exposure)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name closed_shape_write_guard)
  (package neural_nets_lib)

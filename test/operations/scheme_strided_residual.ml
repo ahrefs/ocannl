@@ -37,7 +37,10 @@ let events f =
   let result = Tensor.For_testing.observe_schemes f ~on_event:(fun e -> log := e :: !log) in
   (result, List.rev !log)
 
-let traced name = function Tensor.Scheme.Traced n -> String.equal n name | _ -> false
+let traced name = function
+  | Tensor.Scheme.Traced s -> String.equal (Tensor.Scheme.label s) name
+  | _ -> false
+
 let checked name = function Tensor.Scheme.Checked n -> String.equal n name | _ -> false
 let unschemed name = function Tensor.Scheme.Unschemed (n, _) -> String.equal n name | _ -> false
 
