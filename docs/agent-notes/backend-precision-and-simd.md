@@ -1120,12 +1120,29 @@ files.
   (gh-ocannl-1865). `test_uniform_virtual_lane`'s `draw into` rows, which narrow the draw with
   `Tn.update_prec`,
   pin the parity; diagnosis recipe: break on the kernel under gdb and read its argument buffers.
-  A virtual cast twin's f16 scope over its f32 master is kept too, by gh-ocannl-1788's exact-collapse
-  rule, so whether it rounds is the backend's `compute_prec` of f16, the precision its local is
-  declared at: rounded on Metal, CUDA and HIP and on cc under `narrow_compute_f32=false`, unrounded
-  on cc's default. `mixed_prec_twin_rounding` derives the expected value from
-  `Context.codegen_capabilities`, and its digits go to stderr: they differ by backend, and the golden
-  that printed them went red on every non-cc backend once gh-ocannl-1788 landed (gh-ocannl-1817).
+- **A cast rounds at its own precision, whatever its placement** (gh-ocannl-1866). A narrow scope
+  over a read it does not widen exactly (`Low_level.narrowing_read`) is what a virtual `Operation.cast`
+  twin lowers to. `simplify_llc` keeps it even in a slot of its own precision, and `C_syntax` pins it
+  at storage precision like the rng scopes, so the read narrows once and widens exactly where a
+  materialized twin's store does. Two halves, because `compute_prec` is what skips the rounding
+  twice over: a slot annotated f16 can render at f32, so `Ops.equal_prec scope_prec eval` does not
+  make a collapse exact (the default recipe's `Twin_auto` weights read `w[...]` unrounded in every
+  f16 consumer before this, forward and backward), and a kept scope used to declare its local at
+  `compute_prec`. The simplifier cannot ask which applies: numerics are never in the lowered code
+  (gh-ocannl-568), so the scope stays on every backend and the renderer decides what it costs.
+  The rule is the read, not `Operation.cast`: `Precision_policy` stores a model's batch slice f16
+  over f32 data, a virtual node of the same shape, so it rounds too. That is why a recipe run moves
+  even with materialized twins, and why such a comparison needs the slice materialized as well:
+  before the fix, materializing `batch_x` beside the twins reproduced the fixed code's losses
+  bit for bit, while Metal's never moved. Limits: only a read. A virtual narrow node with
+  **arithmetic** in its body, and a narrow `Constant`, still skip their store's rounding where
+  compute is wider; that is gh-ocannl-517's policy, which `narrow_storage_compute` pins, so
+  placement can still change those values. An accumulator opened by a narrowing init keeps its
+  residency (the census needs every `Set_local` to be the read). A statement reading a kept scope is
+  out of reach of `serial_kernel_of` and the vectorizer, so a virtual twin at a matmul site seeds no
+  tile: the fix's known cost on a tuned cc run. `mixed_prec_twin_rounding` pins all three placements
+  at each narrow precision with exact claims, and `Context.placements` reads what the compile
+  resolved; `scope_collapse_rounding`'s cast shapes compare bitwise against a materialized node.
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator

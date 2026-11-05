@@ -66,6 +66,7 @@ test/operations/micrograd_demo_logging-cc-0-0.log.expected [c ll routine-log] ma
 test/operations/micrograd_demo_logging-hip-0-0.log.expected [c ll routine-log] markers c-prec-cast ll-assign routine-log; re-run by @test/operations/runtest-micrograd_demo_logging when %{read:../config/ocannl_backend.txt} is hip (hip)
 test/operations/micrograd_demo_logging-metal-0-0.log.expected [c ll routine-log] markers c-prec-cast ll-assign routine-log; re-run by @test/operations/runtest-micrograd_demo_logging when %{read:../config/ocannl_backend.txt} is metal (metal)
 test/operations/micrograd_demo_logging-multidev_cc-0-0.log.expected [c ll routine-log] markers c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-micrograd_demo_logging when %{read:../config/ocannl_backend.txt} is multidev_cc (multidev_cc)
+test/operations/mixed_prec_twin_rounding.expected [derived] beside test/operations/mixed_prec_twin_rounding.ml; re-run by @test/operations/runtest-mixed_prec_twin_rounding
 test/operations/n3_fwd_with_prec-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/operations/runtest-n3_fwd_with_prec-unoptimized
 test/operations/online_softmax_block_mma.expected [derived] beside test/operations/online_softmax_block_mma.ml; re-run by @test/operations/runtest-online_softmax_block_mma
 test/operations/reduction_forms.expected [derived] beside test/operations/reduction_forms.ml; re-run by @test/operations/runtest-reduction_forms
@@ -238,6 +239,8 @@ test/operations/integer_power_domain.ml [run by @test/operations/runtest-integer
 test/operations/ll_printer_constants.ml [renders generated text in memory; run by @test/operations/runtest-ll_printer_constants; also pins text this scan cannot name: mutation or unseen buffer write]
     " := "
 test/operations/masked_persistent_fragment.ml [pins through Ll_test.resident_regions, haystack unvalidated; run by @test/operations/runtest-masked_persistent_fragment; also pins text this scan cannot name: untraced callback, opaque aggregate component]
+test/operations/mixed_prec_twin_rounding.ml [run by @test/operations/runtest-mixed_prec_twin_rounding; also pins text this scan cannot name: computed fragment]
+    "= FLOAT_TO_HALF(" ^ ... ^ "[0])"
 test/operations/mma_operand_loads.ml [run by @test/operations/runtest-mma_operand_loads]
     "ldmatrix.sync.aligned.m8n8.x2"
     "ldmatrix.sync.aligned.m8n8.x4"
@@ -673,6 +676,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-log_index_width_wide
 @test/operations/runtest-masked_persistent_fragment
 @test/operations/runtest-micrograd_demo_logging
+@test/operations/runtest-mixed_prec_twin_rounding
 @test/operations/runtest-mma_operand_loads
 @test/operations/runtest-n3_fwd_with_prec-unoptimized
 @test/operations/runtest-narrow_storage_compute

@@ -10,6 +10,11 @@ nload: optimize inlines the virtual node and collapses its scope, computing the 
 wload: an exact scope over a load is still collapsed: true
 wload: the collapsed form computes the oracle's values bitwise: true
 wload: optimize inlines the virtual node and collapses its scope, computing the oracle's values bitwise: true
+cast_own: a cast stays a scope, scheduled and inlined: true
+cast_own: every form of the cast computes the materialized values bitwise: true
+cast_wide: a cast stays a scope, scheduled and inlined: true
+cast_wide: every form of the cast computes the materialized values bitwise: true
+a narrowing init leaves an accumulator at its residency: true
 narrow: the oracle's rounding is observable -- the value written straight into the sum computes different values: true
 narrow: the uncollapsed oracle runs its scope, and the schedule's simplify keeps it: true
 narrow: the scheduled form computes the oracle's values bitwise: true
@@ -24,3 +29,8 @@ nload: optimize inlines the virtual node and collapses its scope, computing the 
 wload: an exact scope over a load is still collapsed: true
 wload: the collapsed form computes the oracle's values bitwise: true
 wload: optimize inlines the virtual node and collapses its scope, computing the oracle's values bitwise: true
+cast_own: a cast stays a scope, scheduled and inlined: true
+cast_own: every form of the cast computes the materialized values bitwise: true
+cast_wide: a cast stays a scope, scheduled and inlined: true
+cast_wide: every form of the cast computes the materialized values bitwise: true
+a narrowing init leaves an accumulator at its residency: true

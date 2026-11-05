@@ -286,7 +286,9 @@ let neg ?spec ?(capture_dims = []) =
     their precisions differ. This is the "cast twin" primitive of the mixed-precision recipes
     (gh-ocannl-492): pin the result at a reduced precision to make it a low-precision copy of an f32
     master weight; the gradient accumulates back through the cast, widening (e.g. f16 -> f32) at the
-    accumulating assignment. *)
+    accumulating assignment. A read of the result gives the rounded value whether the node is
+    virtual or materialized, even where the compute precision is wider than the node's
+    (gh-ocannl-1866). *)
 let cast ?spec ?(capture_dims = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~t ~t1 ~projections = v =:+ id v1 in

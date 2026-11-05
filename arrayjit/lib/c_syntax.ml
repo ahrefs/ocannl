@@ -1004,9 +1004,10 @@ module type C_syntax_config = sig
 
       Only the register precision of an assignment's intermediates is at stake: this function is
       never consulted for a declaration, a kernel parameter, or a buffer's element type, which
-      always take the storage precision. It must be a function of the storage precision alone —
-      identical across sibling autotune candidates — or schedule transforms would stop being
-      numerics-preserving. *)
+      always take the storage precision. A cast is not an intermediate: a scope that is a
+      {!Ir.Low_level.narrowing_read} stays at its storage precision (gh-ocannl-1866). It must be a
+      function of the storage precision alone — identical across sibling autotune candidates — or
+      schedule transforms would stop being numerics-preserving. *)
 
   val accum_prec : Ops.prec -> Ops.prec
   (** The precision a reduction {e accumulator} resides at across its whole nest, given the
@@ -3793,6 +3794,14 @@ module C_syntax (B : C_syntax_config) = struct
   let carried_state_scope_ids : Low_level.Scope_id.t Hash_set.t =
     Hash_set.create (module Low_level.Scope_id)
 
+  (* gh-ocannl-1866: scopes every [Set_local] of which is a {!Low_level.narrowing_read}, filled by
+     the [rng_scope_ids] walk below. They take their node's storage precision, like the rng and
+     carried-state pins, so a virtual cast rounds where the local is assigned, as the materialized
+     node's store does; a scope that also updates itself is an accumulator or a recurrence, and
+     keeps its residency. *)
+  let narrowing_cast_verdicts : (Low_level.Scope_id.t, bool) Hashtbl.t =
+    Hashtbl.create (module Low_level.Scope_id)
+
   (* Scope-local scalars an RNG conversion writes. Their declaration, their assignments and their
      reads all have to agree on a precision, and only a whole-proc scan sees all three (a
      [Declare_local] carries no value), so the exclusion is resolved once here rather than per
@@ -3840,6 +3849,12 @@ module C_syntax (B : C_syntax_config) = struct
           scan body
       | Set_local (id, v) ->
           if mentions_rng_conversion v then Hash_set.add acc id;
+          let narrowing =
+            Low_level.narrowing_read ~scope_prec:(Lazy.force id.Low_level.tn.Tn.storage_prec) v
+          in
+          Hashtbl.update narrowing_cast_verdicts id ~f:(function
+            | Some seen -> seen && narrowing
+            | None -> narrowing);
           scan_sc v
       | Set { llsc; _ } -> scan_sc llsc
       | Set_dynamic { dyn_value = v, _; llsc; _ } ->
@@ -3853,6 +3868,9 @@ module C_syntax (B : C_syntax_config) = struct
     in
     Array.iter B.procs ~f:scan;
     acc
+
+  let narrowing_cast_scope id =
+    Option.value (Hashtbl.find narrowing_cast_verdicts id) ~default:false
 
   (* Scope locals that are reduction ACCUMULATORS (gh-ocannl-663): every [Set_local] to the scope is
      either an opening init (its value free of the local) or a reduce-shaped update
@@ -4106,7 +4124,11 @@ module C_syntax (B : C_syntax_config) = struct
 
   let scope_prec_of ctx (id : Low_level.scope_id) =
     let p = Lazy.force id.tn.Tn.storage_prec in
-    if Hash_set.mem rng_scope_ids id || Hash_set.mem carried_state_scope_ids id then p
+    if
+      Hash_set.mem rng_scope_ids id
+      || Hash_set.mem carried_state_scope_ids id
+      || narrowing_cast_scope id
+    then p
     else if Hash_set.mem ctx.accum_scope_ids id.scope_id then acc_prec p
     else comp_prec p
 
@@ -6476,12 +6498,14 @@ module C_syntax (B : C_syntax_config) = struct
            separate source assignment — and renders as that assignment's store would: at [comp_prec]
            (the rng carve-out rides [scope_prec_of]'s storage pin), converted once into the scope's
            residency. Where scope and compute precision coincide (the CPU backends, non-accumulator
-           scopes) this is the identity; where an accumulator resides wider than the arithmetic
-           (gh-ocannl-663), it preserves the initializer's own per-assignment rounding — e.g. a
-           virtual bf16 node initialized by [a + b] and then reduced narrows the init to bf16
-           exactly as its materialized twin's store does, instead of leaking f32 residency into a
-           different source assignment's semantics (Codex P2 round 3 on PR #396; the provenance
-           boundary of gh-ocannl-639's adjacent-accumulations rule). *)
+           scopes) this is the identity, and the store's narrowing is the part the init does not
+           repeat (gh-ocannl-517), except for a cast, whose residency is its storage precision
+           (gh-ocannl-1866); where an accumulator resides wider than the arithmetic (gh-ocannl-663),
+           it preserves the initializer's own per-assignment rounding — e.g. a virtual bf16 node
+           initialized by [a + b] and then reduced narrows the init to bf16 exactly as its
+           materialized twin's store does, instead of leaking f32 residency into a different source
+           assignment's semantics (Codex P2 round 3 on PR #396; the provenance boundary of
+           gh-ocannl-639's adjacent-accumulations rule). *)
         let prec = (scope_prec_of ctx) id in
         let value_prec =
           if Low_level.scalar_reads_scope ~id value then prec
