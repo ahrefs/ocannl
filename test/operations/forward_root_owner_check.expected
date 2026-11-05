@@ -1,0 +1,18 @@
+the check is on
+intact: the cells and the scan name the owner: true
+intact: the sibling is refused over the owner: true
+intact: the owner is handed out: true
+intact: then the sibling is: true
+dropped: the cells name no root, the scan names the owner: true
+dropped: the check fails the consume, naming the owner: true
+partial: the cells name one owner, the scan both: true
+partial: the check fails the consume, naming the missed owner: true
+the check is off
+intact: the cells and the scan name the owner: true
+intact: the sibling is refused over the owner: true
+intact: the owner is handed out: true
+intact: then the sibling is: true
+dropped: the cells name no root, the scan names the owner: true
+dropped: unchecked, the reader is handed out: true
+partial: the cells name one owner, the scan both: true
+partial: unchecked, the reader is refused over the other owner alone: true

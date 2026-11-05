@@ -11428,6 +11428,25 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1899: the debug_check_forward_root_owners check, the suite's proof that no owner edge is
+; missing, fails a consume_forward_code a dropped owner edge left blind, ahead of any refusal; with
+; the check off the same consume is silently accepted. Both legs, the configuration's and the
+; command line's, in one golden: the first is what shows test/config keeps the check on.
+
+(test
+ ; ocannl-backend: none -- it builds tensor graphs only; nothing is ever lowered, compiled or run.
+ (name forward_root_owner_check)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (action
+  (progn
+   (run %{test})
+   (run %{test} --ocannl_debug_check_forward_root_owners=false)))
+ (modules forward_root_owner_check)
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1744: two routines of a lineage accumulating into one shared gradient (an input, a
 ; parameter, a trunk) without a common zeroing are refused at compile, naming both; the supported
 ; spellings (one routine over the sum, a common reset compiled first) run with exact values.

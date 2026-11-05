@@ -1588,12 +1588,43 @@ let not_a_root_reason ~(handout : handout) ~what ~name t =
          in a tensor constructed from it (a shared subtensor's code is owned by its \
          first-constructed consumer); consume that consumer instead"]
 
-(* [t]'s non-embedded reads -- the forward requirements of its code -- whose code an unconsumed
-   forward root still owns, read off the owner cells (gh-ocannl-1796): a root the caller dropped
-   before its code was consumed stays pending, whatever the GC has done. *)
-let forward_conflicts t =
-  let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
-  pending_owners ~self:t.consumption.fwd_owner (Set.diff all_read t.forward.embedded_nodes)
+(* [t]'s non-embedded reads: the forward requirements of its code. *)
+let forward_reads t =
+  Set.diff (fst @@ Asgns.collect_nodes_guess_output t.forward.asgns) t.forward.embedded_nodes
+
+(* The reads whose code an unconsumed forward root still owns, read off the owner cells
+   (gh-ocannl-1796): a root the caller dropped before its code was consumed stays pending, whatever
+   the GC has done. *)
+let forward_conflicts t = pending_owners ~self:t.consumption.fwd_owner (forward_reads t)
+
+(* The rule the owner cells replaced (gh-ocannl-1796): the live roots whose embedded nodes [t]'s
+   code reads without embedding. It sees no root the GC reclaimed, so it can name fewer roots than
+   the cells, never more: a root only it names is an owner edge some source of [embedded_nodes]
+   failed to add. *)
+let forward_conflicts_by_live_roots t =
+  let reads = forward_reads t in
+  Weak_root.live session_state.forward_roots
+  |> List.filter ~f:(fun r ->
+      r.value.id <> t.value.id && not (Set.is_empty (Set.inter reads r.forward.embedded_nodes)))
+
+let debug_check_forward_root_owners =
+  lazy (Utils.get_global_flag ~default:false ~arg_name:"debug_check_forward_root_owners")
+
+(* Fails rather than refuses, ahead of the refusal the verdict decides: a missed root is a bug here,
+   not a session the caller can fix, and no handler of [Session_error] should absorb it. *)
+let check_forward_root_owners t ~conflicting_roots =
+  if Lazy.force debug_check_forward_root_owners then
+    let missed =
+      List.filter (forward_conflicts_by_live_roots t) ~f:(fun r ->
+          not (List.mem conflicting_roots r.consumption.fwd_owner ~equal:phys_equal))
+    in
+    if not (List.is_empty missed) then
+      let names = String.concat ~sep:", " @@ List.map missed ~f:(fun r -> Tn.label_name r.value) in
+      failwith
+        [%string
+          "Tensor.consume_forward_code (debug_check_forward_root_owners) for %{debug_name t}: the \
+           live forward roots %{names} own nodes it reads, and no owner cell says so: a source of \
+           these roots' embedded nodes added no owner edge"]
 
 let consume_forward_code t =
   Shape.check_untainted ();
@@ -1613,6 +1644,7 @@ let consume_forward_code t =
                t,
              Some t );
     let conflicting_roots = forward_conflicts t in
+    check_forward_root_owners t ~conflicting_roots;
     if not @@ List.is_empty conflicting_roots then
       raise
       @@ Session_error
@@ -2322,18 +2354,11 @@ module For_testing = struct
 
   let forward_conflicts_by_cells t = List.map (forward_conflicts t) ~f:(fun c -> c.oc_name)
 
-  (* The pre-gh-ocannl-1796 rule, over the live roots only: the roots whose embedded nodes [t]'s
-     code reads without embedding. A test pins the cell verdict equal to it while every root is
-     held. *)
   let forward_conflicts_by_live_roots t =
-    let all_read = fst @@ Asgns.collect_nodes_guess_output t.forward.asgns in
-    let reads = Set.diff all_read t.forward.embedded_nodes in
-    Weak_root.live session_state.forward_roots
-    |> List.filter ~f:(fun r ->
-        r.value.id <> t.value.id && not (Set.is_empty (Set.inter reads r.forward.embedded_nodes)))
-    |> List.map ~f:(fun r -> Tn.label_name r.value)
+    List.map (forward_conflicts_by_live_roots t) ~f:(fun r -> Tn.label_name r.value)
 
   let owner_count t = List.length t.consumption.fwd_owner.owners
+  let drop_owner_edges t = t.consumption.fwd_owner.owners <- []
 
   let checkpoint_sizes ck =
     ("open nodes", List.length ck.ck_globals.g_open_nodes) :: Shape.Checkpoint.sizes ck.ck_shape
@@ -2713,9 +2738,6 @@ let print ?here ?(force = false) ?ctx ~with_grad ~with_code ?(with_low_level = f
   let doc = to_doc ?ctx ~force ~with_grad ~with_code ~with_low_level style t in
   PPrint.ToChannel.pretty 0.7 100 Stdio.stdout doc;
   Stdio.Out_channel.flush Stdio.stdout
-
-let print_forward_roots ~with_grad ~with_code (style : array_print_style) =
-  List.iter (Weak_root.live session_state.forward_roots) ~f:(print ~with_grad ~with_code style)
 
 let print_tree ?here ?(force = false) ?ctx ?entries_per_axis ?(with_backend_info = false)
     ?(with_id = true) ?(with_shape = false) ?(with_value = true) ?embedded_only ~with_grad ~depth t
