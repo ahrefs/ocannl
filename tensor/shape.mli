@@ -489,6 +489,7 @@ type registration_counts = {
   closures : int;
   closure_constraints : int;
   rank_search_visits : int;
+  subst_visits : int;
 }
 [@@deriving sexp_of]
 (** Registration statistics (gh-ocannl-1752), process-wide since the last reset: checked [%op]
@@ -502,7 +503,8 @@ type registration_counts = {
     the store's size at the entry of each [finish_inference] ([closures] counts them).
 
     [rank_search_visits] is the rank-cycle search's work counter (gh-ocannl-1802): the states it
-    visited, for every rank fact recorded since the reset, inside traces too. *)
+    visited, for every rank fact recorded since the reset, inside traces too. [subst_visits] is
+    solution substitution's (gh-ocannl-1904): the environment entries solutions visited. *)
 
 type registration_times = {
   tracing_s : float;

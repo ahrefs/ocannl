@@ -93,13 +93,18 @@ type run = {
   total_s : float;
   dims : int list list;  (** The closed dims of the result and of every parameter. *)
   checked : string list;  (** The labels of the schemes the applications were checked against. *)
+  alloc_words : float option;
+      (** With [~alloc]: the heap words construction and closure allocated (gh-ocannl-1904). *)
 }
 
 let seconds started = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9
 
 (* [~unbounded]: with the rank-cycle search walking everything a new edge's target reaches, as
-   before gh-ocannl-1802 bounded it by the edge's endpoints: the reference for its work counter. *)
-let run_one ?(unbounded = false) (mode : mode) w n =
+   before gh-ocannl-1802 bounded it by the edge's endpoints: the reference for its work counter.
+   [~whole_env]: with every solution substituted into the whole environment, as before
+   gh-ocannl-1904 indexed the entries it can change. [~alloc]: counting the heap words construction
+   and closure allocate, in a window opened after the earlier garbage's finalisers ran. *)
+let run_one ?(unbounded = false) ?(whole_env = false) ?(alloc = false) (mode : mode) w n =
   Tensor.For_testing.set_op_shape_schemes (Some mode);
   Tensor.unsafe_reinitialize ();
   Tensor.Scheme.reset_registration_counts ();
@@ -115,8 +120,13 @@ let run_one ?(unbounded = false) (mode : mode) w n =
     let construction_s = seconds started in
     (y, construction_s, Array.to_list (Shape.to_dims y.Tensor.shape))
   in
-  let y, construction_s, result_dims =
-    if unbounded then Ocannl.Row.with_unbounded_rank_search infer else infer ()
+  let infer = if unbounded then fun () -> Ocannl.Row.with_unbounded_rank_search infer else infer in
+  let infer = if whole_env then fun () -> Ocannl.Row.with_whole_env_substitution infer else infer in
+  let (y, construction_s, result_dims), alloc_words =
+    if alloc then
+      let result, { Gc_witness.words; drained = _ } = Gc_witness.drained_finalisers infer in
+      (result, Some words)
+    else (infer (), None)
   in
   let total_s = seconds started in
   let params =
@@ -130,17 +140,18 @@ let run_one ?(unbounded = false) (mode : mode) w n =
     total_s;
     dims = result_dims :: params;
     checked = List.dedup_and_sort !checked ~compare:String.compare;
+    alloc_words;
   }
 
 let row_header =
   "workload depth mode | checked inline | C' E' boundary inline_c | closure_constraints | \
-   rank_search_visits"
+   rank_search_visits subst_visits"
 
 let count_row w n mode (c : Shape.registration_counts) =
-  Printf.sprintf "%s %d %s | %d %d | %d %d %d %d | %d | %d" w n (mode_name mode)
+  Printf.sprintf "%s %d %s | %d %d | %d %d %d %d | %d | %d %d" w n (mode_name mode)
     c.checked_applications c.inline_registrations c.instantiated_constraints
     c.instantiated_solutions c.instantiated_boundary c.inline_constraints c.closure_constraints
-    c.rank_search_visits
+    c.rank_search_visits c.subst_visits
 
 let ms x = Printf.sprintf "%.2f" (x *. 1000.)
 
@@ -167,6 +178,12 @@ let time_row w n mode r =
 
 (* The test's depths: the counts' relationships show by depth 4; the measurement goes deeper. *)
 let depths = [ 1; 2; 4 ]
+
+(* gh-ocannl-1904's scaling cells: deep enough for the whole environment's quadratic term to show in
+   each doubling. *)
+let scaling_cells =
+  [ ("distinct", [ 4; 8; 16 ]); ("shared", [ 4; 8; 16 ]); ("decoder", [ 2; 4; 8 ]) ]
+
 let find_workload name = List.find_exn workloads ~f:(fun x -> String.equal x.w_name name)
 
 let median xs =
@@ -255,6 +272,15 @@ let () =
         List.concat_map workloads ~f:(fun w ->
             List.map depths ~f:(fun n -> ((w.w_name, n), run_one ~unbounded:true `Off w n)))
       in
+      (* gh-ocannl-1904: deeper stacks, schemes off, with the allocation counted, indexed and with
+         every solution substituted into the whole environment (the control). *)
+      let scaling =
+        List.concat_map scaling_cells ~f:(fun (w, ns) ->
+            let w = find_workload w in
+            List.concat_map ns ~f:(fun n ->
+                List.map [ false; true ] ~f:(fun whole_env ->
+                    ((w.w_name, n, whole_env), run_one ~whole_env ~alloc:true `Off w n))))
+      in
       Tensor.For_testing.set_op_shape_schemes None;
       Stdio.eprintf "(not part of the golden) %s\n" row_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
@@ -262,6 +288,10 @@ let () =
       List.iter unbounded ~f:(fun ((w, n), r) ->
           Stdio.eprintf "(not part of the golden) unbounded rank search: %s\n"
             (count_row w n `Off r.counts));
+      List.iter scaling ~f:(fun ((w, n, whole_env), r) ->
+          Stdio.eprintf "(not part of the golden) %s substitution: %s | %.0f words\n"
+            (if whole_env then "whole-env" else "indexed")
+            (count_row w n `Off r.counts) (Option.value_exn r.alloc_words));
       Stdio.eprintf "(not part of the golden) %s\n" time_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
           Stdio.eprintf "(not part of the golden) %s\n" (time_row w n mode r));
@@ -317,4 +347,47 @@ let () =
               (List.zip_exn (List.drop_last_exn depths) (List.tl_exn depths))
           in
           p_all "the bounded search's saving grows with depth" deeper ~f:(fun (w, (n, n')) ->
-              saving w.w_name n < saving w.w_name n'))
+              saving w.w_name n < saving w.w_name n'));
+      (* gh-ocannl-1904: a solution visits the entries it can change, not the whole environment. Per
+         depth doubling, the indexed substitution's work doubles and the inference's allocation
+         stays well below the whole environment's growth, which the control shows near 4x. The
+         rank-cycle search still grows about 4x per doubling, which is what keeps the allocation's
+         ratio above 2 here and is why it is bounded only to the depths below. *)
+      let scaled w n whole_env = List.Assoc.find_exn scaling (w, n, whole_env) ~equal:Poly.equal in
+      let doublings =
+        List.concat_map scaling_cells ~f:(fun (w, ns) ->
+            List.map
+              (List.zip_exn (List.drop_last_exn ns) (List.tl_exn ns))
+              ~f:(fun (n, n') -> (w, n, n')))
+      in
+      let ratio f w n n' whole_env = f (scaled w n' whole_env) /. f (scaled w n whole_env) in
+      let visits r = Float.of_int r.counts.subst_visits in
+      let words r = Option.value_exn r.alloc_words in
+      (* Under the cross-check setting every solution also visits the whole environment, so the
+         allocation is the whole environment's again: those claims need the setting off. *)
+      let leg =
+        Verdict.leg ~aggregation:`Environment
+          ~when_:(not (Ocannl.Row.substitution_cross_checked ()))
+          ~on:"shape_substitution_cross_check=true" ()
+      in
+      Verdict.case "a solution substitutes itself into the entries it can change" (fun () ->
+          p_all "indexed substitution closes the shapes whole-environment substitution closes"
+            scaling ~f:(fun ((w, n, _), r) ->
+              List.equal (List.equal Int.equal) r.dims (scaled w n true).dims);
+          p_all "indexed substitution visits fewer entries than whole-environment substitution"
+            doublings ~f:(fun (w, _, n') ->
+              (scaled w n' false).counts.subst_visits < (scaled w n' true).counts.subst_visits);
+          p_all "per depth doubling, the indexed substitution's visits double (1.8x-2.2x)" doublings
+            ~f:(fun (w, n, n') -> Float.between (ratio visits w n n' false) ~low:1.8 ~high:2.2);
+          p_all "per depth doubling, whole-environment substitution's visits grow at least 3x"
+            doublings ~f:(fun (w, n, n') -> Float.(ratio visits w n n' true >= 3.));
+          p "the allocation window counts a known allocation" (Gc_witness.window_sees_allocation ());
+          in_leg ~leg
+            "per depth doubling, the inference allocates 1.8x-2.6x with indexed substitution"
+            (fun label ->
+              p_all label doublings ~f:(fun (w, n, n') ->
+                  Float.between (ratio words w n n' false) ~low:1.8 ~high:2.6));
+          in_leg ~leg
+            "per depth doubling, the inference allocates at least 3x with whole-environment \
+             substitution" (fun label ->
+              p_all label doublings ~f:(fun (w, n, n') -> Float.(ratio words w n n' true >= 3.))))

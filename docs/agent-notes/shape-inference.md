@@ -377,10 +377,23 @@ files.
   `Row.add_rank_edge` searches only the levels between the new edge's endpoints
   (`global_rank_levels`, checkpointed with the edges; `Row.with_unbounded_rank_search` is the old
   walk, for tests), and its work is `registration_counts.rank_search_visits`, still about 4x per
-  depth doubling but a few percent of the run. The superlinear term is eager substitution: every
-  solution maps over the whole environment (`Utils.Tree_map.map` in `unify_row`/`unify_dim`), so
-  anything per-entry there (the `from_` provenance of `s_dim_one_in_entry`, now lazy) multiplies.
-  Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy.
+  depth doubling. With substitution indexed (gh-ocannl-1904) it is the superlinear term left, the
+  bulk of a `sample` profile from depth 64. Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic
+  proxy when the box is noisy.
+- Substitution is indexed (gh-ocannl-1904): a solution visits the entries mentioning its variable
+  and, for a dimension solution, the pending ones (`environment`'s doc comment), not the whole
+  environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on
+  `dim_env`/`row_env` elsewhere, or a mention a visit reads that `dim_entry_mentions`/
+  `row_entry_*_mentions` do not list, is a missed visit. The whole map also changed entries that
+  do not mention the variable -- it summed a stored `Concat` of solved parts, collapsed windows,
+  and re-emitted every `Total_elems` row's `Rows_constr` -- which is why written entries stay
+  pending until an unrelated visit leaves them unchanged. `unify_row`'s unbalanced-flank branch
+  discards the visited environment but keeps the visit's inequalities, as the whole map's did.
+  Verify a change here with `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` over the shape tests (it
+  fails on the first solution whose indexed visit differs from the whole map's), and
+  `test/operations/shape_substitution_chains` for the chains. The eager, resolved representation
+  stays quadratic on an alias chain solved oldest-first (`x1:=x2, x2:=x3, ...`); no model workload
+  showed one.
 - A trace solves symbolically what inline construction solves numerically (gh-ocannl-1820): a
   scheme's tracer widths are unsolved variables, so an `Affine` the `Dim` arms would collapse to a
   number stays a term, and each symbolic arm of `unify_dim` must agree with the concrete

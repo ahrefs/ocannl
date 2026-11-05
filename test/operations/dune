@@ -762,6 +762,20 @@
  (preprocess
   (pps ppx_here)))
 
+;; gh-ocannl-1904: long substitution chains through the shape solver, every solution cross-checked
+;; against the whole-environment substitution the index replaced.
+
+(test
+ ; ocannl-backend: none -- hand-built constraints through Row.solve_inequalities; the solver runs
+ ; before any backend is chosen.
+ (name shape_substitution_chains)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules shape_substitution_chains)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_sexp_conv)))
+
 (test
  (name top_down_prec)
  (package neural_nets_lib)
@@ -13275,7 +13289,8 @@
   mtime
   mtime.clock.os
   arrayjit.verdict
-  bench_out)
+  bench_out
+  gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

@@ -6,6 +6,9 @@ tensor/row.ml: origin_focus (ref) -- exempt: the shape schemes in progress, rest
 tensor/row.ml: reapply_rows_constr (ref) -- exempt: a transient flag of one constraint substitution, cleared before it returns or raises
 tensor/row.ml: ineqs_from_reapply_rows_constr (ref) -- exempt: a transient carrier within one solver pass, drained by unify_dim; reset_transient clears it at a rewind
 tensor/row.ml: resolve_at_use_dim (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
+tensor/row.ml: subst_whole_env (ref) -- exempt: a test switch, set only around a test's own run
+tensor/row.ml: subst_visit_count (ref) -- exempt: a work counter of solution substitution, not inference state
+tensor/row.ml: subst_cross_check_forced (ref) -- exempt: a test switch, set only around a test's own run
 tensor/row.ml: safe_to_guess (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: used_in_spec_or_compose (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: used_in_pointwise (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
