@@ -878,16 +878,23 @@ let virtualize_settings =
     footprint_materialization;
   }
 
-type setter_read_sets = {
-  reads_branching : Set.M(Tnode).t;
-      (** A select charges its wider arm (it short-circuits: CUDA, Metal). *)
-  reads_blended : Set.M(Tnode).t;
-      (** A select {!speculable_select} admits charges the union of its arms (cc, HIP). *)
+type read_charge = {
+  loads : Set.M(Tnode).t;  (** Contributors loaded whichever way the selects below go. *)
+  selects : select_charge list;  (** The value selects met at this level, program order. *)
 }
 [@@deriving sexp_of]
-(** One setter's fan-in contributors under both renderings of a value select (gh-ocannl-1775): the
-    analysis is cached across backends, so it keeps both and the guard picks by the backend's
-    [blends_value_selects] fact. *)
+(** One evaluation's fan-in contributors with its value selects left unresolved (gh-ocannl-1874):
+    which arm a short-circuiting select is charged depends on what each arm's reads expand to, which
+    only the transitive guard knows -- so the collector keeps the arms, and {!resolve_charge} picks
+    after expansion. The analysis is cached across backends, so the backend's reading of a select
+    (gh-ocannl-1775) is applied at resolution too. *)
+
+and select_charge = {
+  speculable : bool;
+      (** {!speculable_select} admits it: a backend whose [blends_value_selects] fact holds renders
+          it as a blend evaluating every arm. *)
+  arms : read_charge list;  (** One per arm, in order; exactly one runs where it short-circuits. *)
+}
 
 type traced_array = {
   tn : Tn.t;
@@ -916,20 +923,20 @@ type traced_array = {
           own read-modify-write does not. A node never read in the routine has no inlining cost, so
           the recompute-cost guard must not materialize it (it may instead be dropped as a committed
           virtual computation, or inlined by a later routine in the lineage). *)
-  mutable setter_reads : setter_read_sets list;
+  mutable setter_reads : read_charge list;
       (** Per setter statement ([Set]/[Set_from_vec]), the tensor nodes its right-hand side reads,
-          under each rendering of a value select ({!setter_read_sets}) — including reads inside
-          [Local_scope] bodies in the right-hand side (their loads execute per evaluation of the
-          setter), and excluding the node's own read-modify-write self-reads (when inlined they
-          become the local accumulator, not a load). Decision-independent analysis fact behind the
-          transitive inline-fanin guard (gh-573): a read of a cell executes one setter's
-          computation, so the guard takes the per-setter maximum, not the union — a Block/concat
-          node written by one range-guarded setter per component costs one component per read. The
-          per-setter maximum is chosen before downstream unions, so a consumer overlapping one
-          alternative but not another can be undercounted — accepted: an exact treatment is
-          combinatorial across multi-setter dependencies, and both error directions of this
-          heuristic prior are benign (a miss reproduces the pre-guard placement, which stays a
-          [`Materialize] flip candidate with a fanin-charged cost). *)
+          its value selects' arms kept apart ({!read_charge}) — including reads inside [Local_scope]
+          bodies in the right-hand side (their loads execute per evaluation of the setter), and
+          excluding the node's own read-modify-write self-reads (when inlined they become the local
+          accumulator, not a load). Decision-independent analysis fact behind the transitive
+          inline-fanin guard (gh-573): a read of a cell executes one setter's computation, so the
+          guard takes the per-setter maximum, not the union — a Block/concat node written by one
+          range-guarded setter per component costs one component per read. The per-setter maximum is
+          chosen before downstream unions, so a consumer overlapping one alternative but not another
+          can be undercounted — accepted: an exact treatment is combinatorial across multi-setter
+          dependencies, and both error directions of this heuristic prior are benign (a miss
+          reproduces the pre-guard placement, which stays a [`Materialize] flip candidate with a
+          fanin-charged cost). *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in the guard computed for this node under the current
           placements: the number of distinct materialized nodes the node's fully-inlined computation
@@ -1490,24 +1497,18 @@ let speculable_select ~(cond : scalar_t) ~(arms : scalar_arg list) =
    evaluates first; gh-ocannl-1327); - a projection's discarded operand is not evaluated, a gated
    binary operand is charged (its worst case evaluates both), and merge-buffer reads are not
    contributors: a merge-buffer read loads a materialized copy, never inlining the source's
-   computation; - exactly one arm of a [Cond_and_one_arm] ternary evaluates per visit where the
-   select short-circuits, so the wider arm is charged, not the union -- two arms each within the cap
-   must not jointly trip it -- and on a tie the first; but with [~blends] (the backend's
-   [blends_value_selects] fact, gh-ocannl-1775) a select {!speculable_select} admits renders as a
-   blend that evaluates every arm, and is charged the union of its arms. The admission is judged
-   here, before inlining and at the arms' own annotations, while the renderer judges it after
-   virtualization at the select's compute precision (and HIP keeps [?:] over a NaN literal): the
-   difference errs only toward the union -- inlining can add an index to a condition or a gather to
-   an arm, never remove one -- the materializing direction the guard takes for undecided
-   dependencies too; - [Local_scope] bodies hoist to statement level and execute unconditionally
-   (both [Where] arms' bodies really run), so their reads join the STATEMENT sink, never an arm's; -
-   a dead loop's body replays zero times, and a [Tile_mma] (constructed after the analyses) is
-   opaque. *)
-type eval_reads = { e_stmt : Set.M(Tn).t; e_cur : Set.M(Tn).t; e_saved : Set.M(Tn).t list }
+   computation; - a [Cond_and_one_arm] ternary's arms are kept apart, as a {!select_charge}
+   ({!resolve_charge} reads them); - [Local_scope] bodies hoist to statement level and execute
+   unconditionally (both [Where] arms' bodies really run), so their reads join the STATEMENT sink,
+   never an arm's; - a dead loop's body replays zero times, and a [Tile_mma] (constructed after the
+   analyses) is opaque. *)
+type eval_reads = { e_stmt : read_charge; e_cur : read_charge; e_saved : read_charge list }
 
-let eval_reads_traversal ~blends ~self =
+let empty_charge = { loads = Set.empty (module Tn); selects = [] }
+let merge_charges a b = { loads = Set.union a.loads b.loads; selects = a.selects @ b.selects }
+
+let eval_reads_traversal ~self =
   let open Access_fold in
-  let empty = Set.empty (module Tn) in
   let policy =
     {
       discarded_operands = Skip;
@@ -1519,7 +1520,8 @@ let eval_reads_traversal ~blends ~self =
     }
   in
   let contributor acc q =
-    if Tn.equal q self then acc else { acc with e_cur = Set.add acc.e_cur q }
+    if Tn.equal q self then acc
+    else { acc with e_cur = { acc.e_cur with loads = Set.add acc.e_cur.loads q } }
   in
   let hooks =
     {
@@ -1527,7 +1529,8 @@ let eval_reads_traversal ~blends ~self =
       scalar =
         (fun _ acc sc ->
           match sc with
-          | Local_scope _ -> Continue { acc with e_cur = empty; e_saved = acc.e_cur :: acc.e_saved }
+          | Local_scope _ ->
+              Continue { acc with e_cur = empty_charge; e_saved = acc.e_cur :: acc.e_saved }
           | _ -> Continue acc);
       after_statement = (fun _ acc _ -> acc);
       after_scalar =
@@ -1537,47 +1540,78 @@ let eval_reads_traversal ~blends ~self =
           | Local_scope _ -> (
               match acc.e_saved with
               | cur :: saved ->
-                  { e_stmt = Set.union acc.e_stmt acc.e_cur; e_cur = cur; e_saved = saved }
+                  { e_stmt = merge_charges acc.e_stmt acc.e_cur; e_cur = cur; e_saved = saved }
               | [] -> assert false)
           | _ -> acc);
       branches =
         (fun _ acc ~select arms ->
-          let blended =
-            blends
-            &&
+          let speculable =
             match select with
             | Ternop (_, (cond, _), b, c) -> speculable_select ~cond ~arms:[ b; c ]
             | _ -> false
           in
-          let acc', charged =
-            List.fold arms ~init:(acc, None) ~f:(fun (acc', charged) arm ->
-                let r = arm { acc' with e_cur = empty } in
-                let charged =
-                  match charged with
-                  | Some w when blended -> Some (Set.union w r.e_cur)
-                  | Some w when Set.length r.e_cur <= Set.length w -> charged
-                  | _ -> Some r.e_cur
-                in
-                ({ r with e_cur = acc.e_cur }, charged))
+          let acc', arm_charges =
+            List.fold arms ~init:(acc, []) ~f:(fun (acc', charges) arm ->
+                let r = arm { acc' with e_cur = empty_charge } in
+                ({ r with e_cur = acc.e_cur }, r.e_cur :: charges))
           in
-          { acc' with e_cur = Set.union acc.e_cur (Option.value charged ~default:empty) });
+          let select = { speculable; arms = List.rev arm_charges } in
+          { acc' with e_cur = { acc.e_cur with selects = acc.e_cur.selects @ [ select ] } });
     }
   in
-  (policy, hooks, { e_stmt = empty; e_cur = empty; e_saved = [] })
+  (policy, hooks, { e_stmt = empty_charge; e_cur = empty_charge; e_saved = [] })
 
-let eval_reads_result r = Set.union r.e_stmt r.e_cur
+let eval_reads_result r = merge_charges r.e_stmt r.e_cur
 
 (** See the comment above {!eval_reads}: the contributors of one evaluation of [llsc], the
-    right-hand side of a setter of [self]. *)
-let evaluation_reads ~blends ~(self : Tn.t) (llsc : scalar_t) : Set.M(Tn).t =
-  let policy, hooks, init = eval_reads_traversal ~blends ~self in
+    right-hand side of a setter of [self], its selects unresolved. *)
+let read_charge ~(self : Tn.t) (llsc : scalar_t) : read_charge =
+  let policy, hooks, init = eval_reads_traversal ~self in
   eval_reads_result (Access_fold.fold_scalar ~policy ~hooks ~init llsc)
+
+(** {!read_charge} of a statement: one replay of [code], a stored computation of [self]. *)
+let read_charge_of_proc ~(self : Tn.t) (code : t) : read_charge =
+  let policy, hooks, init = eval_reads_traversal ~self in
+  eval_reads_result (Access_fold.fold ~policy ~hooks ~init code)
+
+(* gh-ocannl-1874: a charge's contributors, each load folded in by [expand] (the transitive guard
+   expands a virtual dependency into its own fan-in; the plain reading adds the node itself). A
+   select [~blends] (the backend's [blends_value_selects] fact, gh-ocannl-1775) renders as a blend
+   -- one {!speculable_select} admits -- evaluates every arm and is charged their union. Any other
+   select evaluates exactly one arm per visit, so one arm is charged, not the union -- two arms each
+   within the cap must not jointly trip it: the arm whose EXPANDED reads, joined with what this
+   evaluation has already been charged, are the most, the first on a tie. Choosing after expansion
+   is the point: an arm loading fewer nodes directly can load more once a virtual dependency's
+   computation is inlined into it, and a choice made on direct loads under-counts there. The loads
+   of a level are charged before its selects, so an arm re-reading a node already loaded adds
+   nothing. Exact for a single select per path; across several, a greedy choice that still charges a
+   path some visit can run. The admission ([speculable]) is judged before inlining and at the arms'
+   own annotations, while the renderer judges it after virtualization at the select's compute
+   precision (and HIP keeps [?:] over a NaN literal): the difference errs only toward the union --
+   inlining can add an index to a condition or a gather to an arm, never remove one -- the
+   materializing direction the guard takes for undecided dependencies too. *)
+let resolve_charge ~blends ~expand (c : read_charge) : Set.M(Tn).t =
+  let rec go acc c =
+    let acc = Set.fold c.loads ~init:acc ~f:expand in
+    List.fold c.selects ~init:acc ~f:(fun acc s ->
+        if blends && s.speculable then List.fold s.arms ~init:acc ~f:go
+        else
+          List.fold s.arms ~init:None ~f:(fun best arm ->
+              let r = go acc arm in
+              match best with Some b when Set.length r <= Set.length b -> best | _ -> Some r)
+          |> Option.value ~default:acc)
+  in
+  go (Set.empty (module Tn)) c
+
+(** The contributors of one evaluation of [llsc], each charged as itself: {!resolve_charge} of
+    {!read_charge}. *)
+let evaluation_reads ~blends ~(self : Tn.t) (llsc : scalar_t) : Set.M(Tn).t =
+  resolve_charge ~blends ~expand:Set.add (read_charge ~self llsc)
 
 (** {!evaluation_reads} of a statement: the contributors of one replay of [code], a stored
     computation of [self]. *)
 let evaluation_reads_of_proc ~blends ~(self : Tn.t) (code : t) : Set.M(Tn).t =
-  let policy, hooks, init = eval_reads_traversal ~blends ~self in
-  eval_reads_result (Access_fold.fold ~policy ~hooks ~init code)
+  resolve_charge ~blends ~expand:Set.add (read_charge_of_proc ~self code)
 
 (* Structural facts pass (gh-554): a single non-enumerating program-order traversal computing the
    per-node facts of {!traced_array} that are not affine questions — setter/reader structure,
@@ -1589,9 +1623,9 @@ let evaluation_reads_of_proc ~blends ~(self : Tn.t) (code : t) : Set.M(Tn).t =
 
    gh-ocannl-1451: the traversal is {!Access_fold}'s (dead loops skipped, projection-discarded
    operands skipped, both [Where] arms and scope bodies visited, scan inits as scalars outside the
-   scan's binder), and a setter's fan-in sink is {!evaluation_reads}. A write this pass does not
-   know -- anything {!direct_write} classifies as a write besides [Set], [Set_from_vec] and
-   [Zero_out] -- is refused rather than silently passed over. *)
+   scan's binder), and a setter's fan-in sink is {!read_charge}. A write this pass does not know --
+   anything {!direct_write} classifies as a write besides [Set], [Set_from_vec] and [Zero_out] -- is
+   refused rather than silently passed over. *)
 let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indices llc =
   let statics_set =
     Set.of_list (module Indexing.Symbol)
@@ -1632,12 +1666,7 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
   let current_lhs () = match !lhs with top :: _ -> top | [] -> None in
   let setter_facts ctx ~tn ~idcs ~(rhs : scalar_t) =
     let traced : traced_array = get_node traced_store tn in
-    traced.setter_reads <-
-      {
-        reads_branching = evaluation_reads ~blends:false ~self:tn rhs;
-        reads_blended = evaluation_reads ~blends:true ~self:tn rhs;
-      }
-      :: traced.setter_reads;
+    traced.setter_reads <- read_charge ~self:tn rhs :: traced.setter_reads;
     let loop_ranges = loop_ranges ctx in
     traced.inline_reduction_extent <-
       max traced.inline_reduction_extent (reduction_extent loop_ranges idcs);
@@ -1759,11 +1788,11 @@ let trace_node_facts traced_store ~merge_node_ref reverse_node_map ~static_indic
         (* gh-343: the pipeline mints [Get_dynamic] after this pass; hand-built IR handed to
            [optimize] reaches it (test/operations/dynamic_axis_coverage). A gather is a read of its
            table like a static [Get] (gh-ocannl-1327): it counts for [read_by_other] and the
-           setter's fan-in sink ({!evaluation_reads}), and it is a first touch, so a later constant
-           [Set] or [Zero_out] is not taken for the table's first touch. No read-modify-write
-           exemption: the runtime row is not provably the write's cell, as [reads_covered_query]
-           rules for a gather under a static write (gh-ocannl-1244), and the one write that could
-           share it, [Set_dynamic], never reaches this pass. Recorded after the index expression
+           setter's fan-in sink ({!read_charge}), and it is a first touch, so a later constant [Set]
+           or [Zero_out] is not taken for the table's first touch. No read-modify-write exemption:
+           the runtime row is not provably the write's cell, as [reads_covered_query] rules for a
+           gather under a static write (gh-ocannl-1244), and the one write that could share it,
+           [Set_dynamic], never reaches this pass. Recorded after the index expression
            ([after_scalar]): it is evaluated before the load (a [Local_scope] in it hoists ahead of
            the statement), so a touch inside it precedes the gather's in program order. *)
         read_by_other ptr;
@@ -10035,19 +10064,16 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      once per consumer. Per-setter maximum, not union across setters — a read of one cell executes
      one setter's computation (Block/concat range-guarded setters, each component under an
      index-only guard no backend blends). Within a setter a value select is charged as the backend
-     renders it (gh-ocannl-1775, [setter_charge] below): the union of its arms where it blends, its
-     wider arm where it short-circuits. *)
+     renders it (gh-ocannl-1775, {!resolve_charge} in [max_expansion] below): the union of its arms
+     where it blends; where it short-circuits, the arm whose reads are the most AFTER transitive
+     expansion (gh-ocannl-1874) -- an arm loading one virtual node can replay more than an arm
+     loading three materialized ones. *)
   if virtualize_settings.max_inline_fanin >= 0 then
     (* The reads a stored computation replays when [inline_computation] inlines it: the one read
-       collector ({!evaluation_reads_of_proc}, gh-ocannl-1451) that [trace_node_facts] uses for this
+       collector ({!read_charge_of_proc}, gh-ocannl-1451) that [trace_node_facts] uses for this
        routine's own setters. Used for a dependency this routine only READS whose definition an
        earlier routine in the lineage committed [Virtual] — its traced entry here has no setters,
        but its computation will be replayed all the same. *)
-    (* gh-ocannl-1775: a setter's contributors under the backend's rendering of a value select --
-       the union of a speculable select's arms where the backend blends it, else its wider arm. *)
-    let setter_charge (r : setter_read_sets) =
-      if blends_value_selects then r.reads_blended else r.reads_branching
-    in
     let memo = Hashtbl.create (module Tnode) in
     let rec fanin tn : Set.M(Tnode).t =
       match Hashtbl.find memo tn with
@@ -10080,12 +10106,14 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
               let s_p = fanin p in
               if Tn.Placements.known_non_virtual plc p then Set.add acc p else Set.union acc s_p
           in
-          (* Per-setter maximum over the per-setter read sets (see [setter_reads]). *)
-          let max_expansion read_sets =
-            List.fold read_sets
+          (* Per-setter maximum over the per-setter charges (see [setter_reads]), each resolved
+             under the backend's reading of a select with every load expanded first, so a
+             short-circuiting select is charged by its arms' expansions (gh-ocannl-1874). *)
+          let max_expansion charges =
+            List.fold charges
               ~init:(Set.empty (module Tnode))
-              ~f:(fun best reads ->
-                let s = Set.fold reads ~init:(Set.empty (module Tnode)) ~f:expand in
+              ~f:(fun best charge ->
+                let s = resolve_charge ~blends:blends_value_selects ~expand charge in
                 if Set.length s > Set.length best then s else best)
           in
           (* A node committed [Virtual] by an earlier routine in the lineage: its stored
@@ -10099,9 +10127,7 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
             if not (Tn.Placements.known_virtual plc tn) then []
             else
               match Hashtbl.find optim_ctx.computations tn with
-              | Some comps ->
-                  List.map comps ~f:(fun (_, code) ->
-                      evaluation_reads_of_proc ~blends:blends_value_selects ~self:tn code)
+              | Some comps -> List.map comps ~f:(fun (_, code) -> read_charge_of_proc ~self:tn code)
               | None -> []
           in
           let s =
@@ -10109,12 +10135,10 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
             | None -> (
                 match inherited_reads () with
                 | [] -> Set.singleton (module Tnode) tn
-                | read_sets -> max_expansion read_sets)
+                | charges -> max_expansion charges)
             | Some traced ->
                 let s =
-                  Set.union
-                    (max_expansion (List.map traced.setter_reads ~f:setter_charge))
-                    (max_expansion (inherited_reads ()))
+                  Set.union (max_expansion traced.setter_reads) (max_expansion (inherited_reads ()))
                 in
                 traced.inline_fanin <- max 1 (Set.length s);
                 if

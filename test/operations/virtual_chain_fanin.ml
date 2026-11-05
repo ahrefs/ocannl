@@ -444,6 +444,157 @@ let phase1c () =
   p "cross-routine select, short-circuiting: executed values match the reference"
     (same got [ mask_ref ~then_ks ~else_ks ])
 
+(* === Phase 1d: a short-circuiting select is charged by its arms' expansions ===
+
+   gh-ocannl-1874: one arm loads three materialized nodes, the other a single virtual node [v] whose
+   own setter loads eight. Inlined, [v]'s computation replays inside its arm, so that arm runs eight
+   loads where the other runs three. A short-circuiting backend (CUDA, Metal) evaluates one arm, and
+   the guard must charge the one that is wider AFTER transitive expansion: mask + 8 = 9, over the
+   cap of 8, so the producer is materialized; choosing on direct loads (3 to 1) charged mask + 3 = 4
+   and left it virtual. The blended reading (cc, HIP) is charged the union, mask + 3 + 8 = 12. The
+   control keeps the expanded arm within the cap (5 loads): short-circuiting it is charged one arm
+   (mask + 5 = 6, virtual), blended the union (mask + 3 + 5 = 9, materialized) -- the arms are not
+   joined where only one runs. Each reading executes on the running backend against the
+   reference. *)
+
+let phase1d () =
+  let mk = node_factory ~first_id:4100 ~dims:[| dim |] () in
+  let ws =
+    Array.init 11 ~f:(fun k ->
+        let w = mk (Printf.sprintf "ew%d" (k + 1)) in
+        materialize w;
+        w)
+  in
+  let m = mk "em" in
+  materialize m;
+  let m_vals = Array.init dim ~f:(fun i -> Float.of_int (i % 2)) in
+  let sum i ks =
+    List.fold ks ~init:(Ll_test.c 0.) ~f:(fun acc k -> add acc (get ws.(k) [| iter i |]))
+  in
+  let sum_ref ks i = List.fold ks ~init:0. ~f:(fun acc k -> acc +. (w_vals k).(i)) in
+  let seed out =
+    (out, blank dim) :: (m, m_vals) :: (Array.to_list ws |> List.mapi ~f:(fun k w -> (w, w_vals k)))
+  in
+  let is_fanin_cap o tn =
+    Option.equal Tn.equal_provenance (rejection_code o tn) (Some Tn.Inline_fanin_cap)
+  in
+  (* [v[i] = sum v_ks; y[i] = where m[i] (sum direct_ks) v[i]] (the arms swapped with [~v_first]),
+     [out[i] = y[i]]; fresh nodes per fixture. *)
+  let fixture label ~direct_ks ~v_ks ~v_first =
+    let v = mk ("ev_" ^ label) and y = mk ("ey_" ^ label) and out = mk ("eo_" ^ label) in
+    materialize out;
+    let i = sym () and j = sym () and k = sym () in
+    let v_setter = loop_n k dim (set v [| iter k |] (sum k v_ks)) in
+    let direct = (sum i direct_ks, single) and via_v = (get v [| iter i |], single) in
+    let then_, else_ = if v_first then (via_v, direct) else (direct, via_v) in
+    let producer =
+      loop_n i dim
+        (set y [| iter i |] (LL.Ternop (Ir.Ops.Where, (get m [| iter i |], single), then_, else_)))
+    in
+    let consumer = loop_n j dim (set out [| iter j |] (get y [| iter j |])) in
+    let then_ks, else_ks = if v_first then (v_ks, direct_ks) else (direct_ks, v_ks) in
+    let expected =
+      Array.init dim ~f:(fun i -> if i % 2 <> 0 then sum_ref then_ks i else sum_ref else_ks i)
+    in
+    (v, y, out, seq (seq v_setter producer) consumer, expected)
+  in
+  let direct_ks = [ 0; 1; 2 ] in
+  let wide_ks = [ 3; 4; 5; 6; 7; 8; 9; 10 ] and narrow_ks = [ 3; 4; 5; 6; 7 ] in
+  let readings label ~v_ks ~v_first =
+    let v, y, out, llc, expected = fixture label ~direct_ks ~v_ks ~v_first in
+    let o_branch = optimize ~name:("vcf_exp_branch_" ^ label) llc in
+    let o_blend = optimize ~blends_value_selects:true ~name:("vcf_exp_blend_" ^ label) llc in
+    let run tag o =
+      execute ~name:("vcf_exp_" ^ tag ^ "_" ^ label) o ~seed:(seed out) ~read:[ out ]
+    in
+    let executed =
+      same (run "branch" o_branch) [ expected ] && same (run "blend" o_blend) [ expected ]
+    in
+    (v, y, o_branch, o_blend, executed)
+  in
+  List.iter
+    [ (false, "then-arm direct"); (true, "else-arm direct") ]
+    ~f:(fun (v_first, side) ->
+      let tag = if v_first then "swapped" else "witness" in
+      let v, y, o_branch, o_blend, executed = readings tag ~v_ks:wide_ks ~v_first in
+      p
+        (Printf.sprintf
+           "expanded arms (%s): the virtual arm's producer stays virtual (fan-in 8, at the cap)"
+           side)
+        (known_virtual o_branch v && known_virtual o_blend v);
+      p
+        (Printf.sprintf
+           "expanded arms (%s), short-circuiting: the producer is materialized by the fan-in cap \
+            (mask + the 8-load expanded arm = 9)"
+           side)
+        (is_fanin_cap o_branch y);
+      p
+        (Printf.sprintf
+           "expanded arms (%s), blended: the producer is materialized by the fan-in cap (mask + \
+            both arms = 12)"
+           side)
+        (is_fanin_cap o_blend y);
+      p (Printf.sprintf "expanded arms (%s): both readings execute the reference" side) executed);
+  let _v, y, o_branch, o_blend, executed = readings "control" ~v_ks:narrow_ks ~v_first:false in
+  p "expanded arms control, short-circuiting: the producer stays virtual (one arm: mask + 5 = 6)"
+    (known_virtual o_branch y);
+  p
+    "expanded arms control, blended: the producer is materialized by the fan-in cap (the union: \
+     mask + 3 + 5 = 9)"
+    (is_fanin_cap o_blend y);
+  p "expanded arms control: both readings execute the reference" executed;
+  (* Across routines: routine A defines [v] and the select's producer [y], committing both [Virtual]
+     (neither is read there); routine B copies [y] through [z] into [out]. [z]'s fan-in is replayed
+     from the stored computations, under the same charge: the expanded arm is the wider, so [z] is
+     materialized on either reading. *)
+  let cross blends =
+    let tag = if blends then "blend" else "branch" in
+    let v = mk ("evx_" ^ tag) and y = mk ("eyx_" ^ tag) in
+    let z = mk ("ezx_" ^ tag) and out = mk ("eox_" ^ tag) in
+    materialize out;
+    let i = sym () and j = sym () and k = sym () and l = sym () in
+    let llc_a =
+      seq
+        (loop_n k dim (set v [| iter k |] (sum k wide_ks)))
+        (loop_n i dim
+           (set y
+              [| iter i |]
+              (LL.Ternop
+                 ( Ir.Ops.Where,
+                   (get m [| iter i |], single),
+                   (sum i direct_ks, single),
+                   (get v [| iter i |], single) ))))
+    in
+    let llc_b =
+      seq
+        (loop_n j dim (set z [| iter j |] (get y [| iter j |])))
+        (loop_n l dim (set out [| iter l |] (get z [| iter l |])))
+    in
+    let ctx = LL.empty_optimize_ctx () in
+    let o_a = optimize_in ~blends_value_selects:blends ctx ~name:("vcf_expx_a_" ^ tag) llc_a in
+    let o_b = optimize_in ~blends_value_selects:blends ctx ~name:("vcf_expx_b_" ^ tag) llc_b in
+    let got = execute ~name:("vcf_expx_b_" ^ tag) o_b ~seed:(seed out) ~read:[ out ] in
+    let expected =
+      Array.init dim ~f:(fun i -> if i % 2 <> 0 then sum_ref direct_ks i else sum_ref wide_ks i)
+    in
+    (known_virtual o_a v && known_virtual o_a y, is_fanin_cap o_b z, same got [ expected ])
+  in
+  List.iter [ false; true ] ~f:(fun blends ->
+      let reading = if blends then "blended" else "short-circuiting" in
+      let committed, capped, executed = cross blends in
+      p
+        (Printf.sprintf "cross-routine expanded arms, %s: routine A commits both producers virtual"
+           reading)
+        committed;
+      p
+        (Printf.sprintf
+           "cross-routine expanded arms, %s: the copy is materialized by the fan-in cap" reading)
+        capped;
+      p
+        (Printf.sprintf "cross-routine expanded arms, %s: executed values match the reference"
+           reading)
+        executed)
+
 (* === Phase 2: the Assignments pipeline === *)
 
 open Ocannl
@@ -556,6 +707,65 @@ let phase2b () =
   in
   let lv = Context.get_values ctx loss.Tensor.value in
   p "pipeline select: the loss matches the reference (exact: small integers)"
+    (Array.length lv = 1 && Float.equal lv.(0) expected)
+
+(* === Phase 2c: the arms' expansions decide the charge on every backend ===
+
+   gh-ocannl-1874, end to end: [y = where mask (a1 + a2 + a3) (b1 + ... + b8)] through [Context].
+   Each arm loads one virtual node directly -- the last link of its sum chain -- so a choice on
+   direct loads ties and charges the first arm (mask + 3 = 4, virtual). Expanded, the else-arm
+   replays eight loads: short-circuiting (CUDA, Metal) [y] is charged mask + 8 = 9, blended (cc,
+   HIP) mask + 3 + 8 = 12, so the fan-in cap materializes it on every backend. The backend's fact
+   goes to stderr: a backend-uniform golden cannot say which reading ran. *)
+
+let phase2c () =
+  Utils.settings.fixed_state_for_init <- Some 42;
+  Tensor.unsafe_reinitialize ();
+  let init l k =
+    NTDSL.init ~l ~prec:Ir.Ops.single ~o:[ dim ]
+      ~f:(fun idcs -> Float.of_int ((100 * k) + (10 * idcs.(0)) + 1))
+      ()
+  in
+  let mask =
+    NTDSL.init ~l:"vcf_exp_mask" ~prec:Ir.Ops.single ~o:[ dim ]
+      ~f:(fun idcs -> Float.of_int (idcs.(0) % 2))
+      ()
+  in
+  let sum ks =
+    List.map ks ~f:(fun k -> init (Printf.sprintf "vcf_exp_w%d" k) k)
+    |> List.reduce_exn ~f:TDSL.O.( + )
+  in
+  let then_ks = [ 1; 2; 3 ] and else_ks = [ 4; 5; 6; 7; 8; 9; 10; 11 ] in
+  let wide = sum else_ks in
+  let y = TDSL.O.where mask (sum then_ks) wide in
+  let%op loss = y ++ "i=>0" in
+  Train.set_materialized loss.Tensor.value;
+  Tn.set_observable loss.Tensor.value;
+  let ctx = Context.auto () in
+  let blends = (Context.backend_facts ctx).Ir.Backend_intf.blends_value_selects in
+  Stdio.eprintf "phase 2c: on the %s backend, blends_value_selects=%b (not part of the golden)\n%!"
+    (Context.backend_name ctx) blends;
+  let ctx, routine = Context.compile ctx (Train.forward loss) Ir.Indexing.Empty in
+  let ctx = Context.run ctx routine in
+  let plc = Context.placements ctx in
+  p "pipeline expanded arms: the 8-load arm's last link stays virtual (fan-in 8, at the cap)"
+    (Tn.Placements.known_virtual plc wide.Tensor.value);
+  p
+    "pipeline expanded arms: the producer is materialized by the fan-in cap on every backend \
+     (short-circuiting 9, blended 12)"
+    (Option.equal Tn.equal_provenance
+       (Option.map (Tn.Placements.get plc y.Tensor.value) ~f:(fun (_, prov) ->
+            Tn.leading_provenance prov))
+       (Some Tn.Inline_fanin_cap));
+  let cell ks i =
+    List.fold ks ~init:0. ~f:(fun acc k -> acc +. Float.of_int ((100 * k) + (10 * i) + 1))
+  in
+  let expected =
+    List.init dim ~f:(fun i -> if i % 2 <> 0 then cell then_ks i else cell else_ks i)
+    |> List.fold ~init:0. ~f:( +. )
+  in
+  let lv = Context.get_values ctx loss.Tensor.value in
+  p "pipeline expanded arms: the loss matches the reference (exact: small integers)"
     (Array.length lv = 1 && Float.equal lv.(0) expected)
 
 (* === Phase 3: the chain split across two routines in one lineage === *)
@@ -1556,8 +1766,10 @@ let () =
   phase1 ();
   phase1b ();
   phase1c ();
+  phase1d ();
   phase2 ();
   phase2b ();
+  phase2c ();
   phase3 ();
   phase4 ();
   phase5 ();

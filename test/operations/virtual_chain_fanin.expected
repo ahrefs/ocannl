@@ -34,6 +34,23 @@ cross-routine select, blended: executed values match the reference: true
 cross-routine select, short-circuiting: routine A commits the producer virtual: true
 cross-routine select, short-circuiting: the copy stays virtual (fan-in 6): true
 cross-routine select, short-circuiting: executed values match the reference: true
+expanded arms (then-arm direct): the virtual arm's producer stays virtual (fan-in 8, at the cap): true
+expanded arms (then-arm direct), short-circuiting: the producer is materialized by the fan-in cap (mask + the 8-load expanded arm = 9): true
+expanded arms (then-arm direct), blended: the producer is materialized by the fan-in cap (mask + both arms = 12): true
+expanded arms (then-arm direct): both readings execute the reference: true
+expanded arms (else-arm direct): the virtual arm's producer stays virtual (fan-in 8, at the cap): true
+expanded arms (else-arm direct), short-circuiting: the producer is materialized by the fan-in cap (mask + the 8-load expanded arm = 9): true
+expanded arms (else-arm direct), blended: the producer is materialized by the fan-in cap (mask + both arms = 12): true
+expanded arms (else-arm direct): both readings execute the reference: true
+expanded arms control, short-circuiting: the producer stays virtual (one arm: mask + 5 = 6): true
+expanded arms control, blended: the producer is materialized by the fan-in cap (the union: mask + 3 + 5 = 9): true
+expanded arms control: both readings execute the reference: true
+cross-routine expanded arms, short-circuiting: routine A commits both producers virtual: true
+cross-routine expanded arms, short-circuiting: the copy is materialized by the fan-in cap: true
+cross-routine expanded arms, short-circuiting: executed values match the reference: true
+cross-routine expanded arms, blended: routine A commits both producers virtual: true
+cross-routine expanded arms, blended: the copy is materialized by the fan-in cap: true
+cross-routine expanded arms, blended: executed values match the reference: true
 pipeline: x7 stays virtual: true
 pipeline: x8 materialized by the fan-in cap: true
 pipeline: x9 and x10 virtual again past the reset: true
@@ -42,6 +59,9 @@ pipeline: loss matches the reference: true
 pipeline: default and cap-disabled arms agree: true
 pipeline select: the producer is materialized by the fan-in cap exactly where the backend blends: true
 pipeline select: the loss matches the reference (exact: small integers): true
+pipeline expanded arms: the 8-load arm's last link stays virtual (fan-in 8, at the cap): true
+pipeline expanded arms: the producer is materialized by the fan-in cap on every backend (short-circuiting 9, blended 12): true
+pipeline expanded arms: the loss matches the reference (exact: small integers): true
 cross-routine: routine A leaves x1..x5 virtual: true
 cross-routine: x7 stays virtual: true
 cross-routine: x8 materialized by the fan-in cap: true

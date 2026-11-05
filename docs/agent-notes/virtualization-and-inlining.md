@@ -673,19 +673,24 @@ files.
 - **The fan-in guard charges a value select as the backend renders it** (gh-ocannl-1775). Where
   `backend_facts.blends_value_selects` holds (cc, HIP), a `Where` that `speculable_select` admits is
   a blend evaluating both arms, so a setter is charged the UNION of the arms' loads (distinct nodes,
-  never the sum of sizes); elsewhere (CUDA, Metal) the wider arm. The cached analysis is
-  backend-independent, so `setter_reads` keeps both (`reads_branching` / `reads_blended`) and
-  `decide_placements` picks by the flag, which reaches it only through `Backends.lower_assignments
+  never the sum of sizes); elsewhere (CUDA, Metal) one arm -- the one whose loads are the most
+  AFTER transitive expansion (gh-ocannl-1874): an arm loading one virtual node can replay more than
+  an arm loading three materialized ones, so a choice on direct loads under-counts. Hence
+  `setter_reads` keeps each setter's `read_charge` -- unconditional loads plus every select's arms
+  and its `speculable` admission, unresolved -- and `decide_placements` resolves it
+  (`resolve_charge`) with its transitive `expand` under the backend's flag; the cached analysis
+  stays backend-independent. The flag reaches it only through `Backends.lower_assignments
   ~facts` -- the compile and `Context.lowered_for_decisions` alike; `Low_level.optimize`, and so
   `Ll_test`, default to the short-circuiting reading, so a hand-built test of a select decision says
   which reading it asks for. Admission is judged before inlining at the arms' annotations, while the
   renderer judges it after virtualization at the compute precision (and HIP keeps `?:` over a NaN
   literal): the guard can charge the union where the select ends up branching, never the reverse --
   the materializing direction. The per-setter maximum across components is untouched: each
-  component's update sits under an index-only `Where` no backend blends. Two known under-counts
-  remain: overlapping components (two bodies run where both guards hold) and, short-circuiting, the
-  wider arm chosen by direct loads before transitive expansion. Pins: `virtual_chain_fanin` phases
-  1c and 2b (the latter two-sided on the running backend), `access_fold`, `backend_facts`, and
+  component's update sits under an index-only `Where` no backend blends. Known under-counts that
+  remain: overlapping components (two bodies run where both guards hold), and several selects on
+  one path, where the arm choice is greedy (each select joined to what is already charged), still
+  a path some visit runs. Pins: `virtual_chain_fanin` phases 1c, 1d (the arm chosen after
+  expansion) and 2b/2c (two-sided on the running backend), `access_fold`, `backend_facts`, and
   `op_table_compile` against the emitted kernels.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
