@@ -614,6 +614,16 @@ val mentions_rng_conversion : scalar_t -> bool
     renders at, so the expression renders at its target's storage precision and an accumulation
     carrying it keeps a storage-width accumulator. *)
 
+val narrowing_read : scope_prec:Ops.prec -> scalar_t -> bool
+(** Whether a scope of precision [scope_prec] holding this value is a cast that rounds: a narrow
+    float scope over a read -- of a tensor node or of another scope -- at a precision that does not
+    widen exactly into it (gh-ocannl-1866). This is what a virtual cast twin lowers to, an identity
+    of its master. {!simplify_llc} keeps such a scope, and code generation gives it its node's
+    storage precision, so that the read rounds as the materialized node's store does, wherever
+    compute is wider than storage. A [uint4x32] source is not a cast: a conversion from it is keyed
+    by where it renders. Narrow arithmetic is not covered: it computes at the compute precision on
+    purpose (gh-ocannl-517). *)
+
 val accum_update_widens : tn:Tnode.t -> idcs:Indexing.axis_index array -> scalar_t -> bool
 (** Whether code generation holds this update's accumulator at the backend's accumulator residency:
     an {!accum_update_parts} accumulation, free of RNG conversions ({!mentions_rng_conversion}),

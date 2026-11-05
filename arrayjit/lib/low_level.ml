@@ -5880,6 +5880,23 @@ let rec mentions_rng_conversion (llsc : scalar_t) =
   | Constant_bits _ | Embed_index _ ->
       false
 
+let narrowing_read ~scope_prec (llsc : scalar_t) =
+  let narrows ~from =
+    (match Ops.prec_family from with Packed_integer -> false | _ -> true)
+    && not (Ops.widens_exactly ~from ~to_:scope_prec)
+  in
+  let rec read = function
+    | Unop (Identity, (v, _)) | Binop (Arg1, (v, _), _) | Binop (Arg2, _, (v, _)) -> read v
+    | Get (tn, _)
+    | Get_merge_buffer (tn, _)
+    | Get_dynamic { tn; _ }
+    | Get_local { tn; _ }
+    | Local_scope { id = { tn; _ }; _ } ->
+        narrows ~from:(Lazy.force tn.Tn.storage_prec)
+    | _ -> false
+  in
+  Ops.is_narrow_float scope_prec && read llsc
+
 let simplify_llc static_indices llc =
   let licence = Fp_licence.exact in
   let positive_zero c = Float.(c = 0.) && not (Stdlib.Float.sign_bit c) in
@@ -6010,7 +6027,14 @@ let simplify_llc static_indices llc =
          would reach its consumer unrounded wherever the consumer computes in float -- under an
          operator following its operands, [3 * sqrt(8)] gives 8 where the scope gives [3 * 2] -- and
          the simplifier cannot see which kind of consumer the slot is. *)
-      && not (Ops.is_integer scope_prec && float_valued v)
+      && (not (Ops.is_integer scope_prec && float_valued v))
+      (* gh-ocannl-1866: the first clause's [equal_prec scope_prec eval] is a statement about the
+         slot's annotation. A narrow slot can render wider ([compute_prec], which lowered code must
+         not depend on: gh-ocannl-568), where it would read a collapsed cast unrounded while the
+         materialized node holds the rounded value. So a narrowing read stays a scope on every
+         backend, and {!C_syntax} rounds it. Only a read: narrow ARITHMETIC computes wide on purpose
+         (gh-ocannl-517). *)
+      && not (narrowing_read ~scope_prec v)
     in
     (* gh-ocannl-1769: an RNG conversion renders at the precision of the store holding it
        ({!is_rng_conversion}), and a scope body is a store at the scope's precision -- the one a

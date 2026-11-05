@@ -329,9 +329,9 @@ single-threaded segments that sum to the serial step
   cast twins instead of leaving them to the virtualization heuristics
   (`Mixed_prec.Twin_materialized`). The twins' placement decides whether a tensorized candidate is
   *seeded at all* on a uniform-format backend (gh-ocannl-546): with virtual twins the matmul site
-  reads f32 masters into a reduced-precision destination, a mixed triple no advertised tile
-  matches, so the default-placement arm proposes zero tensorized candidates — materializing three
-  small weight casts is enough to make them reachable at that arm's cost.
+  reads each f32 master through a scope that rounds it (gh-ocannl-1866), a read the recognizers
+  do not see through, so the default-placement arm proposes no tensorized candidate for that site
+  — materializing three small weight casts is enough to make them reachable at that arm's cost.
   `BENCH_PRESEED_TWINS=1` (mlp, reduced precision) reaches the same placement through
   `Context.decide_materialized` instead: a context-level *decision* rather than a tnode-level
   intent, so unlike `BENCH_TWIN_PLACEMENT` it is visible to the placement A/B and composes with the

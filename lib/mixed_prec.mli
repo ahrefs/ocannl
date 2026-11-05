@@ -11,8 +11,14 @@
       twin" ({!Operation.cast}) inserted by a {!Tensor.param_postprocess} hook at parameter
       construction. The twin is recomputed from the master each forward pass; whether it is a
       virtual node (recompute-on-read) or a materialized per-step copy is the [placement] choice.
-      The twin's gradient flows back into the master's f32 gradient through an accumulating
-      assignment, which is where the f16 -> f32 widening happens.
+      The twin rounds the master at the twin's precision whichever placement it gets, on every
+      backend and under either [narrow_compute_f32], so the choice never changes what a read of the
+      twin gives (gh-ocannl-1866); it can still decide which schedules are reachable, since a matmul
+      reads a virtual twin through a scope. That guarantee is the cast's: a virtual narrow node
+      computing {e arithmetic} elsewhere in the model keeps the compute-precision policy of
+      gh-ocannl-517, and skips its store's rounding where compute is wider than storage. The twin's
+      gradient flows back into the master's f32 gradient through an accumulating assignment, which
+      is where the f16 -> f32 widening happens.
     - {b Loss scaling} ({!Loss_scaler}): f16's exponent range underflows on small gradients, so the
       backprop is seeded with a scale factor ([Train.grad_update ~loss_scale]) and gradients are
       unscaled in the optimizer step ([Train.sgd_update ~grad_unscale]). The dynamic schedule backs

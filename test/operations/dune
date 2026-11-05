@@ -1859,8 +1859,8 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1769: whether a mixed-precision cast twin rounds its f32 master to f16 under each
-; placement, executed on a master value f16 cannot represent.
+; gh-ocannl-1866: a mixed-precision cast twin rounds its f32 master at the twin's precision under
+; every placement, executed on master values the twin's precision cannot represent.
 
 (test
  (name mixed_prec_twin_rounding)
@@ -1869,7 +1869,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules mixed_prec_twin_rounding)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.utils test_utils arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

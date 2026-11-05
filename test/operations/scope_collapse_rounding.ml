@@ -3,9 +3,12 @@
    A [Local_scope] converts its value into its own precision before its slot reads it. [simplify]
    collapses a single-assignment scope into the expression around it, which drops that step, so the
    collapse is exact only when the slot evaluates at the scope's precision, or when the value is a
-   load whose storage precision the scope's widens exactly. Before gh-ocannl-1788 it collapsed every
-   float scope: a bfloat16 scope over a single product, read in a single sum, lost its rounding
-   wherever the scope's local is declared at bfloat16 -- Metal, CUDA and HIP, and cc under
+   load whose storage precision the scope's widens exactly, and it is never exact for a cast
+   (gh-ocannl-1866): a narrow scope over a read it does not widen exactly stays a scope even in a
+   slot of its own precision, which can render wider, and code generation gives it its node's
+   precision whatever the compute precision. Before gh-ocannl-1788 it collapsed every float scope: a
+   bfloat16 scope over a single product, read in a single sum, lost its rounding wherever the
+   scope's local is declared at bfloat16 -- Metal, CUDA and HIP, and cc under
    [narrow_compute_f32=false]. (Under cc's default [narrow_compute_f32=true] the local is single
    anyway, so the collapse happened to be exact there.)
 
@@ -13,10 +16,10 @@
    (the uncollapsed oracle); the same through a schedule whose trailing [simplify] decides the
    collapse; a virtual node read in the sum, inlined by [optimize], whose own [simplify] decides it;
    and the value written straight into the sum, which shows that the oracle's rounding is observable
-   where the claim needs it to be. All run under each narrow-compute policy
-   ([Ir.Numerics.set_policy] in-process, distinct routine names per policy). The single inputs and
-   their squares lie off the bfloat16 grid; the bfloat16 inputs lie on it, so seeding them is
-   exact. *)
+   where the claim needs it to be. A cast also runs as a materialized node, the value every form of
+   it has to give. All run under each narrow-compute policy ([Ir.Numerics.set_policy] in-process,
+   distinct routine names per policy). The single inputs and their squares lie off the bfloat16
+   grid; the bfloat16 inputs lie on it, so seeding them is exact. *)
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
@@ -59,6 +62,7 @@ let run shape ~form ~policy =
     | `Scheduled -> "sch"
     | `Unscoped -> "raw"
     | `Inlined -> "inl"
+    | `Materialized -> "mat"
   in
   let name = Printf.sprintf "scr_%s_%s_%s" shape.label tag policy in
   let s = Ll_test.sym () in
@@ -75,12 +79,20 @@ let run shape ~form ~policy =
   let o =
     match form with
     | `Unscoped -> Ll_test.optimize_scoped ~name ~raw raw
-    | `Inlined ->
-        Ll_test.virtualize mid;
+    | (`Inlined | `Materialized) as placed ->
+        let materialized =
+          match placed with
+          | `Inlined ->
+              Ll_test.virtualize mid;
+              [ x_tn; y_tn; out ]
+          | `Materialized ->
+              Ll_test.materialize mid;
+              [ x_tn; y_tn; out; mid ]
+        in
         let s1 = Ll_test.sym () in
         let i1 = [| Ll_test.iter s1 |] in
         let v1 = shape.value ~x:(Ll_test.get x_tn i1, shape.slot) ~y:(Ll_test.get y_tn i1, other) in
-        Ll_test.optimize ~materialized:[ x_tn; y_tn; out ] ~name
+        Ll_test.optimize ~materialized ~name
           (LL.unflat_lines
              [
                Ll_test.loop_n s1 n (Ll_test.set mid i1 v1); sum (Ll_test.get mid i, shape.scope_prec);
@@ -92,7 +104,7 @@ let run shape ~form ~policy =
   let o =
     match form with
     | `Scheduled -> Ir.Schedule.apply [ Ir.Schedule.Retype { axis = s; ty = LL.Serial } ] o
-    | `Oracle | `Unscoped | `Inlined -> o
+    | `Oracle | `Unscoped | `Inlined | `Materialized -> o
   in
   let seed tn =
     (tn, if Ops.equal_prec (Lazy.force tn.Ir.Tnode.storage_prec) bf then bf_inputs else f32_inputs)
@@ -124,6 +136,51 @@ let narrow_load =
 let widening_load =
   (* A single scope over a bfloat16 load, in a bfloat16 sum: the widening is exact. *)
   { label = "wload"; slot = bf; scope_prec = f32; value = (fun ~x ~y:_ -> fst x) }
+
+let cast_into_own_prec =
+  (* A bfloat16 scope over a single load, in a bfloat16 sum: the shape a cast twin has in a model of
+     its own precision. *)
+  { label = "cast_own"; slot = bf; scope_prec = bf; value = (fun ~x:_ ~y -> fst y) }
+
+let cast_into_wider =
+  (* A bfloat16 scope over a single load, in a single sum. *)
+  { label = "cast_wide"; slot = f32; scope_prec = bf; value = (fun ~x ~y:_ -> fst x) }
+
+(* A narrowing init does not make a scope a cast. [mid] is a bfloat16 accumulator opened by a single
+   load and then updated: it keeps the residency of a reduction ([accum_prec]), so increments of
+   [2^-9], a quarter of its ulp at 1, add up where it resides wide and round away where it resides
+   at bfloat16. Its init, 1, is on the grid either way. *)
+let accumulator_keeps_residency ~policy =
+  let name = "scr_accum_" ^ policy in
+  let s = Ll_test.sym () in
+  let i = [| Ll_test.iter s |] and at0 = [| Ll_test.fixed 0 |] in
+  let x_tn = fnode (name ^ "_x") and y_tn = fnode (name ^ "_y") in
+  let mid = bnode (name ^ "_mid") and out = bnode (name ^ "_out") in
+  List.iter [ x_tn; y_tn; out ] ~f:Ll_test.materialize;
+  let id = LL.get_scope mid in
+  let body =
+    LL.Seq
+      ( LL.Set_local (id, Ll_test.get y_tn at0),
+        Ll_test.loop_n s n
+          (LL.Set_local (id, LL.Binop (Ops.Add, (LL.Get_local id, bf), (Ll_test.get x_tn i, bf))))
+      )
+  in
+  let scoped =
+    Ll_test.set out at0
+      (LL.Local_scope { id; body; orig_indices = at0; mint = LL.Inlined_computation })
+  in
+  let raw =
+    Ll_test.loop_n s n
+      (Ll_test.set out at0
+         (LL.Binop (Ops.Add, (Ll_test.get y_tn at0, f32), (Ll_test.get x_tn i, f32))))
+  in
+  let o = Ll_test.optimize_scoped ~name ~raw scoped in
+  let seed = [ (x_tn, Array.create ~len:n 0.001953125); (y_tn, Array.create ~len:n 1.) ] in
+  let values = Ll_test.execute ~name o ~seed ~read:[ out ] in
+  let accum = (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec bf in
+  let expected = if Ops.equal_prec accum bf then 1. else 1.0078125 in
+  p "a narrowing init leaves an accumulator at its residency"
+    Float.((List.hd_exn values).(0) = expected)
 
 let () =
   let saved = Ir.Numerics.get () in
@@ -185,5 +242,24 @@ let () =
                    "%s: optimize inlines the virtual node and collapses its scope, computing the \
                     oracle's values bitwise"
                    shape.label)
-                (inlined && inl_scopes = 0 && same_bits pre inl))));
+                (inlined && inl_scopes = 0 && same_bits pre inl));
+          List.iter [ cast_into_own_prec; cast_into_wider ] ~f:(fun shape ->
+              let pre, _, _ = run shape ~form:`Oracle ~policy in
+              let sch, sch_scopes, _ = run shape ~form:`Scheduled ~policy in
+              let inl, inl_scopes, inlined = run shape ~form:`Inlined ~policy in
+              let mat, _, _ = run shape ~form:`Materialized ~policy in
+              let raw, _, _ = run shape ~form:`Unscoped ~policy in
+              p
+                (Printf.sprintf "%s: a cast stays a scope, scheduled and inlined" shape.label)
+                (sch_scopes = 1 && inlined && inl_scopes = 1);
+              p
+                (Printf.sprintf
+                   "%s: every form of the cast computes the materialized values bitwise" shape.label)
+                (same_bits mat pre && same_bits mat sch && same_bits mat inl);
+              let show vs =
+                String.concat ~sep:" " (Array.to_list (Array.map vs ~f:(Printf.sprintf "%h")))
+              in
+              Stdio.eprintf "(not part of the golden) %s %s: materialized %s; unscoped %s\n" policy
+                shape.label (show mat) (show raw));
+          accumulator_keeps_residency ~policy));
   Ir.Numerics.set_policy saved
