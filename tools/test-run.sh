@@ -91,6 +91,14 @@
 # UNMAPPED); `--list` then still prints what it found and exits 3. A list with
 # no `runtest-` alias runs nothing and exits 0. `--targets-file` is refused
 # (the list is affected's): name any further alias after `build`.
+# The shell harnesses are no dune aliases, so the run does not hold them
+# (gh-ocannl-1929): the commands `affected --harnesses --since BASE` prints
+# are NAMED, not run, as the last lines of stderr -- a count line, then one
+# `test-run: prepush: harness: CMD` each -- after the run's verdict, after
+# `--list`'s list, and after a cross-cutting or incomplete refusal alike, for
+# the caller to run before pushing (on a fleet box inside a slot). They change
+# no exit status. A change reaching no harness (most `.ml`-only ones) prints
+# no such line; an `affected --harnesses` that fails runs nothing (exit 2).
 #
 # `--targets-file FILE` (repeatable; gh-ocannl-1740) adds the aliases FILE lists
 # to dune's argv, after its own words (before dune's `--`, if any): one `@`
@@ -3785,7 +3793,8 @@ shift
 # by an allowlist, and then BECOMES that run: `sub` is `run` from here on and
 # the list reaches the run's own intake as a targets file in a scratch
 # directory this launcher removes as it exits (the run records the argv it
-# read; no launch path sets an EXIT trap of its own). Nothing runs when the
+# read; no launch path sets an EXIT trap of its own), naming the harness
+# commands the change reaches as it does (gh-ocannl-1929). Nothing runs when the
 # verdict `affected` ends its stderr with is cross-cutting (exit 2: the pre-push
 # run is then not this list), nor when it is incomplete (exit 3: a path reached
 # what this build cannot place), nor without a verdict (exit 2), so no green
@@ -3819,7 +3828,22 @@ if [ "$sub" = prepush ]; then
     die "prepush: the list is aliases, which only dune's build takes: tools/test-run.sh $pp_usage, not $1"
   reject_misplaced_options "$@"
   pp_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-run-prepush.XXXXXX") || die "cannot create a scratch directory"
-  trap 'rm -rf "$pp_dir"' EXIT
+  # The closing lines (gh-ocannl-1929): the harness commands the change
+  # reaches, named last -- after the run's verdict, a refusal or --list's
+  # list -- so the tail of a pre-push log carries them. Nothing is printed
+  # when the change reaches none.
+  pp_harness=()
+  pp_close() {
+    if [ ${#pp_harness[@]} -gt 0 ]; then
+      {
+        printf 'test-run: prepush: %d harness command(s) this change reaches, named here and NOT run (they are no dune aliases, so no part of prepush'\''s list): run each before pushing, on a fleet box inside a slot (fleet-worker.sh execution slot --cpu -- CMD):\n' \
+          "${#pp_harness[@]}"
+        printf 'test-run: prepush: harness: %s\n' "${pp_harness[@]}"
+      } >&2
+    fi
+    rm -rf "$pp_dir"
+  }
+  trap pp_close EXIT
   pp_rc=0
   bash "$runner_root/tools/test-run.sh" affected --since "$pp_base" >"$pp_dir/affected" 2>"$pp_dir/affected.err" ||
     pp_rc=$?
@@ -3846,6 +3870,21 @@ if [ "$sub" = prepush ]; then
   esac
   [ "$pp_rc" = $((pp_incomplete * 3)) ] ||
     die "prepush: affected --since $pp_base exited $pp_rc with the verdict '$pp_verdict' (incomplete is exit 3, and only it); nothing run"
+  # The harness legs the change reaches (gh-ocannl-1929) are asked of
+  # `affected --harnesses`, whose stdout is those commands and nothing else
+  # (no dune, no worktree lock), never read out of the stderr above. They are
+  # named as this command ends (pp_close), whatever it then does: a refusal
+  # below names them too, since they are the caller's to run either way.
+  pp_hrc=0
+  bash "$runner_root/tools/test-run.sh" affected --harnesses --since "$pp_base" >"$pp_dir/harnesses" 2>"$pp_dir/harnesses.err" ||
+    pp_hrc=$?
+  if [ "$pp_hrc" != 0 ]; then
+    cat "$pp_dir/harnesses.err" >&2
+    die "prepush: affected --harnesses --since $pp_base exited $pp_hrc (above), so the harness commands this change reaches are not known; nothing run"
+  fi
+  while IFS= read -r pp_line || [ -n "$pp_line" ]; do
+    [ -z "$pp_line" ] || pp_harness+=("$pp_line")
+  done <"$pp_dir/harnesses"
   [ "$pp_cross" = 0 ] ||
     die "prepush: this change is CROSS-CUTTING (above), so the pre-push run is not this list: the PR's CI run owns it but its slow- aliases; run those and the tests that exercise the change, named in the PR body, then dune build @check (AGENTS.md, gh-ocannl-1765); nothing run"
   # The allowlist: one `@` operand per line, its last component a per-test

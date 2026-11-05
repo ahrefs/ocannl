@@ -1407,6 +1407,28 @@ STUB
   affected --files lib/helper.ml
   # shellcheck disable=SC2086
   expect 'the aliases are unchanged by the harness legs' 0 $reached_by_core
+  # The closing summary counts the harness commands (gh-ocannl-1929), and says
+  # nothing of them for a change reaching none (an `.ml` no harness reads).
+  hs_label='the closing summary counts the harness commands, and names none for a change reaching no harness'
+  hs_none=$(grep -c 'harness' "$err")
+  hs_summary() { sed -n '/^affected: [0-9]* alias(es) from /p' "$err"; }
+  hs_plain=$(hs_summary)
+  affected --files stubs/s.mli lib/helper.ml
+  if [ "$hs_none" = 0 ] && [ -n "$hs_plain" ] && [ "$(grep -c '^affected: harness: ' "$err")" = 1 ] &&
+     [ "$(hs_summary)" = "${hs_plain/ 1 changed path(s)/ 2 changed path(s)}, and 1 harness command(s), named above" ]; then
+    report 0 "$hs_label"
+  else report 1 "$hs_label" "an .ml alone: $hs_none harness line(s), summary [$hs_plain]; with a declared stub: $(tr '\n' '|' <"$err")"; fi
+  hs_label='negative control: a summary that does not count the harness commands loses the count'
+  mutant=$repo/tools/affected-mutant.sh
+  if FROM='$n_harness++ if $f eq "harness-cmds";' TO='' \
+      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    rc=0
+    (cd "$TMP" && bash "$mutant" --files stubs/s.mli lib/helper.ml) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 0 ] && [ "$(hs_summary)" = "${hs_plain/ 1 changed path(s)/ 2 changed path(s)}" ]; then report 0 "$hs_label"
+    else report 1 "$hs_label" "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
+  else report 1 "$hs_label" 'the mutation anchor does not occur exactly once'; fi
+  rm -f "$mutant"
   affected --harnesses --files stubs/s.mli
   if [ "$rc" = 0 ] && [ "$(cat "$out")" = "tools/test-h.sh --only '^1:'" ]; then
     report 0 '--harnesses prints the command on stdout instead of the aliases'
