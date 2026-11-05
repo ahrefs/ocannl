@@ -80,8 +80,8 @@ let reduce_leg lanes =
   let%op s = v ++ "i=>0" in
   let captured = ref None in
   (* The lowered serial reduction replaced by one [Workgroup_reduce] accumulation loop: the renderer
-     owns the communication. The transform drops the lowered [Zero_out], so allocation zeroes the
-     accumulator instead. *)
+     owns the communication. The transform drops the lowered [Zero_out], so [Context.run] below
+     starts from a stated zero: allocation's is not one to rely on (gh-ocannl-1873). *)
   let transform (opt : LL.optimized) =
     (LL.get_node opt.traced_store s.Tensor.value).LL.zero_initialized_by_code <- false;
     let i = L.sym () in
@@ -104,7 +104,7 @@ let reduce_leg lanes =
       ~lowered_transform:(fun o -> [ transform o ])
       ctx (Train.forward s) Ir.Indexing.Empty
   in
-  let ctx = Context.run ctx routine in
+  let ctx = Context.run (Context.set_values ctx s.Tensor.value [| 0. |]) routine in
   {
     name;
     lanes;

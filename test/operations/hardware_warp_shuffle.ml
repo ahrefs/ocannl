@@ -126,12 +126,27 @@ let () = Generated.init ~backend_name
 let named name (comp : Asgns.comp) : Asgns.comp =
   { comp with asgns = Asgns.Block_comment (name, comp.asgns) }
 
+(* The nodes a transform took the lowered [Zero_out] of. Nothing in the routine zeroes them now, and
+   the accumulation reads them first, so the run states the zero they start from: allocation's would
+   be an accident, and is not one under [debug_fill_fresh_outputs] (gh-ocannl-1873). A compile that
+   never runs leaves its node here, hence the check against the routine about to run. *)
+let dropped_zeros = ref []
+
+let state_dropped_zeros ctx (routine : Context.routine) =
+  let nodes = !dropped_zeros in
+  dropped_zeros := [];
+  List.fold nodes ~init:ctx ~f:(fun ctx tn ->
+      if Set.mem routine.written_first tn && Context.mem ctx tn then
+        Context.set_values ctx tn (Array.create ~len:(Tn.num_elems tn) 0.)
+      else ctx)
+
 (* Replace the lowered serial reduction with a single [Workgroup_reduce] accumulation loop over a
    fresh index; the renderer owns the communication. The transform drops the lowered [Zero_out] of
-   the accumulator, so un-mark [zero_initialized_by_code]: allocation then zeroes the buffer, giving
-   the accumulation the same all-zeros starting point as the serial lowering. *)
+   the accumulator, so un-mark [zero_initialized_by_code], which no longer holds, and record the
+   node: the run gives the accumulation the same all-zeros starting point as the serial lowering. *)
 let reduce_transform ~n ~body_of (s : Tn.t) (opt : LL.optimized) : LL.optimized =
   (LL.get_node opt.traced_store s).LL.zero_initialized_by_code <- false;
+  dropped_zeros := s :: !dropped_zeros;
   let i = L.sym () in
   { opt with llc = L.loop_n ~axis:LL.Workgroup_reduce i n (body_of i) }
 
@@ -141,7 +156,7 @@ let run ~name ~transform t =
   let ctx, routine =
     Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
   in
-  let ctx = Context.run ctx routine in
+  let ctx = Context.run (state_dropped_zeros ctx routine) routine in
   (Context.get_values ctx t.Tensor.value).(0)
 
 let it = L.iter
@@ -261,6 +276,7 @@ let () =
   let%op z1 = tt ++ "i=>0" in
   let sibling_transform (opt : LL.optimized) : LL.optimized =
     (LL.get_node opt.traced_store z1.Tensor.value).LL.zero_initialized_by_code <- false;
+    dropped_zeros := z1.Tensor.value :: !dropped_zeros;
     let j = L.sym () in
     let i = L.sym () in
     let copy_nest =
@@ -1022,7 +1038,7 @@ let () =
     let ctx, routine =
       Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
     in
-    let ctx = Context.run ctx routine in
+    let ctx = Context.run (state_dropped_zeros ctx routine) routine in
     Context.get_values ctx t.Tensor.value
   in
   let refused ~name ~transform t =
@@ -1073,9 +1089,11 @@ let () =
     else skipped claim
   in
   (* Replace the lowered code with a hand-built nest over the value node [s] (dropping the lowered
-     [Zero_out], hence un-marking [zero_initialized_by_code] as [reduce_transform] does). *)
+     [Zero_out], hence un-marking [zero_initialized_by_code] and recording the node as
+     [reduce_transform] does). *)
   let replace ~s ~llc_of (opt : LL.optimized) : LL.optimized =
     (LL.get_node opt.LL.traced_store s).LL.zero_initialized_by_code <- false;
+    dropped_zeros := s :: !dropped_zeros;
     { opt with llc = llc_of () }
   in
   let pin i body : LL.t = L.if_idx (L.eq (L.embed i) (L.ic 0)) body in

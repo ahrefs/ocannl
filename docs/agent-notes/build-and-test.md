@@ -2598,7 +2598,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   nothing wrote from `Ir.Ops.debug_fill_value`, NaN or for integer storage a `0xA5` byte pattern. So
   a red that names a NaN is a finding, not noise: either a write is missing, or the test reads a cell
   no writer covers and should seed it (`Ll_test.blank`) or stop reading it. Rerun with
-  `OCANNL_DEBUG_FILL_FRESH_OUTPUTS=false` to see it was the fill. A zero dropped AFTER the analysis
+  `OCANNL_DEBUG_FILL_FRESH_OUTPUTS=false` to see it was the fill. A test whose `lowered_transform`
+  replaces the lowered code owes the zero it dropped, as a seed between compile and run
+  (`hardware_warp_shuffle`'s `state_dropped_zeros`): the replacement leaves the node written first,
+  so the run starts it from the fill. A zero dropped AFTER the analysis
   is what it catches: `written_first` is decided before scheduling, so a schedule or codegen drop
   leaves the node there, and so does a dropped init of a write that does not read its target (a
   diagonal, whose off-diagonal cells then read the fill). An accumulation left without its init reads
