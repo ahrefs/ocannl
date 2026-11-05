@@ -153,9 +153,9 @@ let concat_pair =
     let hey13 =
       (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
          "hey13") () in
-    let j = Shape.get_variable_ref "j" in
     let i = Shape.get_variable_ref "i" in
-    concat ?label:(Some ["concat_pair"]) ~capture_dims:[j; i] "i; j => i ^ j"
+    let j = Shape.get_variable_ref "j" in
+    concat ?label:(Some ["concat_pair"]) ~capture_dims:[i; j] "i; j => i ^ j"
       [|hey12;hey13|]
 let initialized_no_unit =
   let open! TDSL.O in

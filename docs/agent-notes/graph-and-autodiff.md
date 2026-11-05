@@ -82,8 +82,9 @@ files.
   disjointness. The check found OCANNL's own duplicate: a `%cd` `op_asn` naming an operand tensor
   (`deinterleave_even`'s `id t1`) re-embedded the operand's forward beside `Tensor.op`'s `fwds`,
   so `Tensor.op` hides the root operands from the root map while `op_asn` runs. `%cd` builds a
-  statement sequence in source order (gh-ocannl-1770: `ppx_cd`'s `source_ordered_list` let-binds
-  every member but the last, since OCaml evaluates a list literal right to left), so the FIRST
+  statement sequence in source order (gh-ocannl-1770: `ppx_cd`'s `source_ordered_list`, through
+  `Ppx_shared.in_source_order`, let-binds every member that can have an effect but the last,
+  since OCaml evaluates a list literal right to left), so the FIRST
   statement naming a root tensor embeds its forward code and later ones read it computed; an
   explicit `t.forward` belongs before the statements naming `t` — after one, it is refused as a
   second copy (`cd_source_order.ml`). Any new ppx site that builds a list of comps with effects

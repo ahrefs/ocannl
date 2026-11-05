@@ -128,29 +128,12 @@ let make_vb ~loc ~name ~name_expr ~hint_label ~extra_args =
   vb
 
 (** [source_ordered_list ~loc ~prefix exprs] is the list expression of [exprs], evaluated in source
-    order (gh-ocannl-1770). OCaml evaluates a list literal's elements right to left, and members of
-    a [%cd] sequence have effects whose order decides values: the first member naming a forward-root
-    tensor embeds its forward code ([Tensor.take_forward_code]), and the members run in list order.
-    Evaluated right to left, an earlier member would read a root a later one computes. So every
-    member but the last is let-bound, in order, to [prefix ^ "<position>"]; the last is evaluated
-    last anyway. *)
+    order (gh-ocannl-1770). Members of a [%cd] sequence have effects whose order decides values: the
+    first member naming a forward-root tensor embeds its forward code ([Tensor.take_forward_code]),
+    and the members run in list order. Evaluated right to left, as a list literal is, an earlier
+    member would read a root a later one computes. *)
 let source_ordered_list ~loc ~prefix exprs =
-  let last = List.length exprs - 1 in
-  let named =
-    List.mapi exprs ~f:(fun i e ->
-        if i = last then (None, e)
-        else
-          let name = prefix ^ Int.to_string (i + 1) in
-          (Some (name, e), Ast_builder.Default.evar ~loc name))
-  in
-  let list = Ast_builder.Default.elist ~loc (List.map named ~f:snd) in
-  List.fold_right named ~init:list ~f:(fun (binding, _) body ->
-      match binding with
-      | None -> body
-      | Some (name, e) ->
-          [%expr
-            let [%p Ast_builder.Default.pvar ~loc name] = [%e e] in
-            [%e body]])
+  in_source_order ~loc ~prefix exprs ~f:(Ast_builder.Default.elist ~loc)
 
 (** The expression argument is of type: [Assignments.t]. *)
 let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =

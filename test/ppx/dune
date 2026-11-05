@@ -59,7 +59,8 @@
   (alias runtest-test_ppx_op-ppx)
   (alias runtest-test_ppx_name_conflict-ppx)
   (alias runtest-test_compose_logic_err-ppx)
-  (alias runtest-test_raw_accum-ppx)))
+  (alias runtest-test_raw_accum-ppx)
+  (alias runtest-test_eval_order-ppx)))
 
 (executable
  (name pp)
@@ -118,6 +119,18 @@
   (run ./%{pp} --impl %{input} -o %{targets})))
 
 (rule
+ ; ocannl-backend: none -- pp.exe links ppx_ocannl, which is base, ppxlib, str and einsum_parser:
+ ; no arrayjit at all, so no OCANNL configuration is in reach. Its output is a printed AST.
+ (targets test_eval_order_actual.ml)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (:pp pp.exe)
+  (:input test_eval_order.ml))
+ (action
+  (run ./%{pp} --impl %{input} -o %{targets})))
+
+(rule
  (alias runtest-test_ppx_op-ppx)
  (package neural_nets_lib)
  (action
@@ -140,6 +153,12 @@
  (package neural_nets_lib)
  (action
   (diff test_raw_accum_expected.ml test_raw_accum_actual.ml)))
+
+(rule
+ (alias runtest-test_eval_order-ppx)
+ (package neural_nets_lib)
+ (action
+  (diff test_eval_order_expected.ml test_eval_order_actual.ml)))
 
 (test
  (name test_ppx_op)
@@ -184,3 +203,26 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (libraries ocannl))
+
+; The evaluation order of the components %op splices into a literal (gh-ocannl-1869). Both sides of
+; the golden are compiled AND run: each reports, through Verdict, the order its components were
+; evaluated in, so the expansion text and what it does are pinned by one fixture. Only tensor
+; construction happens -- nothing is compiled for a backend.
+
+(test
+ ; ocannl-backend: none -- builds tensors and reads their ids; no context, no routine.
+ (name test_eval_order)
+ (package neural_nets_lib)
+ (modules test_eval_order)
+ (deps ocannl_config)
+ (libraries ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
+
+(test
+ ; ocannl-backend: none -- builds tensors and reads their ids; no context, no routine.
+ (name test_eval_order_expected)
+ (package neural_nets_lib)
+ (modules test_eval_order_expected)
+ (deps ocannl_config)
+ (libraries ocannl arrayjit.verdict))

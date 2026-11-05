@@ -1,0 +1,19 @@
+list block: evaluated a b c
+list block: components are evaluated in source order: true
+array block: evaluated a b c
+array block: components are evaluated in source order: true
+tuple block: evaluated a b c
+tuple block: components are evaluated in source order: true
+nested block: evaluated a b c d
+nested block: components are evaluated in source order: true
+concat operands: evaluated a b c
+concat operands: components are evaluated in source order: true
+concat operands with captures: evaluated a b
+concat operands with captures: components are evaluated in source order: true
+variables among effectful components: evaluated a b
+variables among effectful components: components are evaluated in source order: true
+variables only: evaluated 
+variables only: components are evaluated in source order: true
+a variable named like a binding is not captured: true
+list block: component ids ascend in source order: true
+capture list: reference uids ascend in source order: true
