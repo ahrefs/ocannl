@@ -1856,8 +1856,9 @@ let missing_computation_rejection (plc : Tn.Placements.t) (traced : traced_array
 (* Why [instantiate_computations] can refuse a read site, for the two refusals below: they relay its
    code and cannot dispatch on it. *)
 let uninlinable_causes =
-  "unsupported indexing or vector form for inlining, or a guard of the computation that would fall \
-   back, at a cell no write of it reaches, on a value no write put there"
+  "unsupported indexing or vector form for inlining, a guard of the computation that would fall \
+   back, at a cell no write of it reaches, on a value no write put there, or a first write that \
+   reads the cell's previous value, which only a buffer holds"
 
 (* gh-ocannl-1551: the refusal of an INHERITED computation that cannot be instantiated at a read
    site ([code] is [instantiate_computations]' rejection), shared like the one above. *)
@@ -2828,6 +2829,40 @@ let replay_facts ~(self : Tn.t) (code : t) : replay_facts =
     replay_free_symbols = !free;
   }
 
+(* gh-466: conservative "mentions [tn]" scan over a scalar, descending into [Local_scope] bodies and
+   [Get_dynamic] index values. [merge]: whether a merge-buffer read counts, which is not a read of
+   [tn]'s own cells. *)
+let rec scalar_mentions ~merge (tn : Tn.t) (llsc : scalar_t) : bool =
+  let scalar_mentions_tn = scalar_mentions ~merge and proc_mentions_tn = proc_mentions ~merge in
+  match llsc with
+  | Get (g, _) -> Tn.equal g tn
+  | Get_merge_buffer (g, _) -> merge && Tn.equal g tn
+  | Get_dynamic { tn = g; dyn_value = v, _; _ } -> Tn.equal g tn || scalar_mentions_tn tn v
+  | Local_scope { body; _ } -> proc_mentions_tn tn body
+  | Ternop (_, (a, _), (b, _), (c, _)) ->
+      scalar_mentions_tn tn a || scalar_mentions_tn tn b || scalar_mentions_tn tn c
+  | Binop (_, (a, _), (b, _)) -> scalar_mentions_tn tn a || scalar_mentions_tn tn b
+  | Unop (_, (a, _)) -> scalar_mentions_tn tn a
+  | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> false
+
+and proc_mentions ~merge (tn : Tn.t) (llc : t) : bool =
+  let scalar_mentions_tn = scalar_mentions ~merge and proc_mentions_tn = proc_mentions ~merge in
+  match llc with
+  | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> false
+  | Seq (a, b) -> proc_mentions_tn tn a || proc_mentions_tn tn b
+  | For_loop { body; _ } -> proc_mentions_tn tn body
+  | Scan_loop { carried; body; _ } ->
+      List.exists carried ~f:(fun c -> scalar_mentions_tn tn c.init) || proc_mentions_tn tn body
+  | Zero_out g -> Tn.equal g tn
+  | Set { tn = g; llsc; _ } -> Tn.equal g tn || scalar_mentions_tn tn llsc
+  | Set_dynamic { tn = g; dyn_value = v, _; llsc; _ } ->
+      Tn.equal g tn || scalar_mentions_tn tn v || scalar_mentions_tn tn llsc
+  | Set_from_vec { tn = g; arg = a, _; _ } -> Tn.equal g tn || scalar_mentions_tn tn a
+  | Set_local (_, llsc) -> scalar_mentions_tn tn llsc
+  | If { cond = c, _; body } -> scalar_mentions_tn tn c || proc_mentions_tn tn body
+  | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
+      Tn.equal d_tn tn || Tn.equal a_tn tn || Tn.equal b_tn tn || proc_mentions_tn tn fallback
+
 (* The instantiation half of [inline_computation] (gh-ocannl-1011): [computations] (a
    stored-template list, newest first) replayed at [call_args] as the body of the scope [id], or the
    rejection code of the read site. Loop symbols it keeps come from [fresh_symbol]; the lane-extract
@@ -2838,6 +2873,9 @@ let replay_facts ~(self : Tn.t) (code : t) : replay_facts =
    bounds of the read site's loop binding it -- or [None] where unknown (a static index, a symbol no
    loop of the read site binds): a range must contain every value [s] takes at the read, and only
    ever licenses a binding (gh-ocannl-1896), so [None] is always sound. *)
+
+let scalar_mentions_tn tn llsc = scalar_mentions ~merge:true tn llsc
+
 let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
     ~(placements : Tn.Placements.t) ~(call_range : Indexing.symbol -> (int * int) option)
     ~(coverage_exempt : bool) ~id (self : Tn.t)
@@ -2989,6 +3027,24 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
     in
     List.exists computations ~f:(fun (_, def) -> contains def)
   in
+  (* What a computation does to the node, in statement order: [true] for a read of it, which the
+     replay turns into a read of the shared local, [false] for a store reading none. Each [Set] is
+     one entry -- a store that reads the node reads first -- and a dead loop replays nothing. A
+     computation's writes all share one index vector ([4:lhs-idcs-differ]), and a read of the node
+     there is at that vector, so a read names the cell of the store it stands in. *)
+  let self_accesses def =
+    (* Not a merge-buffer read: the replay keeps that one, and it holds no previous cell. *)
+    let reads_cell = scalar_mentions ~merge:false self in
+    let rec go acc = function
+      | For_loop { from_; to_; _ } when to_ < from_ -> acc
+      | For_loop { body; _ } | Scan_loop { body; _ } -> go acc body
+      | Seq (a, b) -> go (go acc a) b
+      | Set { tn; llsc; _ } when Tn.equal tn self -> reads_cell llsc :: acc
+      | Set_local (_, llsc) when reads_cell llsc -> true :: acc
+      | _ -> acc
+    in
+    List.rev (go [] def)
+  in
   (* For Block/Concat virtual nodes with multiple Set computations (each writing a distinct slice),
      a single init local is shared across all component computations so that each guarded update
      sees the preceding component's value via [Get_local id] rather than a per-component reset to 0.
@@ -3010,10 +3066,15 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
      components oldest first over one shared local -- so it applies exactly the writes the
      materialized program applies to [r], in its order, and a component that does not write [r]
      leaves the local as it was. The init a guard falls back on before the first write to [r] is
-     overwritten by that write. A first write that ACCUMULATES reads the cell's entry value: an
-     input by the read-before-write rule for a node [decide_placements] decides, the replay's init
-     for a coverage-exempt one -- with a guard or without, so that is not a question of the guard's
-     fallback.
+     overwritten by that write -- provided that write stores without reading the node. A first write
+     that ACCUMULATES reads the cell's entry value: an input by the read-before-write rule for a
+     node [decide_placements] decides, and nothing the replay has for a coverage-exempt node, where
+     it would build on the init (gh-ocannl-1954). So on such a node only the PLAIN PREFIX proves:
+     the components, oldest first, ahead of the first one reading the node. If they cover it, every
+     cell is defined before any accumulation replays -- the update of an inherited virtual, a
+     non-zero neutral's fill ahead of its reduction. A component that reads the node ends the prefix
+     even where it stores first, the conservative direction. A [Zero_out] proves regardless, since
+     the materialized cell starts from that zero too.
 
      A literal table is excluded, here and from the omission below: a host-constant node
      ([Tn.known_host_constant]), or one every setter of which stores a constant -- the in-kernel
@@ -3051,18 +3112,27 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
             (range, Affine.view ~dims idcs) :: acc
         | _ -> acc
       in
+      let reads_self (_, def) = List.exists (self_accesses def) ~f:Fn.id in
+      let proving =
+        if coverage_exempt then List.take_while (List.rev computations) ~f:(Fn.non reads_self)
+        else computations
+      in
       Affine.union_covers_box
-        (List.fold computations ~init:[] ~f:(fun acc (def_args, def) ->
+        (List.fold proving ~init:[] ~f:(fun acc (def_args, def) ->
              if Option.is_some def_args then writes [] acc def else acc)))
   in
   let omitted_any = ref false in
   let fallback_defined = lazy (has_zero_init || Lazy.force union_covers) in
+  (* Each replayed component's first access of the node ({!self_accesses}), oldest first: the fold
+     below runs newest first and conses. *)
+  let openings = ref [] in
   (* gh-ocannl-1795: a component that never writes the read cell -- some position of it fixed at a
      cell other than the read's -- contributes nothing at this read site: omitting it is the same as
      its guard being always false, which needs no fallback proof. A read every component is omitted
      from is one no write reaches: [13], the call-site index mismatch it always was. *)
   let exception Omitted in
-  (* In the order of computation. *)
+  (* One component, in the order of computation in what it returns; [List.rev_filter_map] below runs
+     it newest component first, so a side effect here sees the replay backwards. *)
   let loop_proc ((def_args : Indexing.axis_index array option), (def : t)) : t option =
     (* One substitution step: replace env-bound symbols, folding nested affine/fixed
        contributions. *)
@@ -3421,6 +3491,7 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       && (not (List.is_empty guards && List.is_empty range_guards))
       && not (Lazy.force fallback_defined)
     then raise @@ Non_virtual "157:guard-fallback-unproven";
+    openings := List.hd (self_accesses def) :: !openings;
     (* Set when a guard is introduced but the producer emitted no [Zero_out]: an explicit init local
        is then prepended before the (possibly loop-nested) guarded updates. *)
     let needs_init = ref false in
@@ -3592,6 +3663,14 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
         let body =
           List.rev_filter_map computations ~f:(fun c -> try loop_proc c with Omitted -> None)
         in
+        (* gh-ocannl-1954: no guard is left to ask about, but a coverage-exempt node's first
+           replayed access may still read the cell's entry value, which is nothing the replay holds:
+           no init is prepended without a guard, so the read was an undeclared local and a backend
+           compile failure. A [Zero_out] defines it, and so does a store opening the replay. *)
+        if
+          coverage_exempt && (not has_zero_init)
+          && Option.value ~default:false (List.find_map !openings ~f:Fn.id)
+        then raise @@ Non_virtual "158:accumulation-without-init";
         if List.is_empty body && !omitted_any then
           raise @@ Non_virtual "13:call-site-index-mismatch"
         else if List.is_empty body then raise @@ Non_virtual "14:empty-inlined-body"
@@ -9319,36 +9398,6 @@ let try_rewrite_materialized_loop ~ienv (llc : t) : t option =
                   debug = "";
                 }))
   | _ -> None
-
-(* gh-466: conservative "mentions [tn]" scan over a scalar, descending into [Local_scope] bodies and
-   [Get_dynamic] index values. *)
-let rec scalar_mentions_tn (tn : Tn.t) (llsc : scalar_t) : bool =
-  match llsc with
-  | Get (g, _) | Get_merge_buffer (g, _) -> Tn.equal g tn
-  | Get_dynamic { tn = g; dyn_value = v, _; _ } -> Tn.equal g tn || scalar_mentions_tn tn v
-  | Local_scope { body; _ } -> proc_mentions_tn tn body
-  | Ternop (_, (a, _), (b, _), (c, _)) ->
-      scalar_mentions_tn tn a || scalar_mentions_tn tn b || scalar_mentions_tn tn c
-  | Binop (_, (a, _), (b, _)) -> scalar_mentions_tn tn a || scalar_mentions_tn tn b
-  | Unop (_, (a, _)) -> scalar_mentions_tn tn a
-  | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> false
-
-and proc_mentions_tn (tn : Tn.t) (llc : t) : bool =
-  match llc with
-  | Noop | Comment _ | Staged_compilation _ | Declare_local _ | Workgroup_barrier -> false
-  | Seq (a, b) -> proc_mentions_tn tn a || proc_mentions_tn tn b
-  | For_loop { body; _ } -> proc_mentions_tn tn body
-  | Scan_loop { carried; body; _ } ->
-      List.exists carried ~f:(fun c -> scalar_mentions_tn tn c.init) || proc_mentions_tn tn body
-  | Zero_out g -> Tn.equal g tn
-  | Set { tn = g; llsc; _ } -> Tn.equal g tn || scalar_mentions_tn tn llsc
-  | Set_dynamic { tn = g; dyn_value = v, _; llsc; _ } ->
-      Tn.equal g tn || scalar_mentions_tn tn v || scalar_mentions_tn tn llsc
-  | Set_from_vec { tn = g; arg = a, _; _ } -> Tn.equal g tn || scalar_mentions_tn tn a
-  | Set_local (_, llsc) -> scalar_mentions_tn tn llsc
-  | If { cond = c, _; body } -> scalar_mentions_tn tn c || proc_mentions_tn tn body
-  | Tile_mma { d = d_tn, _; a = a_tn, _; b = b_tn, _; fallback; _ } ->
-      Tn.equal d_tn tn || Tn.equal a_tn tn || Tn.equal b_tn tn || proc_mentions_tn tn fallback
 
 (* gh-466: transposed (scatter) form -- the embedding-table gradient. A loop [For k { Set { tn;
    idcs; llsc } }] where [k] indexes [tn] itself (once, as a plain [Iterator] -- the table axis) and

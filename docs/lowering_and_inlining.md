@@ -337,7 +337,8 @@ order, which is what decides whether a code can fire. The exit codes:
   on a wider coordinate read at a symbolic index is not one either when the replay's fallback is
   proved defined — a `Zero_out` of the node, or another component covering it — and is served by an
   equality guard `k == index` (gh-ocannl-1735). Two different fixed cells, a `Sub_axis` position, or
-  a fixed position without that proof still mismatch.
+  a fixed position without that proof still mismatch; on a node already virtual when the routine
+  started, the missing proof is `157` instead.
 - `14:empty-inlined-body` — Empty computation list at inline time.
 - `19:declare-local` — `Declare_local` encountered during virtualization (see the note below: no
   longer defensive).
@@ -363,6 +364,14 @@ order, which is what decides whether a code can fire. The exit codes:
   inherited reads that refuse a routine where they execute (gh-ocannl-1551): a node an earlier
   routine placed as routine-local (`Local`) scratch, and a stored computation that cannot be
   instantiated at the read's indices.
+- `157:guard-fallback-unproven` — A guard on a node already virtual when the routine started
+  (declared, or committed by an earlier routine of the lineage) has no proved fallback: such a node
+  skipped the coverage rule, so it needs a `Zero_out`, or the components ahead of the first one
+  reading the node covering it (gh-ocannl-1897, gh-ocannl-1954). It cannot materialize instead, so
+  the refusal is a `User_error`.
+- `158:accumulation-without-init` — The same node's first replayed write reads the cell's previous
+  value with no guard in the replay and no `Zero_out`: only a buffer holds that value
+  (gh-ocannl-1954).
 
 `Non_virtual 19` was a defensive arm and is one no longer. The reasoning that made it defensive
 still holds *within* the pipeline: `hoist_cross_statement_cse` is the only phase here that produces

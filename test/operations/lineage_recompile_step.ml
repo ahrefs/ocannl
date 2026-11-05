@@ -164,3 +164,50 @@ let () =
       p_all "eight more recompiles emit a routine as large as the second step's" chain
         ~f:(fun (_, n) -> n = List.nth_exn lineage_sizes 1)
   | _ -> p "the steps ran" false
+
+(* gh-ocannl-1954: a reduction with a non-zero neutral, through the real lowering. [=:@^] has
+   neutral [-inf], and [Assignments] fills a non-zero neutral with plain stores ahead of the
+   accumulation (only [0.] lowers to a [Zero_out]), so [m]'s template is two components and the
+   second reads [m]. On the recompile [m] is already virtual, so its guards' fallback must be proved
+   by the inliner: the fill covers the node ahead of the first reading component, the plain prefix.
+   A proof asking that NO setter read the node refused this recompile. *)
+let () =
+  Tensor.unsafe_reinitialize ();
+  let w_init =
+    Array.init (n * n)
+      ~f:(Ll_test.cycle_flat ~dims:[| n; n |] ~modulus:9 ~offset:(-4.) ~stride:0.125)
+  in
+  let w = TDSL.param ~values:w_init "w" ~input_dims:[ n ] ~output_dims:[ n ] () in
+  let%op m = w @^^ "i->j => j" in
+  let%op out = m + 1. in
+  Train.set_materialized w.Tensor.value;
+  Train.set_materialized out.Tensor.value;
+  let comp = Ll_test.unowned_copy ~name:"max_reduction" (Tensor.consume_forward_code out) in
+  let fresh () = Train.init_params (Context.auto ()) IDX.empty out in
+  let step ctx =
+    let ctx, routine = Context.compile ctx comp IDX.empty in
+    Context.run ctx routine
+  in
+  let values ctx = [ Context.get_values ctx out.Tensor.value ] in
+  let expected =
+    [
+      Array.init n ~f:(fun j ->
+          1.
+          +. Option.value_exn
+               (Array.max_elt (Array.sub w_init ~pos:(j * n) ~len:n) ~compare:Float.compare));
+    ]
+  in
+  let virtual_in ctx = Ir.Tnode.Placements.known_virtual (Context.placements ctx) m.Tensor.value in
+  let first = step (fresh ()) in
+  p "max reduction: virtual after its first compile" (virtual_in first);
+  p "max reduction: the first compile computes the maxima" (Ll_test.same (values first) expected);
+  match step first with
+  | second ->
+      p "max reduction: compiles again in the lineage that ran it" true;
+      p "max reduction: still virtual after the recompile" (virtual_in second);
+      p "max reduction: the recompile computes the maxima" (Ll_test.same (values second) expected);
+      let reference = step (step (Context.decide_materialized (fresh ()) [ m.Tensor.value ])) in
+      p "max reduction: the recompile agrees with a materialized lineage"
+        (Ll_test.same (values second) (values reference))
+  | exception Utils.User_error msg ->
+      p ("max reduction: compiles again in the lineage that ran it (" ^ msg ^ ")") false

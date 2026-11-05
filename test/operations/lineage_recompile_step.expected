@@ -15,3 +15,9 @@ every later step's lineage stores as many template components as step 1's: true
 every recompile after the first emits a routine as large as the second: true
 eight more recompiles store as many template components as step 1: true
 eight more recompiles emit a routine as large as the second step's: true
+max reduction: virtual after its first compile: true
+max reduction: the first compile computes the maxima: true
+max reduction: compiles again in the lineage that ran it: true
+max reduction: still virtual after the recompile: true
+max reduction: the recompile computes the maxima: true
+max reduction: the recompile agrees with a materialized lineage: true

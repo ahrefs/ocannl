@@ -43,6 +43,9 @@ fixed_component_first: the two placements agree: true
 fixed_component_accumulating: inlined: true
 fixed_component_accumulating: executed values are the reference: true
 fixed_component_accumulating: the two placements agree: true
+fixed_component_accumulating_inside: inlined: true
+fixed_component_accumulating_inside: executed values are the reference: true
+fixed_component_accumulating_inside: the two placements agree: true
 fixed_component_zero_init: inlined: true
 fixed_component_zero_init: executed values are the reference: true
 fixed_component_zero_init: the two placements agree: true
@@ -114,6 +117,30 @@ dvg_block_cover: executed values are the materialized twin's: true
 dvg_guard_free: the materialized twin computes the stated values: true
 dvg_guard_free: inlined: true
 dvg_guard_free: executed values are the materialized twin's: true
+dva_block: the materialized twin computes the stated values: true
+dva_block: refused as 157:guard-fallback-unproven, or executed equal to the materialized twin: true
+dva_partial_store: the materialized twin computes the stated values: true
+dva_partial_store: refused as 157:guard-fallback-unproven, or executed equal to the materialized twin: true
+dva_one_component: the materialized twin computes the stated values: true
+dva_one_component: refused as 158:accumulation-without-init, or executed equal to the materialized twin: true
+dva_covering_store: the materialized twin computes the stated values: true
+dva_covering_store: inlined: true
+dva_covering_store: executed values are the materialized twin's: true
+dva_mixed_components: the materialized twin computes the stated values: true
+dva_mixed_components: refused as 157:guard-fallback-unproven, the node-level proof's price: true
+dva_zeroed: the materialized twin computes the stated values: true
+dva_zeroed: inlined: true
+dva_zeroed: executed values are the materialized twin's: true
+dva_zeroed_one_component: the materialized twin computes the stated values: true
+dva_zeroed_one_component: inlined: true
+dva_zeroed_one_component: executed values are the materialized twin's: true
+dva_store_opens: the materialized twin computes the stated values: true
+dva_store_opens: inlined: true
+dva_store_opens: executed values are the materialized twin's: true
+dva_fixed_store: the materialized twin computes the stated values: true
+dva_fixed_store: inlined: true
+dva_fixed_store: executed values are the materialized twin's: true
+dvm_opening: a store from the node's merge buffer inlines: true
 inh_diagonal_uninit: the materialized twin computes the stated values: true
 inh_diagonal_uninit: routine A defers the node: true
 inh_diagonal_uninit: routine B is refused as 157:guard-fallback-unproven, or executes equal to the materialized twin: true
