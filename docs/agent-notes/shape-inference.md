@@ -270,6 +270,13 @@ files.
   (`Tensor.For_testing.rewind_omitting`): `test/operations/checkpoint_rewind.ml`. A window op that
   rewrites an older shape's rows in place needs an equation: pointwise ops only add broadcasting
   inequalities, an einsum (`+*`) equates.
+  The "steps" category restores only projections, which only a closure writes, so its control
+  needs a closure failing PARTWAY through derivation (gh-ocannl-1827): `finish_inference` derives
+  newest step first, so the step that keeps stale projections sits between the window's step and
+  an older one that the window makes fail -- there a sum window whose operand's margins a window
+  op with another FINITE neutral (a product accumulation; the max family is clamped, gh-504)
+  committed first -- with the closure forced through a window shape, which leaves the rewind
+  available.
 - What a rewind discarded is recorded where it lasts only as long as someone can present it
   (gh-ocannl-1789): a shape's, a capture reference's and an update step's own `discarded_by` field,
   and a node's entry in `Tensor`'s weak `discarded_nodes` (an ephemeron table). A schemed closure's
@@ -339,3 +346,10 @@ files.
   keep it, deriving the extent's basis from the kernel's. The occurs check is unchanged. Pinned by
   `test/operations/scheme_strided_residual`: `check` against `off` on schemed blocks with equal
   and unequal strides, and the window-pair equations solved directly in both orders.
+- Every benchmark model builds under `check` with `off`'s dims (gh-ocannl-1908):
+  `test/operations/bench_model_schemes` builds each conv and gpt workload of `benchmarks/workloads`
+  from a synthetic zero-valued fixture, through `Bench_conv_model`/`Bench_gpt_model` as the runners
+  do, plus `Nn_blocks.resnet_block` at stride 2, and compares every graph tensor's label and dims.
+  A new workload JSON is covered without an edit; a new model kind needs its fixture layout in
+  the test's `fixture_tensors`. The mlp workloads are not covered: `bench_mlp`'s model lives in its
+  executable.
