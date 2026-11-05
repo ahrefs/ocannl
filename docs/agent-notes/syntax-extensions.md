@@ -71,9 +71,9 @@ files.
 - Option-valued tensors in schemes (gh-ocannl-1792): only an annotation classifies them
   (`~(p : Tensor.t option)`, `?(p : Tensor.t option)`; `?(p : Tensor.t)` is an OCaml type error), and
   `(x : Tensor.t)` is evidence for a forwarded labelled tensor. The handle keeps one slot per
-  presence pattern, `[_variants]` entry points, all-required expansions byte-identical. A scheme over
-  a whole stack is a trap: a trace window's solve is superlinear in depth (`decoder_only` at depth 4
-  traced for 96 s against 1 s at depth 2), so the stacks stay plain `let` and only the blocks scheme.
+  presence pattern, `[_variants]` entry points, all-required expansions byte-identical. The stacks
+  stay plain `let` and only the blocks scheme because a scheme over a stack checks each layer twice
+  (gh-ocannl-1814), not because of its trace: the trace's own cost is in shape-inference.md.
   A caller's `Some !@step_n` that nothing reads (dropout rate 0, batch norm) is an unconsumed forward
   root and shifts later printed ids by one.
 - A dimension capture needs a literal spec containing `=>`; this example captures the reduced axis.

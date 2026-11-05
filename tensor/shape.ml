@@ -4358,6 +4358,7 @@ type registration_counts = {
   closures : int;
   closure_constraints : int;
   rank_search_visits : int;
+  dim_cycle_visits : int;
   subst_visits : int;
 }
 [@@deriving sexp_of]
@@ -4373,6 +4374,7 @@ let zero_counts =
     closures = 0;
     closure_constraints = 0;
     rank_search_visits = 0;
+    dim_cycle_visits = 0;
     subst_visits = 0;
   }
 
@@ -4383,12 +4385,14 @@ let registration_counts () =
   {
     !counts with
     rank_search_visits = Row.rank_search_visits ();
+    dim_cycle_visits = Row.dim_cycle_visits ();
     subst_visits = Row.subst_visits ();
   }
 
 let reset_registration_counts () =
   counts := zero_counts;
   Row.reset_rank_search_visits ();
+  Row.reset_dim_cycle_visits ();
   Row.reset_subst_visits ()
 
 (* Where shape-registration time goes (gh-ocannl-1752), process-wide since the last reset. *)
@@ -5307,10 +5311,14 @@ module Scheme = struct
         refuse ~spec ~dim_refs
     | Transpose _ | Broadcast _ | Broadcast_tern _ | Terminal _ -> ()
 
+  (* The first occurrence of each shape, physically: an id can name several, as in [open_shapes]. *)
   let dedup_shapes shapes =
-    List.fold shapes ~init:[] ~f:(fun acc sh ->
-        if List.mem acc sh ~equal:phys_equal then acc else sh :: acc)
-    |> List.rev
+    let seen = Hashtbl.create (module Int) in
+    List.filter shapes ~f:(fun (sh : shape) ->
+        (not (List.mem (Hashtbl.find_multi seen sh.id) sh ~equal:phys_equal))
+        &&
+        (Hashtbl.add_multi seen ~key:sh.id ~data:sh;
+         true))
 
   let trace ?sabotage ~var_mark ~label ~(args : shape list) (f : unit -> shape list) =
     let sabotaged x = Option.exists sabotage ~f:(fun y -> Poly.equal x y) in
@@ -5491,13 +5499,14 @@ module Scheme = struct
                 else None))
       in
       let covered =
-        List.concat_map anchors ~f:(fun (_, rows) ->
-            List.concat_map (rows_vars rows) ~f:(fun (ds, rs) ->
-                List.map ds ~f:(fun v -> `Dim (Row.dim_var_id v))
-                @ List.map rs ~f:(fun v -> `Row (Row.row_var_id v))))
+        Hash_set.Poly.of_list
+          (List.concat_map anchors ~f:(fun (_, rows) ->
+               List.concat_map (rows_vars rows) ~f:(fun (ds, rs) ->
+                   List.map ds ~f:(fun v -> `Dim (Row.dim_var_id v))
+                   @ List.map rs ~f:(fun v -> `Row (Row.row_var_id v)))))
       in
       let uncovered =
-        List.filter fixed_unsolved ~f:(fun v -> not (List.mem covered v ~equal:Poly.equal))
+        List.filter fixed_unsolved ~f:(fun v -> not (Hash_set.mem covered v))
         |> List.dedup_and_sort ~compare:Poly.compare
       in
       let closure_bound =

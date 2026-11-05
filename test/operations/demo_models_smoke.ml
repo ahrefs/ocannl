@@ -96,4 +96,82 @@ let () =
         Demo_models.mobile_cnn ~label:[ "m" ] ~num_classes:3 ~width_mult:0.25 () ~train_step:None
           (images ~h:8 ~w:8 ~c:3)
       in
-      ([ logits ], [ ("logits", logits) ]))
+      ([ logits ], [ ("logits", logits) ]));
+  (* gh-ocannl-1891: the two CNNs' own schemes, one per presence pattern of [~train_step]. The
+     events are the models' own labels: a child layer's scheme checking proves nothing about
+     them. *)
+  let step () =
+    let step_n, _ = Train.IDX.get_static_symbol Train.IDX.empty in
+    NTDSL.embed_symbol step_n
+  in
+  let session mode f =
+    Tensor.For_testing.set_op_shape_schemes (Some mode);
+    Tensor.unsafe_reinitialize ();
+    let events = ref [] in
+    let ys = Tensor.For_testing.observe_schemes f ~on_event:(fun e -> events := e :: !events) in
+    (!events, ys)
+  in
+  let closed_dims ys =
+    let params =
+      List.map ys ~f:(fun y -> y.Tensor.params) |> Set.union_list (module Tensor) |> Set.to_list
+    in
+    List.map (ys @ params) ~f:(fun t -> Array.to_list (Shape.to_dims t.Tensor.shape))
+  in
+  let sokoban ~grid_state train_step =
+    let action_logits, value = Demo_models.sokoban_cnn ~label:[ "s" ] () ~train_step ~grid_state in
+    [ action_logits; value ]
+  and mobile ~grid_state train_step =
+    [
+      Demo_models.mobile_cnn ~label:[ "m" ] ~num_classes:3 ~width_mult:0.25 () ~train_step
+        grid_state;
+    ]
+  in
+  let img () = images ~h:8 ~w:8 ~c:3 in
+  (* An argument no conv can take: the models whose own scheme, not a child's, refused it. *)
+  let refusals =
+    List.filter_map
+      [ ("sokoban_cnn", sokoban); ("mobile_cnn", mobile) ]
+      ~f:(fun (name, model) ->
+        let flat () =
+          TDSL.range_of_shape ~label:[ "flat" ] ~batch_dims:[ 2 ] ~output_dims:[ 3 ] ()
+        in
+        let own = "applying the shape scheme " ^ name ^ " [no train_step]" in
+        match session `Check (fun () -> model ~grid_state:(flat ()) None) with
+        | _ -> None
+        | exception Row.Shape_error (msg, _) ->
+            Stdio.eprintf "(not part of the golden) %s refused a flat argument: %s\n" name msg;
+            Option.some_if (String.is_prefix msg ~prefix:own) name)
+  in
+  List.iter
+    [ ("sokoban_cnn", sokoban); ("mobile_cnn", mobile) ]
+    ~f:(fun (name, model) ->
+      let label pattern = name ^ " [" ^ pattern ^ "]" in
+      let traced events pattern =
+        List.exists events ~f:(function
+          | Tensor.Scheme.Traced s -> String.equal (Tensor.Scheme.label s) (label pattern)
+          | _ -> false)
+      and checked events pattern =
+        List.exists events ~f:(function
+          | Tensor.Scheme.Checked l -> String.equal l (label pattern)
+          | _ -> false)
+      in
+      let evaluated, y_eval = session `Check (fun () -> model ~grid_state:(img ()) None) in
+      let dims_eval = closed_dims y_eval in
+      (* The training graph is checked, not closed: [batch_norm2d] with a [train_step] does not
+         close in a session that has not closed since its first use, with or without schemes. *)
+      let trained, _ = session `Check (fun () -> model ~grid_state:(img ()) (Some (step ()))) in
+      let dims_off = closed_dims (snd (session `Off (fun () -> model ~grid_state:(img ()) None))) in
+      Verdict.case (name ^ "'s own schemes") (fun () ->
+          let p what = p (name ^ ": " ^ what) in
+          p "both presence patterns are traced"
+            (traced evaluated "train_step" && traced evaluated "no train_step");
+          p "evaluation checks the evaluation scheme" (checked evaluated "no train_step");
+          p "training checks the training scheme" (checked trained "train_step");
+          p_none (name ^ ": no pattern was left unschemed") (evaluated @ trained) ~f:(function
+            | Tensor.Scheme.Unschemed (l, _) -> String.is_prefix l ~prefix:name
+            | _ -> false);
+          p "evaluating under its scheme closes the shapes it closes without one"
+            (List.equal (List.equal Int.equal) dims_eval dims_off);
+          p "its own scheme reports an argument without spatial axes, before the body runs"
+            (List.mem refusals name ~equal:String.equal)));
+  Tensor.For_testing.set_op_shape_schemes None

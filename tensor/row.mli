@@ -123,14 +123,27 @@ val globals_differences : globals -> globals -> string list
 (** The components that differ between two captures (physically), by name: a diagnostic. *)
 
 val rank_search_visits : unit -> int
-(** The states the rank-cycle search visited since the last reset (gh-ocannl-1802): its work
-    counter, process-wide. *)
+(** The rank-cycle check's work counter since the last reset, process-wide (gh-ocannl-1802): the
+    variables whose potentials it moved (gh-ocannl-1891), and under {!with_unbounded_rank_search}
+    the states the walk visited too. *)
 
 val reset_rank_search_visits : unit -> unit
 
 val with_unbounded_rank_search : (unit -> 'a) -> 'a
-(** Runs the function with the rank-cycle search walking everything the new edge's target reaches,
-    as it did before gh-ocannl-1802 bounded it by the endpoints' levels: a test's reference. *)
+(** Runs the function with every new rank edge also walked from its target, as the check did before
+    gh-ocannl-1802 and gh-ocannl-1891, and raises if the walk and the potentials disagree on whether
+    the edge closes a positive cycle: a test's reference. *)
+
+val dim_cycle_visits : unit -> int
+(** The variables the dimension-cycle search of [Dim_ineq] visited since the last reset
+    (gh-ocannl-1891): its work counter, process-wide. *)
+
+val reset_dim_cycle_visits : unit -> unit
+
+val with_unmemoized_cycle_search : (unit -> 'a) -> 'a
+(** Runs the function with the dimension-cycle search walking every path and repeating a recorded
+    edge's search, as it did before gh-ocannl-1891: a test's reference, exponential in the residual
+    connections of a body traced on unsized arguments. *)
 
 val subst_visits : unit -> int
 (** The environment entries solutions visited to substitute themselves since the last reset

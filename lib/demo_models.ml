@@ -106,7 +106,7 @@ let%op sokoban_cnn ~label ?(num_actions = 4) () =
   let conv1 = conv_bn_relu ~label:("conv1" :: label) ~kernel_size:3 ~out_channels:32 () in
   let conv2 = conv_bn_relu ~label:("conv2" :: label) ~kernel_size:3 ~out_channels:64 () in
   let conv3 = conv_bn_relu ~label:("conv3" :: label) ~kernel_size:3 ~out_channels:64 () in
-  fun ~train_step ~grid_state ->
+  fun ~(train_step : Tensor.t option) ~(grid_state : Tensor.t) ->
     let x = conv1 ~train_step grid_state |> conv2 ~train_step |> conv3 ~train_step in
 
     (* Global pooling to aggregate spatial info *)
@@ -150,11 +150,11 @@ let scale_channels ~width_mult channels =
     and positive. *)
 let mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
   (* The widths are computed, and the multiplier validated, before the [%op] scope opens: its inline
-     parameters ([w_classifier], [b_classifier]) are created as soon as [build ()] is applied, and a
+     parameters ([w_classifier], [b_classifier]) are created as soon as its [()] is applied, and a
      refused multiplier must leave nothing behind. *)
   let ch = scale_channels ~width_mult in
   let c0 = ch 32 and c1 = ch 64 and c2 = ch 128 and c3 = ch 128 and c4 = ch 256 in
-  let%op build ~label () =
+  let%op mobile_cnn ~label () =
     (* Initial standard conv *)
     let conv_init =
       conv_bn_relu ~label:("conv_init" :: label) ~kernel_size:3 ~stride:2 ~out_channels:c0 ()
@@ -176,7 +176,7 @@ let mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
 
     let bn = batch_norm2d ~label:("bn_final" :: label) () in
 
-    fun ~train_step x ->
+    fun ~(train_step : Tensor.t option) x ->
       let x =
         conv_init ~train_step x |> dw_block1 |> relu |> dw_block2 |> relu |> dw_block3 |> relu
         |> dw_block4 |> relu |> bn ~train_step
@@ -186,4 +186,4 @@ let mobile_cnn ~label ?(num_classes = 1000) ?(width_mult = 1.0) () =
       let x = global_avg_pool2d x in
       ({ w_classifier } * x) + { b_classifier = 0.; o = [ num_classes ] }
   in
-  build ~label ()
+  mobile_cnn ~label ()

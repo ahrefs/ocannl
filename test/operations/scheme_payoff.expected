@@ -6,9 +6,9 @@ decoder: checking reaches decoder_only_block [no train_step], multi_head_attenti
 decoder_train: checking reaches decoder_only_block [train_step], multi_head_attention [train_step, mask]: true
 encoder_train: checking reaches transformer_encoder_block [train_step], multi_head_attention [train_step, no mask]: true
 schemes off: no application is checked: true
-the bounded search closes the shapes the unbounded one closes: true
-the bounded search visits fewer states than the unbounded one: true
-the bounded search's saving grows with depth: true
+the rank potentials close the shapes the walk closes: true
+the rank potentials move fewer variables than the walk visits: true
+the rank potentials' saving grows with depth: true
 indexed substitution closes the shapes whole-environment substitution closes: true
 indexed substitution visits fewer entries than whole-environment substitution: true
 per depth doubling, the indexed substitution's visits double (1.8x-2.2x): true
@@ -16,3 +16,12 @@ per depth doubling, whole-environment substitution's visits grow at least 3x: tr
 the allocation window counts a known allocation: true
 per depth doubling, the inference allocates 1.8x-2.6x with indexed substitution: true
 per depth doubling, the inference allocates at least 3x with whole-environment substitution: true
+a whole stack's scheme, applied, closes the shapes one build closes: true
+per depth doubling, the trace's rank-cycle check moves 1.8x-2.5x: true
+per depth doubling, the trace's dimension-cycle search visits 1.8x-4.6x: true
+one more layer: the dimension-cycle search visits at most 3x: true
+one more layer: walking every path visits at least 10x: true
+per depth doubling, a decoder stack's trace allocates 2.0x-2.7x: true
+at every depth, a trace allocates 0.45x-0.95x of one build: true
+over its depths, a stack's trace-to-build ratio moves at most 1.5x: true
+one more layer: walking every path, the trace outgrows the build at least 3x: true

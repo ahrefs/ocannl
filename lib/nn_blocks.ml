@@ -403,8 +403,8 @@ let%op decoder_only_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) ?(
     ln2 (x1 + ffn x1)
 
 (** Stack of {!decoder_only_block} layers. The stacks are plain functions, not schemed: their layers
-    are, per presence pattern, and a scheme of the whole stack would trace the whole model, which
-    costs superlinearly in depth (gh-ocannl-1792 measured 96 s of tracing at depth 4). *)
+    are, per presence pattern, and a scheme of the whole stack would check every layer once more on
+    top of its layers' own checks (gh-ocannl-1814). *)
 let decoder_only ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout_rate ?mask_fill
     ?(pos_embed = No_pos_embed) () =
   let layers =
