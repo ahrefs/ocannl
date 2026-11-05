@@ -13772,6 +13772,17 @@
   (env_var OCANNL_BACKEND))
  (libraries base ocannl stdio unix arrayjit.verdict ll_test))
 
+;; gh-ocannl-1884: an integer scope collapses only where its value provably stays the same.
+
+(test
+ (name integer_scope_collapse)
+ (package neural_nets_lib)
+ (modules integer_scope_collapse)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 ;; gh-ocannl-1799: shape errors raised inside a scheme trace or check, printed readably.
 
 (test

@@ -711,7 +711,9 @@ let () =
    and result small enough for a byte, so no out-of-range conversion is involved on any backend.
 
    [Min(a + b, c)] over [200 + 100, 250] is 250: C compares the integer-promoted sum, where
-   narrowing the operands to [uchar] first, to resolve the overload, compares 44 with 250.
+   narrowing the operands to [uchar] first, to resolve the overload, compares 44 with 250. This is
+   one setter's expression; a byte node holding the sum holds 44 however it is placed
+   ([integer_scope_collapse], gh-ocannl-1884).
 
    [two * Sin(a)] over [a = 1] is 1: the sine stays a float until the store, where casting a math
    result back to the integer precision first gives 2 * 0.

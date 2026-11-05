@@ -1,0 +1,258 @@
+byte sum under byte Min: the materialized run gives the worked value: true
+byte sum under byte Min: the uncollapsed scope gives the worked value: true
+byte sum under byte Min: inlined, it gives the worked value: true
+byte sum under byte Min: scheduled, it gives the worked value: true
+byte sum under byte Min: optimize keeps the scope: true
+byte sum under byte Min: a schedule's simplify keeps the scope: true
+byte sum under byte Mod: the materialized run gives the worked value: true
+byte sum under byte Mod: the uncollapsed scope gives the worked value: true
+byte sum under byte Mod: inlined, it gives the worked value: true
+byte sum under byte Mod: scheduled, it gives the worked value: true
+byte sum under byte Mod: optimize keeps the scope: true
+byte sum under byte Mod: a schedule's simplify keeps the scope: true
+negative byte difference under byte Max: the materialized run gives the worked value: true
+negative byte difference under byte Max: the uncollapsed scope gives the worked value: true
+negative byte difference under byte Max: inlined, it gives the worked value: true
+negative byte difference under byte Max: scheduled, it gives the worked value: true
+negative byte difference under byte Max: optimize keeps the scope: true
+negative byte difference under byte Max: a schedule's simplify keeps the scope: true
+uint16 sum under uint16 Min: the materialized run gives the worked value: true
+uint16 sum under uint16 Min: the uncollapsed scope gives the worked value: true
+uint16 sum under uint16 Min: inlined, it gives the worked value: true
+uint16 sum under uint16 Min: scheduled, it gives the worked value: true
+uint16 sum under uint16 Min: optimize keeps the scope: true
+uint16 sum under uint16 Min: a schedule's simplify keeps the scope: true
+uint32 sum in a uint64 slot: the materialized run gives the worked value: true
+uint32 sum in a uint64 slot: the uncollapsed scope gives the worked value: true
+uint32 sum in a uint64 slot: inlined, it gives the worked value: true
+uint32 sum in a uint64 slot: scheduled, it gives the worked value: true
+uint32 sum in a uint64 slot: optimize keeps the scope: true
+uint32 sum in a uint64 slot: a schedule's simplify keeps the scope: true
+int32 load narrowed to byte, read at int32: the materialized run gives the worked value: true
+int32 load narrowed to byte, read at int32: the uncollapsed scope gives the worked value: true
+int32 load narrowed to byte, read at int32: inlined, it gives the worked value: true
+int32 load narrowed to byte, read at int32: scheduled, it gives the worked value: true
+int32 load narrowed to byte, read at int32: optimize keeps the scope: true
+int32 load narrowed to byte, read at int32: a schedule's simplify keeps the scope: true
+byte sum in a float product: the materialized run gives the worked value: true
+byte sum in a float product: the uncollapsed scope gives the worked value: true
+byte sum in a float product: inlined, it gives the worked value: true
+byte sum in a float product: scheduled, it gives the worked value: true
+byte sum in a float product: optimize keeps the scope: true
+byte sum in a float product: a schedule's simplify keeps the scope: true
+byte quotient in a float product: the materialized run gives the worked value: true
+byte quotient in a float product: the uncollapsed scope gives the worked value: true
+byte quotient in a float product: inlined, it gives the worked value: true
+byte quotient in a float product: scheduled, it gives the worked value: true
+byte quotient in a float product: optimize keeps the scope: true
+byte quotient in a float product: a schedule's simplify keeps the scope: true
+byte comparison of float loads in a float product: the materialized run gives the worked value: true
+byte comparison of float loads in a float product: the uncollapsed scope gives the worked value: true
+byte comparison of float loads in a float product: inlined, it gives the worked value: true
+byte comparison of float loads in a float product: scheduled, it gives the worked value: true
+byte comparison of float loads in a float product: optimize keeps the scope: true
+byte comparison of float loads in a float product: a schedule's simplify keeps the scope: true
+uint32 equality above the float limit in a float product: the materialized run gives the worked value: true
+uint32 equality above the float limit in a float product: the uncollapsed scope gives the worked value: true
+uint32 equality above the float limit in a float product: inlined, it gives the worked value: true
+uint32 equality above the float limit in a float product: scheduled, it gives the worked value: true
+uint32 equality above the float limit in a float product: optimize keeps the scope: true
+uint32 equality above the float limit in a float product: a schedule's simplify keeps the scope: true
+int32 Min read at byte, an in-range result over an out-of-range leaf: the materialized run gives the worked value: true
+int32 Min read at byte, an in-range result over an out-of-range leaf: the uncollapsed scope gives the worked value: true
+int32 Min read at byte, an in-range result over an out-of-range leaf: inlined, it gives the worked value: true
+int32 Min read at byte, an in-range result over an out-of-range leaf: scheduled, it gives the worked value: true
+int32 Min read at byte, an in-range result over an out-of-range leaf: optimize keeps the scope: true
+int32 Min read at byte, an in-range result over an out-of-range leaf: a schedule's simplify keeps the scope: true
+byte negated truth over an index past byte: the materialized run gives the worked value: true
+byte negated truth over an index past byte: the uncollapsed scope gives the worked value: true
+byte negated truth over an index past byte: inlined, it gives the worked value: true
+byte negated truth over an index past byte: scheduled, it gives the worked value: true
+byte negated truth over an index past byte: optimize keeps the scope: true
+byte negated truth over an index past byte: a schedule's simplify keeps the scope: true
+uint32 negated truth compared with a truth: the materialized run gives the worked value: true
+uint32 negated truth compared with a truth: the uncollapsed scope gives the worked value: true
+uint32 negated truth compared with a truth: inlined, it gives the worked value: true
+uint32 negated truth compared with a truth: scheduled, it gives the worked value: true
+uint32 negated truth compared with a truth: optimize keeps the scope: true
+uint32 negated truth compared with a truth: a schedule's simplify keeps the scope: true
+byte sum in range by its loop extent: the materialized run gives the worked value: true
+byte sum in range by its loop extent: the uncollapsed scope gives the worked value: true
+byte sum in range by its loop extent: inlined, it gives the worked value: true
+byte sum in range by its loop extent: scheduled, it gives the worked value: true
+byte sum in range by its loop extent: optimize collapses the scope: true
+byte sum in range by its loop extent: a schedule's simplify collapses the scope: true
+int32 sum in an int32 slot: the materialized run gives the worked value: true
+int32 sum in an int32 slot: the uncollapsed scope gives the worked value: true
+int32 sum in an int32 slot: inlined, it gives the worked value: true
+int32 sum in an int32 slot: scheduled, it gives the worked value: true
+int32 sum in an int32 slot: optimize collapses the scope: true
+int32 sum in an int32 slot: a schedule's simplify collapses the scope: true
+wrapping uint32 sum in a uint32 slot: the materialized run gives the worked value: true
+wrapping uint32 sum in a uint32 slot: the uncollapsed scope gives the worked value: true
+wrapping uint32 sum in a uint32 slot: inlined, it gives the worked value: true
+wrapping uint32 sum in a uint32 slot: scheduled, it gives the worked value: true
+wrapping uint32 sum in a uint32 slot: optimize collapses the scope: true
+wrapping uint32 sum in a uint32 slot: a schedule's simplify collapses the scope: true
+byte load in an int32 scope in a float product: the materialized run gives the worked value: true
+byte load in an int32 scope in a float product: the uncollapsed scope gives the worked value: true
+byte load in an int32 scope in a float product: inlined, it gives the worked value: true
+byte load in an int32 scope in a float product: scheduled, it gives the worked value: true
+byte load in an int32 scope in a float product: optimize collapses the scope: true
+byte load in an int32 scope in a float product: a schedule's simplify collapses the scope: true
+byte load in a bfloat16 scope in a single product: the materialized run gives the worked value: true
+byte load in a bfloat16 scope in a single product: the uncollapsed scope gives the worked value: true
+byte load in a bfloat16 scope in a single product: inlined, it gives the worked value: true
+byte load in a bfloat16 scope in a single product: scheduled, it gives the worked value: true
+byte load in a bfloat16 scope in a single product: optimize collapses the scope: true
+byte load in a bfloat16 scope in a single product: a schedule's simplify collapses the scope: true
+byte truth over byte loads in a float product: the materialized run gives the worked value: true
+byte truth over byte loads in a float product: the uncollapsed scope gives the worked value: true
+byte truth over byte loads in a float product: inlined, it gives the worked value: true
+byte truth over byte loads in a float product: scheduled, it gives the worked value: true
+byte truth over byte loads in a float product: optimize collapses the scope: true
+byte truth over byte loads in a float product: a schedule's simplify collapses the scope: true
+admitted Add: the materialized run gives the worked value: true
+admitted Add: the uncollapsed scope gives the worked value: true
+admitted Add: inlined, it gives the worked value: true
+admitted Add: scheduled, it gives the worked value: true
+admitted Add: optimize collapses the scope: true
+admitted Add: a schedule's simplify collapses the scope: true
+admitted Sub: the materialized run gives the worked value: true
+admitted Sub: the uncollapsed scope gives the worked value: true
+admitted Sub: inlined, it gives the worked value: true
+admitted Sub: scheduled, it gives the worked value: true
+admitted Sub: optimize collapses the scope: true
+admitted Sub: a schedule's simplify collapses the scope: true
+admitted Mul: the materialized run gives the worked value: true
+admitted Mul: the uncollapsed scope gives the worked value: true
+admitted Mul: inlined, it gives the worked value: true
+admitted Mul: scheduled, it gives the worked value: true
+admitted Mul: optimize collapses the scope: true
+admitted Mul: a schedule's simplify collapses the scope: true
+admitted Max: the materialized run gives the worked value: true
+admitted Max: the uncollapsed scope gives the worked value: true
+admitted Max: inlined, it gives the worked value: true
+admitted Max: scheduled, it gives the worked value: true
+admitted Max: optimize collapses the scope: true
+admitted Max: a schedule's simplify collapses the scope: true
+admitted Min: the materialized run gives the worked value: true
+admitted Min: the uncollapsed scope gives the worked value: true
+admitted Min: inlined, it gives the worked value: true
+admitted Min: scheduled, it gives the worked value: true
+admitted Min: optimize collapses the scope: true
+admitted Min: a schedule's simplify collapses the scope: true
+admitted Mod: the materialized run gives the worked value: true
+admitted Mod: the uncollapsed scope gives the worked value: true
+admitted Mod: inlined, it gives the worked value: true
+admitted Mod: scheduled, it gives the worked value: true
+admitted Mod: optimize collapses the scope: true
+admitted Mod: a schedule's simplify collapses the scope: true
+admitted Neg: the materialized run gives the worked value: true
+admitted Neg: the uncollapsed scope gives the worked value: true
+admitted Neg: inlined, it gives the worked value: true
+admitted Neg: scheduled, it gives the worked value: true
+admitted Neg: optimize collapses the scope: true
+admitted Neg: a schedule's simplify collapses the scope: true
+admitted Identity: the materialized run gives the worked value: true
+admitted Identity: the uncollapsed scope gives the worked value: true
+admitted Identity: inlined, it gives the worked value: true
+admitted Identity: scheduled, it gives the worked value: true
+admitted Identity: optimize collapses the scope: true
+admitted Identity: a schedule's simplify collapses the scope: true
+admitted Trunc: the materialized run gives the worked value: true
+admitted Trunc: the uncollapsed scope gives the worked value: true
+admitted Trunc: inlined, it gives the worked value: true
+admitted Trunc: scheduled, it gives the worked value: true
+admitted Trunc: optimize collapses the scope: true
+admitted Trunc: a schedule's simplify collapses the scope: true
+admitted Relu: the materialized run gives the worked value: true
+admitted Relu: the uncollapsed scope gives the worked value: true
+admitted Relu: inlined, it gives the worked value: true
+admitted Relu: scheduled, it gives the worked value: true
+admitted Relu: optimize collapses the scope: true
+admitted Relu: a schedule's simplify collapses the scope: true
+admitted Satur01: the materialized run gives the worked value: true
+admitted Satur01: the uncollapsed scope gives the worked value: true
+admitted Satur01: inlined, it gives the worked value: true
+admitted Satur01: scheduled, it gives the worked value: true
+admitted Satur01: optimize collapses the scope: true
+admitted Satur01: a schedule's simplify collapses the scope: true
+admitted Cmplt: the materialized run gives the worked value: true
+admitted Cmplt: the uncollapsed scope gives the worked value: true
+admitted Cmplt: inlined, it gives the worked value: true
+admitted Cmplt: scheduled, it gives the worked value: true
+admitted Cmplt: optimize collapses the scope: true
+admitted Cmplt: a schedule's simplify collapses the scope: true
+admitted Cmple: the materialized run gives the worked value: true
+admitted Cmple: the uncollapsed scope gives the worked value: true
+admitted Cmple: inlined, it gives the worked value: true
+admitted Cmple: scheduled, it gives the worked value: true
+admitted Cmple: optimize collapses the scope: true
+admitted Cmple: a schedule's simplify collapses the scope: true
+admitted Cmpeq: the materialized run gives the worked value: true
+admitted Cmpeq: the uncollapsed scope gives the worked value: true
+admitted Cmpeq: inlined, it gives the worked value: true
+admitted Cmpeq: scheduled, it gives the worked value: true
+admitted Cmpeq: optimize collapses the scope: true
+admitted Cmpeq: a schedule's simplify collapses the scope: true
+admitted Cmpne: the materialized run gives the worked value: true
+admitted Cmpne: the uncollapsed scope gives the worked value: true
+admitted Cmpne: inlined, it gives the worked value: true
+admitted Cmpne: scheduled, it gives the worked value: true
+admitted Cmpne: optimize collapses the scope: true
+admitted Cmpne: a schedule's simplify collapses the scope: true
+admitted And: the materialized run gives the worked value: true
+admitted And: the uncollapsed scope gives the worked value: true
+admitted And: inlined, it gives the worked value: true
+admitted And: scheduled, it gives the worked value: true
+admitted And: optimize collapses the scope: true
+admitted And: a schedule's simplify collapses the scope: true
+admitted Or: the materialized run gives the worked value: true
+admitted Or: the uncollapsed scope gives the worked value: true
+admitted Or: inlined, it gives the worked value: true
+admitted Or: scheduled, it gives the worked value: true
+admitted Or: optimize collapses the scope: true
+admitted Or: a schedule's simplify collapses the scope: true
+admitted Not: the materialized run gives the worked value: true
+admitted Not: the uncollapsed scope gives the worked value: true
+admitted Not: inlined, it gives the worked value: true
+admitted Not: scheduled, it gives the worked value: true
+admitted Not: optimize collapses the scope: true
+admitted Not: a schedule's simplify collapses the scope: true
+admitted Where: the materialized run gives the worked value: true
+admitted Where: the uncollapsed scope gives the worked value: true
+admitted Where: inlined, it gives the worked value: true
+admitted Where: scheduled, it gives the worked value: true
+admitted Where: optimize collapses the scope: true
+admitted Where: a schedule's simplify collapses the scope: true
+two assignments: the first assignment's wrap stays: true
+two assignments: a schedule's simplify keeps the scope: true
+a byte scope over FMA stays a scope: true
+byte widens into bfloat16 exactly: true
+byte widens into half exactly: true
+byte does not widen into fp8 exactly: true
+uint16 does not widen into half exactly: true
+uint16 does not widen into bfloat16 exactly: true
+uint16 widens into single exactly: true
+uint32 does not widen into single exactly: true
+int32 does not widen into single exactly: true
+int32 widens into double exactly: true
+uint32 widens into double exactly: true
+int64 does not widen into double exactly: true
+uint64 does not widen into double exactly: true
+byte widens into int32 exactly: true
+uint16 widens into uint32 exactly: true
+int32 does not widen into uint32 exactly: true
+int32 does not widen into uint64 exactly: true
+uint32 widens into int64 exactly: true
+uint32 does not widen into int32 exactly: true
+uint64 does not widen into int64 exactly: true
+int64 does not widen into uint64 exactly: true
+single does not widen into int32 exactly: true
+single widens into double exactly: true
+uint4x32 does not widen into double exactly: true
+an integer precision widens into a float exactly when its range lies within the limit: true
+the one-hot gather collapses its scopes: true
+the one-hot gather is rewritten: true
+the gather computes the table's rows: true
