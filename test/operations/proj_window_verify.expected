@@ -1,0 +1,7 @@
+a window reaching the slice index: solves: true
+a window missing the slice index, s = 1*x at s = 3: Shape_error: solve_proj_equations: a window or concatenation is equated to a solved index it does not reach
+a window missing the slice index, s = 1*x at s = 3: the refusal is the projection verifier's: true
+a window over a window's target: x is iterated: true
+a window over a window's target: t indexes as x: true
+two strides over one axis, 2*x = 3*x: Shape_error: solve_proj_equations: two equated windows (or a window and a concatenation) index differently
+two strides over one axis, 2*x = 3*x: the refusal is the projection verifier's: true

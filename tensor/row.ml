@@ -6051,27 +6051,6 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
                  ( "Multiple constraints on the same Conv_input projection",
                    [ Index_mismatch [ idx; idx2 ] ] )));
 
-  (* Verify postponed equations *)
-  List.iter !verify_when_solved1 ~f:(fun (idx, conv_input) ->
-      try
-        let conv_idx = get_proj_index temp_proj_env conv_input in
-        if not @@ Idx.equal_axis_index idx conv_idx then
-          raise
-          @@ Shape_error
-               ( "Cannot unify index with Conv_input projection",
-                 [ Index_mismatch [ idx; conv_idx ] ] )
-      with _ -> () (* Ignore errors for now *));
-
-  List.iter !verify_when_solved2 ~f:(fun (conv_input1, conv_input2) ->
-      try
-        let idx1 = get_proj_index temp_proj_env conv_input1 in
-        let idx2 = get_proj_index temp_proj_env conv_input2 in
-        if not @@ Idx.equal_axis_index idx1 idx2 then
-          raise
-          @@ Shape_error
-               ("Cannot unify two Conv_input projections", [ Index_mismatch [ idx1; idx2 ] ])
-      with _ -> () (* Ignore errors for now *));
-
   (* Now create fresh iterators for product dimensions that still don't have an index. This is done
      after p_conv_input processing so Conv_input projections don't conflict. *)
   Map.iteri !product_dim ~f:(fun ~key:p ~data:_ ->
@@ -6140,15 +6119,50 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
                    "Concat target projection %{target_pid#Proj_id} conflicts with existing index"],
                  [ Index_mismatch [ existing_idx; expected_idx ] ] ));
 
-  {
-    v_env;
-    proj_classes = !proj_classes;
-    proj_to_index = !projs;
-    inferred_padding;
-    resolved_padding;
-    product_dim = !product_dim;
-    clamp_padded;
-  }
+  let proj_env =
+    {
+      v_env;
+      proj_classes = !proj_classes;
+      proj_to_index = !projs;
+      inferred_padding;
+      resolved_padding;
+      product_dim = !product_dim;
+      clamp_padded;
+    }
+  in
+  (* gh-ocannl-1889: the equations no binding could carry -- a window or concatenation equated to a
+     solved index, or to another window -- are checked once every index is assigned, against the
+     environment the caller gets. They were checked against [temp_proj_env], before the indices of
+     the windows' own targets and of the concat targets existed (so a window over another window's
+     target read as an unknown projection), under a catch-all: every error was swallowed, and a
+     window equated to an index it does not reach passed silently. Checked last, nothing here fails
+     on a consistent program, so nothing is caught. An [Iterator] equals the [Concat] of that one
+     iterator, as in the concat-target pass. *)
+  let same_index idx1 idx2 =
+    Idx.equal_axis_index idx1 idx2
+    ||
+    match (idx1, idx2) with
+    | Idx.Iterator s, Idx.Concat [ s' ] | Idx.Concat [ s' ], Idx.Iterator s -> Idx.equal_symbol s s'
+    | _ -> false
+  in
+  List.iter (List.rev !verify_when_solved1) ~f:(fun (idx, proj) ->
+      let proj_idx = get_proj_index proj_env proj in
+      if not @@ same_index idx proj_idx then
+        raise
+        @@ Shape_error
+             ( "solve_proj_equations: a window or concatenation is equated to a solved index it \
+                does not reach",
+               [ Index_mismatch [ idx; proj_idx ]; Projection_mismatch [ Solved idx; proj ] ] ));
+  List.iter (List.rev !verify_when_solved2) ~f:(fun (proj1, proj2) ->
+      let idx1 = get_proj_index proj_env proj1 in
+      let idx2 = get_proj_index proj_env proj2 in
+      if not @@ same_index idx1 idx2 then
+        raise
+        @@ Shape_error
+             ( "solve_proj_equations: two equated windows (or a window and a concatenation) index \
+                differently",
+               [ Index_mismatch [ idx1; idx2 ]; Projection_mismatch [ proj1; proj2 ] ] ));
+  proj_env
 
 let proj_repr proj_env p =
   fst @@ Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:p ~rank:0
