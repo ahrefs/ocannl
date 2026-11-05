@@ -647,6 +647,11 @@ module For_testing : sig
   val owner_count : t -> int
   (** The number of owners [t]'s forward owner cell records, as last compacted (the probe compacts
       nothing itself). *)
+
+  val drop_owner_edges : t -> unit
+  (** Forgets every owner of [t]'s forward owner cell: a negative control of the
+      [debug_check_forward_root_owners] check, standing for a source of [embedded_nodes] that added
+      no owner edge. *)
 end
 
 val update_operand_prec : t -> Ir.Ops.prec -> unit
@@ -775,8 +780,6 @@ val print :
 (** [print] renders a tensor's metadata and, when an explicit [?ctx] is supplied, its values via an
     on-demand device-to-host transfer (gh-ocannl-333). Without [?ctx] (the default) values are shown
     as a placeholder. *)
-
-val print_forward_roots : with_grad:bool -> with_code:bool -> array_print_style -> unit
 
 val print_tree :
   ?here:Ppx_here_lib.position ->

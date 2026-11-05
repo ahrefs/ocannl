@@ -176,6 +176,7 @@ let known_config_keys =
       "legality_crosscheck";
       "debug_check_upload_arenas";
       "debug_check_lane_bounds";
+      "debug_check_forward_root_owners";
       "cc_parallel_grid";
       "cc_parallel_chunks";
       "cc_pool_core_class";
@@ -630,6 +631,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "legality_crosscheck";
         "autotune_strict_replay";
         "debug_check_upload_arenas";
+        "debug_check_forward_root_owners";
         "hip_scratch_validation";
         "cc_backend_verify_codesign";
         "cc_backend_post_compile_timeout";

@@ -518,6 +518,12 @@
 # draws are bit-identical; the schedule cache keys on it.
 #debug_check_lane_bounds=false
 
+# gh-ocannl-1899: at every Tensor.consume_forward_code that decides a handout, check that the
+# conflicting roots the owner cells report include every root a scan of the live forward roots
+# finds; a root only the scan finds is a missing owner edge, which fails the call. A debugging/soak
+# switch, on across the test suite: off by default, no effect on behavior beyond the check.
+#debug_check_forward_root_owners=false
+
 # How the C backend renders eligible outermost Grid loops (pool-backed Grid rendering,
 # docs/proposals/gh-ocannl-164.md): "dispatch" uses libdispatch's dispatch_apply (macOS),
 # "openmp" uses `#pragma omp parallel for` (adds -fopenmp to the kernel compile), "none" keeps

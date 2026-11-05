@@ -102,9 +102,11 @@ files.
   their cells strongly so restores (`restore_root_cells`) reset a reclaimed root's cell like a
   live one's; `with_unchanged_roots` defers forward pruning and owner-list compaction (by
   `closure_epoch`) so its restore sees every root its body made. Traps: a new source of a root's
-  `embedded_nodes` must add owner edges, or it silently stops refusing (`For_testing`'s
-  `forward_conflicts_by_cells` vs `forward_conflicts_by_live_roots` pin the two equal on held
-  graphs); the refusal names roots by `label_name`. A stray reference to ANY record sharing the
+  `embedded_nodes` must add owner edges, or it silently stops refusing: the
+  `debug_check_forward_root_owners` check, on across the suite in `test/config`, fails any
+  `consume_forward_code` whose scan of the live roots finds a root the cells miss (a subset, not
+  equality: the scan loses what the GC reclaimed); the refusal names roots by `label_name`. A stray
+  reference to ANY record sharing the
   cell keeps the entry alive. A GC witness builds the graph in an `[@inline never]` function
   returning a `Weak` observer, and reads it with `Weak.check` after `Gc.full_major`
   (`dropped_graph_reclaimed.ml`).
