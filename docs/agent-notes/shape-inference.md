@@ -95,6 +95,10 @@ files.
   closure (its uid no longer in `open_refs`, its `var` dead) contributes its `carried_row`
   (`row_for_set_equal`, gh-ocannl-1689); with both closed the solver compares the two concrete
   rows when it next runs (no eager comparison: the broadcast-top and basis rules are the solver's).
+  Whether a closed reference IS a row reference is `closed_kind` (`binding_kind`), never `var`'s
+  constructor: `derive_projections` rebinds `var` after the closure, newest step first, so a
+  reference bound as a dimension then as a row is left holding a dimension variable, and
+  dispatching on it tied a carried 2x3 to 3x2 by product.
   Pinned under both registration and argument orders by `test/operations/set_equal_rows.ml`.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in

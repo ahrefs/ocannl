@@ -173,6 +173,50 @@ let () =
               | _, refused ->
                   Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
                   p (name ^ ": the open row takes the closed row") false)));
+  (* The kind of a closed reference is that of its binding at the closure, not of [var]: projection
+     derivation rebinds [var] after the closure, newest step first, so a reference bound as a
+     dimension and then as a row is left holding the dimension's projection-local variable. Bound
+     last as a row, it carries the row; bound last as a dimension, it carries a number. *)
+  List.iter
+    [ (`Dim_then_row, [ 3; 2 ], false); (`Row_then_dim, [ 3; 2 ], true) ]
+    ~f:(fun (order, sizes, accepted) ->
+      List.iter [ false; true ] ~f:(fun swap ->
+          let name =
+            Printf.sprintf "closed after a %s, set_equal %s, the open row fixed to %s"
+              (match order with
+              | `Dim_then_row -> "dimension then a row capture"
+              | `Row_then_dim -> "row then a dimension capture")
+              (if swap then "s r" else "r s")
+              (String.concat ~sep:"x" (List.map sizes ~f:Int.to_string))
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r1 = Shape.get_variable_ref "r" and r2 = Shape.get_variable_ref "s" in
+              let dim_capture () = NTDSL.einsum1 ~capture_dims:[ r1 ] "r => r" (open_leaf "v") () in
+              let ys =
+                match order with
+                | `Dim_then_row ->
+                    let y = dim_capture () in
+                    [ y; capture_row r1 (fixed "x" [ 2; 3 ]) ]
+                | `Row_then_dim ->
+                    let y = capture_row r1 (fixed "x" [ 2; 3 ]) in
+                    [ y; dim_capture () ]
+              in
+              List.iter ys ~f:(fun y -> ignore (dims y : int list));
+              let w = open_leaf "w" in
+              ignore (capture_row r2 w : Tensor.t);
+              let refused =
+                shape_error (fun () ->
+                    set_equal ~swap r1 r2;
+                    fix w sizes;
+                    ignore (dims w : int list))
+              in
+              Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+              if accepted then
+                p
+                  (name ^ ": tied by product, a row of the same product is accepted")
+                  (Option.is_none refused)
+              else p (name ^ ": a row of the same product is refused") (Option.is_some refused))));
   (* Both closed: each carries its row, and the solver compares the two when it next runs. *)
   List.iter
     [ ([ 2; 3 ], true); ([ 3; 2 ], false) ]

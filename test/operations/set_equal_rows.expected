@@ -64,6 +64,12 @@ one reference closed, set_equal s r, the open row fixed to 2x3: the open row tak
 one reference closed, set_equal s r, the open row fixed to 3x2: the closure carried r's row and its product: true
 one reference closed, set_equal s r, the open row fixed to 3x2: refused: solved dimensions for axis: mismatch
 one reference closed, set_equal s r, the open row fixed to 3x2: a row of the same product is refused: true
+closed after a dimension then a row capture, set_equal r s, the open row fixed to 3x2: refused: solved dimensions for axis: mismatch
+closed after a dimension then a row capture, set_equal r s, the open row fixed to 3x2: a row of the same product is refused: true
+closed after a dimension then a row capture, set_equal s r, the open row fixed to 3x2: refused: solved dimensions for axis: mismatch
+closed after a dimension then a row capture, set_equal s r, the open row fixed to 3x2: a row of the same product is refused: true
+closed after a row then a dimension capture, set_equal r s, the open row fixed to 3x2: tied by product, a row of the same product is accepted: true
+closed after a row then a dimension capture, set_equal s r, the open row fixed to 3x2: tied by product, a row of the same product is accepted: true
 both references closed, rows 2x3 and 2x3: equal rows are accepted: true
 both references closed, rows 2x3 and 3x2: refused: solved dimensions for axis: mismatch
 both references closed, rows 2x3 and 3x2: different rows are refused: true
