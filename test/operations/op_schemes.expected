@@ -55,6 +55,7 @@ and with a body that raises: true
 a function without a [()] stage, applied in a checked body: the outer one is checked: true
 and the entailed one is neither traced nor checked: true
 and its own application traces and checks it: true
+a first application in a checked body still validates the patterns it does not take: true
 the session hands out the same ids with schemes on and off: true
 and the same node uids, relative to the run's first node: true
 and the same shape variable ids, relative to the run's start: true

@@ -115,6 +115,19 @@ let%op refused_outer r () =
 let%op nested_late x = x + x
 let%op over_late () x = nested_late x
 
+(* Without a [()] stage, a contradiction in the pattern the outer function does not take: only this
+   function's own first trace can find it. *)
+let%op twice_when_masked ?(mask : Tensor.t option) x =
+  match mask with
+  | None -> x + x
+  | Some m ->
+      let y = (x *. m) ++ "...|a => ...|a" [ "a" ] in
+      [%oc Shape.set_dim a 3];
+      [%oc Shape.set_dim a 4];
+      y
+
+let%op over_twice_when_masked () x = twice_when_masked x
+
 (* A body that raises once its check has passed. *)
 let raise_in_body = ref false
 
@@ -572,7 +585,12 @@ let () =
       p_none "and the entailed one is neither traced nor checked" evs ~f:(about "nested_late");
       let (_ : Tensor.t), evs = events (fun () -> nested_late (x ())) in
       p "and its own application traces and checks it"
-        (List.exists evs ~f:(traced "nested_late") && count "nested_late" evs = 1));
+        (List.exists evs ~f:(traced "nested_late") && count "nested_late" evs = 1);
+      Tensor.unsafe_reinitialize ();
+      let f = over_twice_when_masked () in
+      p "a first application in a checked body still validates the patterns it does not take"
+        (has_substring ~substring:"tracing the shape scheme twice_when_masked [mask]"
+           (error_message (fun () -> f (x ())))));
   Verdict.case "schemes change no id and no value" (fun () ->
       let run ~on =
         Tensor.For_testing.set_op_shape_schemes (Some (if on then `Check else `Off));
