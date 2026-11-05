@@ -245,9 +245,24 @@ files.
   omission: its per-cell `Constant_fill` components would replay as a guard per cell, and a later
   `Context.set_values` must reach its readers, so a multi-cell literal read off its own cell stays
   a buffer read (`recompute_on_read`, `test_one_hot_embedding_lookup` pin what that keeps). Rows: `fixed_component_*` and `declared_virtual_union` in
-  `virtual_rejection_boundary.ml`. Equality guards from repeated symbols and range guards carry no
-  such proof — they rely on the coverage rule, so a declared-virtual node read where no write
-  reaches falls back on the init.
+  `virtual_rejection_boundary.ml`.
+- **Every guard on a node that skipped the coverage rule needs that proof** (gh-ocannl-1897).
+  Equality guards (a repeated symbol `x[i; i]`, an unsolved affine `x[2s]` with its loop kept) and
+  range guards (a unit solve, the bindings of a multi-component node) fall back on the same shared
+  local. For a node `decide_placements` decides, the coverage rule is the proof: a node read where
+  its writes do not reach owns a buffer instead. A node already `Virtual` at routine entry —
+  declared, or committed by an earlier routine of the lineage, a recompiled step's own nodes
+  included — skipped it, so `inline_computation` passes `~coverage_exempt` and
+  `instantiate_computations` refuses any guard on such a node without `fallback_defined` as
+  `157:guard-fallback-unproven` (the fixed-index guard folds into the same check there). It cannot
+  materialize instead — `Virtual -> Never_virtual` is the "already virtual" collision, and an
+  inherited node's setters are gone — so the refusal is a `User_error`
+  (`declared_uninlinable_rejection`, `inherited_uninlinable_rejection`). The flag is the caller's,
+  never `known_virtual` read inside: `instantiate_at_synthetic_read` marks the node it prices
+  virtual in its private copy. The proof is the node's, so a guard sound only for the cells read (a
+  block whose reads avoid its hole) refuses too. An accumulating first write on such a node reads
+  the replay's init with or without a guard: a separate gap. Rows: `dvg_*` and `inh_*` in
+  `virtual_rejection_boundary.ml`.
 - **The inliner solves raw index positions pairwise, so both sides must share one coordinate
   layout** (gh-ocannl-1795): a `Sub_axis` on one side only refuses the read site as 13 — it bound a
   producer symbol to the run placeholder, which then miscomputed in guards, affine reads and
