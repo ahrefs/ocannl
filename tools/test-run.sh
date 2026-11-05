@@ -1680,28 +1680,6 @@ supervisor_perl=$lock_census_perl'
   my $lock = delete $ENV{OCANNL_TOOL_TESTRUN_LOCK};
   my ($pid, $finishing, $hurry);
   my $code_of = sub { my $st = shift; ($st & 127) ? 128 + ($st & 127) : $st >> 8 };
-  # The start token of THIS process, in the rendering ps_token recomputes for
-  # any pid: Linux reads /proc/self/stat (clock ticks); elsewhere ps renders
-  # lstart under the same pinned locale/TZ and squeeze. Sampled by the process
-  # itself, never by a parent that could catch a recycled pid after a fast
-  # exit.
-  my $self_token = sub {
-    my $tok = "";
-    if (open my $sf, "<", "/proc/self/stat") {
-      my $s = <$sf>;
-      if ($s =~ /^(?s:.*)\)\s+(.*)$/) {
-        my @f = split /\s+/, $1;
-        $tok = defined $f[19] ? $f[19] : "";
-      }
-    } else {
-      local $ENV{LC_ALL} = "C";
-      local $ENV{TZ} = "UTC";
-      $tok = qx{ps -o lstart= -p $$ 2>/dev/null};
-      $tok =~ s/\s+$//;
-      $tok =~ s/ +/ /g;
-    }
-    $tok;
-  };
   my $write = sub { # path, content -> 1, or 0 with $! set
     open(my $fh, ">", $_[0]) or return 0;
     print $fh $_[1] or return 0;
@@ -1968,10 +1946,13 @@ supervisor_perl=$lock_census_perl'
     # lands before the verdict file appears.
     $| = 1;
     # Identity first, token before pid: a reader that finds the pid finds the
-    # token too. A run whose supervisor cannot record itself would be
-    # invisible to status and uncancellable by stop while dune ran on, so
-    # dune is not started: nothing ran, and the verdict (126) says so.
-    unless ($write->("$own/ptoken", $self_token->() . "\n") && $write->("$own/pid", "$$\n")) {
+    # token too. The token comes from census_token, the one Perl renderer
+    # (gh-ocannl-1944), sampled by this process itself, never by a parent
+    # that could catch a recycled pid after a fast exit. A run whose
+    # supervisor cannot record itself would be invisible to status and
+    # uncancellable by stop while dune ran on, so dune is not started:
+    # nothing ran, and the verdict (126) says so.
+    unless ($write->("$own/ptoken", census_token($$) . "\n") && $write->("$own/pid", "$$\n")) {
       print STDOUT "test-run: cannot record the supervisor identity in $own: $!\n";
       $finish->(126);
     }
@@ -2016,7 +1997,7 @@ supervisor_perl=$lock_census_perl'
         # The leader publishes its OWN start token before exec: a token
         # sampled later by a parent could capture a recycled pid if the
         # leader exited first.
-        my $tok = $self_token->();
+        my $tok = census_token($$);
         if ($tok ne "") {
           open my $gf, ">", "$rd/gtoken" or die;
           print $gf "$tok\n";

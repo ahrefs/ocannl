@@ -12,7 +12,7 @@
 # Each leg's body is a function, run by `harness_leg_run 'N: what it pins
 # #group' leg_N` (scripts/harness-support.sh), its name led by the leg numbers
 # below and closed by the one group it belongs to (gh-ocannl-1202):
-# #group-alive (1-5), #stop (6-8, 67), #queries (39, 100), #repeat (9-25, 38, 83-85),
+# #group-alive (1-5), #stop (6-8, 67, 101), #queries (39, 100), #repeat (9-25, 38, 83-85),
 # #options (26-28, 37, 89, 94-96, 98), #width (29-34, 48-52, 64, 70), #digest (35-36,
 # 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74, 97, 99: the run/start
 # lifecycle with its signal legs, both fork-window negative controls, and a
@@ -349,6 +349,11 @@
 #      lists the sibling's too, the control), a launch queued in the sibling
 #      holds no wait here, and one queued there with the very argv of a
 #      detached one queued here hides nothing here.
+# 101. one rendering of a start token (gh-ocannl-1944): ps_token, the launch
+#      chain's bulk join and census_token, read from the script under test,
+#      render one string for this shell and each ancestor; a ps_token or a
+#      bulk join that renders differently is told apart (the negative
+#      controls); and the script holds no renderer beside them.
 #  90. the runner's own OCANNL_TOOL_TESTRUN_BG, _RD and _OWN reach no dune: a
 #      run, a probed GPU run under a slot, a probed repeat's iterations.
 #  59-63 sit after leg 47: the source a run tested, recorded at launch
@@ -1421,6 +1426,122 @@ fi
 [ -z "$inherit_lock" ] || rm -f "$inherit_lock" "$inherit_owner"
 }
 harness_leg_run '67: a lock held through an inherited descriptor is reaped #stop' leg_67
+
+# ---------------------------------------------------------------------------
+# Leg 101: one rendering of a start token (gh-ocannl-1944)
+# ---------------------------------------------------------------------------
+# Start tokens are compared as strings across writers: the supervisor and the
+# group leader record their own (`ptoken`, `gtoken`) through census_token, the
+# shell re-checks them through ps_token, and a launch chain (`launchers`) holds
+# the tokens proc_table_perl joined out of one bulk process table. A rendering
+# that differs in one of them makes a live run read as dead. So the three are
+# read here from the script under test -- ps_token's function, and the two
+# Perl programs by their assignments -- for the same pids: this shell and each
+# ancestor above it, the rows `chain` prints (an ancestor started on a
+# one-digit day carries the padded lstart the squeeze is for). The negative
+# controls are that script with ps_token's rendering, then the bulk join's,
+# changed on both of its branches (another stat field under /proc, another
+# time zone for lstart): each must be told from census_token. The fourth
+# renderer the issue counted, the supervisor's own, is gone: the last check
+# is the inventory of every line of the script that renders a token, so one
+# added beside these is pinned here or refused.
+# lock_census's own bulk join needs no row: it pairs a pid only while
+# census_same holds on the token it joined, so a rendering that differs finds
+# no holder, which leg 67 decides wherever lsof is the census.
+token_views() { # <script>: "PID<TAB>CENSUS<TAB>SHELL<TAB>BULK" for this shell and each ancestor above it
+  (
+    unset -f ps_token
+    unset lock_census_perl proc_table_perl
+    sed -n '/^ps_token() {/,/^}/p' "$1" >"$TMP/token-views.sh" || exit 2
+    # shellcheck disable=SC1091
+    . "$TMP/token-views.sh" || exit 2
+    eval "$(sed -n "/^lock_census_perl='\$/,/^'\$/p" "$1")" || exit 2
+    eval "$(sed -n "/^proc_table_perl='\$/,/^'\$/p" "$1")" || exit 2
+    [ "$(type -t ps_token)" = function ] && [ -n "${lock_census_perl:-}" ] && [ -n "${proc_table_perl:-}" ] || exit 2
+    perl -e "$proc_table_perl" chain >"$TMP/token-chain" 2>/dev/null || exit 2
+    while read -r pid rest; do
+      # "PID TOKEN ARGV-MD5": the token holds spaces where it is an lstart.
+      case $rest in *' '*) bulk=${rest% *} ;; *) bulk= ;; esac
+      census=$(perl -e "$lock_census_perl"'print census_token($ARGV[0])' "$pid" 2>/dev/null)
+      shell=$(ps_token "$pid")
+      # An ancestor that exited since the table was read has no token to compare.
+      [ "$pid" = "$$" ] || [ -n "$census$shell" ] || continue
+      printf '%s\t%s\t%s\t%s\n' "$pid" "$census" "$shell" "$bulk"
+    done <"$TMP/token-chain"
+  )
+}
+token_diff() { # <script>; sets token_rows, token_self (this shell's row), token_bad (rows not one string)
+  token_rows=$(token_views "$1") || token_rows=
+  token_self=$(awk -F '\t' -v p="$$" '$1 == p' <<<"$token_rows")
+  token_bad=$(awk -F '\t' 'NF && !($2 == $3 && $3 == $4)' <<<"$token_rows")
+}
+token_mutant() { # <out> [FROM TO]...: $SRC with each whole line FROM replaced by TO; 0 iff each FROM was one line
+  perl -e '
+    my ($src, $out, %to) = @ARGV;
+    my %n;
+    open(my $in, "<", $src) or exit 1;
+    open(my $o, ">", $out) or exit 1;
+    while (my $l = <$in>) {
+      chomp $l;
+      if (exists $to{$l}) { $n{$l}++; $l = $to{$l} }
+      print $o "$l\n";
+    }
+    close $o or exit 1;
+    exit((grep { ($n{$_} || 0) != 1 } keys %to) ? 1 : 0);
+  ' "$SRC" "$@"
+}
+leg_101() {
+local l_one="start tokens: ps_token, the launch chain's bulk join and census_token render one string for this shell and each ancestor"
+local l_shell_nc="negative control: a ps_token that renders differently is told from census_token"
+local l_bulk_nc="negative control: a bulk join that renders differently is told from census_token"
+local l_only="start tokens: the renderers are census_token, ps_token and the two bulk joins, and no other"
+local tok_skip=
+[ -n "$(ps_token $$)" ] || tok_skip="this system records no start token, so there is no rendering to compare"
+if [ -n "$tok_skip" ]; then
+  skip "$l_one" "$tok_skip"
+  skip "$l_shell_nc" "$tok_skip"
+  skip "$l_bulk_nc" "$tok_skip"
+else
+  token_diff "$SRC"
+  if [ -n "$(cut -f2 <<<"$token_self")" ] && [ -z "$token_bad" ]; then
+    report 0 "$l_one"
+  else
+    report 1 "$l_one" "this shell's row (pid, census_token, ps_token, bulk join): ${token_self:-none}; rows that differ: ${token_bad:-none}"
+  fi
+  token_mutant "$TMP/token-shell-mutant.sh" \
+    '      print defined $f[19] ? $f[19] : "";' '      print defined $f[20] ? $f[20] : "";' \
+    '    LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null |' '    LC_ALL=C TZ=UTC-13 ps -o lstart= -p "$1" 2>/dev/null |' ||
+    { harness_abandon "ps_token's two renderings could not be changed in a copy of $SRC; the mutant is broken"; return; }
+  token_diff "$TMP/token-shell-mutant.sh"
+  if awk -F '\t' '$2 != "" && $2 == $4 && $2 != $3 { ok = 1 } END { exit !ok }' <<<"$token_self"; then
+    report 0 "$l_shell_nc"
+  else
+    report 1 "$l_shell_nc" "this shell's row (pid, census_token, ps_token, bulk join): ${token_self:-none}"
+  fi
+  token_mutant "$TMP/token-bulk-mutant.sh" \
+    '    $tok{$p} = defined $f[19] ? $f[19] : "";' '    $tok{$p} = defined $f[20] ? $f[20] : "";' \
+    '  $ENV{TZ} = "UTC";' '  $ENV{TZ} = "UTC-13";' ||
+    { harness_abandon "the bulk join's two renderings could not be changed in a copy of $SRC; the mutant is broken"; return; }
+  token_diff "$TMP/token-bulk-mutant.sh"
+  if awk -F '\t' '$2 != "" && $2 == $3 && $2 != $4 { ok = 1 } END { exit !ok }' <<<"$token_self"; then
+    report 0 "$l_bulk_nc"
+  else
+    report 1 "$l_bulk_nc" "this shell's row (pid, census_token, ps_token, bulk join): ${token_self:-none}"
+  fi
+fi
+# Every line that reads a start time, by the two things a token is made of:
+# stat's starttime (census_token, ps_token, the chain's table) and an lstart
+# (census_token, lock_census's table, ps_token, the chain's table).
+local tok_stat tok_lstart
+tok_stat=$(grep -c -F '$f[19] :' "$SRC")
+tok_lstart=$(grep -c -E '^[^#]*lstart=' "$SRC")
+if [ "$tok_stat" = 3 ] && [ "$tok_lstart" = 4 ]; then
+  report 0 "$l_only"
+else
+  report 1 "$l_only" "$tok_stat line(s) render stat's starttime (want 3), $tok_lstart an lstart (want 4): $(grep -n -E '\$f\[19\] :|^[^#]*lstart=' "$SRC" | cut -c1-90 | tr '\n' ';')"
+fi
+}
+harness_leg_run '101: one rendering of a start token #stop' leg_101
 
 # ---------------------------------------------------------------------------
 # Legs 9-17: repeat mode's output, lifecycle and exit-code contract
@@ -5469,7 +5590,7 @@ if [ "$fork_posix" = 1 ] && [ "$have_state" = 1 ]; then
         print "  $pid = do {"
         print "    my $forked = fork();"
         print "    if (defined $forked && !$forked) {"
-        print "      $write->(\"$ENV{FORK_PREFIX}.child-token\", $self_token->() . \"\\n\");"
+        print "      $write->(\"$ENV{FORK_PREFIX}.child-token\", census_token($$) . \"\\n\");"
         print "      $write->(\"$ENV{FORK_PREFIX}.child\", \"$$\\n\");"
         if (mode == "child") print "      kill(\"TERM\", $$);"
         print "      select undef, undef, undef, .3;"
