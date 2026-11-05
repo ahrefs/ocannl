@@ -403,6 +403,10 @@ type proj_equation =
           e.g. for broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
+val unsized_kernel_error : use_padding:bool -> dim_var -> dim -> exn
+(** The refusal of a window kernel nothing sized: what projection derivation raises for it, and what
+    a shape-scheme trace raises at the definition (gh-ocannl-1803). *)
+
 val get_proj_equations :
   constraint_ list -> Ir.Indexing.axis_index dim_map -> environment -> proj_equation list
 

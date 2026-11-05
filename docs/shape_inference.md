@@ -472,6 +472,7 @@ What a scheme holds:
 **Errors.**
 
 - A shape error inside `f` that does not depend on the arguments raises at `trace`. A trailing `set_dim` is covered too: the window is solved once more at Stage1 at the end.
+- A window kernel nothing can size raises at `trace` too, with the message projection derivation gives it (gh-ocannl-1803). `Shape.unsized_padded_kernels` reads it off each einsum step's spec and captures: a kernel that occurs only as the kernel of padded (`=+`) windows, and that no capture binds, has no size in any application. Every derivation re-reads the spec with fresh variables, and unification drops a padded window's kernel, so no shape can supply one. Any capture of the label leaves the verdict to the closure, set or not.
 - One that depends on the arguments raises at `instantiate`, before any closure. The instantiated constraints carry an origin naming the scheme and the application, so a closure-time failure names them as well.
 
 **Refused, by design:**
@@ -536,23 +537,23 @@ Without schemes, inference is still superlinear in depth (`decoder` goes from 45
 | concatenation component exceeds the axis | yes | closure | application (scheme) |
 | `set_dim` against a fixed width | no | application (body) | definition |
 | `set_dim` twice, no `()` stage | no | application (body) | application (trace) |
+| window kernel nothing sizes | no | closure | definition |
 | undetermined concatenation components | no | closure | closure |
 | forgotten hidden dimension | no | closure | closure |
 | parameter sized by a fixed index | no | closure | closure |
 | cyclic row permutation, abstract argument | yes | closure | closure |
-| window kernel nothing sizes | no | closure | closure |
 
 The mode-independent facts are claimed:
 
 - every mode accepts and refuses the same programs;
 - no error surfaces later under a scheme.
 
-Two kinds of error move earlier. An argument-independent contradiction moves to the definition, or to the first application for a function without a `()` stage. An argument-dependent one is reported at the application before the body runs, naming the function and the argument. That includes a concatenation that Stage 1 alone leaves to the closure without schemes.
+Three kinds of error move earlier. An argument-independent contradiction moves to the definition, or to the first application for a function without a `()` stage. So does a window kernel nothing can size, which no contradiction shows: the spec and its captures decide it. An argument-dependent error is reported at the application before the body runs, naming the function and the argument. That includes a concatenation that Stage 1 alone leaves to the closure without schemes.
 
-The classes that stay late all need what a trace deliberately does not run, namely the closing stages and projection derivation. The trace validates at Stage 1 only, because the closing stages would default the generic arguments.
+The classes that stay late all need what a trace deliberately does not run, namely the closing stages. The trace validates at Stage 1 only, because the closing stages would default the generic arguments.
 
-- *Undetermined components and forgotten hidden dimensions*: the free dimension reaches the result, so a consumer of the result can still determine it. It must stay late.
-- *A parameter sized by a fixed index, and an unsized window kernel*: the variable is internal to the body, so a trace could in principle report it by running a closing check over the variables that reach neither the arguments nor the results. No such check exists.
+- *Undetermined components*: the free dimension reaches the result, so a consumer of the result can still determine it. It must stay late.
+- *Underspecification: a forgotten hidden dimension, a parameter sized by a fixed index.* Reported at the closure by design (gh-ocannl-1803). Reporting anticipated underspecification early is too ambitious for the core calculus in the general case, and the fixed-index case alone does not justify an analysis: if one is ever done, it should cover the whole class. The closure's messages already name the cause. Do not re-file either as a missing scheme check. The unsized kernel above is not part of this class: the spec decides it, so no analysis is involved.
 - *The abstract cyclic permutation*: an incompleteness of the closing policy, not a contradiction. A trace must not report it.
 
 ## Projections inference

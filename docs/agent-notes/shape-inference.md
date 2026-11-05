@@ -368,6 +368,15 @@ files.
   part in reading order with explicit `let`s: a `[%string]` or list literal evaluates its parts
   back to front, which would name the variables right to left. A golden prints the rendering, not
   the sexp (`scheme_error_rendering` pins it with a reserved-id control).
+- A check that reports at the definition needs its verdict to hold for EVERY application, and for
+  whatever else holds the function's tensors (gh-ocannl-1803). Reachability from the boundary rows
+  does not decide that: an inline `{ w }` is an anchor built before the trace, and a padded kernel
+  sits in the argument's row (inside the `Affine`) yet is certain, because the error concerns a
+  variable each `derive_projections` re-mints, whose trace counterpart Stage 7 would guess
+  silently. So decide such a check from what fixes the verdict (`Shape.unsized_padded_kernels`
+  reads the spec and captures), never from trace variables. Underspecification (a forgotten hidden
+  dimension, a fixed-index parameter) stays at the closure by design: early reporting of it is out
+  of the core calculus, and an analysis, if ever done, covers the whole class, not one case.
 - Which origins an error keeps (gh-ocannl-1903): `Row.merge_origins` interleaves the incoming
   constraint's origins with the entry's in arrival order (never sorted: a sort by name made the
   `max_shape_error_origins` cap keep the alphabetically first), then ranks by the focus stack
