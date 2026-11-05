@@ -1034,6 +1034,9 @@ let () =
    types -- or a function it skips, which has to be named here with why. *)
 let unguarded_functions =
   [
+    ( ("cc", "OCANNL_CHECKED_LANE"),
+      "the precision's name passed as a string, for the abort's diagnostic (gh-ocannl-1867); only \
+       rendered under debug_check_lane_bounds, around an index-precision lane operand" );
     ( ("metal", "ocannl_max"),
       "a template: integer Max in the operands' common type, which it is instantiated at" );
     ( ("metal", "ocannl_min"),
