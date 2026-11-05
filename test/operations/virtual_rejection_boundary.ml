@@ -417,6 +417,28 @@ let row_fixed_component_accumulating () =
   row ~label:"fixed_component_accumulating" ~llc ~cand:x ~out ~seed:[]
     ~expected:[| 10.; 2.; 3.; 4. |] ~verdict:Accepted
 
+(* The union of a node [decide_placements] decides counts in full: the coverage rule already made
+   any read of an entry value an input, so a setter reading the node ends nothing here. Cell 3 is
+   written after the component accumulating cell 2, so the plain prefix a coverage-exempt node is
+   held to (gh-ocannl-1954) would not cover this node, and the fixed guards would refuse. *)
+let row_fixed_component_accumulating_inside () =
+  let x = mk "fcai_x" and out = mk "fcai_out" in
+  materialize out;
+  let t = sym () in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        set x [| fixed 0 |] (c 31.);
+        set x [| fixed 1 |] (c 32.);
+        set x [| fixed 2 |] (c 33.);
+        set x [| fixed 2 |] (add (get x [| fixed 2 |]) (c 5.));
+        set x [| fixed 3 |] (c 34.);
+        loop_n t n (set out [| iter t |] (add (get x [| iter t |]) (tick t)));
+      ]
+  in
+  row ~label:"fixed_component_accumulating_inside" ~llc ~cand:x ~out ~seed:[]
+    ~expected:[| 32.; 34.; 41.; 38. |] ~verdict:Accepted
+
 (* No covering writer, but a [Zero_out]: every other cell is the zero the materialized buffer holds
    too. The consumer adds [tick t], so the zero cells stay distinct from one another. *)
 let row_fixed_component_zero_init () =
@@ -772,13 +794,18 @@ let declared_virtual_guards () =
         let o = optimize ~name:label llc in
         p (label ^ ": inlined") (known_virtual o x && count_get o x = 0);
         p (label ^ ": executed values are the materialized twin's") (same (run_virtual o) reference)
-    | `Refused ->
+    | `Refused code ->
         p
-          (label ^ ": refused as " ^ guard_fallback_code
-         ^ ", or executed equal to the materialized twin")
+          (label ^ ": refused as " ^ code ^ ", or executed equal to the materialized twin")
           (match optimize ~name:label llc with
           | o -> same (run_virtual o) reference
-          | exception Utils.User_error msg -> String.is_substring msg ~substring:guard_fallback_code)
+          | exception Utils.User_error msg -> String.is_substring msg ~substring:code)
+    | `Refused_though_sound code ->
+        p
+          (label ^ ": refused as " ^ code ^ ", the node-level proof's price")
+          (match optimize ~name:label llc with
+          | (_ : Ir.Low_level.optimized) -> false
+          | exception Utils.User_error msg -> String.is_substring msg ~substring:code)
   in
   let fl = Float.of_int in
   (* Consumers add [tick]/[tag] of their own iteration, so equal producer values stay distinct. *)
@@ -804,7 +831,7 @@ let declared_virtual_guards () =
   case ~label:"dvg_diagonal_uninit" ~dims:[| 3; 3 |]
     ~build:(fun x out -> seq (diagonal x) (grid_read x out))
     ~expected:(grid_expected ~hole:(fun cell -> 101. +. fl cell))
-    `Refused;
+    (`Refused guard_fallback_code);
   case ~label:"dvg_diagonal_zeroed" ~dims:[| 3; 3 |]
     ~build:(fun x out -> seq (zero x) (seq (diagonal x) (grid_read x out)))
     ~expected:(grid_expected ~hole:(fun _ -> 0.))
@@ -818,7 +845,7 @@ let declared_virtual_guards () =
     ~expected:
       (Array.init n ~f:(fun u ->
            (if u % 2 = 0 then 1. +. fl (u / 2) else 101. +. fl u) +. 1. +. fl u))
-    `Refused;
+    (`Refused guard_fallback_code);
   (* Range guard from a unit solve: [k := u - 2i] must fall in [0, 2), the loop over [i] kept. The
      writes cover cells 0..3, densely, and the node has [cells] of them. *)
   let affine_writes x =
@@ -832,7 +859,7 @@ let declared_virtual_guards () =
   case ~label:"dvg_affine_beyond_uninit" ~dims:[| 6 |]
     ~build:(fun x out -> seq (affine_writes x) (flat_read ~width:6 x out))
     ~expected:(affine_expected ~cells:6 ~hole:(fun u -> 101. +. fl u))
-    `Refused;
+    (`Refused guard_fallback_code);
   case ~label:"dvg_affine_beyond_zeroed" ~dims:[| 6 |]
     ~build:(fun x out -> seq (zero x) (seq (affine_writes x) (flat_read ~width:6 x out)))
     ~expected:(affine_expected ~cells:6 ~hole:(fun _ -> 0.))
@@ -859,7 +886,7 @@ let declared_virtual_guards () =
   in
   case ~label:"dvg_block_hole" ~dims:[| 5 |] ~build:(block ~from_:3 ~width:5)
     ~expected:(block_expected ~from_:3 ~cells:5)
-    `Refused;
+    (`Refused guard_fallback_code);
   case ~label:"dvg_block_cover" ~dims:[| n |] ~build:(block ~from_:2 ~width:n)
     ~expected:(block_expected ~from_:2 ~cells:n)
     `Inlined;
@@ -869,7 +896,109 @@ let declared_virtual_guards () =
       let s = sym () in
       seq (loop_n s n (set x [| iter s |] (tick s))) (flat_read ~width:n x out))
     ~expected:(Array.init n ~f:(fun u -> 2. +. (2. *. fl u)))
+    `Inlined;
+  (* gh-ocannl-1954: a union proves only through the components ahead of the first one that reads
+     the node. A write there or later is present, but the materialized cell builds on its entry
+     value and the replay on the init, so a guard needs a [Zero_out] or that plain prefix covering
+     the node; with no guard no init exists at all, and an opening read refuses on its own.
+     [accumulate ~lo ~hi] is [x[s] += 1 + s] over [lo..hi]. *)
+  let accumulate ~lo ~hi x =
+    let s = sym () in
+    loop ~from_:lo ~upto:hi s (set x [| iter s |] (add (get x [| iter s |]) (tick s)))
+  in
+  let store ~lo ~hi x =
+    let s = sym () in
+    loop ~from_:lo ~upto:hi s (set x [| iter s |] (ramp 10. s))
+  in
+  let entry u = 101. +. fl u and bump u = 1. +. fl u in
+  let values f = Array.init n ~f:(fun u -> f u +. bump u) in
+  let accumulation_code = "158:accumulation-without-init" in
+  case ~label:"dva_block" ~dims:[| n |]
+    ~build:(fun x out ->
+      seq (accumulate ~lo:0 ~hi:1 x) (seq (accumulate ~lo:2 ~hi:3 x) (flat_read ~width:n x out)))
+    ~expected:(values (fun u -> entry u +. bump u))
+    (`Refused guard_fallback_code);
+  (* A store under part of the node does not define the cells the accumulation opens on. *)
+  case ~label:"dva_partial_store" ~dims:[| n |]
+    ~build:(fun x out ->
+      seq (store ~lo:0 ~hi:1 x) (seq (accumulate ~lo:2 ~hi:3 x) (flat_read ~width:n x out)))
+    ~expected:(values (fun u -> if u < 2 then 10. +. fl u else entry u +. bump u))
+    (`Refused guard_fallback_code);
+  case ~label:"dva_one_component" ~dims:[| n |]
+    ~build:(fun x out -> seq (accumulate ~lo:0 ~hi:3 x) (flat_read ~width:n x out))
+    ~expected:(values (fun u -> entry u +. bump u))
+    (`Refused accumulation_code);
+  (* A plain store covering the node ahead of the accumulation defines every cell before any read:
+     the update of an inherited virtual, and a non-zero neutral's fill, have this shape. *)
+  case ~label:"dva_covering_store" ~dims:[| n |]
+    ~build:(fun x out ->
+      seq (store ~lo:0 ~hi:3 x) (seq (accumulate ~lo:0 ~hi:3 x) (flat_read ~width:n x out)))
+    ~expected:(values (fun u -> 10. +. fl u +. bump u))
+    `Inlined;
+  (* Sound, and refused: each component stores before it reads, but the prefix stops at the first
+     component that reads the node, so only a guard-free replay gets past it. *)
+  case ~label:"dva_mixed_components" ~dims:[| n |]
+    ~build:(fun x out ->
+      let mixed ~lo ~hi =
+        let s = sym () in
+        loop ~from_:lo ~upto:hi s
+          (seq
+             (set x [| iter s |] (ramp 10. s))
+             (set x [| iter s |] (add (get x [| iter s |]) (tick s))))
+      in
+      seq (mixed ~lo:0 ~hi:1) (seq (mixed ~lo:2 ~hi:3) (flat_read ~width:n x out)))
+    ~expected:(values (fun u -> 10. +. fl u +. bump u))
+    (`Refused_though_sound guard_fallback_code);
+  case ~label:"dva_zeroed" ~dims:[| n |]
+    ~build:(fun x out ->
+      seq (zero x)
+        (seq (accumulate ~lo:0 ~hi:1 x) (seq (accumulate ~lo:2 ~hi:3 x) (flat_read ~width:n x out))))
+    ~expected:(values bump) `Inlined;
+  case ~label:"dva_zeroed_one_component" ~dims:[| n |]
+    ~build:(fun x out -> seq (zero x) (seq (accumulate ~lo:0 ~hi:3 x) (flat_read ~width:n x out)))
+    ~expected:(values bump) `Inlined;
+  (* A store opening the component: its accumulation reads what the store just wrote. *)
+  case ~label:"dva_store_opens" ~dims:[| n |]
+    ~build:(fun x out ->
+      let s = sym () in
+      seq
+        (loop_n s n
+           (seq
+              (set x [| iter s |] (ramp 10. s))
+              (set x [| iter s |] (add (get x [| iter s |]) (tick s)))))
+        (flat_read ~width:n x out))
+    ~expected:(values (fun u -> 10. +. fl u +. bump u))
+    `Inlined;
+  (* An earlier unguarded store of the read site: at a fixed cell no guard is built, and the second
+     component's read is of the first one's store. *)
+  case ~label:"dva_fixed_store" ~dims:[| n |]
+    ~build:(fun x out ->
+      let u = sym () in
+      seq
+        (set x [| fixed 2 |] (c 9.))
+        (seq
+           (set x [| fixed 2 |] (add (get x [| fixed 2 |]) (c 5.)))
+           (loop_n u n (set out [| iter u |] (add (get x [| fixed 2 |]) (tick u))))))
+    ~expected:(values (fun _ -> 14.))
     `Inlined
+
+(* A merge-buffer read is no read of the node's previous cell: the replay keeps it, so an opening
+   store from the node's own merge buffer accumulates nothing and is not refused as one (local Codex
+   review of gh-ocannl-1954). Structural: the read needs a transfer to execute, and what this pins
+   is the classification. *)
+let declared_virtual_merge_opening () =
+  let x = mk "dvm_x" and out = mk "dvm_out" in
+  virtualize x;
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s n (set x [| iter s |] (Ir.Low_level.Get_merge_buffer (x, [| iter s |]))))
+      (loop_n t n (set out [| iter t |] (add (get x [| iter t |]) (tick t))))
+  in
+  let o = optimize ~name:"dvm" llc in
+  p "dvm_opening: a store from the node's merge buffer inlines"
+    (known_virtual o x && count_get o x = 0)
 
 (* The inherited case: routine A computes [x] and does not read it, so it defers [x] -- the lineage
    commits it virtual and stores its template -- and routine B reads it over the whole grid. B
@@ -1494,6 +1623,7 @@ let () =
   row_fixed_component_affine_read ();
   row_fixed_component_first ();
   row_fixed_component_accumulating ();
+  row_fixed_component_accumulating_inside ();
   row_fixed_component_zero_init ();
   row_fixed_component_uninitialized ();
   declared_virtual_fixed_component ();
@@ -1508,6 +1638,7 @@ let () =
   row_fixed_component_read_covered_only ();
   declared_virtual_union ();
   declared_virtual_guards ();
+  declared_virtual_merge_opening ();
   inherited_guard_fallback ();
   row_block_components ();
   row_block_components_offset_loop ();
