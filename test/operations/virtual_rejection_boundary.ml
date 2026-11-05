@@ -743,6 +743,27 @@ let declared_virtual_union () =
       [ loop_n f 2 (set x [| Idx.Sub_axis; iter f |] (tick f)) ])
     ~read_at:(fun t -> [| fixed 1; iter t |])
     (`Refused "157:guard-fallback-unproven");
+  (* gh-ocannl-1953: a declared node skips the coverage rule, and a one-component binding built no
+     guard for [157] to inspect, so a read past the loop replayed the producer there. With no
+     [Zero_out] the guard now has no fallback and refuses; with one it reads the zero; and a read
+     inside the loop needs no guard, so it needs no proof either -- a partial declared node stays
+     servable where it is written. [same] compares every cell of [out], so the cells this read
+     leaves are the sentinel. *)
+  let partial x =
+    let s = sym () in
+    loop_n s 2 (set x [| iter s |] (tick s))
+  in
+  case ~label:"dvu_partial_past_loop" ~dims:[| n |]
+    ~writes:(fun x -> [ partial x ])
+    ~read_at:flat (`Refused "157:guard-fallback-unproven");
+  case ~label:"dvu_zeroed_past_loop" ~dims:[| n |]
+    ~writes:(fun x -> [ zero x; partial x ])
+    ~read_at:flat
+    (`Inlined [| 2.; 4.; 3.; 4. |]);
+  case ~label:"dvu_partial_in_loop" ~width:2 ~dims:[| n |]
+    ~writes:(fun x -> [ partial x ])
+    ~read_at:flat
+    (`Inlined [| 2.; 4.; sentinel; sentinel |]);
   (* The union does cover the node: the proof holds, and the flattened read inlines. *)
   case ~label:"dvu_flat_covered" ~dims:[| 2; 2 |]
     ~writes:(fun x ->

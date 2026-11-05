@@ -170,6 +170,139 @@ let case_normalized_bounds ~name ~u_n ~v_n ~contained () =
   p (name ^ ": every cell holds the value of the iteration that wrote it") (same virt [ expected ]);
   p (name ^ ": virtual and materialized arms agree") (same virt mat)
 
+(* === Case 1d: a zeroed, partially written node (gh-ocannl-1953) === A [Zero_out] satisfies the
+   coverage rule at cells no iteration writes, so with one component nothing else stops a binding
+   from replaying the producer outside its loop: [x[s]] for [s] in 0..1, read at [x[t]], computed
+   the producer's expression at [t = 2] where the zeros are. Each shape takes a range guard and
+   reads the zero; [guarded:false] is the other edge, a read inside the loop, which ends up
+   guard-free (no guard is built, and the simplifier would fold one against the read's loop). Every
+   producer varies with every symbol, and the materialized arm is prefilled so a dropped [Zero_out]
+   cannot agree by accident. *)
+let case_zeroed ~name ~dims ~prod ~read ~guarded ~expected () =
+  let tgt = mk ~dims (name ^ "_x") and out = mk ~dims:[| Array.length expected |] (name ^ "_out") in
+  materialize out;
+  let llc = seq (zero tgt) (seq (prod tgt) (read tgt out)) in
+  let o = optimize llc in
+  p (name ^ " producer virtual") (known_virtual o tgt);
+  p (name ^ " producer inlined (no array reads survive)") (count_get o tgt = 0);
+  let wh, le, lt = count_guard_ops o in
+  if guarded then
+    (* Only the [Where]: the simplifier folds a bound the read's own loop proves, [0 <= t]. *)
+    p (name ^ " reads under a guard") (wh >= 1)
+  else p (name ^ " takes no guard: the read stays in the loop") (wh = 0 && le = 0 && lt = 0);
+  let seed = [ (out, blank (Array.length expected)) ] and read = [ out ] in
+  let virt = execute ~name:("va_" ^ name) o ~seed ~read in
+  let mat =
+    execute
+      ~name:("va_" ^ name ^ "_mat")
+      (optimize ~materialized:[ tgt ] llc)
+      ~seed:(prefill tgt :: seed) ~read
+  in
+  p (name ^ ": each cell holds its write or the zero") (same virt [ expected ]);
+  p (name ^ ": virtual and materialized arms agree") (same virt mat)
+
+let zeroed_cases () =
+  let flat_read n =
+   fun tgt out ->
+    let t = sym () in
+    loop_n t n (set out [| iter t |] (get tgt [| iter t |]))
+  in
+  case "zeroed-partial"
+    (case_zeroed ~name:"zeroed-partial" ~dims:[| 4 |]
+       ~prod:(fun x ->
+         let s = sym () in
+         loop_n s 2 (set x [| iter s |] (tick s)))
+       ~read:(flat_read 4) ~guarded:true ~expected:[| 1.; 2.; 0.; 0. |]);
+  (* The loop need not start at 0: [t] in 0..2 lies within a width-3 loop only if the bound is taken
+     from [0], which would drop the guard and compute [tick 0] at cell 0. *)
+  case "zeroed-partial-offset"
+    (case_zeroed ~name:"zeroed-partial-offset" ~dims:[| 4 |]
+       ~prod:(fun x ->
+         let s = sym () in
+         loop ~from_:1 ~upto:3 s (set x [| iter s |] (tick s)))
+       ~read:(flat_read 3) ~guarded:true ~expected:[| 0.; 2.; 3. |]);
+  (* One axis partial: [k] wide of its loop takes the guard, [s] stays in its own. *)
+  case "zeroed-partial-axis"
+    (case_zeroed ~name:"zeroed-partial-axis" ~dims:[| 2; 3 |]
+       ~prod:(fun x ->
+         let s = sym () and k = sym () in
+         loop_n s 2 (loop_n k 2 (set x [| iter s; iter k |] (tag s k))))
+       ~read:(fun x out ->
+         let a = sym () and b = sym () in
+         loop_n a 2
+           (loop_n b 3 (set out [| aff [ (3, a); (1, b) ] 0 |] (get x [| iter a; iter b |]))))
+       ~guarded:true ~expected:[| 1.; 2.; 0.; 11.; 12.; 0. |]);
+  (* A binding beside a fixed axis: the fixed position's own guard does not stop [s] past its
+     loop. *)
+  case "zeroed-fixed-axis"
+    (case_zeroed ~name:"zeroed-fixed-axis" ~dims:[| 3; 2 |]
+       ~prod:(fun x ->
+         let s = sym () in
+         loop_n s 2 (set x [| iter s; fixed 1 |] (tick s)))
+       ~read:(fun x out ->
+         let a = sym () and b = sym () in
+         loop_n a 3
+           (loop_n b 2 (set out [| aff [ (2, a); (1, b) ] 0 |] (get x [| iter a; iter b |]))))
+       ~guarded:true ~expected:[| 0.; 1.; 0.; 2.; 0.; 0. |]);
+  (* The zeroed reduction, the shape a [Zero_out] is usually for: an unbound [k] keeps its loop, and
+     past [i]'s loop the accumulation must leave the zero. *)
+  case "zeroed-reduction"
+    (case_zeroed ~name:"zeroed-reduction" ~dims:[| 4 |]
+       ~prod:(fun x ->
+         let i = sym () and k = sym () in
+         loop_n i 2 (loop_n k 3 (set x [| iter i |] (add (get x [| iter i |]) (tag i k)))))
+       ~read:(flat_read 4) ~guarded:true ~expected:[| 6.; 36.; 0.; 0. |]);
+  (* The single-term structural match: [x[2s]] read at [x[2t]] binds [s := t] past the loop. *)
+  case "zeroed-structural"
+    (case_zeroed ~name:"zeroed-structural" ~dims:[| 6 |]
+       ~prod:(fun x ->
+         let s = sym () in
+         loop_n s 2 (set x [| aff [ (2, s) ] 0 |] (tick s)))
+       ~read:(fun x out ->
+         let t = sym () in
+         loop_n t 3 (set out [| iter t |] (get x [| aff [ (2, t) ] 0 |])))
+       ~guarded:true ~expected:[| 1.; 2.; 0. |]);
+  (* The edge the guard must leave alone: the whole node written, and only the written part read. *)
+  case "zeroed-whole"
+    (case_zeroed ~name:"zeroed-whole" ~dims:[| 4 |]
+       ~prod:(fun x ->
+         let s = sym () in
+         loop_n s 4 (set x [| iter s |] (tick s)))
+       ~read:(flat_read 4) ~guarded:false ~expected:[| 1.; 2.; 3.; 4. |]);
+  case "zeroed-read-inside"
+    (case_zeroed ~name:"zeroed-read-inside" ~dims:[| 4 |]
+       ~prod:(fun x ->
+         let s = sym () in
+         loop_n s 3 (set x [| iter s |] (tick s)))
+       ~read:(flat_read 2) ~guarded:false ~expected:[| 1.; 2. |]);
+  (* Pricing replays the same bindings at a synthetic read sweeping the node, with no call range:
+     the guard is built, and what is priced must still be the walk's verdict once the pipeline folds
+     it against the reader's static ranges -- a whole-node write prices no guard, a partial one
+     does. *)
+  let synthetic_guards ~dims ~write =
+    let x = mk ~dims "synth_x" in
+    let s = sym () in
+    let computations =
+      [ (Some (write s), loop_n s 4 (set x (write s) (tick s))); (None, zero x) ]
+    in
+    match
+      LL.instantiate_at_synthetic_read ~placements:(LL.empty_optimize_ctx ()).LL.placements
+        ~static_indices:[] x computations
+    with
+    | Error code -> failwith code
+    | Ok body ->
+        let wh = ref 0 in
+        walk body ~on_ternop:(function Ops.Where -> Int.incr wh | _ -> ());
+        !wh
+  in
+  case "zeroed-synthetic" (fun () ->
+      p "zeroed-synthetic: a whole-node write prices no guard"
+        (synthetic_guards ~dims:[| 4 |] ~write:(fun s -> [| iter s |]) = 0);
+      p "zeroed-synthetic: a partial write prices one"
+        (synthetic_guards ~dims:[| 6 |] ~write:(fun s -> [| iter s |]) >= 1);
+      p "zeroed-synthetic: a flattened whole-node write prices no guard"
+        (synthetic_guards ~dims:[| 2; 2 |] ~write:(fun s -> [| Idx.Sub_axis; iter s |]) = 0))
+
 (* === Case 2: unit-coefficient solving at a plain iterator === *)
 let case_unit_solve_plain () =
   let tgt = mk ~dims:[| 6 |] "usolve" and out = mk ~dims:[| 6 |] "out2" in
@@ -314,6 +447,7 @@ let () =
     (case_normalized_bounds ~name:"normalized-wide" ~u_n:2 ~v_n:4 ~contained:false);
   case "normalized-contained"
     (case_normalized_bounds ~name:"normalized-contained" ~u_n:3 ~v_n:2 ~contained:true);
+  zeroed_cases ();
   case "unit-solve(plain)" case_unit_solve_plain;
   case "triangular" case_triangular;
   case "non-injective" case_noninjective;
