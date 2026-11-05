@@ -285,6 +285,39 @@ let common_frame (views : coord array list) : coord array list option =
         let ends = List.fold views ~init:(ends_of v0) ~f:(fun acc v -> Set.inter acc (ends_of v)) in
         Some (List.map views ~f:(regroup ~ends))
 
+(* gh-ocannl-1898: re-express two full-rank access maps of one node in one coordinate layout. Each
+   coordinate of the common frame is written back at the node's rank as IR -- [span - 1] [Sub_axis]
+   entries, then the coordinate's composed index -- so the two results carry [Sub_axis] at the same
+   positions and each addresses exactly the flat cells its original does: a [Known] coordinate's
+   index IS the row-major Horner sum of its axes' components ({!merge}), the sum the renderers
+   compute over the [Sub_axis] run. The frame is the coarsest either side needs and is never refined
+   below a side's own grouping: a flattened index is never split into per-axis components, which
+   would assert a decomposition the access does not have. [None] when either map is not of the
+   node's rank or a common coordinate is [Unknown] (a [Concat] component). *)
+let common_layout ~(dims : int array) (a : Idx.axis_index array) (b : Idx.axis_index array) :
+    (Idx.axis_index array * Idx.axis_index array) option =
+  let n = Array.length dims in
+  if Array.length a <> n || Array.length b <> n then None
+  else
+    match common_frame [ view ~dims a; view ~dims b ] with
+    | Some [ va; vb ] ->
+        let reemit v =
+          let out = Array.create ~len:n Idx.Sub_axis in
+          let pos = ref 0 in
+          let ok =
+            Array.for_all v ~f:(fun c ->
+                pos := !pos + coord_span c;
+                match c with
+                | Known { terms; offset; _ } ->
+                    out.(!pos - 1) <- Idx.affine ~symbols:terms ~offset;
+                    true
+                | Unknown _ -> false)
+          in
+          if ok && !pos = n then Some out else None
+        in
+        Option.both (reemit va) (reemit vb)
+    | _ -> None
+
 (* The two sides' range environments. A [Left_v]/[Right_v] variable ranges over its own side's
    bounds — two sibling loops may bind one symbol with different bounds, and either side's bounds
    would drop the other's values (gh-ocannl-1282). A [Shared] variable is one value on both sides,

@@ -768,27 +768,29 @@ let () =
   p "numbering: pricing draws no symbol and no scope id"
     (symbols = symbols_off && scopes = scopes_off)
 
-(* An [`Inline] flip a READER refuses (review round 4): over a zeroed [1; 2] F, F[0; 0] = 2 X[0],
-   read at F[0; 0] and at its flat cell 1 through a [Sub_axis] read by every cell of out[x] (the
+(* An [`Inline] flip a READER refuses (review round 4): over a [1; 2] F, F[0; 0] = 2 X[0], read at
+   F[0; 0] and at the same cell through a width-one iterator [F[0; u]] by every cell of out[x] (the
    visit cap materializes F). The synthetic read at the written slice would be served, but replaying
-   the flip meets the flattened read, whose layout differs from the producer's, which the inliner
-   cannot serve (13, gh-ocannl-1795; a plain read of F[0; 1] is served by the [Zero_out] since
-   then): the pricer instantiates at every read site the routine has, and prices the flip by the
+   the flip meets the iterator read, where the producer's [Fixed_idx 0] needs an equality guard over
+   a fallback this lone producer cannot prove -- no [Zero_out], and its write does not cover the
+   node (13, gh-ocannl-1735/1795; the [scope_over_materialized] witness). A flattened [F[Sub_axis;
+   1]] read, this vehicle until gh-ocannl-1898, is now normalized to the producer's coordinates and
+   served. The pricer instantiates at every read site the routine has, and prices the flip by the
    proxy. *)
 let () =
   Stdio.printf "== an Inline flip a read site refuses ==\n";
   let f = mk ~dims:[| 1; 2 |] "Fr"
   and x = mk ~dims:[| 1 |] "Xr"
   and out = mk ~dims:[| 2 |] "outF" in
-  let j = sym () in
+  let j = sym () and u = sym () in
   let llc =
-    seq (zero f)
-      (seq
-         (set f [| fixed 0; fixed 0 |] (mul (get x [| fixed 0 |]) (c 2.)))
-         (loop_n j 2
+    seq
+      (set f [| fixed 0; fixed 0 |] (mul (get x [| fixed 0 |]) (c 2.)))
+      (loop_n j 2
+         (loop ~upto:0 u
             (set out
                [| iter j |]
-               (add (get f [| fixed 0; fixed 0 |]) (get f [| Idx.Sub_axis; fixed 1 |])))))
+               (add (get f [| fixed 0; fixed 0 |]) (get f [| fixed 0; iter u |])))))
   in
   let o = optimize ~materialized:[ x; out ] ~name:"cmt_reader_refused" llc in
   p "reader-refused flip: a cap materialized the node" (known_non_virtual o f);
@@ -910,15 +912,17 @@ let () =
   let f = mk ~dims:[| 1; 2 |] "memo_refused"
   and input = mk ~dims:[| 1 |] "memo_refused_input"
   and output = mk ~dims:[| 2 |] "memo_refused_out" in
-  let j = sym () in
+  let j = sym () and u = sym () in
+  (* The read the inliner refuses is the reader-refused flip's: a fixed producer cell read through a
+     width-one iterator, with no fallback to guard over (13). *)
   let code =
-    seq (zero f)
-      (seq
-         (set f [| fixed 0; fixed 0 |] (mul (get input [| fixed 0 |]) (c 2.)))
-         (loop_n j 2
+    seq
+      (set f [| fixed 0; fixed 0 |] (mul (get input [| fixed 0 |]) (c 2.)))
+      (loop_n j 2
+         (loop ~upto:0 u
             (set output
                [| iter j |]
-               (add (get f [| fixed 0; fixed 0 |]) (get f [| Idx.Sub_axis; fixed 1 |])))))
+               (add (get f [| fixed 0; fixed 0 |]) (get f [| fixed 0; iter u |])))))
   in
   price_replay ~name:"refused read" ~self:f ~materialized:[ input; output ]
     ~extra:(fun _ _ surface first _ ->

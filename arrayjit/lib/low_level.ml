@@ -3139,24 +3139,51 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
         [%string
           "inline_computation: call_args too short, maybe stale optimization context? Tnode: \
            %{Tn.debug_name self} #%{self.Tn.id#Int} n: %{n#Int}"];
-    (* gh-ocannl-1795: the producer and the read must index the node in the same coordinate layout
-       -- a [Sub_axis] at the same positions on both sides. Every step below solves RAW positions
-       pairwise, which is sound only when position [i] names the same coordinate on both sides
-       ({!Affine.view}): after a [Sub_axis] run the next component is a flattened index over the
-       run's extent product, not its own axis's. A one-sided [Sub_axis] bound a producer symbol to
-       the run placeholder, which the substitution then carried into the replay's other reads (a
-       transposed operand read [a[t; Sub_axis]]), into an affine read (where it silently counts as
-       0), and into guards ([Embed_index Sub_axis], which renders as nothing) -- each measured to
-       miscompute. Such a read site is refused; normalizing both sides into common coordinates is
-       separate work. With the layouts agreeing, no symbol is ever bound to [Sub_axis]: pass 1 binds
-       to a call index that is not one, and the solving rounds bind to [Iterator]s and affine forms
-       of the call's symbols. *)
-    if
-      not
-        (Array.for_alli def_args_arr ~f:(fun i lhs ->
-             let is_sub = function Indexing.Sub_axis -> true | _ -> false in
-             Bool.equal (is_sub lhs) (is_sub call_args.(i))))
-    then raise @@ Non_virtual "13:call-site-index-mismatch";
+    (* gh-ocannl-1795, gh-ocannl-1898: the producer and the read must index the node in the same
+       coordinate layout -- a [Sub_axis] at the same positions on both sides. Every step below
+       solves positions pairwise, which is sound only when position [i] names the same coordinate on
+       both sides ({!Affine.view}): after a [Sub_axis] run the next component is a flattened index
+       over the run's extent product, not its own axis's. Solved raw, a one-sided [Sub_axis] bound a
+       producer symbol to the run placeholder, which the substitution carried into the replay's
+       other reads, affine reads and guards -- each measured to miscompute (the [flattened_read_*]
+       rows of [virtual_rejection_boundary]).
+
+       So a mismatched pair is first re-expressed in its common frame ({!Affine.common_layout}):
+       both sides coarsened to the grouping either needs, each coordinate written back as a
+       [Sub_axis] run and its composed row-major index -- the same flat cells, now position for
+       position the same coordinates. A flattened read of a per-axis producer [x[i; k]] becomes the
+       producer position [K·i + k] against the read's [t], which unit solving serves under a range
+       guard with the [i] loop kept; a per-axis read of a flattened producer binds the producer's
+       flat symbol to [K·h + e]. The frame is never refined below a side's own grouping, so no
+       flattened index is split into per-axis components: a multi-term match on the normalized form
+       still has to pass the containment rule of [try_structural_match] (gh-ocannl-1896). Only a
+       mismatched pair is normalized -- an agreeing pair's frames are already identical -- and the
+       solving below runs on the normalized copies; [def_args] itself, which the replay's setters
+       and self-reads are checked against, is untouched. A pair with no common frame (a map of
+       another rank, a [Concat] component) is refused. With the layouts agreeing, no symbol is ever
+       bound to [Sub_axis]: pass 1 binds to a call index that is not one, and the solving rounds
+       bind to [Iterator]s and affine forms of the call's symbols.
+
+       Coarsening also folds what a per-axis reading would have checked into one index: the producer
+       [x[1; k]] becomes [K + k], so its [Fixed_idx] no longer meets [fixed_guardable], and a
+       flattened producer's symbol binds with no per-axis proof that the read stays inside its loop.
+       Their guards are answered as any guard is: by the coverage rule, or for a [coverage_exempt]
+       node by [fallback_defined] (gh-ocannl-1897). What a guard cannot answer for is a binding
+       without one, so a normalized binding that pins one symbol ([normalized]) takes its range
+       guard even with one component: a [Zero_out] satisfies the coverage rule at cells no iteration
+       writes, where the unguarded replay would run the producer outside its loop. *)
+    let same_layout (a : Indexing.axis_index array) (b : Indexing.axis_index array) =
+      Array.for_alli a ~f:(fun i lhs ->
+          let is_sub = function Indexing.Sub_axis -> true | _ -> false in
+          Bool.equal (is_sub lhs) (is_sub b.(i)))
+    in
+    let def_args_arr, call_args, normalized =
+      if same_layout def_args_arr call_args then (def_args_arr, call_args, false)
+      else
+        match Affine.common_layout ~dims:(Lazy.force self.Tn.dims) def_args_arr call_args with
+        | Some (d, c) when same_layout d c -> (d, c, true)
+        | _ -> raise @@ Non_virtual "13:call-site-index-mismatch"
+    in
     (* [bound_pos.(i)] marks positions that DEFINE bindings (no consistency guard for them).
        [range_guards] collects [(uc, rest, rhs, (lo, width))] tuples: the solved symbol's value must
        fall in [lo, lo + width), its producer loop's bounds. *)
@@ -3172,7 +3199,7 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
         | Indexing.Iterator s when (not (Set.mem static_indices s)) && not (Map.mem !env s) ->
             bound_pos.(i) <- true;
             env := Map.add_exn !env ~key:s ~data:call_args.(i);
-            if set_computation_count > 1 then
+            if set_computation_count > 1 || normalized then
               range_guards :=
                 (1, Indexing.Fixed_idx 0, call_args.(i), symbol_range s) :: !range_guards
         | _ -> ());
@@ -3226,9 +3253,10 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                   (* As for a pass-1 binding: in a multi-component replay the call-site symbol
                      ranges over the whole node, the producer's over its own loop, so the component
                      replays only where [cs] falls in that loop (Codex review of gh-ocannl-1795's
-                     PR: [x[s + 1]] for [s] in 0..1, read at [x[t + 1]], wrote cell 3 at [t =
-                     2]). *)
-                  if set_computation_count > 1 then
+                     PR: [x[s + 1]] for [s] in 0..1, read at [x[t + 1]], wrote cell 3 at [t = 2]). A
+                     normalized pair's one-term binding has no per-axis check behind it either; a
+                     contained multi-term match needs no guard, by containment. *)
+                  if set_computation_count > 1 || (normalized && List.length pterms = 1) then
                     range_guards :=
                       (1, Indexing.Fixed_idx 0, Indexing.Iterator cs, symbol_range ps)
                       :: !range_guards);
@@ -10950,8 +10978,11 @@ let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indice
   let id = pricing_scope self and sink = pricing_scope self in
   try
     Result.map
-      (* Its call indices are bare iterators or fixed positions, so no multi-term structural match
-         can fire and no call-site range is needed (gh-ocannl-1896). *)
+      (* Its call indices are bare iterators, fixed positions or [Sub_axis] runs every component
+         shares. A component whose layout differs is normalized to a common frame (gh-ocannl-1898),
+         which can compose those iterators into a multi-term index; with no call-site range a
+         multi-term structural match declines into unit solving, the sound direction
+         (gh-ocannl-1896). *)
       (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
          ~call_range:(fun _ -> None)
            (* [self] is virtual in [plc] only as the reading priced, so it is not taken for a

@@ -647,14 +647,17 @@ let declared_virtual_union () =
         (writes x @ [ loop_n t width (set out [| iter t |] (add (get x (read_at t)) (tick t))) ])
     in
     match expect with
-    | `Inlined expected ->
-        let o = optimize ~name:label llc in
-        p (label ^ ": inlined") (known_virtual o x && count_get o x = 0);
-        p
-          (label ^ ": executed values are the reference")
-          (same
-             (execute ~name:label o ~seed:[ (src, [| 100. |]); (out, blank n) ] ~read:[ out ])
-             [ expected ])
+    | `Inlined expected -> (
+        (* A declared node's refusal raises: a failed claim, not the end of every row after it. *)
+        match optimize ~name:label llc with
+        | exception Utils.User_error _ -> p (label ^ ": inlined") false
+        | o ->
+            p (label ^ ": inlined") (known_virtual o x && count_get o x = 0);
+            p
+              (label ^ ": executed values are the reference")
+              (same
+                 (execute ~name:label o ~seed:[ (src, [| 100. |]); (out, blank n) ] ~read:[ out ])
+                 [ expected ]))
     | `Refused code ->
         p
           (label ^ ": refused as " ^ code)
@@ -692,7 +695,39 @@ let declared_virtual_union () =
   case ~label:"dvu_all_disjoint" ~dims:[| n |]
     ~writes:(fun x -> [ cell x 0 31.; cell x 1 32. ])
     ~read_at:(fun _ -> [| fixed 3 |])
-    (`Refused "13:call-site-index-mismatch")
+    (`Refused "13:call-site-index-mismatch");
+  (* gh-ocannl-1898: a flattened read of a partial write. Normalization folds the producer's fixed
+     row into the composed index ([x[1; k]] becomes [2 + k]) and a diagonal into [3s], so neither
+     meets [fixed_guardable]; a partial flattened producer read per axis binds its symbol under a
+     range guard. Each guard asks the fallback proof of a coverage-exempt node, and nothing covers
+     the node, so each must refuse rather than read a zero no write put there. *)
+  let flat_read t = [| Idx.Sub_axis; iter t |] in
+  case ~label:"dvu_flat_fixed_row" ~dims:[| 2; 2 |]
+    ~writes:(fun x ->
+      let k = sym () in
+      [ loop_n k 2 (set x [| fixed 1; iter k |] (tick k)) ])
+    ~read_at:flat_read (`Refused "157:guard-fallback-unproven");
+  case ~label:"dvu_flat_diagonal" ~dims:[| 2; 2 |]
+    ~writes:(fun x ->
+      let s = sym () in
+      [ loop_n s 2 (set x [| iter s; iter s |] (tick s)) ])
+    ~read_at:flat_read (`Refused "157:guard-fallback-unproven");
+  case ~label:"dvu_flat_fixed_cell" ~dims:[| 2; 2 |]
+    ~writes:(fun x -> [ set x [| fixed 1; fixed 1 |] (add (c 9.) (get src [| fixed 0 |])) ])
+    ~read_at:flat_read (`Refused "157:guard-fallback-unproven");
+  case ~label:"dvu_flat_producer_partial" ~width:2 ~dims:[| 2; 2 |]
+    ~writes:(fun x ->
+      let f = sym () in
+      [ loop_n f 2 (set x [| Idx.Sub_axis; iter f |] (tick f)) ])
+    ~read_at:(fun t -> [| fixed 1; iter t |])
+    (`Refused "157:guard-fallback-unproven");
+  (* The union does cover the node: the proof holds, and the flattened read inlines. *)
+  case ~label:"dvu_flat_covered" ~dims:[| 2; 2 |]
+    ~writes:(fun x ->
+      let i = sym () and k = sym () in
+      [ loop_n i 2 (loop_n k 2 (set x [| iter i; iter k |] (tag i k))) ])
+    ~read_at:flat_read
+    (`Inlined [| 2.; 4.; 14.; 16. |])
 
 (* gh-ocannl-1897: the same proof for EVERY guard on a node that skipped the coverage rule, not only
    a fixed-index one -- an equality guard from a repeated symbol ([x[s; s]]) or from an unsolved
@@ -1107,16 +1142,24 @@ let row_unit_axis_flattened () =
   row ~label:"unit_axis_flattened" ~llc ~cand:x ~out ~seed:[] ~expected:[| 9.; 2.; 3.; 4. |]
     ~verdict:Accepted
 
-(* === Mismatched coordinate layouts (gh-ocannl-1795) ===
+(* === Mismatched coordinate layouts (gh-ocannl-1795, gh-ocannl-1898) ===
 
    The mirror of [row_unit_axis_flattened]: there the producer and the read both flatten the node
-   through [Sub_axis], so position by position they name the same coordinate. Here only the READ
-   does, and the inliner solves raw positions pairwise: it bound the producer's first symbol to the
-   run placeholder and carried it on. Each of these inlined and miscomputed before the layout gate
-   (the values in each comment); each read site is now refused, and the node materializes. *)
+   through [Sub_axis], so position by position they name the same coordinate. Here only one side
+   does. Solved raw, the inliner bound the producer's first symbol to the run placeholder and
+   carried it on: each of the first three rows inlined and miscomputed that way (the values in each
+   comment), and gh-ocannl-1795 refused them as 13. Now the pair is first re-expressed in its common
+   frame ([Affine.common_layout]: the coarser grouping, each coordinate a [Sub_axis] run and its
+   composed row-major index), so a flattened read of a per-axis producer [x[i; k]] meets the
+   producer position [K·i + k], and a per-axis read of a flattened producer binds the flat symbol to
+   [K·h + e]. Every row inlines and agrees with the materialized run. The rows' producers vary with
+   every symbol of their iteration, so a coordinate composed with the wrong stride reads a different
+   value. *)
 
-(* Into a guard: the diagonal's repeated symbol becomes [Sub_axis == t] ([Embed_index Sub_axis]
-   renders as nothing), which printed [1; 0; 0; 0]. *)
+(* Was, into a guard: the diagonal's repeated symbol became [Sub_axis == t] ([Embed_index Sub_axis]
+   renders as nothing), which printed [1; 0; 0; 0]. Normalized, the producer position is [3s]
+   against [t]: no unit coefficient to solve for, so it is an equality guard [3s == t] over the kept
+   [s] loop, falling back on the [Zero_out] off the diagonal. *)
 let row_flattened_read_diagonal () =
   let x = mk ~dims:[| 2; 2 |] "frd_x" and out = mk "frd_out" in
   materialize out;
@@ -1128,11 +1171,13 @@ let row_flattened_read_diagonal () =
          (loop_n t n (set out [| iter t |] (get x [| Idx.Sub_axis; iter t |]))))
   in
   row ~label:"flattened_read_diagonal" ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 0.; 0.; 2. |]
-    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+    ~verdict:Accepted
 
-(* Into a fixed guard and the range guards: [2 == t] compares the producer's column with the flat
-   index, and the covering component's guards bound the flat index by the row count, which printed
-   [1; 2; 90; 4; 0; 0; 0; 0]. *)
+(* Was, into a fixed guard and the range guards: [2 == t] compared the producer's column with the
+   flat index, and the covering component's guards bounded the flat index by the row count, which
+   printed [1; 2; 90; 4; 0; 0; 0; 0]. Normalized, the covering component is [4i + k] (unit-solved
+   for [k] under a range guard, the [i] loop kept) and the column component [4s + 2] (an equality
+   guard over the kept [s] loop), replayed in order over one local. *)
 let row_flattened_read_fixed_component () =
   let x = mk ~dims:[| 2; 4 |] "frf_x" and out = mk ~dims:[| 8 |] "frf_out" in
   materialize out;
@@ -1146,10 +1191,11 @@ let row_flattened_read_fixed_component () =
   in
   row ~label:"flattened_read_fixed_component" ~llc ~cand:x ~out ~seed:[]
     ~expected:[| 1.; 2.; 90.; 4.; 11.; 12.; 91.; 14. |]
-    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+    ~verdict:Accepted
 
-(* Into the replay's other reads, with no guard at all: a transposing producer [x[i; k] := a[k; i]]
-   replayed as [a[t; Sub_axis]], which printed [1; 3; 5; 0; 0; 0]. *)
+(* Was, into the replay's other reads, with no guard at all: a transposing producer [x[i; k] := a[k;
+   i]] replayed as [a[t; Sub_axis]], which printed [1; 3; 5; 0; 0; 0]. Normalized, [k := t - 3i]
+   under a range guard, the [i] loop kept: the operand read is [a[t - 3i; i]]. *)
 let row_flattened_read_transpose () =
   let a = mk ~dims:[| 3; 2 |] "frt_a" and x = mk ~dims:[| 2; 3 |] "frt_x" in
   let out = mk ~dims:[| 6 |] "frt_out" in
@@ -1163,8 +1209,132 @@ let row_flattened_read_transpose () =
   in
   row ~label:"flattened_read_transpose" ~llc ~cand:x ~out
     ~seed:[ (a, [| 1.; 2.; 3.; 4.; 5.; 6. |]) ]
-    ~expected:[| 1.; 3.; 5.; 2.; 4.; 6. |]
-    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+    ~expected:[| 1.; 3.; 5.; 2.; 4.; 6. |] ~verdict:Accepted
+
+(* The other direction: a flattened producer [x[Sub_axis; f]] read per axis. The read is normalized
+   to [x[Sub_axis; 3i + k]] and pass 1 binds [f := 3i + k] -- no guard, no loop. The transposed read
+   [out[k; i] := x[i; k]] checks the stride is the producer's, not the reader's. *)
+let row_flattened_producer_axis_read ~transposed =
+  let label =
+    if transposed then "flattened_producer_transposed_read" else "flattened_producer_axis_read"
+  in
+  let x = mk ~dims:[| 2; 3 |] (label ^ "_x") in
+  let out = mk ~dims:(if transposed then [| 3; 2 |] else [| 2; 3 |]) (label ^ "_out") in
+  materialize out;
+  let f = sym () and i = sym () and k = sym () in
+  let llc =
+    seq
+      (loop_n f 6 (set x [| Idx.Sub_axis; iter f |] (tick f)))
+      (loop_n i 2
+         (loop_n k 3
+            (set out
+               (if transposed then [| iter k; iter i |] else [| iter i; iter k |])
+               (get x [| iter i; iter k |]))))
+  in
+  (* [x]'s flat cell [3i + k] holds [tick (3i + k) = 1 + 3i + k]; [out[k; i]] is flat cell [2k +
+     i]. *)
+  let expected =
+    if transposed then [| 1.; 4.; 2.; 5.; 3.; 6. |] else [| 1.; 2.; 3.; 4.; 5.; 6. |]
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[] ~expected ~verdict:Accepted
+
+(* A flattened producer of part of a zeroed node, read per axis past its loop. The [Zero_out] admits
+   the read, so the coverage rule has nothing to say, and with one component pass 1 binds [f := 2h +
+   e] with no guard of its own: unguarded, the replay computes [tick f] at cells 2 and 3, where the
+   materialized run reads the zeros. A normalized binding takes the range guard whatever the
+   component count. *)
+let row_flattened_producer_zero_partial () =
+  let label = "flattened_producer_zero_partial" in
+  let x = mk ~dims:[| 2; 2 |] (label ^ "_x") and out = mk (label ^ "_out") in
+  materialize out;
+  let f = sym () and h = sym () and e = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n f 2 (set x [| Idx.Sub_axis; iter f |] (tick f)))
+         (loop_n h 2
+            (loop_n e 2 (set out [| aff [ (2, h); (1, e) ] 0 |] (get x [| iter h; iter e |])))))
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 2.; 0.; 0. |] ~verdict:Accepted
+
+(* The same past a single-term structural match: normalized, the producer position [k + 1] meets the
+   read's [t + 1], coefficients and offsets equal, so [k := t] binds pairwise, and it too takes the
+   range guard. Unguarded, the replay computes [tick t] at cells 3 to 5, where the zeros are. *)
+let row_flattened_read_zero_structural () =
+  let label = "flattened_read_zero_structural" in
+  let x = mk ~dims:[| 2; 3 |] (label ^ "_x") and out = mk ~dims:[| 5 |] (label ^ "_out") in
+  materialize out;
+  let k = sym () and t = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n k 2 (set x [| fixed 0; aff [ (1, k) ] 1 |] (tick k)))
+         (loop_n t 5 (set out [| iter t |] (get x [| Idx.Sub_axis; aff [ (1, t) ] 1 |]))))
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 2.; 0.; 0.; 0. |] ~verdict:Accepted
+
+(* A partial write read through a flattened index, ordinary node, no [Zero_out]. A normalized pair's
+   guards rest on the coverage rule here, as any guard's do, so that rule must see through the
+   flattened read: read past the write the node owns a buffer with its entry values; read only where
+   it is written, [x[1; k]] folded into [2 + k] is unit-solved under a range guard that always
+   holds, and the node inlines -- the proof is the coverage rule's, about the cells read. *)
+let flattened_read_partial_write ~label ~read_from ~verdict ~expected ~entry =
+  let x = mk ~dims:[| 2; 2 |] (label ^ "_x")
+  and out = mk ~dims:[| 4 - read_from |] (label ^ "_out") in
+  materialize out;
+  let k = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n k 2 (set x [| fixed 1; iter k |] (tick k)))
+      (loop ~from_:read_from ~upto:3 t
+         (set out [| aff [ (1, t) ] (-read_from) |] (get x [| Idx.Sub_axis; iter t |])))
+  in
+  row ~label ~llc ~cand:x ~out ~seed:(entry x) ~expected ~verdict
+
+let row_flattened_read_past_partial () =
+  flattened_read_partial_write ~label:"flattened_read_past_partial" ~read_from:0
+    ~verdict:(Rejected (Coverage, Ir.Tnode.Read_before_write))
+    ~expected:[| 50.; 51.; 1.; 2. |]
+    ~entry:(fun x -> [ (x, [| 50.; 51.; 52.; 53. |]) ])
+
+let row_flattened_read_written_cells () =
+  flattened_read_partial_write ~label:"flattened_read_written_cells" ~read_from:2 ~verdict:Accepted
+    ~expected:[| 1.; 2. |] ~entry:(fun _ -> [])
+
+(* A partial frame: on dims [2; 3; 2] the producer flattens only the first two axes, [x[Sub_axis; f;
+   g]], and the read is per axis. The common frame coarsens just those two -- the read becomes
+   [x[Sub_axis; 3a + b; c]] -- and keeps the last axis its own coordinate, so pass 1 binds [f := 3a
+   + b] and [g := c]. *)
+let row_partial_frame () =
+  let label = "partial_frame" in
+  let x = mk ~dims:[| 2; 3; 2 |] (label ^ "_x") and out = mk ~dims:[| 2; 3; 2 |] (label ^ "_out") in
+  materialize out;
+  let f = sym () and g = sym () and a = sym () and b = sym () and c' = sym () in
+  let llc =
+    seq
+      (loop_n f 6 (loop_n g 2 (set x [| Idx.Sub_axis; iter f; iter g |] (tag f g))))
+      (loop_n a 2
+         (loop_n b 3
+            (loop_n c' 2
+               (set out [| iter a; iter b; iter c' |] (get x [| iter a; iter b; iter c' |])))))
+  in
+  (* Cell [(a, b, c)] is written at [f = 3a + b], [g = c]: [tag f g = 1 + 10f + g]. *)
+  let expected = Array.init 12 ~f:(fun n -> Float.of_int (1 + (10 * (n / 2)) + (n % 2))) in
+  row ~label ~llc ~cand:x ~out ~seed:[] ~expected ~verdict:Accepted
+
+(* A trailing [Sub_axis] is index 0 of its own axis: [x[t; Sub_axis]] reads column 0, normalized to
+   [x[t; 0]], which binds the producer's [i := t] and [k := 0]. *)
+let row_trailing_sub_axis_read () =
+  let label = "trailing_sub_axis_read" in
+  let x = mk ~dims:[| 3; 2 |] (label ^ "_x") and out = mk ~dims:[| 3 |] (label ^ "_out") in
+  materialize out;
+  let i = sym () and k = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n i 3 (loop_n k 2 (set x [| iter i; iter k |] (tag i k))))
+      (loop_n t 3 (set out [| iter t |] (get x [| iter t; Idx.Sub_axis |])))
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 11.; 21. |] ~verdict:Accepted
 
 (* === A refused scalar constexpr declines (gh-ocannl-1735) ===
 
@@ -1201,9 +1371,14 @@ let row_constexpr_guarded_setter ~flag_value =
     ~expected:(Array.init n ~f:(fun i -> (7. *. flag_value) +. 1. +. Float.of_int i))
     ~verdict:(Rejected (Store, Ir.Tnode.Site "142:guarded-computation"))
 
-(* Consumption time: the one cell of a [1; 1] scalar read through a flattened [Sub_axis] run -- the
-   same cell, but a [Fixed_idx] producer position has no value to compare with a run placeholder, so
-   the read site is refused as [13]. *)
+(* The one cell of a [1; 1] scalar read through a flattened [Sub_axis] run. Until gh-ocannl-1898 a
+   [Fixed_idx] producer position had no value to compare with a run placeholder, and the read site
+   was refused as [13] -- this row's consumption-time refusal. Normalized, the producer is
+   [x[Sub_axis; 0]] against [x[Sub_axis; u]] on a coordinate of extent 1: the same cell, served with
+   no guard. No consumption-time refusal of a scalar constexpr remains to pin: the node has one
+   cell, so every in-bounds read is that cell, and the other consumption-time codes belong to vector
+   setters and scans, which a scalar constexpr does not have. The store-time leg
+   ([row_constexpr_guarded_setter]) still pins that a refusal declines rather than raising. *)
 let row_constexpr_flattened_read () =
   let label = "constexpr_flattened_read" in
   let x = mk ~dims:[| 1; 1 |] (label ^ "_x") and out = mk (label ^ "_out") in
@@ -1220,7 +1395,7 @@ let row_constexpr_flattened_read () =
     (is_scalar_constexpr (optimize ~name:(label ^ "_probe") llc) x);
   row ~label ~llc ~cand:x ~out ~seed:[]
     ~expected:(Array.init n ~f:(fun i -> 8. +. Float.of_int i))
-    ~verdict:(Rejected (Consumption, Ir.Tnode.Site "13:call-site-index-mismatch"))
+    ~verdict:Accepted
 
 (* The exemption the deferral keeps: with simple computations no longer inlined unconditionally, a
    constant read [n] times is past the visit cap -- which a scalar constexpr is exempt from, and
@@ -1348,6 +1523,14 @@ let () =
   row_flattened_read_diagonal ();
   row_flattened_read_fixed_component ();
   row_flattened_read_transpose ();
+  row_flattened_producer_axis_read ~transposed:false;
+  row_flattened_producer_axis_read ~transposed:true;
+  row_flattened_producer_zero_partial ();
+  row_flattened_read_zero_structural ();
+  row_flattened_read_past_partial ();
+  row_flattened_read_written_cells ();
+  row_partial_frame ();
+  row_trailing_sub_axis_read ();
   row_hoisted_local ();
   row_scan_recurrence ();
   row_constexpr_cap_exempt ();

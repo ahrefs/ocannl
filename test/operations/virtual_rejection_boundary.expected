@@ -85,6 +85,12 @@ dvu_duplicate: refused as 157:guard-fallback-unproven: true
 dvu_dead_loop: refused as 157:guard-fallback-unproven: true
 dvu_diagonal: refused as 157:guard-fallback-unproven: true
 dvu_all_disjoint: refused as 13:call-site-index-mismatch: true
+dvu_flat_fixed_row: refused as 157:guard-fallback-unproven: true
+dvu_flat_diagonal: refused as 157:guard-fallback-unproven: true
+dvu_flat_fixed_cell: refused as 157:guard-fallback-unproven: true
+dvu_flat_producer_partial: refused as 157:guard-fallback-unproven: true
+dvu_flat_covered: inlined: true
+dvu_flat_covered: executed values are the reference: true
 dvg_diagonal_uninit: the materialized twin computes the stated values: true
 dvg_diagonal_uninit: refused as 157:guard-fallback-unproven, or executed equal to the materialized twin: true
 dvg_diagonal_zeroed: the materialized twin computes the stated values: true
@@ -151,15 +157,39 @@ unit_axis_loop_producer: the two placements agree: true
 unit_axis_flattened: inlined: true
 unit_axis_flattened: executed values are the reference: true
 unit_axis_flattened: the two placements agree: true
-flattened_read_diagonal: rejected at consumption time as 13:call-site-index-mismatch: true
+flattened_read_diagonal: inlined: true
 flattened_read_diagonal: executed values are the reference: true
 flattened_read_diagonal: the two placements agree: true
-flattened_read_fixed_component: rejected at consumption time as 13:call-site-index-mismatch: true
+flattened_read_fixed_component: inlined: true
 flattened_read_fixed_component: executed values are the reference: true
 flattened_read_fixed_component: the two placements agree: true
-flattened_read_transpose: rejected at consumption time as 13:call-site-index-mismatch: true
+flattened_read_transpose: inlined: true
 flattened_read_transpose: executed values are the reference: true
 flattened_read_transpose: the two placements agree: true
+flattened_producer_axis_read: inlined: true
+flattened_producer_axis_read: executed values are the reference: true
+flattened_producer_axis_read: the two placements agree: true
+flattened_producer_transposed_read: inlined: true
+flattened_producer_transposed_read: executed values are the reference: true
+flattened_producer_transposed_read: the two placements agree: true
+flattened_producer_zero_partial: inlined: true
+flattened_producer_zero_partial: executed values are the reference: true
+flattened_producer_zero_partial: the two placements agree: true
+flattened_read_zero_structural: inlined: true
+flattened_read_zero_structural: executed values are the reference: true
+flattened_read_zero_structural: the two placements agree: true
+flattened_read_past_partial: rejected by the coverage rule as 36:read-before-write: true
+flattened_read_past_partial: executed values are the reference: true
+flattened_read_past_partial: the two placements agree: true
+flattened_read_written_cells: inlined: true
+flattened_read_written_cells: executed values are the reference: true
+flattened_read_written_cells: the two placements agree: true
+partial_frame: inlined: true
+partial_frame: executed values are the reference: true
+partial_frame: the two placements agree: true
+trailing_sub_axis_read: inlined: true
+trailing_sub_axis_read: executed values are the reference: true
+trailing_sub_axis_read: the two placements agree: true
 hoisted_local: rejected at store time as 19:declare-local: true
 hoisted_local: executed values are the reference: true
 hoisted_local: the two placements agree: true
@@ -171,7 +201,7 @@ constexpr_cap_exempt: inlined: true
 constexpr_cap_exempt: executed values are the reference: true
 constexpr_cap_exempt: the two placements agree: true
 constexpr_flattened_read: the candidate is a scalar constexpr: true
-constexpr_flattened_read: rejected at consumption time as 13:call-site-index-mismatch: true
+constexpr_flattened_read: inlined: true
 constexpr_flattened_read: executed values are the reference: true
 constexpr_flattened_read: the two placements agree: true
 constexpr_guarded_setter_flag0: the candidate is a scalar constexpr: true
