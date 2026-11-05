@@ -501,6 +501,11 @@ type optop =
 type schedule = optop list [@@deriving sexp_of]
 (** Applied left to right by {!apply}. *)
 
+val tile_namespace : string
+(** The namespace of the nodes a schedule mints (staged tiles, moved accumulators): their ids come
+    from a process-wide counter of the schedule's own, apart from the session's, and their
+    identifiers in emitted code spell it ([tile__n24_...], {!Tnode.ident_prefix}). *)
+
 val split :
   axis:Indexing.symbol ->
   factor:int ->

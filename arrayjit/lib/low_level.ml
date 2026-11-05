@@ -9979,11 +9979,36 @@ let template_leaves (optim_ctx : optimize_ctx) (tn : Tn.t) : Set.M(Tnode).t =
   in
   go (Set.empty (module Tnode)) tn
 
+(* gh-ocannl-1777: each node's first buffer access in [llc], in {!iter_buffer_accesses}' walk order
+   (a statement's write before its reads), numbered from 0 -- a key the program fixes. A node's uid
+   is fixed by when it was built: the same program built in another order (hand-built IR, or
+   independent subterms constructed in a different sequence) would otherwise hand its equal-cost
+   decisions to whichever node happened to be built first. *)
+let first_access_positions (llc : t) : (Tn.t, int) Hashtbl.t =
+  let first = Hashtbl.create (module Tnode) in
+  iter_buffer_accesses llc
+    ~on_opaque:(fun () -> ())
+    ~touch:(fun tn ->
+      if not (Hashtbl.mem first tn) then Hashtbl.set first ~key:tn ~data:(Hashtbl.length first));
+  first
+
+(* Program order over [first_access_positions]: nodes the code touches in access order, then the
+   rest. A flip candidate is a node the raw code writes, or a footprint-scoped node it reads, so it
+   has a position; the identity fallback only keeps the order total for anything else. Not by label:
+   labels are display, not identity (gh-ocannl-1783). *)
+let compare_program_order positions a b =
+  match (Hashtbl.find positions a, Hashtbl.find positions b) with
+  | Some pa, Some pb -> Int.compare pa pb
+  | Some _, None -> -1
+  | None, Some _ -> 1
+  | None, None -> Tn.compare a b
+
 let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_store ~max_visits
     ~reads_covered ~read_multiplicity ~footprint
     ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
     ~(tentative_constexpr : Tn.t Hash_set.t)
-    ~(live_local : Tn.t -> [ `Unread | `Covered | `Uncovered ]) =
+    ~(live_local : Tn.t -> [ `Unread | `Covered | `Uncovered ])
+    ~(program_position : (Tn.t, int) Hashtbl.t Lazy.t) =
   let plc = optim_ctx.placements in
   (* gh-ocannl-1735: whether the per-node heuristics below still have [tn] to decide -- an
      unspecified placement that is not a scalar constexpr awaiting its deferred commitment. *)
@@ -10205,9 +10230,15 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
       | Some s -> s
       | None ->
           (* Cycle guard: a node re-entered during its own expansion counts as one contributor, as
-             if materialized — a cyclically-read node has an uncovered read and was placed
-             [On_device] by the coverage rule above anyway. A cycle through a node ALREADY
-             materialized never reaches it: [expand] does not enter such a node (below). *)
+             if materialized. A cycle through a node ALREADY materialized never reaches it: [expand]
+             does not enter such a node (below) -- which covers a cyclically-read node with an
+             uncovered read, placed [On_device] by the coverage rule above. What is left is a cycle
+             through nodes still headed for inlining, every read covered: a node with several
+             setters, one of them reading a node that reads another's cells ([a] over its first
+             half, [b] from it, [a]'s second half from [b]). The set memoized for a node inside such
+             a cycle was computed under the placeholder of the node the traversal entered the cycle
+             at, so it depends on where the traversal starts: the top-level iteration below is in
+             program order for that reason (gh-ocannl-1877). *)
           Hashtbl.set memo ~key:tn ~data:(Set.singleton (module Tnode) tn);
           let expand acc p =
             (* A dependency already materialized contributes itself, and is not entered: expanding
@@ -10277,7 +10308,12 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
           Hashtbl.set memo ~key:tn ~data:s;
           s
     in
-    Hashtbl.iter_keys traced_store ~f:(fun tn -> ignore (fanin tn : Set.M(Tnode).t))
+    (* In program order, never the table's: its iteration order follows the nodes' uids, hence how
+       many nodes the session minted before, and a cycle is cut where the traversal enters it
+       (gh-ocannl-1877; see the cycle guard above). *)
+    Hashtbl.keys traced_store
+    |> List.sort ~compare:(compare_program_order (Lazy.force program_position))
+    |> List.iter ~f:(fun tn -> ignore (fanin tn : Set.M(Tnode).t))
 
 type recompute_pricer_fn =
   static_indices:Indexing.static_symbol list ->
@@ -11125,30 +11161,6 @@ let memoized_recompute_price an ~pricer ~static_indices ~world tn =
           an.an_price_cache := List.take ((key, price) :: !(an.an_price_cache)) 128;
           price)
 
-(* gh-ocannl-1777: each node's first buffer access in [llc], in {!iter_buffer_accesses}' walk order
-   (a statement's write before its reads), numbered from 0 -- a key the program fixes. A node's uid
-   is fixed by when it was built: the same program built in another order (hand-built IR, or
-   independent subterms constructed in a different sequence) would otherwise hand its equal-cost
-   decisions to whichever node happened to be built first. *)
-let first_access_positions (llc : t) : (Tn.t, int) Hashtbl.t =
-  let first = Hashtbl.create (module Tnode) in
-  iter_buffer_accesses llc
-    ~on_opaque:(fun () -> ())
-    ~touch:(fun tn ->
-      if not (Hashtbl.mem first tn) then Hashtbl.set first ~key:tn ~data:(Hashtbl.length first));
-  first
-
-(* Program order over [first_access_positions]: nodes the code touches in access order, then the
-   rest. A flip candidate is a node the raw code writes, or a footprint-scoped node it reads, so it
-   has a position; the identity fallback only keeps the order total for anything else. Not by label:
-   labels are display, not identity (gh-ocannl-1783). *)
-let compare_program_order positions a b =
-  match (Hashtbl.find positions a, Hashtbl.find positions b) with
-  | Some pa, Some pb -> Int.compare pa pb
-  | Some _, None -> -1
-  | None, Some _ -> 1
-  | None, None -> Tn.compare a b
-
 let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : optimize_ctx)
     (an : analysis) : optimized =
   let static_indices = an.an_static_indices in
@@ -11177,10 +11189,13 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : opt
     else if local_read_covered tn then `Covered
     else `Uncovered
   in
+  (* gh-ocannl-1777, gh-ocannl-1877: where the raw lowered code first touches each node -- the order
+     of the fan-in pass's traversal, and of equal-cost flip candidates below. *)
+  let program_position = lazy (first_access_positions an.an_llc) in
   decide_placements ~blends_value_selects input_ctx traced_store
     ~max_visits:virtualize_settings.max_visits ~reads_covered:an.an_reads_covered
     ~read_multiplicity:an.an_read_multiplicity ~footprint:an.an_footprint ~footprint_scoped
-    ~tentative_constexpr ~live_local;
+    ~tentative_constexpr ~live_local ~program_position;
   [%log "optimizing"];
   (* gh-ocannl-681: taken BEFORE virtualization, so cleanup can tell the scopes this pass was handed
      from the ones it mints and only retracts its own. *)
@@ -11224,8 +11239,7 @@ let%diagn2_sexp specialize_proc ?(blends_value_selects = false) (input_ctx : opt
   let flip_candidates =
     let plc = input_ctx.placements in
     (* gh-ocannl-1777: equal-cost candidates are ordered by where the raw lowered code first touches
-       them, never by node id. *)
-    let program_position = lazy (first_access_positions an.an_llc) in
+       them ([program_position]), never by node id. *)
     (* The world a read of a candidate is instantiated in, resolved once per node: both the pricer
        and the refusal below read it (gh-ocannl-1093). *)
     let worlds = Hashtbl.create (module Tnode) in

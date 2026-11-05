@@ -7766,8 +7766,9 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1777: the flip surface and the planner's choice are invariant under unrelated node
-; minting and construction order. Lowers and plans only; it runs no training step.
+; gh-ocannl-1777, gh-ocannl-1877: the flip surface, the planner's choices and what a compile ships
+; (source and placements) are invariant under unrelated node minting; the surface also under
+; construction order. Lowers, plans and compiles; it runs no training step.
 
 (test
  (name flip_order_minting)
@@ -7783,7 +7784,8 @@
   unix
   arrayjit.memory_budget
   arrayjit.verdict
-  ll_test)
+  ll_test
+  test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

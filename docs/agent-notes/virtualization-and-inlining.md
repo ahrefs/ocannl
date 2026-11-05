@@ -745,6 +745,29 @@ files.
   decision read off a Tnode-keyed table's iteration order has the same trap; equal-cost flip
   candidates are ordered by first access in the raw code, never by uid, and consumers sort stably.
   `test/operations/flip_order_minting.ml` is the shift-the-uids pattern for checking a decision.
+- **A cycle of covered reads through nodes still headed for inlining is cut where the fan-in
+  traversal enters it, so the traversal runs in program order** (gh-ocannl-1877). Not entering
+  materialized nodes removed the cycles through parameters, not every cycle: a node with several
+  setters can read, in one of them, a node that reads the cells another of its setters wrote (`a`
+  over its first half, `b` from it, `a`'s second half from `b`), with every read covered and neither
+  node materialized. The set memoized for the node inside the cut is computed under the entry
+  node's placeholder (`b` counts `a` once when entered at `a`, and all of `a`'s inputs when entered
+  at `b`), which moved `b` across `virtualize_max_inline_fanin` with the uids. The top-level
+  iteration is sorted by `compare_program_order` over `first_access_positions`; what remains is
+  that the cut node is under-counted by design, and that within one setter's loads the recursion
+  follows the `Set`'s uid order (creation order, which a uid shift keeps). Pin: part 2b of
+  `flip_order_minting`. The audit behind it (every hash iteration in `low_level`, `schedule`,
+  `autotune` and their neighbours, classified) is the gh-ocannl-1877 issue comment; the other live
+  site was `C_syntax.parallel_grid_safe`, which privatized a pool chunk's locals in the order of a
+  uid-keyed table: the chunk's declarations and which of two equal-sized tiles kept the stack
+  followed the uids (now first-access order; `heap_local_arrays`' two-tile leg).
+- **The shift-the-uids check reads what a compile ships, not only the decision surface**
+  (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
+  offsets, the emitted source up to minted identifiers (`Generated.normalize_minted`) and every
+  program node's placement with its provenance, for the untuned compile and for the compile from a
+  mid-range `Bytes` budget's plan. A dependence planted downstream of the surface (kernel
+  parameters in table order) fails the source claims alone; one planted in `decide_placements`
+  fails the placement claims too.
 - **A candidate whose captured computation contains a `Scan_loop` is refused, and the refusal has
   two doors** (gh-ocannl-696, `test/operations/scan_loop.ml` legs 5 and 5b): `virtual_llc` threads
   `~in_scan` beside `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in

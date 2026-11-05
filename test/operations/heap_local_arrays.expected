@@ -19,3 +19,7 @@ Grid chunk, one element over the budget: values: true
 Grid chunk, 12 MiB: the Grid renders on the pool: true
 Grid chunk, 12 MiB: a heap tile, freed: true
 Grid chunk, 12 MiB: values: true
+Grid chunk, two tiles over the budget together: control: a table keyed by their uids has the first-touched tile ahead in one build and behind in another: true
+Grid chunk, two tiles over the budget together: the first-touched keeps the stack, the other takes the heap, whatever was minted before: true
+Grid chunk, two tiles over the budget together: declared in the order touched: true
+Grid chunk, two tiles over the budget together: values: true
