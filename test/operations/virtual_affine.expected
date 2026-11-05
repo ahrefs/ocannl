@@ -35,6 +35,49 @@ normalized-contained producer inlined (no array reads survive): true
 normalized-contained keeps the guard-free pairwise binding: true
 normalized-contained: every cell holds the value of the iteration that wrote it: true
 normalized-contained: virtual and materialized arms agree: true
+zeroed-partial producer virtual: true
+zeroed-partial producer inlined (no array reads survive): true
+zeroed-partial reads under a guard: true
+zeroed-partial: each cell holds its write or the zero: true
+zeroed-partial: virtual and materialized arms agree: true
+zeroed-partial-offset producer virtual: true
+zeroed-partial-offset producer inlined (no array reads survive): true
+zeroed-partial-offset reads under a guard: true
+zeroed-partial-offset: each cell holds its write or the zero: true
+zeroed-partial-offset: virtual and materialized arms agree: true
+zeroed-partial-axis producer virtual: true
+zeroed-partial-axis producer inlined (no array reads survive): true
+zeroed-partial-axis reads under a guard: true
+zeroed-partial-axis: each cell holds its write or the zero: true
+zeroed-partial-axis: virtual and materialized arms agree: true
+zeroed-fixed-axis producer virtual: true
+zeroed-fixed-axis producer inlined (no array reads survive): true
+zeroed-fixed-axis reads under a guard: true
+zeroed-fixed-axis: each cell holds its write or the zero: true
+zeroed-fixed-axis: virtual and materialized arms agree: true
+zeroed-reduction producer virtual: true
+zeroed-reduction producer inlined (no array reads survive): true
+zeroed-reduction reads under a guard: true
+zeroed-reduction: each cell holds its write or the zero: true
+zeroed-reduction: virtual and materialized arms agree: true
+zeroed-structural producer virtual: true
+zeroed-structural producer inlined (no array reads survive): true
+zeroed-structural reads under a guard: true
+zeroed-structural: each cell holds its write or the zero: true
+zeroed-structural: virtual and materialized arms agree: true
+zeroed-whole producer virtual: true
+zeroed-whole producer inlined (no array reads survive): true
+zeroed-whole takes no guard: the read stays in the loop: true
+zeroed-whole: each cell holds its write or the zero: true
+zeroed-whole: virtual and materialized arms agree: true
+zeroed-read-inside producer virtual: true
+zeroed-read-inside producer inlined (no array reads survive): true
+zeroed-read-inside takes no guard: the read stays in the loop: true
+zeroed-read-inside: each cell holds its write or the zero: true
+zeroed-read-inside: virtual and materialized arms agree: true
+zeroed-synthetic: a whole-node write prices no guard: true
+zeroed-synthetic: a partial write prices one: true
+zeroed-synthetic: a flattened whole-node write prices no guard: true
 unit-solve(plain) producer virtual: true
 unit-solve(plain) producer inlined (no array reads survive): true
 unit-solve(plain) producer setter dropped: true

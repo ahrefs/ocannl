@@ -3238,20 +3238,18 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
        [x[1; k]] becomes [K + k], so its [Fixed_idx] no longer meets [fixed_guardable], and a
        flattened producer's symbol binds with no per-axis proof that the read stays inside its loop.
        Their guards are answered as any guard is: by the coverage rule, or for a [coverage_exempt]
-       node by [fallback_defined] (gh-ocannl-1897). What a guard cannot answer for is a binding
-       without one, so a normalized binding that pins one symbol ([normalized]) takes its range
-       guard even with one component: a [Zero_out] satisfies the coverage rule at cells no iteration
-       writes, where the unguarded replay would run the producer outside its loop. *)
+       node by [fallback_defined] (gh-ocannl-1897); a binding without a guard, by
+       [needs_range_guard]. *)
     let same_layout (a : Indexing.axis_index array) (b : Indexing.axis_index array) =
       Array.for_alli a ~f:(fun i lhs ->
           let is_sub = function Indexing.Sub_axis -> true | _ -> false in
           Bool.equal (is_sub lhs) (is_sub b.(i)))
     in
-    let def_args_arr, call_args, normalized =
-      if same_layout def_args_arr call_args then (def_args_arr, call_args, false)
+    let def_args_arr, call_args =
+      if same_layout def_args_arr call_args then (def_args_arr, call_args)
       else
         match Affine.common_layout ~dims:(Lazy.force self.Tn.dims) def_args_arr call_args with
-        | Some (d, c) when same_layout d c -> (d, c, true)
+        | Some (d, c) when same_layout d c -> (d, c)
         | _ -> raise @@ Non_virtual "13:call-site-index-mismatch"
     in
     (* [bound_pos.(i)] marks positions that DEFINE bindings (no consistency guard for them).
@@ -3260,16 +3258,49 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
     let bound_pos = Array.create ~len:n false in
     let env = ref (Map.empty (module Indexing.Symbol)) in
     let range_guards = ref [] in
+    (* gh-ocannl-1953: whether a binding of producer symbol [s] to the call index [idx] takes a
+       range guard. A binding replays the component at the iteration [idx] names, whether or not the
+       producer's loop has one. In a multi-component replay the read ranges over the whole node, so
+       it always may not (the pass-1 comment). With one component, that one iteration is the one
+       writing the read cell only if the read stays inside the loop, and what proves that is the
+       coverage rule -- every cell read is written, and a symbol pinned by its position has no other
+       iteration to write it. The rule says nothing here in two cases: a [Zero_out] satisfies it at
+       cells no iteration writes, where the unguarded replay ran the producer outside its loop
+       ([x[s]] for [s] in 0..1, zeroed, read at [x[t]], gave [t + 1] where the zeros are), and a
+       [coverage_exempt] node skipped it. Both take the guard, which on the exempt node then asks
+       the fallback proof -- unless the read's own range ([call_range]) lies within the loop, where
+       the guard could never be false. That is what keeps a read inside a partial exempt node
+       servable; on a zeroed node the simplifier would fold such a guard against the read's loop
+       anyway. An unknown range is not containment, so a static index takes the guard. *)
+    let needs_range_guard s (idx : Indexing.axis_index) =
+      let within_loop () =
+        match (canon idx, Map.find def_loop_ranges s) with
+        | Some (terms, offset), Some (from_, width) -> (
+            let bounds =
+              List.fold terms
+                ~init:(Some (offset, offset))
+                ~f:(fun acc (c, cs) ->
+                  match (acc, call_range cs) with
+                  | Some (lo, hi), Some (slo, shi) ->
+                      Some (lo + min (c * slo) (c * shi), hi + max (c * slo) (c * shi))
+                  | _ -> None)
+            in
+            match bounds with Some (lo, hi) -> from_ <= lo && hi < from_ + width | None -> false)
+        | _ -> false
+      in
+      set_computation_count > 1 || ((has_zero_init || coverage_exempt) && not (within_loop ()))
+    in
     (* Pass 1: bind the first bare non-static [Iterator] occurrence of each symbol. For Block/Concat
        virtual nodes with multiple Set computations, also emit a range guard: the producer's loop
        covers [lo, lo + width) while the consumer iterates a wider range, so out-of-range consumer
-       iterations must fall back to [Get_local id]. *)
+       iterations must fall back to [Get_local id]. A single component can need one too
+       ([needs_range_guard]). *)
     Array.iteri def_args_arr ~f:(fun i lhs_ind ->
         match lhs_ind with
         | Indexing.Iterator s when (not (Set.mem static_indices s)) && not (Map.mem !env s) ->
             bound_pos.(i) <- true;
             env := Map.add_exn !env ~key:s ~data:call_args.(i);
-            if set_computation_count > 1 || normalized then
+            if needs_range_guard s call_args.(i) then
               range_guards :=
                 (1, Indexing.Fixed_idx 0, call_args.(i), symbol_range s) :: !range_guards
         | _ -> ());
@@ -3294,15 +3325,15 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                symbols name, and the store-time injectivity check (51) makes that iteration the one
                writing the read cell exactly when it lies in the producer's loops. With one term the
                position pins its symbol, so an iteration outside the loop names a cell no iteration
-               writes -- the coverage rule's case, as for a pass-1 binding. With several, the read's
-               symbols need not decompose a cell the way the producer's loops do: [x[2u + v]] for
-               [v] in 0..3 reads cell [2u + 2], which the producer writes as [x[2s + t]] at [(u + 1,
-               0)], not at the [(u, 2)] the binding replays -- a silent miscompute with one
-               component, and with several the range guard below would suppress a cell the component
-               does write (gh-ocannl-1795). So a multi-term match binds only where every call-site
-               symbol's range lies within its producer symbol's loop; otherwise the position is left
-               to unit-coefficient solving, which keeps a producer loop and guards the decomposition
-               that holds. *)
+               writes, which is the question [needs_range_guard] answers, as for a pass-1 binding.
+               With several, the read's symbols need not decompose a cell the way the producer's
+               loops do: [x[2u + v]] for [v] in 0..3 reads cell [2u + 2], which the producer writes
+               as [x[2s + t]] at [(u + 1, 0)], not at the [(u, 2)] the binding replays -- a silent
+               miscompute with one component, and with several the range guard below would suppress
+               a cell the component does write (gh-ocannl-1795). So a multi-term match binds only
+               where every call-site symbol's range lies within its producer symbol's loop;
+               otherwise the position is left to unit-coefficient solving, which keeps a producer
+               loop and guards the decomposition that holds. *)
             let within_producer_bounds () =
               List.for_all pterms ~f:(fun (c, ps) ->
                   match (call_range (call_symbol c), Map.find def_loop_ranges ps) with
@@ -3323,10 +3354,9 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
                   (* As for a pass-1 binding: in a multi-component replay the call-site symbol
                      ranges over the whole node, the producer's over its own loop, so the component
                      replays only where [cs] falls in that loop (Codex review of gh-ocannl-1795's
-                     PR: [x[s + 1]] for [s] in 0..1, read at [x[t + 1]], wrote cell 3 at [t = 2]). A
-                     normalized pair's one-term binding has no per-axis check behind it either; a
-                     contained multi-term match needs no guard, by containment. *)
-                  if set_computation_count > 1 || (normalized && List.length pterms = 1) then
+                     PR: [x[s + 1]] for [s] in 0..1, read at [x[t + 1]], wrote cell 3 at [t = 2]),
+                     and a single component only where nothing proves the read stays in it. *)
+                  if needs_range_guard ps (Indexing.Iterator cs) then
                     range_guards :=
                       (1, Indexing.Fixed_idx 0, Indexing.Iterator cs, symbol_range ps)
                       :: !range_guards);
@@ -3482,10 +3512,10 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
        not reach owns a buffer instead -- so any guard is sound. A node that skipped the rule
        ([coverage_exempt]: declared virtual, or committed by an earlier routine of the lineage) has
        no such proof and no buffer to fall back to, so every guard on it -- equality from a repeated
-       or unsolved symbol, range from a binding of a multi-component node or a unit solve, fixed --
-       needs [fallback_defined]: without it the guard would read, at a cell no write reaches, the
-       [0.] the replay invents ([needs_init]). Checked ahead of the init and after omission, so an
-       omitted component still needs nothing. *)
+       or unsolved symbol, range from a binding or a unit solve, fixed -- needs [fallback_defined]:
+       without it the guard would read, at a cell no write reaches, the [0.] the replay invents
+       ([needs_init]). Checked ahead of the init and after omission, so an omitted component still
+       needs nothing. *)
     if
       coverage_exempt
       && (not (List.is_empty guards && List.is_empty range_guards))
@@ -11031,7 +11061,9 @@ let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indice
          shares. A component whose layout differs is normalized to a common frame (gh-ocannl-1898),
          which can compose those iterators into a multi-term index; with no call-site range a
          multi-term structural match declines into unit solving, the sound direction
-         (gh-ocannl-1896). *)
+         (gh-ocannl-1896). A range guard from an unknown range is no false price: the pipeline below
+         folds it against the reader's static ranges where the write sweeps the coordinate
+         (gh-ocannl-1953). *)
       (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
          ~call_range:(fun _ -> None)
            (* [self] is virtual in [plc] only as the reading priced, so it is not taken for a

@@ -92,6 +92,11 @@ dvu_flat_fixed_row: refused as 157:guard-fallback-unproven: true
 dvu_flat_diagonal: refused as 157:guard-fallback-unproven: true
 dvu_flat_fixed_cell: refused as 157:guard-fallback-unproven: true
 dvu_flat_producer_partial: refused as 157:guard-fallback-unproven: true
+dvu_partial_past_loop: refused as 157:guard-fallback-unproven: true
+dvu_zeroed_past_loop: inlined: true
+dvu_zeroed_past_loop: executed values are the reference: true
+dvu_partial_in_loop: inlined: true
+dvu_partial_in_loop: executed values are the reference: true
 dvu_flat_covered: inlined: true
 dvu_flat_covered: executed values are the reference: true
 dvg_diagonal_uninit: the materialized twin computes the stated values: true

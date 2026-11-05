@@ -248,7 +248,7 @@ files.
   `virtual_rejection_boundary.ml`.
 - **Every guard on a node that skipped the coverage rule needs that proof** (gh-ocannl-1897).
   Equality guards (a repeated symbol `x[i; i]`, an unsolved affine `x[2s]` with its loop kept) and
-  range guards (a unit solve, the bindings of a multi-component node) fall back on the same shared
+  range guards (a unit solve, a binding that needs one) fall back on the same shared
   local. For a node `decide_placements` decides, the coverage rule is the proof: a node read where
   its writes do not reach owns a buffer instead. A node already `Virtual` at routine entry —
   declared, or committed by an earlier routine of the lineage, a recompiled step's own nodes
@@ -290,15 +290,29 @@ files.
   away what a per-axis reading checks — `x[1; k]` becomes `2 + k`, so its `Fixed_idx` never meets
   `fixed_guardable`. Its guards are answered as any guard is: the coverage rule
   (`flattened_read_past_partial`, `flattened_read_written_cells`), or the gh-ocannl-1897 check on a
-  coverage-exempt node (`dvu_flat_*`). A binding without a guard is not, so one pinning one symbol
-  takes a range guard even with one component: a `Zero_out` admits a read past the loop
-  (`flattened_producer_zero_partial`). Still 13: no common frame (a map of another rank, a `Concat`
+  coverage-exempt node (`dvu_flat_*`). A binding without a guard is the
+  next bullet's question. Still 13: no common frame (a map of another rank, a `Concat`
   component). Rows: `flattened_read_*`,
   `flattened_producer_*`, `partial_frame`, `trailing_sub_axis_read` in
   `virtual_rejection_boundary.ml`. Range guards bound a solved symbol by its
   loop's `[from_, from_ + width)`, not `[0, width)` (`block_components_offset_*`), and a
   structural affine match (`s + 1` read at `t + 1`) gets one too in a multi-component replay, as a
   pass-1 binding does (`block_components_structural_*`).
+- **A binding replays the iteration it names, whether or not the producer's loop has it**
+  (gh-ocannl-1953). `needs_range_guard` decides. A multi-component replay always guards. With one
+  component the coverage rule is the proof the read stays in the loop (a symbol pinned by its
+  position has no other iteration to write the cell), but it proves nothing in two cases: a
+  `Zero_out` satisfies it at cells no iteration writes, where the unguarded replay computed the
+  producer's expression over the zeros, and a coverage-exempt node skipped it, where the guard then
+  asks the fallback proof (157). Both guard unless `call_range` shows the read within the loop's
+  `[from_, from_ + width)`, where the guard could never be false: a whole-node zeroed write, the
+  usual reduction, stays guard-free, and so does a read inside a partial one.
+  `instantiate_at_synthetic_read` passes no range, so it builds the guard, and its pipeline folds
+  it against the reader's static ranges where the write sweeps the coordinate (`zeroed-synthetic`).
+  Measured reach when this landed: no existing read in those families or the training and autotune
+  integrations gained a guard when inlined. Rows: `zeroed-*` in `virtual_affine.ml`, `dvu_{partial,zeroed}_*`,
+  `flattened_producer_zero_partial`, `flattened_read_zero_structural` in
+  `virtual_rejection_boundary.ml`.
 - **A multi-term structural match binds pairwise only within the producer's bounds**
   (gh-ocannl-1896): `x[2s + t]` read at `x[2u + v]` replays the producer at `(u, v)`, which —
   the write map being injective (store-time `51`) — is the iteration writing the read cell exactly
