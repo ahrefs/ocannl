@@ -466,6 +466,7 @@ type routine = {
   inputs : Set.M(Tn).t;
   shared_reads : Set.M(Tn).t;
   outputs : Set.M(Tn).t;
+  written_first : Set.M(Tn).t;
   routine_id : int;
   execution_deps : Set.M(Int).t;
   requires : Set.M(Asgns.Fragment).t;
@@ -761,6 +762,12 @@ let finish_link ctx comp wrapped
 
   (* Outputs are all nodes written by the computation *)
   let outputs = backend_outputs in
+  (* Against the backend's raw read set, not [inputs]: an embedded node a routine reads first is
+     state it starts from allocation's zero ([Train.sgd_one]'s momentum), left out of [inputs]
+     because the routine carries that initialization, not because it is written first. *)
+  let written_first =
+    Set.filter (Set.diff outputs backend_inputs) ~f:(fun tn -> not (Ir.Host_inits.mem tn))
+  in
 
   let routine =
     {
@@ -771,6 +778,7 @@ let finish_link ctx comp wrapped
       inputs;
       shared_reads;
       outputs;
+      written_first;
       routine_id = id;
       execution_deps = deps;
       requires = comp.Asgns.requires;
@@ -1473,12 +1481,66 @@ let record_accumulations ledger routine_id gb =
         (Some (Map.update counts routine_id ~f:(fun n -> 1 + Option.value n ~default:0))));
   Hashtbl.set ledger.accumulation_undo ~key:routine_id ~data:!undo
 
+(* A fresh temporary host buffer matching the node's (padded) device buffer. *)
+let host_buffer (tn : Tn.t) =
+  Nd.create_array
+    ~debug:("Context host buffer for " ^ Tn.debug_name tn)
+    (Lazy.force tn.Tn.storage_prec) ~dims:(Lazy.force tn.Tn.dims)
+    ~padding:(Lazy.force tn.Tn.padding)
+
+let debug_fill_fresh_outputs =
+  lazy (Utils.get_global_flag ~default:false ~arg_name:"debug_fill_fresh_outputs")
+
+(* gh-ocannl-1873: the [written_first] nodes of [routine] whose very buffer nothing has written yet
+   start from {!Ir.Ops.debug_fill_value} instead of allocation's zero, so a write the routine should
+   have done and did not -- a zero a transform dropped, a seed reading the node, a cell no writer
+   covers -- shows in its results rather than computing the same values from a fresh zero.
+
+   Asks the ledger's [written_buffers], so a repeated run, a seeded node and a node an earlier
+   routine wrote all keep their values. Goes through [Backend.from_host] rather than {!from_host},
+   because this is no write of a value: the ledger's answer stays [run]'s to give, so a run
+   [rollback_execution] withdraws leaves the buffer unwritten, as gh-ocannl-1339's check asks. The
+   margins of a padded node keep their padding value, which [host_buffer] gives them: writers refill
+   them, and a reader of a margin reads the padding.
+
+   Left out: a liveness-aliased buffer, which [Backend.from_host] refuses and whose bytes are not
+   the node's alone, and a node with no scalar storage. [written_first] has already left out every
+   node with host initialization data, which is what makes a buffer a device-wide literal other
+   roots read ([BI.Constant_key]). *)
+let fill_fresh_outputs ctx routine =
+  let fresh tn =
+    Option.exists (buffer_key routine.context tn) ~f:(fun key ->
+        not (Set.mem ctx.ledger.written_buffers key))
+  in
+  let targets = Set.filter routine.written_first ~f:fresh in
+  if not (Set.is_empty targets) then
+    Backends.query routine.context.wrapped
+      {
+        q =
+          (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) c ->
+            (* As {!from_host}: on a host-visible buffer the upload is a direct memcpy. No queued
+               kernel writes a buffer the ledger calls unwritten, but one may still be reading it,
+               at the allocation zero [Tn.is_zero_valid] declares correct. *)
+            Backend.await c.BI.device;
+            Set.iter targets ~f:(fun tn ->
+                let prec = Lazy.force tn.Tn.storage_prec in
+                match Ir.Ops.debug_fill_value prec with
+                | Some v when not (Backends.buffer_aliased c.BI.ctx_buffers tn) ->
+                    let nd = host_buffer tn in
+                    let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
+                    Nd.set_flat_values ?padding ~cycle:true nd [| v |];
+                    ignore (Backend.from_host c tn nd : bool)
+                | _ -> ());
+            Backend.await c.BI.device);
+      }
+
 let run ?(timing = false) ctx routine =
   check_runnable ctx routine;
   let grad_buffers = Hashtbl.find routine.context.ledger.grad_buffers routine.routine_id in
   (* The autotuner's timing loop dispatches one routine repeatedly by design (and restores the
      lineage's state around its windows, gh-ocannl-1621): its runs count, but are not refused. *)
   if not timing then Option.iter grad_buffers ~f:(check_accumulation_resets ctx routine);
+  if Lazy.force debug_fill_fresh_outputs then fill_fresh_outputs ctx routine;
 
   (* Run the routine's task/schedule *)
   Ir.Task.run routine.task;
@@ -1584,13 +1646,6 @@ let record_external_writes ctx nodes =
    stored on the tensor node, and there is no cache: each call allocates a fresh temporary host
    buffer and performs a device-to-host (or host-to-device) transfer. This is intentionally
    expensive on non-unified-memory backends — callers should batch access rather than poll. *)
-
-(* A fresh temporary host buffer matching the node's (padded) device buffer. *)
-let host_buffer (tn : Tn.t) =
-  Nd.create_array
-    ~debug:("Context host buffer for " ^ Tn.debug_name tn)
-    (Lazy.force tn.Tn.storage_prec) ~dims:(Lazy.force tn.Tn.dims)
-    ~padding:(Lazy.force tn.Tn.padding)
 
 (** Whether [tn] has a device buffer allocated in this context. *)
 let mem ctx (tn : Tn.t) : bool =

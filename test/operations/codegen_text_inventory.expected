@@ -812,6 +812,7 @@ test/operations/fixed_name_temporaries.ml [through Ll_test.execute; through Ll_t
 test/operations/float_literal_forms.ml [through Ll_test.execute; run by @test/operations/runtest-float_literal_forms]
 test/operations/footprint_materialization.ml [through Ll_test.execute; run by @test/operations/runtest-footprint_materialization]
 test/operations/fp_licence_values.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-fp_licence_values]
+test/operations/fresh_output_fill.ml [prelowered compile; through Ll_test.link; run by @test/operations/runtest-fresh_output_fill]
 test/operations/gather_table_placement.ml [through Ll_test.execute; run by @test/operations/runtest-gather_table_placement]
 test/operations/gpu_lane_reduction.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-gpu_lane_reduction]
 test/operations/gpu_packed_prec.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_packed_prec]
@@ -926,6 +927,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-float_literal_forms
 @test/operations/runtest-footprint_materialization
 @test/operations/runtest-fp_licence_values
+@test/operations/runtest-fresh_output_fill
 @test/operations/runtest-gather_table_placement
 @test/operations/runtest-gpu_lane_reduction
 @test/operations/runtest-gpu_packed_prec

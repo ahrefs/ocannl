@@ -2578,8 +2578,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   empty reason or a node the default would not reach. A value the passed context holds is kept,
   so a run-twice leg that runs on the context the first run returned still reads its results. A root's device buffer outlives the context value it came
   from, so a leg that needs a buffer no run has written links in a fresh `Context.auto ()` root. The
-  default stops at `run_linked`: a test that drives `Context.run` itself prefills by hand, and a
-  claim that the prefill differs from the result names its own seed. A node the
+  default stops at `run_linked`, and a claim that the prefill differs from the result names its own
+  seed. A test that drives `Context.run` itself still gets the fill below, which is weaker than a
+  prefill: one value, and only on a first write, so a hand prefill stays right for a test OF a zero
+  transform. A node the
   schedule mints (the partials) has no host handle: run the idempotent routine twice and read the
   second run. A `Local` or shared-memory node cannot be prefilled at all: put its zero after a write
   in the same routine (`zero_out_local_decl`'s hand-built leg). The prefill must reach the
@@ -2591,6 +2593,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `schedule_ops`'s matmul twins both take that seed, so they cannot catch a seed that reads the
   node. Prove the leg with `tools/mutation-run.sh` and a drop-one-zero
   patch; the inventory and its mutants are in lukstafi/ocannl-staging's gh-1625 PR body.
+- `debug_fill_fresh_outputs`, on in `test/config` (gh-ocannl-1873), makes every executed test
+  discriminate against a missing write: `Context.run` starts each `written_first` node whose buffer
+  nothing wrote from `Ir.Ops.debug_fill_value`, NaN or for integer storage a `0xA5` byte pattern. So
+  a red that names a NaN is a finding, not noise: either a write is missing, or the test reads a cell
+  no writer covers and should seed it (`Ll_test.blank`) or stop reading it. Rerun with
+  `OCANNL_DEBUG_FILL_FRESH_OUTPUTS=false` to see it was the fill. A zero dropped AFTER the analysis
+  is what it catches: `written_first` is decided before scheduling, so a schedule or codegen drop
+  leaves the node there, and so does a dropped init of a write that does not read its target (a
+  diagonal, whose off-diagonal cells then read the fill). An accumulation left without its init reads
+  its own target first, which takes the node out of `written_first`, and an embedded node is out of
+  the required inputs too, so that drop is neither filled nor refused. Nor can the key reach what has
+  no host-reachable buffer of its own: a `Local` node, a schedule-minted partial, a liveness-aliased
+  buffer. `fresh_output_fill` pins the contract and holds `test/config` to it; the mutant table is in
+  lukstafi/ocannl-staging's gh-1873 PR body.
 - A test operand minted from a FLATTENED offset stops discriminating at sizes that divide its
   modulus, and does it while still looking right: `(row * stride + col) mod p` collapses to
   `col mod p` whenever `p` divides the row stride, so every row becomes identical. That makes a
@@ -5887,6 +5903,7 @@ box.
   `model_multiprocessors`, `model_peak_flops`, `model_peak_memory_bandwidth`,
   `model_transaction_rate`, `model_workgroup_bytes_per_multiprocessor`.
 - `c_syntax.ml`: `cc_grid_private_bytes_cap`, `schedule_log_declines`.
+- `context.ml`: `debug_fill_fresh_outputs`.
 - `cc_backend.ml`: `cc_backend_arch_flags`, `cc_backend_compiler_command`,
   `cc_backend_probe_cache`, `cc_backend_simd_flags`, `cc_kernel_cache_mib`, `cc_parallel_grid`,
   `cc_pool_core_class`.
