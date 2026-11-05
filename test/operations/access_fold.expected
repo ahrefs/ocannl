@@ -32,6 +32,9 @@ a blended Where with an integer-division arm keeps the wider arm: true
 nested blended selects charge every arm: true
 a scope body inside an arm charges the statement, not the arm: true
 nested alternatives take the wider arm at each level: true
+a Where whose arm re-reads the condition charges the arm that adds more: true
+a short-circuiting Where charges the arm wider after expansion, not before: true
+a blended Where charges the union of its arms' expansions: true
 the setter's own reads and merge-buffer reads are no contributors: true
 a gather charges its index and its table: true
 a projection charges only its rendered operand: true

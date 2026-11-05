@@ -258,6 +258,24 @@ let () =
     (set_eq
        (ev (where_ (at a) (where_ (at b) (add (at c_) (at d_)) (at e_)) (at e_)))
        [ a; b; c_; d_ ]);
+  (* gh-ocannl-1874: an arm is charged by what it adds to the evaluation, not by its own size: the
+     then-arm re-reads the condition's node, so the else-arm is the wider one. *)
+  p "a Where whose arm re-reads the condition charges the arm that adds more"
+    (set_eq (ev (where_ (at a) (at a) (at b))) [ a; b ]);
+  (* gh-ocannl-1874: the arm is chosen after each load is expanded, as the transitive guard expands
+     a virtual dependency into its own fan-in. Here [c_] stands for a virtual node over [b] and [d_]
+     for one over [d_] and [e_]: the then-arm loads more nodes directly (2 to 1) but fewer once
+     expanded (1 to 2), so a short-circuiting select is charged the else-arm. *)
+  let expand acc q =
+    if Tn.equal q c_ then Set.add acc b
+    else if Tn.equal q d_ then Set.add (Set.add acc d_) e_
+    else Set.add acc q
+  in
+  let charge = LL.read_charge ~self:out (where_ (at a) (add (at b) (at c_)) (at d_)) in
+  p "a short-circuiting Where charges the arm wider after expansion, not before"
+    (set_eq (LL.resolve_charge ~blends:false ~expand charge) [ a; d_; e_ ]);
+  p "a blended Where charges the union of its arms' expansions"
+    (set_eq (LL.resolve_charge ~blends:true ~expand charge) [ a; b; d_; e_ ]);
   p "the setter's own reads and merge-buffer reads are no contributors"
     (set_eq (ev (add (at out) (LL.Get_merge_buffer (a, [| fixed 0 |])))) []);
   p "a gather charges its index and its table"

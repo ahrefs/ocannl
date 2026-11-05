@@ -33,6 +33,16 @@ let namer ?known () =
             tok)
     | _ -> "t" ^ Int.to_string tn.Tn.uid
 
+(* A setter's charge: its loads, then each select's arms in braces separated by bars, a speculable
+   select's braces prefixed by a tilde. Destructured exhaustively, like [traced] below. *)
+let rec read_charge ~uids ({ loads; selects } : LL.read_charge) =
+  uids (Set.to_list loads)
+  ^ String.concat
+      (List.map selects ~f:(fun ({ speculable; arms } : LL.select_charge) ->
+           (if speculable then "~{" else "{")
+           ^ String.concat ~sep:"|" (List.map arms ~f:(read_charge ~uids))
+           ^ "}"))
+
 (* Destructured exhaustively, so a field added to the record fails to compile here rather than
    silently escaping the comparison. *)
 let traced ~uids
@@ -59,9 +69,7 @@ let traced ~uids
     zeroed_out read_before_write read_only is_scalar_constexpr is_accessing is_complex
     prefers_virtual_one_hot has_non_one_hot_setter is_range_producer read_by_other
     inline_reduction_extent inline_fanin
-    (String.concat ~sep:";"
-       (List.map setter_reads ~f:(fun { LL.reads_branching; reads_blended } ->
-            uids (Set.to_list reads_branching) ^ "|" ^ uids (Set.to_list reads_blended))))
+    (String.concat ~sep:";" (List.map setter_reads ~f:(read_charge ~uids)))
 
 (* A stored computation: its index tuple's symbols are free in its code, so they are registered
    first, in tuple order, and the tuple renders positionally. *)

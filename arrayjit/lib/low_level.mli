@@ -369,18 +369,58 @@ val write_demand : t -> write_demand
     Scan bodies are entered (gh-ocannl-1134); a scan binder is reported with [axis = None]. Dead
     loops are entered: the walk is structural. *)
 
-val evaluation_reads : blends:bool -> self:Tnode.t -> scalar_t -> Set.M(Tnode).t
+type read_charge = {
+  loads : Set.M(Tnode).t;  (** Contributors loaded whichever way the selects below go. *)
+  selects : select_charge list;  (** The value selects met at this level, program order. *)
+}
+[@@deriving sexp_of]
+(** One evaluation's fan-in contributors with its value selects left unresolved (gh-ocannl-1874):
+    which arm a short-circuiting select is charged depends on what each arm's reads expand to, which
+    only the transitive inline-fanin guard knows, so the arms are kept apart and {!resolve_charge}
+    picks after expansion. The analysis is cached across backends, so the backend's reading of a
+    select (gh-ocannl-1775) is applied at resolution too. *)
+
+and select_charge = {
+  speculable : bool;
+      (** {!speculable_select} admits it: a backend whose [blends_value_selects] fact holds renders
+          it as a blend evaluating every arm. *)
+  arms : read_charge list;  (** One per arm, in order; exactly one runs where it short-circuits. *)
+}
+
+val read_charge : self:Tnode.t -> scalar_t -> read_charge
 (** The one read collector (gh-ocannl-1451): the tensor nodes one evaluation of [llsc], the
     right-hand side of a setter of [self], loads -- the transitive inline-fanin guard's contributors
     (gh-573), shared by [trace_node_facts]' per-setter [setter_reads] and the guard's replay of
     stored computations. [self] and merge-buffer reads are excluded, a gather counts its table,
-    projection-discarded operands are not evaluated, a [Where] charges its wider arm (the first on a
-    tie) -- or, with [blends] (a backend whose [blends_value_selects] fact holds, gh-ocannl-1775),
-    the union of its arms when {!speculable_select} admits it: the blend evaluates both. Admission
-    is judged at the arms' own annotations and ahead of inlining, an over-approximation of the
-    renderer's (which also needs a float compute precision, and on HIP no NaN-literal arm) that errs
-    toward the union only. And [Local_scope] bodies -- hoisted, unconditional -- charge the
-    statement whichever arm they sit in. Dead loops replay nothing; a [Tile_mma] is opaque. *)
+    projection-discarded operands are not evaluated, and a [Where]'s arms are kept apart as a
+    {!select_charge}, with whether {!speculable_select} admits it. Admission is judged at the arms'
+    own annotations and ahead of inlining, an over-approximation of the renderer's (which also needs
+    a float compute precision, and on HIP no NaN-literal arm) that errs toward the union only. And
+    [Local_scope] bodies -- hoisted, unconditional -- charge the statement whichever arm they sit
+    in. Dead loops replay nothing; a [Tile_mma] is opaque. *)
+
+val read_charge_of_proc : self:Tnode.t -> t -> read_charge
+(** {!read_charge} of a statement: one replay of a stored computation of [self]. *)
+
+val resolve_charge :
+  blends:bool ->
+  expand:(Set.M(Tnode).t -> Tnode.t -> Set.M(Tnode).t) ->
+  read_charge ->
+  Set.M(Tnode).t
+(** gh-ocannl-1874: a charge's contributors, each load folded in by [expand] (the transitive guard
+    expands a virtual dependency into its own fan-in; {!evaluation_reads} adds the node itself).
+    With [blends] (the backend's [blends_value_selects] fact, gh-ocannl-1775) an admitted select is
+    charged the union of its arms: the blend evaluates both. Any other select evaluates one arm per
+    visit and is charged one: the arm whose EXPANDED reads, joined with what the evaluation was
+    already charged, are the most, the first on a tie -- choosing on direct loads under-counts an
+    arm whose few loads inline a large virtual computation. A level's loads are charged before its
+    selects. Exact for one select per path; across several, a greedy choice that still charges a
+    path some visit runs. *)
+
+val evaluation_reads : blends:bool -> self:Tnode.t -> scalar_t -> Set.M(Tnode).t
+(** {!resolve_charge} of {!read_charge}, each load charged as itself: a [Where] charges its
+    condition and its wider arm (the first on a tie), or with [blends] the union of its arms when
+    {!speculable_select} admits it. *)
 
 val evaluation_reads_of_proc : blends:bool -> self:Tnode.t -> t -> Set.M(Tnode).t
 (** {!evaluation_reads} of a statement: one replay of a stored computation of [self]. *)
@@ -552,10 +592,10 @@ val speculable_select : cond:scalar_t -> arms:scalar_arg list -> bool
     ({!Ops.ternop_conditionality}, {!Ops.binop_conditionality}) call conditional: their floors stay
     floors, [Affine]'s [a_gated] stays a conservative over-approximation, and [Cost_model]'s upper
     walk, which charges both arms, stays an upper bound (flagged approximate: it reads no backend,
-    and CUDA and Metal still short-circuit). The inline fan-in guard's read collector
-    ({!evaluation_reads}) charges a single arm only where the backend short-circuits: on a backend
-    whose [blends_value_selects] fact holds it charges an admitted select's arms by their union
-    (gh-ocannl-1775). *)
+    and CUDA and Metal still short-circuit). The inline fan-in guard ({!resolve_charge}) charges a
+    single arm, chosen after transitive expansion (gh-ocannl-1874), only where the backend
+    short-circuits: on a backend whose [blends_value_selects] fact holds it charges an admitted
+    select's arms by their union (gh-ocannl-1775). *)
 
 val float_valued : scalar_t -> bool
 (** gh-ocannl-1785: whether the expression, evaluated at an INTEGER compute precision, is
@@ -1209,17 +1249,6 @@ val footprint_namespace : string
 (** gh-ocannl-616: the namespace of the scratch nodes footprint-scoped materialization mints — how a
     test tells them from the program's own nodes in an [optimized] record's traced store. *)
 
-type setter_read_sets = {
-  reads_branching : Set.M(Tnode).t;
-      (** A select charges its wider arm (it short-circuits: CUDA, Metal). *)
-  reads_blended : Set.M(Tnode).t;
-      (** A select {!speculable_select} admits charges the union of its arms (cc, HIP). *)
-}
-[@@deriving sexp_of]
-(** One setter's fan-in contributors under both renderings of a value select (gh-ocannl-1775): the
-    analysis is cached across backends, so it keeps both and the guard picks by the backend's
-    [blends_value_selects] fact. *)
-
 type traced_array = {
   tn : Tnode.t;
   mutable has_assignment : bool;
@@ -1280,12 +1309,12 @@ type traced_array = {
           read-multiplicity metric, same-cell reads count, while a setter's own read-modify-write
           does not. Gates the recompute-cost guard: a node never read in the routine has no inlining
           cost, so it must stay eligible for virtual dead-code elimination. *)
-  mutable setter_reads : setter_read_sets list;
+  mutable setter_reads : read_charge list;
       (** Per setter statement ([Set]/[Set_from_vec]), the tensor nodes its right-hand side reads,
-          under each rendering of a value select ({!setter_read_sets}) — including reads inside
-          [Local_scope] bodies, excluding the node's own read-modify-write self-reads. Analysis fact
-          behind the transitive inline-fanin guard (gh-573), which takes the per-setter maximum (a
-          read of one cell executes one setter's computation). *)
+          its value selects' arms kept apart ({!read_charge}) — including reads inside [Local_scope]
+          bodies, excluding the node's own read-modify-write self-reads. Analysis fact behind the
+          transitive inline-fanin guard (gh-573), which takes the per-setter maximum (a read of one
+          cell executes one setter's computation). *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in [decide_placements] computed for this node under the current
           placements (at least 1); multiplies into the proxy [fa_recompute_cost] (gh-ocannl-637: the
