@@ -8,6 +8,19 @@
 #   tools/test-test-run.sh --keep   # keep the temp dir for inspection
 #   tools/test-test-run.sh --only '^81:'   # only the legs whose names match
 #   tools/test-test-run.sh --only '#lifecycle'   # one named group of legs
+#   tools/test-test-run.sh --subject FILE --only '^99:'   # test FILE, not tools/test-run.sh
+#
+# --subject FILE (or OCANNL_TOOL_HARNESS_SUBJECT=FILE; the option wins) tests
+# FILE in place of tools/test-run.sh (gh-ocannl-1925): the control "this leg
+# fails against the previous script" is `git show REV:tools/test-run.sh >F`
+# and `--subject F`, with no copy of tools/ and scripts/. FILE is copied to
+# tools/test-run.sh of a root under the scratch directory, beside the files it
+# sources (stage_sourced; those come from THIS tree, so a FILE sourcing one the
+# tree lacks is refused, exit 2), and that copy is the subject of every leg:
+# the one each fixture root is given, the one the mutants are cut from and the
+# one run directly. Everything else under test (scripts/process-group.sh, the
+# sourced tools/*.sh, this harness) stays the working tree's. The header of
+# such a run and the line above its footer name FILE: its verdict is FILE's.
 #
 # Each leg's body is a function, run by `harness_leg_run 'N: what it pins
 # #group' leg_N` (scripts/harness-support.sh), its name led by the leg numbers
@@ -18,7 +31,7 @@
 # lifecycle with its signal legs, both fork-window negative controls, and a
 # launch queued before it publishes),
 # #source (59-63, 66), #slot (53-58, 78, 88, 93), #device (75-77, 91), #credentials (79, 90),
-# #bisect (82), #harness (86). A body that cannot go on (an extraction that
+# #bisect (82), #harness (86, 102). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
 # `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
 # which would end the harness and hide every leg after it (gh-ocannl-1374).
@@ -471,10 +484,36 @@
 #      still runs leg 70 to the footer; the same copy with that check spelled
 #      as the `exit 2` it was aborts inside leg 79, and leg 70 never reports
 #      (gh-ocannl-1374).
+# 102 sits last: this harness, run on leg 99 with --subject naming a copy of
+#      the script whose `prepush --list` rule is taken out of proc_table_perl,
+#      exits 1 with exactly the one check that rule answers failed, having
+#      printed the copy's digest; the option outranks the variable, and a
+#      subject that is no file, or no value, is refused (gh-ocannl-1925).
 
 set -u
 
 . "$(cd "$(dirname "$0")/../scripts" && pwd)/harness-support.sh"
+# --subject is this harness's own option: taken out of the words before the
+# shared parser, which knows none of it, reads the rest as its own "$@".
+subject=${OCANNL_TOOL_HARNESS_SUBJECT-} subject_set=0
+harness_argv=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    --subject=*) subject=${1#--subject=} subject_set=1 ;;
+    --subject)
+      [ $# -ge 2 ] || { echo "${0##*/}: --subject needs a file" >&2; exit 2; }
+      subject=$2 subject_set=1
+      shift ;;
+    --only)
+      # Its value is not an option, whatever it looks like.
+      harness_argv+=("$1")
+      [ $# -lt 2 ] || { harness_argv+=("$2"); shift; } ;;
+    *) harness_argv+=("$1") ;;
+  esac
+  shift
+done
+[ "$subject_set" = 0 ] || [ -n "$subject" ] || { echo "${0##*/}: --subject needs a file" >&2; exit 2; }
+set -- ${harness_argv[@]+"${harness_argv[@]}"}
 harness_args "$@"
 
 # Hermetic against the fleet (gh-ocannl-1004): on a fleet box the shipping
@@ -494,12 +533,13 @@ unset DUNE_DIFF_COMMAND
 unset OCANNL_BACKEND
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SRC="$HERE/test-run.sh"
+# The subject as named, until the scratch directory exists to stage it in.
+SRC=${subject:-$HERE/test-run.sh}
 GROUP_SRC="$HERE/../scripts/process-group.sh"
 HOOK_SRC="$HERE/../scripts/setup-ocaml-env.sh"
 JOBS_SRC="$HERE/box-jobs.sh"
 SWEEP_SRC="$HERE/sweep.sh"
-[ -f "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
+[ -f "$SRC" ] && [ -r "$SRC" ] || { echo "no $SRC" >&2; exit 2; }
 [ -f "$GROUP_SRC" ] || { echo "no $GROUP_SRC" >&2; exit 2; }
 [ -f "$HOOK_SRC" ] || { echo "no $HOOK_SRC" >&2; exit 2; }
 [ -f "$JOBS_SRC" ] || { echo "no $JOBS_SRC" >&2; exit 2; }
@@ -548,6 +588,7 @@ have_state=1; [ -n "$(pstate $$)" ] || have_state=0
 have_pgid=1;  [ -n "$(ppgid $$)" ]  || have_pgid=0
 
 echo "testing $SRC and $GROUP_SRC"
+[ -z "$subject" ] || echo "  subject: $SRC in place of $HERE/test-run.sh"
 printf '  digest %s\n' "$( (cksum <"$SRC") 2>/dev/null || echo '?')"
 printf '  group digest %s\n' "$( (cksum <"$GROUP_SRC") 2>/dev/null || echo '?')"
 printf '  state reader: %s; pgid reader: %s\n' \
@@ -575,6 +616,49 @@ inherit_holder="" # leg 67's holder of the inherited lock
 escape_pid="" # leg 24's session-escaped descendant
 escape_release=""
 harness_scratch "test-test-run"
+
+# ---------------------------------------------------------------------------
+# Everything the shipping script SOURCES has to exist in a fixture root, and the
+# list is derived from the script rather than kept here: a `. tools/<new>.sh`
+# added to test-run.sh otherwise makes every leg die at startup, with the
+# real message buried under forty failures (the Ubuntu leg of gh-ocannl-983's
+# first CI round, where the mutation harness hit exactly this). The floor is the
+# other half: a regex that stops matching must fail loudly, not stage nothing.
+# A leg staging a root of its own abandons itself on a failure, as any leg's
+# structural failure does (gh-ocannl-1374): `stage_sourced ROOT ||
+# { harness_abandon "$stage_error"; return; }`. The two roots most of the legs
+# share (repeat_root, life_root) are the exception, staged by stage_shared: the
+# scan is the same for every root, so where it fails no later leg can stage its
+# subject either, and the harness stops there with the reason (exit 2).
+stage_error=
+stage_sourced() { # <fixture root>; 1 with $stage_error saying why
+  local dest=$1 rel staged=0
+  stage_error=
+  while IFS= read -r rel; do
+    mkdir -p "$dest/$(dirname "$rel")" && cp "$HERE/../$rel" "$dest/$rel" ||
+      { stage_error="cannot stage $rel into $dest"; return 1; }
+    staged=$((staged + 1))
+  done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$SRC")
+  [ "$staged" -ge 3 ] ||
+    { stage_error="only $staged sourced file(s) found in $SRC; the scan is broken"; return 1; }
+}
+stage_shared() { # <fixture root most later legs run against>
+  stage_sourced "$1" || { echo "$stage_error" >&2; exit 2; }
+}
+
+# A subject named with --subject is staged once, here, before any leg reads
+# SRC: a root of its own holding it as tools/test-run.sh beside what it
+# sources, because the script works from the parent of the directory it sits
+# in (the legs that run "$SRC" directly) and every fixture root is given a
+# copy of SRC. From here on SRC is that copy, as it is the working tree's
+# script when no subject is named.
+if [ -n "$subject" ]; then
+  mkdir -p "$TMP/subject/tools" && cp "$SRC" "$TMP/subject/tools/test-run.sh" &&
+    chmod +x "$TMP/subject/tools/test-run.sh" ||
+    { echo "cannot stage the subject $subject under $TMP" >&2; exit 2; }
+  SRC=$TMP/subject/tools/test-run.sh
+  stage_shared "$TMP/subject"
+fi
 # Hermetic against the box's devices (gh-ocannl-1108), as
 # tools/test-mutation-run.sh is: the three probes the width cap reads (the dxg
 # bridge, the KFD topology, the NVIDIA control device) name paths that do not
@@ -1215,35 +1299,6 @@ else
 fi
 }
 harness_leg_run '6-8: the sentences stop prints, and a legacy leftover reaped #stop' leg_6_8
-
-# ---------------------------------------------------------------------------
-# Everything the shipping script SOURCES has to exist in a fixture root, and the
-# list is derived from the script rather than kept here: a `. tools/<new>.sh`
-# added to test-run.sh otherwise makes every leg below die at startup, with the
-# real message buried under forty failures (the Ubuntu leg of gh-ocannl-983's
-# first CI round, where the mutation harness hit exactly this). The floor is the
-# other half: a regex that stops matching must fail loudly, not stage nothing.
-# A leg staging a root of its own abandons itself on a failure, as any leg's
-# structural failure does (gh-ocannl-1374): `stage_sourced ROOT ||
-# { harness_abandon "$stage_error"; return; }`. The two roots most of the legs
-# share (repeat_root, life_root) are the exception, staged by stage_shared: the
-# scan is the same for every root, so where it fails no later leg can stage its
-# subject either, and the harness stops there with the reason (exit 2).
-stage_error=
-stage_sourced() { # <fixture root>; 1 with $stage_error saying why
-  local dest=$1 rel staged=0
-  stage_error=
-  while IFS= read -r rel; do
-    mkdir -p "$dest/$(dirname "$rel")" && cp "$HERE/../$rel" "$dest/$rel" ||
-      { stage_error="cannot stage $rel into $dest"; return 1; }
-    staged=$((staged + 1))
-  done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$SRC")
-  [ "$staged" -ge 3 ] ||
-    { stage_error="only $staged sourced file(s) found in $SRC; the scan is broken"; return 1; }
-}
-stage_shared() { # <fixture root most later legs run against>
-  stage_sourced "$1" || { echo "$stage_error" >&2; exit 2; }
-}
 
 # ---------------------------------------------------------------------------
 # Leg 67: a lock its acquirer left behind, held through an inherited descriptor
@@ -8379,18 +8434,19 @@ if [ -z "$sk_all" ]; then
 fi
 if [ -z "$sk_all" ]; then report 0 "$sk_label"; else report 1 "$sk_label" "$sk_all"; fi
 
-# The mutants replace the fixture's copies (bisect's parser is bisect-steps.sh)
+# The mutants replace the fixture's copies (bisect's parser is bisect-steps.sh,
+# read from beside SRC: the tree's, also where a subject is staged)
 # and are put back after each set.
 eq_mutate() { # PERL-0-PROGRAM: sets eq_made to 1 iff both copies were rewritten
   local f n=0
   for f in test-run.sh bisect-steps.sh; do
-    perl -0pe "$1" "$HERE/$f" >"$repeat_root/tools/$f"
-    cmp -s "$HERE/$f" "$repeat_root/tools/$f" || n=$((n + 1))
+    perl -0pe "$1" "${SRC%/*}/$f" >"$repeat_root/tools/$f"
+    cmp -s "${SRC%/*}/$f" "$repeat_root/tools/$f" || n=$((n + 1))
   done
   eq_made=0
   [ "$n" = 2 ] && bash -n "$repeat_root/tools/test-run.sh" && bash -n "$repeat_root/tools/bisect-steps.sh" && eq_made=1
 }
-eq_restore() { cp "$HERE/test-run.sh" "$HERE/bisect-steps.sh" "$repeat_root/tools/"; }
+eq_restore() { cp "$SRC" "${SRC%/*}/bisect-steps.sh" "$repeat_root/tools/"; }
 eq_mutate 's/(--[a-z-]+) \| \1=\*\)(\s*opt_value)/$1)$2/g'
 if [ "$eq_made" != 1 ]; then
   report 1 "$eq_nc_label" "the mutant was not made"
@@ -8556,13 +8612,13 @@ if [ -z "$lo_all" ]; then report 0 "$lo_label"; else report 1 "$lo_label" "$lo_a
 fq_mutate() { # PERL-0-PROGRAM: sets fq_made to 1 iff it rewrote test-run.sh
   local f
   for f in test-run.sh bisect-steps.sh; do
-    perl -0pe "$1" "$HERE/$f" >"$repeat_root/tools/$f"
+    perl -0pe "$1" "${SRC%/*}/$f" >"$repeat_root/tools/$f"
   done
   fq_made=0
-  ! cmp -s "$HERE/test-run.sh" "$repeat_root/tools/test-run.sh" &&
+  ! cmp -s "$SRC" "$repeat_root/tools/test-run.sh" &&
     bash -n "$repeat_root/tools/test-run.sh" && bash -n "$repeat_root/tools/bisect-steps.sh" && fq_made=1
 }
-fq_restore() { cp "$HERE/test-run.sh" "$HERE/bisect-steps.sh" "$repeat_root/tools/"; }
+fq_restore() { cp "$SRC" "${SRC%/*}/bisect-steps.sh" "$repeat_root/tools/"; }
 fq_mutate 's/(opt_flag\(\) \{[^\n]*\n)  case \$1 in --\*=\*\) die [^\n]*\n/$1  :\n/'
 if [ "$fq_made" != 1 ]; then
   report 1 "$fl_nc_label" "the mutant was not made"
@@ -9987,7 +10043,8 @@ self_run() { # tag: the copy under $TMP/self-<tag>, run on legs 79 and 70; sets 
   self_rc=0
   (
     unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_EXPECTED_SKIPS \
-      OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD
+      OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD \
+      OCANNL_TOOL_HARNESS_SUBJECT # the copy tests the script it was staged with
     mkdir -p "$root/tmp"
     TMPDIR=$root/tmp bash "$root/tools/test-test-run.sh" --only '^(79|70):'
   ) >"$root.out" 2>&1 || self_rc=$?
@@ -10027,4 +10084,77 @@ fi
 }
 harness_leg_run '86: a structural failure ends only its own leg #harness' leg_86
 
+# ---------------------------------------------------------------------------
+# Leg 102: --subject tests the named file in place of tools/test-run.sh
+# (gh-ocannl-1925)
+# ---------------------------------------------------------------------------
+# The control every change to the script wants -- "this leg fails against the
+# script without it" -- as one option. The subject here is the script with one
+# rule of proc_table_perl taken out: the line that keeps a queued `prepush
+# --list` (which launches nothing) from reading as a launch in flight. This
+# harness, run on leg 99 against it, must exit 1 with exactly one FAIL, the
+# check that rule answers, and every other check of the leg passed: a subject
+# that reached no fixture root would pass them all, one staged without what it
+# sources would fail them all. The run's header carries the mutant's digest,
+# and its variable names a file that does not exist, which the option
+# outranks. The refusals are the same harness stopped before any leg.
+subj_label="--subject tests the named copy: without the prepush --list rule, leg 99 fails in that one check alone"
+subj_refuse_label="a subject that is no file, or no value, is refused before any leg, by the option and by the variable"
+# The check that rule answers, by the label leg 99 reports it under.
+subj_check=$(sed -n 's/^q_pp_label="\(.*\)"$/\1/p' "$HERE/test-test-run.sh")
+subj_run() { # [NAME=VALUE...] -- [harness argv...]: sets subj_rc, subj_out
+  local envs=()
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done
+  shift
+  subj_rc=0
+  (
+    unset OCANNL_TOOL_HARNESS_STRICT OCANNL_TOOL_HARNESS_EXPECTED_SKIPS \
+      OCANNL_TOOL_HARNESS_NAME OCANNL_TOOL_HARNESS_SKIP_RECORD OCANNL_TOOL_HARNESS_DUNE_SKIP_RECORD \
+      OCANNL_TOOL_HARNESS_SUBJECT
+    mkdir -p "$TMP/subj/tmp"
+    env ${envs[@]+"${envs[@]}"} TMPDIR="$TMP/subj/tmp" bash "$HERE/test-test-run.sh" "$@"
+  ) >"$TMP/subj/out" 2>&1 || subj_rc=$?
+  subj_out=$(cat "$TMP/subj/out")
+}
+leg_102() {
+[ -n "$subj_check" ] || { harness_abandon "no q_pp_label is assigned in $HERE/test-test-run.sh"; return; }
+local mutant=$TMP/subj/mutant.sh absent=$TMP/subj/no-such-script.sh digest fails detail=
+mkdir -p "$TMP/subj"
+awk 'index($0, "next if $w[$i + 1] eq \"prepush\" && grep") { n++; next }
+     { print } END { exit n == 1 ? 0 : 1 }' "$SRC" >"$mutant" && bash -n "$mutant" ||
+  { harness_abandon "the prepush --list rule is not in $SRC exactly once; the mutant is broken"; return; }
+digest=$(cksum <"$mutant")
+subj_run "OCANNL_TOOL_HARNESS_SUBJECT=$absent" -- --subject "$mutant" --only '^99:'
+fails=$(grep '^FAIL  ' <<<"$subj_out")
+if [ "$subj_rc" != 1 ]; then detail="exit $subj_rc (want 1)"
+elif [ "$fails" != "FAIL  $subj_check" ]; then detail="the checks failed are not that one alone"
+elif ! grep -q '^PASS  ' <<<"$subj_out"; then detail="no check passed"
+elif ! grep -qxF "  digest $digest" <<<"$subj_out"; then detail="the header does not carry the mutant's digest $digest"
+elif ! grep -qF "ran 1 leg(s):" <<<"$subj_out"; then detail="the run did not account for its one leg"
+fi
+if [ -z "$detail" ]; then report 0 "$subj_label"; else report 1 "$subj_label" "$detail: $subj_out"; fi
+detail=
+subj_run -- --subject "$absent" --only '^99:'
+{ [ "$subj_rc" = 2 ] && [ "$subj_out" = "no $absent" ]; } ||
+  detail="--subject on a missing file: exit $subj_rc (want 2): $subj_out"
+if [ -z "$detail" ]; then
+  subj_run "OCANNL_TOOL_HARNESS_SUBJECT=$absent" -- --only '^99:'
+  { [ "$subj_rc" = 2 ] && [ "$subj_out" = "no $absent" ]; } ||
+    detail="the variable on a missing file: exit $subj_rc (want 2): $subj_out"
+fi
+if [ -z "$detail" ]; then
+  subj_run -- --only '^99:' --subject
+  { [ "$subj_rc" = 2 ] && [ "$subj_out" = "test-test-run.sh: --subject needs a file" ]; } ||
+    detail="--subject with no value: exit $subj_rc (want 2): $subj_out"
+fi
+if [ -z "$detail" ]; then
+  subj_run "OCANNL_TOOL_HARNESS_SUBJECT=$mutant" -- --subject= --only '^99:'
+  { [ "$subj_rc" = 2 ] && [ "$subj_out" = "test-test-run.sh: --subject needs a file" ]; } ||
+    detail="--subject= with an empty value: exit $subj_rc (want 2): $subj_out"
+fi
+if [ -z "$detail" ]; then report 0 "$subj_refuse_label"; else report 1 "$subj_refuse_label" "$detail"; fi
+}
+harness_leg_run '102: --subject tests the named copy in place of the script #harness' leg_102
+
+[ -z "$subject" ] || echo "the subject of this run was $subject, not $HERE/test-run.sh"
 finish
