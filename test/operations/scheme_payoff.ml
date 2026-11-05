@@ -236,14 +236,17 @@ let stack_build s n =
   Tensor.For_testing.set_op_shape_schemes (Some `Off);
   Tensor.unsafe_reinitialize ();
   Tensor.Scheme.reset_registration_counts ();
-  let started = Mtime_clock.counter () in
+  let started = ref (Mtime_clock.counter ()) in
   let dims, { Gc_witness.words; drained = _ } =
-    Gc_witness.drained_finalisers (fun () -> closed_dims (s.model n (s.args ())))
+    Gc_witness.drained_finalisers (fun () ->
+        (* Inside the window: the collection that opens it is not the build's. *)
+        started := Mtime_clock.counter ();
+        closed_dims (s.model n (s.args ())))
   in
   {
     t_counts = Tensor.Scheme.registration_counts ();
     t_words = words;
-    t_s = seconds started;
+    t_s = seconds !started;
     t_dims = dims;
   }
 
@@ -535,8 +538,8 @@ let () =
       (* gh-ocannl-1904: a solution visits the entries it can change, not the whole environment. Per
          depth doubling, the indexed substitution's work doubles and the inference's allocation
          stays well below the whole environment's growth, which the control shows near 4x. The
-         allocation's ratio stays above 2 in deep stacks through tensor construction, whose per-op
-         parameter sets grow with depth in every mode. *)
+         allocation's ratio stays above 2 in deep stacks in every mode, schemes off included, and a
+         profile points at tensor construction's per-op set unions. *)
       let scaled w n whole_env = List.Assoc.find_exn scaling (w, n, whole_env) ~equal:Poly.equal in
       let doublings =
         List.concat_map scaling_cells ~f:(fun (w, ns) ->
@@ -578,11 +581,10 @@ let () =
       (* gh-ocannl-1891: a trace leaves every dimension unsolved, so its end validation repeats each
          inequality over the whole bounds graph, and nothing about the body's shapes is known while
          it runs. What holds a whole-stack trace to its depth is the cost of one build of the same
-         model: the solver's work counters double, and the trace stays a fraction of the build.
-         Neither alone says so: the build's own allocation grows above 2x per doubling, through the
-         per-op parameter sets of tensor construction in every stack, and through the row bounds'
-         transitive closure in [resnet], whose build grows 2.9x-3.6x -- which is why [resnet] has no
-         allocation band of its own. *)
+         model: the solver's work counters double, and the trace stays a fraction of the build, a
+         fraction that rises slowly with depth. Neither alone says so: the build's own allocation
+         grows above 2x per doubling, and in [resnet] 2.9x-3.6x through the row bounds' transitive
+         closure, which is why [resnet] has no allocation band of its own. *)
       let stack_doublings =
         List.concat_map stacks ~f:(fun s ->
             List.map

@@ -394,13 +394,26 @@ files.
   re-solved by every tie solve. Count before claiming a solver win: `registration_counts` splits the store by
   source, and `closure_constraints` is the store at closure. Error locality is the payoff that
   holds (`scheme_error_locality` is the catalogue).
-- Where `off` inference time goes (gh-ocannl-1802): profile before blaming the rank-cycle search.
-  `Row.add_rank_edge` searches only the levels between the new edge's endpoints
-  (`global_rank_levels`, checkpointed with the edges; `Row.with_unbounded_rank_search` is the old
-  walk, for tests), and its work is `registration_counts.rank_search_visits`, still about 4x per
-  depth doubling. With substitution indexed (gh-ocannl-1904) it is the superlinear term left, the
-  bulk of a `sample` profile from depth 64. Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic
-  proxy when the box is noisy.
+- Where inference time goes: profile before blaming a term, per trace kind. `scheme_payoff`'s
+  `tracing` column is per-block traces; a trace of a whole body is `--stacks`, a window of its own
+  (gh-ocannl-1891). The rank-cycle check is `Row.add_rank_edge` over `global_rank_potentials`,
+  checkpointed with the edges: `p v >= p w + k` on every edge is a proof no cycle is positive, so an
+  edge that satisfies it needs no search, and one that breaks it lowers what must move, Dijkstra-style
+  over reduced costs. The work is `registration_counts.rank_search_visits`, which doubles per depth
+  doubling (before this it was the largest solver term left: 4x visits, 18.3 s of 42.9 s at decoder
+  depth 64). `Row.with_unbounded_rank_search` is the old walk, and compares verdicts edge by edge.
+  `solve_dim_ineq`'s `cyclic` was the exponential one: unsized dims stay `Bounds_dim`, so a trace's
+  end validation re-fed each inequality over a graph that residual connections fill with diamonds.
+  It keeps a visited set, a recorded edge skips it (a merge re-emits bounds as inequalities, so every
+  edge that adds a path is still checked), `Row.with_unmemoized_cycle_search` is the old walk, and
+  `dim_cycle_visits` still grows 4x with a small constant. What is left past depth 16 is not the
+  solver's: tensor construction's set unions (schemes off too), each closure's trace checkpointing
+  the session's open frontier (quadratic in closures, 11.7 s of 43.9 s tracing at decoder depth 128),
+  and in conv stacks `s_row_one_in_entry` re-emitting whole bound lists per solution, which
+  materializes the transitive closure (`off` 67 s at resnet depth 64). Identical emissions are most
+  of the volume, but collapsing them leaves the growth: the distinct pairs are the cost. Allocation
+  (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy. A
+  `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` run of `scheme_payoff` takes about 13 minutes.
 - Substitution is indexed (gh-ocannl-1904): a solution visits the entries mentioning its variable
   and, for a dimension solution, the pending ones (`environment`'s doc comment), not the whole
   environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on
