@@ -353,9 +353,11 @@ let node_ident ~(facts : Ir.Backend_intf.backend_facts) label =
 (* An identifier spelled with a number a compile mints afresh: a loop symbol ([i<digits>],
    [Indexing.symbol_ident]), a node identifier spelling its id ([n<digits>], optionally followed by
    [_<label>]: [Tnode.styled_ident] for an unlabeled node or one whose label repeats in the kernel),
-   or a scope-local scalar spelling its scope id ([v<digits>_<ident>]). A type or builtin whose name
-   ends in a digit ([uint3], [float4], [__half2]) is none of these shapes and stays as written. *)
-let is_minted_ident ~(facts : Ir.Backend_intf.backend_facts) ident =
+   or a scope-local scalar spelling its scope id ([v<digits>_<ident>]), or a pool-chunked [Grid]
+   loop's chunk index and bounds, which derive from its loop symbol
+   ([Ir.C_syntax.grid_chunk_derivations], gh-ocannl-1877). A type or builtin whose name ends in a
+   digit ([uint3], [float4], [__half2]) is none of these shapes and stays as written. *)
+let rec is_minted_ident ~(facts : Ir.Backend_intf.backend_facts) ident =
   let numbered ~prefix =
     match String.chop_prefix ident ~prefix with
     | None -> None
@@ -366,6 +368,14 @@ let is_minted_ident ~(facts : Ir.Backend_intf.backend_facts) ident =
   (match numbered ~prefix:"i" with
     | Some rest -> String.for_all rest ~f:Char.is_digit
     | None -> false)
+  || (let chunk, lo, hi = Ir.C_syntax.grid_chunk_derivations in
+      List.exists [ chunk; lo; hi ] ~f:(fun (prefix, suffix) ->
+          match Option.bind (String.chop_prefix ident ~prefix) ~f:(String.chop_suffix ~suffix) with
+          | Some base ->
+              String.is_prefix base ~prefix:"i"
+              && (not (String.equal base ident))
+              && is_minted_ident ~facts base
+          | None -> false))
   || Option.is_some (numbered ~prefix:"n")
   (* A node identifier behind a GPU dialect's prefix ([t_n12_x], gh-ocannl-1338). *)
   || (match !backend with
@@ -376,12 +386,12 @@ let is_minted_ident ~(facts : Ir.Backend_intf.backend_facts) ident =
 (** [normalize_minted ~facts text] is a generated source with every identifier a compile spells with
     a freshly minted number -- loop symbols [i<digits>], node identifiers [n<digits>[_<label>]]
     (behind the backend's {!node_ident} prefix where it has one), scope-local scalars
-    [v<digits>_<ident>] -- renamed [@0], [@1], ... by first appearance, and every run of whitespace
-    collapsed to one space (a longer identifier moves the pretty-printer's line breaks). Two
-    compiles of one program differ in nothing else -- not even across fresh builds of it, which mint
-    new node ids (gh-ocannl-1473) -- so their normalized sources are equal, and a difference left is
-    one in the code. Number literals are copied whole, so a hex float's letters are not read as an
-    identifier. *)
+    [v<digits>_<ident>], a pool-chunked loop's [i<digits>_chunk] and bounds -- renamed [@0], [@1],
+    ... by first appearance, and every run of whitespace collapsed to one space (a longer identifier
+    moves the pretty-printer's line breaks). Two compiles of one program differ in nothing else --
+    not even across fresh builds of it, which mint new node ids (gh-ocannl-1473) -- so their
+    normalized sources are equal, and a difference left is one in the code. Number literals are
+    copied whole, so a hex float's letters are not read as an identifier. *)
 let normalize_minted ~facts text =
   let names = Hashtbl.create (module String) in
   let out = Buffer.create (String.length text) in

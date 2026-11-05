@@ -168,6 +168,7 @@ test/operations/fission_schedule.ml [run by @test/operations/runtest-fission_sch
 test/operations/fixed_name_temporaries.ml [run by @test/operations/runtest-fixed_name_temporaries-logged, @test/operations/runtest-fixed_name_temporaries-plain]
     "{ /* Vectorized reduction rendering:"
     "{ /* Vectorized rendering:"
+test/operations/flip_order_minting.ml [run by @test/operations/runtest-flip_order_minting]
 test/operations/float_literal_forms.ml [run by @test/operations/runtest-float_literal_forms]
     "(float)(" ^ ... ^ ")"
 test/operations/fresh_build_kernel_text.ml [run by @test/operations/runtest-fresh_build_kernel_text; also pins text this scan cannot name: untraced callback]
@@ -222,9 +223,10 @@ test/operations/hardware_workgroup_reduce.ml [run by @test/operations/runtest-ha
     "__syncthreads()"
     "threadgroup float " ^ ... ^ "[64]"
     "threadgroup_barrier"
-test/operations/heap_local_arrays.ml [run by @test/operations/runtest-heap_local_arrays, @test/operations/runtest-heap_local_arrays-outlined; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component]
+test/operations/heap_local_arrays.ml [run by @test/operations/runtest-heap_local_arrays, @test/operations/runtest-heap_local_arrays-outlined; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, rebound parameter]
     "Pool-backed Grid rendering"
     "hla_fs_named"
+    ... ^ "_second"
     sprintf "free(%s);"
 test/operations/integer_power_domain.ml [run by @test/operations/runtest-integer_power_domain]
     ")["
@@ -650,6 +652,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-fission_schedule
 @test/operations/runtest-fixed_name_temporaries-logged
 @test/operations/runtest-fixed_name_temporaries-plain
+@test/operations/runtest-flip_order_minting
 @test/operations/runtest-float_literal_forms
 @test/operations/runtest-fresh_build_kernel_text
 @test/operations/runtest-gpu_lane_reduction

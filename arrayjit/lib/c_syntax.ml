@@ -5382,6 +5382,12 @@ module C_syntax (B : C_syntax_config) = struct
     let mentions_comp = Indexing.axis_index_mentions_symbol sym in
     let loop_ident = Indexing.symbol_ident sym in
     let locals : grid_local_info Hashtbl.M(Int).t = Hashtbl.create (module Int) in
+    (* The locals in the order the body first accesses them, latest first. They are judged in that
+       order, and the privatized ones returned in it: the chunk's declarations, which of two
+       equal-sized tiles keeps the stack ({!heap_locals}) and the first refusal are then the
+       program's, where the table's order follows the nodes' uids, hence how many nodes the session
+       minted before (gh-ocannl-1877). *)
+    let locals_rev = ref [] in
     (* Keyed by the full scope id -- node and integer, the identity the rendered C name carries. *)
     let declared_scopes = Hash_set.create (module Low_level.Scope_id) in
     let ok = ref true in
@@ -5391,7 +5397,9 @@ module C_syntax (B : C_syntax_config) = struct
       if (is_local ctx) tn then (
         let info =
           Hashtbl.find_or_add locals tn.Tn.uid ~default:(fun () ->
-              { gl_tn = tn; gl_written = false; gl_accs = []; gl_count = 0 })
+              let info = { gl_tn = tn; gl_written = false; gl_accs = []; gl_count = 0 } in
+              locals_rev := info :: !locals_rev;
+              info)
         in
         info.gl_count <- info.gl_count + 1;
         info.gl_written <- info.gl_written || write;
@@ -5420,7 +5428,7 @@ module C_syntax (B : C_syntax_config) = struct
       let dup = Affine.Loop_ranges.mem env in
       (* Stops at the first local no rule admits, which records why in [failed]. *)
       let (_all_admitted : bool) =
-        Hashtbl.for_all locals ~f:(fun info ->
+        List.for_all (List.rev !locals_rev) ~f:(fun info ->
             (* The legacy procedural shared rule (every access mentions [sym] and all accesses agree
                on every mentioning component), kept for [legality_crosscheck]. *)
             let procedural_shared_ok () =
@@ -5526,7 +5534,7 @@ module C_syntax (B : C_syntax_config) = struct
       | Some why -> Error why
       | None when !private_bytes > cap ->
           Error (Grid_private_over_cap { private_bytes = !private_bytes; cap })
-      | None -> Ok (!privatized, !ptr_aliased, !private_bytes)
+      | None -> Ok (List.rev !privatized, !ptr_aliased, !private_bytes)
 
   (* The outermost [Grid] loops safe to render in parallel, with each loop's privatized locals and
      (under [`Dispatch]) the pointer-aliased function-scope locals. Nested [Grid] loops render

@@ -215,3 +215,74 @@ let () =
   grid_leg ~what:"at the budget" ~name:"hla_gr_at" ~n ~heap:false;
   grid_leg ~what:"one element over the budget" ~name:"hla_gr_over" ~n:(n + 1) ~heap:true;
   grid_leg ~what:"12 MiB" ~name:"hla_gr_big" ~n:big_elems ~heap:true
+
+(* gh-ocannl-1877: which of a chunk's tiles keeps the stack is the program's choice, not the node
+   uids'. Two equal-sized tiles, each within the chunk's budget and together over it, so the budget
+   takes one: the one the chunk touches first, declared first. The renderer collected a loop's
+   locals in a table keyed by uid and privatized them in the table's order, so the unrelated nodes
+   minted before the routine -- [mint] of them here -- decided the order of the declarations and
+   which tile went to the heap. The tile touched second is created first, so creation order is not
+   the program's either. *)
+let pair_leg ~mint =
+  for _ = 1 to mint do
+    ignore (mk "unrelated" : Tn.t)
+  done;
+  let name = Printf.sprintf "hla_gr_pair%d" mint in
+  let n = floats (Ir.C_syntax.chunk_stack_locals_bytes * 3 / 4) in
+  let second = scratch (name ^ "_second") n in
+  let first = scratch (name ^ "_first") n in
+  let out = mk ~dims:[| grid_extent; n |] (name ^ "_out") in
+  let lead = mk ~dims:[| grid_extent |] (name ^ "_lead") in
+  materialize out;
+  materialize lead;
+  let g = sym () and x1 = sym () and x2 = sym () and y = sym () and z = sym () in
+  let llc =
+    seq
+      (loop_n z grid_extent (set lead [| iter z |] (tick z)))
+      (loop_n ~axis:LL.Grid g grid_extent
+         (seq
+            (loop_n x1 n (set first [| iter x1 |] (tag g x1)))
+            (seq
+               (loop_n x2 n (set second [| iter x2 |] (add (c 100.) (tag g x2))))
+               (loop_n y n
+                  (set out
+                     [| iter g; iter y |]
+                     (add (get first [| rev ~n y |]) (get second [| rev ~n y |])))))))
+  in
+  let want =
+    Array.init (grid_extent * n) ~f:(fun cell ->
+        let g = cell / n and x = cell % n in
+        Float.of_int (100 + (2 * (1 + (10 * g) + (n - 1 - x)))))
+  in
+  let src, got, want = run_leg ~name (optimize ~materialized:[ out ] ~name llc, out, want) in
+  (* The renderer's table, replayed: keyed by uid, filled in access order. *)
+  let table_first_ahead =
+    let table = Hashtbl.create (module Int) in
+    Hashtbl.set table ~key:first.Tn.uid ~data:();
+    Hashtbl.set table ~key:second.Tn.uid ~data:();
+    List.hd_exn (Hashtbl.keys table) = first.Tn.uid
+  in
+  let line ident = List.map (declarations src ~ident) ~f:(fun a -> a.Generated.line) in
+  ( table_first_ahead,
+    on_stack src ~scope:`Block ~ident:(name ^ "_first") ~n
+    && on_heap src ~scope:`Block ~ident:(name ^ "_second") ~n,
+    (match (line (name ^ "_first"), line (name ^ "_second")) with
+    | [ l1 ], [ l2 ] -> l1 < l2
+    | _ -> false),
+    Array.equal Float.equal got want )
+
+let () =
+  let builds = List.map [ 0; 1; 2; 3; 4; 5 ] ~f:(fun mint -> pair_leg ~mint) in
+  (* Without both orders, a table-ordered choice would pass too. *)
+  p
+    "Grid chunk, two tiles over the budget together: control: a table keyed by their uids has the \
+     first-touched tile ahead in one build and behind in another"
+    (List.exists builds ~f:(fun (ahead, _, _, _) -> ahead)
+    && List.exists builds ~f:(fun (ahead, _, _, _) -> not ahead));
+  p_all
+    "Grid chunk, two tiles over the budget together: the first-touched keeps the stack, the other \
+     takes the heap, whatever was minted before"
+    builds ~f:(fun (_, placed, _, _) -> placed);
+  p_all "Grid chunk, two tiles over the budget together: declared in the order touched" builds
+    ~f:(fun (_, _, ordered, _) -> ordered);
+  p_all "Grid chunk, two tiles over the budget together: values" builds ~f:(fun (_, _, _, v) -> v)
