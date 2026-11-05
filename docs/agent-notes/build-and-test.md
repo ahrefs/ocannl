@@ -1368,6 +1368,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   and signalled only while it still carries that token.
   Leg 67 pins it with a lock whose acquirer exited, on Linux and macOS. Its negative control
   (Linux) is a census that goes by the pids `/proc/locks` names.
+- **A start token has one Perl renderer, and every rendering is pinned to it** (gh-ocannl-1944).
+  Tokens are compared as strings across writers — `ptoken`/`gtoken` from the supervisor's Perl,
+  the shell's re-checks through `ps_token`, a launch chain's from `proc_table_perl`'s bulk table —
+  so one rendering that differs (a missed trim, an unpinned time zone) makes a live run read as
+  dead. `census_token` is the one Perl renderer of a pid's token (the supervisor calls it on
+  `$$`); the bulk joins stay bulk, one `ps` for the whole table. Leg 101 of
+  `tools/test-test-run.sh` reads the three from the script under test and requires one string for
+  the harness shell and each of its ancestors, tells a changed `ps_token` and a changed bulk join
+  apart (its negative controls), and counts the lines that read a start time: a new renderer
+  fails it until it is pinned there. `lock_census`'s own bulk join is self-checking (a pid is
+  paired only while `census_same` holds on the joined token). `tools/per-test-cap.sh` renders
+  its own tokens, compared only against itself.
 - **A cancelled run settles inside the fleet wrappers' 10 s grace** (gh-ocannl-1808).
   `fleet-worker.sh execution slot` and `bg-run.sh stop` send KILL 10 s after their TERM, so a
   supervisor that spent 5 s reaping and then up to 30 s in the slowest-actions reader was KILLed
