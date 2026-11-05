@@ -313,10 +313,15 @@
 #      order (a root alias, a NAME holding `slow-`, a `train-` directory kept),
 #      its slow- and train- members left off and the slow- ones named; run
 #      options pass through; --list prints the list and runs nothing (and exits
-#      3, still printing, on INCOMPLETE); usage errors run nothing and ask no
-#      affected; an affected failure, CROSS-CUTTING (either form), INCOMPLETE,
-#      and a line of no known family run nothing; a list with no runtest-
-#      member runs nothing, exit 0; no scratch list outlives any of them.
+#      3, still printing, on an incomplete list); usage errors run nothing and
+#      ask no affected; an affected failure, a cross-cutting verdict (either
+#      form), an incomplete one, and a line of no known family run nothing; a
+#      list with no runtest- member runs nothing, exit 0; no scratch list
+#      outlives any of them. The verdict is affected's trailer, the last line
+#      of its stderr (gh-ocannl-1921), each of the four pinned: its prose alone
+#      decides nothing either way, and a stderr with no trailer, two, one that
+#      is not last, an unknown one, or one at odds with the exit status runs
+#      nothing; a mutant reading the prose instead turns those probes red.
 #  99. `wait last` and `status last` follow a launch still in flight
 #      (gh-ocannl-1830): one queued behind a wrapper that waits before it runs
 #      this script (the fleet slot's `--wait-window`, stood in for) is `queued:`
@@ -8614,7 +8619,8 @@ harness_leg_run '96: a flag refuses a value; a query refuses an option-shaped ru
 # case that runs nothing.
 leg_98() {
 pp_label="prepush: affected's list without slow-/train- reaches dune as run's; --list prints it"
-pp_refuse_label="prepush: usage errors, CROSS-CUTTING, INCOMPLETE and an unknown line run nothing"
+pp_refuse_label="prepush: usage errors, a cross-cutting or incomplete verdict and an unknown line run nothing"
+pp_verdict_label="prepush: the verdict is affected's trailer, not its prose; without one nothing runs"
 pp_stub=$repeat_root/tools/affected-tests.sh
 if [ -e "$pp_stub" ]; then
   harness_abandon "the fixture root already has $pp_stub: it is no stand-in of this leg's"; return
@@ -8634,12 +8640,17 @@ pp_left() { find "$pp_tmp" -name 'test-run-prepush.*' -prune -print; }
 # directory named `train-...`. Left off: slow- and train- members.
 printf '%s\n' '@a/runtest-x' '@a/slow-y' '@b/train-z' '@@runtest-root' '@a/runtest-slow-ish' \
   '@train-dir/runtest-q' '@test/training/slow-w' >"$pp_out"
-printf 'affected: 7 alias(es) from 2 changed path(s)\n' >"$pp_err"
-pp_probe() { # tag rc argv...: prepush against the stand-in's list
-  local tag=$1 rc=$2
+printf '%s\n' 'affected: 7 alias(es) from 2 changed path(s)' 'affected: verdict=ok' >"$pp_err"
+# The same list as affected ends it when a changed path is UNMAPPED (exit 3).
+pp_inc_err=$TMP/prepush-affected-incomplete.err
+printf '%s\n' 'affected: 7 alias(es) from 2 changed path(s); INCOMPLETE, see UNMAPPED above' \
+  'affected: verdict=incomplete' >"$pp_inc_err"
+pp_probe() { # tag rc argv...: prepush against the stand-in's list, its stderr the exit status's
+  local tag=$1 rc=$2 err=$pp_err
   shift 2
+  [ "$rc" != 3 ] || err=$pp_inc_err
   : >"$TMP/$tag.affected"
-  PP_AFFECTED_CALLS=$TMP/$tag.affected PP_AFFECTED_OUT=$pp_out PP_AFFECTED_ERR=$pp_err PP_AFFECTED_RC=$rc \
+  PP_AFFECTED_CALLS=$TMP/$tag.affected PP_AFFECTED_OUT=$pp_out PP_AFFECTED_ERR=$err PP_AFFECTED_RC=$rc \
     TMPDIR=$pp_tmp argv_probe "$tag" prepush "$@"
   pp_asked=$(cat "$TMP/$tag.affected")
 }
@@ -8703,7 +8714,7 @@ done
 # CROSS-CUTTING refuses both forms; a line of no known family refuses the list;
 # a list with no runtest- member runs nothing, green.
 pp_cc_err=$TMP/prepush-affected-cc.err
-printf 'affected: CROSS-CUTTING: 9 of the 10 per-test aliases rank first\n' >"$pp_cc_err"
+printf '%s\n' 'affected: CROSS-CUTTING: 9 of the 10 per-test aliases rank first' 'affected: verdict=cross-cutting' >"$pp_cc_err"
 for probe in "cc|$pp_out|$pp_cc_err|--since base|2|is CROSS-CUTTING" \
              "cc-list|$pp_out|$pp_cc_err|--since base --list|2|is CROSS-CUTTING" \
              "aggregate|$TMP/prepush-aggregate.out|$pp_err|--since base|2|no per-test alias of runtest, slow or train: '@x/scans'" \
@@ -8722,6 +8733,73 @@ for probe in "cc|$pp_out|$pp_cc_err|--since base|2|is CROSS-CUTTING" \
     pp_detail="$tag: exit $argv_rc (want $want_rc); dune calls: ${argv_calls:-<none>}; out: $argv_out; stderr: $argv_err"
 done
 if [ -z "$pp_detail" ]; then report 0 "$pp_refuse_label"; else report 1 "$pp_refuse_label" "$pp_detail"; fi
+
+# The verdict is the trailer (gh-ocannl-1921): `STDERR LINES ('~' between
+# them)|affected's exit|prepush's exit|what its stderr says`, exit 0 a run of
+# the four kept aliases. The prose decides nothing: CROSS-CUTTING or INCOMPLETE
+# prose over an `ok` trailer runs, a cross-cutting trailer with no prose does
+# not. No trailer, two, one that is not the last line, an unknown one, and one
+# at odds with the exit status (incomplete is exit 3, and only it) run nothing.
+pp_verdict_cases=(
+  "affected: verdict=ok|0|0|4 of the 7 alias(es)"
+  "affected: CROSS-CUTTING: 9 of the 10 per-test aliases rank first~affected: 7 alias(es); INCOMPLETE, see UNMAPPED above~affected: verdict=ok|0|0|4 of the 7 alias(es)"
+  "affected: verdict=cross-cutting|0|2|is CROSS-CUTTING"
+  "affected: verdict=incomplete|3|3|the list is INCOMPLETE"
+  "affected: verdict=cross-cutting,incomplete|3|2|is CROSS-CUTTING"
+  "affected: CROSS-CUTTING: 9 of the 10 per-test aliases rank first|0|2|printed no verdict trailer"
+  "affected: 7 alias(es) from 2 changed path(s)|0|2|printed no verdict trailer"
+  "affected: 7 alias(es); INCOMPLETE, see UNMAPPED above|3|2|printed no verdict trailer"
+  "|0|2|printed no verdict trailer"
+  "affected: verdict=ok~affected: a later line|0|2|printed no verdict trailer"
+  "affected: verdict=ok~affected: verdict=ok|0|2|printed no verdict trailer"
+  "affected: verdict=cross-cutting~affected: verdict=ok|0|2|printed no verdict trailer"
+  " affected: verdict=ok|0|2|printed no verdict trailer"
+  "affected: verdict=|0|2|a verdict this runner does not know: ''"
+  "affected: verdict=fine|0|2|a verdict this runner does not know: 'fine'"
+  "affected: verdict=OK|0|2|a verdict this runner does not know: 'OK'"
+  "affected: verdict=incomplete,cross-cutting|3|2|a verdict this runner does not know: 'incomplete,cross-cutting'"
+  "affected: verdict=ok|3|2|exited 3 with the verdict 'ok'"
+  "affected: verdict=cross-cutting|3|2|exited 3 with the verdict 'cross-cutting'"
+  "affected: verdict=incomplete|0|2|exited 0 with the verdict 'incomplete'"
+  "affected: verdict=cross-cutting,incomplete|0|2|exited 0 with the verdict 'cross-cutting,incomplete'"
+)
+pp_verdict_check() { # CASE -> $pp_detail, empty when prepush answers it as written
+  local lines rc want_rc want pp_kept
+  pp_kept='build @a/runtest-x @@runtest-root @a/runtest-slow-ish @train-dir/runtest-q'
+  pp_detail=
+  IFS='|' read -r lines rc want_rc want <<<"$1"
+  printf '%s' "$lines" | tr '~' '\n' >"$TMP/prepush-verdict.err"
+  [ -z "$lines" ] || echo >>"$TMP/prepush-verdict.err"
+  PP_AFFECTED_OUT=$pp_out PP_AFFECTED_ERR=$TMP/prepush-verdict.err PP_AFFECTED_RC=$rc \
+    PP_AFFECTED_CALLS=$TMP/pp-verdict.affected TMPDIR=$pp_tmp argv_probe pp-verdict prepush --since base
+  { [ "$argv_rc" = "$want_rc" ] && grep -qF -- "$want" <<<"$argv_err" && [ -z "$(pp_left)" ] &&
+    { if [ "$want_rc" = 0 ]; then [ "$argv_calls" = "$pp_kept" ]; else [ -z "$argv_calls" ]; fi; }; } ||
+    pp_detail="affected's stderr [$lines], exit $rc: exit $argv_rc (want $want_rc, saying '$want'); dune calls: ${argv_calls:-<none>}; stderr: $argv_err"
+}
+for probe in "${pp_verdict_cases[@]}"; do
+  pp_verdict_check "$probe"
+  [ -z "$pp_detail" ] || break
+done
+if [ -z "$pp_detail" ]; then report 0 "$pp_verdict_label"; else report 1 "$pp_verdict_label" "$pp_detail"; fi
+# Negative control: prepush as it read the verdict before (the CROSS-CUTTING
+# prose and the exit status). It answers only the two cases where a lone
+# trailer and the exit status say what the prose would have: the first (ok)
+# and the fourth (incomplete, exit 3). Every other case goes red.
+pp_nc_label="negative control: reading affected's prose and exit status instead, every case but the two they also decide goes red"
+perl -0pe 's/\n  pp_verdict=\$\(sed -n .*?\n  \[ "\$pp_cross" = 0 \] \|\|\n/\n  pp_incomplete=\$((pp_rc \/ 3))\n  ! grep -q "^affected: CROSS-CUTTING:" "\$pp_dir\/affected.err" ||\n/s' \
+  "$HERE/test-run.sh" >"$repeat_root/tools/test-run.sh"
+if cmp -s "$HERE/test-run.sh" "$repeat_root/tools/test-run.sh" || ! bash -n "$repeat_root/tools/test-run.sh" ||
+   grep -qF 'verdict=' <(sed -n '/^if \[ "\$sub" = prepush \]; then$/,/^fi$/p' "$repeat_root/tools/test-run.sh" | grep -v '^ *#'); then
+  report 1 "$pp_nc_label" "the mutant was not made"
+else
+  pp_held=
+  for pp_i in "${!pp_verdict_cases[@]}"; do
+    pp_verdict_check "${pp_verdict_cases[$pp_i]}"
+    [ -n "$pp_detail" ] || pp_held="$pp_held $pp_i"
+  done
+  if [ "$pp_held" = " 0 3" ]; then report 0 "$pp_nc_label"; else report 1 "$pp_nc_label" "held under the mutant: cases${pp_held:- <none>} (want 0 3)"; fi
+fi
+cp "$HERE/test-run.sh" "$repeat_root/tools/test-run.sh"
 rm -f "$pp_stub"
 }
 harness_leg_run '98: prepush runs affected'\''s list without slow-/train- members #options' leg_98

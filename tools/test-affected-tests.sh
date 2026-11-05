@@ -211,12 +211,23 @@ affected() { # ARGS... -> $out, $err, $rc
   rc=0
   (cd "$TMP" && "$repo/tools/affected-tests.sh" "$@") >"$out" 2>"$err" || rc=$?
 }
+trailer() { # -> $verdict: the one `affected: verdict=` line when it is stderr's last, else <none>
+  verdict=$(sed -n 's/^affected: verdict=//p' "$err")
+  [ -n "$verdict" ] && [ "$(tail -n 1 "$err")" = "affected: verdict=$verdict" ] || verdict='<none>'
+}
 expect() { # LABEL RC ALIAS... : the exact list, in any order, and the exit status
   local label=$1 want_rc=$2
   shift 2
   printf '%s\n' "$@" | sed '/^$/d' | sort >"$TMP/want"
   # The printed order is ranked (link-only last); the 'link-only' leg pins it.
   sort "$out" >"$TMP/got"
+  # Every printed list ends its stderr with the verdict trailer (gh-ocannl-1921),
+  # `incomplete` in it exactly on exit 3; the 'verdict trailer' leg pins each one.
+  trailer
+  case $verdict/$rc in
+    ok/0 | cross-cutting/0 | incomplete/3 | cross-cutting,incomplete/3) ;;
+    *) report 1 "$label" "exit $rc with the verdict trailer $verdict; stderr: $(tr '\n' '|' <"$err")"; return ;;
+  esac
   if [ "$rc" = "$want_rc" ] && cmp -s "$TMP/want" "$TMP/got"; then
     report 0 "$label"
   else
@@ -540,6 +551,51 @@ if harness_leg 'unmapped'; then
   if [ "$rc" = 3 ] && [ ! -s "$out" ] && grep -q 'UNMAPPED: nowhere/ghost.ml' "$err"; then
     report 0 'an .ml no stanza owns and no rule reads is UNMAPPED, exit 3'
   else report 1 'an .ml no stanza owns and no rule reads is UNMAPPED, exit 3' "exit $rc; $(cat "$out" "$err")"; fi
+fi
+
+if harness_leg 'verdict trailer'; then
+  # The machine-readable verdict (gh-ocannl-1921): the last line of stderr, one
+  # of four, whenever the list is printed; `tools/test-run.sh prepush` reads it.
+  vt_detail=
+  for vt_case in "ok|0|--files lib/leaf.ml" \
+                 "cross-cutting|0|--files dune-project" \
+                 "incomplete|3|--files nowhere/ghost.ml" \
+                 "incomplete|3|--files lib/optlib.ml" \
+                 "cross-cutting,incomplete|3|--files dune-project nowhere/ghost.ml" \
+                 "ok|0|--referenced-only --files lib/helper.ml" \
+                 "<none>|2|--files" \
+                 "<none>|2|--no-such-option"; do
+    IFS='|' read -r vt_want vt_rc vt_args <<<"$vt_case"
+    # shellcheck disable=SC2086 # the case's operands, split on purpose
+    affected $vt_args
+    trailer
+    # The prose and the trailer say the same thing, and no other line looks like a trailer.
+    vt_prose=
+    ! grep -q '^affected: CROSS-CUTTING:' "$err" || vt_prose=cross-cutting
+    ! grep -q '; INCOMPLETE, see UNMAPPED above$' "$err" || vt_prose=${vt_prose:+$vt_prose,}incomplete
+    [ "$vt_want" = '<none>' ] || [ -n "$vt_prose" ] || vt_prose=ok
+    [ "$vt_want" != '<none>' ] || vt_prose='<none>'
+    { [ "$rc" = "$vt_rc" ] && [ "$verdict" = "$vt_want" ] && [ "$vt_prose" = "$vt_want" ] &&
+      [ "$(grep -c 'verdict=' "$err")" = "$([ "$vt_want" = '<none>' ] && echo 0 || echo 1)" ]; } ||
+      { vt_detail="$vt_args: exit $rc (want $vt_rc), trailer $verdict (want $vt_want), prose says $vt_prose; stderr: $(tr '\n' '|' <"$err")"; break; }
+  done
+  vt_label='the last line of stderr is the verdict: ok, cross-cutting, incomplete or both; none when no list is printed'
+  if [ -z "$vt_detail" ]; then report 0 "$vt_label"; else report 1 "$vt_label" "$vt_detail"; fi
+  # (`--harnesses`, which prints no alias list, gives none: 'harness names and loads'.)
+  # One definition: a mutant threshold in `verdict` moves the trailer and the
+  # CROSS-CUTTING line together, for a change the shipping script calls ok.
+  vt_label='negative control: the trailer and the CROSS-CUTTING line read one definition of the verdict'
+  mutant=$repo/tools/affected-mutant.sh
+  if FROM='if $n_all && 2 * $n_first > $n_all;' TO='if $n_all && $n_first;' \
+      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    rc=0
+    (cd "$TMP" && bash "$mutant" --files lib/leaf.ml) >"$out" 2>"$err" || rc=$?
+    trailer
+    if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] && grep -q '^affected: CROSS-CUTTING:' "$err"; then report 0 "$vt_label"
+    else report 1 "$vt_label" "mutant exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
+  else report 1 "$vt_label" 'the mutation anchor does not occur exactly once'; fi
+  rm -f "$mutant"
 fi
 
 if harness_leg 'link-only'; then
@@ -1209,6 +1265,9 @@ if harness_leg 'harness names and loads'; then
   haffected --harnesses --files tools/sub.sh
   hexpect 'a script a harness names reaches it whole, not one naming it in a comment or in a longer name' 0 tools/test-a.sh
   herr 'and says why' 'tools/sub.sh: read by 1 harness(es): tools/test-a.sh (every leg: it names tools/sub.sh)'
+  # No alias list is printed, so no verdict on one (gh-ocannl-1921).
+  if [ "$rc" = 0 ] && ! grep -q 'verdict=' "$err"; then report 0 '--harnesses prints no verdict trailer'
+  else report 1 '--harnesses prints no verdict trailer' "exit $rc; $(tr '\n' '|' <"$err")"; fi
   haffected --harnesses --files tools/test-a.sh
   hexpect 'a harness reaches itself' 0 tools/test-a.sh
   haffected --harnesses --files tools/lib.sh

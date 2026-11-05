@@ -252,6 +252,16 @@
 #   compile) that a harness reaches is mapped to those legs, not UNMAPPED.
 #   A changed script no harness reaches is named on stderr.
 #
+# The verdict (gh-ocannl-1921): whenever the list is printed (exit 0 or 3), the
+# LAST line of stderr is the trailer `affected: verdict=V`, V one of `ok`,
+# `cross-cutting`, `incomplete` or `cross-cutting,incomplete`: what a caller
+# reads instead of the prose above it (`tools/test-run.sh prepush` does, and
+# refuses a stderr without it). `cross-cutting`: the first tier spans over half
+# the per-test aliases (the CROSS-CUTTING line says who runs the list then);
+# `incomplete`: a changed path is UNMAPPED, which is also what exit 3 says.
+# Both are decided in one place, `verdict` in the reader below. No trailer on
+# exit 2, nor under `--harnesses`, which prints no alias list to judge.
+#
 # Exit: 0 every changed `.ml`/`.mli` was mapped; 3 the list is printed, but a
 # changed `.ml`/`.mli` is UNMAPPED (see stderr; for a module of a library this
 # build does not compile, an OFF-BUILD line counts what a build compiling it
@@ -2918,21 +2928,35 @@ print STDERR "$_\n" for @why_lines;
 # A first tier spanning most of the suite (gh-ocannl-1765): the ranking cannot
 # narrow this change, so say so, and who runs the whole list -- except its
 # `slow-` aliases, which no CI job runs (local review): those stay local.
+# The verdict (gh-ocannl-1921; the header states the contract) is decided here
+# and nowhere else: the CROSS-CUTTING line, the INCOMPLETE note, the exit
+# status and the trailer all read it.
+sub verdict {   # (first-tier aliases, per-test aliases, UNMAPPED paths) -> the trailer's conditions
+  my ($n_first, $n_all, $n_unmapped) = @_;
+  my @v;
+  push @v, "cross-cutting" if $n_all && 2 * $n_first > $n_all;
+  push @v, "incomplete" if $n_unmapped;
+  return @v;
+}
+my %verdict;
 {
   my $n_all = 0;
   $n_all += $_ for values %total;
   my $n_first = keys %out;
+  %verdict = map { $_ => 1 } verdict($n_first, $n_all, scalar @unmapped);
   my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out, @link_only;   # link-only ones too: CI runs none
   printf STDERR "affected: CROSS-CUTTING: %d of the %d per-test aliases rank first, so this change is cross-cutting:"
     . " the PR's CI run owns the full list%s; locally run the tests that exercise the change, named in the PR"
     . " body, and `dune build \@check`\n", $n_first, $n_all,
     (@slow ? sprintf(" but its %d slow- alias(es), which no CI job runs: run those locally too", scalar @slow) : "")
-    if $n_all && 2 * $n_first > $n_all;
+    if $verdict{"cross-cutting"};
 }
 printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s\n", scalar(keys %out) + ($referenced_only ? 0 : @link_only),
   scalar(@changed), (@link_only ? sprintf(", %d of them link-only%s", scalar(@link_only), $referenced_only ? " and left off" : "") : ""),
-  @unmapped ? "; INCOMPLETE, see UNMAPPED above" : "";
-exit(@unmapped ? 3 : 0);
+  $verdict{incomplete} ? "; INCOMPLETE, see UNMAPPED above" : "";
+# The trailer: the last line of stderr, one line, in this order.
+printf STDERR "affected: verdict=%s\n", join(",", grep { $verdict{$_} } qw(cross-cutting incomplete)) || "ok";
+exit($verdict{incomplete} ? 3 : 0);
 PERL
 rc=0
 perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" || rc=$?
