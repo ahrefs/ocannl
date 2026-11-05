@@ -76,6 +76,21 @@ val axis_extents : dims:int array -> Indexing.axis_index array -> int array
     its own axis's dim (gh-ocannl-1165). Every other axis — the run's own, ordinary components —
     keeps its dim; a map of another rank is answered with [dims]. *)
 
+val common_layout :
+  dims:int array ->
+  Indexing.axis_index array ->
+  Indexing.axis_index array ->
+  (Indexing.axis_index array * Indexing.axis_index array) option
+(** [common_layout ~dims a b]: the two full-rank access maps re-expressed in one coordinate layout
+    (gh-ocannl-1898). The {!view}s are re-coarsened to the coarsest grouping either side needs, and
+    each coordinate is written back at the node's rank as [span - 1] [Sub_axis] entries followed by
+    its composed row-major index ([[h; e]] over [[H; E]] against a flattened map becomes
+    [[Sub_axis; E·h + e]]; a trailing [Sub_axis] becomes [Fixed_idx 0]). Both results carry
+    [Sub_axis] at the same positions, and each addresses exactly the flat cells its original does. A
+    side's own grouping is never refined: a flattened index is not split into per-axis components.
+    [None] when a map is not of the node's rank or a common coordinate is [Unknown] (a [Concat]
+    component). *)
+
 (** {2 The pair-conflict query}
 
     Can two accesses touch a common cell from different "threads"? Thread identity is a tuple of

@@ -129,6 +129,47 @@ let case_structural_bounds ~name ~zero_init ~lo ~u_n ~v_n ~contained () =
   p (name ^ ": every cell holds the value of the iteration that wrote it") (same virt [ expected ]);
   p (name ^ ": virtual and materialized arms agree") (same virt mat)
 
+(* === Case 1c: the containment rule on normalized coordinates (gh-ocannl-1898) === A per-axis
+   producer [x[h; e]] over dims [3; 2], read through a flattened [x[Sub_axis; 2u + v]]: the layouts
+   differ, so the pair is re-expressed in its common frame, the producer position becoming [2h + e]
+   -- the same coefficients as the read's. Normalization only composes coordinates, never splits
+   one, so this structural match faces case 1b's containment rule like any other: with [v] wider
+   than [e]'s loop the cell [2u + v] is written at [(u + 1, v - 2)], and binding [h := u], [e := v]
+   would replay [tag u v], a value no iteration wrote. The wide read must take unit solving (a kept
+   [h] loop, a range guard); the contained one keeps the guard-free pairwise form. *)
+let case_normalized_bounds ~name ~u_n ~v_n ~contained () =
+  let tgt = mk ~dims:[| 3; 2 |] (name ^ "_x") and out = mk ~dims:[| u_n; v_n |] (name ^ "_out") in
+  materialize out;
+  let h = sym () and e = sym () and u = sym () and v = sym () in
+  let prod = loop_n h 3 (loop_n e 2 (set tgt [| iter h; iter e |] (tag h e))) in
+  let cons =
+    loop_n u u_n
+      (loop_n v v_n
+         (set out [| iter u; iter v |] (get tgt [| Idx.Sub_axis; aff [ (2, u); (1, v) ] 0 |])))
+  in
+  let llc = seq prod cons in
+  let o = optimize llc in
+  p (name ^ " producer virtual") (known_virtual o tgt);
+  p (name ^ " producer inlined (no array reads survive)") (count_get o tgt = 0);
+  let wh, le, lt = count_guard_ops o in
+  if contained then p (name ^ " keeps the guard-free pairwise binding") (wh = 0 && le = 0 && lt = 0)
+  else
+    p
+      (name ^ " solves the inner symbol under a range guard (Where + Cmple lower + Cmplt upper)")
+      (wh >= 1 && le >= 1 && lt >= 1);
+  (* Flat cell [2h + e] holds [tag h e]; [out[u, v]] reads flat cell [2u + v]. *)
+  let cells = Array.init 6 ~f:(fun n -> Float.of_int (1 + (10 * (n / 2)) + (n % 2))) in
+  let expected =
+    Array.concat (List.init u_n ~f:(fun u -> Array.init v_n ~f:(fun v -> cells.((2 * u) + v))))
+  in
+  let seed = [ (out, blank (u_n * v_n)) ] and read = [ out ] in
+  let virt = execute ~name:("va_" ^ name) o ~seed ~read in
+  let mat =
+    execute ~name:("va_" ^ name ^ "_mat") (optimize ~materialized:[ tgt ] llc) ~seed ~read
+  in
+  p (name ^ ": every cell holds the value of the iteration that wrote it") (same virt [ expected ]);
+  p (name ^ ": virtual and materialized arms agree") (same virt mat)
+
 (* === Case 2: unit-coefficient solving at a plain iterator === *)
 let case_unit_solve_plain () =
   let tgt = mk ~dims:[| 6 |] "usolve" and out = mk ~dims:[| 6 |] "out2" in
@@ -269,6 +310,10 @@ let () =
   case "structural-contained-offset"
     (case_structural_bounds ~name:"structural-contained-offset" ~zero_init:false ~lo:1 ~u_n:3 ~v_n:2
        ~contained:true);
+  case "normalized-wide"
+    (case_normalized_bounds ~name:"normalized-wide" ~u_n:2 ~v_n:4 ~contained:false);
+  case "normalized-contained"
+    (case_normalized_bounds ~name:"normalized-contained" ~u_n:3 ~v_n:2 ~contained:true);
   case "unit-solve(plain)" case_unit_solve_plain;
   case "triangular" case_triangular;
   case "non-injective" case_noninjective;

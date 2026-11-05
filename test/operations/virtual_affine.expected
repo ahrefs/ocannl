@@ -25,6 +25,16 @@ structural-contained-offset producer inlined (no array reads survive): true
 structural-contained-offset keeps the guard-free pairwise binding: true
 structural-contained-offset: every cell holds the value of the iteration that wrote it: true
 structural-contained-offset: virtual and materialized arms agree: true
+normalized-wide producer virtual: true
+normalized-wide producer inlined (no array reads survive): true
+normalized-wide solves the inner symbol under a range guard (Where + Cmple lower + Cmplt upper): true
+normalized-wide: every cell holds the value of the iteration that wrote it: true
+normalized-wide: virtual and materialized arms agree: true
+normalized-contained producer virtual: true
+normalized-contained producer inlined (no array reads survive): true
+normalized-contained keeps the guard-free pairwise binding: true
+normalized-contained: every cell holds the value of the iteration that wrote it: true
+normalized-contained: virtual and materialized arms agree: true
 unit-solve(plain) producer virtual: true
 unit-solve(plain) producer inlined (no array reads survive): true
 unit-solve(plain) producer setter dropped: true

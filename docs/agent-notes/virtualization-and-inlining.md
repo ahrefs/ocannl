@@ -227,8 +227,8 @@ files.
   and `specialize_proc` commits the survivors `40:scalar-constexpr` right after `virtual_llc`,
   ahead of the walked-placements snapshot and cleanup. A new early commitment needs the same
   split. Pinned by the `constexpr_*` rows of `test/operations/virtual_rejection_boundary.ml` (a
-  guarded setter refused as 142, a flattened read refused as 13, the cap exemption), with
-  executed parity.
+  guarded setter refused as 142, a flattened read served since gh-ocannl-1898 — a one-cell node
+  leaves no consumption-time refusal to pin — and the cap exemption), with executed parity.
 - **A fixed-index producer position is guarded only over a proved fallback** (gh-ocannl-1735,
   gh-ocannl-1795). On an extent-1 coordinate a producer `Fixed_idx 0` read at a symbolic index is
   the same cell (`same_unit_cell`, no guard). On a wider one `instantiate_computations` guards
@@ -263,10 +263,30 @@ files.
   block whose reads avoid its hole) refuses too. An accumulating first write on such a node reads
   the replay's init with or without a guard: a separate gap. Rows: `dvg_*` and `inh_*` in
   `virtual_rejection_boundary.ml`.
-- **The inliner solves raw index positions pairwise, so both sides must share one coordinate
-  layout** (gh-ocannl-1795): a `Sub_axis` on one side only refuses the read site as 13 — it bound a
-  producer symbol to the run placeholder, which then miscomputed in guards, affine reads and
-  transposed operand reads (`flattened_read_*` rows). Range guards bound a solved symbol by its
+- **The inliner solves index positions pairwise, so a mismatched pair is first put in one
+  coordinate layout** (gh-ocannl-1795, gh-ocannl-1898). Solved raw, a `Sub_axis` on one side only
+  bound a producer symbol to the run placeholder, which miscomputed in guards, affine reads and
+  transposed operand reads (`flattened_read_*` rows). `instantiate_computations` now re-expresses
+  such a pair through `Affine.common_layout`: both views coarsened to the grouping either side
+  needs, each coordinate written back at the node's rank as a `Sub_axis` run and its composed
+  row-major index (same flat cells, now position for position the same coordinates). A flattened
+  read of a per-axis producer `x[i; k]` meets `K·i + k` (unit-solved under a range guard, the `i`
+  loop kept; a non-unit `3s` is an equality guard over the kept loop); a per-axis read of a
+  flattened producer binds the flat symbol to `K·h + e`. The frame is NEVER refined below a side's
+  own grouping — splitting `[Sub_axis; 2u + v]` into `[u; v]` would assert a decomposition the
+  read does not have, the gh-ocannl-1896 hole — so a multi-term match on normalized coordinates
+  still meets the containment rule below (`normalized-wide`/`-contained` in `virtual_affine.ml`).
+  Only mismatched pairs are normalized (agreeing layouts have identical frames), on copies:
+  `def_args`, which the replay's setters are asserted against, is untouched. Composing also folds
+  away what a per-axis reading checks — `x[1; k]` becomes `2 + k`, so its `Fixed_idx` never meets
+  `fixed_guardable`. Its guards are answered as any guard is: the coverage rule
+  (`flattened_read_past_partial`, `flattened_read_written_cells`), or the gh-ocannl-1897 check on a
+  coverage-exempt node (`dvu_flat_*`). A binding without a guard is not, so one pinning one symbol
+  takes a range guard even with one component: a `Zero_out` admits a read past the loop
+  (`flattened_producer_zero_partial`). Still 13: no common frame (a map of another rank, a `Concat`
+  component). Rows: `flattened_read_*`,
+  `flattened_producer_*`, `partial_frame`, `trailing_sub_axis_read` in
+  `virtual_rejection_boundary.ml`. Range guards bound a solved symbol by its
   loop's `[from_, from_ + width)`, not `[0, width)` (`block_components_offset_*`), and a
   structural affine match (`s + 1` read at `t + 1`) gets one too in a multi-component replay, as a
   pass-1 binding does (`block_components_structural_*`).
