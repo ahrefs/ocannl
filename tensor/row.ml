@@ -5258,8 +5258,9 @@ type proj_equation = Proj_eq of proj * proj | Iterated of proj [@@deriving compa
 
 (** The refusal of a window kernel nothing sized (gh-ocannl-1691): no operand axis carries it, and a
     padded window's extent equation omits it. Raised by [get_proj_equations] for the kernel its
-    local solve left a variable, and by [dim_to_proj] for one the projection environment does not
-    reach (gh-ocannl-1734). *)
+    local solve left a variable, by [dim_to_proj] for one the projection environment does not reach
+    (gh-ocannl-1734), and at the definition by a shape-scheme trace ([Shape.Scheme.trace],
+    gh-ocannl-1803). *)
 let unsized_kernel_error ~use_padding (v : dim_var) (dim : dim) =
   let name = Option.value v.name ~default:(Dim_var.to_string v) in
   let window = if use_padding then "a padded (=+) window's" else "the window's" in

@@ -13,7 +13,7 @@ set_dim against a fixed width | int | application:body | definition:trace
 set_dim twice, no () stage | int | application:body | application:trace
 cyclic row permutation, abstract argument | arg | closure | closure
 cyclic row permutation, concrete argument | arg | accepted | accepted
-window kernel nothing sizes | int | closure | closure
+window kernel nothing sizes | int | closure | definition:trace
 every mode accepts and refuses the same programs: true
 no error surfaces later under a scheme than without one: true
 without schemes, no error surfaces at a definition: true

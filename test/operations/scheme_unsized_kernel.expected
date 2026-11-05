@@ -1,0 +1,22 @@
+strided padded window | off:closure | check:definition
+stride-one padded window | off:closure | check:definition
+binary einsum | off:closure | check:definition
+one kernel in two padded windows | off:closure | check:definition
+ternary einsum | off:closure | check:definition
+block spec | off:closure | check:definition
+captured and set | off:accepted | check:accepted
+kernel carried by an operand | off:accepted | check:accepted
+external capture, set after the application | off:accepted | check:accepted
+second window unpadded | off:accepted | check:accepted
+no window | off:accepted | check:accepted
+capture left unset | off:closure | check:closure
+kernel carried by the result | off:closure | check:closure
+without schemes, projection derivation refuses each: true
+under a scheme, the definition does: true
+the refusal names the function and keeps the closure's explanation: true
+accepted in every mode: true
+what the spec does not decide keeps its verdict: true
+the first application traces and refuses, before the body registers: true
+Tensor.Scheme.trace refuses it, and the printed error names the function and the kernel: true
+open work after a refused definition: 3
+the dims are those without schemes: true
