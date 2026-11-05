@@ -955,6 +955,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   matching no leg exits 2; a filtered run lists the legs it ran and each check they skipped,
   with its reason, above a `FILTERED RUN, not a full pass` footer. To sample a flaky leg, loop
   over the selected run and count its `FAIL  ` lines.
+- Testing another copy of the script (gh-ocannl-1925): `tools/test-test-run.sh --subject FILE`
+  (or `OCANNL_TOOL_HARNESS_SUBJECT=FILE`; the option wins) runs the legs against FILE in place of
+  `tools/test-run.sh`, so "this leg fails against the previous script" is
+  `git show origin/master:tools/test-run.sh >F` and `--subject F --only '^N:'`, expecting exit 1 —
+  not a scratch copy of `tools/` and `scripts/` with the script swapped in, which the
+  gh-ocannl-1830 worker made about ten times. FILE is staged once as `tools/test-run.sh` of a root
+  under the scratch directory beside the files it sources, and every fixture root, mutant and
+  direct call reads that copy. Only the script is swapped: what it sources, the shared
+  `scripts/`, and the harness itself stay the working tree's, so a control for a change that also
+  edits a sourced `tools/*.sh` still needs that file put back by hand, and a leg that reads the
+  script's TEXT (a mutant's seam, an extraction) abandons itself where the older FILE lacks the
+  line — a FAIL that says so, not the leg's verdict on FILE. Leg 102 pins the option with a
+  subject missing one `proc_table_perl` rule: leg 99 fails in the one check that rule answers.
 - **Every gated leg must pass run alone** (gh-ocannl-1367). A leg that reads what an EARLIER
   leg's body made (a variable, a file, a lock, an exported mode) passes in every full run and fails
   only under `--only`, as two did when `tools/test-test-run.sh` was first gated (`LAB_MAP`,

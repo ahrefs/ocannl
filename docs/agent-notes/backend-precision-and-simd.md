@@ -408,8 +408,9 @@ files.
   first), and folds neither a real-valued operator nor a non-integral constant at an integer
   evaluation precision. The rule was chosen over rounding at every integer operator's operand,
   which would have overturned the C-promotion values gh-ocannl-1731 pinned on four backends. The
-  executed cases and the virtualized/materialized parity legs live in `op_table_compile`. Out of
-  scope: C's integer promotion of inlined integer arithmetic against the storage width.
+  executed cases and the virtualized/materialized parity legs live in `op_table_compile`. Integer
+  promotion is kept within one setter's expression; across a node, a scope that could wrap is not
+  collapsed (gh-ocannl-1884, virtualization-and-inlining.md).
 - **An integer table arm is integer-TYPED, in its operands' common type** (gh-ocannl-1883). cc's
   integer `Max`/`Min`/`Relu`/`Satur01` were `fmax`/`fmin` calls, `Trunc` a `truncf` and `Not` a
   `? 1.0 : 0.0`; CUDA's and HIP's `Relu`/`Satur01`/`Trunc`/`Not`, and Metal's `Trunc`, `Satur01`

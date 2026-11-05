@@ -27,7 +27,7 @@ let is_top { lo; hi; _ } = Float.(lo = neg_infinity) && Float.(hi = infinity)
 
 (** Strict exact-integer cutoff: [2^53]. Values with [abs v < exact_int_cutoff] read from integer
     storage convert to float exactly. *)
-let exact_int_cutoff = 9007199254740992.0
+let exact_int_cutoff = Ops.exact_int_cutoff
 
 let endpoint_exact v = Float.is_finite v && Float.(abs v < exact_int_cutoff)
 
@@ -101,33 +101,9 @@ let definitely_true iv = (not (is_top iv)) && (Float.(iv.lo > 0.) || Float.(iv.h
     precision; [top] for float and opaque-data precisions. Note the int64/uint64 upper endpoints
     round outward (2^63 - 1 is not a float) and are marked non-[exact]. *)
 let dtype_range (prec : Ops.prec) =
-  let r lo hi exact = { lo; hi; integral = true; exact } in
-  match prec with
-  | Ops.Byte_prec _ -> r 0. 255. true
-  | Ops.Uint16_prec _ -> r 0. 65535. true
-  | Ops.Int32_prec _ -> r (-2147483648.) 2147483647. true
-  | Ops.Uint32_prec _ -> r 0. 4294967295. true
-  | Ops.Int64_prec _ ->
-      (* hi = 2^63 >= 2^63 - 1: outward. *)
-      r (-9.2233720368547758e18) 9.2233720368547758e18 false
-  | Ops.Uint64_prec _ -> r 0. 1.8446744073709552e19 false
-  | Ops.Void_prec | Ops.Uint4x32_prec _ | Ops.Fp8_prec _ | Ops.Half_prec _ | Ops.Bfloat16_prec _
-  | Ops.Single_prec _ | Ops.Double_prec _ ->
-      top
-
-(** The largest magnitude up to which a float precision represents every integer exactly. bfloat16
-    has 7 mantissa bits, hence 256 -- not fp16's 2048 (binding constraint 5; witness: 257 is
-    unrepresentable in bfloat16). fp8 is conservatively 8 (covers both e4m3 and e5m2). *)
-let float_exact_int_limit (prec : Ops.prec) =
-  match prec with
-  | Ops.Fp8_prec _ -> Some 8.
-  | Ops.Bfloat16_prec _ -> Some 256.
-  | Ops.Half_prec _ -> Some 2048.
-  | Ops.Single_prec _ -> Some 16777216.
-  | Ops.Double_prec _ -> Some exact_int_cutoff
-  | Ops.Void_prec | Ops.Byte_prec _ | Ops.Uint16_prec _ | Ops.Int32_prec _ | Ops.Uint32_prec _
-  | Ops.Int64_prec _ | Ops.Uint64_prec _ | Ops.Uint4x32_prec _ ->
-      None
+  match Ops.integer_range prec with
+  | Some (lo, hi) -> { lo; hi; integral = true; exact = endpoint_exact hi }
+  | None -> top
 
 (** [at_prec prec iv] makes [iv] valid for the machine value of an expression computed at (or
     converted into) precision [prec].
@@ -153,7 +129,7 @@ let at_prec (prec : Ops.prec) iv =
       if iv.integral && iv.exact && Float.(iv.lo >= r.lo) && Float.(iv.hi <= r.hi) then iv else r
   | Ops.Half_prec _ | Ops.Bfloat16_prec _ | Ops.Fp8_prec _ | Ops.Single_prec _ | Ops.Double_prec _
     -> (
-      match float_exact_int_limit prec with
+      match Ops.float_exact_int_limit prec with
       | Some lim
         when iv.integral && iv.exact && Float.(abs iv.lo <= lim) && Float.(abs iv.hi <= lim) ->
           iv

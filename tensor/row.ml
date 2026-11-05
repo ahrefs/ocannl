@@ -3051,7 +3051,7 @@ let rank_potentials v w k =
    k > 0], and a cycle of positive weight means it reaches [v]. How much of [delta] crosses an edge
    [u -> x] is what its slack [p u - p x - k'] leaves: nonnegative, so taking the largest pending
    amount first settles each variable once, as in Dijkstra's algorithm. *)
-let lower_rank_potentials ~src:v ~dst:w ~delta =
+let lower_rank_potentials ?(commit = true) ~src:v ~dst:w ~delta () =
   let potentials = ref !global_rank_potentials in
   let pending = Hashtbl.create (module Row_var) in
   let settled = Hash_set.create (module Row_var) in
@@ -3082,7 +3082,7 @@ let lower_rank_potentials ~src:v ~dst:w ~delta =
                  else queue)))
   in
   let holds = settle (Set.Poly.singleton (-delta, w)) in
-  if holds then (
+  if holds && commit then (
     note_mutation ();
     global_rank_potentials := !potentials);
   holds
@@ -3122,7 +3122,7 @@ let add_rank_edge ~rows v w k =
     then (
       note_mutation ();
       let pv, pw = rank_potentials v w k in
-      let holds = pv >= pw + k || lower_rank_potentials ~src:v ~dst:w ~delta:(pw + k - pv) in
+      let holds = pv >= pw + k || lower_rank_potentials ~src:v ~dst:w ~delta:(pw + k - pv) () in
       if !unbounded_rank_search && Bool.(rank_cycle_walk ~src:v ~dst:w k = holds) then
         failwith "add_rank_edge: the potentials and the reference walk disagree on a rank cycle";
       if not holds then
@@ -3130,6 +3130,35 @@ let add_rank_edge ~rows v w k =
         @@ Shape_error
              ("Infinite number of axes by rank cycle among row variables", [ Row_mismatch rows ]);
       global_rank_edges := Map.add_multi !global_rank_edges ~key:v ~data:(w, k))
+
+(* Is [rank v >= rank w + k] already refuted by the recorded facts? Asks what {!add_rank_edge} would
+   answer and records nothing, for a commitment that is a choice rather than an entailment. A
+   variable new to the graph has no path to close. *)
+let rank_edge_refuted v w k =
+  let refuted =
+    if equal_row_var v w then k > 0
+    else
+      match (Map.find !global_rank_potentials v, Map.find !global_rank_potentials w) with
+      | Some pv, Some pw ->
+          pv < pw + k
+          && not (lower_rank_potentials ~commit:false ~src:v ~dst:w ~delta:(pw + k - pv) ())
+      | _ -> false
+  in
+  if
+    !unbounded_rank_search
+    && (not (equal_row_var v w))
+    && Bool.(rank_cycle_walk ~src:v ~dst:w k <> refuted)
+  then failwith "rank_edge_refuted: the potentials and the reference walk disagree";
+  refuted
+
+(* Closing [v] to a GLB is a choice, the widest reading of its use sites, so it yields to what is
+   known: a GLB over [..w..] with axes around it is out of reach of a [v] already bounded by [w],
+   however true the bound (a statistic [..c..] used by a tensor over [h, w, ..c..], gh-ocannl-1955).
+   Such a GLB says nothing about [v]'s axes. *)
+let rank_refutes_glb v ({ beg_dims; dims; bcast; prov = _ } : t) =
+  match bcast with
+  | Row_var w -> rank_edge_refuted v w (List.length beg_dims + List.length dims)
+  | Broadcastable -> false
 
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
@@ -3299,10 +3328,13 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
         let r2 : row = value in
         let ineqs : constraint_ list ref = ref ineqs in
         let result env =
-          let row_env, more, visited = visit_rows_for_row_solution env v ~value in
-          ineqs := more @ !ineqs;
           let unsolved, env =
             if beg_handled then (
+              (* Substituting reads [v = value] into every entry bounded by [v], so it belongs to
+                 this arm alone: below, [value] is what is left of the other side, and [v] is not it
+                 (gh-ocannl-1955). *)
+              let row_env, more, visited = visit_rows_for_row_solution env v ~value in
+              ineqs := more @ !ineqs;
               (match value.bcast with
               | Row_var u ->
                   add_rank_edge ~rows:orig_rows v u
@@ -4828,6 +4860,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                    resolved *)
                 let env_glb = subst_row env env_glb in
                 match collect_factors (env_glb.beg_dims @ env_glb.dims) with
+                | _ when rank_refutes_glb v env_glb -> (None, false)
                 | Some (_, []) ->
                     (Some env_glb, false) (* All dims are known constants after substitution *)
                 | _ ->
@@ -5057,7 +5090,13 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
       let no_further_axes =
         Row_eq { r1; r2 = { beg_dims = []; dims = []; bcast = Broadcastable; prov }; origin }
       in
-      match find_row env.row_env v with
+      let entry =
+        match find_row env.row_env v with
+        | Some (Bounds_row ({ glb = Some glb; _ } as bounds)) when rank_refutes_glb v glb ->
+            Some (Bounds_row { bounds with glb = None })
+        | entry -> entry
+      in
+      match entry with
       | Some (Bounds_row { is_in_param; glb = None; constr = Unconstrained; _ })
         when is_stage4_up stage ->
           if (is_param || is_in_param) && not (is_safe_to_guess v) then

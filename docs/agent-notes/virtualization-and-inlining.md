@@ -112,11 +112,36 @@ files.
   default CPU path noticed. A wide scope over arithmetic collapsed into a narrow slot computed the
   arithmetic narrow. `test/operations/scope_collapse_rounding` executes each shape against the
   uncollapsed `?prelowered` form under both policies; `top_down_prec`'s goldens show it end to end
-  (a half sum read in a bfloat16 product was computed at bfloat16 on Metal). A scope or slot of an
-  integer precision still collapses unconditionally: the gh-343 gather rewrite recognizes a one-hot
-  comparison only once its scope has collapsed into the float product (`test_bounds_folded_gather`
-  and the tune-cache tests went red when it did not). A kept scope is what the pattern-matching
-  passes then see: the explicit-SIMD renderings decline a loop holding one (`scalar_mentions`).
+  (a half sum read in a bfloat16 product was computed at bfloat16 on Metal). A kept scope is what
+  the pattern-matching passes then see: the explicit-SIMD renderings decline a loop holding one
+  (`scalar_mentions`).
+- **An integer scope collapses only where its value provably stays the same** (gh-ocannl-1884),
+  the materialized run being the oracle. A collapse drops two things: the conversion to the scope's
+  precision, which C's integer promotion makes visible (a byte `a + b` holds 44, and collapsed the
+  expression gives 300), and the evaluation at it, since the body renders at the slot's precision
+  instead (a byte `a / b` in a float slot gives 3.5, a byte comparison of float loads compares in
+  float, two uint32 ids above 2^24 compare equal in single). So `integer_scope_exact` asks for a
+  load the scope widens exactly (`Ops.widens_exactly`, one conversion either way); or the same
+  unpromoted type with no truth inside, because a truth is C `int` at any precision and
+  `Cmplt(Neg(c1), Neg(c2))` at uint32 compares signed collapsed; or machine values that agree at
+  both precisions. The last is a private evaluator rather than `interval_of`, whose double bound
+  misses a leaf's conversion (an index of 256 reads 0 at byte) and whose byte bound wraps to the
+  storage width, the very question here. Every leaf must convert unchanged and every operator's
+  result must fit what the precision computes in (`int` for byte and uint16), so a final interval
+  alone is not enough: `Min(i, 5)` at int32 read at byte has result 5 and computes `i` wrapped.
+  Its operators are a list, because a range says nothing of a domain (`FMA` has an interval and no
+  integer spelling). It reads precisions and loop extents only: a decision on a bounds candidate
+  would settle it, and a collapse is not worth refusing a later upload. Simplification is top-down,
+  so it reads an inner integer scope as a value. The gh-343 gather depends on this rule's one
+  relaxation: `classes = ids` is a uint32 comparison (`term` defaults to `top_down_prec`, so both
+  scopes take `ids`' precision) in a single product, where the rewrite recognizes it only after both
+  scopes collapse (`test_bounds_folded_gather`, and the tune-cache tests go red when they do not). A
+  comparison at a float precision therefore also holds with one side exact there and the other an
+  integer read: the exact side lies strictly inside `float_exact_int_limit`, and an integer past the
+  limit rounds monotonically to at least the limit, so no decision flips. A setter's own nested
+  arithmetic has no node and no oracle, and stays C-promoted (`op_table_compile`'s
+  `Min(a + b, c) = 250`). `test/operations/integer_scope_collapse` runs every shape materialized,
+  uncollapsed, inlined and through a schedule, with a worked value and a kept-or-collapsed claim.
 - The scope-TARGET contract, companion of the body contract above (gh-ocannl-681): a `Local_scope`
   over X denotes THE INLINED COMPUTATION OF X, so `LL.optimize` accepts one only while X is virtual,
   and REJECTS it over a materialized X (`scope_target_rejection` in `low_level.ml`, raised from

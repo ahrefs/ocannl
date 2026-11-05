@@ -250,11 +250,47 @@ let equal_prec p1 p2 =
   | Double_prec _, _ ->
       false
 
+(** Strict exact-integer cutoff: [2^53]. *)
+let exact_int_cutoff = 9007199254740992.0
+
+(** The largest magnitude up to which a float precision represents every integer exactly. bfloat16
+    has 7 mantissa bits, hence 256 -- not fp16's 2048 (witness: 257 is unrepresentable in bfloat16).
+    fp8 is conservatively 8 (covers both e4m3 and e5m2). *)
+let float_exact_int_limit = function
+  | Fp8_prec _ -> Some 8.
+  | Bfloat16_prec _ -> Some 256.
+  | Half_prec _ -> Some 2048.
+  | Single_prec _ -> Some 16777216.
+  | Double_prec _ -> Some exact_int_cutoff
+  | Void_prec | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+  | Uint64_prec _ | Uint4x32_prec _ ->
+      None
+
+(** The endpoints of a scalar integer precision, as floats. The int64 and uint64 upper endpoints
+    round outward: 2^63 - 1 and 2^64 - 1 are not floats. *)
+let integer_range = function
+  | Byte_prec _ -> Some (0., 255.)
+  | Uint16_prec _ -> Some (0., 65535.)
+  | Int32_prec _ -> Some (-2147483648., 2147483647.)
+  | Uint32_prec _ -> Some (0., 4294967295.)
+  | Int64_prec _ -> Some (-9.2233720368547758e18, 9.2233720368547758e18)
+  | Uint64_prec _ -> Some (0., 1.8446744073709552e19)
+  | Void_prec | Uint4x32_prec _ | Fp8_prec _ | Half_prec _ | Bfloat16_prec _ | Single_prec _
+  | Double_prec _ ->
+      None
+
+(** Whether C's integer promotion evaluates an operator at this precision in [int], so that its
+    result can leave the precision's range before anything converts it back (gh-ocannl-1884). Every
+    backend's dialect promotes as C does, with a 32-bit [int]. *)
+let promoted_to_int = function Byte_prec _ | Uint16_prec _ -> true | _ -> false
+
 (** Whether every value of precision [from] converts to [to_] exactly, so that a conversion through
-    [to_] is the identity on it: equal precisions, or a float widening (fp8 into any wider float --
+    [to_] is the identity on it: equal precisions; a float widening (fp8 into any wider float --
     both e4m3 and e5m2 fit half's and bfloat16's exponent ranges and significands -- half or
-    bfloat16 into single or double, single into double). Integer conversions are conservatively
-    [false] (gh-ocannl-1788). *)
+    bfloat16 into single or double, single into double); an integer precision into one whose range
+    holds its range; or an integer precision into a float that represents its whole range exactly
+    ({!float_exact_int_limit}), the case gh-ocannl-1884 added: byte into bfloat16, uint16 into
+    single, int32 into double, but neither uint16 into half nor uint32 into single. *)
 let widens_exactly ~from ~to_ =
   match (from, to_) with
   | _ when equal_prec from to_ -> true
@@ -262,7 +298,11 @@ let widens_exactly ~from ~to_ =
   | (Half_prec _ | Bfloat16_prec _), (Single_prec _ | Double_prec _)
   | Single_prec _, Double_prec _ ->
       true
-  | _ -> false
+  | _ -> (
+      match (integer_range from, integer_range to_, float_exact_int_limit to_) with
+      | Some (lo, hi), Some (lo', hi'), _ -> Float.(lo >= lo' && hi <= hi')
+      | Some (lo, hi), None, Some limit -> Float.(max (abs lo) hi <= limit)
+      | _ -> false)
 
 let compare_prec p1 p2 =
   match (p1, p2) with
