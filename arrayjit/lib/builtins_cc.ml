@@ -1848,6 +1848,29 @@ ARRAYJIT_BUILTIN_LINKAGE uint64_t uint4x32_to_uint64_uniform_lane(uint4x32_t x, 
 }
 |},
       [ "uint4x32_t"; "uint4x32_to_uint64_uniform_vec" ] );
+    (* gh-ocannl-1867: the lane operand of a [_uniform_lane] call under [debug_check_lane_bounds]
+       ([Cc_backend]'s [binop_syntax] wraps it; the kernel text is unchanged without the key). The
+       extractors above index the converted block unchecked, and the lane count belongs to the
+       precision the call RENDERS at, so a lane index sized for another precision reads past the
+       block: gh-ocannl-1769's half draw (8 lanes) rendered at single (4) gave zeros and 1.4e27 on
+       x86/gcc and other, finite garbage on arm64/clang. In the [OCANNL_] namespace, which keeps it
+       out of the host stubs' shared header: it needs [stdio.h]. *)
+    ( "OCANNL_CHECKED_LANE",
+      {|
+/* LANE, when it names one of the LANES lanes of a PREC uniform block; otherwise the process aborts
+   (gh-ocannl-1867, config debug_check_lane_bounds). */
+ARRAYJIT_BUILTIN_LINKAGE int32_t OCANNL_CHECKED_LANE(int64_t lane, int32_t lanes, const char *prec) {
+    if (lane < 0 || lane >= lanes) {
+        fprintf(stderr,
+                "ocannl debug_check_lane_bounds: lane %lld is outside the %d lanes of a %s uniform block\n",
+                (long long)lane, (int)lanes, prec);
+        fflush(stderr);
+        abort();
+    }
+    return (int32_t)lane;
+}
+|},
+      [] );
     (* gh-ocannl-1660: the final step of cc's branchless value select ([Cc_backend]'s
        [select_blend_syntax]), applied to the select's truth expression and the two arm locals. gcc
        at x86 keeps a conditional branch for a [?:] even over two values: a float EQUALITY test

@@ -507,6 +507,17 @@
 # debugging/soak switch: off by default, no effect on behavior beyond the check.
 #debug_check_upload_arenas=false
 
+# gh-ocannl-1867: bound-check, at run time, the lane index of every packed-uniform lane extract a
+# kernel makes (the `uint4x32_to_<prec>_uniform_lane` builtins, which a virtualized `uniform`
+# tensor is inlined through). A lane outside the block of the precision the call renders at prints
+# the lane, the lane count and the precision to stderr and ABORTS the process, where the unchecked
+# read returns whatever lies past the block (gh-ocannl-1769: zeros and 1.4e27 on x86/gcc, a finite
+# wrong loss on arm64). The cc and multidev_cc backends only: a GPU kernel has no abort to raise,
+# and the lowering that sizes the lane index is shared, so a cc run under the key covers it. A
+# debugging/soak switch: off by default, and then the kernels are what they were. On, in-range
+# draws are bit-identical; the schedule cache keys on it.
+#debug_check_lane_bounds=false
+
 # How the C backend renders eligible outermost Grid loops (pool-backed Grid rendering,
 # docs/proposals/gh-ocannl-164.md): "dispatch" uses libdispatch's dispatch_apply (macOS),
 # "openmp" uses `#pragma omp parallel for` (adds -fopenmp to the kernel compile), "none" keeps

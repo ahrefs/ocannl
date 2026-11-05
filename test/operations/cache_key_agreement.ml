@@ -133,6 +133,7 @@ let keyed_flips =
     ("cc_backend_fp_contract", config ~scope:Cpu [ "off"; "on" ]);
     ("cc_backend_fast_math", config ~scope:Cpu flag);
     ("cc_kernel_part_weight", config ~scope:Cpu [ "0"; "1" ]);
+    ("debug_check_lane_bounds", config ~scope:Cpu flag);
     ("cc_vector_bytes", config ~scope:Cpu [ "0"; "64" ]);
     ("cc_vector_registers", config ~scope:Cpu [ "7"; "8" ]);
     ("cc_fp16_arithmetic", config ~scope:Cpu [ "none"; "promoted" ]);

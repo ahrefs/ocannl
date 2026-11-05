@@ -1,0 +1,9 @@
+in range, key on: the child exits normally: true
+in range, key on: every lane extract's lane operand is wrapped in the check: true
+in range, key off: the child exits normally: true
+in range, key off: no lane extract's lane operand is wrapped: true
+in range: the checked kernel stores one draw per cell: true
+in range: the draws are not all one value: true
+in range: the checked and unchecked kernels draw the same bits: true
+out of range, key on: the child is killed by abort: true
+out of range, key on: stderr names the lane, the lane count and the rendered precision: true

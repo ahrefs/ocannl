@@ -322,6 +322,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-test_config_consistency
   test/operations/dune                     @runtest-test_log_stmt_format
   test/operations/dune                     @runtest-test_threefry4x32
+  test/operations/dune                     @runtest-test_uniform_virtual_lane-lane_checked
   test/operations/dune                     @runtest-test_uniform_virtual_lane-outlined
   test/operations/dune                     @runtest-test_where_precision-extension
   test/operations/dune                     @runtest-test_where_precision-unoptimized

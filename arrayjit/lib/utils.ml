@@ -175,6 +175,7 @@ let known_config_keys =
       "schedule_log_declines";
       "legality_crosscheck";
       "debug_check_upload_arenas";
+      "debug_check_lane_bounds";
       "cc_parallel_grid";
       "cc_parallel_chunks";
       "cc_pool_core_class";
@@ -391,6 +392,12 @@ let config_key_classification : (config_key_class * string * string list) list =
         "output_debug_files_in_build_directory";
         "prefer_backend_uniformity";
       ] );
+    ( Keyed "codegen",
+      "a cc-backend debug check rendered into the kernel (gh-ocannl-1867): the lane operand of a \
+       packed-uniform lane extract is bound-checked at run time, aborting past the block, so the \
+       kernel's text and its cost change after the lowered code the digest names; cc's tag carries \
+       it as a component when on",
+      [ "debug_check_lane_bounds" ] );
     ( Keyed "codegen",
       "a GPU compile knob (gh-ocannl-1710, gh-ocannl-1779): it picks nvrtc's or hiprtc's math \
        switches -- and on CUDA the f32 tanh and half function spellings -- when a kernel is \
