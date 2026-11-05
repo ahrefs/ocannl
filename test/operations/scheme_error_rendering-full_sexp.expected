@@ -1,0 +1,16 @@
+--- a mistake no argument can fix, at the trace
+--- the same mistake, found by a definition check
+--- an argument the scheme refuses, at the application
+--- an argument with too few axes for the spec
+--- a dimension and a row variable sharing a name
+--- an empty concatenation component
+--- undetermined concatenation components, at the closure (a variable in the message)
+--- a failed total-elements constraint (hand-built: the solver raises it on divisibility)
+--- the first mistake without a scheme (session ids, for contrast)
+every case raised a shape error: true
+the raw constraint sexp of an error in a scheme spells a reserved-range id: true
+with shape_error_full_sexp, a printed error in a scheme spells a reserved-range id: true
+with shape_error_full_sexp, the exception's sexp is the raw one: true
+every scheme error lists the origins naming the scheme's tensors first: true
+no error holds more origins than the cap: true
+some scheme error's origins name both the scheme's tensors and others: true

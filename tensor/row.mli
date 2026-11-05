@@ -287,6 +287,13 @@ val sexp_of_error_trace : error_trace -> Sexp.t
 
 exception Shape_error of string * error_trace list [@@deriving sexp_of]
 
+val with_origin_focus : (constraint_origin -> bool) -> (unit -> 'a) -> 'a
+(** [with_origin_focus focus f] runs [f] with [focus] as the innermost relevance predicate on
+    constraint origins (gh-ocannl-1903): where the solver merges two origin lists, the origins that
+    [focus] accepts come first -- those of an enclosing focus next, then the rest, each group in
+    arrival order -- and the [max_shape_error_origins] cap keeps the first ones. [Shape] focuses a
+    shape-scheme trace and application on the scheme's own tensors. *)
+
 (** Removed duplicate helper functions *)
 type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]

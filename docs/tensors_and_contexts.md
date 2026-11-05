@@ -599,8 +599,14 @@ block whose layer is 4 wide, applied to 3 features, reads (the first lines)
 Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
   conflicting sizes: 4 vs 3
   failed constraint: 4 ⊑ 3
+    from residual_block (output) with x (output): the shape scheme residual_block applied to x
     from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
 ```
+
+The origins that name the failing scheme's own tensors come first -- its application, its
+trace's solution, the tensors its trace made -- then the rest in the order the solver met them,
+such as how a parameter's random initialization shapes it; `max_shape_error_origins` caps the
+list from the end.
 
 With the scheme opted out (`[@@ocannl.no_scheme]`), the same mistakes surface only inside the
 body, naming neither the function nor the argument, and leave the session tainted.

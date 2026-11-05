@@ -2355,6 +2355,27 @@ let as_tracing ~label f =
   tracing := label :: !tracing;
   Exn.protect ~f ~finally:(fun () -> match !tracing with _ :: rest -> tracing := rest | [] -> ())
 
+(* The tensors of each shape-scheme trace in progress, by debug name, innermost first
+   (gh-ocannl-1903): the shapes made while it runs, its arguments, and the tensors of the schemes it
+   applies. A shape error's origins naming them rank first ([Row.with_origin_focus]). *)
+let traced_names : string Hash_set.t list ref = ref []
+[@@mutation_serial.exempt
+  "the tensor names of the shape-scheme traces in progress, restored by the trace's own finally"]
+
+let note_traced_name name = List.iter !traced_names ~f:(fun names -> Hash_set.add names name)
+
+let names_origin (names : string -> bool) (o : Row.constraint_origin) =
+  names o.lhs_name || names o.rhs_name
+
+(* Runs [f] as a trace whose tensors [names] collects: the solver ranks the origins naming them
+   first. *)
+let with_traced_names names f =
+  let outer = !traced_names in
+  traced_names := names :: outer;
+  Exn.protect
+    ~f:(fun () -> Row.with_origin_focus (names_origin (Hash_set.mem names)) f)
+    ~finally:(fun () -> traced_names := outer)
+
 (** {3 Session consistency (gh-ocannl-1301)}
 
     [finish_inference] is the session's only commit point. A construction that fails after mutating
@@ -4716,6 +4737,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
     | Some _, Some _ -> invalid_arg "Shape.make: do not provide both output_dims, output_axes"
   in
   let result = of_rows ~batch ~input ~output ~id ~debug_name in
+  note_traced_name debug_name;
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
@@ -4766,6 +4788,7 @@ let shape_spec_to_dims_bio ~spec ~sh_id labels =
 let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   let batch, input, output = shape_spec_to_dims_bio ~spec ~sh_id:id @@ axis_labels_of_spec spec in
   let result = of_rows ~batch ~input ~output ~id ~debug_name in
+  note_traced_name debug_name;
   (match deduced with
   | Not_constrained -> ()
   | Input_equals_output -> (
@@ -4935,6 +4958,10 @@ module Scheme = struct
     ref_inputs : ref_input list;
         (** The capture references made before the trace that it bound (gh-ocannl-1791), in first
             binding order: inputs, related at each application to their state then. *)
+    tensor_names : Set.M(String).t;
+        (** The scheme's own tensors, by debug name (gh-ocannl-1903): its label, its arguments, the
+            shapes its trace made and the tensors of the schemes the trace applied. An error at an
+            application ranks the origins naming them first. *)
   }
 
   let label s = s.label
@@ -5105,7 +5132,11 @@ module Scheme = struct
     let refuse msg = raise @@ Untraceable_scheme msg in
     let frame = { frame_refs_mark = refs_mark; frame_inputs = [] } in
     let outer_frame = !trace_ref_frame in
+    let names =
+      Hash_set.of_list (module String) (label :: List.map args ~f:(fun sh -> sh.debug_name))
+    in
     try
+      with_traced_names names @@ fun () ->
       trace_touches := Some [];
       trace_ref_frame := Some frame;
       let results, touched =
@@ -5270,6 +5301,7 @@ module Scheme = struct
         closure_at_trace = !closure_count;
         env = env_end;
         ref_inputs;
+        tensor_names = Set.of_list (module String) (Hash_set.to_list names);
       }
     with
     | Row.Shape_error (msg, trace) ->
@@ -5394,7 +5426,10 @@ module Scheme = struct
       | `Dim v -> `Dim (rn.rn_dim v)
       | `Row v -> `Row (rn.rn_row v)
     in
+    (* The scheme's tensors are those of a trace applying it too. *)
+    if not (List.is_empty !traced_names) then Set.iter s.tensor_names ~f:note_traced_name;
     try
+      Row.with_origin_focus (names_origin (Set.mem s.tensor_names)) @@ fun () ->
       with_taint_on_failure
         ~describe:(fun exn -> prefix ^ exn_summary exn)
         (fun () ->

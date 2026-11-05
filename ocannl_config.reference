@@ -2127,7 +2127,9 @@
 #cc_backend_verify_codesign=false
 
 # The maximal number of entries for the provenance of constraints, as for example reported
-# in shape error exceptions.
+# in shape error exceptions. The entries kept are the most relevant (gh-ocannl-1903): inside a
+# shape-scheme trace or application, those naming the scheme's own tensors (the innermost scheme's
+# first), then the rest in the order the solver met them.
 #max_shape_error_origins=20
 
 # Whether a shape error prints as the full constraint sexp (raw variable and tensor ids, every
