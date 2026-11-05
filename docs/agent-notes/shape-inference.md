@@ -337,3 +337,10 @@ files.
   solved arms keep it, deriving the extent's basis from the kernel's. The occurs check is
   unchanged. Pinned by `test/operations/scheme_strided_residual`, which compares `check` with `off`
   on a schemed block.
+- Every benchmark model builds under `check` with `off`'s dims (gh-ocannl-1908):
+  `test/operations/bench_model_schemes` builds each conv and gpt workload of `benchmarks/workloads`
+  from a synthetic zero-valued fixture, through `Bench_conv_model`/`Bench_gpt_model` as the runners
+  do, plus `Nn_blocks.resnet_block` at stride 2, and compares every graph tensor's label and dims.
+  A new workload JSON is covered without an edit; a new model kind needs its fixture layout in
+  the test's `fixture_tensors`. The mlp workloads are not covered: `bench_mlp`'s model lives in its
+  executable.

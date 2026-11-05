@@ -13207,6 +13207,30 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-1908: every conv and gpt workload of benchmarks/workloads, built from a synthetic
+;; fixture the way its runner builds it, plus Nn_blocks.resnet_block at stride 2: under
+;; op_shape_schemes=check it builds, and every graph tensor's dims equal off's. Nothing trains.
+
+(test
+ (name bench_model_schemes)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (glob_files %{project_root}/benchmarks/workloads/*.json)
+  (env_var OCANNL_BACKEND))
+ (modules bench_model_schemes)
+ (libraries
+  base
+  ocannl
+  stdio
+  yojson
+  bench_harness
+  bench_conv_model
+  bench_gpt_model
+  arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ;; gh-ocannl-1789: what rewinds record of the work they discarded stays bounded by what is still
 ;; reachable, over a thousand explicit rewinds, rewinds to the last closure and schemed closures'
 ;; traces; held stale handles stay refused.

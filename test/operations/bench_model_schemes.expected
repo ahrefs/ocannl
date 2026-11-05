@@ -1,0 +1,112 @@
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+cifar_conv: 87 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+cifar_resnet: 182 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+cifar_resnet_b1: 182 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+cifar_stride: 87 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_b1: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_s1024: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_s512: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_b1_s128: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_b1_s256: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_b1_s512: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_b256: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_h128_s512: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_h64: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_h64_s1024: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_h64_s512: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_s1024: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+gpt2_mini_train_s512: 471 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+lenet: 87 tensors
+check and off give every tensor of the graph the same label and dims: true
+a conv workload was built: true
+a gpt workload was built: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+resnet_block stride 2, 8 out channels: 75 tensors
+check and off give every tensor of the graph the same label and dims: true
+under check, the model builds without a shape error: true
+control (off): the model builds: true
+under check, scheme applications were checked: true
+resnet_block stride 2: 78 tensors
+check and off give every tensor of the graph the same label and dims: true
