@@ -402,10 +402,10 @@ let%op decoder_only_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) ?(
     let x1 = ln1 (x + masked_mha ~train_step ~mask x) in
     ln2 (x1 + ffn x1)
 
-(** Stack of {!decoder_only_block} layers. The stacks are plain functions, not schemed: their layers
-    are, per presence pattern, and a scheme of the whole stack would check every layer once more on
-    top of its layers' own checks (gh-ocannl-1814). *)
-let decoder_only ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout_rate ?mask_fill
+(** Stack of {!decoder_only_block} layers. The stacks are schemed like their layers, per presence
+    pattern: an application checks the stack's scheme once, which holds its layers' constraints, and
+    the layers it applies are not checked again (gh-ocannl-1814). *)
+let%op decoder_only ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?epsilon ?dropout_rate ?mask_fill
     ?(pos_embed = No_pos_embed) () =
   let layers =
     List.init num_layers ~f:(fun i ->
@@ -450,7 +450,7 @@ let%op transformer_decoder_block ~label ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1
     let x2 = ln2 (x1 + cross_mha ~train_step x1 ~enc_output) in
     ln3 (x2 + ffn x2)
 
-let transformer_encoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5)
+let%op transformer_encoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5)
     ?(pos_embed = No_pos_embed) () =
   let layers =
     List.init num_layers ~f:(fun i ->
@@ -461,8 +461,8 @@ let transformer_encoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon 
   fun ~(train_step : Tensor.t option) x ->
     List.fold layers ~init:x ~f:(fun x layer -> layer ~train_step x)
 
-let transformer_decoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5) ?mask_fill
-    ?(pos_embed = No_pos_embed) () =
+let%op transformer_decoder ~label ~num_layers ~num_heads ~d_k ~d_v ~d_ff ?(epsilon = 1e-5)
+    ?mask_fill ?(pos_embed = No_pos_embed) () =
   let layers =
     List.init num_layers ~f:(fun i ->
         transformer_decoder_block

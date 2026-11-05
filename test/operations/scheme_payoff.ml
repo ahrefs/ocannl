@@ -69,9 +69,9 @@ let workloads =
           let layer = block ~label:[ "tied" ] () in
           Fn.apply_n_times ~n layer (input ()));
     };
-    (* nn_blocks' transformer stacks, whose blocks are schemed per presence pattern of [~train_step]
-       and attention's [?mask] (gh-ocannl-1792): evaluation and training of the decoder-only stack
-       (masked attention), and training of the encoder stack (unmasked). *)
+    (* nn_blocks' transformer stacks, schemed like their blocks per presence pattern of
+       [~train_step] and attention's [?mask] (gh-ocannl-1792): evaluation and training of the
+       decoder-only stack (masked attention), and training of the encoder stack (unmasked). *)
     { w_name = "decoder"; build = (fun n -> decoder ~train_step:None n) };
     { w_name = "decoder_train"; build = (fun n -> decoder ~train_step:(Some (step ())) n) };
     {
@@ -146,10 +146,10 @@ let run_one ?(unbounded = false) ?(whole_env = false) ?(alloc = false) ?(recheck
     alloc_words;
   }
 
-(* gh-ocannl-1891: one trace of a whole stack, the scheme nn_blocks' stacks leave off. The closure
-   is built before the window, in a fresh session, so the window holds the trace alone: the body on
-   unsized arguments, its end validation and the scheme's export, not a build's construction and
-   closure. [args] are concrete arguments for one build of the same model. *)
+(* gh-ocannl-1891: one trace of a whole stack. The closure is built before the window, in a fresh
+   session, so the window holds the trace alone: the body on unsized arguments, its end validation
+   and the scheme's export, not a build's construction and closure. [args] are concrete arguments
+   for one build of the same model. *)
 type stack = {
   s_name : string;
   depths : int list;
@@ -517,45 +517,42 @@ let () =
               c.checked_applications > 0 && c.instantiated_constraints > 0);
           p_all "schemes off: no application is checked" results ~f:(fun ((_, _, mode), r) ->
               Poly.equal mode `Check || List.is_empty r.checked));
-      (* gh-ocannl-1814: the outermost schemed applications are what is checked. The block's scheme
-         holds its layers' constraints, as registered at its trace, so checking them too re-solved a
-         renamed subset: three checks per [block], and more per transformer block. The control
-         checks every application again, so a claim here cannot hold by a build making fewer. *)
+      (* gh-ocannl-1814: the outermost schemed applications are what is checked: the block in a
+         plain fold of blocks, the stack where it is schemed. A scheme holds the constraints of the
+         applications in its body, as registered at its trace, so checking those too re-solved a
+         renamed subset. The control checks every application again, so a claim here cannot hold by
+         a build making fewer: three per [block], eight per transformer block, and the stack. *)
       let recheck w n = List.Assoc.find_exn rechecked (w, n) ~equal:Poly.equal in
       let outermost =
         [
-          ("distinct", [ "block" ]);
-          ("shared", [ "block" ]);
-          ("decoder", [ "decoder_only_block [no train_step]" ]);
-          ("decoder_train", [ "decoder_only_block [train_step]" ]);
-          ("encoder_train", [ "transformer_encoder_block [train_step]" ]);
+          ("distinct", "block", Fn.id, fun n -> 3 * n);
+          ("shared", "block", Fn.id, fun n -> 3 * n);
+          ("decoder", "decoder_only [no train_step]", Fn.const 1, fun n -> (8 * n) + 1);
+          ("decoder_train", "decoder_only [train_step]", Fn.const 1, fun n -> (8 * n) + 1);
+          ("encoder_train", "transformer_encoder [train_step]", Fn.const 1, fun n -> (8 * n) + 1);
         ]
       in
-      let cell_of (w, labels) = List.map depths ~f:(fun n -> (w, labels, n)) in
-      let by_depth = List.concat_map outermost ~f:cell_of in
+      let by_depth = List.cartesian_product outermost depths in
       Verdict.case "a checked application vouches for the applications in its body" (fun () ->
           p_all "the outermost schemed applications are the checked ones" by_depth
-            ~f:(fun (w, _, n) -> (get w n `Check).counts.checked_applications = n);
-          p_all "and only their schemes are checked" by_depth ~f:(fun (w, labels, n) ->
-              List.equal String.equal (get w n `Check).checked labels);
-          p_all "the control checks three applications per block" [ "distinct"; "shared" ]
-            ~f:(fun w ->
-              List.for_all depths ~f:(fun n -> (recheck w n).counts.checked_applications = 3 * n));
-          p_all "the control checks eight applications per transformer block"
-            [ "decoder"; "decoder_train"; "encoder_train" ] ~f:(fun w ->
-              List.for_all depths ~f:(fun n -> (recheck w n).counts.checked_applications = 8 * n));
+            ~f:(fun ((w, _, checks, _), n) ->
+              (get w n `Check).counts.checked_applications = checks n);
+          p_all "and only their schemes are checked" by_depth ~f:(fun ((w, label, _, _), n) ->
+              List.equal String.equal (get w n `Check).checked [ label ]);
+          p_all "the control checks every schemed application" by_depth
+            ~f:(fun ((w, _, _, all_checks), n) ->
+              (recheck w n).counts.checked_applications = all_checks n);
           p_all "the control closes the shapes the outermost checks close" by_depth
-            ~f:(fun (w, _, n) ->
+            ~f:(fun ((w, _, _, _), n) ->
               List.equal (List.equal Int.equal) (recheck w n).dims (get w n `Check).dims);
-          p_all "the control instantiates more constraints" by_depth ~f:(fun (w, _, n) ->
+          p_all "the control instantiates more constraints" by_depth ~f:(fun ((w, _, _, _), n) ->
               (recheck w n).counts.instantiated_constraints
               > (get w n `Check).counts.instantiated_constraints);
-          (* The window of a block, once per block: nothing else is instantiated. *)
-          p_all "the outermost checks instantiate one block's window per block"
-            [ "distinct"; "shared" ] ~f:(fun w ->
-              List.for_all depths ~f:(fun n ->
-                  (get w n `Check).counts.instantiated_constraints
-                  = n * (get w 1 `Check).counts.instantiated_constraints)));
+          (* One block's window per block, whether one check or many instantiates them. *)
+          p_all "the checks instantiate one block's window per block" by_depth
+            ~f:(fun ((w, _, _, _), n) ->
+              (get w n `Check).counts.instantiated_constraints
+              = n * (get w 1 `Check).counts.instantiated_constraints));
       (* gh-ocannl-1891: the rank-cycle check by potentials, against the walk it replaced. *)
       let unbounded_visits w n =
         (List.Assoc.find_exn unbounded (w, n) ~equal:Poly.equal).counts.rank_search_visits

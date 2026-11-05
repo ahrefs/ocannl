@@ -58,6 +58,17 @@ let blocks =
     variants "transformer_decoder_block"
       (ignore_ (fun () ->
            Nn.transformer_decoder_block ~label:[ "t" ] ~num_heads:2 ~d_k:4 ~d_v:4 ~d_ff:16 ()));
+    variants "transformer_encoder"
+      (ignore_ (fun () ->
+           Nn.transformer_encoder ~label:[ "t" ] ~num_layers:2 ~num_heads:2 ~d_k:4 ~d_v:4 ~d_ff:16
+             ()));
+    variants "decoder_only"
+      (ignore_ (fun () ->
+           Nn.decoder_only ~label:[ "t" ] ~num_layers:2 ~num_heads:2 ~d_k:4 ~d_v:4 ~d_ff:16 ()));
+    variants "transformer_decoder"
+      (ignore_ (fun () ->
+           Nn.transformer_decoder ~label:[ "t" ] ~num_layers:2 ~num_heads:2 ~d_k:4 ~d_v:4 ~d_ff:16
+             ()));
     variants "batch_norm1d" (ignore_ (fun () -> Nn.batch_norm1d ~label:[ "t" ] ()));
     variants "batch_norm2d" (ignore_ (fun () -> Nn.batch_norm2d ~label:[ "t" ] ()));
     variants "conv_bn_relu" (ignore_ (fun () -> Nn.conv_bn_relu ~label:[ "t" ] ~out_channels:4 ()));
@@ -116,6 +127,45 @@ let () =
       Stdio.printf "\nThe library's block signatures, at the trial configurations:\n";
       List.iter inventory ~f:(fun (_, own) ->
           List.iter own ~f:(fun s -> Stdio.printf "\n%s\n" (Tensor.Scheme.to_string s))));
+  Verdict.case "a transformer stack is checked once, for its layers (gh-ocannl-1814)" (fun () ->
+      let num_layers = 3 in
+      let input len =
+        Tensor.term ~grad_spec:Prohibit_grad ~label:[ "x" ] ~batch_dims:[ 2; len ]
+          ~output_dims:[ 8 ] ()
+      in
+      let mask len =
+        Tensor.term ~grad_spec:Prohibit_grad ~label:[ "mask" ] ~batch_dims:[ len ]
+          ~input_dims:[ len ] ~output_dims:[] ()
+      in
+      (* A fresh session and its own model. *)
+      let model () =
+        Tensor.unsafe_reinitialize ();
+        Nn.decoder_only ~label:[ "t" ] ~num_layers ~num_heads:2 ~d_k:4 ~d_v:4 ~d_ff:16 ()
+      in
+      let checked = ref [] in
+      let observed f =
+        checked := [];
+        Tensor.For_testing.observe_schemes f ~on_event:(function
+          | Tensor.Scheme.Checked l -> checked := l :: !checked
+          | _ -> ())
+      in
+      let m = model () in
+      let (_ : Tensor.t) = observed (fun () -> m ~train_step:None (input 6) ~mask:(mask 6)) in
+      p "the stack's scheme is the one checked"
+        (List.equal String.equal !checked [ "decoder_only [no train_step]" ]);
+      let x = input 6 and bad_mask = mask 5 in
+      let next_id = Tensor.get_next_id () in
+      (match observed (fun () -> m ~train_step:None x ~mask:bad_mask) with
+      | (_ : Tensor.t) -> p "a mask of the wrong size is refused" false
+      | exception Row.Shape_error (msg, _) ->
+          p "a mask of the wrong size is refused, naming the stack"
+            (String.is_prefix msg ~prefix:"applying the shape scheme decoder_only [no train_step]"));
+      p "before any layer's body ran" (Tensor.get_next_id () = next_id);
+      Tensor.For_testing.with_nested_rechecks (fun () ->
+          let m = model () in
+          let (_ : Tensor.t) = observed (fun () -> m ~train_step:None (input 6) ~mask:(mask 6)) in
+          p "the control checks the layers too"
+            (List.count !checked ~f:(String.equal "decoder_only_block [no train_step]") = num_layers)));
   Verdict.case "live dropout: both patterns are schemed" (fun () ->
       (* With [rate > 0] the training pattern draws random numbers, which a scheme carries
          (gh-ocannl-1890). *)

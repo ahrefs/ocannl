@@ -5,11 +5,10 @@ checking instantiates a scheme at every depth: true
 schemes off: no application is checked: true
 the outermost schemed applications are the checked ones: true
 and only their schemes are checked: true
-the control checks three applications per block: true
-the control checks eight applications per transformer block: true
+the control checks every schemed application: true
 the control closes the shapes the outermost checks close: true
 the control instantiates more constraints: true
-the outermost checks instantiate one block's window per block: true
+the checks instantiate one block's window per block: true
 the rank potentials close the shapes the walk closes: true
 the rank potentials move fewer variables than the walk visits: true
 the rank potentials' saving grows with depth: true
