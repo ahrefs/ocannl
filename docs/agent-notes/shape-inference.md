@@ -51,20 +51,34 @@ files.
   dims, `Row_eq` for rows, equal products (`Total_elems` over a `Strided_var`, as `set_equal`) for
   a mixed dim/row pair. Tying rows by product instead looks consistent with the solved arm
   (`solved_dim` -> `Total_elems`) but `Total_elems` refuses rows holding a `Sym`, so two captures
-  of one symbolic row would fail. Across a closure only `solved_dim`/`solved_sym` carry the value:
-  `update_delayed_var_refs` publishes a dim variable's solution of either kind (`Sym` too, through
-  `Row.get_dim_from_env`, gh-ocannl-1616) and a row's numeric product (none for a row holding a
-  `Sym`). It writes only a reference with neither field set and never adjudicates a held one: every
+  of one symbolic row would fail. Across a closure `solved_dim`/`solved_sym` carry the value, and a
+  row reference's `carried_row` its axes (gh-ocannl-1689): `update_delayed_var_refs` publishes a
+  dim variable's solution of either kind (`Sym` too, through `Row.get_dim_from_env`,
+  gh-ocannl-1616) and a row's numeric product (none for a row holding a `Sym`). The carried row is
+  published at the CLOSURE only (`~closure:true`, from `finish_inference`), from the binding the
+  reference has then: a `Row` binding whose substituted row is `Broadcastable` with only `Dim`/`Sym`
+  axes writes it (even over a held product, e.g. `set_dim` on a row reference), a `Dim` binding
+  clears it. Do not publish it as a row resolves mid-inference: within one inference a row captured
+  after a dimension binding is product-tied (row, dim, row ties the last row to the first by
+  product only), and an early publication would make the carried value depend on whether the row
+  resolved at a registration's Stage1 or at the closure. The parity table in
+  `capture_per_call.ml` (`rebind_scenarios`) runs each scenario within one inference and across
+  closures and asserts the outcomes equal. The product is written only to a reference with
+  neither number set, and a held one is never adjudicated: every
   held solution has a constraint on the current variable (`set_dim`/`set_sym_dim` push one, a later
   binding emits the `solved` arm), so a dim meeting a symbol is the solver's `Shape_error` first, and
   the `Ir.Indexing` second-kind refusal is an unreached backstop (pinned directly, and every meeting
   order, in `capture_per_call.ml`). After the closure `var` names a variable of the reset environment (or a
   projection-local one, `derive_projections` rebinds `var`), free in the open work, so the tie to
-  it constrains nothing: a binding drops it and lets the `solved` arm carry the value. A closed
-  reference holding NO value (a `Sym` row) has lost its constraint, so every later relating use
-  refuses it naming the closure (gh-ocannl-1655, `refuse_closed_unsolved_ref`): the binding's
-  pre-pass, `set_dim`, `set_sym_dim`, `set_equal`, `set_scale`. Refuse at the use, not at the
-  closure: a `Sym` row that is never reused is a valid program. The checks run BEFORE `set_var`,
+  it constrains nothing: a binding drops it (`previous_of`) and lets the `solved` arm carry the
+  value -- for a row binding, `Row_eq` against the carried row, standing in for the dead previous
+  row binding; `Total_elems` remains only for a closed row whose axes could not be carried (a
+  `Concat`/`Affine` axis). A closed reference holding no number (a `Sym` row) still has its
+  carried row for the `as_row` uses (a row binding, a Row-Row `set_equal`), but has lost its
+  constraint for every use needing a number, which refuses it naming the closure (gh-ocannl-1655,
+  `refuse_closed_unsolved_ref`): a dimension binding, `set_dim`, `set_sym_dim`, a mixed
+  `set_equal`, `set_scale`. Refuse at the use, not at the closure: a `Sym` row that is never reused
+  is a valid program. The checks run BEFORE `set_var`,
   which touches the reference into `open_refs` and would make it read as open. An unbound
   reference `set_equal` relates to a row reference is marked (`row_numbered_refs`), and binding it
   to a row later is refused (product-only tie; binding it first gives `Row_eq`). Pinned by the shared-reference cases of
@@ -77,10 +91,11 @@ files.
   `update_delayed_var_refs` at the registering step's Stage1 when an operand is fixed), so deciding
   on it first tied two rows by product, or compared two products, depending on what was solved
   by the time of the call. `Total_elems` is for a row against a number or a dimension variable only
-  (`set_dim` on a row, the Dim-Row arm). A Row-Row pair with a reference bound before the last
-  closure is refused, not product-tied: such a reference's uid is no longer in `open_refs`, its
-  `var` is dead. Pinned under both registration and argument orders by
-  `test/operations/set_equal_rows.ml`.
+  (`set_dim` on a row, the Dim-Row arm). In a Row-Row pair a reference bound before the last
+  closure (its uid no longer in `open_refs`, its `var` dead) contributes its `carried_row`
+  (`row_for_set_equal`, gh-ocannl-1689); with both closed the solver compares the two concrete
+  rows when it next runs (no eager comparison: the broadcast-top and basis rules are the solver's).
+  Pinned under both registration and argument orders by `test/operations/set_equal_rows.ml`.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity

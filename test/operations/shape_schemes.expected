@@ -63,6 +63,12 @@ control (no reference inputs): the conflicting application is accepted across a 
 a row reference bound to 2x6: an application to 2x6 succeeds: true
 an application to 3x4, of the same product, is refused: the rows are related: true
 control (no reference inputs): the application to 3x4 is accepted: true
+a row reference bound to 2x6 across a closure: an application to 2x6 succeeds: true
+an application to 3x4 across a closure, of the same product, is refused: the rows are related: true
+control (no reference inputs) across a closure: the application to 3x4 is accepted: true
+a row reference bound to 2x6, traced after it: an application to 2x6 succeeds: true
+an application to 3x4, traced after it, of the same product, is refused: the rows are related: true
+control (no reference inputs), traced after it: the application to 3x4 is accepted: true
 a reference bound outside to a row of 12 elements: a dimension of 12 inside fits: true
 and a dimension of 6 does not: true
 twice : ..'a..|..'b..->'c,'d => ..'a..|..'b..->'c, ..'a..|..'b..->'d
