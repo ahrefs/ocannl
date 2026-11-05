@@ -5,6 +5,26 @@ structural-match consumer setter kept: true
 structural-match has no guard ops: true
 structural-match: every cell holds the value of the iteration bound to it: true
 structural-match: virtual and materialized arms agree: true
+structural-wide producer virtual: true
+structural-wide producer inlined (no array reads survive): true
+structural-wide solves the inner symbol under a range guard (Where + Cmple lower + Cmplt upper): true
+structural-wide: every cell holds the value of the iteration that wrote it: true
+structural-wide: virtual and materialized arms agree: true
+structural-wide-zero producer virtual: true
+structural-wide-zero producer inlined (no array reads survive): true
+structural-wide-zero solves the inner symbol under a range guard (Where + Cmple lower + Cmplt upper): true
+structural-wide-zero: every cell holds the value of the iteration that wrote it: true
+structural-wide-zero: virtual and materialized arms agree: true
+structural-wide-offset producer virtual: true
+structural-wide-offset producer inlined (no array reads survive): true
+structural-wide-offset solves the inner symbol under a range guard (Where + Cmple lower + Cmplt upper): true
+structural-wide-offset: every cell holds the value of the iteration that wrote it: true
+structural-wide-offset: virtual and materialized arms agree: true
+structural-contained-offset producer virtual: true
+structural-contained-offset producer inlined (no array reads survive): true
+structural-contained-offset keeps the guard-free pairwise binding: true
+structural-contained-offset: every cell holds the value of the iteration that wrote it: true
+structural-contained-offset: virtual and materialized arms agree: true
 unit-solve(plain) producer virtual: true
 unit-solve(plain) producer inlined (no array reads survive): true
 unit-solve(plain) producer setter dropped: true

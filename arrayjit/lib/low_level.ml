@@ -2789,10 +2789,13 @@ let replay_facts ~(self : Tn.t) (code : t) : replay_facts =
    form commits its counter [Never_virtual] in [placements]. Given a copy of the lineage's
    placements and a [fresh_symbol] that does not draw on [Indexing.get_symbol], it touches nothing
    the lineage or the generated code's numbering can observe — what [instantiate_at_synthetic_read]
-   relies on. *)
+   relies on. [call_range s] is the inclusive [(from_, to_)] range of a call-site symbol [s] -- the
+   bounds of the read site's loop binding it -- or [None] where unknown (a static index, a symbol no
+   loop of the read site binds): a range must contain every value [s] takes at the read, and only
+   ever licenses a binding (gh-ocannl-1896), so [None] is always sound. *)
 let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
-    ~(placements : Tn.Placements.t) ~id (self : Tn.t)
-    (computations : (Indexing.axis_index array option * t) list)
+    ~(placements : Tn.Placements.t) ~(call_range : Indexing.symbol -> (int * int) option) ~id
+    (self : Tn.t) (computations : (Indexing.axis_index array option * t) list)
     (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
     (t, string) Result.t =
   let exception Non_virtual of string in
@@ -3139,22 +3142,36 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
               List.length (List.dedup_and_sort ~compare:Int.compare l) = List.length l
             in
             let unbound (_, s) = (not (Set.mem static_indices s)) && not (Map.mem !env s) in
-            (* gh-ocannl-1795: in a multi-component replay a matched symbol is range-guarded below,
-               and with several terms the read's symbols need not decompose a cell the way the
-               producer's loops do ([x[2u + v]] for [v] in 0..3 reads cells the producer writes as
-               [x[2s + t]] with [t] in 0..1): the guard would suppress a cell the component does
-               write. Such a position is left to unit-coefficient solving, which keeps a producer
-               loop and guards the decomposition that holds (Codex review of the PR). *)
+            let call_symbol c = snd (List.find_exn cterms ~f:(fun (cc, _) -> cc = c)) in
+            (* gh-ocannl-1896: the pairwise binding replays the producer at the iteration the read's
+               symbols name, and the store-time injectivity check (51) makes that iteration the one
+               writing the read cell exactly when it lies in the producer's loops. With one term the
+               position pins its symbol, so an iteration outside the loop names a cell no iteration
+               writes -- the coverage rule's case, as for a pass-1 binding. With several, the read's
+               symbols need not decompose a cell the way the producer's loops do: [x[2u + v]] for
+               [v] in 0..3 reads cell [2u + 2], which the producer writes as [x[2s + t]] at [(u + 1,
+               0)], not at the [(u, 2)] the binding replays -- a silent miscompute with one
+               component, and with several the range guard below would suppress a cell the component
+               does write (gh-ocannl-1795). So a multi-term match binds only where every call-site
+               symbol's range lies within its producer symbol's loop; otherwise the position is left
+               to unit-coefficient solving, which keeps a producer loop and guards the decomposition
+               that holds. *)
+            let within_producer_bounds () =
+              List.for_all pterms ~f:(fun (c, ps) ->
+                  match (call_range (call_symbol c), Map.find def_loop_ranges ps) with
+                  | Some (lo, hi), Some (from_, width) -> from_ <= lo && hi < from_ + width
+                  | _ -> false)
+            in
             if
               (not (List.is_empty pterms))
-              && (set_computation_count <= 1 || List.length pterms = 1)
               && List.for_all pterms ~f:unbound && distinct pcoeffs
               && List.equal Int.equal
                    (List.sort ~compare:Int.compare pcoeffs)
                    (List.sort ~compare:Int.compare ccoeffs)
+              && (List.length pterms = 1 || within_producer_bounds ())
             then (
               List.iter pterms ~f:(fun (c, ps) ->
-                  let _, cs = List.find_exn cterms ~f:(fun (cc, _) -> cc = c) in
+                  let cs = call_symbol c in
                   env := Map.set !env ~key:ps ~data:(Indexing.Iterator cs);
                   (* As for a pass-1 binding: in a multi-component replay the call-site symbol
                      ranges over the whole node, the producer's over its own loop, so the component
@@ -3498,9 +3515,9 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
   with Non_virtual i -> Error i
 
 let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inherited_unservable
-    ~id ~inherited_merge_tainted ~inherited_tns (optim_ctx : optimize_ctx) (traced : traced_array)
-    (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
-    t option =
+    ~call_range ~id ~inherited_merge_tainted ~inherited_tns (optim_ctx : optimize_ctx)
+    (traced : traced_array) (static_indices : Indexing.static_symbol list)
+    (call_args : Indexing.axis_index array) : t option =
   let computations =
     Hashtbl.find optim_ctx.computations traced.tn
     |> Option.value_or_thunk ~default:(fun () ->
@@ -3516,8 +3533,8 @@ let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inh
   if Hash_set.mem inherited_merge_tainted traced.tn then
     raise @@ Utils.User_error (cross_routine_merge_splice_rejection traced.tn);
   match
-    instantiate_computations ~fresh_symbol ~placements:optim_ctx.placements ~id traced.tn
-      computations static_indices call_args
+    instantiate_computations ~fresh_symbol ~placements:optim_ctx.placements ~call_range ~id
+      traced.tn computations static_indices call_args
   with
   | Ok body -> Some body
   | Error i ->
@@ -3850,7 +3867,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
   (* The ordinary inlining of a read: the node's stored template instantiated at the read's indices,
      as a scope local. [None] from [inline_computation] means the read site could not be served and
      the node was committed [Never_virtual] there; the read then stays a buffer read. *)
-  let inline_get (traced : traced_array) indices : scalar_t =
+  let inline_get (traced : traced_array) indices ~enclosing : scalar_t =
     let tn = traced.tn in
     let id = fresh_scope tn in
     (* gh-ocannl-1551: during a capture walk, an inherited computation that cannot be instantiated
@@ -3858,10 +3875,13 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     let on_inherited_unservable =
       Option.map !capture ~f:(fun _ code -> record_hit (Capture_read_uninlinable (tn, code)))
     in
+    (* gh-ocannl-1896: the read site's loops, innermost first, so an inner binder shadows. *)
+    let call_range s = List.Assoc.find enclosing s ~equal:Indexing.equal_symbol in
     Option.value ~default:(Get (tn, indices))
     @@ Option.map
-         (inline_computation ~fresh_symbol ?on_inherited_unservable ~id ~inherited_merge_tainted
-            ~inherited_tns optim_ctx traced static_indices indices) ~f:(fun body ->
+         (inline_computation ~fresh_symbol ?on_inherited_unservable ~call_range ~id
+            ~inherited_merge_tainted ~inherited_tns optim_ctx traced static_indices indices)
+         ~f:(fun body ->
            if Hash_set.mem inherited_tns tn then record_spliced_reads body;
            Local_scope { id; body; orig_indices = indices; mint = Inlined_computation })
   in
@@ -3931,9 +3951,13 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         in
         let call_args = Array.map indices ~f:substitute in
         let id = fresh_scope tn in
+        let call_range f =
+          List.find_map fresh ~f:(fun (_, f', to_) ->
+              Option.some_if (Indexing.equal_symbol f f') (0, to_))
+        in
         match
-          inline_computation ~fresh_symbol ~id ~inherited_merge_tainted ~inherited_tns optim_ctx
-            traced static_indices call_args
+          inline_computation ~fresh_symbol ~call_range ~id ~inherited_merge_tainted ~inherited_tns
+            optim_ctx traced static_indices call_args
         with
         | None -> `Rejected
         | Some body ->
@@ -4011,7 +4035,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           Hashtbl.remove footprint_scoped tn;
           Hash_set.add footprint_retracted tn;
           Get (tn, indices)
-      | None -> inline_get traced indices
+      | None -> inline_get traced indices ~enclosing
     in
     if not footprint_ok then retract ()
     else
@@ -4362,7 +4386,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           | _ ->
               if Hashtbl.mem footprint_scoped tn then
                 footprint_get ~footprint_ok traced indices ~enclosing
-              else inline_get traced indices)
+              else inline_get traced indices ~enclosing)
     | Get_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec } ->
         (* Review round 12: a dynamically-indexed read cannot be served by recomputation (the gather
            index is only known at runtime), so a LOCAL table materializes — but an INHERITED table
@@ -10744,6 +10768,9 @@ let computations_at_reads ~placements ~static_indices ~raw self computations =
       List.fold_result reads ~init:() ~f:(fun () (a : Tn.t Affine.access) ->
           Result.map ~f:ignore
             (instantiate_computations ~fresh_symbol:pricing_symbol ~placements
+               ~call_range:(fun s ->
+                 (* Outermost first: the innermost binder of [s] is the last. *)
+                 List.Assoc.find (List.rev a.a_loops) s ~equal:Indexing.equal_symbol)
                ~id:(pricing_scope self) self computations static_indices a.a_map))
       |> Result.map ~f:(fun () -> (placements, computations))
       |> Result.map_error ~f:(fun code -> `Read code)
@@ -10848,8 +10875,12 @@ let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indice
   let id = pricing_scope self and sink = pricing_scope self in
   try
     Result.map
-      (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc ~id self computations
-         static_indices call_args) ~f:(fun body ->
+      (* Its call indices are bare iterators or fixed positions, so no multi-term structural match
+         can fire and no call-site range is needed (gh-ocannl-1896). *)
+      (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
+         ~call_range:(fun _ -> None)
+         ~id self computations static_indices call_args)
+      ~f:(fun body ->
         post_virtualization_pipeline plc
           (Hashtbl.create (module Tnode))
           ~input_scopes:(Set.empty (module Scope_id))

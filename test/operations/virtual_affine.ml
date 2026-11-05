@@ -53,7 +53,8 @@ let case_structural_match () =
   p "structural-match producer inlined (no array reads survive)" (count_get o tgt = 0);
   p "structural-match producer setter dropped" (count_set o tgt = 0);
   p "structural-match consumer setter kept" (count_set o out = 1);
-  (* Same affine structure on both sides: bound pairwise, no range/equality guard. *)
+  (* Same affine structure on both sides, the read's loops within the producer's (case 1b): bound
+     pairwise, no range/equality guard. *)
   let wh, le, lt = count_guard_ops o in
   p "structural-match has no guard ops" (wh = 0 && le = 0 && lt = 0);
   (* The scatter is surjective onto [0, 6), so every cell carries the value of the producer
@@ -66,6 +67,67 @@ let case_structural_match () =
   p "structural-match: every cell holds the value of the iteration bound to it"
     (same virt [ scattered ]);
   p "structural-match: virtual and materialized arms agree" (same virt mat)
+
+(* === Case 1b: the structural match within the producer's bounds (gh-ocannl-1896) === The pairwise
+   binding of case 1 evaluates the producer at the iteration [(u, v)] the read's symbols name. The
+   producer map is injective (store time refuses it otherwise), so that iteration writes the read
+   cell exactly when it lies in the producer's loops. A read whose inner symbol ranges wider --
+   [x[2u + v]] for [v] in [lo, lo + 3], against [t] in [lo, lo + 1] -- reads cells the producer
+   writes at [(u + 1, v - 2)], and the pairwise binding replayed [tag u v], a value no iteration
+   wrote. Such a read must take unit-coefficient solving (a kept [s] loop and a range guard); a read
+   inside the bounds keeps case 1's guard-free form. A single setter nest here: a second component
+   would take the multi-component path ([block_components_two_terms] in
+   [virtual_rejection_boundary]). [lo = 1] checks both the fallback's guard and the containment test
+   against the loop's [from_], not [0]; [zero_init] checks that a [Zero_out], which is not a setter
+   component, does not hide the read. *)
+let case_structural_bounds ~name ~zero_init ~lo ~u_n ~v_n ~contained () =
+  let tgt = mk ~dims:[| 6 |] (name ^ "_x") and out = mk ~dims:[| u_n; v_n |] (name ^ "_out") in
+  materialize out;
+  let s = sym () and t = sym () and u = sym () and v = sym () in
+  let scatter =
+    loop_n s 3
+      (loop ~from_:lo ~upto:(lo + 1) t (set tgt [| aff [ (2, s); (1, t) ] (-lo) |] (tag s t)))
+  in
+  let prod = if zero_init then seq (zero tgt) scatter else scatter in
+  let cons =
+    loop_n u u_n
+      (loop ~from_:lo
+         ~upto:(lo + v_n - 1)
+         v
+         (set out [| iter u; aff [ (1, v) ] (-lo) |] (get tgt [| aff [ (2, u); (1, v) ] (-lo) |])))
+  in
+  let llc = seq prod cons in
+  let o = optimize llc in
+  p (name ^ " producer virtual") (known_virtual o tgt);
+  p (name ^ " producer inlined (no array reads survive)") (count_get o tgt = 0);
+  let wh, le, lt = count_guard_ops o in
+  if contained then p (name ^ " keeps the guard-free pairwise binding") (wh = 0 && le = 0 && lt = 0)
+  else
+    p
+      (name ^ " solves the inner symbol under a range guard (Where + Cmple lower + Cmplt upper)")
+      (wh >= 1 && le >= 1 && lt >= 1);
+  (* The reference replays the producer's writes, then reads them the consumer's way: [out[u, v -
+     lo]] is cell [2u + v - lo]. *)
+  let cells = Array.create ~len:6 Float.nan in
+  for s = 0 to 2 do
+    for t = lo to lo + 1 do
+      cells.((2 * s) + t - lo) <- Float.of_int (1 + (10 * s) + t)
+    done
+  done;
+  let expected =
+    Array.concat (List.init u_n ~f:(fun u -> Array.init v_n ~f:(fun j -> cells.((2 * u) + j))))
+  in
+  let seed = [ (out, blank (u_n * v_n)) ] and read = [ out ] in
+  let virt = execute ~name:("va_" ^ name) o ~seed ~read in
+  let mat =
+    execute
+      ~name:("va_" ^ name ^ "_mat")
+      (optimize ~materialized:[ tgt ] llc)
+      ~seed:(if zero_init then prefill tgt :: seed else seed)
+      ~read
+  in
+  p (name ^ ": every cell holds the value of the iteration that wrote it") (same virt [ expected ]);
+  p (name ^ ": virtual and materialized arms agree") (same virt mat)
 
 (* === Case 2: unit-coefficient solving at a plain iterator === *)
 let case_unit_solve_plain () =
@@ -195,6 +257,18 @@ let case_stage_a_diagonal () =
    after it still run (gh-ocannl-1084; [footprint_materialization] is the exemplar). *)
 let () =
   case "structural-match" case_structural_match;
+  case "structural-wide"
+    (case_structural_bounds ~name:"structural-wide" ~zero_init:false ~lo:0 ~u_n:2 ~v_n:4
+       ~contained:false);
+  case "structural-wide-zero"
+    (case_structural_bounds ~name:"structural-wide-zero" ~zero_init:true ~lo:0 ~u_n:2 ~v_n:4
+       ~contained:false);
+  case "structural-wide-offset"
+    (case_structural_bounds ~name:"structural-wide-offset" ~zero_init:false ~lo:1 ~u_n:2 ~v_n:4
+       ~contained:false);
+  case "structural-contained-offset"
+    (case_structural_bounds ~name:"structural-contained-offset" ~zero_init:false ~lo:1 ~u_n:3 ~v_n:2
+       ~contained:true);
   case "unit-solve(plain)" case_unit_solve_plain;
   case "triangular" case_triangular;
   case "non-injective" case_noninjective;

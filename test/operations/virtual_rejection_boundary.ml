@@ -794,6 +794,31 @@ let row_block_components_two_terms () =
     ~expected:[| 1.; 2.; 11.; 12.; 11.; 12.; 21.; 22. |]
     ~verdict:Accepted
 
+(* The same two components read INSIDE the producer's bounds (gh-ocannl-1896): [x[2u + v]] for [u]
+   in 0..2, [v] in 0..1 names the very iteration that writes each cell, so the pairwise binding is
+   exact and its range guards always hold. The match binds pairwise, as with one component, rather
+   than replaying the [s] loop under a solved guard: the replay keeps no producer loop, only the
+   consumer's own two. *)
+let row_block_components_two_terms_contained () =
+  let label = "block_components_two_terms_contained" in
+  let x = mk ~dims:[| 6 |] "blk2c_x" and out = mk ~dims:[| 3; 2 |] "blk2c_out" in
+  materialize out;
+  let s = sym () and t = sym () and u = sym () and v = sym () in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        set x [| fixed 0 |] (c 10.);
+        loop_n s 3 (loop_n t 2 (set x [| aff [ (2, s); (1, t) ] 0 |] (tag s t)));
+        loop_n u 3
+          (loop_n v 2 (set out [| iter u; iter v |] (get x [| aff [ (2, u); (1, v) ] 0 |])));
+      ]
+  in
+  let o = optimize ~name:(label ^ "_shape") llc in
+  p
+    (label ^ ": the replay keeps no producer loop")
+    (List.length (loop_sites ~in_scopes:true o.Ir.Low_level.llc) = 2);
+  row ~label ~llc ~cand:x ~out ~seed:[] ~expected:[| 1.; 2.; 11.; 12.; 21.; 22. |] ~verdict:Accepted
+
 (* gh-ocannl-1690: one cell, two spellings. On an axis of extent 1 a producer position [Fixed_idx 0]
    and a read through a one-iteration loop address the same cell, so the read site is served with no
    guard and no refusal. The consumer reads the candidate both ways -- [x[u]] under [for u = 0 to 0]
@@ -1103,6 +1128,7 @@ let () =
   row_block_components_structural ~cells:false;
   row_block_components_structural ~cells:true;
   row_block_components_two_terms ();
+  row_block_components_two_terms_contained ();
   row_unit_axis_fixed_producer ();
   row_unit_axis_computed_producer ();
   row_unit_axis_loop_producer ();

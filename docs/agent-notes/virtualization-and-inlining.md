@@ -254,9 +254,19 @@ files.
   transposed operand reads (`flattened_read_*` rows). Range guards bound a solved symbol by its
   loop's `[from_, from_ + width)`, not `[0, width)` (`block_components_offset_*`), and a
   structural affine match (`s + 1` read at `t + 1`) gets one too in a multi-component replay, as a
-  pass-1 binding does (`block_components_structural_*`); with several terms the read need
-  not decompose a cell as the producer's loops do, so there the match is left to unit solving
-  (`block_components_two_terms`).
+  pass-1 binding does (`block_components_structural_*`).
+- **A multi-term structural match binds pairwise only within the producer's bounds**
+  (gh-ocannl-1896): `x[2s + t]` read at `x[2u + v]` replays the producer at `(u, v)`, which —
+  the write map being injective (store-time `51`) — is the iteration writing the read cell exactly
+  when it lies in the producer's loops. A `v` ranging wider than `t` reads cells written at
+  `(u + 1, v - 2)`, so the pairwise binding miscomputed silently with one component, and a range
+  guard on it would suppress cells the component writes. The match therefore requires every
+  call-site symbol's range (`~call_range`: the read site's `enclosing` loops, a pricing read's
+  `a_loops`, a footprint's fresh loops; `None` for statics, which declines) to lie within its
+  producer loop's `[from_, from_ + width)`, with one component or several; otherwise unit solving
+  keeps a producer loop under a guard. Rows: `structural-wide*` / `structural-contained-offset` in
+  `virtual_affine.ml`, `block_components_two_terms{,_contained}` in
+  `virtual_rejection_boundary.ml`.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
