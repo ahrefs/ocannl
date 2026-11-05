@@ -261,17 +261,20 @@ let kernel_size_of_span ~dilation ~span =
    conv, say). On a shape-scheme trace's unsolved extents it must collapse: kept, a residual add
    equating its [over] with it reads as an occurs-check cycle (gh-ocannl-1820, where [unify_dim]'s
    mixed padded/valid arm built one as a helper; [window_pair_equation] now equates the outputs
-   directly instead, gh-ocannl-1823). A window over a solved extent, or with a kernel carrying a
-   named basis, is left to the solved arms, which derive the extent's basis from the kernel's. *)
-let is_identity_window ~stride ~over ~conv =
+   directly instead, gh-ocannl-1823). Collapsed, nothing is left to constrain the extent's basis
+   later, so the identity passes the basis through as it passes the size, over a solved extent too
+   (gh-ocannl-1824): deriving [merge_derived_basis over.basis kernel.basis] there turned the other
+   reserved tag into the kernel's, and acceptance depended on which side was solved first. A kernel
+   carrying a named basis still converts the extent, so its window is no identity and is left to the
+   solved arms. *)
+let is_identity_window ~stride ~conv =
   stride = 1
   &&
-  match (conv, over) with
-  | (None | Some { use_padding = true; _ }), _ -> true
-  | Some { use_padding = false; _ }, Dim _ -> false
-  | Some { dilation; kernel = Dim k; use_padding = false }, (Var _ | Sym _ | Affine _ | Concat _) ->
+  match conv with
+  | None | Some { use_padding = true; _ } -> true
+  | Some { dilation; kernel = Dim k; use_padding = false } ->
       effective_kernel_span ~dilation ~kernel_size:k.d = 1 && is_reserved_basis k.basis
-  | Some { kernel = Var _ | Sym _ | Affine _ | Concat _; use_padding = false; _ }, _ -> false
+  | Some { kernel = Var _ | Sym _ | Affine _ | Concat _; use_padding = false; _ } -> false
 
 type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 
@@ -618,9 +621,9 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       let result = Affine { stride; over; conv; stride_offset } in
       match result with
       | res when keep_affine -> res
-      | Affine { stride = 1; over; conv = Some { use_padding = true; _ }; stride_offset = _ } ->
+      (* Before the solved arms: an identity window keeps its extent's basis (gh-ocannl-1824). *)
+      | Affine { stride; over; conv; stride_offset = _ } when is_identity_window ~stride ~conv ->
           over
-      | Affine { stride = 1; over; conv = None; stride_offset = _ } -> over
       | Affine
           {
             stride;
@@ -655,9 +658,6 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
           Dim { d = s.d * stride; basis; proj_id = None }
       | Affine { stride; over = Dim s; conv = None; stride_offset = _ } ->
           Dim { d = s.d * stride; basis = s.basis; proj_id = None }
-      | Affine { stride; over; conv; stride_offset = _ } when is_identity_window ~stride ~over ~conv
-        ->
-          over
       | res -> res)
   | Concat dims -> (
       let dims = List.map dims ~f:(fun d -> s_dim_one ~keep_affine v ~value ~in_:d) in
@@ -2239,11 +2239,9 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
              ("solved dimensions for axis: different bases", [ Dim_mismatch [ dim1; dim2 ] ])
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
   (* Two arms, not an or-pattern: a guard failing on the first alternative would skip the second. *)
-  | Affine { stride; over; conv; stride_offset = _ }, dim
-    when is_identity_window ~stride ~over ~conv ->
+  | Affine { stride; over; conv; stride_offset = _ }, dim when is_identity_window ~stride ~conv ->
       unify_dim ~stage origin (over, dim) env
-  | dim, Affine { stride; over; conv; stride_offset = _ }
-    when is_identity_window ~stride ~over ~conv ->
+  | dim, Affine { stride; over; conv; stride_offset = _ } when is_identity_window ~stride ~conv ->
       unify_dim ~stage origin (over, dim) env
   | ( Affine
         {
@@ -2332,7 +2330,13 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
          effective_kernel_span effective_kernel_span = input_size - stride * (output_size - 1) *)
       let span = i.d - (stride * (s.d - 1)) in
       match kernel_size_of_span ~dilation ~span with
-      | Some k -> unify_dim ~stage origin (Var v, get_default_dim ~d:k ()) env
+      | Some k ->
+          (* The sizes alone pick the kernel; the equation's bases are checked by re-unifying it
+             with the kernel solved (gh-ocannl-1824: a kernel solved before the equation met the
+             solved arms' basis check, one inferred here skipped it). *)
+          let constrs, env = unify_dim ~stage origin (Var v, get_default_dim ~d:k ()) env in
+          let more, env = unify_dim ~stage origin (dim1, dim2) env in
+          (constrs @ more, env)
       | None ->
           raise
           @@ Shape_error

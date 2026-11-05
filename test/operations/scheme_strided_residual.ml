@@ -212,11 +212,14 @@ let () =
         (Result.is_error (solve [ eq (Var v) (valid ~stride:1 ~kernel:3 (Var v)) ]));
       p "control: v = conv(v + dilation 2, kernel 2) is still refused"
         (Result.is_error (solve [ eq (Var v) (valid ~stride:1 ~dilation:2 ~kernel:2 (Var v)) ]));
-      (* Only the self-reference is the tautology: a window over a solved extent still derives its
-         basis from the kernel's, so [bcast_if_1] over a [default] kernel reads as [default]. *)
+      (* The identity holds over a solved extent too, basis included (gh-ocannl-1824): a [default]
+         kernel does not restamp [bcast_if_1] as [default], which the collapse over an unsolved
+         extent could never enforce. *)
       let bcast_4 = Row.get_dim ~d:4 ~basis:Row.bcast_if_1 () in
-      p "a solved window still merges its kernel's basis: default 4 = conv(bcast 4 + kernel 1)"
-        (Result.is_ok (solve [ eq (dim 4) (valid ~stride:1 ~kernel:1 bcast_4) ])));
+      p "a solved identity window keeps its extent's basis: bcast 4 = conv(bcast 4 + kernel 1)"
+        (Result.is_ok (solve [ eq bcast_4 (valid ~stride:1 ~kernel:1 bcast_4) ]));
+      p "control: default 4 = conv(bcast 4 + kernel 1) is refused"
+        (Result.is_error (solve [ eq (dim 4) (valid ~stride:1 ~kernel:1 bcast_4) ])));
   Verdict.case "the pool/shortcut relation solved generically, then concretely" (fun () ->
       (* [w = 2*o_sc] (padded stride 2) and [w = 2*(o_p - 1) + 2] (valid stride-2 2x2 pool). *)
       let pair_then ~first ~then_ =
@@ -322,3 +325,174 @@ let () =
           p
             (order ^ ": and o2 = 5 gives o1 = 7")
             (solves_to [ 7; 5 ] (solved (fun ~w:_ ~o1:_ ~o2 -> [ eq (Var o2) (dim 5) ])))))
+
+(* {2 An identity window's basis does not depend on constraint order (gh-ocannl-1824)}
+
+   Over an unsolved extent, the stride-1 span-1 window collapses ([unify_dim (over, other)]), so the
+   extent takes the other side's basis. Over a solved one, the solved arms used to stamp
+   [merge_derived_basis over.basis kernel.basis] on it: the kernel's tag whenever the extent carried
+   the other reserved one. So [conv(v + kernel 1) = bcast 4] then [v = bcast 4] solved, and the
+   reverse order refused "different bases". *)
+
+let tagged d basis = Row.get_dim ~d ~basis ()
+let bcast d = tagged d Row.bcast_if_1
+
+let identity_window ?(dilation = 1) ?(kernel = tagged 1 Row.default_basis) over =
+  Row.Affine
+    { stride = 1; over; conv = Some { dilation; kernel; use_padding = false }; stride_offset = 0 }
+
+(* Solve the equations in a single batch, or one at a time carrying the environment and whatever the
+   solver deferred into the next step; a constraint still deferred at the end is a failure, not a
+   success. *)
+let solve_strict ~incremental cs =
+  let step (deferred, env) cs =
+    match Row.solve_inequalities ~stage:Stage4 (deferred @ cs) env with
+    | result -> Ok result
+    | exception Row.Shape_error (msg, _) -> Error msg
+  in
+  let batches = if incremental then List.map cs ~f:(fun c -> [ c ]) else [ cs ] in
+  List.fold batches
+    ~init:(Ok ([], Row.empty_env))
+    ~f:(fun acc batch -> Result.bind acc ~f:(fun acc -> step acc batch))
+  |> Result.bind ~f:(function [], env -> Ok env | _ :: _, _ -> Error "constraints left deferred")
+
+let resolves_to expected v = function
+  | Ok env -> (
+      match Row.get_dim_from_env env v with
+      | Some (Dim { d; basis; _ }) -> (
+          match expected with Row.Dim e -> d = e.d && String.equal basis e.basis | _ -> false)
+      | _ -> false)
+  | Error _ -> false
+
+let rec permutations = function
+  | [] -> [ [] ]
+  | xs ->
+      List.concat_mapi xs ~f:(fun i x ->
+          let rest = List.filteri xs ~f:(fun j _ -> j <> i) in
+          List.map (permutations rest) ~f:(fun perm -> x :: perm))
+
+let () =
+  Verdict.case "the issue's identity window resolves to the extent's basis in every order"
+    (fun () ->
+      List.iter [ true; false ] ~f:(fun window_first ->
+          List.iter [ true; false ] ~f:(fun window_left ->
+              List.iter [ false; true ] ~f:(fun incremental ->
+                  let v = Row.get_var () in
+                  let window_eq =
+                    if window_left then eq (identity_window (Var v)) (bcast 4)
+                    else eq (bcast 4) (identity_window (Var v))
+                  in
+                  let extent_eq = eq (Var v) (bcast 4) in
+                  let cs =
+                    if window_first then [ window_eq; extent_eq ] else [ extent_eq; window_eq ]
+                  in
+                  p
+                    (String.concat ~sep:", "
+                       [
+                         (if window_first then "window first" else "extent first");
+                         (if window_left then "window on the left" else "window on the right");
+                         (if incremental then "one at a time" else "one batch");
+                       ]
+                    ^ ": v = 4 of bcast_if_1")
+                    (resolves_to (bcast 4) v (solve_strict ~incremental cs))))));
+  Verdict.case "every reserved tag pair, size and dilation, in both orders" (fun () ->
+      let reserved = [ Row.default_basis; Row.bcast_if_1 ] in
+      let other b = if String.equal b Row.bcast_if_1 then Row.default_basis else Row.bcast_if_1 in
+      let cells =
+        List.concat_map reserved ~f:(fun extent_basis ->
+            List.concat_map reserved ~f:(fun kernel_basis ->
+                List.concat_map [ 1; 4 ] ~f:(fun size ->
+                    List.map [ 1; 3 ] ~f:(fun dilation ->
+                        (extent_basis, kernel_basis, size, dilation)))))
+      in
+      let describe (eb, kb, size, dilation) =
+        Printf.sprintf "extent %d of %s, kernel of %s, dilation %d" size eb kb dilation
+      in
+      List.iter [ true; false ] ~f:(fun extent_first ->
+          let order = if extent_first then "extent first" else "window first" in
+          let run ~target (eb, kb, size, dilation) =
+            let v = Row.get_var () and w = Row.get_var () in
+            let extent_eq = eq (Var v) (tagged size eb) in
+            let window_eqs =
+              [
+                eq (Var w) (identity_window ~dilation ~kernel:(tagged 1 kb) (Var v));
+                eq (Var w) (target ~size ~eb);
+              ]
+            in
+            ( w,
+              solve_strict ~incremental:true
+                (if extent_first then extent_eq :: window_eqs else window_eqs @ [ extent_eq ]) )
+          in
+          p_all ~min:16 (order ^ ": the window resolves to its extent, size and basis") cells
+            ~f:(fun ((eb, _, size, _) as cell) ->
+              let w, result = run ~target:(fun ~size ~eb -> tagged size eb) cell in
+              let ok = resolves_to (tagged size eb) w result in
+              if not ok then
+                Stdio.eprintf "%s: %s fails (not part of the golden)\n" order (describe cell);
+              ok);
+          p_all ~min:16 (order ^ ": control: the other reserved tag at the same size is refused")
+            cells ~f:(fun cell ->
+              let _, result = run ~target:(fun ~size ~eb -> tagged size (other eb)) cell in
+              let ok = Result.is_error result in
+              if not ok then
+                Stdio.eprintf "%s: %s accepts the other tag (not part of the golden)\n" order
+                  (describe cell);
+              ok)));
+  Verdict.case "a kernel solved later goes through substitution, in every order" (fun () ->
+      (* With its kernel a variable the window is no identity yet: [unify_dim] defers it, and
+         [s_dim_one] reduces it once the kernel is solved -- a fix confined to [unify_dim] fails
+         here. With the extent and [w] solved first, [unify_dim] infers the kernel from the sizes
+         alone; the control fails unless that arm re-checks the equation's bases. *)
+      let run cs_of =
+        let v = Row.get_var () and k = Row.get_var () and w = Row.get_var () in
+        List.map
+          (permutations (cs_of ~v ~k ~w))
+          ~f:(fun named ->
+            ( String.concat ~sep:"; " (List.map named ~f:fst),
+              w,
+              solve_strict ~incremental:true (List.map named ~f:snd) ))
+      in
+      let report claim ok (order, _, _) =
+        if not ok then
+          Stdio.eprintf "%s: fails in the order %s (not part of the golden)\n" claim order;
+        ok
+      in
+      let window ~v ~k ~w =
+        ("w = conv(v + kernel k)", eq (Var w) (identity_window ~kernel:(Var k) (Var v)))
+      in
+      let kernel ~k = ("k = 1", eq (Var k) (dim 1))
+      and extent ~v = ("v = bcast 4", eq (Var v) (bcast 4)) in
+      let claim = "w = conv(v + kernel k), k = 1, v = 4 of bcast_if_1: w = 4 of bcast_if_1" in
+      p_all ~min:6 claim
+        (run (fun ~v ~k ~w -> [ window ~v ~k ~w; kernel ~k; extent ~v ]))
+        ~f:(fun ((_, w, result) as run) -> report claim (resolves_to (bcast 4) w result) run);
+      let claim = "control: and w = 4 of default besides is refused" in
+      p_all ~min:24 claim
+        (run (fun ~v ~k ~w ->
+             [ window ~v ~k ~w; kernel ~k; extent ~v; ("w = 4", eq (Var w) (dim 4)) ]))
+        ~f:(fun ((_, _, result) as run) -> report claim (Result.is_error result) run));
+  Verdict.case "controls: what the identity does not cover is unchanged" (fun () ->
+      let named_kernel = tagged 1 "h" in
+      p "a named span-1 kernel still converts: 4 of h = conv(default 4 + kernel 1 of h)"
+        (Result.is_ok (solve [ eq (tagged 4 "h") (identity_window ~kernel:named_kernel (dim 4)) ]));
+      p "and default 4 = conv(default 4 + kernel 1 of h) is refused"
+        (Result.is_error (solve [ eq (dim 4) (identity_window ~kernel:named_kernel (dim 4)) ]));
+      p
+        "a size-changing window still derives the kernel's tag: default 3 = conv(bcast 1 + kernel \
+         3)"
+        (Result.is_ok (solve [ eq (dim 3) (valid ~stride:1 ~kernel:3 (bcast 1)) ]));
+      p "a padded stride-1 window over bcast 4 is bcast 4"
+        (Result.is_ok (solve [ eq (bcast 4) (padded ~stride:1 (bcast 4)) ]));
+      List.iter [ true; false ] ~f:(fun window_first ->
+          let v = Row.get_var () in
+          let cs = [ eq (padded ~stride:1 (Var v)) (bcast 4); eq (Var v) (bcast 4) ] in
+          p
+            ((if window_first then "window first" else "extent first")
+            ^ ": a padded stride-1 window resolves v = 4 of bcast_if_1")
+            (resolves_to (bcast 4) v
+               (solve_strict ~incremental:true (if window_first then cs else List.rev cs))));
+      let v = Row.get_var () in
+      p "a different size is refused: v = bcast 4, conv(v + kernel 1) = bcast 5"
+        (Result.is_error
+           (solve_strict ~incremental:true
+              [ eq (Var v) (bcast 4); eq (identity_window (Var v)) (bcast 5) ])))
