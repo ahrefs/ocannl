@@ -1824,15 +1824,31 @@ let missing_computation_rejection (plc : Tn.Placements.t) (traced : traced_array
      Train.set_materialized) before its first compilation, or drop the placement that made it \
      virtual."]
 
+(* Why [instantiate_computations] can refuse a read site, for the two refusals below: they relay its
+   code and cannot dispatch on it. *)
+let uninlinable_causes =
+  "unsupported indexing or vector form for inlining, or a guard of the computation that would fall \
+   back, at a cell no write of it reaches, on a value no write put there"
+
 (* gh-ocannl-1551: the refusal of an INHERITED computation that cannot be instantiated at a read
    site ([code] is [instantiate_computations]' rejection), shared like the one above. *)
 let inherited_uninlinable_rejection (tn : Tn.t) ~(code : string) : string =
   [%string
     "the deferred computation of %{Tn.debug_name tn}, stored by an earlier routine of this \
      compilation lineage, could not be inlined at a read site of this routine (rejection %{code}: \
-     unsupported indexing or vector form for inlining): no routine writes the node's buffer, so \
-     the read cannot fall back to a materialized access. Mark %{Tn.debug_name tn} as materialized \
-     (e.g. via Train.set_materialized) in the routine that computes it."]
+     %{uninlinable_causes}): no routine writes the node's buffer, so the read cannot fall back to \
+     a materialized access. Mark %{Tn.debug_name tn} as materialized (e.g. via \
+     Train.set_materialized) in the routine that computes it."]
+
+(* gh-ocannl-1897: the same refusal for a node DECLARED virtual, which has no materialization to
+   decline to either -- before, it surfaced as the placement table's "already virtual" collision. *)
+let declared_uninlinable_rejection (tn : Tn.t) ~(code : string) : string =
+  [%string
+    "%{Tn.debug_name tn} is declared virtual, but its computation could not be inlined at a read \
+     site of this routine (rejection %{code}: %{uninlinable_causes}), and a node declared virtual \
+     has no buffer to read instead. Initialize every cell the routine reads (e.g. with an =: \
+     assignment covering the node), or mark %{Tn.debug_name tn} as materialized (e.g. via \
+     Train.set_materialized)."]
 
 (* gh-ocannl-1514, gh-ocannl-1551: an inherited read a capture walk (see [virtual_llc]'s [capture])
    met and left un-inlined, because the read would refuse the routine where it executes -- a
@@ -2794,8 +2810,9 @@ let replay_facts ~(self : Tn.t) (code : t) : replay_facts =
    loop of the read site binds): a range must contain every value [s] takes at the read, and only
    ever licenses a binding (gh-ocannl-1896), so [None] is always sound. *)
 let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
-    ~(placements : Tn.Placements.t) ~(call_range : Indexing.symbol -> (int * int) option) ~id
-    (self : Tn.t) (computations : (Indexing.axis_index array option * t) list)
+    ~(placements : Tn.Placements.t) ~(call_range : Indexing.symbol -> (int * int) option)
+    ~(coverage_exempt : bool) ~id (self : Tn.t)
+    (computations : (Indexing.axis_index array option * t) list)
     (static_indices : Indexing.static_symbol list) (call_args : Indexing.axis_index array) :
     (t, string) Result.t =
   let exception Non_virtual of string in
@@ -2929,9 +2946,11 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
   in
   (* gh-133 Stage A: a guard's else-branch reads [Get_local id] -- the zero/init local produced by a
      [Zero_out] computation. Without one, the guarded update starts from an explicit [0.] init
-     ([needs_init] below), which the Stage B guards may rely on only because their maps are
-     surjective, and a fixed-index guard only where the components together cover the node
-     ([union_covers]). *)
+     ([needs_init] below), which is the materialized value only where some write overwrites it: the
+     components together covering the node ([union_covers]), or -- for a node [decide_placements]
+     decides -- the coverage rule, which materializes a node read where its writes do not reach. A
+     node that skipped that rule ([coverage_exempt]) is held to [fallback_defined] (gh-ocannl-1897,
+     the check after the guard fold). *)
   let has_zero_init =
     let rec contains = function
       | Zero_out tn -> Tn.equal tn self
@@ -2962,8 +2981,10 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
      components oldest first over one shared local -- so it applies exactly the writes the
      materialized program applies to [r], in its order, and a component that does not write [r]
      leaves the local as it was. The init a guard falls back on before the first write to [r] is
-     overwritten by that write; a first write that ACCUMULATES reads the cell's entry value, which
-     the read-before-write rule already makes an input for a node not declared virtual.
+     overwritten by that write. A first write that ACCUMULATES reads the cell's entry value: an
+     input by the read-before-write rule for a node [decide_placements] decides, the replay's init
+     for a coverage-exempt one -- with a guard or without, so that is not a question of the guard's
+     fallback.
 
      A literal table is excluded, here and from the omission below: a host-constant node
      ([Tn.known_host_constant]), or one every setter of which stores a constant -- the in-kernel
@@ -3304,13 +3325,15 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
        carries on, which is the materialized value only if that local is defined at the cell: a
        [Zero_out] of the node ([has_zero_init]) or the components together covering it
        ([union_covers], gh-ocannl-1795). Without either proof the position refuses as before -- it
-       is not the guard's job to invent a value for a cell no write of the replay reaches. *)
+       is not the guard's job to invent a value for a cell no write of the replay reaches. For a
+       coverage-exempt node the shape is admitted here and the proof is asked once, of every guard,
+       below (gh-ocannl-1897), so its refusal names the fallback rather than an index mismatch. *)
     let fixed_guardable (lhs_ind : Indexing.axis_index) (rhs_ind : Indexing.axis_index) =
       (match lhs_ind with Indexing.Fixed_idx _ -> true | _ -> false)
       && (match rhs_ind with
         | Indexing.Iterator _ | Indexing.Affine _ -> true
         | Indexing.Fixed_idx _ | Indexing.Sub_axis | Indexing.Concat _ -> false)
-      && Lazy.force fallback_defined
+      && (coverage_exempt || Lazy.force fallback_defined)
     in
     let guards =
       Array.foldi def_args_arr ~init:[] ~f:(fun i guards lhs_ind ->
@@ -3326,6 +3349,21 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
     in
     let guards = List.rev guards in
     let range_guards = List.rev !range_guards in
+    (* gh-ocannl-1897: where a guard is false the replay carries the shared local on, which is the
+       materialized value only if some write defines it. For a node [decide_placements] decides, the
+       coverage rule proves that of every cell the routine reads -- a node read where its writes do
+       not reach owns a buffer instead -- so any guard is sound. A node that skipped the rule
+       ([coverage_exempt]: declared virtual, or committed by an earlier routine of the lineage) has
+       no such proof and no buffer to fall back to, so every guard on it -- equality from a repeated
+       or unsolved symbol, range from a binding of a multi-component node or a unit solve, fixed --
+       needs [fallback_defined]: without it the guard would read, at a cell no write reaches, the
+       [0.] the replay invents ([needs_init]). Checked ahead of the init and after omission, so an
+       omitted component still needs nothing. *)
+    if
+      coverage_exempt
+      && (not (List.is_empty guards && List.is_empty range_guards))
+      && not (Lazy.force fallback_defined)
+    then raise @@ Non_virtual "157:guard-fallback-unproven";
     (* Set when a guard is introduced but the producer emitted no [Zero_out]: an explicit init local
        is then prepended before the (possibly loop-nested) guarded updates. *)
     let needs_init = ref false in
@@ -3409,12 +3447,11 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
           let conds = eq_conds @ range_conds in
           (* Off-condition reads fall back to [Get_local id] -- the init local emitted by the
              producer's [Zero_out] ([has_zero_init]) or, when absent, the explicit init prepended
-             below. For an affine guard the no-[Zero_out] case implies the map is surjective (an
-             injective+surjective scatter that skipped neutral init -- Stage B), so every read cell
-             IS written by exactly one iteration (injectivity) and the init value is always
-             overwritten -- 0. is a safe neutral. A fixed-index guard is admitted without a
-             [Zero_out] only when the components together cover the node ([fixed_guardable]), so
-             some component overwrites that init at every cell. *)
+             below. That init is overwritten at every cell the read reaches by the write the guard
+             selects -- injectivity makes it exactly one iteration's -- because something proved
+             every such cell written: the coverage rule for a node [decide_placements] decides,
+             [fallback_defined] for a coverage-exempt one (the check after the guard fold), and for
+             a fixed-index guard on any node [fixed_guardable]. *)
           if (not (List.is_empty conds)) && not has_zero_init then needs_init := true;
           (* task-9658aac9: the then-arm [acc] structurally contains the producer read at the
              unit-solved index, so for a non-matching kept-loop iteration that index (hence the flat
@@ -3532,9 +3569,16 @@ let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inh
      routine's own walk; a post-hoc scan of the final code cannot. *)
   if Hash_set.mem inherited_merge_tainted traced.tn then
     raise @@ Utils.User_error (cross_routine_merge_splice_rejection traced.tn);
+  (* gh-ocannl-1897: a node already committed virtual when the routine started -- declared, or by an
+     earlier routine of the lineage -- skipped [decide_placements]' coverage rule, so the inliner
+     must prove its guards' fallback itself. During the walk nothing else is [Virtual]: this
+     routine's own commitments come at cleanup, and sibling compiles fork the lineage. An inherited
+     node is one of these or was judged by that rule here (no local write covers its reads, so it
+     owns a buffer and no read of it is inlined), so [inherited_tns] adds nothing. *)
+  let coverage_exempt = Tn.Placements.known_virtual optim_ctx.placements traced.tn in
   match
-    instantiate_computations ~fresh_symbol ~placements:optim_ctx.placements ~call_range ~id
-      traced.tn computations static_indices call_args
+    instantiate_computations ~fresh_symbol ~placements:optim_ctx.placements ~call_range
+      ~coverage_exempt ~id traced.tn computations static_indices call_args
   with
   | Ok body -> Some body
   | Error i ->
@@ -3551,6 +3595,10 @@ let%track7_sexp inline_computation ?(fresh_symbol = Indexing.get_symbol) ?on_inh
         | Some record ->
             record i;
             None)
+      else if Tn.Placements.known_virtual optim_ctx.placements traced.tn then
+        (* Declared virtual: no materialization to decline to either ([Never_virtual] over [Virtual]
+           is the placement table's "already virtual" collision). *)
+        raise (Utils.User_error (declared_uninlinable_rejection traced.tn ~code:i))
       else (
         Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i);
         None)
@@ -10771,7 +10819,10 @@ let computations_at_reads ~placements ~static_indices ~raw self computations =
                ~call_range:(fun s ->
                  (* Outermost first: the innermost binder of [s] is the last. *)
                  List.Assoc.find (List.rev a.a_loops) s ~equal:Indexing.equal_symbol)
-               ~id:(pricing_scope self) self computations static_indices a.a_map))
+                 (* A flip candidate is a node [decide_placements] decides: the coverage rule, not
+                    the inliner, proves its guards' fallback (gh-ocannl-1897). *)
+               ~coverage_exempt:false ~id:(pricing_scope self) self computations static_indices
+               a.a_map))
       |> Result.map ~f:(fun () -> (placements, computations))
       |> Result.map_error ~f:(fun code -> `Read code)
   with Utils.User_error m | Invalid_argument m | Failure m -> Error (`Read m)
@@ -10879,7 +10930,10 @@ let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indice
          can fire and no call-site range is needed (gh-ocannl-1896). *)
       (instantiate_computations ~fresh_symbol:pricing_symbol ~placements:plc
          ~call_range:(fun _ -> None)
-         ~id self computations static_indices call_args)
+           (* [self] is virtual in [plc] only as the reading priced, so it is not taken for a
+              coverage-exempt node: pricing prices the inlining, and legality stays with the walk
+              (gh-ocannl-1897). *)
+         ~coverage_exempt:false ~id self computations static_indices call_args)
       ~f:(fun body ->
         post_virtualization_pipeline plc
           (Hashtbl.create (module Tnode))

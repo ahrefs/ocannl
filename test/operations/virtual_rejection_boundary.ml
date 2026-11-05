@@ -477,7 +477,7 @@ let declared_virtual_fixed_component () =
     (match optimize ~name:"dvfc_uninit" llc with
     | (_ : Ir.Low_level.optimized) -> false
     | exception Utils.User_error msg ->
-        String.is_substring msg ~substring:"13:call-site-index-mismatch")
+        String.is_substring msg ~substring:"157:guard-fallback-unproven")
 
 (* === Disjoint components and unions of partial covers (gh-ocannl-1795) === *)
 
@@ -671,14 +671,14 @@ let declared_virtual_union () =
   (* A duplicated cell instead of a missing one: four writes, three cells. *)
   case ~label:"dvu_duplicate" ~dims:[| n |]
     ~writes:(fun x -> [ cell x 0 31.; cell x 0 41.; cell x 2 33.; cell x 3 34. ])
-    ~read_at:flat (`Refused "13:call-site-index-mismatch");
+    ~read_at:flat (`Refused "157:guard-fallback-unproven");
   (* A loop over cell 0 that never runs proves nothing about cell 0. *)
   case ~label:"dvu_dead_loop" ~dims:[| n |]
     ~writes:(fun x ->
       let s = sym () in
       loop ~upto:(-1) s (set x [| iter s |] (tick s))
       :: List.init (n - 1) ~f:(fun k -> cell x (k + 1) (32. +. Float.of_int k)))
-    ~read_at:flat (`Refused "13:call-site-index-mismatch");
+    ~read_at:flat (`Refused "157:guard-fallback-unproven");
   (* A diagonal's bounding box is the whole [2; 2] node, but cell [1; 0] is a hole. Read along row
      1, the fixed component [x[1; 1]]'s guard [1 == t] falls back on that hole at [t = 0] (so does
      the diagonal's own [1 == t]); taking the diagonal for a box would admit it and print a zero. *)
@@ -687,12 +687,222 @@ let declared_virtual_union () =
       let s = sym () in
       [ loop_n s 2 (set x [| iter s; iter s |] (tick s)); set x [| fixed 1; fixed 1 |] (c 9.) ])
     ~read_at:(fun t -> [| fixed 1; iter t |])
-    (`Refused "13:call-site-index-mismatch");
+    (`Refused "157:guard-fallback-unproven");
   (* Every component disjoint from the fixed read: nothing is left to replay. *)
   case ~label:"dvu_all_disjoint" ~dims:[| n |]
     ~writes:(fun x -> [ cell x 0 31.; cell x 1 32. ])
     ~read_at:(fun _ -> [| fixed 3 |])
     (`Refused "13:call-site-index-mismatch")
+
+(* gh-ocannl-1897: the same proof for EVERY guard on a node that skipped the coverage rule, not only
+   a fixed-index one -- an equality guard from a repeated symbol ([x[s; s]]) or from an unsolved
+   affine position with its loop kept ([x[2s]]), and a range guard from a unit solve ([x[2i + k]])
+   or from the bindings of a multi-component node. Without a [Zero_out] or a covering union, each
+   used to read the replay's invented [0.] at a cell no write reaches.
+
+   The reference is a twin program over fresh nodes with [x] MATERIALIZED instead of declared
+   virtual (re-specializing the declared node itself would contradict its declaration), its entries
+   seeded [101 + cell], so a hole shows the entry value where the base printed a zero. Each row
+   states its values in closed form, and the twin is held to them first. A refused row claims
+   "refused as 157, or executed equal to the twin": red on the base, which inlined; and still a
+   semantics pin should a sharper proof admit the shape. An accepted row is one whose guard fails on
+   some iterations under a proved fallback, executed against the same twin. *)
+let guard_fallback_code = "157:guard-fallback-unproven"
+
+let declared_virtual_guards () =
+  let numel dims = Array.fold dims ~init:1 ~f:( * ) in
+  let case ~label ~dims ?(out_dims = dims) ~(build : Ir.Tnode.t -> Ir.Tnode.t -> Ir.Low_level.t)
+      ~expected expect =
+    let program ~declare suffix =
+      let x = mk ~dims (label ^ suffix ^ "_x")
+      and out = mk ~dims:out_dims (label ^ suffix ^ "_out") in
+      declare x;
+      materialize out;
+      (x, out, build x out)
+    in
+    let entries = Array.init (numel dims) ~f:(fun i -> 101. +. Float.of_int i) in
+    let blank_out = blank (numel out_dims) in
+    let xm, outm, llc_m = program ~declare:materialize "_mat" in
+    let reference =
+      execute ~name:(label ^ "_mat")
+        (optimize ~name:(label ^ "_mat") llc_m)
+        ~seed:[ (xm, entries); (outm, blank_out) ]
+        ~read:[ outm ]
+    in
+    p (label ^ ": the materialized twin computes the stated values") (same reference [ expected ]);
+    let x, out, llc = program ~declare:virtualize "" in
+    let run_virtual o = execute ~name:label o ~seed:[ (out, blank_out) ] ~read:[ out ] in
+    match expect with
+    | `Inlined ->
+        let o = optimize ~name:label llc in
+        p (label ^ ": inlined") (known_virtual o x && count_get o x = 0);
+        p (label ^ ": executed values are the materialized twin's") (same (run_virtual o) reference)
+    | `Refused ->
+        p
+          (label ^ ": refused as " ^ guard_fallback_code
+         ^ ", or executed equal to the materialized twin")
+          (match optimize ~name:label llc with
+          | o -> same (run_virtual o) reference
+          | exception Utils.User_error msg -> String.is_substring msg ~substring:guard_fallback_code)
+  in
+  let fl = Float.of_int in
+  (* Consumers add [tick]/[tag] of their own iteration, so equal producer values stay distinct. *)
+  let grid_read x out =
+    let j = sym () and k = sym () in
+    loop_n j 3
+      (loop_n k 3 (set out [| iter j; iter k |] (add (get x [| iter j; iter k |]) (tag j k))))
+  in
+  let flat_read ~width x out =
+    let u = sym () in
+    loop_n u width (set out [| iter u |] (add (get x [| iter u |]) (tick u)))
+  in
+  let diagonal x =
+    let s = sym () in
+    loop_n s 3 (set x [| iter s; iter s |] (tick s))
+  in
+  let grid_expected ~hole =
+    Array.init 9 ~f:(fun cell ->
+        let j = cell / 3 and k = cell % 3 in
+        (if j = k then 1. +. fl j else hole cell) +. 1. +. (10. *. fl j) +. fl k)
+  in
+  (* Equality guard from a repeated symbol: [s := j], then [s == k]. *)
+  case ~label:"dvg_diagonal_uninit" ~dims:[| 3; 3 |]
+    ~build:(fun x out -> seq (diagonal x) (grid_read x out))
+    ~expected:(grid_expected ~hole:(fun cell -> 101. +. fl cell))
+    `Refused;
+  case ~label:"dvg_diagonal_zeroed" ~dims:[| 3; 3 |]
+    ~build:(fun x out -> seq (zero x) (seq (diagonal x) (grid_read x out)))
+    ~expected:(grid_expected ~hole:(fun _ -> 0.))
+    `Inlined;
+  (* Equality guard from an unsolved affine position: no unit coefficient, so the loop over [s] is
+     kept and guarded by [2s == u]; the odd cells are holes. *)
+  case ~label:"dvg_strided_hole" ~dims:[| n |]
+    ~build:(fun x out ->
+      let s = sym () in
+      seq (loop_n s 2 (set x [| aff [ (2, s) ] 0 |] (tick s))) (flat_read ~width:n x out))
+    ~expected:
+      (Array.init n ~f:(fun u ->
+           (if u % 2 = 0 then 1. +. fl (u / 2) else 101. +. fl u) +. 1. +. fl u))
+    `Refused;
+  (* Range guard from a unit solve: [k := u - 2i] must fall in [0, 2), the loop over [i] kept. The
+     writes cover cells 0..3, densely, and the node has [cells] of them. *)
+  let affine_writes x =
+    let i = sym () and k = sym () in
+    loop_n i 2 (loop_n k 2 (set x [| aff [ (2, i); (1, k) ] 0 |] (tag i k)))
+  in
+  let affine_expected ~cells ~hole =
+    Array.init cells ~f:(fun u ->
+        (if u < 4 then 1. +. (10. *. fl (u / 2)) +. fl (u % 2) else hole u) +. 1. +. fl u)
+  in
+  case ~label:"dvg_affine_beyond_uninit" ~dims:[| 6 |]
+    ~build:(fun x out -> seq (affine_writes x) (flat_read ~width:6 x out))
+    ~expected:(affine_expected ~cells:6 ~hole:(fun u -> 101. +. fl u))
+    `Refused;
+  case ~label:"dvg_affine_beyond_zeroed" ~dims:[| 6 |]
+    ~build:(fun x out -> seq (zero x) (seq (affine_writes x) (flat_read ~width:6 x out)))
+    ~expected:(affine_expected ~cells:6 ~hole:(fun _ -> 0.))
+    `Inlined;
+  case ~label:"dvg_affine_dense" ~dims:[| n |]
+    ~build:(fun x out -> seq (affine_writes x) (flat_read ~width:n x out))
+    ~expected:(affine_expected ~cells:n ~hole:(fun _ -> assert false))
+    `Inlined;
+  (* Range guards from the bindings of a multi-component node: cells 0..1 and [from_]..[from_ + 1].
+     With [from_ = 3] on five cells, cell 2 is a hole; with [from_ = 2] on four, the union
+     covers. *)
+  let block ~from_ ~width x out =
+    let s = sym () and s2 = sym () in
+    seq
+      (loop_n s 2 (set x [| iter s |] (tick s)))
+      (seq
+         (loop ~from_ ~upto:(from_ + 1) s2 (set x [| iter s2 |] (ramp 20. s2)))
+         (flat_read ~width x out))
+  in
+  let block_expected ~from_ ~cells =
+    Array.init cells ~f:(fun u ->
+        (if u < 2 then 1. +. fl u else if u >= from_ then 20. +. fl u else 101. +. fl u)
+        +. 1. +. fl u)
+  in
+  case ~label:"dvg_block_hole" ~dims:[| 5 |] ~build:(block ~from_:3 ~width:5)
+    ~expected:(block_expected ~from_:3 ~cells:5)
+    `Refused;
+  case ~label:"dvg_block_cover" ~dims:[| n |] ~build:(block ~from_:2 ~width:n)
+    ~expected:(block_expected ~from_:2 ~cells:n)
+    `Inlined;
+  (* No guard at all: nothing to prove, so nothing refuses. *)
+  case ~label:"dvg_guard_free" ~dims:[| n |]
+    ~build:(fun x out ->
+      let s = sym () in
+      seq (loop_n s n (set x [| iter s |] (tick s))) (flat_read ~width:n x out))
+    ~expected:(Array.init n ~f:(fun u -> 2. +. (2. *. fl u)))
+    `Inlined
+
+(* The inherited case: routine A computes [x] and does not read it, so it defers [x] -- the lineage
+   commits it virtual and stores its template -- and routine B reads it over the whole grid. B
+   skipped the coverage rule for [x] as a declared node does, so the diagonal's equality guard is
+   held to the same proof. The reference runs A and B in a fresh lineage with [x] materialized, its
+   entries seeded [101 + cell] before A. *)
+let inherited_guard_fallback () =
+  let fl = Float.of_int in
+  let case ~label ~zeroed =
+    let program suffix =
+      let x = mk ~dims:[| 3; 3 |] (label ^ suffix ^ "_x")
+      and out = mk ~dims:[| 3; 3 |] (label ^ suffix ^ "_out") in
+      materialize out;
+      let s = sym () and j = sym () and k = sym () in
+      let diagonal = loop_n s 3 (set x [| iter s; iter s |] (tick s)) in
+      let llc_a = if zeroed then seq (zero x) diagonal else diagonal in
+      let llc_b =
+        loop_n j 3
+          (loop_n k 3 (set out [| iter j; iter k |] (add (get x [| iter j; iter k |]) (tag j k))))
+      in
+      (x, out, llc_a, llc_b)
+    in
+    let expected =
+      Array.init 9 ~f:(fun cell ->
+          let j = cell / 3 and k = cell % 3 in
+          (if j = k then 1. +. fl j else if zeroed then 0. else 101. +. fl cell)
+          +. 1.
+          +. (10. *. fl j)
+          +. fl k)
+    in
+    let blank_out = blank 9 in
+    let reference =
+      let xm, outm, llc_a, llc_b = program "_mat" in
+      materialize xm;
+      let ctx = Ir.Low_level.empty_optimize_ctx () in
+      let o_a = optimize_in ctx ~name:(label ^ "_ma") llc_a in
+      let o_b = optimize_in ctx ~name:(label ^ "_mb") llc_b in
+      let after_a =
+        run ~name:(label ^ "_ma") o_a ~seed:[ (xm, Array.init 9 ~f:(fun i -> 101. +. fl i)) ]
+      in
+      execute ~ctx:after_a ~name:(label ^ "_mb") o_b ~seed:[ (outm, blank_out) ] ~read:[ outm ]
+    in
+    p (label ^ ": the materialized twin computes the stated values") (same reference [ expected ]);
+    let x, out, llc_a, llc_b = program "" in
+    let ctx = Ir.Low_level.empty_optimize_ctx () in
+    let o_a = optimize_in ctx ~name:(label ^ "_a") llc_a in
+    p (label ^ ": routine A defers the node") (known_virtual o_a x);
+    let run_b o_b =
+      let after_a = run ~name:(label ^ "_a") o_a ~seed:[] in
+      execute ~ctx:after_a ~name:(label ^ "_b") o_b ~seed:[ (out, blank_out) ] ~read:[ out ]
+    in
+    match optimize_in ctx ~name:(label ^ "_b") llc_b with
+    | o_b when zeroed ->
+        p (label ^ ": routine B inlines the template") (count_get o_b x = 0);
+        p (label ^ ": executed values are the materialized twin's") (same (run_b o_b) reference)
+    | o_b ->
+        p
+          (label ^ ": routine B is refused as " ^ guard_fallback_code
+         ^ ", or executes equal to the materialized twin")
+          (same (run_b o_b) reference)
+    | exception Utils.User_error msg ->
+        p
+          (label ^ ": routine B is refused as " ^ guard_fallback_code
+         ^ ", or executes equal to the materialized twin")
+          ((not zeroed) && String.is_substring msg ~substring:guard_fallback_code)
+  in
+  case ~label:"inh_diagonal_uninit" ~zeroed:false;
+  case ~label:"inh_diagonal_zeroed" ~zeroed:true
 
 (* === Accepted === *)
 
@@ -1122,6 +1332,8 @@ let () =
   row_fixed_component_disjoint_first ();
   row_fixed_component_read_covered_only ();
   declared_virtual_union ();
+  declared_virtual_guards ();
+  inherited_guard_fallback ();
   row_block_components ();
   row_block_components_offset_loop ();
   row_block_components_offset_affine ();
