@@ -43,8 +43,8 @@ type solved_dim = { d : int; basis : string; proj_id : proj_id option }
 type convolution = { dilation : int; kernel : dim; use_padding : bool }
 [@@deriving equal, hash, compare, sexp]
 (** Convolution parameters. The offset is implicit, automatically derived. If [use_padding] is
-    [true], the offset is the left part of the dimensionality-preserving symmetric padding,
-    otherwise it is 0. *)
+    [true], the offset is the left part of the dimensionality-preserving padding,
+    [(effective_kernel_span - 1) / 2], otherwise it is 0. *)
 
 and dim =
   | Var of dim_var

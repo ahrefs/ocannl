@@ -68,6 +68,28 @@ binary padded max 2*o=+1+k; s, kernel 3 on neither operand: extent: true
 binary padded max 2*o=+1+k; s, kernel 3 on neither operand: values: true
 gradient of binary padded sum 2*o=+1+k; s, kernel on neither operand: d/dx: true
 gradient of binary padded max 2*o=+1+k; s, kernel on neither operand: d/dx: true
+torch 'same' o=+k, kernel 2: extent: true
+torch 'same' o=+k, kernel 2: values: true
+torch 'same' o=+k, kernel 4: extent: true
+torch 'same' o=+k, kernel 4: values: true
+torch 'same' o=+3*k, kernel 2 (span 4): extent: true
+torch 'same' o=+3*k, kernel 2 (span 4): values: true
+torch 'same' o=+3*k, kernel 4 (span 10): extent: true
+torch 'same' o=+3*k, kernel 4 (span 10): values: true
+torch 2/2 conv 2*o=+k, kernel 2: extent: true
+torch 2/2 conv 2*o=+k, kernel 2: values: true
+torch 2/2 max pool 2*o=+k, window 2: extent: true
+torch 2/2 max pool 2*o=+k, window 2: values: true
+torch stride-1 max pool o=+k, window 4: extent: true
+torch stride-1 max pool o=+k, window 4: values: true
+torch Nn_blocks.max_pool2d ~use_padding:true, default 2/2: extent: true
+torch Nn_blocks.max_pool2d ~use_padding:true, default 2/2: values: true
+torch gradient of o=+k, kernel 4: d/dx: true
+torch gradient of o=+k, kernel 4: d/dw: true
+gradient of max 2*o=+k, window 2: d/dx: true
+gradient of max 2*o=+k, window 2: d/dw: true
+margins of o=+k, kernel 2: left 0, right 1: true
+margins of o=+k, kernel 4: left 1, right 2: true
 one-operand padded sum, kernel not captured: the window kernel k has no size: no operand axis carries it, and a padded (=+) window's extents do not determine it. Capture the kernel label and set it (x ++ "s, 2*o=+k => s, o" ["k"], then Shape.set_dim k 3), or give the window a kernel operand of known extent (x +* "s, 2*o=+k; k => s, o" w)
 one-operand padded sum, kernel not captured: refused, naming the unsized kernel and the remedies: true
 one-operand padded sum, kernel captured but not set: refused, naming the unsized kernel and the remedies: true

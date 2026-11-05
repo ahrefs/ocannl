@@ -1,10 +1,11 @@
 (* gh-ocannl-1657: the execute-audit of padded operand windows, offsets included. A padded ([=+])
    window on an operand, [stride*o=+offset+dilation*k], reads the zero-padded operand at position
    [stride*o+offset+dilation*k-left] for each result position [o], over an operand axis of extent
-   [stride*|o|]. The margins total the dilated kernel extent [span=dilation*(K-1)+1] and
-   [left=span/2] (the smaller half when the split is uneven). A tap outside the operand's extent
-   reads the padding value, 0 for the add family; a max-family (tropical) window is clamped to the
-   extent instead, so an all-outside window yields the neutral element.
+   [stride*|o|]. With the dilated kernel extent [span=dilation*(K-1)+1], the margins are
+   [left=(span-1)/2] and [right=(span+1)/2], so an even span's extra tap goes on the right
+   (gh-ocannl-1692). A tap outside the operand's extent reads the padding value, 0 for the add
+   family; a max-family (tropical) window is clamped to the extent instead, so an all-outside window
+   yields the neutral element.
 
    Each form below runs and is compared, extent included, against [padded_window], computed here in
    plain OCaml from that definition alone; the values are small integers, so every sum is exact in
@@ -12,7 +13,9 @@
    stride, with odd, even and dilated kernels; the raw-string, [%op] (identifier coefficients),
    [%cd] with [~logic], captured-kernel (a padded sum pool) and ternary routes; two padded windows
    in one operand; the max family; and the gradients, d/dx and d/dw, of a strided, dilated window
-   with an offset, of an offset past the stride, and of a max-family window.
+   with an offset, of an offset past the stride, and of a max-family window. The even-span anchor
+   that [padded_window] encodes is itself checked against literal PyTorch outputs, under "Even spans
+   against PyTorch" below.
 
    The audit found the dilated window wrong: its margins were sized by the undilated kernel
    ([left=K/2]), so [o=+2*k] over a kernel of 3 read [o-1], [o+1], [o+3] instead of the centered
@@ -45,7 +48,7 @@ type window = { stride : int; offset : int; dilation : int }
 (* The taps of result position [o] over an operand axis of extent [n] and a kernel of [kk]: [(c, k,
    inside)] for each kernel position [k], where [c] is the operand position read. *)
 let taps { stride; offset; dilation } ~n ~kk o =
-  let left = ((dilation * (kk - 1)) + 1) / 2 in
+  let left = dilation * (kk - 1) / 2 in
   List.init kk ~f:(fun k ->
       let c = (stride * o) + offset + (dilation * k) - left in
       (c, k, c >= 0 && c < n))
@@ -253,7 +256,7 @@ let oracle_grads ~reduce win x w =
   done;
   (dx, dw)
 
-let gradient ?(reduce = `Sum) label win ~n ~w spec =
+let gradient ?(reduce = `Sum) ?want label win ~n ~w spec =
   case label (fun () ->
       Tensor.unsafe_reinitialize ();
       let m = n / win.stride in
@@ -270,7 +273,9 @@ let gradient ?(reduce = `Sum) label win ~n ~w spec =
       Train.set_materialized (grad_of x);
       Train.set_materialized (grad_of wt);
       let ctx = Train.update_once ~output_cd_file:false (Context.auto ()) loss in
-      let dx, dw = oracle_grads ~reduce win (ramp n) w in
+      let dx, dw =
+        match want with Some want -> want | None -> oracle_grads ~reduce win (ramp n) w
+      in
       pf_all2 "%s: d/dx" label (Context.get_values ctx (grad_of x)) dx ~f:Float.equal;
       pf_all2 "%s: d/dw" label (Context.get_values ctx (grad_of wt)) dw ~f:Float.equal)
 
@@ -455,6 +460,117 @@ let run_unary_gradients () =
       Shape.set_dim k 3;
       r)
 
+(* {2 Even spans against PyTorch}
+
+   gh-ocannl-1692: an even span's extra tap goes on the right, PyTorch's [padding='same']. Every
+   [~want] here is a literal PyTorch 2.13 output, independent of [taps], with [ramp = lambda n:
+   torch.arange(1., n + 1).reshape(1, 1, n)] and the kernels above reshaped to [(1, 1, K)]:
+
+   - stride 1, [F.conv1d(ramp(n), w, padding='same', dilation=d)]; - the 2/2 windows tile an even
+   operand, so they are the unpadded [F.conv1d(ramp(8), w, stride=2)] and [F.max_pool1d(x, 2,
+   stride=2)] / [F.max_pool2d(x, 2, stride=2)]; - the stride-1 max pool of 4, [F.max_pool1d(F.pad(x,
+   (1, 2), value=-inf), 4, stride=1)]; - the gradient, [.backward()] on [(F.conv1d(ramp(6), w,
+   padding='same') * c).sum()] with [c = torch.arange(1., 7.)]. *)
+
+let run_pytorch_oracle () =
+  let same label ~n ~w ~want spec =
+    executes label ~dims:[| 1; n |] ~want (fun () ->
+        Operation.einsum spec ~grad_spec:pg
+          (computed [ 1; n ] (ramp n))
+          (ndarray [ Array.length w ] w)
+          ())
+  in
+  same "torch 'same' o=+k, kernel 2" ~n:6 ~w:k2 ~want:[| 7.; 11.; 15.; 19.; 23.; 6. |]
+    "s, o=+k; k => s, o";
+  same "torch 'same' o=+k, kernel 4" ~n:6 ~w:k4
+    ~want:[| 34.; 49.; 64.; 79.; 38.; 17. |]
+    "s, o=+k; k => s, o";
+  same "torch 'same' o=+3*k, kernel 2 (span 4)" ~n:8 ~w:k2
+    ~want:[| 9.; 13.; 17.; 21.; 25.; 29.; 6.; 7. |]
+    "s, o=+3*k; k => s, o";
+  same "torch 'same' o=+3*k, kernel 4 (span 10)" ~n:12 ~w:k4
+    ~want:[| 60.; 74.; 88.; 102.; 117.; 132.; 147.; 58.; 65.; 72.; 27.; 30. |]
+    "s, o=+3*k; k => s, o";
+  executes "torch 2/2 conv 2*o=+k, kernel 2" ~dims:[| 1; 4 |] ~want:[| 7.; 15.; 23.; 31. |]
+    (fun () ->
+      Operation.einsum "s, 2*o=+k; k => s, o" ~grad_spec:pg
+        (computed [ 1; 8 ] (ramp 8))
+        (ndarray [ 2 ] k2) ());
+  executes "torch 2/2 max pool 2*o=+k, window 2" ~dims:[| 1; 4 |] ~want:[| 3.; 9.; 6.; 8. |]
+    (fun () ->
+      let x = computed [ 1; 8 ] [| 3.; 1.; 4.; 9.; 2.; 6.; 5.; 8. |] in
+      let%op r = x @^^ "s, 2*o=+k => s, o" [ "k" ] in
+      Shape.set_dim k 2;
+      r);
+  executes "torch stride-1 max pool o=+k, window 4" ~dims:[| 1; 6 |]
+    ~want:[| 9.; 9.; 9.; 8.; 8.; 7. |] (fun () ->
+      let x = computed [ 1; 6 ] [| 5.; 9.; 2.; 8.; 1.; 7. |] in
+      let%op r = x @^^ "s, o=+k => s, o" [ "k" ] in
+      Shape.set_dim k 4;
+      r);
+  (* The default padded pool: [13] sits in the last row and [10] in the last column. *)
+  executes "torch Nn_blocks.max_pool2d ~use_padding:true, default 2/2" ~dims:[| 2; 3; 1 |]
+    ~want:[| 9.; 11.; 10.; 12.; 13.; 9. |] (fun () ->
+      let x =
+        computed ~spec:"a, b, c => a, b, c" [ 4; 6; 1 ]
+          [|
+            3.;
+            9.;
+            1.;
+            7.;
+            4.;
+            2.;
+            8.;
+            0.;
+            6.;
+            11.;
+            5.;
+            10.;
+            2.;
+            12.;
+            7.;
+            3.;
+            9.;
+            1.;
+            6.;
+            4.;
+            13.;
+            0.;
+            8.;
+            5.;
+          |]
+      in
+      Nn_blocks.max_pool2d ~use_padding:true () x);
+  gradient "torch gradient of o=+k, kernel 4"
+    { stride = 1; offset = 0; dilation = 1 }
+    ~n:6 ~w:k4
+    ~want:([| 4.; 11.; 26.; 41.; 56.; 64. |], [| 70.; 91.; 70.; 50. |])
+    "s, o=+k; k => s, o";
+  (* With a kernel of [0; 1] over a ramp, each window's argmax is its right tap, the odd position
+     [2*o + 1]; the old [left=1] anchor put that tap on the even position [2*o]. *)
+  gradient ~reduce:`Max "gradient of max 2*o=+k, window 2"
+    { stride = 2; offset = 0; dilation = 1 }
+    ~n:8 ~w:[| 0.; 1. |] "s, 2*o=+k; k => s, o";
+  (* The right margin keeps [(span + 1) / 2], one cell past what an offset-free even window reads:
+     no value can see that, taps past the margins being guarded, so the committed margins are
+     checked as they stand. *)
+  let margins label ~kk spec ~want_left ~want_right =
+    case label (fun () ->
+        Tensor.unsafe_reinitialize ();
+        let x = computed [ 1; 6 ] (ramp 6) in
+        let w = ndarray [ kk ] (Array.create ~len:kk 1.) in
+        let r = Operation.einsum spec ~grad_spec:pg x w () in
+        ignore (Train.forward_once (Context.auto ()) r : Context.t);
+        match Ir.Tnode.get_padding x.Tensor.value with
+        | None -> pf "%s: operand is padded" label false
+        | Some (pads, _) ->
+            let Ir.Ops.{ left; right } = pads.(1) in
+            pf "%s: left %d, right %d" label want_left want_right
+              (left = want_left && right = want_right))
+  in
+  margins "margins of o=+k, kernel 2" ~kk:2 "s, o=+k; k => s, o" ~want_left:0 ~want_right:1;
+  margins "margins of o=+k, kernel 4" ~kk:4 "s, o=+k; k => s, o" ~want_left:1 ~want_right:2
+
 (* gh-ocannl-1734: the binary route re-elaborates the spec with fresh variables in the same two
    places as the one-operand route -- [derive_projections]' local solve (through
    [Shape.einsum_n_constraints]) and, for a max-family backward, the [*_pspace] gate proxy -- so a
@@ -618,5 +734,6 @@ let () =
   run_unary_forms ();
   run_unary_gradients ();
   run_uncarried_kernel_binary ();
+  run_pytorch_oracle ();
   run_unsized_kernels ();
   run_refusals ()

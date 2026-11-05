@@ -7,7 +7,7 @@ clamped pool partition consumes an eager index conjunction: true
 breakpoints delimit the left- and right-truncated boundary segments: true
 interior segment is guard-free (one Where per boundary segment): true
 partitioned pool matches reference: true
-pool input gradient = [1 0 1 0 1 0]
+pool input gradient = [0 1 0 0 1 0]
 gradient lands on each clipped window's argmax: true
 backward scatter writes are If-guarded: true
 differentiable operand stays unpadded: true

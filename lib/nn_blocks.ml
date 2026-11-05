@@ -529,16 +529,18 @@ let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_
     size is [(input_size - window_size) / stride + 1]. The [<] in the einsum spec indicates
     no-padding mode (indices stay within bounds).
 
-    With [use_padding=true] ("same" pooling, output size [input_size / stride]), the pool lowers
-    with clamped window bounds (gh-504): per output position the window loop is range-guarded to the
-    intersection of the window with the valid input range, and an out-of-range position contributes
-    the max-accumulation identity ([-inf]) — the same as not visiting it — so clamping is
-    semantically exact and the operand needs NO margins at all. The operand therefore composes
-    freely with 0-neutral margin-touching consumers such as padded convs (the Inception-block
-    pattern), with eagerly allocated data nodes (e.g. [TDSL.init]), and with operands already
-    lowered in earlier compilations of a staged flow. The backward argmax scatter transposes the
-    clamp (guarded writes). Interior outputs still see full windows: the guards flip truth only at
-    affine breakpoints of the output axis, so [Schedule.Partition] at
+    With [use_padding=true] ("same" pooling, output size [input_size / stride]), the window of
+    output position [o] starts at [stride * o - (window_size - 1) / 2], PyTorch's [padding='same']
+    anchor: the default 2/2 pool reads [2*o], [2*o + 1], tiling the input like TF's [SAME] pool
+    (gh-ocannl-1692). The pool lowers with clamped window bounds (gh-504): per output position the
+    window loop is range-guarded to the intersection of the window with the valid input range, and
+    an out-of-range position contributes the max-accumulation identity ([-inf]) — the same as not
+    visiting it — so clamping is semantically exact and the operand needs NO margins at all. The
+    operand therefore composes freely with 0-neutral margin-touching consumers such as padded convs
+    (the Inception-block pattern), with eagerly allocated data nodes (e.g. [TDSL.init]), and with
+    operands already lowered in earlier compilations of a staged flow. The backward argmax scatter
+    transposes the clamp (guarded writes). Interior outputs still see full windows: the guards flip
+    truth only at affine breakpoints of the output axis, so [Schedule.Partition] at
     [Schedule.partition_breakpoints] specializes guard-free interior segments (gh-508).
 
     Overlapping pooling ([stride < window_size], AlexNet-style) has exact gradients: the gradient
