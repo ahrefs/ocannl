@@ -451,6 +451,7 @@ Construction-time writes on operands' tensor nodes, audited for this contract:
 
 - `Tensor.Scheme.trace ~label n f` applies `f` to `n` tracing tensors with fresh row variables, inside `Tensor.with_rewind`. It reads the constraints `f` registered off the open session and leaves nothing behind.
 - `Tensor.Scheme.instantiate s ~args ~results` adds those constraints, renamed, for one application to the given argument and result shapes, *without running `f`*. The next closure closes the arguments and results as an inline application of `f` would have.
+- `Tensor.Scheme.traced_by build` returns the automatic schemes the `%op` closures built by `build` traced, the ones their applications are checked against (gh-ocannl-1801). An automatic scheme's results are what the traced body returns, found by physical identity among the tensors it made and its arguments (a tuple's components each); its checks relate the arguments only.
 - `Tensor.Scheme.to_string s` prints the scheme's boundary like a type: the argument and result rows under the trace's solution, its variables named by first appearance (`'a` generalized, `'_a` fixed), and the broadcasting inequalities among them and the fixed variables, with the function's intermediate variables eliminated. Other constraints (totals, concatenations) are not printed.
 
 What a scheme holds:

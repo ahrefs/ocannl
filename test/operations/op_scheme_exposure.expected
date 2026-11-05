@@ -1,0 +1,32 @@
+layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
+  ..'_a.. ⊑ ..'c..
+  ..'d.. ⊑ ..'a..
+  ..'e.. ⊑ ..'_b..
+  ..'e.. ⊑ ..'b..
+the closure built at () traced one scheme, under its function's name: true
+the scheme has the function's argument and its result: true
+it prints as the explicit trace of the closure does: true
+y: 2|4; at x' the scheme predicts 5,7|4, the body builds 5,7|4
+instantiated at an argument, the scheme predicts the shape the body's result gets: true
+a later application is checked against the scheme exposed, tracing none: true
+pair : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4, ..'g..|..'h..->..'i..,4
+  ..'_a.. ⊑ ..'c..
+  ..'d.. ⊑ ..'a..
+  ..'e.. ⊑ ..'b..
+  ..'g.. ⊑ ..'d..
+  ..'h.. ⊑ ..'e..
+  ..'i.. ⊑ ..'f..
+a returned pair gives two results, in order, an intermediate among them: true
+each predicts its component's shape: true
+passthrough : ..'a..|..'b..->..'c.. => ..'a..|..'b..->..'c..
+a returned argument is the result: true
+the result is the argument's shape: true
+listed : ..'a..|..'b..->..'c.. => _
+a list gives no results: true
+both presence patterns' schemes have the normalized result: true
+doubled : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..
+  ..'d.. ⊑ ..'a..
+  ..'e.. ⊑ ..'b..
+  ..'f.. ⊑ ..'c..
+its first application traces its scheme: true
+the next one is checked against it, tracing none: true

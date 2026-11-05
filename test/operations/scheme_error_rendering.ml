@@ -59,7 +59,7 @@ let cases =
           ignore
             (Tensor.Scheme.check_definition ~name:"two_layer" (fun () ->
                  ignore (two_layer ~hid:8 ~out:2 () : Tensor.t -> Tensor.t))
-              : string list));
+              : Tensor.Scheme.t list));
     };
     {
       name = "an argument the scheme refuses, at the application";

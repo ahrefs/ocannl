@@ -688,11 +688,12 @@ module Scheme : sig
       of the body's own application settles (raised as [Untraceable_scheme] while a trace runs). *)
 
   val check : ?sabotage:sabotage -> t -> application:string -> args:shape list -> unit
-  (** [instantiate] against [args] with no results, binding no capture reference (its capture inputs
-      are only related to their current state), then puts back everything it wrote (the session and
-      solver globals, the taint, the rows of the arguments and anchored shapes): an
-      argument-dependent shape error raises as [instantiate]'s does, and the session is unchanged
-      either way. Costs what [instantiate] does, independent of the open frontier. *)
+  (** [instantiate] against [args] alone, relating none of the scheme's results, binding no capture
+      reference (its capture inputs are only related to their current state), then puts back
+      everything it wrote (the session and solver globals, the taint, the rows of the arguments and
+      anchored shapes): an argument-dependent shape error raises as [instantiate]'s does, and the
+      session is unchanged either way. Costs what [instantiate] does, independent of the open
+      frontier. *)
 
   val stale : t -> bool
   (** Whether {!instantiate} would refuse the scheme for a closure since its trace (the scheme

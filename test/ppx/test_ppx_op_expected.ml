@@ -20,9 +20,7 @@ let y1 =
         (( * ) ?label:None hey2 (TDSL.number (Float.of_int 2))) x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"y1" ~arity:1
-        (function
-         | x::[] -> let (_ : _) = __ocannl_body x in ()
-         | _ -> assert false) in
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
@@ -40,9 +38,7 @@ let y2 =
         (( *. ) ?label:None x1 hey3) x2 in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"y2" ~arity:2
-        (function
-         | x1::x2::[] -> let (_ : _) = __ocannl_body x1 x2 in ()
-         | _ -> assert false) in
+        (function | x1::x2::[] -> __ocannl_body x1 x2 | _ -> assert false) in
     fun x1 x2 ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x1; x2]
         (fun () -> __ocannl_body x1 x2)
@@ -172,9 +168,7 @@ let initialized_no_unit =
         (( * ) ?label:None init_w x) in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"initialized_no_unit" ~arity:1
-        (function
-         | x::[] -> let (_ : _) = __ocannl_body x in ()
-         | _ -> assert false) in
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
@@ -191,9 +185,7 @@ let initialized_expr =
           (( * ) ?label:None expr_w x) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.deferred ~name:"f" ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body x in ()
-           | _ -> assert false) in
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x) in
@@ -216,9 +208,7 @@ let mlp_layer =
           ((+) ?label:None (( * ) ?label:None w x) b) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"mlp_layer" ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body ~x in ()
-           | _ -> assert false) in
+          (function | x::[] -> __ocannl_body ~x | _ -> assert false) in
       fun ~x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body ~x)
@@ -233,9 +223,7 @@ let _config_layer =
       let __ocannl_body x = l ~x in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_config_layer" ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body x in ()
-           | _ -> assert false) in
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
@@ -248,10 +236,7 @@ let _three_layer_perceptron =
       let __ocannl_body x = l3 ~x:(l2 ~x:(l1 ~x)) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_three_layer_perceptron"
-          ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body x in ()
-           | _ -> assert false) in
+          ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
@@ -266,9 +251,7 @@ let _capture_no_unit =
         ~capture_dims:[b] "a, b => a" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_capture_no_unit" ~arity:1
-        (function
-         | x::[] -> let (_ : _) = __ocannl_body x in ()
-         | _ -> assert false) in
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
@@ -285,9 +268,7 @@ let _capture_with_unit =
           (einsum1 ?label:None ~capture_dims:[b] "a, b => a" y) (dim b) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_capture_with_unit" ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body x in ()
-           | _ -> assert false) in
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
@@ -313,9 +294,7 @@ let _capture_nested =
         (einsum1 ?label:None ~capture_dims:[b] "a, b => a" x) (g x) in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_capture_nested" ~arity:1
-        (function
-         | x::[] -> let (_ : _) = __ocannl_body x in ()
-         | _ -> assert false) in
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
@@ -338,8 +317,7 @@ let _scheme_labelled =
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_scheme_labelled" ~arity:3
           (function
-           | gamma::beta::x::[] ->
-               let (_ : _) = __ocannl_body ~gamma ~beta x in ()
+           | gamma::beta::x::[] -> __ocannl_body ~gamma ~beta x
            | _ -> assert false) in
       fun ~gamma ~beta x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [gamma; beta; x]
@@ -351,9 +329,7 @@ let _scheme_tail =
       let __ocannl_body x = l ~x in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_scheme_tail" ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body x in ()
-           | _ -> assert false) in
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
@@ -390,7 +366,7 @@ let _scheme_variants =
           ~optional:[Some "train_step"; Some "mask"; None]
           (function
            | train_step::mask::(Some x)::[] ->
-               let (_ : _) = __ocannl_body ~train_step ?mask x in ()
+               __ocannl_body ~train_step ?mask x
            | _ -> assert false) in
       fun ~train_step ?mask x ->
         Tensor.Scheme.For_ppx.apply_variants __ocannl_scheme
@@ -404,7 +380,7 @@ let _scheme_forwarded =
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_scheme_forwarded" ~arity:2
           (function
-           | gamma::x::[] -> let (_ : _) = __ocannl_body ~gamma x in ()
+           | gamma::x::[] -> __ocannl_body ~gamma x
            | _ -> assert false) in
       fun ~gamma x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [gamma; x]
@@ -425,7 +401,7 @@ let _scheme_late =
       Tensor.Scheme.For_ppx.deferred_variants ~name:"_scheme_late"
         ~optional:[Some "mask"; None]
         (function
-         | mask::(Some x)::[] -> let (_ : _) = __ocannl_body ?mask x in ()
+         | mask::(Some x)::[] -> __ocannl_body ?mask x
          | _ -> assert false) in
     fun ?mask x ->
       Tensor.Scheme.For_ppx.apply_variants __ocannl_scheme [mask; Some x]
@@ -486,7 +462,7 @@ let _late_gamma =
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_late_gamma" ~arity:2
         (function
-         | gamma::x::[] -> let (_ : _) = __ocannl_body ~gamma x in ()
+         | gamma::x::[] -> __ocannl_body ~gamma x
          | _ -> assert false) in
     fun ~gamma x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [gamma; x]
@@ -496,9 +472,7 @@ let _late_beta =
     let __ocannl_body ~beta:(beta : Tensor.t) x = _late_gamma ~gamma:beta x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_late_beta" ~arity:2
-        (function
-         | beta::x::[] -> let (_ : _) = __ocannl_body ~beta x in ()
-         | _ -> assert false) in
+        (function | beta::x::[] -> __ocannl_body ~beta x | _ -> assert false) in
     fun ~beta x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [beta; x]
         (fun () -> __ocannl_body ~beta x)
@@ -526,9 +500,7 @@ let _opt_label =
         (+) ?label:(Some ["_opt_label"]) (( * ) ?label:None olw x) olb in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_opt_label" ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body x in ()
-           | _ -> assert false) in
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
@@ -541,9 +513,7 @@ let _opt_label_default =
       let __ocannl_body x = ( * ) ?label:(Some ["_opt_label_default"]) odw x in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_opt_label_default" ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body x in ()
-           | _ -> assert false) in
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)

@@ -22,9 +22,7 @@ let test_inline_defs =
         (( * ) ?label:None q k) v in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"test_inline_defs" ~arity:1
-        (function
-         | x::[] -> let (_ : _) = __ocannl_body x in ()
-         | _ -> assert false) in
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
@@ -45,9 +43,7 @@ let test_variable_capture =
                       a] "a, b => b, a" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"test_variable_capture" ~arity:1
-        (function
-         | x::[] -> let (_ : _) = __ocannl_body x in ()
-         | _ -> assert false) in
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
@@ -69,9 +65,7 @@ let test_mixed =
         ~capture_dims:[b; a] "a, b; b, c => a, c" x b in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"test_mixed" ~arity:1
-        (function
-         | x::[] -> let (_ : _) = __ocannl_body x in ()
-         | _ -> assert false) in
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
     fun x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
         (fun () -> __ocannl_body x)
@@ -89,9 +83,7 @@ let test_capture_shadows_outer_param =
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure
           ~name:"test_capture_shadows_outer_param" ~arity:1
-          (function
-           | x::[] -> let (_ : _) = __ocannl_body x in ()
-           | _ -> assert false) in
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)

@@ -2,7 +2,11 @@
    is checked early by [Tensor.Scheme.check_definition], which runs a trial application at a default
    configuration in a window that is always rewound: the [()] traces run there, and with them any
    shape error that holds for every argument. [lib/nn_blocks.ml] does not do this at load time
-   (module initialization is no place for a trace); this test does it for every schemed block. *)
+   (module initialization is no place for a trace); this test does it for every schemed block.
+
+   The schemes a check returns are those its trial's closures traced at [()] (gh-ocannl-1801), so
+   the golden ends with each block's own, printed by [Tensor.Scheme.to_string]: a readable inventory
+   of the library's block signatures at the trial configurations below. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -86,16 +90,32 @@ let () =
       Tensor.unsafe_reinitialize ();
       let ck = Tensor.checkpoint ~label:"before the checks" () in
       let next_id = Tensor.get_next_id () in
-      List.iter blocks ~f:(fun (name, trial, labels) ->
-          let claim = name ^ ": every presence pattern's scheme was traced" in
-          match Tensor.Scheme.check_definition ~name trial with
-          | traced -> p_all claim labels ~f:(fun l -> List.mem traced l ~equal:String.equal)
-          | exception (Row.Shape_error (msg, _) | Tensor.Session_error (msg, _)) ->
-              Stdio.eprintf "(not part of the golden) %s refused: %s\n%!" name msg;
-              p claim false);
+      let inventory =
+        List.map blocks ~f:(fun (name, trial, labels) ->
+            let claim = name ^ ": every presence pattern's scheme was traced" in
+            match Tensor.Scheme.check_definition ~name trial with
+            | traced ->
+                (* The block's own schemes, in the order of [labels]; its sub-blocks' are theirs. *)
+                let own =
+                  List.filter_map labels ~f:(fun l ->
+                      List.find traced ~f:(fun s -> String.equal (Tensor.Scheme.label s) l))
+                in
+                p claim (List.length own = List.length labels);
+                (name, own)
+            | exception (Row.Shape_error (msg, _) | Tensor.Session_error (msg, _)) ->
+                Stdio.eprintf "(not part of the golden) %s refused: %s\n%!" name msg;
+                p claim false;
+                (name, []))
+      in
       p "the checks allocated no session id" (Tensor.get_next_id () = next_id);
       p_empty "the checks left the session as it was" ~over:Tensor.For_testing.restore_categories
-        (Tensor.For_testing.checkpoint_differences ck));
+        (Tensor.For_testing.checkpoint_differences ck);
+      let schemes = List.concat_map inventory ~f:snd in
+      p_all "every block's scheme has one result: the tensor the block returns" schemes ~f:(fun s ->
+          Tensor.Scheme.num_results s = 1);
+      Stdio.printf "\nThe library's block signatures, at the trial configurations:\n";
+      List.iter inventory ~f:(fun (_, own) ->
+          List.iter own ~f:(fun s -> Stdio.printf "\n%s\n" (Tensor.Scheme.to_string s))));
   Verdict.case "live dropout: both patterns are schemed" (fun () ->
       (* With [rate > 0] the training pattern draws random numbers, which a scheme carries
          (gh-ocannl-1890). *)
@@ -107,6 +127,7 @@ let () =
             Tensor.Scheme.check_definition ~name:"dropout"
               (ignore_ (fun () -> Nn.dropout ~rate:0.5 ())))
           ~on_event:(fun e -> events := e :: !events)
+        |> List.map ~f:Tensor.Scheme.label
       in
       let is_unschemed = function Tensor.Scheme.Unschemed _ -> true | _ -> false in
       List.iter !events ~f:(function

@@ -51,8 +51,16 @@ let%op two_layer_unchecked ~hid ~out () x =
 let input ?(batch = []) name output =
   Tensor.term ~grad_spec:Prohibit_grad ~label:[ name ] ~batch_dims:batch ~output_dims:output ()
 
-(* [Tensor.Scheme.trace] traces a one-argument function's scheme explicitly -- the same trace the
-   [()] application ran automatically -- and [Tensor.Scheme.to_string] prints it. *)
+(* [Tensor.Scheme.traced_by build] runs [build] and returns its result with the schemes the closures
+   built in it traced -- the ones their applications are checked against -- and
+   [Tensor.Scheme.to_string] prints them. *)
+let print_traced build =
+  let f, schemes = Tensor.Scheme.traced_by build in
+  List.iter schemes ~f:(fun s -> Stdio.print_endline (Tensor.Scheme.to_string s));
+  f
+
+(* [Tensor.Scheme.trace] traces a one-argument function's scheme explicitly: the trace the [()]
+   application ran, run again now. *)
 let print_scheme ~label f =
   let s = Tensor.Scheme.trace ~label 1 (function [ x ] -> [ f x ] | _ -> assert false) in
   Stdio.print_endline (Tensor.Scheme.to_string s)
@@ -77,18 +85,18 @@ let shape t = Shape.to_string_hum t.Tensor.shape
 
 let%expect_test "a tensor function defined once, applied at two shapes" =
   Tensor.unsafe_reinitialize ();
-  let layer = mlp_layer ~hid:4 () in
-  (* The scheme reads like a type: [batch|input->output] for the argument, [=>], the same for the
-     result. [..'a..] is a row variable (any number of axes), generalized: each application gets its
-     own. [..'_a..] is fixed: it belongs to [w], which every application shares, as OCaml prints a
-     weak type variable. The indented lines are the broadcasting relations, [r ⊑ o] reading "the
-     result row r refines the operand row o" (equal, or o broadcasts to r). So: the result keeps the
-     argument's batch and input axes (and [b]'s), its output ends in the 4 features, and the
-     argument's output row must broadcast to [w]'s input row. *)
-  print_scheme ~label:"layer" layer;
+  (* The scheme the [()] application traced reads like a type: [batch|input->output] for the
+     argument, [=>], the same for the result. [..'a..] is a row variable (any number of axes),
+     generalized: each application gets its own. [..'_a..] is fixed: it belongs to [w], which every
+     application shares, as OCaml prints a weak type variable. The indented lines are the
+     broadcasting relations, [r ⊑ o] reading "the result row r refines the operand row o" (equal, or
+     o broadcasts to r). So: the result keeps the argument's batch and input axes (and [b]'s), its
+     output ends in the 4 features, and the argument's output row must broadcast to [w]'s input
+     row. *)
+  let layer = print_traced (fun () -> mlp_layer ~hid:4 ()) in
   [%expect
     {|
-    layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
+    mlp_layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
       ..'_a.. ⊑ ..'c..
       ..'d.. ⊑ ..'a..
       ..'e.. ⊑ ..'_b..
@@ -103,8 +111,10 @@ let%expect_test "a tensor function defined once, applied at two shapes" =
     y1: 2|4
     y2: 5,7|4
     |}];
-  (* The first application fixed [w]'s input size to 3: the scheme printed now says so -- [w]'s
-     input row ends in 3, and bounds the argument's output row from below. *)
+  (* The first application fixed [w]'s input size to 3. The closure keeps the scheme it traced at
+     [()]: its fixed variables are [w]'s, so each check relates them to [w]'s state then. A trace
+     run now says so in its text -- [w]'s input row ends in 3, and bounds the argument's output row
+     from below. *)
   print_scheme ~label:"layer" layer;
   [%expect
     {|
@@ -137,7 +147,9 @@ let%expect_test "a shape mistake reported at the definition or the first use" =
      first. *)
   let check name f =
     match Tensor.Scheme.check_definition ~name f with
-    | traced -> Stdio.printf "%s: ok, traced %s\n" name (String.concat ~sep:", " traced)
+    | traced ->
+        Stdio.printf "%s: ok, traced %s\n" name
+          (String.concat ~sep:", " (List.map traced ~f:Tensor.Scheme.label))
     | exception (Row.Shape_error _ as exn) -> print_shape_error exn
   in
   check "residual_block" (fun () -> ignore (residual_block ~hid:4 () : Tensor.t -> Tensor.t));

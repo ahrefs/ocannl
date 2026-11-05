@@ -5148,7 +5148,8 @@ module Scheme = struct
     in
     let side rows = String.concat ~sep:", " (List.map rows ~f:shape_str) in
     let args = side s.arg_rows in
-    let results = side s.result_rows in
+    (* [_]: the scheme constrains no result. *)
+    let results = match s.result_rows with [] -> "_" | rows -> side rows in
     (* The capture inputs (gh-ocannl-1791): what each first binding is under the final
        environment. *)
     let captures =
@@ -5489,8 +5490,10 @@ module Scheme = struct
     | `Row v1, `Row v2 -> Row.equal_row_var v1 v2
     | _ -> false
 
+  (* [results]: [None] relates none of the scheme's results (a check, which has only the
+     arguments). *)
   let instantiate_core ?sabotage ~instance ~bind_refs s ~application ~(args : shape list)
-      ~(results : shape list) =
+      ~(results : shape list option) =
     check_untainted ();
     let sabotaged x = Option.exists sabotage ~f:(fun y -> Poly.equal x y) in
     let prefix = [%string "applying the shape scheme %{s.label} to %{application}: "] in
@@ -5500,7 +5503,13 @@ module Scheme = struct
         fail [%string "the scheme has %{expected#Int} %{what}, the application gives %{got#Int}"]
     in
     check_count "arguments" (arity s) (List.length args);
-    check_count "results" (num_results s) (List.length results);
+    let results, result_rows =
+      match results with
+      | None -> ([], [])
+      | Some results ->
+          check_count "results" (num_results s) (List.length results);
+          (results, s.result_rows)
+    in
     (* An explicit instance stands for the body until closure, which forces every draw's
        coefficient; it has no conversion node to fill the scheme's holes with. A check ([bind_refs]
        false) solves Stage1 only and is put back before the body registers its own. *)
@@ -5577,7 +5586,7 @@ module Scheme = struct
     in
     let boundary =
       List.concat (List.map2_exn s.arg_rows args ~f:equate)
-      @ List.concat (List.map2_exn s.result_rows results ~f:equate)
+      @ List.concat (List.map2_exn result_rows results ~f:equate)
     in
     let anchors =
       if sabotaged Sever_shared then []
@@ -5662,7 +5671,8 @@ module Scheme = struct
 
   let instantiate ?sabotage s ~application ~args ~results =
     ignore
-      (instantiate_core ?sabotage ~instance:true ~bind_refs:true s ~application ~args ~results
+      (instantiate_core ?sabotage ~instance:true ~bind_refs:true s ~application ~args
+         ~results:(Some results)
         : Row.renaming * Row.constraint_origin)
 
   (* What [instantiate] writes, put back: the session globals, the solver's, the taint, and the rows
@@ -5685,7 +5695,7 @@ module Scheme = struct
           ~f:(fun () ->
             ignore
               (instantiate_core ?sabotage ~instance:true ~bind_refs:false s ~application ~args
-                 ~results:[]
+                 ~results:None
                 : Row.renaming * Row.constraint_origin))
           ~finally:(fun () -> restore_after_check ~globals ~row_globals ~taint:taint0 rows))
 end

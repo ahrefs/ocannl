@@ -318,10 +318,17 @@ let restore_root_cells ~restored =
   Map.iter session_state.forward_roots ~f:(fun e -> set_not_root (Weak_root.cell e));
   Map.iter restored ~f:(fun e -> (Weak_root.cell e).is_root <- true)
 
+(* The tensors made while a traced [%op] body runs (gh-ocannl-1801), newest first: the candidates
+   for its results, held strongly until the trace reads them. [None] outside such a body. *)
+let made_by_traced_body : t list ref option ref = ref None
+[@@mutation_serial.exempt
+  "the result candidates of a running trace, restored by Scheme.traced_results"]
+
 (* Root-map and handout changes count as session mutations (gh-ocannl-1301): a construction that
-   embedded a root and then failed has to be rewound. *)
+   embedded a root and then failed has to be rewound. Every tensor made is installed here. *)
 let add_fwd_root t =
   Row.note_mutation ();
+  Option.iter !made_by_traced_body ~f:(fun made -> made := t :: !made);
   session_state.forward_roots <-
     Map.add_exn session_state.forward_roots ~key:t.value.id ~data:(Weak_root.make t);
   t.consumption.fwd_owner.is_root <- true
@@ -1948,10 +1955,10 @@ module Scheme = struct
 
   (* {3 Automatic schemes for [%op] functions (gh-ocannl-1751)} *)
 
-  type event = Traced of string | Unschemed of string * string | Checked of string
+  type event = Traced of t | Unschemed of string * string | Checked of string
 
-  (* Observers of the automatic schemes' events, innermost first: [check_definition] collects the
-     traces its trial makes, and tests read the log. *)
+  (* Observers of the automatic schemes' events, innermost first: [traced_by] and [check_definition]
+     collect the schemes traced, and tests read the log. *)
   let observers : (event -> unit) list ref = ref []
   [@@mutation_serial.exempt "observers of scheme events, restored by their installers' finally"]
 
@@ -1998,7 +2005,52 @@ module Scheme = struct
   (* One scheme per presence pattern (gh-ocannl-1792): which of the function's option-valued tensor
      parameters are [Some]. [pattern] covers every position, a required one always present. *)
   type slot = { pattern : bool list; label : string; mutable state : state }
-  type handle = { body : tensor option list -> unit; slots : slot list }
+
+  type handle = {
+    body : tensor option list -> tensor list;
+        (** The function applied to tracers, returning its result tensors. *)
+    slots : slot list;
+  }
+
+  (* [body] applied to the tracers [args], returning its result tensors (gh-ocannl-1801). The ppx
+     cannot name a function's result type, so they are found by physical identity, among the tensors
+     the body made and the tracers: the value itself, or each field of a returned tuple or record
+     when every field is one. A copy of a tensor's record ([{ t with forward = ... }], as
+     [Nn_blocks]' batch norm returns in training) is that tensor: a block of its size holding its
+     node where it does. Any other value -- a function, a list, a tensor made before the body ran --
+     gives no results. [Obj] only compares pointers and reads the fields of tag-0 blocks, each a
+     value. *)
+  let traced_results body args =
+    let made = ref [] in
+    let outer = !made_by_traced_body in
+    made_by_traced_body := Some made;
+    let value =
+      Exn.protect ~f:(fun () -> body args) ~finally:(fun () -> made_by_traced_body := outer)
+    in
+    let module Obj = Stdlib.Obj in
+    let fields r =
+      if Obj.is_block r && Obj.tag r = 0 then List.init (Obj.size r) ~f:(Obj.field r) else []
+    in
+    (* A copy of [c]'s record: a block of its size holding its node where [c] does. *)
+    let is_copy r (c : tensor) =
+      let rc = Obj.repr c and node = Obj.repr c.value in
+      Obj.is_block r
+      && Obj.tag r = 0
+      && Obj.size r = Obj.size rc
+      && List.exists2_exn (fields rc) (fields r) ~f:(fun fc fr ->
+          phys_equal fc node && phys_equal fr node)
+    in
+    (* Newest first: a result is usually the last tensor made. *)
+    let candidates = !made @ List.filter_opt args in
+    let find r =
+      match List.find candidates ~f:(fun c -> phys_equal r (Obj.repr c)) with
+      | Some _ as found -> found
+      | None -> List.find candidates ~f:(is_copy r)
+    in
+    let r = Obj.repr value in
+    match find r with
+    | Some t -> [ t ]
+    | None -> Option.value ~default:[] (Option.all (List.map (fields r) ~f:find))
 
   let unscheme s reason =
     s.state <- Unschemed reason;
@@ -2069,13 +2121,12 @@ module Scheme = struct
           let ck = checkpoint ~label () in
           match
             trace_core ~label:s.label (List.count s.pattern ~f:Fn.id) (fun ts ->
-                h.body (spread s.pattern ts);
-                [])
+                h.body (spread s.pattern ts))
           with
           | scheme ->
               rewind ck;
               s.state <- Schemed { scheme; generation = !generation };
-              emit (Traced s.label)
+              emit (Traced scheme)
           | exception (Row.Shape_error _ as exn) ->
               (* A contradiction that does not depend on the arguments: loud, naming the
                  function. *)
@@ -2121,7 +2172,7 @@ module Scheme = struct
 
   let make ~name ~optional body =
     {
-      body;
+      body = traced_results body;
       slots =
         List.map (patterns optional) ~f:(fun pattern ->
             { pattern; label = slot_label ~name optional pattern; state = Pending });
@@ -2210,18 +2261,20 @@ module Scheme = struct
         String.concat ~sep:"; "
           (List.map slots ~f:(fun s -> [%string "%{s.label}: %{slot_status s}"]))
 
-  let check_definition ~name f =
+  let traced_by f =
     let traced = ref [] in
-    let on_event = function Traced l -> traced := l :: !traced | _ -> () in
-    (try
-       let label = [%string "the check of the definition %{name}"] in
-       with_id_neutral ~label (fun () -> with_rewind ~label (fun () -> observing ~on_event f))
-     with Row.Shape_error (msg, trace) ->
-       let bt = Stdlib.Printexc.get_raw_backtrace () in
-       Stdlib.Printexc.raise_with_backtrace
-         (Row.Shape_error ([%string "checking the definition %{name}: %{msg}"], trace))
-         bt);
-    List.rev !traced
+    let result = observing f ~on_event:(function Traced s -> traced := s :: !traced | _ -> ()) in
+    (result, List.rev !traced)
+
+  let check_definition ~name f =
+    try
+      let label = [%string "the check of the definition %{name}"] in
+      snd (with_id_neutral ~label (fun () -> with_rewind ~label (fun () -> traced_by f)))
+    with Row.Shape_error (msg, trace) ->
+      let bt = Stdlib.Printexc.get_raw_backtrace () in
+      Stdlib.Printexc.raise_with_backtrace
+        (Row.Shape_error ([%string "checking the definition %{name}: %{msg}"], trace))
+        bt
 end
 
 module For_testing = struct
