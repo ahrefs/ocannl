@@ -16,6 +16,15 @@ control (off): no scheme event, where check had some: true
 output dims: single prec 2x4x6x4
 check and off give the same output dims: true
 check and off give the same output, loss, parameters and gradients, bitwise: true
+under check, the network builds without a shape error: true
+control (off): the network builds: true
+its scheme is traced: true
+and its application is checked against the scheme: true
+no scheme event leaves it unschemed: true
+control (off): no scheme event, where check had some: true
+output dims: single prec 2x2x3x4
+check and off give the same output dims: true
+check and off give the same output, loss, parameters and gradients, bitwise: true
 the scheme or the body raises a shape error: true
 v = conv(v + kernel 1): true
 conv(v + kernel 1) = v: true
@@ -29,3 +38,25 @@ shortcut first: control: different concrete outputs are refused: true
 pool first: the residual equation o_p = o_sc holds on unsolved widths: true
 pool first: then w = 12 gives both outputs 6, as solving concretely does: true
 pool first: control: different concrete outputs are refused: true
+o1's window first: o1 = 4 gives o2 = 8: true
+o1's window first: o2 = 8 gives o1 = 4: true
+o1's window first: w = 16 gives o1 = 4 and o2 = 8, as solving concretely does: true
+o1's window first: control: o1 = 4 with o2 = 7 is refused: true
+o2's window first: o1 = 4 gives o2 = 8: true
+o2's window first: o2 = 8 gives o1 = 4: true
+o2's window first: w = 16 gives o1 = 4 and o2 = 8, as solving concretely does: true
+o2's window first: control: o1 = 4 with o2 = 7 is refused: true
+o1's window first: o1 = 3 gives o2 = 7: true
+o1's window first: w = 14 gives o1 = 3 and o2 = 7: true
+o2's window first: o1 = 3 gives o2 = 7: true
+o2's window first: w = 14 gives o1 = 3 and o2 = 7: true
+o1's window first: padded stride 2 against a valid stride-2 window of 3: true
+o2's window first: padded stride 2 against a valid stride-2 window of 3: true
+o1's window first: valid stride-2 windows of 3 and of 2: true
+o2's window first: valid stride-2 windows of 3 and of 2: true
+o1's window first: both valid: o1 = 4 gives o2 = 8: true
+o2's window first: both valid: o1 = 4 gives o2 = 8: true
+o1's window first: padded stride 1 against a valid window of 3: o1 = 7 gives o2 = 5: true
+o1's window first: and o2 = 5 gives o1 = 7: true
+o2's window first: padded stride 1 against a valid window of 3: o1 = 7 gives o2 = 5: true
+o2's window first: and o2 = 5 gives o1 = 7: true
