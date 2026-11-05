@@ -10,13 +10,20 @@
    The uniform() default init of w1/w2 routes through uint4x32 threefry chains; the policy must
    leave those precisions untouched or compilation itself fails (threefry ops require a uint4x32
    target), so the bf16 leg compiling and running is the regression guard for the integer/uint4x32
-   protection. *)
+   protection.
+
+   Two more legs (gh-ocannl-1865) are the mixed-precision recipe's: f32 masters behind half cast
+   twins ([Mixed_prec.with_master_weights]), activations reduced to half, under [param_prec = None]
+   and under a uniform policy. A master's initializer takes the master's precision, so its executed
+   initial values are f32 draws -- not all f16-representable, as they were when the walk narrowed
+   the initializer as an activation. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
 module Train = Ocannl.Train
 module IDX = Train.IDX
 module PP = Ocannl.Precision_policy
+module MP = Ocannl.Mixed_prec
 module Tn = Ir.Tnode
 
 let hid = 6
@@ -35,11 +42,21 @@ let find_param root name =
 
 let prec_str tn = Ir.Ops.prec_string (Lazy.force tn.Tn.storage_prec)
 
+(* Whether [x] is a finite IEEE binary16 value: within its range, and a multiple of the half spacing
+   at its binade (11 significant bits; subnormals below 2^-14 share the spacing 2^-24). *)
+let f16_representable x =
+  Float.(x = 0.)
+  || Float.(abs x <= 65504.)
+     &&
+     let _, ex = Float.frexp x in
+     let scaled = Float.ldexp x (10 - Int.max (ex - 1) (-14)) in
+     Float.(round_towards_zero scaled = scaled)
+
 (* One leg: build the model, let [prepare] see the loss root (the policy application site), compile
    the gradient update, initialize params, optionally overwrite w1/w2 with given values, run, and
    return what the comparisons need. *)
-let run_leg base_ctx ~input_l ~prepare ~w_vals =
-  let f = make_model () in
+let run_leg ?(build = make_model) base_ctx ~input_l ~prepare ~w_vals =
+  let f = build () in
   let x =
     NTDSL.init ~l:input_l ~prec:Ir.Ops.single
       ~o:[ Array.length x_vals ]
@@ -119,4 +136,47 @@ let () =
   in
   Verdict.p "reference forward varies past the parity tolerance" Float.(ref_spread > 0.05);
   Verdict.p "forward parity within 0.05" Float.(max_err < 0.05);
-  Verdict.p "loss parity within 0.05" Float.(Float.abs (loss_a_v -. loss_b_v) < 0.05)
+  Verdict.p "loss parity within 0.05" Float.(Float.abs (loss_a_v -. loss_b_v) < 0.05);
+
+  (* Mixed-precision legs: f32 masters behind half twins, with the params left alone and with a
+     uniform policy, whose [param_prec] the masters' explicit precision outranks. The step computes
+     gradients only, so the masters still hold their initial values. *)
+  let master_leg ~name ~input_l policy =
+    let ctx, loss, y, _x =
+      run_leg base_ctx ~input_l
+        ~build:(fun () -> MP.with_master_weights ~prec:Ir.Ops.half make_model)
+        ~prepare:(fun loss -> PP.apply policy loss)
+        ~w_vals:None
+    in
+    let w1 = find_param loss "w1" and w2 = find_param loss "w2" in
+    Stdio.printf "w1 master (%s): %s\n" name (prec_str w1.Tensor.value);
+    Stdio.printf "y activation (%s): %s\n" name (prec_str y.Tensor.value);
+    let initial =
+      Array.to_list
+        (Array.append
+           (Context.get_values ctx w1.Tensor.value)
+           (Context.get_values ctx w2.Tensor.value))
+    in
+    Verdict.p_all
+      (name ^ ": the f32 masters' initial values lie in the default init's [-0.25, 0.25) range")
+      initial ~f:(fun v -> Float.(v >= -0.25 && v < 0.25));
+    Verdict.p_exists (name ^ ": some f32 master's initial value is not f16-representable") initial
+      ~f:(fun v -> not (f16_representable v))
+  in
+  master_leg ~name:"param_prec = None" ~input_l:"xc"
+    { PP.param_prec = None; activation_prec = Some Ir.Ops.half; grad_prec = None };
+  master_leg ~name:"uniform half" ~input_l:"xd" (PP.uniform Ir.Ops.half);
+
+  (* A node both an initializer and the model read is an activation, although the walk reaches the
+     initializer first ([w] precedes [shared] in [y]). [param_prec] is a value here: a node the
+     policy left alone would follow its consumers into the same answer. *)
+  let shared = NTDSL.number 3. in
+  let w = TDSL.param ~param_init:(NTDSL.pointmul shared (NTDSL.number 2.)) "shared_w" () in
+  let%op y = w *. shared in
+  PP.apply
+    { PP.param_prec = Some Ir.Ops.bfloat16; activation_prec = Some Ir.Ops.half; grad_prec = None }
+    y;
+  Verdict.p "a parameter reading a node the model reads keeps param_prec"
+    (Ir.Ops.equal_prec (Lazy.force w.Tensor.value.storage_prec) Ir.Ops.bfloat16);
+  Verdict.p "a node both an initializer and the model read is an activation"
+    (Ir.Ops.equal_prec (Lazy.force shared.Tensor.value.storage_prec) Ir.Ops.half)

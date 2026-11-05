@@ -428,10 +428,8 @@ let build_mp () =
   let batch_n, bindings = IDX.get_static_symbol ~static_range:n_batches IDX.empty in
   let mlp = MP.with_master_weights ~prec:Ir.Ops.half make_mlp in
   let loss = batch_loss ~mlp ~xs ~ys batch_n in
-  (* f16 activations and gradients, where loss scaling matters. The policy's walk also narrows the
-     masters' initializer draws to f16 (gh-ocannl-1769): their lane-extract reads once collapsed
-     into the f32 masters' stores, reading lanes 4..7 of a 4-lane block -- an infinite loss from
-     step 0 on x86/gcc, a finite but wrong one on arm64/clang. *)
+  (* f16 activations and gradients, where loss scaling matters. The masters' initializers are in the
+     masters' class, so with [param_prec = None] their draws stay f32 (gh-ocannl-1865). *)
   Precision_policy.apply
     {
       Precision_policy.param_prec = None;

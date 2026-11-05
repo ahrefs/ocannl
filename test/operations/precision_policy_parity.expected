@@ -7,3 +7,13 @@ input x (explicitly single): single
 reference forward varies past the parity tolerance: true
 forward parity within 0.05: true
 loss parity within 0.05: true
+w1 master (param_prec = None): single
+y activation (param_prec = None): half
+param_prec = None: the f32 masters' initial values lie in the default init's [-0.25, 0.25) range: true
+param_prec = None: some f32 master's initial value is not f16-representable: true
+w1 master (uniform half): single
+y activation (uniform half): half
+uniform half: the f32 masters' initial values lie in the default init's [-0.25, 0.25) range: true
+uniform half: some f32 master's initial value is not f16-representable: true
+a parameter reading a node the model reads keeps param_prec: true
+a node both an initializer and the model read is an activation: true

@@ -1102,8 +1102,10 @@ files.
   `~render`) keeps an RNG-carrying scope of another precision. Collapsed, an f16 draw in an f32
   master's initializer read lanes 4..7 of a 4-lane f32 block: undefined behavior that x86/gcc read
   as zeros and `1.4e27` (an infinite loss from step 0) and arm64/clang as other, finite garbage, so
-  byte-identical C diverged by platform. `Precision_policy`'s walk reaches that draw because it
-  treats a parameter's initializer as an activation. `test_uniform_virtual_lane`'s `draw into` rows
+  byte-identical C diverged by platform. It takes a draw narrower than its reader, which
+  `Precision_policy` no longer produces for an initializer: it gives one its parameter's precision
+  (gh-ocannl-1865). `test_uniform_virtual_lane`'s `draw into` rows, which narrow the draw with
+  `Tn.update_prec`,
   pin the parity; diagnosis recipe: break on the kernel under gdb and read its argument buffers.
   A virtual cast twin's f16 scope over its f32 master is kept too, by gh-ocannl-1788's exact-collapse
   rule, so whether it rounds is the backend's `compute_prec` of f16, the precision its local is
