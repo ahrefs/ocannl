@@ -43,10 +43,15 @@ files.
   ids and capture uids ascend left to right (`test/ppx/test_eval_order.ml`, both compiled and
   run). Where it keeps OCaml's meaning the order is OCaml's, right to left: the operands of an
   operator or function application (`f x + g y` creates `g y` first, as `TDSL.O.(f x + g y)`
-  does outside the ppx) and an argument tuple `f (a, b)`. Inline declarations are not affected
-  by either: they are lifted and bound in source order ahead of the expression. A new builder
-  that splices several effectful expressions into one literal or argument list owes
-  `in_source_order`.
+  does outside the ppx) and an argument tuple `f (a, b)`. That is the maintainer's decision
+  (gh-ocannl-1986), not a gap to close: no value depends on it, and wrapping the operator and
+  einsum arms in `in_source_order` would shift ids across most goldens. The uncurried primitive
+  forms `op (a, b)` / `op (a, b, c)` expand to the curried call with the operator alone as head
+  (gh-ocannl-1986; they used the whole application as the head and never type-checked), so their
+  operands are created right to left too (`test/ppx/test_ppx_op.ml`, `_uncurried_*`). Inline
+  declarations are not affected by either: they are lifted and bound in source order ahead of the
+  expression. A new builder that splices several effectful expressions into one literal or
+  argument list owes `in_source_order`.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`

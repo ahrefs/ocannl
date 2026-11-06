@@ -747,18 +747,21 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       if is_ndarray_constant_expr expr then
         (no_vbs, ndarray_op ?label ~ndarray_fn:(dsl_fn "ndarray") expr)
       else translate_block_tensor ~loc ~loop:block_loop ~label ~opt_label `Input elems
+  (* The uncurried forms [op (a, b)] and [op (a, b, c)]: the call head is the operator alone, as in
+     the curried form (gh-ocannl-1986). *)
   | [%expr
-      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }] ([%e? expr2], [%e? expr3])]
+      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
+        ([%e? expr2], [%e? expr3])]
     when Hashtbl.mem binary_ops op_ident ->
-      let e1 = [%expr [%e expr] ?label:[%e opt_expr ~loc label]] in
+      let e1 = [%expr [%e op] ?label:[%e opt_expr ~loc label]] in
       let vbs2, e2 = loop expr2 in
       let vbs3, e3 = loop expr3 in
       (reduce_vbss [ vbs2; vbs3 ], [%expr [%e e1] [%e e2] [%e e3]])
   | [%expr
-      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
+      [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
         ([%e? expr2], [%e? expr3], [%e? expr4])]
     when Hashtbl.mem ternary_ops op_ident ->
-      let e1 = [%expr [%e expr] ?label:[%e opt_expr ~loc label]] in
+      let e1 = [%expr [%e op] ?label:[%e opt_expr ~loc label]] in
       let vbs2, e2 = loop expr2 in
       let vbs3, e3 = loop expr3 in
       let vbs4, e4 = loop expr4 in
