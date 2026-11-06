@@ -941,7 +941,7 @@ and the floating-point algebra-policy split (gh-ocannl-998) remain follow-up wor
 > Release note: theme — consolidation after 1.0: making a green result mean what it says. This is
 > the release previously planned as v1.1, renumbered because version-number depth tracks release
 > scope in this project (as in the 0.6.x line): the ladder is now
-> `1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.2` (see ROADMAP.md). Its 135 closed issues were mostly
+> `1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.2` (see docs/release-history.md). Its 135 closed issues were mostly
 > filed by PR review cycles, and their common shape is trust: a failing check that cannot be
 > `dune promote`d into a golden, an environment variable that cannot be mistyped silently, an
 > inlined computation that cannot lose its guard or its repetition loop, a reduction whose
@@ -1394,7 +1394,7 @@ and the floating-point algebra-policy split (gh-ocannl-998) remain follow-up wor
 > Release note: theme — parallel schedules and autotuning; AMD HIP backend. Scope changes
 > vs. the original plan: **tensor cores are pushed out to v0.9**; conversely **autotuning**
 > was not on the original roadmap and lands here as multi-round, execution-measured beam search
-> over schedule compositions. See [ROADMAP.md](ROADMAP.md).
+> over schedule compositions. See [docs/release-history.md](docs/release-history.md).
 
 ### Added
 
@@ -1500,7 +1500,7 @@ and the floating-point algebra-policy split (gh-ocannl-998) remain follow-up wor
 > Release note: **0.6.4 is skipped** as a tagged release (last release before 0.7 was 0.6.3). The
 > work originally planned for 0.6.4/0.6.5/0.7.0 (frontend finalization, concatenation,
 > position embeddings, transformer toy) and for 0.7.2 (compiler optimizations, pool
-> allocator) is **consolidated into 0.7**. See [ROADMAP.md](ROADMAP.md).
+> allocator) is **consolidated into 0.7**. See [docs/release-history.md](docs/release-history.md).
 
 ### Added
 

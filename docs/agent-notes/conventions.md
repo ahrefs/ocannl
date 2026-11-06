@@ -41,7 +41,7 @@ files.
   would keep calling an item retained after this very policy removed it. When you retain surface
   on purpose, write the reason into its doc comment — that is where the README sends users — and
   do not add it to the README. Version depth is no argument against removal either: it tracks
-  release scope, not semver (README's Milestones, ROADMAP.md's August 26, 2026 renumbering). The
+  release scope, not semver (README's Milestones, `docs/release-history.md`'s August 26, 2026 renumbering). The
   exception is a STRING a user typed rather than a name a compiler resolves — `big_models` for
   `large_models` (`arrayjit/lib/utils.ml`), `sync_cc` / `multicore_cc` for `cc` / `multidev_cc`
   (`arrayjit/lib/backends.ml`) — kept as runtime aliases as a matter of course, because a renamed

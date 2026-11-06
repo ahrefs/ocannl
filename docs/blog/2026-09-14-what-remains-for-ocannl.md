@@ -16,7 +16,7 @@ them can stand on its own.
 This guide explains those ambitions and the gaps between them and the current implementation.
 It is an OCANNL-focused companion to the operational sequencing plan, incorporating the
 September 14 milestone reshuffle. It leaves machine assignments, daily waves, review histories
-and other repositories' backlogs in that plan. [ROADMAP.md](../../ROADMAP.md) owns the release
+and other repositories' backlogs in that plan. [The GitHub milestones](https://github.com/ahrefs/ocannl/milestones) own the release
 calendar; [CHANGES.md](../../CHANGES.md) records what has landed. Issue links below point to
 `ahrefs/ocannl`, while implementation PRs live in `lukstafi/ocannl-staging`. The descriptions and
 issue directory are a dated snapshot, not a second live tracker.
@@ -362,7 +362,7 @@ not semantic-versioning compatibility.
 The dates are end-of-period targets. A milestone can leave work open without invalidating the
 release's contribution. If scope exceeds the available time, the early-November anchor calls
 for a coherent smaller result and an explicit deferral, rather than silently moving every later
-date. For the current calendar and assignments, follow the roadmap and linked issues.
+date. For the current calendar and assignments, follow the milestones and linked issues.
 
 ## Issue directory
 
