@@ -113,3 +113,27 @@ closed row holding a symbolic extent, set_equal d r: the call is refused, naming
 closed row holding a symbolic extent, set_equal with a row, s r: the open row takes the symbolic row: true
 closed row that kept its product, set_equal d r: w is 6
 closed row that kept its product, set_equal d r: the dimension takes the closed product: true
+set_scale ~factor:1, the larger, closed reference is a row: refused: Shape.set_scale: requires two dimension variables; got at least one row variable (labels r, s)
+set_scale ~factor:1, the larger, closed reference is a row: a row is refused: true
+set_scale ~factor:2, the larger, closed reference is a row: refused: Shape.set_scale: requires two dimension variables; got at least one row variable (labels r, s)
+set_scale ~factor:2, the larger, closed reference is a row: a row is refused: true
+set_scale ~factor:1, the smaller, closed reference is a row: refused: Shape.set_scale: requires two dimension variables; got at least one row variable (labels s, r)
+set_scale ~factor:1, the smaller, closed reference is a row: a row is refused: true
+set_scale ~factor:2, the smaller, closed reference is a row: refused: Shape.set_scale: requires two dimension variables; got at least one row variable (labels s, r)
+set_scale ~factor:2, the smaller, closed reference is a row: a row is refused: true
+set_scale ~factor:1, the larger, closed reference is a dimension: the dimension relates the other reference: true
+set_scale ~factor:2, the larger, closed reference is a dimension: the dimension relates the other reference: true
+set_scale ~factor:1, the smaller, closed reference is a dimension: the dimension relates the other reference: true
+set_scale ~factor:2, the smaller, closed reference is a dimension: the dimension relates the other reference: true
+setters on a closed reference that is a row: the number it holds is no change: true
+setters on a closed reference that is a row: a different number is refused: true
+setters on a closed reference that is a row: a symbol is refused: true
+setters on a closed reference that is a dimension: the number it holds is no change: true
+setters on a closed reference that is a dimension: a different number is refused: true
+setters on a closed reference that is a dimension: a symbol is refused: true
+unbound u, set_equal u r with a closed reference that is a row, then u a row: refused: Variable reference u is captured as a row variable in spec "..u.. => ..u..", but Shape.set_equal related it to the row reference r while it was unbound, which equated only a number (the row's product): bound to a row now, it would leave the two rows tied by product alone, not as rows. Pass u to an operation's ~capture_dims before calling set_equal on it.
+unbound u, set_equal u r with a closed reference that is a row, then u a row: the row binding is refused: true
+unbound u, set_equal r u with a closed reference that is a row, then u a row: refused: Variable reference u is captured as a row variable in spec "..u.. => ..u..", but Shape.set_equal related it to the row reference r while it was unbound, which equated only a number (the row's product): bound to a row now, it would leave the two rows tied by product alone, not as rows. Pass u to an operation's ~capture_dims before calling set_equal on it.
+unbound u, set_equal r u with a closed reference that is a row, then u a row: the row binding is refused: true
+unbound u, set_equal u r with a closed reference that is a dimension, then u a row: tied by product, 3x2 is accepted: true
+unbound u, set_equal r u with a closed reference that is a dimension, then u a row: tied by product, 3x2 is accepted: true

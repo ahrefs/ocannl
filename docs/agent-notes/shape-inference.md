@@ -57,8 +57,7 @@ files.
   gh-ocannl-1616) and a row's numeric product (none for a row holding a `Sym`). The carried row is
   published at the CLOSURE only (`~closure:true`, from `finish_inference`), from the binding the
   reference has then: a `Row` binding whose substituted row is `Broadcastable` with only `Dim`/`Sym`
-  axes writes it (even over a held product, e.g. `set_dim` on a row reference), a `Dim` binding
-  clears it. Do not publish it as a row resolves mid-inference: within one inference a row captured
+  axes writes it (even over a held product, e.g. `set_dim` on a row reference), a `Dim` binding clears it. Do not publish it as a row resolves mid-inference: within one inference a row captured
   after a dimension binding is product-tied (row, dim, row ties the last row to the first by
   product only), and an early publication would make the carried value depend on whether the row
   resolved at a registration's Stage1 or at the closure. The parity table in
@@ -68,12 +67,15 @@ files.
   held solution has a constraint on the current variable (`set_dim`/`set_sym_dim` push one, a later
   binding emits the `solved` arm), so a dim meeting a symbol is the solver's `Shape_error` first, and
   the `Ir.Indexing` second-kind refusal is an unreached backstop (pinned directly, and every meeting
-  order, in `capture_per_call.ml`). After the closure `var` names a variable of the reset environment (or a
-  projection-local one, `derive_projections` rebinds `var`), free in the open work, so the tie to
-  it constrains nothing: a binding drops it (`previous_of`) and lets the `solved` arm carry the
-  value -- for a row binding, `Row_eq` against the carried row, standing in for the dead previous
-  row binding; `Total_elems` remains only for a closed row whose axes could not be carried (a
-  `Concat`/`Affine` axis). A closed reference holding no number (a `Sym` row) still has its
+  order, in `capture_per_call.ml`). After the closure `var` names a variable of the reset environment,
+  free in the open work, so the tie to it constrains nothing: a binding drops it (`previous_of`) and
+  lets the `solved` arm carry the value -- for a row binding, `Row_eq` against the carried row,
+  standing in for the dead previous row binding; `Total_elems` remains for a closed dimension (the
+  tie is not transitive, maintainer's call in gh-ocannl-1969: row, dimension, row stays a product
+  tie, and identifying the rows takes an explicit `set_equal`). `var` is always a binding inference
+  made: `bind_ref` skips `set_var` for projections (gh-ocannl-1969), whose variables nothing reads
+  through it; rewriting it left a closed reference with the kind of its oldest step, which
+  `set_scale`'s row refusal and `set_equal`'s `row_numbered_refs` marking read backwards. A closed reference holding no number (a `Sym` row) still has its
   carried row for the `as_row` uses (a row binding, a Row-Row `set_equal`), but has lost its
   constraint for every use needing a number, which refuses it naming the closure (gh-ocannl-1655,
   `refuse_closed_unsolved_ref`): a dimension binding, `set_dim`, `set_sym_dim`, a mixed
@@ -95,10 +97,6 @@ files.
   closure (its uid no longer in `open_refs`, its `var` dead) contributes its `carried_row`
   (`row_for_set_equal`, gh-ocannl-1689); with both closed the solver compares the two concrete
   rows when it next runs (no eager comparison: the broadcast-top and basis rules are the solver's).
-  Whether a closed reference IS a row reference is `closed_kind` (`binding_kind`), never `var`'s
-  constructor: `derive_projections` rebinds `var` after the closure, newest step first, so a
-  reference bound as a dimension then as a row is left holding a dimension variable, and
-  dispatching on it tied a carried 2x3 to 3x2 by product.
   Pinned under both registration and argument orders by `test/operations/set_equal_rows.ml`.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in

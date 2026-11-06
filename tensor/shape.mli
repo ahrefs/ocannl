@@ -126,10 +126,6 @@ type delayed_var_ref = private {
           to a row that resolved (gh-ocannl-1689), outer to inner, [Sym] axes included: across the
           closure it stands in for that row. [None] when the binding at the closure was a dimension.
           Omitted from sexps when [None]. *)
-  mutable closed_kind : [ `Row | `Dim ] option;
-      (** The kind of the reference's binding when its inference last closed: what a closed
-          reference is to {!set_equal}. [var]'s kind can differ after the closure, as projection
-          derivation rebinds it. Omitted from sexps when [None]. *)
   uid : int;  (** The reference's identity for rewind tracking; ignored by [equal] and sexps. *)
   mutable discarded_by : string option;
       (** The provenance of the rewind that discarded the reference, which every setter then refuses
