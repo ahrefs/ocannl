@@ -287,6 +287,8 @@
   (alias runtest-cache_key_agreement-outranked)
   (alias runtest-scheme_error_rendering-trimmed)
   (alias runtest-scheme_error_rendering-full_sexp)
+  (alias runtest-transformer_test-origins_cap_0)
+  (alias runtest-resnet_block-origins_cap_0)
   (alias runtest-heap_local_arrays-outlined)
   (alias runtest-epilogue_fusion_mma_seeds-tf32)
   (alias runtest-fast_math_libmvec)
@@ -2434,6 +2436,30 @@
  (preprocess
   (pps ppx_here ppx_ocannl ppx_sexp_conv)))
 
+; gh-ocannl-2000: the same executable with the origin cap at 0, against the SAME golden --
+; max_shape_error_origins is a diagnostics cap, so a deep graph's inference (every merge of two
+; constraints' origins keeps none) must mint the same shape and projection ids. The setting is
+; pinned on the command line, over an ambient one; test/einsum's concat_extraction has the twin for
+; the one filter that reads an origin as data.
+
+(rule
+ (target transformer_test-origins_cap_0.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:transformer_test.exe} --ocannl_max_shape_error_origins=0))))
+
+(rule
+ (alias runtest-transformer_test-origins_cap_0)
+ (package neural_nets_lib)
+ (action
+  (diff transformer_test.expected transformer_test-origins_cap_0.actual)))
+
 (test
  (name attention_test)
  (package neural_nets_lib)
@@ -2586,6 +2612,27 @@
  (libraries base ocannl arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2000: as transformer_test-origins_cap_0 above, for executed values: the residual
+; blocks' outputs against their oracles with the origin cap at 0.
+
+(rule
+ (target resnet_block-origins_cap_0.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:resnet_block.exe} --ocannl_max_shape_error_origins=0))))
+
+(rule
+ (alias runtest-resnet_block-origins_cap_0)
+ (package neural_nets_lib)
+ (action
+  (diff resnet_block.expected resnet_block-origins_cap_0.actual)))
 
 (test
  (name mobile_cnn_width)

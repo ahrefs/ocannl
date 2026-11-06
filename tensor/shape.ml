@@ -1150,6 +1150,10 @@ let refuse_unsolved ~where (unsolved : Row.constraint_ list) =
     projection derivation; see there. *)
 let projection_sizing_operation = "set_dim (projection-local sizing)"
 
+(* Read off origins, which [Row.merge_origins] caps ([max_shape_error_origins]) -- sound only on
+   constraints no solve has touched: [derive_projections] applies it to [get_inequalities]' own
+   list, where the tagged constraint still carries the one origin [binding_constraints] built. A
+   caller filtering a solver's output needs a marker of its own instead (gh-ocannl-2000). *)
 let is_projection_sizing (c : Row.constraint_) =
   match c with
   | Dim_eq { origin; _ } ->

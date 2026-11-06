@@ -199,10 +199,11 @@ files.
 
 - The solver's fixpoint is list equality over CONSECUTIVE iterations, so a constraint is deferred by
   re-emitting the SAME value, never a freshly built one: re-emitting a fresh `Rows_constr` from an
-  `eliminate_*` arm churns origins and substitutions, defeats that equality and livelocks the
+  `eliminate_*` arm churns substitutions, defeats that equality and livelocks the
   per-stage loop (gh-ocannl-509 task 5) — defer through the stored-constraint path
   (`keep_constr`/`apply_rows_constraint`) instead. Same discipline the `unify_dim` deferral rule
-  above states for dim constraints.
+  above states for dim constraints. The equality is up to origins
+  (`Row.equal_constraint_up_to_origin`, gh-ocannl-2000): they explain a constraint and say nothing.
 - `Shape_row` constraints (added in `finish_inference` from every update row) are the ONLY mechanism
   that finalizes NON-terminal variables — `Terminal_dim`/`Terminal_row` cover leaf tensors alone. So
   a `process_shape_row` arm that closes a row var via its GLB must RE-EMIT the `Shape_row` unless it
@@ -387,6 +388,17 @@ files.
   (`Shape.traced_names`, filled by `Shape.make`/`of_spec` while a trace runs, and a scheme's
   `tensor_names`) -- before the cap. A new window that should own its errors' origins pushes a
   focus; ranking at a rethrow handler instead would come too late, after the cap has trimmed.
+- Origins are diagnostics, and `max_shape_error_origins` must stay execution-neutral
+  (gh-ocannl-2000): never decide anything from an origin list a solve has touched, since
+  `merge_origins` may have trimmed it. Two places read origins outside error text. The solver's
+  fixpoint used to compare them (now it does not; on 49 shape-heavy tests, 269k continuations, no
+  pass had continued for an origin alone, at cap 0 or 20). `Shape.is_projection_sizing` finds a
+  capture's sizing constraint by its origin tag, soundly because `derive_projections` filters
+  `get_inequalities`' own list, before any solve; drop that filter and every concatenation case
+  raises `to_proj: Dim without proj_id`. A filter over a solver's OUTPUT needs a constructor field
+  instead. The `-origins_cap_0` aliases (`concat_extraction`, `transformer_test`, `resnet_block`)
+  rerun at cap 0 against the default run's golden; what cap 0 may move is error text
+  (`test_param_shape_error` loses its spec, by design) and allocation (`scheme_payoff`'s ratio).
 - Scheme cost (gh-ocannl-1752, `test/operations/scheme_payoff.ml`, `Shape.registration_times`):
   a scheme only checks; it cannot stand in for the body's registration. An instantiation carries
   about as many constraints as the body's inline registration produces (C' + E' vs the steps'
