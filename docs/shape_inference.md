@@ -317,6 +317,11 @@ rows carry leading dimensions in `beg_dims`, and an omission there does not fail
 miscomputes the product (e.g. a slack-window re-check falsely rejecting a block row whose total was
 actually inside the window).
 
+The same `var` can also be a factor of the product the total is compared to: a row tied by product
+to a dimension and holding that dimension. There the variable cancels, for `round_up = false`:
+`(coeff * var / denom) / (var * rest) = (coeff / denom) / rest`. `var` stays free, and what remains
+is the check that `rest` multiplies to `coeff / denom`; a fractional quotient is refused.
+
 During the solution process, the constraints are incorporated, or propagated, into the environment `constr` entry fields, and into further `constraint_` constraints, as needed. This provides sufficient scaffolding to implement the other complex constraints as the need arises.
 
 ## Solving the constraints

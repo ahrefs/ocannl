@@ -186,6 +186,15 @@ files.
   chains and an eager stage-6 guess-to-1 conflicts with a dim arriving in the same stage
   (box_muller's interior axes were the canary). `At_least_dim` axes always meet their use sites
   (direct indexing is a dim-carrying use).
+- An exact `Strided_var` whose variable is also a factor of the constrained product cancels
+  (`Row.cancel_strided_var`, gh-ocannl-1960): `(coeff * v / denom) / (v * rest) =
+  (coeff / denom) / rest`, so `v` stays free and only `rest` is checked. This is what a product tie
+  means for a row holding its own dimension, in either form (`v` among the row's axes or, after
+  reduction, in `divided_by`). A numerator variable is never solved from such a constraint, and a
+  fractional `coeff / denom` is a refusal, not a wait: no dimension can make it whole. The closed-row
+  path, row elimination and `row_conjunction` all go through it, and the closed-row path marks `v`
+  as if it were in `divided_by`, or the leftover `has_uniq_constr_unless` would keep it from ever
+  closing.
 - The packed sampler's round-up total (`Total_elems` over a `Strided_var { round_up = true }`,
   minted by `Uint4x32_to_prec`) has to wait for the same use-site bound, in
   `Row.eliminate_row_constraint`: an arm that settles the counter from the already-closed axes
@@ -347,8 +356,8 @@ files.
   such a reference refuse at entry (`refuse_external_in_trace`): a satisfied `set_dim` and the
   row/row `set_equal` touch nothing, so `trace_touches` alone would miss them. A dim/row mixed
   binding traces (gh-ocannl-1890): both product ties (`Shape.product_tie`) have a constant
-  coefficient (`Utils.safe_value`), which Stage1's cancellation arm may now use early -- its
-  `is_safe_val` disjunct exists for constants.
+  coefficient (`Utils.safe_value`), which Stage1's cancellation may read early -- the
+  `is_safe_val` disjunct of its `can_force` exists for constants.
 - Random draws in schemes (gh-ocannl-1890): a packed conversion's `Strided_var` coefficient is a
   lazy over its result node's `storage_prec`, set top-down by consumers as they register
   (`update_infer_prec`). Every arm that reads a lazy coefficient is gated on Stage2+ (`late` in the

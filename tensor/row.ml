@@ -890,6 +890,26 @@ let total_elems_known_zero = function
 (* Helper to remove a dimension variable from a list *)
 let remove_var v vars = Utils.remove_elem ~equal:equal_dim_var v vars
 
+(* The numerator of an exact [Strided_var] over a product that holds its own variable: [(coeff * v /
+   denom) / (v * rest) = (coeff / denom) / rest]. The variable cancels, so it stays free, and what
+   the constraint still states is that [rest]'s product is [coeff / denom] (a row tied by product to
+   a dimension and holding that dimension: gh-ocannl-1960). [can_force] says whether the coefficient
+   may be read yet. A round-up total does not cancel: it fixes [v] only up to the slack window. *)
+let cancel_strided_var ~can_force ~error_trace numerator vars =
+  match numerator with
+  | Strided_var { coeff; var; denom; round_up = false }
+    when can_force coeff && List.mem vars var ~equal:equal_dim_var ->
+      let coeff = Utils.safe_force coeff in
+      if coeff % denom = 0 then (Num_elems (coeff / denom), remove_var var vars)
+      else
+        raise
+        @@ Shape_error
+             ( [%string
+                 "Total_elems constraint failed: the dimension cancels, leaving a fractional \
+                  %{coeff#Int}/%{denom#Int} elements"],
+               error_trace )
+  | _ -> (numerator, vars)
+
 (* For future flexibility *)
 let dim_conjunction constr1 constr2 =
   match (constr1, constr2) with
@@ -1037,32 +1057,25 @@ let rec row_conjunction ~prov ~origin stage constr1 constr2 =
           (* We don't want to force delayed values - keep both constraints *)
           None)
   | ( Total_elems
-        {
-          numerator = Strided_var { coeff = c1; var = v1; round_up = false; _ };
-          divided_by = vars1;
-          _;
-        },
+        { numerator = Strided_var { var = v1; round_up = false; _ } as n1; divided_by = vars1; _ },
       constr2 )
     when List.mem vars1 v1 ~equal:equal_dim_var && late ->
       (* Variable appears in both numerator and denominator, they cancel out *)
-      (* (c1 * v1 / d1) / (... * v1 * ...) = c1 / (d1 * ... * ...) *)
-      let vars1' = remove_var v1 vars1 in
+      let numerator, divided_by =
+        cancel_strided_var ~can_force:(fun _ -> true) ~error_trace:[] n1 vars1
+      in
       row_conjunction ~prov ~origin stage
-        (Total_elems
-           { numerator = Num_elems (Utils.safe_force c1); divided_by = vars1'; keep_axis = false })
+        (Total_elems { numerator; divided_by; keep_axis = false })
         constr2
   | ( constr2,
       Total_elems
-        {
-          numerator = Strided_var { coeff = c1; var = v1; round_up = false; _ };
-          divided_by = vars1;
-          _;
-        } )
+        { numerator = Strided_var { var = v1; round_up = false; _ } as n1; divided_by = vars1; _ } )
     when List.mem vars1 v1 ~equal:equal_dim_var && late ->
-      let vars1' = remove_var v1 vars1 in
+      let numerator, divided_by =
+        cancel_strided_var ~can_force:(fun _ -> true) ~error_trace:[] n1 vars1
+      in
       row_conjunction ~prov ~origin stage
-        (Total_elems
-           { numerator = Num_elems (Utils.safe_force c1); divided_by = vars1'; keep_axis = false })
+        (Total_elems { numerator; divided_by; keep_axis = false })
         constr2
   | ( Total_elems { numerator = n1; divided_by = vars1; _ },
       Total_elems { numerator = n2; divided_by = vars2; _ } ) ->
@@ -2126,6 +2139,23 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
             @@ Shape_error
                  ( "apply_row_constraint: Total_elems constraint failed, shape is too big",
                    [ Dim_mismatch dims ] );
+          (* The row's closed part divided the numerator, so the row's own variables and
+             [divided_by] sit on the same side of the equation. *)
+          let can_force coeff = Utils.is_safe_val coeff || is_stage2_up stage in
+          let cancel = cancel_strided_var ~can_force ~error_trace:[ Row_mismatch [ r ] ] in
+          let strided = numerator in
+          let numerator, vars = cancel numerator vars in
+          let numerator, divided_by = cancel numerator divided_by in
+          let env =
+            match (strided, numerator) with
+            | Strided_var { var; _ }, Num_elems _ ->
+                (* Its own factor cancelled, so this constraint no longer holds [var] back from a
+                   guess. *)
+                mark_total_elems_vars
+                  (Total_elems { numerator = strided; divided_by = [ var ]; keep_axis = false })
+                  env
+            | _ -> env
+          in
           match (numerator, vars, divided_by) with
           | Num_elems 1, [], [] -> (extras, env)
           | Num_elems _, [], [] ->
@@ -2152,23 +2182,6 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
                   (vs1 @ vs2)
                 @ extras,
                 env )
-          | Strided_var { coeff; var; denom; round_up = false }, [], [ v ]
-            when equal_dim_var var v && (Utils.is_safe_val coeff || is_stage2_up stage) ->
-              (* Total = (coeff * v / denom) / v = coeff / denom *)
-              if Utils.safe_force coeff % denom = 0 then
-                ( Dim_eq
-                    {
-                      d1 = Var v;
-                      d2 = get_default_dim ~d:(Utils.safe_force coeff / denom) ();
-                      origin;
-                    }
-                  :: extras,
-                  env )
-              else if
-                (* coeff not divisible by denom - keep as constraint *)
-                stored
-              then (extras, env)
-              else (Rows_constr { r = [ r ]; constr; origin } :: extras, env)
           | _ ->
               if stored then (extras, env)
               else
@@ -4932,6 +4945,11 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
              exact behavior of divisible shapes. The window's tolerance is only needed when
              re-checking against already-closed rows (in [apply_row_constraint]). *)
           let numerator = match numerator with Range_elems { hi; _ } -> Num_elems hi | n -> n in
+          let numerator, divided_by =
+            cancel_strided_var
+              ~can_force:(fun coeff -> Utils.is_safe_val coeff || is_stage2_up stage)
+              ~error_trace:[ Row_mismatch [ r ] ] numerator divided_by
+          in
           match (numerator, divided_by, glb) with
           | Num_elems 1, [], (None | Some { beg_dims = []; dims = []; _ })
             when keep_axis && is_stage5_up stage ->
