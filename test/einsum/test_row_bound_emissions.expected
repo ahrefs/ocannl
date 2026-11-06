@@ -1,0 +1,15 @@
+a value with axes reaches the far operand: v <= e <= leaf, v := [3]: [3] [3] [3]
+the entry's GLB reaches a bare value: [7] <= e <= v, v := u, u a leaf: [7] [7] [7]
+the result side, value with axes: r <= e <= v, v := [5]: [5] [5] [5]
+the result side, through an alias: r <= e <= v, v := u, u := [5]: [5] [5] [5]
+a refusal past an alias, operand side: v <= e <= o, v := u, o := [3], u := [4]: Shape_error: solved dimensions for axis: mismatch
+a refusal past an alias, result side: r <= e <= v, v := u, r := [3], u := [4]: Shape_error: dimension comparison for axis: mismatch
+the same refusal over an entry no shape closes: v <= e <= o: Shape_error: solved dimensions for axis: mismatch
+reach past an alias: v <= e <= o <= leaf, v := u, u := [3]: [3] [] [] []
+the same store written with u: u <= e <= o <= leaf, u := [3]: [3] [] [] []
+the equations swapped: u := [3], then v := u: [3] [] [] []
+the old emission, reach past an alias: [3] [3] [3] [3]
+the old emission, the equations swapped: [3] [] [] []
+the sweep solves stores and refuses others: true
+every solution satisfies its store, on ground rows: true
+no store the old emission solved is refused: true

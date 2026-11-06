@@ -1888,13 +1888,33 @@ let s_row_one v ~value:{ beg_dims = value_beg; dims = more_dims; bcast; prov = _
 let s_row_one_in_row_constr _v ~value:_ ~in_ =
   match in_ with Unconstrained | Total_elems _ | Exact _ -> in_
 
+let transitive_row_emissions = ref false
+[@@mutation_serial.exempt "a test's reference switch, set around one call"]
+
+let with_transitive_row_emissions f =
+  let saved = !transitive_row_emissions in
+  transitive_row_emissions := true;
+  Exn.protect ~f ~finally:(fun () -> transitive_row_emissions := saved)
+
+let is_bare_row_var : row -> bool = function
+  | { beg_dims = []; dims = []; bcast = Row_var _; prov = _ } -> true
+  | _ -> false
+
+(* The visited entry [e] is bounded by [v], and [v := value]. What this owes through [e], beyond
+   [v]'s own bounds, which [unify_row] re-emits (gh-ocannl-1977):
+
+   - [e]'s GLB reaches [value]. Rows have no other route to it: [solve_row_ineq] records a GLB and
+   does not pass it on, unlike [solve_dim_ineq]. - A [value] with axes reaches the far neighbours:
+   [value ⊑ opnd] is what carries a lower bound two hops, to a use-site row closing from its GLB.
+   [res ⊑ value] follows, for [e ⊑ value] solves [e], but it costs little. - A bare variable has no
+   axes to carry. [r ⊑ value] is the path [r ⊑ e ⊑ value], which stays in the environment, so
+   emitting it would only store the transitive closure: quadratic pairs in a residual stack, each
+   re-emitted per solution. *)
 let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
     constraint_ list * row_entry =
   match in_ with
   | Solved_row in_ -> ([], Solved_row (s_row_one v ~value ~in_))
   | Bounds_row { is_in_param; res; opnd; glb; constr; origin } ->
-      (* TODO: audit code to ensure we don't lose the constraints associated with the bounds
-         variables. *)
       let find_v side = List.partition_tf side ~f:(equal_row_var v) in
       let res_v, res = find_v res in
       let opnd_v, opnd = find_v opnd in
@@ -1903,14 +1923,15 @@ let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
         | _ :: _, Some glb -> [ Row_ineq { res = glb; opnd = value; origin } ]
         | _ -> []
       in
+      let past_the_entry = !transitive_row_emissions || not (is_bare_row_var value) in
       let ineqs1 =
-        if List.is_empty opnd_v then []
+        if List.is_empty opnd_v || not past_the_entry then []
         else
           List.map res ~f:(fun res ->
               Row_ineq { res = row_of_var res value.prov; opnd = value; origin })
       in
       let ineqs2 =
-        if List.is_empty res_v then []
+        if List.is_empty res_v || not past_the_entry then []
         else
           List.map opnd ~f:(fun opnd ->
               Row_ineq { opnd = row_of_var opnd value.prov; res = value; origin })
@@ -2418,6 +2439,14 @@ let subst_visit_count = ref 0
 
 let subst_visits () = !subst_visit_count
 let reset_subst_visits () = subst_visit_count := 0
+
+(* The inequalities row solutions' visits emitted since the last reset (gh-ocannl-1977), reported by
+   [Shape.registration_counts]. *)
+let row_visit_emission_count = ref 0
+[@@mutation_serial.exempt "a work counter of solution substitution, not inference state"]
+
+let row_visit_emissions () = !row_visit_emission_count
+let reset_row_visit_emissions () = row_visit_emission_count := 0
 
 let subst_cross_check =
   lazy (Utils.get_global_flag ~default:false ~arg_name:"shape_substitution_cross_check")
@@ -3481,6 +3510,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                  this arm alone: below, [value] is what is left of the other side, and [v] is not it
                  (gh-ocannl-1955). *)
               let row_env, more, visited = visit_rows_for_row_solution env v ~value in
+              row_visit_emission_count := !row_visit_emission_count + List.length more;
               ineqs := more @ !ineqs;
               (match value.bcast with
               | Row_var u ->

@@ -512,12 +512,11 @@ resnet_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->conv(2*'e+3),
   ..'_d.. ⊑ ..'_a..
   ..'_e.. ⊑ ..'_a..
   ..'_f.. ⊑ ..'_a..
-  ..'_g.. ⊑ ..'_a..
   ..'h.. ⊑ ..'d..
-  ..'i.. ⊑ ..'_e..
+  ..'i.. ⊑ ..'_d..
   ..'i.. ⊑ ..'_a..
+  ..'l.. ⊑ ..'_g..
   ..'l.. ⊑ ..'_h..
-  ..'l.. ⊑ ..'_i..
 
 resnet_block [no train_step] : ..'a..|..'_a..->conv(2*'b+3),conv(2*'c+3),..'d.. => ..'e..|..'f..->'g,'h,..'i..,'j
   'j ⊑ '_b
@@ -539,7 +538,6 @@ vgg_block [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->conv(2*'e+2),con
   ..'_d.. ⊑ ..'_a..
   ..'h.. ⊑ ..'d..
   ..'i.. ⊑ ..'_c..
-  ..'i.. ⊑ ..'_a..
   ..'j.. ⊑ ..'_e..
 
 vgg_block [no train_step] : ..'a..|..'_a..->conv(2*'b+2),conv(2*'c+2),..'d.. => ..'e..|..'f..->'b,'c,..'g..,'h
@@ -548,10 +546,7 @@ vgg_block [no train_step] : ..'a..|..'_a..->conv(2*'b+2),conv(2*'c+2),..'d.. => 
   ..'_d.. ⊑ ..'_a..
   ..'e.. ⊑ ..'a..
   ..'f.. ⊑ ..'_d..
-  ..'f.. ⊑ ..'_e..
-  ..'f.. ⊑ ..'_a..
-  ..'f.. ⊑ ..'_c..
-  ..'g.. ⊑ ..'_f..
+  ..'g.. ⊑ ..'_e..
 the stack's scheme is the one checked: true
 a mask of the wrong size is refused, naming the stack: true
 before any layer's body ran: true
