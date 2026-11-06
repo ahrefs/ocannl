@@ -5673,6 +5673,16 @@ let symbolic_kernel_error dim =
     ( "projection_of_solved_dims: symbolic dimension not supported as convolution kernel",
       [ Dim_mismatch [ dim ] ] )
 
+(** gh-ocannl-1971: a component with a symbolic extent keeps a [Concat] in a closed row, there being
+    no [Dim] to sum it to. Where the segments after it start depends on the launch-time extent,
+    which no index of a [Concat] can say, and such an axis was never lowered. *)
+let symbolic_concat_error dim =
+  Shape_error
+    ( "a concatenation component has a symbolic extent, which is not supported: where the segments \
+       after it start would depend on the launch-time extent. Concatenate along an axis of fixed \
+       size",
+      [ Dim_mismatch [ dim ] ] )
+
 let%track4_sexp get_proj_equations ?spec (inequalities : constraint_ list) proj_axis_env env :
     proj_equation list =
   (* The difference between to_proj and dim_to_proj is that here we do not have a projection
@@ -5757,10 +5767,7 @@ let%track4_sexp get_proj_equations ?spec (inequalities : constraint_ list) proj_
                   | Dim { d; basis; proj_id = None } ->
                       let proj_id = Proj_id.fresh () in
                       (proj_id, { d; basis; proj_id = Some proj_id })
-                  | Sym ({ sym_proj_id = Some proj_id; _ } as s) -> (proj_id, solved_dim_of_sym s)
-                  | Sym ({ sym_proj_id = None; _ } as s) ->
-                      let proj_id = Proj_id.fresh () in
-                      (proj_id, { (solved_dim_of_sym s) with proj_id = Some proj_id })
+                  | Sym _ as dim -> raise @@ symbolic_concat_error dim
                   | _ ->
                       raise
                       @@ Shape_error
@@ -6575,7 +6582,10 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
      projection), under a catch-all: every error was swallowed, and a window equated to an index it
      does not reach passed silently. Checked last, nothing here fails on a consistent program, so
      nothing is caught. An [Iterator] equals the [Concat] of that one iterator, as in the
-     concat-target pass. *)
+     concat-target pass. A [Concat] side comes from an axis that did not close to a plain [Dim]:
+     hand-built equations, or through [Shape] a row of integer components alone (["=> 2^3"]), which
+     no substitution sums, and whose own step does not derive. A symbolic component is refused by
+     [get_proj_equations] (gh-ocannl-1971). *)
   let same_index idx1 idx2 =
     Idx.equal_axis_index idx1 idx2
     ||

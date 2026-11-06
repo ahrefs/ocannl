@@ -1,0 +1,43 @@
+as written: every axis read as a plain axis: true
+as written: a fixed index, 0: true
+as written: a fixed index, 1: true
+as written: a fixed index, 2: true
+as written: a fixed index, 3: true
+as written: a fixed index, 4: true
+as written: a fixed index, 5: true
+as written: a window over it: true
+through a pointwise copy: every axis read as a plain axis: true
+through a pointwise copy: a fixed index, 0: true
+through a pointwise copy: a fixed index, 1: true
+through a pointwise copy: a fixed index, 2: true
+through a pointwise copy: a fixed index, 3: true
+through a pointwise copy: a fixed index, 4: true
+through a pointwise copy: a fixed index, 5: true
+through a pointwise copy: a window over it: true
+made by a shape scheme: every axis read as a plain axis: true
+made by a shape scheme: a fixed index, 0: true
+made by a shape scheme: a fixed index, 1: true
+made by a shape scheme: a fixed index, 2: true
+made by a shape scheme: a fixed index, 3: true
+made by a shape scheme: a fixed index, 4: true
+made by a shape scheme: a fixed index, 5: true
+made by a shape scheme: a window over it: true
+as written: slicing the concatenated batch axis at 0: true
+as written: slicing the concatenated batch axis at 1: true
+as written: slicing the concatenated batch axis at 2: true
+as written: slicing the concatenated batch axis at 3: true
+as written: slicing the concatenated batch axis at 4: true
+through a pointwise copy: slicing the concatenated batch axis at 0: true
+through a pointwise copy: slicing the concatenated batch axis at 1: true
+through a pointwise copy: slicing the concatenated batch axis at 2: true
+through a pointwise copy: slicing the concatenated batch axis at 3: true
+through a pointwise copy: slicing the concatenated batch axis at 4: true
+a window as one concatenated component: true
+a fixed index beside the concatenated axis: true
+a result-side window over an extracted component: true
+a symbolic component, computed: Shape_error: a concatenation component has a symbolic extent, which is not supported: where the segments after it start would depend on the launch-time extent. Concatenate along an axis of fixed size
+a symbolic component, computed: the refusal names the symbolic component: true
+a symbolic component, at a fixed index: Shape_error: a concatenation component has a symbolic extent, which is not supported: where the segments after it start would depend on the launch-time extent. Concatenate along an axis of fixed size
+a symbolic component, at a fixed index: the refusal names the symbolic component: true
+a symbolic component, sliced: Shape_error: a concatenation component has a symbolic extent, which is not supported: where the segments after it start would depend on the launch-time extent. Concatenate along an axis of fixed size
+a symbolic component, sliced: the refusal names the symbolic component: true
