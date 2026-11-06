@@ -172,12 +172,25 @@ two situations that require opposite treatment:
 The round-up `Total_elems` elimination arms therefore distinguish `glb_pending` (a GLB entry exists
 in the row environment but `collect_factors` fails on it after substitution) from an absent GLB.
 Pending bounds defer the guess through the stored-constraint path; genuinely absent bounds keep the
-previous stages and guesses. Sibling rows in a multi-row `Rows_constr` are closed to no-further-axes
-before the final stage only when they carry no bounds at all — closing them on stage progression
-alone would discard axes whose bounds are still arriving, silently repeating random values along
-them. Both deferrals have a final-stage escape: at Stage 7 the guesses fire regardless, because
-bounds that have not resolved by then never will, and every constraint must be consumed by the
-final stage (see the termination discipline below).
+previous stages and guesses. An open row variable in a GLB's tail is as pending as a dimension
+variable in its flanks. Sibling rows in a multi-row `Rows_constr` are closed to no-further-axes
+before the final stage only when they have no pending GLB, and not before Stage 5 — closing them on
+stage progression alone would discard axes whose bounds are still arriving, silently repeating
+random values along them. What closes them must also not read the environment mid-pass: a bound
+solved in the current pass has already left `res` while the `Row_ineq` carrying it is in flight, and
+a variable shared with another row's `Total_elems` shows no bound at all until Stage 5 sizes that
+row. So at Stages 5 and 6 `solve_inequalities` runs draws once everything else has settled.
+
+Stage 7 guesses neither (gh-ocannl-1961). A pending GLB can still resolve there: a fixed-index axis
+closes at this stage, and taking the counter from the closed axes first left the draw smaller than
+its shape whenever their product was a multiple of the block size, which is the #1868 repetition.
+So the total re-emits itself together with a `Shape_row` over the GLB, the GLB closes by its own
+rules, and the arm consuming a known GLB derives the row and the counter. A total that makes no
+progress reaches the list fixpoint, and `Shape.refuse_unsolved` reports it. A symbolic extent in the
+GLB can never resolve, so the total is refused at once with the same message as a draw placed on a
+symbolic axis directly: reach for `uniform1`, whose equality specs size such an axis. A sibling with
+a GLB does not reach Stage 7: a draw's rows are resolve-at-use, so its own `Shape_row` closes it at
+Stage 6 (see the termination discipline below).
 
 ### Inference strategy
 
@@ -354,8 +367,9 @@ landing gh-ocannl-509 task 5):
    leaving `Strided_var`-against-resolved-GLB unmatched — does not fail loudly: the constraint just
    sits stored forever, the variables it marked via `mark_total_elems_vars` stay unguessable, their
    `Terminal_dim`s keep being re-emitted, and the Stage 7 assertion fires far from the cause. When
-   adding a guard to an arm (e.g. to defer a premature guess), pair it with a Stage 7 escape, and
-   check the arm inventory: for each syntactic shape of the stored constraint (fresh, reduced,
+   adding a guard to an arm (e.g. to defer a premature guess), pair it with a Stage 7 escape (a
+   re-emission counts, as the fixpoint refuses what stays stuck, where a silently stored constraint
+   does not), and check the arm inventory: for each syntactic shape of the stored constraint (fresh, reduced,
    variable-solved, GLB-resolved), which arm consumes it, and at which stage?
 
 A practical debugging note: the per-module tracing gates (`OCANNL_LOG_LEVEL_ROW=9` at preprocessing

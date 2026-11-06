@@ -4836,7 +4836,10 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~glb (rows : r
                gets its rows' bounds only once the surrounding shapes settle. Closing sibling rows
                empty on stage progression alone would discard axes that are still arriving (the
                result would silently repeat random values along them), so for round-up numerators
-               a sibling with any pending bounds keeps the constraint deferred until stage 7. *)
+               a sibling with a pending GLB keeps the constraint deferred until stage 7, and only
+               one without closes earlier. Not before stage 5 (gh-ocannl-1961): a variable shared
+               with another row's [Total_elems] shows no bound at all until that stage sizes the
+               row, and from then on [solve_inequalities] runs draws at quiescence. *)
             let round_up_numerator =
               match constr with
               | Total_elems { numerator = Strided_var { round_up = true; _ }; _ } -> true
@@ -4851,14 +4854,17 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~glb (rows : r
             let closeable (v, _prov) =
               match find_row env.row_env v with
               | None
-              | Some (Bounds_row { is_in_param = false; glb = None; _ })
-              | Some (Bounds_row { glb = Some { dims = []; bcast = Broadcastable; _ }; _ }) ->
+              | Some
+                  (Bounds_row
+                     { glb = Some { beg_dims = []; dims = []; bcast = Broadcastable; _ }; _ }) ->
                   true
+              | Some (Bounds_row { is_in_param = false; glb = None; _ }) -> true
               | _ -> false
             in
+            let may_close_early = (not round_up_numerator) || is_stage5_up stage in
             let other_eqs : constraint_ list =
               List.concat_map other_vars ~f:(fun ((v, prov) as vp) ->
-                  if unconditional_close || closeable vp then
+                  if unconditional_close || (may_close_early && closeable vp) then
                     let r1 = row_of_var v prov in
                     [
                       Row_eq
@@ -4910,36 +4916,34 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
          otherwise be available until Stage 6. However, we only use the environment GLB if it has
          fully resolved dimensions (no dimension variables), as partially resolved GLBs can prevent
          proper constraint resolution. *)
-      let glb, glb_pending =
+      let flanks_known (glb : row) = known_dims_product (glb.beg_dims @ glb.dims) in
+      let unless_tail_open (glb : row) = Option.some_if (not (is_broadcastable glb.bcast)) glb in
+      (* [pending_glb]: the bound the round-up arms must wait for. An open tail is as unresolved as
+         a variable in a flank: axes may still arrive there (gh-ocannl-1961). *)
+      let glb, pending_glb =
         match glb with
         | Some ctx_glb ->
             (* gh-ocannl-1868: a GLB handed down by the caller can be as unresolved as one read from
                the environment below. It stays available to the arms that only inspect its shape,
                but the round-up arms must not take it for settled. *)
             let ctx_glb = subst_row env ctx_glb in
-            let pending =
-              match collect_factors (ctx_glb.beg_dims @ ctx_glb.dims) with
-              | Some (_, []) -> false
-              | _ -> true
-            in
-            (glb, pending)
+            (Some ctx_glb, if flanks_known ctx_glb then unless_tail_open ctx_glb else Some ctx_glb)
         | None -> (
             match find_row env.row_env v with
-            | Some (Bounds_row { glb = Some env_glb; _ }) -> (
+            | Some (Bounds_row { glb = Some env_glb; _ }) ->
                 (* We need to substitute environment dimensions into the GLB to see if it's
                    resolved *)
                 let env_glb = subst_row env env_glb in
-                match collect_factors (env_glb.beg_dims @ env_glb.dims) with
-                | _ when rank_refutes_glb v env_glb -> (None, false)
-                | Some (_, []) ->
-                    (Some env_glb, false) (* All dims are known constants after substitution *)
-                | _ ->
-                    (* GLB has unresolved dimension variables or collect_factors failed: bounds
-                       exist but are still pending (gh-509 task 5) -- round-up guesses below must
-                       wait for them to resolve rather than committing prematurely. *)
-                    (None, true))
-            | _ -> (None, false))
+                if rank_refutes_glb v env_glb then (None, None)
+                else if flanks_known env_glb then (Some env_glb, unless_tail_open env_glb)
+                else
+                  (* GLB has unresolved dimension variables or collect_factors failed: bounds exist
+                     but are still pending (gh-509 task 5) -- round-up guesses below must wait for
+                     them to resolve rather than committing prematurely. *)
+                  (None, Some env_glb)
+            | _ -> (None, None))
       in
+      let glb_pending = Option.is_some pending_glb in
       let glb_has_axes =
         Option.exists glb ~f:(fun glb -> not (List.is_empty (glb.beg_dims @ glb.dims)))
       in
@@ -5048,10 +5052,18 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                  (e.g. a composite parameter initializer over an inferred shape, where the bounds
                  settle only once the surrounding shapes do). Guessing the counter now would commit
                  the result prematurely; defer through the stored-constraint path (which dedups, so
-                 the per-stage solver loop still terminates). At stage 7 the arms below fire
-                 regardless: bounds that never resolved will not, and every constraint must be
-                 consumed by the final stage. *)
+                 the per-stage solver loop still terminates). *)
               keep_constr ()
+          | Strided_var { round_up = true; _ }, [], _ when glb_pending ->
+              (* gh-ocannl-1961: the final stage does not guess either, or a fixed-index axis
+                 closing in this same stage would repeat the draw along it. Close the bound by its
+                 own rules and come back: the arm consuming a known GLB derives the rest. The stored
+                 path re-fires on the constraint's own variables only, so this one is re-emitted,
+                 and its value is stable: with no progress the list reaches the solver's fixpoint
+                 and [Shape.refuse_unsolved] reports it. Nothing can size a symbolic extent. *)
+              let pending = Option.value_exn pending_glb in
+              fail_if_total_elems_over_sym (pending.beg_dims @ pending.dims);
+              ([ Rows_constr { r = [ r ]; constr; origin }; Shape_row (pending, origin) ], env)
           | Strided_var { coeff; var; denom; round_up = true }, [], None
             when is_stage5_up stage && denom > 1 && denom % Utils.safe_force coeff <> 0 ->
               (* Round-up totality: the known-axes product [denom] is not a multiple of [coeff];
@@ -5083,7 +5095,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
           | Strided_var { coeff; var; denom; round_up }, [], _
             when is_stage6_up stage
                  && denom % Utils.safe_force coeff = 0
-                 && not (round_up && (not glb_pending) && glb_has_axes) ->
+                 && not (round_up && glb_has_axes) ->
               (* gh-ocannl-1868: a round-up total (packed uniform) whose use sites give the row
                  variable axes belongs to the GLB arm below, also when the already-closed axes'
                  product [denom] happens to be a multiple of [coeff]: closing the variable empty
@@ -5147,6 +5159,15 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
           ([ Row_eq { r1; r2 = { beg_dims = []; dims; bcast = Broadcastable; prov }; origin } ], env)
       | Unconstrained -> ([], env))
 
+(* A row's entry as closing it may read it: {!rank_refutes_glb} is a question about the variable's
+   axes, which a GLB out of its reach says nothing about (gh-ocannl-1955). *)
+let entry_for_closing env v =
+  match find_row env.row_env v with
+  | Some (Bounds_row ({ glb = Some glb; _ } as bounds)) when rank_refutes_glb v (subst_row env glb)
+    ->
+      Some (Bounds_row { bounds with glb = None })
+  | entry -> entry
+
 let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
     ({ beg_dims; dims; bcast; prov } as _r : row) : constraint_ list =
   let suffix () = List.map dims ~f:(fun d -> Terminal_dim (is_param, d, origin)) in
@@ -5165,13 +5186,7 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
       let no_further_axes =
         Row_eq { r1; r2 = { beg_dims = []; dims = []; bcast = Broadcastable; prov }; origin }
       in
-      let entry =
-        match find_row env.row_env v with
-        | Some (Bounds_row ({ glb = Some glb; _ } as bounds)) when rank_refutes_glb v glb ->
-            Some (Bounds_row { bounds with glb = None })
-        | entry -> entry
-      in
-      match entry with
+      match entry_for_closing env v with
       | Some (Bounds_row { is_in_param; glb = None; constr = Unconstrained; _ })
         when is_stage4_up stage ->
           if (is_param || is_in_param) && not (is_safe_to_guess v) then
@@ -5327,7 +5342,7 @@ let%track5_sexp process_shape_row ~(stage : stage) origin env
          7), re-emit the [Shape_row] so those vars get revisited: consuming the constraint here
          would leave them unresolved forever. *)
       let keep = if final then [] else [ Shape_row (r, origin) ] in
-      match find_row env.row_env v with
+      match entry_for_closing env v with
       | Some (Bounds_row { glb = Some glb; constr = Unconstrained; is_in_param; _ })
         when is_stage6_up stage ->
           (* gh-ocannl-544: only rows that resolve at use sites (terminal rows of leaves and
@@ -5425,6 +5440,11 @@ let update_row_is_param r is_p env =
             set_row env ~key:v ~data:b
         | _ -> env)
     | _ -> env
+
+let is_draw_total = function
+  | Rows_constr { constr = Total_elems { numerator = Strided_var { round_up; _ }; _ }; _ } ->
+      round_up
+  | _ -> false
 
 let%debug4_sexp solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
@@ -5525,7 +5545,17 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
       (ineqs', env)
     else solve ineqs' env
   in
-  solve ineqs env
+  (* gh-ocannl-1961: what closes a draw's rows reads the environment, which mid-pass lies: a solved
+     bound has left its operands' [res] while the [Row_ineq] carrying it is still in the list. So
+     from the stage the draw arms start, a draw runs only once everything else has settled. *)
+  let rec draws_at_quiescence ineqs env =
+    let draws, others = List.partition_tf ineqs ~f:is_draw_total in
+    let others, env = solve others env in
+    let draws', env = solve draws env in
+    if List.equal equal_constraint_up_to_origin draws' draws then (others @ draws, env)
+    else draws_at_quiescence (others @ draws') env
+  in
+  match stage with Stage5 | Stage6 -> draws_at_quiescence ineqs env | _ -> solve ineqs env
 
 let rec row_to_bases env =
   let rec f = function

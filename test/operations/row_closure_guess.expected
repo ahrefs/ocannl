@@ -1,0 +1,46 @@
+final-stage bound, batch 3: the same shape as the explicit twin: true
+final-stage bound, batch 3: a value for every cell: true
+final-stage bound, batch 3: all distinct: true
+final-stage bound, batch 4: the same shape as the explicit twin: true
+final-stage bound, batch 4: a value for every cell: true
+final-stage bound, batch 4: all distinct: true
+final-stage bound, batch 8: the same shape as the explicit twin: true
+final-stage bound, batch 8: a value for every cell: true
+final-stage bound, batch 8: all distinct: true
+final-stage bound through stretch: the same shape as the explicit twin: true
+final-stage bound through stretch: a value for every cell: true
+final-stage bound through stretch: all distinct: true
+sibling bounded late, no batch: the same shape as the explicit twin: true
+sibling bounded late, no batch: a value for every cell: true
+sibling bounded late, no batch: all distinct: true
+sibling bounded late, batch 2: the same shape as the explicit twin: true
+sibling bounded late, batch 2: a value for every cell: true
+sibling bounded late, batch 2: all distinct: true
+sibling bounded late, batch 4: the same shape as the explicit twin: true
+sibling bounded late, batch 4: a value for every cell: true
+sibling bounded late, batch 4: all distinct: true
+sibling bounded at stage 6, through stretch: the same shape as the explicit twin: true
+sibling bounded at stage 6, through stretch: a value for every cell: true
+sibling bounded at stage 6, through stretch: all distinct: true
+sibling bounded late, sized with the batch row open too: the same shape as the explicit twin: true
+sibling bounded late, sized with the batch row open too: a value for every cell: true
+sibling bounded late, sized with the batch row open too: all distinct: true
+the same, the reshape built before the draw and after it: the same shape as the explicit twin: true
+the same, the reshape built before the draw and after it: a value for every cell: true
+the same, the reshape built before the draw and after it: all distinct: true
+a sibling shared with a reshape, its size arriving at stage 3: the same shape as the explicit twin: true
+a sibling shared with a reshape, its size arriving at stage 3: a value for every cell: true
+a sibling shared with a reshape, its size arriving at stage 3: all distinct: true
+a sibling shared with a reshape, its size arriving at stage 5: the same shape as the explicit twin: true
+a sibling shared with a reshape, its size arriving at stage 5: a value for every cell: true
+a sibling shared with a reshape, its size arriving at stage 5: all distinct: true
+parameter bounded through chains, packed: [5; 12]: true
+parameter bounded through chains, packed: all distinct: true
+parameter bounded through chains, uniform1: [5; 12]: true
+parameter bounded through chains, uniform1: all distinct: true
+a GLB the rank facts refute leaves the statistic its own axes: true
+a bare draw is one block: true
+a draw meeting a scalar stays one element: true
+a draw over a symbolic use site is refused, naming why: true
+so is a batched one, whose total the closed axis divides: true
+uniform1 is the route that sizes one: true
