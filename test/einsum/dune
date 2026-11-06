@@ -56,7 +56,8 @@
  (name runtest)
  (deps
   (alias runtest-inline_permuted_view-c_fwd)
-  (alias runtest-test_cse-cse_d_fwd)))
+  (alias runtest-test_cse-cse_d_fwd)
+  (alias runtest-concat_extraction-origins_cap_0)))
 
 (test
  (name moons_demo_variant)
@@ -494,6 +495,30 @@
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2000: the same executable with the origin cap at 0, against the SAME golden --
+; max_shape_error_origins is a diagnostics cap, and these cases are where inference reads an origin
+; as data: derive_projections keeps a capture's sizing constraint out of the projection equations
+; by its origin tag (Shape.is_projection_sizing). The setting is pinned on the command line, over
+; an ambient one.
+
+(rule
+ (target concat_extraction-origins_cap_0.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:concat_extraction.exe} --ocannl_max_shape_error_origins=0))))
+
+(rule
+ (alias runtest-concat_extraction-origins_cap_0)
+ (package neural_nets_lib)
+ (action
+  (diff concat_extraction.expected concat_extraction-origins_cap_0.actual)))
 
 (test
  (name result_side_padded_window)

@@ -144,6 +144,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   bin/dune                                 @bin-smoke
   bin/dune                                 @bin-smoke-env_spelling_gate
   test/einsum/dune                         @runtest
+  test/einsum/dune                         @runtest-concat_extraction-origins_cap_0
   test/einsum/dune                         @runtest-einsum_trivia
   test/einsum/dune                         @runtest-env_spelling_gate
   test/einsum/dune                         @runtest-inline_permuted_view-c_fwd
@@ -308,6 +309,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-qkv_zero_init-approximate
   test/operations/dune                     @runtest-refused_action_streams
   test/operations/dune                     @runtest-render_decline_inventory
+  test/operations/dune                     @runtest-resnet_block-origins_cap_0
   test/operations/dune                     @runtest-reusable_tensor_programs
   test/operations/dune                     @runtest-routine_log_rng_init
   test/operations/dune                     @runtest-routine_log_stream_files
@@ -331,6 +333,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-thread_private_gate-outlined
   test/operations/dune                     @runtest-top_down_prec-extension
   test/operations/dune                     @runtest-top_down_prec-unoptimized
+  test/operations/dune                     @runtest-transformer_test-origins_cap_0
   test/operations/dune                     @runtest-unary_math_special_values-reproducible
   test/operations/dune                     @runtest-vendor_stub_arms_scan
   test/operations/dune                     @runtest-vendor_stub_arms_scan_control

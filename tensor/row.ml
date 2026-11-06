@@ -619,6 +619,32 @@ let drop_constraint_origin (c : constraint_) : constraint_ =
   | Terminal_row (b, r, _) -> Terminal_row (b, r, [])
   | Shape_row (r, _) -> Shape_row (r, [])
 
+(* Origins explain a constraint, they are no part of what it says: the solver's fixpoint compares by
+   this, so that [merge_origins] and its [max_shape_error_origins] cap cannot decide how many passes
+   a stage takes (gh-ocannl-2000). *)
+let equal_constraint_up_to_origin (c1 : constraint_) (c2 : constraint_) =
+  match (c1, c2) with
+  | Dim_eq { d1; d2; origin = _ }, Dim_eq { d1 = d1'; d2 = d2'; origin = _ } ->
+      equal_dim d1 d1' && equal_dim d2 d2'
+  | Row_eq { r1; r2; origin = _ }, Row_eq { r1 = r1'; r2 = r2'; origin = _ } ->
+      equal_row r1 r1' && equal_row r2 r2'
+  | ( Dim_ineq { res; opnd; from_; origin = _ },
+      Dim_ineq { res = res'; opnd = opnd'; from_ = from_'; origin = _ } ) ->
+      equal_dim res res' && equal_dim opnd opnd' && Sexp.equal from_ from_'
+  | Row_ineq { res; opnd; origin = _ }, Row_ineq { res = res'; opnd = opnd'; origin = _ } ->
+      equal_row res res' && equal_row opnd opnd'
+  | Dim_constr { d; constr; origin = _ }, Dim_constr { d = d'; constr = constr'; origin = _ } ->
+      equal_dim d d' && equal_dim_constraint constr constr'
+  | Rows_constr { r; constr; origin = _ }, Rows_constr { r = r'; constr = constr'; origin = _ } ->
+      List.equal equal_row r r' && equal_row_constraint constr constr'
+  | Terminal_dim (b, d, _), Terminal_dim (b', d', _) -> Bool.equal b b' && equal_dim d d'
+  | Terminal_row (b, r, _), Terminal_row (b', r', _) -> Bool.equal b b' && equal_row r r'
+  | Shape_row (r, _), Shape_row (r', _) -> equal_row r r'
+  | ( ( Dim_eq _ | Row_eq _ | Dim_ineq _ | Row_ineq _ | Dim_constr _ | Rows_constr _
+      | Terminal_dim _ | Terminal_row _ | Shape_row _ ),
+      _ ) ->
+      false
+
 type stage = Stage1 | Stage2 | Stage3 | Stage4 | Stage5 | Stage6 | Stage7
 [@@deriving sexp, equal, compare]
 
@@ -5450,10 +5476,8 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in
-    if
-      List.is_empty ineqs'
-      || (List.length ineqs' = List.length ineqs && [%equal: constraint_ list] ineqs' ineqs)
-    then (ineqs', env)
+    if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
+      (ineqs', env)
     else solve ineqs' env
   in
   solve ineqs env
