@@ -487,20 +487,25 @@ alias_listing() {
   printf '\n--dirs--\n%s\n' "$dirs"
 }
 
-# The sharding itself: MODE (targets|plan), K, N, then alias_listing's output.
-# (The listing is an argument because the heredoc below is python's stdin.)
-# The sharding itself: MODE (targets|plan), K, N, SUITE (main|train), then
-# alias_listing's output for `main` or the directory list for `train`. (The
-# listing is an argument because the heredoc below is python's stdin.)
+# The sharding itself: MODE (targets|plan|resolve), K, N, SUITE (main|train),
+# then alias_listing's output for `main`, the directory list for `train`, or
+# the table for `resolve`. The heredoc below is python's stdin, so that text
+# is its descriptor 3 -- never an argument (gh-ocannl-2014): Linux caps ONE
+# argument at 131072 bytes (MAX_ARG_STRLEN, whatever `getconf ARG_MAX` says),
+# the listing grows with every test, and past the cap python3 does not start
+# at all ("Argument list too long", exit 126). The tables after it are this
+# script's own, some 25 bytes a unit.
 shard() {
-  python3 - "$@" "$SUITE_ALIASES" "$SPLIT_DIR" "$DEFAULT_WEIGHT" "$WEIGHTS" "$TRAIN_WEIGHTS" "$root" \
-    "$WALL_WEIGHTS" "$MIN_WEIGHT" <<'PY'
+  python3 - "$1" "$2" "$3" "$4" "$SUITE_ALIASES" "$SPLIT_DIR" "$DEFAULT_WEIGHT" "$WEIGHTS" "$TRAIN_WEIGHTS" "$root" \
+    "$WALL_WEIGHTS" "$MIN_WEIGHT" 3<<<"$5" <<'PY'
 import os
 import re
 import sys
 
-mode, k, n, kind, text, suite, split_dir, default_weight, table, train_table, root, wall_table, min_weight \
-    = sys.argv[1:14]
+mode, k, n, kind, suite, split_dir, default_weight, table, train_table, root, wall_table, min_weight \
+    = sys.argv[1:13]
+# The here-string ends the text with one newline of its own.
+text = open(3, encoding='utf-8', errors='surrogateescape').read()[:-1]
 k, n, default_weight = int(k), int(n), float(default_weight)
 suite = suite.split()
 
@@ -1116,7 +1121,9 @@ merge_weights() { # cpu|wall LOG...|-
   [ "$1" = wall ] && marker=ci-shard-wall
   shift
   [ $# -gt 0 ] || set -- -
-  # Only the marked lines reach python, as arguments: the heredoc is its stdin.
+  # Only the marked lines reach python, on its descriptor 3 (the heredoc is its
+  # stdin), each run's closed by a `--run--` line, which no marked line is:
+  # one argument holds 131072 bytes on Linux and no more (see `shard`).
   for log in "$@"; do
     if [ "$log" = - ]; then
       [ "$stdin" = 0 ] || die "merge-weights: stdin named twice"
@@ -1126,11 +1133,12 @@ merge_weights() { # cpu|wall LOG...|-
       die "no $marker lines in ${log/#-/stdin}"
     runs+=("$one")
   done
-  table=$(python3 - "$MIN_WEIGHT" "${runs[@]}" <<'PY'
+  table=$(python3 - "$MIN_WEIGHT" 3<<<"$(printf '%s\n--run--\n' "${runs[@]}")" <<'PY'
 import collections
 import sys
 
-min_weight, texts = float(sys.argv[1]), sys.argv[2:]
+min_weight = float(sys.argv[1])
+texts = open(3, encoding='utf-8', errors='surrogateescape').read().split('\n--run--\n')[:-1]
 
 
 def die(message):
