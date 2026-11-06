@@ -395,6 +395,21 @@ files.
   keeps a producer loop under a guard. Rows: `structural-wide*` / `structural-contained-offset` in
   `virtual_affine.ml`, `block_components_two_terms{,_contained}` in
   `virtual_rejection_boundary.ml`.
+- **`virtual_inliner_oracle` holds the whole inliner to one semantics over small programs**
+  (gh-ocannl-1964), the way `affine_legality` holds the coverage query: the holes above were found by
+  reasoning, not by a row. It enumerates a stated grammar (shapes up to `[2; 3]`, layout pairs,
+  position forms, partial and offset loops, `Zero_out`, one or two components, reads past the
+  writes, undecided, declared and inherited nodes), runs each program through both arms of the real
+  `optimize`, and compares `Ll_test.interpret`'s evaluation of each with a replay of the descriptor
+  in integer arithmetic. Materializing is always right and a wrong value never is, so it pins no
+  placement: a census table on stdout moves when the boundary moves, floor claims keep it
+  non-vacuous, and a compiled sample holds the interpreter to a backend. Add a form to `coord_forms`
+  or a step shape to `enumerate`, not a row, when a new inliner path appears; a stderr `FINDING` names
+  a program, and `--only` on the built executable prints its code. Its first run found
+  `Affine.common_layout` writing coordinates back in reverse (`Array.for_all` in Base runs from the
+  last element, so a side effect in its predicate runs backwards): both sides reversed alike, which
+  the pairwise solving could not see, while `same_unit_cell` read a wide coordinate at a unit axis
+  (`row_trailing_sub_axis_write`).
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
