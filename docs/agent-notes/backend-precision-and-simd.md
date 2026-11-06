@@ -411,6 +411,19 @@ files.
   executed cases and the virtualized/materialized parity legs live in `op_table_compile`. Integer
   promotion is kept within one setter's expression; across a node, a scope that could wrap is not
   collapsed (gh-ocannl-1884, virtualization-and-inlining.md).
+- **`interval_of` bounds what the renderer computes, not what a store keeps** (gh-ocannl-1957).
+  A leaf converts to the evaluation precision, so it keeps `Interval.at_prec`. An operator does
+  not: at byte and uint16 its result goes through `at_prec` at `Ops.operator_prec`, `int32`, and a
+  float-valued operator at any integer precision is `top`. Wrapped to storage width, a comparison
+  folded against C: `Cmple(a + b, 255)` to 1, `Cmplt(a - b, 0)` and `Cmplt(Sin(a), 0)` to 0, where
+  the kernel with the same literal held in a node compares 300, -155 and -0.76. `try_interval_fold`
+  evaluates at the slot's `eval`, not the annotation, since a homogeneous slot renders its operands
+  there. A one-hot comparison over an index float-valued at an integer annotation is no gather: no
+  precision re-evaluates that index as written for the guards and the dynamic index
+  (`match_one_hot_cmpeq`). The reach is IR with an operator under a
+  comparison, which `Assignments` never emits: a nested `%cd` expression gets a node, so `(a + b) <=
+  255.` reads a kept byte scope and is rightly 1 at 300, since the node holds 44.
+  `test/operations/integer_promotion_folds` runs each shape against the same literal in a node.
 - **An integer table arm is integer-TYPED, in its operands' common type** (gh-ocannl-1883). cc's
   integer `Max`/`Min`/`Relu`/`Satur01` were `fmax`/`fmin` calls, `Trunc` a `truncf` and `Not` a
   `? 1.0 : 0.0`; CUDA's and HIP's `Relu`/`Satur01`/`Trunc`/`Not`, and Metal's `Trunc`, `Satur01`

@@ -245,7 +245,9 @@ satisfy all of these:
    storage dtype's behavior: integer casts wrap (propose top unless the RHS is provably
    in range), float stores overflow to inf. Readers intersect candidates with dtype
    bounds. And bfloat16's exact-integer limit is **256** (7 mantissa bits), not fp16's
-   2048 — witness: 257 is unrepresentable.
+   2048 — witness: 257 is unrepresentable. The conversion is the store's, and a leaf's:
+   an operator's result inside an expression is not converted, so `interval_of` models
+   byte and uint16 operators in `int` and float-valued ones in float (gh-ocannl-1957).
 6. **Exactness discipline for all folds.** Ordering folds (`Cmplt`), not just
    equality/singleton folds, require `exact` endpoints or outward rounding at every
    operation — round-to-nearest endpoint arithmetic can round *inward* above 2^53.

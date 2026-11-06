@@ -165,10 +165,9 @@ files.
   unpromoted type with no truth inside, because a truth is C `int` at any precision and
   `Cmplt(Neg(c1), Neg(c2))` at uint32 compares signed collapsed; or machine values that agree at
   both precisions. The last is a private evaluator rather than `interval_of`, whose double bound
-  misses a leaf's conversion (an index of 256 reads 0 at byte) and whose byte bound wraps to the
-  storage width, the very question here. Every leaf must convert unchanged and every operator's
-  result must fit what the precision computes in (`int` for byte and uint16), so a final interval
-  alone is not enough: `Min(i, 5)` at int32 read at byte has result 5 and computes `i` wrapped.
+  misses a leaf's conversion (an index of 256 reads 0 at byte). Every leaf must convert unchanged
+  and every operator's result must fit what the precision computes in (`int` for byte and uint16),
+  so a final interval alone is not enough: `Min(i, 5)` at int32 read at byte has result 5 and computes `i` wrapped.
   Its operators are a list, because a range says nothing of a domain (`FMA` has an interval and no
   integer spelling). It reads precisions and loop extents only: a decision on a bounds candidate
   would settle it, and a collapse is not worth refusing a later upload. Simplification is top-down,

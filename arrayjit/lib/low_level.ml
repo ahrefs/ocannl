@@ -5116,6 +5116,33 @@ and substitute_proc ~var ~value llc =
   | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = loop_proc fallback }
   | If { cond = c, prec; body } -> If { cond = (loop_scalar c, prec); body = loop_proc body }
 
+let rec float_valued (llsc : scalar_t) =
+  match llsc with
+  | Unop (op, (v, _)) -> (
+      match Ops.unop_integer_valuation op with
+      | Real_valued -> true
+      | Follows_operands -> float_valued v
+      | Truth | Integer_only | Projection | Integer_table -> false)
+  | Binop (op, (v1, _), (v2, _)) -> (
+      match Ops.binop_integer_valuation op with
+      | Real_valued -> true
+      | Follows_operands -> float_valued v1 || float_valued v2
+      | Projection -> (
+          match Ops.binop_conditionality op with
+          | Only_first -> float_valued v1
+          | Only_second -> float_valued v2
+          | Both_operands | Gated_second -> false)
+      | Truth | Integer_only | Integer_table -> false)
+  | Ternop (op, (v1, _), (v2, _), (v3, _)) -> (
+      match (Ops.ternop_integer_valuation op, op) with
+      | Follows_operands, Ops.Where -> float_valued v2 || float_valued v3
+      | Follows_operands, _ -> float_valued v1 || float_valued v2 || float_valued v3
+      | Real_valued, _ -> true
+      | (Truth | Integer_only | Projection | Integer_table), _ -> false)
+  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
+  | Constant_bits _ | Embed_index _ ->
+      false
+
 (** {2 Interval analysis over [scalar_t]}
 
     Phase A of docs/design/interval-analysis-scalar-t.md: [interval_of] computes machine-value
@@ -5443,13 +5470,19 @@ let interval_of_node ~node_bounds ~prec (tn : Tn.t) : interval_result =
   in
   { ival = Interval.at_prec prec ival; srcs }
 
-(** [interval_of ~ienv ~prec llsc] bounds the machine value of [llsc] evaluated at (converted into)
-    precision [prec] -- matching [C_syntax.pp_scalar]'s convention that homogeneous operations
-    evaluate their arguments at the consumer's precision, while [Where] conditions keep their
-    annotation precision. Every rule pipes its real-arithmetic result through
-    [Interval.at_prec prec], accounting for wrapping/rounding of the precision actually computed in
-    (binding constraint 5). Currently-unhandled operations return top explicitly (exhaustive match:
-    adding an op to [Ops] forces a conscious interval-rule decision). *)
+(** [interval_of ~ienv ~prec llsc] bounds the value [llsc] has where it is rendered at precision
+    [prec] -- matching [C_syntax.pp_scalar]'s convention that homogeneous operations evaluate their
+    arguments at the consumer's precision, while [Where] conditions keep their annotation precision.
+    It is the value the expression has there, not the one a store would keep. A leaf converts to
+    [prec], so its interval goes through [Interval.at_prec prec]. An operator's result does not (the
+    renderer has no conversion there): it goes through [Interval.at_prec] at what the operator
+    computes in, [int] at byte and uint16 ({!Ops.operator_prec}, gh-ocannl-1957), accounting for
+    wrapping/rounding there (binding constraint 5), and at any integer precision a float-valued
+    operator ({!float_valued}) computes in float, so it is [top]. A byte [a + b] is 300 to whatever
+    compares it, as is C, and only a store or a scope makes it 44: the store's conversion is no
+    consumer of this function, and a kept scope is a leaf. Currently-unhandled operations return top
+    explicitly (exhaustive match: adding an op to [Ops] forces a conscious interval-rule decision).
+*)
 let rec interval_of ~ienv ~(prec : Ops.prec) (llsc : scalar_t) : interval_result =
   let cached =
     match Phys_memo.find_opt ienv.memo llsc with
@@ -5465,8 +5498,12 @@ let rec interval_of ~ienv ~(prec : Ops.prec) (llsc : scalar_t) : interval_result
       r
 
 and interval_of_uncached ~ienv ~(prec : Ops.prec) (llsc : scalar_t) : interval_result =
-  let at iv = Interval.at_prec prec iv in
-  let pure iv = { ival = at iv; srcs = no_srcs } in
+  let pure iv = { ival = Interval.at_prec prec iv; srcs = no_srcs } in
+  (* An operator's real-arithmetic result, where the renderer leaves it. *)
+  let at iv =
+    if Ops.is_integer prec && float_valued llsc then Interval.top
+    else Interval.at_prec (Ops.operator_prec prec) iv
+  in
   let bool_undecided = { ival = Interval.bool_range; srcs = no_srcs } in
   let decided ~srcs b = { ival = (if b then Interval.true_ else Interval.false_); srcs } in
   match llsc with
@@ -5527,7 +5564,7 @@ and interval_of_uncached ~ienv ~(prec : Ops.prec) (llsc : scalar_t) : interval_r
           else bool_undecided
       | Ops.ToPowOf | Ops.Threefry4x32_crypto | Ops.Threefry4x32_light
       | Ops.Uint4x32_to_prec_uniform_lane ->
-          pure Interval.top)
+          { ival = at Interval.top; srcs = no_srcs })
   | Ternop (op, ((v1, p1) as _a1), (v2, _), (v3, _)) -> (
       match op with
       | Ops.Where ->
@@ -5580,7 +5617,7 @@ and interval_of_uncached ~ienv ~(prec : Ops.prec) (llsc : scalar_t) : interval_r
           else if Interval.definitely_true a.ival then decided ~srcs:a.srcs false
           else bool_undecided
       | Ops.Log | Ops.Log2 | Ops.Recip | Ops.Recip_sqrt | Ops.Uint4x32_to_prec_uniform1 ->
-          pure Interval.top)
+          { ival = at Interval.top; srcs = no_srcs })
 
 (** Settles the bounds of every source node consumed by a fold decision (binding constraint 2:
     settlement is transitive and fires at every consumption point). *)
@@ -5589,7 +5626,8 @@ let settle_srcs { srcs; _ } = Set.iter srcs ~f:Tn.settle_bounds
 (* Interval-driven comparison folding for [simplify_llc]: when the interval of a comparison /
    logical connective is decided, replace it by the constant and settle the consumed bounds. Only
    these [0,1]-valued operations are folded -- their decided intervals are exact points by
-   construction. *)
+   construction. [prec] is the precision the expression is evaluated at, not its annotation: at a
+   homogeneous slot the operands render at the slot's precision (gh-ocannl-1957). *)
 let try_interval_fold ~ienv ~prec (llsc : scalar_t) : scalar_t option =
   match llsc with
   | Binop ((Ops.Cmplt | Ops.Cmple | Ops.Cmpeq | Ops.Cmpne | Ops.And | Ops.Or), _, _) ->
@@ -5950,33 +5988,6 @@ let is_rng_conversion (llsc : scalar_t) =
       true
   | _ -> false
 
-let rec float_valued (llsc : scalar_t) =
-  match llsc with
-  | Unop (op, (v, _)) -> (
-      match Ops.unop_integer_valuation op with
-      | Real_valued -> true
-      | Follows_operands -> float_valued v
-      | Truth | Integer_only | Projection | Integer_table -> false)
-  | Binop (op, (v1, _), (v2, _)) -> (
-      match Ops.binop_integer_valuation op with
-      | Real_valued -> true
-      | Follows_operands -> float_valued v1 || float_valued v2
-      | Projection -> (
-          match Ops.binop_conditionality op with
-          | Only_first -> float_valued v1
-          | Only_second -> float_valued v2
-          | Both_operands | Gated_second -> false)
-      | Truth | Integer_only | Integer_table -> false)
-  | Ternop (op, (v1, _), (v2, _), (v3, _)) -> (
-      match (Ops.ternop_integer_valuation op, op) with
-      | Follows_operands, Ops.Where -> float_valued v2 || float_valued v3
-      | Follows_operands, _ -> float_valued v1 || float_valued v2 || float_valued v3
-      | Real_valued, _ -> true
-      | (Truth | Integer_only | Projection | Integer_table), _ -> false)
-  | Local_scope _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _ | Constant _
-  | Constant_bits _ | Embed_index _ ->
-      false
-
 let rec mentions_rng_conversion (llsc : scalar_t) =
   is_rng_conversion llsc
   ||
@@ -6022,11 +6033,11 @@ let narrowing_read ~scope_prec (llsc : scalar_t) =
    Otherwise [value q v] is the exact integer interval of [v]'s machine value when rendered at [q],
    or [None]. It is not {!interval_of}: that bounds a value as if the operands were exact, so at
    double it misses a leaf's conversion to byte (an embedded index of 256 compares equal to 0), and
-   at byte it wraps a result to the storage width, which is the question here. Each leaf must
-   convert to [q] without changing value, and each operator's result must fit what [q] computes in.
-   Exact integers then compute the same in C integer arithmetic and in float. The operators are a
-   list, not a default: a range says nothing of an operator's domain ([FMA] has a range and no
-   integer spelling, an integer [Div] truncates).
+   a final bound does not say that no operator wrapped on the way. Each leaf must convert to [q]
+   without changing value, and each operator's result must fit what [q] computes in. Exact integers
+   then compute the same in C integer arithmetic and in float. The operators are a list, not a
+   default: a range says nothing of an operator's domain ([FMA] has a range and no integer spelling,
+   an integer [Div] truncates).
 
    A comparison at a float [q] also holds with one operand exact there and the other an integer read
    converted once: the exact one lies strictly inside [float_exact_int_limit], and an integer past
@@ -6045,7 +6056,6 @@ let integer_scope_exact ~ienv ~(scope_prec : Ops.prec) ~(eval : Ops.prec) (v : s
     | None, Some limit -> Float.(abs iv.lo < limit && abs iv.hi < limit)
     | None, None -> false
   in
-  let computes_in q = if Ops.promoted_to_int q then Ops.int32 else q in
   let read q ~from =
     let iv = Interval.dtype_range from in
     Option.some_if (Ops.is_integer from && (holds q iv || Ops.widens_exactly ~from ~to_:q)) iv
@@ -6057,7 +6067,7 @@ let integer_scope_exact ~ienv ~(scope_prec : Ops.prec) ~(eval : Ops.prec) (v : s
     | _ -> false
   in
   let rec value q v =
-    let result iv = Option.some_if (holds (computes_in q) iv) iv in
+    let result iv = Option.some_if (holds (Ops.operator_prec q) iv) iv in
     let unary rule a = Option.bind (value q a) ~f:(fun i -> result (rule i)) in
     let binary rule a b =
       match (value q a, value q b) with Some i, Some j -> result (rule i j) | _ -> None
@@ -6427,7 +6437,7 @@ let simplify_llc static_indices llc =
               loop_scalar (Binop (Ops.Mul, v1, v2), prec)
             else if equal_scalar_arg llv1 v1 && equal_scalar_arg llv2 v2 then
               (* At the rewriting fixpoint, try the interval-driven comparison fold. *)
-              match try_interval_fold ~ienv ~prec (fst result) with
+              match try_interval_fold ~ienv ~prec:eval (fst result) with
               | Some c -> (c, prec)
               | None -> result
             else loop_scalar result)
@@ -7714,11 +7724,18 @@ let sink_zero_outs (llc : t) : t =
    index_expr)] where [index_expr] is the scalar value used as the dynamic index. *)
 (* Match a Cmpeq comparing [Embed_index (Iterator k)] against an index expression free of [k].
    Returns the index expression (with its precision). Uses [is_embedded_range_iterator] defined
-   above, sharing the recognition logic with [is_one_hot_selector_assignment]. *)
-let match_one_hot_cmpeq (k : Indexing.symbol) : scalar_t -> scalar_arg option = function
+   above, sharing the recognition logic with [is_one_hot_selector_assignment]. An index float-valued
+   at an integer annotation is no match (gh-ocannl-1957): the comparison holds at no [k] where it is
+   not integral, and no precision re-evaluates it as written for the guards and the dynamic index --
+   an integer one converts its float result, a float one drops its leaves' conversions. *)
+let match_one_hot_cmpeq (k : Indexing.symbol) : scalar_t -> scalar_arg option =
+  let index ((v, p) as arg : scalar_arg) =
+    Option.some_if (not (Ops.is_integer p && float_valued v)) arg
+  in
+  function
   | Binop (Ops.Cmpeq, (a, pa), (b, pb)) ->
-      if is_embedded_range_iterator k a && not (scalar_mentions_symbol k b) then Some (b, pb)
-      else if is_embedded_range_iterator k b && not (scalar_mentions_symbol k a) then Some (a, pa)
+      if is_embedded_range_iterator k a && not (scalar_mentions_symbol k b) then index (b, pb)
+      else if is_embedded_range_iterator k b && not (scalar_mentions_symbol k a) then index (a, pa)
       else None
   | _ -> None
 
