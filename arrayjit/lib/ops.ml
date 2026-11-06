@@ -600,6 +600,16 @@ type unop =
   | Trunc  (** Truncate toward zero to an integer value (matches a C [(int)] cast). *)
   | Tanh_approx
   | Not  (** 0. -> 1. | _ -> 0. *)
+  | Round_prec
+      (** [Unop (Round_prec, (v, t))]: the value of [v] rounded to precision [t], in one step from
+          where [v] stands, whatever precision the slot reading it computes at (gh-ocannl-1975).
+          IR-internal: {!Low_level.simplify_llc} mints it from a narrowing read
+          ({!Low_level.narrowing_read}), so the read stays an expression the schedule and the
+          vectorizer can see, and the rounding stays required however the backend computes. It is
+          not exposed in the user-facing syntaxes. Heterogeneous, and the target is the operand's
+          annotation: nothing may narrow, widen or re-annotate that slot. Its table spelling is the
+          identity because at [t] there is nothing left to do; the conversion from [t] to the slot
+          is the renderers' own arm, which is why no renderer reaches the table for it. *)
   | Uint4x32_to_prec_uniform1
       (** Non-vectorized variant of [Uint4x32_to_prec_uniform] that converts the given Uint4x32 to a
           single value of the output precision. Less bit-efficient but operates poitwise. For random
@@ -774,6 +784,9 @@ let interpret_unop op v =
   | Trunc -> round_towards_zero v
   | Tanh_approx -> tanh v
   | Not -> if v = 0. then 1. else 0.
+  | Round_prec ->
+      (* The target precision is the operand's annotation, which this table never sees. *)
+      invalid_arg "Ops.interpret_unop: Round_prec rounds to an annotation, outside this table"
   | Uint4x32_to_prec_uniform1 ->
       invalid_arg
         "Ops.interpret_unop: Uint4x32_to_prec_uniform1 argument outside the domain of float"
@@ -963,6 +976,7 @@ let unop_cd_syntax = function
   | Trunc -> "trunc"
   | Tanh_approx -> "tanh"
   | Not -> "not"
+  | Round_prec -> "round_prec"
   | Uint4x32_to_prec_uniform1 -> "uint4x32_to_prec_uniform1"
 
 let vec_unop_cd_syntax = function Uint4x32_to_prec_uniform -> "uint4x32_to_prec_uniform"
@@ -984,7 +998,7 @@ let unop_c_syntax prec op =
     | _ -> "fminf"
   in
   match (op, prec) with
-  | Identity, _ -> ("", "")
+  | (Identity | Round_prec), _ -> ("", "")
   (* The integer arms are integer-typed (gh-ocannl-1883), through the common-type comparisons of the
      binary [Max]/[Min] arms; their operand is never float-valued (C_syntax's [integer_op]). *)
   | Relu, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
@@ -1297,6 +1311,7 @@ external fp8_to_uint4x32 : int -> int array = "arrayjit_fp8_to_uint4x32_ocaml"
     converted to the result precision. *)
 let is_homogeneous_prec_unop = function
   | Uint4x32_to_prec_uniform1 -> false (* Heterogeneous: argument must be uint4x32 *)
+  | Round_prec -> false (* Heterogeneous: the annotation is the precision rounded to *)
   | _ -> true (* All other unary operations are homogeneous *)
 
 (** Returns true if the vec_unop operation is homogeneous in precision, meaning its argument should
@@ -1350,7 +1365,7 @@ type integer_valuation =
 
 let unop_integer_valuation = function
   | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Recip | Recip_sqrt | Tanh_approx -> Real_valued
-  | Identity | Neg | Relu | Satur01 | Trunc -> Follows_operands
+  | Identity | Neg | Relu | Satur01 | Trunc | Round_prec -> Follows_operands
   | Not -> Truth
   | Uint4x32_to_prec_uniform1 -> Integer_table
 

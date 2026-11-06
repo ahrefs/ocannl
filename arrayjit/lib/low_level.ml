@@ -5634,7 +5634,9 @@ and interval_of_uncached ~ienv ~(prec : Ops.prec) (llsc : scalar_t) : interval_r
           if Interval.definitely_false a.ival then decided ~srcs:a.srcs true
           else if Interval.definitely_true a.ival then decided ~srcs:a.srcs false
           else bool_undecided
-      | Ops.Log | Ops.Log2 | Ops.Recip | Ops.Recip_sqrt | Ops.Uint4x32_to_prec_uniform1 ->
+      (* A local's value, the scope this rounding replaces: rounding can leave [v]'s interval. *)
+      | Ops.Round_prec | Ops.Log | Ops.Log2 | Ops.Recip | Ops.Recip_sqrt
+      | Ops.Uint4x32_to_prec_uniform1 ->
           { ival = at Interval.top; srcs = no_srcs })
 
 (** Settles the bounds of every source node consumed by a fold decision (binding constraint 2:
@@ -6037,7 +6039,8 @@ let rec renders_no_wider ~prec (value : scalar_t) =
   let double = match prec with Ops.Double_prec _ -> true | _ -> false in
   match value with
   | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_dynamic _ | Get_merge_buffer _
-  | Get_local _ | Local_scope _ ->
+  | Get_local _ | Local_scope _
+  | Unop (Round_prec, _) ->
       true
   | Unop ((Identity | Neg), a) -> fits a
   | Unop
@@ -6070,6 +6073,8 @@ let narrowing_read ~scope_prec (llsc : scalar_t) =
   in
   let rec read = function
     | Unop (Identity, (v, _)) | Binop (Arg1, (v, _), _) | Binop (Arg2, _, (v, _)) -> read v
+    (* A rounding reads as what it rounded to: the outer cast of a cast still has to round. *)
+    | Unop (Round_prec, (_, from)) -> narrows ~from
     | Get (tn, _)
     | Get_merge_buffer (tn, _)
     | Get_dynamic { tn; _ }
@@ -6174,7 +6179,7 @@ let integer_scope_exact ~ienv ~(scope_prec : Ops.prec) ~(eval : Ops.prec) (v : s
         | Relu -> unary Interval.relu a
         | Satur01 -> unary Interval.satur01 a
         | Not -> truth [ a ]
-        | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Recip | Recip_sqrt | Tanh_approx
+        | Round_prec | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Recip | Recip_sqrt | Tanh_approx
         | Uint4x32_to_prec_uniform1 ->
             None)
     | Binop (op, (a, _), (b, _)) -> (
@@ -6255,7 +6260,16 @@ let simplify_llc static_indices llc =
           }
     | Zero_out _ -> llc
     | Set { tn; idcs; llsc; debug } ->
-        Set { tn; idcs; llsc = fst (loop_scalar (llsc, Lazy.force tn.Tn.storage_prec)); debug }
+        let store_prec = Lazy.force tn.Tn.storage_prec in
+        let llsc =
+          match fst (loop_scalar (llsc, store_prec)) with
+          (* gh-ocannl-1975: the store rounds it, in the one step a [Round_prec] stands for, so this
+             is the materialized copy's text. The one place a slot's precision discharges one, since
+             a store is the one slot that cannot render wider than its node. *)
+          | Unop (Ops.Round_prec, (v, t)) when Ops.equal_prec t store_prec -> v
+          | llsc -> llsc
+        in
+        Set { tn; idcs; llsc; debug }
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value; llsc; debug } ->
         (* gh-466: reached via [Schedule.apply]'s simplify of post-rewrite code. The scatter itself
            is never folded; its index value and RHS are. *)
@@ -6421,6 +6435,20 @@ let simplify_llc static_indices llc =
         ignore (Lazy.force id.tn.Tn.dims);
         let result = substitute_float ~var:(Get_local id) ~value:v1 v2 in
         (fst (loop_scalar (result, Lazy.force id.tn.Tn.storage_prec)), prec)
+    (* gh-ocannl-1975: a narrowing read the clause above refuses to collapse rounds in-expression,
+       so the schedule's recognizers and the vectorizer see a read of the enclosing statement. Only
+       a plain load, or a cast of one: what else [narrowing_read] accepts reaches no tile or lane,
+       and stays the scope [C_syntax] pins. A [uint4x32] slot keys its conversion on what renders
+       there, so it keeps the scope too. *)
+    | Local_scope ({ id; body = Set_local (id2, v); _ } as opts)
+      when equal_scope_id id id2 && (not packed)
+           && narrowing_read ~scope_prec:(Lazy.force id.tn.Tn.storage_prec) v -> (
+        let scope_prec = Lazy.force id.tn.Tn.storage_prec in
+        match fst (own (v, scope_prec)) with
+        | (Get _ | Unop (Ops.Round_prec, _)) as read ->
+            ignore (Lazy.force id.tn.Tn.dims);
+            (Unop (Ops.Round_prec, (read, scope_prec)), prec)
+        | _ -> (Local_scope { opts with body = loop_proc local_scope_body }, prec))
     | Local_scope opts -> (Local_scope { opts with body = loop_proc local_scope_body }, prec)
     | Get_local _ -> (llsc, prec)
     | Get_merge_buffer _ -> (llsc, prec)
@@ -6543,6 +6571,10 @@ let simplify_llc static_indices llc =
           | _ -> result
         else loop_scalar result
     | Unop (Identity, llsc) -> loop_scalar (at_slot llsc)
+    (* The annotation is the precision rounded to, so it survives whatever the operand becomes: a
+       fold or a stripped wrapper answers with the annotation of what it left. And no constant fold:
+       [Ops.interpret_unop] has no precision to round to. *)
+    | Unop (Round_prec, ((_, t) as v)) -> (Unop (Round_prec, (fst (own v), t)), prec)
     (* gh-ocannl-1785: at an integer evaluation precision a real-valued operator yields a float the
        renderer carries in float to its conversion point, where a folded [Constant] would be
        converted wherever it is read -- [2 * sin(1)] would fold its sine to 0.84 and render [2 *
@@ -11337,6 +11369,13 @@ let walk_operand_precisions ~(mode : [ `Refuse | `Describe ]) (llc : t) : t =
     | Binop (op, a, b) ->
         let a = own ~dest a in
         Binop (op, a, own ~dest b)
+    | Unop (Ops.Round_prec, (((Get _ | Constant _ | Unop (Ops.Round_prec, _)), _) as a)) ->
+        Unop (Ops.Round_prec, own ~dest a)
+    | Unop (Ops.Round_prec, _) ->
+        raise
+          (Operand_precision_malformed
+             "Round_prec rounds a read: over arithmetic its annotation would also set the \
+              precision the arithmetic computes at, which rounding promises nothing about")
     | Unop (op, a) when Ops.is_homogeneous_prec_unop op ->
         Unop
           (op, at ~dest ~prec ~what:("The operand of " ^ Sexp.to_string_hum (Ops.sexp_of_unop op)) a)
@@ -12690,6 +12729,8 @@ let to_doc_cstyle ?name ?static_indices () llc =
           (string prefix ^^ doc_of_float prec v1 ^^ string infix ^^ space ^^ doc_of_float prec v2
          ^^ string postfix)
     | Unop (Identity, (v, _)) -> doc_of_float prec v
+    | Unop (Round_prec, (v, t)) ->
+        string ("round_" ^ Ops.prec_string t ^ "(") ^^ doc_of_float t v ^^ string ")"
     | Unop (op, (v, _)) ->
         let prefix, postfix = Ops.unop_c_syntax prec op in
         string prefix ^^ doc_of_float prec v ^^ string postfix
@@ -12841,6 +12882,7 @@ let to_doc ?name ?static_indices () llc =
           let prefix = Ops.binop_cd_fallback_syntax op in
           group (string prefix ^^ parens (doc_of_float v1 ^^ string "," ^^ space ^^ doc_of_float v2))
     | Unop (Identity, (v, _)) -> doc_of_float v
+    | Unop (Round_prec, (v, t)) -> string ("round_" ^ Ops.prec_string t) ^^ parens (doc_of_float v)
     | Unop (op, (v, _)) ->
         let prefix = Ops.unop_cd_syntax op in
         string prefix ^^ parens (doc_of_float v)

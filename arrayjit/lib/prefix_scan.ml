@@ -214,6 +214,8 @@ let rec eval (rt : routine) dom ~before ~depth sub (s : LL.scalar_t) : value opt
       let* a = arg a in
       match (op, a) with
       | Ops.Neg, Lin { cr; cq; c } -> note (Lin { cr = -cr; cq = -cq; c = -.c })
+      (* Pointwise evaluation is in double, which has no rounding to a narrow precision. *)
+      | Ops.Round_prec, _ -> None
       | _ ->
           let* v = pointwise_d (fun fs d -> Ops.interpret_unop op ((List.hd_exn fs) d)) [ a ] in
           note v)

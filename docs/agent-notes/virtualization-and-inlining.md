@@ -156,14 +156,12 @@ files.
   every iteration and would localize and narrow once, on cc's default too. CSE runs first, so a scope with a `Get_local` reader stays, which `collapsible`
   never had to ask. A draw stays: `mentions_rng_conversion` stops at a scope.
   **Its reach is narrow.** What it recovers on cc's default is gh-ocannl-1788's arithmetic scopes.
-  It does NOT recover the tiles gh-ocannl-1866 cost: a cast on a wide-compute backend has `R` and
-  `V` f16 and `S` f32 wherever arithmetic reads it, so it must stay, and `serial_kernel_of` works on
-  the lowered scope anyway; only at the root of a store of its own precision does it collapse, into
-  the copy a materialized twin is. It does nothing for
-  gh-ocannl-1884's integer scopes, where `compute_prec` is the identity. A cast that does collapse
-  (`narrow_compute_f32=false`, a GPU) loses its local and still gets no SIMD, since `vec_expr`
-  refuses a load at another width. `Vectorized` comes from retypes, so the default schedule gains
-  only `has_accumulation`'s pragma arm. Exact means bitwise under the compile's contraction licence,
+  A cast over a plain load never reaches it: `simplify_llc` has made that a `Round_prec` already
+  (gh-ocannl-1975, backend-precision-and-simd.md), and what still does, a scope over another read,
+  collapses only at the root of a store of its own precision, into the copy a materialized twin is.
+  It does nothing for gh-ocannl-1884's integer scopes, where `compute_prec` is the identity.
+  `Vectorized` comes from retypes, so the default schedule gains only `has_accumulation`'s pragma
+  arm. Exact means bitwise under the compile's contraction licence,
   like every same-precision collapse; a test comparing the two forms pins it off or uses products
   exact in f32, which contraction cannot move. Since a plain `?prelowered` scope now collapses too, a
   kept oracle needs its assignment outside the single-assignment shape, as

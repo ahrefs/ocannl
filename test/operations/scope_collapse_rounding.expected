@@ -1,3 +1,5 @@
+a rounding reads as what it rounded to, so the cast around it still rounds: true
+roundings to two precisions are two programs: true
 narrow: the uncollapsed oracle runs its scope, and the schedule's simplify keeps it: true
 narrow: the scheduled form computes the oracle's values bitwise: true
 narrow: optimize inlines the virtual node and keeps its scope, computing the oracle's values bitwise: true
@@ -10,41 +12,41 @@ nload: optimize inlines the virtual node and collapses its scope, computing the 
 wload: an exact scope over a load is still collapsed: true
 wload: the collapsed form computes the oracle's values bitwise: true
 wload: optimize inlines the virtual node and collapses its scope, computing the oracle's values bitwise: true
-cast_own: a cast stays a scope, scheduled and inlined: true
+cast_own: a cast leaves no scope, scheduled or inlined: true
 cast_own: every form of the cast computes the materialized values bitwise: true
-cast_wide: a cast stays a scope, scheduled and inlined: true
+cast_wide: a cast leaves no scope, scheduled or inlined: true
 cast_wide: every form of the cast computes the materialized values bitwise: true
 a narrowing init leaves an accumulator at its residency: true
 narrow: the oracle holds its local in the kernel: true
-narrow: the scope survives lowering: true
-narrow: the kernel holds the local unless the backend's compute precision makes it exact: true
+narrow: a scope survives lowering, a cast rounding in the expression instead: true
+narrow: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 narrow: the retyped form computes the oracle's values bitwise: true
-narrow: explicit SIMD exactly where arithmetic collapsed: true
+narrow: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 wide: the oracle holds its local in the kernel: true
-wide: the scope survives lowering: true
-wide: the kernel holds the local unless the backend's compute precision makes it exact: true
+wide: a scope survives lowering, a cast rounding in the expression instead: true
+wide: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 wide: the retyped form computes the oracle's values bitwise: true
-wide: explicit SIMD exactly where arithmetic collapsed: true
+wide: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 fp8: the oracle holds its local in the kernel: true
-fp8: the scope survives lowering: true
-fp8: the kernel holds the local unless the backend's compute precision makes it exact: true
+fp8: a scope survives lowering, a cast rounding in the expression instead: true
+fp8: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 fp8: the retyped form computes the oracle's values bitwise: true
-fp8: explicit SIMD exactly where arithmetic collapsed: true
+fp8: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 cast_own: the oracle holds its local in the kernel: true
-cast_own: the scope survives lowering: true
-cast_own: the kernel holds the local unless the backend's compute precision makes it exact: true
+cast_own: a scope survives lowering, a cast rounding in the expression instead: true
+cast_own: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 cast_own: the retyped form computes the oracle's values bitwise: true
-cast_own: explicit SIMD exactly where arithmetic collapsed: true
+cast_own: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 cast_half: the oracle holds its local in the kernel: true
-cast_half: the scope survives lowering: true
-cast_half: the kernel holds the local unless the backend's compute precision makes it exact: true
+cast_half: a scope survives lowering, a cast rounding in the expression instead: true
+cast_half: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 cast_half: the retyped form computes the oracle's values bitwise: true
-cast_half: explicit SIMD exactly where arithmetic collapsed: true
+cast_half: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 cast_wide: the oracle holds its local in the kernel: true
-cast_wide: the scope survives lowering: true
-cast_wide: the kernel holds the local unless the backend's compute precision makes it exact: true
+cast_wide: a scope survives lowering, a cast rounding in the expression instead: true
+cast_wide: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 cast_wide: the retyped form computes the oracle's values bitwise: true
-cast_wide: explicit SIMD exactly where arithmetic collapsed: true
+cast_wide: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 reduce: the retyped form computes the oracle's value: true
 reduce: the kernel holds the local unless the compute precision makes it exact: true
 reduce: a collapsed scope renders the SIMD reduction: true
@@ -134,41 +136,41 @@ nload: optimize inlines the virtual node and collapses its scope, computing the 
 wload: an exact scope over a load is still collapsed: true
 wload: the collapsed form computes the oracle's values bitwise: true
 wload: optimize inlines the virtual node and collapses its scope, computing the oracle's values bitwise: true
-cast_own: a cast stays a scope, scheduled and inlined: true
+cast_own: a cast leaves no scope, scheduled or inlined: true
 cast_own: every form of the cast computes the materialized values bitwise: true
-cast_wide: a cast stays a scope, scheduled and inlined: true
+cast_wide: a cast leaves no scope, scheduled or inlined: true
 cast_wide: every form of the cast computes the materialized values bitwise: true
 a narrowing init leaves an accumulator at its residency: true
 narrow: the oracle holds its local in the kernel: true
-narrow: the scope survives lowering: true
-narrow: the kernel holds the local unless the backend's compute precision makes it exact: true
+narrow: a scope survives lowering, a cast rounding in the expression instead: true
+narrow: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 narrow: the retyped form computes the oracle's values bitwise: true
-narrow: explicit SIMD exactly where arithmetic collapsed: true
+narrow: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 wide: the oracle holds its local in the kernel: true
-wide: the scope survives lowering: true
-wide: the kernel holds the local unless the backend's compute precision makes it exact: true
+wide: a scope survives lowering, a cast rounding in the expression instead: true
+wide: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 wide: the retyped form computes the oracle's values bitwise: true
-wide: explicit SIMD exactly where arithmetic collapsed: true
+wide: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 fp8: the oracle holds its local in the kernel: true
-fp8: the scope survives lowering: true
-fp8: the kernel holds the local unless the backend's compute precision makes it exact: true
+fp8: a scope survives lowering, a cast rounding in the expression instead: true
+fp8: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 fp8: the retyped form computes the oracle's values bitwise: true
-fp8: explicit SIMD exactly where arithmetic collapsed: true
+fp8: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 cast_own: the oracle holds its local in the kernel: true
-cast_own: the scope survives lowering: true
-cast_own: the kernel holds the local unless the backend's compute precision makes it exact: true
+cast_own: a scope survives lowering, a cast rounding in the expression instead: true
+cast_own: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 cast_own: the retyped form computes the oracle's values bitwise: true
-cast_own: explicit SIMD exactly where arithmetic collapsed: true
+cast_own: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 cast_half: the oracle holds its local in the kernel: true
-cast_half: the scope survives lowering: true
-cast_half: the kernel holds the local unless the backend's compute precision makes it exact: true
+cast_half: a scope survives lowering, a cast rounding in the expression instead: true
+cast_half: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 cast_half: the retyped form computes the oracle's values bitwise: true
-cast_half: explicit SIMD exactly where arithmetic collapsed: true
+cast_half: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 cast_wide: the oracle holds its local in the kernel: true
-cast_wide: the scope survives lowering: true
-cast_wide: the kernel holds the local unless the backend's compute precision makes it exact: true
+cast_wide: a scope survives lowering, a cast rounding in the expression instead: true
+cast_wide: the kernel holds the local unless it rounds in the expression or compute makes it exact: true
 cast_wide: the retyped form computes the oracle's values bitwise: true
-cast_wide: explicit SIMD exactly where arithmetic collapsed: true
+cast_wide: explicit SIMD exactly where the expression has no scope and fits the lanes: true
 reduce: the retyped form computes the oracle's value: true
 reduce: the kernel holds the local unless the compute precision makes it exact: true
 reduce: a collapsed scope renders the SIMD reduction: true

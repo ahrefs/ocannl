@@ -1004,10 +1004,11 @@ module type C_syntax_config = sig
 
       Only the register precision of an assignment's intermediates is at stake: this function is
       never consulted for a declaration, a kernel parameter, or a buffer's element type, which
-      always take the storage precision. A cast is not an intermediate: a scope that is a
-      {!Ir.Low_level.narrowing_read} stays at its storage precision (gh-ocannl-1866). It must be a
-      function of the storage precision alone — identical across sibling autotune candidates — or
-      schedule transforms would stop being numerics-preserving. *)
+      always take the storage precision. A cast is not an intermediate: {!Ir.Ops.Round_prec} renders
+      at the precision it rounds to, and a scope still holding a {!Ir.Low_level.narrowing_read}
+      stays at its storage precision (gh-ocannl-1866). It must be a function of the storage
+      precision alone — identical across sibling autotune candidates — or schedule transforms would
+      stop being numerics-preserving. *)
 
   val accum_prec : Ops.prec -> Ops.prec
   (** The precision a reduction {e accumulator} resides at across its whole nest, given the
@@ -3597,6 +3598,12 @@ module C_syntax (B : C_syntax_config) = struct
             let defs = List.concat [ d1; d2 ] in
             let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
             (defs, expr))
+    (* gh-ocannl-1975: at exactly [t], never [comp_prec t], which on a wide-compute backend rounds
+       nothing and takes an f64 source through f32 first (gh-ocannl-1956); then into the slot. *)
+    | Unop (Ops.Round_prec, (v, t)) ->
+        let defs, expr_v = operand t v in
+        let pre, post = B.convert_precision ~from:t ~to_:prec in
+        (defs, group (string pre ^^ expr_v ^^ string post))
     | Unop (op, (v, v_prec)) ->
         let arg_prec =
           if Ops.is_homogeneous_prec_unop op then prec
@@ -3769,6 +3776,8 @@ module C_syntax (B : C_syntax_config) = struct
         true
     | _ when mentions_rng_conversion llsc -> true
     | Unop (Ops.Identity, (v, _)) -> renders_at_store_prec v
+    (* Its one step is to [t], and from there a copy, as the scope it replaces was. *)
+    | Unop (Ops.Round_prec, _) -> true
     | Binop (Ops.Arg1, (v, _), _) | Binop (Ops.Arg2, _, (v, _)) -> renders_at_store_prec v
     | Unop _ | Binop _ | Ternop _ -> false
 
@@ -3798,10 +3807,11 @@ module C_syntax (B : C_syntax_config) = struct
     Hash_set.create (module Low_level.Scope_id)
 
   (* gh-ocannl-1866: scopes every [Set_local] of which is a {!Low_level.narrowing_read}, filled by
-     the [rng_scope_ids] walk below. They take their node's storage precision, like the rng and
-     carried-state pins, so a virtual cast rounds where the local is assigned, as the materialized
-     node's store does; a scope that also updates itself is an accumulator or a recurrence, and
-     keeps its residency. *)
+     the [rng_scope_ids] walk below: what [simplify_llc] did not turn into a {!Ops.Round_prec}
+     (gh-ocannl-1975), a dynamic, merge-buffer or local read among them. They take their node's
+     storage precision, like the rng and carried-state pins, so a virtual cast rounds where the
+     local is assigned, as the materialized node's store does; a scope that also updates itself is
+     an accumulator or a recurrence, and keeps its residency. *)
   let narrowing_cast_verdicts : (Low_level.Scope_id.t, bool) Hashtbl.t =
     Hashtbl.create (module Low_level.Scope_id)
 
@@ -4165,8 +4175,9 @@ module C_syntax (B : C_syntax_config) = struct
      [vec_expr] still declines a load at another width. A cast's [R] and [V] are both its storage
      precision (gh-ocannl-1956), so at the root of a store of that precision it collapses into the
      materialized copy it is. Anywhere wider, a wide-compute backend's narrow operators included, it
-     stays: that rounding is the cast (gh-ocannl-1866). An integer scope stays too: [compute_prec]
-     is the identity there, so render time knows nothing [Low_level.integer_scope_exact] did not.
+     stays: that rounding is the cast (gh-ocannl-1866), though a plain load's never gets here, being
+     a {!Ops.Round_prec} by now (gh-ocannl-1975). An integer scope stays too: [compute_prec] is the
+     identity there, so render time knows nothing [Low_level.integer_scope_exact] did not.
 
      This is a pass, not an arm of [pp_scalar], because everything that pattern-matches a statement
      has to read the same tree: [scalar_mentions], [no_written_reads], [renders_at_store_prec],
@@ -7751,11 +7762,14 @@ module C_syntax (B : C_syntax_config) = struct
       let store_prec = Lazy.force tn.Tn.storage_prec in
       let load, _store = vec_bridge ~store_prec ~prec ~lanes ~vtyp ~need_typedef ~fresh in
       emit (load ~width:lanes ~dst:name ~mem:(string (get_ident tn) ^^ brackets offset));
-      string name
+      name
     in
     let rec vec_expr (llsc : Low_level.scalar_t) (p : Ops.prec) : PPrint.document =
+      let rounds = match llsc with Unop (Ops.Round_prec, _) -> true | _ -> false in
       if not ((scalar_mentions loop) llsc) then (uniform_scalar ctx) ~written prec llsc
-      else if not (Ops.equal_prec (comp_prec p) prec) then raise Vectorization_declined
+        (* A rounding's annotation in its slot says what it rounded to, not where it computes. *)
+      else if (not rounds) && not (Ops.equal_prec (comp_prec p) prec) then
+        raise Vectorization_declined
       else
         match llsc with
         | Low_level.Get (tn, idcs) ->
@@ -7763,7 +7777,20 @@ module C_syntax (B : C_syntax_config) = struct
                is a node whose arithmetic would run at another width. *)
             if not (Ops.equal_prec (comp_prec (Lazy.force tn.Tn.storage_prec)) prec) then
               raise Vectorization_declined;
-            vload tn idcs
+            string (vload tn idcs)
+        | Unop (Ops.Round_prec, (Low_level.Get (tn, idcs), t)) ->
+            (* gh-ocannl-1975: through [t]'s own storage bridge, so the lanes round as the scalar
+               remainder does. A source computing at another width stays serial: narrowing it
+               through this vector's precision would be two steps (gh-ocannl-1956). *)
+            if not (Ops.equal_prec (comp_prec (Lazy.force tn.Tn.storage_prec)) prec) then
+              raise Vectorization_declined;
+            let held = fresh "vround" and rounded = fresh "vget" in
+            let load, store = vec_bridge ~store_prec:t ~prec ~lanes ~vtyp ~need_typedef ~fresh in
+            let mem = string held ^^ string "[0]" in
+            emit (string (Printf.sprintf "%s %s[%d];" (B.typ_of_prec t) held lanes));
+            emit (store ~width:lanes ~src:(vload tn idcs) ~mem);
+            emit (load ~width:lanes ~dst:rounded ~mem);
+            string rounded
         | Binop (op, (a, pa), (b, pb)) ->
             let inf =
               match op with
@@ -9184,6 +9211,10 @@ module C_syntax (B : C_syntax_config) = struct
                 (v1_doc, idcs1, v2_doc, idcs2)
             in
             (B.binop_syntax prec op v1_doc v2_doc, idcs1 @ idcs2))
+    | Unop (Ops.Round_prec, (v, t)) ->
+        let v_doc, idcs = (debug_float ctx) ?guard t v in
+        let pre, post = B.convert_precision ~from:t ~to_:prec in
+        (PPrint.(string pre ^^ v_doc ^^ string post), idcs)
     | Unop (op, (v, v_prec)) ->
         let arg_prec =
           if Ops.is_homogeneous_prec_unop op then prec

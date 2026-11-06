@@ -623,7 +623,7 @@ struct
        wherever it lands. *)
     let bf16_func fn = f ("__float2bfloat16(" ^ fn ^ "(__bfloat162float(") ")))" in
     match (v, prec) with
-    | Ops.Identity, _ -> f "" ""
+    | (Ops.Identity | Ops.Round_prec), _ -> f "" ""
     | Uint4x32_to_prec_uniform1, Ops.Uint4x32_prec _ ->
         invalid_arg
           (Dialect.error_prefix

@@ -1,3 +1,6 @@
+(* cc-fp-contract: no-contraction -- each cast leg holds a sum or a product and never both, so no
+   multiply-add forms, and the mul-add legs compare within a tolerance *)
+
 (* Explicit SIMD rendering of [Vectorized] loops (gh-ocannl-164 follow-up,
    archive/docs/proposals/watch-ocannl-README-md-347818d3.md): executed parity of vector-rendered
    kernels against their serial twins, plus structural checks on the generated source.
@@ -102,6 +105,72 @@ let () =
        (not (has "vector_size")) && not (has "reinterpret_cast")
    in
    p "vectorized rendering with serial remainder" ok);
+
+  (* --- A virtual cast twin in lanes (gh-ocannl-1975): the rounding is an expression, so the loop
+     vectorizes, and every lane rounds as the serial remainder and a materialized twin do. Values at
+     f16's rounding boundaries, ties and signed zeros among them, across the whole 517-lane row and
+     its tail. --- *)
+  let boundary =
+    [|
+      1. +. (2. **. -11.);
+      1. +. (3. *. (2. **. -11.));
+      -1. -. (2. **. -11.);
+      -1. -. (3. *. (2. **. -11.));
+      1. +. (2. **. -12.);
+      -0.;
+      2. **. -26.;
+      -.(2. **. -26.);
+      70000.;
+      -70000.;
+      0.1;
+      -0.3;
+      Ll_test.cycle_flat ~dims:[| 1; 17 |] ~modulus:13 ~offset:0. ~stride:0.25 5;
+    |]
+  in
+  let cycled len = Array.init len ~f:(fun cell -> boundary.(cell % Array.length boundary)) in
+  let twin_of_master ~materialize ~dims label =
+    let values = cycled (Array.fold dims ~init:1 ~f:( * )) in
+    let m = TDSL.ndarray values ~label:[ label ] ~output_dims:(Array.to_list dims) () in
+    let t = Operation.cast ~grad_spec:Tensor.Prohibit_grad m () in
+    Ir.Tnode.update_prec t.Tensor.value Ir.Ops.half;
+    (if materialize then Train.set_materialized else Train.set_virtual) t.Tensor.value;
+    t
+  in
+  let same_bits got want =
+    Array.equal (fun x y -> Int64.equal (Int64.bits_of_float x) (Int64.bits_of_float y)) got want
+  in
+  let retyped opt =
+    let j = Option.value_exn ~here:[%here] (innermost_loop opt.LL.llc) in
+    Sched.apply [ Sched.Retype { axis = j; ty = LL.Vectorized } ] opt
+  in
+  let in_lanes label ~name ?(dims = [| rows; cols |]) build =
+    let result t =
+      let c : Tensor.t = build t in
+      Ir.Tnode.update_prec c.Tensor.value Ir.Ops.single;
+      c
+    in
+    let want =
+      run ~name:(name ^ "_twin") ~transform:Fn.id
+        (result (twin_of_master ~materialize:true ~dims "tm"))
+    in
+    let got =
+      run ~name ~transform:retyped (result (twin_of_master ~materialize:false ~dims "tv"))
+    in
+    p (label ^ ": every lane matches a materialized twin bitwise") (same_bits got want);
+    gated ~when_:on_cpu ~on:backend_name
+      (label ^ ": the rounding runs in lanes")
+      (String.is_substring (Generated.read name) ~substring:"vector_size")
+  in
+  in_lanes "cast read in an f32 sum" ~name:"simd_cast" (fun t ->
+      let%op c = t + a in
+      c);
+  in_lanes "cast read in an f32 reduction" ~name:"simd_cast_reduce" (fun t ->
+      let%op c = t ++ "ab => a" in
+      c);
+  (* A read the lanes do not vary: it rounds in the scalar render, before the splat. *)
+  in_lanes "cast read uniform across the lanes" ~name:"simd_cast_uniform" ~dims:[| rows |] (fun t ->
+      let%op c = t +* "a; ab => ab" a in
+      c);
 
   (* --- Split by 8 then retype the inner loop: Affine last components (8*j_o + j_i). --- *)
   let cols2 = 512 in

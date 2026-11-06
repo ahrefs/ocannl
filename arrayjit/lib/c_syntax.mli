@@ -504,10 +504,11 @@ module type C_syntax_config = sig
 
       Only the register precision of an assignment's intermediates is at stake: this function is
       never consulted for a declaration, a kernel parameter, or a buffer's element type, which
-      always take the storage precision. A cast is not an intermediate: a scope that is a
-      {!Ir.Low_level.narrowing_read} stays at its storage precision (gh-ocannl-1866). It must be a
-      function of the storage precision alone — identical across sibling autotune candidates — or
-      schedule transforms would stop being numerics-preserving. *)
+      always take the storage precision. A cast is not an intermediate: {!Ir.Ops.Round_prec} renders
+      at the precision it rounds to, and a scope still holding a {!Ir.Low_level.narrowing_read}
+      stays at its storage precision (gh-ocannl-1866). It must be a function of the storage
+      precision alone — identical across sibling autotune candidates — or schedule transforms would
+      stop being numerics-preserving. *)
 
   val accum_prec : Ops.prec -> Ops.prec
   (** The precision a reduction {e accumulator} resides at across its whole nest, given the
