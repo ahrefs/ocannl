@@ -1,0 +1,34 @@
+Ties through capture references:
+set_dim after the row closed: 5 5 5
+a size set after the row closed reaches the tied dimension: true
+an operand met after the row closed: 5 5 5 5
+an operand met after the row closed sizes the tied dimension: true
+a row left open: 5 5 5
+a row left open closes empty around the tied dimension: true
+a row closed from the start: 5 5 5
+a row closed from the start holds the tied dimension: true
+refusal: Total_elems constraint failed: the dimension cancels, leaving a fractional 1/3 elements
+a row closed with a second axis of 3 refuses the tie: true
+refusal: Total_elems constraint failed: the dimension cancels, leaving a fractional 1/3 elements
+an open row with an axis of 3 refuses the tie: true
+refusal: Total_elems constraint failed: the dimension cancels, leaving a fractional 1/3 elements
+an open row with an axis of 3 refuses the tie, its rest constrained: true
+Hand-built constraints:
+1 v / v over the empty row is satisfied, v free: true
+1 v / v over the empty row is satisfied, v free, nothing left to wait on: true
+2 v / v over a row of 2 is satisfied, v free: true
+2 v / v over a row of 2 is satisfied, v free, nothing left to wait on: true
+1 v over the row [v] is satisfied, v free: true
+1 v over the row [v] is satisfied, v free, nothing left to wait on: true
+refusal: apply_row_constraint: Total_elems constraint failed, shape is too small
+2 v / v over the empty row is refused: true
+refusal: Total_elems constraint failed: the dimension cancels, leaving a fractional 1/3 elements
+1 v / v over a row of 3 is refused: true
+refusal: Total_elems constraint failed: the dimension cancels, leaving a fractional 3/2 elements
+3 v / 2 v is no whole number of elements: true
+the other variable takes the quotient, v stays free: true
+a round-up total stays waiting: true
+the cancelled variable closes at the end: true
+the cancelled variable closes, nothing left to wait on: true
+an open row closes empty around the cancelled variable: true
+the open row closes, nothing left to wait on: true
