@@ -35,8 +35,7 @@ files.
   gh-ocannl-1885 an optional one was silently ignored, so `Demo_models.lenet`'s `w_logits` and
   `b_logits` lacked the `lenet` label. A change to what `%op` accepts also reaches the arm
   `tools/test-typecheck-scan-cases.sh` plants to be rejected through the ppx (its `#project` legs,
-  CI's main shard 1): `affected --harnesses` names no harness for `tensor/ppx_op.ml`, so run
-  that one by hand.
+  CI's main shard 1), which `affected --harnesses` names for a change to any `tensor/ppx_*.ml`.
 - Evaluation order (gh-ocannl-1869): where `%op` gives a literal a meaning of its own -- a block
   tensor's components, a concat's operand tuple, an einsum's capture list -- the expansion runs
   the members in source order (`Ppx_shared.in_source_order` let-binds each one that is not a

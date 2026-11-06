@@ -490,6 +490,10 @@ let () =
   p "a bare numeral is not read" (ints (named "refused as 7 first, then as 9:fixture-helper") [ 9 ]);
   p "a tag-shaped token no source mints is a stale citation: a retired tag in prose"
     (strings (stale "the store was refused as 3:fixture-retired.") [ "`3:fixture-retired`" ]);
+  p "the tag shape is reserved outside OCaml too: a two-word shell case label is a stale citation"
+    (strings (stale "0:cross-cutting | 3:incomplete) ;;") [ "`0:cross-cutting`" ]);
+  p_empty "and the same labels spelled status last are no citation" ~over:[ "cross-cutting/0" ]
+    (stale "ok/0 | cross-cutting/0 | incomplete/3 | cross-cutting,incomplete/3) ;;");
   p_empty "a test's own tag is a known citation, not a stale one" ~over:[ "99:test-fixture" ]
     (mention ~test_tags:[ "99:test-fixture" ] "set up as 99:test-fixture").stale;
   p_all "colon-joined text that is not a tag is not read"

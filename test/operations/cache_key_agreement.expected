@@ -11,6 +11,7 @@ the backend name moves its own component: true
 and only components it reaches: true
 the backend's facts move only the components they reach: true
 cc_grid_private_bytes_cap, stated in a child, moves the codegen component alone on a CPU backend, and nothing on a GPU one: true
+max_shape_error_origins, stated in a child, moves nothing in the cache key: true
 every child run of the pool-class flips completed: true
 no pool-class flip moves a component other than the pool and what follows from it: true
 with the chunk count auto, codegen beyond the pool tag moves exactly when the pool width does: true

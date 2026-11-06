@@ -26,7 +26,7 @@
 # #group' leg_N` (scripts/harness-support.sh), its name led by the leg numbers
 # below and closed by the one group it belongs to (gh-ocannl-1202):
 # #group-alive (1-5), #stop (6-8, 67, 101), #queries (39, 100), #repeat (9-25, 38, 83-85),
-# #options (26-28, 37, 89, 94-96, 98), #width (29-34, 48-52, 64, 70), #digest (35-36,
+# #options (26-28, 37, 89, 94-96, 98, 103), #width (29-34, 48-52, 64, 70), #digest (35-36,
 # 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74, 97, 99: the run/start
 # lifecycle with its signal legs, both fork-window negative controls, and a
 # launch queued before it publishes),
@@ -286,6 +286,13 @@
 #      the aliases to dune; and where a real dune is at hand, its own listing.
 #      Where dune is made to color (CLICOLOR_FORCE=1), its escaped `Error`
 #      tag reads as the plain one, from the fixture and from a real dune.
+# 103. a named test's sibling goldens: `plan`, the launch and the digest name
+#      each alias `runtest-NAME-VARIANT` with a golden `NAME-VARIANT[.*].expected`
+#      of its own in the test's directory, under any per-test family, in the
+#      directory a recursive operand found it; the batch reaches dune as given.
+#      A variant with no golden, one the batch names, a variant named by itself
+#      and an argv whose listing is not read say nothing, and mutants cutting
+#      the golden test, its `.` or the batch's own names turn those probes red.
 #  94. targeted batches (gh-ocannl-1740): `--targets-file` hands dune the
 #      listed aliases after its own words (comments, blank lines, CRLF and
 #      padding skipped; a relative file read from the caller's directory;
@@ -8259,6 +8266,88 @@ else
 fi
 }
 harness_leg_run '89: an alias dune does not know is refused before the slot #options' leg_89
+
+# ---------------------------------------------------------------------------
+# Leg 103: a named test's sibling goldens are named, and never added to the batch
+# ---------------------------------------------------------------------------
+# `runtest-NAME` does not reach `runtest-NAME-VARIANT`: promoting after a run
+# naming only NAME left two goldens stale, which only CI showed. Directory `sb`
+# holds the test `t` with two siblings (one an `.ll.expected`), a variant with no
+# golden, a golden with no alias and an alias a golden's name merely extends; `q`
+# with a golden-less variant only; `s` under slow; `sb/deep` a test only a
+# recursive operand finds.
+leg_103() {
+sib_label="plan, the launch and the digest name a test's sibling goldens, and dune gets the batch as given"
+sib_quiet_label="a variant with no golden, one the batch names, and a listing not read say nothing"
+sib_control_label="negative controls: the golden test, its stem's dot and the batch's own names decide the note"
+sib_note=$(sed -n "s/^alias_siblings_label='\(.*\)'$/\1/p" "$SRC")
+[ -n "$sib_note" ] || { harness_abandon "no alias_siblings_label in $SRC"; return; }
+sib_table=$TMP/sib-table
+mkdir -p "$repeat_root/sb/deep"
+printf '(rule (alias runtest-t) (action (progn)))\n' >"$repeat_root/sb/dune"
+printf '(rule (alias runtest-d) (action (progn)))\n' >"$repeat_root/sb/deep/dune"
+for f in t t-own t-ll.ll t-orphan s-own deep/d deep/d-own; do : >"$repeat_root/sb/$f.expected"; done
+printf '%s\n' . 'sb runtest-t' 'sb runtest-t-own' 'sb runtest-t-ll' 'sb runtest-t-bare' 'sb runtest-t-ow' \
+  'sb runtest-q' 'sb runtest-q-bare' 'sb slow-s' 'sb slow-s-own' 'sb/deep runtest-d' 'sb/deep runtest-d-own' >"$sib_table"
+sib_probe() { REPEAT_TEST_ALIASES=$sib_table argv_probe "$@"; }
+sib_detail=
+for probe in "@@sb/runtest-t|@sb/runtest-t: @sb/runtest-t-ll @sb/runtest-t-own" \
+             "@@sb/runtest-t @@sb/runtest-t-own|@sb/runtest-t: @sb/runtest-t-ll" \
+             "@sb/runtest-d|@sb/deep/runtest-d: @sb/deep/runtest-d-own" \
+             "@@sb/slow-s|@sb/slow-s: @sb/slow-s-own"; do
+  IFS='|' read -r args want <<<"$probe"
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  sib_probe sib-run run build $args
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build $args" ]; } ||
+    { sib_detail="run $args: exit $argv_rc; dune calls: ${argv_calls:-<none>}"; break; }
+  grep -qxF -- "$sib_note: $want" <<<"$argv_out" ||
+    { sib_detail="run $args: the digest does not carry '$want': $argv_out"; break; }
+  grep -qxF -- "test-run: $sib_note: $want" <<<"$argv_err" ||
+    { sib_detail="run $args: the launch does not carry '$want': $argv_err"; break; }
+  [ "$(cat "$argv_dir/sibling-goldens" 2>/dev/null)" = "$want" ] ||
+    { sib_detail="run $args: sibling-goldens: $(cat "$argv_dir/sibling-goldens" 2>/dev/null)"; break; }
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  sib_probe sib-plan plan build $args
+  { grep -qxF -- "$sib_note:" <<<"$argv_out" && grep -qxF -- "  $want" <<<"$argv_out"; } ||
+    { sib_detail="plan $args: exit $argv_rc: $argv_out"; break; }
+done
+if [ -z "$sib_detail" ]; then report 0 "$sib_label"; else report 1 "$sib_label" "$sib_detail"; fi
+
+sib_detail=
+for args in "@@sb/runtest-q" "@@sb/runtest-t @@sb/runtest-t-own @@sb/runtest-t-ll" "@sb/runtest-d @sb/runtest-d-own" \
+            "@@sb/runtest-t-own" "--profile release @@sb/runtest-t"; do
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  sib_probe sib-quiet run build $args
+  { [ "$argv_rc" = 0 ] && [ ! -e "$argv_dir/sibling-goldens" ] &&
+    ! grep -qF -- "$sib_note" <<<"$argv_out$argv_err"; } ||
+    { sib_detail="$args: exit $argv_rc; digest: $argv_out; stderr: $argv_err"; break; }
+done
+if [ -z "$sib_detail" ]; then report 0 "$sib_quiet_label"; else report 1 "$sib_quiet_label" "$sib_detail"; fi
+
+sib_detail=
+for probe in 'next unless grep { index($_, $stem) == 0 } @{ goldens($at) };|@@sb/runtest-q|runtest-q-bare' \
+             'substr($alias, length("$name-")) . ".";|@@sb/runtest-t|runtest-t-ow ' \
+             'next if grep { $_->[2] eq $alias && at_covers($_, $at) } @op;|@@sb/runtest-t @@sb/runtest-t-own @@sb/runtest-t-ll|runtest-t-ll'; do
+  IFS='|' read -r from args want <<<"$probe"
+  case $from in
+    substr*) to='substr($alias, length("$name-"));' ;;
+    *) to= ;;
+  esac
+  SIB_FROM=$from SIB_TO=$to perl -pe 's/\Q$ENV{SIB_FROM}\E/$ENV{SIB_TO}/' "$SRC" >"$repeat_root/tools/test-run.sh"
+  if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
+    sib_detail="the mutation matched nothing in $SRC: $from"
+    break
+  fi
+  # shellcheck disable=SC2086 # the probe's operands, split on purpose
+  sib_probe sib-mutant run build $args
+  grep -F -- "$sib_note" <<<"$argv_err" | grep -qF -- "$want" ||
+    sib_detail="the mutant '$from' said nothing of $want: $argv_err"
+  [ -z "$sib_detail" ] || break
+done
+cp "$SRC" "$repeat_root/tools/test-run.sh"
+if [ -z "$sib_detail" ]; then report 0 "$sib_control_label"; else report 1 "$sib_control_label" "$sib_detail"; fi
+}
+harness_leg_run '103: a named test'\''s sibling goldens are named, never added to the batch #options' leg_103
 
 # ---------------------------------------------------------------------------
 # Leg 94: targeted batches from a file, and a test's aliases by family

@@ -134,6 +134,31 @@ val context_nodes : plc:Tnode.Placements.t -> t -> Tnode.t_set
 val collect_nodes_guess_output : t -> Tnode.t_set * Tnode.t_set
 val collect_written : t -> Tnode.t_set
 
+val slice_alias_eligible : array:Tnode.t -> sliced:Tnode.t -> bool
+(** Whether the [Slice] of [sliced] into [array] lowers to an alias view of its parent rather than
+    to a copy (gh-ocannl-293). Lineage-independent; forces both nodes' shapes, so it belongs where
+    lowering follows, not where shape inference may still be open. *)
+
+val forward_fetched :
+  ?fetched_elsewhere:(Tnode.t -> bool) ->
+  ?view_aliases:(array:Tnode.t -> sliced:Tnode.t -> bool) ->
+  comp ->
+  Set.M(Tnode).t
+(** The nodes whose forward code [comp] carries as a [Fetch] -- a [Fetch] into a node whose forward
+    fragment [comp] owns (gh-ocannl-1876). Only [Tensor.term] emits such a [Fetch] for a leaf (a
+    [Tensor.term_init] or literal with at most [limit_constant_fill_size] values, a range, an
+    embedded symbol or id), as that leaf's whole forward code, and [Operation.slice] for a view; a
+    gradient's zeroing [Fetch] has no forward fragment, and a parameter's initializer owns none
+    ([Tensor.init_params]). These are the nodes every run re-establishes, so a write to one does not
+    last: [Context.compile]'s refusal and [Train.sgd_update]'s are this one rule.
+
+    A [Slice] counts unless the write through it lasts: a view [view_aliases] (by default, any) over
+    a parent this [comp] does not fetch and [fetched_elsewhere] (by default, none) does not name.
+    Forward code orders the parent first. A write through an alias reaches the parent and stays over
+    data, and over a fetched parent is undone when the parent is fetched again; a copy is copied
+    again whatever its parent. Pass {!slice_alias_eligible} once shapes are settled; a caller before
+    that leaves the copies to one after. *)
+
 val sequence : comp list -> comp
 (** Runs the computations in order, uniting their nodes, fragments and gradient sets; a gradient two
     members state different [accumulation_runs] for keeps the smaller, a member accumulating into it

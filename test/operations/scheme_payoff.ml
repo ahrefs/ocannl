@@ -617,8 +617,10 @@ let () =
          it runs. What holds a whole-stack trace to its depth is the cost of one build of the same
          model: the solver's work counters double, and the trace stays a fraction of the build, a
          fraction that rises slowly with depth. Neither alone says so: the build's own allocation
-         grows above 2x per doubling, and in [resnet] 2.9x-3.6x through the row bounds' transitive
-         closure, which is why [resnet] has no allocation band of its own. *)
+         grows above 2x per doubling, and in [resnet] 2.9x-3.9x through the row bounds' transitive
+         closure, which is why [resnet] has no allocation band of its own. The decoder band reads
+         the part of a trace that outgrows the depth, not a total: a cost linear in the solver's
+         merges dilutes it, so dropping one raises the ratio while every depth allocates less. *)
       let stack_doublings =
         List.concat_map stacks ~f:(fun s ->
             List.map
@@ -644,11 +646,11 @@ let () =
             Float.(grown (fun (t, _, _) -> cycle_visits t) cycle_walk <= 3.);
           p "one more layer: walking every path visits at least 10x"
             Float.(grown (fun (_, u, _) -> cycle_visits u) cycle_walk >= 10.);
-          in_leg ~leg "per depth doubling, a decoder stack's trace allocates 2.0x-2.7x"
+          in_leg ~leg "per depth doubling, a decoder stack's trace allocates 2.0x-2.9x"
             (fun label ->
               p_all label
                 (List.filter stack_doublings ~f:(fun (w, _, _) -> not (String.equal w "resnet")))
-                ~f:(fun d -> Float.between (trace_ratio (fun t -> t.t_words) d) ~low:2.0 ~high:2.7));
+                ~f:(fun d -> Float.between (trace_ratio (fun t -> t.t_words) d) ~low:2.0 ~high:2.9));
           in_leg ~leg "at every depth, a trace allocates 0.45x-0.95x of one build" (fun label ->
               p_all label traced ~f:(fun (_, cell) ->
                   Float.between (over_build cell) ~low:0.45 ~high:0.95));

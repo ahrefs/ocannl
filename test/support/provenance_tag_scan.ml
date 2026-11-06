@@ -87,7 +87,10 @@
 
     A tag's reason is kebab-case with at least two words; the reader refuses a minted tag with a
     one-word reason, because that is what lets a citation be told from other colon-joined text (a
-    PCI address, a named dimension, a shell [case] label). Three spellings cite one, all mechanical:
+    PCI address, a named dimension, a one-word shell [case] label). The rest of that shape is
+    reserved for tags in every file read, a shell [case] label of two words included: no syntax is
+    exempted, since a label branching on a real tag is a citation a retirement has to find. Three
+    spellings cite one, all mechanical:
     - the tag itself: decimal digits not continuing a word, a path, a version or another number (the
       character before them is none of [A-Za-z0-9_'.:/-]), a colon, a kebab-case reason of two or
       more words, and no identifier character or hyphen after it. EVERY such token is read, which is
@@ -1240,7 +1243,10 @@ let violations ?(malformed = []) ~(mints : mint list) ~pinned ~files () =
   let stale =
     List.concat_map files ~f:(fun (path, mention) ->
         List.map mention.stale ~f:(fun s ->
-            Printf.sprintf "%s: %s cites a tag no source mints" path s))
+            Printf.sprintf
+              "%s: %s cites a tag no source mints (a number, a colon and a reason of two or more \
+               words is reserved for tags, in every file: respell anything else)"
+              path s))
   in
   (* The citation reader's own floor: a minting source cites each of its tags by construction, so
      one it does not see there is the reader gone blind, not the source. *)

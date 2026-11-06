@@ -60,6 +60,8 @@ a family whose last code is retired still has its citations read, and refused: t
 a word-number of a number no tag has is stale: true
 a bare numeral is not read: true
 a tag-shaped token no source mints is a stale citation: a retired tag in prose: true
+the tag shape is reserved outside OCaml too: a two-word shell case label is a stale citation: true
+and the same labels spelled status last are no citation: true
 a test's own tag is a known citation, not a stale one: true
 colon-joined text that is not a tag is not read: true
 the table reads as its literal pairs: true

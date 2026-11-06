@@ -168,6 +168,44 @@ let fold_leaves (asgns : t) ~init ~f =
 
 let iter_leaves (asgns : t) ~f = fold_leaves asgns ~init:() ~f:(fun () leaf -> f leaf)
 
+(* A slice falls back to the materializing copy loop unless ALL hold: - leading-axis,
+   rank-drop-by-one (the only shape [Slice] produces): parent rank = child rank + 1 and the trailing
+   dims match elementwise; - parent and child share the same precision: the copy loop silently
+   converts precision (e.g. a float buffer sliced then reinterpreted as uint4x32), which a
+   shared-storage alias cannot do; - the parent has backing storage (not [Virtual] /
+   [Effectively_constant]); - parent and child are both unpadded (aliasing would otherwise break the
+   padding contract). *)
+let slice_alias_eligible ~(array : Tn.t) ~(sliced : Tn.t) : bool =
+  let pdims = Lazy.force sliced.Tn.dims and cdims = Lazy.force array.Tn.dims in
+  Array.length pdims = Array.length cdims + 1
+  && Array.equal Int.equal (Array.subo pdims ~pos:1) cdims
+  && Ops.equal_prec (Lazy.force array.Tn.storage_prec) (Lazy.force sliced.Tn.storage_prec)
+  (* Alias-ness is a semantic fact settled deterministically at assignments lowering, BEFORE
+     per-lineage placement decisions diverge (context-scoped memory modes, category 1). So
+     eligibility may consult only lineage-independent facts -- shapes, precision, padding, and the
+     parent's DECLARED INTENT -- never a lineage's placements: the alias mark is cached globally on
+     the tnode, and a lineage-dependent eligibility input would let one lineage's alias redirect
+     accesses to a parent that another lineage virtualized (PR #93 review). Conversely, confirming
+     an alias declares [On_device] intent on the parent (see [mark_aliases]), so no lineage can
+     resolve the backing buffer away from under the view. *)
+  && (not (Tn.known_virtual sliced))
+  && (not (Tn.known_constant sliced))
+  && Option.is_none (Tn.get_padding sliced)
+  && Option.is_none (Tn.get_padding array)
+
+(* Documented in the interface: [Context.compile] and [Train.sgd_update] refuse by this one rule. *)
+let forward_fetched ?(fetched_elsewhere = fun _ -> false)
+    ?(view_aliases = fun ~array:_ ~sliced:_ -> true) (comp : comp) =
+  fold_leaves comp.asgns ~init:no_nodes ~f:(fun acc -> function
+    | Fetch { array; fetch_op; _ } when Set.mem comp.owned (array, Fwd) -> (
+        match fetch_op with
+        | Slice { sliced; _ }
+          when (not (Set.mem acc sliced || fetched_elsewhere sliced)) && view_aliases ~array ~sliced
+          ->
+            acc
+        | _ -> Set.add acc array)
+    | _ -> acc)
+
 let can_skip_accumulation ~projections =
   (* We can skip accumulation (use = instead of +=) only if the projection is injective *)
   Affine.is_injective projections
@@ -1416,31 +1454,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
   (* Pre-pass: mark alias-eligible [Fetch.Slice]s before lowering, so [get]/[set] redirect them and
      the [Slice] lowering emits no copy loop. Eligibility needs forced shapes, which are available
      here (shape inference is forced before [lower]/[to_low_level]). Idempotent across re-lowerings.
-     A slice falls back to the materializing copy loop unless ALL hold: - leading-axis,
-     rank-drop-by-one (the only shape [Slice] produces): parent rank = child rank + 1 and the
-     trailing dims match elementwise; - parent and child share the same precision: the copy loop
-     silently converts precision (e.g. a float buffer sliced then reinterpreted as uint4x32), which
-     a shared-storage alias cannot do; - the parent has backing storage (not [Virtual] /
-     [Effectively_constant]); - parent and child are both unpadded (aliasing would otherwise break
-     the padding contract). (gh-ocannl-293 subtask 293a.) *)
-  let slice_alias_eligible ~(array : Tn.t) ~(sliced : Tn.t) : bool =
-    let pdims = Lazy.force sliced.Tn.dims and cdims = Lazy.force array.Tn.dims in
-    Array.length pdims = Array.length cdims + 1
-    && Array.equal Int.equal (Array.subo pdims ~pos:1) cdims
-    && Ops.equal_prec (Lazy.force array.Tn.storage_prec) (Lazy.force sliced.Tn.storage_prec)
-    (* Alias-ness is a semantic fact settled deterministically at assignments lowering, BEFORE
-       per-lineage placement decisions diverge (context-scoped memory modes, category 1). So
-       eligibility may consult only lineage-independent facts -- shapes, precision, padding, and the
-       parent's DECLARED INTENT -- never a lineage's placements: the alias mark is cached globally
-       on the tnode, and a lineage-dependent eligibility input would let one lineage's alias
-       redirect accesses to a parent that another lineage virtualized (PR #93 review). Conversely,
-       confirming an alias declares [On_device] intent on the parent (see [mark_aliases]), so no
-       lineage can resolve the backing buffer away from under the view. *)
-    && (not (Tn.known_virtual sliced))
-    && (not (Tn.known_constant sliced))
-    && Option.is_none (Tn.get_padding sliced)
-    && Option.is_none (Tn.get_padding array)
-  in
+     (gh-ocannl-293 subtask 293a.) *)
   let mark_aliases (c : t) : unit =
     iter_leaves c ~f:(function
       | Fetch { array; fetch_op = Slice { batch_idx; sliced }; dims = _ } ->

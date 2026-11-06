@@ -683,13 +683,17 @@ let rank_origins origins =
 let rec interleave l1 l2 =
   match (l1, l2) with [], l | l, [] -> l | h1 :: t1, h2 :: t2 -> h1 :: h2 :: interleave t1 t2
 
+(* Read once per process: [merge_origins] runs at every merge of two constraints' origins, and a
+   lookup there shows in a deep graph's profile (gh-ocannl-1891). *)
+let max_origins =
+  lazy (Int.of_string @@ Utils.get_global_arg ~default:"20" ~arg_name:"max_shape_error_origins")
+
 (* [o1] is the incoming constraint's origins, [o2] those an entry of the environment accumulated.
    Both are in arrival order, each one's most direct first: interleaved, so that neither crowds the
    other out, without duplicates, ranked by relevance, and capped -- the cap keeps the most relevant
    (gh-ocannl-1903; before, each was sorted by its names, so the cap kept the alphabetically
    first). *)
 let merge_origins o1 o2 =
-  let n = Int.of_string @@ Utils.get_global_arg ~default:"20" ~arg_name:"max_shape_error_origins" in
   let seen = ref [] in
   let deduplicated =
     List.filter (interleave o1 o2) ~f:(fun item ->
@@ -698,7 +702,7 @@ let merge_origins o1 o2 =
           seen := item :: !seen;
           true))
   in
-  List.take (rank_origins deduplicated) n
+  List.take (rank_origins deduplicated) (Lazy.force max_origins)
 
 let rec dim_to_int_exn = function
   | Dim { d; _ } -> d

@@ -17,3 +17,5 @@ uniform half: the f32 masters' initial values lie in the default init's [-0.25, 
 uniform half: some f32 master's initial value is not f16-representable: true
 a parameter reading a node the model reads keeps param_prec: true
 a node both an initializer and the model read is an activation: true
+under param_prec = None a plain parameter follows its half consumers: true
+a plain parameter whose consumers stay at the default stays there: true

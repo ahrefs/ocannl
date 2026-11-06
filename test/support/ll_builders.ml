@@ -143,11 +143,12 @@ let define_local id v : LL.t list =
 
 (** [scope tn v] is a [Local_scope] over [tn] whose body assigns [v] once: the inlined computation
     of [tn] (read at [orig_indices], default none), in the single-assignment form [simplify]
-    collapses into its reader where the collapse is exact (gh-ocannl-1788). Mints a fresh scope id.
+    collapses into its reader where the collapse is exact (gh-ocannl-1788). Mints a fresh scope id
+    unless given [~id], one of [tn]'s: scopes reading each other's locals name their ids up front.
     Over a materialized [tn] the form exists only past the optimizer: build its program with
     [Ll_test.optimize_scoped]. *)
-let scope ?(orig_indices = [||]) tn v : LL.scalar_t =
-  let id = LL.get_scope tn in
+let scope ?(orig_indices = [||]) ?id tn v : LL.scalar_t =
+  let id = match id with Some id -> id | None -> LL.get_scope tn in
   LL.Local_scope { id; body = LL.Set_local (id, v); orig_indices; mint = LL.Inlined_computation }
 
 (** [scope_of id body] is the inlined computation over [id] (see {!scope}) with its body spelled

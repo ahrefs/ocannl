@@ -1488,7 +1488,8 @@ fi
 
 # This repository's own harnesses, read as `affected --harnesses` reads them
 # (dune-free, so the toolchain-free jobs can run it too): gh-ocannl-1797's two
-# CI reds, and the scan-case tables and stubs (gh-ocannl-1584).
+# CI reds, the scan-case tables and stubs (gh-ocannl-1584), and the ppx the
+# type check's #project legs expand through.
 root=$(cd "$HERE/.." && pwd)
 raffected() { # ARGS... -> $out, $err, $rc, over this repository
   rc=0
@@ -1522,6 +1523,15 @@ if harness_leg 'harness legs of this repository'; then
     rhas "its table ${name%.*}.ml reaches those legs" "tools/test-typecheck-scan-cases.sh --only '^(1|10):'"
   done
   [ "$n" -ge 1 ] || report 1 'the repository has stubbed scan-case tables' 'none under test/operations/scan_case_stubs'
+  # The ppx the #project legs expand their arms through, every module of its
+  # stanza: read from there, since a module path spelled here would reach this
+  # harness too, and a ppx module outside the declaration's glob must show.
+  ppx_modules=$(sed -n '/(name ppx_ocannl)/,/(modules /s/^ (modules \([^)]*\)).*/\1/p' "$root/tensor/dune")
+  [ -n "$ppx_modules" ] || report 1 'tensor/dune lists the ppx modules' 'no (modules ...) line in the ppx_ocannl stanza'
+  for m in $ppx_modules; do
+    raffected --files "tensor/$m.ml"
+    rhas "the ppx module $m reaches the #project legs" "tools/test-typecheck-scan-cases.sh --only '^(10|11):'"
+  done
   # The legs that selector picks are exactly the ones over the repository's
   # tables, as their names say: a new such leg must join the declaration.
   if "$root/tools/test-typecheck-scan-cases.sh" --list-legs >"$TMP/legs" 2>&1; then
@@ -1530,6 +1540,10 @@ if harness_leg 'harness legs of this repository'; then
     named=$(grep -F 'the repository tables' "$TMP/leg-names")
     if [ -n "$picked" ] && [ "$picked" = "$named" ]; then report 0 "'^(1|10):' selects exactly the legs over the repository tables"
     else report 1 "'^(1|10):' selects exactly the legs over the repository tables" "picked [$picked] named [$named]"; fi
+    picked=$(while IFS= read -r l; do [[ $l =~ ^(10|11): ]] && printf '%s\n' "$l"; done <"$TMP/leg-names")
+    named=$(grep -F '#project' "$TMP/leg-names")
+    if [ -n "$picked" ] && [ "$picked" = "$named" ]; then report 0 "'^(10|11):' selects exactly the #project legs"
+    else report 1 "'^(10|11):' selects exactly the #project legs" "picked [$picked] named [$named]"; fi
   else report 1 'tools/test-typecheck-scan-cases.sh lists its legs' "$(tail -n 3 "$TMP/legs")"; fi
   # Every declared selector of every harness selects some leg of it.
   bash "$root/tools/test-harnesses.sh" --list >"$TMP/members" || exit 2
@@ -1789,6 +1803,58 @@ if harness_leg 'probe library split'; then
   else report 1 'negative control: reading the membership change is what ranks the split' "the mutation anchor does not occur exactly once"; fi
   rm -f "$mutant"
   git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p7" || exit 2
+fi
+# A variant with a golden of its own (`runtest-sib-alt`, `runtest-sib-low`) has
+# its test's stanza as an owner, so whatever reaches the test lists it too, in
+# the same tier: the list `tools/test-run.sh run` names siblings for when a hand-
+# written batch leaves them out. A base golden alone reaches only its own alias.
+if harness_leg 'sibling goldens'; then
+  probe_restore
+  mkdir -p "$repo/p8" || exit 2
+  cat >"$repo/p8/dune" <<'DUNE'
+(library (name sl) (modules sl))
+(test (name sib) (modules sib) (libraries sl))
+(rule (target sib-alt.actual) (action (with-stdout-to %{target} (run %{exe:sib.exe} alt))))
+(rule (alias runtest-sib-alt) (action (diff sib-alt.expected sib-alt.actual)))
+(rule (target sib-low.ll.actual) (action (with-stdout-to %{target} (run %{exe:sib.exe} low))))
+(rule (alias runtest-sib-low) (action (diff sib-low.ll.expected sib-low.ll.actual)))
+DUNE
+  printf 'let f () = ()\n' >"$repo/p8/sl.ml"
+  printf 'let () = Sl.f ()\n' >"$repo/p8/sib.ml"
+  : >"$repo/p8/sib.expected"
+  : >"$repo/p8/sib-alt.expected"
+  : >"$repo/p8/sib-low.ll.expected"
+  git_q add -A p8 && git_q commit -qm sibling-fixture || exit 2
+  sib_all='@p8/runtest-sib @p8/runtest-sib-alt @p8/runtest-sib-low'
+  for f in p8/sib.ml p8/sl.ml; do
+    affected --files "$f"
+    # shellcheck disable=SC2086
+    expect "a change to $f lists the test with its sibling goldens" 0 $sib_all
+    affected --referenced-only --files "$f"
+    # shellcheck disable=SC2086
+    expect "... and so does --referenced-only" 0 $sib_all
+  done
+  OCANNL_TOOL_AFFECTED_PROBE=0 affected --files p8/sl.ml
+  # shellcheck disable=SC2086
+  expect '... and so does the reach without the probe' 0 $sib_all
+  affected --files p8/sib.expected
+  # shellcheck disable=SC2086
+  expect 'a base golden alone reaches its own alias, not the siblings, whose rules do not read it' 0 @p8/runtest-sib $probe_blind
+  # Two routes reach a variant: the name it shares with the stanza, and the
+  # executable its `.actual` rule runs. Cut for a variant, the siblings fall away.
+  mutant=$repo/tools/affected-mutant.sh
+  if FROM1='grep { $st[$_]{units}{$unit} } @in }, own' TO1='grep { !@variant && $st[$_]{units}{$unit} } @in }, own' \
+     FROM2='map { %{$runs{$_} // {}} } @{$a->{own}});' TO2='$a->{alias} =~ /-sib-/ ? () : map { %{$runs{$_} // {}} } @{$a->{own}});' \
+      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM1}\E/$ENV{TO1}/g; $n += s/\Q$ENV{FROM2}\E/$ENV{TO2}/g; END { exit($n == 2 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    rc=0
+    (cd "$TMP" && bash "$mutant" --files p8/sl.ml) >"$out" 2>"$err" || rc=$?
+    if [ "$rc" = 0 ] && ! grep -qx @p8/runtest-sib-alt "$out" && ! grep -qx @p8/runtest-sib-low "$out"; then
+      report 0 'negative control: the name and the executable are what list a sibling'
+    else report 1 'negative control: the name and the executable are what list a sibling' "exit $rc; $(cat "$out")"; fi
+  else report 1 'negative control: the name and the executable are what list a sibling' 'the mutation anchors did not each occur once'; fi
+  rm -f "$mutant"
+  git_q reset -q --hard HEAD~1 && rm -rf "${repo:?}/p8" || exit 2
 fi
 # Probes that do not answer: an input the copy lacks (an ignored directory),
 # and a dune file including one. Each reads the change without the probe.

@@ -335,6 +335,7 @@
   (alias runtest-schedule_bench_padded)
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
+  (alias runtest-virtual_rejection_boundary_raise)
   (alias runtest-config_var_fatal_spelling)
   (alias runtest-autotune_cache_dir_records)
   (alias runtest-test_config_consistency)
@@ -544,6 +545,22 @@
 ; Ll_test.substitute (post-wave task post-1-task-13): one node replaced by another in every
 ; position the IR has for one, the helper behind the end-to-end forged-node controls of
 ; schedule_epilogue_fusion and online_softmax_block_mma. Structural only.
+
+; Ll_test's IR dump: the backend's own build_files gate, off and on, and what each file holds.
+
+(test
+ ; ocannl-backend: none -- hand-built IR is optimized and printed, never linked or executed.
+ (name ll_test_dump)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules ll_test_dump)
+ (libraries
+  base
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  ll_test
+  test_utils))
 
 (test
  ; ocannl-backend: none -- compares hand-built IR structurally and never creates a context.
@@ -2667,6 +2684,32 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; Its rows run under Verdict.case: with --raise-every-row each one raises instead, so this golden
+; says every row is named and reached past the raises before it. Exit 1 is those failed claims.
+
+(rule
+ ; ocannl-backend: none -- every row raises before it compiles, so no backend is selected.
+ (target virtual_rejection_boundary_raise.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (ignore-stderr
+    (with-accepted-exit-codes
+     1
+     (run %{dep:virtual_rejection_boundary.exe} --raise-every-row))))))
+
+(rule
+ (alias runtest-virtual_rejection_boundary_raise)
+ (package neural_nets_lib)
+ (action
+  (diff
+   virtual_rejection_boundary_raise.expected
+   virtual_rejection_boundary_raise.actual)))
 
 ; gh-ocannl-805: the post-virtual_llc decision-coverage seam. The negative control injects raw
 ; hand-built IR directly into the validator; the normal leg runs the same shape through optimize.

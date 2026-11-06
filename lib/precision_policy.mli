@@ -27,7 +27,10 @@
       ([Tensor.default_value_prec] / [default_grad_prec]), not merely skipped: precision inference
       propagates top-down as well as bottom-up (see the [top_down_prec] test), so a skipped node
       between policy-assigned neighbors would be inferred into the reduced precision anyway.
-    - A [None] field leaves that class alone (inference proceeds as without a policy).
+    - A [None] field leaves that class alone (inference proceeds as without a policy). A plain
+      parameter under [param_prec = None] then follows its half consumers top-down, so to keep
+      parameters at f32 while the model reads half, build it under
+      {!Mixed_prec.with_master_weights}.
 
     Call {!apply} after the model (and its gradient graph, if any) is fully constructed and before
     the first compilation: assignments to already-settled nodes fail loudly (the settlement guards

@@ -1628,67 +1628,82 @@ let row_scan_recurrence () =
     ~expected:[| 1.; 3.; 6.; 10. |]
     ~verdict:(Rejected (Store, Ir.Tnode.Site "148:scan-recurrence"))
 
+(* Each row runs through [case], so a row that raises is a failed claim naming it, and the rows
+   after it still run (gh-ocannl-1084). [--raise-every-row] puts that to the test: every row raises
+   before it compiles anything, and [virtual_rejection_boundary_raise.expected] pins that each one
+   is named and reached. A row called bare would run for real there, and move that golden. *)
+let raise_every_row = Array.mem Stdlib.Sys.argv "--raise-every-row" ~equal:String.equal
+
+let case label row =
+  case label (if raise_every_row then fun () -> failwith "injected by --raise-every-row" else row)
+
 let () =
-  row_visit_cap ();
-  row_guarded_enclosing ();
-  row_guarded_interior ();
-  row_repetition_above ();
-  row_reduction_symbol_free ();
-  row_two_setters_one_subtree ();
-  row_escaping_read ();
-  row_escaping_setter ();
-  row_escaping_embed ();
-  row_noninjective ();
-  row_fixed_component ();
-  row_fixed_component_offset ();
-  row_fixed_component_affine_read ();
-  row_fixed_component_first ();
-  row_fixed_component_accumulating ();
-  row_fixed_component_accumulating_inside ();
-  row_fixed_component_zero_init ();
-  row_fixed_component_uninitialized ();
-  declared_virtual_fixed_component ();
-  row_fixed_component_fixed_read ();
-  row_fixed_component_partial_cover ();
-  row_fixed_component_cells ();
-  row_fixed_component_literal_table ();
-  row_fixed_component_overlaps ();
-  row_fixed_component_rows ~read_row:0;
-  row_fixed_component_rows ~read_row:1;
-  row_fixed_component_disjoint_first ();
-  row_fixed_component_read_covered_only ();
-  declared_virtual_union ();
-  declared_virtual_guards ();
-  declared_virtual_merge_opening ();
-  inherited_guard_fallback ();
-  row_block_components ();
-  row_block_components_offset_loop ();
-  row_block_components_offset_affine ();
-  row_block_components_structural ~cells:false;
-  row_block_components_structural ~cells:true;
-  row_block_components_two_terms ();
-  row_block_components_two_terms_contained ();
-  row_unit_axis_fixed_producer ();
-  row_unit_axis_computed_producer ();
-  row_unit_axis_loop_producer ();
-  row_unit_axis_flattened ();
-  row_flattened_read_diagonal ();
-  row_flattened_read_fixed_component ();
-  row_flattened_read_transpose ();
-  row_flattened_producer_axis_read ~transposed:false;
-  row_flattened_producer_axis_read ~transposed:true;
-  row_flattened_producer_zero_partial ();
-  row_flattened_read_zero_structural ();
-  row_flattened_read_past_partial ();
-  row_flattened_read_written_cells ();
-  row_partial_frame ();
-  row_trailing_sub_axis_read ();
-  row_hoisted_local ();
-  row_scan_recurrence ();
-  row_constexpr_cap_exempt ();
-  row_constexpr_flattened_read ();
-  row_constexpr_guarded_setter ~flag_value:0.;
-  row_constexpr_guarded_setter ~flag_value:1.;
+  case "row_visit_cap" row_visit_cap;
+  case "row_guarded_enclosing" row_guarded_enclosing;
+  case "row_guarded_interior" row_guarded_interior;
+  case "row_repetition_above" row_repetition_above;
+  case "row_reduction_symbol_free" row_reduction_symbol_free;
+  case "row_two_setters_one_subtree" row_two_setters_one_subtree;
+  case "row_escaping_read" row_escaping_read;
+  case "row_escaping_setter" row_escaping_setter;
+  case "row_escaping_embed" row_escaping_embed;
+  case "row_noninjective" row_noninjective;
+  case "row_fixed_component" row_fixed_component;
+  case "row_fixed_component_offset" row_fixed_component_offset;
+  case "row_fixed_component_affine_read" row_fixed_component_affine_read;
+  case "row_fixed_component_first" row_fixed_component_first;
+  case "row_fixed_component_accumulating" row_fixed_component_accumulating;
+  case "row_fixed_component_accumulating_inside" row_fixed_component_accumulating_inside;
+  case "row_fixed_component_zero_init" row_fixed_component_zero_init;
+  case "row_fixed_component_uninitialized" row_fixed_component_uninitialized;
+  case "declared_virtual_fixed_component" declared_virtual_fixed_component;
+  case "row_fixed_component_fixed_read" row_fixed_component_fixed_read;
+  case "row_fixed_component_partial_cover" row_fixed_component_partial_cover;
+  case "row_fixed_component_cells" row_fixed_component_cells;
+  case "row_fixed_component_literal_table" row_fixed_component_literal_table;
+  case "row_fixed_component_overlaps" row_fixed_component_overlaps;
+  case "row_fixed_component_rows ~read_row:0" (fun () -> row_fixed_component_rows ~read_row:0);
+  case "row_fixed_component_rows ~read_row:1" (fun () -> row_fixed_component_rows ~read_row:1);
+  case "row_fixed_component_disjoint_first" row_fixed_component_disjoint_first;
+  case "row_fixed_component_read_covered_only" row_fixed_component_read_covered_only;
+  case "declared_virtual_union" declared_virtual_union;
+  case "declared_virtual_guards" declared_virtual_guards;
+  case "declared_virtual_merge_opening" declared_virtual_merge_opening;
+  case "inherited_guard_fallback" inherited_guard_fallback;
+  case "row_block_components" row_block_components;
+  case "row_block_components_offset_loop" row_block_components_offset_loop;
+  case "row_block_components_offset_affine" row_block_components_offset_affine;
+  case "row_block_components_structural ~cells:false" (fun () ->
+      row_block_components_structural ~cells:false);
+  case "row_block_components_structural ~cells:true" (fun () ->
+      row_block_components_structural ~cells:true);
+  case "row_block_components_two_terms" row_block_components_two_terms;
+  case "row_block_components_two_terms_contained" row_block_components_two_terms_contained;
+  case "row_unit_axis_fixed_producer" row_unit_axis_fixed_producer;
+  case "row_unit_axis_computed_producer" row_unit_axis_computed_producer;
+  case "row_unit_axis_loop_producer" row_unit_axis_loop_producer;
+  case "row_unit_axis_flattened" row_unit_axis_flattened;
+  case "row_flattened_read_diagonal" row_flattened_read_diagonal;
+  case "row_flattened_read_fixed_component" row_flattened_read_fixed_component;
+  case "row_flattened_read_transpose" row_flattened_read_transpose;
+  case "row_flattened_producer_axis_read ~transposed:false" (fun () ->
+      row_flattened_producer_axis_read ~transposed:false);
+  case "row_flattened_producer_axis_read ~transposed:true" (fun () ->
+      row_flattened_producer_axis_read ~transposed:true);
+  case "row_flattened_producer_zero_partial" row_flattened_producer_zero_partial;
+  case "row_flattened_read_zero_structural" row_flattened_read_zero_structural;
+  case "row_flattened_read_past_partial" row_flattened_read_past_partial;
+  case "row_flattened_read_written_cells" row_flattened_read_written_cells;
+  case "row_partial_frame" row_partial_frame;
+  case "row_trailing_sub_axis_read" row_trailing_sub_axis_read;
+  case "row_hoisted_local" row_hoisted_local;
+  case "row_scan_recurrence" row_scan_recurrence;
+  case "row_constexpr_cap_exempt" row_constexpr_cap_exempt;
+  case "row_constexpr_flattened_read" row_constexpr_flattened_read;
+  case "row_constexpr_guarded_setter ~flag_value:0." (fun () ->
+      row_constexpr_guarded_setter ~flag_value:0.);
+  case "row_constexpr_guarded_setter ~flag_value:1." (fun () ->
+      row_constexpr_guarded_setter ~flag_value:1.);
   p_all "every phase-table entry is exercised by a row" phase_table ~f:(fun (site, _) ->
       Hash_set.mem exercised site);
   Stdio.printf "%!"

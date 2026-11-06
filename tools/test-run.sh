@@ -382,7 +382,9 @@
 # also prints: the five longest processes in the batch's own dune trace (a
 # trace file of the run's, never the worktree's `_build/trace.csexp`), with
 # their seconds, recorded on every exit path, the caps' included (see
-# explicit_trace_file).
+# explicit_trace_file). A batch naming a test with a sibling golden the batch
+# leaves unrun records `sibling-goldens`, which the digest prints too (see
+# alias_siblings_perl).
 #
 # Windows: run it from Git Bash, whose MSYS perl carries the flock and the cap.
 # Best-effort even there -- process-group kills may only reach dune itself, not
@@ -959,6 +961,8 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
 # leaves the recursive misses to dune. The query's trace goes to a file of the
 # run's, so the shared `_build/trace.csexp` is not rewritten.
 alias_refusal=  # why the batch is refused, one unknown alias per line; empty for none
+alias_siblings= # the batch's unrun sibling goldens, one named test per line; empty for none
+alias_siblings_label='sibling goldens not in this batch (their own aliases; a promote here can leave them stale)'
 alias_listing_perl='
   # <raw listing> <dir>...: the listing of these directories, as "+ DIR" (dune
   # knows it), "- DIR" (it does not) and "= DIR NAME", tab-separated. Exit 3
@@ -1014,6 +1018,58 @@ alias_listing() { # <listing file> dir...; 0 with the parsed listing in it, 1 in
   done
   [ "$rc" = 0 ]
 }
+# A test's sibling goldens. A per-test alias runs its own golden and no other:
+# `runtest-NAME` does not reach `runtest-NAME-VARIANT`, where one executable runs
+# again under another setting and diffs `NAME-VARIANT.expected` (or
+# `NAME-VARIANT.ll.expected`), so a change to what the test prints, promoted
+# after a run naming only NAME, leaves the sibling stale, and only CI says so
+# (#1723 lost a cycle to it). `plan`, the launch and the digest name them, off
+# the listing plan_aliases already has: an alias FAMILY-NAME-VARIANT of the
+# directory holding a named FAMILY-NAME, with such a golden there, that no
+# operand of the batch names. A variant with no golden of its own is left out:
+# a promote has nothing of its to leave behind. This is a note, never a refusal:
+# an aggregate in the batch may well run the sibling. A list from `affected`
+# already holds it (a variant has its test's stanza as an owner, so what reaches
+# one reaches the other, and the affected harness pins that). Nothing is said
+# where the listing is not read (plan_aliases' silent cases).
+alias_siblings_perl='
+  # <operands: REC DIR NAME, tab-separated> <parsed listing>...: one line per
+  # named test with siblings, "@DIR/ALIAS: @DIR/SIBLING...".
+  my ($ops, @lists) = @ARGV;
+  my (@op, %in, %golden, %seen);
+  open my $oh, "<", $ops or exit 3;
+  while (<$oh>) { chomp; push @op, [split /\t/, $_, 3] }
+  for my $l (@lists) {
+    open my $fh, "<", $l or exit 3;
+    while (<$fh>) { $in{$1}{$2} = 1 if /^=\t([^\t]*)\t([^\t\n]*)$/ }
+  }
+  sub at_covers { my ($o, $at) = @_; $o->[1] eq $at || ($o->[0] && ($o->[1] eq "." || index($at, "$o->[1]/") == 0)) }
+  sub goldens {
+    my ($at) = @_;
+    return $golden{$at} ||= do {
+      my @g;
+      if (opendir(my $dh, $at)) { @g = grep { /\.expected$/ } readdir $dh; closedir $dh }
+      \@g;
+    };
+  }
+  for my $o (@op) {
+    my $name = $o->[2];
+    my ($test) = $name =~ /^(?:runtest|slow|train)-(.+)$/ or next;
+    for my $at (sort keys %in) {
+      next unless $in{$at}{$name} && at_covers($o, $at) && !$seen{"$at\t$name"}++;
+      my $show = sub { $at eq "." ? "\@\@$_[0]" : "\@$at/$_[0]" };
+      my @sib;
+      for my $alias (sort keys %{ $in{$at} }) {
+        next unless index($alias, "$name-") == 0;
+        my $stem = "$test-" . substr($alias, length("$name-")) . ".";
+        next unless grep { index($_, $stem) == 0 } @{ goldens($at) };
+        next if grep { $_->[2] eq $alias && at_covers($_, $at) } @op;
+        push @sib, $show->($alias);
+      }
+      print $show->($name), ": @sib\n" if @sib;
+    }
+  }
+'
 # The directories a dune file's `(subdir NAME ...)` stanzas give rules to, which
 # hold no dune file of their own (gh-ocannl-1448, Codex review round 2): a
 # reader of dune's s-expressions -- `;` line comments, quoted and plain atoms,
@@ -1107,10 +1163,10 @@ alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `
   sort -u "$run_dir/aliases.dirs"
   rm -f "$run_dir/aliases.dirs"
 }
-plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
+plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal, alias_siblings
   local arg spec rec d name i n all=
   local specs=() recs=() spec_dirs=() names=() first=() rest=()
-  alias_refusal=
+  alias_refusal= alias_siblings=
   [ "${1:-}" = build ] || return 0
   shift
   # Every option before dune's `--` must be one known to leave the set of
@@ -1198,7 +1254,14 @@ plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal
     fi
     i=$((i + 1))
   done
-  rm -f "$run_dir/aliases.1" "$run_dir/aliases.2"
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    printf '%s\t%s\t%s\n' "${recs[$i]}" "${spec_dirs[$i]}" "${names[$i]}"
+    i=$((i + 1))
+  done >"$run_dir/aliases.ops" &&
+    alias_siblings=$(perl -e "$alias_siblings_perl" "$run_dir/aliases.ops" "$run_dir/aliases.1" "$run_dir/aliases.2") ||
+    alias_siblings=
+  rm -f "$run_dir/aliases.1" "$run_dir/aliases.2" "$run_dir/aliases.ops"
 }
 # A refused per-test alias whose test the listing has under another family
 # (gh-ocannl-1740): a batch built from file names asks for `runtest-NAME` where
@@ -3556,6 +3619,7 @@ digest() {
   elif [ -s "$dir/backend-warning" ]; then
     cat "$dir/backend-warning"
   fi
+  [ ! -s "$dir/sibling-goldens" ] || sed "s/^/$alias_siblings_label: /" "$dir/sibling-goldens"
   if [ -s "$dir/device-probe" ]; then
     echo "device probe:"
     sed 's/^/  /' "$dir/device-probe"
@@ -4837,6 +4901,10 @@ case $sub in
           echo "aliases: run would refuse this batch (ALIAS REFUSED, exit 2)"
           printf '%s\n' "$alias_refusal" | sed 's/^/  /'
         fi
+        if [ -n "$alias_siblings" ]; then
+          echo "$alias_siblings_label:"
+          printf '%s\n' "$alias_siblings" | sed 's/^/  /'
+        fi
         if [ -n "$batch_refused" ]; then
           echo "markers: run would refuse this batch (MARKER REFUSED, exit 2)"
           printf '%s' "$batch_refused" | sed 's/^/  /'
@@ -4891,6 +4959,11 @@ case $sub in
     for line in "$backend_warning" "$width_announce" "$slot_announce" "$probe_announce"; do
       [ -z "$line" ] || printf 'test-run: %s\n' "$line" | tee -a "$run_dir/resolved.tmp"
     done
+    if [ -n "$alias_siblings" ]; then
+      printf '%s\n' "$alias_siblings" >"$run_dir/sibling-goldens" ||
+        { echo "test-run: cannot record the sibling goldens in $run_dir"; exit 126; }
+      printf '%s\n' "$alias_siblings" | sed "s/^/test-run: $alias_siblings_label: /" | tee -a "$run_dir/resolved.tmp"
+    fi
     # Decided on the caller's argv, before the slot's words are put in front.
     promotions_recordable=1
     ! explicit_build_root "$@" || promotions_recordable=

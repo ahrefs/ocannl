@@ -990,8 +990,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   ordinary `FAIL  leg naming: ...`. Gated and alone-clean so far: `tools/test-test-run.sh`,
   `tools/test-mutation-run.sh`, `tools/test-promote.sh`, `tools/test-machine-verify.sh`,
   `scripts/test-setup-ocaml-env.sh`, `tools/test-merge-build-check.sh`,
-  `tools/test-merge-build-replay.sh`, `tools/test-affected-tests.sh` and the two
-  `benchmarks/test-*box*.sh`.
+  `tools/test-merge-build-replay.sh`, `tools/test-row-trace-compact.sh`,
+  `tools/test-affected-tests.sh` and the two `benchmarks/test-*box*.sh`.
 - **A leg that cannot go on ends itself, never the harness** (gh-ocannl-1374). Each leg of
   `tools/test-test-run.sh` is a function run by `harness_leg_run 'NAME' leg_N`; a check it cannot
   get past (an extraction or mutant that matched nothing, a fixture repository that will not
@@ -2511,6 +2511,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ## Hand-built IR tests
 
+- To read the IR a hand-built test optimized, run it with
+  `OCANNL_OUTPUT_DEBUG_FILES_IN_BUILD_DIRECTORY=true`: `Ll_test.optimize` writes
+  `<name>-unoptimized.ll` and `<name>.ll` under the gate a backend's own lowering uses, in
+  `_build/default/<test dir>/build_files/<exe>/` (`ll_test_dump` pins it). `optimize_scoped` optimizes
+  `raw`, so those two files are `raw`'s; the backend's source for the routine shows the scoped program.
 - `ll_test_ratchet` prints an adopted-but-still-hand-building census (gh-ocannl-1090): the same
   syntactic record and private-traversal counts, sorted by source path, for adopted sources with
   either count nonzero. These golden rows are informative and promotable, with no growth cap;
@@ -2998,7 +3003,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its constructor so), and exclude the scan's own golden, as `codegen_text_inventory`'s `excluded` list does — else a
   promote takes two rounds to converge. Where EVERY token of a shape is read, as the provenance
   inventory reads every tag-shaped token so that a retired one is refused, pieces cannot hide an
-  invented fixture tag: that scan excludes its cases file and golden by name instead.
+  invented fixture tag: that scan excludes its cases file and golden by name instead. That shape
+  (digits, a colon, a kebab-case reason of two or more words) is reserved for tags in every file
+  read, shell included: a `case` label of that shape reads as a stale citation, so spell such a
+  pair status last (`some-state/0`). The scan exempts no syntax, because a label branching on a real
+  tag is a citation a retirement has to find.
 
 ## Aliases and goldens
 
@@ -3060,6 +3069,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `module%test`): it fails on a tested module without its rule, on a runner rule whose
   `-only-test`, alias and golden do not name the same one module, and on such an alias in the
   `runtest` aggregate, while the golden-diff naming rule above covers it like any other.
+- **A per-test alias runs its own golden and no other.** `runtest-NAME` does not reach a variant
+  `runtest-NAME-VARIANT` holding a golden of its own (`NAME-VARIANT.expected`, or
+  `NAME-VARIANT.ll.expected`): the same executable again, under another setting. A hand-named batch
+  that changes what the test prints and promotes leaves those goldens stale, and only CI says so.
+  `plan`, the launch and the digest name such siblings when the batch does not (`sibling-goldens`
+  in the run): add them and run again before promoting. It is a note, never a refusal, and adds
+  nothing to the batch. `aliases PATH` lists a test with its variants, and `affected`'s list already
+  holds them, since a variant has its test's stanza as an owner; a base golden changed alone reaches
+  only its own alias, because no sibling's rule reads it.
 - **A `(test)` stanza can only diff the one `<name>.expected` beside it**, so a test whose output
   legitimately differs per backend converts to an `(executable)` plus a diff rule that reads the
   resolved backend name and diffs `<name>-%{read:../config/ocannl_backend.txt}.expected`. That is
@@ -3316,7 +3334,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     not name, `# affected-reads: GLOB... [--only 'ERE']`; a declaration only adds, never narrowing
     what the text reaches: `tools/test-typecheck-scan-cases.sh` sends the scan-case tables and
     `scan_case_stubs/*` to its legs 1 and 10, its engine to every leg, so a stub edit is mapped
-    there rather than UNMAPPED (gh-ocannl-1584). A marker line outside a header stops the run, so
+    there rather than UNMAPPED (gh-ocannl-1584), and `tensor/ppx_*.ml` to its `#project` legs 10
+    and 11, whose `let%op` arms expand through the built ppx. A marker line outside a header stops the run, so
     a harness's fixture writes one through a variable. gh-ocannl-1797's two CI reds read this way:
     `tools/test-run.sh` reaches `tools/test-test-run.sh`, `benchmarks/fixture_digest.py`
     `benchmarks/test-check-box.sh`.
@@ -5885,11 +5904,11 @@ box.
   `config_dep_completeness` requires), or a `setenv` around the rule's `run`. For several values in one test, run a child per value: `Fresh_process.run`
   re-executes the test's own executable with `--ocannl_<key>=<value>`, which outranks every other
   source, and the child reports what it saw on stdout -- `cache_key_agreement` states
-  `cc_grid_private_bytes_cap` and `cc_pool_core_class` that way. An in-process statement is sound
-  only as the first thing the executable does, before anything can force the lazy, and the site
-  says so (`placement_surface` states `gpu_fission_keep_mapping` that way, gh-ocannl-1430). There
-  is no reset hook, by decision: add one beside a lazy only when a test needs two values of it in
-  one process and a child cannot serve.
+  `cc_grid_private_bytes_cap`, `cc_pool_core_class` and `max_shape_error_origins` that way. An
+  in-process statement is sound only as the first thing the executable does, before anything can
+  force the lazy, and the site says so (`placement_surface` states `gpu_fission_keep_mapping` that
+  way, gh-ocannl-1430). There is no reset hook, by decision: add one beside a lazy only when a test
+  needs two values of it in one process and a child cannot serve.
 - Values computed EAGERLY at initialization are a different class, outside the list: they are read
   when the module is linked in, before any test code runs, so no in-process statement reaches
   them at all -- the bootstrap keys and the profile pick, the debug runtime's settings, and the
@@ -5925,7 +5944,7 @@ box.
   `hip_kernel_cache_mib`, `hip_printf_fifo_size`, `hip_scratch_validation`, `log_level`.
 - `metal_backend.ml`: `metal_kernel_cache_mib`.
 - `persistence.ml`: `checkpoint_load_mmap`.
-- `row.ml`: `shape_substitution_cross_check`.
+- `row.ml`: `max_shape_error_origins`, `shape_substitution_cross_check`.
 - `schedule.ml`: `automatic_cpu_schedule`, `automatic_gpu_schedule`, `gpu_fission_keep_mapping`,
   `schedule_fission`, `schedule_log_launches`.
 - `schedule_outcome.ml`: `strict_failure_classification`.

@@ -81,4 +81,5 @@ a size-changing window still derives the kernel's tag: default 3 = conv(bcast 1 
 a padded stride-1 window over bcast 4 is bcast 4: true
 window first: a padded stride-1 window resolves v = 4 of bcast_if_1: true
 extent first: a padded stride-1 window resolves v = 4 of bcast_if_1: true
+a window with nothing solved stays deferred: neither solved nor refused: true
 a different size is refused: v = bcast 4, conv(v + kernel 1) = bcast 5: true

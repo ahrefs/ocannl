@@ -323,13 +323,16 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
    hidden memory-mode change is the kind of semantics gh-ocannl-1743's audit removed. Only a [Fetch]
    re-establishes; a read-modify-write the forward makes (a running statistic) builds on the stepped
    value instead. This is the early, tensor-naming refusal; [Context.compile]'s (gh-ocannl-1876)
-   covers what never reaches here: [sgd_one], hand-written [%cd] steps. *)
+   covers what never reaches here: [sgd_one], hand-written [%cd] steps.
+
+   Both refuse by {!Asgns.forward_fetched}. A slice is no leaf, but [?params] is taken as given and
+   a view is differentiable, so one does arrive here: a step through an alias of data reaches the
+   parent and stays. Shapes may still be open here, so the alias is taken on trust: a view lowering
+   to a copy, whose step the next copy undoes, is refused by [Context.compile]. Not fetched, and so
+   refused by neither: a view of a computed parent, undone as a step on any computed node in
+   [?params] is, when the forward computes it again. *)
 let refuse_fetch_defined ~fn_name loss stepped =
-  let fetched =
-    Asgns.fold_leaves loss.Tensor.forward.Asgns.asgns
-      ~init:(Set.empty (module Tn))
-      ~f:(fun acc -> function Asgns.Fetch { array; _ } -> Set.add acc array | _ -> acc)
-  in
+  let fetched = Asgns.forward_fetched loss.Tensor.forward in
   Set.iter stepped ~f:(fun p ->
       if Set.mem fetched p.Tensor.value then
         raise
@@ -337,9 +340,9 @@ let refuse_fetch_defined ~fn_name loss stepped =
              ( fn_name ^ ": " ^ Tensor.debug_name p
                ^ " is fetch-defined: the loss's forward code re-establishes its value on every run \
                   (a [Tensor.term_init] or literal with at most [limit_constant_fill_size] values \
-                  is a fetch, not data), which would silently undo each step. Build an optimized \
-                  input data-backed, with [Operation.init ~grad_spec:Require_grad], or make it a \
-                  parameter",
+                  is a fetch, not data, and a slice of one follows it), which would silently undo \
+                  each step. Build an optimized input data-backed, with [Operation.init \
+                  ~grad_spec:Require_grad], or make it a parameter",
                Some p ))
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?grad_scale
