@@ -1118,7 +1118,13 @@ files.
   as zeros and `1.4e27` (an infinite loss from step 0) and arm64/clang as other, finite garbage, so
   byte-identical C diverged by platform. It takes a draw narrower than its reader, which
   `Precision_policy` no longer produces for an initializer: it gives one its parameter's precision
-  (gh-ocannl-1865). `test_uniform_virtual_lane`'s `draw into` rows, which narrow the draw with
+  (gh-ocannl-1865), and inference alone keeps one at least as precise as its parameter
+  (gh-ocannl-1967: `Tensor.mark_init_cone` links each float node to the parameter through
+  `Tn.follow_prec`, which promotes and never narrows; the linked node answers bottom-up readers
+  with its pre-link precision, `Tn.bottom_up_prec`, because the parameter may be inferred from a
+  consumer reading that very node -- a plain `update_infer_prec` there is a lazy cycle,
+  `CamlinternalLazy.Undefined` at the first force; `init_prec_follows_param` pins both).
+  `test_uniform_virtual_lane`'s `draw into` rows, which narrow the draw with
   `Tn.update_prec`,
   pin the parity; diagnosis recipe: run on cc under `debug_check_lane_bounds=true` (gh-ocannl-1867),
   which wraps every lane extract's lane operand in `OCANNL_CHECKED_LANE` and aborts past the block

@@ -1911,6 +1911,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: cc -- `Context.cpu ()`: precision inference precedes every backend, and the
+ ; parameters are double, which Metal does not evaluate.
+ (name init_prec_follows_param)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules init_prec_follows_param)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name precision_policy_parity)
  (package neural_nets_lib)
  (deps

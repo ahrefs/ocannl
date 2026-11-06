@@ -20,9 +20,11 @@
       expression is not an activation: it fills the parameter, so it takes the precision the
       parameter holds explicitly, or else [param_prec] ([None] leaves it alone), and an f32 master's
       initial values are f32 draws under any policy, not f16-quantized (gh-ocannl-1865). A node that
-      both the model and an initializer read is an activation. Op-kind selectivity ("softmax stays
-      f32") is the [except] predicate's job — or the training recipe's, when gh-ocannl-492 grows
-      one; label matching over [Tn.label] is the intended idiom.
+      both the model and an initializer read is an activation. Without a policy, inference alone
+      already keeps an initializer at least as precise as its parameter (gh-ocannl-1967); the
+      policy's assignment is what narrows one to a reduced [param_prec]. Op-kind selectivity
+      ("softmax stays f32") is the [except] predicate's job — or the training recipe's, when
+      gh-ocannl-492 grows one; label matching over [Tn.label] is the intended idiom.
     - [except]-ed float nodes are PINNED at the session default precision for their class
       ([Tensor.default_value_prec] / [default_grad_prec]), not merely skipped: precision inference
       propagates top-down as well as bottom-up (see the [top_down_prec] test), so a skipped node

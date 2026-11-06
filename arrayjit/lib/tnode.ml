@@ -125,6 +125,17 @@ module Prec_cell : sig
   val update_infer_prec :
     ?only_if:(Ops.prec -> bool) -> name:(unit -> string) -> t -> Ops.prec Lazy.t -> unit
 
+  val follow : ?only_if:(Ops.prec -> bool) -> name:(unit -> string) -> t -> Ops.prec Lazy.t -> unit
+  (** [update_infer_prec] for a link whose target may itself be inferred from readers of this cell
+      (gh-ocannl-1967: an initializer's node following its parameter). The cell keeps the precision
+      it would have settled into without the link, which is what {!bottom_up} then answers, so the
+      link closes no cycle through a bottom-up reader. *)
+
+  val bottom_up : t -> Ops.prec
+  (** The precision a consumer promoting from its operands reads: the storage precision, except for
+      a cell that {!follow}s another and holds no specified precision, which answers the precision
+      it had before the link. Forces what it answers. *)
+
   type snapshot
   (** The cell's value at a checkpoint, bound to the cell (gh-ocannl-903). *)
 
@@ -140,11 +151,18 @@ module Prec_cell : sig
   val snapshot_changed : snapshot -> bool
   (** Whether the value differs (physically) from the recorded one: a diagnostic. *)
 end = struct
-  (* [settling] is set as forcing [storage] begins, before the value is read: [Lazy.is_val] alone
-     would miss a force that raised, whose lazy is memoized all the same. *)
-  type t = { mutable value : delayed_prec; storage : Ops.prec Lazy.t; mutable settling : bool }
+  (* [settling] is set as forcing [storage] (or [unlinked], in [bottom_up]) begins, before the value
+     is read: [Lazy.is_val] alone would miss a force that raised, whose lazy is memoized all the
+     same. *)
+  type t = {
+    mutable value : delayed_prec;
+    storage : Ops.prec Lazy.t;
+    mutable settling : bool;
+    mutable unlinked : Ops.prec Lazy.t option;
+        (** Set by [follow]: the precision the cell held before its first such link. *)
+  }
 
-  let sexp_of_t { value; storage = _; settling = _ } = sexp_of_delayed_prec value
+  let sexp_of_t { value; storage = _; settling = _; unlinked = _ } = sexp_of_delayed_prec value
 
   let make value =
     let rec cell =
@@ -155,12 +173,13 @@ end = struct
             (cell.settling <- true;
              match cell.value with Default prec | Specified prec | Inferred (lazy prec) -> prec);
         settling = false;
+        unlinked = None;
       }
     in
     cell
 
-  let get { value; storage = _; settling = _ } = value
-  let storage { value = _; storage; settling = _ } = storage
+  let get { value; storage = _; settling = _; unlinked = _ } = value
+  let storage { value = _; storage; settling = _; unlinked = _ } = storage
 
   let set cell value =
     !prec_write_hook ();
@@ -243,18 +262,40 @@ end = struct
             set cell
               (Inferred (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec))))
 
-  type snapshot = { snap_cell : t; snap_value : delayed_prec; snap_settling : bool }
+  let follow ?only_if ~name cell delayed_prec =
+    let before = cell.value in
+    update_infer_prec ?only_if ~name cell delayed_prec;
+    if Option.is_none cell.unlinked && not (phys_equal cell.value before) then
+      cell.unlinked <-
+        Some
+          (match before with Default prec | Specified prec -> lazy prec | Inferred prec -> prec)
 
-  let snapshot ({ value; storage = _; settling } as cell) =
-    { snap_cell = cell; snap_value = value; snap_settling = settling }
+  let bottom_up cell =
+    match (cell.value, cell.unlinked) with
+    | (Default _ | Inferred _), Some unlinked ->
+        (* Memoized like a force of [storage], so no rewind resets it either. *)
+        cell.settling <- true;
+        Lazy.force unlinked
+    | _ -> Lazy.force cell.storage
 
-  let restore { snap_cell; snap_value; snap_settling = _ } =
+  type snapshot = {
+    snap_cell : t;
+    snap_value : delayed_prec;
+    snap_settling : bool;
+    snap_unlinked : Ops.prec Lazy.t option;
+  }
+
+  let snapshot ({ value; storage = _; settling; unlinked } as cell) =
+    { snap_cell = cell; snap_value = value; snap_settling = settling; snap_unlinked = unlinked }
+
+  let restore { snap_cell; snap_value; snap_settling = _; snap_unlinked } =
+    snap_cell.unlinked <- snap_unlinked;
     if not (phys_equal snap_cell.value snap_value) then set snap_cell snap_value
 
-  let settling_began_since { snap_cell; snap_value = _; snap_settling } =
+  let settling_began_since { snap_cell; snap_value = _; snap_settling; snap_unlinked = _ } =
     snap_cell.settling && not snap_settling
 
-  let snapshot_changed { snap_cell; snap_value; snap_settling = _ } =
+  let snapshot_changed { snap_cell; snap_value; snap_settling = _; snap_unlinked = _ } =
     not (phys_equal snap_cell.value snap_value)
 end
 
@@ -665,6 +706,13 @@ let update_infer_prec ?only_if tn delayed_prec =
   Prec_cell.update_infer_prec ?only_if
     ~name:(fun () -> (debug_name tn [@message_only "names the node in a precision conflict"]))
     tn.delayed_prec_unsafe delayed_prec
+
+let follow_prec ?only_if tn delayed_prec =
+  Prec_cell.follow ?only_if
+    ~name:(fun () -> (debug_name tn [@message_only "names the node in a precision conflict"]))
+    tn.delayed_prec_unsafe delayed_prec
+
+let bottom_up_prec tn = Prec_cell.bottom_up tn.delayed_prec_unsafe
 
 let get_specified_prec tn =
   match Prec_cell.get tn.delayed_prec_unsafe with Specified prec -> Some prec | _ -> None

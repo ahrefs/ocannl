@@ -1,0 +1,20 @@
+explicit: the parameter is double: true
+explicit: every float node of the initializer is double: true
+explicit: the initial values lie in the initializer's range: true
+explicit: some initial value is not f32-representable: true
+inferred from a consumer: the parameter is double: true
+inferred from a consumer: every float node of the initializer is double: true
+inferred from a consumer: the initial values lie in the initializer's range: true
+inferred from a consumer: some initial value is not f32-representable: true
+master weight: the model reads a single twin: true
+master weight: the parameter is double: true
+master weight: every float node of the initializer is double: true
+master weight: the initial values lie in the initializer's range: true
+master weight: some initial value is not f32-representable: true
+kaiming: the parameter is double: true
+kaiming: every float node of the initializer is double: true
+shared node (consumer, parameter, shared, shared as its consumers read it): double double double single
+shared node: the forcing order does not change the precisions: true
+a linked node read bottom-up after a checkpoint refuses the rewind: true
+narrow parameter: the parameter is half: true
+narrow parameter: the draw and the operations over it stay single: true

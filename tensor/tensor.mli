@@ -277,7 +277,11 @@ val param : ?require_grad:bool -> t:op_fun -> string -> ?more_label:string list 
     with the field {!field:params} replaced by a singleton set containing that result, and it also
     updates the memory modes. If [require_grad] is true, any gradient structure inherited from the
     initialization expression is replaced by a fresh gradient for the final parameter value only.
-    The result has fresh consumption state, independent of any prior handouts of [t]’s result. *)
+    The result has fresh consumption state, independent of any prior handouts of [t]’s result.
+
+    The float nodes of the initialization expression are at least as precise as the parameter,
+    whatever its precision comes from (gh-ocannl-1967): a narrower draw would quantize the initial
+    values. A wider one is left alone. *)
 
 val param_postprocess : (t -> t) ref
 (** Post-processing hook applied by {!param} to each fully-constructed parameter before it is
