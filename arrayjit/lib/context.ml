@@ -467,6 +467,7 @@ type routine = {
   shared_reads : Set.M(Tn).t;
   outputs : Set.M(Tn).t;
   written_first : Set.M(Tn).t;
+  read_first_undeclared : Set.M(Tn).t;
   routine_id : int;
   execution_deps : Set.M(Int).t;
   requires : Set.M(Asgns.Fragment).t;
@@ -755,7 +756,14 @@ let finish_link ctx comp wrapped
   let written_first =
     Set.filter (Set.diff outputs backend_inputs) ~f:(fun tn -> not (Ir.Host_inits.mem tn))
   in
-
+  (* gh-ocannl-1966: the embedded nodes the raw read set calls read first and nothing declares to
+     start from zero. Not refused: the raw read set is conservative, so this holds correct routines
+     too (a vectorized write whose cell reads have unknown coverage, a read of a padded margin). *)
+  let read_first_undeclared =
+    Set.filter
+      (Set.inter (Set.inter outputs backend_inputs) comp.Asgns.embedded_nodes)
+      ~f:(fun tn -> not (Ir.Host_inits.mem tn || Tn.is_zero_valid tn))
+  in
   let routine =
     {
       context = updated_ctx;
@@ -766,6 +774,7 @@ let finish_link ctx comp wrapped
       shared_reads;
       outputs;
       written_first;
+      read_first_undeclared;
       routine_id = id;
       execution_deps = deps;
       requires = comp.Asgns.requires;
@@ -1298,9 +1307,9 @@ let check_lineage_runnable ctx routine =
      about this one. Every path that marks a node initialized also records its buffer, so nothing is
      lost by asking the buffer. Its allocation-time zeros do not count (gh-ocannl-1339): an
      uninitialized read of state the routine then overwrites is a user bug the context can see.
-     State a routine is meant to start from zero carries that in its own computation -- an inline
-     declaration is an embedded node, excluded from [inputs] at compile ([Train.sgd_one]'s momentum
-     is the pattern) -- or is seeded explicitly.
+     State a routine is meant to start from zero carries that in its own computation -- an embedded
+     node, excluded from [inputs] at compile, declared zero-valid so that [debug_fill_fresh_outputs]
+     leaves it at zero ([Train.sgd_one]'s momentum is the pattern) -- or is seeded explicitly.
 
      A READ-ONLY input must have been written the same way, unless allocation-time zero is declared
      a correct value of it ([Tn.is_zero_valid], gh-ocannl-1462): every gradient is marked at
@@ -1309,8 +1318,8 @@ let check_lineage_runnable ctx routine =
      accepted nearly anything, so a forgotten data input read zeros. Neither the running context's
      allocation nor its node-level [initialized_nodes] vouches for the buffer either: a compile
      sibling that seeded its own buffer for the node says nothing about this one. The mark excuses
-     only the read-only class: a read-before-write input is state the routine overwrites, and its
-     entry value is the caller's to give. *)
+     only the read-only class of [inputs]: a read-before-write input is state the routine
+     overwrites, and its entry value is the caller's to give. *)
   let accepted tn =
     match buffer_key routine.context tn with
     | None -> false
@@ -1482,25 +1491,35 @@ let debug_fill_fresh_outputs =
 (* gh-ocannl-1873: the [written_first] nodes of [routine] whose very buffer nothing has written yet
    start from {!Ir.Ops.debug_fill_value} instead of allocation's zero, so a write the routine should
    have done and did not -- a zero a transform dropped, a seed reading the node, a cell no writer
-   covers -- shows in its results rather than computing the same values from a fresh zero.
+   covers -- shows in its results rather than computing the same values from a fresh zero. So do its
+   [read_first_undeclared] nodes (gh-ocannl-1966): an accumulation that lost its init reads its
+   target first, and a correct routine there writes over the fill before reading.
 
    Asks the ledger's [written_buffers], so a repeated run, a seeded node and a node an earlier
-   routine wrote all keep their values. Goes through [Backend.from_host] rather than {!from_host},
-   because this is no write of a value: the ledger's answer stays [run]'s to give, so a run
-   [rollback_execution] withdraws leaves the buffer unwritten, as gh-ocannl-1339's check asks. The
-   margins of a padded node keep their padding value, which [host_buffer] gives them: writers refill
-   them, and a reader of a margin reads the padding.
+   routine wrote all keep their values. Goes through [Backend.overwrite_from_host] rather than
+   {!from_host}, because this is no write of a value: the ledger's answer stays [run]'s to give, so
+   a run [rollback_execution] withdraws leaves the buffer unwritten, as gh-ocannl-1339's check asks.
+   The margins of a padded node keep their padding value, which [host_buffer] gives them: writers
+   refill them, and a reader of a margin reads the padding.
 
-   Left out: a liveness-aliased buffer, which [Backend.from_host] refuses and whose bytes are not
-   the node's alone, and a node with no scalar storage. [written_first] has already left out every
-   node with host initialization data, which is what makes a buffer a device-wide literal other
-   roots read ([BI.Constant_key]). *)
+   A liveness-aliased buffer is filled over its whole range, which may reach bytes of a node whose
+   own buffer is not fresh. That destroys nothing: bytes are shared only among alias-eligible nodes
+   ([Backends.alias_eligible]), each written first in the routine that computes it, whose values the
+   host and every later routine are refused, and a padded one gets its margins back from its writer.
+   Only a range's first occupant reads the fill, though: a later one that lost a zero reads what its
+   predecessor left there.
+
+   Left out: a node with no scalar storage. [written_first] and [read_first_undeclared] have already
+   left out every node with host initialization data, which is what makes a buffer a device-wide
+   literal other roots read ([BI.Constant_key]). *)
 let fill_fresh_outputs ctx routine =
   let fresh tn =
     Option.exists (buffer_key routine.context tn) ~f:(fun key ->
         not (Set.mem ctx.ledger.written_buffers key))
   in
-  let targets = Set.filter routine.written_first ~f:fresh in
+  let targets =
+    Set.filter (Set.union routine.written_first routine.read_first_undeclared) ~f:fresh
+  in
   if not (Set.is_empty targets) then
     Backends.query routine.context.wrapped
       {
@@ -1513,11 +1532,11 @@ let fill_fresh_outputs ctx routine =
             Set.iter targets ~f:(fun tn ->
                 let prec = Lazy.force tn.Tn.storage_prec in
                 match Ir.Ops.debug_fill_value prec with
-                | Some v when not (Backends.buffer_aliased c.BI.ctx_buffers tn) ->
+                | Some v ->
                     let nd = host_buffer tn in
                     let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
                     Nd.set_flat_values ?padding ~cycle:true nd [| v |];
-                    ignore (Backend.from_host c tn nd : bool)
+                    ignore (Backend.overwrite_from_host c tn nd : bool)
                 | _ -> ());
             Backend.await c.BI.device);
       }

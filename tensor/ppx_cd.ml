@@ -117,6 +117,11 @@ let make_vb ~loc ~name ~name_expr ~hint_label ~extra_args =
     | None -> (Labelled "label", [%expr [ [%e name_expr] ]])
     | Some hint_label -> (Labelled "label", [%expr [%e name_expr] :: [%e hint_label]])
   in
+  (* Not a [term] argument: it declares the node, and [term]'s optional arguments are fixed by
+     partial applications all over. *)
+  let zero_valid, extra_args =
+    List.partition_tf extra_args ~f:(fun (label, _) -> String.equal label "zero_valid")
+  in
   let term_args =
     label_arg
     :: (Optional "fetch_op", [%expr None])
@@ -124,6 +129,15 @@ let make_vb ~loc ~name ~name_expr ~hint_label ~extra_args =
   in
   let term_call = A.Exp.apply ~loc [%expr NTDSL.term] term_args in
   let v = [%expr [%e term_call] ()] in
+  let v =
+    match zero_valid with
+    | [] -> v
+    | (_, flag) :: _ ->
+        [%expr
+          let __cd_declared = [%e v] in
+          if [%e flag] then Ir.Tnode.mark_zero_valid __cd_declared.Tensor.value;
+          __cd_declared]
+  in
   let vb = A.Vb.mk ~loc pat v in
   vb
 

@@ -87,6 +87,14 @@ type routine = private {
           nodes hold a value the routine did not put there. Decided before scheduling: a transform
           that drops a zero leaves the node here, and that is the failure the
           [debug_fill_fresh_outputs] configuration key exists to expose. *)
+  read_first_undeclared : Set.M(Ir.Tnode).t;
+      (** The embedded {!outputs} in the backend's raw read set that are not
+          {!Ir.Tnode.is_zero_valid} as of this compile, and with no registered host initialization
+          data: neither required inputs nor {!field-written_first}. The state a routine starts from
+          allocation's zero belongs to the class by default, and declares itself out of it; what
+          stays is a routine that lost an init, or a correct one the conservative read set could not
+          clear (a vectorized write, a read of a padded margin). So [debug_fill_fresh_outputs] fills
+          these rather than {!run} refusing them (gh-ocannl-1966). *)
   routine_id : int;
       (** A unique integer identifying the routine within its root context's lifetime. *)
   execution_deps : Set.M(Int).t;
@@ -364,16 +372,18 @@ val run : ?timing:bool -> t -> routine -> t
     input — one the routine reads and then writes, such as a counter or a running statistic — must
     have been written by something in this lineage (a run, an upload, a device copy): its
     allocation-time zeros do not count (gh-ocannl-1339). State meant to start from zero declares
-    that in its own computation (an inline declaration, embedded in the routine) or is seeded with
-    {!set_values}. A read-only input must have been written the same way -- the buffer the routine
-    binds, not merely the node in some context -- unless allocation-time zero is declared its
-    correct value ({!Ir.Tnode.mark_zero_valid}; every gradient is marked at creation, being an
+    that in its own computation (a node embedded in the routine, declared zero-valid) or is seeded
+    with {!set_values}. A read-only input must have been written the same way -- the buffer the
+    routine binds, not merely the node in some context -- unless allocation-time zero is declared
+    its correct value ({!Ir.Tnode.mark_zero_valid}; every gradient is marked at creation, being an
     accumulator), so a forgotten data input is refused rather than read as zeros (gh-ocannl-1462).
 
     With the [debug_fill_fresh_outputs] configuration key (gh-ocannl-1873, on in the test suite's
-    configuration), a {!field-written_first} node whose buffer nothing has written yet starts from
-    {!Ir.Ops.debug_fill_value} instead of allocation's zero, so a write the routine owed and did not
-    do shows in its results. Such a node is no more written, to the checks above, than it was.
+    configuration), a {!field-written_first} or {!field-read_first_undeclared} node whose buffer
+    nothing has written yet starts from {!Ir.Ops.debug_fill_value} instead of allocation's zero, so
+    a write the routine owed and did not do shows in its results. Such a node is no more written, to
+    the checks above, than it was. State an embedded node really starts from zero is declared with
+    {!Ir.Tnode.mark_zero_valid}, in [%cd] as [{ x; zero_valid = true }].
 
     Before any of that, the routine's {!field-requires} (gh-ocannl-1724): each backprop fragment its
     gradient writes flow into must be owned by a routine of its lineage, or nothing would ever

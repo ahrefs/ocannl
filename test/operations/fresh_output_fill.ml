@@ -7,13 +7,20 @@
    [Context.run] start them from [Ir.Ops.debug_fill_value] instead.
 
    Part 1 pins the contract on hand-built IR, on any backend: what the key reaches (a buffer nothing
-   wrote yet, of a node written first), what it leaves alone (a seeded node, a node a run wrote,
-   state read first, a padding margin), the pattern at every storage precision, and that the key is
-   what does it: a child process with the key off reads allocation's zero from the same program.
+   wrote yet, of a node written first, or embedded and read first with nothing declaring it starts
+   from zero: gh-ocannl-1966), what it leaves alone (a seeded node, a node a run wrote, declared
+   state, a padding margin), the pattern at every storage precision, and that the key is what does
+   it: a child process with the key off reads allocation's zero from the same program.
 
-   Part 2 shows a correct routine does not notice: a default-pipeline matmul, with no seed for its
-   output, against a closed form. What the key catches is shown by mutation, not here: the table is
-   in the PR body and in docs/agent-notes/build-and-test.md. *)
+   Part 2 shows a correct routine does not notice: a default-pipeline matmul and a reduction, with
+   no seed for their outputs, against closed forms. Correct routines in the undeclared class, which
+   is why it is filled and not refused, are [resnet_block]'s and [test_padding_reset]'s. The
+   reduction is the mutants' target: an init dropped before the analysis (A01 of gh-ocannl-1873)
+   reads its target first, so with nothing here seeding it only the fill shows the drop. Their
+   tables are in the PR bodies.
+
+   Part 3 fills liveness-aliased buffers: a dropped zero on the first occupant of a shared range
+   reaches an observable output as NaN, where it used to read the arena's zero. *)
 
 open Base
 open Ocannl
@@ -53,10 +60,28 @@ let run_seeded (ctx, routine) seed =
     (List.fold seed ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs))
     routine
 
+(* Embedded state incremented cell by cell: read first, in the routine's own computation. *)
+let bump_routine state ~name =
+  L.materialize state;
+  let i = L.sym () in
+  let bump =
+    L.optimize ~name
+      (L.loop ~upto:3 i (L.set_at state (L.iter i) (L.add (L.get state [| L.iter i |]) (L.c 1.))))
+  in
+  let comp = { Asgns.empty_comp with embedded_nodes = Set.singleton (module Tn) state } in
+  Context.compile ~name ~prelowered:bump
+    ~lowered_transform:(fun o -> [ o ])
+    (Context.auto ()) comp Ir.Indexing.Empty
+
 (* Hex, so the parent's claim is on the bits the child read rather than on a rounded rendering. *)
 let child () =
   let got = Context.get_values (run_seeded (linked (partial_write ())) [ (x, xv) ]) y in
-  Array.iter (Array.append (written got) (uncovered got)) ~f:(fun v -> Stdio.printf "cell\t%h\n" v)
+  let state = node "fof_child_state" in
+  let ctx, routine = bump_routine state ~name:"fof_child_bump" in
+  let bumped = Context.get_values (Context.run ctx routine) state in
+  Array.iter
+    (Array.concat [ written got; uncovered got; bumped ])
+    ~f:(fun v -> Stdio.printf "cell\t%h\n" v)
 
 let part1 () =
   let key = Utils.get_global_flag ~default:false ~arg_name:"debug_fill_fresh_outputs" in
@@ -101,26 +126,67 @@ let part1 () =
   let got = Context.get_values (Context.run ctx routine) hosted in
   p_all2 "a host-initialized node keeps its host values" (uncovered got) (uncovered hosted_values)
     ~f:Float.equal;
-  (* Read first: state the routine starts from allocation's zero by declaration (an embedded node,
-     as [Train.sgd_one]'s momentum), which the required-input set leaves out. *)
+  (* Read first: state the routine starts from allocation's zero by declaration (an embedded node
+     marked zero-valid, as [Train.sgd_one]'s momentum), which the required-input set leaves out. *)
   let state = node "fof_state" in
-  L.materialize state;
-  let i = L.sym () in
-  let bump =
-    L.optimize ~name:"fof_bump"
-      (L.loop ~upto:3 i (L.set_at state (L.iter i) (L.add (L.get state [| L.iter i |]) (L.c 1.))))
-  in
-  let comp = { Asgns.empty_comp with embedded_nodes = Set.singleton (module Tn) state } in
-  let ctx, routine =
-    Context.compile ~name:"fof_bump" ~prelowered:bump
-      ~lowered_transform:(fun o -> [ o ])
-      (Context.auto ()) comp Ir.Indexing.Empty
-  in
+  Tn.mark_zero_valid state;
+  let ctx, routine = bump_routine state ~name:"fof_bump" in
   p "embedded state read first is no required input" (not (Set.mem routine.inputs state));
   p "embedded state read first is not written first" (not (Set.mem routine.written_first state));
-  p_all "embedded state read first starts from zero"
+  p "declared state is no undeclared read" (not (Set.mem routine.read_first_undeclared state));
+  let ctx = Context.run ctx routine in
+  p_all "declared state read first starts from zero"
+    (Array.to_list (Context.get_values ctx state))
+    ~f:(Float.equal 1.);
+  p_all "declared state carries its value to the next run"
     (Array.to_list (Context.get_values (Context.run ctx routine) state))
-    ~f:(Float.equal 1.)
+    ~f:(Float.equal 2.);
+  let state = node "fof_seeded_state" in
+  Tn.mark_zero_valid state;
+  let ctx, routine = bump_routine state ~name:"fof_seeded_bump" in
+  p_all "declared state keeps a seed"
+    (Array.to_list
+       (Context.get_values
+          (Context.run (Context.set_values ctx state (Array.create ~len:4 5.)) routine)
+          state))
+    ~f:(Float.equal 6.);
+  (* The same routine, undeclared: what an accumulation that lost its init looks like. *)
+  let lost = node "fof_lost" in
+  let ctx, routine = bump_routine lost ~name:"fof_lost_bump" in
+  p "undeclared embedded state read first is no required input" (not (Set.mem routine.inputs lost));
+  p "nor is it written first" (not (Set.mem routine.written_first lost));
+  p "it is an undeclared read" (Set.mem routine.read_first_undeclared lost);
+  p_all "undeclared state read first reads the fill"
+    (Array.to_list (Context.get_values (Context.run ctx routine) lost))
+    ~f:Float.is_nan;
+  let lost = node "fof_lost_seeded" in
+  let ctx, routine = bump_routine lost ~name:"fof_lost_seeded_bump" in
+  p_all "undeclared state keeps a seed"
+    (Array.to_list
+       (Context.get_values
+          (Context.run (Context.set_values ctx lost (Array.create ~len:4 5.)) routine)
+          lost))
+    ~f:(Float.equal 6.)
+
+(* The declaration through [%cd]: the field goes to the node, not to [term]. *)
+let declared_inline () =
+  let run_ctr ~name comp =
+    let ctx, routine = Context.compile ~name (Context.auto ()) comp Ir.Indexing.Empty in
+    let ctr = Set.choose_exn routine.outputs in
+    (routine, ctr, Context.get_values (Context.run ctx routine) ctr)
+  in
+  let routine, ctr, got =
+    run_ctr ~name:"fof_ctr"
+      [%cd { fof_ctr; o = [ 2 ]; zero_valid = true } =: (!.1.0 *. fof_ctr) + 1]
+  in
+  p "{ x; zero_valid = true } marks the node" (Tn.is_zero_valid ctr);
+  p "so it is no undeclared read" (not (Set.mem routine.read_first_undeclared ctr));
+  p_all "and starts from zero" (Array.to_list got) ~f:(Float.equal 1.);
+  let routine, ctr, got =
+    run_ctr ~name:"fof_plain" [%cd { fof_plain; o = [ 2 ] } =: (!.1.0 *. fof_plain) + 1]
+  in
+  p "{ x } alone declares nothing" (Set.mem routine.read_first_undeclared ctr);
+  p_all "so it reads the fill" (Array.to_list got) ~f:Float.is_nan
 
 (* A padded node's interior starts from the fill, and its margins from the padding value: what a
    reader of a margin must read, written or not. Cells [1] and [2] are written, of the padded
@@ -206,9 +272,12 @@ let key_off () =
         | _ -> None)
   in
   p_all2 "with the key off, the same program leaves allocation's zero in the unwritten cells"
-    (Array.of_list cells)
+    (Array.sub (Array.of_list cells) ~pos:0 ~len:4)
     (Array.append covered [| 0.; 0. |])
-    ~f:Float.equal
+    ~f:Float.equal;
+  p_all2 "with the key off, undeclared state starts from allocation's zero"
+    (Array.sub (Array.of_list cells) ~pos:4 ~len:4)
+    (Array.create ~len:4 1.) ~f:Float.equal
 
 (* {1 Part 2: a correct routine does not notice} *)
 
@@ -230,14 +299,127 @@ let part2 () =
   p "the matmul's output is written first" (Set.mem routine.written_first mc.Tensor.value);
   p_all2 "the default pipeline's matmul from the fill is the closed form"
     (Context.get_values (Context.run ctx routine) mc.Tensor.value)
-    closed_form ~f:Float.equal
+    closed_form ~f:Float.equal;
+  (* Non-injective, so its init is owed for the accumulation and for nothing else. *)
+  let ra = NTDSL.init ~l:"fof_ra" ~prec:Ops.single ~o:[ m; k ] ~f:a_init () in
+  let%op r = ra ++ "ab => a" in
+  Train.set_materialized r.Tensor.value;
+  let ctx, routine = Context.compile (Context.auto ()) (Train.forward r) Ir.Indexing.Empty in
+  p "the reduction's output is written first" (Set.mem routine.written_first r.Tensor.value);
+  p_all2 "an unseeded reduction from the fill is the closed form"
+    (Context.get_values (Context.run ctx routine) r.Tensor.value)
+    (Array.init m ~f:(fun i ->
+         List.sum (module Float) (List.range 0 k) ~f:(fun j -> a_init [| i; j |])))
+    ~f:Float.equal
+
+(* {1 Part 3: liveness-aliased buffers} *)
+
+(* A chain of matrix-vector products: each output is written from its [Zero_out] on, so the outer
+   two are liveness-disjoint, and [h1], being first, is the range's first occupant. [h3] is shorter,
+   so the two ranges differ in size. A hand-cut segment per product, for a backend whose liveness is
+   per segment. *)
+let segments (o : LL.optimized) =
+  let flush seg acc = if List.is_empty seg then acc else List.rev seg :: acc in
+  let rec cut seg acc = function
+    | [] -> List.rev (flush seg acc)
+    | (LL.For_loop _ as loop) :: rest -> cut [] (flush (loop :: seg) acc) rest
+    | stmt :: rest -> cut (stmt :: seg) acc rest
+  in
+  List.map
+    (cut [] [] (LL.flat_lines [ o.LL.llc ]))
+    ~f:(fun lines -> { o with LL.llc = LL.unflat_lines lines })
+
+let drop_zero tn found (o : LL.optimized) =
+  (LL.get_node o.LL.traced_store tn).LL.zero_initialized_by_code <- false;
+  let keep = function
+    | LL.Zero_out t when Tn.equal t tn ->
+        found := true;
+        false
+    | _ -> true
+  in
+  { o with LL.llc = LL.unflat_lines (List.filter (LL.flat_lines [ o.LL.llc ]) ~f:keep) }
+
+let chain_dims = (8, 16, 12)
+let chain_entry idcs = L.weighted ~weights:[| 1; 2 |] ~modulus:5 ~offset:(-1.) ~stride:1. idcs
+
+let chain ~label =
+  let n, m1, m3 = chain_dims in
+  let init ~l ~o ~i =
+    NTDSL.init ~l:(label ^ l) ~prec:Ops.single ~o:[ o ] ~i:[ i ] ~f:chain_entry ()
+  in
+  let v = NTDSL.init ~l:(label ^ "x") ~prec:Ops.single ~o:[ n ] ~f:(fun _ -> 1.) () in
+  let a1 = init ~l:"a1" ~o:m1 ~i:n and a2 = init ~l:"a2" ~o:n ~i:m1 in
+  let a3 = init ~l:"a3" ~o:m3 ~i:n in
+  let%op h1 = a1 * v in
+  let%op h2 = a2 * h1 in
+  let%op h3 = a3 * h2 in
+  let%op out = h3 ++ "i=>0" in
+  List.iter [ h1; h2; h3 ] ~f:(fun t -> Train.set_materialized t.Tensor.value);
+  Tn.set_observable out.Tensor.value;
+  (h1, h3, out)
+
+let chain_closed_form () =
+  let n, m1, m3 = chain_dims in
+  let apply ~rows ~cols x =
+    Array.init rows ~f:(fun r ->
+        List.sum (module Float) (List.range 0 cols) ~f:(fun c -> chain_entry [| r; c |] *. x.(c)))
+  in
+  let h1 = apply ~rows:m1 ~cols:n (Array.create ~len:n 1.) in
+  let h2 = apply ~rows:n ~cols:m1 h1 in
+  Array.fold (apply ~rows:m3 ~cols:n h2) ~init:0. ~f:( +. )
+
+let aliased () =
+  Unix.putenv "OCANNL_BUFFER_ALIASING" "true";
+  let aliased ctx (t : Tensor.t) =
+    match Context.observability ctx t.Tensor.value with
+    | Unobservable_aliased [ v ] -> Tn.equal v t.Tensor.value
+    | _ -> false
+  in
+  let keep = NTDSL.term ~label:[ "fof_keep" ] ~output_dims:[ 2 ] ?fetch_op:None () in
+  let h1, h3, out = chain ~label:"fof_good_" in
+  let comp = Asgns.sequence [ Train.forward out; [%cd keep =+ 1] ] in
+  let ctx, routine =
+    Context.compile ~lowered_transform:segments (Context.auto ()) comp Ir.Indexing.Empty
+  in
+  p "the first occupant of a shared range is aliased" (aliased ctx h1);
+  p "and so is the shorter node over it" (aliased ctx h3);
+  p "the aliased node is written first" (Set.mem routine.written_first h1.Tensor.value);
+  p "the host's own write to an aliased node stays refused"
+    (try
+       ignore (Context.set_values ctx h1.Tensor.value (Array.create ~len:16 0.) : Context.t);
+       false
+     with Utils.User_error msg -> String.is_substring msg ~substring:"buffer-aliased");
+  let ctx = Context.set_values ctx keep.Tensor.value [| 5.; 5. |] in
+  let expected = chain_closed_form () in
+  let ctx = Context.run ctx routine in
+  p "a correct chain from the fill is the closed form"
+    (Float.equal (Context.get_values ctx out.Tensor.value).(0) expected);
+  p_all "a seeded node beside the arena keeps its value"
+    (Array.to_list (Context.get_values ctx keep.Tensor.value))
+    ~f:(Float.equal 6.);
+  p "a second run, which is not filled, is the closed form too"
+    (Float.equal (Context.get_values (Context.run ctx routine) out.Tensor.value).(0) expected);
+  let h1, _, out = chain ~label:"fof_lost_" in
+  let found = ref false in
+  let ctx, routine =
+    Context.compile
+      ~lowered_transform:(fun o -> segments (drop_zero h1.Tensor.value found o))
+      (Context.auto ()) (Train.forward out) Ir.Indexing.Empty
+  in
+  p "the transform dropped the first occupant's zero" !found;
+  p "that node is aliased" (aliased ctx h1);
+  p "its dropped zero reaches an observable output as the fill"
+    (Float.is_nan (Context.get_values (Context.run ctx routine) out.Tensor.value).(0));
+  Unix.putenv "OCANNL_BUFFER_ALIASING" "false"
 
 let () =
   if Array.mem Stdlib.Sys.argv child_flag ~equal:String.equal then child ()
   else (
     part1 ();
+    declared_inline ();
     padded ();
     precisions ();
     key_off ();
     part2 ();
+    aliased ();
     Stdio.eprintf "fresh_output_fill: backend %s (not part of the golden)\n%!" backend_name)
