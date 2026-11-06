@@ -1,7 +1,7 @@
 # Tensorize: emitting tensor-core (MMA) instructions
 
 Follow-up to [schedule-ir-optops](schedule-ir-optops.md) (§5 `Stage`, §6 presets) and
-[gh-ocannl-412](gh-ocannl-412.md): after shared-memory staging and register tiling, the
+[gh-ocannl-412](../../archive/docs/proposals/gh-ocannl-412.md): after shared-memory staging and register tiling, the
 remaining hardware tier for matmul-class kernels is the matrix-multiply-accumulate
 units — CUDA tensor cores (`wmma` / `mma.sync`, 16×16×16 and smaller shapes) and Apple
 `simdgroup_matrix` (8×8). This proposal pins down what emitting them requires.
@@ -341,8 +341,8 @@ Most of that list landed 2026-08-04 — the fp8 arm's `ta`/`tb` gathers, `ldmatr
 `Swizzle_b128` staged tiles on both inline-PTX arms, the swizzled autotune twins, the family-arch
 marker mechanism, and `Stage ~pad_stride`. e4m3 and block scaling stay blocked on the precision /
 microscaling-storage question rather than on emission. See
-[gh-ocannl-481](gh-ocannl-481.md) for the outcome record, and
-[gh-ocannl-481-item3-ldmatrix](gh-ocannl-481-item3-ldmatrix.md) for the design resolution it
+[gh-ocannl-481](../../archive/docs/proposals/gh-ocannl-481.md) for the outcome record, and
+[gh-ocannl-481-item3-ldmatrix](../../archive/docs/proposals/gh-ocannl-481-item3-ldmatrix.md) for the design resolution it
 implements.
 
 ## The accumulator is part of the capability (gh-ocannl-545, 2026-08-04)
@@ -618,7 +618,7 @@ packing copy, host-side for hoisted packs), and the sketch seeding resolves comp
 through the shared `Numerics.cpu_compute_prec` so narrow sites seed exactly where the emission
 fires — pure-fp16 (f16 accumulators, doubled lanes, bitwise vs the scalar half rendering) only
 where `native_fp16_arithmetic` holds. Design record and x86 measurements:
-[gh-ocannl-575-narrow-register-tiling](gh-ocannl-575-narrow-register-tiling.md).
+[gh-ocannl-575-narrow-register-tiling](../../archive/docs/proposals/gh-ocannl-575-narrow-register-tiling.md).
 
 ## The register-tile geometry as a schedule decision (gh-ocannl-619, 2026-09-07)
 
@@ -642,7 +642,7 @@ the conv family, and replacing the model's fitted constant with an `Ir.Cost_mode
 - [schedule-ir-optops](schedule-ir-optops.md): §5 `Stage` supplies the shared tiles and
   barriers; §6 the preset this extends; §7 fission is orthogonal (matmuls are single
   nests) but shares the divergence-validation machinery.
-- [gh-ocannl-412](gh-ocannl-412.md): the matmul optimization arc this completes.
+- [gh-ocannl-412](../../archive/docs/proposals/gh-ocannl-412.md): the matmul optimization arc this completes.
 - [gh-ocannl-164](gh-ocannl-164.md): CPU vectorization; its open matmul micro-kernel
   item is the CPU-side analogue of a tile step.
 - [axis-types-for-loops](axis-types-for-loops.md): the axis-type vocabulary

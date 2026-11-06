@@ -1,8 +1,8 @@
 # Imbue 70B Infrastructure — Lessons Memo
 
 GitHub issue: https://github.com/ahrefs/ocannl/issues/270
-Proposal: [docs/proposals/gh-ocannl-270.md](proposals/gh-ocannl-270.md)
-Companion memo (llm.c lessons): [docs/proposals/gh-ocannl-253.md](proposals/gh-ocannl-253.md) (future `docs/llm-c-analysis.md`)
+Proposal: [archive/docs/proposals/gh-ocannl-270.md](../archive/docs/proposals/gh-ocannl-270.md)
+Companion memo (llm.c lessons): [archive/docs/proposals/gh-ocannl-253.md](../archive/docs/proposals/gh-ocannl-253.md) (future `docs/llm-c-analysis.md`)
 Status: disposition memo, milestone v1.1, scope `explore`.
 
 ## §1. Scope and what this memo is not
@@ -15,7 +15,7 @@ techniques (warp shuffles, online softmax, `float4` loads), memory layout
 (contiguous parameter buffers, in-place ops), and training-loop patterns
 (AdamW, cosine schedule, gradient clipping) — overlaps almost completely with
 [gh-ocannl-253](https://github.com/ahrefs/ocannl/issues/253) and lives in
-`docs/proposals/gh-ocannl-253.md` and (when written) `docs/llm-c-analysis.md`.
+`archive/docs/proposals/gh-ocannl-253.md` and (when written) `docs/llm-c-analysis.md`.
 Re-deriving those lessons here would split the discussion across two issues
 and duplicate work; cross-links go in both directions.
 
@@ -152,7 +152,7 @@ to be made cheap. (Imbue guide, checkpointing strategy section.)
 
 **OCANNL status.** Tensor save/load shipped in
 [gh-ocannl-373](https://github.com/ahrefs/ocannl/issues/373)
-(`docs/proposals/tensor-persistence.md`). The current format is correct
+(`archive/docs/proposals/tensor-persistence.md`). The current format is correct
 but has not been tuned against any "checkpointing dominates" budget,
 because OCANNL has no training run today against which to measure.
 

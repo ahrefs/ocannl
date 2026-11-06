@@ -420,7 +420,7 @@ construct-then-fold discipline.
 
 Implementation order across backends is **Metal first** (the primary dev box is a
 Mac), then cc's serial fallback, then CUDA (CI-verified; not buildable locally). The
-[#412 writeup](gh-ocannl-412.md)'s CUDA-centric phase list predates this decision and
+[#412 writeup](../../archive/docs/proposals/gh-ocannl-412.md)'s CUDA-centric phase list predates this decision and
 is outdated on ordering — treat it as a catalogue of transforms, not a sequence.
 
 - **Phase A — representation** *(landed 2026-07-03, PR #84)*. IR field + barrier
@@ -445,7 +445,7 @@ is outdated on ordering — treat it as a catalogue of transforms, not a sequenc
 - **Consumers.** [#412](https://github.com/ahrefs/ocannl/issues/412) Phase 2+
   annotates via heuristics/tiling; [schedule-ir-optops](schedule-ir-optops.md)'s
   Split-with-retype makes annotation a schedule value;
-  [gh-ocannl-263](gh-ocannl-263.md) (Flash attention) eventually consumes the
+  [gh-ocannl-263](../research/lean-attention-feasibility.md) (Flash attention) eventually consumes the
   workgroup structure. The `__constant__` end of address spaces
   ([#195](https://github.com/ahrefs/ocannl/issues/195)) can reuse the
   placement-refinement pattern (§3) rather than a memory mode, but is out of scope
@@ -478,7 +478,7 @@ is outdated on ordering — treat it as a catalogue of transforms, not a sequenc
 [#412](https://github.com/ahrefs/ocannl/issues/412) (consumer and first site),
 [#195](https://github.com/ahrefs/ocannl/issues/195) (addrspace cousin),
 [#318](https://github.com/ahrefs/ocannl/issues/318) (megakernel exploration, landed),
-[gh-ocannl-263](gh-ocannl-263.md) (Flash attention — eventual consumer),
+[gh-ocannl-263](../research/lean-attention-feasibility.md) (Flash attention — eventual consumer),
 [schedule-ir-optops](schedule-ir-optops.md) (depends on this);
 [interval-analysis-scalar-t](interval-analysis-scalar-t.md) (**landed** 2026-07-04:
 supplies the guard-discharge mechanism for §2's extent-mismatch guards and the

@@ -1,8 +1,8 @@
 # gh-ocannl-481 on CUDA: `ldmatrix` renders, and changes nothing measurable — yet
 
 Measurement-only report. The subject is the `ldmatrix`-over-swizzled-staging work of
-[gh-ocannl-481](../docs/proposals/gh-ocannl-481.md) (staging PR #285), whose design resolution is
-[gh-ocannl-481-item3-ldmatrix](../docs/proposals/gh-ocannl-481-item3-ldmatrix.md). That work's own
+[gh-ocannl-481](../archive/docs/proposals/gh-ocannl-481.md) (staging PR #285), whose design resolution is
+[gh-ocannl-481-item3-ldmatrix](../archive/docs/proposals/gh-ocannl-481-item3-ldmatrix.md). That work's own
 acceptance rule is T4's: *driven by benchmarks, not speculation*. This is the benchmark.
 
 **The verdict is neutral, and the interesting part is how little the headline A/B could say about

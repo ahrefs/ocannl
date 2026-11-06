@@ -1,6 +1,6 @@
 (** CPU topology facts for the worker-pool uniformity policy (gh-ocannl-530,
-    docs/proposals/gh-ocannl-530-pool-uniformity.md). Facts only — the policy that consumes them
-    lives in [Cc_backend]. Every probe degrades to an "unknown" answer ([[]], [`Unknown], a fallback
+    docs/design/gh-ocannl-530-pool-uniformity.md). Facts only — the policy that consumes them lives
+    in [Cc_backend]. Every probe degrades to an "unknown" answer ([[]], [`Unknown], a fallback
     count) rather than raising; the consumers treat unknown conservatively. *)
 
 type core_class = {
@@ -82,7 +82,7 @@ val decide_pool_restriction :
   affinity_mask:int64 option ->
   pool_decision
 (** The pure pool-uniformity decision (config [cc_pool_core_class]; the applying wrapper lives in
-    [Cc_backend], the rationale in docs/proposals/gh-ocannl-530-pool-uniformity.md). [classes] is
+    [Cc_backend], the rationale in docs/design/gh-ocannl-530-pool-uniformity.md). [classes] is
     perf-ranked fastest-first; [effective] the process's affinity-respecting logical CPU count;
     [affinity_mask] its current mask when known (enters the unrestricted tag, see
     {!unrestricted_decision}).

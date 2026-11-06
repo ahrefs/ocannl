@@ -12,7 +12,7 @@
 > for why.
 
 Design resolution + implementation handoff for the T4 ceiling chase of
-[tensorize-mma](tensorize-mma.md). Written against the state of the tree after gh-ocannl-528
+[tensorize-mma](../../../docs/design/tensorize-mma.md). Written against the state of the tree after gh-ocannl-528
 (batched matmul sites; `Tile_mma` carries explicit `ldd`/`lda`/`ldb` leading-dimension strides).
 The decisions below are resolved; the coder should implement, not re-litigate — but each records
 its rationale so a contradicting discovery has something concrete to argue with.

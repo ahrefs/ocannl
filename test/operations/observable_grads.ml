@@ -1,5 +1,5 @@
 (* Gradients carry observation intent ([Tnode.set_observable]) instead of a [Never_virtual] request
-   (docs/proposals/context-scoped-memory-modes.md, Never_virtual audit). This pins the per-lineage
+   (docs/design/context-scoped-memory-modes.md, Never_virtual audit). This pins the per-lineage
    placement a parameter gradient gets in the archetypal flows:
 
    1. Fused fwd+bwd+sgd compiled as ONE routine: the gradient is written and consumed within the

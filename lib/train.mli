@@ -571,7 +571,7 @@ val tune_placements :
     (gh-ocannl-638): a forced arm ships whether or not it was the faster one, which is the point —
     they exist so a measurement can execute the artifact it profiles — so every "keeps the winner"
     and "at least as fast" statement here is about [Measured_winner] alone. Respecting the two-level
-    memory-mode split (docs/proposals/context-scoped-memory-modes.md) — tnode-level [memory_mode] is
+    memory-mode split (docs/design/context-scoped-memory-modes.md) — tnode-level [memory_mode] is
     declared, semantics-bearing intent, while placement {e decisions} are context-level and
     functional — the B arm does not touch intent: it tunes from {!Context.decide_materialized}
     siblings of [ctx] (and of [timing_ctx]), so the arms are hermetic and [tune_placements] leaves

@@ -191,11 +191,11 @@ struct
   let kernel_prep_line = ""
 
   (* Use native types for loop indices and arguments instead of stdint.h types. Signed index
-     arithmetic (docs/proposals/signed-index-precision.md). *)
+     arithmetic (docs/design/signed-index-precision.md). *)
   let loop_index_type = if Utils.settings.large_models then "long long " else "int "
   let arg_int_prefix = if Utils.settings.large_models then "const long long " else "const int "
 
-  (* Hardware axis bindings (docs/proposals/axis-types-for-loops.md §5); the binding site casts the
+  (* Hardware axis bindings (docs/design/axis-types-for-loops.md §5); the binding site casts the
      unsigned register to the signed [loop_index_type] (values fit by device limits and the per-node
      numel contract). *)
   let hardware_index ~kind ~slot =

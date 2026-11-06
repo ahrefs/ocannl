@@ -7,7 +7,7 @@ Reproduces every table of benchmarks/report-gh1002-fused-backward.md. Two subcom
              benchmarks/check-box.sh checks BOX and every fixture first, box_gate.py)
   summarize  --out DIR                                        print the report's tables
 
-Treatments (docs/proposals/gh-ocannl-1002-1003.md, "Measurement plan and completion gates"), as
+Treatments (docs/design/gh-ocannl-1002-1003.md, "Measurement plan and completion gates"), as
 flags on ONE tree, untuned default pipeline, f32:
 
   A   composed forward, composed backward       online_softmax=false, online_softmax_backward=false

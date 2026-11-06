@@ -1,7 +1,7 @@
 # gh-ocannl-1002: the fused attention backward in training, on Metal and cc
 
 Measurement report for PR 2 of ahrefs/ocannl#1002 — the training measurement the design record
-([docs/proposals/gh-ocannl-1002-1003.md](../docs/proposals/gh-ocannl-1002-1003.md), "Measurement
+([docs/design/gh-ocannl-1002-1003.md](../docs/design/gh-ocannl-1002-1003.md), "Measurement
 plan and completion gates") asks for. PR 1 (lukstafi/ocannl-staging#885) made the fused backward
 the third shape of `Ir.Online_softmax`, behind `online_softmax_backward` (default off, in the
 `approximate` profile): the training step recomputes the probabilities from the saved row max and

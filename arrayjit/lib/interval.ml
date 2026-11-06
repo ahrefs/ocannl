@@ -1,9 +1,9 @@
 open Base
 (** Interval (min/max) lattice shared between the per-tensor bounds summaries stored on {!Tnode.t}
     and the [interval_of] analysis over [Low_level.scalar_t]. See
-    docs/proposals/interval-analysis-scalar-t.md. This is deliberately the single module defining
-    the bounds record and its operations (binding constraint 9 of the proposal): [Tnode] stores
-    plain [t] values; [Low_level] extends them with a symbol environment and source tracking.
+    docs/design/interval-analysis-scalar-t.md. This is deliberately the single module defining the
+    bounds record and its operations (binding constraint 9 of the proposal): [Tnode] stores plain
+    [t] values; [Low_level] extends them with a symbol environment and source tracking.
 
     {b Invariants.}
     - {b Outwardness}: [lo] and [hi] always bound every possible (machine) value from below resp.

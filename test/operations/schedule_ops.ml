@@ -1,5 +1,5 @@
-(* Schedule IR, Phase S1 (docs/proposals/schedule-ir-optops.md): executed parity of scheduled
-   kernels against their unscheduled twins, plus structural checks on the generated source read from
+(* Schedule IR, Phase S1 (docs/design/schedule-ir-optops.md): executed parity of scheduled kernels
+   against their unscheduled twins, plus structural checks on the generated source read from
    [build_files/].
 
    Covered here: [Split] with a dividing factor (the remainder guard folds away), [Split] with a

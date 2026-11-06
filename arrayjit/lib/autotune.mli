@@ -2,7 +2,7 @@ open Base
 (** {1 Empirical schedule search (autotuning)}
 
     tinygrad-style beam search over {!Ir.Schedule} transforms, timed on the real device
-    (docs/proposals/schedule-ir-optops.md; the search-harness half of the OptOps port). {!tune} is a
+    (docs/design/schedule-ir-optops.md; the search-harness half of the OptOps port). {!tune} is a
     drop-in replacement for {!Context.compile}: it compiles candidate schedules through the
     [?lowered_transform] seam, times each on the context's device, and returns the routine of the
     fastest one. Every candidate (and the winner replay) derives from a hermetic copy of the {e one}
@@ -69,7 +69,7 @@ open Base
       the composed pipelines pinned by the schedule tests — register blocktiling (Split + Swap +
       shared Stage + Privatize + materializing Unroll) on GPU backends, operand packing (non-shared
       Stage + Privatize) on CPU backends — with dividing tile sizes. When the backend reports an mma
-      capability, additionally the {e tensorized} pipelines (docs/proposals/tensorize-mma.md): Split
+      capability, additionally the {e tensorized} pipelines (docs/design/tensorize-mma.md): Split
       into Grid blocks + [Tensorize] targeting [simdgroup_matrix]/tensor cores, both unstaged (one
       full-reduction [Tile_mma] block) and cooperatively staged through shared tiles (lane-aware
       Stage) — Stage-only by design, [Privatize] would move the accumulator into thread-space the

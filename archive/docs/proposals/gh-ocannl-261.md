@@ -4,7 +4,7 @@
 **Status:** Deep dive **done in this revision (2026-07-07)** — the reading, literature
 re-selection, and technique-to-seam mapping below replace the earlier scouting plan.
 Detailed evidence base (full paper extractions, verified survey with citations,
-cross-cutting implementation notes): [docs/research/superoptimizers.md](../research/superoptimizers.md).
+cross-cutting implementation notes): [docs/research/superoptimizers.md](../../../docs/research/superoptimizers.md).
 Remaining deliverable: file the follow-up issues and comment on #261.
 **Milestone:** v0.9 (Program search with execution-based cost functions; due Aug 24, 2026 — ICFP week)
 
@@ -20,7 +20,7 @@ The repo moved out from under the previous revision of this document. Every
   `Tensorize`/`Tile_mma` (tensor-core MMA) — applied as a pure
   `Low_level.optimized -> Low_level.optimized` pass at the `?lowered_transform` seam
   (`backend_intf.ml:221`, applied at `backends.ml:498-505`). See
-  [schedule-ir-optops.md](schedule-ir-optops.md) (Phases S1–S5 implemented).
+  [schedule-ir-optops.md](../../../docs/design/schedule-ir-optops.md) (Phases S1–S5 implemented).
 - **Kernels are no longer single-threaded.** The default GPU annotator
   (`automatic_gpu_schedule`, on by default for cuda/metal) parallelizes to
   Grid×Workgroup launches; hand schedules reach ~200 GFLOP/s f32 matmul on
@@ -31,7 +31,7 @@ The repo moved out from under the previous revision of this document. Every
 - **BEAM search is in progress** (parallel work, modeled after tinygrad): beam over
   schedule prefixes with on-device timing, candidates as sibling `Context.compile`
   calls from one frontier, executed parity against the unscheduled twin as the
-  correctness gate (scoped in [schedule-ir-optops.md](schedule-ir-optops.md) §8).
+  correctness gate (scoped in [schedule-ir-optops.md](../../../docs/design/schedule-ir-optops.md) §8).
 - **Consequence for #261:** the issue no longer owns "build a search space" — the
   schedule IR is the search space and BEAM is the search loop. What #261 owns now is
   what the papers below are actually about: (a) making the search converge fast

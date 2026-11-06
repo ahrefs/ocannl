@@ -1,4 +1,4 @@
-(* Axis-type annotations, Phase C (docs/proposals/axis-types-for-loops.md §3): an executed
+(* Axis-type annotations, Phase C (docs/design/axis-types-for-loops.md §3): an executed
    shared-memory workgroup reduction (tinygrad's GROUP_REDUCE pattern) against the serial reduction.
 
    The surrogate computation [s = sum v] (64 elements) is compiled twice: once as lowered

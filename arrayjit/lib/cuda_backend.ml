@@ -218,7 +218,7 @@ end = struct
   (* Minimum compute capability across devices as [major * 10 + minor] (e.g. 89 for sm_89, 120 for
      sm_120), memoized behind [lazy] (driver init and device enumeration must not run at
      backend-module initialization). Tensor cores (wmma) need sm_70+, bf16 wmma sm_80+, fp8 mma.sync
-     sm_89+ (docs/proposals/tensorize-mma.md T3). *)
+     sm_89+ (docs/design/tensorize-mma.md T3). *)
   let min_compute_capability =
     let cc =
       lazy

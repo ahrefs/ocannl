@@ -1,11 +1,11 @@
-(* Context-scoped memory modes (docs/proposals/context-scoped-memory-modes.md): sibling compiles
-   from the SAME context must be hermetic, each resolving placements in its own lineage. The same
-   shared node [x] is compiled by two sibling routines: lineage A consumes it once (virtualizable),
-   lineage B consumes it at two visits of the same cell (over the visit cap, so B must keep it
-   non-virtual). Under the retired global [Tnode.memory_mode_intent] settlement this divergence was
-   impossible: whichever sibling compiled first pinned the mode for the other. Both siblings also
-   execute, pinning that the divergent placements produce correct values, and the tnode's declared
-   intent stays untouched throughout. *)
+(* Context-scoped memory modes (docs/design/context-scoped-memory-modes.md): sibling compiles from
+   the SAME context must be hermetic, each resolving placements in its own lineage. The same shared
+   node [x] is compiled by two sibling routines: lineage A consumes it once (virtualizable), lineage
+   B consumes it at two visits of the same cell (over the visit cap, so B must keep it non-virtual).
+   Under the retired global [Tnode.memory_mode_intent] settlement this divergence was impossible:
+   whichever sibling compiled first pinned the mode for the other. Both siblings also execute,
+   pinning that the divergent placements produce correct values, and the tnode's declared intent
+   stays untouched throughout. *)
 
 open Base
 module Idx = Ir.Indexing

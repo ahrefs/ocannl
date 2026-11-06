@@ -1,40 +1,93 @@
-# OCANNL Roadmap
+# OCANNL release history
 
-**v1.1.3 released October 29, 2026: the training experience a newcomer meets — resumable checkpoints, persistent state declared by its update, virtual nodes readable by recomputation, plot legends, and refusals where gradient used to drop silently. Next: reusable tensor programs (v1.2, November 15, 2026).**
+What each release set out to do, what it delivered and how the schedule moved along the way. This is a record, not a plan: [GitHub milestones](https://github.com/ahrefs/ocannl/milestones) state what comes next, [concerns.md](concerns.md) maps the work by concern, and [CHANGES.md](../CHANGES.md) lists each release's changes.
 
-This roadmap outlines the development plan for OCANNL through version 1.0 and beyond. Dates indicate **end of period** targets. Through v1.0 the schedule was pinned to conference deadlines; it is now project-internal, and the dates below are aspirational rather than external commitments.
+Release outcomes distinguish delivered work from unfinished goals; they do not imply that every issue in a released milestone is closed. Dates are **end of period** targets. Through v1.0 they were pinned to conference deadlines; after that they are project-internal and aspirational.
 
-> **Schedule note (July 2026):** the roadmap drifted from its original dating because of a slowdown between January and May 2026. v0.7 is the catch-up release. Three structural changes follow from that:
->
-> - **v0.6.4 is skipped as a release.** Its scope — axis concatenation/block tensors (#49), RoPE and non-learned position embeddings (#398), the decoder-only transformer toy (#57) — is complete (the GitHub milestone is closed), but it ships inside **v0.7** rather than as a separate tagged release. The last tagged release before v0.7 was **0.6.3**.
-> - **v0.7.2 is consolidated into v0.7.** The compiler-optimization and memory-management work that was scheduled separately (loop hoisting, CSE, the universal pool allocator) is part of the single **v0.7** milestone.
-> - **v0.7.1 was dissolved.** Its two tracks were redistributed: the **AMD HIP backend (#411)** shipped in **v0.8**; completed examples and tokenizer work landed subsequently, while remaining examples now follow their current GitHub milestone assignments. The GitHub milestone has been deleted.
->
-> **Update (August 2026):** the v0.9 milestone closed on schedule, and two rebalances came with that: CUDA/HIP graph capture (#488) moved from v0.9 to v1.0, and the training/deployment utilities plus the `lib/` design study moved out of v1.0, in favor of the compiler-tier and diagnostics work the v0.9 sweep exposed. (Their current homes are v1.0.1 and v1.1.2 — see the rebalance and renumbering notes below.)
->
-> **Venue history (August 2026):** the OCaml Workshop submission was not accepted — the article was written as a research report rather than as an introductory demonstration, which put it outside that audience's scope. IFL 2026 was then considered as the next target and **decided against as a poor fit**. No conference submission is currently scheduled; the paper-facing artifacts below stay in the repository and the formal core technical report continues as live work. The workshop article and its PDF are kept unchanged, as a historical artifact capturing the state of the project at v0.8.
->
-> **v1.0 shipped August 13, 2026**, with its milestone fully closed (49 issues). Three consequences for what follows: the release dates are no longer pinned to paper deadlines, **v1.1's soft target moves to August 24, 2026** (the OCaml Workshop date, used as an anchor rather than as a submission), and v1.1/v1.2 were rebalanced along a different seam than the original split — **v1.1 is the compiler work plus the training-loop mechanics it needs**, and **v1.2 is the consumers and explorations**: models, reproductions, demos, integrations, the training experience a user sees, and performance items gated on hardware or on evidence not yet in hand.
->
-> **Update (late August 2026):** v1.2 was split along the performance seam. **v1.2 is now performance-chasing in the `approximate` profile, demonstrated on benchmarks** — the numerics-changing tier (fused attention, Winograd, tf32/fp16 arithmetic) behind a third preset, the exact-numerics performance residue, and the benchmark legs that expose where OCANNL wins and loses; the Winograd and zero-nest conv tiers (#505, #503) moved into it from v1.1. Everything else that was in v1.2 — the consumers, explorations, training experience, engineering hygiene, and hardware-gated items — is **v1.3**. With its numerics-changing carry-overs gone, **v1.1 reads as consolidation after v1.0**: the search follow-ups v1.0's evaluation filed, inlining and reduction soundness, the test and benchmark seams that cannot report a false pass, and the training-loop mechanics.
->
-> **Renumbering (August 26, 2026):** the ladder was renumbered so that version-number depth tracks release *scope*, as it did through the 0.6.x line (0.6.1 shipped features; this project does not follow semver, and 0.x releases never did). Consolidation and robustness releases take a third component; feature releases take a second. Concretely: the release planned as v1.1 shipped as **v1.0.1**; a new **v1.0.2** pulls the robustness and engineering-hygiene backlog forward out of the feature milestones, so refactoring issues are worked while they still describe the code they were filed against; the performance milestone (formerly v1.2) is now **v1.1**; the consumers/demos milestone (formerly v1.3) is now **v1.1.1**; and a new **v1.2** holds the ambitious feature-grade work (shape schemes #404, CDNA MFMA #477, PoPE #444, mmap zero-copy #585, CUDA pinned host buffers #170 and `__constant__` arrays #195).
->
-> **Dating (September 7, 2026):** the post-1.0.1 ladder is dated again, aspirationally. v1.2 targets **October 28, 2026**, and the milestones before it split the interval from September 7 by the scope their version depth signals (a feature release counts twice a third-component release, so 1 : 2 : 1 : 2 — issue counts were rejected as the weight, since v1.0.2's are review-filed follow-ups and the later milestones' are design spaces): **v1.0.2 September 16, v1.1 October 3, v1.1.1 October 11**. These are end-of-period targets rather than commitments; the GitHub milestone due dates then carried the same values.
->
-> **Rebalance (September 14, 2026):** finish v1.0.2 with a bounded compiler-deduplication set, then start performance work promptly. The deferred consolidation becomes **v1.1.1**, and the former consumers milestone becomes **v1.1.2**. Working backward from **November 3** for v1.2 gives **October 18** for consumers, **October 10** for consolidation and **October 2** for v1.1, after **September 16** for v1.0.2. The 48 days after that cut split 16 : 8 : 8 : 16 (feature : consolidation : consumers : feature), preserving the scope weighting used in September. These are soft end-of-period targets, not requirements to empty each milestone; protect the early-November anchor by reducing scope when necessary.
->
-> **Update (October 4, 2026):** the September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. **v1.1 released October 4** with fused attention and better transformer scheduling, ahead of its October 5 GitHub due date. Later GitHub targets remain October 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
->
-> **Rebalance (October 13, 2026):** the ladder was re-fit to keep **November 15** for v1.2 by cutting scope rather than moving the date. **v1.1.1** (October 20; it shipped October 15) is released as a bounded set against a release gate — CI green, three soundness finds, a full-step training comparison — since its queue grows about as fast as waves close it; leftovers move to v1.2.1. **v1.1.2** moves to October 27 (it shipped October 25). **v1.1.3** (October 31) is cut to the training experience a newcomer meets, with models and explorations moved to v1.2.2. **v1.2** is cut to reusable tensor programs: shape schemes (#404) with checkpoint rollback (#903) as their first work package, beside an end-to-end newcomer path; the package split (#852) is optional and the other feature-grade work moved to a new, undated **v1.3**. #903 was rescoped from session-owned persistent shapes to a rollback over open inference state, and its coarse level split out as #1301 in v1.1.3. These dates supersede the October 4 targets above.
->
-> The version sequence is: `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2 → 1.2.1 → 1.2.2 → 1.3`. Milestone *scope* below tracks the GitHub milestones, which are the source of truth for issue assignments. Release outcomes distinguish delivered work from unfinished goals; they do not imply that every issue in a released milestone is closed.
+The version sequence so far is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 → 1.1 → 1.1.1 → 1.1.2 → 1.1.3 → 1.2`.
+
+---
+
+## Summary
+
+| Version | Target | Status | Key Deliverables |
+|---------|--------|--------|------------------|
+| 0.6.2  | Nov 2025 | released | Menhir parser, hidden-dimension errors |
+| 0.6.3  | Dec 2025 | released | Padding inference, toy CNN |
+| ~~0.6.4~~ | — | **skipped** (folds into 0.7) | Concatenation, RoPE, transformer toy |
+| **0.7** | Jul 3, 2026 | **released** | **Frontend finalization + compiler optimizations** (consolidates 0.7.2) |
+| ~~0.7.1~~ | — | **dissolved** | AMD HIP backend → 0.8; completed examples and tokenizers landed subsequently |
+| **0.8** | Jul 13, 2026 | **released** | **Parallel schedules (GPU + CPU), autotuning, SIMD/`Tile_mma`, AMD HIP backend, benchmark suite** |
+| **0.9** | Aug 3, 2026 | **released** | **Schedule quality, deterministic parallelism, mixed precision, convolution performance, and search survivability** |
+| **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
+| **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
+| **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
+| **1.1** | Oct 4, 2026 | **released** | **Fused attention and better transformer scheduling**; tuned f32 inference improves over the same-night August anchor, while approximate performance remains workload-dependent |
+| **1.1.1** | Oct 15, 2026 | **released** (bounded set) | **Consolidation after the transformer work**: the release gate met (CI green, three soundness fixes, the full-step training comparison), backward-contraction sketches for training, and broad search and diagnostics follow-through |
+| **1.1.2** | Oct 25, 2026 | **released** | **Performance beyond transformers**: a reduced ResNet-style leg, Winograd under `approximate`, CPU sketch economy, and a 5× faster untuned GPU training step at batch 256 |
+| **1.1.3** | Oct 29, 2026 | **released** | **The training experience a newcomer meets**: resumable checkpoints, persistent state declared by its update, virtual nodes readable by recomputation, plot legends, lineage composition checks, and a 2.2–3.65× faster untuned cc `cifar_resnet` step |
+| 1.2 | Nov 15, 2026 | issues closed, tag pending | Shape inference: reusable, checked tensor programs — shape schemes with checkpoint rollback, row-solver correctness, shape-error reporting, an end-to-end newcomer path |
+
+---
+
+## How the schedule moved
+### July 2026: the catch-up release
+
+The roadmap drifted from its original dating because of a slowdown between January and May 2026. v0.7 is the catch-up release. Three structural changes follow from that:
+
+- **v0.6.4 is skipped as a release.** Its scope — axis concatenation/block tensors (#49), RoPE and non-learned position embeddings (#398), the decoder-only transformer toy (#57) — is complete (the GitHub milestone is closed), but it ships inside **v0.7** rather than as a separate tagged release. The last tagged release before v0.7 was **0.6.3**.
+- **v0.7.2 is consolidated into v0.7.** The compiler-optimization and memory-management work that was scheduled separately (loop hoisting, CSE, the universal pool allocator) is part of the single **v0.7** milestone.
+- **v0.7.1 was dissolved.** Its two tracks were redistributed: the **AMD HIP backend (#411)** shipped in **v0.8**; completed examples and tokenizer work landed subsequently, while remaining examples now follow their current GitHub milestone assignments. The GitHub milestone has been deleted.
+
+### August 2026: the v0.9 close
+
+The v0.9 milestone closed on schedule, and two rebalances came with that: CUDA/HIP graph capture (#488) moved from v0.9 to v1.0, and the training/deployment utilities plus the `lib/` design study moved out of v1.0, in favor of the compiler-tier and diagnostics work the v0.9 sweep exposed. (Their current homes are v1.0.1 and v1.1.2 — see the rebalance and renumbering notes below.)
+
+### August 2026: venue history
+
+The OCaml Workshop submission was not accepted — the article was written as a research report rather than as an introductory demonstration, which put it outside that audience's scope. IFL 2026 was then considered as the next target and **decided against as a poor fit**. No conference submission is currently scheduled; the paper-facing artifacts below stay in the repository and the formal core technical report continues as live work. The workshop article and its PDF are kept unchanged, as a historical artifact capturing the state of the project at v0.8.
+
+### August 13, 2026: v1.0 ships
+
+**v1.0 shipped August 13, 2026**, with its milestone fully closed (49 issues). Three consequences for what follows: the release dates are no longer pinned to paper deadlines, **v1.1's soft target moves to August 24, 2026** (the OCaml Workshop date, used as an anchor rather than as a submission), and v1.1/v1.2 were rebalanced along a different seam than the original split — **v1.1 is the compiler work plus the training-loop mechanics it needs**, and **v1.2 is the consumers and explorations**: models, reproductions, demos, integrations, the training experience a user sees, and performance items gated on hardware or on evidence not yet in hand.
+
+### Late August 2026: the performance seam
+
+v1.2 was split along the performance seam. **v1.2 is now performance-chasing in the `approximate` profile, demonstrated on benchmarks** — the numerics-changing tier (fused attention, Winograd, tf32/fp16 arithmetic) behind a third preset, the exact-numerics performance residue, and the benchmark legs that expose where OCANNL wins and loses; the Winograd and zero-nest conv tiers (#505, #503) moved into it from v1.1. Everything else that was in v1.2 — the consumers, explorations, training experience, engineering hygiene, and hardware-gated items — is **v1.3**. With its numerics-changing carry-overs gone, **v1.1 reads as consolidation after v1.0**: the search follow-ups v1.0's evaluation filed, inlining and reduction soundness, the test and benchmark seams that cannot report a false pass, and the training-loop mechanics.
+
+### August 26, 2026: renumbering
+
+The ladder was renumbered so that version-number depth tracks release *scope*, as it did through the 0.6.x line (0.6.1 shipped features; this project does not follow semver, and 0.x releases never did). Consolidation and robustness releases take a third component; feature releases take a second. Concretely: the release planned as v1.1 shipped as **v1.0.1**; a new **v1.0.2** pulls the robustness and engineering-hygiene backlog forward out of the feature milestones, so refactoring issues are worked while they still describe the code they were filed against; the performance milestone (formerly v1.2) is now **v1.1**; the consumers/demos milestone (formerly v1.3) is now **v1.1.1**; and a new **v1.2** holds the ambitious feature-grade work (shape schemes #404, CDNA MFMA #477, PoPE #444, mmap zero-copy #585, CUDA pinned host buffers #170 and `__constant__` arrays #195).
+
+### September 7, 2026: dating
+
+The post-1.0.1 ladder is dated again, aspirationally. v1.2 targets **October 28, 2026**, and the milestones before it split the interval from September 7 by the scope their version depth signals (a feature release counts twice a third-component release, so 1 : 2 : 1 : 2 — issue counts were rejected as the weight, since v1.0.2's are review-filed follow-ups and the later milestones' are design spaces): **v1.0.2 September 16, v1.1 October 3, v1.1.1 October 11**. These are end-of-period targets rather than commitments; the GitHub milestone due dates then carried the same values.
+
+### September 14, 2026: rebalance
+
+Finish v1.0.2 with a bounded compiler-deduplication set, then start performance work promptly. The deferred consolidation becomes **v1.1.1**, and the former consumers milestone becomes **v1.1.2**. Working backward from **November 3** for v1.2 gives **October 18** for consumers, **October 10** for consolidation and **October 2** for v1.1, after **September 16** for v1.0.2. The 48 days after that cut split 16 : 8 : 8 : 16 (feature : consolidation : consumers : feature), preserving the scope weighting used in September. These are soft end-of-period targets, not requirements to empty each milestone; protect the early-November anchor by reducing scope when necessary.
+
+### October 4, 2026: the September 29 split
+
+The September 29 split keeps **v1.1 focused on transformer workloads**. Convolution and CPU kernel/sketch economy now have their own **v1.1.2** milestone; consumers moved to **v1.1.3**. **v1.1 released October 4** with fused attention and better transformer scheduling, ahead of its October 5 GitHub due date. Later GitHub targets remain October 16, 24 and 31, then November 15 for v1.2. Undated v1.2.1/v1.2.2 placeholders allow consolidation and consumers to continue if scope moves again. These dates supersede the September schedule above.
+
+### October 13, 2026: rebalance
+
+The ladder was re-fit to keep **November 15** for v1.2 by cutting scope rather than moving the date. **v1.1.1** (October 20; it shipped October 15) is released as a bounded set against a release gate — CI green, three soundness finds, a full-step training comparison — since its queue grows about as fast as waves close it; leftovers move to v1.2.1. **v1.1.2** moves to October 27 (it shipped October 25). **v1.1.3** (October 31) is cut to the training experience a newcomer meets, with models and explorations moved to v1.2.2. **v1.2** is cut to reusable tensor programs: shape schemes (#404) with checkpoint rollback (#903) as their first work package, beside an end-to-end newcomer path; the package split (#852) is optional and the other feature-grade work moved to a new, undated **v1.3**. #903 was rescoped from session-owned persistent shapes to a rollback over open inference state, and its coarse level split out as #1301 in v1.1.3. These dates supersede the October 4 targets above.
+
+### October 29, 2026: rebalance
+
+The re-layering (#852) and the semiring recurrence (#952) moved from v1.2 to v1.3. **v1.3** was redefined as compiler architecture and feature-grade design, undated, and **v1.4** opened for what lies beyond the single box. Hardware-gated work moved to v1.4 and models to v1.2.2.
+
+### November 3, 2026: rebalance
+
+v1.2 was refilled with eighteen shape-inference issues and renamed **"Shape inference: reusable, checked tensor programs"**: the row solver's correctness, scheme cost and coverage, shape-error reporting, and the edges around inference. Networked consumer hardware joined v1.4. A `dormant` milestone followed on November 4 for issues with no next step until a named trigger fires; it is not a release.
 
 ---
 
 ## Released: Foundation (through 0.6.3)
 
-The 0.6.x line stabilized the frontend: the Menhir einsum parser and "missing hidden dimensions" error detection (0.6.2), then padding inference for convolutions with a toy CNN (0.6.3). See [CHANGES.md](CHANGES.md) for details.
+The 0.6.x line stabilized the frontend: the Menhir einsum parser and "missing hidden dimensions" error detection (0.6.2), then padding inference for convolutions with a toy CNN (0.6.3). See [CHANGES.md](../CHANGES.md) for details.
 
 ---
 
@@ -135,7 +188,7 @@ A research-heavy milestone, closed with all 44 assigned issues resolved. GitHub 
 
 **Examples, research, and dispositions:**
 - CNN classifiers (#54), GPT-2 inference (#377), and the matmul-to-tensor-cores track (#412) closed here.
-- Research: TVM (#242), [Tiramisu/Telamon](docs/blog/tiramisu-telamon-optimization-space-pruning.md) (#267), [superoptimizers](docs/research/superoptimizers.md) (#261), and Lean Attention (#263).
+- Research: TVM (#242), [Tiramisu/Telamon](blog/tiramisu-telamon-optimization-space-pruning.md) (#267), [superoptimizers](research/superoptimizers.md) (#261), and Lean Attention (#263).
 - Candle (#265), Petalisp/Caten (#306), and MSVC (#313) were evaluated and closed as not planned.
 
 **Deferred out of v0.9:**
@@ -146,18 +199,18 @@ A research-heavy milestone, closed with all 44 assigned issues resolved. GitHub 
 ## v1.0 — August 13, 2026 (released)
 **Theme: Advanced compiler tiers and schedule-quality follow-through**
 
-Closed with all 49 assigned issues resolved. GitHub milestone scope: *"Branch-and-bound on the analytic cost model. Better performance: better tensor cores, algebraic rewrites (non-numeric-preserving), better beam search."* The completeness, ergonomics and safety goals originally under v1.0 moved to v1.1 and v1.2: v1.0 marks the compilation side reaching the shape argued for in [the compilation manifesto](docs/compilation_manifesto.md).
+Closed with all 49 assigned issues resolved. GitHub milestone scope: *"Branch-and-bound on the analytic cost model. Better performance: better tensor cores, algebraic rewrites (non-numeric-preserving), better beam search."* The completeness, ergonomics and safety goals originally under v1.0 moved to v1.1 and v1.2: v1.0 marks the compilation side reaching the shape argued for in [the compilation manifesto](compilation_manifesto.md).
 
 **Advanced compiler tiers (done):**
-- **Branch-and-bound schedule inference** (#514) — `Ir.Schedule_space` as a refinement tree over partial schedules, legality verdicts with witnesses deciding subtrees before any member is built, `Cost_model.completion_floor` as an admissible downward bound, the placement-space search with its enablement prior, and the staged tile lattice as corner-judged interval boxes. Delivered in phases 0–6, with a three-machine evaluation as its research output ([report](benchmarks/report-gh514-eval.md)).
+- **Branch-and-bound schedule inference** (#514) — `Ir.Schedule_space` as a refinement tree over partial schedules, legality verdicts with witnesses deciding subtrees before any member is built, `Cost_model.completion_floor` as an admissible downward bound, the placement-space search with its enablement prior, and the staged tile lattice as corner-judged interval boxes. Delivered in phases 0–6, with a three-machine evaluation as its research output ([report](../benchmarks/report-gh514-eval.md)).
 - **Inlining as a first-class, searchable schedule decision** (#555), on top of retiring the concrete-index tracer in favor of the affine access relations (#554); the analysis is shared across sibling candidate compiles (#560).
 - CUDA tensor-core profile completeness (#481), software-pipelined double-buffered staging (#487), CUDA/HIP graph capture of the fissioned step (#488), and budget-driven rematerialization on top of the liveness planner (#498).
 - CPU reduced precision: 16-bit storage with f32 compute (#517) and native fp16 arithmetic (#516).
 
 **Schedule quality — the `gpt2_mini` arc (done):**
-- The v0.9 sweep left `gpt2_mini` 72x off torch CUDA and unmoved by tuning or materialization (#531). Attributing the step (#531, [report](benchmarks/report-gh531-profile.md)) put 70.2% of it in five kernels declined by one companion-coverage rule; judging that rule at the site's arity (#569) took the tuned step 107.4 → 52.4 ms on CUDA and 45.6 → 25.4 ms on HIP. Batched/rank-3 matmul sites are seeded (#528), so tensor cores are reachable on transformer workloads at all.
-- CUDA bf16 mma timed scalar-fallback code under an mma label, because capability was keyed on the multiplicand pair rather than the accumulator format (#545); the tuner reports the untuned default's measured time as its honest reference point (#552); the search report names the winning candidate, and Metal's placement A/B was measured and found sound (#546, [report](benchmarks/report-gh546-metal.md)).
-- Conv-sketch tuning wins did not port across CPUs; the cause was pool heterogeneity rather than the seeds, and `cc` now restricts its worker pool to one core class on hybrid machines (#530, [proposal](docs/proposals/gh-ocannl-530-pool-uniformity.md)). Device-memory accumulation during tuning and the placement-arm containment around it (#550), `bench_gpt` gate-cost legs (#551).
+- The v0.9 sweep left `gpt2_mini` 72x off torch CUDA and unmoved by tuning or materialization (#531). Attributing the step (#531, [report](../benchmarks/report-gh531-profile.md)) put 70.2% of it in five kernels declined by one companion-coverage rule; judging that rule at the site's arity (#569) took the tuned step 107.4 → 52.4 ms on CUDA and 45.6 → 25.4 ms on HIP. Batched/rank-3 matmul sites are seeded (#528), so tensor cores are reachable on transformer workloads at all.
+- CUDA bf16 mma timed scalar-fallback code under an mma label, because capability was keyed on the multiplicand pair rather than the accumulator format (#545); the tuner reports the untuned default's measured time as its honest reference point (#552); the search report names the winning candidate, and Metal's placement A/B was measured and found sound (#546, [report](../benchmarks/report-gh546-metal.md)).
+- Conv-sketch tuning wins did not port across CPUs; the cause was pool heterogeneity rather than the seeds, and `cc` now restricts its worker pool to one core class on hybrid machines (#530, [proposal](design/gh-ocannl-530-pool-uniformity.md)). Device-memory accumulation during tuning and the placement-arm containment around it (#550), `bench_gpt` gate-cost legs (#551).
 - Search-plumbing consolidation: intra-statement order in affine access paths (#561), a shared canonical-llc emission core (#563), pre-dispatch validation as its own contained phase (#564), interval narrowing from `If` conditions in `simplify_llc` (#566), barrier elision for same-anchor shared stages (#567), and the numerics policy entering the schedule cache key (#568).
 
 **Frontend, configuration and diagnostics (done):**
@@ -180,7 +233,7 @@ Work that landed in this milestone before the v0.9 cutoff and shipped inside v0.
 ## v1.0.1 — August 26, 2026 (released)
 **Theme: Consolidation after v1.0 — search follow-through, inlining and reduction soundness, honest test and benchmark seams, and training-loop mechanics**
 
-Planned and worked as "v1.1" until the August 26 renumbering. GitHub milestone scope: *"Consolidation after v1.0: the search follow-ups its evaluation filed, soundness of inlining and of reduction accumulators under every schedule, test and benchmark seams that cannot report a false pass, and the training-loop mechanics."* v1.0 brought the compiler's search to the shape [the manifesto](docs/compilation_manifesto.md) argued for; v1.0.1 is where its claims became trustworthy. The milestone was first scoped as "performance carry-overs and algebraic rewrites", but the carry-overs that change numerics or close on a benchmark cell moved to the performance milestone (now v1.1) in the late-August split, and what the milestone actually filled with — 135 issues, most filed by PR review cycles — is the work of making a green result mean what it says: a pass that cannot be promoted into a golden, an environment variable that cannot be mistyped silently, an inlined computation that cannot lose its guard, a reduction whose width cannot depend on which schedule won.
+Planned and worked as "v1.1" until the August 26 renumbering. GitHub milestone scope: *"Consolidation after v1.0: the search follow-ups its evaluation filed, soundness of inlining and of reduction accumulators under every schedule, test and benchmark seams that cannot report a false pass, and the training-loop mechanics."* v1.0 brought the compiler's search to the shape [the manifesto](compilation_manifesto.md) argued for; v1.0.1 is where its claims became trustworthy. The milestone was first scoped as "performance carry-overs and algebraic rewrites", but the carry-overs that change numerics or close on a benchmark cell moved to the performance milestone (now v1.1) in the late-August split, and what the milestone actually filled with — 135 issues, most filed by PR review cycles — is the work of making a green result mean what it says: a pass that cannot be promoted into a golden, an environment variable that cannot be mistyped silently, an inlined computation that cannot lose its guard, a reduction whose width cannot depend on which schedule won.
 
 **Search follow-through from the v1.0 evaluation (done)** — the deliberate consequence of v1.0 recording its nulls rather than shipping them as wins:
 - Statically-decidable builder preconditions lifted into tree verdicts (#577), with the epilogue-fusion level factored into the family tree (#613); the envelope's memory leg made fittable (#578); a profitability term weighing enablement promotion (#579); the sketch-family trees extracted from `autotune.ml` (#580); family-tree decision labels as a typed protocol (#591).
@@ -216,7 +269,7 @@ of the feature milestones, so refactoring issues were worked while they still de
 they were filed against. The milestone closed with **175 issues**, all of them closed after the
 1.0.1 tag; it had 55 open before the September 14 rebalance, which bounded the remainder to eight
 compiler-structure and coverage issues and moved the rest past v1.1. See
-[CHANGES.md](CHANGES.md) for the release's entries.
+[CHANGES.md](../CHANGES.md) for the release's entries.
 
 **Robustness, landed through the milestone:**
 
@@ -226,7 +279,7 @@ compiler-structure and coverage issues and moved the rest past v1.1. See
 - Explicit C renderer state (#769), replayable tensor code (#955), wide-index routine logging
   (#953), and partial autotune reports that preserve admitted work (#962/#972).
 - The earlier cache, merge-buffer dependency, optimizer, API and precision fixes are recorded
-  in [CHANGES.md](CHANGES.md); they are no longer future-work checklists.
+  in [CHANGES.md](../CHANGES.md); they are no longer future-work checklists.
 - Test-run launch consolidation and supported queries (#606/#671), verdict provenance
   (#908/#931/#968/#973), shared IR builders (#954), and restored Windows CI setup (#935).
   These improve release verification; they do not close the remaining analysis gaps.
@@ -354,7 +407,7 @@ benchmark coverage. Release scope does not close or reassign those issues.
 
 **What the measurements establish:**
 
-The completed [cross-framework comparison with a same-night August anchor](benchmarks/report-tagline-gpt2.md)
+The completed [cross-framework comparison with a same-night August anchor](../benchmarks/report-tagline-gpt2.md)
 (#1181) measured tuned f32 `gpt2_mini` inference at one geometry: batch 8, sequence 128,
 four layers, d_model 256. The October 3/4 campaign rebuilt and re-measured August commit
 `7014dc44` alongside master `a723dc5b` on each box; this is **not a v1.0.2-to-v1.1 comparison**.
@@ -380,13 +433,13 @@ whole-profile measurements, not an isolated attribution to fused attention or TF
   the result does not isolate TF32. The [issue's acceptance report](https://github.com/ahrefs/ocannl/issues/719)
   records the search cost and deliberately skipped CPU tuning cells.
 - **The attention features have useful bounded wins.** The
-  [block-fold ablation](benchmarks/report-gh1003-block-fold.md), on a September 28 M4 Max build,
+  [block-fold ablation](../benchmarks/report-gh1003-block-fold.md), on a September 28 M4 Max build,
   measured seq1024 inference at **0.483× composed latency**, with requested memory **91–96 MiB
   across the sequence endpoints versus 124–353 MiB composed**. The
-  [fused-backward report](benchmarks/report-gh1002-fused-backward.md) records seq1024 training
+  [fused-backward report](../benchmarks/report-gh1002-fused-backward.md) records seq1024 training
   memory falling from **689 to 305 MiB** with scores stored, alongside a Metal latency regression
   on that build. Later scheduling fixes and whole-profile sweeps have their own baselines.
-- **The latest transformer sweep is mixed** ([#720 report](benchmarks/report-gh720-transformer.md),
+- **The latest transformer sweep is mixed** ([#720 report](../benchmarks/report-gh720-transformer.md),
   October 3). Default f32 approximate is slower on all eight HIP endpoints; base inference is
   **20.024 versus 17.695 ms exact**. Metal inference improves at the three sequence endpoints,
   including **22.572 versus 28.784 ms at seq1024**, while base training is **70.631 versus
@@ -528,6 +581,8 @@ memory policy (#565).
 ## v1.2 — November 15, 2026
 **Theme: Reusable tensor programs**
 
+> **Not yet tagged.** This section is the October 13 cut. The November 3 rebalance refilled the milestone and all its issues have closed; the tag writes the outcome here.
+
 v1.2 is the release the schedule is anchored on. The October 13 rebalance cut it to one
 architectural track, chosen because it tests the project's founding bet — constraint-based shape
 inference with row variables — in its most demanding form, plus the user path that makes it
@@ -556,67 +611,3 @@ pinned host buffers and `__constant__` arrays (#170, #195), PoPE (#444), the des
 compilation pipeline that can loop (#1000), and the scan licence and attention block geometry
 postponed from #1003 (#1122, #1123). The undated v1.2.1 and v1.2.2 milestones hold the
 consolidation and consumer work deferred from v1.1.1 and v1.1.3.
-
----
-
-## Key Milestones Summary
-
-| Version | Target | Status | Key Deliverables |
-|---------|--------|--------|------------------|
-| 0.6.2  | Nov 2025 | released | Menhir parser, hidden-dimension errors |
-| 0.6.3  | Dec 2025 | released | Padding inference, toy CNN |
-| ~~0.6.4~~ | — | **skipped** (folds into 0.7) | Concatenation, RoPE, transformer toy |
-| **0.7** | Jul 3, 2026 | **released** | **Frontend finalization + compiler optimizations** (consolidates 0.7.2) |
-| ~~0.7.1~~ | — | **dissolved** | AMD HIP backend → 0.8; completed examples and tokenizers landed subsequently |
-| **0.8** | Jul 13, 2026 | **released** | **Parallel schedules (GPU + CPU), autotuning, SIMD/`Tile_mma`, AMD HIP backend, benchmark suite** |
-| **0.9** | Aug 3, 2026 | **released** | **Schedule quality, deterministic parallelism, mixed precision, convolution performance, and search survivability** |
-| **1.0** | Aug 13, 2026 | **released** | **Branch-and-bound schedule inference, inlining as a searchable decision, graph capture, software pipelining, rematerialization, CPU reduced precision, and the 2x `gpt2_mini` step** |
-| **1.0.1** | Aug 26, 2026 | **released** | **Consolidation after v1.0** (planned as "v1.1"): search follow-through, inlining and reduction soundness, test and benchmark seams that cannot report a false pass, and the training-loop mechanics |
-| **1.0.2** | Sep 16, 2026 | **released** | **Robustness pulled forward, plus compiler elegance through shared structure**: the landed robustness fixes and eight compiler-structure/coverage issues |
-| **1.1** | Oct 4, 2026 | **released** | **Fused attention and better transformer scheduling**; tuned f32 inference improves over the same-night August anchor, while approximate performance remains workload-dependent |
-| **1.1.1** | Oct 15, 2026 | **released** (bounded set) | **Consolidation after the transformer work**: the release gate met (CI green, three soundness fixes, the full-step training comparison), backward-contraction sketches for training, and broad search and diagnostics follow-through |
-| **1.1.2** | Oct 25, 2026 | **released** | **Performance beyond transformers**: a reduced ResNet-style leg, Winograd under `approximate`, CPU sketch economy, and a 5× faster untuned GPU training step at batch 256 |
-| **1.1.3** | Oct 31, 2026 | **released** | **The training experience a newcomer meets**: resumable checkpoints, persistent state declared by its update, virtual nodes readable by recomputation, plot legends, lineage composition checks, and a 2.2–3.65× faster untuned cc `cifar_resnet` step |
-| 1.2    | Nov 15, 2026 | planned | Reusable tensor programs: shape schemes with checkpoint rollback, beside an end-to-end newcomer path; standalone ArrayJIT optional |
-| 1.2.1 / 1.2.2 | undated | overflow | Consolidation deferred from v1.1.1 / models, reproductions and explorations deferred from v1.1.3 |
-| 1.3    | undated | design spaces | Feature-grade and hardware-gated work moved out of v1.2: CDNA MFMA, CUDA pinned/constant memory, PoPE, a looping compilation pipeline, scan licences |
-
----
-
-## Paper Artifacts (no venue currently targeted)
-
-**No conference submission is scheduled.** The OCaml Workshop / FProPer submission was not accepted, and IFL 2026 was considered and decided against as a poor fit. The written material below is therefore maintained for its own sake — as the project's technical account, and as the starting point should a venue be chosen later. Only the formal core technical report and the constraint-generation notes are live work; the rest is archival.
-
-The paper-facing material, first assembled for the v0.7/v0.8 workshop submission:
-
-- Workshop article: [docs/ocannl_workshop_article_human.md](docs/ocannl_workshop_article_human.md) — **historical artifact**, kept as-is; it describes the project as of the [0.8 release](https://github.com/ahrefs/ocannl/releases/tag/0.8) and was written for the OCaml Workshop / FProPer submission, which was not accepted.
-- Workshop article PDF: [docs/html/pdfs/ocannl_workshop_article_human.pdf](docs/html/pdfs/ocannl_workshop_article_human.pdf) — likewise archival, rendered from the v0.8-era source.
-- Formal core technical report: [rendered PDF](https://ahrefs.github.io/ocannl/docs/pdfs/ocannl-formal-core-technical-report.pdf), LaTeX source in [docs/](docs/ocannl-formal-core-technical-report.latex) — live, still developing.
-- Shape constraint generation notes: [docs/shape-constraint-generation.md](docs/shape-constraint-generation.md) — live.
-
-The intended shape of a paper, should one be written, is recorded below.
-
-### Proposed Title
-*"Generalized Einsum with Row Variables: Shape Inference for Deep Learning in OCaml"*
-
-### Key Contributions
-1. **Generalized einsum notation** with convolutions, strided iteration, and concatenation
-2. **Row variables** for flexible axis handling ("principle of least commitment")
-3. **Constraint-based shape inference** with provenance tracking for error messages
-4. **Dimension basis** design rationale (vs. axis labels)
-5. **Integration with OCaml's type system** via syntax extensions
-
-### Related Work to Address
-- einops (#413)
-- torchdim / DumPy (#316)
-- Named tensors in PyTorch/JAX
-- Dependent types for tensor shapes
-
-### Why v0.7 Was the Prerequisite
-Any such paper needs working examples on OCANNL's mature frontend, all delivered by v0.7:
-- Clean context-based API (no hosted tensors)
-- Shape concatenation syntax (`^`)
-- Complete transformer example with RoPE
-- Consistent, documented API surface
-
-The deep semantic groundwork (the two-sorted ground algebra, the rank-fact graph and rank-cycle check, ≈-semantics for row equality) now lives in the formal core technical report and its appendix.

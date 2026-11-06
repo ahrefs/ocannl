@@ -7,12 +7,12 @@
    independently-created root contexts yields identical offsets and pooling structure (the
    debuggability win). Pool ids are deterministic but advance monotonically across the runs: the
    backend and its devices are process singletons since the backend-singletons refactor
-   (docs/proposals/backend-singletons-context-copy.md), so [device.next_pool_id] is not reset by
-   creating a fresh root. 2. Pooling: when a single routine materializes several non-constant
-   tnodes, they share one [pool_id] with distinct, increasing offsets; read-only inputs (constants)
-   live in separate per-device pools. If the allocator regressed to one-pool-per-tnode, the two
-   outputs below would print different pool ids (and all offsets 0); if it stopped honoring offsets,
-   the computed values would be wrong. *)
+   (archive/docs/proposals/backend-singletons-context-copy.md), so [device.next_pool_id] is not
+   reset by creating a fresh root. 2. Pooling: when a single routine materializes several
+   non-constant tnodes, they share one [pool_id] with distinct, increasing offsets; read-only inputs
+   (constants) live in separate per-device pools. If the allocator regressed to one-pool-per-tnode,
+   the two outputs below would print different pool ids (and all offsets 0); if it stopped honoring
+   offsets, the computed values would be wrong. *)
 
 open Base
 open Ocannl

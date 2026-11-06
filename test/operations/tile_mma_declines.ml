@@ -3,7 +3,7 @@
 
    Declines are silent by design — the scalar fallback and the serial loop are correct — but
    indistinguishable from the intended rendering in timings, which already cost one wrong conclusion
-   (docs/proposals/tensorize-mma.md: parity passed while tensor cores never ran). This test pins the
+   (docs/design/tensorize-mma.md: parity passed while tensor cores never ran). This test pins the
    three visibility mechanisms:
 
    - The [Ir.C_syntax.mma_census]: each compiled [Tile_mma] statement records how it actually

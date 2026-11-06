@@ -4,7 +4,7 @@ GitHub issue: https://github.com/ahrefs/ocannl/issues/318
 
 ## Motivation
 
-OCANNL's compilation model maps one `Assignments.comp` (computation graph) to one routine to one GPU kernel. As lukstafi noted on the issue: "megakernel = routine in OCANNL terminology." Kernel splitting into smaller kernels is not implemented and "might never be for some hardware targets" (ROADMAP.md). This means OCANNL is **inherently megakernel by default**.
+OCANNL's compilation model maps one `Assignments.comp` (computation graph) to one routine to one GPU kernel. As lukstafi noted on the issue: "megakernel = routine in OCANNL terminology." Kernel splitting into smaller kernels is not implemented and "might never be for some hardware targets". This means OCANNL is **inherently megakernel by default**.
 
 Recent work from Hazy Research (Stanford) and CMU/NVIDIA (Mirage project) demonstrates that the megakernel approach -- fusing entire model forward passes into single persistent GPU kernels -- is a winning strategy for LLM inference, achieving 1.5-3.5x latency improvements over separate-kernel baselines.
 
@@ -126,7 +126,7 @@ Key files (as of the March 2026 tree this study read):
 - Remove the `kernel_prep_line` single-thread guard
 - Generate parallel loop structures: map outer loops to thread blocks and threads
 - Handle thread-safe accumulation (atomic adds or reduction trees for shared accumulators)
-- This is largely the domain of the tiling/parallelization work planned for v0.8 (ROADMAP issue #412)
+- This is largely the domain of the tiling/parallelization work planned for v0.8 (issue #412)
 
 Without P1, none of the megakernel techniques apply. The v0.8 GPU tiling milestone is therefore the natural entry point.
 

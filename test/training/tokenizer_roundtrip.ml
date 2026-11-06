@@ -1,5 +1,5 @@
 (* Integration test for the dataprep BPE tokenizer -> OCANNL tensor bridge
-   (docs/proposals/dataprep-tokenizer-integration.md).
+   (archive/docs/proposals/dataprep-tokenizer-integration.md).
 
    Hermetic: instead of [Dataprep.Bpe.from_pretrained] (which downloads from HuggingFace), the test
    writes a minimal GPT-2-style byte-level BPE tokenizer.json and loads it with [Dataprep.Bpe.load].

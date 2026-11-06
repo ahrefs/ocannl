@@ -10,9 +10,9 @@ This is the primary documentation of the schedule layer and its search. The norm
 contracts live in the interface, [schedule.mli](../arrayjit/lib/schedule.mli) — this document
 gives the system view: the pass-ordering contract, the transform vocabulary, the composition
 recipes, the automatic presets, legality, and the autotuner. Design rationale and the decision
-history are in [docs/proposals/](proposals/) (notably
-[schedule-ir-optops.md](proposals/schedule-ir-optops.md) and
-[tensorize-mma.md](proposals/tensorize-mma.md)); proposal files record evolution and are not kept
+history are in [docs/design/](design/) (notably
+[schedule-ir-optops.md](design/schedule-ir-optops.md) and
+[tensorize-mma.md](design/tensorize-mma.md)); design records record evolution and are not kept
 current — when they disagree with this document or the interfaces, the latter win. For the
 big-picture direction of the compiler, see the
 [compilation manifesto](compilation_manifesto.md) and the design-space essay

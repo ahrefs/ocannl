@@ -210,5 +210,5 @@ test/operations/virtual_uncaptured_loop.expected -- 147
 test/operations/virtual_uncaptured_loop.ml -- 9 147
 test/support/provenance_tag_scan.ml -- 13 41
 Read, not part of the checklist:
-  docs/proposals/ -- design proposals, each describing the code as it stood when written
-  docs/in-progress/ -- links into docs/proposals/, the proposals currently being worked on
+  docs/design/ -- design records, each describing the code as it stood when written
+  archive/ -- proposals from before work moved to GitHub issues, frozen as written

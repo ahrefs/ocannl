@@ -1,5 +1,5 @@
 (** The partial-schedule decision space (gh-ocannl-514 phases 1-2): the representation
-    branch-and-bound schedule search operates on, per docs/proposals/gh-ocannl-514.md.
+    branch-and-bound schedule search operates on, per archive/docs/proposals/gh-ocannl-514.md.
 
     A search node is a {e partial schedule shape} — some decisions committed, the rest open. Two
     kinds of decision level make up the space:

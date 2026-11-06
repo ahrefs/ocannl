@@ -78,8 +78,8 @@ let pinned =
    a later change does not revise. A prefix no file lives under is stale and fails. *)
 let records =
   [
-    ("docs/proposals/", "design proposals, each describing the code as it stood when written");
-    ("docs/in-progress/", "links into docs/proposals/, the proposals currently being worked on");
+    ("docs/design/", "design records, each describing the code as it stood when written");
+    ("archive/", "proposals from before work moved to GitHub issues, frozen as written");
   ]
 
 let scan ~records ~pinned root generated =

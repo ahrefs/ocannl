@@ -2298,7 +2298,7 @@ let cpu_sketch_schedule ~accum_prec (site : matmul_site)
       Sched.privatize ~accum_prec ~target:site.m_d ~over:(List.hd_exn kb);
     ]
 
-(* Tensorized (tile-MMA) GPU matmul (docs/proposals/tensorize-mma.md; the pinned pipelines of
+(* Tensorized (tile-MMA) GPU matmul (docs/design/tensorize-mma.md; the pinned pipelines of
    schedule_mma_matmul.ml): Split the output dims into Grid blocks, then [Tensorize] the inner
    micro-kernel into a [Tile_mma] block statement. Stage-only composition — [Privatize] must NOT
    join it: it would relocate the accumulator into thread-local scratch, which the MMA loads cannot

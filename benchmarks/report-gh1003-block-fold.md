@@ -1,7 +1,7 @@
 # gh-ocannl-1003: the block-tiled online attention fold on Metal and cc
 
 Measurement report for the closing PR of ahrefs/ocannl#1003 (design record
-[docs/proposals/gh-ocannl-1002-1003.md](../docs/proposals/gh-ocannl-1002-1003.md), "1003: a
+[docs/design/gh-ocannl-1002-1003.md](../docs/design/gh-ocannl-1002-1003.md), "1003: a
 single-pass, block-tiled forward fold"). The fold is the online-softmax rewrite's fourth shape
 (`Ir.Online_softmax.find_fold`, lukstafi/ocannl-staging#892), behind the key
 `online_softmax_block` (a key-block size `B`; 0 keeps the two-pass form): per query row one scan

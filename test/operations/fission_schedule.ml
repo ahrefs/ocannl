@@ -1,4 +1,4 @@
-(* Kernel fission at cross-workgroup edges (docs/proposals/schedule-ir-optops.md §7): routines whose
+(* Kernel fission at cross-workgroup edges (docs/design/schedule-ir-optops.md §7): routines whose
    top-level statements form materialized producer/consumer pairs split into segment kernels
    launched back-to-back on the routine's stream, each with its own default schedule.
 

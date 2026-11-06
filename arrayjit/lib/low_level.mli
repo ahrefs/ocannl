@@ -18,8 +18,8 @@ val get_scope : Tnode.t -> scope_id
 
 (** {2 Low-level representation} *)
 
-(** How a loop's iterations map to hardware; see docs/proposals/axis-types-for-loops.md. [Serial] is
-    an ordinary for-loop. [Grid] / [Workgroup] bind the loop index to a GPU grid / workgroup (block,
+(** How a loop's iterations map to hardware; see docs/design/axis-types-for-loops.md. [Serial] is an
+    ordinary for-loop. [Grid] / [Workgroup] bind the loop index to a GPU grid / workgroup (block,
     threadgroup) hardware index instead of looping; [Workgroup_reduce] is a [Workgroup] axis
     participating in a workgroup-cooperative reduction (see the contract below). [Unrolled] is
     emitted as the repeated body with substituted constants. [Vectorized] renders eligible bodies as
@@ -168,8 +168,8 @@ type t =
   | If of { cond : scalar_arg; body : t }
       (** Guarded statement: [body] executes iff [cond] is nonzero (renders as
           [if (cond != 0) { body }]). Introduced by launch-extent guards on hardware-annotated loops
-          (docs/proposals/axis-types-for-loops.md §2); [simplify_llc] erases a guard whose condition
-          an interval proves, and simplifies a surviving guard's body under the bounds the condition
+          (docs/design/axis-types-for-loops.md §2); [simplify_llc] erases a guard whose condition an
+          interval proves, and simplifies a surviving guard's body under the bounds the condition
           implies. A conditional write is never a definite write; virtualization treats guarded
           computations as non-inlineable in v1. *)
   | Tile_mma of {
@@ -196,7 +196,7 @@ type t =
               intrinsic (tensor-core) emissions. *)
       fallback : t;  (** Semantically equivalent scalar micro-kernel over fresh serial symbols. *)
     }
-      (** Cooperative tile multiply-accumulate (docs/proposals/tensorize-mma.md):
+      (** Cooperative tile multiply-accumulate (docs/design/tensorize-mma.md):
           [d[i,j] += Σ_{l<k} a[i,l] * b[l,j]] for [i < m], [j < n], relative to the operands' base
           index vectors, executed jointly by the threads of the [lane] axis (tensor cores /
           [simdgroup_matrix]). Each operand's tile is a 2-D slice: minor tile axis on the tnode's
@@ -946,7 +946,7 @@ val elide_covered_zeros : t list -> t option list
 
 (** {2 Hardware axis analyses}
 
-    Phase B of docs/proposals/axis-types-for-loops.md. Hardware slot assignment is positional, not
+    Phase B of docs/design/axis-types-for-loops.md. Hardware slot assignment is positional, not
     stored in the IR: among a kernel's annotated loops of one kind, the innermost binds [.x] (slot
     0), the next [.y], then [.z]; [Workgroup] and [Workgroup_reduce] share the block/threadgroup
     slot space. [Grid] slots [>= 2] all share the hardware [.z] dimension by folding
@@ -1362,9 +1362,9 @@ type optimize_ctx = {
       *)
   placements : Tnode.Placements.t;
       (** Per-compilation-lineage memory-mode resolution
-          (docs/proposals/context-scoped-memory-modes.md): the pipeline's placement decisions
-          (Virtual / Local / On_device) land here, seeded by and never written back to the tnodes'
-          declared intent ({!Tnode.field-memory_mode_intent}). *)
+          (docs/design/context-scoped-memory-modes.md): the pipeline's placement decisions (Virtual
+          / Local / On_device) land here, seeded by and never written back to the tnodes' declared
+          intent ({!Tnode.field-memory_mode_intent}). *)
   alias_candidates : Hash_set.M(Tnode).t;
       (** gh-ocannl-489 liveness-based buffer aliasing: nodes the memory planner may place at
           overlapping byte ranges within the routine's working pool (decided per compile, before
@@ -1594,7 +1594,7 @@ type optimized = {
   workgroup_shared : Set.M(Tnode).t;
       (** [Local]-memory-mode nodes to be placed in workgroup-shared memory ([__shared__] /
           [threadgroup]) instead of kernel-local arrays. Populated by schedule transforms; empty for
-          unscheduled code. See docs/proposals/axis-types-for-loops.md. *)
+          unscheduled code. See docs/design/axis-types-for-loops.md. *)
   simdgroup_fragments : Set.M(Tnode).t;
       (** [Local]-memory-mode accumulator tiles whose init-load, serial reduction and store-back
           form one per-simdgroup fragment lifetime. Backends without a fragment rendering ignore the
@@ -1612,14 +1612,14 @@ type optimized = {
           [simdgroup_fragments] (gh-ocannl-1736). Read by scheduling only: no renderer consults it.
       *)
   swizzled : swizzle_kind Map.M(Tnode).t;
-      (** Nodes stored in an XOR-swizzled layout (docs/proposals/tensorize-mma.md, "Swizzled
-          staging"), keyed by the remap's granularity ({!type-swizzle_kind}): codegen remaps every
-          element access [flat = P*C + col] (with [C] the minor dim, [P] the linearized prefix) to a
-          per-row permutation of [col] — a bijection on the buffer, so the IR-level semantics are
-          unchanged; only the physical layout differs, spreading same-column accesses across
-          shared-memory banks. Populated by [Schedule.Stage ~swizzle]. Renderings that assume a
-          row-major layout must decline swizzled nodes; the tile-MMA intrinsic arms decline
-          [Swizzle_elem] and may consume [Swizzle_b128] through [ldmatrix]-style loads. *)
+      (** Nodes stored in an XOR-swizzled layout (docs/design/tensorize-mma.md, "Swizzled staging"),
+          keyed by the remap's granularity ({!type-swizzle_kind}): codegen remaps every element
+          access [flat = P*C + col] (with [C] the minor dim, [P] the linearized prefix) to a per-row
+          permutation of [col] — a bijection on the buffer, so the IR-level semantics are unchanged;
+          only the physical layout differs, spreading same-column accesses across shared-memory
+          banks. Populated by [Schedule.Stage ~swizzle]. Renderings that assume a row-major layout
+          must decline swizzled nodes; the tile-MMA intrinsic arms decline [Swizzle_elem] and may
+          consume [Swizzle_b128] through [ldmatrix]-style loads. *)
   pipelined : pipelined_tile Map.M(Tnode).t;
       (** gh-487: workgroup-shared staged tiles rendered as [pt_depth] rotating buffer copies (see
           {!type-pipelined_tile}). Populated by [Schedule.Stage ~pipeline_depth] with depth > 1;
@@ -1786,7 +1786,7 @@ val simplify_llc : Indexing.static_symbol list -> t -> t
     comparisons (gh-ocannl-566), so a guard the statement guard proves folds too — what is
     simplified under a condition is valid only where that condition holds. Called internally by
     [optimize]; exposed for [Schedule.apply], whose transforms construct guards after the pipeline's
-    simplify already ran (docs/proposals/schedule-ir-optops.md §2), and for testing. Pure and
+    simplify already ran (docs/design/schedule-ir-optops.md §2), and for testing. Pure and
     idempotent.
 
     Exact: every rewrite preserves IEEE results (the [x * 1] and [x - (+0)] identities, constant
@@ -1817,9 +1817,9 @@ val rewrite_one_hot_reductions : ?static_indices:Indexing.static_symbol list -> 
     a guarded dynamic gather ({!Get_dynamic}) that reads the table row at [index_expr] directly,
     with an in-range guard returning 0 out of [\[0, vocab_size)] to preserve the one-hot semantics.
     The guard is constructed generically and interval analysis
-    (docs/proposals/interval-analysis-scalar-t.md) erases the conjuncts it can prove -- from the
-    index precision's machine range, loop extents seeded from [static_indices], and settled
-    per-tensor bounds ({!Tnode.bounds_state}).
+    (docs/design/interval-analysis-scalar-t.md) erases the conjuncts it can prove -- from the index
+    precision's machine range, loop extents seeded from [static_indices], and settled per-tensor
+    bounds ({!Tnode.bounds_state}).
 
     gh-466: also rewrites the {e transposed} one-hot pattern -- the embedding-table gradient
     [for k in \[0, V): tn[.., k, ..] += (k == index_expr) * g] where the loop variable indexes the

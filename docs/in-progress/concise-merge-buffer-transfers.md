@@ -1,1 +1,0 @@
-../proposals/concise-merge-buffer-transfers.md

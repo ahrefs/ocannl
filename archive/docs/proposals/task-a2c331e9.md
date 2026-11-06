@@ -29,7 +29,7 @@ completed) removed that. Three candidate outcomes:
 > below for the resolved answers.
 
 > **Addendum from the tinygrad deep dive (2026-06-12,
-> [a-range-is-not-its-shape](../blog/a-range-is-not-its-shape.md), port area 4)**: the
+> [a-range-is-not-its-shape](../../../docs/blog/a-range-is-not-its-shape.md), port area 4)**: the
 > verdict composes with tinygrad's shard-axis design rather than competing with it. The
 > portable part of tinygrad's multi-device story is the *propagation algebra* — a
 > per-tensor-node placement annotation propagated by local per-op rules (Reshape remaps

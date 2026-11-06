@@ -1,4 +1,4 @@
-(* Axis-type annotations, Phase B (docs/proposals/axis-types-for-loops.md): executed parity of
+(* Axis-type annotations, Phase B (docs/design/axis-types-for-loops.md): executed parity of
    hardware-annotated kernels against their all-Serial twins, plus structural checks on the
    generated source read from [build_files/] (as-compiled structure; re-lowering reflects mutated
    global state).

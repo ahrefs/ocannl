@@ -1,7 +1,7 @@
-(* Context.copy (docs/proposals/backend-singletons-context-copy.md): same-backend copies pair-match
-   Backends.wrapped_context to dispatch onto the backend's device_to_device transfer machinery;
-   cross-backend copies fall back to a host round-trip. Backends are pinned explicitly (cc /
-   multidev_cc, always available) so the output is deterministic regardless of the configured
+(* Context.copy (archive/docs/proposals/backend-singletons-context-copy.md): same-backend copies
+   pair-match Backends.wrapped_context to dispatch onto the backend's device_to_device transfer
+   machinery; cross-backend copies fall back to a host round-trip. Backends are pinned explicitly
+   (cc / multidev_cc, always available) so the output is deterministic regardless of the configured
    default backend.
 
    Scenarios: 1. On-device copy into a context lacking the node (the init_from_device path: allocate

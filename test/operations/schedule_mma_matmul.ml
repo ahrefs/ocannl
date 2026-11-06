@@ -1,4 +1,4 @@
-(* Tensorize / Tile_mma, T1+T2 of docs/proposals/tensorize-mma.md: the tensorized matmul schedule
+(* Tensorize / Tile_mma, T1+T2 of docs/design/tensorize-mma.md: the tensorized matmul schedule
    executed against the serial twin on every backend.
 
    [mc = ma * mb] (32x32 times 32x32) lowers to a zeroing nest plus the naive triple loop. The

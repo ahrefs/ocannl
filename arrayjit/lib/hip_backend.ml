@@ -1354,11 +1354,11 @@ end = struct
      uninitialized input yields. There is nothing to classify on, and the stream is already dead:
      gh-ocannl-533 saw one autotune candidate take the whole benchmark process down with it.
 
-     So this is prediction, not recovery (see docs/proposals/gh-ocannl-536.md): read the linked
-     kernel's private segment size and decline an over-budget kernel BEFORE it is ever launched, as
-     a typed [Resource_exceeded Thread_scratch]. To a tuner candidate that is an ordinary decline
-     the blocker census tabulates; a hand-written schedule gets the usual [Utils.User_error]
-     rendering at the public [Context.compile] boundary.
+     So this is prediction, not recovery (see archive/docs/proposals/gh-ocannl-536.md): read the
+     linked kernel's private segment size and decline an over-budget kernel BEFORE it is ever
+     launched, as a typed [Resource_exceeded Thread_scratch]. To a tuner candidate that is an
+     ordinary decline the blocker census tabulates; a hand-written schedule gets the usual
+     [Utils.User_error] rendering at the public [Context.compile] boundary.
 
      The budget model, established experimentally on gfx1151 (Radeon 8060S, ROCm 7.14, WSL2) -- see
      the gh-ocannl-533 writeup:

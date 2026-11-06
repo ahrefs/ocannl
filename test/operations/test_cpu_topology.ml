@@ -1,6 +1,6 @@
 (* Tests for the CPU topology facts and the worker-pool uniformity decision (gh-ocannl-530,
-   docs/proposals/gh-ocannl-530-pool-uniformity.md). The parsers and the decision function are pure,
-   so they are exercised on fabricated inputs (rog's recorded topology among them) with
+   docs/design/gh-ocannl-530-pool-uniformity.md). The parsers and the decision function are pure, so
+   they are exercised on fabricated inputs (rog's recorded topology among them) with
    machine-independent golden output; the live probes are only checked for invariants, with the
    machine's actual facts printed to stderr for manual inspection. *)
 

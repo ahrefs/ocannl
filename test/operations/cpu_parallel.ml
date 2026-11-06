@@ -1,4 +1,4 @@
-(* Pool-backed Grid rendering on the CPU backends (docs/proposals/gh-ocannl-164.md): within-kernel
+(* Pool-backed Grid rendering on the CPU backends (docs/design/gh-ocannl-164.md): within-kernel
    parallelization over the thread grid to match GPU parallelism. Covered here:
 
    - The automatic CPU schedule ([Schedule.default_cpu], config [automatic_cpu_schedule]) annotates

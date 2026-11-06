@@ -19,7 +19,8 @@ OCANNL (OCaml Compiles Algorithms for Neural Networks Learning) is a from-scratc
 - `arrayjit/`: compiler + backends (`assignments.ml`, `low_level.ml`, `indexing.ml`, `schedule.ml`, `context.ml`, and the `*_backend.ml` implementations).
 - `bin/`: runnable benchmarks and demos.
 - `test/`: tutorials and tests (ppx_expect and standalone `.expected` tests).
-- `docs/`: slides and reference docs.
+- `docs/`: slides, reference docs and `docs/design/` records.
+- `archive/`: frozen proposals, not guidance.
 - `build_files/` and `log_files/`: generated artifacts when debug settings are enabled.
 
 Key reference files: `docs/syntax_extensions.md` (%op/%cd), `docs/shape_inference.md` (shape/projection inference), `arrayjit/lib/context.mli` (the context-based runtime API), `ocannl_config.reference` (every configuration key and default).
@@ -217,4 +218,4 @@ agents without skill support read the files directly. In brief:
 - New primitive ops: `arrayjit/lib/ops.ml` (+ `Ir.Ops`), wired into `tensor/operation.ml`
 - New tensor convenience functions: `tensor/operation.ml` (use `%cd` for forward/backprop)
 - Shape/projection changes: `tensor/shape.ml`, `tensor/row.ml`, `arrayjit/lib/indexing.ml`
-- Algebraic rewrites over raw lowered code (pattern-directed substitutions that change the computation, each behind its own config key): a member of the `arrayjit/lib/rewrites.ml` tier (lowering-and-analysis.md); `online_softmax.ml` is the exemplar, design record `docs/proposals/gh-ocannl-483.md`
+- Algebraic rewrites over raw lowered code (pattern-directed substitutions that change the computation, each behind its own config key): a member of the `arrayjit/lib/rewrites.ml` tier (lowering-and-analysis.md); `online_softmax.ml` is the exemplar, design record `docs/design/gh-ocannl-483.md`

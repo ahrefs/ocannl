@@ -5,14 +5,14 @@
 **Milestone**: v0.8
 
 > Imbue counterpart: the Imbue 70B infrastructure-guide lessons live in
-> [`docs/imbue-infrastructure-lessons.md`](../imbue-infrastructure-lessons.md)
+> [`docs/imbue-infrastructure-lessons.md`](../../../docs/imbue-infrastructure-lessons.md)
 > ([gh-ocannl-270](https://github.com/ahrefs/ocannl/issues/270)). That memo
 > defers all kernel/training-loop material here; this proposal stays the
 > canonical home for llm.c-derived recommendations.
 
 ## Status update (2026-07-07)
 
-- **The deep dive is delivered**: [`docs/research/llmc-lessons.md`](../research/llmc-lessons.md) — evidence base (llm.c read at `master` `f1e2ace`, its final commit), per-technique verdicts (13 already-covered, 8 follow-up-worthy across 5 draft issues, 3 not-applicable, 5 future), a top-5 shortlist for the GPT-2 driver workload, and drafts of the issue comment and follow-up issues. It supersedes the planned `docs/llm-c-analysis.md` deliverable name.
+- **The deep dive is delivered**: [`docs/research/llmc-lessons.md`](../../../docs/research/llmc-lessons.md) — evidence base (llm.c read at `master` `f1e2ace`, its final commit), per-technique verdicts (13 already-covered, 8 follow-up-worthy across 5 draft issues, 3 not-applicable, 5 future), a top-5 shortlist for the GPT-2 driver workload, and drafts of the issue comment and follow-up issues. It supersedes the planned `docs/llm-c-analysis.md` deliverable name.
 - Note: the 2026-06-12 update below is stale on infrastructure claims (single-threaded CUDA kernels, per-tensor allocation, no pool allocator) — the schedule IR, default GPU annotator, kernel fission, autotune, and pool allocator have all landed since; see the research note's §1 for the verified current state.
 - **Remaining deliverable**: post the summary comment on GitHub issue #253 and file the follow-up issues (both drafted in the research note, §7–§8).
 
