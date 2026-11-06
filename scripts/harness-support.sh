@@ -32,6 +32,29 @@ harness_args() {
     [ "$harness_list" = 0 ] || { echo "${0##*/}: --list-legs lists every leg; it takes no --only" >&2; exit 2; }
   fi
   harness_groups=$(harness_header_groups)
+  # A locale is named (gh-ocannl-2002): with neither LANG nor LC_ALL set, a
+  # Homebrew bash asks CoreFoundation for the user's preferred languages each
+  # time a script assigns a locale variable (libintl's default-locale lookup),
+  # and that lookup segfaults when several processes make it at once: 12 of 40
+  # runs of tools/test-ci-durations.sh beside seven copies of itself on macOS
+  # 27 with bash 5.3.9, none of 40 with LANG=C. LANG=C is what no name means,
+  # and a category the caller did name (LC_CTYPE) still outranks it.
+  [ -n "${LANG:-}" ] || [ -n "${LC_ALL:-}" ] || export LANG=C
+  # Taken out of the environment: a harness a leg runs keeps no clock of ours.
+  harness_clock=${OCANNL_TOOL_HARNESS_LEG_TIMES-} harness_clock_at=$SECONDS
+  unset OCANNL_TOOL_HARNESS_LEG_TIMES
+}
+# Where a harness's seconds go (gh-ocannl-2002): under
+# OCANNL_TOOL_HARNESS_LEG_TIMES=FILE every gate, and finish, appends
+# `SECONDS<TAB>HARNESS<TAB>LEG` for the stretch that just ended -- charged, as
+# a skip is, to the last gate reached (`(before any gate)` ahead of the
+# first), so the shared code between two gates is that leg's, in a filtered
+# run too. Whole seconds: the legs worth splitting off sleep for tens of them.
+harness_leg_clock() {
+  [ -n "${harness_clock:-}" ] || return 0
+  printf '%s\t%s\t%s\n' "$((SECONDS - harness_clock_at))" "${OCANNL_TOOL_HARNESS_NAME:-$0}" \
+    "${harness_leg_current:-(before any gate)}" >>"$harness_clock"
+  harness_clock_at=$SECONDS
 }
 # A harness that groups its legs declares each group in its header (the
 # comment block --help prints) as `#NAME (LEGS)`: LEGS a comma-separated list
@@ -153,6 +176,7 @@ harness_leg() { # NAME
   # The leg a later skip is charged to (OCANNL_TOOL_HARNESS_SKIP_LEGS): the
   # last gate reached, selected or not, so shared code between two gates is
   # charged alike in a full run and a filtered one.
+  harness_leg_clock
   harness_leg_current=$1
   harness_leg_lint "$1"
   if [ "$harness_list" = 1 ]; then
@@ -425,6 +449,7 @@ harness_tally() {
 }
 finish() {
   harness_finished=1
+  harness_leg_clock
   harness_header_unclaimed
   echo
   if [ "$harness_list" = 1 ]; then
