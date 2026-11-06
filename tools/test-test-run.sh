@@ -343,12 +343,13 @@
 #      is not last, an unknown one, or one at odds with the exit status runs
 #      nothing; a mutant reading the prose instead turns those probes red.
 #      The harness commands `affected --harnesses --since BASE` prints
-#      (gh-ocannl-1929) are named as the last lines of stderr and never run:
+#      (gh-ocannl-1929) are named as the last lines of stderr and never run,
+#      the very last naming the one command that runs them for this BASE:
 #      after a run, after --list's list, after a cross-cutting or incomplete
 #      refusal and a list with nothing to run, the exit status unchanged; a
 #      change reaching none (an `.ml`-only diff) gets no line, and a failed
-#      ask runs nothing; a mutant keeping no command turns each naming probe
-#      red.
+#      ask runs nothing; a mutant keeping no command, and one closing with
+#      another BASE, turn each naming probe red.
 #  99. `wait last` and `status last` follow a launch still in flight
 #      (gh-ocannl-1830): one queued behind a wrapper that waits before it runs
 #      this script (the fleet slot's `--wait-window`, stood in for) is `queued:`
@@ -9086,7 +9087,8 @@ cp "$SRC" "$repeat_root/tools/test-run.sh"
 # LINES ('~' between them)|its exit|affected's list|its stderr|its exit|
 # prepush's operands|prepush's exit|dune reached (kept) or not (none)|the
 # commands named (named) or no line about them (silent)`. They are asked of
-# `affected --harnesses --since BASE`, named as the LAST lines of stderr --
+# `affected --harnesses --since BASE`, named as the LAST lines of stderr, the
+# very last the one command that runs them for this BASE --
 # after a run, after --list's list (stdout is still the list alone), after a
 # cross-cutting or incomplete refusal and after a list with nothing to run --
 # and never reach dune or change the exit status. A change reaching none (an
@@ -9124,9 +9126,10 @@ pp_harness_check() { # CASE -> $pp_detail, empty when prepush answers it as writ
     { case $args in *--list*) [ "$argv_out" = "$(grep -E '/runtest-|^@@runtest-' "$out")" ] ;; esac; } &&
     { if [ "$named" = named ]; then
         [ "$n_count" = 1 ] && [ "$n_named" = 2 ] &&
-          [ "$(tail -n 3 <<<"$argv_err")" = "$(grep '^test-run: prepush: 2 harness command(s) this change reaches, named here and NOT run' <<<"$argv_err")
+          [ "$(tail -n 4 <<<"$argv_err")" = "$(grep '^test-run: prepush: 2 harness command(s) this change reaches, named here and NOT run' <<<"$argv_err")
 test-run: prepush: harness: tools/test-a.sh
-test-run: prepush: harness: tools/test-b.sh --only '^1:'" ]
+test-run: prepush: harness: tools/test-b.sh --only '^1:'
+test-run: prepush: run them before pushing, as one command that takes its own --cpu slot: tools/test-harnesses.sh --affected --since base" ]
       else
         [ "$n_count" = 0 ] && [ "$n_named" = 0 ]
       fi; } &&
@@ -9138,24 +9141,32 @@ for probe in "${pp_harness_cases[@]}"; do
   [ -z "$pp_detail" ] || break
 done
 if [ -z "$pp_detail" ]; then report 0 "$pp_harness_label"; else report 1 "$pp_harness_label" "$pp_detail"; fi
-# Negative control: prepush as it was (gh-ocannl-1829), keeping none of the
-# commands it is told. Only the cases with nothing to name hold: the two
-# `.ml`-only ones (1, 3) and the failed ask (8).
-pp_nc_label="negative control: a prepush that names no harness command turns every case with one to name red"
-FROM='[ -z "$pp_line" ] || pp_harness+=("$pp_line")' TO=':' \
-  perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
-  "$SRC" >"$repeat_root/tools/test-run.sh"
-# shellcheck disable=SC2181 # perl's status, read after the redirection
-if [ $? != 0 ] || ! bash -n "$repeat_root/tools/test-run.sh"; then
-  report 1 "$pp_nc_label" "the mutant was not made"
-else
+pp_harness_control() { # LABEL FROM TO WANT: the cases WANT alone hold under the mutant
+  local label="negative control: $1" want=$4
+  FROM=$2 TO=$3 \
+    perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+    "$SRC" >"$repeat_root/tools/test-run.sh"
+  # shellcheck disable=SC2181 # perl's status, read after the redirection
+  if [ $? != 0 ] || ! bash -n "$repeat_root/tools/test-run.sh"; then
+    report 1 "$label" "the mutant was not made"
+    return
+  fi
   pp_held=
   for pp_i in "${!pp_harness_cases[@]}"; do
     pp_harness_check "${pp_harness_cases[$pp_i]}"
     [ -n "$pp_detail" ] || pp_held="$pp_held $pp_i"
   done
-  if [ "$pp_held" = " 1 3 8" ]; then report 0 "$pp_nc_label"; else report 1 "$pp_nc_label" "held under the mutant: cases${pp_held:- <none>} (want 1 3 8)"; fi
-fi
+  if [ "$pp_held" = "$want" ]; then report 0 "$label"; else report 1 "$label" "held under the mutant: cases${pp_held:- <none>} (want$want)"; fi
+}
+# Prepush as it was (gh-ocannl-1829), keeping none of the commands it is told,
+# and a closing line that does not carry the run's BASE. Only the cases with
+# nothing to name hold: the two `.ml`-only ones (1, 3) and the failed ask (8).
+pp_harness_control 'a prepush that names no harness command turns every case with one to name red' \
+  '[ -z "$pp_line" ] || pp_harness+=("$pp_line")' ':' ' 1 3 8'
+pp_harness_control 'a closing line naming another base than the run'\''s turns every case with one to name red' \
+  '"$pp_base"
+      } >&2' '"master"
+      } >&2' ' 1 3 8'
 cp "$SRC" "$repeat_root/tools/test-run.sh"
 rm -f "$pp_stub"
 }

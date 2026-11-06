@@ -6,14 +6,16 @@
 # run the real-dune job's check (--ci-real-dune) on the selected legs alone,
 # pass a leg declared not applicable with no list naming it while an unlisted
 # skip beside it is still refused,
-# refuse arguments (or a malformed list) before executing work, and take the
-# fleet's run-time slot through the shared probe (gh-ocannl-1576).
+# refuse arguments (or a malformed list) before executing work, take the
+# fleet's run-time slot through the shared probe (gh-ocannl-1576), and run
+# exactly what a change reaches (--affected, with the real `affected
+# --harnesses` on a fixture change reaching two members).
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
 set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$here/../scripts/harness-support.sh"
 harness_args "$@"
-harness_require python3 perl
+harness_require python3 perl git
 harness_scratch test-harnesses
 # No run reaches this host's fleet: the subject's slot (gh-ocannl-1576) is
 # driven by the fake fleet-worker.sh below, in the slot legs alone.
@@ -52,6 +54,7 @@ if [ -n "${ENV_RECORD:-}" ]; then
 fi
 [ -z "${ARGS_RECORD:-}" ] ||
   printf '%s strict=%s args=%s\n' "$name" "${OCANNL_TOOL_HARNESS_STRICT-unset}" "$*" >>"$ARGS_RECORD"
+[ -z "${ARGV_RECORD:-}" ] || { printf '%s' "$name"; printf ' [%s]' "$@"; echo; } >>"$ARGV_RECORD"
 [ "$name" != "${PASS_MEMBER:-}" ] || printf 'PASS  %s\n' "$PASS_LABEL"
 if [ "$name" = "${FAIL_MEMBER:-}" ]; then
   if [ -n "${FAIL_SIGNAL:-}" ]; then
@@ -108,9 +111,9 @@ python3 - "$subject" "$TMP/fail-fast.sh" <<'PY_CONTROL'
 from pathlib import Path
 import sys
 text = Path(sys.argv[1]).read_text()
-assert '"$root/$script" || rc=$?' in text
-Path(sys.argv[2]).write_text(text.replace('"$root/$script" || rc=$?',
-                                        '"$root/$script" || exit 1'))
+anchor = '"$root/$script" ${args[@]+"${args[@]}"} || rc=$?'
+assert anchor in text
+Path(sys.argv[2]).write_text(text.replace(anchor, '"$root/$script" || exit 1'))
 PY_CONTROL
 # Keep the twin at the same tools/ depth so root resolution stays identical.
 cp "$TMP/fail-fast.sh" "$fixture/tools/fail-fast.sh"
@@ -522,6 +525,147 @@ for args in --list --unknown expected-skips; do
     report 0 "$args asks the fleet nothing and runs no member"
   else report 1 "$args asks the fleet nothing and runs no member" "exit $got; calls: $(tr '\n' '|' <"$FAKE_FW_CALLS")"; fi
 done
+# --affected --since BASE: the real `affected --harnesses`, this fixture being
+# a git checkout whose last commit changes one file two members reach -- the
+# first of the shell tier by its text, whole, and the first of the promotion
+# tier by a declaration, through an --only whose ERE holds a space, so it is
+# seen to reach the member as one word. The rest of the tier stays unrun.
+cp "$here/test-run.sh" "$here/affected-tests.sh" "$fixture/tools/" || exit 2
+# Whatever test-run.sh sources, derived from it rather than listed here.
+af_staged=0
+while IFS= read -r rel; do
+  mkdir -p "$fixture/$(dirname "$rel")" && cp "$here/../$rel" "$fixture/$rel" || exit 2
+  af_staged=$((af_staged + 1))
+done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$here/test-run.sh")
+[ "$af_staged" -ge 3 ] || exit 2
+af_whole=$(head -n 1 "$TMP/shell") af_leg=$(head -n 1 "$TMP/promotion") af_path=tools/fixture-reached.tbl
+af_ere='^2 b:'
+printf ': %s\n' "$af_path" >>"$fixture/$af_whole"
+{ head -n 1 "$fixture/$af_leg"; printf "# affected-reads: %s --only '%s'\n" "$af_path" "$af_ere"
+  sed 1d "$fixture/$af_leg"; } >"$TMP/af-stub" && cat "$TMP/af-stub" >"$fixture/$af_leg" || exit 2
+af_git() { git -C "$fixture" -c user.name=t -c user.email=t@t -c commit.gpgsign=false "$@"; }
+printf 'before\n' >"$fixture/$af_path"
+af_git init -q && af_git add -A && af_git commit -qm base || exit 2
+printf 'after\n' >"$fixture/$af_path"
+af_git commit -qam change || exit 2
+printf '%s\n' "$af_whole" "$af_leg" >"$TMP/af-names"
+printf '%s\n' "$af_whole" "$af_leg --only '$af_ere'" >"$TMP/af-commands"
+printf '%s []\n%s [--only] [%s]\n' "$af_whole" "$af_leg" "$af_ere" >"$TMP/af-argv"
+export ARGV_RECORD=$TMP/argv-record
+# Ran exactly the two commands, each once with its own argv.
+af_ran() { cmp -s "$TMP/af-names" "$RECORD" && cmp -s "$TMP/af-argv" "$ARGV_RECORD"; }
+af_slot() { : >"$ARGV_RECORD"; slot_run "$@"; }
+af_detail() { echo "exit $got; calls: $(tr '\n' '|' <"$FAKE_FW_CALLS"); ran: $(tr '\n' '|' <"$RECORD"); argv: $(tr '\n' '|' <"$ARGV_RECORD"); $(tail -n 5 "$TMP/out")"; }
+bash "$fixture/tools/test-run.sh" affected --harnesses --since HEAD~1 >"$TMP/af-real" 2>"$TMP/af-real-err" ||
+  report 1 '--affected: the fixture change is asked of the real affected --harnesses' "$(cat "$TMP/af-real-err")"
+if [ "$(sort "$TMP/af-real")" = "$(sort "$TMP/af-commands")" ]; then
+  report 0 '--affected: the fixture change reaches two members, one whole and one by --only'
+else report 1 '--affected: the fixture change reaches two members, one whole and one by --only' "$(cat "$TMP/af-real" "$TMP/af-real-err")"; fi
+af_slot -- --affected --since HEAD~1 --list
+if [ "$got" = 0 ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ] &&
+   [ "$(grep -v '^affected: ' "$TMP/out" | sort)" = "$(sort "$TMP/af-real")" ]; then
+  report 0 '--affected --list prints the commands affected --harnesses prints and takes no slot'
+else report 1 '--affected --list prints the commands affected --harnesses prints and takes no slot' "$(af_detail)"; fi
+af_slot -- --affected --since HEAD~1
+if [ "$got" = 0 ] && af_ran && [ "$probes" = 1 ] && [ "$slot_calls" = "execution slot --wait 600 --cpu" ] &&
+   grep -qxF -- "execution slot --wait 600 --cpu -- ${BASH:-bash} $subject --affected --since HEAD~1" "$FAKE_FW_CALLS" &&
+   [ "$(sed 's/.* //' "$SLOT_RECORD" | sort -u)" = slot=1 ] &&
+   [ "$(grep -c '^harnesses: ' "$TMP/out")" = 2 ] && [ "$(tail -n 1 "$TMP/out")" = 'harnesses: 2 run, 0 failed' ] &&
+   [ "$(grep -c '^affected: 2 harness command(s)' "$TMP/out")" = 1 ]; then
+  report 0 '--affected runs exactly the two commands, in one --cpu slot under one footer'
+else report 1 '--affected runs exactly the two commands, in one --cpu slot under one footer' "$(af_detail)"; fi
+af_slot FAIL_MEMBER="$af_whole" -- --affected --since HEAD~1
+if [ "$got" = 1 ] && af_ran && [ "$(tail -n 1 "$TMP/out")" = 'harnesses: 2 run, 1 failed' ]; then
+  report 0 '--affected: a failing member keeps the run red, the other command still run'
+else report 1 '--affected: a failing member keeps the run red, the other command still run' "$(af_detail)"; fi
+af_slot FAKE_FW_MODE=noprobe -- --affected --since HEAD~1
+if [ "$got" = 0 ] && af_ran && [ -z "$slot_calls" ] && [ "$(sed 's/.* //' "$SLOT_RECORD" | sort -u)" = slot=none ]; then
+  report 0 '--affected off the fleet runs the same commands directly'
+else report 1 '--affected off the fleet runs the same commands directly' "$(af_detail)"; fi
+# The one command prepush closes with: the form test-run.sh prints, run as it
+# stands, so the two tools cannot drift apart on its spelling.
+af_form=$(sed -n '/test-run: prepush: run them/s/.*: tools\/test-harnesses\.sh \([^%]*\)%s.*/\1/p' "$here/test-run.sh")
+# shellcheck disable=SC2086 # the printed form's words, split on purpose
+af_slot -- $af_form HEAD~1
+if [ -n "$af_form" ] && [ "$got" = 0 ] && af_ran; then
+  report 0 "the command prepush closes with runs what the change reaches"
+else report 1 "the command prepush closes with runs what the change reaches" "form [$af_form]; $(af_detail)"; fi
+# A change reaching no harness is a result: green, no slot, nothing run.
+af_slot -- --affected --since HEAD
+if [ "$got" = 0 ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ] &&
+   [ "$(tail -n 1 "$TMP/out")" = 'harnesses: 0 run, 0 failed (this change reaches no harness)' ]; then
+  report 0 '--affected on a change reaching no harness is green, with no slot and no member run'
+else report 1 '--affected on a change reaching no harness is green, with no slot and no member run' "$(af_detail)"; fi
+for args in no-since since-alone group expected ci-shell ci-real-dune bad-base; do
+  case $args in
+    no-since) af_slot -- --affected ;;
+    since-alone) af_slot -- --since HEAD~1 ;;
+    group) af_slot -- --affected --since HEAD~1 --shell ;;
+    expected) af_slot -- --affected --since HEAD~1 --expected-skips "$TMP/expected-none" ;;
+    ci-shell) af_slot -- --affected --since HEAD~1 --ci-shell ;;
+    ci-real-dune) af_slot -- --affected --since HEAD~1 --ci-real-dune ;;
+    bad-base) af_slot -- --affected --since no-such-revision ;;
+  esac
+  if [ "$got" = 2 ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ] &&
+     { [ "$args" != bad-base ] || grep -qF 'not a revision: no-such-revision' "$TMP/out"; }; then
+    report 0 "--affected with $args is refused before a slot or any harness"
+  else report 1 "--affected with $args is refused before a slot or any harness" "$(af_detail)"; fi
+done
+# The commands are read through an allowlist, never evaluated: a stand-in for
+# the ask prints each shape; only the two forms pass, the --only form as one
+# word again. The first case is the control: the stand-in itself runs members.
+mv "$fixture/tools/test-run.sh" "$TMP/test-run.aside" || exit 2
+printf '#!/usr/bin/env bash\ncat "$AF_COMMANDS"\nexit "${AF_RC:-0}"\n' >"$fixture/tools/test-run.sh"
+export AF_COMMANDS=$TMP/af-standin
+printf "%s --only '^1 a:'\n" "$af_leg" >"$AF_COMMANDS"
+af_slot -- --affected --since HEAD~1
+if [ "$got" = 0 ] && [ "$(cat "$RECORD")" = "$af_leg" ] && [ "$(cat "$ARGV_RECORD")" = "$af_leg [--only] [^1 a:]" ]; then
+  report 0 '--affected: a stand-in printing the --only form runs that member alone'
+else report 1 '--affected: a stand-in printing the --only form runs that member alone' "$(af_detail)"; fi
+for bad in unknown evaluated option double-quoted two-selectors twice failed-ask; do
+  case $bad in
+    unknown) echo tools/no-such-harness.sh ;;
+    evaluated) printf '%s; touch %s\n' "$af_whole" "$TMP/af-evaluated" ;;
+    option) printf '%s --keep\n' "$af_whole" ;;
+    double-quoted) printf '%s --only "^1:"\n' "$af_whole" ;;
+    two-selectors) printf "%s --only '^1:' --only '^2:'\n" "$af_whole" ;;
+    twice) printf '%s\n%s\n' "$af_whole" "$af_whole" ;;
+    failed-ask) echo "$af_whole" ;;
+  esac >"$AF_COMMANDS"
+  case $bad in failed-ask) rc_var=AF_RC=3 ;; *) rc_var=AF_RC=0 ;; esac
+  af_slot "$rc_var" -- --affected --since HEAD~1
+  if [ "$got" = 2 ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ] && [ ! -e "$TMP/af-evaluated" ] &&
+     grep -q '^test-harnesses.sh: --affected: ' "$TMP/out"; then
+    report 0 "--affected refuses $bad before a slot or any harness"
+  else report 1 "--affected refuses $bad before a slot or any harness" "$(af_detail)"; fi
+done
+mv "$TMP/test-run.aside" "$fixture/tools/test-run.sh" || exit 2
+unset AF_COMMANDS
+# Negative controls of the run's oracle: a twin at the same tools/ depth that
+# ignores the selection, and one that drops the selector, each lose it.
+for mutant in every-member no-selector; do
+  case $mutant in
+    every-member) af_from='[ -n "$reached" ] || continue' af_to=':' ;;
+    no-selector) af_from='args=(--only "$selector")
+      command=' af_to='command=' ;;
+  esac
+  af_twin=$fixture/tools/affected-twin.sh
+  if ! AF_FROM=$af_from AF_TO=$af_to perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{AF_FROM}\E/$ENV{AF_TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$subject" >"$af_twin"; then
+    report 1 "negative control: an --affected twin ($mutant)" 'the mutation anchor does not occur exactly once'
+    continue
+  fi
+  chmod +x "$af_twin"
+  : >"$RECORD"
+  : >"$ARGV_RECORD"
+  twin_rc=0
+  (cd "$TMP" && "$af_twin" --affected --since HEAD~1) >"$TMP/twin-out" 2>&1 || twin_rc=$?
+  if [ "$twin_rc" = 0 ] && ! af_ran; then
+    report 0 "negative control: an --affected twin ($mutant) loses the exactly-these-commands oracle"
+  else report 1 "negative control: an --affected twin ($mutant) loses the exactly-these-commands oracle" "exit $twin_rc; $(tr '\n' '|' <"$ARGV_RECORD")"; fi
+  rm -f "$af_twin"
+done
+unset ARGV_RECORD
 unset SLOT_RECORD FAKE_FW_CALLS
 # One probe for every fleet asker, one rerun helper for the two tools that run
 # themselves again inside the slot (gh-ocannl-1576, gh-ocannl-1841): the

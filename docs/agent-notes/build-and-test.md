@@ -909,9 +909,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   an ordinary failure; the footer counts failed harnesses and exits 1 if any failed. A member
   interrupted by HUP, INT or TERM stops the aggregate and preserves exit 129, 130 or 143. Individual
   harnesses retain their counted capability skips; the formatter's real cache control and
-  promotion fixtures need the local toolchain. For a shell change, run the harness commands
-  `tools/test-run.sh prepush` names (gh-ocannl-1929, below: the members and legs the change
-  reaches, the whole tier being CI's) beside
+  promotion fixtures need the local toolchain. For a shell change, run the command
+  `tools/test-run.sh prepush` closes with, `tools/test-harnesses.sh --affected --since BASE`
+  (gh-ocannl-1929, below: the members and legs the change reaches, the whole tier being CI's) beside
   `tools/test-run.sh run build @test/operations/scans`: the latter includes configuration
   usage and shell parsing, which standalone process fixtures cannot cover (gh-ocannl-988).
   `tools/test-test-harnesses.sh` drives an isolated copy with derived member stubs, including
@@ -3387,12 +3387,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     with the OFF-BUILD aliases on a box that builds them). A list with no `runtest-` member runs
     nothing, exit 0, and `--list` then prints nothing, which `run --targets-file` refuses: check
     the list before shipping it. Harness: leg 98 of `tools/test-test-run.sh`.
-  - `prepush` names the harness commands the change reaches and runs none (gh-ocannl-1929): a
+  - `prepush` names the harness commands the change reaches, and the one command that runs them,
+    and runs none (gh-ocannl-1929): a
     change to `scripts/harness-support.sh` listed 18 aliases and no word of the shell tier, and
     its fixture break reached CI (gh-ocannl-1839). It asks `affected --harnesses --since BASE`
     (stdout is the commands; the `affected: harness:` stderr lines are not parsed, a changed path
     named `harness` printing one of that shape) and prints, as the LAST lines of stderr, a count
-    line and one `test-run: prepush: harness: CMD` each: after the run's verdict, after `--list`'s
+    line, one `test-run: prepush: harness: CMD` each and a closing line naming
+    `tools/test-harnesses.sh --affected --since BASE`: after the run's verdict, after `--list`'s
     list, and after a cross-cutting or incomplete refusal or a list with nothing to run, since
     the commands are the caller's to run in each case. They change no exit status; a change
     reaching no harness prints no line (`tensor/shape.ml` beside `AGENTS.md`: none; this note
@@ -3401,10 +3403,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     argv and log, a harness is another program with its own verdict lines and minutes of its own
     (`tools/test-test-run.sh` whole), a harness of the runner starts runs of its own in fixture
     worktrees, and `--list` -- a fleet leg's form -- can only carry aliases. So a shell change's
-    pre-push is `prepush`, then each named command (on a fleet box inside a slot,
-    `fleet-worker.sh execution slot --cpu -- CMD`: a single harness takes none itself, only
-    `tools/test-harnesses.sh` does), and the rule to run that whole tier before pushing a shell
-    change is retired to CI, which runs it on every PR.
+    pre-push is `prepush`, then that closing command, and the rule to run the whole tier before
+    pushing a shell change is retired to CI, which runs it on every PR. `--affected` reads
+    `affected --harnesses --since BASE`'s stdout, never evaluates it (each line is `HARNESS` or
+    `HARNESS --only 'ERE'`, HARNESS a member listed once, anything else exit 2 before the slot),
+    and runs those commands in manifest order under the aggregate's one `--cpu` slot and footer.
+    The form exists because a change reaching six harnesses meant six slot launches, or a scratch
+    loop: a single harness takes no slot itself. A change reaching none exits 0 with no slot, where
+    an empty group is refused: the first is a result, the second a broken manifest.
+    `tools/test-test-harnesses.sh` drives the real `affected --harnesses` over a git fixture whose
+    commit reaches two members, and reads the closing line's form out of `tools/test-run.sh`, so
+    the two tools cannot disagree on its spelling.
 
 ## OCaml and dune traps
 

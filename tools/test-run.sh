@@ -93,12 +93,14 @@
 # (the list is affected's): name any further alias after `build`.
 # The shell harnesses are no dune aliases, so the run does not hold them
 # (gh-ocannl-1929): the commands `affected --harnesses --since BASE` prints
-# are NAMED, not run, as the last lines of stderr -- a count line, then one
-# `test-run: prepush: harness: CMD` each -- after the run's verdict, after
-# `--list`'s list, and after a cross-cutting or incomplete refusal alike, for
-# the caller to run before pushing (on a fleet box inside a slot). They change
-# no exit status. A change reaching no harness (most `.ml`-only ones) prints
-# no such line; an `affected --harnesses` that fails runs nothing (exit 2).
+# are NAMED, not run, as the last lines of stderr -- a count line, one
+# `test-run: prepush: harness: CMD` each, and a closing line naming the one
+# command that runs them, `tools/test-harnesses.sh --affected --since BASE`
+# (one --cpu slot, which it takes itself, and one footer) -- after the run's
+# verdict, after `--list`'s list, and after a cross-cutting or incomplete
+# refusal alike, for the caller to run before pushing. They change no exit
+# status. A change reaching no harness (most `.ml`-only ones) prints no such
+# line; an `affected --harnesses` that fails runs nothing (exit 2).
 #
 # `--targets-file FILE` (repeatable; gh-ocannl-1740) adds the aliases FILE lists
 # to dune's argv, after its own words (before dune's `--`, if any): one `@`
@@ -3874,16 +3876,18 @@ if [ "$sub" = prepush ]; then
   reject_misplaced_options "$@"
   pp_dir=$(mktemp -d "${TMPDIR:-/tmp}/test-run-prepush.XXXXXX") || die "cannot create a scratch directory"
   # The closing lines (gh-ocannl-1929): the harness commands the change
-  # reaches, named last -- after the run's verdict, a refusal or --list's
-  # list -- so the tail of a pre-push log carries them. Nothing is printed
-  # when the change reaches none.
+  # reaches, then the one command that runs them all, named last -- after the
+  # run's verdict, a refusal or --list's list -- so the tail of a pre-push log
+  # carries them. Nothing is printed when the change reaches none.
   pp_harness=()
   pp_close() {
     if [ ${#pp_harness[@]} -gt 0 ]; then
       {
-        printf 'test-run: prepush: %d harness command(s) this change reaches, named here and NOT run (they are no dune aliases, so no part of prepush'\''s list): run each before pushing, on a fleet box inside a slot (fleet-worker.sh execution slot --cpu -- CMD):\n' \
+        printf 'test-run: prepush: %d harness command(s) this change reaches, named here and NOT run (they are no dune aliases, so no part of prepush'\''s list):\n' \
           "${#pp_harness[@]}"
         printf 'test-run: prepush: harness: %s\n' "${pp_harness[@]}"
+        printf 'test-run: prepush: run them before pushing, as one command that takes its own --cpu slot: tools/test-harnesses.sh --affected --since %s\n' \
+          "$pp_base"
       } >&2
     fi
     rm -rf "$pp_dir"

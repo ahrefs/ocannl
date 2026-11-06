@@ -4,6 +4,7 @@
 #                               [--expected-skips FILE]
 #        tools/test-harnesses.sh --ci-shell [--list]
 #        tools/test-harnesses.sh --ci-real-dune [--list]
+#        tools/test-harnesses.sh --affected --since BASE [--list]
 # With no group, run all three. --shell needs no OCaml toolchain; --toolchain
 # runs the formatter controls and the scan-case type check (which links
 # ppxlib) and --promotion the controls of tools that read
@@ -55,6 +56,20 @@
 # misses is red there, never a skip nobody runs per PR. It takes no group and
 # no --expected-skips.
 #
+# --affected --since BASE is a shell change's pre-push, the command
+# `tools/test-run.sh prepush` closes by naming: exactly the commands
+# `tools/test-run.sh affected --harnesses --since BASE` prints, each member with
+# the --only printed for it, in manifest order, under one slot and one footer
+# instead of a launch per command. The selection is the change's, so it takes
+# no group, no --expected-skips and no CI form, and --since belongs to it alone.
+# Those commands are read, never evaluated, through a fail-closed allowlist:
+# each line is `HARNESS` or `HARNESS --only 'ERE'`, HARNESS a member listed once
+# and ERE free of quotes, tabs and carriage returns. Any other line, or an ask
+# that fails (a BASE that is no revision), refuses the run (exit 2) before a
+# slot is taken or a member starts. A change reaching no harness is a result,
+# not the empty selection the other forms refuse: exit 0, `harnesses: 0 run, 0
+# failed`, no slot. --list prints the commands and runs nothing.
+#
 # On a fleet box a run takes one of the box's run-time correctness slots
 # itself, as --cpu (no member holds a device), as tools/test-run.sh and
 # tools/fmt-check.sh take theirs and through the same probe,
@@ -76,7 +91,7 @@ slot_record=${OCANNL_TOOL_HARNESSES_IN_SLOT-}
 unset OCANNL_TOOL_HARNESSES_IN_SLOT
 [ -z "$slot_record" ] || : >"$slot_record" || exit 2
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
-group=all list=0 expected= ci_shell=0 ci_real_dune=0
+group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since=
 original_args=("$@")
 while [ $# -gt 0 ]; do
   arg=$1
@@ -87,6 +102,11 @@ while [ $# -gt 0 ]; do
     --list) list=1 ;;
     --ci-shell) ci_shell=1 ;;
     --ci-real-dune) ci_real_dune=1 ;;
+    --affected) affected=1 ;;
+    --since)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --since needs a base revision" >&2; exit 2; }
+      since=$2
+      shift ;;
     --expected-skips)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --expected-skips needs a file" >&2; exit 2; }
       expected=$2
@@ -106,6 +126,16 @@ if [ "$ci_shell" = 1 ] || [ "$ci_real_dune" = 1 ]; then
     exit 2
   }
   group=shell
+fi
+if [ "$affected" = 1 ]; then
+  [ -n "$since" ] || { echo "test-harnesses.sh: --affected needs --since BASE" >&2; exit 2; }
+  [ "$group" = all ] && [ -z "$expected" ] || {
+    echo "test-harnesses.sh: --affected selects what the change reaches, so it takes no group, no --expected-skips and no CI form" >&2
+    exit 2
+  }
+elif [ -n "$since" ]; then
+  echo "test-harnesses.sh: --since is --affected's" >&2
+  exit 2
 fi
 # This is the sole membership list: CI selects groups from this entrypoint.
 manifest() {
@@ -232,6 +262,49 @@ if [ -n "$expected" ]; then
     { echo "test-harnesses.sh: --expected-skips: cannot read $expected" >&2; exit 2; }
   validate_list "$expected" --expected-skips
 fi
+# --affected's commands (see the header) as `HARNESS<TAB>ERE` lines in
+# affected_table, ERE empty for a member reached whole. Asked of this checkout
+# whatever the caller's directory: test-run.sh goes to its own root. The copy
+# in the slot asks again, for a slot wait is minutes in which the change can
+# move; what reached what was already said, so only a failure speaks there.
+affected_table=
+read_affected() {
+  local dir rc=0 line n=0 seen=$'\n' selected reached
+  # The two forms `affected --harnesses` prints (tools/affected-tests.sh).
+  local form=$'^([^ \t\r\']+)( --only \'([^\t\r\']+)\')?$'
+  dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-affected.XXXXXX") ||
+    { echo "test-harnesses.sh: cannot create the --affected scratch directory" >&2; exit 2; }
+  scratch+=("$dir")
+  "${BASH:-bash}" "$root/tools/test-run.sh" affected --harnesses --since "$since" >"$dir/commands" 2>"$dir/err" || rc=$?
+  if [ "$rc" != 0 ]; then
+    cat "$dir/err" >&2
+    echo "test-harnesses.sh: --affected: affected --harnesses --since $since exited $rc (above), so what this change reaches is not known; nothing run" >&2
+    exit 2
+  fi
+  [ -n "$slot_record" ] || cat "$dir/err" >&2
+  selected=$'\n'$(members)$'\n'
+  affected_table=$dir/table
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    reached=
+    if [[ $line =~ $form ]]; then
+      reached=${BASH_REMATCH[1]}
+      printf '%s\t%s\n' "$reached" "${BASH_REMATCH[3]}"
+      case $selected in *$'\n'"$reached"$'\n'*) ;; *) reached= ;; esac
+      case $seen in *$'\n'"$reached"$'\n'*) reached= ;; esac
+      seen=$seen$reached$'\n'
+    fi
+    if [ -z "$reached" ]; then
+      echo "test-harnesses.sh: --affected: line $n of what affected --harnesses printed is no command of a member, once: $line" >&2
+      exit 2
+    fi
+  done <"$dir/commands" >"$affected_table"
+}
+[ "$affected" = 0 ] || read_affected
+if [ "$affected" = 1 ] && [ ! -s "$affected_table" ]; then
+  [ "$list" = 1 ] || printf '\nharnesses: 0 run, 0 failed (this change reaches no harness)\n'
+  exit 0
+fi
 # The fleet's run-time correctness slot (see the header): the whole run, this
 # script again, inside one `execution slot --cpu`. Taken here, after every
 # refusal above and before anything below is exported -- the fleet-worker.sh
@@ -280,19 +353,30 @@ while read -r tier script; do
     [ -n "$selector" ] || continue
     args=(--only "$selector")
   fi
+  command=$script
+  if [ "$affected" = 1 ]; then
+    # `+` tells a member reached whole from one no line names.
+    reached=$(awk -F '\t' -v s="$script" '$1 == s { print "+" $2 }' "$affected_table")
+    [ -n "$reached" ] || continue
+    selector=${reached#+}
+    if [ -n "$selector" ]; then
+      args=(--only "$selector")
+      command="$script --only '$selector'"
+    fi
+  fi
   total=$((total + 1))
   if [ "$list" = 1 ]; then
-    printf '%s\n' "$script"
+    printf '%s\n' "$command"
     continue
   fi
-  printf '\nHARNESS %s (%s)\n' "$script" "$tier"
+  printf '\nHARNESS %s (%s)\n' "$command" "$tier"
   rc=0
   if [ "$ci_real_dune" = 1 ]; then
     # Kept for the PASS check below, and shown as it runs.
     OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" "${args[@]}" | tee "$outputs/${script//\//_}.out"
     rc=${PIPESTATUS[0]}
   else
-    OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" || rc=$?
+    OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" ${args[@]+"${args[@]}"} || rc=$?
   fi
   printf 'HARNESS %s exit: %s\n' "$script" "$rc"
   case $rc in
