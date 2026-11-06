@@ -500,25 +500,26 @@ gh-ocannl-404 claimed two benefits for schemes: errors reported earlier, and che
 - `shared`: one such closure applied N times (a weight-tied stack);
 - `decoder`: `Nn_blocks.decoder_only`, today a schemed stack of schemed blocks (gh-ocannl-1792, gh-ocannl-1814). At the table's commit its blocks were unschemed, while their feed-forward layers and layer norms were schemed.
 
-`Tensor.Scheme.registration_counts` and `registration_times` attribute the work. To regenerate the numbers, run `scheme_payoff.exe --bench 5 distinct=1,2,4,8,16 shared=1,2,4,8,16 decoder=1,2,4,8` from `_build/default/test/operations` (the table below is from `feecffeab`, before the gains described after it). The test itself claims the count relationships.
+`Tensor.Scheme.registration_counts` and `registration_times` attribute the work. To regenerate the numbers, run `scheme_payoff.exe --bench 5 distinct=1,4,8,16 shared=1,4,8,16 decoder=1,4,8,16` from `_build/default/test/operations`. The test itself claims the count relationships.
 
-Total shape-inference wall time per build (construction plus closure), in ms. Each cell is the median of 5 runs after a warm-up, measured on cc, mac-studio M4 Max, in an exclusive window at `feecffeab`:
+Total shape-inference wall time per build (construction plus closure), in ms. Each cell is the median of 5 runs after a warm-up, measured on cc, mac-studio M4 Max, at `2d75b2c7c`, in a shared slot:
 
 | stack | N | off | check | check/off |
 | --- | --- | --- | --- | --- |
-| distinct | 1 | 5.4 | 11.5 | 2.2 |
-| distinct | 4 | 36.8 | 85.1 | 2.3 |
-| distinct | 8 | 133 | 296 | 2.2 |
-| distinct | 16 | 582 | 1,269 | 2.2 |
-| shared | 1 | 3.8 | 10.3 | 2.7 |
-| shared | 4 | 30.3 | 64.3 | 2.1 |
-| shared | 8 | 99.3 | 207 | 2.1 |
-| shared | 16 | 390 | 842 | 2.2 |
-| decoder | 1 | 26.1 | 47.4 | 1.8 |
-| decoder | 4 | 455 | 664 | 1.5 |
-| decoder | 8 | 2,046 | 3,000 | 1.5 |
+| distinct | 1 | 2.5 | 5.6 | 2.2 |
+| distinct | 4 | 14.4 | 27.0 | 1.9 |
+| distinct | 8 | 29.7 | 58.3 | 2.0 |
+| distinct | 16 | 62.0 | 127 | 2.0 |
+| shared | 1 | 2.3 | 6.4 | 2.7 |
+| shared | 4 | 12.0 | 20.3 | 1.7 |
+| shared | 8 | 25.4 | 40.9 | 1.6 |
+| shared | 16 | 56.4 | 84.8 | 1.5 |
+| decoder | 1 | 10.9 | 53.5 | 4.9 |
+| decoder | 4 | 56.8 | 265 | 4.7 |
+| decoder | 8 | 123 | 599 | 4.9 |
+| decoder | 16 | 286 | 1,517 | 5.3 |
 
-Checking mode costs a constant factor, about 2x on the schemed stacks and 1.5x on the decoder. The extra time is its traces plus a rewound instantiation per application. It leaves the closure's constraint store exactly as it is with the schemes off.
+Checking mode costs a constant factor, about 2x on the block stacks and 5x on the decoder, whose scheme traces the whole stack (two thirds of its `check` time at N=16). The extra time is its traces plus a rewound instantiation per application. It leaves the closure's constraint store exactly as it is with the schemes off.
 
 **Which applications are checked** (gh-ocannl-1814). The outermost schemed ones. A trace runs the schemed applications in its body plain, so the outer scheme already holds their constraints, and checking them while the body runs re-solved a renamed subset of what the outer check had just found consistent. So the body of a checked application runs with its nested applications unchecked: one `block` is one check of 127 + 29 + 15 (constraints, solutions, boundary) instead of three checks of 215 + 53 + 33, and a transformer block one check instead of eight. This moves no error, because the outer check always ran first: a nested argument error was already reported naming the outer function, and a nested check could only speak after the outer one had passed. `scheme_error_locality`'s second table pins it, against a control that checks the nested applications too. A nested application is still checked where nothing vouches for it: under an opted-out function, a refused one, or any other application that did not run a check. And a function's first application still traces its presence patterns when it has several, since the outer window holds only the one applied. A body breaking the determinism premise (its graph depending on anything but its closure and its arguments' shapes) still registers inline, so its error surfaces in the body or at the closure.
 
