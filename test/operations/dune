@@ -545,6 +545,22 @@
 ; position the IR has for one, the helper behind the end-to-end forged-node controls of
 ; schedule_epilogue_fusion and online_softmax_block_mma. Structural only.
 
+; Ll_test's IR dump: the backend's own build_files gate, off and on, and what each file holds.
+
+(test
+ ; ocannl-backend: none -- hand-built IR is optimized and printed, never linked or executed.
+ (name ll_test_dump)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules ll_test_dump)
+ (libraries
+  base
+  arrayjit.ir
+  arrayjit.utils
+  arrayjit.verdict
+  ll_test
+  test_utils))
+
 (test
  ; ocannl-backend: none -- compares hand-built IR structurally and never creates a context.
  (name ll_test_substitute)

@@ -2511,6 +2511,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ## Hand-built IR tests
 
+- To read the IR a hand-built test optimized, run it with
+  `OCANNL_OUTPUT_DEBUG_FILES_IN_BUILD_DIRECTORY=true`: `Ll_test.optimize` writes
+  `<name>-unoptimized.ll` and `<name>.ll` under the gate a backend's own lowering uses, in
+  `_build/default/<test dir>/build_files/<exe>/` (`ll_test_dump` pins it). `optimize_scoped` optimizes
+  `raw`, so those two files are `raw`'s; the backend's source for the routine shows the scoped program.
 - `ll_test_ratchet` prints an adopted-but-still-hand-building census (gh-ocannl-1090): the same
   syntactic record and private-traversal counts, sorted by source path, for adopted sources with
   either count nonzero. These golden rows are informative and promotable, with no growth cap;

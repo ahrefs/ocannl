@@ -1,0 +1,5 @@
+gate off: no .ll: true
+gate off: no -unoptimized.ll: true
+gate on: -unoptimized.ll is the IR as handed in: true
+gate on: .ll is the IR the pipeline left: true
+optimize_scoped: .ll is raw's, not the scoped program: true
