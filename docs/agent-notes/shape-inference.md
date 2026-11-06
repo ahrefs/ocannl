@@ -516,17 +516,34 @@ files.
   `unify_dim`'s stride-1 arm and in `s_dim_one` (`is_identity_window`); kept, a residual add
   equating its `over` with it reads as an occurs-check cycle. Collapsed, nothing constrains the
   extent's basis later, so the identity passes the basis through over a solved `Dim` too
-  (gh-ocannl-1824): the solved arms' `merge_derived_basis` turned the other reserved tag into the
+  (gh-ocannl-1824): the solved arms' basis rule turned the other reserved tag into the
   kernel's (`bcast_if_1` into `default`), and `conv(v + kernel 1) = 4_(bcast_if_1)` solved before
   `v = 4_(bcast_if_1)` but not after. `s_dim_one` applies `is_identity_window` before its solved
   arms for the same reason, and `unify_dim`'s kernel-inference arm (a window over a solved extent
   whose kernel is a variable, against a solved `Dim`) re-unifies the equation once it has bound
   the kernel: it picks the kernel from the sizes alone, and used to skip the basis check a kernel
-  solved earlier would have met. A named kernel tag still converts (its window is no identity), and
-  size-changing windows keep `merge_derived_basis`. The occurs check is unchanged. Pinned by
+  solved earlier would have met. A named kernel tag still converts (its window is no identity).
+  The occurs check is unchanged. Pinned by
   `test/operations/scheme_strided_residual`: `check` against `off` on schemed blocks with equal
   and unequal strides, the window-pair equations solved directly in both orders, and the identity's
   basis over every reserved tag pair, constraint order and a kernel solved late.
+- A valid window's basis has one forward rule, `window_input_basis` (gh-ocannl-1968); the reverse
+  arm and the kernel-inference arm enumerate candidates through it (`window_bases`) instead of
+  inverting it by hand, which is how reverse came to accept what forward refused. The rule is not
+  injective: `default` and `1_(bcast_if_1)` both map to the kernel's tag, so an equation with
+  several surviving tags stays a `Dim_eq`, and `solve_inequalities` settles the first one on
+  `default` at a fixpoint from Stage2 up. At a fixpoint, not at the stage: `set_dim` and the other
+  trailing setters push constraints no Stage1 pass read, so a stage gate would settle a window ahead
+  of an older `set_dim` in the same pass. `default` is in every ambiguous set, so it satisfies every
+  open window over an output at once, which `merge_derived_basis`'s answer does not. `bcast_if_1`
+  above size 1 is an atom in the rule, or the whole conv path would be ambiguous and every window
+  output would leave Stage1; contested outputs are size 1 and those of a named kernel, and such an
+  output is unknown until closure if nothing else solves it. Padded windows take the extent's basis,
+  whatever the kernel. A window pair with a kernel that claims a tag stays a `Dim_eq` after its size
+  equation, since that equation carries no basis. Two claim-free kernels still equate their
+  outputs, so `o1 = 1_(bcast_if_1)`, `o2 = 1_default` over equal windows is refused pair-first and
+  accepted solved-first: gh-ocannl-1820 needs those outputs merged. Pinned by
+  `test/operations/scheme_strided_residual`'s matrix over tags, window shapes and orders.
 - Every benchmark model builds under `check` with `off`'s dims (gh-ocannl-1908):
   `test/operations/bench_model_schemes` builds each conv and gpt workload of `benchmarks/workloads`
   from a synthetic zero-valued fixture, through `Bench_conv_model`/`Bench_gpt_model` as the runners

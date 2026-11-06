@@ -236,14 +236,48 @@ let get_sym_dim ?(basis = default_basis) ?proj_id sym =
 (* The reserved tags ([default], [bcast_if_1]) carry no naming claim. *)
 let is_reserved_basis b = String.equal b default_basis || String.equal b bcast_if_1
 
-(* Combine the bases of two dimensions fused into one derived dimension (e.g. a convolution's stride
-   and kernel). A named tag wins over a reserved (claim-free) tag; two distinct named tags are a
-   conflict handled by [on_conflict]. *)
+(* Combine the bases of two components of a concatenated dimension. A named tag wins over a reserved
+   (claim-free) tag; two distinct named tags are a conflict handled by [on_conflict]. *)
 let merge_derived_basis ~on_conflict b1 b2 =
   if String.equal b1 b2 then b1
   else if is_reserved_basis b1 then b2
   else if is_reserved_basis b2 then b1
   else on_conflict ()
+
+(* The basis a valid window derives for its input from its extent's and its kernel's
+   (gh-ocannl-1968). [default] and the top [1_(bcast_if_1)] make no claim, and every other tag is an
+   atom, which includes [bcast_if_1] at any size but 1 (the inert atom of docs/shape_inference.md).
+   Two atoms must agree, an atom wins over a claim-free tag, and two claim-free tags stay [default]
+   unless both are the top. [None] is a conflict. *)
+let is_claim_free (s : solved_dim) =
+  String.equal s.basis default_basis || (String.equal s.basis bcast_if_1 && s.d = 1)
+
+let window_input_basis ~(extent : solved_dim) ~(kernel : solved_dim) =
+  if String.equal extent.basis kernel.basis then Some extent.basis
+  else
+    match (is_claim_free extent, is_claim_free kernel) with
+    | true, true -> Some default_basis
+    | true, false -> Some kernel.basis
+    | false, true -> Some extent.basis
+    | false, false -> None
+
+(* The rule is not injective, so the tags of an unsolved output or kernel are what the rule says
+   they are: its candidates, filtered by the rule itself. Inverting it by hand is how the reverse
+   arm came to commit tags the forward arm refused. Besides the two tags in play only the claim-free
+   ones can map onto the input. Several survive only when a claim-free tag does, so [default] is
+   always among them: [input = F(default, kernel)] then, whichever window asks, so settling an open
+   window with it cannot contradict another one over the same output. *)
+let window_bases ~size ~tags ~derives =
+  List.dedup_and_sort ~compare:String.compare (default_basis :: bcast_if_1 :: tags)
+  |> List.filter ~f:(fun basis -> derives { d = size; basis; proj_id = None })
+
+let window_output_bases ~size ~(input : solved_dim) ~(kernel : solved_dim) =
+  window_bases ~size ~tags:[ input.basis; kernel.basis ] ~derives:(fun extent ->
+      Option.equal String.equal (window_input_basis ~extent ~kernel) (Some input.basis))
+
+let window_kernel_bases ~size ~(input : solved_dim) ~(extent : solved_dim) =
+  window_bases ~size ~tags:[ input.basis; extent.basis ] ~derives:(fun kernel ->
+      Option.equal String.equal (window_input_basis ~extent ~kernel) (Some input.basis))
 
 let effective_kernel_span ~dilation ~kernel_size =
   (* The effective kernel span with dilation is: 1 + (kernel_size - 1) * dilation This is the actual
@@ -263,10 +297,9 @@ let kernel_size_of_span ~dilation ~span =
    mixed padded/valid arm built one as a helper; [window_pair_equation] now equates the outputs
    directly instead, gh-ocannl-1823). Collapsed, nothing is left to constrain the extent's basis
    later, so the identity passes the basis through as it passes the size, over a solved extent too
-   (gh-ocannl-1824): deriving [merge_derived_basis over.basis kernel.basis] there turned the other
-   reserved tag into the kernel's, and acceptance depended on which side was solved first. A kernel
-   carrying a named basis still converts the extent, so its window is no identity and is left to the
-   solved arms. *)
+   (gh-ocannl-1824): deriving [window_input_basis] there turned the other reserved tag into the
+   kernel's, and acceptance depended on which side was solved first. A kernel carrying a named basis
+   still converts the extent, so its window is no identity and is left to the solved arms. *)
 let is_identity_window ~stride ~conv =
   stride = 1
   &&
@@ -759,6 +792,15 @@ let sum_solved_components (solved_dims : solved_dim list) =
   in
   { d = total_d; basis; proj_id = None }
 
+let derived_window_basis (s : solved_dim) (k : solved_dim) =
+  match window_input_basis ~extent:s ~kernel:k with
+  | Some basis -> basis
+  | None ->
+      raise
+      @@ Shape_error
+           ( "convolution: conflicting dimension bases between stride and kernel",
+             [ Dim_mismatch [ Dim s; Dim k ] ] )
+
 let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
   match in_ with
   | Var v2 when equal_dim_var v v2 -> value
@@ -783,13 +825,7 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
           } ->
           (* input_size = stride * (output_size - 1) + effective_kernel_span *)
           let span = effective_kernel_span ~dilation ~kernel_size:k.d in
-          let basis =
-            merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
-                raise
-                @@ Shape_error
-                     ( "convolution: conflicting dimension bases between stride and kernel",
-                       [ Dim_mismatch [ Dim s; Dim k ] ] ))
-          in
+          let basis = derived_window_basis s k in
           let d = (stride * (s.d - 1)) + span in
           (* Only [window_pair_equation]'s helper has a span below 1, and what it computes is a real
              window's output: below 1, that window is wider than the extent the two share, which the
@@ -799,27 +835,11 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
             @@ Shape_error
                  ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ result ] ]);
           Dim { d; basis; proj_id = None }
+      (* A padded extent is the stride's alone, whatever the kernel, as [unify_dim]'s padded arms
+         and a stride-1 padded window have it (gh-ocannl-1968). *)
       | Affine
-          {
-            stride;
-            over = Dim s;
-            conv = Some { kernel = Dim k; use_padding = true; _ };
-            stride_offset = _;
-          } ->
-          (* A padded kernel does not enter the extent, so the claim-free top must not retag it, as
-             in [unify_dim]'s padded arm: merging the two reserved tags turned a [default] extent
-             into [bcast_if_1] under a kernel closed to [1_(bcast_if_1)] (gh-ocannl-1983). *)
-          let basis =
-            if String.equal k.basis bcast_if_1 then s.basis
-            else
-              merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
-                  raise
-                  @@ Shape_error
-                       ( "convolution: conflicting dimension bases between stride and kernel",
-                         [ Dim_mismatch [ Dim s; Dim k ] ] ))
-          in
-          Dim { d = s.d * stride; basis; proj_id = None }
-      | Affine { stride; over = Dim s; conv = None; stride_offset = _ } ->
+          { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; stride_offset = _ }
+        ->
           Dim { d = s.d * stride; basis = s.basis; proj_id = None }
       | res -> res)
   | Concat dims -> (
@@ -2584,12 +2604,20 @@ let visit_rows_for_row_solution env v ~value =
       let more, data = s_row_one_in_entry v ~value ~in_:data in
       (data, more))
 
-let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
+(* [settling], from [solve_inequalities]: a window whose output or kernel the equation leaves open
+   takes [default] rather than waiting, and the flag says one did (gh-ocannl-1968). *)
+let%track6_sexp rec unify_dim ?(settling : bool ref option) ~stage origin (eq : dim * dim) env :
+    constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
-  let window_pair ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 =
+  let held = Dim_eq { d1 = dim1; d2 = dim2; origin } in
+  (* The size equation of two windows says nothing of a kernel's claim on their input, so a window
+     pair with such a kernel stays until the solved arms can decide it (gh-ocannl-1968). *)
+  let window_pair ?(kernels = []) ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 () =
     match window_pair_equation ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 with
-    | `Equate eq -> unify_dim ~stage origin eq env
-    | `Defer -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
+    | `Equate eq ->
+        let constrs, env = unify_dim ~stage origin eq env in
+        if List.for_all kernels ~f:is_claim_free then (constrs, env) else (held :: constrs, env)
+    | `Defer -> ([ held ], env)
     | `Refuse msg -> raise @@ Shape_error (msg, [ Dim_mismatch [ dim1; dim2 ] ])
   in
   match (dim1, dim2) with
@@ -2666,13 +2694,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
     ->
       (* input_size = stride * (output_size - 1) + effective_kernel_span *)
       let span = effective_kernel_span ~dilation ~kernel_size:k.d in
-      let basis =
-        merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
-            raise
-            @@ Shape_error
-                 ( "convolution: conflicting dimension bases between stride and kernel",
-                   [ Dim_mismatch [ Dim s; Dim k ] ] ))
-      in
+      let basis = derived_window_basis s k in
       unify_dim ~stage origin (get_dim ~d:((stride * (s.d - 1)) + span) ~basis (), dim) env
   | Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }
@@ -2680,16 +2702,33 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       (* Reverse: solve for output_size given input_size s. input_size = stride * (output_size - 1)
          + effective_kernel_span output_size = (input_size - effective_kernel_span) / stride + 1 *)
       let span : int = effective_kernel_span ~dilation ~kernel_size:k.d in
-      let basis =
-        merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
+      let numerator : int = s.d - span in
+      if numerator >= 0 && numerator % stride = 0 then
+        let d = (numerator / stride) + 1 in
+        let solve_over basis = unify_dim ?settling ~stage origin (get_dim ~d ~basis (), over) env in
+        match window_output_bases ~size:d ~input:s ~kernel:k with
+        | [] ->
             raise
             @@ Shape_error
                  ( "convolution: conflicting dimension bases between stride and kernel",
-                   [ Dim_mismatch [ Dim s; Dim k ] ] ))
-      in
-      let numerator : int = s.d - span in
-      if numerator >= 0 && numerator % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:((numerator / stride) + 1) ~basis (), over) env
+                   [ Dim_mismatch [ dim1; dim2 ] ] )
+        | [ basis ] -> solve_over basis
+        | bases -> (
+            match settling with
+            | None -> ([ held ], env)
+            | Some settled ->
+                settled := true;
+                (* [default] suits a variable. A nested window can derive only some of the tags, so
+                   it takes the first it can. *)
+                let rec first_fit = function
+                  | [] -> assert false
+                  | [ basis ] -> solve_over basis
+                  | basis :: rest -> ( try solve_over basis with Shape_error _ -> first_fit rest)
+                in
+                let others = List.filter bases ~f:(Fn.non (String.equal default_basis)) in
+                let constrs, env = first_fit (default_basis :: others) in
+                let more, env = unify_dim ~stage origin (dim1, dim2) env in
+                (constrs @ more, env))
       else
         raise
         @@ Shape_error
@@ -2705,13 +2744,29 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
          effective_kernel_span effective_kernel_span = input_size - stride * (output_size - 1) *)
       let span = i.d - (stride * (s.d - 1)) in
       match kernel_size_of_span ~dilation ~span with
-      | Some k ->
-          (* The sizes alone pick the kernel; the equation's bases are checked by re-unifying it
-             with the kernel solved (gh-ocannl-1824: a kernel solved before the equation met the
-             solved arms' basis check, one inferred here skipped it). *)
-          let constrs, env = unify_dim ~stage origin (Var v, get_default_dim ~d:k ()) env in
-          let more, env = unify_dim ~stage origin (dim1, dim2) env in
-          (constrs @ more, env)
+      | Some k -> (
+          (* The sizes pick the kernel's size, and the rule its tag, as for an open output. The
+             equation is re-unified with the kernel solved, for the identity's basis
+             (gh-ocannl-1824: a kernel solved before the equation met the solved arms' check, one
+             inferred here skipped it). *)
+          let solve_kernel basis =
+            let constrs, env = unify_dim ~stage origin (Var v, get_dim ~d:k ~basis ()) env in
+            let more, env = unify_dim ~stage origin (dim1, dim2) env in
+            (constrs @ more, env)
+          in
+          match window_kernel_bases ~size:k ~input:i ~extent:s with
+          | [] ->
+              raise
+              @@ Shape_error
+                   ( "convolution: conflicting dimension bases between stride and kernel",
+                     [ Dim_mismatch [ dim1; dim2 ] ] )
+          | [ basis ] -> solve_kernel basis
+          | _ -> (
+              match settling with
+              | None -> ([ held ], env)
+              | Some settled ->
+                  settled := true;
+                  solve_kernel default_basis))
       | None ->
           raise
           @@ Shape_error
@@ -2721,7 +2776,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       Affine { stride = s2; over = o2; conv = None | Some { use_padding = true; _ }; _ } ) ->
       (* Strides that divide each other took the padded-pair arm above. A padded window or a plain
          affine reads [input = s * o = s * (o - 1) + s]: its span is its stride. *)
-      window_pair ~s1 ~span1:s1 ~o1 ~s2 ~span2:s2 ~o2
+      window_pair ~s1 ~span1:s1 ~o1 ~s2 ~span2:s2 ~o2 ()
   | ( Affine
         {
           stride = s1;
@@ -2739,7 +2794,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       (* Both sides use: input = stride * (output - 1) + span *)
       let span1 = effective_kernel_span ~dilation:d1 ~kernel_size:k1.d
       and span2 = effective_kernel_span ~dilation:d2 ~kernel_size:k2.d in
-      window_pair ~s1 ~span1 ~o1 ~s2 ~span2 ~o2
+      window_pair ~kernels:[ k1; k2 ] ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 ()
   | ( Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ },
       Affine
         {
@@ -2759,7 +2814,7 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
       (* A padded window or a plain affine reads [input = s1 * o1 = s1 * (o1 - 1) + s1]: its span is
          its stride (gh-ocannl-1823). *)
       let span2 = effective_kernel_span ~dilation:d2 ~kernel_size:k2.d in
-      window_pair ~s1 ~span1:s1 ~o1 ~s2 ~span2 ~o2
+      window_pair ~kernels:[ k2 ] ~s1 ~span1:s1 ~o1 ~s2 ~span2 ~o2 ()
   | Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ }, _
   | _, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
       (* Can't compute offset until kernel dimension is resolved; defer *)
@@ -5519,10 +5574,29 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
         (* Add the failing constraint to the error trace *)
         raise @@ Shape_error (s, Constraint_failed ineq :: trace)
     in
+    (* At a fixpoint, from Stage2 on, nothing more will solve what an open window left open, and the
+       closing stages need its size. One at a time, in that a choice can solve another window
+       (gh-ocannl-1968). Stage1 waits: its constraints are still arriving. *)
+    let rec settle_window kept = function
+      | [] -> None
+      | (Dim_eq { d1; d2; origin } as held) :: rest ->
+          let settled = ref false in
+          let more, env =
+            try unify_dim ~settling:settled ~stage origin (d1, d2) env
+            with Shape_error (s, trace) ->
+              raise @@ Shape_error (s, Constraint_failed held :: trace)
+          in
+          if !settled then Some (List.rev_append kept (more @ rest), env)
+          else settle_window (held :: kept) rest
+      | held :: rest -> settle_window (held :: kept) rest
+    in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in
-    if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
-      (ineqs', env)
+    if List.is_empty ineqs' then (ineqs', env)
+    else if List.equal equal_constraint_up_to_origin ineqs' ineqs then
+      match if is_stage2_up stage then settle_window [] ineqs' else None with
+      | Some (ineqs', env) -> solve ineqs' env
+      | None -> (ineqs', env)
     else solve ineqs' env
   in
   solve ineqs env
