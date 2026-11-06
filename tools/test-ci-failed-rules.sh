@@ -10,7 +10,9 @@
 # lose the GitHub-served leg, so that leg is seen to discriminate. The
 # quoting legs (gh-ocannl-1831) build rules that fail for a stated reason --
 # claims, a Python unittest run, a scan's golden -- and two that must not lend
-# their lines to the rule above them, each boundary held by a mutant.
+# their lines to the rule above them, each boundary held by a mutant. The
+# last-output legs (gh-ocannl-1927) build rules that die saying nothing the
+# reader matches -- a shell error, a long output, a signal, a bare status.
 # Usage: tools/test-ci-failed-rules.sh [--keep] [--only REGEX]
 #
 # In the `promotion` harness group, beside the other readers of Dune's output,
@@ -207,11 +209,16 @@ first_two='Failed dune rules (1), in the order dune reported them:
   t/dune:6-17  (rule) target bad.actual'
 ran_re="^      ran: \(cd _build/default/t && [^ ]*sh -c 'echo noise from the failing test; exit 3'\) > _build/default/t/bad\.actual$"
 # The listing of a red build: the header names the rule, its own target field
-# names it, and the command is the one dune ran. Nothing else is listed.
-listing_ok() { # OUTPUT RC
+# names it, and the command is the one dune ran. Its output went to the target,
+# so the block holds only dune's line for the status, shown as the last output
+# (gh-ocannl-1927). Nothing else is listed.
+listing_head_ok() { # OUTPUT RC
   [ "$2" = 0 ] && [ "$(printf '%s\n' "$1" | sed -n '1,2p')" = "$first_two" ] &&
-    [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 3 ] &&
     printf '%s\n' "$1" | sed -n '3p' | grep -qE "$ran_re"
+}
+listing_ok() { # OUTPUT RC
+  listing_head_ok "$1" "$2" && [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 4 ] &&
+    [ "$(printf '%s\n' "$1" | sed -n '4p')" = '      last output: Command exited with code 3.' ]
 }
 
 write_fixture 3
@@ -297,7 +304,7 @@ if harness_leg 'locationless errors beside located failures #dune'; then
   # (gh-ocannl-1831) and not listed.
   { cat "$TMP/alias.log" "$TMP/red.log"; echo 'Error: printed by the failing test itself'; } >"$TMP/mixed.log"
   out=$(cd "$proj" && subject "$TMP/mixed.log" 2>&1); rc=$?
-  if [ "$rc" = 0 ] && listing_ok "$(printf '%s\n' "$out" | sed -n '1,3p')" 0 &&
+  if [ "$rc" = 0 ] && listing_head_ok "$out" 0 &&
      [ "$(printf '%s\n' "$out" | sed -n '4p')" = '      | Error: printed by the failing test itself' ] &&
      [ "$(printf '%s\n' "$out" | sed -n '5p')" = 'dune errors without a location (1):' ] &&
      printf '%s\n' "$out" | sed -n '6p' | grep -q '^  Error: .*runtest-nonesuch' &&
@@ -336,7 +343,8 @@ if harness_leg 'a failing test that prints a fixture dune block is listed alone 
   # Here a failing rule prints the same block bare, behind the sweep's `rtc ` prefix and behind
   # the `| ` its harness now puts on a replay: only the rule itself is listed. The bare copy is
   # left out because its excerpt omits line 4 of `lines 1-4`, the prefixed ones because a header
-  # is read only at the start of its line.
+  # is read only at the start of its line. The bare copy still ends the rule's block, as any
+  # header does, so the last output line shown is the one above it (gh-ocannl-1927).
   mkdir -p "$proj/p" || exit 2
   cat >"$proj/p/dune" <<'DUNE'
 (rule
@@ -356,8 +364,9 @@ unit.exe: segmentation fault'
   phantom_ok() { # OUTPUT RC
     [ "$2" = 0 ] && [ "$(printf '%s\n' "$1" | sed -n '1,2p')" = 'Failed dune rules (1), in the order dune reported them:
   p/dune:1-5  (rule) alias runtest-phantom' ] &&
-      [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 3 ] &&
-      printf '%s\n' "$1" | sed -n '3p' | grep -qE "^      ran: \(cd _build/default/p && [^ ]*sh -c 'cat phantom\.log; exit 1'\)$"
+      [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 4 ] &&
+      printf '%s\n' "$1" | sed -n '3p' | grep -qE "^      ran: \(cd _build/default/p && [^ ]*sh -c 'cat phantom\.log; exit 1'\)$" &&
+      [ "$(printf '%s\n' "$1" | sed -n '4p')" = '      last output: sweep-hold: sleep:idle block inhibitor held' ]
   }
   out=$(cd "$proj" && subject "$TMP/phantom.log" 2>&1); rc=$?
   if [ "$brc" = 1 ] && grep -q '^File "test/dune", lines 1-4' "$TMP/phantom.log" && phantom_ok "$out" "$rc"; then
@@ -569,6 +578,118 @@ if harness_leg 'another rule'"'"'s output and dune'"'"'s own error are not quote
     else report 1 'negative control: without holding a wrapped error dune'"'"'s error is quoted as the rule'"'"'s' \
       "mutant applied: $(grep -c 'npb < 0 && ' "$mut"); $out"; fi
   else report 1 'negative control: without holding a wrapped error dune'"'"'s error is quoted as the rule'"'"'s' 'mutant did not build'; fi
+fi
+# A rule that dies saying nothing the reader matches (gh-ocannl-1927): its entry showed only the
+# command. Four real rules, each built alone: one whose program cannot be run, after a banner
+# (the shell's own error, worded per platform); one printing more than dune keeps, a banner first
+# and its reason last, blank lines after it; one killed by a signal and one exiting 3, both
+# silent, so the only line is dune's. Built outside the gates, so each leg passes run alone.
+mkdir -p "$proj/l" || exit 2
+cat >"$proj/l/dune" <<'DUNE'
+(rule
+ (alias runtest-missing)
+ (action
+  (run sh -c "echo 'probe: starting'; ./nonesuch.exe --probe")))
+
+(rule
+ (alias runtest-long)
+ (deps long.out)
+ (action
+  (run sh -c "cat long.out; exit 1")))
+
+(rule
+ (alias runtest-signal)
+ (action
+  (run sh -c "kill -SEGV $$")))
+
+(rule
+ (alias runtest-status)
+ (action
+  (run sh -c "exit 3")))
+DUNE
+{ echo 'unit.exe: banner, version 1'
+  i=0; while [ "$i" -lt 2000 ]; do printf 'step %04d of the unit ... ok\n' "$i"; i=$((i + 1)); done
+  printf 'unit.exe: the arena ran out at step 2000\n\n  \n'; } >"$proj/l/long.out"
+build "$TMP/missing.log" @l/runtest-missing; missing_brc=$?
+build "$TMP/long.log" @l/runtest-long; long_brc=$?
+build "$TMP/signal.log" @l/runtest-signal; signal_brc=$?
+build "$TMP/status.log" @l/runtest-status; status_brc=$?
+# An entry of exactly 4 lines: its two, the command, and the last output line matching RE.
+last_ok() { # OUTPUT RC SECOND-LINE COMMAND-RE LAST-RE
+  [ "$2" = 0 ] && [ "$(printf '%s\n' "$1" | sed -n '1p')" = 'Failed dune rules (1), in the order dune reported them:' ] &&
+    [ "$(printf '%s\n' "$1" | sed -n '2p')" = "$3" ] &&
+    printf '%s\n' "$1" | sed -n '3p' | grep -qE "^      ran: \(cd _build/default/l && $4\)$" &&
+    printf '%s\n' "$1" | sed -n '4p' | grep -qE "^      last output: $5$" &&
+    [ "$(printf '%s\n' "$1" | wc -l | tr -d ' ')" = 4 ]
+}
+missing_ok() { last_ok "$1" "$2" '  l/dune:1-4  (rule) alias runtest-missing' "[^ ]*sh -c .*nonesuch\.exe --probe'" '[^|]*nonesuch\.exe.*'; }
+long_ok() { last_ok "$1" "$2" '  l/dune:6-10  (rule) alias runtest-long' "[^ ]*sh -c 'cat long\.out; exit 1'" 'unit\.exe: the arena ran out at step 2000'; }
+if harness_leg 'a rule with no matching line shows its last output line #dune'; then
+  out=$(cd "$proj" && subject "$TMP/missing.log" 2>&1); rc=$?
+  if [ "$missing_brc" = 1 ] && plain "$TMP/missing.log" | grep -qx 'probe: starting' && missing_ok "$out" "$rc"; then
+    report 0 'a shell error is shown as the last output line'
+  else report 1 'a shell error is shown as the last output line' "build exit $missing_brc, exit $rc; $out"; fi
+  out=$(cd "$proj" && subject --github "$TMP/missing.log" 2>&1); rc=$?
+  ann=$(printf '%s\n' "$out" | grep '^::error ')
+  if [ "$rc" = 0 ] && [ "$(printf '%s\n' "$ann" | wc -l | tr -d ' ')" = 1 ] &&
+     [[ $ann == '::error file=l/dune,line=1,endLine=4,title=Failed dune rule::l/dune:1-4  (rule) alias runtest-missing -- ran: (cd _build/default/l && '*"--probe') -- last output: "*'nonesuch.exe'* ]]; then
+    report 0 '--github carries the last output line into the annotation'
+  else report 1 '--github carries the last output line into the annotation' "exit $rc; $out"; fi
+  # The end of an output longer than dune keeps, not its banner and not the blank lines after it.
+  out=$(cd "$proj" && subject "$TMP/long.log" 2>&1); rc=$?
+  if [ "$long_brc" = 1 ] && plain "$TMP/long.log" | grep -qx 'unit.exe: banner, version 1' &&
+     [ "$(grep -c '^step ' "$TMP/long.log")" -ge 1000 ] && long_ok "$out" "$rc"; then
+    report 0 'a long output is quoted by its last non-blank line'
+  else report 1 'a long output is quoted by its last non-blank line' "build exit $long_brc, exit $rc; $out"; fi
+  # A silent death leaves dune's own line, which says how the command ended.
+  out=$(cd "$proj" && subject "$TMP/signal.log" 2>&1); rc=$?
+  out2=$(cd "$proj" && subject "$TMP/status.log" 2>&1); rc2=$?
+  if [ "$signal_brc" = 1 ] && [ "$status_brc" = 1 ] &&
+     last_ok "$out" "$rc" '  l/dune:12-15  (rule) alias runtest-signal' "[^ ]*sh -c 'kill -SEGV \\$\\$'" 'Command got signal SEGV\.' &&
+     last_ok "$out2" "$rc2" '  l/dune:17-20  (rule) alias runtest-status' "[^ ]*sh -c 'exit 3'" 'Command exited with code 3\.'; then
+    report 0 'a silent signal or exit status shows the line dune prints for it'
+  else report 1 'a silent signal or exit status shows the line dune prints for it' \
+    "builds $signal_brc/$status_brc, exits $rc/$rc2; $out; $out2"; fi
+  # The negative controls: keeping the first line quotes the banner, and without the
+  # no-matching-line condition a rule that says why (the claims one) gains a second kind of quote.
+  if mut=$(mutant first-output-line '{ sub(/^        if \(s !~ \/\^\[ \\t\]\*\$\/\) qlast = s$/, "        if (qlast == \"\") qlast = s # first line kept") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/long.log" 2>&1); rc=$?
+    if grep -q '# first line kept$' "$mut" && ! long_ok "$out" "$rc" &&
+       [ "$(printf '%s\n' "$out" | sed -n '4p')" = '      last output: unit.exe: banner, version 1' ]; then
+      report 0 'negative control: keeping the first line quotes the banner'
+    else report 1 'negative control: keeping the first line quotes the banner' \
+      "mutant applied: $(grep -c 'first line kept' "$mut"); $out"; fi
+  else report 1 'negative control: keeping the first line quotes the banner' 'mutant did not build'; fi
+  if mut=$(mutant last-output-always '{ sub(/\(qn == 0 && detail ~ \/\^ran: \/\) \? qlast : ""$/, "qlast # always") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/claims.log" 2>&1); rc=$?
+    if grep -q 'qlast # always$' "$mut" && claims_ok "$out" "$rc" 3 &&
+       [ "$(printf '%s\n' "$out" | sed -n '8p')" = '      last output: FAILED: 5 checks did not hold' ]; then
+      report 0 'negative control: without the condition a rule that says why is quoted twice'
+    else report 1 'negative control: without the condition a rule that says why is quoted twice' \
+      "mutant applied: $(grep -c 'qlast # always' "$mut"); $out"; fi
+  else report 1 'negative control: without the condition a rule that says why is quoted twice' 'mutant did not build'; fi
+fi
+if harness_leg 'the steps after the build lend no last output line #dune'; then
+  # `gh run view --log-failed` of a red job: the build step ends with GitHub's `##[error]` line,
+  # and the listing step's own lines follow it. When the failed rule printed last, nothing stands
+  # between its block and those; the entry reads as from the build log alone.
+  { LC_ALL=C awk '{ printf "Build (ubuntu-latest, 5.5.x, main)\tRun opam exec -- dune build\t2026-11-06T19:53:18.%07dZ %s\n", NR, $0 }' "$TMP/missing.log"
+    printf 'Build (ubuntu-latest, 5.5.x, main)\tRun opam exec -- dune build\t2026-11-06T19:53:18.9482040Z %s\n' \
+      '##[error]Process completed with exit code 1.'
+    printf 'Build (ubuntu-latest, 5.5.x, main)\tList the failed dune rules\t2026-11-06T19:53:20.5748380Z %s\n' \
+      '##[group]Run tools/ci-failed-rules.sh --github "$RUNNER_TEMP/dune-build.log"' 'shell: /bin/bash --noprofile --norc -e -o pipefail {0}' \
+      '##[endgroup]' 'OCANNL host: cpu="fixture" cpus=3'; } >"$TMP/steps.log"
+  out=$(cd "$proj" && subject "$TMP/steps.log" 2>&1); rc=$?
+  report "$(missing_ok "$out" "$rc"; echo $?)" 'the steps after the build lend no last output line' "exit $rc; $out"
+  # The negative control: without the `##[` boundary the last line of the job is the rule's.
+  if mut=$(mutant no-step-boundary '{ sub(/^      else if \(s ~ \/\^##\\\[\/\) qopen = 0$/, "      # step boundary removed") } 1'); then
+    out=$(cd "$proj" && bash "$mut" "$TMP/steps.log" 2>&1); rc=$?
+    if grep -q '^      # step boundary removed$' "$mut" && ! missing_ok "$out" "$rc" &&
+       [ "$(printf '%s\n' "$out" | sed -n '4p')" = '      last output: OCANNL host: cpu="fixture" cpus=3' ]; then
+      report 0 'negative control: without the step boundary a later step'"'"'s line is quoted'
+    else report 1 'negative control: without the step boundary a later step'"'"'s line is quoted' \
+      "mutant applied: $(grep -c 'step boundary removed' "$mut"); $out"; fi
+  else report 1 'negative control: without the step boundary a later step'"'"'s line is quoted' 'mutant did not build'; fi
 fi
 if harness_leg 'the green build prints nothing #dune'; then
   write_fixture 0

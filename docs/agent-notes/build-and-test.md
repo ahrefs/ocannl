@@ -4063,6 +4063,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   last. `gh` 2.x prints a log's ESC as the text `^[` (and `gh api` refuses the raw bytes), which
   the reader strips like a raw escape: before that, a piped `gh run view --log-failed` listed
   nothing for any coloured header.
+- **A listed rule with no such line shows its last output line** (gh-ocannl-1927), behind
+  `last output:` so `| ` keeps its one meaning: an entry that shows the command it ran and whose
+  block matches none of those patterns -- a shell error (`/bin/sh: ./x: No such file or
+  directory`, the `Permission denied` rows of ahrefs/ocannl#1720), a signal, a bare exit status
+  -- quotes the last
+  non-blank line of its block, in the annotation too. The last, since dune keeps the end of a long
+  output and the first line is usually a banner; when the action printed nothing (a test whose
+  stdout goes to its `.actual`, say) that line is dune's own `Command exited with code N.` or
+  `Command got signal SEGV.`. A compile error, a golden mismatch and a rule dune reported an error
+  for carry their reason already and get none. In a job log GitHub serves a block also ends at a
+  `##[` line (`##[error]Process completed ...` closes the build step), so a rule that printed last
+  is not lent the later steps' lines -- the listing step's own echo among them. Any header ends a
+  block, a dropped one too, so a test printing a bare dune block shows the line above it.
 - **Each build job prints the host it drew** (gh-ocannl-1371), before building: `tools/host_caps.exe`
   (run from `test/config`) prints `Context.host_capabilities` -- CPU, CPU count and pool tag, the
   ISA the cc probes find under the kernel flags (`avx2+fma`, `avx512f+bw+vl`, `neon`), the resolved
