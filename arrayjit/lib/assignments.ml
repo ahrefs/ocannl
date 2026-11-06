@@ -284,6 +284,82 @@ let collect_written (asgns : t) : Tn.t_set =
       | Fetch { array; _ } -> acc + one array
       | Noop | Seq _ | Block_comment _ -> acc)
 
+(* A view's storage: a [Slice] is taken on trust as an alias of its parent, as [forward_fetched]
+   takes it where shapes may still be open. *)
+let rec slice_storage parents tn =
+  Option.value_map (Map.find parents tn) ~default:tn ~f:(slice_storage parents)
+
+(* Documented in the interface. [built_from] maps a storage to the incoming values its current value
+   is built from, keeping only the storages [comp] writes: nothing else can be recomputed, and it
+   keeps these sets small on a large forward, whose every node is otherwise built from all its
+   inputs. A write through a view is a write to its parent. *)
+let forward_recomputed (comp : comp) =
+  let parents =
+    fold_leaves comp.asgns
+      ~init:(Map.empty (module Tn))
+      ~f:(fun parents -> function
+        | Fetch { array; fetch_op = Slice { sliced; _ }; _ } ->
+            Map.set parents ~key:array ~data:sliced
+        | _ -> parents)
+  in
+  let storage = slice_storage parents in
+  let written = Set.map (module Tn) (collect_written comp.asgns) ~f:storage in
+  let step built_from leaf =
+    let current tn =
+      let tn = storage tn in
+      match Map.find built_from tn with
+      | Some sources -> sources
+      | None -> if Set.mem written tn then Set.singleton (module Tn) tn else no_nodes
+    in
+    let current_of buffers =
+      List.filter_map buffers ~f:(function Node tn -> Some tn | Merge_buffer _ -> None)
+      |> List.map ~f:current
+      |> Set.union_list (module Tn)
+    in
+    let write built_from tn sources = Map.set built_from ~key:(storage tn) ~data:sources in
+    match leaf with
+    | Accum_op { initialize_neutral; accum; lhs; rhs; _ } -> (
+        let keeps_old, takes_new =
+          match Ops.binop_conditionality accum with
+          | Ops.Only_first -> (not initialize_neutral, false)
+          | Ops.Only_second -> (false, true)
+          | Ops.Both_operands | Ops.Gated_second -> (not initialize_neutral, true)
+        in
+        let accumulated tn sources =
+          Set.union
+            (if takes_new then sources else no_nodes)
+            (if keeps_old then current tn else no_nodes)
+        in
+        match rhs with
+        | Rev_sides { lhses; _ } ->
+            let sources = current lhs in
+            Array.fold lhses ~init:built_from ~f:(fun built_from -> function
+              | Node tn -> write built_from tn (accumulated tn sources)
+              | Merge_buffer _ -> built_from)
+        | Binop { op; rhs1; rhs2 } ->
+            let operands =
+              match Ops.binop_conditionality op with
+              | Ops.Only_first -> [ rhs1 ]
+              | Ops.Only_second -> [ rhs2 ]
+              | Ops.Both_operands | Ops.Gated_second -> [ rhs1; rhs2 ]
+            in
+            write built_from lhs (accumulated lhs (current_of operands))
+        | Ternop _ | Unop _ | Block _ ->
+            write built_from lhs (accumulated lhs (current_of (buffers_of_accum_rhs rhs))))
+    | Set_vec_unop { lhs; rhs; _ } -> write built_from lhs (current_of [ rhs ])
+    | Fetch { fetch_op = Slice _; _ } -> built_from
+    | Fetch { array; _ } -> write built_from array no_nodes
+    | Noop | Seq _ | Block_comment _ -> built_from
+  in
+  let recomputed =
+    Map.fold
+      (fold_leaves comp.asgns ~init:(Map.empty (module Tn)) ~f:step)
+      ~init:no_nodes
+      ~f:(fun ~key:tn ~data:sources acc -> if Set.mem sources tn then acc else Set.add acc tn)
+  in
+  Map.fold parents ~init:recomputed ~f:(fun ~key:view ~data:_ acc ->
+      if Set.mem recomputed (storage view) then Set.add acc view else acc)
+
 let sequential l =
   Option.value ~default:Noop @@ List.reduce l ~f:(fun sts another_st -> Seq (sts, another_st))
 

@@ -202,7 +202,14 @@ val sgd_update :
     [Tensor.term_init] or literal with at most [limit_constant_fill_size] values -- raises
     [Session_error] naming it, since the next forward pass would undo each step (gh-ocannl-1776).
     {!sgd_one} sees no loss, so stepping such a tensor directly is refused later, by
-    [Context.compile] (gh-ocannl-1876). *)
+    [Context.compile] (gh-ocannl-1876).
+
+    A stepped tensor that [loss]'s forward code recomputes without reading it, a computed node or a
+    view of one, raises [Session_error] too (gh-ocannl-1998): each step would be gone by the next
+    forward. One whose value the forward builds on, a running statistic, is accepted, and so is one
+    computed outside [loss]'s forward, whose step lasts as long as that code does not run again.
+    Stepping a computed node with {!sgd_one} or a hand-written [%cd] update is not refused anywhere:
+    a routine cannot tell a step from post-processing a value. *)
 
 val sequential_loop : f:(unit -> unit) -> (Ir.Indexing.static_symbol * int ref) list -> unit
 (** All and only bindings with associated ranges are iterated, with the binding's initial value

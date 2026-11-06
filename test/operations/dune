@@ -14090,3 +14090,17 @@
  (libraries base ocannl stdio arrayjit.verdict lineage_claims)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1998: sgd_update refuses a stepped node the loss's forward recomputes, not one the
+; forward builds on.
+
+(test
+ (name sgd_computed_node)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules sgd_computed_node)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

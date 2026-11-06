@@ -159,6 +159,26 @@ val forward_fetched :
     again whatever its parent. Pass {!slice_alias_eligible} once shapes are settled; a caller before
     that leaves the copies to one after. *)
 
+val forward_recomputed : comp -> Set.M(Tnode).t
+(** The nodes [comp] re-establishes without using the value they had (gh-ocannl-1998): a node it
+    writes whose resulting value is not built from its incoming value, directly or through the nodes
+    it wrote on the way. Forward code that recomputes a node, or fetches one, is what this tells
+    from a read-modify-write, a running statistic, which builds on whatever it found. Order counts:
+    a read after a reset uses the new value, and a read of the old value that the node's own result
+    does not reach (a delay line, [y =: s; s =: x]) does not save it. Takes the operators at their
+    word: an operand {!Ops.binop_conditionality} leaves unevaluated is no use of a value, and
+    assignments are not simplified, so [s =: s *. 0] does use [s]. Every write counts as covering
+    its node, as whether a projection does cannot be asked before shapes settle.
+
+    A [Slice] counts exactly when its parent does, the view being taken as an alias of it; whether
+    it is one is {!forward_fetched}'s question, for a caller with settled shapes.
+
+    For code known to be forward code: nothing here asks who owns a write, so a gradient's zeroing
+    or a parameter's initializer in [comp] would count. [Train.sgd_update] asks it of a loss's
+    forward, where a step on such a node is the only write meant to persist; [Context.compile] does
+    not, as a routine cannot tell a step from post-processing, or a forward it re-runs from one that
+    ran once. *)
+
 val sequence : comp list -> comp
 (** Runs the computations in order, uniting their nodes, fragments and gradient sets; a gradient two
     members state different [accumulation_runs] for keeps the smaller, a member accumulating into it

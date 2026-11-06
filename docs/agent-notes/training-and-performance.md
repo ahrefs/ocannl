@@ -49,6 +49,14 @@ files.
   needs a data-backed leaf at any size (`recompute_on_read`). `copy` is not refused, and the
   autotuner's timing restore reaches no such node: a hosted constant has no written code and a view
   of a fetched parent no assignment (`timing_state_nodes`).
+- A computed node is the same trap by another route (gh-ocannl-1998): `sgd_update` refuses a stepped
+  node, or a view of one, that the loss's forward recomputes (`Assignments.forward_recomputed`). It
+  is an ordered fold of which incoming values each written node is built from, so a statistic keeps
+  its step through temporaries while a delay line (`y =: s; s =: x`) does not; "has a forward" would
+  refuse a `=+` node, whose step lasts. Executed: `sgd_computed_node.ml`. Only `sgd_update` knows a
+  write is meant to last: `Context.compile` cannot tell a step from post-processing, or a re-run
+  forward from one that ran once, whose steps do last, so bare `sgd_one` and a hand-written step on
+  a computed node go unrefused.
 - Training-loop utilities (gh-465, `lib/train.ml`): `Lr_schedule` (host floats; feed via
   `scheduled_learning_rate`'s data-backed `host_scalar` — `set_values` refuses a fetch-defined
   constant, re-fetched each step), `grad_l2_norm`/`clip_by_global_norm` +
