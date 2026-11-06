@@ -30,6 +30,7 @@ type point =
   | Schedule_cache_before_regime_commit
   | Schedule_cache_before_commit
   | Schedule_cache_before_replay
+  | Run_before_launch
 [@@deriving sexp, equal]
 
 val hit : point -> unit

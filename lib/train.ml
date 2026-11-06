@@ -731,6 +731,54 @@ type shipped = {
   ship_substituted : bool;
 }
 
+(* The process-level failures no containment here absorbs. *)
+let must_propagate = function
+  | Out_of_memory | Stdlib.Sys.Break | Stack_overflow | Assert_failure _ -> true
+  (* A malformed registered setting (gh-ocannl-1332) is the configuration's failure, not an arm's or
+     a flip's: contained, it would ship whichever placement happens not to read the key, as though
+     the setting had been honored. *)
+  | Utils.Invalid_config_value _ -> true
+  | _ -> false
+
+(* gh-ocannl-1859: giving back a context no caller will receive. A failed release is reported and
+   never replaces the failure the caller has to act on. *)
+let release_quietly ~what ctx =
+  try Context.release ctx
+  with exn when not (must_propagate exn) ->
+    Stdio.eprintf "Train: releasing %s failed: %s\n%!" what (Exn.to_string exn)
+
+(* [f], and if it raises, the release of the context [held] then reads -- unless that is [caller]'s
+   own unit, which the caller holds. *)
+let release_on_raise ~caller ~what held f =
+  try f ()
+  with exn ->
+    let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+    if not (Context.same_release_unit (held ()) caller) then release_quietly ~what (held ());
+    Stdlib.Printexc.raise_with_backtrace exn backtrace
+
+(* gh-ocannl-1859: what a search over placements decided along the way, in the caller's lineage and
+   its timing lineage alike. [ship ()] may compile from any of [minted] (newest first), so they stay
+   live until it is done. Then the ancestors of what it shipped go with it, and the rest are
+   released here; newest first, since a child is newer than its parent. On a raise nothing shipped,
+   so all of them go. *)
+let settle_decided ~minted ship =
+  let release_all contexts =
+    List.iter contexts ~f:(release_quietly ~what:"a placement decision's context")
+  in
+  match ship () with
+  | exception exn ->
+      let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+      release_all !minted;
+      Stdlib.Printexc.raise_with_backtrace exn backtrace
+  | (compiled, _) as shipped ->
+      let ancestors, others =
+        List.partition_tf !minted ~f:(fun ancestor ->
+            Context.is_lifecycle_ancestor compiled ~ancestor)
+      in
+      release_all others;
+      List.iter ancestors ~f:(fun ancestor -> Context.adopt_ancestor compiled ~ancestor);
+      shipped
+
 let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?report ?flip_report
     ?inline_flips ?ship_arm ?placement_store ?call_budget ?log ?progress ?on_ship ctx loss comp
     bindings =
@@ -843,14 +891,6 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      The device OOM this containment exists for stays contained: a typed device-memory refusal
      surfaces as the [Utils.User_error] its [Resource_exceeded] cause renders to (gh-ocannl-1326),
      and any other driver failure as an ordinary [Invalid_argument]. *)
-  let must_propagate = function
-    | Out_of_memory | Stdlib.Sys.Break | Stack_overflow | Assert_failure _ -> true
-    (* A malformed registered setting (gh-ocannl-1332) is the configuration's failure, not an arm's
-       or a flip's: contained, it would ship whichever placement happens not to read the key, as
-       though the setting had been honored. *)
-    | Utils.Invalid_config_value _ -> true
-    | _ -> false
-  in
   (* A [report] callback exception is the caller's failure, not the search's — {!Autotune.tune}
      propagates it deliberately on the completion path — so it is re-raised rather than reclassified
      as an arm failure (which would hide it, and could ship the other arm even though this search
@@ -1028,7 +1068,12 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
   (* [decide_materialized] skips the nodes constrained away from materialization (constants,
      declared-virtual), mirroring [every_non_literal_materialized]'s guards at the decision
      level. *)
-  let materialize c = Context.decide_materialized c embedded in
+  let minted = ref [] in
+  let decided from c =
+    if not (Context.same_release_unit c from) then minted := c :: !minted;
+    c
+  in
+  let materialize c = decided c (Context.decide_materialized c embedded) in
   (* gh-ocannl-786: the placement-decision store. The schedule cache persists each arm's and each
      flip's crowned schedule with its timings, so on a warm cache the arms and the chain replay
      their measurements -- but the DECISION (which arm shipped, which flips the chain accepted) was
@@ -1082,7 +1127,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
      it yields; and, at replay, the lowering it produces in the search lineage, whose
      placement-aware digest is the entry's guard ({!decision_lowering_digest}). *)
   let decisions_of problem = placement_decision_lists ~embedded problem in
-  let apply decisions c = Context.decide_readings c decisions in
+  let apply decisions c = decided c (Context.decide_readings c decisions) in
   let outcome_digest decisions =
     decision_lowering_digest ?name ?timing_ctx ctx comp bindings decisions
   in
@@ -1706,7 +1751,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
                           None
                       | _ when stop_for_call_budget () -> Some `Cut
                       | _ ->
-                          let apply c = Context.decide_reading c fa.LL.fa_flip [ tn ] in
+                          let apply c = decided c (Context.decide_reading c fa.LL.fa_flip [ tn ]) in
                           let ctx' = apply base_ctx in
                           let timing' = Option.map base_timing ~f:apply in
                           let r, ms, rep =
@@ -1841,6 +1886,7 @@ let tune_placements ?name ?beam_width ?rounds ?repeats ?cache_dir ?timing_ctx ?r
               winner_ms;
             ship_winner ())
   in
+  settle_decided ~minted @@ fun () ->
   match replay with
   | Some (e, decisions) -> (
       (* The recorded decision, applied as the search applied it, then the one search the decision
@@ -2015,9 +2061,15 @@ let adopt_minted ~caller ~minted result =
 let compile_within_budget ?budget ?max_candidates ?budget_report ctx comp bindings =
   let planned, budget_plan = fit_memory_budget ?budget ?max_candidates ctx comp bindings in
   let budgeted = Option.is_some budget_plan in
-  let compiled, routine = compile_with_model_gate ~budgeted planned comp bindings in
+  let compiled, routine =
+    release_on_raise ~caller:ctx ~what:"a memory budget's decision context"
+      (fun () -> planned)
+      (fun () -> compile_with_model_gate ~budgeted planned comp bindings)
+  in
   adopt_minted ~caller:ctx ~minted:planned compiled;
-  Option.iter budget_report ~f:(fun f -> Option.iter budget_plan ~f);
+  release_on_raise ~caller:ctx ~what:"a compile its budget report failed on"
+    (fun () -> compiled)
+    (fun () -> Option.iter budget_report ~f:(fun f -> Option.iter budget_plan ~f));
   (compiled, routine)
 
 let%track7_sexp to_routine (ctx : Context.t) ?(output_cd_file = false) ?budget ?max_candidates
@@ -2072,17 +2124,21 @@ let init_params ?(reinit_all = false) ctx bindings t =
      Upload after compilation finalizes shapes, before running computed initializers that may read
      these parameters. A newly linked buffer needs no second upload during ordinary
      initialization. *)
-  let ctx, routine = Context.compile ctx comp bindings in
+  let compiled, routine = Context.compile ctx comp bindings in
   (* Initialization runs once, not per launch-parameter value: it binds every parameter to 0,
      explicitly, since linking leaves them unassigned (gh-ocannl-940). *)
   bind_all_to_zero routine;
-  let ctx =
-    Set.fold host_params ~init:ctx ~f:(fun ctx tn ->
-        if reinit_all || not (Context.is_initialized ctx tn) then
-          Context.from_host ctx tn (Lazy.force (Option.value_exn (Ir.Host_inits.find tn)))
-        else ctx)
-  in
-  Context.run ctx routine
+  (* gh-ocannl-1859: a failure leaves the caller nothing to release this through, and an upload's
+     value is the one holding what it allocated. *)
+  let latest = ref compiled in
+  release_on_raise ~caller:ctx ~what:"a failed initialization's context"
+    (fun () -> !latest)
+    (fun () ->
+      Set.iter host_params ~f:(fun tn ->
+          if reinit_all || not (Context.is_initialized !latest tn) then
+            latest :=
+              Context.from_host !latest tn (Lazy.force (Option.value_exn (Ir.Host_inits.find tn))));
+      Context.run !latest routine)
 
 let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_all
     ?(bindings = IDX.empty) ?(launch_values = []) ?budget ?max_candidates ?budget_report ~f ctx
@@ -2106,13 +2162,20 @@ let%track3_sexp run_once ?(output_cd_file = false) ?(skip_init = false) ?reinit_
     if skip_init || Set.is_empty t.params then ctx else init_params ?reinit_all ctx bindings t
   in
   let compiled, routine =
-    compile_within_budget ?budget ?max_candidates ?budget_report initialized update bindings
+    release_on_raise ~caller:ctx ~what:"an initialization context"
+      (fun () -> initialized)
+      (fun () ->
+        compile_within_budget ?budget ?max_candidates ?budget_report initialized update bindings)
   in
   (* gh-ocannl-1762: the initialization context is an ancestor the caller never holds, so the
      returned context releases it (and the parameter pools it owns) with its own. *)
   adopt_minted ~caller:ctx ~minted:initialized compiled;
-  Idx.copy_launch_values ~from:launch routine.Context.bindings;
-  Context.run compiled routine
+  (* gh-ocannl-1859: and when the run fails, nobody receives that context. *)
+  release_on_raise ~caller:ctx ~what:"a failed run's context"
+    (fun () -> compiled)
+    (fun () ->
+      Idx.copy_launch_values ~from:launch routine.Context.bindings;
+      Context.run compiled routine)
 
 let forward_once ?output_cd_file ?(skip_init = false) ?reinit_all ?(bindings = IDX.empty)
     ?launch_values ?budget ?max_candidates ?budget_report ctx t =

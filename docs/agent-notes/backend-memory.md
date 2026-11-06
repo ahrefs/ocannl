@@ -285,7 +285,15 @@ files.
   `release` of the unit. A new wrapper that compiles from a context it minted adopts it the same way
   (`Train.adopt_minted`), skipping the caller's own unit (`Context.same_release_unit`). Guard:
   `dropped_graph_buffers` (the forward_once and fork cases; the fork case's claims fail when the
-  fork does not take its hold).
+  fork does not take its hold). A wrapper owes this on its raising paths too (gh-ocannl-1859): what
+  it minted is released when no caller will receive it, through `Train.release_on_raise`, which
+  skips the caller's unit and never replaces the original failure. A search that decides contexts
+  as it goes holds them until it has shipped, since a fallback's deferred compile still needs its
+  decided base: `Train.settle_decided` then adopts those on the shipped chain and releases the rest,
+  newest first, and `Autotune.model_default` does the same for its pick. A decided child holds no
+  pools but takes constant holds, so a dropped one pins the root's constant pools.
+  `Context.decide_readings` mints one child for its three readings, so an adopter holds the whole
+  decision. Guard: `wrapper_release_paths` (arm B's case fails with the adoption alone removed).
 - Five facts about the allocation seams that each cost a review round to learn, and that any further
   release work will meet again. (1) There are **two** shared allocation sites, not one:
   `Backends.allocate_delta` for a compile's delta, and the transfer destinations inside
