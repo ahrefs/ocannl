@@ -5,3 +5,15 @@ a window over a window's target: x is iterated: true
 a window over a window's target: t indexes as x: true
 two strides over one axis, 2*x = 3*x: Shape_error: solve_proj_equations: two equated windows (or a window and a concatenation) index differently
 two strides over one axis, 2*x = 3*x: the refusal is the projection verifier's: true
+a chain of two windows, u = 2*t with t = 1*x: every axis indexes as its windows compose: true
+a chain of two windows, u = 2*t with t = 1*x, equations reversed: every axis indexes as its windows compose: true
+a chain of three windows with offsets, v = 3*u + 1, u = 2*t + 2, t = 1*x + 1: every axis indexes as its windows compose: true
+a chain of three windows with offsets, v = 3*u + 1, u = 2*t + 2, t = 1*x + 1, equations reversed: every axis indexes as its windows compose: true
+a chain through a variable, u = 2*w with w = t and t = 1*x: every axis indexes as its windows compose: true
+a chain through a variable, u = 2*w with w = t and t = 1*x, equations reversed: every axis indexes as its windows compose: true
+a chain through a kernel, u = 2*y + 3*k with k = 1*x and y at 1: every axis indexes as its windows compose: true
+a chain through a kernel, u = 2*y + 3*k with k = 1*x and y at 1, equations reversed: every axis indexes as its windows compose: true
+a chain over a target of extent 1, u = 2*t with t = 1*y + 3: every axis indexes as its windows compose: true
+a chain over a target of extent 1, u = 2*t with t = 1*y + 3, equations reversed: every axis indexes as its windows compose: true
+a cycle of windows, t = 2*u and u = 2*t: Shape_error: projection_of_solved_dims: unknown projection: 1889003 5
+a cycle of windows, t = 2*u and u = 2*t: the refusal is the projection reader's: true

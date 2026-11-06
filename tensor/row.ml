@@ -6305,14 +6305,14 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
      width-1 named component, indexed at [Fixed_idx 0] like any dimension-1 axis, then selected no
      segment at all, so every segment read into (wrote from) the one cell. A concatenation proper
      ([a; b => a^b]: every component named) keeps its [Concat] index. *)
+  let rec named = function
+    | Proj (pid, _) -> [ pid ]
+    | Conv_input { over; conv; _ } -> (
+        named over @ match conv with Some { kernel; _ } -> named kernel | None -> [])
+    | Var v -> ( match Hashtbl.find v_env v with Some p -> named p | None -> [])
+    | Solved _ | Concat _ -> []
+  in
   let named_reprs =
-    let rec named = function
-      | Proj (pid, _) -> [ pid ]
-      | Conv_input { over; conv; _ } -> (
-          named over @ match conv with Some { kernel; _ } -> named kernel | None -> [])
-      | Var v -> ( match Hashtbl.find v_env v with Some p -> named p | None -> [])
-      | Solved _ | Concat _ -> []
-    in
     let outside =
       List.concat_map eqs ~f:(function
         | Proj_eq (p1, p2) -> named p1 @ named p2
@@ -6460,7 +6460,7 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
         (fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0, pad))
   in
 
-  let temp_proj_env =
+  let proj_env_so_far () =
     {
       v_env;
       proj_classes = !proj_classes;
@@ -6471,16 +6471,33 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
       clamp_padded;
     }
   in
-  (* Process postponed Conv_input equations *)
-  List.iter !p_conv_input ~f:(fun (p, conv_input) ->
-      let repr, _ = Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0 in
-      let idx = get_proj_index temp_proj_env conv_input in
-      Utils.mref_add projs ~key:repr ~data:idx ~or_:(fun idx2 ->
-          if not @@ Idx.equal_axis_index idx idx2 then
-            raise
-            @@ Shape_error
-                 ( "Multiple constraints on the same Conv_input projection",
-                   [ Index_mismatch [ idx; idx2 ] ] )));
+  (* Process postponed Conv_input equations, in dependency order (gh-ocannl-1971): a window's index
+     is built from the indices of what it ranges over, so a window over another window's target ([u
+     = 2*t] with [t = 1*x]) waits for that target, and each window reads every index assigned so
+     far. When no window is ready the rest are cyclic ([t = 2*u], [u = 2*t]): each reads what it
+     can, which is an unknown projection for an iterated axis. *)
+  let index_window (p, conv_input) =
+    let idx = get_proj_index (proj_env_so_far ()) conv_input in
+    Utils.mref_add projs ~key:(repr_of p) ~data:idx ~or_:(fun idx2 ->
+        if not @@ Idx.equal_axis_index idx idx2 then
+          raise
+          @@ Shape_error
+               ( "Multiple constraints on the same Conv_input projection",
+                 [ Index_mismatch [ idx; idx2 ] ] ))
+  in
+  let rec index_windows pending =
+    let waits_for_no_target (_, conv_input) =
+      List.for_all (named conv_input) ~f:(fun p ->
+          let repr = repr_of p in
+          Map.mem !projs repr || not (Set.mem conv_input_targets repr))
+    in
+    match List.partition_tf pending ~f:waits_for_no_target with
+    | [], cyclic -> List.iter cyclic ~f:index_window
+    | ready, blocked ->
+        List.iter ready ~f:index_window;
+        index_windows blocked
+  in
+  index_windows !p_conv_input;
 
   (* Now create fresh iterators for product dimensions that still don't have an index. This is done
      after p_conv_input processing so Conv_input projections don't conflict. *)
@@ -6550,25 +6567,15 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
                    "Concat target projection %{target_pid#Proj_id} conflicts with existing index"],
                  [ Index_mismatch [ existing_idx; expected_idx ] ] ));
 
-  let proj_env =
-    {
-      v_env;
-      proj_classes = !proj_classes;
-      proj_to_index = !projs;
-      inferred_padding;
-      resolved_padding;
-      product_dim = !product_dim;
-      clamp_padded;
-    }
-  in
+  let proj_env = proj_env_so_far () in
   (* gh-ocannl-1889: the equations no binding could carry -- a window or concatenation equated to a
      solved index, or to another window -- are checked once every index is assigned, against the
-     environment the caller gets. They were checked against [temp_proj_env], before the indices of
-     the windows' own targets and of the concat targets existed (so a window over another window's
-     target read as an unknown projection), under a catch-all: every error was swallowed, and a
-     window equated to an index it does not reach passed silently. Checked last, nothing here fails
-     on a consistent program, so nothing is caught. An [Iterator] equals the [Concat] of that one
-     iterator, as in the concat-target pass. *)
+     environment the caller gets. They were checked before the indices of the windows' own targets
+     and of the concat targets existed (so a window over another window's target read as an unknown
+     projection), under a catch-all: every error was swallowed, and a window equated to an index it
+     does not reach passed silently. Checked last, nothing here fails on a consistent program, so
+     nothing is caught. An [Iterator] equals the [Concat] of that one iterator, as in the
+     concat-target pass. *)
   let same_index idx1 idx2 =
     Idx.equal_axis_index idx1 idx2
     ||
