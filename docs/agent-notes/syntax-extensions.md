@@ -72,8 +72,8 @@ files.
   (`~(p : Tensor.t option)`, `?(p : Tensor.t option)`; `?(p : Tensor.t)` is an OCaml type error), and
   `(x : Tensor.t)` is evidence for a forwarded labelled tensor. The handle keeps one slot per
   presence pattern, `[_variants]` entry points, all-required expansions byte-identical. The stacks
-  stay plain `let` and only the blocks scheme because a scheme over a stack checks each layer twice
-  (gh-ocannl-1814), not because of its trace: the trace's own cost is in shape-inference.md.
+  scheme like the blocks: a checked application's body skips its nested applications, so a stack is
+  one check (gh-ocannl-1814, shape-inference.md).
   A caller's `Some !@step_n` that nothing reads (dropout rate 0, batch norm) is an unconsumed forward
   root and shifts later printed ids by one.
 - A dimension capture needs a literal spec containing `=>`; this example captures the reduced axis.

@@ -2242,16 +2242,40 @@ module Scheme = struct
       | [] -> "no arguments"
       | _ -> String.concat ~sep:", " (List.map args ~f:(fun t -> Tn.label_name t.value))
 
+    (* Whether the body of a checked application is running (gh-ocannl-1814). Its trace ran every
+       schemed application in that body plain, so the scheme just checked holds their constraints:
+       one checked below it would re-solve a renamed subset of what the outer check found
+       consistent. Such an application only runs its body, and an argument its scheme would refuse
+       has already been refused naming the outer function. What the outer window does not hold is
+       the patterns that application does not take: a first application still traces those. What
+       this rests on is gh-ocannl-1751's determinism premise, that a schemed body's graph depends
+       only on its closure and its arguments' shapes; a body breaking it still registers its
+       constraints inline, so an error moves to the body or the closure and is not lost. *)
+    let in_checked_body = ref false
+    [@@mutation_serial.exempt
+      "the extent of a checked application's body, restored by run_checked_body's finally"]
+
+    let recheck_nested = ref false
+    [@@mutation_serial.exempt "a negative control's switch, set by tests only"]
+
+    let run_checked_body body =
+      let outer = !in_checked_body in
+      in_checked_body := true;
+      Exn.protect ~f:body ~finally:(fun () -> in_checked_body := outer)
+
     (* The check of one application: the scheme's constraints against the arguments, solved, and
-       then put back -- the session afterwards is what the body alone makes. *)
+       then put back -- the session afterwards is what the body alone makes. False when no check
+       could run, so that nothing vouches for the body's applications. *)
     let check s scheme args =
-      if Shape.can_checkpoint () then (
-        (* Its renamed variables die with it: minted from the reserved range. *)
-        Row.with_reserved_vars (fun () ->
-            Shape.Scheme.check scheme ~application:(application_name args)
-              ~args:(List.map args ~f:(fun t -> t.shape)));
-        Shape.note_checked_application ();
-        emit (Checked s.label))
+      Shape.can_checkpoint ()
+      &&
+      ((* Its renamed variables die with it: minted from the reserved range. *)
+       Row.with_reserved_vars (fun () ->
+           Shape.Scheme.check scheme ~application:(application_name args)
+             ~args:(List.map args ~f:(fun t -> t.shape)));
+       Shape.note_checked_application ();
+       emit (Checked s.label);
+       true)
 
     let due s =
       match s.state with
@@ -2266,16 +2290,23 @@ module Scheme = struct
         match List.find h.slots ~f:(fun s -> List.equal Bool.equal s.pattern pattern) with
         | None -> body ()
         | Some s ->
-            (* Tracing begins with every pattern (a function without a [()] stage, or a closure
-               built when no checkpoint was possible); afterwards, each slot re-traces on its
-               own. *)
-            if List.for_all h.slots ~f:(fun s -> match s.state with Pending -> true | _ -> false)
-            then List.iter h.slots ~f:(trace_slot h)
-            else if due s then trace_slot h s;
-            (match s.state with
-            | Schemed { scheme; _ } -> check s scheme (List.filter_opt args)
-            | _ -> ());
-            body ()
+            let first =
+              List.for_all h.slots ~f:(fun s -> match s.state with Pending -> true | _ -> false)
+            in
+            if !in_checked_body && not !recheck_nested then (
+              if first && List.length h.slots > 1 then List.iter h.slots ~f:(trace_slot h);
+              body ())
+            else (
+              (* Tracing begins with every pattern (a function without a [()] stage, or a closure
+                 built when no checkpoint was possible); afterwards, each slot re-traces on its
+                 own. *)
+              if first then List.iter h.slots ~f:(trace_slot h) else if due s then trace_slot h s;
+              let checked =
+                match s.state with
+                | Schemed { scheme; _ } -> check s scheme (List.filter_opt args)
+                | Pending | Unschemed _ -> false
+              in
+              if checked then run_checked_body body else body ())
 
     let apply h args body = apply_variants h (List.map args ~f:Option.some) body
   end
@@ -2325,6 +2356,10 @@ module For_testing = struct
     Weak_discards.clean (discarded_nodes ());
     ("discarded nodes", Weak_discards.length (discarded_nodes ()))
     :: Shape.discarded_registry_sizes ()
+
+  let with_nested_rechecks f =
+    Scheme.For_ppx.recheck_nested := true;
+    Exn.protect ~f ~finally:(fun () -> Scheme.For_ppx.recheck_nested := false)
 
   let without_id_neutrality f =
     Scheme.id_neutral_sabotaged := true;

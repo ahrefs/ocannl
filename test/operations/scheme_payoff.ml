@@ -69,9 +69,9 @@ let workloads =
           let layer = block ~label:[ "tied" ] () in
           Fn.apply_n_times ~n layer (input ()));
     };
-    (* nn_blocks' transformer stacks, whose blocks are schemed per presence pattern of [~train_step]
-       and attention's [?mask] (gh-ocannl-1792): evaluation and training of the decoder-only stack
-       (masked attention), and training of the encoder stack (unmasked). *)
+    (* nn_blocks' transformer stacks, schemed like their blocks per presence pattern of
+       [~train_step] and attention's [?mask] (gh-ocannl-1792): evaluation and training of the
+       decoder-only stack (masked attention), and training of the encoder stack (unmasked). *)
     { w_name = "decoder"; build = (fun n -> decoder ~train_step:None n) };
     { w_name = "decoder_train"; build = (fun n -> decoder ~train_step:(Some (step ())) n) };
     {
@@ -103,8 +103,10 @@ let seconds started = Mtime.Span.to_float_ns (Mtime_clock.count started) /. 1e9
    gh-ocannl-1802 and gh-ocannl-1891: the reference for its work counter. [~whole_env]: with every
    solution substituted into the whole environment, as before gh-ocannl-1904 indexed the entries it
    can change. [~alloc]: counting the heap words construction and closure allocate, in a window
-   opened after the earlier garbage's finalisers ran. *)
-let run_one ?(unbounded = false) ?(whole_env = false) ?(alloc = false) (mode : mode) w n =
+   opened after the earlier garbage's finalisers ran. [~recheck]: with the applications inside a
+   checked body checked too, as before gh-ocannl-1814. *)
+let run_one ?(unbounded = false) ?(whole_env = false) ?(alloc = false) ?(recheck = false)
+    (mode : mode) w n =
   Tensor.For_testing.set_op_shape_schemes (Some mode);
   Tensor.unsafe_reinitialize ();
   Tensor.Scheme.reset_registration_counts ();
@@ -122,6 +124,7 @@ let run_one ?(unbounded = false) ?(whole_env = false) ?(alloc = false) (mode : m
   in
   let infer = if unbounded then fun () -> Ocannl.Row.with_unbounded_rank_search infer else infer in
   let infer = if whole_env then fun () -> Ocannl.Row.with_whole_env_substitution infer else infer in
+  let infer = if recheck then fun () -> Tensor.For_testing.with_nested_rechecks infer else infer in
   let (y, construction_s, result_dims), alloc_words =
     if alloc then
       let result, { Gc_witness.words; drained = _ } = Gc_witness.drained_finalisers infer in
@@ -143,10 +146,10 @@ let run_one ?(unbounded = false) ?(whole_env = false) ?(alloc = false) (mode : m
     alloc_words;
   }
 
-(* gh-ocannl-1891: one trace of a whole stack, the scheme nn_blocks' stacks leave off. The closure
-   is built before the window, in a fresh session, so the window holds the trace alone: the body on
-   unsized arguments, its end validation and the scheme's export, not a build's construction and
-   closure. [args] are concrete arguments for one build of the same model. *)
+(* gh-ocannl-1891: one trace of a whole stack. The closure is built before the window, in a fresh
+   session, so the window holds the trace alone: the body on unsized arguments, its end validation
+   and the scheme's export, not a build's construction and closure. [args] are concrete arguments
+   for one build of the same model. *)
 type stack = {
   s_name : string;
   depths : int list;
@@ -280,8 +283,8 @@ let row_header =
   "workload depth mode | checked inline | C' E' boundary inline_c | closure_constraints | \
    rank_search_visits dim_cycle_visits subst_visits"
 
-let count_row w n mode (c : Shape.registration_counts) =
-  Printf.sprintf "%s %d %s | %d %d | %d %d %d %d | %d | %d %d %d" w n (mode_name mode)
+let count_row w n mode_label (c : Shape.registration_counts) =
+  Printf.sprintf "%s %d %s | %d %d | %d %d %d %d | %d | %d %d %d" w n mode_label
     c.checked_applications c.inline_registrations c.instantiated_constraints
     c.instantiated_solutions c.instantiated_boundary c.inline_constraints c.closure_constraints
     c.rank_search_visits c.dim_cycle_visits c.subst_visits
@@ -292,13 +295,13 @@ let time_header =
   "workload depth mode | construction_ms closure_ms total_ms | tracing instantiation inline_steps \
    (ms)"
 
-let time_row w n mode r =
+let time_row w n mode_label r =
   let t = r.times in
   String.concat ~sep:" "
     [
       w;
       Int.to_string n;
-      mode_name mode;
+      mode_label;
       "|";
       ms r.construction_s;
       ms t.closure_s;
@@ -324,15 +327,19 @@ let median xs =
   a.(Array.length a / 2)
 
 (* The measurement: per workload, depth and mode, one warm-up run and the median of [reps] runs
-   (each column's own median), with the range of the total. *)
+   (each column's own median), with the range of the total. The [recheck] row is [check] with the
+   applications inside a checked body checked too: what gh-ocannl-1814 saves, under one window. *)
 let bench reps cells =
   Stdio.printf "%s | total range (ms)\n%!" time_header;
   let counts = ref [] in
+  let rows =
+    List.map modes ~f:(fun mode -> (mode_name mode, mode, false)) @ [ ("recheck", `Check, true) ]
+  in
   List.iter cells ~f:(fun (w, ns) ->
       List.iter ns ~f:(fun n ->
-          List.iter modes ~f:(fun mode ->
-              ignore (run_one mode w n : run);
-              let rs = List.init reps ~f:(fun _ -> run_one mode w n) in
+          List.iter rows ~f:(fun (row_label, mode, recheck) ->
+              ignore (run_one ~recheck mode w n : run);
+              let rs = List.init reps ~f:(fun _ -> run_one ~recheck mode w n) in
               let med f = median (List.map rs ~f) in
               let r =
                 {
@@ -348,11 +355,12 @@ let bench reps cells =
                     };
                 }
               in
-              counts := count_row w.w_name n mode r.counts :: !counts;
+              counts := count_row w.w_name n row_label r.counts :: !counts;
               let totals = List.map rs ~f:(fun r -> r.total_s) in
               let lo = List.reduce_exn totals ~f:Float.min
               and hi = List.reduce_exn totals ~f:Float.max in
-              Stdio.printf "%s | total range %s-%s\n%!" (time_row w.w_name n mode r) (ms lo) (ms hi))));
+              Stdio.printf "%s | total range %s-%s\n%!" (time_row w.w_name n row_label r) (ms lo)
+                (ms hi))));
   Stdio.printf "%s\n" row_header;
   List.iter (List.rev !counts) ~f:(Stdio.printf "%s\n")
 
@@ -365,7 +373,7 @@ let bench_result cells =
       List.iter ns ~f:(fun n ->
           ignore (run_one `Off w n : run);
           let r = run_one `Off w n in
-          Stdio.printf "%s\n" (time_row w.w_name n `Off r);
+          Stdio.printf "%s\n" (time_row w.w_name n (mode_name `Off) r);
           Bench_out.result
             ~variant:(Printf.sprintf "%s-%d-off" w.w_name n)
             ~check:(Unchecked "an inference timing: the test claims the shapes it closes")
@@ -416,7 +424,8 @@ let () =
       let w = find_workload w and n = Int.of_string n in
       let mode = List.find_exn modes ~f:(fun m -> String.equal (mode_name m) mode) in
       let r = run_one mode w n in
-      Stdio.printf "%s\n%s\n" (count_row w.w_name n mode r.counts) (time_row w.w_name n mode r)
+      let label = mode_name mode in
+      Stdio.printf "%s\n%s\n" (count_row w.w_name n label r.counts) (time_row w.w_name n label r)
   | _ :: "--bench" :: reps :: cells ->
       (* [--bench REPS distinct=1,4,16 shared=1,4,16 decoder=1,4,8] *)
       bench (Int.of_string reps) (parse_cells cells)
@@ -433,6 +442,10 @@ let () =
       let unbounded =
         List.concat_map workloads ~f:(fun w ->
             List.map depths ~f:(fun n -> ((w.w_name, n), run_one ~unbounded:true `Off w n)))
+      in
+      let rechecked =
+        List.concat_map workloads ~f:(fun w ->
+            List.map depths ~f:(fun n -> ((w.w_name, n), run_one ~recheck:true `Check w n)))
       in
       (* gh-ocannl-1904: deeper stacks, schemes off, with the allocation counted, indexed and with
          every solution substituted into the whole environment (the control). *)
@@ -461,20 +474,23 @@ let () =
       Tensor.For_testing.set_op_shape_schemes None;
       Stdio.eprintf "(not part of the golden) %s\n" row_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
-          Stdio.eprintf "(not part of the golden) %s\n" (count_row w n mode r.counts));
+          Stdio.eprintf "(not part of the golden) %s\n" (count_row w n (mode_name mode) r.counts));
       List.iter unbounded ~f:(fun ((w, n), r) ->
           Stdio.eprintf "(not part of the golden) unbounded rank search: %s\n"
-            (count_row w n `Off r.counts));
+            (count_row w n (mode_name `Off) r.counts));
+      List.iter rechecked ~f:(fun ((w, n), r) ->
+          Stdio.eprintf "(not part of the golden) %s\n" (count_row w n "recheck" r.counts));
       List.iter scaling ~f:(fun ((w, n, whole_env), r) ->
           Stdio.eprintf "(not part of the golden) %s substitution: %s | %.0f words\n"
             (if whole_env then "whole-env" else "indexed")
-            (count_row w n `Off r.counts) (Option.value_exn r.alloc_words));
+            (count_row w n (mode_name `Off) r.counts)
+            (Option.value_exn r.alloc_words));
       List.iter traced ~f:(fun ((w, n), (t, b)) ->
           Stdio.eprintf
             "(not part of the golden) whole-stack trace: %s | %.0f words %.1f ms | build %.0f \
              words %.1f ms | trace/build %.3f\n"
-            (count_row w n `Check t.t_counts) t.t_words (t.t_s *. 1000.) b.t_words (b.t_s *. 1000.)
-            (t.t_words /. b.t_words));
+            (count_row w n (mode_name `Check) t.t_counts)
+            t.t_words (t.t_s *. 1000.) b.t_words (b.t_s *. 1000.) (t.t_words /. b.t_words));
       List.iter cycle_walk ~f:(fun (n, (t, u, _)) ->
           Stdio.eprintf
             "(not part of the golden) dimension-cycle search at depth %d: %d visits, walking paths \
@@ -482,7 +498,7 @@ let () =
             n t.t_counts.dim_cycle_visits u.t_counts.dim_cycle_visits);
       Stdio.eprintf "(not part of the golden) %s\n" time_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
-          Stdio.eprintf "(not part of the golden) %s\n" (time_row w n mode r));
+          Stdio.eprintf "(not part of the golden) %s\n" (time_row w n (mode_name mode) r));
       let get w n mode = List.Assoc.find_exn results (w, n, mode) ~equal:Poly.equal in
       let cells = List.filter results ~f:(fun ((_, _, mode), _) -> Poly.equal mode `Off) in
       Verdict.case "what each mode adds to inference" (fun () ->
@@ -499,26 +515,44 @@ let () =
           p_all "checking instantiates a scheme at every depth" cells ~f:(fun ((w, n, _), _) ->
               let c = (get w n `Check).counts in
               c.checked_applications > 0 && c.instantiated_constraints > 0);
-          (* The transformer blocks' own schemes, by pattern: the counts above are already positive
-             through the layer norms and feed-forward layers alone. *)
-          let checks_at_every_depth w labels =
-            p_all
-              (w ^ ": checking reaches " ^ String.concat ~sep:", " labels)
-              depths
-              ~f:(fun n ->
-                List.for_all labels ~f:(fun l ->
-                    List.mem (get w n `Check).checked l ~equal:String.equal))
-          in
-          checks_at_every_depth "decoder"
-            [ "decoder_only_block [no train_step]"; "multi_head_attention [no train_step, mask]" ];
-          checks_at_every_depth "decoder_train"
-            [ "decoder_only_block [train_step]"; "multi_head_attention [train_step, mask]" ];
-          checks_at_every_depth "encoder_train"
-            [
-              "transformer_encoder_block [train_step]"; "multi_head_attention [train_step, no mask]";
-            ];
           p_all "schemes off: no application is checked" results ~f:(fun ((_, _, mode), r) ->
               Poly.equal mode `Check || List.is_empty r.checked));
+      (* gh-ocannl-1814: the outermost schemed applications are what is checked: the block in a
+         plain fold of blocks, the stack where it is schemed. A scheme holds the constraints of the
+         applications in its body, as registered at its trace, so checking those too re-solved a
+         renamed subset. The control checks every application again, so a claim here cannot hold by
+         a build making fewer: three per [block], eight per transformer block, and the stack. *)
+      let recheck w n = List.Assoc.find_exn rechecked (w, n) ~equal:Poly.equal in
+      let outermost =
+        [
+          ("distinct", "block", Fn.id, fun n -> 3 * n);
+          ("shared", "block", Fn.id, fun n -> 3 * n);
+          ("decoder", "decoder_only [no train_step]", Fn.const 1, fun n -> (8 * n) + 1);
+          ("decoder_train", "decoder_only [train_step]", Fn.const 1, fun n -> (8 * n) + 1);
+          ("encoder_train", "transformer_encoder [train_step]", Fn.const 1, fun n -> (8 * n) + 1);
+        ]
+      in
+      let by_depth = List.cartesian_product outermost depths in
+      Verdict.case "a checked application vouches for the applications in its body" (fun () ->
+          p_all "the outermost schemed applications are the checked ones" by_depth
+            ~f:(fun ((w, _, checks, _), n) ->
+              (get w n `Check).counts.checked_applications = checks n);
+          p_all "and only their schemes are checked" by_depth ~f:(fun ((w, label, _, _), n) ->
+              List.equal String.equal (get w n `Check).checked [ label ]);
+          p_all "the control checks every schemed application" by_depth
+            ~f:(fun ((w, _, _, all_checks), n) ->
+              (recheck w n).counts.checked_applications = all_checks n);
+          p_all "the control closes the shapes the outermost checks close" by_depth
+            ~f:(fun ((w, _, _, _), n) ->
+              List.equal (List.equal Int.equal) (recheck w n).dims (get w n `Check).dims);
+          p_all "the control instantiates more constraints" by_depth ~f:(fun ((w, _, _, _), n) ->
+              (recheck w n).counts.instantiated_constraints
+              > (get w n `Check).counts.instantiated_constraints);
+          (* One block's window per block, whether one check or many instantiates them. *)
+          p_all "the checks instantiate one block's window per block" by_depth
+            ~f:(fun ((w, _, _, _), n) ->
+              (get w n `Check).counts.instantiated_constraints
+              = n * (get w 1 `Check).counts.instantiated_constraints));
       (* gh-ocannl-1891: the rank-cycle check by potentials, against the walk it replaced. *)
       let unbounded_visits w n =
         (List.Assoc.find_exn unbounded (w, n) ~equal:Poly.equal).counts.rank_search_visits

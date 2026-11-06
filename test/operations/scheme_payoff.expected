@@ -2,10 +2,13 @@ every mode closes the shapes it closes without schemes: true
 checking leaves the closure the constraint store it has without schemes: true
 checking leaves the body's inline registrations those it has without schemes: true
 checking instantiates a scheme at every depth: true
-decoder: checking reaches decoder_only_block [no train_step], multi_head_attention [no train_step, mask]: true
-decoder_train: checking reaches decoder_only_block [train_step], multi_head_attention [train_step, mask]: true
-encoder_train: checking reaches transformer_encoder_block [train_step], multi_head_attention [train_step, no mask]: true
 schemes off: no application is checked: true
+the outermost schemed applications are the checked ones: true
+and only their schemes are checked: true
+the control checks every schemed application: true
+the control closes the shapes the outermost checks close: true
+the control instantiates more constraints: true
+the checks instantiate one block's window per block: true
 the rank potentials close the shapes the walk closes: true
 the rank potentials move fewer variables than the walk visits: true
 the rank potentials' saving grows with depth: true

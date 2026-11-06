@@ -16,6 +16,9 @@ cross_attention: every presence pattern's scheme was traced: true
 transformer_encoder_block: every presence pattern's scheme was traced: true
 decoder_only_block: every presence pattern's scheme was traced: true
 transformer_decoder_block: every presence pattern's scheme was traced: true
+transformer_encoder: every presence pattern's scheme was traced: true
+decoder_only: every presence pattern's scheme was traced: true
+transformer_decoder: every presence pattern's scheme was traced: true
 batch_norm1d: every presence pattern's scheme was traced: true
 batch_norm2d: every presence pattern's scheme was traced: true
 conv_bn_relu: every presence pattern's scheme was traced: true
@@ -275,6 +278,202 @@ transformer_decoder_block [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..
   'w ⊑ ..'h..
   2 ⊑ ..'i..
 
+transformer_encoder [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ..'g..,'h|..'i..->..'j..,'k
+  'k ⊑ '_a
+  'k ⊑ '_b
+  'k ⊑ '_c
+  'k ⊑ '_d
+  ..'_e.. ⊑ ..'f..
+  ..'_f.. ⊑ ..'f..
+  ..'_g.. ⊑ ..'f..
+  ..'i.. ⊑ ..'_h..
+  ..'i.. ⊑ ..'_i..
+  ..'i.. ⊑ ..'_j..
+  ..'i.. ⊑ ..'_k..
+  ..'i.. ⊑ ..'_l..
+  ..'i.. ⊑ ..'_m..
+  ..'i.. ⊑ ..'_n..
+  ..'i.. ⊑ ..'_o..
+  ..'i.. ⊑ ..'e..
+  ..'i.. ⊑ ..'_p..
+  ..'i.. ⊑ ..'_q..
+  ..'j.. ⊑ ..'_r..
+  ..'j.. ⊑ ..'_s..
+  ..'j.. ⊑ ..'_t..
+  ..'j.. ⊑ ..'_u..
+  ..'l..,'m ⊑ ..'d..
+  ..'n..,'o ⊑ ..'f..
+
+transformer_encoder [no train_step] : ..'a..|..'b..->..'c.. => ..'d..,'e|..'f..->..'g..,'h
+  'h ⊑ '_a
+  'h ⊑ '_b
+  'h ⊑ '_c
+  'h ⊑ '_d
+  ..'_e.. ⊑ ..'c..
+  ..'_f.. ⊑ ..'c..
+  ..'_g.. ⊑ ..'c..
+  ..'f.. ⊑ ..'_h..
+  ..'f.. ⊑ ..'_i..
+  ..'f.. ⊑ ..'_j..
+  ..'f.. ⊑ ..'_k..
+  ..'f.. ⊑ ..'_l..
+  ..'f.. ⊑ ..'_m..
+  ..'f.. ⊑ ..'_n..
+  ..'f.. ⊑ ..'_o..
+  ..'f.. ⊑ ..'b..
+  ..'f.. ⊑ ..'_p..
+  ..'f.. ⊑ ..'_q..
+  ..'g.. ⊑ ..'_r..
+  ..'g.. ⊑ ..'_s..
+  ..'g.. ⊑ ..'_t..
+  ..'g.. ⊑ ..'_u..
+  ..'i..,'j ⊑ ..'a..
+  ..'k..,'l ⊑ ..'c..
+
+decoder_only [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., ..'g..|..'h..->..'i.. => ..'j..,'k|..'l..->..'m..,'n
+  'n ⊑ '_a
+  'n ⊑ '_b
+  'n ⊑ '_c
+  'n ⊑ '_d
+  ..'_e.. ⊑ ..'f..
+  ..'_f.. ⊑ ..'f..
+  ..'_g.. ⊑ ..'f..
+  ..'l.. ⊑ ..'_h..
+  ..'l.. ⊑ ..'_i..
+  ..'l.. ⊑ ..'_j..
+  ..'l.. ⊑ ..'_k..
+  ..'l.. ⊑ ..'_l..
+  ..'l.. ⊑ ..'_m..
+  ..'l.. ⊑ ..'_n..
+  ..'l.. ⊑ ..'_o..
+  ..'l.. ⊑ ..'e..
+  ..'l.. ⊑ ..'_p..
+  ..'l.. ⊑ ..'_q..
+  ..'m.. ⊑ ..'_r..
+  ..'m.. ⊑ ..'_s..
+  ..'m.. ⊑ ..'_t..
+  ..'m.. ⊑ ..'_u..
+  ..'o..,'p ⊑ ..'d..
+  ..'q..,'r ⊑ ..'f..
+  ..'s..,'t ⊑ ..'g..
+  'u ⊑ ..'h..
+  2 ⊑ ..'i..
+
+decoder_only [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ..'g..,'h|..'i..->..'j..,'k
+  'k ⊑ '_a
+  'k ⊑ '_b
+  'k ⊑ '_c
+  'k ⊑ '_d
+  ..'_e.. ⊑ ..'c..
+  ..'_f.. ⊑ ..'c..
+  ..'_g.. ⊑ ..'c..
+  ..'i.. ⊑ ..'_h..
+  ..'i.. ⊑ ..'_i..
+  ..'i.. ⊑ ..'_j..
+  ..'i.. ⊑ ..'_k..
+  ..'i.. ⊑ ..'_l..
+  ..'i.. ⊑ ..'_m..
+  ..'i.. ⊑ ..'_n..
+  ..'i.. ⊑ ..'_o..
+  ..'i.. ⊑ ..'b..
+  ..'i.. ⊑ ..'_p..
+  ..'i.. ⊑ ..'_q..
+  ..'j.. ⊑ ..'_r..
+  ..'j.. ⊑ ..'_s..
+  ..'j.. ⊑ ..'_t..
+  ..'j.. ⊑ ..'_u..
+  ..'l..,'m ⊑ ..'a..
+  ..'n..,'o ⊑ ..'c..
+  ..'p..,'q ⊑ ..'d..
+  'r ⊑ ..'e..
+  2 ⊑ ..'f..
+
+transformer_decoder [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., ..'g..|..'h..->..'i.., ..'j..|..'k..->..'l.. => ..'m..,'n|..'o..->..'p..,'q
+  'q ⊑ '_a
+  'q ⊑ '_b
+  'q ⊑ '_c
+  'q ⊑ '_d
+  'q ⊑ '_e
+  'q ⊑ '_f
+  ..'_g.. ⊑ ..'f..
+  ..'_h.. ⊑ ..'f..
+  ..'_i.. ⊑ ..'f..
+  ..'_j.. ⊑ ..'i..
+  ..'_k.. ⊑ ..'i..
+  ..'_l.. ⊑ ..'i..
+  ..'_m.. ⊑ ..'i..
+  ..'o.. ⊑ ..'_n..
+  ..'o.. ⊑ ..'_o..
+  ..'o.. ⊑ ..'_p..
+  ..'o.. ⊑ ..'_q..
+  ..'o.. ⊑ ..'_r..
+  ..'o.. ⊑ ..'_s..
+  ..'o.. ⊑ ..'_t..
+  ..'o.. ⊑ ..'_u..
+  ..'o.. ⊑ ..'_v..
+  ..'o.. ⊑ ..'_w..
+  ..'o.. ⊑ ..'_x..
+  ..'o.. ⊑ ..'_y..
+  ..'o.. ⊑ ..'e..
+  ..'o.. ⊑ ..'h..
+  ..'o.. ⊑ ..'_z..
+  ..'o.. ⊑ ..'_a1..
+  ..'p.. ⊑ ..'_b1..
+  ..'p.. ⊑ ..'_c1..
+  ..'p.. ⊑ ..'_d1..
+  ..'p.. ⊑ ..'_e1..
+  ..'p.. ⊑ ..'_f1..
+  ..'p.. ⊑ ..'_g1..
+  ..'r..,'s ⊑ ..'d..
+  ..'t..,'u ⊑ ..'f..
+  ..'v..,'w ⊑ ..'g..
+  ..'x..,'y ⊑ ..'j..
+  'z ⊑ ..'k..
+  2 ⊑ ..'l..
+
+transformer_decoder [no train_step] : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.., ..'g..|..'h..->..'i.. => ..'j..,'k|..'l..->..'m..,'n
+  'n ⊑ '_a
+  'n ⊑ '_b
+  'n ⊑ '_c
+  'n ⊑ '_d
+  'n ⊑ '_e
+  'n ⊑ '_f
+  ..'_g.. ⊑ ..'c..
+  ..'_h.. ⊑ ..'c..
+  ..'_i.. ⊑ ..'c..
+  ..'_j.. ⊑ ..'f..
+  ..'_k.. ⊑ ..'f..
+  ..'_l.. ⊑ ..'f..
+  ..'_m.. ⊑ ..'f..
+  ..'l.. ⊑ ..'_n..
+  ..'l.. ⊑ ..'_o..
+  ..'l.. ⊑ ..'_p..
+  ..'l.. ⊑ ..'_q..
+  ..'l.. ⊑ ..'_r..
+  ..'l.. ⊑ ..'_s..
+  ..'l.. ⊑ ..'_t..
+  ..'l.. ⊑ ..'_u..
+  ..'l.. ⊑ ..'_v..
+  ..'l.. ⊑ ..'_w..
+  ..'l.. ⊑ ..'_x..
+  ..'l.. ⊑ ..'_y..
+  ..'l.. ⊑ ..'b..
+  ..'l.. ⊑ ..'e..
+  ..'l.. ⊑ ..'_z..
+  ..'l.. ⊑ ..'_a1..
+  ..'m.. ⊑ ..'_b1..
+  ..'m.. ⊑ ..'_c1..
+  ..'m.. ⊑ ..'_d1..
+  ..'m.. ⊑ ..'_e1..
+  ..'m.. ⊑ ..'_f1..
+  ..'m.. ⊑ ..'_g1..
+  ..'o..,'p ⊑ ..'a..
+  ..'q..,'r ⊑ ..'c..
+  ..'s..,'t ⊑ ..'d..
+  ..'u..,'v ⊑ ..'g..
+  'w ⊑ ..'h..
+  2 ⊑ ..'i..
+
 batch_norm1d [train_step] : ..'a..|..'b..->..'c.., ..'d..|..'_a..->..'e..,'f => ..'d..|..'_a..->..'e..,'f
   ..'_b.. ⊑ ..'_a..
 
@@ -353,6 +552,10 @@ vgg_block [no train_step] : ..'a..|..'_a..->conv(2*'b+2),conv(2*'c+2),..'d.. => 
   ..'f.. ⊑ ..'_a..
   ..'f.. ⊑ ..'_c..
   ..'g.. ⊑ ..'_f..
+the stack's scheme is the one checked: true
+a mask of the wrong size is refused, naming the stack: true
+before any layer's body ran: true
+the control checks the layers too: true
 the evaluation pattern was traced: true
 the training pattern, which draws random numbers, was traced: true
 of the trial's scheme events, none leaves a pattern unschemed: true

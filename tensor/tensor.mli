@@ -491,7 +491,12 @@ module Scheme : sig
       application -- or, for a function without a [()] stage, its first application -- traces the
       scheme. How each application uses it is the [op_shape_schemes] setting:
       - [check] (the default): each application checks the scheme against its arguments' shapes, in
-        a window that is always rewound, before the body runs and registers as it always does;
+        a window that is always rewound, before the body runs and registers as it always does. The
+        applications in the body of a checked application are not checked themselves: its scheme
+        holds their constraints, so an argument error in one is reported by the outer check, naming
+        the outer function (gh-ocannl-1814). Only a function's first application there still traces
+        its presence patterns, which the outer scheme does not hold. Under an opted-out, refused or
+        otherwise unchecked function they are checked as usual;
       - [off]: no schemes.
 
       A shape error that does not depend on the arguments raises at the trace, prefixed
@@ -577,7 +582,10 @@ module Scheme : sig
 
     val apply : handle -> tensor list -> (unit -> 'a) -> 'a
     (** [apply h args body] (tracing [h]'s scheme first when pending or stale) checks the scheme
-        against [args], then runs [body]. Inside a trace, and when unschemed, only runs [body]. *)
+        against [args], then runs [body]. Inside a trace, and when unschemed, only runs [body]. So
+        it does inside the [body] of an application that was checked, whose scheme holds this
+        application's constraints (gh-ocannl-1814), but for tracing the presence patterns of a
+        function on its first application. *)
 
     val closure_variants :
       name:string -> optional:string option list -> (tensor option list -> 'r) -> handle
@@ -621,6 +629,11 @@ module For_testing : sig
   val discarded_registry_sizes : unit -> (string * int) list
   (** The records the session holds of what rewinds discarded, by kind (nodes, capture references,
       update steps). Call it after a full major collection to count only what is reachable. *)
+
+  val with_nested_rechecks : (unit -> 'a) -> 'a
+  (** Runs the function with every schemed application checked, those a checked application's body
+      makes included: a negative control of gh-ocannl-1814, and the reference for what skipping them
+      saves. *)
 
   val without_id_neutrality : (unit -> 'a) -> 'a
   (** Runs the function with the shape-scheme windows allocating session ids: a negative control of

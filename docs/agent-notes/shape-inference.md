@@ -394,6 +394,17 @@ files.
   re-solved by every tie solve. Count before claiming a solver win: `registration_counts` splits the store by
   source, and `closure_constraints` is the store at closure. Error locality is the payoff that
   holds (`scheme_error_locality` is the catalogue).
+- Nested applications (gh-ocannl-1814, `Scheme.For_ppx.in_checked_body`): `apply_variants` runs
+  plain inside the body of an application whose check really ran, set only after it did, so an
+  outer that is refused, opted out or could not checkpoint leaves its applications checked. It
+  moves no error (the outer check always came first, so a nested check could only speak after it
+  passed), and a body breaking the determinism premise still registers inline. Nested applications
+  skip `due` too, but two traces stay, each holding what no outer window does: a multi-pattern
+  function's first application traces its other patterns, and `closure_variants` its eager trace,
+  for a closure built in a body and never applied. On a schemed decoder, tracing is about two thirds
+  of check's time, and those eager per-layer traces are most of it.
+  `Tensor.For_testing.with_nested_rechecks` is the control, and `scheme_payoff --bench`'s `recheck`
+  row its A/B in one process.
 - A rank-cycle error is usually a consequence: find the commitment that made it (gh-ocannl-1955).
   Two sit in the closing path. An equation left with `beg_handled = false` solves neither variable,
   and `value` there is the rest of the other side, so `visit_rows_for_row_solution` (which reads
