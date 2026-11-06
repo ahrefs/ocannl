@@ -18,7 +18,7 @@ let%op z2 = { hey7 } +* "stride*a+dilation*b,;b=>a," { hey8 }
 
 let z3 =
   let s = 2 and d = 3 in
-  [%op { hey9 } +* "i, s*a+d*bc; b => i, a, c" { hey10 }]
+  [%op { hey9 } +* "i, s*a+d*bc; bc => i, a, c" { hey10 }]
 
 let%op concat_single = { hey11 } ++^ "i=>i"
 let%op concat_pair = ({ hey12 }, { hey13 }) ++^ "i; j => i^j" [ "i"; "j" ]

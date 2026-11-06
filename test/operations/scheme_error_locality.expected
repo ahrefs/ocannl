@@ -13,7 +13,7 @@ set_dim against a fixed width | int | application:body | definition:trace
 set_dim twice, no () stage | int | application:body | application:trace
 cyclic row permutation, abstract argument | arg | closure | closure
 cyclic row permutation, concrete argument | arg | accepted | accepted
-window kernel nothing sizes | int | closure | definition:trace
+window kernel nothing sizes | int | application:body | definition:trace
 nested case | depends | check | re-checked | under an opted-out function
 bias of the wrong width | arg | application:scheme | application:scheme | application:scheme
 contradicting parameters | int | definition:trace | definition:trace | definition:trace

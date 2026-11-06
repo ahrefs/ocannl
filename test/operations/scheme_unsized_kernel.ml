@@ -1,7 +1,10 @@
-(* gh-ocannl-1803: a window kernel nothing can size is refused at the definition. The refusal reads
-   the spec and the step's captures alone, so it must agree with what projection derivation does
-   under op_shape_schemes=off: each refused program below fails at the closure there, and each valid
-   one, a repaired program included, passes in both modes. *)
+(* gh-ocannl-1803, gh-ocannl-1983: a window kernel nothing can size is refused where the operation
+   is built, naming the kernel and the spec. The refusal reads the spec and the step's captures
+   alone, so it holds in every mode: without a scheme at the application (the body's registration),
+   under one at the definition, since a trace runs the body. It writes nothing first, so it taints
+   no session. Each valid program, a repaired one included, passes in both modes. What the spec does
+   not decide stays with projection derivation, at the closure, which refuses with the same message:
+   a capture nothing set, and a kernel only the result carries, unless that axis is sized. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -57,13 +60,38 @@ let%op unpadded_window () x =
 (* An axis named like a kernel, in a spec with no window. *)
 let%op no_window () x = x ++ "s, k => s, k"
 
+(* An axis of the result carries it, and something sizes that axis. *)
+let%op result_axis_captured () x =
+  let y = x ++ "s, 2*o=+k => s, o, k" [ "k" ] in
+  [%oc Shape.set_dim k 3];
+  y
+
+let%op result_axis_consumer () x =
+  let y = x ++ "s, 2*o=+k => s, o, k" in
+  y +* "s, o, k; s, o, k => s, o, k" { c = 0.; o = [ 1; 4; 3 ] }
+
+(* An explicit 1 is a size, not closure's guess. *)
+let%op result_axis_set_to_one () x =
+  let y = x ++ "s, 2*o=+k => s, o, k" [ "k" ] in
+  [%oc Shape.set_dim k 1];
+  y
+
 (* {2 Not the refusal's to decide: left to the closure, whatever it says} *)
 
-(* A capture nothing has set: an application could still. *)
+(* A capture nothing sets. The reference is made inside the body, so nothing else ever will, but the
+   refusal reads whether a capture exists, not what becomes of it. *)
 let%op captured_unset () x = x ++ "s, 2*o=+1+k => s, o" [ "k" ]
 
-(* An axis of the result carries it. *)
+(* An axis of the result carries it, and nothing sizes that axis: closure would guess the kernel. *)
 let%op kernel_in_result () x = x ++ "s, 2*o=+k => s, o, k"
+
+(* The same at stride 1, where the window's extent equation is the identity. *)
+let%op kernel_in_result_stride_one () x = x ++ "s, o=+k => s, o, k"
+
+(* A broadcast sizes nothing: the result's axis closes to 1 and broadcasts into the consumer's 3. *)
+let%op kernel_in_result_broadcast () x =
+  let y = x ++ "s, 2*o=+k => s, o, k" in
+  y + { c = 0.; o = [ 1; 4; 3 ] }
 
 type case = {
   name : string;
@@ -119,12 +147,18 @@ let valid =
     external_case;
     unit_case "second window unpadded" unpadded_window;
     unit_case "no window" no_window;
+    unit_case "result axis captured and set" result_axis_captured;
+    unit_case "result axis sized by an einsum consumer" result_axis_consumer;
+    unit_case "result axis set to 1" result_axis_set_to_one;
   ]
 
-let left_to_closure =
+let left_to_closure = [ unit_case "capture left unset" captured_unset ]
+
+let result_carried =
   [
-    unit_case "capture left unset" captured_unset;
     unit_case "kernel carried by the result" kernel_in_result;
+    unit_case "kernel carried by the result, stride 1" kernel_in_result_stride_one;
+    unit_case "kernel carried by the result, broadcast consumer" kernel_in_result_broadcast;
   ]
 
 type phase = Definition | Application | Closure | Accepted
@@ -179,16 +213,33 @@ let () =
   let refused_rows = table refused in
   let valid_rows = table valid in
   let left_rows = table left_to_closure in
-  Verdict.case "a kernel nothing can size is refused at the definition" (fun () ->
-      p_all "without schemes, projection derivation refuses each" refused_rows ~f:(fun (_, row) ->
-          equal_phase (phase_of `Off row) Closure
-          && Option.exists (message_of `Off row) ~f:(fun m -> contains m "has no size"));
+  let carried_rows = table result_carried in
+  Verdict.case "a kernel nothing can size is refused where the operation is built" (fun () ->
+      p_all "without schemes, the application refuses each" refused_rows ~f:(fun (_, row) ->
+          equal_phase (phase_of `Off row) Application);
       p_all "under a scheme, the definition does" refused_rows ~f:(fun (_, row) ->
           equal_phase (phase_of `Check row) Definition);
-      p_all "the refusal names the function and keeps the closure's explanation" refused_rows
-        ~f:(fun (_, row) ->
-          Option.exists (message_of `Check row) ~f:(fun m ->
-              contains m "tracing the shape scheme" && contains m "has no size")));
+      p_all "either way the message names the kernel and the spec" refused_rows ~f:(fun (_, row) ->
+          List.for_all modes ~f:(fun m ->
+              Option.exists (message_of m row) ~f:(fun msg ->
+                  contains msg "the window kernel k has no size in einsum spec \""
+                  && contains msg "Shape.set_dim" && contains msg "kernel operand")));
+      p_all "the refusal under a scheme names the function" refused_rows ~f:(fun (_, row) ->
+          Option.exists (message_of `Check row) ~f:(fun m -> contains m "tracing the shape scheme"));
+      p_all "a refused application taints no session" refused ~f:(fun case ->
+          ignore (outcome `Off case : phase * string option);
+          Option.is_none (Shape.taint_provenance ())));
+  Verdict.case "a kernel only the result carries, unsized" (fun () ->
+      p_all "is refused at the closure in every mode, not at construction" carried_rows
+        ~f:(fun (_, row) -> List.for_all modes ~f:(fun m -> equal_phase (phase_of m row) Closure));
+      p_all "naming the kernel and the spec, whatever the stride" carried_rows ~f:(fun (_, row) ->
+          List.for_all modes ~f:(fun m ->
+              Option.exists (message_of m row) ~f:(fun msg ->
+                  contains msg "the window kernel k has no size in einsum spec \"s, ")));
+      p_all "never as a clash of bases" carried_rows ~f:(fun (_, row) ->
+          not
+            (List.exists modes ~f:(fun m ->
+                 Option.exists (message_of m row) ~f:(fun msg -> contains msg "different bases")))));
   Verdict.case "a kernel something can size is left alone" (fun () ->
       p_all "accepted in every mode" valid_rows ~f:(fun (_, row) ->
           List.for_all modes ~f:(fun m -> equal_phase (phase_of m row) Accepted));
@@ -225,20 +276,21 @@ let () =
       p "Tensor.Scheme.trace refuses it, and the printed error names the function and the kernel"
         refused)
 
-(* A refused definition leaves open work as it found it: inference continues, to the same dims. *)
+(* A refused construction leaves open work as it found it: inference continues, to the same dims,
+   whether the application refused it or the definition did. *)
 let () =
   let dims_after mode =
     Tensor.For_testing.set_op_shape_schemes (Some mode);
     Tensor.unsafe_reinitialize ();
     let a = leaf ~output:[ 3 ] "a" and b = leaf ~output:[ 3 ] "b" in
     let%op open_work = a + { c = 0. } in
-    (match strided () with (_ : Tensor.t -> Tensor.t) -> () | exception Row.Shape_error _ -> ());
+    (match strided () (x18 ()) with (_ : Tensor.t) -> () | exception Row.Shape_error _ -> ());
     let%op further = open_work + b in
     Shape.to_dims further.Tensor.shape
   in
   let off = dims_after `Off and check = dims_after `Check in
   Tensor.For_testing.set_op_shape_schemes None;
-  Stdio.printf "open work after a refused definition: %s\n"
+  Stdio.printf "open work after a refused construction: %s\n"
     (String.concat ~sep:"," (List.map (Array.to_list check) ~f:Int.to_string));
-  Verdict.case "open work survives a refused definition" (fun () ->
+  Verdict.case "open work survives a refused construction" (fun () ->
       p "the dims are those without schemes" (Array.equal Int.equal off check))

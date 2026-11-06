@@ -1442,10 +1442,13 @@ let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : pa
     window's kernel, so such a kernel has a size only if the label occurs some other way (a plain
     axis, an [over], a concatenation component, an unpadded window's kernel) or a capture
     reference's solved value reaches it ({!bind_delayed_vars_to_envs}). Any capture counts, set or
-    not: it may be set later. The answer reads no shape, so it holds for every application. *)
+    not: it may be set later. The answer reads no shape, so it holds for every application. Only
+    operand windows count: a result-side padded window is {!refuse_result_side_padded_window}'s to
+    refuse, whatever its kernel. *)
 let unsized_padded_kernels ~spec ~(dim_refs : delayed_var_ref list) =
   let ls_rhs_list, ls_lhs = einsum_of_spec spec in
-  let axes = List.concat_map (ls_lhs :: ls_rhs_list) ~f:(fun ls -> Map.data ls.labels) in
+  let operand_axes = List.concat_map ls_rhs_list ~f:(fun ls -> Map.data ls.labels) in
+  let axes = Map.data ls_lhs.labels @ operand_axes in
   let sizing =
     List.concat_map axes ~f:(function
       | Label l -> [ l ]
@@ -1460,12 +1463,21 @@ let unsized_padded_kernels ~spec ~(dim_refs : delayed_var_ref list) =
             | Concat_size _ -> None))
     @ List.map dim_refs ~f:(fun r -> r.var_ref.ref_label)
   in
-  List.filter_map axes ~f:(function
+  List.filter_map operand_axes ~f:(function
     | Affine_spec { conv = Some { kernel_label; use_padding = `True; _ }; _ }
       when not (List.mem sizing kernel_label ~equal:String.equal) ->
         Some kernel_label
     | _ -> None)
   |> List.dedup_and_sort ~compare:String.compare
+
+(** The spec and captures of an einsum-family logic. *)
+let einsum_of_logic = function
+  | Transpose (Permute (spec, dim_refs), _)
+  | Broadcast (Einsum (spec, dim_refs), _, _)
+  | Broadcast_tern (Einsum_tern (spec, dim_refs), _, _, _)
+  | Block { spec; delayed_vars = dim_refs; _ } ->
+      Some (spec, dim_refs)
+  | Transpose _ | Broadcast _ | Broadcast_tern _ | Terminal _ -> None
 
 (** Shared n-ary einsum constraint builder used by [Broadcast (Einsum ...)],
     [Broadcast_tern (Einsum_tern ...)], and [Block]. Handles per-shape
@@ -3936,6 +3948,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
      get_inequalities provides indexing information that is lost after substitution. *)
   let proj_eqs : Row.proj_equation list =
     Row.get_proj_equations
+      ?spec:(Option.map (einsum_of_logic update_step.logic) ~f:fst)
       (terminal_rows_for_inputs @ List.filter ineqs ~f:(fun c -> not (is_projection_sizing c)))
       proj_axis_env local_env
   in
@@ -4480,9 +4493,23 @@ let propagate_inline (update_step : update_step) : unit =
       apply_env_step ~closure:false env update_step;
       state := env)
 
+(* Before anything is written too, so a refused construction taints nothing: [get_inequalities] has
+   already marked operands used by the time an einsum branch runs. This refuses what projection
+   derivation would at every closure (gh-ocannl-1803, gh-ocannl-1983). The step's spec and captures
+   decide it, not its shapes, so it needs no reasoning about what an application or a consumer of
+   the result can supply. A trace runs the body, so a shape scheme reports it at the definition. *)
+let refuse_unsized_kernels (update_step : update_step) =
+  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, dim_refs) ->
+      Option.iter
+        (List.hd (unsized_padded_kernels ~spec ~dim_refs))
+        ~f:(fun name ->
+          let v = Row.get_var ~name () in
+          raise @@ Row.unsized_kernel_error ~spec ~use_padding:true v (Row.Var v)))
+
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   check_untainted ();
   refuse_discarded_operands update_step;
+  refuse_unsized_kernels update_step;
   if tracing_in_progress () then propagate_inline update_step
   else timed `Inline_step (fun () -> propagate_inline update_step)
 
@@ -5324,25 +5351,6 @@ module Scheme = struct
     in
     go [] l
 
-  (* Refuses at the definition what every application's closure would refuse in projection
-     derivation (gh-ocannl-1803). The step's spec and captures decide it, not its shapes, so this
-     needs no reasoning about what an application or a consumer of the result can supply. *)
-  let refuse_unsized_kernels (step : update_step) =
-    let refuse ~spec ~dim_refs =
-      Option.iter
-        (List.hd (unsized_padded_kernels ~spec ~dim_refs))
-        ~f:(fun name ->
-          let v = Row.get_var ~name () in
-          raise @@ Row.unsized_kernel_error ~use_padding:true v (Row.Var v))
-    in
-    match step.logic with
-    | Transpose (Permute (spec, dim_refs), _)
-    | Broadcast (Einsum (spec, dim_refs), _, _)
-    | Broadcast_tern (Einsum_tern (spec, dim_refs), _, _, _)
-    | Block { spec; delayed_vars = dim_refs; _ } ->
-        refuse ~spec ~dim_refs
-    | Transpose _ | Broadcast _ | Broadcast_tern _ | Terminal _ -> ()
-
   (* The first occurrence of each shape, physically: an id can name several, as in [open_shapes]. *)
   let dedup_shapes shapes =
     let seen = Hashtbl.create (module Int) in
@@ -5489,7 +5497,6 @@ module Scheme = struct
                   }))
       in
       let steps = List.rev (window ~mark:steps_mark !active_update_steps) in
-      List.iter steps ~f:refuse_unsized_kernels;
       (* A scheme the function applied registered no step: its instance holds its boundary and
          anchored shapes, and its rows. *)
       let instances = List.rev (window ~mark:instances_mark !active_instances) in
