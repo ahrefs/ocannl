@@ -124,6 +124,24 @@ let%op _late_beta ~(beta : Tensor.t) x = _late_gamma ~gamma:beta x
 let%op _late_scale ~scale x = x *. !.scale
 let%op _late_label ~label x = mlp_layer ~label:("late" :: label) ~hid_dim:2 () ~x
 
+(* gh-ocannl-1987: without [()], the parameter labelled [label] enriches the result's label, at its
+   position among the label sources -- the list for [~label] and a defaulted [?(label = ...)], the
+   option's contents for [?label]. The inline declarations are created at definition and cannot take
+   it. A [label] with tensor evidence is not this list: labelled it is a tensor like any other,
+   optional it is left alone like any other. *)
+let%op _late_label_result ~label x = ({ llw } * x) + 1.0
+let%op _late_opt_label ?label x = x + 1.0
+let%op _late_label_default ?(label = [ "dflt" ]) ~(g : Tensor.t) x = x + g
+let%op _late_label_annot ~(label : string list) x = relu x
+let%op _late_label_tensor ~label x = x + label
+let%op _late_label_default_tensor ?(label = !.1.0) x = x + label
+
+(* gh-ocannl-1987: an integer or a float that is labelled, or bound before [()], stays what it
+   is. *)
+let%op _late_stride ~stride x = x +* "stride*o<+k; k => o" { ls_kernel }
+let%op _unit_stride stride () x = x +* "stride*o<+k; k => o" { us_kernel }
+let%op _late_exponent ~n x = x **. n
+
 (* gh-ocannl-1885: [?label] before [()] enriches the inline declarations' labels as [~label] does;
    un-defaulted it is the option itself, defaulted the list. *)
 let%op _opt_label ?label ~hid_dim () x = ({ olw } * x) + { olb; o = [ hid_dim ] }

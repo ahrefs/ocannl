@@ -19,6 +19,8 @@
   - [Further features of the syntax extension %op](#further-features-of-the-syntax-extension-op)
     - [Name from binding](#name-from-binding)
     - [Label from function argument](#label-from-function-argument)
+    - [The `label` parameter](#the-label-parameter)
+    - [Parameters that need a unit parameter, or a label](#parameters-that-need-a-unit-parameter-or-a-label)
     - [Configuring inline declarations: inline output dimensions, initial values](#configuring-inline-declarations-inline-output-dimensions-initial-values)
     - [Lifting of the applications of config arguments: if an error, refactor your code](#lifting-of-the-applications-of-config-arguments-if-an-error-refactor-your-code)
   - [The syntax extension %%extend_dsls](#the-syntax-extension-extend_dsls)
@@ -785,13 +787,27 @@ This syntax used to be very important, because comments in assignments are used 
 
 When an extension point is applied to a let-binding, e.g. `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })`, it uses the name of the binding (`mlp_layer` in the example) for the label of the primary tensor created by the extension, if any. This is why the resulting layer tensor in the example has its label starting with `"mlp_layer"`. If the extension is over a semicolon-separated sequence of expressions, the primary tensor can only be in the last component of the sequence, other syntax constructs are handled analogously.
 
-The example `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })` also illustrates providing additional string list to populate the label of the tensor: `label` must be of type `string list`.
+The example `let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })` also illustrates providing an additional string list to populate labels: `label` must be of type `string list` (see [The `label` parameter](#the-label-parameter) for which tensors take it).
 
 ### Label from function argument
 
-When the function directly under `%op` has no unit parameter `()`, the resulting (primary) tensor's label also incorporates the labels of its arguments: in `let%op scaled ~gamma x = gamma *. x`, the result's label includes the labels of the applied `gamma` and `x`. An unlabelled parameter is always such a label source. A labelled one is when `%op` sees evidence that it is a tensor: it is a direct operand of a tensor operator in the body (`gamma *. x`), or it is annotated (`~(gamma : Tensor.t)`, for a tensor the body only passes on). Any other labelled parameter is left alone and may be anything, e.g. `let%op scaled ~scale x = x *. !.scale` with a float `scale` (gh-ocannl-1885); so a labelled tensor that the body only hands to another function contributes its label only when annotated. An optional parameter (`?scale`, `?(stride = 2)`) is not a label source and may be anything (gh-ocannl-1787). If the function has a unit parameter `()`, like `mlp_layer` above, no parameter is a label source: the label comes from the binding's name and the `~label` parameter.
+When the function directly under `%op` has no unit parameter `()`, the resulting (primary) tensor's label also incorporates the labels of its arguments: in `let%op scaled ~gamma x = gamma *. x`, the result's label includes the labels of the applied `gamma` and `x`. An unlabelled parameter is always such a label source. A labelled one is when `%op` sees evidence that it is a tensor: it is a direct operand of a tensor operator in the body (`gamma *. x`), or it is annotated (`~(gamma : Tensor.t)`, for a tensor the body only passes on). Any other labelled parameter is left alone and may be anything, e.g. `let%op scaled ~scale x = x *. !.scale` with a float `scale` (gh-ocannl-1885); so a labelled tensor that the body only hands to another function contributes its label only when annotated. An optional parameter (`?scale`, `?(stride = 2)`) is not a label source and may be anything (gh-ocannl-1787). If the function has a unit parameter `()`, like `mlp_layer` above, no parameter is a label source: the label comes from the binding's name.
 
-When there is the unit parameter, and a `~label` or `?label` parameter (specifically a parameter with label `label`), this label is also incorporated.
+### The `label` parameter
+
+A parameter with the label `label` -- `~label`, `?label` or `?(label = [ ... ])` -- is a `string list` that `%op` puts into the labels of the tensors the function creates per application (gh-ocannl-1987):
+
+- Before a unit parameter, as in `let%op mlp_layer ~label ~hid_dim () x = ...`, it enriches the inline declarations, which are created at the `()` application: `mlp_layer ~label:[ "L1" ] ~hid_dim:3 ()` creates `w` and `b` labelled with `L1`. The result's label is not enriched.
+- Without a unit parameter, as in `let%op scaled ~label x = { gamma } *. x`, the inline declarations are created once, when the function is defined, where `label` is not bound; instead it enriches the result's label, at its position among the label sources of the previous section: the binding's name, then `label` and the tensor parameters' labels in parameter order. An omitted `?label` contributes nothing.
+
+`label` is not otherwise reserved: a `~label` that is a tensor by the evidence of the previous section (an operand use, a `Tensor.t` annotation) is a tensor, and an optional one with that evidence (`?(label = fallback)` used as an operand) is left alone like any other optional parameter.
+
+### Parameters that need a unit parameter, or a label
+
+Two uses of a parameter cannot work where a new user is likely to write them, and `%op` refuses them with an error naming the fix (gh-ocannl-1987):
+
+- An inline declaration field that names a parameter bound after the declaration is created: `let%op layer ~hid_dim x = ({ w } * x) + { b; o = [ hid_dim ] }` creates `b` once, at definition, where `hid_dim` is not bound. Give the function a unit parameter, with the configuration before it: `let%op layer ~hid_dim () x = ...`. The same holds for a parameter after the `()` and for the parameters of a function nested in the body.
+- An unlabelled parameter that the body uses as an integer or a float -- a stride or dilation in a literal einsum spec (`"stride*o+k"`), the operand of `!.` or `!..`, the exponent of `**.`: an unlabelled parameter is taken for a tensor, both as a label source and as an argument of the function's [shape scheme](#automatic-shape-schemes). Label it (`~stride`) or bind it before a unit parameter. Other non-tensor uses of an unlabelled parameter are not detected and remain type errors at the use.
 
 ### Configuring inline declarations: inline output dimensions, initial values
 

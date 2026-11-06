@@ -1,0 +1,192 @@
+open Base
+open Ocannl
+open Nn_blocks.DSL_modules
+let late_field =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "w") () in
+    let b =
+      ((TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+          "b")
+         ~output_dims:([%ocaml.error
+                         "ppx_ocannl %op: the inline declaration { b } is created once, when the function is defined, where the parameter hid_dim is not bound. Give the function a unit parameter with hid_dim before it -- fun ~hid_dim () ... -- so that the declaration is created at each () application"]))
+        () in
+    let __ocannl_body hid_dim x =
+      (+) ?label:(Some
+                    (List.concat
+                       [["late_field"];
+                       (hid_dim.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        (( * ) ?label:None w x) b in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"late_field" ~arity:2
+        (function
+         | hid_dim::x::[] -> __ocannl_body hid_dim x
+         | _ -> assert false) in
+    fun hid_dim x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [hid_dim; x]
+        (fun () -> __ocannl_body hid_dim x)
+let late_field_labelled =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "w") () in
+    let b =
+      ((TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+          "b")
+         ~output_dims:([%ocaml.error
+                         "ppx_ocannl %op: the inline declaration { b } is created once, when the function is defined, where the parameter hid_dim is not bound. Give the function a unit parameter with hid_dim before it -- fun ~hid_dim () ... -- so that the declaration is created at each () application"]))
+        () in
+    fun ~hid_dim x ->
+      (+) ?label:(Some
+                    (List.concat
+                       [["late_field_labelled"];
+                       (x.Tensor.value).Ir.Tnode.label]))
+        (( * ) ?label:None w x) b
+let late_init =
+  let open! TDSL.O in
+    let w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some
+                        ([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { w } is created once, when the function is defined, where the parameter scale is not bound. Give the function a unit parameter with scale before it -- fun ~scale () ... -- so that the declaration is created at each () application"]))
+         "w") () in
+    fun ~scale x ->
+      ( *
+        ) ?label:(Some
+                    (List.concat
+                       [["late_init"]; (x.Tensor.value).Ir.Tnode.label]))
+        w x
+let field_after_unit =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "w") () in
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), where the parameter hid_dim is not bound yet. Bind hid_dim before the unit parameter: fun ~hid_dim () ..."]))
+          () in
+      fun ~hid_dim x ->
+        (+) ?label:(Some ["field_after_unit"]) (( * ) ?label:None w x) b
+let field_in_nested =
+  let open! TDSL.O in
+    fun () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), where the parameter n is not bound yet. Bind n before the unit parameter: fun ~n () ..."]))
+          () in
+      let __ocannl_body x =
+        let g n y = (+) ?label:(Some ["g"]) y b in
+        g (TDSL.number (Float.of_int 3)) x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_in_nested" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let field_before_unit =
+  let open! TDSL.O in
+    fun ~hid_dim () ->
+      let w =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "w") () in
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b") ~output_dims:[hid_dim]) () in
+      let __ocannl_body x =
+        (+) ?label:(Some ["field_before_unit"]) (( * ) ?label:None w x) b in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_before_unit" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let field_rebinds =
+  let open! TDSL.O in
+    let b =
+      ((TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+          "b") ~output_dims:(List.map [3] ~f:(fun hid_dim -> hid_dim))) () in
+    let __ocannl_body hid_dim x =
+      (+) ?label:(Some
+                    (List.concat
+                       [["field_rebinds"];
+                       (hid_dim.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x b in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"field_rebinds" ~arity:2
+        (function
+         | hid_dim::x::[] -> __ocannl_body hid_dim x
+         | _ -> assert false) in
+    fun hid_dim x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [hid_dim; x]
+        (fun () -> __ocannl_body hid_dim x)
+let spec_stride =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*o<+k; k => o\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let spec_dilation =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter dil is taken for a tensor, but the einsum spec \"o<+dil*k; k => o\" reads it as an integer. Label it (~dil), or bind it before a unit parameter: fun dil () ..."]
+let embedded_float =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter scale is taken for a tensor, but it is the float that !. embeds. Label it (~scale), or bind it before a unit parameter: fun scale () ..."]
+let embedded_int =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter count is taken for a tensor, but it is the integer that !.. embeds. Label it (~count), or bind it before a unit parameter: fun count () ..."]
+let float_exponent =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter n is taken for a tensor, but it is the float exponent of **.. Label it (~n), or bind it before a unit parameter: fun n () ..."]
+let stride_after_unit =
+  let open! TDSL.O in
+    fun () ->
+      let kernel =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "kernel") () in
+      [%ocaml.error
+        "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*o<+k; k => o\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let exponent_rebound =
+  let open! TDSL.O in
+    let __ocannl_body n x =
+      let pow n = TDSL.O.( **. ) ?label:(Some ["pow"]) x n in
+      (+) ?label:(Some
+                    (List.concat
+                       [["exponent_rebound"];
+                       (n.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        (pow ?label:None 2.0) n in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"exponent_rebound" ~arity:2
+        (function | n::x::[] -> __ocannl_body n x | _ -> assert false) in
+    fun n x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [n; x]
+        (fun () -> __ocannl_body n x)
+let stride_unschemed =
+  let open! TDSL.O in
+    fun () ->
+      let kernel =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "kernel") () in
+      fun stride x ->
+        einsum ?label:(Some ["stride_unschemed"])
+          (String.concat ~sep:""
+             [Int.to_string stride;
+             "*";
+             "o";
+             "<";
+             "+";
+             "k";
+             "; ";
+             "k";
+             " => ";
+             "o"]) x kernel

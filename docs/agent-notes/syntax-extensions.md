@@ -33,7 +33,26 @@ files.
   type-check. Before `()`, `find_label_param` takes `~label`, `?(label = ..)` (as `Some label`)
   and `?label` (the option itself) for the inline declarations' `?more_label`; before
   gh-ocannl-1885 an optional one was silently ignored, so `Demo_models.lenet`'s `w_logits` and
-  `b_logits` lacked the `lenet` label. A change to what `%op` accepts also reaches the arm
+  `b_logits` lacked the `lenet` label. Without `()` the declarations are lifted to definition
+  and cannot take it, so there the non-tensor parameter labelled `label` (any of the three forms)
+  is itself a label source of the RESULT, at its position (gh-ocannl-1987; it was accepted and
+  ignored); with `()` the result still gets the binding's name only -- an asymmetry by where each
+  is possible, pinned by `test/ppx/test_label_param.ml`, which runs.
+- Refusals that name the fix (gh-ocannl-1987, `test/ppx/test_param_errors.ml`, expansion only):
+  `translate` threads `late`, the parameters bound after the lift point (every parameter of a
+  no-unit toplevel function, and of any function below the toplevel one), and `guard_late`
+  replaces an inline declaration's field or initializer naming one with an error node -- it was
+  OCaml's "Unbound value", or a silent capture of an outer value of that name. A `let` in the
+  body is NOT tracked (`let n = 3 in { b; o = [ n ] }` is still "Unbound value"). And an
+  unlabelled, unannotated parameter with `non_tensor_evidence` (a stride/dilation identifier of
+  a literal spec through `Ppx_shared.einsum_spec_identifiers`, the operand of `!.`/`!..`, the
+  exponent of `**.`; never when the body rebinds the name) replaces the whole function with an
+  error: without `()` always, after `()` only where the function gets a scheme, since an
+  unschemed one (`[@@ocannl.no_scheme]`) takes an unlabelled int fine. Refusing rather than
+  reclassifying keeps "unlabelled = tensor" a rule one can read code by, and can be relaxed
+  later. The whole function is replaced because the type checker reports the first error it
+  meets, and the mistyped use may come before an error node placed in the body. A change to what
+  `%op` accepts also reaches the arm
   `tools/test-typecheck-scan-cases.sh` plants to be rejected through the ppx (its `#project` legs,
   CI's main shard 1), which `affected --harnesses` names for a change to any `tensor/ppx_*.ml`.
 - Evaluation order (gh-ocannl-1869): where `%op` gives a literal a meaning of its own -- a block

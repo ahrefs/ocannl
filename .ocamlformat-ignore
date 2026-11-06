@@ -10,3 +10,4 @@ arrayjit/vendor_stubs/metal/metal.mli
 arrayjit/lib/vendor_idents_cuda.ml
 arrayjit/lib/vendor_idents_hip.ml
 test/ppx/test_eval_order_expected.ml
+test/ppx/test_param_errors_expected.ml

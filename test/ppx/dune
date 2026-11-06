@@ -60,7 +60,8 @@
   (alias runtest-test_ppx_name_conflict-ppx)
   (alias runtest-test_compose_logic_err-ppx)
   (alias runtest-test_raw_accum-ppx)
-  (alias runtest-test_eval_order-ppx)))
+  (alias runtest-test_eval_order-ppx)
+  (alias runtest-test_param_errors-ppx)))
 
 (executable
  (name pp)
@@ -131,6 +132,18 @@
   (run ./%{pp} --impl %{input} -o %{targets})))
 
 (rule
+ ; ocannl-backend: none -- pp.exe links ppx_ocannl, which is base, ppxlib, str and einsum_parser:
+ ; no arrayjit at all, so no OCANNL configuration is in reach. Its output is a printed AST.
+ (targets test_param_errors_actual.ml)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  (:pp pp.exe)
+  (:input test_param_errors.ml))
+ (action
+  (run ./%{pp} --impl %{input} -o %{targets})))
+
+(rule
  (alias runtest-test_ppx_op-ppx)
  (package neural_nets_lib)
  (action
@@ -159,6 +172,12 @@
  (package neural_nets_lib)
  (action
   (diff test_eval_order_expected.ml test_eval_order_actual.ml)))
+
+(rule
+ (alias runtest-test_param_errors-ppx)
+ (package neural_nets_lib)
+ (action
+  (diff test_param_errors_expected.ml test_param_errors_actual.ml)))
 
 (test
  (name test_ppx_op)
@@ -226,3 +245,16 @@
  (modules test_eval_order_expected)
  (deps ocannl_config)
  (libraries ocannl arrayjit.verdict))
+
+; Where the `string list` of a parameter labelled `label` goes, with and without a `()`
+; (gh-ocannl-1987): the labels the built tensors carry, claimed through Verdict.
+
+(test
+ ; ocannl-backend: none -- builds tensors and reads their labels; no context, no routine.
+ (name test_label_param)
+ (package neural_nets_lib)
+ (modules test_label_param)
+ (deps ocannl_config)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))

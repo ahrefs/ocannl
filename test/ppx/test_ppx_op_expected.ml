@@ -487,6 +487,127 @@ let _late_scale =
 let _late_label =
   let open! TDSL.O in
     fun ~label x -> mlp_layer ~label:("late" :: label) ~hid_dim:2 () ~x
+let _late_label_result =
+  let open! TDSL.O in
+    let llw =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "llw") () in
+    fun ~label x ->
+      (+) ?label:(Some
+                    (List.concat
+                       [["_late_label_result"];
+                       (label : string list);
+                       (x.Tensor.value).Ir.Tnode.label]))
+        (( * ) ?label:None llw x) (TDSL.number ?label:None 1.0)
+let _late_opt_label =
+  let open! TDSL.O in
+    fun ?label x ->
+      (+) ?label:(Some
+                    (List.concat
+                       [["_late_opt_label"];
+                       (match label with
+                        | Some label -> (label : string list)
+                        | None -> []);
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x (TDSL.number ?label:None 1.0)
+let _late_label_default =
+  let open! TDSL.O in
+    fun ?(label= ["dflt"]) ~g:(g : Tensor.t) x ->
+      (+) ?label:(Some
+                    (List.concat
+                       [["_late_label_default"];
+                       (label : string list);
+                       ((g : Tensor.t).Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x g
+let _late_label_annot =
+  let open! TDSL.O in
+    fun ~label:(label : string list) x ->
+      relu
+        ?label:(Some
+                  (List.concat
+                     [["_late_label_annot"];
+                     (label : string list);
+                     (x.Tensor.value).Ir.Tnode.label])) x
+let _late_label_tensor =
+  let open! TDSL.O in
+    let __ocannl_body ~label x =
+      (+) ?label:(Some
+                    (List.concat
+                       [["_late_label_tensor"];
+                       (label.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x label in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_late_label_tensor" ~arity:2
+        (function
+         | label::x::[] -> __ocannl_body ~label x
+         | _ -> assert false) in
+    fun ~label x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [label; x]
+        (fun () -> __ocannl_body ~label x)
+let _late_label_default_tensor =
+  let open! TDSL.O in
+    fun ?(label= !. 1.0) x ->
+      (+) ?label:(Some
+                    (List.concat
+                       [["_late_label_default_tensor"];
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x label
+let _late_stride =
+  let open! TDSL.O in
+    let ls_kernel =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "ls_kernel") () in
+    fun ~stride x ->
+      einsum
+        ?label:(Some
+                  (List.concat
+                     [["_late_stride"]; (x.Tensor.value).Ir.Tnode.label]))
+        (String.concat ~sep:""
+           [Int.to_string stride;
+           "*";
+           "o";
+           "<";
+           "+";
+           "k";
+           "; ";
+           "k";
+           " => ";
+           "o"]) x ls_kernel
+let _unit_stride =
+  let open! TDSL.O in
+    fun stride () ->
+      let us_kernel =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "us_kernel") () in
+      let __ocannl_body x =
+        einsum ?label:(Some ["_unit_stride"])
+          (String.concat ~sep:""
+             [Int.to_string stride;
+             "*";
+             "o";
+             "<";
+             "+";
+             "k";
+             "; ";
+             "k";
+             " => ";
+             "o"]) x us_kernel in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"_unit_stride" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let _late_exponent =
+  let open! TDSL.O in
+    fun ~n x ->
+      TDSL.O.( **. )
+        ?label:(Some
+                  (List.concat
+                     [["_late_exponent"]; (x.Tensor.value).Ir.Tnode.label]))
+        x n
 let _opt_label =
   let open! TDSL.O in
     fun ?label ~hid_dim () ->

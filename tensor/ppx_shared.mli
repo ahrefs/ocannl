@@ -18,6 +18,10 @@ val ndarray_constant :
 val substitute_identifiers_in_einsum_spec : loc:location -> string -> expression
 (** An expression building an einsum or axis-labels spec, reading identifier strides at run time. *)
 
+val einsum_spec_identifiers : string -> string list
+(** The identifiers [substitute_identifiers_in_einsum_spec] reads as integers at run time: the
+    strides and dilations that are not integer literals. Empty for a spec that does not parse. *)
+
 val string_expr : loc:location -> string -> expression
 (** The string literal expression [s] at [loc]. *)
 
