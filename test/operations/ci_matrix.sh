@@ -652,11 +652,11 @@ for name, body in (
         ('df', 'echo "$*" >> "$WATCH_LOG/df"\n'
                'echo "Filesystem 1M-blocks Used Available Capacity Mounted on"\n'
                'for a in "$@"; do case $a in -*) ;; *) echo "stub 99999 1 $(cat "$DF_AVAIL") 1% $a" ;; esac; done\n'),
-        # sudo: the cleanup, held until the test releases it, then freeing space (atomically, as below)
-        # and failing, as an rm -rf that could not delete everything does.
+        # sudo: the cleanup, held until the test releases it, then freeing space (atomically, as below,
+        # through its own temp name) and failing, as an rm -rf that could not delete everything does.
         ('sudo', 'echo "$*" >> "$WATCH_LOG/sudo"\n'
                  'while [ ! -e "$WATCH_LOG/release" ]; do sleep 0.02; done\n'
-                 'echo 50000 > "$DF_AVAIL.new" && mv "$DF_AVAIL.new" "$DF_AVAIL"\nexit 1\n'),
+                 'echo 50000 > "$DF_AVAIL.stub" && mv "$DF_AVAIL.stub" "$DF_AVAIL"\nexit 1\n'),
         ('pkill', 'echo "$*" >> "$WATCH_LOG/pkill"\n')):
     (watch_bin / name).write_text('#!/usr/bin/env bash\n' + body)
     (watch_bin / name).chmod(0o755)
@@ -703,7 +703,9 @@ def watch_run(start, report):
         wait_for(state / 'min')
         healthy = report_run()
         early = (state / 'tripped').exists()
-        # Atomically: a df reading the file mid-truncation would report 1 MB free.
+        # Atomically: a df reading the file mid-truncation would report 1 MB free. The cleanup's own
+        # write is over by now: state/min follows state/cleaned, which follows the stub. Only the mutant
+        # counting a low before the cleanup's end comes here sooner, and its 20000 fails it either way.
         (run / 'avail.new').write_text('600\n')
         os.replace(run / 'avail.new', avail)
         wait_for(state / 'tripped')
