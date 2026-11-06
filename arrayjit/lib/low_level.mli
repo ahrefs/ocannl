@@ -1104,6 +1104,25 @@ val validate_scope_bodies : t -> unit
     being the probes that must stay conservative on IR they may not trust. The optimization pipeline
     satisfies the contract by construction. *)
 
+val unbound_local_violation : t -> string option
+(** gh-ocannl-1973: the predicate form of {!validate_local_binders} — [None] when every scope local
+    the rendered code accesses has a binder, else a description of the first access without one,
+    naming the local, the access, and the scope body it sits in with that scope's {!scope_mint}. *)
+
+val validate_local_binders : ?site:string -> t -> unit
+(** gh-ocannl-1973: every [Get_local] and [Set_local] the code renders names a local the routine
+    binds SOMEWHERE — by a [Local_scope] of that {!scope_id} (the whole id, as codegen spells it), a
+    [Declare_local], or a [Scan_loop]'s carried pair. Raises [Invalid_argument], prefixed with
+    [site], on the first access that names none: the local a pass stranded by removing or renaming
+    its binder, which would otherwise surface as the backend compiler's undeclared identifier.
+
+    It checks that a binder exists, not that it is emitted ahead of the access or in a block the
+    access can see: emission order belongs to [C_syntax.pp_local_defs], and a rule second-guessing
+    it rejects valid pipeline output (gh-ocannl-584 review rounds 4-5). A projection's discarded
+    operand is skipped on both sides, as the renderer skips it. Applied by [C_syntax.compile_proc]
+    on the way out, where every pass and schedule transform has run and a [?prelowered] routine
+    arrives too. *)
+
 val validate_scan_loops : Tnode.Placements.t -> t -> unit
 (** gh-ocannl-696: the well-formedness contract of {!t.Scan_loop} -- one state node DECLARED virtual
     per carried pair, ids pairwise distinct across the list, inits free of carried state and of the

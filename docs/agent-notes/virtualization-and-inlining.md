@@ -88,6 +88,15 @@ files.
   by its own single assignment is a different failure (`simplify_llc` collapses it out from under
   its declaration); that one is refused earlier, as `158`. `local_scope_sibling_reads` pins all of
   this but the last.
+  What a gate CAN decide without the emission order is whether a binder exists at all
+  (gh-ocannl-1973): `Low_level.validate_local_binders`, at `C_syntax.compile_proc` beside the purity
+  gate, refuses a `Get_local` or `Set_local` whose whole `scope_id` no `Local_scope`,
+  `Declare_local` or `Scan_loop` carried pair in the routine binds, naming the local, the access
+  and the scope body it sits in — the hoist hole above, which used to surface as the backend
+  compiler's undeclared identifier. It follows the rendering on both sides (a projection's
+  discarded operand neither reads nor binds) and says nothing about a binder in a block the access
+  cannot see, which stays the compiler's to report; `local_binder_gate` pins the refusals beside
+  the same routines bound and executed.
   `Low_level.validate_scope_bodies` enforces it at BOTH ends of the pipeline: `optimize_proc` on the
   way in (ahead of the analysis cache, so a digest hit cannot skip it — and before the hoist can
   launder a body write into a top-level statement that no later gate would recognize) and

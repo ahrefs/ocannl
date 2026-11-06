@@ -7089,6 +7089,98 @@ let validate_scope_bodies (llc : t) : unit =
   Option.iter (scope_purity_violation llc) ~f:(fun msg ->
       invalid_arg ("Low_level.validate_scope_bodies: " ^ msg))
 
+(** gh-ocannl-1973: every scope local the rendered code reads or writes has a binder somewhere in
+    the routine -- a [Local_scope] of that id, a [Declare_local], or a [Scan_loop]'s carried pair. A
+    local without one renders as an identifier nothing declares, which reaches the user as the
+    backend compiler's "undeclared identifier" on a kernel they did not write.
+
+    Existence only, deliberately: whether the binder is emitted AHEAD of the access is codegen's own
+    business ([C_syntax.pp_local_defs] has the emission order in hand), and a rule replicating it
+    here was written and reverted for its false rejections (gh-ocannl-584 review rounds 4-5). So a
+    binder in a block the access cannot see still passes; what this names is the local nothing
+    declares at all, the shape a pass leaves when it removes or renames a binder and misses a reader
+    (the hoist's stale remap inside scope bodies, gh-ocannl-1895).
+
+    Both sides follow the rendering: a projection's discarded operand is skipped, since
+    [C_syntax.pp_scalar] never renders it -- a read there strands nothing, and a binder there
+    declares nothing. Identity is the whole {!scope_id}, as in {!scope_purity_violation}: codegen
+    spells a local from both the integer and the node, so a binder sharing only the integer is a
+    different C variable. A [Staged_compilation] callback's text is not inspected; IR locals are
+    bound by IR constructs. *)
+let unbound_local_violation (llc : t) : string option =
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Skip;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Skip;
+    }
+  in
+  let bound = Hash_set.create (module Scope_id) in
+  (* Innermost first: the scopes whose bodies enclose the walk's position. *)
+  let enclosing = ref [] in
+  let accesses = ref [] in
+  let access what id = accesses := (what, id, List.hd !enclosing) :: !accesses in
+  let statement _ () = function
+    | Declare_local { id; _ } ->
+        Hash_set.add bound id;
+        Continue ()
+    | Scan_loop { carried; _ } ->
+        List.iter carried ~f:(fun c ->
+            Hash_set.add bound c.prev;
+            Hash_set.add bound c.next);
+        Continue ()
+    | Set_local (id, _) ->
+        access "Set_local" id;
+        Continue ()
+    | _ -> Continue ()
+  in
+  let scalar _ () = function
+    | Local_scope { id; mint; _ } ->
+        Hash_set.add bound id;
+        enclosing := (id, mint) :: !enclosing;
+        Continue ()
+    | Get_local id ->
+        access "Get_local" id;
+        Continue ()
+    | _ -> Continue ()
+  in
+  let after_scalar _ () = function
+    | Local_scope _ -> enclosing := List.tl_exn !enclosing
+    | _ -> ()
+  in
+  fold ~policy ~hooks:{ (hooks ()) with statement; scalar; after_scalar } ~init:() llc;
+  let local id = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
+  (* In program order, so the message names the first stranded access. *)
+  List.find_map (List.rev !accesses) ~f:(fun (what, id, scope) ->
+      if Hash_set.mem bound id then None
+      else
+        let where =
+          match scope with
+          | None -> "at statement level"
+          | Some (s, mint) ->
+              "inside the body of local scope " ^ local s ^ " ("
+              ^ Sexp.to_string (sexp_of_scope_mint mint)
+              ^ ")"
+        in
+        let near =
+          Hash_set.find bound ~f:(fun b -> b.scope_id = id.scope_id)
+          |> Option.value_map ~default:"" ~f:(fun b ->
+              "; " ^ local b ^ " shares its integer but names another node, a different local")
+        in
+        Some
+          ("a " ^ what ^ " of " ^ local id ^ " " ^ where
+         ^ " names a local the routine never binds: no Local_scope, Declare_local or Scan_loop \
+            carried pair declares it" ^ near
+         ^ " -- the pass that removed or renamed its binder left this access behind \
+            (gh-ocannl-1973)"))
+
+let validate_local_binders ?(site = "Low_level.validate_local_binders") (llc : t) : unit =
+  Option.iter (unbound_local_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))
+
 (** {2 Hardware axis analyses}
 
     Phase B of docs/design/axis-types-for-loops.md: pure analyses of hardware-annotated loops.
