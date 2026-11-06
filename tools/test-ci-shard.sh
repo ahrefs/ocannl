@@ -793,4 +793,60 @@ else
 fi
 install_subject "$SRC"
 
+# A text past what one argument holds (gh-ocannl-2014). Linux caps a single
+# argument at 131072 bytes (MAX_ARG_STRLEN) and macOS all of them together at
+# 1 MiB, so over a mebibyte is past both: a subject handing that text to
+# python3 as an argument never starts it ("Argument list too long", exit 126),
+# which is how CI's `main` shards died on a 131683-byte listing. The listing
+# is padded with targets naming no executable, which change no unit; the
+# merge-weights log with units under its 2 s floor, which stay off the table.
+# Each twin is the subject with the text an argument AS WELL, as it used to be.
+default_listings
+: >"$repo/$ops/dune"
+awk 'BEGIN { for (i = 0; i < 60000; i++) printf "padding_target_%06d.ml\n", i }' >>"$TMP/targets"
+{
+  printf 'ci-shard-weight 1/1 heavy 100\nci-shard-weight 1/1 @rest 30\n'
+  awk 'BEGIN { for (i = 0; i < 60000; i++) printf "ci-shard-weight 1/1 pad%06d 1\n", i }'
+} >"$TMP/big.log"
+big_listing_holds() { # LOG
+  local out
+  out=$(subject targets 1/1 2>"$1") || { echo "targets 1/1 failed" >>"$1"; return 1; }
+  [ "$(printf '%s\n' "$out" | sort)" = "$(printf '%s\n' "$units_expected" | sort)" ] ||
+    { echo "targets 1/1 differ from the units" >>"$1"; return 1; }
+}
+big_merge_holds() { # LOG
+  local out
+  out=$(subject merge-weights "$TMP/big.log" 2>"$1") || { echo "merge-weights failed" >>"$1"; return 1; }
+  [ "$out" = 'heavy 100
+@rest 30' ] || { echo "merge-weights printed another table" >>"$1"; return 1; }
+  grep -q '1 run(s); 60000 units under 2s' "$1"
+}
+ok=0
+[ "$(wc -c <"$TMP/targets")" -gt 1048576 ] && [ "$(wc -c <"$TMP/big.log")" -gt 1048576 ] || ok=1
+report $ok "the oversized fixtures are each over a mebibyte, past one argument's 131072 bytes on Linux"
+big_listing_holds "$TMP/big-listing.log"
+report $? "targets shards a listing larger than one argument can hold" "$(tail -n 3 "$TMP/big-listing.log")"
+big_merge_holds "$TMP/big-merge.log"
+report $? "merge-weights merges a run whose lines are larger than one argument can hold" \
+  "$(tail -n 3 "$TMP/big-merge.log")"
+argument_twin() { # LABEL AWK_PROGRAM ORACLE
+  local path
+  path=$(mutant "$(printf '%s' "$1" | tr ' ' '-')" "$2") && ! cmp -s "$path" "$SRC" ||
+    { report 1 "negative control: $1" "could not build the mutant"; return; }
+  install_subject "$path"
+  if "$3" "$TMP/argument-twin.log"; then
+    report 1 "negative control: $1" "the oracle accepted the mutant"
+  elif ! grep -q 'Argument list too long' "$TMP/argument-twin.log"; then
+    report 1 "negative control: $1" "rejected for an unrelated reason: $(tail -n 3 "$TMP/argument-twin.log")"
+  else
+    report 0 "negative control: $1"
+  fi
+  install_subject "$SRC"
+}
+argument_twin "the listing as an argument" \
+  '{ sub(/ 3<<<"\$5"/, " \"$5\" 3<<<\"$5\"") } { print }' big_listing_holds
+argument_twin "merge-weights lines as arguments" \
+  '{ sub(/- "\$MIN_WEIGHT" 3<<</, "- \"$MIN_WEIGHT\" \"${runs[@]}\" 3<<<") } { print }' big_merge_holds
+default_listings
+
 finish
