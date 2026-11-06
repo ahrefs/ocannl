@@ -779,9 +779,21 @@ let () =
     Stdio.printf "%d programs\n" !programs_run;
     Stdio.eprintf "%d programs in %.1f s, %d findings (not part of the golden)\n%!" !programs_run
       seconds !finding_count;
+    (* One row per family, so that a moved boundary edits rows without removing any:
+       [tools/mutation-run.sh] reads a run printing fewer rows than the golden as stopped early. *)
     Hashtbl.to_alist census
-    |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
-    |> List.iter ~f:(fun (k, n) -> Stdio.printf "%s: %d\n" k n);
+    |> List.map ~f:(fun (key, n) ->
+        match String.substr_index key ~pattern:" | " with
+        | Some at ->
+            (String.prefix key at, Printf.sprintf "%s=%d" (String.drop_prefix key (at + 3)) n)
+        | None -> (key, Int.to_string n))
+    |> List.sort ~compare:(fun (a, b) (c, d) ->
+        match String.compare a c with 0 -> String.compare b d | order -> order)
+    |> List.group ~break:(fun (a, _) (b, _) -> not (String.equal a b))
+    |> List.iter ~f:(fun rows ->
+        Stdio.printf "%s: %s\n"
+          (fst (List.hd_exn rows))
+          (String.concat ~sep:" " (List.map rows ~f:snd)));
     let total prefix substring =
       Hashtbl.fold census ~init:0 ~f:(fun ~key ~data acc ->
           if String.is_prefix key ~prefix && String.is_substring key ~substring then acc + data
