@@ -414,6 +414,14 @@
  (libraries base ocannl stdio))
 
 (test
+ (name test_row_bound_emissions)
+ (package neural_nets_lib)
+ ; ocannl-backend: none -- drives the row solver directly, nothing is compiled
+ (deps ocannl_config)
+ (modules test_row_bound_emissions)
+ (libraries base ocannl stdio arrayjit.verdict))
+
+(test
  (name test_closing_order)
  (package neural_nets_lib)
  (deps

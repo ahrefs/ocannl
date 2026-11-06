@@ -494,6 +494,7 @@ type registration_counts = {
   rank_search_visits : int;
   dim_cycle_visits : int;
   subst_visits : int;
+  row_visit_emissions : int;
 }
 [@@deriving sexp_of]
 (** Registration statistics (gh-ocannl-1752), process-wide since the last reset: checked [%op]
@@ -509,7 +510,8 @@ type registration_counts = {
     [rank_search_visits] is the rank-cycle search's work counter (gh-ocannl-1802): the states it
     visited, for every rank fact recorded since the reset, inside traces too. [dim_cycle_visits] is
     the dimension-cycle search's (gh-ocannl-1891): the variables it visited. [subst_visits] is
-    solution substitution's (gh-ocannl-1904): the environment entries solutions visited. *)
+    solution substitution's (gh-ocannl-1904): the environment entries solutions visited.
+    [row_visit_emissions] is what the row solutions' visits emitted (gh-ocannl-1977). *)
 
 type registration_times = {
   tracing_s : float;

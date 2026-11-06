@@ -4369,6 +4369,7 @@ type registration_counts = {
   rank_search_visits : int;
   dim_cycle_visits : int;
   subst_visits : int;
+  row_visit_emissions : int;
 }
 [@@deriving sexp_of]
 
@@ -4385,6 +4386,7 @@ let zero_counts =
     rank_search_visits = 0;
     dim_cycle_visits = 0;
     subst_visits = 0;
+    row_visit_emissions = 0;
   }
 
 let counts = ref zero_counts
@@ -4396,13 +4398,15 @@ let registration_counts () =
     rank_search_visits = Row.rank_search_visits ();
     dim_cycle_visits = Row.dim_cycle_visits ();
     subst_visits = Row.subst_visits ();
+    row_visit_emissions = Row.row_visit_emissions ();
   }
 
 let reset_registration_counts () =
   counts := zero_counts;
   Row.reset_rank_search_visits ();
   Row.reset_dim_cycle_visits ();
-  Row.reset_subst_visits ()
+  Row.reset_subst_visits ();
+  Row.reset_row_visit_emissions ()
 
 (* Where shape-registration time goes (gh-ocannl-1752), process-wide since the last reset. *)
 type registration_times = {

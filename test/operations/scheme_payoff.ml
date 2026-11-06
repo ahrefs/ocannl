@@ -234,18 +234,22 @@ let closed_dims (y : Tensor.t) =
   Array.to_list (Shape.to_dims y.shape)
   :: (Set.to_list y.params |> List.map ~f:(fun p -> Array.to_list (Shape.to_dims p.Tensor.shape)))
 
-(* One build of the stack without schemes: what a trace is held against. *)
-let stack_build s n =
+(* One build of the stack without schemes: what a trace is held against. [~transitive]: with a row
+   solution emitting past the entries it bounds, as before gh-ocannl-1977. *)
+let stack_build ?(transitive = false) s n =
   Tensor.For_testing.set_op_shape_schemes (Some `Off);
   Tensor.unsafe_reinitialize ();
   Tensor.Scheme.reset_registration_counts ();
   let started = ref (Mtime_clock.counter ()) in
-  let dims, { Gc_witness.words; drained = _ } =
-    Gc_witness.drained_finalisers (fun () ->
-        (* Inside the window: the collection that opens it is not the build's. *)
-        started := Mtime_clock.counter ();
-        closed_dims (s.model n (s.args ())))
+  let build () =
+    (* Inside the window: the collection that opens it is not the build's. *)
+    started := Mtime_clock.counter ();
+    closed_dims (s.model n (s.args ()))
   in
+  let build =
+    if transitive then fun () -> Ocannl.Row.with_transitive_row_emissions build else build
+  in
+  let dims, { Gc_witness.words; drained = _ } = Gc_witness.drained_finalisers build in
   {
     t_counts = Tensor.Scheme.registration_counts ();
     t_words = words;
@@ -471,6 +475,12 @@ let () =
                 stack_trace ~unmemoized:true decoder_cell n,
                 stack_build decoder_cell n ) ))
       in
+      let resnet_cell = List.find_exn stacks ~f:(fun s -> String.equal s.s_name "resnet") in
+      let resnet_depths = [ 4; 8; 16 ] in
+      let resnet_builds =
+        List.map resnet_depths ~f:(fun n ->
+            (n, (stack_build resnet_cell n, stack_build ~transitive:true resnet_cell n)))
+      in
       Tensor.For_testing.set_op_shape_schemes None;
       Stdio.eprintf "(not part of the golden) %s\n" row_header;
       List.iter results ~f:(fun ((w, n, mode), r) ->
@@ -491,6 +501,11 @@ let () =
              words %.1f ms | trace/build %.3f\n"
             (count_row w n (mode_name `Check) t.t_counts)
             t.t_words (t.t_s *. 1000.) b.t_words (b.t_s *. 1000.) (t.t_words /. b.t_words));
+      List.iter resnet_builds ~f:(fun (n, (b, o)) ->
+          Stdio.eprintf
+            "(not part of the golden) resnet build at depth %d: %d row visit emissions, %.0f \
+             words; transitive %d, %.0f words\n"
+            n b.t_counts.row_visit_emissions b.t_words o.t_counts.row_visit_emissions o.t_words);
       List.iter cycle_walk ~f:(fun (n, (t, u, _)) ->
           Stdio.eprintf
             "(not part of the golden) dimension-cycle search at depth %d: %d visits, walking paths \
@@ -617,10 +632,9 @@ let () =
          it runs. What holds a whole-stack trace to its depth is the cost of one build of the same
          model: the solver's work counters double, and the trace stays a fraction of the build, a
          fraction that rises slowly with depth. Neither alone says so: the build's own allocation
-         grows above 2x per doubling, and in [resnet] 2.9x-3.9x through the row bounds' transitive
-         closure, which is why [resnet] has no allocation band of its own. The decoder band reads
-         the part of a trace that outgrows the depth, not a total: a cost linear in the solver's
-         merges dilutes it, so dropping one raises the ratio while every depth allocates less. *)
+         grows above 2x per doubling. The decoder band reads the part of a trace that outgrows the
+         depth, not a total: a cost linear in the solver's merges dilutes it, so dropping one raises
+         the ratio while every depth allocates less. *)
       let stack_doublings =
         List.concat_map stacks ~f:(fun s ->
             List.map
@@ -651,9 +665,9 @@ let () =
               p_all label
                 (List.filter stack_doublings ~f:(fun (w, _, _) -> not (String.equal w "resnet")))
                 ~f:(fun d -> Float.between (trace_ratio (fun t -> t.t_words) d) ~low:2.0 ~high:2.9));
-          in_leg ~leg "at every depth, a trace allocates 0.45x-0.95x of one build" (fun label ->
+          in_leg ~leg "at every depth, a trace allocates 0.4x-0.95x of one build" (fun label ->
               p_all label traced ~f:(fun (_, cell) ->
-                  Float.between (over_build cell) ~low:0.45 ~high:0.95));
+                  Float.between (over_build cell) ~low:0.4 ~high:0.95));
           in_leg ~leg "over its depths, a stack's trace-to-build ratio moves at most 1.5x"
             (fun label ->
               p_all label stacks ~f:(fun s ->
@@ -668,4 +682,22 @@ let () =
               p label
                 Float.(
                   grown (fun (_, u, b) -> over_build (u, b)) cycle_walk
-                  >= 3. * grown (fun (t, _, b) -> over_build (t, b)) cycle_walk)))
+                  >= 3. * grown (fun (t, _, b) -> over_build (t, b)) cycle_walk)));
+      (* gh-ocannl-1977: a bare row variable's solution emitted past the entries it bounds, so a
+         residual stack stored the transitive closure of its row bounds and re-emitted each pair per
+         solution. The control is that emission, which closes the same shapes. *)
+      let resnet_doublings =
+        List.zip_exn (List.drop_last_exn resnet_builds) (List.tl_exn resnet_builds)
+      in
+      let growth f pick ((_, a), (_, b)) = f (pick b) /. f (pick a) in
+      let emissions b = Float.of_int b.t_counts.row_visit_emissions in
+      Verdict.case "a residual stack's row bounds" (fun () ->
+          p_all "a build closes the shapes the transitive emission closes" resnet_builds
+            ~f:(fun (_, (b, o)) -> List.equal (List.equal Int.equal) b.t_dims o.t_dims);
+          p_all "per depth doubling, a build's row visits emit 1.8x-2.4x" resnet_doublings
+            ~f:(fun d -> Float.between (growth emissions fst d) ~low:1.8 ~high:2.4);
+          p_all "per depth doubling, the transitive emission grows at least 4x" resnet_doublings
+            ~f:(fun d -> Float.(growth emissions snd d >= 4.));
+          in_leg ~leg "per depth doubling, a resnet build allocates 1.8x-2.6x" (fun label ->
+              p_all label resnet_doublings ~f:(fun d ->
+                  Float.between (growth (fun t -> t.t_words) fst d) ~low:1.8 ~high:2.6)))

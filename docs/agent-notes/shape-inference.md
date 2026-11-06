@@ -501,21 +501,32 @@ files.
   It keeps a visited set, a recorded edge skips it (a merge re-emits bounds as inequalities, so every
   edge that adds a path is still checked), `Row.with_unmemoized_cycle_search` is the old walk, and
   `dim_cycle_visits` still grows 4x with a small constant. What is left past depth 16 is not the
-  solver's: tensor construction's set unions (schemes off too), each closure's trace checkpointing
-  the session's open frontier (quadratic in closures, 11.7 s of 43.9 s tracing at decoder depth 128),
-  and in conv stacks `s_row_one_in_entry` re-emitting whole bound lists per solution, which
-  materializes the transitive closure (`off` 67 s at resnet depth 64). Identical emissions are most
-  of the volume, but collapsing them leaves the growth: the distinct pairs are the cost. Allocation
-  (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy. A
+  solver's: tensor construction's set unions (schemes off too), and each closure's trace
+  checkpointing the session's open frontier (quadratic in closures, 11.7 s of 43.9 s tracing at
+  decoder depth 128). Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy. A
   `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` run of `scheme_payoff` takes about 13 minutes.
+- What a row solution owes the entries it bounds (gh-ocannl-1977, `s_row_one_in_entry`'s comment):
+  rows have no GLB transport but the visit, so `value ⊑ opnd` (a value with axes) and `glb ⊑ value`
+  are load-bearing, and for a long time nothing pinned them; dropping both passed the whole shape
+  suite (`test_row_bound_emissions` does now). A bare variable carries no axes, so it stops at the
+  entry: its emissions stored the transitive closure, 94% of the volume in a resnet, and duplicates
+  were not the cost. The pairs it stored moved two things a test can see. A store closes differently
+  in a corner, where an alias before a solution reached a third hop (an accident of equation order,
+  pinned), and the stage-2 singleton arm fires about 3% more often, since it needs a recorded pair
+  and a short list. `Row.with_transitive_row_emissions` is the old walk; compare against it on
+  random stores before touching this. Row GLBs reach two hops, dims all the way: closing that gap
+  would change what ordinary programs close to.
 - Substitution is indexed (gh-ocannl-1904): a solution visits the entries mentioning its variable
   and, for a dimension solution, the pending ones (`environment`'s doc comment), not the whole
   environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on
   `dim_env`/`row_env` elsewhere, or a mention a visit reads that `dim_entry_mentions`/
   `row_entry_*_mentions` do not list, is a missed visit. The whole map also changed entries that
-  do not mention the variable -- it summed a stored `Concat` of solved parts, collapsed windows,
-  and re-emitted every `Total_elems` row's `Rows_constr` -- which is why written entries stay
-  pending until an unrelated visit leaves them unchanged.
+  do not mention the variable -- it summed a stored `Concat` of solved parts and collapsed
+  windows -- which is why written entries stay pending until an unrelated visit leaves them
+  unchanged. A `Total_elems` row no longer does: a solution reaching no divisor is no change, where
+  it used to re-emit and stay pending, rows times solutions (gh-ocannl-1977). Summing eagerly in
+  `subst_dim` to retire the pending sets fails `set_equal_rows` and `test_concat_dim_solver`: a
+  `Concat` kept as parts is what they pin.
   Verify a change here with `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` over the shape tests (it
   fails on the first solution whose indexed visit differs from the whole map's), and
   `test/operations/shape_substitution_chains` for the chains. The eager, resolved representation

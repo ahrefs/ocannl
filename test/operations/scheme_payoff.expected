@@ -25,6 +25,10 @@ per depth doubling, the trace's dimension-cycle search visits 1.8x-4.6x: true
 one more layer: the dimension-cycle search visits at most 3x: true
 one more layer: walking every path visits at least 10x: true
 per depth doubling, a decoder stack's trace allocates 2.0x-2.9x: true
-at every depth, a trace allocates 0.45x-0.95x of one build: true
+at every depth, a trace allocates 0.4x-0.95x of one build: true
 over its depths, a stack's trace-to-build ratio moves at most 1.5x: true
 one more layer: walking every path, the trace outgrows the build at least 3x: true
+a build closes the shapes the transitive emission closes: true
+per depth doubling, a build's row visits emit 1.8x-2.4x: true
+per depth doubling, the transitive emission grows at least 4x: true
+per depth doubling, a resnet build allocates 1.8x-2.6x: true

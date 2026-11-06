@@ -134,6 +134,17 @@ val with_unbounded_rank_search : (unit -> 'a) -> 'a
     gh-ocannl-1802 and gh-ocannl-1891, and raises if the walk and the potentials disagree on whether
     the edge closes a positive cycle: a test's reference. *)
 
+val row_visit_emissions : unit -> int
+(** The inequalities the row solutions' visits of the entries bounded by them emitted since the last
+    reset (gh-ocannl-1977): their work counter, process-wide. *)
+
+val reset_row_visit_emissions : unit -> unit
+
+val with_transitive_row_emissions : (unit -> 'a) -> 'a
+(** Runs the function with a bare row variable's solution also emitting the inequalities past the
+    entries bounded by it, as it did before gh-ocannl-1977: a test's reference, which stores the
+    transitive closure of the row bounds. *)
+
 val dim_cycle_visits : unit -> int
 (** The variables the dimension-cycle search of [Dim_ineq] visited since the last reset
     (gh-ocannl-1891): its work counter, process-wide. *)
