@@ -38,6 +38,9 @@
 #       ran: (cd _build/default/test/operations && ./foo.exe) > ...
 #       | FAIL: the claim the test makes, as it printed it
 #       (2 more such lines)
+#   test/operations/dune:7720-7726  (rule) alias runtest-bar
+#       ran: (cd _build/default/test/operations && ./bar.exe)
+#       last output: /bin/sh: ./bar.exe: Permission denied
 # For a header in a dune file the rule is named by its own fields (alias,
 # aliases, name, names, target, targets), read from the source file when it is
 # present under the working directory and from dune's excerpt otherwise; the
@@ -53,7 +56,18 @@
 # or a dune error of its own (below). Of an expectation diff only the lines it
 # adds (`+`) are read, since a context or removed line is not what the run
 # said. Under a display that prints no command lines (not CI's), a later
-# action's output can run on into the block above it.
+# action's output can run on into the block above it. In a job log GitHub
+# serves, a block also ends at a `##[` line (`##[error]Process completed ...`
+# closes the build step), so the steps after the build lend it nothing.
+# An entry that shows the command it ran and has no such line -- a shell error,
+# a signal, a bare exit status -- shows the last non-blank line of its block
+# instead, behind `last output:` so that `| ` keeps its one meaning
+# (gh-ocannl-1927). The last and not the first: dune keeps the end of a long
+# output and elides its middle, and the first line is usually a banner. That
+# line is dune's own `Command exited with code N.` or `Command got signal
+# SEGV.` when the action printed nothing. Any header ends a block, one left
+# out of the listing too, so a test that prints a bare dune block shows the
+# line above it.
 # A header is read only at the start of its line (after the timestamps and
 # prefixes GitHub adds), so a replay a test prefixes is never one; and a dune-
 # file header whose excerpt omits its first or last line is not dune's -- a
@@ -210,6 +224,7 @@ function close_block() {
       cwhat[count] = what
       cdetail[count] = detail
       cq[count] = qn
+      clastout[count] = (qn == 0 && detail ~ /^ran: /) ? qlast : ""
       for (j = 1; j <= qn && j <= qcap; j++) cql[count, j] = q[j]
     }
   }
@@ -248,14 +263,18 @@ function step(s) {
     first += 0; last += 0
     is_dune = (path ~ /(^|\/)dune$/ || path ~ /(^|\/)dune-project$/)
     decided = 0; dropped = 0; detail = ""; xkind = ""; xfields = ""; nx = 0; split("", xl)
-    qopen = 0; qdiff = 0; qn = 0
+    qopen = 0; qdiff = 0; qn = 0; qlast = ""
     return
   }
   if (cur == "" || decided) {
     if (s ~ /^Error: /) { pend = s; pend_after = (cur != ""); npb = 0; return }
     if (qopen) {
       if (s ~ /^\(cd /) qopen = 0
-      else quote(s)
+      else if (s ~ /^##\[/) qopen = 0
+      else {
+        quote(s)
+        if (s !~ /^[ \t]*$/) qlast = s
+      }
     }
     return
   }
@@ -317,6 +336,7 @@ END {
       if (cdetail[i] != "") printf "      %s\n", trim(cdetail[i], 240)
       for (j = 1; j <= cq[i] && j <= qcap; j++) printf "      | %s\n", trim(cql[i, j], 240)
       if (cq[i] > qcap) printf "      (%d more such lines)\n", cq[i] - qcap
+      if (clastout[i] != "") printf "      last output: %s\n", trim(clastout[i], 240)
     }
     if (github) {
       for (i = 1; i <= count; i++) {
@@ -328,6 +348,7 @@ END {
         msg = loc[i] "  " cwhat[i] (cdetail[i] == "" ? "" : " -- " trim(cdetail[i], 200))
         for (j = 1; j <= cq[i] && j <= qcap; j++) msg = msg (j == 1 ? " -- " : " | ") trim(cql[i, j], 200)
         if (cq[i] > qcap) msg = msg " | (" (cq[i] - qcap) " more such lines)"
+        if (clastout[i] != "") msg = msg " -- last output: " trim(clastout[i], 200)
         gsub(/%/, "%25", msg); gsub(/\r/, "%0D", msg); gsub(/\n/, "%0A", msg)
         printf "::error file=%s,line=%d,endLine=%d,title=Failed dune rule::%s\n", cpath[i], cfirst[i], clast[i], msg
       }
