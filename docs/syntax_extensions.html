@@ -2025,7 +2025,7 @@ architectures:</p>
 <h3 id="automatic-shape-schemes">Automatic shape schemes</h3>
 <p>A <code>%op</code> function gets a <em>shape scheme</em>
 automatically (gh-ocannl-1751), on top of the explicit layer
-<code>Tensor.Scheme</code> (gh-ocannl-404, see <a href="./shape_inference.md#shape-schemes">shape inference</a>), in
+<code>Tensor.Scheme</code> (gh-ocannl-404, see <a href="shape_inference.md#shape-schemes">shape inference</a>), in
 <em>checking mode</em>:</p>
 <ul>
 <li><strong>When it is traced.</strong> The closure built at the
@@ -2042,7 +2042,7 @@ initialization.</li>
 against its arguments’ shapes, in a window that is always rewound, then
 runs the body, which builds and registers the graph as it always has.
 The scheme only checks; it never replaces the body’s own registration,
-which would not be cheaper (<a href="./shape_inference.md#what-schemes-buy-measured">shape
+which would not be cheaper (<a href="shape_inference.md#what-schemes-buy-measured">shape
 inference</a>).</li>
 <li><strong>What it reports.</strong> A shape error that does not depend
 on the arguments raises when the closure is built, as
@@ -2069,9 +2069,9 @@ relate the arguments only. <code>Tensor.Scheme.check_definition</code>
 returns the schemes of its trial the same way, and <a href="../test/operations/nn_blocks_definitions.expected"><code>nn_blocks_definitions.expected</code></a>
 prints those of every schemed <code>Nn_blocks</code> block, an inventory
 of the library’s block signatures. <code>Tensor.Scheme.trace</code>
-traces a function explicitly, again. The newcomer tutorial <a href="./tensors_and_contexts.md#reusable-tensor-programs">Reusable
-Tensor Programs</a> prints one, shows both kinds of report, and recovers
-a REPL session from a failed construction.</p>
+traces a function explicitly, again. The newcomer tutorial <a href="tensors_and_contexts.md#reusable-tensor-programs">Reusable Tensor
+Programs</a> prints one, shows both kinds of report, and recovers a REPL
+session from a failed construction.</p>
 <p><strong>Which functions qualify.</strong> The returned function –
 right after <code>()</code>, or the function a unit body ends in,
 through <code>let</code>, <code>;</code> and <code>let open</code>, as
@@ -2135,10 +2135,9 @@ function, nothing vouches for them and they are checked as usual. That
 is why the <code>nn_blocks</code> stacks
 (<code>transformer_encoder</code>, <code>transformer_decoder</code>,
 <code>decoder_only</code>) are schemed like their layers: an application
-is one check, whose scheme gives the whole model’s signature, for <a href="./shape_inference.md#what-schemes-buy-measured">a trace per
-presence pattern, each a fraction of one build</a>.
-<code>sokoban_cnn</code> and <code>mobile_cnn</code> are schemed the
-same way.</p>
+is one check, whose scheme gives the whole model’s signature, for <a href="shape_inference.md#what-schemes-buy-measured">a trace per presence
+pattern, each a fraction of one build</a>. <code>sokoban_cnn</code> and
+<code>mobile_cnn</code> are schemed the same way.</p>
 <p><strong>Refused traces degrade, with a warning.</strong> A function
 whose trace a scheme cannot carry – random number generation inside it
 (including a closure built inside it whose parameters take the default
