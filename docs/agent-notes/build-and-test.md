@@ -1058,7 +1058,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   box with a toolchain (gh-ocannl-1593; under `execution slot` on a fleet box): it hides dune from
   every leg that probes a real one through `harness_real_dune` (`OCANNL_TOOL_HARNESS_NO_DUNE=1`),
   and the fleet tables `benchmarks/test-check-box.sh` reads, so a Linux box shows the job's
-  skip set and macOS adds the Linux-only legs `tools/harness-skips-ci-shell-darwin.txt` lists. A
+  skip set and macOS adds the skips `tools/harness-skips-ci-shell-darwin.txt` lists (none now). A
   leg that needs a real dune takes it from `harness_real_dune`, never a probe of its own: one
   `--ci-shell` cannot hide runs green here and skips, unlisted, only on the job.
 - A leg whose subject does not exist on this platform declares itself not applicable rather than
@@ -1070,6 +1070,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   that OBSERVED the subject absent, never one that could not tell: leg 1b of
   `tools/test-refusal-manifest-sync.sh` is N/A only where the host's `/bin/bash` expanded an empty
   array under `set -u` (Bash 4.4 on, CI's Ubuntu), and its leg 1c is the probe's negative control.
+  The Linux-only process facts are declared the same way on macOS, so the Darwin list holds no
+  line for them (gh-ocannl-1930): `tools/test-test-run.sh` leg 67b where `/proc` holds neither
+  `locks` nor `fdinfo`, its leg 85 (the child subreaper) where `uname` named another kernel than
+  Linux (67c and 85b are the probes' controls, over stand-ins), and
+  `scripts/test-setup-ocaml-env.sh` leg 1b where `killpg` was seen to answer dead for the leg's
+  own zombie-only group. The outcome is a leg's, so a check that can be not applicable is a leg of
+  its own (a `67b` beside `67`), never a label inside a leg that otherwise runs; and a facility a
+  LINUX host lacks (no python3, a refused prctl) stays a skip.
   A declaration outside a function leg body or in a subshell of one, with no reason, after a
   check, twice or followed by one is a FAIL, never counted. `scripts/test-harness-support.sh` pins the primitive, and
   `tools/test-test-harnesses.sh` that `--ci-shell` still refuses an undeclared skip beside one.

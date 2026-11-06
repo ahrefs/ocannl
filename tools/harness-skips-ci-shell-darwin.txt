@@ -6,11 +6,12 @@
 # reproduces the job locally (gh-ocannl-1593). The line forms are the header
 # of tools/test-harnesses.sh.
 
-# Linux-only process facts: /proc/locks and fdinfo, a child subreaper
-# (prctl PR_SET_CHILD_SUBREAPER), and a killpg that still answers alive for a
-# group holding only a zombie.
-tools/test-test-run.sh	negative control: a census that goes by /proc/locks' named acquirer misses that holder
-tools/test-test-run.sh	zombie-only groups under a parent that reaps no orphans: repeat keeps TIMEOUT and a GPU set passes, run keeps its verdict, nothing refused
-tools/test-test-run.sh	negative control: without the iteration shell's reaping trap, a capped repeat under that parent is refused
-tools/test-test-run.sh	negative control: without the resolution's inert-zombie branch, a GPU set under that parent is refused
-scripts/test-setup-ocaml-env.sh	bounded (f): a group holding nothing but a zombie reads as empty
+# None now (gh-ocannl-1930). A line here is coverage a macOS host LOSES: a tool
+# or capability it lacks for a subject it has. A leg whose subject macOS does
+# not have is no skip and takes no line: it declares itself not applicable
+# from a probe that observed the absence (harness_not_applicable,
+# scripts/harness-support.sh), as the legs for the Linux-only process facts
+# do -- /proc/locks and fdinfo (tools/test-test-run.sh leg 67b), a child
+# subreaper standing in for a PID 1 that reaps no orphans (its leg 85), and a
+# killpg that still answers alive for a group holding only a zombie
+# (scripts/test-setup-ocaml-env.sh leg 1b).

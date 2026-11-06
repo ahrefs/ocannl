@@ -208,7 +208,9 @@
 #      (gh-ocannl-1448) -- a stub ps and the watcher's /proc seam advance a 7 s
 #      test's starttime at every listing, and it is never capped under 4 s;
 #      held steady, the same test is capped.
-#  85 sits after leg 83 (Linux only): under a stand-in for a PID 1 that reaps
+#  85 sits after leg 83 (not applicable off Linux, gh-ocannl-1930: the
+#      stand-in is a Linux facility, and so is the PID 1 it stands in for;
+#      85b is that probe's own control): under a stand-in for a PID 1 that reaps
 #      no orphans -- a child subreaper that waits for its own child only --
 #      the zombie-only groups `repeat` and `run` leave are read as gone, not
 #      refused: a capped set keeps TIMEOUT, a GPU set passes through the
@@ -409,9 +411,12 @@
 #      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
 #  67 sits after leg 8: a lock whose acquirer exited, held through the
 #      description it shared, is found by `stop`'s census and reaped, though
-#      /proc/locks names only the dead acquirer, or nobody (gh-ocannl-1107);
-#      the negative control (Linux only), the census going by that name,
-#      leaves the holder running.
+#      /proc/locks names only the dead acquirer, or nobody (gh-ocannl-1107).
+#  67b. its negative control: the census going by that name leaves the holder
+#      running. Not applicable where /proc holds neither lock table (macOS):
+#      the census reads lsof's openers there, and no name (gh-ocannl-1930).
+#  67c. that probe's own control: only a /proc observed without both tables
+#      makes 67b not applicable.
 #  84 sits after leg 36: a red run carrying, at a line's start, the line a
 #      GPU backend's device-init deadline writes before its process dies by
 #      SIGALRM is WEDGED DEVICE (exit 1) quoting it; indented, it is FAIL
@@ -1485,11 +1490,11 @@ harness_leg_run '6-8: the sentences stop prints, and a legacy leftover reaped #s
 # lock can attribute anything), the owner pointer naming it, and a perl
 # HOLDER -- this shell's own child, so it stays reapable under a PID 1 that
 # reaps nothing -- that opens the lock file, forks the ACQUIRER to flock the
-# shared description, and reaps it. The negative control (Linux) runs the
+# shared description, and reaps it. The negative control, leg 67b, runs the
 # census that went by the name -- the shipping script with the sweep's
 # processes replaced by the pids /proc/locks names -- and must leave the
-# holder running.
-leg_67() {
+# holder running. Both legs build the fixture, so each passes run alone.
+inherit_fixture() {
 l_inherit="stop: a leftover holding the lock through an inherited descriptor, its acquirer gone, is reaped"
 l_inherit_nc="negative control: a census that goes by /proc/locks' named acquirer misses that holder"
 inherit_skip= inherit_nc_skip=
@@ -1498,7 +1503,7 @@ if [ ! -d /proc/self/fdinfo ] && ! command -v lsof >/dev/null 2>&1; then
 elif [ "$have_state" = 0 ]; then
   inherit_skip="no way to read a process's state, so a reaped holder cannot be told from a zombie"
 elif [ ! -r /proc/locks ] || [ ! -d /proc/self/fdinfo ]; then
-  inherit_nc_skip="no /proc/locks and fdinfo here (Linux only): the census reads lsof's openers, and no name"
+  inherit_nc_skip="/proc/locks or /proc fdinfo cannot be read here, so the census that goes by the name cannot be run"
 fi
 inherit_dir=$STOP_RUNS/19700101-000000-inherited
 mkdir -p "$inherit_dir" "$STOP_WT"
@@ -1582,13 +1587,13 @@ inherit_gone() { # 0 iff the holder is dead (a zombie: it is ours to reap) withi
   done
   return 1
 }
-
+}
+leg_67() {
+inherit_fixture
 if [ -n "$inherit_skip" ]; then
   skip "$l_inherit" "$inherit_skip"
-  skip "$l_inherit_nc" "$inherit_skip"
 elif [ -z "$inherit_lock" ] || [ -z "$inherit_owner" ]; then
   report 1 "$l_inherit" "\`paths lock\`/\`paths owner\` did not name the fixture run's lock"
-  report 1 "$l_inherit_nc" "\`paths lock\`/\`paths owner\` did not name the fixture run's lock"
 else
   if ! inherit_start; then
     report 1 "$l_inherit" "$inherit_err"
@@ -1607,7 +1612,33 @@ else
     fi
   fi
   inherit_kill
+fi
+[ -z "$inherit_lock" ] || rm -f "$inherit_lock" "$inherit_owner"
+}
+harness_leg_run '67: a lock held through an inherited descriptor is reaped #stop' leg_67
 
+# Whether the /proc under ROOT can show what leg 67b pins: prints `absent`
+# when it holds neither the lock table (ROOT/locks) nor the per-descriptor one
+# (ROOT/self/fdinfo). That answer alone makes 67b not applicable
+# (gh-ocannl-1930): with no fdinfo the shipping census never runs the sweep
+# 67b mutates -- it asks lsof for the file's openers -- and with no
+# /proc/locks there is no named acquirer for a census to go by, so the control
+# has no subject there and nothing is lost. A /proc holding either table
+# leaves 67b to run, or to skip where the other cannot be read.
+proc_lock_tables_probe() { # ROOT
+  [ -e "$1/locks" ] || [ -e "$1/self/fdinfo" ] || echo absent
+}
+leg_67b() {
+if [ "$(proc_lock_tables_probe /proc)" = absent ]; then
+  harness_not_applicable "this system has neither /proc/locks nor /proc fdinfo: \`stop\`'s census reads lsof's openers and no name, so a census that goes by /proc/locks' named acquirer does not exist here"
+  return
+fi
+inherit_fixture
+if [ -n "$inherit_skip" ]; then
+  skip "$l_inherit_nc" "$inherit_skip"
+elif [ -z "$inherit_lock" ] || [ -z "$inherit_owner" ]; then
+  report 1 "$l_inherit_nc" "\`paths lock\`/\`paths owner\` did not name the fixture run's lock"
+else
   # The census before gh-ocannl-1107, near enough: the processes /proc/locks
   # names for any FLOCK, each still asked for the FLOCK in its fdinfo. The
   # sweep's line is replaced whole, and checked to be the only change, so a
@@ -1643,7 +1674,26 @@ else
 fi
 [ -z "$inherit_lock" ] || rm -f "$inherit_lock" "$inherit_owner"
 }
-harness_leg_run '67: a lock held through an inherited descriptor is reaped #stop' leg_67
+harness_leg_run "67b: a census that goes by /proc/locks' named acquirer misses that holder #stop" leg_67b
+
+leg_67c() {
+  local d=$TMP/67c ok=1
+  # Stand-ins for the /proc a host shows: both tables (Linux), one of them, none.
+  mkdir -p "$d/both/self/fdinfo" "$d/locks-only" "$d/fdinfo-only/self/fdinfo" "$d/neither"
+  : >"$d/both/locks"
+  : >"$d/locks-only/locks"
+  for stand_in in "$d/both" "$d/locks-only" "$d/fdinfo-only"; do
+    [ "$(proc_lock_tables_probe "$stand_in")" != absent ] || ok=0
+  done
+  [ "$(proc_lock_tables_probe "$d/neither")" = absent ] || ok=0
+  if [ "$ok" = 1 ]; then
+    report 0 "67c: only a /proc observed without both lock tables makes 67b not applicable (negative control)"
+  else
+    report 1 "67c: only a /proc observed without both lock tables makes 67b not applicable (negative control)" \
+      "the probe answered a /proc holding a table as absent, or one holding neither as present"
+  fi
+}
+harness_leg_run '67c: only a /proc observed without both lock tables makes 67b not applicable #stop' leg_67c
 
 # ---------------------------------------------------------------------------
 # Leg 101: one rendering of a start token (gh-ocannl-1944)
@@ -7415,6 +7465,21 @@ harness_leg_run '83: repeat has both bounds #repeat' leg_83
 # reproduced nothing. The negative controls take out the two fixes -- the
 # iteration shell's reaping trap, the resolution's inert-zombie branch -- and
 # each set must then be refused, exit 2, under the same stand-in.
+#
+# Off Linux the leg is not applicable (gh-ocannl-1930): the stand-in is a
+# Linux prctl read back through Linux's /proc, and what it stands in for -- a
+# container's PID 1 that reaps nothing -- is a Linux arrangement; macOS's PID 1
+# reaps every orphan, so no zombie-only group outlives its parent there and no
+# coverage is lost. subreaper_kernel_probe prints `absent` when UNAME named a
+# kernel other than Linux, and that answer alone makes the leg not applicable:
+# a uname that is missing or says nothing leaves the leg to run, or to skip
+# (leg 85b is the probe's control). On Linux a missing python3 or a refused
+# prctl is still a skip: coverage that host lost.
+subreaper_kernel_probe() { # UNAME
+  local kernel
+  kernel=$("$1" -s 2>/dev/null) || return 0
+  [ -z "$kernel" ] || [ "$kernel" = Linux ] || echo absent
+}
 reap_label="zombie-only groups under a parent that reaps no orphans: repeat keeps TIMEOUT and a GPU set passes, run keeps its verdict, nothing refused"
 reap_nc_trap_label="negative control: without the iteration shell's reaping trap, a capped repeat under that parent is refused"
 reap_nc_resolve_label="negative control: without the resolution's inert-zombie branch, a GPU set under that parent is refused"
@@ -7491,10 +7556,13 @@ reap_refused() { # label: the last case was refused, exit 2, as reap_repeat_grou
 }
 leg_85() {
 local why= detail=
+if [ "$(subreaper_kernel_probe uname)" = absent ]; then
+  harness_not_applicable "this kernel is $(uname -s), not Linux: it has no child subreaper (prctl PR_SET_CHILD_SUBREAPER) to stand in for a PID 1 that reaps no orphans, the Linux container case this leg pins"
+  return
+fi
 renamed_dune_readable
-if [ "$(uname -s)" != Linux ] || ! command -v python3 >/dev/null 2>&1 ||
-   ! python3 "$reap_stub" >/dev/null 2>&1; then
-  why="needs a Linux child subreaper (prctl PR_SET_CHILD_SUBREAPER, through python3)"
+if ! command -v python3 >/dev/null 2>&1 || ! python3 "$reap_stub" >/dev/null 2>&1; then
+  why="needs a child subreaper (prctl PR_SET_CHILD_SUBREAPER, through python3), which this host did not give"
 elif [ -z "${test_cap_named_ok:-}" ] || [ "$have_state" != 1 ]; then
   why="a process renamed through \$0 does not read back as dune in ps here, or no state reader"
 fi
@@ -7548,6 +7616,28 @@ cp "$SRC" "$repeat_root/tools/test-run.sh"
 unset REPEAT_TEST_ACTION_PID
 }
 harness_leg_run '85: zombie-only groups under a parent that reaps no orphans #repeat' leg_85
+
+leg_85b() {
+  local d=$TMP/85b ok=1
+  mkdir -p "$d"
+  # Stand-ins for the answers a uname gives: Linux, another kernel, nothing, a failure.
+  printf '#!/bin/sh\necho Linux\n' >"$d/linux"
+  printf '#!/bin/sh\necho Darwin\n' >"$d/darwin"
+  printf '#!/bin/sh\nexit 0\n' >"$d/silent"
+  printf '#!/bin/sh\necho Darwin\nexit 1\n' >"$d/failing"
+  chmod +x "$d/linux" "$d/darwin" "$d/silent" "$d/failing"
+  for stand_in in "$d/linux" "$d/silent" "$d/failing" "$d/missing"; do
+    [ "$(subreaper_kernel_probe "$stand_in")" != absent ] || ok=0
+  done
+  [ "$(subreaper_kernel_probe "$d/darwin")" = absent ] || ok=0
+  if [ "$ok" = 1 ]; then
+    report 0 "85b: only a kernel that named itself, and not as Linux, makes 85 not applicable (negative control)"
+  else
+    report 1 "85b: only a kernel that named itself, and not as Linux, makes 85 not applicable (negative control)" \
+      "the probe answered a Linux, silent, failing or missing uname as absent, or a Darwin one as present"
+  fi
+}
+harness_leg_run '85b: only a kernel that named itself, and not as Linux, makes 85 not applicable #repeat' leg_85b
 
 # ---------------------------------------------------------------------------
 # Leg 84: repeat --direct builds once and replays the rules (gh-ocannl-1377)
