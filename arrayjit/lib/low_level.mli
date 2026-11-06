@@ -614,6 +614,20 @@ val mentions_rng_conversion : scalar_t -> bool
     renders at, so the expression renders at its target's storage precision and an accumulation
     carrying it keeps a storage-width accumulator. *)
 
+val typed_at : prec:Ops.prec -> scalar_t -> bool
+(** Whether the expression, rendered at the float precision [prec], has that precision's C type --
+    the one owner of the question (gh-ocannl-1958). Rendered at a precision is not typed at it, and
+    a local's declaration is a conversion the expression alone does not make, so a scope over a
+    value rendered wider is not collapsed, by {!simplify_llc} (whatever the numerics) or by the
+    renderer. At single, cc's [Recip] is [1.0 / x], a double the local rounds and a collapse would
+    hand to the arithmetic around it, a gate is [c ? y : 0.0], a double by its literal, and [Not] is
+    [x == 0.0 ? 1.0 : 0.0]; [tanhf] is a float at double. A narrow precision answers for the wide
+    compute it may render at, where [Recip], [Not] and the gates are single's; a library call there
+    is typed either way, since compute at storage width rounds the call's result in its own text. A
+    truth is C [int] at every precision: the renderer, which sees no slot, leaves it, and
+    {!simplify_llc} keeps it only under a [Div], where two would divide integers, since it converts
+    exactly. The operators are a list, not a default. *)
+
 val narrowing_read : scope_prec:Ops.prec -> scalar_t -> bool
 (** Whether a scope of precision [scope_prec] holding this value is a cast that rounds: a narrow
     float scope over a read -- of a tensor node or of another scope -- at a precision that does not

@@ -323,6 +323,164 @@ let must_agree ?(leg = every_backend) ?(collapses = false) label ~policy build =
       let _, name, _ = Lazy.force runs in
       p claim (Bool.equal (holds_local name) (not collapses)))
 
+(* gh-ocannl-1958: a scope of the slot's own precision over a value whose rendering is not typed at
+   that precision. The precisions agree, yet the local is what rounds the value: [T v = e; ... v
+   ...] is a conversion [e] alone does not make, so collapsed, the arithmetic around it runs in the
+   wider type (or, for two truths under [/], divides C integers). [simplify] keeps such a scope
+   ([keeps_scopes]) by {!Ir.Low_level.typed_at}. Each value is computed into virtual nodes, read in
+   the expression [read], and compared with the scope kept, with the schedule's trailing simplify
+   and, unless wide compute takes the node's rounding from the scope, with a materialized node.
+   [observable]: the leg of the backends rendering the value wider, where it written straight into
+   the expression has to come out different, so the claims above can fail. *)
+let wider_rendering ?(materialized_agrees = true) ?observable ?(keeps_scopes = true) label ~policy
+    ~prec ~inputs ~values ~read =
+  let run form =
+    let tag =
+      match form with
+      | `Oracle -> "keep"
+      | `Scheduled -> "sch"
+      | `Unscoped -> "raw"
+      | `Inlined -> "inl"
+      | `Materialized -> "mat"
+    in
+    let name = routine_name label tag policy in
+    let s = Ll_test.sym () in
+    let i = [| Ll_test.iter s |] in
+    let in_tns = List.mapi inputs ~f:(fun k _ -> node prec (Printf.sprintf "%s_in%d" name k)) in
+    let out = node prec (name ^ "_out") in
+    let observed = out :: in_tns in
+    List.iter observed ~f:Ll_test.materialize;
+    let operands i = List.map in_tns ~f:(fun tn -> (Ll_test.get tn i, prec)) in
+    let vs = values (operands i) in
+    let mids = List.mapi vs ~f:(fun k _ -> node prec (Printf.sprintf "%s_mid%d" name k)) in
+    let at_prec v = (v, prec) in
+    let write reads =
+      Ll_test.loop_n s n (Ll_test.set out i (read (List.map reads ~f:at_prec) (operands i)))
+    in
+    let raw = write vs in
+    let scoped place =
+      write (List.map2_exn mids vs ~f:(fun mid v -> place ~orig_indices:i mid v))
+    in
+    let o =
+      match form with
+      | `Unscoped -> Ll_test.optimize_scoped ~name ~raw raw
+      | `Oracle -> Ll_test.optimize_scoped ~name ~raw (scoped kept_scope)
+      | `Scheduled ->
+          Ir.Schedule.apply
+            [ Ir.Schedule.Retype { axis = s; ty = LL.Serial } ]
+            (Ll_test.optimize_scoped ~name ~raw (scoped plain_scope))
+      | (`Inlined | `Materialized) as placed ->
+          let materialized =
+            match placed with
+            | `Inlined ->
+                List.iter mids ~f:Ll_test.virtualize;
+                observed
+            | `Materialized ->
+                List.iter mids ~f:Ll_test.materialize;
+                mids @ observed
+          in
+          let fill k mid =
+            let s1 = Ll_test.sym () in
+            let i1 = [| Ll_test.iter s1 |] in
+            Ll_test.loop_n s1 n (Ll_test.set mid i1 (List.nth_exn (values (operands i1)) k))
+          in
+          Ll_test.optimize ~materialized ~name
+            (LL.unflat_lines
+               (List.mapi mids ~f:fill @ [ write (List.map mids ~f:(fun mid -> Ll_test.get mid i)) ]))
+    in
+    let seed = List.zip_exn in_tns inputs in
+    let result = List.hd_exn (Ll_test.execute ~name o ~seed ~read:[ out ]) in
+    (name, result, Ll_test.count_scopes o.LL.llc, List.map mids ~f:(Ll_test.known_virtual o))
+  in
+  let show vs = String.concat ~sep:" " (Array.to_list (Array.map vs ~f:(Printf.sprintf "%h"))) in
+  let keep_name, kept, _, _ = run `Oracle in
+  let _, sch, _, _ = run `Scheduled in
+  let _, inl, inl_scopes, inlined = run `Inlined in
+  Stdio.eprintf "(not part of the golden) %s %s: kept %s; inlined %s\n" policy label (show kept)
+    (show inl);
+  pf "%s: the oracle holds its local in the kernel" label (holds_local keep_name);
+  pf "%s: the schedule's simplify keeps the oracle's values bitwise" label (same_bits kept sch);
+  p_all (Printf.sprintf "%s: optimize inlines the virtual nodes" label) inlined ~f:Fn.id;
+  pf "%s: optimize keeps a scope exactly where the collapse would not be exact" label
+    (inl_scopes = if keeps_scopes then List.length inlined else 0);
+  pf "%s: the inlined form computes the oracle's values bitwise" label (same_bits kept inl);
+  (if materialized_agrees then
+     let _, mat, _, _ = run `Materialized in
+     pf "%s: every placement computes the materialized node's values bitwise" label
+       (same_bits mat kept && same_bits mat inl));
+  Option.iter observable ~f:(fun leg ->
+      in_legf ~leg "%s: the value written straight into the expression differs" label (fun claim ->
+          let _, raw, _, _ = run `Unscoped in
+          p claim (not (same_bits kept raw))))
+
+(* What a single holds of a double: the value a [float] local would. *)
+let single_of v = Stdlib.Int32.(float_of_bits (bits_of_float v))
+let two_to_minus_30 = 0.000000000931322574615478515625
+
+let rendered_wider ~policy =
+  let tiny = Array.create ~len:n two_to_minus_30 in
+  let unary op = function [ x; _ ] -> [ LL.Unop (op, x) ] | _ -> assert false in
+  let sum reads operands =
+    match (reads, operands) with [ v ], [ _; y ] -> LL.Binop (Ops.Add, v, y) | _ -> assert false
+  in
+  (* [(gate + tiny) - y], the gate passing [y]. Single gives 0: [y + tiny] rounds back to [y]. In
+     double, [tiny] survives. The sum alone could not tell: 53 bits make double rounding of one
+     operator exact. *)
+  let gated op =
+    ( (function [ x; y; _ ] -> [ LL.Binop (op, x, y) ] | _ -> assert false),
+      fun reads operands ->
+        match (reads, operands) with
+        | [ v ], [ _; y; tiny ] -> LL.Binop (Ops.Sub, (LL.Binop (Ops.Add, v, tiny), f32), y)
+        | _ -> assert false )
+  in
+  let x = [| 3.; 7.; 11.; 13. |] in
+  wider_rendering "f32_recip" ~policy ~prec:f32 ~observable:cc_leg
+    ~inputs:[ x; Array.map x ~f:(fun v -> -.single_of (1. /. v)) ]
+    ~values:(unary Ops.Recip) ~read:sum;
+  wider_rendering "f32_recip_sqrt" ~policy ~prec:f32 ~observable:cc_leg
+    ~inputs:[ x; Array.map x ~f:(fun v -> -.single_of (1. /. single_of (Float.sqrt v))) ]
+    ~values:(unary Ops.Recip_sqrt) ~read:sum;
+  let y = [| 1.; 1.5; 2.; 2.5 |] in
+  let values, read = gated Ops.Relu_gate in
+  wider_rendering "f32_relu_gate" ~policy ~prec:f32 ~observable:cc_leg ~inputs:[ x; y; tiny ]
+    ~values ~read;
+  let values, read = gated Ops.Satur01_gate in
+  wider_rendering "f32_satur01_gate" ~policy ~prec:f32 ~observable:cc_leg
+    ~inputs:[ [| 0.125; 0.25; 0.5; 0.75 |]; y; tiny ]
+    ~values ~read;
+  (* [Not] is no truth at a float precision: cc spells it [x == 0.0 ? 1.0 : 0.0], so it reads as the
+     gates do. *)
+  wider_rendering "f32_not" ~policy ~prec:f32 ~observable:cc_leg
+    ~inputs:[ [| 0.; 0.; 1.; 0. |]; [| 1.; 1.; 0.; 1. |]; tiny ]
+    ~values:(function [ x; _; _ ] -> [ LL.Unop (Ops.Not, x) ] | _ -> assert false)
+    ~read:(snd (gated Ops.Relu_gate));
+  (* Two truths are C [int], so the collapsed quotient divides integers. 1/0 traps on x86, which is
+     the negative control there. *)
+  wider_rendering "f32_truth" ~policy ~prec:f32
+    ~inputs:[ [| 1.; 1.5; 3.; 4. |]; Array.create ~len:n 2. ]
+    ~values:(function
+      | [ x; two ] -> [ LL.Binop (Ops.Cmplt, x, two); LL.Binop (Ops.Cmplt, two, x) ]
+      | _ -> assert false)
+    ~read:(fun reads _ ->
+      match reads with [ a; b ] -> LL.Binop (Ops.Div, a, b) | _ -> assert false);
+  (* Outside a division a truth converts exactly, and it has to collapse: the select would test a
+     local, and the one-hot gather would not see its [Cmpeq]. *)
+  wider_rendering "f32_truth_tested" ~policy ~prec:f32 ~keeps_scopes:false
+    ~inputs:[ [| 1.; 1.5; 3.; 4. |]; Array.create ~len:n 2. ]
+    ~values:(function [ x; two ] -> [ LL.Binop (Ops.Cmplt, x, two) ] | _ -> assert false)
+    ~read:(fun reads operands ->
+      match (reads, operands) with
+      | [ test ], [ x; two ] -> LL.Ternop (Ops.Where, test, x, two)
+      | _ -> assert false);
+  (* A library call at a narrow precision is typed either way: at storage width its own text rounds
+     it ([FLOAT_TO_HALF(sinf(..))]), and wide, local and slot agree on f32. So it collapses. Under
+     wide compute no local narrows it, so a materialized node, whose store does, is not the
+     oracle. *)
+  let x = [| 1.; 1.25; 1.5; 1.75 |] in
+  wider_rendering "half_sin" ~policy ~prec:half ~materialized_agrees:false ~keeps_scopes:false
+    ~inputs:[ x; Array.map x ~f:(fun v -> -.(Float.round (Float.sin v *. 2048.) /. 2048.)) ]
+    ~values:(unary Ops.Sin) ~read:sum
+
 (* The loop's symbol and index, and materialized nodes for a statement's inputs and result. *)
 let statement_nodes ~name ?(extent = n) precs =
   let s = Ll_test.sym () in
@@ -635,6 +793,7 @@ let () =
             ]
             ~f:(render_time_collapse ~policy);
           reduction ~policy;
+          rendered_wider ~policy;
           must_agree "shared" ~policy shared_read;
           must_agree "truth" ~policy truth_quotient;
           must_agree "recip" ~policy reciprocal;

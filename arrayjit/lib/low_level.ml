@@ -6000,6 +6000,51 @@ let rec mentions_rng_conversion (llsc : scalar_t) =
   | Constant_bits _ | Embed_index _ ->
       false
 
+(* C [int] ([bool] on Metal) whatever the precision it renders at: a truth, and arithmetic over
+   nothing else. Exact in every float, so rounding it is the identity, but C divides two of them as
+   integers. *)
+let rec int_typed = function
+  | Binop ((Cmplt | Cmple | Cmpeq | Cmpne | Or | And), _, _) -> true
+  | Unop ((Identity | Neg), (a, _)) | Binop (Arg1, (a, _), _) | Binop (Arg2, _, (a, _)) ->
+      int_typed a
+  | Binop ((Add | Sub | Mul | Div), (a, _), (b, _)) | Ternop (Where, _, (a, _), (b, _)) ->
+      int_typed a && int_typed b
+  | Ternop (Mul3, (a, _), (b, _), (c, _)) -> int_typed a && int_typed b && int_typed c
+  | _ -> false
+
+(* Whether the rendering at [prec] is no wider than [prec]'s C type: {!typed_at} but for
+   {!int_typed}. *)
+let rec renders_no_wider ~prec (value : scalar_t) =
+  let fits ((v, _) : scalar_arg) = renders_no_wider ~prec v in
+  let double = match prec with Ops.Double_prec _ -> true | _ -> false in
+  match value with
+  | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_dynamic _ | Get_merge_buffer _
+  | Get_local _ | Local_scope _ ->
+      true
+  | Unop ((Identity | Neg), a) -> fits a
+  | Unop
+      ( ( Relu | Satur01 | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Trunc
+        | Uint4x32_to_prec_uniform1 ),
+        _ ) ->
+      true
+  | Unop (Tanh_approx, _) -> not double
+  | Unop ((Recip | Recip_sqrt | Not), _) -> double
+  | Binop (Arg1, a, _) | Binop (Arg2, _, a) -> fits a
+  | Binop ((Add | Sub | Mul | Div), a, b) -> fits a && fits b
+  | Binop
+      ( ( ToPowOf | Max | Min | Mod | Cmplt | Cmple | Cmpeq | Cmpne | Or | And
+        | Uint4x32_to_prec_uniform_lane ),
+        _,
+        _ ) ->
+      true
+  | Binop ((Relu_gate | Satur01_gate), _, _) -> double
+  | Binop ((Threefry4x32_crypto | Threefry4x32_light), _, _) -> false
+  | Ternop (Where, _, a, b) -> fits a && fits b
+  | Ternop (Mul3, a, b, c) -> fits a && fits b && fits c
+  | Ternop (FMA, _, _, _) -> true
+
+let typed_at ~prec value = renders_no_wider ~prec value && not (int_typed value)
+
 let narrowing_read ~scope_prec (llsc : scalar_t) =
   let narrows ~from =
     (match Ops.prec_family from with Packed_integer -> false | _ -> true)
@@ -6162,7 +6207,9 @@ let simplify_llc static_indices llc =
        store's value at its target's storage precision, a scope local's at its scope's. A
        statement's slot is also evaluated there, and a heterogeneous slot (a guard, a dynamic index,
        a vector argument) at its own annotation (gh-ocannl-1788). *)
-    let loop_scalar ((_, prec) as arg) = loop_scalar ~ienv ~render:prec ~eval:prec arg in
+    let loop_scalar ((_, prec) as arg) =
+      loop_scalar ~ienv ~render:prec ~eval:prec ~divided:false arg
+    in
     match llc with
     | Noop -> Noop
     | Seq (c1, c2) ->
@@ -6230,14 +6277,17 @@ let simplify_llc static_indices llc =
                 cond = (c', cprec);
                 body = loop_proc ~ienv:(ienv_narrow_from_cond ienv ~cprec c') body;
               })
-  and loop_scalar ~ienv ~render ~eval ((llsc, prec) : scalar_t * Ops.prec) : scalar_t * Ops.prec =
+  and loop_scalar ~ienv ~render ~eval ~divided ((llsc, prec) : scalar_t * Ops.prec) :
+      scalar_t * Ops.prec =
     (* [prec] is the operand's annotation, [eval] the precision its slot evaluates it at: the
        enclosing homogeneous operator's evaluation precision, or a heterogeneous slot's own
        annotation (gh-ocannl-1788). A homogeneous child keeps [eval]; a heterogeneous one is
        evaluated at its own annotation. [render] is the enclosing store's precision, whatever the
-       slot (gh-ocannl-1769). *)
-    let own ((_, p) as arg) = loop_scalar ~ienv ~render ~eval:p arg in
-    let loop_scalar = loop_scalar ~ienv ~render ~eval in
+       slot (gh-ocannl-1769). [divided]: the slot is under a [Div] with no conversion between
+       (gh-ocannl-1958). *)
+    let own ((_, p) as arg) = loop_scalar ~ienv ~render ~eval:p ~divided:false arg in
+    let divided = divided || match llsc with Binop (Div, _, _) -> true | _ -> false in
+    let loop_scalar = loop_scalar ~ienv ~render ~eval ~divided in
     let loop_proc = loop_proc ~ienv in
     (* gh-ocannl-1498: in a [uint4x32] slot the SOURCE precision of what renders there picks the
        conversion, so a rewrite that hands a child the wrapper's place -- a projection, an
@@ -6287,6 +6337,11 @@ let simplify_llc static_indices llc =
          backend, and {!C_syntax} rounds it. Only a read: narrow ARITHMETIC computes wide on purpose
          (gh-ocannl-517). *)
       && (not (narrowing_read ~scope_prec v))
+      (* gh-ocannl-1958: agreeing precisions are not a typed value. Where the rendering is wider,
+         the local's declaration is the conversion, and the arithmetic around a collapsed value
+         would run wider. A truth converts exactly, so only a division can tell. *)
+      && ((not (Ops.is_float scope_prec))
+         || (renders_no_wider ~prec:scope_prec v && not (divided && int_typed v)))
       (* gh-ocannl-1884: an integer scope collapses only where the value provably stays the same. *)
       && ((not (Ops.is_integer scope_prec))
          || exact_load

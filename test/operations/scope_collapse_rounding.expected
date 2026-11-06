@@ -48,6 +48,58 @@ cast_wide: explicit SIMD exactly where arithmetic collapsed: true
 reduce: the retyped form computes the oracle's value: true
 reduce: the kernel holds the local unless the compute precision makes it exact: true
 reduce: a collapsed scope renders the SIMD reduction: true
+f32_recip: the oracle holds its local in the kernel: true
+f32_recip: the schedule's simplify keeps the oracle's values bitwise: true
+f32_recip: optimize inlines the virtual nodes: true
+f32_recip: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_recip: the inlined form computes the oracle's values bitwise: true
+f32_recip: every placement computes the materialized node's values bitwise: true
+f32_recip: the value written straight into the expression differs: true
+f32_recip_sqrt: the oracle holds its local in the kernel: true
+f32_recip_sqrt: the schedule's simplify keeps the oracle's values bitwise: true
+f32_recip_sqrt: optimize inlines the virtual nodes: true
+f32_recip_sqrt: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_recip_sqrt: the inlined form computes the oracle's values bitwise: true
+f32_recip_sqrt: every placement computes the materialized node's values bitwise: true
+f32_recip_sqrt: the value written straight into the expression differs: true
+f32_relu_gate: the oracle holds its local in the kernel: true
+f32_relu_gate: the schedule's simplify keeps the oracle's values bitwise: true
+f32_relu_gate: optimize inlines the virtual nodes: true
+f32_relu_gate: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_relu_gate: the inlined form computes the oracle's values bitwise: true
+f32_relu_gate: every placement computes the materialized node's values bitwise: true
+f32_relu_gate: the value written straight into the expression differs: true
+f32_satur01_gate: the oracle holds its local in the kernel: true
+f32_satur01_gate: the schedule's simplify keeps the oracle's values bitwise: true
+f32_satur01_gate: optimize inlines the virtual nodes: true
+f32_satur01_gate: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_satur01_gate: the inlined form computes the oracle's values bitwise: true
+f32_satur01_gate: every placement computes the materialized node's values bitwise: true
+f32_satur01_gate: the value written straight into the expression differs: true
+f32_not: the oracle holds its local in the kernel: true
+f32_not: the schedule's simplify keeps the oracle's values bitwise: true
+f32_not: optimize inlines the virtual nodes: true
+f32_not: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_not: the inlined form computes the oracle's values bitwise: true
+f32_not: every placement computes the materialized node's values bitwise: true
+f32_not: the value written straight into the expression differs: true
+f32_truth: the oracle holds its local in the kernel: true
+f32_truth: the schedule's simplify keeps the oracle's values bitwise: true
+f32_truth: optimize inlines the virtual nodes: true
+f32_truth: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_truth: the inlined form computes the oracle's values bitwise: true
+f32_truth: every placement computes the materialized node's values bitwise: true
+f32_truth_tested: the oracle holds its local in the kernel: true
+f32_truth_tested: the schedule's simplify keeps the oracle's values bitwise: true
+f32_truth_tested: optimize inlines the virtual nodes: true
+f32_truth_tested: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_truth_tested: the inlined form computes the oracle's values bitwise: true
+f32_truth_tested: every placement computes the materialized node's values bitwise: true
+half_sin: the oracle holds its local in the kernel: true
+half_sin: the schedule's simplify keeps the oracle's values bitwise: true
+half_sin: optimize inlines the virtual nodes: true
+half_sin: optimize keeps a scope exactly where the collapse would not be exact: true
+half_sin: the inlined form computes the oracle's values bitwise: true
 shared: the kept form's values, bitwise: true
 shared: the local stays unless the collapse is exact: true
 truth: the kept form's values, bitwise: true
@@ -120,6 +172,58 @@ cast_wide: explicit SIMD exactly where arithmetic collapsed: true
 reduce: the retyped form computes the oracle's value: true
 reduce: the kernel holds the local unless the compute precision makes it exact: true
 reduce: a collapsed scope renders the SIMD reduction: true
+f32_recip: the oracle holds its local in the kernel: true
+f32_recip: the schedule's simplify keeps the oracle's values bitwise: true
+f32_recip: optimize inlines the virtual nodes: true
+f32_recip: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_recip: the inlined form computes the oracle's values bitwise: true
+f32_recip: every placement computes the materialized node's values bitwise: true
+f32_recip: the value written straight into the expression differs: true
+f32_recip_sqrt: the oracle holds its local in the kernel: true
+f32_recip_sqrt: the schedule's simplify keeps the oracle's values bitwise: true
+f32_recip_sqrt: optimize inlines the virtual nodes: true
+f32_recip_sqrt: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_recip_sqrt: the inlined form computes the oracle's values bitwise: true
+f32_recip_sqrt: every placement computes the materialized node's values bitwise: true
+f32_recip_sqrt: the value written straight into the expression differs: true
+f32_relu_gate: the oracle holds its local in the kernel: true
+f32_relu_gate: the schedule's simplify keeps the oracle's values bitwise: true
+f32_relu_gate: optimize inlines the virtual nodes: true
+f32_relu_gate: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_relu_gate: the inlined form computes the oracle's values bitwise: true
+f32_relu_gate: every placement computes the materialized node's values bitwise: true
+f32_relu_gate: the value written straight into the expression differs: true
+f32_satur01_gate: the oracle holds its local in the kernel: true
+f32_satur01_gate: the schedule's simplify keeps the oracle's values bitwise: true
+f32_satur01_gate: optimize inlines the virtual nodes: true
+f32_satur01_gate: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_satur01_gate: the inlined form computes the oracle's values bitwise: true
+f32_satur01_gate: every placement computes the materialized node's values bitwise: true
+f32_satur01_gate: the value written straight into the expression differs: true
+f32_not: the oracle holds its local in the kernel: true
+f32_not: the schedule's simplify keeps the oracle's values bitwise: true
+f32_not: optimize inlines the virtual nodes: true
+f32_not: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_not: the inlined form computes the oracle's values bitwise: true
+f32_not: every placement computes the materialized node's values bitwise: true
+f32_not: the value written straight into the expression differs: true
+f32_truth: the oracle holds its local in the kernel: true
+f32_truth: the schedule's simplify keeps the oracle's values bitwise: true
+f32_truth: optimize inlines the virtual nodes: true
+f32_truth: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_truth: the inlined form computes the oracle's values bitwise: true
+f32_truth: every placement computes the materialized node's values bitwise: true
+f32_truth_tested: the oracle holds its local in the kernel: true
+f32_truth_tested: the schedule's simplify keeps the oracle's values bitwise: true
+f32_truth_tested: optimize inlines the virtual nodes: true
+f32_truth_tested: optimize keeps a scope exactly where the collapse would not be exact: true
+f32_truth_tested: the inlined form computes the oracle's values bitwise: true
+f32_truth_tested: every placement computes the materialized node's values bitwise: true
+half_sin: the oracle holds its local in the kernel: true
+half_sin: the schedule's simplify keeps the oracle's values bitwise: true
+half_sin: optimize inlines the virtual nodes: true
+half_sin: optimize keeps a scope exactly where the collapse would not be exact: true
+half_sin: the inlined form computes the oracle's values bitwise: true
 shared: the kept form's values, bitwise: true
 shared: the local stays unless the collapse is exact: true
 truth: the kept form's values, bitwise: true
