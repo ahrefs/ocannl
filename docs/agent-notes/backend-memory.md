@@ -270,6 +270,9 @@ files.
   device-memory claim reads the process's own accounting (`Alloc_census`, the used gauge), never
   the driver's free bytes: device-wide, so any concurrent GPU process -- the suite's own parallel
   GPU tests included -- moves them between two readings (gh-ocannl-1798); print them on stderr only.
+  Host arrays have their own counted reading, `Ndarray.get_used_memory`, a gauge a finalizer gives
+  back: it covers `Host_inits` data, so "the literal's host array is reclaimed" is a byte claim
+  after a settle, with a memory-mapped array outside it (gh-ocannl-1859).
 - **A context a wrapper mints and does not return is adopted by the one it returns**
   (gh-ocannl-1762). `Train.run_once`'s initialization context (the parameters' pools) and a memory
   budget's decision context (rooted constant holds) are lifecycle ancestors of the returned context

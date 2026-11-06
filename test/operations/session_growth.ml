@@ -84,10 +84,11 @@ let () =
   in
   run cycles_warm;
   settle ();
-  let before = live_words () in
+  let before = live_words () and host_before = Ir.Ndarray.get_used_memory () in
   run cycles_read;
   settle ();
   let after = live_words () in
+  p "the loop leaves no live host bytes behind" (Ir.Ndarray.get_used_memory () = host_before);
   let slope = (after - before) / cycles_read in
   Stdio.eprintf "live words per cycle: %d, %d to %d (not part of the golden)\n%!" slope before after;
   (* Before retirement a cycle added 1640 to 2000 words. The bound is a fifth of that, well above

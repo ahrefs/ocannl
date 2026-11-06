@@ -81,8 +81,9 @@ type t = {
           It covers exactly what the rest of the census covers -- the pools recorded at the shared
           allocator seam, in requested bytes -- so it is not a device-memory total: a device's
           reserved merge-buffer slab, the loaded code modules and the host-side {!Ndarray} arrays
-          are all outside it. Process-global and summed across devices, like every other field here.
-      *)
+          are all outside it (the arrays, literals' {!Host_inits} data included, have a live gauge
+          of their own, {!Ndarray.get_used_memory}). Process-global and summed across devices, like
+          every other field here. *)
 }
 [@@deriving sexp_of, equal]
 (** A point-in-time reading. The [live_*] fields come from the live table, the rest are cumulative

@@ -23,10 +23,12 @@ literal: the device's used-memory gauge is back to the baseline: true
 literal: every pool the window allocated was freed: true
 literal: every literal's node is reclaimed: true
 literal: every literal's host array is reclaimed: true
+literal: the live host bytes are back to the baseline: true
 two roots: the first root computed t = 2 x: true
 two roots: the second root still computes after the first root's release: true
 two roots: the first root's release left the literal's one constant buffer in place: true
 two roots: the second root's release gave every constant pool and its used memory back: true
 two roots: every literal's node is reclaimed: true
 unreleased literal: the constant bytes grew by each graph's literal: true
+unreleased literal: the live host bytes grew by each graph's literal: true
 unreleased literal: every literal's node is kept by the device's constant cache: true

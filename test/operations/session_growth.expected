@@ -1,3 +1,4 @@
+the loop leaves no live host bytes behind: true
 a cycle leaves under 400 live words: true
 the live-word slope is not an artifact of a shrinking heap: true
 the open work wrote each solver table but the role claims: true
