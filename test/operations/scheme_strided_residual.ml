@@ -12,7 +12,12 @@
    hid it (the truncating division happened to give the identity helper); a padded stride-4 shortcut
    against the stride-2 pool derived [o_p = 2*o_sc - 1] where concrete solving gives [2*o_sc]. The
    arm now equates the two equal-stride outputs directly. Pinned by the [s4_shortcut] network
-   against [off] and by the solver claims on unequal strides at the end. *)
+   against [off] and by the solver claims on unequal strides at the end.
+
+   gh-ocannl-1972: strides that do not divide each other (2 and 3) relate no output to the other as
+   a function, and the same reduction refused them, so [check] killed a program [off] ran. The pair
+   now waits for one side. Pinned by the [windows_2_3] network against [off], by [late_sized] on a
+   width arriving after the windows, and by the solver claims. *)
 
 (* cc-fp-contract: same-shape -- check and off build the same graph, so both arms compile the same
    kernel code and contract alike *)
@@ -71,6 +76,17 @@ let make_s4_shortcut () =
   and sc = conv ~part:"sc" ~kernel_size:1 ~stride:4 in
   fun x -> TDSL.O.(relu (c (pool x) + sc x))
 
+(* gh-ocannl-1972: strides that do not divide each other over one input. On a tracer's unsolved
+   widths the pair [2*o2 = 3*o3] relates no single output to the other: it waits for an application
+   to size the input. *)
+let make_windows_2_3 () =
+  let conv ~stride =
+    Nn_blocks.conv2d
+      ~label:[ "w" ^ Int.to_string stride ]
+      ~kernel_size:stride ~stride ~use_padding:false ~out_channels:4 ()
+  in
+  (conv ~stride:2, conv ~stride:3)
+
 (* The networks under test are [%op] functions without a [()] stage, as the benchmark's [model] is:
    each traces at its first application, on a tracer whose spatial widths are unsolved. One block,
    and two stacked (cifar_resnet stacks three): the second block composes the first's widths into
@@ -89,11 +105,15 @@ let make_net net =
       let b = make_s4_shortcut () in
       let%op s4_shortcut x = b x in
       ("s4_shortcut", s4_shortcut)
+  | `Windows_2_3 ->
+      let c2, c3 = make_windows_2_3 () in
+      let%op windows_2_3 x = c2 x ++ "...|... => 0" + (c3 x ++ "...|... => 0") in
+      ("windows_2_3", windows_2_3)
 
 (* Non-square, batch 2, 3 channels: 8x12 for one block (and for the stride-4 shortcut), 16x24 for
    two. *)
 let input net =
-  let k = match net with `S2 | `S4 -> 1 | `S2_s3 -> 2 in
+  let k = match net with `S2 | `S4 -> 1 | `S2_s3 -> 2 | `Windows_2_3 -> 3 in
   TDSL.range_of_shape ~label:[ "input" ] ~batch_dims:[ 2 ] ~output_dims:[ 8 * k; 12 * k; 3 ] ()
 
 let run net ~mode =
@@ -108,6 +128,7 @@ let run net ~mode =
       ( log,
         Result.map built ~f:(fun out ->
             let%op loss = out ++ "...|... => 0" in
+            Ocannl.Train.set_materialized out.Tensor.value;
             Set.iter loss.Tensor.params ~f:(fun t ->
                 Option.iter t.Tensor.diff ~f:(fun d -> Ocannl.Train.set_materialized d.Tensor.grad));
             let ctx = Ocannl.Train.update_once (Context.auto ()) loss in
@@ -127,7 +148,7 @@ let run net ~mode =
               :: List.concat_map params ~f:(fun t -> [ values t; grads t ]) )) ))
 
 let () =
-  List.iter [ `S2; `S2_s3; `S4 ] ~f:(fun net ->
+  List.iter [ `S2; `S2_s3; `S4; `Windows_2_3 ] ~f:(fun net ->
       let name = fst (make_net net) in
       Verdict.case (name ^ ": traces, checks and agrees with off") (fun () ->
           let log_check, check = run net ~mode:`Check in
@@ -162,6 +183,80 @@ let () =
       let%op self_res x = c x + x in
       p "the scheme or the body raises a shape error"
         (Result.is_error (outcome (fun () -> self_res (input `S2)))))
+
+(* gh-ocannl-1972: an input whose width is not known when the windows meet it, under [off] too, so
+   the application itself leaves the pair waiting. The width comes from a later operation, or never.
+   The pair's value counts each window's cells of an all-ones input, so it says the sizes were
+   solved, not only accepted: [width / 2 + width / 3], and the later operation's [sum (0 .. width -
+   1)] on top. *)
+let late_sized ~mode ~width =
+  Tensor.For_testing.set_op_shape_schemes (Some mode);
+  Tensor.unsafe_reinitialize ();
+  Exn.protect
+    ~finally:(fun () -> Tensor.For_testing.set_op_shape_schemes check_mode)
+    ~f:(fun () ->
+      outcome (fun () ->
+          let%op pair x =
+            x ++ "2*o1 => o1" ++ "...|... => 0" + (x ++ "3*o2 => o2" ++ "...|... => 0")
+          in
+          let x = TDSL.term ~label:[ "x" ] ~fetch_op:(Constant 1.) () in
+          let paired = pair x in
+          let out =
+            match width with
+            | None -> paired
+            | Some width ->
+                let y = TDSL.range_of_shape ~label:[ "y" ] ~output_dims:[ width ] () in
+                let%op out = paired + ((x *. y) ++ "...|... => 0") in
+                out
+          in
+          Ocannl.Train.set_materialized out.Tensor.value;
+          let ctx = Ocannl.Train.forward_once (Context.auto ()) out in
+          Array.to_list (Context.get_values ctx out.Tensor.value)))
+
+let () =
+  List.iter
+    [ (`Off, "off"); (`Check, "check") ]
+    ~f:(fun (mode, name) ->
+      Verdict.case (name ^ ": a width arriving after both windows solves the waiting pair")
+        (fun () ->
+          let report label r =
+            Stdio.eprintf "(not part of the golden) %s %s: %s\n%!" name label
+              (match r with
+              | Ok v -> String.concat ~sep:" " (List.map v ~f:Float.to_string)
+              | Error msg -> "refused: " ^ msg);
+            r
+          in
+          let got = report "width 12" (late_sized ~mode ~width:(Some 12)) in
+          p "width 12 gives outputs 6 and 4, over the input and y's 66"
+            (Result.equal (List.equal Float.equal) String.equal got (Ok [ 76. ]));
+          p "control: width 10 is no multiple of 3"
+            (Result.is_error (report "width 10" (late_sized ~mode ~width:(Some 10))));
+          p "with no width anywhere, closing refuses"
+            (Result.is_error (report "no width" (late_sized ~mode ~width:None)))))
+
+(* The width reaching the pair through one window's output instead, as a broadcast's bound, which
+   the closing stages must spend before they close the other output at 1. *)
+let () =
+  Verdict.case "a bound on one output solves the waiting pair before the other closes" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let got =
+        outcome (fun () ->
+            let x = TDSL.term ~label:[ "x" ] ~fetch_op:(Constant 1.) () in
+            let y = TDSL.range_of_shape ~label:[ "y" ] ~output_dims:[ 4 ] () in
+            let%op out =
+              x ++ "2*o1 => o1" ++ "...|... => 0" + (((x ++ "3*o2 => o2") *. y) ++ "...|... => 0")
+            in
+            Ocannl.Train.set_materialized out.Tensor.value;
+            let ctx = Ocannl.Train.forward_once (Context.auto ()) out in
+            Array.to_list (Context.get_values ctx out.Tensor.value))
+      in
+      (match got with
+      | Ok v ->
+          Stdio.eprintf "(not part of the golden) a bound: %s\n%!"
+            (String.concat ~sep:" " (List.map v ~f:Float.to_string))
+      | Error msg -> Stdio.eprintf "(not part of the golden) a bound: refused: %s\n%!" msg);
+      p "y's 4 gives o2 = 4, so o1 = 6: 6 cells of ones and 0 + 1 + 2 + 3"
+        (Result.equal (List.equal Float.equal) String.equal got (Ok [ 12. ])))
 
 (* {2 The solver's identity collapse, directly} *)
 
@@ -274,25 +369,25 @@ let () =
 
 (* {2 Unequal strides and spans across the mixed arm, directly (gh-ocannl-1823)} *)
 
+(* Two windows over one width [w], related in both orders, then a concrete [then_]. *)
+let pair_then ~first ~w_o1 ~w_o2 then_ =
+  let w = Row.get_var () and o1 = Row.get_var () and o2 = Row.get_var () in
+  let rel = [ eq (Var w) (w_o1 (Row.Var o1)); eq (Var w) (w_o2 (Row.Var o2)) ] in
+  let rel = if first then rel else List.rev rel in
+  solve_batches [ rel; then_ ~w ~o1 ~o2 ]
+  |> Result.map ~f:(fun env -> (Row.get_dim_val env o1, Row.get_dim_val env o2))
+
+let both_orders ~w_o1 ~w_o2 claim =
+  List.iter [ true; false ] ~f:(fun first ->
+      claim
+        ~order:(if first then "o1's window first" else "o2's window first")
+        (pair_then ~first ~w_o1 ~w_o2))
+
+let solves_to expected = function
+  | Ok (Some a, Some b) -> List.equal Int.equal [ a; b ] expected
+  | _ -> false
+
 let () =
-  (* Two windows over one width [w], related in both orders, then a concrete [then_]. *)
-  let pair_then ~first ~w_o1 ~w_o2 then_ =
-    let w = Row.get_var () and o1 = Row.get_var () and o2 = Row.get_var () in
-    let rel = [ eq (Var w) (w_o1 (Row.Var o1)); eq (Var w) (w_o2 (Row.Var o2)) ] in
-    let rel = if first then rel else List.rev rel in
-    solve_batches [ rel; then_ ~w ~o1 ~o2 ]
-    |> Result.map ~f:(fun env -> (Row.get_dim_val env o1, Row.get_dim_val env o2))
-  in
-  let both_orders ~w_o1 ~w_o2 claim =
-    List.iter [ true; false ] ~f:(fun first ->
-        claim
-          ~order:(if first then "o1's window first" else "o2's window first")
-          (pair_then ~first ~w_o1 ~w_o2))
-  in
-  let solves_to expected = function
-    | Ok (Some a, Some b) -> List.equal Int.equal [ a; b ] expected
-    | _ -> false
-  in
   Verdict.case "a padded stride-4 window against a valid stride-2 window of 2: o2 = 2*o1" (fun () ->
       (* [4*o1 = 2*(o2 - 1) + 2]: the padded side's span is 4, so [o2 = 2*o1]. Read as 1, it was [o2
          = 2*o1 - 1]. *)
@@ -345,6 +440,100 @@ let () =
           p
             (order ^ ": and o2 = 5 gives o1 = 7")
             (solves_to [ 7; 5 ] (solved (fun ~w:_ ~o1:_ ~o2 -> [ eq (Var o2) (dim 5) ])))))
+
+(* {2 Strides that do not divide each other, directly (gh-ocannl-1972)} *)
+
+let sym_dim () =
+  Row.get_sym_dim (fst (Ocannl.Train.IDX.get_static_symbol ~static_range:12 Ocannl.Train.IDX.empty))
+
+let () =
+  Verdict.case "windows of strides 2 and 3 wait for one side, which decides the pair" (fun () ->
+      let v ~stride ~kernel over = valid ~stride ~kernel over in
+      let cases =
+        [
+          (* [2*o1 = 3*o2] *)
+          ("padded 2, padded 3", padded ~stride:2, padded ~stride:3, 12, 6, 4);
+          (* [2*(o1 - 1) + 2 = 3*(o2 - 1) + 3], the same equation. *)
+          ("valid 2 of 2, valid 3 of 3", v ~stride:2 ~kernel:2, v ~stride:3 ~kernel:3, 12, 6, 4);
+          (* [2*o1 = 3*(o2 - 1) + 5] *)
+          ("padded 2, valid 3 of 5", padded ~stride:2, v ~stride:3 ~kernel:5, 14, 7, 4);
+          (* [2*(o1 - 1) + 3 = 3*(o2 - 1) + 4] *)
+          ("valid 2 of 3, valid 3 of 4", v ~stride:2 ~kernel:3, v ~stride:3 ~kernel:4, 13, 6, 4);
+          (* Common divisor 2: [4*(o1 - 1) + 4 = 6*(o2 - 1) + 2]. *)
+          ("valid 4 of 4, valid 6 of 2", v ~stride:4 ~kernel:4, v ~stride:6 ~kernel:2, 20, 5, 4);
+        ]
+      in
+      List.iter cases ~f:(fun (name, w_o1, w_o2, width, o1_val, o2_val) ->
+          both_orders ~w_o1 ~w_o2 (fun ~order solved ->
+              let claim text = name ^ ", " ^ order ^ ": " ^ text in
+              p
+                (claim "with nothing solved the pair stays deferred, neither solved nor refused")
+                (let held = solved (fun ~w:_ ~o1:_ ~o2:_ -> []) in
+                 (not (is_solved held)) && not (is_refused held));
+              p
+                (claim "the width gives both outputs")
+                (solves_to [ o1_val; o2_val ]
+                   (solved (fun ~w ~o1:_ ~o2:_ -> [ eq (Var w) (dim width) ])));
+              p
+                (claim "one output gives the other")
+                (solves_to [ o1_val; o2_val ]
+                   (solved (fun ~w:_ ~o1 ~o2:_ -> [ eq (Var o1) (dim o1_val) ])));
+              p (claim "and the other way round")
+                (solves_to [ o1_val; o2_val ]
+                   (solved (fun ~w:_ ~o1:_ ~o2 -> [ eq (Var o2) (dim o2_val) ])));
+              p
+                (claim "control: outputs of different widths are refused")
+                (is_refused
+                   (solved (fun ~w:_ ~o1 ~o2 ->
+                        [ eq (Var o1) (dim o1_val); eq (Var o2) (dim (o2_val + 1)) ]))))));
+  Verdict.case "a solved side no other side can match is refused when it arrives" (fun () ->
+      both_orders ~w_o1:(padded ~stride:2) ~w_o2:(padded ~stride:3) (fun ~order solved ->
+          p
+            (order ^ ": [2*5 = 3*o2]: 10 is no multiple of 3")
+            (is_refused (solved (fun ~w:_ ~o1 ~o2:_ -> [ eq (Var o1) (dim 5) ])));
+          p
+            (order ^ ": w = 10 is no multiple of 3 either")
+            (is_refused (solved (fun ~w ~o1:_ ~o2:_ -> [ eq (Var w) (dim 10) ])))));
+  Verdict.case "strides with a common divisor the spans do not share are refused at once" (fun () ->
+      (* [4*(o1 - 1) + 3 = 6*(o2 - 1) + 2]: an odd width equal to an even one, whatever the sizes.
+         Neither stride divides the other, so this is the case waiting would only postpone. *)
+      both_orders ~w_o1:(valid ~stride:4 ~kernel:3) ~w_o2:(valid ~stride:6 ~kernel:2)
+        (fun ~order solved ->
+          p
+            (order ^ ": valid 4 of 3, valid 6 of 2")
+            (is_refused (solved (fun ~w:_ ~o1:_ ~o2:_ -> [])))));
+  Verdict.case "a pair on two rigid symbols is refused: nothing could solve a side" (fun () ->
+      p "2*n = 3*m"
+        (is_refused (solve [ eq (padded ~stride:2 (sym_dim ())) (padded ~stride:3 (sym_dim ())) ]));
+      let v = Row.get_var () in
+      let held = solve [ eq (padded ~stride:2 (sym_dim ())) (padded ~stride:3 (Var v)) ] in
+      p "control: a symbol against an unsolved output waits"
+        ((not (is_solved held)) && not (is_refused held)));
+  Verdict.case "a helper window's output is at least 1, as the concrete window demands" (fun () ->
+      (* [2*o1 = 2*(o2 - 1) + 6]: a helper of span -1, [o2 = o1 - 2]. *)
+      both_orders ~w_o1:(padded ~stride:2) ~w_o2:(valid ~stride:2 ~kernel:6) (fun ~order solved ->
+          p (order ^ ": o1 = 3 gives o2 = 1")
+            (solves_to [ 3; 1 ] (solved (fun ~w:_ ~o1 ~o2:_ -> [ eq (Var o1) (dim 3) ])));
+          List.iter [ 1; 2 ] ~f:(fun o1_val ->
+              let msg =
+                Printf.sprintf ": o1 = %d is refused: width %d cannot hold 6" o1_val (2 * o1_val)
+              in
+              p (order ^ msg)
+                (is_refused (solved (fun ~w:_ ~o1 ~o2:_ -> [ eq (Var o1) (dim o1_val) ])));
+              p
+                (order ^ msg ^ ", solved through the width as well")
+                (is_refused (solved (fun ~w ~o1:_ ~o2:_ -> [ eq (Var w) (dim (2 * o1_val)) ])))));
+      (* Unequal strides, where no orientation avoids the helper: [4*(o1 - 1) + 2 = 2*(o2 - 1) + 4],
+         so [o2 = 2*(o1 - 1) + 0]. *)
+      both_orders ~w_o1:(valid ~stride:4 ~kernel:2) ~w_o2:(valid ~stride:2 ~kernel:4)
+        (fun ~order solved ->
+          p (order ^ ": o1 = 2 gives o2 = 2")
+            (solves_to [ 2; 2 ] (solved (fun ~w:_ ~o1 ~o2:_ -> [ eq (Var o1) (dim 2) ])));
+          p
+            (order ^ ": o1 = 1 is refused: width 2 cannot hold 4")
+            (is_refused (solved (fun ~w:_ ~o1 ~o2:_ -> [ eq (Var o1) (dim 1) ])));
+          p (order ^ ": as w = 2 is")
+            (is_refused (solved (fun ~w ~o1:_ ~o2:_ -> [ eq (Var w) (dim 2) ])))))
 
 (* {2 An identity window's basis does not depend on constraint order (gh-ocannl-1824)}
 

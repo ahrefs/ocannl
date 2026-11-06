@@ -742,7 +742,15 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
                      ( "convolution: conflicting dimension bases between stride and kernel",
                        [ Dim_mismatch [ Dim s; Dim k ] ] ))
           in
-          Dim { d = (stride * (s.d - 1)) + span; basis; proj_id = None }
+          let d = (stride * (s.d - 1)) + span in
+          (* Only [window_pair_equation]'s helper has a span below 1, and what it computes is a real
+             window's output: below 1, that window is wider than the extent the two share, which the
+             solved arms refuse when they meet it (gh-ocannl-1972). *)
+          if span < 1 && d < 1 then
+            raise
+            @@ Shape_error
+                 ("solved dimensions for axis: incompatible stride", [ Dim_mismatch [ result ] ]);
+          Dim { d; basis; proj_id = None }
       | Affine
           {
             stride;
@@ -2273,29 +2281,39 @@ let is_resolve_at_use_dim v = Set.mem !resolve_at_use_dim v
    1] over [o1], the identity when [k] and that span are both 1. Unless [s2] divides [span1 -
    span2], no outputs satisfy it. The helper's span can be below 1 (a valid window wider than the
    other side's span at one stride, [o2 = o1 - 2]); the solved arms' arithmetic holds for it all the
-   same. Returns the equation between the outputs, or why there is none. *)
+   same, and [s_dim_one] refuses an output below 1, which no window has.
+
+   Strides that do not divide each other (2 and 3) make neither output a function of the other: [2 *
+   o1 = 3 * o2] holds for every [o1 = 3 * k]. Such a pair waits for one side to be solved, and the
+   solved arms then decide it (gh-ocannl-1972). Solutions exist exactly when [gcd s1 s2] divides
+   [span1 - span2], the divisibility above when one stride divides the other, so a pair without any
+   is refused at once. Two symbolic outputs are rigid, so waiting would decide nothing: refused, as
+   a concat against a symbolic extent is. *)
 let window_pair_equation ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 =
   let reduce ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 =
-    if (span1 - span2) % s2 <> 0 then
-      Error "solved dimensions for axis: window spans differ by a non-multiple of the stride"
+    let stride = s1 / s2 and span = ((span1 - span2) / s2) + 1 in
+    if stride = 1 && span = 1 then `Equate (o1, o2)
     else
-      let stride = s1 / s2 and span = ((span1 - span2) / s2) + 1 in
-      if stride = 1 && span = 1 then Ok (o1, o2)
-      else
-        Ok
-          ( o2,
-            Affine
-              {
-                stride;
-                over = o1;
-                conv =
-                  Some { dilation = 1; kernel = get_default_dim ~d:span (); use_padding = false };
-                stride_offset = 0;
-              } )
+      `Equate
+        ( o2,
+          Affine
+            {
+              stride;
+              over = o1;
+              conv = Some { dilation = 1; kernel = get_default_dim ~d:span (); use_padding = false };
+              stride_offset = 0;
+            } )
   in
-  if s1 % s2 = 0 then reduce ~s1 ~span1 ~o1 ~s2 ~span2 ~o2
+  if (span1 - span2) % Utils.gcd s1 s2 <> 0 then
+    `Refuse
+      "solved dimensions for axis: window spans differ by a non-multiple of the strides' common \
+       divisor"
+  else if s1 % s2 = 0 then reduce ~s1 ~span1 ~o1 ~s2 ~span2 ~o2
   else if s2 % s1 = 0 then reduce ~s1:s2 ~span1:span2 ~o1:o2 ~s2:s1 ~span2:span1 ~o2:o1
-  else Error "solved dimensions for axis: unresolvable strides"
+  else
+    match (o1, o2) with
+    | Sym _, Sym _ -> `Refuse "solved dimensions for axis: unresolvable strides"
+    | _ -> `Defer
 
 (* Substituting a solution (gh-ocannl-1904). A solution [v := value] visits the entries it can
    change -- those mentioning [v], and the pending ones (see {!environment}) for a dimension
@@ -2511,6 +2529,12 @@ let visit_rows_for_row_solution env v ~value =
 
 let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
+  let window_pair ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 =
+    match window_pair_equation ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 with
+    | `Equate eq -> unify_dim ~stage origin eq env
+    | `Defer -> ([ Dim_eq { d1 = dim1; d2 = dim2; origin } ], env)
+    | `Refuse msg -> raise @@ Shape_error (msg, [ Dim_mismatch [ dim1; dim2 ] ])
+  in
   match (dim1, dim2) with
   | Dim { basis = b1; _ }, Dim { basis = b2; _ } when not (String.equal b1 b2) ->
       raise
@@ -2638,20 +2662,9 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
                  [ Dim_mismatch [ dim1; dim2 ] ] ))
   | ( Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ },
       Affine { stride = s2; over = o2; conv = None | Some { use_padding = true; _ }; _ } ) ->
-      (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
-      if s1 = s2 then unify_dim ~stage origin (o1, o2) env
-      else if s1 >= s2 && s1 % s2 = 0 then
-        unify_dim ~stage origin
-          (o2, Affine { stride = s1 / s2; over = o1; conv = None; stride_offset = 0 })
-          env
-      else if s2 >= s1 && s2 % s1 = 0 then
-        unify_dim ~stage origin
-          (o1, Affine { stride = s2 / s1; over = o2; conv = None; stride_offset = 0 })
-          env
-      else
-        raise
-        @@ Shape_error
-             ("solved dimensions for axis: unresolvable strides", [ Dim_mismatch [ dim1; dim2 ] ])
+      (* Strides that divide each other took the padded-pair arm above. A padded window or a plain
+         affine reads [input = s * o = s * (o - 1) + s]: its span is its stride. *)
+      window_pair ~s1 ~span1:s1 ~o1 ~s2 ~span2:s2 ~o2
   | ( Affine
         {
           stride = s1;
@@ -2665,13 +2678,11 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           over = o2;
           conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
           _;
-        } ) -> (
+        } ) ->
       (* Both sides use: input = stride * (output - 1) + span *)
       let span1 = effective_kernel_span ~dilation:d1 ~kernel_size:k1.d
       and span2 = effective_kernel_span ~dilation:d2 ~kernel_size:k2.d in
-      match window_pair_equation ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 with
-      | Ok eq -> unify_dim ~stage origin eq env
-      | Error msg -> raise @@ Shape_error (msg, [ Dim_mismatch [ dim1; dim2 ] ]))
+      window_pair ~s1 ~span1 ~o1 ~s2 ~span2 ~o2
   | ( Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ },
       Affine
         {
@@ -2687,13 +2698,11 @@ let%track6_sexp rec unify_dim ~stage origin (eq : dim * dim) env : constraint_ l
           conv = Some { dilation = d2; kernel = Dim k2; use_padding = false };
           _;
         },
-      Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ } ) -> (
+      Affine { stride = s1; over = o1; conv = None | Some { use_padding = true; _ }; _ } ) ->
       (* A padded window or a plain affine reads [input = s1 * o1 = s1 * (o1 - 1) + s1]: its span is
          its stride (gh-ocannl-1823). *)
       let span2 = effective_kernel_span ~dilation:d2 ~kernel_size:k2.d in
-      match window_pair_equation ~s1 ~span1:s1 ~o1 ~s2 ~span2 ~o2 with
-      | Ok eq -> unify_dim ~stage origin eq env
-      | Error msg -> raise @@ Shape_error (msg, [ Dim_mismatch [ dim1; dim2 ] ]))
+      window_pair ~s1 ~span1:s1 ~o1 ~s2 ~span2 ~o2
   | Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ }, _
   | _, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
       (* Can't compute offset until kernel dimension is resolved; defer *)

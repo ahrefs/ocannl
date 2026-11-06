@@ -459,7 +459,15 @@ files.
   which writes both as `stride * (o - 1) + span`: a padded window or plain affine of stride `s`
   has span `s`, not 1 (read as 1, a padded stride-4 shortcut against a stride-2 pool derived
   `2*o - 1` where concrete solving gives `2*o`, gh-ocannl-1823; equal strides hid it). A span
-  difference the smaller stride does not divide has no solution and is refused, not truncated.
+  difference `gcd s1 s2` does not divide has no solution and is refused, not truncated. Strides
+  that do not divide each other (2 and 3) have solutions but no functional relation, so the pair
+  stays a `Dim_eq` until a side is solved, then the solved arms decide it (gh-ocannl-1972); a
+  rigid `Sym` on both sides is refused, since nothing would ever solve one. No width at all still
+  fails: closure sizes each output at 1 on its own, and `2 = 3` reads as a plain mismatch. The
+  helper's span can be below 1 (`o2 = o1 - 2`), and `s_dim_one` refuses a helper output below 1,
+  which is the window not fitting; without that, a width arriving after the pair gave `o2 = 0`
+  or a negative extent where solving concretely refuses. Reorienting the helper would not do:
+  at unequal strides no orientation has a positive span.
   A stride-1 valid window of span 1 over an unsolved extent is the identity and collapses in
   `unify_dim`'s stride-1 arm and in `s_dim_one` (`is_identity_window`); kept, a residual add
   equating its `over` with it reads as an occurs-check cycle. Collapsed, nothing constrains the

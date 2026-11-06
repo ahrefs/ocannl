@@ -25,7 +25,23 @@ control (off): no scheme event, where check had some: true
 output dims: single prec 2x2x3x4
 check and off give the same output dims: true
 check and off give the same output, loss, parameters and gradients, bitwise: true
+under check, the network builds without a shape error: true
+control (off): the network builds: true
+its scheme is traced: true
+and its application is checked against the scheme: true
+no scheme event leaves it unschemed: true
+control (off): no scheme event, where check had some: true
+output dims: single prec 2x1
+check and off give the same output dims: true
+check and off give the same output, loss, parameters and gradients, bitwise: true
 the scheme or the body raises a shape error: true
+width 12 gives outputs 6 and 4, over the input and y's 66: true
+control: width 10 is no multiple of 3: true
+with no width anywhere, closing refuses: true
+width 12 gives outputs 6 and 4, over the input and y's 66: true
+control: width 10 is no multiple of 3: true
+with no width anywhere, closing refuses: true
+y's 4 gives o2 = 4, so o1 = 6: 6 cells of ones and 0 + 1 + 2 + 3: true
 v = conv(v + kernel 1): true
 conv(v + kernel 1) = v: true
 v = conv(v + dilation 3, kernel 1): true
@@ -61,6 +77,80 @@ o1's window first: padded stride 1 against a valid window of 3: o1 = 7 gives o2 
 o1's window first: and o2 = 5 gives o1 = 7: true
 o2's window first: padded stride 1 against a valid window of 3: o1 = 7 gives o2 = 5: true
 o2's window first: and o2 = 5 gives o1 = 7: true
+padded 2, padded 3, o1's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+padded 2, padded 3, o1's window first: the width gives both outputs: true
+padded 2, padded 3, o1's window first: one output gives the other: true
+padded 2, padded 3, o1's window first: and the other way round: true
+padded 2, padded 3, o1's window first: control: outputs of different widths are refused: true
+padded 2, padded 3, o2's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+padded 2, padded 3, o2's window first: the width gives both outputs: true
+padded 2, padded 3, o2's window first: one output gives the other: true
+padded 2, padded 3, o2's window first: and the other way round: true
+padded 2, padded 3, o2's window first: control: outputs of different widths are refused: true
+valid 2 of 2, valid 3 of 3, o1's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+valid 2 of 2, valid 3 of 3, o1's window first: the width gives both outputs: true
+valid 2 of 2, valid 3 of 3, o1's window first: one output gives the other: true
+valid 2 of 2, valid 3 of 3, o1's window first: and the other way round: true
+valid 2 of 2, valid 3 of 3, o1's window first: control: outputs of different widths are refused: true
+valid 2 of 2, valid 3 of 3, o2's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+valid 2 of 2, valid 3 of 3, o2's window first: the width gives both outputs: true
+valid 2 of 2, valid 3 of 3, o2's window first: one output gives the other: true
+valid 2 of 2, valid 3 of 3, o2's window first: and the other way round: true
+valid 2 of 2, valid 3 of 3, o2's window first: control: outputs of different widths are refused: true
+padded 2, valid 3 of 5, o1's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+padded 2, valid 3 of 5, o1's window first: the width gives both outputs: true
+padded 2, valid 3 of 5, o1's window first: one output gives the other: true
+padded 2, valid 3 of 5, o1's window first: and the other way round: true
+padded 2, valid 3 of 5, o1's window first: control: outputs of different widths are refused: true
+padded 2, valid 3 of 5, o2's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+padded 2, valid 3 of 5, o2's window first: the width gives both outputs: true
+padded 2, valid 3 of 5, o2's window first: one output gives the other: true
+padded 2, valid 3 of 5, o2's window first: and the other way round: true
+padded 2, valid 3 of 5, o2's window first: control: outputs of different widths are refused: true
+valid 2 of 3, valid 3 of 4, o1's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+valid 2 of 3, valid 3 of 4, o1's window first: the width gives both outputs: true
+valid 2 of 3, valid 3 of 4, o1's window first: one output gives the other: true
+valid 2 of 3, valid 3 of 4, o1's window first: and the other way round: true
+valid 2 of 3, valid 3 of 4, o1's window first: control: outputs of different widths are refused: true
+valid 2 of 3, valid 3 of 4, o2's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+valid 2 of 3, valid 3 of 4, o2's window first: the width gives both outputs: true
+valid 2 of 3, valid 3 of 4, o2's window first: one output gives the other: true
+valid 2 of 3, valid 3 of 4, o2's window first: and the other way round: true
+valid 2 of 3, valid 3 of 4, o2's window first: control: outputs of different widths are refused: true
+valid 4 of 4, valid 6 of 2, o1's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+valid 4 of 4, valid 6 of 2, o1's window first: the width gives both outputs: true
+valid 4 of 4, valid 6 of 2, o1's window first: one output gives the other: true
+valid 4 of 4, valid 6 of 2, o1's window first: and the other way round: true
+valid 4 of 4, valid 6 of 2, o1's window first: control: outputs of different widths are refused: true
+valid 4 of 4, valid 6 of 2, o2's window first: with nothing solved the pair stays deferred, neither solved nor refused: true
+valid 4 of 4, valid 6 of 2, o2's window first: the width gives both outputs: true
+valid 4 of 4, valid 6 of 2, o2's window first: one output gives the other: true
+valid 4 of 4, valid 6 of 2, o2's window first: and the other way round: true
+valid 4 of 4, valid 6 of 2, o2's window first: control: outputs of different widths are refused: true
+o1's window first: [2*5 = 3*o2]: 10 is no multiple of 3: true
+o1's window first: w = 10 is no multiple of 3 either: true
+o2's window first: [2*5 = 3*o2]: 10 is no multiple of 3: true
+o2's window first: w = 10 is no multiple of 3 either: true
+o1's window first: valid 4 of 3, valid 6 of 2: true
+o2's window first: valid 4 of 3, valid 6 of 2: true
+2*n = 3*m: true
+control: a symbol against an unsolved output waits: true
+o1's window first: o1 = 3 gives o2 = 1: true
+o1's window first: o1 = 1 is refused: width 2 cannot hold 6: true
+o1's window first: o1 = 1 is refused: width 2 cannot hold 6, solved through the width as well: true
+o1's window first: o1 = 2 is refused: width 4 cannot hold 6: true
+o1's window first: o1 = 2 is refused: width 4 cannot hold 6, solved through the width as well: true
+o2's window first: o1 = 3 gives o2 = 1: true
+o2's window first: o1 = 1 is refused: width 2 cannot hold 6: true
+o2's window first: o1 = 1 is refused: width 2 cannot hold 6, solved through the width as well: true
+o2's window first: o1 = 2 is refused: width 4 cannot hold 6: true
+o2's window first: o1 = 2 is refused: width 4 cannot hold 6, solved through the width as well: true
+o1's window first: o1 = 2 gives o2 = 2: true
+o1's window first: o1 = 1 is refused: width 2 cannot hold 4: true
+o1's window first: as w = 2 is: true
+o2's window first: o1 = 2 gives o2 = 2: true
+o2's window first: o1 = 1 is refused: width 2 cannot hold 4: true
+o2's window first: as w = 2 is: true
 window first, window on the left, one batch: v = 4 of bcast_if_1: true
 window first, window on the left, one at a time: v = 4 of bcast_if_1: true
 window first, window on the right, one batch: v = 4 of bcast_if_1: true
