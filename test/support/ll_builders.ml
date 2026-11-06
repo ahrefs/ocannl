@@ -112,7 +112,11 @@ let set_from_vec ?(debug = "") ~length ~vec_unop tn idcs (arg : LL.scalar_arg) :
 
 (** [carry ~init tn] is one carried scalar over the state node [tn], starting at [init] (a scalar
     that may read tensor nodes but no carried state). *)
-let carry ~init tn : LL.carried = { prev = LL.get_scope tn; next = LL.get_scope tn; init }
+let carry ~init tn : LL.carried =
+  (* [next] is minted first, spelled (gh-ocannl-1974). *)
+  let next = LL.get_scope tn in
+  let prev = LL.get_scope tn in
+  { prev; next; init }
 
 (** [prev cr] reads the carried scalar's value from the previous iteration (its [init] on the
     first). *)

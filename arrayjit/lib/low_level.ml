@@ -3671,13 +3671,16 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       | Get_merge_buffer (tn, indices) -> Get_merge_buffer (tn, Array.map ~f:(subst env) indices)
       | Embed_index idx -> Embed_index (subst env idx)
       | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
-          Ternop
-            ( op,
-              (loop_scalar env llv1, prec1),
-              (loop_scalar env llv2, prec2),
-              (loop_scalar env llv3, prec3) )
+          (* gh-ocannl-1974: last operand first, spelled -- a nested scope's loops are freshened
+             here, so the order numbers their symbols and decides which rejection is raised. *)
+          let v3 = loop_scalar env llv3 in
+          let v2 = loop_scalar env llv2 in
+          let v1 = loop_scalar env llv1 in
+          Ternop (op, (v1, prec1), (v2, prec2), (v3, prec3))
       | Binop (op, (llv1, prec1), (llv2, prec2)) ->
-          Binop (op, (loop_scalar env llv1, prec1), (loop_scalar env llv2, prec2))
+          let v2 = loop_scalar env llv2 in
+          let v1 = loop_scalar env llv1 in
+          Binop (op, (v1, prec1), (v2, prec2))
       | Unop (op, (llsc, prec)) -> Unop (op, (loop_scalar env llsc, prec))
     in
     match loop env def with
@@ -4544,16 +4547,16 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
        (prepending the guard to the stored computation) is adjacent to the Block virtualizer's
        range-guard machinery. *)
     | If { cond = c, prec; body } ->
-        If
-          {
-            cond =
-              ( loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan
-                  ~enclosing ~footprint_ok:false c,
-                prec );
-            body =
-              loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded:true ~in_scan
-                ~enclosing body;
-          }
+        (* gh-ocannl-1974: the body before its condition, spelled (see the operand arms below). *)
+        let body =
+          loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded:true ~in_scan ~enclosing
+            body
+        in
+        let c =
+          loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
+            ~footprint_ok:false c
+        in
+        If { cond = (c, prec); body }
   and loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
       ~footprint_ok (llsc : scalar_t) : scalar_t =
     let loop =
@@ -4656,16 +4659,29 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         match decide_where ~loops:(decision_loops ~opaque enclosing) cond with
         | Some true -> Ternop (Ops.Where, cond, (loop llv2, prec2), elided_operand)
         | Some false -> Ternop (Ops.Where, cond, elided_operand, (loop llv3, prec3))
-        | None -> Ternop (Ops.Where, cond, (loop llv2, prec2), (loop llv3, prec3)))
+        | None ->
+            (* gh-ocannl-1974: operands are walked last to first, spelled. [loop] mints scopes and
+               prologues, commits placements and records capture hits, so the order decides the
+               emitted text; it is the order OCaml's unspecified constructor-argument evaluation
+               gave in practice, kept so that no kernel moves. Pin: [operand_walk_order]. *)
+            let v3 = loop llv3 in
+            let v2 = loop llv2 in
+            Ternop (Ops.Where, cond, (v2, prec2), (v3, prec3)))
     | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
-        Ternop (op, (loop llv1, prec1), (loop llv2, prec2), (loop llv3, prec3))
+        let v3 = loop llv3 in
+        let v2 = loop llv2 in
+        let v1 = loop llv1 in
+        Ternop (op, (v1, prec1), (v2, prec2), (v3, prec3))
     (* Review round 9: a projection's discarded operand is never evaluated — do not descend into it
        (attempting to inline a merge-tainted inherited virtual there would raise for code that never
        runs); collapse to the selected operand, mirroring [simplify_llc]'s Arg1/Arg2 arms — the
        renderers emit the selected operand alone either way. *)
     | Binop (Arg1, (llv1, _), _) -> loop llv1
     | Binop (Arg2, _, (llv2, _)) -> loop llv2
-    | Binop (op, (llv1, prec1), (llv2, prec2)) -> Binop (op, (loop llv1, prec1), (loop llv2, prec2))
+    | Binop (op, (llv1, prec1), (llv2, prec2)) ->
+        let v2 = loop llv2 in
+        let v1 = loop llv1 in
+        Binop (op, (v1, prec1), (v2, prec2))
     | Unop (op, (llsc, prec)) -> Unop (op, (loop llsc, prec))
   in
   (* Top-level statement by statement: a footprint prologue is spliced right after the statement of
@@ -4687,7 +4703,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           ~in_storage_pass:false ~guarded:false ~in_scan:false ~enclosing:[] stmt)
   in
   let before = Array.map stmts ~f:(fun _ -> []) and after = Array.map stmts ~f:(fun _ -> []) in
-  (* Minted in program order, consed: reversed per slot below. *)
+  (* Consed in minting order -- statements in program order, one statement's operands last to first:
+     reversed per slot below. *)
   List.iter !prologues ~f:(fun (placement, nest) ->
       match placement with
       | `Before j -> before.(j) <- nest :: before.(j)
@@ -4973,16 +4990,11 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
        materialized. Keep, recursing like the [Set] arm. *)
     | Set_dynamic { tn; idcs; dyn_axis; dyn_value = v, prec; llsc; debug } ->
         Tn.Placements.update plc tn Never_virtual Surviving_read;
-        Some
-          (Set_dynamic
-             {
-               tn;
-               idcs;
-               dyn_axis;
-               dyn_value = (loop_scalar ~balanced ~env_dom v, prec);
-               llsc = loop_scalar ~balanced ~env_dom llsc;
-               debug;
-             })
+        (* gh-ocannl-1974: last operand first, spelled -- the scalar walk commits placements and
+           retracts scopes, so the order can decide a retraction and which error is raised. *)
+        let llsc = loop_scalar ~balanced ~env_dom llsc in
+        let v = loop_scalar ~balanced ~env_dom v in
+        Some (Set_dynamic { tn; idcs; dyn_axis; dyn_value = (v, prec); llsc; debug })
     | If { cond = c, prec; body } ->
         (* The guard is elided when its cleaned body is empty, like an empty loop. *)
         Option.map (loop_proc ~balanced ~env_dom body) ~f:(fun body : t ->
@@ -5049,8 +5061,14 @@ let cleanup_virtual_llc plc ~input_scopes ~static_indices (llc : t) : t =
         List.iter syms ~f:(fun s -> assert (Set.mem env_dom s));
         llsc
     | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
-        Ternop (op, (loop llv1, prec1), (loop llv2, prec2), (loop llv3, prec3))
-    | Binop (op, (llv1, prec1), (llv2, prec2)) -> Binop (op, (loop llv1, prec1), (loop llv2, prec2))
+        let v3 = loop llv3 in
+        let v2 = loop llv2 in
+        let v1 = loop llv1 in
+        Ternop (op, (v1, prec1), (v2, prec2), (v3, prec3))
+    | Binop (op, (llv1, prec1), (llv2, prec2)) ->
+        let v2 = loop llv2 in
+        let v1 = loop llv1 in
+        Binop (op, (v1, prec1), (v2, prec2))
     | Unop (op, (llsc, prec)) -> Unop (op, (loop llsc, prec))
   in
   let static_indices =
@@ -6636,8 +6654,17 @@ let eliminate_common_subexpressions llc =
       | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
           llsc
       | Ternop (op, (s1, p1), (s2, p2), (s3, p3)) ->
-          Ternop (op, (loop_scalar s1, p1), (loop_scalar s2, p2), (loop_scalar s3, p3))
-      | Binop (op, (s1, p1), (s2, p2)) -> Binop (op, (loop_scalar s1, p1), (loop_scalar s2, p2))
+          (* gh-ocannl-1974: last operand first, spelled -- [seen] makes the LAST alpha-equal scope
+             of a statement the one that survives, the earlier ones reading it (the order
+             [C_syntax.pp_local_defs] sorts out). Pin: [operand_walk_order]. *)
+          let s3 = loop_scalar s3 in
+          let s2 = loop_scalar s2 in
+          let s1 = loop_scalar s1 in
+          Ternop (op, (s1, p1), (s2, p2), (s3, p3))
+      | Binop (op, (s1, p1), (s2, p2)) ->
+          let s2 = loop_scalar s2 in
+          let s1 = loop_scalar s1 in
+          Binop (op, (s1, p1), (s2, p2))
       | Unop (op, (s1, p1)) -> Unop (op, (loop_scalar s1, p1))
     and loop_proc (llc : t) : t =
       match llc with
@@ -10382,8 +10409,10 @@ let first_access_positions (llc : t) : (Tn.t, int) Hashtbl.t =
 
 (* Program order over [first_access_positions]: nodes the code touches in access order, then the
    rest. A flip candidate is a node the raw code writes, or a footprint-scoped node it reads, so it
-   has a position; the identity fallback only keeps the order total for anything else. Not by label:
-   labels are display, not identity (gh-ocannl-1783). *)
+   has a position; the identity fallback only keeps the order total for anything else -- two store
+   entries the code never accesses, which it lists in the order they were created in
+   (gh-ocannl-1974: nothing in the program orders them). Not by label: labels are display, not
+   identity (gh-ocannl-1783). *)
 let compare_program_order positions a b =
   match (Hashtbl.find positions a, Hashtbl.find positions b) with
   | Some pa, Some pb -> Int.compare pa pb
@@ -11490,7 +11519,8 @@ let instantiate_at_synthetic_read ~(placements : Tn.Placements.t) ~static_indice
   in
   let plc = Tn.Placements.copy placements in
   Tn.Placements.unsafe_restore plc self (Some (Virtual, Site "1011:synthetic-read"));
-  let id = pricing_scope self and sink = pricing_scope self in
+  let id = pricing_scope self in
+  let sink = pricing_scope self in
   try
     Result.map
       (* Its call indices are bare iterators, fixed positions or [Sub_axis] runs every component

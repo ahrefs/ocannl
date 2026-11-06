@@ -73,13 +73,25 @@ type optop =
 
 type schedule = optop list [@@deriving sexp_of]
 
+(* gh-ocannl-1974: [List.init] with [f] called from the last index down, spelled. Where [f] mints (a
+   symbol per segment, a scope per unrolled copy) the calling order numbers what it mints, and
+   [Base.List.init] promises none; this is the order it has in practice, kept so that no kernel
+   moves. *)
+let init_last_first n ~f =
+  (* invariant: a count is a list length, a rank or a loop's trip count, and [Base.List.init] raised
+     on a negative one too. Without the check the recursion below would not end. *)
+  if n < 0 then invalid_arg (Printf.sprintf "Schedule.init_last_first %d" n);
+  let rec loop i acc = if i = 0 then acc else loop (i - 1) (f (i - 1) :: acc) in
+  loop n []
+
 let split ~axis ~factor ~outer ~inner =
-  let outer_index = Indexing.get_symbol () and inner_index = Indexing.get_symbol () in
+  let outer_index = Indexing.get_symbol () in
+  let inner_index = Indexing.get_symbol () in
   (Split { axis; factor; outer; inner; outer_index; inner_index }, outer_index, inner_index)
 
 let partition ~axis ~breakpoints =
   let segment_indices =
-    List.init (List.length breakpoints + 1) ~f:(fun _ -> Indexing.get_symbol ())
+    init_last_first (List.length breakpoints + 1) ~f:(fun _ -> Indexing.get_symbol ())
   in
   (Partition { axis; breakpoints; segment_indices }, segment_indices)
 
@@ -93,7 +105,8 @@ let tensorize ?tile ~i ~j ~k ~simd_width () =
   (Tensorize { i; j; k; lane; simd_width; tile }, lane)
 
 let fold_mma ~query ~width =
-  let lane = Indexing.get_symbol () and block = Indexing.get_symbol () in
+  let lane = Indexing.get_symbol () in
+  let block = Indexing.get_symbol () in
   (Fold_mma { query; lane; block; width }, lane, block)
 
 let coalesce ~outer ~inner =
@@ -102,16 +115,17 @@ let coalesce ~outer ~inner =
 
 let expand_zero ~tn =
   let rank = Array.length (Lazy.force tn.Tn.dims) in
-  let indices = List.init rank ~f:(fun _ -> Indexing.get_symbol ()) in
+  let indices = init_last_first rank ~f:(fun _ -> Indexing.get_symbol ()) in
   (Expand_zero { tn; indices }, indices)
 
 let privatize ~accum_prec ~target ~over =
   Privatize { target; over; acc_prec = accum_prec (Lazy.force target.Tn.storage_prec) }
 
 let split_reduce ~axis ~target ~num_blocks =
-  let block_index = Indexing.get_symbol () and inner_index = Indexing.get_symbol () in
+  let block_index = Indexing.get_symbol () in
+  let inner_index = Indexing.get_symbol () in
   let rank = Array.length (Lazy.force target.Tn.dims) in
-  let combine_indices = List.init rank ~f:(fun _ -> Indexing.get_symbol ()) in
+  let combine_indices = init_last_first rank ~f:(fun _ -> Indexing.get_symbol ()) in
   ( Split_reduce { axis; target; num_blocks; block_index; inner_index; combine_indices },
     block_index,
     inner_index,
@@ -339,11 +353,20 @@ let rewrite_loop ~what ~sym ~(f : floop -> Low_level.t) (llc : Low_level.t) : Lo
         found := true;
         f { index; from_; to_; body; axis }
     | For_loop fc -> For_loop { fc with body = go fc.body }
-    | Seq (a, b) -> Seq (go a, go b)
+    | Seq (a, b) ->
+        (* gh-ocannl-1974: last to first, spelled. [f] runs once per copy of the loop an earlier
+           materializing operation left, and mints scopes or refuses there, so the order numbers the
+           copies' scopes and picks the refusal; it is the one OCaml's unspecified argument
+           evaluation gave in practice, kept so that no kernel moves. *)
+        let b = go b in
+        let a = go a in
+        Seq (a, b)
     | If { cond; body } -> If { cond; body = go body }
     | Set s -> Set { s with llsc = go_scalar s.llsc }
     | Set_dynamic ({ dyn_value = v, vp; llsc; _ } as s) ->
-        Set_dynamic { s with dyn_value = (go_scalar v, vp); llsc = go_scalar llsc }
+        let llsc = go_scalar llsc in
+        let v = go_scalar v in
+        Set_dynamic { s with dyn_value = (v, vp); llsc }
     | Set_local (id, llsc) -> Set_local (id, go_scalar llsc)
     | Set_from_vec ({ arg = a, ap; _ } as s) -> Set_from_vec { s with arg = (go_scalar a, ap) }
     | other -> other
@@ -353,8 +376,14 @@ let rewrite_loop ~what ~sym ~(f : floop -> Low_level.t) (llc : Low_level.t) : Lo
     | Get_dynamic ({ dyn_value = v, vp; _ } as g) ->
         Get_dynamic { g with dyn_value = (go_scalar v, vp) }
     | Ternop (op, (a, pa), (b, pb), (c, pc)) ->
-        Ternop (op, (go_scalar a, pa), (go_scalar b, pb), (go_scalar c, pc))
-    | Binop (op, (a, pa), (b, pb)) -> Binop (op, (go_scalar a, pa), (go_scalar b, pb))
+        let c = go_scalar c in
+        let b = go_scalar b in
+        let a = go_scalar a in
+        Ternop (op, (a, pa), (b, pb), (c, pc))
+    | Binop (op, (a, pa), (b, pb)) ->
+        let b = go_scalar b in
+        let a = go_scalar a in
+        Binop (op, (a, pa), (b, pb))
     | Unop (op, (a, pa)) -> Unop (op, (go_scalar a, pa))
     | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
         llsc
@@ -381,7 +410,11 @@ let rewrite_loop_holder ~what ~sym ~(f : Low_level.t -> Low_level.t) (llc : Low_
     match llc with
     | For_loop { index; _ } when Indexing.equal_symbol index sym -> hit llc
     | For_loop fc -> For_loop { fc with body = go fc.body }
-    | Seq (a, b) -> Seq (go a, go b)
+    | Seq (a, b) ->
+        (* gh-ocannl-1974: last to first, spelled, as in {!rewrite_loop}. *)
+        let b = go b in
+        let a = go a in
+        Seq (a, b)
     | If { cond; body } -> If { cond; body = go body }
     | (Set _ | Set_dynamic _ | Set_local _ | Set_from_vec _) when Option.is_some (find_loop sym llc)
       ->
@@ -1052,7 +1085,7 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                     (id, unflat_lines rest)
               in
               let copies =
-                List.init (fc.to_ - fc.from_ + 1) ~f:(fun k -> copy k (rebuild update_code))
+                init_last_first (fc.to_ - fc.from_ + 1) ~f:(fun k -> copy k (rebuild update_code))
               in
               Set
                 {
@@ -1069,7 +1102,8 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                       };
                   debug;
                 }
-          | None -> unflat_lines (List.init (fc.to_ - fc.from_ + 1) ~f:(fun k -> copy k fc.body)))
+          | None ->
+              unflat_lines (init_last_first (fc.to_ - fc.from_ + 1) ~f:(fun k -> copy k fc.body)))
   | Pad { axis; to_multiple_of } ->
       (* gh-ocannl-485 (PADTO): extend the loop extent to the next multiple of [to_multiple_of] and
          guard each effectful leaf statement of the body with [If (axis < N)] — the pad iterations
@@ -3813,7 +3847,8 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
         in
         let body = replace body in
         assert !replaced;
-        let fi = Indexing.get_symbol () and fj = Indexing.get_symbol () in
+        let fi = Indexing.get_symbol () in
+        let fj = Indexing.get_symbol () in
         let target_idcs = Array.copy d_base in
         let rank = Array.length target_idcs in
         if rank < 2 then refuse "Schedule.Tensorize: accumulator rank must be at least 2";
@@ -3885,7 +3920,8 @@ let contract_tensorized_accumulator ~lane ~(masks : pad_mask list) (opt : Low_le
                  tiles, which the scratch tile (unlike [target]) has. Every scratch slot is written
                  by the masked init (pad slots as 0), so the whole-tile load reads no uninitialized
                  cell. *)
-              let gi = Indexing.get_symbol () and gj = Indexing.get_symbol () in
+              let gi = Indexing.get_symbol () in
+              let gj = Indexing.get_symbol () in
               let g_idcs = [| Indexing.Iterator gi; Indexing.Iterator gj |] in
               let copy ~into ~from =
                 lane0 simd_width
@@ -4513,7 +4549,8 @@ let apply_fuse_epilogue ~target ~shared (opt : Low_level.optimized) : Low_level.
                           ("the Tile_mma block executes once per iteration of enclosing loop "
                          ^ Indexing.symbol_ident s
                          ^ " which does not index it — the tail would read partial accumulations"));
-                  let fi = Indexing.get_symbol () and fj = Indexing.get_symbol () in
+                  let fi = Indexing.get_symbol () in
+                  let fj = Indexing.get_symbol () in
                   let site_idcs = Array.copy d_base in
                   site_idcs.(rank - 2) <- add_symbol site_idcs.(rank - 2) fi;
                   site_idcs.(rank - 1) <- add_symbol site_idcs.(rank - 1) fj;
@@ -4994,7 +5031,8 @@ let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_
         fold_value_nest ~s_tile:site.fs_s ~u_tile:site.fs_u stmt )
     with
     | Some (j, j_to, d, d_to, (x_tn, x_idcs), (y_tn, y_idcs), chain), _ ->
-        let i' = Indexing.get_symbol () and j' = Indexing.get_symbol () in
+        let i' = Indexing.get_symbol () in
+        let j' = Indexing.get_symbol () in
         let k' = Indexing.get_symbol () in
         let subs = [ (query, row_of i'); (j, iter j'); (d, iter k') ] in
         let at = [| Indexing.Iterator i'; Indexing.Iterator j' |] in
@@ -5037,7 +5075,8 @@ let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_
                   };
             }
         in
-        let jz = Indexing.get_symbol () and jc = Indexing.get_symbol () in
+        let jz = Indexing.get_symbol () in
+        let jc = Indexing.get_symbol () in
         let zero =
           for_loop
             {
@@ -5077,7 +5116,8 @@ let apply_fold_mma ~query ~lane ~block ~width (opt : Low_level.optimized) : Low_
         in
         [ zero; Workgroup_barrier; tile_mma ~i:i' ~j:j' ~k:k' micro; Workgroup_barrier; chained ]
     | None, Some (e, e_to, j, j_to, (v_tn, v_idcs)) ->
-        let i' = Indexing.get_symbol () and e' = Indexing.get_symbol () in
+        let i' = Indexing.get_symbol () in
+        let e' = Indexing.get_symbol () in
         let k' = Indexing.get_symbol () in
         let subs = [ (query, row_of i'); (e, iter e'); (j, iter k') ] in
         let at = [| Indexing.Iterator i'; Indexing.Iterator e' |] in

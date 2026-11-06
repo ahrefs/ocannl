@@ -749,10 +749,11 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
      running. Without it a reader of the node through the same padded window (a [%cd] assignment
      reading a gradient through a padded convolution) read the contributions as data. Each node is
      restored once, with fresh loop symbols (a second [reset_padding_regions] call, never the
-     leading resets' statements again: a binder shared by sibling loops is misread,
-     gh-ocannl-1384). *)
+     leading resets' statements again: a binder shared by sibling loops is misread, gh-ocannl-1384),
+     in the order the writes were lowered (gh-ocannl-1974: [margin_writes] is consed; a uid sort
+     made the statements follow the order the nodes were created in). *)
   let margin_restores (margin_writes : Tn.t list ref) : Low_level.t list =
-    List.dedup_and_sort !margin_writes ~compare:Tn.compare
+    List.stable_dedup (List.rev !margin_writes) ~compare:Tn.compare
     |> List.concat_map ~f:(fun tn ->
         match Tn.get_padding tn with Some (_, v) -> reset_padding_regions tn v | None -> [])
   in
@@ -1225,11 +1226,12 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
        margins. The node the scatter READS gets no resets: no reader resets its operand's margins
        ([loop_accum]'s comment), and writing it would make the lowered code write a node
        {!collect_written} says this assignment does not (gh-ocannl-1474). A node named by several
-       targets ([(w, w) ++^ ...]) is reset once. *)
+       targets ([(w, w) ++^ ...]) is reset once, at its first position among them (gh-ocannl-1974:
+       not in uid order, which is the order the nodes were created in). *)
     let padding_resets =
       Array.to_list lhses
       |> List.filter_map ~f:(function Node tn -> Some tn | Merge_buffer _ -> None)
-      |> List.dedup_and_sort ~compare:Tn.compare
+      |> List.stable_dedup ~compare:Tn.compare
       |> List.concat_map ~f:(fun tn ->
           match Tn.get_padding tn with Some (_, v) -> reset_padding_regions tn v | None -> [])
     in

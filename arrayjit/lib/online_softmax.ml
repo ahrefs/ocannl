@@ -391,8 +391,15 @@ let emit_normalizer (nz : normalizer) : LL.t =
   let m_st = scalar_node ~label:"online_max" ~like:nz.m (state_prec nz.m) in
   let l_st = scalar_node ~label:"online_sum" ~like:nz.l (state_prec nz.l) in
   let x_st = scalar_node ~label:"online_score" ~like:nz.x (state_prec nz.x) in
-  let m = { prev = get_scope m_st; next = get_scope m_st; init = Constant Float.neg_infinity } in
-  let l = { prev = get_scope l_st; next = get_scope l_st; init = Constant 0. } in
+  (* gh-ocannl-1974: [next] is minted before [prev], spelled (record fields evaluate in an
+     unspecified order; this is the one they have in practice). *)
+  let carried st init =
+    let next = get_scope st in
+    let prev = get_scope st in
+    { prev; next; init }
+  in
+  let m = carried m_st (Constant Float.neg_infinity) in
+  let l = carried l_st (Constant 0.) in
   let x = get_scope x_st in
   let binop op a b = apply_op (Ops.Binop op) [| a; b |] in
   let exp_ a = apply_op (Ops.Unop Ops.Exp) [| a |] in
@@ -1121,7 +1128,9 @@ let find_backward r (nz : normalizer) : backward option =
      [x], and a second counted read of any one node of the chain would store it as a [seq, seq]
      buffer. *)
   let pair ~stop ~grad sym =
-    let p = get_scope p_node and dp = get_scope dp_node and ds = get_scope ds_node in
+    let p = get_scope p_node in
+    let dp = get_scope dp_node in
+    let ds = get_scope ds_node in
     let* p_val, _ =
       unfold r ~stop:(stop @ [ nz.m; nz.l ]) ~before:emit ~depth:8 (Get (p_tn, idcs_of sym sig_p))
     in
@@ -1519,8 +1528,15 @@ let find_fold r (nz : normalizer) ~block : fold option =
   let m_st = scalar_node ~label:"block_max" ~like:nz.m mp in
   let l_st = scalar_node ~label:"block_sum" ~like:nz.l mp in
   let local label like = get_scope (scalar_node ~label ~like mp) in
-  let m = { prev = get_scope m_st; next = get_scope m_st; init = Constant Float.neg_infinity } in
-  let l = { prev = get_scope l_st; next = get_scope l_st; init = Constant 0. } in
+  (* gh-ocannl-1974: [next] is minted before [prev], spelled (record fields evaluate in an
+     unspecified order; this is the one they have in practice). *)
+  let carried st init =
+    let next = get_scope st in
+    let prev = get_scope st in
+    { prev; next; init }
+  in
+  let m = carried m_st (Constant Float.neg_infinity) in
+  let l = carried l_st (Constant 0.) in
   let row_syms = List.map rows_roles ~f:(fun r -> (r, Idx.get_symbol ())) in
   let row_sym r = List.Assoc.find_exn row_syms ~equal:equal_role r in
   let tb = Idx.get_symbol () in

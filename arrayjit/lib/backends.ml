@@ -277,10 +277,15 @@ let fold_segment_stores ~(into : Low_level.traced_store) (segments : Low_level.o
    equal-size ties by input order, and bump packing's alignment padding and cap segmentation depend
    on the running offset -- sizes 4 then 64 at alignment 32 occupy 96 bytes, reversed 68). Uid order
    is deterministic and shared; pool ids are minted per segment before any placement, so nothing
-   else depends on enumeration order. [skip] excludes nodes the caller already holds (the
-   allocator's prior context); slice-alias views own no buffer and are excluded automatically
-   ([is_in_context_force] returns false for them, gh-ocannl-293 293a) -- their materialized parent
-   is laid out like any other node. *)
+   else depends on enumeration order. It is also the order the nodes were CREATED in, which a uid
+   shift keeps and a program built with its nodes created in another order does not: such a build
+   can lay the same program out differently (gh-ocannl-1974). It stays because the key must be one
+   the scorer (over the union of the scheduled segments' stores) and every allocator delta (over one
+   routine's store, minus what the context holds) agree on, and a position in the code is not: the
+   two see different code. [skip] excludes nodes the caller already holds (the allocator's prior
+   context); slice-alias views own no buffer and are excluded automatically ([is_in_context_force]
+   returns false for them, gh-ocannl-293 293a) -- their materialized parent is laid out like any
+   other node. *)
 let partition_layout_groups ~(plc : Tn.Placements.t) ?(skip = fun (_ : Tn.t) -> false)
     (store : Low_level.traced_store) :
     (Tn.t * Low_level.traced_array) list * (Tn.t * Low_level.traced_array) list =
