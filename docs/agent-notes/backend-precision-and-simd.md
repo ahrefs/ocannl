@@ -1150,7 +1150,8 @@ files.
   placement can still change those values. An accumulator opened by a narrowing init keeps its
   residency (the census needs every `Set_local` to be the read). A statement reading a kept scope is
   out of reach of `serial_kernel_of` and the vectorizer, so a virtual twin at a matmul site seeds no
-  tile: the fix's known cost on a tuned cc run. `mixed_prec_twin_rounding` pins all three placements
+  tile: the fix's known cost on a tuned cc run, which the render-time collapse does not recover
+  (virtualization-and-inlining.md). `mixed_prec_twin_rounding` pins all three placements
   at each narrow precision with exact claims, and `Context.placements` reads what the compile
   resolved; `scope_collapse_rounding`'s cast shapes compare bitwise against a materialized node.
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a

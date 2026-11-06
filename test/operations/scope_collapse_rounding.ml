@@ -12,69 +12,134 @@
    [narrow_compute_f32=false]. (Under cc's default [narrow_compute_f32=true] the local is single
    anyway, so the collapse happened to be exact there.)
 
-   Each shape is executed in four forms: the scoped form through the [?prelowered] seam as written
-   (the uncollapsed oracle); the same through a schedule whose trailing [simplify] decides the
-   collapse; a virtual node read in the sum, inlined by [optimize], whose own [simplify] decides it;
-   and the value written straight into the sum, which shows that the oracle's rounding is observable
-   where the claim needs it to be. A cast also runs as a materialized node, the value every form of
-   it has to give. All run under each narrow-compute policy ([Ir.Numerics.set_policy] in-process,
-   distinct routine names per policy). The single inputs and their squares lie off the bfloat16
-   grid; the bfloat16 inputs lie on it, so seeding them is exact. *)
+   Each shape is executed in four forms: the scoped form through the [?prelowered] seam, its
+   assignment under an always-true guard (the uncollapsed oracle: see {!kept_scope}); the scope
+   through a schedule whose trailing [simplify] decides the collapse; a virtual node read in the
+   sum, inlined by [optimize], whose own [simplify] decides it; and the value written straight into
+   the sum, which shows that the oracle's rounding is observable where the claim needs it to be. A
+   cast also runs as a materialized node, the value every form of it has to give. All run under each
+   narrow-compute policy ([Ir.Numerics.set_policy] in-process, distinct routine names per policy).
+   The single inputs and their squares lie off the bfloat16 grid; the bfloat16 inputs lie on it, so
+   seeding them is exact.
+
+   A scope [simplify] keeps can still collapse at render time, where the backend's compute precision
+   makes it exact (gh-ocannl-1887): [C_syntax.collapse_exact_scopes], so that the explicit-SIMD
+   renderings can take the loop. Those shapes run retyped [Vectorized] at an extent of several
+   vector groups and a remainder, against the oracle bitwise, and the emitted kernel says which of
+   the two happened. The collapse is predicted from the backend's own [compute_prec] ({!collapses}).
+   The rest of the file is the shapes where the three precisions agree and it still must not
+   happen. *)
 open Base
 open Ocannl.Operation.DSL_modules
 module LL = Ir.Low_level
 module Ops = Ir.Ops
+module Generated = Test_utils.Generated
 open Verdict.Claims
 
 (* The forms compared bitwise are different kernel shapes, so the C compiler's contraction must not
    fuse the sum into a product in one of them only. *)
 let () = Unix.putenv "OCANNL_CC_BACKEND_FP_CONTRACT" "off"
+let () = Utils.settings.output_debug_files_in_build_directory <- true
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
+let () = Generated.init ~backend_name
+let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend_name)
+let cc_leg = Verdict.leg ~when_:on_cpu ~on:backend_name ()
+let capabilities = lazy (Context.codegen_capabilities (Context.auto ()))
+let compute p = (Lazy.force capabilities).Ir.Backend_intf.compute_prec p
 let bf = Ops.bfloat16
 let f32 = Ops.single
+let f64 = Ops.double
+let fp8 = Ops.fp8
+let half = Ops.half
 let n = 4
-let bnode = Ll_test.node_factory ~prec:bf ~first_id:24700 ~dims:[| n |] ()
-let fnode = Ll_test.node_factory ~prec:f32 ~first_id:24800 ~dims:[| n |] ()
+
+(* Several 4-lane groups and a remainder. *)
+let long = 11
+
+let factories =
+  List.concat_mapi [ bf; f32; f64; fp8; half ] ~f:(fun p prec ->
+      List.mapi [ n; long ] ~f:(fun e extent ->
+          ( (prec, extent),
+            Ll_test.node_factory ~prec
+              ~first_id:(24700 + (100 * ((2 * p) + e)))
+              ~dims:[| extent |] () )))
+
+let node ?(extent = n) prec =
+  snd (List.find_exn factories ~f:(fun ((p, e), _) -> Ops.equal_prec p prec && e = extent))
+
+let bnode label = node bf label
+let fnode label = node f32 label
 
 (* 1 + (2k + 1/4) * 2^-10: off the bfloat16 grid (8 significant bits), and so are their squares. *)
-let f32_inputs = Array.init n ~f:(fun k -> 1. +. ((Float.of_int (2 * k) +. 0.25) *. 0.0009765625))
+let f32_inputs extent =
+  Array.init extent ~f:(fun k -> 1. +. ((Float.of_int (2 * k) +. 0.25) *. 0.0009765625))
 
-(* Exactly representable in bfloat16, so seeding a bfloat16 node is exact. *)
-let bf_inputs = Array.init n ~f:(fun k -> 1. +. (Float.of_int (k + 1) *. 0.0078125))
+(* Exactly representable in bfloat16, so seeding a bfloat16 node is exact. A product of two is exact
+   in single and off the bfloat16 grid, so no compiler's contraction can move it, and a rounding to
+   bfloat16 can. *)
+let bf_inputs extent = Array.init extent ~f:(fun k -> 1. +. (Float.of_int (k + 1) *. 0.0078125))
+
+(* The assignment sits under an always-true guard: outside the single-assignment shape both
+   [simplify] and {!Ir.C_syntax}'s render-time collapse act on, so the local is really declared. A
+   plain [?prelowered] scope no longer shows that, whichever way the claims around it read: the
+   render-time collapse would compare the collapse with itself. [`Oracle] is checked to hold the
+   local in its emitted kernel. *)
+let kept_scope ~orig_indices tn v =
+  let id = LL.get_scope tn in
+  Ll_test.scope_of ~orig_indices id
+    (LL.If { cond = (Ll_test.c 1., f32); body = LL.Set_local (id, v) })
+
+let plain_scope ~orig_indices tn v = Ll_test.scope ~orig_indices tn v
+let routine_name label tag policy = Printf.sprintf "scr_%s_%s_%s" label tag policy
+
+(* Whether a kernel still declares the local of the node suffixed [mid]. The node is the scope's and
+   nothing else's, so its name occurs in the kernel exactly when the local does. *)
+let holds_local ?(mid = "_mid") routine =
+  String.is_substring (Generated.read routine) ~substring:mid
 
 type shape = {
   label : string;
   slot : Ops.prec;  (** the destination's, hence the sum's evaluation precision *)
   scope_prec : Ops.prec;
+  cast : bool;  (** a read the scope does not widen exactly: its local takes its node's precision *)
   value : x:LL.scalar_arg -> y:LL.scalar_arg -> LL.scalar_t;  (** the scope's value *)
 }
 
+(* Whether the render-time collapse should take a kept scope: the three precisions of [T_R v =
+   conv(V->R)(e@V); ... conv(R->S)(v)] agree. *)
+let collapses shape =
+  let value_prec = compute shape.scope_prec and slot_prec = compute shape.slot in
+  let scope_prec = if shape.cast then shape.scope_prec else value_prec in
+  Ops.equal_prec scope_prec value_prec && Ops.equal_prec scope_prec slot_prec
+
 (* [out[i] = x[i] + scope(value)], with [x] at the slot's precision and [y] at the other one.
-   [`Oracle] runs it as written, [`Scheduled] through [Schedule.apply]'s trailing simplify, and
-   [`Unscoped] runs the value written straight into the sum -- the collapse done by hand, without
-   the scope's rounding. [`Inlined] reaches the scope the ordinary way: a virtual node computing the
-   value, read in the sum and inlined by [optimize], whose own simplify decides the collapse.
-   Returns the values, the number of scopes left in the program that ran, and whether the scope's
-   node is virtual there. *)
-let run shape ~form ~policy =
+   [`Oracle] runs it under {!kept_scope}, [`Scheduled] through [Schedule.apply]'s trailing simplify,
+   [`Simd] retyped [Vectorized] the same way, and [`Unscoped] runs the value written straight into
+   the sum -- the collapse done by hand, without the scope's rounding. [`Inlined] reaches the scope
+   the ordinary way: a virtual node computing the value, read in the sum and inlined by [optimize],
+   whose own simplify decides the collapse. Returns the values, the number of scopes left in the
+   program that ran, and whether the scope's node is virtual there. *)
+let run ?(extent = n) shape ~form ~policy =
   let tag =
     match form with
-    | `Oracle -> "pre"
+    | `Oracle -> if extent = n then "pre" else "keep"
     | `Scheduled -> "sch"
+    | `Simd -> "vec"
     | `Unscoped -> "raw"
     | `Inlined -> "inl"
     | `Materialized -> "mat"
   in
-  let name = Printf.sprintf "scr_%s_%s_%s" shape.label tag policy in
+  let name = routine_name shape.label tag policy in
   let s = Ll_test.sym () in
   let i = [| Ll_test.iter s |] in
-  let node prec suffix = (if Ops.equal_prec prec bf then bnode else fnode) (name ^ suffix) in
-  let other = if Ops.equal_prec shape.slot bf then f32 else bf in
+  let node prec suffix = node ~extent prec (name ^ suffix) in
+  let other = if Ops.is_narrow_float shape.slot then f32 else bf in
   let x_tn = node shape.slot "_x" and y_tn = node other "_y" in
   let mid = node shape.scope_prec "_mid" and out = node shape.slot "_out" in
   List.iter [ x_tn; y_tn; out ] ~f:Ll_test.materialize;
   let x = (Ll_test.get x_tn i, shape.slot) and y = (Ll_test.get y_tn i, other) in
   let v = shape.value ~x ~y in
-  let sum operand = Ll_test.loop_n s n (Ll_test.set out i (LL.Binop (Ops.Add, x, operand))) in
+  let sum operand = Ll_test.loop_n s extent (Ll_test.set out i (LL.Binop (Ops.Add, x, operand))) in
   let raw = sum (v, shape.slot) in
   let o =
     match form with
@@ -95,19 +160,26 @@ let run shape ~form ~policy =
         Ll_test.optimize ~materialized ~name
           (LL.unflat_lines
              [
-               Ll_test.loop_n s1 n (Ll_test.set mid i1 v1); sum (Ll_test.get mid i, shape.scope_prec);
+               Ll_test.loop_n s1 extent (Ll_test.set mid i1 v1);
+               sum (Ll_test.get mid i, shape.scope_prec);
              ])
-    | `Oracle | `Scheduled ->
+    | `Oracle ->
+        Ll_test.optimize_scoped ~name ~raw
+          (sum (kept_scope mid ~orig_indices:i v, shape.scope_prec))
+    | `Scheduled | `Simd ->
         Ll_test.optimize_scoped ~name ~raw
           (sum (Ll_test.scope mid ~orig_indices:i v, shape.scope_prec))
   in
   let o =
     match form with
     | `Scheduled -> Ir.Schedule.apply [ Ir.Schedule.Retype { axis = s; ty = LL.Serial } ] o
+    | `Simd -> Ir.Schedule.apply [ Ir.Schedule.Retype { axis = s; ty = LL.Vectorized } ] o
     | `Oracle | `Unscoped | `Inlined | `Materialized -> o
   in
   let seed tn =
-    (tn, if Ops.equal_prec (Lazy.force tn.Ir.Tnode.storage_prec) bf then bf_inputs else f32_inputs)
+    ( tn,
+      (if Ops.is_narrow_float (Lazy.force tn.Ir.Tnode.storage_prec) then bf_inputs else f32_inputs)
+        extent )
   in
   let values = Ll_test.execute ~name o ~seed:[ seed x_tn; seed y_tn ] ~read:[ out ] in
   (List.hd_exn values, Ll_test.count_scopes o.LL.llc, Ll_test.known_virtual o mid)
@@ -121,30 +193,52 @@ let narrow_product =
     label = "narrow";
     slot = f32;
     scope_prec = bf;
+    cast = false;
     value = (fun ~x ~y:_ -> LL.Binop (Ops.Mul, x, x));
   }
 
 let wide_product =
   (* A single scope over a single product of single loads, in a bfloat16 sum. *)
-  { label = "wide"; slot = bf; scope_prec = f32; value = (fun ~x:_ ~y -> LL.Binop (Ops.Mul, y, y)) }
+  {
+    label = "wide";
+    slot = bf;
+    scope_prec = f32;
+    cast = false;
+    value = (fun ~x:_ ~y -> LL.Binop (Ops.Mul, y, y));
+  }
+
+let fp8_product =
+  (* An fp8 scope over a product of bfloat16 loads, in a single sum. Every backend computes fp8 in
+     single by default, so this is the shape that collapses on the GPUs too. *)
+  {
+    label = "fp8";
+    slot = f32;
+    scope_prec = fp8;
+    cast = false;
+    value = (fun ~x:_ ~y -> LL.Binop (Ops.Mul, y, y));
+  }
 
 let narrow_load =
   (* A bfloat16 scope over a bfloat16 load, in a single sum: the scope's rounding is the
      identity. *)
-  { label = "nload"; slot = f32; scope_prec = bf; value = (fun ~x:_ ~y -> fst y) }
+  { label = "nload"; slot = f32; scope_prec = bf; cast = false; value = (fun ~x:_ ~y -> fst y) }
 
 let widening_load =
   (* A single scope over a bfloat16 load, in a bfloat16 sum: the widening is exact. *)
-  { label = "wload"; slot = bf; scope_prec = f32; value = (fun ~x ~y:_ -> fst x) }
+  { label = "wload"; slot = bf; scope_prec = f32; cast = false; value = (fun ~x ~y:_ -> fst x) }
 
 let cast_into_own_prec =
   (* A bfloat16 scope over a single load, in a bfloat16 sum: the shape a cast twin has in a model of
      its own precision. *)
-  { label = "cast_own"; slot = bf; scope_prec = bf; value = (fun ~x:_ ~y -> fst y) }
+  { label = "cast_own"; slot = bf; scope_prec = bf; cast = true; value = (fun ~x:_ ~y -> fst y) }
+
+let cast_into_own_half =
+  (* The same at half, which a backend can compute at its own width and vectorize. *)
+  { cast_into_own_prec with label = "cast_half"; slot = half; scope_prec = half }
 
 let cast_into_wider =
   (* A bfloat16 scope over a single load, in a single sum. *)
-  { label = "cast_wide"; slot = f32; scope_prec = bf; value = (fun ~x ~y:_ -> fst x) }
+  { label = "cast_wide"; slot = f32; scope_prec = bf; cast = true; value = (fun ~x ~y:_ -> fst x) }
 
 (* A narrowing init does not make a scope a cast. [mid] is a bfloat16 accumulator opened by a single
    load and then updated: it keeps the residency of a reduction ([accum_prec]), so increments of
@@ -181,6 +275,258 @@ let accumulator_keeps_residency ~policy =
   let expected = if Ops.equal_prec accum bf then 1. else 1.0078125 in
   p "a narrowing init leaves an accumulator at its residency"
     Float.((List.hd_exn values).(0) = expected)
+
+(* A kept scope retyped [Vectorized], against the oracle. A value parity alone passes with the
+   collapse switched off: the claims on the kernel are what fail then. *)
+let render_time_collapse shape ~policy =
+  let keep_name = routine_name shape.label "keep" policy in
+  let vec_name = routine_name shape.label "vec" policy in
+  let kept, _, _ = run ~extent:long shape ~form:`Oracle ~policy in
+  let simd, simd_scopes, _ = run ~extent:long shape ~form:`Simd ~policy in
+  pf "%s: the oracle holds its local in the kernel" shape.label (holds_local keep_name);
+  pf "%s: the scope survives lowering" shape.label (simd_scopes = 1);
+  pf "%s: the kernel holds the local unless the backend's compute precision makes it exact"
+    shape.label
+    (Bool.equal (holds_local vec_name) (not (collapses shape)));
+  pf "%s: the retyped form computes the oracle's values bitwise" shape.label (same_bits kept simd);
+  (* A collapsed cast loses its local and no more: its load computes at another width than the
+     lanes, which [vec_expr] refuses. *)
+  in_legf ~leg:cc_leg "%s: explicit SIMD exactly where arithmetic collapsed" shape.label
+    (fun label ->
+      p label
+        (Bool.equal
+           (String.is_substring (Generated.read vec_name) ~substring:"ocannl_vec")
+           (collapses shape && not shape.cast)))
+
+let every_backend = Verdict.leg ~when_:true ~on:backend_name ()
+
+(* One statement built twice, its scopes kept and left to the render-time collapse, which must give
+   the same values whatever it decides. [collapses]: whether it should take this one. *)
+let must_agree ?(leg = every_backend) ?(collapses = false) label ~policy build =
+  let compile_and_run tag scope =
+    let name = routine_name label tag policy in
+    let o, seed, out = build ~name ~scope in
+    (name, List.hd_exn (Ll_test.execute ~name o ~seed ~read:[ out ]))
+  in
+  let runs =
+    lazy
+      (let _, kept = compile_and_run "keep" kept_scope in
+       let name, scoped = compile_and_run "col" plain_scope in
+       Stdio.eprintf "(not part of the golden) %s %s: %s\n" policy label
+         (String.concat ~sep:" " (Array.to_list (Array.map scoped ~f:(Printf.sprintf "%h"))));
+       (kept, name, scoped))
+  in
+  in_legf ~leg "%s: the kept form's values, bitwise" label (fun claim ->
+      let kept, _, scoped = Lazy.force runs in
+      p claim (same_bits kept scoped));
+  in_legf ~leg "%s: the local stays unless the collapse is exact" label (fun claim ->
+      let _, name, _ = Lazy.force runs in
+      p claim (Bool.equal (holds_local name) (not collapses)))
+
+(* The loop's symbol and index, and materialized nodes for a statement's inputs and result. *)
+let statement_nodes ~name ?(extent = n) precs =
+  let s = Ll_test.sym () in
+  let tns =
+    List.mapi precs ~f:(fun k prec ->
+        let tn = node ~extent prec (Printf.sprintf "%s_n%d" name k) in
+        Ll_test.materialize tn;
+        tn)
+  in
+  (s, [| Ll_test.iter s |], tns)
+
+let ( *: ) a b = LL.Binop (Ops.Mul, a, b)
+
+(* A scope read twice: CSE leaves the second read a [Get_local], so the local has to exist. *)
+let shared_read ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ f32; f32 ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let x = (Ll_test.get x_tn i, f32) in
+  let shared = scope ~orig_indices:i (bnode (name ^ "_mid")) (x *: x) in
+  let id = match shared with LL.Local_scope { id; _ } -> id | _ -> assert false in
+  let write operands =
+    Ll_test.loop_n s n (Ll_test.set out i (LL.Binop (Ops.Add, fst operands, snd operands)))
+  in
+  let raw = write ((x *: x, f32), (x *: x, f32)) in
+  let o = Ll_test.optimize_scoped ~name ~raw (write ((shared, f32), (LL.Get_local id, f32))) in
+  (o, [ (x_tn, f32_inputs n) ], out)
+
+(* A truth alone is C [int]: the division of two collapsed scopes would divide integers. The kept
+   form divides 1 by 0 in float. Off this file's other inputs: the scope's value must decide. *)
+let truth_quotient ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ f32; f32 ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let x = (Ll_test.get x_tn i, f32) in
+  let less = LL.Binop (Ops.Cmplt, x, (Ll_test.c 2., f32)) in
+  let more = LL.Binop (Ops.Cmplt, (Ll_test.c 2., f32), x) in
+  let write a b = Ll_test.loop_n s n (Ll_test.set out i (LL.Binop (Ops.Div, a, b))) in
+  let raw = write (less, f32) (more, f32) in
+  let scoped =
+    write
+      (scope ~orig_indices:i (bnode (name ^ "_mid")) less, f32)
+      (scope ~orig_indices:i (bnode (name ^ "_mid2")) more, f32)
+  in
+  (Ll_test.optimize_scoped ~name ~raw scoped, [ (x_tn, f32_inputs n) ], out)
+
+(* A value whose rendering is wider than its precision: [Recip] is [1.0 / x], a double at single, so
+   the local is what rounds it. Kept, this subtracts the single nearest a third from itself. *)
+let reciprocal ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ f32; f32; f32 ] in
+  let x_tn, y_tn, out = match tns with [ a; b; c ] -> (a, b, c) | _ -> assert false in
+  let inverse prec = LL.Unop (Ops.Recip, (Ll_test.get x_tn i, prec)) in
+  let write v =
+    Ll_test.loop_n s n (Ll_test.set out i (LL.Binop (Ops.Add, (v, f32), (Ll_test.get y_tn i, f32))))
+  in
+  let o =
+    Ll_test.optimize_scoped ~name
+      ~raw:(write (inverse f32))
+      (write (scope ~orig_indices:i (bnode (name ^ "_mid")) (inverse bf)))
+  in
+  let third = Stdlib.Int32.(float_of_bits (bits_of_float (1. /. 3.))) in
+  (o, [ (x_tn, Array.create ~len:n 3.); (y_tn, Array.create ~len:n (-.third)) ], out)
+
+(* A draw in a scope wider than the narrow store around it: [mentions_rng_conversion] stops at the
+   scope, so collapsed, the statement would render at the store's precision, and draw there. *)
+let wide_draw ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ half; half ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let u4 = Ops.uint4x32 in
+  let block = LL.Binop (Ops.Threefry4x32_light, (LL.Constant_bits 7L, u4), (Ll_test.embed s, u4)) in
+  let draw = LL.Unop (Ops.Uint4x32_to_prec_uniform1, (block, u4)) in
+  let x = (Ll_test.get x_tn i, half) in
+  let write v = Ll_test.loop_n s n (Ll_test.set out i (LL.Binop (Ops.Add, x, (v, half)))) in
+  let o =
+    Ll_test.optimize_scoped ~name ~raw:(write draw)
+      (write (scope ~orig_indices:i (fnode (name ^ "_mid")) draw))
+  in
+  (o, [ (x_tn, bf_inputs n) ], out)
+
+(* A scope in a [Where] condition: the condition has a precision of its own, so the walk does not
+   follow it, and the scope stays whatever the arms do. *)
+let where_condition ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ f32; f32 ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let x = (Ll_test.get x_tn i, f32) in
+  let write cond =
+    Ll_test.loop_n s n
+      (Ll_test.set out i (LL.Ternop (Ops.Where, (cond, f32), x, (Ll_test.c 0.5, f32))))
+  in
+  let o =
+    Ll_test.optimize_scoped ~name
+      ~raw:(write (x *: x))
+      (write (scope ~orig_indices:i (bnode (name ^ "_mid")) (x *: x)))
+  in
+  (o, [ (x_tn, f32_inputs n) ], out)
+
+(* A cast read by an update, where the accumulator resides wider than the arithmetic: the update can
+   localize at the residency, which would read the cast unrounded. Run under the policy that widens
+   the bfloat16 accumulator and computes bfloat16 narrow. The inputs cancel, so the sum is 0 when
+   each rounds to its neighbour on the grid, and the sum of what rounding drops otherwise: without
+   the cancellation that remainder scales with the total, and so does the final rounding. *)
+let cast_in_update ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ f32; bf ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let at0 = [| Ll_test.fixed 0 |] in
+  let x = Ll_test.get x_tn i in
+  let write v =
+    Ll_test.loop_n s n
+      (Ll_test.set out at0 (LL.Binop (Ops.Add, (Ll_test.get out at0, bf), (v, bf))))
+  in
+  let o =
+    Ll_test.optimize_scoped ~name ~raw:(write x)
+      (write (scope ~orig_indices:i (bnode (name ^ "_mid")) x))
+  in
+  let cancelling = Array.init n ~f:(fun k -> if k % 2 = 0 then 1.0029296875 else -1.) in
+  (o, [ (x_tn, cancelling); (out, Array.create ~len:n 0.) ], out)
+
+(* A scope at the root of a store. Kept, a double is converted to the scope's single and then to
+   fp8; collapsed, [store_precs] would see a copy and convert it in one step, and [double_to_fp8]
+   does not round twice: 1.125 + 2^-40 is an f32 tie, broken to 1, and above the fp8 tie, so
+   1.25. *)
+let double_at_store_root ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ f64; fp8 ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let x = Ll_test.get x_tn i in
+  let write v = Ll_test.loop_n s n (Ll_test.set out i v) in
+  let o =
+    Ll_test.optimize_scoped ~name ~raw:(write x)
+      (write (scope ~orig_indices:i (fnode (name ^ "_mid")) x))
+  in
+  (o, [ (x_tn, Array.create ~len:n (1.125 +. Float.ldexp 1. (-40))) ], out)
+
+(* The same at a cast's own precision, where the store's conversion is what the scope would have
+   done but for its value rendering at [comp_prec] first: [R] is the slot's, [V] is not. *)
+let cast_at_store_root ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ f64; fp8 ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let x = Ll_test.get x_tn i in
+  let write v = Ll_test.loop_n s n (Ll_test.set out i v) in
+  let o =
+    Ll_test.optimize_scoped ~name ~raw:(write x)
+      (write (scope ~orig_indices:i (node fp8 (name ^ "_mid")) x))
+  in
+  (o, [ (x_tn, Array.create ~len:n (1.125 +. Float.ldexp 1. (-40))) ], out)
+
+(* Arithmetic at the same root renders at [comp_prec] either way, and the scope goes. *)
+let product_at_store_root ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ bf; bf ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let x = (Ll_test.get x_tn i, bf) in
+  let write v = Ll_test.loop_n s n (Ll_test.set out i v) in
+  let o =
+    Ll_test.optimize_scoped ~name
+      ~raw:(write (x *: x))
+      (write (scope ~orig_indices:i (fnode (name ^ "_mid")) (x *: x)))
+  in
+  (o, [ (x_tn, bf_inputs n) ], out)
+
+(* A scope inside a collapsing scope's value. *)
+let nested ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ bf; f32; f32 ] in
+  let y_tn, x_tn, out = match tns with [ a; b; c ] -> (a, b, c) | _ -> assert false in
+  let x = (Ll_test.get x_tn i, f32) and y = (Ll_test.get y_tn i, bf) in
+  let write v = Ll_test.loop_n s n (Ll_test.set out i (LL.Binop (Ops.Add, x, (v, f32)))) in
+  let inner = scope ~orig_indices:i (bnode (name ^ "_inner")) (y *: y) in
+  let o =
+    Ll_test.optimize_scoped ~name
+      ~raw:(write ((y *: y, bf) *: y))
+      (write (scope ~orig_indices:i (bnode (name ^ "_mid")) ((inner, bf) *: y)))
+  in
+  (o, [ (y_tn, bf_inputs n); (x_tn, f32_inputs n) ], out)
+
+(* A reduction over a kept scope, retyped [Vectorized]. That annotation licenses reassociating the
+   sum, which a collapse lets it act on, so the data is dyadic: every order gives one value. *)
+let reduction ~policy =
+  let run_it tag ~ty scope =
+    let name = routine_name "reduce" tag policy in
+    let s, i, tns = statement_nodes ~name ~extent:long [ bf; f32 ] in
+    let y_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+    let at0 = [| Ll_test.fixed 0 |] in
+    let y = (Ll_test.get y_tn i, bf) in
+    let write v =
+      Ll_test.loop_n s long
+        (Ll_test.set out at0 (LL.Binop (Ops.Add, (Ll_test.get out at0, f32), (v, f32))))
+    in
+    let mid = node ~extent:long bf (name ^ "_mid") in
+    let o =
+      Ll_test.optimize_scoped ~name
+        ~raw:(write (y *: y))
+        (write (scope ~orig_indices:i mid (y *: y)))
+    in
+    let o = Ir.Schedule.apply [ Ir.Schedule.Retype { axis = s; ty } ] o in
+    let seed = [ (y_tn, bf_inputs long); (out, Array.create ~len:long 0.) ] in
+    (name, (List.hd_exn (Ll_test.execute ~name o ~seed ~read:[ out ])).(0))
+  in
+  let _, kept = run_it "keep" ~ty:LL.Serial kept_scope in
+  let name, reduced = run_it "vec" ~ty:LL.Vectorized plain_scope in
+  pf "reduce: the retyped form computes the oracle's value" Float.(kept = reduced);
+  let collapsed = collapses narrow_product in
+  pf "reduce: the kernel holds the local unless the compute precision makes it exact"
+    (Bool.equal (holds_local name) (not collapsed));
+  in_leg ~leg:cc_leg "reduce: a collapsed scope renders the SIMD reduction" (fun label ->
+      p label
+        (Bool.equal
+           (String.is_substring (Generated.read name) ~substring:"Vectorized reduction rendering")
+           collapsed))
 
 let () =
   let saved = Ir.Numerics.get () in
@@ -261,5 +607,38 @@ let () =
               in
               Stdio.eprintf "(not part of the golden) %s %s: materialized %s; unscoped %s\n" policy
                 shape.label (show mat) (show raw));
-          accumulator_keeps_residency ~policy));
+          accumulator_keeps_residency ~policy;
+          List.iter
+            [
+              narrow_product;
+              wide_product;
+              fp8_product;
+              cast_into_own_prec;
+              cast_into_own_half;
+              cast_into_wider;
+            ]
+            ~f:(render_time_collapse ~policy);
+          reduction ~policy;
+          must_agree "shared" ~policy shared_read;
+          must_agree "truth" ~policy truth_quotient;
+          must_agree "recip" ~policy reciprocal;
+          must_agree "draw" ~policy wide_draw;
+          must_agree "where" ~policy where_condition;
+          must_agree "nested" ~policy ~collapses:(collapses narrow_product) nested;
+          must_agree "root_product" ~policy ~collapses:(collapses wide_product)
+            product_at_store_root;
+          let f64_leg =
+            Verdict.leg ~when_:(Lazy.force capabilities).Ir.Backend_intf.supports_f64
+              ~on:backend_name ()
+          in
+          must_agree ~leg:f64_leg "root_double" ~policy double_at_store_root;
+          (* Only this file's kept form is at stake here: a materialized copy converts in one step
+             (gh-ocannl-1956). *)
+          must_agree ~leg:f64_leg "root_cast" ~policy
+            ~collapses:(collapses { cast_into_own_prec with scope_prec = fp8; slot = fp8 })
+            cast_at_store_root));
+  Ir.Numerics.set_policy
+    { saved with Ir.Numerics.narrow_compute_f32 = false; bf16_arithmetic = Bf16_wide };
+  Verdict.case "a bfloat16 accumulator wider than the arithmetic" (fun () ->
+      must_agree "update" ~policy:"acc_wide" cast_in_update);
   Ir.Numerics.set_policy saved

@@ -44,7 +44,7 @@ test/operations/scan_loop.ml -- records=3 traversals=0
 test/operations/schedule_epilogue_fusion.ml -- records=8 traversals=5
 test/operations/schedule_partition.ml -- records=6 traversals=0
 test/operations/schedule_pipelined_matmul.ml -- records=3 traversals=7
-test/operations/scope_collapse_rounding.ml -- records=1 traversals=0
+test/operations/scope_collapse_rounding.ml -- records=2 traversals=0
 test/operations/scope_over_materialized.ml -- records=3 traversals=0
 test/operations/simplify_if_narrowing.ml -- records=1 traversals=0
 test/operations/simplify_rng_operands.ml -- records=1 traversals=0
