@@ -3069,6 +3069,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `module%test`): it fails on a tested module without its rule, on a runner rule whose
   `-only-test`, alias and golden do not name the same one module, and on such an alias in the
   `runtest` aggregate, while the golden-diff naming rule above covers it like any other.
+- **A per-test alias runs its own golden and no other.** `runtest-NAME` does not reach a variant
+  `runtest-NAME-VARIANT` holding a golden of its own (`NAME-VARIANT.expected`, or
+  `NAME-VARIANT.ll.expected`): the same executable again, under another setting. A hand-named batch
+  that changes what the test prints and promotes leaves those goldens stale, and only CI says so.
+  `plan`, the launch and the digest name such siblings when the batch does not (`sibling-goldens`
+  in the run): add them and run again before promoting. It is a note, never a refusal, and adds
+  nothing to the batch. `aliases PATH` lists a test with its variants, and `affected`'s list already
+  holds them, since a variant has its test's stanza as an owner; a base golden changed alone reaches
+  only its own alias, because no sibling's rule reads it.
 - **A `(test)` stanza can only diff the one `<name>.expected` beside it**, so a test whose output
   legitimately differs per backend converts to an `(executable)` plus a diff rule that reads the
   resolved backend name and diffs `<name>-%{read:../config/ocannl_backend.txt}.expected`. That is
