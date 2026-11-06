@@ -33,9 +33,11 @@
 # What `tools/test-run.sh affected` lists for a change (gh-ocannl-1900; grammar in
 # tools/affected-tests.sh, The harness legs): legs 1 and 10 read the repository's stubbed tables and
 # their stubs, which `--stubbed` finds and no code here names (a table with no stub is matched too,
-# and costs those two legs); every leg runs the engine.
+# and costs those two legs); legs 10 and 11, the #project ones, expand their `let%op` arms through
+# the built ppx; every leg runs the engine.
 # affected-reads: test/operations/scan_case_stubs/* --only '^(1|10):'
 # affected-reads: test/operations/*_scan_cases.ml test/operations/config_scan_lexing.ml --only '^(1|10):'
+# affected-reads: tensor/ppx_*.ml --only '^(10|11):'
 # affected-reads: tools/scan_case_snippets.ml
 
 set -u

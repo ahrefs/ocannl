@@ -3316,7 +3316,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     not name, `# affected-reads: GLOB... [--only 'ERE']`; a declaration only adds, never narrowing
     what the text reaches: `tools/test-typecheck-scan-cases.sh` sends the scan-case tables and
     `scan_case_stubs/*` to its legs 1 and 10, its engine to every leg, so a stub edit is mapped
-    there rather than UNMAPPED (gh-ocannl-1584). A marker line outside a header stops the run, so
+    there rather than UNMAPPED (gh-ocannl-1584), and `tensor/ppx_*.ml` to its `#project` legs 10
+    and 11, whose `let%op` arms expand through the built ppx. A marker line outside a header stops the run, so
     a harness's fixture writes one through a variable. gh-ocannl-1797's two CI reds read this way:
     `tools/test-run.sh` reaches `tools/test-test-run.sh`, `benchmarks/fixture_digest.py`
     `benchmarks/test-check-box.sh`.
