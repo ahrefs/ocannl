@@ -7,6 +7,9 @@ Part of the agent notes; the [index](../agent-notes.md) carries the scope discip
 files.
 
 - Releases use lightweight, un-prefixed git tags (`0.8`, not `v0.8`).
+- Release prep also writes the release's outcome section in `docs/release-history.md`, including
+  what did not land, and re-reads each branch's status in `docs/concerns.md`, which promises that
+  review. GitHub milestones own what comes next, so neither file carries a forward plan.
 - The changelog is written in editorial passes, never in feature PRs (gh-ocannl-807): at release
   prep, or an explicitly-requested batch catch-up, derive `CHANGES.md` entries from the records the
   work already left — merge commits (`git log --first-parent`), PR bodies, issue closing comments.
