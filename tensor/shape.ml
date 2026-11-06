@@ -3878,6 +3878,19 @@ let merge_dealiased_padding copies =
       set_paddings orig ~batch ~input ~output;
       if Option.is_none orig.padding_elem then set_padding_elem orig copy.padding_elem)
 
+(** The operand shapes a step's projections index, in [rhs_dims] order, and whether the step derives
+    no projections at all (its [%cd] code indexes for itself). *)
+let projected_operands = function
+  | Broadcast (Defined_by_cd_logic, _, _)
+  | Transpose (Defined_by_cd_logic, _)
+  | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
+      ([], true)
+  | Terminal _ -> ([], false)
+  | Transpose (_, sh) -> ([ sh ], false)
+  | Broadcast (_, sh1, sh2) -> ([ sh1; sh2 ], false)
+  | Broadcast_tern (_, sh1, sh2, sh3) -> ([ sh1; sh2; sh3 ], false)
+  | Block { rhses; _ } -> (rhses, false)
+
 (** Computes the indexing into subtensors given the shape information of a tensor.
     [derive_projections] should only be invoked when the shapes are fully inferred already! Sets
     [unsafe_projections] as a side effect. Raises if projections were already computed. *)
@@ -3910,18 +3923,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
   refuse_unsolved ~where:"derive_projections" unsolved;
   let local_env = Row.populate_dim_proj_in_solved local_env in
-  let rhs, skip_deriving =
-    match update_step.logic with
-    | Broadcast (Defined_by_cd_logic, _, _)
-    | Transpose (Defined_by_cd_logic, _)
-    | Broadcast_tern (Defined_by_cd_logic, _, _, _) ->
-        ([], true)
-    | Terminal _ -> ([], false)
-    | Transpose (_, sh) -> ([ sh ], false)
-    | Broadcast (_, sh1, sh2) -> ([ sh1; sh2 ], false)
-    | Broadcast_tern (_, sh1, sh2, sh3) -> ([ sh1; sh2; sh3 ], false)
-    | Block { rhses; _ } -> (rhses, false)
-  in
+  let rhs, skip_deriving = projected_operands update_step.logic in
   let terminal_rows_for_inputs =
     List.concat_map rhs ~f:(fun sh ->
         [
@@ -4847,21 +4849,47 @@ let () =
 
 (** {2 Shape builders.} *)
 
+(* gh-ocannl-1970: a closure derives no projections for a step that has them, so projections that
+   survived a change of the shapes they were derived over would reach a kernel iterating dims the
+   buffers do not have. Only reached on a step that is committed by now, which no checkpoint's
+   frontier holds, so the refusal is no read for [failed_reads]. *)
+let refuse_stale_projections (step : update_step) (projections : Idx.projections) =
+  let check ~what (sh : t) dims =
+    let closed = to_dims_impl sh in
+    if not (Array.equal Int.equal dims closed) then
+      let text dims = Sexp.to_string ([%sexp_of: int array] dims) in
+      raise
+      @@ Row.Shape_error
+           ( [%string
+               "get_projections: the projections of the update step of #%{step.shape.id#Int} \
+                %{step.shape.debug_name} are stale: they iterate dims %{text dims} of %{what}, \
+                which closed to dims %{text closed}"],
+             [ Shape_mismatch [ sh ] ] )
+  in
+  check ~what:"its result" step.shape projections.lhs_dims;
+  List.iteri
+    (fst (projected_operands step.logic))
+    ~f:(fun i sh -> check ~what:[%string "operand %{i#Int}"] sh projections.rhs_dims.(i))
+
 let get_projections (update_step : update_step) : Idx.projections =
   check_step_live update_step;
-  match update_step.unsafe_projections with
-  | Some projections when not (List.mem !active_update_steps update_step ~equal:phys_equal) ->
-      (* Committed by an earlier closure. *)
-      projections
-  | _ -> (
-      finish_for_read ~step:update_step update_step.shape;
-      match update_step.unsafe_projections with
-      | Some projections -> projections
-      | None ->
-          (* This shouldn't happen if finish_inference is working correctly, but derive projections
-             just in case *)
-          derive_projections update_step;
-          Option.value_exn update_step.unsafe_projections)
+  let projections =
+    match update_step.unsafe_projections with
+    | Some projections when not (List.mem !active_update_steps update_step ~equal:phys_equal) ->
+        (* Committed by an earlier closure. *)
+        projections
+    | _ -> (
+        finish_for_read ~step:update_step update_step.shape;
+        match update_step.unsafe_projections with
+        | Some projections -> projections
+        | None ->
+            (* This shouldn't happen if finish_inference is working correctly, but derive
+               projections just in case *)
+            derive_projections update_step;
+            Option.value_exn update_step.unsafe_projections)
+  in
+  refuse_stale_projections update_step projections;
+  projections
 
 let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?(deduced = Not_constrained) ~debug_name ~id () =

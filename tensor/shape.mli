@@ -586,7 +586,9 @@ val with_memoized_draw_coefficient : (unit -> 'a) -> 'a
 val get_projections : update_step -> Ir.Indexing.projections
 (** Returns the projections for this update step, computing them if not already done. This triggers
     [finish_inference] and then retrieves the projections from [unsafe_projections]. Use this
-    instead of [derive_projections] directly. *)
+    instead of [derive_projections] directly. Raises [Row.Shape_error] when the dims they iterate
+    disagree with what the step's result or operands closed to, rather than let stale projections
+    reach a kernel (gh-ocannl-1970). *)
 
 val of_spec : ?deduced:deduce_within_shape -> debug_name:string -> id:int -> string -> t
 val default_display_indices : t -> int array

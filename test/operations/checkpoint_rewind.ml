@@ -10,8 +10,9 @@
    ([Tensor.For_testing.rewind_omitting]): one of those oracles must fail, or the category is
    restoring nothing the oracles see. For a step's projections, which only a closure writes, the
    oracle is the dims they iterate, after a closure that fails having published some
-   (gh-ocannl-1827). [For_testing.checkpoint_differences], the machinery's own observer, is checked
-   too, but only as a diagnostic: it reads the snapshots it is judging. *)
+   (gh-ocannl-1827), and [Shape.get_projections] refuses the stale ones (gh-ocannl-1970).
+   [For_testing.checkpoint_differences], the machinery's own observer, is checked too, but only as a
+   diagnostic: it reads the snapshots it is judging. *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -230,17 +231,18 @@ let prod_window spec t1 t2 =
     ~compose_op:(Shape.Einsum (spec, []))
     ~op_asn ~grad_asn ~grad_spec:Tensor.Prohibit_grad t1 t2 ()
 
+(* The tensor's own accumulation: its forward code ends with it, after its operands' code. *)
 let accum_projections (t : Tensor.t) =
   Ir.Assignments.fold_leaves t.forward.asgns ~init:None ~f:(fun found leaf ->
-      match leaf with
-      | Ir.Assignments.Accum_op { projections; _ } -> Option.first_some found (Some projections)
-      | _ -> found)
+      match leaf with Ir.Assignments.Accum_op { projections; _ } -> Some projections | _ -> found)
 
 type steps_leg = {
   closure_failed : bool;  (** The window's closure failed on the older step's neutral. *)
   published : bool;
       (** The checkpoint's own observer saw projections published before it failed. *)
   proj_dims : (int array, string) Result.t;  (** The dims the newer step's projections iterate. *)
+  operand_proj_dims : (int array, string) Result.t;
+      (** The dims a reduction over it iterates on its operand: its result does not change size. *)
   shape_dims : (int array, string) Result.t;  (** The dims its shape closed to. *)
 }
 
@@ -256,6 +258,7 @@ let steps_leg ?omit ~detour ~size () =
   let b = TDSL.einsum "o=+k; k => o" x (leaf "ck_sk" 3) () in
   let%op wq = { wq = 0.5 } in
   let%op a = wq ++ "u => u" [ "u" ] in
+  let%op reduced = a ++ "i => 0" in
   let ck = Tensor.checkpoint ~label:"ck_steps" () in
   let closure_failed, published =
     if not detour then (false, false)
@@ -284,13 +287,15 @@ let steps_leg ?omit ~detour ~size () =
         ignore (Shape.to_dims b.shape : int array);
         Shape.to_dims a.shape)
   in
-  let proj_dims =
+  let read_projections t ~f =
     read (fun () ->
-        match accum_projections a with
-        | Some projections -> (Lazy.force projections).Ir.Indexing.lhs_dims
+        match accum_projections t with
+        | Some projections -> f (Lazy.force projections)
         | None -> failwith "no accumulation in the forward code")
   in
-  { closure_failed; published; proj_dims; shape_dims }
+  let proj_dims = read_projections a ~f:(fun proj -> proj.Ir.Indexing.lhs_dims) in
+  let operand_proj_dims = read_projections reduced ~f:(fun proj -> proj.rhs_dims.(0)) in
+  { closure_failed; published; proj_dims; operand_proj_dims; shape_dims }
 
 let dims_to_string = function
   | Ok dims -> String.concat ~sep:" " (List.map (Array.to_list dims) ~f:Int.to_string)
@@ -309,25 +314,48 @@ let steps () =
     l.published;
   p "steps, a failed closure rewound: the step's projections iterate the control's dims"
     (same_dims1 l.proj_dims control.proj_dims);
+  p "steps, a failed closure rewound: a reduction's projections iterate the control's dims"
+    (same_dims1 l.operand_proj_dims control.operand_proj_dims);
   p "steps, a failed closure rewound: its shape closes to the control's dims"
     (same_dims1 l.shape_dims control.shape_dims)
 
 (* The "steps" category restores only projections, which a window cannot write without a closure:
    the soak's constructions never reach it (gh-ocannl-1827). Its oracle is the projections' own
    dims; omitted, the step keeps the projections the failed closure derived, over the window's size,
-   since a closure derives none for a step that has them. *)
+   since a closure derives none for a step that has them, and reading them is refused, naming both
+   sizes (gh-ocannl-1970). *)
 let steps_negative_control ~omit =
-  let control = steps_leg ~detour:false ~size:3 () in
-  let l = steps_leg ~omit ~detour:true ~size:3 () in
-  Stdio.eprintf "(not part of the golden) omitting %S: projections over %s, shape %s\n%!" omit
-    (dims_to_string l.proj_dims) (dims_to_string l.shape_dims);
+  let size = 3 in
+  let control = steps_leg ~detour:false ~size () in
+  let l = steps_leg ~omit ~detour:true ~size () in
+  Stdio.eprintf
+    "(not part of the golden) omitting %S: projections over %s, on the reduction's operand %s, \
+     shape %s\n\
+     %!"
+    omit (dims_to_string l.proj_dims)
+    (dims_to_string l.operand_proj_dims)
+    (dims_to_string l.shape_dims);
   p
     (Printf.sprintf "negative control: omitting %S fails an independent oracle" omit)
     (l.closure_failed && not (same_dims1 l.proj_dims control.proj_dims));
+  let refused_over ~what = function
+    | Ok _ -> false
+    | Error msg ->
+        let says substring = String.is_substring msg ~substring in
+        says "are stale"
+        && says (Printf.sprintf "dims (%d) of %s" window_size what)
+        && says (Printf.sprintf "closed to dims (%d)" size)
+  in
   p
-    (Printf.sprintf "negative control: omitting %S leaves the projections over the window's size"
+    (Printf.sprintf
+       "negative control: omitting %S leaves projections over the window's size, which are refused"
        omit)
-    (same_dims1 l.proj_dims (Ok [| window_size |]) && same_dims1 l.shape_dims control.shape_dims)
+    (refused_over ~what:"its result" l.proj_dims && same_dims1 l.shape_dims control.shape_dims);
+  p
+    (Printf.sprintf
+       "negative control: omitting %S leaves a reduction's operand projections, which are refused"
+       omit)
+    (refused_over ~what:"operand 0" l.operand_proj_dims)
 
 let soak () =
   let seeds = List.init 24 ~f:(fun i -> i + 1) in
