@@ -3406,8 +3406,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     on the counts above.
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
-    mid-change, never for the pre-push run, which takes the full default list (`prepush`, below,
-    leaves off only its `slow-`/`train-` members).
+    mid-change, never for the pre-push run, which is `prepush`, below: the default list without
+    its `slow-`/`train-` members, unless the verdict is `cross-cutting`, when `prepush` refuses
+    and the PR's CI run owns the list.
   - `--why ALIAS` (repeatable; `--why all` for every listed alias) explains a rank on stderr, in
     `affected: why @ALIAS:` lines, stdout untouched (gh-ocannl-1711): a verdict (REFERENCED,
     BLIND, LINK-ONLY, NOT LISTED), then each reason with the changed path behind it -- a dune file
