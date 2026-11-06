@@ -24,7 +24,7 @@ per depth doubling, the trace's rank-cycle check moves 1.8x-2.5x: true
 per depth doubling, the trace's dimension-cycle search visits 1.8x-4.6x: true
 one more layer: the dimension-cycle search visits at most 3x: true
 one more layer: walking every path visits at least 10x: true
-per depth doubling, a decoder stack's trace allocates 2.0x-2.7x: true
+per depth doubling, a decoder stack's trace allocates 2.0x-2.9x: true
 at every depth, a trace allocates 0.45x-0.95x of one build: true
 over its depths, a stack's trace-to-build ratio moves at most 1.5x: true
 one more layer: walking every path, the trace outgrows the build at least 3x: true

@@ -532,19 +532,19 @@ Without schemes, inference was superlinear in depth (`decoder` went from 455 ms 
 
 | stack | depth | trace (ms) | trace words / build words |
 | --- | --- | --- | --- |
-| decoder | 2 | 18.5 | 0.58 |
-| decoder | 4 | 42.2 | 0.60 |
-| decoder | 8 | 91.4 | 0.63 |
-| decoder | 16 | 215 | 0.68 |
+| decoder | 2 | 18.5 | 0.52 |
+| decoder | 4 | 42.2 | 0.55 |
+| decoder | 8 | 91.4 | 0.60 |
+| decoder | 16 | 215 | 0.67 |
 | decoder | 32 | 543 | 0.75 |
-| decoder | 64 | 1,545 | 0.83 |
-| resnet | 2 | 11.4 | 0.51 |
-| resnet | 4 | 40.4 | 0.63 |
-| resnet | 8 | 170 | 0.74 |
-| resnet | 16 | 930 | 0.82 |
-| resnet | 32 | 6,369 | 0.85 |
+| decoder | 64 | 1,545 | 0.84 |
+| resnet | 2 | 11.4 | 0.54 |
+| resnet | 4 | 40.4 | 0.66 |
+| resnet | 8 | 170 | 0.78 |
+| resnet | 16 | 930 | 0.84 |
+| resnet | 32 | 6,369 | 0.86 |
 
-A whole-stack trace costs less than one build of the same model, and the fraction rises slowly with depth. That bounds it by the build, not by a line: the decoder's trace grows 2.2-2.8x in time per doubling. The `resnet` row is the build's own cost: the row bounds' transitive closure makes its build grow 2.9x, 3.6x, 4.8x and 6.2x in allocation per doubling, with schemes off too. The dimension-cycle check stays at 4x visits per doubling, with a small constant (12,640 visits at decoder depth 16). In a session building many closures, each closure's trace also pays for a checkpoint of the open frontier, which grows with the session, not with the body.
+A whole-stack trace costs less than one build of the same model, and the fraction rises slowly with depth. That bounds it by the build, not by a line: the decoder's trace grows 2.2-2.8x in time per doubling. The `resnet` row is the build's own cost: the row bounds' transitive closure makes its build grow 2.9x, 3.9x, 5.6x and 7.0x in allocation per doubling, with schemes off too. The dimension-cycle check stays at 4x visits per doubling, with a small constant (12,640 visits at decoder depth 16). In a session building many closures, each closure's trace also pays for a checkpoint of the open frontier, which grows with the session, not with the body.
 
 **Error locality.** `test/operations/scheme_error_locality.ml` restates the suite's shape-error classes as schemed `%op` functions. These come from `test_inference_counterexamples.ml`, `test_param_shape_error.ml`, `concat_extraction.ml`, `padded_operand_offset_windows.ml`, `op_schemes.ml` and others. Its golden records, per mode, whether each error surfaces at the definition (the `()` application, which traces), at the application (by the scheme, or by the body's own registration), or only at the closure:
 
