@@ -653,10 +653,10 @@ shape schemes take such an unlabelled parameter to be a tensor (see <a href="#au
 because, in a function without <code>()</code>, <code>%op</code> uses
 this tensor’s (value’s) label to enrich the label of the resulting
 tensor (see <a href="#label-from-function-argument">Label from function
-argument</a>). A labelled parameter of a function without
-<code>()</code> must be a tensor for the same reason; an optional
-parameter may be anything, and so may a labelled one after
-<code>()</code>.</p>
+argument</a>). A labelled or optional parameter may be anything, with or
+without <code>()</code>: without <code>()</code>, a labelled one is read
+as a tensor only on evidence that it is one (see <a href="#label-from-function-argument">Label from function
+argument</a>).</p>
 <p>When the declaration is followed by a literal float, the float
 provides the initial value to initialize the tensor. Otherwise, the
 tensor value cells are initialized with the default parameter
@@ -1096,13 +1096,15 @@ parameter would introduce:</p>
 <p>For <code>%op</code>, the declaration is allowed anywhere. If there
 is a unit <code>()</code> parameter in the function, the scope of
 inline-declared tensors is delimited at that parameter. The tensors are
-defined right after the unit parameter. If there is a labeled parameter
-with label <code>label</code> before the unit parameter (e.g.,
-<code>~label</code>), the inline-declared tensors will use that
-parameter (which should be of type <code>string list</code>) to enrich
-their labels. Example showing two param tensors declared inline, with
-scope delimited by <code>()</code> and labels enriched by the
-<code>label</code> parameter:</p>
+defined right after the unit parameter. If there is a labeled or
+optional parameter with label <code>label</code> before the unit
+parameter (<code>~label</code>, <code>?label</code>,
+<code>?(label = [ &quot;net&quot; ])</code>), the inline-declared tensors will use
+that parameter (which should be of type <code>string list</code>; an
+omitted <code>?label</code> adds nothing) to enrich their labels.
+Example showing two param tensors declared inline, with scope delimited
+by <code>()</code> and labels enriched by the <code>label</code>
+parameter:</p>
 <div class="sourceCode" id="cb14"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">let</span>%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })</span></code></pre></div>
 <h3 id="implementation-strategy-for-the-initialization-syntax">Implementation
 strategy for the initialization syntax</h3>
@@ -1340,15 +1342,28 @@ directly in einsum notation. The semantics:</p>
 <code>input_index = stride * output_position + dilation * kernel_position</code></p></li>
 <li><p><strong>Padded convolution</strong> (<code>=+</code>):
 <code>input_size = stride * output_size</code> (padding compensates for
-kernel extent). The operand is zero-padded by margins totalling the
-effective kernel span (below), split with the smaller half on the left,
-<code>left = effective_kernel_span / 2</code>, and a padded window reads
+kernel extent). The operand is zero-padded by
+<code>left = (effective_kernel_span - 1) / 2</code> cells on the left
+and <code>right = (effective_kernel_span + 1) / 2</code> on the right
+(the span is below), and a padded window reads
 <code>input[stride * output_position + offset + dilation * kernel_position - left]</code>,
 a position outside the operand reading the padding value (0 for the add
-family; a max-family window is clamped to the operand instead). So with
-stride 1 and an odd kernel the window is centered, dilated or not:
-<code>o=+2*k</code> over a kernel of 3 reads <code>o - 2</code>,
-<code>o</code>, <code>o + 2</code> (gh-ocannl-1657).</p></li>
+family; a max-family window is clamped to the operand instead). The
+split is PyTorch’s <code>padding=&#39;same&#39;</code>,
+<code>left = dilation * (kernel_size - 1) // 2</code>. So with stride 1
+an odd kernel’s window is centered, dilated or not: <code>o=+2*k</code>
+over a kernel of 3 reads <code>o - 2</code>, <code>o</code>,
+<code>o + 2</code> (gh-ocannl-1657). An even span puts its extra tap on
+the right: <code>o=+k</code> over a kernel of 4 reads <code>o - 1</code>
+through <code>o + 2</code>, and the 2/2 pool <code>2*o=+k</code> over a
+window of 2 reads <code>2*o</code>, <code>2*o + 1</code>, tiling the
+operand as TF’s <code>SAME</code> pool does (gh-ocannl-1692). The anchor
+does not depend on the stride: an odd kernel at
+<code>stride &gt; 1</code> keeps PyTorch’s explicit
+<code>padding=kernel_size//2</code>, the torchvision ResNet convention,
+not TF’s stride-aware <code>(span - stride) // 2</code>, so
+<code>2*o=+k</code> over a kernel of 3 reads <code>2*o - 1</code>,
+<code>2*o</code>, <code>2*o + 1</code>.</p></li>
 <li><p><strong>Stride and dilation are at least 1</strong>: a
 coefficient of 0 (written as a literal, or the runtime value of an
 identifier under <code>%op</code>/<code>%cd</code>) is refused with a
@@ -1674,6 +1689,16 @@ tuples, since those are applications rather than bare tuples.</li>
 <li>The named operation is also callable directly:
 <code>TDSL.O.stack `Output [| ta; tb |]</code> (and the
 <code>NTDSL</code> variant).</li>
+<li>The components of a block tensor are evaluated in source order, left
+to right, as are the operands of a concatenation
+<code>(ta, tb) ++^ spec</code> and the captures of a capture list: a
+component that creates a tensor gets an id below those of the components
+after it. (OCaml itself evaluates the elements of a list, array or tuple
+right to left; the expansion binds the components with <code>let</code>
+first.) This holds only for these literals. The operands of an operator
+or a function application keep OCaml’s order: <code>f x + g y</code>
+creates <code>g y</code> first, inside <code>%op</code> as outside
+it.</li>
 <li>Nested block tensors are supported at arbitrary depth, including
 three-way across all axis kinds: a nested literal reproduces the shape
 the corresponding nested ndarray literal would have. The delimiters nest
@@ -1716,20 +1741,26 @@ dimension, whichever order shape inference solves them in
 (gh-ocannl-1545): until inference closes, their dimension variables are
 equated, as are their row variables, and a dimension with a row has the
 row’s product. Across a closure (say a <code>Train.forward_once</code>
-between the operations) the reference carries its solved value, which
-for a row variable is the product.</p>
+between the operations) the reference carries its solved value: a
+dimension’s size, and a row variable’s axes (gh-ocannl-1689) together
+with their product. A row captured again after the closure is the same
+row – after <code>2, 3</code>, an operand of <code>3, 2</code> or
+<code>6</code> is refused – and a dimension captured again has the row’s
+product. A reference whose last binding before the closure was a
+dimension carries only the number, so a row captured from it later is
+tied by product, as within one inference.</p>
 <p><code>Shape.set_equal</code> on two row references equates the rows
 themselves, not their products, whatever either reference has been
 solved to so far (gh-ocannl-1617): rows <code>2, 3</code> and
 <code>6</code> do not unify. Product equality is what relates a
 dimension to a row (<code>set_equal</code> on a dimension and a row
 reference, or <code>Shape.set_dim</code> on a row reference). A row
-reference bound before a closure has kept only its product, so
-<code>set_equal</code> refuses it in a Row-Row pair; relate rows before
-the closure. A reference whose closure kept no value at all (a row
-holding a symbolic extent has no numeric product) is refused in any
-later capture, <code>set_dim</code> or <code>set_equal</code>, naming
-the closure (gh-ocannl-1655). And a reference made by
+reference bound before a closure takes part in a Row-Row pair with the
+row it carried. A row holding a symbolic extent has no numeric product:
+after its closure it can be captured again as a row, or
+<code>set_equal</code>-ed with a row reference, but a capture as a
+dimension, <code>set_dim</code> or a dimension <code>set_equal</code> is
+refused, naming the closure (gh-ocannl-1655). And a reference made by
 <code>Shape.get_variable_ref</code> that <code>set_equal</code> relates
 to a row reference before it is bound is a number, the row’s product:
 binding it to a row afterwards is refused, since the rows would be tied
@@ -1898,18 +1929,24 @@ parameter <code>()</code>, the resulting (primary) tensor’s label also
 incorporates the labels of its arguments: in
 <code>let%op scaled ~gamma x = gamma *. x</code>, the result’s label
 includes the labels of the applied <code>gamma</code> and
-<code>x</code>. Every parameter except an optional one is such a label
-source, so a labelled non-tensor parameter there is a type error at the
-parameter: give the function a <code>()</code> and put the parameter
-before it. An optional parameter (<code>?scale</code>,
+<code>x</code>. An unlabelled parameter is always such a label source. A
+labelled one is when <code>%op</code> sees evidence that it is a tensor:
+it is a direct operand of a tensor operator in the body
+(<code>gamma *. x</code>), or it is annotated
+(<code>~(gamma : Tensor.t)</code>, for a tensor the body only passes
+on). Any other labelled parameter is left alone and may be anything,
+e.g. <code>let%op scaled ~scale x = x *. !.scale</code> with a float
+<code>scale</code> (gh-ocannl-1885); so a labelled tensor that the body
+only hands to another function contributes its label only when
+annotated. An optional parameter (<code>?scale</code>,
 <code>?(stride = 2)</code>) is not a label source and may be anything
 (gh-ocannl-1787). If the function has a unit parameter <code>()</code>,
 like <code>mlp_layer</code> above, no parameter is a label source: the
 label comes from the binding’s name and the <code>~label</code>
 parameter.</p>
-<p>When there is the unit parameter, and a <code>~label</code> parameter
-(specifically a parameter with label <code>label</code>), this label is
-also incorporated.</p>
+<p>When there is the unit parameter, and a <code>~label</code> or
+<code>?label</code> parameter (specifically a parameter with label
+<code>label</code>), this label is also incorporated.</p>
 <h3 id="configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
 inline declarations: inline output dimensions, initial values</h3>
 <p>In the <code>%op</code> syntax, inline declarations use record syntax
@@ -2020,10 +2057,19 @@ reserved-range ids (<code>Shape.error_to_string_hum</code>;
 <code>shape_error_full_sexp=true</code> prints the raw constraint
 sexp).</li>
 </ul>
-<p>To see a function’s scheme, trace it explicitly with
-<code>Tensor.Scheme.trace</code> (the same trace the closure ran) and
-print it with <code>Tensor.Scheme.to_string</code>. The newcomer
-tutorial <a href="./tensors_and_contexts.md#reusable-tensor-programs">Reusable
+<p>To see the scheme a closure uses, build it under
+<code>Tensor.Scheme.traced_by</code>, which returns the schemes the
+closures built while it ran traced – the ones their applications are
+checked against – and print one with
+<code>Tensor.Scheme.to_string</code> (gh-ocannl-1801). A scheme’s
+results are what the traced body returns: a tensor it made (or a copy of
+its record) or one of its arguments, or a tuple of them; any other value
+leaves the scheme without results, printed <code>_</code>. The checks
+relate the arguments only. <code>Tensor.Scheme.check_definition</code>
+returns the schemes of its trial the same way, and <a href="../test/operations/nn_blocks_definitions.expected"><code>nn_blocks_definitions.expected</code></a>
+prints those of every schemed <code>Nn_blocks</code> block, an inventory
+of the library’s block signatures. <code>Tensor.Scheme.trace</code>
+traces a function explicitly, again. The newcomer tutorial <a href="./tensors_and_contexts.md#reusable-tensor-programs">Reusable
 Tensor Programs</a> prints one, shows both kinds of report, and recovers
 a REPL session from a failed construction.</p>
 <p><strong>Which functions qualify.</strong> The returned function –
@@ -2078,12 +2124,21 @@ a callback, a configuration value – stays unschemed, and expands exactly
 as before: its parameter’s value does not exist yet when the closure is
 built, and the body may branch on it. So do <code>let%op rec</code> and
 <code>function</code>-case bodies. An unlabelled parameter that is not a
-tensor, against the convention, is a compile error; opt out. The
-<code>nn_blocks</code> stacks (<code>transformer_encoder</code>,
-<code>transformer_decoder</code>, <code>decoder_only</code>) and the
-<code>demo_models</code> stay plain functions on purpose: their layers
-are schemed, and a scheme of the whole stack would trace the whole
-model, which costs superlinearly in depth.</p>
+tensor, against the convention, is a compile error; opt out.</p>
+<p><strong>Nested applications.</strong> A checked application vouches
+for the applications in its body (gh-ocannl-1814): its scheme holds
+their constraints, so they run without a check of their own, and an
+argument error in one is reported by the outer check, naming the outer
+function. A function’s first application still traces its other presence
+patterns, which that scheme does not hold. Under an opted-out or refused
+function, nothing vouches for them and they are checked as usual. That
+is why the <code>nn_blocks</code> stacks
+(<code>transformer_encoder</code>, <code>transformer_decoder</code>,
+<code>decoder_only</code>) are schemed like their layers: an application
+is one check, whose scheme gives the whole model’s signature, for <a href="./shape_inference.md#what-schemes-buy-measured">a trace per
+presence pattern, each a fraction of one build</a>.
+<code>sokoban_cnn</code> and <code>mobile_cnn</code> are schemed the
+same way.</p>
 <p><strong>Refused traces degrade, with a warning.</strong> A function
 whose trace a scheme cannot carry – random number generation inside it
 (including a closure built inside it whose parameters take the default

@@ -255,8 +255,8 @@ keyed by the input axis’s projection identifier, as the running maximum
 of the kernel extents of every operation addressing that axis: an axis
 read by a 3-wide kernel and elsewhere a 5-wide one is padded for the 5,
 and the maximum is what makes every reader’s overrun fit. For a kernel
-of size <code>k</code> the margin splits
-<code>right = (k + 1) / 2</code>, <code>left = k − right</code>.</p>
+of size <code>k</code> the margins are <code>left = (k − 1) / 2</code>
+and <code>right = (k + 1) / 2</code>.</p>
 <p>That maximum tightens monotonically as constraints are processed and
 is committed once, at finalization — the boundary at which the first
 post substituted unsolved shape variables by their bounds, and the

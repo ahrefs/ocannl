@@ -765,8 +765,10 @@ and every excerpt below is checked to be verbatim from it.</p>
 <code>w</code> and <code>b</code> and returns the function that uses
 them; the input size of <code>w</code> is left to inference:</p>
 <p><code>ocaml doc-excerpt=test/operations/reusable_tensor_programs.ml let%op mlp_layer ~hid () x = relu (({ w; o = [ hid ] } * x) + { b = 0.; o = [ hid ] })</code></p>
-<p><code>Tensor.Scheme.to_string</code> prints a scheme like a type,
-<code>batch|input-&gt;output</code> for the argument, then
+<p><code>Tensor.Scheme.traced_by</code> returns the schemes the closures
+built while it ran traced – the ones their applications are checked
+against – and <code>Tensor.Scheme.to_string</code> prints one like a
+type, <code>batch|input-&gt;output</code> for the argument, then
 <code>=&gt;</code> and the result. A row variable <code>..&#39;a..</code>
 stands for any number of axes and is generalized: each application gets
 its own. <code>..&#39;_a..</code> is fixed, shared by every application
@@ -774,7 +776,7 @@ its own. <code>..&#39;_a..</code> is fixed, shared by every application
 type variable. The indented lines are the broadcasting relations,
 <code>r ⊑ o</code> reading “the result row <code>r</code> refines the
 operand row <code>o</code>”:</p>
-<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml layer : ..&#39;a..|..&#39;b..-&gt;..&#39;c.. =&gt; ..&#39;d..|..&#39;e..-&gt;..&#39;f..,4   ..&#39;_a.. ⊑ ..&#39;c..   ..&#39;d.. ⊑ ..&#39;a..   ..&#39;e.. ⊑ ..&#39;_b..   ..&#39;e.. ⊑ ..&#39;b..</code></p>
+<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml mlp_layer : ..&#39;a..|..&#39;b..-&gt;..&#39;c.. =&gt; ..&#39;d..|..&#39;e..-&gt;..&#39;f..,4   ..&#39;_a.. ⊑ ..&#39;c..   ..&#39;d.. ⊑ ..&#39;a..   ..&#39;e.. ⊑ ..&#39;_b..   ..&#39;e.. ⊑ ..&#39;b..</code></p>
 <p>The same <code>layer</code> then applies at batch shapes
 <code>2</code> and <code>5,7</code>, each application checked against
 the scheme before its body builds, giving results of shapes
@@ -800,7 +802,12 @@ solver’s raw constraint sexp.</p>
 <p>One that depends on the argument fails at the application, before the
 body runs: a residual block whose layer is 4 wide, applied to 3
 features, reads (the first lines)</p>
-<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch   conflicting sizes: 4 vs 3   failed constraint: 4 ⊑ 3     from residual_block (output) with (its trace&#39;s solution) (output): the trace of the shape scheme residual_block</code></p>
+<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml Shape_error: applying the shape scheme residual_block to x: dimension comparison for axis: mismatch   conflicting sizes: 4 vs 3   failed constraint: 4 ⊑ 3     from residual_block (output) with x (output): the shape scheme residual_block applied to x     from residual_block (output) with (its trace&#39;s solution) (output): the trace of the shape scheme residual_block</code></p>
+<p>The origins that name the failing scheme’s own tensors come first –
+its application, its trace’s solution, the tensors its trace made – then
+the rest in the order the solver met them, such as how a parameter’s
+random initialization shapes it; <code>max_shape_error_origins</code>
+caps the list from the end.</p>
 <p>With the scheme opted out (<code>[@@ocannl.no_scheme]</code>), the
 same mistakes surface only inside the body, naming neither the function
 nor the argument, and leave the session tainted.</p>
