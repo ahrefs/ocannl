@@ -517,3 +517,91 @@ let _opt_label_default =
       fun x ->
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x)
+let _uncurried_where =
+  let open! TDSL.O in
+    let __ocannl_body c x y =
+      (where
+         ?label:(Some
+                   (List.concat
+                      [["_uncurried_where"];
+                      (c.Tensor.value).Ir.Tnode.label;
+                      (x.Tensor.value).Ir.Tnode.label;
+                      (y.Tensor.value).Ir.Tnode.label]))) c x y in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_uncurried_where" ~arity:3
+        (function | c::x::y::[] -> __ocannl_body c x y | _ -> assert false) in
+    fun c x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [c; x; y]
+        (fun () -> __ocannl_body c x y)
+let _curried_where =
+  let open! TDSL.O in
+    let __ocannl_body c x y =
+      where
+        ?label:(Some
+                  (List.concat
+                     [["_curried_where"];
+                     (c.Tensor.value).Ir.Tnode.label;
+                     (x.Tensor.value).Ir.Tnode.label;
+                     (y.Tensor.value).Ir.Tnode.label])) c x y in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_curried_where" ~arity:3
+        (function | c::x::y::[] -> __ocannl_body c x y | _ -> assert false) in
+    fun c x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [c; x; y]
+        (fun () -> __ocannl_body c x y)
+let _uncurried_fma =
+  let open! TDSL.O in
+    let uf_w =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "uf_w") () in
+    let uf_b =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "uf_b") () in
+    let __ocannl_body x =
+      (fma
+         ?label:(Some
+                   (List.concat
+                      [["_uncurried_fma"]; (x.Tensor.value).Ir.Tnode.label])))
+        x uf_w uf_b in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_uncurried_fma" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _uncurried_plus =
+  let open! TDSL.O in
+    let up_w =
+      (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+         "up_w") () in
+    let __ocannl_body x y =
+      ((+) ?label:(Some
+                     (List.concat
+                        [["_uncurried_plus"];
+                        (x.Tensor.value).Ir.Tnode.label;
+                        (y.Tensor.value).Ir.Tnode.label]))) x
+        (( *. ) ?label:None y up_w) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_uncurried_plus" ~arity:2
+        (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
+    fun x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x; y]
+        (fun () -> __ocannl_body x y)
+let _uncurried_nested =
+  let open! TDSL.O in
+    let __ocannl_body c x y =
+      (where
+         ?label:(Some
+                   (List.concat
+                      [["_uncurried_nested"];
+                      (c.Tensor.value).Ir.Tnode.label;
+                      (x.Tensor.value).Ir.Tnode.label;
+                      (y.Tensor.value).Ir.Tnode.label])))
+        (((<) ?label:None) x y) (relu ?label:None x)
+        ((fma ?label:None) c x y) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_uncurried_nested" ~arity:3
+        (function | c::x::y::[] -> __ocannl_body c x y | _ -> assert false) in
+    fun c x y ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [c; x; y]
+        (fun () -> __ocannl_body c x y)

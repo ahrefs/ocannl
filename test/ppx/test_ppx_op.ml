@@ -128,3 +128,12 @@ let%op _late_label ~label x = mlp_layer ~label:("late" :: label) ~hid_dim:2 () ~
    un-defaulted it is the option itself, defaulted the list. *)
 let%op _opt_label ?label ~hid_dim () x = ({ olw } * x) + { olb; o = [ hid_dim ] }
 let%op _opt_label_default ?(label = [ "dflt" ]) () x = { odw } * x
+
+(* gh-ocannl-1986: the uncurried forms [op (a, b)] and [op (a, b, c)] of the primitive operations
+   expand to the same curried call as [op a b] and [op a b c]: the operator alone is the call head,
+   and the operands are translated, so they may hold inline declarations. *)
+let%op _uncurried_where c x y = where (c, x, y)
+let%op _curried_where c x y = where c x y
+let%op _uncurried_fma x = fma (x, { uf_w }, { uf_b })
+let%op _uncurried_plus x y = ( + ) (x, y *. { up_w })
+let%op _uncurried_nested c x y = where (( < ) (x, y), relu x, fma (c, x, y))
