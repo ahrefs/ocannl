@@ -183,8 +183,8 @@ files.
   reads may live in a constant pool of its root that compile siblings SHARE, so a sibling-seeding
   test makes it `context_owned` to get a buffer per sibling (`chr_read_only_buffer`). Hand-built
   tests that accumulate from zero therefore seed the accumulator (`peel_census`) or mark it; state
-  meant to start from zero inside a model is an inline declaration, an embedded node excluded from
-  `inputs` (`Train.sgd_one`'s momentum). An SGD step compiled without `Train.init_params` never
+  meant to start from zero inside a model is an embedded node, excluded from `inputs`, and declares
+  so with the mark (`{ sgd_momentum; zero_valid = true }`, gh-ocannl-1966). An SGD step compiled without `Train.init_params` never
   reaches this check: linking already refuses a parameter the prior context lacks.
 - **Constants are cached per root; only host literals are shared across roots** (gh-ocannl-1654,
   gh-ocannl-1623). Every non-`context_owned` node a compile only reads (data inputs, zero-valid

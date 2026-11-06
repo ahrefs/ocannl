@@ -302,9 +302,10 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
        | None -> sgd_delta =: p.grad + (!.weight_decay *. p));
        if Float.(momentum > 0.0) then (
          (* [=:] reading its own lhs makes the buffer read-before-write: the compiler keeps it on
-            the device, carrying its value from one step to the next (gh-ocannl-793). *)
+            the device, carrying its value from one step to the next (gh-ocannl-793). The first step
+            reads allocation's zero, which [zero_valid] declares correct (gh-ocannl-1966). *)
          (match update_gate with
-         | None -> { sgd_momentum } =: (!.momentum *. sgd_momentum) + sgd_delta
+         | None -> { sgd_momentum; zero_valid = true } =: (!.momentum *. sgd_momentum) + sgd_delta
          | Some gate ->
              sgd_momentum =: where gate ((!.momentum *. sgd_momentum) + sgd_delta) sgd_momentum);
          if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);

@@ -10,6 +10,8 @@ grad scale + momentum: matches the host oracle: PASS
 grad scale + momentum: the step moved the parameter: true
 gate open throughout: matches the host oracle: PASS
 gate open throughout: the step moved the parameter: true
+gate closed from the first step, with momentum: matches the host oracle: PASS
+gate closed from the first step, with momentum: the step moved the parameter: true
 gate closed mid-run, with momentum: matches the host oracle: PASS
 gate closed mid-run, with momentum: the step moved the parameter: true
 Train.sgd_one forwards momentum: matches the host oracle: PASS

@@ -2636,11 +2636,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is what it catches: `written_first` is decided before scheduling, so a schedule or codegen drop
   leaves the node there, and so does a dropped init of a write that does not read its target (a
   diagonal, whose off-diagonal cells then read the fill). An accumulation left without its init reads
-  its own target first, which takes the node out of `written_first`, and an embedded node is out of
-  the required inputs too, so that drop is neither filled nor refused. Nor can the key reach what has
-  no host-reachable buffer of its own: a `Local` node, a schedule-minted partial, a liveness-aliased
-  buffer. `fresh_output_fill` pins the contract and holds `test/config` to it; the mutant table is in
-  lukstafi/ocannl-staging's gh-1873 PR body.
+  its own target first, which takes the node out of `written_first` and, embedded, out of the
+  required inputs: it lands in `read_first_undeclared` (gh-ocannl-1966), which the key fills too, so
+  embedded state really starting from zero declares it (`{ x; zero_valid = true }`, or
+  `Tnode.mark_zero_valid`). Gradients are declared at creation, so a gradient that lost its zero
+  before the analysis stays unfilled. That class is filled rather than refused because the raw read
+  set is conservative: a vectorized write whose cell reads have unknown coverage (`init_params`' `n42`
+  in `resnet_block`) and a read of a padded margin (`test_padding_reset`) land there, correct, and
+  any write covering a read lands over the fill first. A liveness-aliased buffer is filled by
+  location, but only a range's first occupant reads the fill: a later one that lost a zero reads what
+  its predecessor left, which only a closed form or a planner-off twin shows. Nor can the key reach
+  what has no host-reachable buffer of its own: a `Local` node, a schedule-minted partial.
+  `fresh_output_fill` pins the contract and holds `test/config` to it; the mutant tables are in
+  lukstafi/ocannl-staging's gh-1873 and gh-1966 PR bodies.
 - A test operand minted from a FLATTENED offset stops discriminating at sizes that divide its
   modulus, and does it while still looking right: `(row * stride + col) mod p` collapses to
   `col mod p` whenever `p` divides the row stride, so every row becomes identical. That makes a

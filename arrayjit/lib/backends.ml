@@ -486,12 +486,12 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         (* Note: the previous event does not need to be done! *)
         s.updating_for_merge_buffer <- Some (tn, Some e)
 
-  let%track3_sexp from_host (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
+  let%track3_sexp upload_from_host ~guard (ctx : Backend.context) (tn : Tn.t) (hosted : Ndarray.t) =
     match Map.find ctx.ctx_buffers tn with
     | Some dst ->
         (* A host write to an aliased buffer would be clobbered by the next run of the aliasing
            routine (and would clobber co-tenants meanwhile) -- surely a mistake; fail loudly. *)
-        if buffer_overlaps ctx.ctx_buffers tn dst then
+        if guard && buffer_overlaps ctx.ctx_buffers tn dst then
           aliased_read_error ~what:"writing from host" tn;
         (* No cross-stream reader synchronization needed: multi-streaming was removed
            (gh-ocannl-341). Only one stream exists per device, so there are no concurrent
@@ -502,6 +502,9 @@ module Add_buffer_retrieval_and_syncing (Backend : No_buffer_retrieval_or_syncin
         update_writer_event ctx @@ Node tn;
         true
     | None -> false
+
+  let from_host ctx tn hosted = upload_from_host ~guard:true ctx tn hosted
+  let overwrite_from_host ctx tn hosted = upload_from_host ~guard:false ctx tn hosted
 
   (* gh-ocannl-550: [upload_slot] roots a pool in the backend table, and the transfer that follows
      adds its location to the context only on success — so a failing upload leaves a pool no context

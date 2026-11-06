@@ -10,7 +10,20 @@ a host-initialized node is not written first: true
 a host-initialized node keeps its host values: true
 embedded state read first is no required input: true
 embedded state read first is not written first: true
-embedded state read first starts from zero: true
+declared state is no undeclared read: true
+declared state read first starts from zero: true
+declared state carries its value to the next run: true
+declared state keeps a seed: true
+undeclared embedded state read first is no required input: true
+nor is it written first: true
+it is an undeclared read: true
+undeclared state read first reads the fill: true
+undeclared state keeps a seed: true
+{ x; zero_valid = true } marks the node: true
+so it is no undeclared read: true
+and starts from zero: true
+{ x } alone declares nothing: true
+so it reads the fill: true
 a padded node's margin keeps the padding value: true
 a padded node's unwritten interior cell reads the fill: true
 single: the routine's write lands: true
@@ -42,6 +55,19 @@ uint64: the pattern is clear of zero: true
 double: an unwritten cell reads NaN: true
 packed RNG state holds no scalar to fill: true
 with the key off, the same program leaves allocation's zero in the unwritten cells: true
+with the key off, undeclared state starts from allocation's zero: true
 the operands' products sum exactly in f32: true
 the matmul's output is written first: true
 the default pipeline's matmul from the fill is the closed form: true
+the reduction's output is written first: true
+an unseeded reduction from the fill is the closed form: true
+the first occupant of a shared range is aliased: true
+and so is the shorter node over it: true
+the aliased node is written first: true
+the host's own write to an aliased node stays refused: true
+a correct chain from the fill is the closed form: true
+a seeded node beside the arena keeps its value: true
+a second run, which is not filled, is the closed form too: true
+the transform dropped the first occupant's zero: true
+that node is aliased: true
+its dropped zero reaches an observable output as the fill: true

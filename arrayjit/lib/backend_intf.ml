@@ -1764,6 +1764,11 @@ module type With_buffer_retrieval_and_syncing = sig
       After [gh-ocannl-333] the host buffer is supplied by the caller (e.g. {!Context.set_values});
       it is no longer read from the tensor node. *)
 
+  val overwrite_from_host : context -> Tnode.t -> Ndarray.t -> bool
+  (** {!from_host} without its refusal of a liveness-aliased buffer, for bytes that hold no value
+      anything may read: [debug_fill_fresh_outputs]' fill (gh-ocannl-1966). Writes the node's whole
+      range, its co-tenants' bytes included. *)
+
   val init_from_host : context -> Tnode.t -> Ndarray.t -> context
   (** Schedules a copy from the explicit host buffer to context: a variant of {!from_host} that
       requires the input context to not contain the tensor node, and outputs the context with the

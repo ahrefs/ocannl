@@ -408,11 +408,12 @@ type t = {
           materializing a repacked copy once per device. *)
   mutable zero_valid : (bool[@sexp_drop_if not]);
       (** Declared accumulator semantics: allocation-time zero is a correct value for this node, so
-          [Context.run] may bind it as a READ-ONLY input that nothing has written (gh-ocannl-1462).
-          Set at creation of every gradient node (by [Tensor]) and by {!mark_zero_valid}, never
-          cleared. It is permission to consume the zeros a fresh buffer holds, not evidence that a
-          buffer was written: it does not excuse an unwritten read-before-write input, nor any other
-          node aliasing or slicing this one. *)
+          [Context.run] may bind it as a READ-ONLY input that nothing has written (gh-ocannl-1462),
+          and [debug_fill_fresh_outputs] leaves it at that zero where a routine carrying it as
+          embedded state reads it first (gh-ocannl-1966). Set at creation of every gradient node (by
+          [Tensor]) and by {!mark_zero_valid}, never cleared. It is permission to consume the zeros
+          a fresh buffer holds, not evidence that a buffer was written: it does not excuse an
+          unwritten read-before-write input, nor any other node aliasing or slicing this one. *)
   mutable alias_of : ((t * Indexing.static_symbol) option[@sexp.opaque]);
       (** When [Some (parent, batch_idx)], this node is a zero-copy slice-alias *view* of [parent]:
           it owns no buffer of its own, and every read/write of it is redirected (during lowering)
@@ -637,8 +638,10 @@ let set_context_owned tn = tn.context_owned <- true
 let set_host_constant tn = tn.host_constant <- true
 
 (** Declares that allocation-time zero is a correct value of [tn] (see {!field-zero_valid}): a
-    routine may then read it, read-only, before anything writes it. Gradients are marked at
-    creation; mark any other read-only accumulator the same way. *)
+    routine may then read it, read-only, before anything writes it, and embedded state the routine
+    reads first stays at that zero under [debug_fill_fresh_outputs]. Gradients are marked at
+    creation; mark any other read-only accumulator or zero-started state the same way, before
+    compiling, in [%cd] with [{ x; zero_valid = true }]. *)
 let mark_zero_valid tn = tn.zero_valid <- true
 
 let is_zero_valid tn = tn.zero_valid

@@ -180,6 +180,9 @@ let () =
   case "gate open throughout" ~momentum:0.0 ~gate_of_step:(fun _ -> true) ();
   (* The gate closes on steps 2 and 3: both the parameter and the momentum buffer must be held, so
      step 4 resumes from step 1's buffer rather than from an advanced one. *)
+  case "gate closed from the first step, with momentum" ~momentum:0.9
+    ~gate_of_step:(fun step -> step >= 2)
+    ();
   case "gate closed mid-run, with momentum" ~momentum:0.9
     ~gate_of_step:(fun step -> step = 1 || step = 4)
     ();
