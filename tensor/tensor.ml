@@ -894,7 +894,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         List.filter_map ordered_ts ~f:(fun ti ->
             Option.map (get ti) ~f:(fun v ->
                 if ti.top_down_prec then lazy (Tn.get_specified_prec v)
-                else lazy (Some (Lazy.force v.storage_prec))))
+                else lazy (Some (Tn.bottom_up_prec v))))
       in
       Tn.Inferred
         (lazy
@@ -1497,7 +1497,16 @@ let param_postprocess : (t -> t) ref = ref Fn.id
 (* gh-ocannl-544: an initialization expression's job is to fill the parameter's shape, so its
    intermediate results resolve at their use sites — they widen to the parameter instead of closing
    down and broadcasting (which would repeat random values along the broadcast axes). Walks the init
-   expression's subgraph, stopping at parameters (their own terminal marking governs them). *)
+   expression's subgraph, stopping at parameters (their own terminal marking governs them).
+
+   gh-ocannl-1967: for the same reason its float nodes are at least as precise as the parameter,
+   whatever the parameter's precision comes from -- a narrower draw would quantize the initial
+   values. Bottom-up inference alone stops at the first node none of whose operands states a
+   precision, which settles at the session default. The link promotes and does not narrow: a
+   parameter narrower than its initializer rounds the wider values once, as it did. A parameter that
+   is not top-down reads its initializer's precisions instead, and a settled or closed node takes no
+   link (gh-ocannl-1301). The parameter may in turn be inferred from a consumer reading one of these
+   nodes, which is why the link is [Tn.follow_prec]. *)
 let mark_init_cone (t : t) =
   let visited = Hash_set.create (module Int) in
   let rec loop sub =
@@ -1505,7 +1514,11 @@ let mark_init_cone (t : t) =
     if not (Hash_set.mem visited uid) then (
       Hash_set.add visited uid;
       if not (Set.mem sub.params sub) then (
+        let follows =
+          t.top_down_prec && not (Lazy.is_val sub.value.Tn.storage_prec || sub.shape.Shape.closed)
+        in
         Shape.set_resolve_at_use sub.shape;
+        if follows then Tn.follow_prec ~only_if:Ir.Ops.is_float sub.value t.value.Tn.storage_prec;
         List.iter sub.children ~f:(fun { subtensor; _ } -> loop subtensor)))
   in
   List.iter t.children ~f:(fun { subtensor; _ } -> loop subtensor)
