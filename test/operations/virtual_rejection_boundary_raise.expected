@@ -50,6 +50,12 @@ row_flattened_producer_zero_partial: the case ran to completion (raised Failure(
 row_flattened_read_zero_structural: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_flattened_read_past_partial: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_flattened_read_written_cells: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+row_uncovered_iterator ~span:3: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+row_uncovered_iterator ~span:2: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+row_uncovered_single_term ~span:3: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+row_uncovered_single_term ~span:2: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+row_uncovered_nested_template ~span:3: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+row_uncovered_nested_template ~span:2: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_trailing_sub_axis_write: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_partial_frame: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_trailing_sub_axis_read: the case ran to completion (raised Failure("injected by --raise-every-row")): false
