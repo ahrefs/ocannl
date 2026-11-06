@@ -123,6 +123,22 @@ files.
   uncollapsed `?prelowered` form under both policies; `top_down_prec`'s goldens show it end to end
   (a half sum read in a bfloat16 product was computed at bfloat16 on Metal). A kept scope is what
   the schedule's recognizers then see; the renderer can still drop it, next entry.
+- **Agreeing precisions are not a typed value** (gh-ocannl-1958). A scope of the slot's own precision
+  still rounds where its value renders as another C type, since the local's declaration is the
+  conversion. `Low_level.typed_at` owns that list, and both collapses ask it. At single, cc's
+  `Recip` is `1.0 / x`, a gate `c ? y : 0.0` and `Not` `x == 0.0 ? 1.0 : 0.0`, doubles; `tanhf` is a
+  float at double. Collapsed,
+  `1/x + y` adds in double where a materialized node rounds first. A gate needs two operators
+  around it to show: one sum in double rounds to single exactly, since 53 bits are at least
+  2 * 24 + 2. cc is the only dialect with these double literals: Metal, CUDA and HIP spell `1.0f`
+  and `0.0f`, so there the entry costs a local and no value; a backend-blind lowering can state no
+  less. A library call at a narrow precision is typed either way: at storage width its text rounds
+  it (`FLOAT_TO_HALF(sinf(..))`, `hsin`), and under wide compute local and slot agree on f32.
+  `Recip`, `Not` and gates at a narrow precision are listed for that wide compute. A truth is C `int` but
+  converts exactly, so `simplify_llc` keeps one only under a `Div` (`~divided`), where two divide
+  integers (1/0 traps on x86): the one-hot gather needs its `Cmpeq` in the product, and
+  `branchless_select`'s census its test in the select. `scope_collapse_rounding`'s `rendered_wider`
+  executes each.
 - **A kept scope collapses at render time where compute precision makes it exact** (gh-ocannl-1887).
   Rendered, a kept scope is `T_R v = conv(V->R)(e@V); ... conv(R->S)(v)`, with `R` the local's
   precision (`scope_prec_of`), `V` the value's and `S` the slot's. `C_syntax.collapse_exact_scopes`
@@ -132,9 +148,7 @@ files.
   collapsed tree, while `Low_level.optimized` and the `.ll` output keep the scope: numerics stay out
   of lowered code (gh-ocannl-568), so a kernel and its `.ll` can differ here. The walk follows only
   slots it is sure of, so an unfollowed position just keeps its scope. Agreement is not enough in
-  five places. Rendered at a precision is not typed at it: a local's declaration is a conversion,
-  and at single `Recip` is `1.0 / x`, a double, a gate is `c ? y : 0.0`, a double by its literal, and
-  a truth is C `int`, so `typed_at` lists the operators whose text has the precision's type. A
+  five places. Rendered at a precision is not typed at it: `Low_level.typed_at`, previous entry. A
   scope at a `Set`'s root is judged at `store_precs` of its VALUE, because collapsing
   changes that answer (`x16 = Scope f32 { read f64 }` rounds twice kept). An update can render at
   `acc_prec`, which on a GPU is wider than `comp_prec` and would read a cast unrounded, so it needs

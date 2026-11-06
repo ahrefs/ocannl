@@ -4153,50 +4153,17 @@ module C_syntax (B : C_syntax_config) = struct
     then scope_prec
     else comp_prec (Lazy.force id.tn.Tn.storage_prec)
 
-  (* Whether a value's rendering at [prec] has the C type of [prec]. Rendered at a precision is not
-     typed at it, and a local's declaration is a conversion the expression alone does not make: at
-     single, [Recip] is [1.0 / x], a double the local rounds and a collapse would hand to the
-     arithmetic around it; a gate is [c ? y : 0.0], a double by its literal; a truth is C [int]
-     ([bool] on Metal), so two collapsed under [/] divide integers; and at half, [sinf] is a float.
-     The operators are a list, not a default. *)
-  let rec typed_at ~prec (value : Low_level.scalar_t) =
-    let typed ((v, _) : Low_level.scalar_arg) = typed_at ~prec v in
-    (* The [f]-suffixed or [double] library spellings, typed by name. *)
-    let library_call = match prec with Ops.Single_prec _ | Double_prec _ -> true | _ -> false in
-    match value with
-    | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_dynamic _ | Get_merge_buffer _
-    | Get_local _ | Local_scope _ ->
-        true
-    | Unop ((Identity | Neg), a) -> typed a
-    | Unop ((Relu | Satur01 | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Trunc), _) ->
-        library_call
-    (* [tanhf] at every float precision. *)
-    | Unop (Tanh_approx, _) -> ( match prec with Ops.Single_prec _ -> true | _ -> false)
-    | Unop ((Recip | Recip_sqrt | Not | Uint4x32_to_prec_uniform1), _) -> false
-    | Binop (Arg1, a, _) | Binop (Arg2, _, a) -> typed a
-    | Binop ((Add | Sub | Mul | Div), a, b) -> typed a && typed b
-    | Binop ((ToPowOf | Max | Min | Mod), _, _) -> library_call
-    | Binop
-        ( ( Relu_gate | Satur01_gate | Cmplt | Cmple | Cmpeq | Cmpne | Or | And
-          | Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane ),
-          _,
-          _ ) ->
-        false
-    | Ternop (Where, _, a, b) -> typed a && typed b
-    | Ternop (Mul3, a, b, c) -> typed a && typed b && typed c
-    | Ternop (FMA, _, _, _) -> library_call
-
   (* gh-ocannl-1887: collapse a kept scope where the backend's compute precision makes the collapse
      exact. [simplify_llc] keeps a scope it cannot prove exact without knowing the numerics, which
      lowered code must not depend on (gh-ocannl-568), and the explicit-SIMD renderings then decline
      the loop holding it. Rendered, a kept scope is [T_R v = conv(V->R)(e@V); ... conv(R->S)(v)]:
      [R] the local's precision, [V] the one its value renders at, [S] the slot's. Where the three
      coincide the expression is the same text and both conversions are identities, so only a C local
-     goes, wherever the text's C type is [R] ({!typed_at}). Cc's default then collapses an f16 scope
-     over arithmetic in an f32 slot ([R] is f32 there: gh-ocannl-517 computes it wide on purpose),
-     and a backend computing f16 at f16 collapses a cast in a real f16 slot, though [vec_expr] still
-     declines a load at another width. A cast's [R] and [V] are both its storage precision
-     (gh-ocannl-1956), so at the root of a store of that precision it collapses into the
+     goes, wherever the text's C type is [R] ({!Low_level.typed_at}). Cc's default then collapses an
+     f16 scope over arithmetic in an f32 slot ([R] is f32 there: gh-ocannl-517 computes it wide on
+     purpose), and a backend computing f16 at f16 collapses a cast in a real f16 slot, though
+     [vec_expr] still declines a load at another width. A cast's [R] and [V] are both its storage
+     precision (gh-ocannl-1956), so at the root of a store of that precision it collapses into the
      materialized copy it is. Anywhere wider, a wide-compute backend's narrow operators included, it
      stays: that rounding is the cast (gh-ocannl-1866). An integer scope stays too: [compute_prec]
      is the identity there, so render time knows nothing [Low_level.integer_scope_exact] did not.
@@ -4224,7 +4191,7 @@ module C_syntax (B : C_syntax_config) = struct
     && Ops.equal_prec scope_prec (set_local_value_prec ~scope_prec id value)
     && (not (Hash_set.mem rng_scope_ids id))
     && (not (Hash_set.mem get_local_read_ids id))
-    && typed_at ~prec:scope_prec value
+    && Low_level.typed_at ~prec:scope_prec value
 
   let collapse_exact_scopes (llc : Low_level.t) : Low_level.t =
     let single_assignment id (body : Low_level.t) =
