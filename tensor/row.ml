@@ -750,12 +750,17 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
             conv = Some { kernel = Dim k; use_padding = true; _ };
             stride_offset = _;
           } ->
+          (* A padded kernel does not enter the extent, so the claim-free top must not retag it, as
+             in [unify_dim]'s padded arm: merging the two reserved tags turned a [default] extent
+             into [bcast_if_1] under a kernel closed to [1_(bcast_if_1)] (gh-ocannl-1983). *)
           let basis =
-            merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
-                raise
-                @@ Shape_error
-                     ( "convolution: conflicting dimension bases between stride and kernel",
-                       [ Dim_mismatch [ Dim s; Dim k ] ] ))
+            if String.equal k.basis bcast_if_1 then s.basis
+            else
+              merge_derived_basis s.basis k.basis ~on_conflict:(fun () ->
+                  raise
+                  @@ Shape_error
+                       ( "convolution: conflicting dimension bases between stride and kernel",
+                         [ Dim_mismatch [ Dim s; Dim k ] ] ))
           in
           Dim { d = s.d * stride; basis; proj_id = None }
       | Affine { stride; over = Dim s; conv = None; stride_offset = _ } ->
@@ -5592,20 +5597,24 @@ type proj_env = {
 
 type proj_equation = Proj_eq of proj * proj | Iterated of proj [@@deriving compare, equal, sexp]
 
-(** The refusal of a window kernel nothing sized (gh-ocannl-1691): no operand axis carries it, and a
-    padded window's extent equation omits it. Raised by [get_proj_equations] for the kernel its
-    local solve left a variable, by [dim_to_proj] for one the projection environment does not reach
-    (gh-ocannl-1734), and at the definition by a shape-scheme trace ([Shape.Scheme.trace],
-    gh-ocannl-1803). *)
-let unsized_kernel_error ~use_padding (v : dim_var) (dim : dim) =
+(** The refusal of a window kernel nothing sized (gh-ocannl-1691): no operand axis sizes it, and a
+    padded window's extent equation omits it. Raised at construction when the spec and captures
+    alone decide it ([Shape.propagate_shapes], gh-ocannl-1803, gh-ocannl-1983), by
+    [get_proj_equations] for the kernel its local solve left a variable or closed by guess, and by
+    [dim_to_proj] for one the projection environment does not reach (gh-ocannl-1734). [spec] is the
+    einsum spec, where the raiser has one. *)
+let unsized_kernel_error ?spec ~use_padding (v : dim_var) (dim : dim) =
   let name = Option.value v.name ~default:(Dim_var.to_string v) in
   let window = if use_padding then "a padded (=+) window's" else "the window's" in
+  let in_spec =
+    Option.value_map spec ~default:"" ~f:(fun spec -> [%string " in einsum spec \"%{spec}\""])
+  in
   Shape_error
     ( [%string
-        "the window kernel %{name} has no size: no operand axis carries it, and %{window} extents \
-         do not determine it. Capture the kernel label and set it (x ++ \"s, 2*o=+k => s, o\" \
-         [\"k\"], then Shape.set_dim k 3), or give the window a kernel operand of known extent (x \
-         +* \"s, 2*o=+k; k => s, o\" w)"],
+        "the window kernel %{name} has no size%{in_spec}: no operand axis sizes it, and %{window} \
+         extents do not determine it. Capture the kernel label and set it (x ++ \"s, 2*o=+k => s, \
+         o\" [\"k\"], then Shape.set_dim k 3), or give the window a kernel operand of known extent \
+         (x +* \"s, 2*o=+k; k => s, o\" w)"],
       [ Dim_mismatch [ dim ] ] )
 
 let symbolic_kernel_error dim =
@@ -5613,7 +5622,7 @@ let symbolic_kernel_error dim =
     ( "projection_of_solved_dims: symbolic dimension not supported as convolution kernel",
       [ Dim_mismatch [ dim ] ] )
 
-let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_env env :
+let%track4_sexp get_proj_equations ?spec (inequalities : constraint_ list) proj_axis_env env :
     proj_equation list =
   (* The difference between to_proj and dim_to_proj is that here we do not have a projection
      environment. *)
@@ -5638,19 +5647,25 @@ let%track4_sexp get_proj_equations (inequalities : constraint_ list) proj_axis_e
         Conv_input { stride; over = to_proj over; conv = None; stride_offset; target_id = None }
     | Affine { stride; over; conv = Some { dilation; kernel; use_padding }; stride_offset } ->
         let kernel_size =
-          match subst_dim ~keep_affine:true env kernel with
-          | Var v as dim ->
+          match (subst_dim ~keep_affine:true env kernel, kernel) with
+          | (Var v as dim), _ ->
               (* gh-ocannl-1691: no operand axis carries the kernel, and a padded window's extent
                  equation omits it, so nothing sized it. A captured, set kernel reaches here solved
                  (the projection-local sizing constraints of [Shape.bind_delayed_vars_to_envs]). *)
-              raise @@ unsized_kernel_error ~use_padding v dim
-          | Dim { d; _ } -> d
-          | Sym _ as dim -> raise @@ symbolic_kernel_error dim
-          | Affine _ as dim ->
+              raise @@ unsized_kernel_error ?spec ~use_padding v dim
+          | (Dim { d = 1; basis; _ } as dim), Var v
+            when use_padding && String.equal basis bcast_if_1 ->
+              (* gh-ocannl-1983: an axis of the result (or of an operand) carried the kernel, and
+                 nothing sized that axis, so closure guessed it: for a padded window the guess would
+                 silently change the taps, not just an extent. An explicit 1 is [default]. *)
+              raise @@ unsized_kernel_error ?spec ~use_padding v dim
+          | Dim { d; _ }, _ -> d
+          | (Sym _ as dim), _ -> raise @@ symbolic_kernel_error dim
+          | (Affine _ as dim), _ ->
               raise
               @@ Shape_error
                    ("projection_of_solved_dims: still not fully inferred", [ Dim_mismatch [ dim ] ])
-          | Concat _ as dim ->
+          | (Concat _ as dim), _ ->
               raise
               @@ Shape_error
                    ( "projection_of_solved_dims: concat not supported as kernel",

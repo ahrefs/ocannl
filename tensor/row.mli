@@ -416,12 +416,18 @@ type proj_equation =
           e.g. for broadcasted-to axes of a tensor assigned a constant. *)
 [@@deriving compare, equal, sexp]
 
-val unsized_kernel_error : use_padding:bool -> dim_var -> dim -> exn
-(** The refusal of a window kernel nothing sized: what projection derivation raises for it, and what
-    a shape-scheme trace raises at the definition (gh-ocannl-1803). *)
+val unsized_kernel_error : ?spec:string -> use_padding:bool -> dim_var -> dim -> exn
+(** The refusal of a window kernel nothing sized: what construction raises for one the spec and
+    captures already condemn (gh-ocannl-1983), and projection derivation for the rest. [spec] names
+    the einsum spec in the message. *)
 
 val get_proj_equations :
-  constraint_ list -> Ir.Indexing.axis_index dim_map -> environment -> proj_equation list
+  ?spec:string ->
+  constraint_ list ->
+  Ir.Indexing.axis_index dim_map ->
+  environment ->
+  proj_equation list
+(** [spec] is the step's einsum spec, for the refusal of a window kernel nothing sized. *)
 
 val solve_proj_equations :
   ?clamp_padded:bool ->

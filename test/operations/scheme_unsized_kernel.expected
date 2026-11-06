@@ -1,22 +1,32 @@
-strided padded window | off:closure | check:definition
-stride-one padded window | off:closure | check:definition
-binary einsum | off:closure | check:definition
-one kernel in two padded windows | off:closure | check:definition
-ternary einsum | off:closure | check:definition
-block spec | off:closure | check:definition
+strided padded window | off:application | check:definition
+stride-one padded window | off:application | check:definition
+binary einsum | off:application | check:definition
+one kernel in two padded windows | off:application | check:definition
+ternary einsum | off:application | check:definition
+block spec | off:application | check:definition
 captured and set | off:accepted | check:accepted
 kernel carried by an operand | off:accepted | check:accepted
 external capture, set after the application | off:accepted | check:accepted
 second window unpadded | off:accepted | check:accepted
 no window | off:accepted | check:accepted
+result axis captured and set | off:accepted | check:accepted
+result axis sized by an einsum consumer | off:accepted | check:accepted
+result axis set to 1 | off:accepted | check:accepted
 capture left unset | off:closure | check:closure
 kernel carried by the result | off:closure | check:closure
-without schemes, projection derivation refuses each: true
+kernel carried by the result, stride 1 | off:closure | check:closure
+kernel carried by the result, broadcast consumer | off:closure | check:closure
+without schemes, the application refuses each: true
 under a scheme, the definition does: true
-the refusal names the function and keeps the closure's explanation: true
+either way the message names the kernel and the spec: true
+the refusal under a scheme names the function: true
+a refused application taints no session: true
+is refused at the closure in every mode, not at construction: true
+naming the kernel and the spec, whatever the stride: true
+never as a clash of bases: true
 accepted in every mode: true
 what the spec does not decide keeps its verdict: true
 the first application traces and refuses, before the body registers: true
 Tensor.Scheme.trace refuses it, and the printed error names the function and the kernel: true
-open work after a refused definition: 3
+open work after a refused construction: 3
 the dims are those without schemes: true

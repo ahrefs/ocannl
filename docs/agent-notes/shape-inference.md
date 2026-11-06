@@ -111,6 +111,15 @@ files.
   The refusal stays (gh-ocannl-1619, maintainer's call): its message gives the two-step recipe,
   `<+` then a crop by a slice (`"s, p^o^q => s, o"`), executed against PyTorch's
   `ConvTranspose1d` in `result_side_affine_forms` beside the older one-hot-window crop.
+- An unsized padded kernel has two refusals with one message (`Row.unsized_kernel_error`).
+  `Shape.refuse_unsized_kernels`, in `propagate_shapes` beside `refuse_discarded_operands`, takes
+  what spec and captures decide, before any write: `get_inequalities` is too late, its einsum
+  branches `unmark_unused` first, which would taint the session (gh-ocannl-1983). It sits on the
+  registration path, so projection derivation never runs it. `to_proj` takes the rest: a capture
+  nothing set, and a kernel an axis carries that closure guessed to `1_(bcast_if_1)`. That guess
+  used to surface as `different bases` at strides above 1 and pass silently at stride 1, by
+  `s_dim_one`'s padded arm merging two reserved tags. A broadcast consumer does not size such an
+  axis, an einsum consumer does (`scheme_unsized_kernel`).
 - Extraction and replacement (`p^o^q => o`, `b => a^b^c`, gh-ocannl-1656) are a concat TARGET
   exactly one of whose components another access names. `solve_proj_equations` gives such a target
   a SHIFT index (the named component's index plus the preceding extents) and the unnamed
@@ -146,9 +155,7 @@ files.
   `product_space_shape`, the `*_pspace` gate proxy of a max-family backward, which ties each
   captured label to the operation's binding (`capture_ties_for_proxy`; untied, the kernel closed to
   1 and lowering died in `Indexing.prod_project_for`). A new fresh re-elaboration of a spec needs
-  the same tie: operand equalities reach only labels an operand row carries. A padded kernel
-  nothing sizes is refused in `Row.get_proj_equations` (the `Conv_input` arm) naming the kernel.
-  The audit of every fresh elaboration (gh-ocannl-1734) found four environments, all tied:
+  the same tie: operand equalities reach only labels an operand row carries. The audit of every fresh elaboration (gh-ocannl-1734) found four environments, all tied:
   `einsum_n_constraints` (einsum, ternary, block) and the `Permute` arm rebind captures through
   `bind_delayed_vars_to_envs` (in a projection re-solve, the closure-published value as a sizing
   constraint), `product_space_shape` adds `capture_ties_for_proxy`, and `of_spec` takes no captures;
@@ -377,7 +384,8 @@ files.
   sits in the argument's row (inside the `Affine`) yet is certain, because the error concerns a
   variable each `derive_projections` re-mints, whose trace counterpart Stage 7 would guess
   silently. So decide such a check from what fixes the verdict (`Shape.unsized_padded_kernels`
-  reads the spec and captures), never from trace variables. Underspecification (a forgotten hidden
+  reads the spec and captures), never from trace variables; a check that only needs that much
+  need not be a trace's at all (gh-ocannl-1983). Underspecification (a forgotten hidden
   dimension, a fixed-index parameter) stays at the closure by design: early reporting of it is out
   of the core calculus, and an analysis, if ever done, covers the whole class, not one case.
 - Which origins an error keeps (gh-ocannl-1903): `Row.merge_origins` interleaves the incoming

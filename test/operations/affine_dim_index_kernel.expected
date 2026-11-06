@@ -2,7 +2,7 @@ unpadded window, kernel variable: the variable kernel indexes as the axis it is 
 unpadded window, kernel variable: the window's offset is 0: true
 padded window, kernel variable: the variable kernel indexes as the axis it is equated to: true
 padded window, kernel variable: the window's offset is -1: true
-padded window, kernel variable nothing sizes: Shape_error: the window kernel j has no size: no operand axis carries it, and a padded (=+) window's extents do not determine it. Capture the kernel label and set it (x ++ "s, 2*o=+k => s, o" ["k"], then Shape.set_dim k 3), or give the window a kernel operand of known extent (x +* "s, 2*o=+k; k => s, o" w)
+padded window, kernel variable nothing sizes: Shape_error: the window kernel j has no size: no operand axis sizes it, and a padded (=+) window's extents do not determine it. Capture the kernel label and set it (x ++ "s, 2*o=+k => s, o" ["k"], then Shape.set_dim k 3), or give the window a kernel operand of known extent (x +* "s, 2*o=+k; k => s, o" w)
 padded window, kernel variable nothing sizes: refused with a Shape_error naming it: true
 padded window, symbolic kernel: Shape_error: projection_of_solved_dims: symbolic dimension not supported as convolution kernel
 padded window, symbolic kernel: refused with a Shape_error naming it: true

@@ -655,14 +655,16 @@ let kernel () = ndarray [ 3 ] k3
    -- has no extent for the kernel: a padded window's extent equation omits it. It is refused naming
    the kernel and the two remedies, where it used to die with the internal
    [projection_of_solved_dims: still not fully inferred]. (An unpadded window's extent equation does
-   determine the kernel, so the unpadded form is not here.) The refusal comes at projection
-   derivation, after construction, so the session is rewound by [attempt]. *)
-let refused_unsized ?(print_message = false) label build =
+   determine the kernel, so the unpadded form is not here.) Without a capture the spec alone decides
+   it, so the refusal comes while the tensor is built, naming the spec too (gh-ocannl-1983); a
+   capture leaves it to projection derivation, after construction, which rewinds through
+   [attempt]. *)
+let refused_unsized ?(print_message = false) label ~at build =
   case label (fun () ->
       Tensor.unsafe_reinitialize ();
       let claim_label = label ^ ": refused, naming the unsized kernel and the remedies" in
       match attempt (fun () -> forward (build ())) with
-      | Refused_later msg | Refused_at_construction msg ->
+      | (Refused_later msg | Refused_at_construction msg) as outcome ->
           if print_message then Stdio.printf "%s: %s\n" label msg;
           let names_it =
             String.is_substring msg ~substring:"the window kernel k has no size"
@@ -670,23 +672,52 @@ let refused_unsized ?(print_message = false) label build =
             && String.is_substring msg ~substring:"kernel operand"
           in
           if not names_it then Stdio.eprintf "%s: refused with another message: %s\n" label msg;
-          pf "%s" claim_label names_it
+          pf "%s" claim_label names_it;
+          pf "%s: refused %s" label
+            (match at with `Construction -> "at construction" | `Later -> "after it")
+            (match (at, outcome) with
+            | `Construction, Refused_at_construction _ | `Later, Refused_later _ -> true
+            | _ -> false)
       | Ran ->
           Stdio.eprintf "%s: was not refused\n" label;
           pf "%s" claim_label false)
 
 let run_unsized_kernels () =
-  refused_unsized ~print_message:true "one-operand padded sum, kernel not captured" (fun () ->
+  refused_unsized ~print_message:true ~at:`Construction
+    "one-operand padded sum, kernel not captured" (fun () ->
       let x = computed [ 1; 8 ] (ramp 8) in
       [%op x ++ "s, 2*o=+1+k => s, o"]);
-  refused_unsized "one-operand padded sum, kernel captured but not set" (fun () ->
+  refused_unsized ~at:`Later "one-operand padded sum, kernel captured but not set" (fun () ->
       let x = computed [ 1; 8 ] (ramp 8) in
       let%op r = x ++ "s, 2*o=+1+k => s, o" [ "k" ] in
       ignore (k : Shape.delayed_var_ref);
       r);
-  refused_unsized "one-operand padded max, kernel not captured" (fun () ->
+  refused_unsized ~at:`Construction "one-operand padded max, kernel not captured" (fun () ->
       let x = computed [ 1; 8 ] (ramp 8) in
-      [%op x @^^ "s, 2*o=+1+k => s, o"])
+      [%op x @^^ "s, 2*o=+1+k => s, o"]);
+  (* A kernel the result carries: the window, unfolded along that axis. Each result position [k]
+     holds the tap [padded_window] would sum over at that position of the kernel
+     (gh-ocannl-1983). *)
+  let unfolded ~kk ~n win x =
+    Array.concat
+      (List.init (n / win.stride) ~f:(fun o ->
+           Array.of_list_map (taps win ~n ~kk o) ~f:(fun (c, _, inside) ->
+               if inside then x.(c) else 0.)))
+  in
+  executes "kernel carried by the result, captured and set" ~dims:[| 1; 4; 3 |]
+    ~want:(unfolded ~kk:3 ~n:8 { stride = 2; offset = 0; dilation = 1 } (ramp 8))
+    (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      let%op r = x ++ "s, 2*o=+k => s, o, k" [ "k" ] in
+      Shape.set_dim k 3;
+      r);
+  executes "kernel carried by the result, sized by an einsum consumer" ~dims:[| 1; 4; 3 |]
+    ~want:(unfolded ~kk:3 ~n:8 { stride = 2; offset = 0; dilation = 1 } (ramp 8))
+    (fun () ->
+      let x = computed [ 1; 8 ] (ramp 8) in
+      let w = ndarray [ 1; 4; 3 ] (Array.create ~len:12 1.) in
+      let%op r = x ++ "s, 2*o=+k => s, o, k" in
+      [%op r +* "s, o, k; s, o, k => s, o, k" w])
 
 let run_refusals () =
   Tensor.unsafe_reinitialize ();
