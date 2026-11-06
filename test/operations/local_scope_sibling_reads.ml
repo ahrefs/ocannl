@@ -77,14 +77,13 @@ let outward_reads (llc : LL.t) =
     | _ -> ());
   !pairs
 
-(* Claims that every [Get_local] of [llc] names a binder of [llc], whatever depth either sits at. *)
+(* Claims that every [Get_local] of [llc] names a binder of [llc], whatever depth either sits at:
+   the compile gate's own predicate (gh-ocannl-1973), asked of code that does read a local. *)
 let every_read_bound name (llc : LL.t) =
-  let bound = Hash_set.create (module Int) and reads = ref [] in
-  walk llc
-    ~on_scope:(fun (b : LL.scope_id) -> Hash_set.add bound b.scope_id)
-    ~on_stmt:(function LL.Declare_local { id; _ } -> Hash_set.add bound id.scope_id | _ -> ())
-    ~on_scalar:(function LL.Get_local r -> reads := r.scope_id :: !reads | _ -> ());
-  p_all ~min:1 (name ^ ": every local a body reads has a binder") !reads ~f:(Hash_set.mem bound)
+  p
+    (name ^ ": every local a body reads has a binder")
+    (count_scalar llc ~f:(function LL.Get_local _ -> true | _ -> false) >= 1
+    && Option.is_none (LL.unbound_local_violation llc))
 
 (* Runs [llc] with [virtuals] virtual, then again with them materialized, seeding [w] and reading
    [outs]. Materialized, a virtual's prefill is the harness's: off the zero init and per cell. *)

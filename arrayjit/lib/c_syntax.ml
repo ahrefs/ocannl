@@ -9514,6 +9514,11 @@ module C_syntax (B : C_syntax_config) = struct
        impure scope body is malformed IR that no schedule choice can rescue, so declining candidates
        around it would only hide the defect. *)
     Low_level.validate_scope_bodies llc;
+    (* gh-ocannl-1973: a local nothing binds renders as an undeclared identifier, so the backend
+       compiler would be the one to report it, against text the user never wrote. Exit-only: the
+       shape is what a pass leaves behind (a hoist or rename that misses a reader), and this is
+       where all of them have run. *)
+    Low_level.validate_local_binders ~site:"C_syntax.compile_proc" llc;
     Low_level.validate_scan_loops optimize_ctx.Low_level.placements llc;
     (* gh-ocannl-1485: the exit gate of the slice-alias invariant ([optimize_proc] holds the entry
        one), for what a schedule transform constructs and for a [?prelowered] routine that never

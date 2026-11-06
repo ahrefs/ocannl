@@ -1,0 +1,14 @@
+lbg_statement: the compile gate refuses it: true
+lbg_statement: the refusal names the access, the local and where it sits: true
+lbg_statement_bound: the gate leaves it alone, and it runs: true
+lbg_body: the compile gate refuses it: true
+lbg_body: the refusal names the access, the local and where it sits: true
+lbg_body_bound: the gate leaves it alone, and it runs: true
+lbg_other_node: the compile gate refuses it: true
+lbg_other_node: the refusal names the access, the local and where it sits: true
+lbg_write: the compile gate refuses it: true
+lbg_write: the refusal names the access, the local and where it sits: true
+lbg_write_bound: the gate leaves it alone, and it runs: true
+lbg_discarded_read: the gate leaves it alone, and it runs: true
+lbg_discarded: the compile gate refuses it: true
+lbg_discarded: the refusal names the access, the local and where it sits: true
