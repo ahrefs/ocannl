@@ -253,15 +253,12 @@ let row_discarded () =
       ]
   in
   let ia = LL.get_scope a and ib = LL.get_scope b in
-  let scope id value =
-    LL.Local_scope
-      { id; body = LL.Set_local (id, value); orig_indices = cell; mint = LL.Inlined_computation }
-  in
   let scoped =
     set out cell
       (add
-         (scope ia (LL.Binop (Ops.Arg1, (c 5., single), (LL.Get_local ib, single))))
-         (scope ib (add (LL.Get_local ia) (c 1.))))
+         (scope ~orig_indices:cell ~id:ia a
+            (LL.Binop (Ops.Arg1, (c 5., single), (LL.Get_local ib, single))))
+         (scope ~orig_indices:cell ~id:ib b (add (LL.Get_local ia) (c 1.))))
   in
   let o = optimize_scoped ~name ~raw scoped in
   let got = execute ~name o ~seed:[ (out, blank 1) ] ~read:[ out ] in
