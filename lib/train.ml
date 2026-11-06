@@ -328,11 +328,17 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
    Both refuse by {!Asgns.forward_fetched}. A slice is no leaf, but [?params] is taken as given and
    a view is differentiable, so one does arrive here: a step through an alias of data reaches the
    parent and stays. Shapes may still be open here, so the alias is taken on trust: a view lowering
-   to a copy, whose step the next copy undoes, is refused by [Context.compile]. Not fetched, and so
-   refused by neither: a view of a computed parent, undone as a step on any computed node in
-   [?params] is, when the forward computes it again. *)
-let refuse_fetch_defined ~fn_name loss stepped =
+   to a copy, whose step the next copy undoes, is refused by [Context.compile].
+
+   gh-ocannl-1998: the same trap with a computed node, or a view of one, in [?params]: the forward
+   recomputes it over the step ({!Asgns.forward_recomputed}, which is what tells a recomputation
+   from the running statistic above). Only here: this is the one place that knows the write is meant
+   to last. A routine writing a computed node may be post-processing it, or stepping a value another
+   routine computed once, so [Context.compile] has no such refusal, and a node computed outside
+   [loss]'s forward is not this check's to judge. *)
+let refuse_reestablished ~fn_name loss stepped =
   let fetched = Asgns.forward_fetched loss.Tensor.forward in
+  let recomputed = Asgns.forward_recomputed loss.Tensor.forward in
   Set.iter stepped ~f:(fun p ->
       if Set.mem fetched p.Tensor.value then
         raise
@@ -343,6 +349,16 @@ let refuse_fetch_defined ~fn_name loss stepped =
                   is a fetch, not data, and a slice of one follows it), which would silently undo \
                   each step. Build an optimized input data-backed, with [Operation.init \
                   ~grad_spec:Require_grad], or make it a parameter",
+               Some p );
+      if Set.mem recomputed p.Tensor.value then
+        raise
+        @@ Tensor.Session_error
+             ( fn_name ^ ": " ^ Tensor.debug_name p
+               ^ " is computed: the loss's forward code recomputes its value on every run without \
+                  reading it (a slice of such a node follows it), which would silently undo each \
+                  step; materializing it changes nothing. Step what it is computed from instead, \
+                  or optimize a data-backed input, with [Operation.init ~grad_spec:Require_grad], \
+                  or a parameter",
                Some p ))
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?grad_scale
@@ -351,7 +367,7 @@ let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?g
     sgd_one ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?grad_scale ?update_gate
   in
   let stepped = stepped_params_for ~fn_name:"Train.sgd_update" ?params loss in
-  refuse_fetch_defined ~fn_name:"Train.sgd_update" loss stepped;
+  refuse_reestablished ~fn_name:"Train.sgd_update" loss stepped;
   let comp = Set.to_list stepped |> List.map ~f |> Asgns.sequence in
   { comp with asgns = Asgns.Block_comment ("sgd_update", comp.asgns) }
 
