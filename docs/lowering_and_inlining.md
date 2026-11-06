@@ -596,6 +596,11 @@ to the routine receiving the transfer, so deferral would change *which transfer*
 footprint-scoped materialization (gh-616) is the eventual mechanism for a strict mode that
 materializes a deferred node before an intervening write (gh-617 option 2, not implemented).
 
+Writes are not the only thing placement decides. At a narrow float precision a store is also a
+rounding, so where a backend computes wider than a node stores, placement can change the value with
+no write in sight: [Storage, compute and placement](precision_inference.md#storage-compute-and-placement)
+states what is promised.
+
 ## Loop-Generation Utilities
 
 A few helpers generate loop nests for backends and for the optimizer itself. They are conceptual

@@ -78,6 +78,11 @@ type t = {
           faithful reading of "16-bit storage with f32 compute" and what makes the vectorized
           renderings — which are f32/f64 shaped — reachable for narrow-storage kernels.
 
+          The store is an actual one: a virtual narrow node has none, so its arithmetic stays at
+          compute precision past the node, and placement can decide the value where this policy
+          makes compute wider than storage (gh-ocannl-1965, docs/precision_inference.md). Turning
+          this off restores per-operator arithmetic and leaves accumulators to their own settings.
+
           A reduction accumulator is such an intermediate (gh-ocannl-639): every rendering of an
           accumulation nest — the plain serial fallback included — holds the accumulator at the
           resolved compute precision across the whole nest and narrows it once at the store, so the
