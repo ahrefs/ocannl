@@ -301,3 +301,40 @@ let () =
              eq (flanked rho1 ~beg:[ dim 5 ] ~dims:[]) (flanked rho2 ~beg:[] ~dims:[ dim 7 ]);
            ]
            Row.empty_env))
+
+(* The closing commit skips an overlap on what [unify_dim] would refuse, no less: each store below
+   has its solution at overlap 1, and overlap 0 must read as refuted. *)
+let balanced_close name ~beg ~dims:d =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  decide name ~shows:[ rho1; rho2 ] (fun () ->
+      snd
+        (through_stages
+           [ eq (flanked rho1 ~beg ~dims:[]) (flanked rho2 ~beg:[] ~dims:d) ]
+           Row.empty_env))
+
+let () =
+  balanced_close "balanced flanks, 3 against 1 (satisfiable at overlap 1)"
+    ~beg:[ dim 3 ]
+    ~dims:[ dim 1 ];
+  balanced_close "balanced flanks, equal sizes of different bases (satisfiable at overlap 1)"
+    ~beg:[ Row.get_dim ~d:5 ~basis:"a" () ]
+    ~dims:[ Row.get_dim ~d:5 ~basis:"b" () ];
+  let sym, _ = Ir.Indexing.get_static_symbol ~static_range:5 Ir.Indexing.Empty in
+  balanced_close "balanced flanks, symbol against size (satisfiable at overlap 1)"
+    ~beg:[ Row.get_sym_dim sym ]
+    ~dims:[ dim 5 ]
+
+(* An equation first met at the closing stage conflicts on what its peeled flank has just solved: x
+   := 3 from the outer pair, so [x].<rho1>.[x] = <rho2>.[9; 3] refutes overlap 0 and sets rho2 =
+   [3]. *)
+let () =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  let x = Row.Var (Row.get_var ()) in
+  decide "balanced flanks, variable solved by the peeled flank (satisfiable at overlap 1)"
+    ~shows:[ rho1; rho2 ] (fun () ->
+      snd
+        (Row.solve_inequalities ~stage:Stage7
+           [
+             eq (flanked rho1 ~beg:[ x ] ~dims:[ x ]) (flanked rho2 ~beg:[] ~dims:[ dim 9; dim 3 ]);
+           ]
+           Row.empty_env))

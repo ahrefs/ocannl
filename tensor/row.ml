@@ -3496,8 +3496,15 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                 let v2 = match r2.bcast with Row_var v2 -> v2 | Broadcastable -> assert false in
                 let begS = List.drop beg_dims1 beg_dims_l in
                 let definitely_conflicting d1 d2 =
-                  match (d1, d2) with
-                  | Dim { d = a; _ }, Dim { d = b; _ } -> a <> b && a <> 1 && b <> 1
+                  (* Equation-level, so as strict as [unify_dim]: a 1 is an ordinary size here, a
+                     different basis refuses, and flank peeling may have solved a variable since
+                     [r1] and [r2] were substituted. *)
+                  match (subst_dim env d1, subst_dim env d2) with
+                  | Dim { d = a; basis = b1; _ }, Dim { d = b; basis = b2; _ } ->
+                      a <> b || not (String.equal b1 b2)
+                  | Sym { sym = s1; sym_basis = b1; _ }, Sym { sym = s2; sym_basis = b2; _ } ->
+                      not (Ir.Indexing.equal_static_symbol s1 s2 && String.equal b1 b2)
+                  | Dim _, Sym _ | Sym _, Dim _ -> true
                   | _ -> false
                 in
                 let rec least_k k =
