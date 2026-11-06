@@ -202,9 +202,17 @@ build() { # LOG TARGET...
   local log=$1
   shift
   # CI=true: the display GitHub's runners get, which echoes each failing
-  # command.
-  (cd "$proj" && CI=true dune build --root . "$@") >"$log" 2>&1
+  # command. CLICOLOR_FORCE=1: the colour setup-ocaml exports job-wide, so
+  # dune wraps the `File` headers, the echoed commands and its `Error:` in
+  # escapes there; forced here too, whatever the ambient setting, so a leg's
+  # own read of a raw log sees what CI's does (gh-ocannl-1928: two legs that
+  # read their log unstripped passed locally and failed in CI).
+  (cd "$proj" && CI=true CLICOLOR_FORCE=1 dune build --root . "$@") >"$log" 2>&1
 }
+# A log's lines as the reader sees them: build() forces dune's colour as CI's
+# environment does (CLICOLOR_FORCE), which these legs' own reads of a raw log
+# must look past.
+plain() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" "$1"; }
 first_two='Failed dune rules (1), in the order dune reported them:
   t/dune:6-17  (rule) target bad.actual'
 ran_re="^      ran: \(cd _build/default/t && [^ ]*sh -c 'echo noise from the failing test; exit 3'\) > _build/default/t/bad\.actual$"
@@ -226,6 +234,15 @@ build "$TMP/red.log" @runtest; red_brc=$?
 # Dune's locationless error, which two legs read: built here, outside both
 # gates, so each passes run alone (tools/harness-legs-alone.sh).
 build "$TMP/alias.log" @t/runtest-nonesuch; alias_brc=$?
+if harness_leg 'the built logs carry CI'"'"'s forced colour #dune'; then
+  # The raw logs hold what CI's hold: dune's escapes around the header, so
+  # every leg reading one unstripped is tried here as it is there
+  # (gh-ocannl-1928), whatever the ambient CLICOLOR_FORCE.
+  if [ "$red_brc" = 1 ] && LC_ALL=C grep -q "$(printf '\033')\[[0-9;]*mFile \"t/dune\"" "$TMP/red.log" &&
+     plain "$TMP/red.log" | grep -q '^File "t/dune", lines 6-17'; then
+    report 0 'the built logs carry CI'"'"'s forced colour'
+  else report 1 'the built logs carry CI'"'"'s forced colour' "build exit $red_brc; $(head -c 300 "$TMP/red.log")"; fi
+fi
 if harness_leg 'a red build lists exactly the failing rule #dune'; then
   brc=$red_brc
   out=$(cd "$proj" && subject "$TMP/red.log" 2>&1); rc=$?
@@ -463,9 +480,6 @@ build "$TMP/orchestrate.log" @r/runtest-orchestrate; orch_brc=$?
 build "$TMP/scan.log" @r/runtest-scan; scan_brc=$?
 build "$TMP/chatty.log" @r/runtest-chatty; chatty_brc=$?
 build "$TMP/unbuildable.log" @r/runtest-unbuildable; unb_brc=$?
-# A log's lines as the reader sees them: CI's environment forces dune's colour
-# (CLICOLOR_FORCE), which these legs' own reads of a raw log must look past.
-plain() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" "$1"; }
 claims_want='Failed dune rules (1), in the order dune reported them:
   r/dune:1-5  (rule) alias runtest-claims'
 claims_quoted='      | FAIL: claim 1: the gradient is finite
