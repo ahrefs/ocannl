@@ -179,10 +179,28 @@ let origin : Row.constraint_origin list =
 let dim d = Row.get_dim ~d ~basis:Row.default_basis ()
 let eq d1 d2 : Row.constraint_ = Row.Dim_eq { d1; d2; origin }
 
-let solve ?(env = Row.empty_env) cs =
-  match Row.solve_inequalities ~stage:Stage4 cs env with
-  | _, env -> Ok env
-  | exception Row.Shape_error (msg, _) -> Error msg
+(* Solve [batches] in order, carrying the environment and whatever the solver deferred into the next
+   step. Refusing and deferring are different answers, so neither is read as the other: a claim that
+   a system SOLVES needs [is_solved], which a constraint still deferred at the end fails, and a
+   claim that it is REFUSED needs [is_refused], which only the solver raising passes. *)
+let solve_batches batches =
+  let step (deferred, env) cs =
+    match Row.solve_inequalities ~stage:Stage4 (deferred @ cs) env with
+    | result -> Ok result
+    | exception Row.Shape_error (msg, _) -> Error (`Refused msg)
+  in
+  List.fold batches
+    ~init:(Ok ([], Row.empty_env))
+    ~f:(fun acc batch -> Result.bind acc ~f:(fun acc -> step acc batch))
+  |> Result.bind ~f:(function [], env -> Ok env | _ :: _, _ -> Error `Left_deferred)
+
+let solve cs = solve_batches [ cs ]
+
+let solve_strict ~incremental cs =
+  solve_batches (if incremental then List.map cs ~f:(fun c -> [ c ]) else [ cs ])
+
+let is_solved = Result.is_ok
+let is_refused = function Error (`Refused _) -> true | _ -> false
 
 let valid ~stride ?(dilation = 1) ~kernel over =
   Row.Affine
@@ -206,23 +224,23 @@ let () =
   Verdict.case "a stride-1 valid window of span 1 is the identity" (fun () ->
       let v = Row.get_var () in
       p "v = conv(v + kernel 1)"
-        (Result.is_ok (solve [ eq (Var v) (valid ~stride:1 ~kernel:1 (Var v)) ]));
+        (is_solved (solve [ eq (Var v) (valid ~stride:1 ~kernel:1 (Var v)) ]));
       p "conv(v + kernel 1) = v"
-        (Result.is_ok (solve [ eq (valid ~stride:1 ~kernel:1 (Var v)) (Var v) ]));
+        (is_solved (solve [ eq (valid ~stride:1 ~kernel:1 (Var v)) (Var v) ]));
       p "v = conv(v + dilation 3, kernel 1)"
-        (Result.is_ok (solve [ eq (Var v) (valid ~stride:1 ~dilation:3 ~kernel:1 (Var v)) ]));
+        (is_solved (solve [ eq (Var v) (valid ~stride:1 ~dilation:3 ~kernel:1 (Var v)) ]));
       p "control: v = conv(v + kernel 3) is still refused"
-        (Result.is_error (solve [ eq (Var v) (valid ~stride:1 ~kernel:3 (Var v)) ]));
+        (is_refused (solve [ eq (Var v) (valid ~stride:1 ~kernel:3 (Var v)) ]));
       p "control: v = conv(v + dilation 2, kernel 2) is still refused"
-        (Result.is_error (solve [ eq (Var v) (valid ~stride:1 ~dilation:2 ~kernel:2 (Var v)) ]));
+        (is_refused (solve [ eq (Var v) (valid ~stride:1 ~dilation:2 ~kernel:2 (Var v)) ]));
       (* The identity holds over a solved extent too, basis included (gh-ocannl-1824): a [default]
          kernel does not restamp [bcast_if_1] as [default], which the collapse over an unsolved
          extent could never enforce. *)
       let bcast_4 = Row.get_dim ~d:4 ~basis:Row.bcast_if_1 () in
       p "a solved identity window keeps its extent's basis: bcast 4 = conv(bcast 4 + kernel 1)"
-        (Result.is_ok (solve [ eq bcast_4 (valid ~stride:1 ~kernel:1 bcast_4) ]));
+        (is_solved (solve [ eq bcast_4 (valid ~stride:1 ~kernel:1 bcast_4) ]));
       p "control: default 4 = conv(bcast 4 + kernel 1) is refused"
-        (Result.is_error (solve [ eq (dim 4) (valid ~stride:1 ~kernel:1 bcast_4) ])));
+        (is_refused (solve [ eq (dim 4) (valid ~stride:1 ~kernel:1 bcast_4) ])));
   Verdict.case "the pool/shortcut relation solved generically, then concretely" (fun () ->
       (* [w = 2*o_sc] (padded stride 2) and [w = 2*(o_p - 1) + 2] (valid stride-2 2x2 pool). *)
       let pair_then ~first ~then_ =
@@ -234,14 +252,14 @@ let () =
           ]
         in
         let rel = if first then rel else List.rev rel in
-        Result.bind (solve rel) ~f:(fun env -> solve ~env (then_ ~w ~o_sc ~o_p))
+        solve_batches [ rel; then_ ~w ~o_sc ~o_p ]
         |> Result.map ~f:(fun env -> (Row.get_dim_val env o_sc, Row.get_dim_val env o_p))
       in
       List.iter [ true; false ] ~f:(fun first ->
           let order = if first then "shortcut first" else "pool first" in
           p
             (order ^ ": the residual equation o_p = o_sc holds on unsolved widths")
-            (Result.is_ok
+            (is_solved
                (pair_then ~first ~then_:(fun ~w:_ ~o_sc ~o_p -> [ eq (Var o_p) (Var o_sc) ])));
           p
             (order ^ ": then w = 12 gives both outputs 6, as solving concretely does")
@@ -250,7 +268,7 @@ let () =
             | _ -> false);
           p
             (order ^ ": control: different concrete outputs are refused")
-            (Result.is_error
+            (is_refused
                (pair_then ~first ~then_:(fun ~w:_ ~o_sc ~o_p ->
                     [ eq (Var o_sc) (dim 6); eq (Var o_p) (dim 7) ])))))
 
@@ -262,7 +280,7 @@ let () =
     let w = Row.get_var () and o1 = Row.get_var () and o2 = Row.get_var () in
     let rel = [ eq (Var w) (w_o1 (Row.Var o1)); eq (Var w) (w_o2 (Row.Var o2)) ] in
     let rel = if first then rel else List.rev rel in
-    Result.bind (solve rel) ~f:(fun env -> solve ~env (then_ ~w ~o1 ~o2))
+    solve_batches [ rel; then_ ~w ~o1 ~o2 ]
     |> Result.map ~f:(fun env -> (Row.get_dim_val env o1, Row.get_dim_val env o2))
   in
   let both_orders ~w_o1 ~w_o2 claim =
@@ -288,8 +306,7 @@ let () =
             (solves_to [ 4; 8 ] (solved (fun ~w ~o1:_ ~o2:_ -> [ eq (Var w) (dim 16) ])));
           p
             (order ^ ": control: o1 = 4 with o2 = 7 is refused")
-            (Result.is_error
-               (solved (fun ~w:_ ~o1 ~o2 -> [ eq (Var o1) (dim 4); eq (Var o2) (dim 7) ])))));
+            (is_refused (solved (fun ~w:_ ~o1 ~o2 -> [ eq (Var o1) (dim 4); eq (Var o2) (dim 7) ])))));
   Verdict.case "a valid stride-4 window against a padded stride-2 window: o2 = 2*o1 + 1" (fun () ->
       (* The valid side carries the larger stride: [4*(o1 - 1) + 6 = 2*o2], so [o2 = 2*o1 + 1]. A
          control: there the old reading's [(6 - 1) / 2 + 1] truncated onto the right span, 3, as it
@@ -305,13 +322,13 @@ let () =
       both_orders ~w_o1:(padded ~stride:2) ~w_o2:(valid ~stride:2 ~kernel:3) (fun ~order solved ->
           p
             (order ^ ": padded stride 2 against a valid stride-2 window of 3")
-            (Result.is_error (solved (fun ~w:_ ~o1:_ ~o2:_ -> []))));
+            (is_refused (solved (fun ~w:_ ~o1:_ ~o2:_ -> []))));
       (* [2*(o1 - 1) + 3 = 2*(o2 - 1) + 2], the both-valid arm's counterpart. *)
       both_orders ~w_o1:(valid ~stride:2 ~kernel:3) ~w_o2:(valid ~stride:2 ~kernel:2)
         (fun ~order solved ->
           p
             (order ^ ": valid stride-2 windows of 3 and of 2")
-            (Result.is_error (solved (fun ~w:_ ~o1:_ ~o2:_ -> [])))));
+            (is_refused (solved (fun ~w:_ ~o1:_ ~o2:_ -> [])))));
   Verdict.case "controls the old reading already solved" (fun () ->
       (* Both valid, unequal strides: [4*(o1 - 1) + 4 = 2*(o2 - 1) + 2], so [o2 = 2*o1]. *)
       both_orders ~w_o1:(valid ~stride:4 ~kernel:4) ~w_o2:(valid ~stride:2 ~kernel:2)
@@ -343,21 +360,6 @@ let bcast d = tagged d Row.bcast_if_1
 let identity_window ?(dilation = 1) ?(kernel = tagged 1 Row.default_basis) over =
   Row.Affine
     { stride = 1; over; conv = Some { dilation; kernel; use_padding = false }; stride_offset = 0 }
-
-(* Solve the equations in a single batch, or one at a time carrying the environment and whatever the
-   solver deferred into the next step; a constraint still deferred at the end is a failure, not a
-   success. *)
-let solve_strict ~incremental cs =
-  let step (deferred, env) cs =
-    match Row.solve_inequalities ~stage:Stage4 (deferred @ cs) env with
-    | result -> Ok result
-    | exception Row.Shape_error (msg, _) -> Error msg
-  in
-  let batches = if incremental then List.map cs ~f:(fun c -> [ c ]) else [ cs ] in
-  List.fold batches
-    ~init:(Ok ([], Row.empty_env))
-    ~f:(fun acc batch -> Result.bind acc ~f:(fun acc -> step acc batch))
-  |> Result.bind ~f:(function [], env -> Ok env | _ :: _, _ -> Error "constraints left deferred")
 
 let resolves_to expected v = function
   | Ok env -> (
@@ -436,7 +438,7 @@ let () =
           p_all ~min:16 (order ^ ": control: the other reserved tag at the same size is refused")
             cells ~f:(fun cell ->
               let _, result = run ~target:(fun ~size ~eb -> tagged size (other eb)) cell in
-              let ok = Result.is_error result in
+              let ok = is_refused result in
               if not ok then
                 Stdio.eprintf "%s: %s accepts the other tag (not part of the golden)\n" order
                   (describe cell);
@@ -473,19 +475,19 @@ let () =
       p_all ~min:24 claim
         (run (fun ~v ~k ~w ->
              [ window ~v ~k ~w; kernel ~k; extent ~v; ("w = 4", eq (Var w) (dim 4)) ]))
-        ~f:(fun ((_, _, result) as run) -> report claim (Result.is_error result) run));
+        ~f:(fun ((_, _, result) as run) -> report claim (is_refused result) run));
   Verdict.case "controls: what the identity does not cover is unchanged" (fun () ->
       let named_kernel = tagged 1 "h" in
       p "a named span-1 kernel still converts: 4 of h = conv(default 4 + kernel 1 of h)"
-        (Result.is_ok (solve [ eq (tagged 4 "h") (identity_window ~kernel:named_kernel (dim 4)) ]));
+        (is_solved (solve [ eq (tagged 4 "h") (identity_window ~kernel:named_kernel (dim 4)) ]));
       p "and default 4 = conv(default 4 + kernel 1 of h) is refused"
-        (Result.is_error (solve [ eq (dim 4) (identity_window ~kernel:named_kernel (dim 4)) ]));
+        (is_refused (solve [ eq (dim 4) (identity_window ~kernel:named_kernel (dim 4)) ]));
       p
         "a size-changing window still derives the kernel's tag: default 3 = conv(bcast 1 + kernel \
          3)"
-        (Result.is_ok (solve [ eq (dim 3) (valid ~stride:1 ~kernel:3 (bcast 1)) ]));
+        (is_solved (solve [ eq (dim 3) (valid ~stride:1 ~kernel:3 (bcast 1)) ]));
       p "a padded stride-1 window over bcast 4 is bcast 4"
-        (Result.is_ok (solve [ eq (bcast 4) (padded ~stride:1 (bcast 4)) ]));
+        (is_solved (solve [ eq (bcast 4) (padded ~stride:1 (bcast 4)) ]));
       List.iter [ true; false ] ~f:(fun window_first ->
           let v = Row.get_var () in
           let cs = [ eq (padded ~stride:1 (Var v)) (bcast 4); eq (Var v) (bcast 4) ] in
@@ -494,8 +496,14 @@ let () =
             ^ ": a padded stride-1 window resolves v = 4 of bcast_if_1")
             (resolves_to (bcast 4) v
                (solve_strict ~incremental:true (if window_first then cs else List.rev cs))));
+      (* The one claim on a deferred result, which is the point of it: what the solver holds back is
+         neither of the two answers the claims above read. *)
+      let v = Row.get_var () and k = Row.get_var () and w = Row.get_var () in
+      let held = solve [ eq (Var w) (identity_window ~kernel:(Var k) (Var v)) ] in
+      p "a window with nothing solved stays deferred: neither solved nor refused"
+        ((not (is_solved held)) && not (is_refused held));
       let v = Row.get_var () in
       p "a different size is refused: v = bcast 4, conv(v + kernel 1) = bcast 5"
-        (Result.is_error
+        (is_refused
            (solve_strict ~incremental:true
               [ eq (Var v) (bcast 4); eq (identity_window (Var v)) (bcast 5) ])))
