@@ -335,6 +335,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-vendor_stub_arms_scan_control
   test/operations/dune                     @runtest-verdict_quantified
   test/operations/dune                     @runtest-verdict_ratchet
+  test/operations/dune                     @runtest-virtual_rejection_boundary_raise
   test/operations/dune                     @runtest-workflow_job_timeouts
   test/operations/dune                     @runtest-zero2hero_1of7
   test/operations/dune                     @runtest-zero_out_local_decl-extension

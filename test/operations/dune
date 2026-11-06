@@ -335,6 +335,7 @@
   (alias runtest-schedule_bench_padded)
   (alias runtest-exit_stream_teardown)
   (alias runtest-config_var_warnings)
+  (alias runtest-virtual_rejection_boundary_raise)
   (alias runtest-config_var_fatal_spelling)
   (alias runtest-autotune_cache_dir_records)
   (alias runtest-test_config_consistency)
@@ -2683,6 +2684,32 @@
  (libraries base ocannl stdio arrayjit.verdict ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; Its rows run under Verdict.case: with --raise-every-row each one raises instead, so this golden
+; says every row is named and reached past the raises before it. Exit 1 is those failed claims.
+
+(rule
+ ; ocannl-backend: none -- every row raises before it compiles, so no backend is selected.
+ (target virtual_rejection_boundary_raise.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ (action
+  (with-stdout-to
+   %{target}
+   (ignore-stderr
+    (with-accepted-exit-codes
+     1
+     (run %{dep:virtual_rejection_boundary.exe} --raise-every-row))))))
+
+(rule
+ (alias runtest-virtual_rejection_boundary_raise)
+ (package neural_nets_lib)
+ (action
+  (diff
+   virtual_rejection_boundary_raise.expected
+   virtual_rejection_boundary_raise.actual)))
 
 ; gh-ocannl-805: the post-virtual_llc decision-coverage seam. The negative control injects raw
 ; hand-built IR directly into the validator; the normal leg runs the same shape through optimize.

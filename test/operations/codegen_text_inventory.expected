@@ -239,6 +239,10 @@ test/operations/integer_power_domain.ml [run by @test/operations/runtest-integer
 test/operations/lane_bounds_check.ml [run by @test/operations/runtest-lane_bounds_check; also pins text this scan cannot name: opaque aggregate component]
 test/operations/ll_printer_constants.ml [renders generated text in memory; run by @test/operations/runtest-ll_printer_constants; also pins text this scan cannot name: mutation or unseen buffer write]
     " := "
+test/operations/ll_test_dump.ml [run by @test/operations/runtest-ll_test_dump]
+    "out[0] := (2.0 + 3.0)"
+    "out[0] := 5.0"
+    "out[0] := 7.0"
 test/operations/masked_persistent_fragment.ml [pins through Ll_test.resident_regions, haystack unvalidated; run by @test/operations/runtest-masked_persistent_fragment; also pins text this scan cannot name: untraced callback, opaque aggregate component]
 test/operations/mixed_prec_twin_rounding.ml [run by @test/operations/runtest-mixed_prec_twin_rounding; also pins text this scan cannot name: computed fragment]
     "= FLOAT_TO_HALF(" ^ ... ^ "[0])"
@@ -678,6 +682,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-integer_power_domain
 @test/operations/runtest-lane_bounds_check
 @test/operations/runtest-ll_printer_constants
+@test/operations/runtest-ll_test_dump
 @test/operations/runtest-log_index_width_narrow
 @test/operations/runtest-log_index_width_wide
 @test/operations/runtest-masked_persistent_fragment
@@ -877,7 +882,7 @@ test/operations/virtual_affine.ml [through Ll_test.execute; through Ll_test.run;
 test/operations/virtual_chain_fanin.ml [through Ll_test.execute; through Ll_test.link; through Ll_test.run; run by @test/operations/runtest-virtual_chain_fanin]
 test/operations/virtual_diagonal.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_diagonal]
 test/operations/virtual_guarded_setter.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-virtual_guarded_setter]
-test/operations/virtual_rejection_boundary.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_rejection_boundary]
+test/operations/virtual_rejection_boundary.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_rejection_boundary, @test/operations/runtest-virtual_rejection_boundary_raise]
 test/operations/virtual_shared_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_shared_loop]
 test/operations/virtual_uncaptured_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_uncaptured_loop]
 test/operations/winograd_conv.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-winograd_conv]
@@ -1003,6 +1008,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-virtual_diagonal
 @test/operations/runtest-virtual_guarded_setter
 @test/operations/runtest-virtual_rejection_boundary
+@test/operations/runtest-virtual_rejection_boundary_raise
 @test/operations/runtest-virtual_shared_loop
 @test/operations/runtest-virtual_uncaptured_loop
 @test/operations/runtest-winograd_conv
