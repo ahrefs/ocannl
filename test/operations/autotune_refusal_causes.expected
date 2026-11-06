@@ -5,6 +5,10 @@ the contended scope refuses a positive reading for contention: true
 the contended scope leaves a degenerate reading its own cause: true
 the innermost scope applies: true
 leaving the scopes restores the window's own flag: true
+outside the scopes a script does not admit an unbatched window: true
+the uncontended scope leaves an unbatched window with no script its cause: true
+the uncontended scope admits an unbatched window a script reads: true
+the contended scope leaves an unbatched window its cause, script or none: true
 degenerate clock: the search refused windows and timed none: true
 degenerate clock: every refused window is counted under that cause: true
 degenerate clock: the named causes are subsets of the refused windows: true

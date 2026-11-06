@@ -33,7 +33,12 @@
    re-derived -- and two on a scripted clock: with the cut at its default (off), every seeded single
    takes its whole window; with {!Autotune.seeded_hopeless_cut} on, a seeded single over
    {!Autotune.seeded_hopeless_ratio} times the plan is cut after three samples and one under it
-   takes its whole window. *)
+   takes its whole window.
+
+   gh-ocannl-1995 adds a clock that reads every batch over the target, what a device shared under
+   load reads for a kernel near it: no calibration settles a depth, so every physical window is
+   [unbatched] and refused, while a scripted search under the same clock still refuses nothing, so
+   its claims owe the host nothing. *)
 
 open Base
 open Ocannl
@@ -698,3 +703,42 @@ let () =
           Poly.equal c.decision.settle Autotune.Prior_depth));
   claim "the search crowns the plan at its reading" (fun label (r, _) ->
       p label (is_seeded r.Autotune.best_label && Float.equal r.best_ms plan_ms))
+
+(* gh-ocannl-1995: singles well under the target, every batch far over it. The scripted search and
+   the same clock with no script. *)
+let () =
+  let clock ~depth ~ordinal:_ _wall = if depth = 1 then 0.5 else 20. *. Float.of_int depth in
+  let over_target f = Autotune.Seam.with_value Autotune.on_batch_wall clock f in
+  let measure (w : Scripted_search.window) =
+    if is_seeded w.label then 10. else 50. +. (Float.of_int w.ordinal /. 1000.)
+  in
+  let scripted =
+    if seeds_here then Some (over_target (fun () -> scripted_search measure)) else None
+  in
+  claim scripted "with no batch within the target, a scripted search refuses no window"
+    (fun label (r, record, _) ->
+      p label (r.Autotune.timings_contended = 0 && not (List.is_empty record.windows)));
+  claim scripted "... and its plan's window reaches the script, which crowns it"
+    (fun label (r, record, _) ->
+      p label
+        (List.exists record.windows ~f:(fun (w, _) -> is_seeded w.label)
+        && is_seeded r.Autotune.best_label && Float.equal r.best_ms 10.));
+  let physical () =
+    let report = ref None in
+    let _ctx, _routine =
+      over_target @@ fun () ->
+      Autotune.with_uncontended_test_windows @@ fun () ->
+      Scripted_search.with_settings [ ("autotune_finals_margin", "0") ] @@ fun () ->
+      Autotune.tune ~search:true ~beam_width:2 ~rounds:0 ~repeats:1 ~seed_block_sizes:[]
+        ~cache_dir:"" ~log:false
+        ~report:(fun r -> report := Some r)
+        (Context.auto ()) comp Ir.Indexing.Empty
+    in
+    Option.value_exn ~here:[%here] !report
+  in
+  let unscripted = if seeds_here then Some (physical ()) else None in
+  claim unscripted "the same clock with no script refuses its windows as unbatched" (fun label r ->
+      p label
+        (r.Autotune.timings_unbatched > 0
+        && r.timings_unbatched = r.timings_contended
+        && r.candidates_timed = 0))

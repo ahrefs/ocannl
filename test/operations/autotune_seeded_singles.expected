@@ -44,3 +44,6 @@ a segment single is timed: true
 a split single is timed: true
 no other candidate settles at a prior depth: true
 the search crowns the plan at its reading: true
+with no batch within the target, a scripted search refuses no window: true
+... and its plan's window reaches the script, which crowns it: true
+the same clock with no script refuses its windows as unbatched: true

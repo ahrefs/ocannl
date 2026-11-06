@@ -1521,11 +1521,15 @@ let on_candidate_measured : (label:string -> digest:string -> float -> float) Se
 let measurement_is_physical () = phys_equal (Seam.get on_candidate_measured) physical_measurement
 
 (* Explicit test-only admission seam (gh-ocannl-1156). Scripted candidate measurements need their
-   branches to run even when the host stalls every physical window. The [Cleared] scope clears ONLY
-   the contention flag before candidate admission; calibration, dispatch, invalid clock readings and
-   unresolved queued batching retain their ordinary rules. No configuration selects it. Production
-   callers of [on_candidate_measured] still see only admitted windows. Restore the prior mode even
-   on an injected failure, including when test scopes nest.
+   branches to run even when the host stalls every physical window. The [Cleared] scope clears the
+   contention flag before candidate admission and, when a script is in force, the [unbatched] flag
+   (gh-ocannl-1995): a calibration's verdict on load as much as contention is, since the probes of a
+   batch near the target read over it on a shared device, and it refuses a window for what its
+   reading would rank by, which the script replaces. With no script that reading is what ranks, so
+   the window stays refused. Calibration, dispatch and invalid clock readings retain their ordinary
+   rules. No configuration selects it. Production callers of [on_candidate_measured] still see only
+   admitted windows. Restore the prior mode even on an injected failure, including when test scopes
+   nest.
 
    [Forced] is the opposite scope (gh-ocannl-1517): it sets the contention flag on every window, so
    a test can drive the contention refusal's own accounting on any host, as [on_candidate_measured]
@@ -1559,7 +1563,12 @@ let apply_measurement_seam ~label ~digest timing_result =
   let timing_result =
     match Seam.get test_window_contention with
     | Physical -> timing_result
-    | Cleared -> { timing_result with contended = false }
+    | Cleared ->
+        {
+          timing_result with
+          contended = false;
+          unbatched = timing_result.unbatched && measurement_is_physical ();
+        }
     | Forced -> { timing_result with contended = true }
   in
   match admitted_timing_ms timing_result with

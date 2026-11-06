@@ -1157,9 +1157,20 @@ files.
 - Scripted search fixtures opt into `Autotune.with_uncontended_test_windows` (gh-ocannl-1156)
   around `on_candidate_measured`: the measurement callback alone only sees windows the host already
   admitted, so a loaded runner could time nothing and leave cache controls vacuous. The scoped seam
-  clears candidate contention only; calibration, invalid readings and unresolved batching keep
-  their admission rules. `flip_abandonment` pins production refusal, nesting and failure restoration
-  with a majority-stalled window, then asserts search, placement and cache branches without skips.
+  clears candidate contention and, with a script in force, an unresolved batching verdict; calibration
+  and invalid readings keep their admission rules. `flip_abandonment` pins production refusal, nesting
+  and failure restoration with a majority-stalled window, then asserts search, placement and cache
+  branches without skips.
+- **`unbatched` is load too** (gh-ocannl-1995). On a shared GPU a kernel near the batch target reads
+  every batched probe a few percent over it (hip on tuf: singles 0.4 ms, depths 26, 32 and the
+  rescue's 25 at 10.3, 13.5 and 11.8 ms), the calibration has no depth left, and the window is refused
+  by a path contention clearing did not reach. In a scripted search that dropped whichever window it
+  hit: the plan's left `autotune_seeded_singles` with no plan digest to compare, and any window left a
+  search uncacheable (`search_measurements_cacheable`), so no store, no warm replay
+  (`autotune_lowering_reuse_drift`, `tune_arm_a_replay`). The scope now clears it where a script
+  replaces the reading; with no script the window keeps its refusal, since its depth-1 reading is
+  what would rank (`autotune_refusal_causes` pins the scope, `autotune_seeded_singles` both searches
+  on a clock that reads every batch over the target).
 - **A refused window names one cause** (gh-ocannl-1517): `Autotune.timing_admission` is the one
   classifier (the gate, the `NOT TIMED` lines, the report's counts and each timing call's
   `admission` all read it), in the order unbatched, unreadable reading, contention. The reading
@@ -1169,8 +1180,8 @@ files.
   and completeness gate reads it unchanged); `timings_unbatched` and `timings_unreadable` are its
   named subsets and `Autotune.contention_refusals` the rest, and `baseline_refusal` names the
   baseline's cause. A skip or retry excused by a refused window gates on the cause it expects —
-  under `with_uncontended_test_windows` that is `timings_unreadable`, the one refusal an `Isolated`
-  search has left (`autotune_callback_release`) — and its reason names the cause it met
+  under `with_uncontended_test_windows` that is `timings_unreadable`, the one refusal a scripted or
+  `Isolated` search has left (`autotune_callback_release`) — and its reason names the cause it met
   (`autotune_replay_refusal`). Drive each cause on any host: a degenerate reading by
   `on_candidate_measured` returning NaN inside the uncontended scope (outside it, a host contention
   refusal can pre-empt the scripted one), contention by `with_contended_test_windows`; both are

@@ -2,13 +2,13 @@
 
    A test that claims what a search attempts, times, crowns or stores cannot let the machine rank
    the candidates, so it scripts every admitted window through [Autotune.on_candidate_measured]
-   (gh-ocannl-1027) and opts the windows out of host contention
-   ([Autotune.with_uncontended_test_windows], gh-ocannl-1156). Around that it records what the
-   search did: each candidate attempt ([Autotune.on_candidate_attempt]), each admitted window with
-   the time the script gave it, and, for a full search, the schedule-cache operations
-   ([Ir.Schedule_cache.recording_cache_io]); a budget test reads a virtual clock off the attempts
-   ([Autotune.budget_elapsed], gh-ocannl-1409). Configuration a test states for one search is set at
-   the config-file level for that search alone.
+   (gh-ocannl-1027) and opts the windows out of the host's load, contention and an unbatched
+   calibration both ([Autotune.with_uncontended_test_windows], gh-ocannl-1156, gh-ocannl-1995).
+   Around that it records what the search did: each candidate attempt
+   ([Autotune.on_candidate_attempt]), each admitted window with the time the script gave it, and,
+   for a full search, the schedule-cache operations ([Ir.Schedule_cache.recording_cache_io]); a
+   budget test reads a virtual clock off the attempts ([Autotune.budget_elapsed], gh-ocannl-1409).
+   Configuration a test states for one search is set at the config-file level for that search alone.
 
    [scripted] is that scope around any body -- an [Autotune.tune] call with arguments of its own, or
    [Train.tune_placements]; [search] is the common body: one [Autotune.tune] on a computation,

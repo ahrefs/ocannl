@@ -10,7 +10,7 @@ an incumbent with no timed record abandons nothing: true
 production contention refuses a window before its measurement script: true
 the explicit scripted scope admits contention and preserves the physical sample count: true
 the scripted scope still refuses invalid physical readings: true
-the scripted scope still refuses unresolved queued batching: true
+the scripted scope admits an unbatched window at the script's reading: true
 the scripted scope still refuses invalid scripted readings: true
 an injected failure restores the enclosing scripted scope: true
 leaving the scripted scope restores production contention refusal: true
