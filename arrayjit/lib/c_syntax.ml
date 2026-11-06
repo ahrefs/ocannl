@@ -3805,6 +3805,13 @@ module C_syntax (B : C_syntax_config) = struct
   let narrowing_cast_verdicts : (Low_level.Scope_id.t, bool) Hashtbl.t =
     Hashtbl.create (module Low_level.Scope_id)
 
+  (* gh-ocannl-1887: every scope a [Get_local] reads anywhere in the unit, filled by the
+     [rng_scope_ids] walk below. The scalar and cross-statement CSE leave [Get_local] readers of a
+     [Local_scope]'s local behind, and a self-reading value is one too, so {!collapse_exact_scopes}
+     leaves all of these alone. *)
+  let get_local_read_ids : Low_level.Scope_id.t Hash_set.t =
+    Hash_set.create (module Low_level.Scope_id)
+
   (* Scope-local scalars an RNG conversion writes. Their declaration, their assignments and their
      reads all have to agree on a precision, and only a whole-proc scan sees all three (a
      [Declare_local] carries no value), so the exclusion is resolved once here rather than per
@@ -3821,8 +3828,8 @@ module C_syntax (B : C_syntax_config) = struct
     let rec scan_sc (llsc : Low_level.scalar_t) =
       match llsc with
       | Low_level.Local_scope { body; _ } -> scan body
-      | Get _ | Get_local _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
-          ()
+      | Get_local id -> Hash_set.add get_local_read_ids id
+      | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
       | Get_dynamic { dyn_value = v, _; _ } -> scan_sc v
       | Ternop (_, (a, _), (b, _), (c, _)) ->
           scan_sc a;
@@ -4125,15 +4132,169 @@ module C_syntax (B : C_syntax_config) = struct
   (** One rendering owns every mutable traversal cell. Backend/procedure-family analyses above are
       immutable; codegen-minted accumulator scopes are copied into this context. *)
 
-  let scope_prec_of ctx (id : Low_level.scope_id) =
+  let scope_prec_in ~accum_scope_ids (id : Low_level.scope_id) =
     let p = Lazy.force id.tn.Tn.storage_prec in
     if
       Hash_set.mem rng_scope_ids id
       || Hash_set.mem carried_state_scope_ids id
       || narrowing_cast_scope id
     then p
-    else if Hash_set.mem ctx.accum_scope_ids id.scope_id then acc_prec p
+    else if Hash_set.mem accum_scope_ids id.scope_id then acc_prec p
     else comp_prec p
+
+  let scope_prec_of ctx id = scope_prec_in ~accum_scope_ids:ctx.accum_scope_ids id
+
+  (* The precision a [Set_local]'s value renders at, given the precision its local is declared at.
+     The reasons are at [pp_ll]'s [Set_local] arm. *)
+  let set_local_value_prec ~scope_prec (id : Low_level.scope_id) value =
+    if Low_level.scalar_reads_scope ~id value then scope_prec
+    else if Hash_set.mem rng_scope_ids id then scope_prec
+    else comp_prec (Lazy.force id.tn.Tn.storage_prec)
+
+  (* Whether a value's rendering at [prec] has the C type of [prec]. Rendered at a precision is not
+     typed at it, and a local's declaration is a conversion the expression alone does not make: at
+     single, [Recip] is [1.0 / x], a double the local rounds and a collapse would hand to the
+     arithmetic around it; a gate is [c ? y : 0.0], a double by its literal; a truth is C [int]
+     ([bool] on Metal), so two collapsed under [/] divide integers; and at half, [sinf] is a float.
+     The operators are a list, not a default. *)
+  let rec typed_at ~prec (value : Low_level.scalar_t) =
+    let typed ((v, _) : Low_level.scalar_arg) = typed_at ~prec v in
+    (* The [f]-suffixed or [double] library spellings, typed by name. *)
+    let library_call = match prec with Ops.Single_prec _ | Double_prec _ -> true | _ -> false in
+    match value with
+    | Constant _ | Constant_bits _ | Embed_index _ | Get _ | Get_dynamic _ | Get_merge_buffer _
+    | Get_local _ | Local_scope _ ->
+        true
+    | Unop ((Identity | Neg), a) -> typed a
+    | Unop ((Relu | Satur01 | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Trunc), _) ->
+        library_call
+    (* [tanhf] at every float precision. *)
+    | Unop (Tanh_approx, _) -> ( match prec with Ops.Single_prec _ -> true | _ -> false)
+    | Unop ((Recip | Recip_sqrt | Not | Uint4x32_to_prec_uniform1), _) -> false
+    | Binop (Arg1, a, _) | Binop (Arg2, _, a) -> typed a
+    | Binop ((Add | Sub | Mul | Div), a, b) -> typed a && typed b
+    | Binop ((ToPowOf | Max | Min | Mod), _, _) -> library_call
+    | Binop
+        ( ( Relu_gate | Satur01_gate | Cmplt | Cmple | Cmpeq | Cmpne | Or | And
+          | Threefry4x32_crypto | Threefry4x32_light | Uint4x32_to_prec_uniform_lane ),
+          _,
+          _ ) ->
+        false
+    | Ternop (Where, _, a, b) -> typed a && typed b
+    | Ternop (Mul3, a, b, c) -> typed a && typed b && typed c
+    | Ternop (FMA, _, _, _) -> library_call
+
+  (* gh-ocannl-1887: collapse a kept scope where the backend's compute precision makes the collapse
+     exact. [simplify_llc] keeps a scope it cannot prove exact without knowing the numerics, which
+     lowered code must not depend on (gh-ocannl-568), and the explicit-SIMD renderings then decline
+     the loop holding it. Rendered, a kept scope is [T_R v = conv(V->R)(e@V); ... conv(R->S)(v)]:
+     [R] the local's precision, [V] the one its value renders at, [S] the slot's. Where the three
+     coincide the expression is the same text and both conversions are identities, so only a C local
+     goes, wherever the text's C type is [R] ({!typed_at}). Cc's default then collapses an f16 scope
+     over arithmetic in an f32 slot ([R] is f32 there: gh-ocannl-517 computes it wide on purpose),
+     and a backend computing f16 at f16 collapses a cast in a real f16 slot, though [vec_expr] still
+     declines a load at another width. A cast on a wide-compute backend stays ([R] is its storage
+     precision, [V] is f32), as it does in any slot wider than itself: that rounding is the cast
+     (gh-ocannl-1866). An integer scope stays too: [compute_prec] is the identity there, so render
+     time knows nothing [Low_level.integer_scope_exact] did not.
+
+     This is a pass, not an arm of [pp_scalar], because everything that pattern-matches a statement
+     has to read the same tree: [scalar_mentions], [no_written_reads], [renders_at_store_prec],
+     [has_accumulation], [decide_accum_width], [blend_for]. Nothing else may be read off it: the
+     caller's [Low_level.optimized] and the [.ll] output keep the scope. Exact means bitwise under
+     the compile's contraction licence, as every same-precision collapse in [simplify_llc] is: an
+     unpinned compile may fuse a collapsed [c + a * b] where a local would have kept two roundings
+     ({!C_syntax_config.compiler_contraction_off}).
+
+     [slot] is the precision [pp_scalar] would be asked for, followed only through positions whose
+     answer is certain; every other position just keeps its scopes. That covers the operands
+     [Ops.is_homogeneous_prec_*] sends to the operator's own precision, as [pp_scalar_op_at] does,
+     and a [Where]'s arms, at a float precision: an operator at an integer precision goes through
+     [integer_op].
+
+     Why each refusal: a draw renders at the store holding it, and [mentions_rng_conversion] stops
+     at a scope, so a collapsed one would flip the statement's [renders_at_store_prec]. A scope with
+     a [Get_local] reader is shared, a scan's carried state among them ({!get_local_read_ids}). *)
+  let exact_scope_collapse ~slot (id : Low_level.scope_id) value =
+    let scope_prec = scope_prec_in ~accum_scope_ids id in
+    Ops.is_float scope_prec && Ops.equal_prec scope_prec slot
+    && Ops.equal_prec scope_prec (set_local_value_prec ~scope_prec id value)
+    && (not (Hash_set.mem rng_scope_ids id))
+    && (not (Hash_set.mem get_local_read_ids id))
+    && typed_at ~prec:scope_prec value
+
+  let collapse_exact_scopes (llc : Low_level.t) : Low_level.t =
+    let single_assignment id (body : Low_level.t) =
+      match body with
+      | Set_local (id', value) when Low_level.equal_scope_id id id' -> Some value
+      | _ -> None
+    in
+    let rec scalar ~slot (sc : Low_level.scalar_t) : Low_level.scalar_t =
+      let arg ((v, ann) : Low_level.scalar_arg) : Low_level.scalar_arg = (scalar ~slot v, ann) in
+      let in_float = Ops.is_float slot in
+      match sc with
+      | Local_scope ({ id; body; _ } as scope) -> (
+          match single_assignment id body with
+          | Some value when exact_scope_collapse ~slot id value -> scalar ~slot value
+          | _ -> Local_scope { scope with body = stmt body })
+      | Unop (op, a) when in_float && Ops.is_homogeneous_prec_unop op -> Unop (op, arg a)
+      | Binop (op, a, b) when in_float && Ops.is_homogeneous_prec_binop op ->
+          let a = arg a in
+          Binop (op, a, arg b)
+      | Ternop (op, a, b, c) when in_float && Ops.is_homogeneous_prec_ternop op ->
+          let a = arg a in
+          let b = arg b in
+          Ternop (op, a, b, arg c)
+      | Ternop (Ops.Where, cond, a, b) when in_float ->
+          let a = arg a in
+          Ternop (Ops.Where, cond, a, arg b)
+      | Unop _ | Binop _ | Ternop _ | Get _ | Get_local _ | Get_dynamic _ | Get_merge_buffer _
+      | Constant _ | Constant_bits _ | Embed_index _ ->
+          sc
+    (* A value at the root of a [Set]: collapsing it can change [store_precs]'s answer, so it is
+       judged at the answer for what would take its place. [x16 = Scope f32 { read f64 }] rounds
+       twice kept and once collapsed, while [x16 = Scope f32 { a * b }] renders the same. *)
+    and stored ~store_prec (sc : Low_level.scalar_t) : Low_level.scalar_t =
+      let slot_of v = fst (store_precs ~store_prec v) in
+      match sc with
+      | Local_scope { id; body; _ } -> (
+          match single_assignment id body with
+          | Some value when exact_scope_collapse ~slot:(slot_of value) id value ->
+              stored ~store_prec value
+          | _ -> scalar ~slot:(slot_of sc) sc)
+      | _ -> scalar ~slot:(slot_of sc) sc
+    and stmt (c : Low_level.t) : Low_level.t =
+      match c with
+      | Seq (a, b) ->
+          let a = stmt a in
+          Seq (a, stmt b)
+      | For_loop ({ body; _ } as loop) -> For_loop { loop with body = stmt body }
+      | Scan_loop ({ body; _ } as loop) -> Scan_loop { loop with body = stmt body }
+      | If ({ body; _ } as guarded) -> If { guarded with body = stmt body }
+      | Set ({ tn; idcs; llsc; _ } as set) ->
+          let store_prec = Lazy.force tn.Tn.storage_prec in
+          (* A recognized update can render at the accumulator's residency instead
+             ([decide_accum_width]). Where that differs the slot is not known here, and a cast read
+             at the wider one would go unrounded. And it holds the accumulator across the level, so
+             a collapse must not make one: [out = Scope { out + x }] narrows every iteration, and
+             collapsed it would localize and narrow once. [accum_update_parts] is the one
+             classification reading operand positions, which a collapse moves; a read's own
+             predicates ([scalar_reads_scope], [scalar_touches_tn]) descend into scopes. *)
+          let updates v = Option.is_some (Low_level.accum_update_parts ~tn ~idcs v) in
+          let collapsed = stored ~store_prec llsc in
+          if
+            (updates llsc && not (Ops.equal_prec (acc_prec store_prec) (comp_prec store_prec)))
+            || not (Bool.equal (updates llsc) (updates collapsed))
+          then c
+          else Set { set with llsc = collapsed }
+      | Set_local (id, value) ->
+          let scope_prec = scope_prec_in ~accum_scope_ids id in
+          Set_local (id, scalar ~slot:(set_local_value_prec ~scope_prec id value) value)
+      | Noop | Comment _ | Staged_compilation _ | Zero_out _ | Declare_local _ | Workgroup_barrier
+      | Set_dynamic _ | Set_from_vec _ | Tile_mma _ ->
+          c
+    in
+    stmt llc
 
   (* The emitted name of a scope local. One definition, so that the volatility census below names
      the same identifier the declaration carries rather than a second spelling of the convention. *)
@@ -6528,11 +6689,7 @@ module C_syntax (B : C_syntax_config) = struct
            assignment's semantics (Codex P2 round 3 on PR #396; the provenance boundary of
            gh-ocannl-639's adjacent-accumulations rule). *)
         let prec = (scope_prec_of ctx) id in
-        let value_prec =
-          if Low_level.scalar_reads_scope ~id value then prec
-          else if Hash_set.mem rng_scope_ids id then prec
-          else comp_prec (Lazy.force id.Low_level.tn.Tn.storage_prec)
-        in
+        let value_prec = set_local_value_prec ~scope_prec:prec id value in
         let volatile_reads =
           B.volatile_serial_accumulation
           && Hash_set.mem ctx.accum_scope_ids id.Low_level.scope_id
@@ -9375,6 +9532,9 @@ module C_syntax (B : C_syntax_config) = struct
            joined pool dispatch (or a serial loop), so code outside [Grid] loops runs once. *)
       ~fork_join:(Option.is_none (B.hardware_index ~kind:`Grid ~slot:0))
       optimize_ctx.Low_level.placements llc;
+    (* gh-ocannl-1887: past the gates, which judge what the caller built, and ahead of the render
+       context, so that every analysis below reads the tree that renders. *)
+    let llc = collapse_exact_scopes llc in
     (* Launch-extent guards (construct-then-fold, axis-types proposal §2), only for kinds this
        backend binds in hardware -- the serial fallback iterates the true extent. *)
     let llc =

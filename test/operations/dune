@@ -13813,7 +13813,7 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (libraries base ocannl stdio unix arrayjit.verdict ll_test))
+ (libraries base ocannl stdio unix arrayjit.verdict test_utils ll_test))
 
 ;; gh-ocannl-1884: an integer scope collapses only where its value provably stays the same.
 

@@ -490,6 +490,10 @@ test/operations/schedule_swizzle_matmul.ml [run by @test/operations/runtest-sche
     "__syncthreads()"
     "threadgroup float " ^ ...
     "threadgroup_barrier"
+test/operations/scope_collapse_rounding.ml [run by @test/operations/runtest-scope_collapse_rounding]
+    "Vectorized reduction rendering"
+    "_mid"
+    "ocannl_vec"
 test/operations/source_tokens_joined.ml [renders generated text in memory; run by @test/operations/runtest-source_tokens_joined]
 test/operations/test_bounds_folded_gather.ml [run by @test/operations/runtest-test_bounds_folded_gather]
     "!= 0 ?"
@@ -707,6 +711,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-schedule_register_matmul
 @test/operations/runtest-schedule_smem_matmul
 @test/operations/runtest-schedule_swizzle_matmul
+@test/operations/runtest-scope_collapse_rounding
 @test/operations/runtest-source_tokens_joined
 @test/operations/runtest-test_bounds_folded_gather
 @test/operations/runtest-test_log_stmt_format

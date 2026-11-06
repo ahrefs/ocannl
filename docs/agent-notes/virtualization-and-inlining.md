@@ -113,8 +113,37 @@ files.
   arithmetic narrow. `test/operations/scope_collapse_rounding` executes each shape against the
   uncollapsed `?prelowered` form under both policies; `top_down_prec`'s goldens show it end to end
   (a half sum read in a bfloat16 product was computed at bfloat16 on Metal). A kept scope is what
-  the pattern-matching passes then see: the explicit-SIMD renderings decline a loop holding one
-  (`scalar_mentions`).
+  the schedule's recognizers then see; the renderer can still drop it, next entry.
+- **A kept scope collapses at render time where compute precision makes it exact** (gh-ocannl-1887).
+  Rendered, a kept scope is `T_R v = conv(V->R)(e@V); ... conv(R->S)(v)`, with `R` the local's
+  precision (`scope_prec_of`), `V` the value's and `S` the slot's. `C_syntax.collapse_exact_scopes`
+  takes it out when all three agree: the same text, less a C local. It runs in
+  `compile_proc` past the exit gates and ahead of the render context, so `scalar_mentions`,
+  `renders_at_store_prec`, `has_accumulation`, `decide_accum_width` and `blend_for` all read the
+  collapsed tree, while `Low_level.optimized` and the `.ll` output keep the scope: numerics stay out
+  of lowered code (gh-ocannl-568), so a kernel and its `.ll` can differ here. The walk follows only
+  slots it is sure of, so an unfollowed position just keeps its scope. Agreement is not enough in
+  five places. Rendered at a precision is not typed at it: a local's declaration is a conversion,
+  and at single `Recip` is `1.0 / x`, a double, a gate is `c ? y : 0.0`, a double by its literal, and
+  a truth is C `int`, so `typed_at` lists the operators whose text has the precision's type. A
+  scope at a `Set`'s root is judged at `store_precs` of its VALUE, because collapsing
+  changes that answer (`x16 = Scope f32 { read f64 }` rounds twice kept). An update can render at
+  `acc_prec`, which on a GPU is wider than `comp_prec` and would read a cast unrounded, so it needs
+  the two equal; and a collapse must not MAKE an update, since `out = Scope { out + x }` narrows
+  every iteration and would localize and narrow once, on cc's default too. CSE runs first, so a scope with a `Get_local` reader stays, which `collapsible`
+  never had to ask. A draw stays: `mentions_rng_conversion` stops at a scope.
+  **Its reach is narrow.** What it recovers on cc's default is gh-ocannl-1788's arithmetic scopes.
+  It does NOT recover the tiles gh-ocannl-1866 cost: a cast on a wide-compute backend has `R` f16 and
+  `V` f32 and must stay, and `serial_kernel_of` works on the lowered scope anyway. It does nothing for
+  gh-ocannl-1884's integer scopes, where `compute_prec` is the identity. A cast that does collapse
+  (`narrow_compute_f32=false`, a GPU) loses its local and still gets no SIMD, since `vec_expr`
+  refuses a load at another width. `Vectorized` comes from retypes, so the default schedule gains
+  only `has_accumulation`'s pragma arm. Exact means bitwise under the compile's contraction licence,
+  like every same-precision collapse; a test comparing the two forms pins it off or uses products
+  exact in f32, which contraction cannot move. Since a plain `?prelowered` scope now collapses too, a
+  kept oracle needs its assignment outside the single-assignment shape, as
+  `scope_collapse_rounding`'s `kept_scope` does, and proof from the emitted kernel that its local
+  survived.
 - **An integer scope collapses only where its value provably stays the same** (gh-ocannl-1884),
   the materialized run being the oracle. A collapse drops two things: the conversion to the scope's
   precision, which C's integer promotion makes visible (a byte `a + b` holds 44, and collapsed the
