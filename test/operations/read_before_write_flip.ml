@@ -32,8 +32,7 @@ let build () =
       ~f:(Ll_test.weighted ~weights:[| 3; 5; 7 |] ~modulus:11 ~offset:0. ~stride:0.125)
       ()
   in
-  (* An [init] data node has its layout committed at creation; the padded conv needs a fresh operand
-     to grant the halo (see padding_lifecycle.ml). *)
+  (* A computed operand: the padded conv grants it the halo (see padding_lifecycle.ml). *)
   let x = NTDSL.O.einsum1 "h, w, c => h, w, c" x_src in
   let conv1 =
     Nn_blocks.conv2d ~label:[ "rbwf_c1" ] ~kernel_size:3 ~use_padding:true ~out_channels:3 ()

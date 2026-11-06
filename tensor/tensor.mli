@@ -240,8 +240,9 @@ val term :
     tensor's [value] node: [Broadcast] fills the inferred shape with a scalar without constraining
     its element count, [Reshape] (the default) if the data is not padded and both the tensor's shape
     and padding are inferred, [Keep_shape_no_padding] if the tensor should not be padded and the
-    shape is as given by the ndarray, and [Padded] if the data is already padded as given, and the
-    shape is as given by the ndarray.
+    shape is as given by the ndarray (a layout committed at creation, so a consumer demanding
+    margins is refused), and [Padded] if the data is already padded as given, and the shape is as
+    given by the ndarray.
 
     With [~grad_spec:Require_grad] the term is a differentiable leaf that is not a parameter: it
     stays out of {!field:params} (nothing initializes it; its value is its data or its forward

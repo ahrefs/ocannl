@@ -100,6 +100,14 @@ files.
   reference bound as a dimension then as a row is left holding a dimension variable, and
   dispatching on it tied a carried 2x3 to 3x2 by product.
   Pinned under both registration and argument orders by `test/operations/set_equal_rows.ml`.
+- Which leaves take margins (gh-ocannl-1982): `Keep_shape_no_padding` commits an unpadded layout at
+  birth (`Tnode.create_from_padded` forces `padding`, and `Shape.fresh_proj_ids` then registers
+  zeros as resolved), so `wrap`, `wrap_param` and a loaded node refuse a margin demand. Everything
+  whose `padding` is a lazy over the shape takes margins: `init` and `reshape` copy their array
+  into the padded buffer at link time (`Tnode.create_with_reshape`), `range_of_shape` and params
+  fetch into it. The price of the lazy is that reading the node's `dims` or `padding` closes the
+  session, as for any other leaf, so `init` sits on the `Reshape` route only because it owns its
+  array; `test/operations/padded_conv_init_leaf` holds the executed values and both refusals.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity

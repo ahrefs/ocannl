@@ -27,8 +27,15 @@ let leaf ~h ~w =
   TDSL.range_of_shape ~label:[ "images" ] ~batch_dims:[ batch ] ~output_dims:[ h; w; in_channels ]
     ()
 
+(* A data leaf whose array [init] allocated: the padded convolution of [conv_bn_relu] gives it
+   margins, as it does a [range_of_shape] leaf (gh-ocannl-1982). *)
+let init_leaf ~h ~w =
+  TDSL.init ~l:"images" ~prec:Ir.Ops.single ~b:[ batch ] ~o:[ h; w; in_channels ]
+    ~f:(fun idcs -> Float.of_int (Array.fold idcs ~init:1 ~f:(fun acc i -> (3 * acc) + i)))
+    ()
+
 let result ~h ~w = TDSL.O.(leaf ~h ~w *. !.0.5)
-let inputs = [ ("a leaf", leaf); ("an operation's result", result) ]
+let inputs = [ ("a leaf", leaf); ("an init leaf", init_leaf); ("an operation's result", result) ]
 
 (* A value any backend computes, and a golden that cannot say which one did. *)
 let context () =

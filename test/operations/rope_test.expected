@@ -22,15 +22,15 @@ PE(0,0)=0.0000 PE(0,1)=1.0000 PE(1,0)=0.8415 PE(1,1)=0.5403
 RoPE attention output shape: ((batch
   ((beg_dims ())
    (dims
-    ((Dim ((d 1) (basis default) (proj_id ((Proj_id 95)))))
-     (Dim ((d 4) (basis default) (proj_id ((Proj_id 96)))))))
+    ((Dim ((d 1) (basis default) (proj_id ((Proj_id 97)))))
+     (Dim ((d 4) (basis default) (proj_id ((Proj_id 98)))))))
    (bcast Broadcastable) (prov (((sh_id 124) (kind Batch))))))
  (input
   ((beg_dims ()) (dims ()) (bcast Broadcastable)
    (prov (((sh_id 124) (kind Input))))))
  (output
   ((beg_dims ())
-   (dims ((Dim ((d 16) (basis default) (proj_id ((Proj_id 97)))))))
+   (dims ((Dim ((d 16) (basis default) (proj_id ((Proj_id 99)))))))
    (bcast Broadcastable) (prov (((sh_id 124) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
  (id 124) (debug_name out))
