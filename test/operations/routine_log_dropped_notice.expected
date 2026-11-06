@@ -1,0 +1,8 @@
+the run logs its routines, and not to stream files: true
+the notice names the key that keeps the lines: true
+rldn_first: the logged routine computes its values: true
+the first logged run writes nothing to stdout: true
+the first logged run says once on stderr that its lines are dropped: true
+rldn_second: the logged routine computes its values: true
+the second logged run writes nothing to stdout: true
+the second logged run does not repeat the notice: true

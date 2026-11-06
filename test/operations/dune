@@ -7568,6 +7568,46 @@
  (deps
   (alias runtest-metal_routine_log_delivery)))
 
+; gh-ocannl-1999: with the stream-file key off a default build drops a logged routine's lines; the
+; first batch dropped says so on stderr, once.
+
+(executable
+ (name routine_log_dropped_notice)
+ (modules routine_log_dropped_notice)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test))
+
+(rule
+ (target routine_log_dropped_notice.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:routine_log_dropped_notice.exe}
+    "--ocannl_debug_log_from_routines=true"
+    "--ocannl_log_level=2"
+    "--ocannl_debug_log_to_stream_files=false"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_log_file_stem=routine_log_dropped_notice"
+    "--ocannl_build_files_prefix=routine_log_dropped_notice"))))
+
+(rule
+ (alias runtest-routine_log_dropped_notice)
+ (package neural_nets_lib)
+ (action
+  (diff
+   routine_log_dropped_notice.expected
+   routine_log_dropped_notice.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-routine_log_dropped_notice)))
+
 (test
  ; ocannl-backend: none -- inspects precision witnesses and renderer enumeration, executes no backend.
  (name precision_families)

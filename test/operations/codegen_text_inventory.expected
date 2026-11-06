@@ -862,6 +862,7 @@ test/operations/reduction_accumulator_residency.ml [prelowered compile; through 
 test/operations/reduction_forms.ml [prelowered compile; run by @test/operations/runtest-reduction_forms]
 test/operations/rev_sides_padded_target.ml [through Ll_test.link; run by @test/operations/runtest-rev_sides_padded_target]
 test/operations/rev_sides_width1_store.ml [through Ll_test.link; run by @test/operations/runtest-rev_sides_width1_store]
+test/operations/routine_log_dropped_notice.ml [through Ll_test.run_routine; run by @test/operations/runtest-routine_log_dropped_notice]
 test/operations/routine_log_stream_files.ml [through Ll_test.run_routine; run by @test/operations/runtest-routine_log_stream_files]
 test/operations/runtime_integer_power.ml [through Ll_test.execute; run by @test/operations/runtest-runtime_integer_power]
 test/operations/scan_loop.ml [staged callback; through Ll_test.execute; through Ll_test.link; through Ll_test.optimize_and_execute; through Ll_test.run; run by @test/operations/runtest-scan_loop]
@@ -986,6 +987,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-reduction_forms
 @test/operations/runtest-rev_sides_padded_target
 @test/operations/runtest-rev_sides_width1_store
+@test/operations/runtest-routine_log_dropped_notice
 @test/operations/runtest-routine_log_stream_files
 @test/operations/runtest-runtime_integer_power
 @test/operations/runtest-scan_loop

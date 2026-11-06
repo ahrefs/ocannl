@@ -151,6 +151,9 @@
 
 # If `log_level` is at least 2 and this is true, the generated code will contain
 # printf statements, whose output is then (typically) integrated into ppx_minidebug logs.
+# The kernels are then serial and unvectorized. To read the lines in a default build, also set
+# `debug_log_to_stream_files` below: without it they are dropped, which the first dropped batch
+# says once on stderr (gh-ocannl-1999).
 #debug_log_from_routines=false
 
 # If true, various intermediate representation files for the compiled code are generated
@@ -1372,7 +1375,8 @@
 
 # If `false`, debug logs from routines are re-logged via the ppx_minidebug framework, but only in a
 # build with the preprocessing-time OCANNL_LOG_LEVEL_UTILS set: otherwise the cc and Metal backends
-# drop the lines, so `true` is how to read them there.
+# drop the lines, so `true` is how to read them there; the first batch dropped prints a one-time
+# notice on stderr (gh-ocannl-1999), also for CUDA or HIP lines a caller's capture window collected.
 # If `true`, the logs are in stream-specific files. WARNING: files are appended to, not overwritten.
 # On CUDA and HIP, where routine logs are device-side `printf` on process stdout, `true` also has
 # the backend capture each logged launch's output itself when no `Utils.capture_stdout_logs`
