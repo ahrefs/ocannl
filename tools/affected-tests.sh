@@ -260,7 +260,10 @@
 # `cross-cutting`, `incomplete` or `cross-cutting,incomplete`: what a caller
 # reads instead of the prose above it (`tools/test-run.sh prepush` does, and
 # refuses a stderr without it). `cross-cutting`: the first tier spans over half
-# the per-test aliases (the CROSS-CUTTING line says who runs the list then);
+# the per-test aliases, or the printed list does though its first tier does not
+# (gh-ocannl-1996: a library module most tests only link; `--referenced-only`
+# prints the first tier alone, so it is judged on that); the CROSS-CUTTING line
+# says which, and who runs the list then;
 # `incomplete`: a changed path is UNMAPPED, which is also what exit 3 says.
 # Both are decided in one place, `verdict` in the reader below. No trailer on
 # exit 2, nor under `--harnesses`, which prints no alias list to judge.
@@ -2936,13 +2939,26 @@ my $n_harness = 0;
 # A first tier spanning most of the suite (gh-ocannl-1765): the ranking cannot
 # narrow this change, so say so, and who runs the whole list -- except its
 # `slow-` aliases, which no CI job runs (local review): those stay local.
+# A printed list spanning most of the suite over a narrower first tier
+# (gh-ocannl-1996) is no pre-push run either: `low_level.ml` lists 815 of the
+# 825 per-test aliases, 436 of them link-only, and that list cannot run on a
+# shared box. The ranking did narrow it, so that line names the first tier as
+# where the local run starts. Two thresholds, each its own function, equal today.
 # The verdict (gh-ocannl-1921; the header states the contract) is decided here
 # and nowhere else: the CROSS-CUTTING line, the INCOMPLETE note, the exit
 # status and the trailer all read it.
-sub verdict {   # (first-tier aliases, per-test aliases, UNMAPPED paths) -> the trailer's conditions
-  my ($n_first, $n_all, $n_unmapped) = @_;
+sub first_tier_wide {   # (first-tier aliases, per-test aliases)
+  my ($n_first, $n_all) = @_;
+  return $n_all && 2 * $n_first > $n_all;
+}
+sub list_wide {   # (printed aliases, per-test aliases)
+  my ($n_listed, $n_all) = @_;
+  return $n_all && 2 * $n_listed > $n_all;
+}
+sub verdict {   # (first-tier aliases, printed aliases, per-test aliases, UNMAPPED paths) -> the trailer's conditions
+  my ($n_first, $n_listed, $n_all, $n_unmapped) = @_;
   my @v;
-  push @v, "cross-cutting" if $n_all && 2 * $n_first > $n_all;
+  push @v, "cross-cutting" if first_tier_wide($n_first, $n_all) || list_wide($n_listed, $n_all);
   push @v, "incomplete" if $n_unmapped;
   return @v;
 }
@@ -2951,13 +2967,21 @@ my %verdict;
   my $n_all = 0;
   $n_all += $_ for values %total;
   my $n_first = keys %out;
-  %verdict = map { $_ => 1 } verdict($n_first, $n_all, scalar @unmapped);
+  my $n_listed = $n_first + ($referenced_only ? 0 : @link_only);
+  %verdict = map { $_ => 1 } verdict($n_first, $n_listed, $n_all, scalar @unmapped);
   my @slow = sort grep { m{(?:^\@|/)slow-[^/]*$} } keys %out, @link_only;   # link-only ones too: CI runs none
-  printf STDERR "affected: CROSS-CUTTING: %d of the %d per-test aliases rank first, so this change is cross-cutting:"
-    . " the PR's CI run owns the full list%s; locally run the tests that exercise the change, named in the PR"
-    . " body, and `dune build \@check`\n", $n_first, $n_all,
-    (@slow ? sprintf(" but its %d slow- alias(es), which no CI job runs: run those locally too", scalar @slow) : "")
-    if $verdict{"cross-cutting"};
+  my $slow = @slow ? sprintf(" but its %d slow- alias(es), which no CI job runs: run those locally too", scalar @slow) : "";
+  if (!$verdict{"cross-cutting"}) {
+  } elsif (first_tier_wide($n_first, $n_all)) {
+    printf STDERR "affected: CROSS-CUTTING: %d of the %d per-test aliases rank first, so this change is cross-cutting:"
+      . " the PR's CI run owns the full list%s; locally run the tests that exercise the change, named in the PR"
+      . " body, and `dune build \@check`\n", $n_first, $n_all, $slow;
+  } else {
+    printf STDERR "affected: CROSS-CUTTING: %d of the %d per-test aliases are listed, %d of them link-only, so this change"
+      . " is cross-cutting by its list, though only %d rank first: the PR's CI run owns the full list%s; locally run"
+      . " the tests that exercise the change, named in the PR body -- the %d that rank first (--referenced-only) are"
+      . " where to start -- and `dune build \@check`\n", $n_listed, $n_all, scalar(@link_only), $n_first, $slow, $n_first;
+  }
 }
 printf STDERR "affected: %d alias(es) from %d changed path(s)%s%s%s\n", scalar(keys %out) + ($referenced_only ? 0 : @link_only),
   scalar(@changed), (@link_only ? sprintf(", %d of them link-only%s", scalar(@link_only), $referenced_only ? " and left off" : "") : ""),

@@ -3322,12 +3322,24 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     run owns the full list then, but for its `slow-` aliases, which no CI job runs (CI builds
     `@train` or `@default @runtest @bin-smoke`; `@check` only compiles `@slow`), so the local run
     is those plus the tests exercising the change (AGENTS.md).
+    A list spanning over half the suite is CROSS-CUTTING too, whatever its first tier
+    (gh-ocannl-1996): link-level reach lists 815 of the 825 per-test aliases for any `arrayjit/lib`
+    module (`low_level.ml`: 379 first, 436 link-only; `metal_backend.ml`: 27 first) and 631 to 636
+    for one of `tensor/` or `lib/` (`autotune.ml`: 307 first), and read `ok` they made `prepush`
+    a near-full suite no shared box runs, so six workers of one wave hand-picked their sets
+    against it. A separate threshold on the printed total, not link-only aliases counted into the
+    first tier: that tier still says what the ranking could narrow, and the line for this case
+    names it as where the local run starts (`affected --referenced-only`, which prints that tier
+    alone and is judged on it). Both thresholds are over half today; the lists found were under
+    40% (`test/support/ll_test.ml`, 329) or over 76%. So `prepush` now runs for tests, test
+    support, tools and docs, and refuses for a library module.
     The machine-readable form is the trailer (gh-ocannl-1921): whenever the list is printed, the
     last line of stderr is `affected: verdict=V`, V one of `ok`, `cross-cutting`, `incomplete`
     (a changed path is UNMAPPED, exit 3) or `cross-cutting,incomplete`. A caller reads that line,
     never the prose; both conditions are decided in one place, `verdict` in `affected-tests.sh`,
-    which is where a different cross-cutting rule goes (link-only aliases are not counted today:
-    `low_level.ml` lists about 790 aliases, most of them link-only, and is `ok`).
+    with one function per threshold (`first_tier_wide`, `list_wide`), which is where a different
+    cross-cutting rule goes; the `verdict trailer` leg of `tools/test-affected-tests.sh` calls it
+    on the counts above.
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
     mid-change, never for the pre-push run, which takes the full default list (`prepush`, below,

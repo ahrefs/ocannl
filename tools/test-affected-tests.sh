@@ -352,7 +352,7 @@ if harness_leg 'dune-project'; then
     # The slow- aliases ranked link-only count too (local review): with core's helper changed, 10 of
     # the 31 rank first by a mutant threshold, slow-gen among the link-only ones.
     mutant=$repo/tools/affected-mutant.sh
-    if FROM='if $n_all && 2 * $n_first > $n_all;' TO='if $n_all && $n_first;' \
+    if FROM='return $n_all && 2 * $n_first > $n_all;' TO='return $n_all && $n_first;' \
         perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
         "$repo/tools/affected-tests.sh" >"$mutant"; then
       printf 'let used = 1\nlet unused = 3\n' >"$repo/lib/helper.ml"
@@ -563,6 +563,10 @@ if harness_leg 'verdict trailer'; then
                  "incomplete|3|--files lib/optlib.ml" \
                  "cross-cutting,incomplete|3|--files dune-project nowhere/ghost.ml" \
                  "ok|0|--referenced-only --files lib/helper.ml" \
+                 "ok|0|--files lib/core.ml lib/leaf.ml lib/stubbed.ml" \
+                 "cross-cutting|0|--files lib/core.ml lib/leaf.ml lib/stubbed.ml lib/myppx.ml" \
+                 "ok|0|--referenced-only --files lib/core.ml lib/leaf.ml lib/stubbed.ml lib/myppx.ml" \
+                 "cross-cutting,incomplete|3|--files lib/core.ml lib/leaf.ml lib/stubbed.ml lib/myppx.ml nowhere/ghost.ml" \
                  "<none>|2|--files" \
                  "<none>|2|--no-such-option"; do
     IFS='|' read -r vt_want vt_rc vt_args <<<"$vt_case"
@@ -586,7 +590,7 @@ if harness_leg 'verdict trailer'; then
   # CROSS-CUTTING line together, for a change the shipping script calls ok.
   vt_label='negative control: the trailer and the CROSS-CUTTING line read one definition of the verdict'
   mutant=$repo/tools/affected-mutant.sh
-  if FROM='if $n_all && 2 * $n_first > $n_all;' TO='if $n_all && $n_first;' \
+  if FROM='return $n_all && 2 * $n_first > $n_all;' TO='return $n_all && $n_first;' \
       perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
       "$repo/tools/affected-tests.sh" >"$mutant"; then
     rc=0
@@ -595,7 +599,56 @@ if harness_leg 'verdict trailer'; then
     if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] && grep -q '^affected: CROSS-CUTTING:' "$err"; then report 0 "$vt_label"
     else report 1 "$vt_label" "mutant exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
   else report 1 "$vt_label" 'the mutation anchor does not occur exactly once'; fi
+  # A list spanning over half the per-test aliases over a narrower first tier
+  # (gh-ocannl-1996): 16 of the 31 listed, 10 first, where 15 listed is ok above
+  # and the first tier alone (--referenced-only) is too. Its line names the
+  # first tier as where the local run starts, and keeps the slow- aliases local.
+  vt_label='a list over half the per-test aliases is cross-cutting by its list, and says how many rank first'
+  affected --files lib/core.ml lib/leaf.ml lib/stubbed.ml lib/myppx.ml
+  trailer
+  if [ "$rc" = 0 ] && [ "$verdict" = cross-cutting ] && [ "$(wc -l <"$out" | tr -d ' ')" = 16 ] &&
+     grep -q '^affected: CROSS-CUTTING: 16 of the 31 per-test aliases are listed, 6 of them link-only, so this change is cross-cutting by its list, though only 10 rank first: the PR'"'"'s CI run owns the full list but its 2 slow- alias(es), which no CI job runs: run those locally too; locally run the tests that exercise the change, named in the PR body -- the 10 that rank first (--referenced-only) are where to start -- and `dune build @check`$' "$err"; then
+    report 0 "$vt_label"
+  else report 1 "$vt_label" "exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
+  # Without the list's threshold that change reads ok, as it did before it.
+  vt_label='negative control: without the threshold on the list, the wide list reads ok'
+  if FROM='return $n_all && 2 * $n_listed > $n_all;' TO='return 0;' \
+      perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
+      "$repo/tools/affected-tests.sh" >"$mutant"; then
+    rc=0
+    (cd "$TMP" && bash "$mutant" --files lib/core.ml lib/leaf.ml lib/stubbed.ml lib/myppx.ml) >"$out" 2>"$err" || rc=$?
+    trailer
+    if [ "$rc" = 0 ] && [ "$verdict" = ok ] && ! grep -q 'CROSS-CUTTING' "$err"; then report 0 "$vt_label"
+    else report 1 "$vt_label" "mutant exit $rc, trailer $verdict; $(tr '\n' '|' <"$err")"; fi
+  else report 1 "$vt_label" 'the mutation anchor does not occur exactly once'; fi
   rm -f "$mutant"
+  # The rule itself, on the counts this repository gave when gh-ocannl-1996 was
+  # decided (825 per-test aliases): the fixture is too small to hold a list
+  # that is mostly link-only. Each case: first tier, printed, all, UNMAPPED.
+  vt_label='the verdict on a low_level.ml- and an autotune.ml-shaped list, their --referenced-only forms and the boundaries'
+  vt_detail=$(perl -e '
+    local $/; open my $fh, "<", $ARGV[0] or die "unreadable\n"; my $s = <$fh>;
+    $s =~ /^(sub first_tier_wide \{.*?^sub verdict \{.*?^\})/ms or die "no verdict in the script\n";
+    eval "$1; 1" or die "verdict does not load: $@";
+    for (["low_level.ml: whole module", 379, 815, 825, 0, "cross-cutting"],
+         ["low_level.ml: one function", 27, 815, 825, 0, "cross-cutting"],
+         ["low_level.ml --referenced-only", 379, 379, 825, 0, "ok"],
+         ["autotune.ml", 307, 636, 825, 0, "cross-cutting"],
+         ["autotune.ml --referenced-only", 307, 307, 825, 0, "ok"],
+         ["metal_backend.ml, nearly all link-only", 27, 815, 825, 0, "cross-cutting"],
+         ["test/support/ll_test.ml, none link-only", 329, 329, 825, 0, "ok"],
+         ["shape.ml, by its first tier", 544, 633, 825, 0, "cross-cutting"],
+         ["half the aliases listed", 10, 412, 824, 0, "ok"],
+         ["one over half listed", 10, 413, 824, 0, "cross-cutting"],
+         ["one over half ranking first", 413, 413, 824, 0, "cross-cutting"],
+         ["a wide list with an UNMAPPED path", 27, 815, 825, 1, "cross-cutting,incomplete"],
+         ["an UNMAPPED path alone", 0, 0, 825, 1, "incomplete"],
+         ["no per-test alias at all", 0, 0, 0, 0, "ok"]) {
+      my ($what, @c) = @$_; my $want = pop @c;
+      my $got = join(",", verdict(@c)) || "ok";
+      print "$what (@c): $got, want $want; " if $got ne $want;
+    }' "$repo/tools/affected-tests.sh" 2>&1)
+  if [ -z "$vt_detail" ]; then report 0 "$vt_label"; else report 1 "$vt_label" "$vt_detail"; fi
 fi
 
 if harness_leg 'link-only'; then
