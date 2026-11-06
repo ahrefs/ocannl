@@ -91,6 +91,8 @@ input_dim = (output_dim - 1) * stride + (kernel_dim - 1) * dilation + 1
 
 Equivalently, solving for output_dim: `output_dim = (input_dim - effective_kernel_span) / stride + 1`. This requires `(input_dim - effective_kernel_span)` to be non-negative and divisible by `stride`.
 
+Two windows over one extent relate their outputs: `stride1 * (o1 - 1) + span1 = stride2 * (o2 - 1) + span2`, where a padded window or a plain stride has `span = stride`. If one stride divides the other, one output is an affine of the other (`window_pair_equation`). Otherwise (strides 2 and 3) neither output is a function of the other, so the equation is deferred until the extent or one output is solved, and is then checked like any concrete window (gh-ocannl-1972). When `gcd stride1 stride2` does not divide `span1 - span2`, no sizes satisfy the pair, and it is refused at once. A shape scheme's trace, where the widths are unsolved, takes the same path. If nothing ever sizes the extent, closure sets each output to 1 and the pair is refused as a mismatch.
+
 **Projection inference** handles `Affine` terms differently depending on `use_padding`:
 
 - If `use_padding = false`: the effective kernel span is incorporated during shape inference; projection inference just applies the index formula with the actual `stride_offset`.
