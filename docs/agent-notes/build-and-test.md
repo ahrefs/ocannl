@@ -5876,11 +5876,11 @@ box.
   `config_dep_completeness` requires), or a `setenv` around the rule's `run`. For several values in one test, run a child per value: `Fresh_process.run`
   re-executes the test's own executable with `--ocannl_<key>=<value>`, which outranks every other
   source, and the child reports what it saw on stdout -- `cache_key_agreement` states
-  `cc_grid_private_bytes_cap` and `cc_pool_core_class` that way. An in-process statement is sound
-  only as the first thing the executable does, before anything can force the lazy, and the site
-  says so (`placement_surface` states `gpu_fission_keep_mapping` that way, gh-ocannl-1430). There
-  is no reset hook, by decision: add one beside a lazy only when a test needs two values of it in
-  one process and a child cannot serve.
+  `cc_grid_private_bytes_cap`, `cc_pool_core_class` and `max_shape_error_origins` that way. An
+  in-process statement is sound only as the first thing the executable does, before anything can
+  force the lazy, and the site says so (`placement_surface` states `gpu_fission_keep_mapping` that
+  way, gh-ocannl-1430). There is no reset hook, by decision: add one beside a lazy only when a test
+  needs two values of it in one process and a child cannot serve.
 - Values computed EAGERLY at initialization are a different class, outside the list: they are read
   when the module is linked in, before any test code runs, so no in-process statement reaches
   them at all -- the bootstrap keys and the profile pick, the debug runtime's settings, and the
@@ -5916,7 +5916,7 @@ box.
   `hip_kernel_cache_mib`, `hip_printf_fifo_size`, `hip_scratch_validation`, `log_level`.
 - `metal_backend.ml`: `metal_kernel_cache_mib`.
 - `persistence.ml`: `checkpoint_load_mmap`.
-- `row.ml`: `shape_substitution_cross_check`.
+- `row.ml`: `max_shape_error_origins`, `shape_substitution_cross_check`.
 - `schedule.ml`: `automatic_cpu_schedule`, `automatic_gpu_schedule`, `gpu_fission_keep_mapping`,
   `schedule_fission`, `schedule_log_launches`.
 - `schedule_outcome.ml`: `strict_failure_classification`.

@@ -261,7 +261,6 @@ let emitted_flips =
     ("cc_compile_unit_min_bytes", [ "0"; "1048576" ]);
     ("cuda_compile_programs", [ "1"; "4" ]);
     ("cuda_compile_program_min_kernels", [ "1"; "64" ]);
-    ("max_shape_error_origins", [ "3"; "9" ]);
     ("output_dlls_in_build_directory", flag);
     ("output_prec_in_ll_files", flag);
     ("cd_ident_style", [ "name_only"; "name_and_label" ]);
@@ -692,6 +691,21 @@ let () =
      backend, and nothing on a GPU one"
     (Option.value_map cap_flip ~default:false ~f:(fun moved ->
          if cpu then List.equal String.equal moved [ "codegen" ] else List.is_empty moved));
+  (* The stage 2 oracle's flip of an execution-neutral key resolved once: the first merge of two
+     constraints forces it, so a trace never sees it and a flip in this process would change
+     nothing. Its one reader is shape inference, whose every effect on the kernel passes through the
+     lowered code, so the digest speaks for it; 0 is the cap at its harshest, keeping no origin at
+     all. *)
+  let origins_flip =
+    match
+      ( child [ "--ocannl_max_shape_error_origins=0" ],
+        child [ "--ocannl_max_shape_error_origins=20" ] )
+    with
+    | Some (before, _, _), Some (after, _, _) -> Some (moved before after)
+    | _ -> None
+  in
+  p "max_shape_error_origins, stated in a child, moves nothing in the cache key"
+    (Option.exists origins_flip ~f:List.is_empty);
   (* Each pool class twice: with the chunk count left to its auto value, which follows the decided
      pool's width, and with it stated, which takes that route away. *)
   let pool_children chunks =
