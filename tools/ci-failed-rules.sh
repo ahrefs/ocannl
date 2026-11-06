@@ -7,6 +7,7 @@
 # thousands of lines up. CI's build jobs end red runs with this listing.
 #
 # Usage: tools/ci-failed-rules.sh [--github] [--host FILE] [LOG...]
+#        tools/ci-failed-rules.sh --names [LOG...]
 #   LOG        a build log: dune's own output as `tee` saved it, or a job log
 #              GitHub serves (`gh api .../actions/jobs/<id>/logs`, or
 #              `gh run view <id> --log-failed`, whose JOB<TAB>STEP<TAB>
@@ -21,6 +22,15 @@
 #              rather than refusing.
 #   --host FILE  print FILE (the host-capability line, gh-ocannl-1371) above
 #              the listing when it exists.
+#   --names    print only one short name per line, in the listing's order, for
+#              a verdict line that says what failed (gh-ocannl-2005): a
+#              stanza's `name`, else its `target` less a golden-diff rule's
+#              `.actual`, else its `alias`; a stanza with none of these as
+#              `<path>:<line>`; any other entry's file, without its directory;
+#              a locationless error as its message, cut to 80 characters. One
+#              failure is one line: another header in the same file is the same
+#              non-dune entry, and two different places sharing a name keep
+#              both, each led by its directory. Not with --github or --host.
 #
 # Prints one entry per dune error header -- `File "<path>", line N, ...:` or
 # `lines N-M` -- in the order dune reported them, a repeated one once:
@@ -66,6 +76,7 @@ set -u
 
 github=0
 host=
+names=0
 while [ $# -gt 0 ]; do
   case $1 in
     --github) github=1 ;;
@@ -73,6 +84,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "ci-failed-rules.sh: --host needs a file" >&2; exit 2; }
       host=$2
       shift ;;
+    --names) names=1 ;;
     -h|--help) sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --) shift; break ;;
     -?*) echo "ci-failed-rules.sh: unknown argument '$1'" >&2; exit 2 ;;
@@ -80,6 +92,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$names" = 1 ] && { [ "$github" = 1 ] || [ -n "$host" ]; }; then
+  echo "ci-failed-rules.sh: --names takes neither --github nor --host" >&2
+  exit 2
+fi
 
 if [ -n "$host" ] && [ -f "$host" ]; then
   cat -- "$host"
@@ -105,7 +122,7 @@ tab=$(printf '\t')
 bom=$(printf '\357\273\277')
 # Bytes, not characters: under a UTF-8 locale an awk may read the BOM as one
 # character, or refuse a log's invalid UTF-8.
-LC_ALL=C awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" '
+LC_ALL=C awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" -v names="$names" '
 function clean(s) {
   if (index(s, bom) == 1) s = substr(s, length(bom) + 1)
   sub(/\r$/, "", s)
@@ -122,6 +139,19 @@ function clean(s) {
   return s
 }
 function trim(s, n) { return length(s) > n ? substr(s, 1, n - 3) "..." : s }
+# What --names calls entry I (see the header).
+function rule_name(i,   n) {
+  n = cwhat[i]
+  if (n !~ /^\(/) { n = cpath[i]; sub(/.*\//, "", n); return n }
+  if (match(n, / (name|names) [^,]*/) || match(n, / (target|targets) [^,]*/) ||
+      match(n, / (alias|aliases) [^,]*/)) {
+    n = substr(n, RSTART + 1, RLENGTH - 1)
+    sub(/^[a-z]+ /, "", n)
+    sub(/\.actual$/, "", n)
+    return n
+  }
+  return cpath[i] ":" cfirst[i]
+}
 # A depth-1 field of a dune stanza names it. dune files are formatted, so a
 # field of the stanza itself is the one indented by exactly one space.
 function name_field(src,   m) {
@@ -279,7 +309,7 @@ BEGIN {
 END {
   flush_pend()
   close_block()
-  if (count > 0) {
+  if (count > 0 && !names) {
     printf "Failed dune rules (%d), in the order dune reported them:\n", count
     for (i = 1; i <= count; i++) {
       loc[i] = cpath[i] ":" cfirst[i] (clast[i] != cfirst[i] ? "-" clast[i] : "")
@@ -314,7 +344,7 @@ END {
     if (k in eseen) continue
     eseen[k] = 1; shown[++nshow] = errs[i]; schain[nshow] = echain[i]
   }
-  if (nshow > 0) {
+  if (nshow > 0 && !names) {
     printf "dune errors without a location (%d):\n", nshow
     for (i = 1; i <= nshow; i++) {
       printf "  %s\n", trim(shown[i], 240)
@@ -326,6 +356,24 @@ END {
       gsub(/\n/, " ", msg); msg = trim(msg, 400); gsub(/%/, "%25", msg); gsub(/\r/, "%0D", msg)
       printf "::error title=dune error::%s\n", msg
     }
+  }
+  if (names) {
+    m = 0
+    for (i = 1; i <= count; i++) {
+      n = rule_name(i)
+      # A dune stanza is told by where it stands, and any other entry by its file.
+      k = cpath[i] SUBSEP n SUBSEP (cpath[i] ~ /(^|\/)dune(-project)?$/ ? cfirst[i] : "")
+      if (k in nseen) continue
+      nseen[k] = 1
+      uname[++m] = n; upath[m] = cpath[i]
+      if (!((n, cpath[i]) in nplace)) { nplace[n, cpath[i]] = 1; places[n]++ }
+    }
+    for (i = 1; i <= m; i++) {
+      n = uname[i]; d = upath[i]
+      if (places[n] > 1 && sub(/\/[^\/]*$/, "", d)) n = d "/" n
+      print n
+    }
+    for (i = 1; i <= nshow; i++) print trim(shown[i], 80)
   }
   if (count == 0 && nshow == 0 && github) {
     print "No failed dune rule in this job'"'"'s build log: the failure lies in another step."

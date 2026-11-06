@@ -49,6 +49,89 @@ LOG
       Error: Unbound value w'
   report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" 'warning and alert blocks are left out' "exit $rc; $out"
 fi
+if harness_leg '--names gives each entry one short name #canned'; then
+  cat >"$TMP/names.log" <<'LOG'
+File "t/dune", line 3, characters 7-10:
+3 |  (name foo)
+           ^^^
+FAIL: a claim
+File "t/foo.expected", line 1, characters 0-0:
+--- a/t/foo.expected
++++ b/t/foo.exe.output
+File "t/foo.expected", line 9, characters 0-0:
+--- a/t/foo.expected
++++ b/t/foo.exe.output
+File "t/dune", lines 5-6, characters 0-40:
+5 | (rule
+6 |  (target bar.actual))
+FAIL: a claim
+File "t/dune", lines 8-9, characters 0-40:
+8 | (rule
+9 |  (alias runtest-baz))
+FAIL: a claim
+File "t/dune", lines 11-12, characters 0-40:
+11 | (rule
+12 |  (alias runtest)
+FAIL: a claim
+File "t/dune", lines 14-15, characters 0-40:
+14 | (rule
+15 |  (deps x))
+FAIL: a claim
+File "t/x.ml", line 1, characters 0-1:
+1 | y
+    ^
+Error: Unbound value y
+Error: Alias "nope" specified on the command line is empty.
+-> required by alias nope
+LOG
+  out=$(cd "$TMP" && subject --names names.log 2>&1); rc=$?
+  want='foo
+foo.expected
+bar
+runtest-baz
+runtest
+t/dune:14
+x.ml
+Error: Alias "nope" specified on the command line is empty.'
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" '--names gives each entry one short name' "exit $rc; $out"
+  cat >"$TMP/both.log" <<'LOG'
+File "t/dune", lines 5-7, characters 0-40:
+5 | (rule
+6 |  (alias runtest)
+7 |  (target qux.actual))
+FAIL: a claim
+LOG
+  out=$(cd "$TMP" && subject --names both.log 2>&1); rc=$?
+  report "$([ "$rc" = 0 ] && [ "$out" = qux ]; echo $?)" '--names prefers a target to an alias' "exit $rc; $out"
+  # The same short name in two directories is two failures; each golden header once is one.
+  cat >"$TMP/collide.log" <<'LOG'
+File "a/dune", line 3, characters 7-10:
+3 |  (name foo)
+           ^^^
+FAIL: a claim
+File "b/dune", line 3, characters 7-10:
+3 |  (name foo)
+           ^^^
+FAIL: a claim
+File "a/bar.expected", line 1, characters 0-0:
+--- a/a/bar.expected
++++ b/a/bar.exe.output
+File "b/bar.expected", line 1, characters 0-0:
+--- a/b/bar.expected
++++ b/b/bar.exe.output
+LOG
+  out=$(cd "$TMP" && subject --names collide.log 2>&1); rc=$?
+  want='a/foo
+b/foo
+a/bar.expected
+b/bar.expected'
+  report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" '--names keeps a name two directories share, each led by its directory' "exit $rc; $out"
+  : >"$TMP/green.log"
+  out=$(cd "$TMP" && subject --names green.log 2>&1); rc=$?
+  report "$([ "$rc" = 0 ] && [ -z "$out" ]; echo $?)" '--names on a green log prints nothing' "exit $rc; $out"
+  out=$(cd "$TMP" && subject --names --github names.log 2>&1); rc=$?
+  report "$([ "$rc" = 2 ] && [[ $out == *"--names takes neither"* ]]; echo $?)" '--names refuses --github' "exit $rc; $out"
+fi
 if harness_leg 'CI mode on a missing log, and usage errors #canned'; then
   out=$(subject --github "$TMP/absent.log" 2>&1); rc=$?
   report "$([ "$rc" = 0 ] && [ "$out" = "No dune build log at $TMP/absent.log: this job failed before its dune build ran." ]; echo $?)" \
