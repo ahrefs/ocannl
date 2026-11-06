@@ -14,10 +14,16 @@
 # reads a new kind of file; the few paths nothing reads (editor settings) cost a build only when
 # both sides change one. Replayed over the 474 first-parent merges on master from 2026-09-19 to
 # 2026-10-19, the OCaml-and-scripts list this replaced built 166 of them, adding `*.md` would
-# build 238 and every path builds 245, at about 40 s each (tools/merge-build-replay.py replays a
+# build 238 and every path builds 245, at about 100 s each (tools/merge-build-replay.py replays a
 # history against any glob sets, these lines by default). What stays outside: a clash across
 # paths only ONE side changed, and one the compile tier cannot see (a runtime test's verdict);
 # both are the integration loop's, on master.
+#
+# Bound. `timeout` covers the command's slowest honest run: the compile tier and the WHOLE shell
+# tier, which every fail-closed fallback of tools/merge-build-check.sh runs. Measured on mac-studio
+# on 2026-11-06 under a --cpu slot, from a fresh clone: 1167 s and 1154 s at load about 3; a run
+# at load 3.6 overran the 1200 s this was (gh-ocannl-1994). 1800 s is 1.5 times that. Re-measure
+# with `tools/merge-build-check.sh --all` when the shell tier grows.
 #
 # Trust. The command is this repository's own code, trusted as a developer's build is: the
 # scratch repository is a place to build, not a sandbox. It runs from whatever environment
@@ -25,4 +31,4 @@
 # cost and how it finds dune when that environment lacks the opam switch.
 command tools/merge-build-check.sh
 input *
-timeout 1200
+timeout 1800

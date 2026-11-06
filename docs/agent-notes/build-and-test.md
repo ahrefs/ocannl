@@ -229,8 +229,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   therefore has ship-pr's `merge` build the PR head merged with master's tip before the merge call,
   whenever ANY path changed on both sides since their merge base, and refuse the merge when
   `tools/merge-build-check.sh` fails there. That script always runs
-  `dune build @check @test/operations/scans`, about 40 s from a fresh tree on mac-studio, and adds
-  the shell harness tier, about 470 s, only when a shared path is a `*.sh`. Every path is an input
+  `dune build @check @test/operations/scans`, about 100 s from a fresh tree on mac-studio, and adds
+  the shell harness tier only when a shared path is a `*.sh`, narrowed to what the shared paths
+  reach (the next item). Every path is an input
   because the scans read the repository itself: two notes edits that merge cleanly can still break
   `agent_notes_structure`, push `AGENTS.md` past `agents_md_size`'s cap, or desynchronize a scan
   golden (gh-ocannl-1382). In the month to 2026-10-19, 245 of 474 merges shared a path (166 an OCaml
@@ -250,6 +251,32 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   and a zone in `--since`/`--until`: git fills a bare date with the current time of day and a
   zoneless one with the local zone. `tools/test-merge-build-replay.sh` pins its shell-tier replay
   to the script's own `--plan` merge by merge.
+- The merge build's shell tier runs what the overlap reaches, and its bound holds the whole tier
+  (gh-ocannl-1994). Sized on 2026-11-06 on mac-studio at load about 3, under a `--cpu` slot from a
+  fresh clone, `tools/merge-build-check.sh --all` took 1167 s and 1154 s: the shell tier 1071 s and 1056 s, of which
+  `tools/test-test-run.sh` alone is about 735 s; a run at load 3.6 overran the 1200 s it was bounded
+  by then. `timeout` in `.github/ship-pr-merge-build` is 1800 s, 1.5 times that 1200 s, so the whole
+  tier fits at the load the fleet runs. Re-measure before trusting a figure older than the manifest:
+  the tier's cost has tripled since one read 470 s. When the trigger holds, the tier is
+  `tools/test-harnesses.sh --shell --affected --files PATH...` over every path changed on both sides,
+  both names of a rename, non-scripts too, so `affected --harnesses`'s mapping is asked and not
+  copied. `--shell` keeps only that group's members: a member of another group would need a
+  toolchain the tier does not promise and time the bound was not sized for, so a scoped run is
+  never more than the whole tier. The trigger itself stays `*.sh`, a shared non-script alone
+  building no shell tier, so `tools/merge-build-replay.py`'s shell-tier counts stand. The fallback
+  is fail-closed: a failed ask, a line `--affected`'s allowlist refuses, a path reading as an
+  option, a scoped run refused before a member starts (exit 2), and a shared `*.sh` no member of
+  the tier reaches, each asked alone so one reached path cannot hide another, all run the whole
+  tier. What the mapping answers is the policy: `scripts/harness-support.sh`, which every member
+  loads, reaches the whole tier, and a manifest edit reaches the members naming
+  `tools/test-harnesses.sh` (three, about 30 s), which is why `tools/test-test-run.sh` compares the
+  closing line of `prepush` without spelling that name. A harness named only in another's literal
+  buys the slow member every edit of the named file; `tools/test-merge-build-check.sh` pins both
+  answers. The nested slot needs nothing: `--list` takes none, and a run inside ship-pr's slot reuses
+  it. The base-alone build `merge` compares a failure with carries the merge's two parents on the
+  base's tree, so it selects and narrows the same way. A reach the two trees answer differently
+  shows as `+` lines, a refusal, and a base red no leg of the scope reaches lets the merge through
+  rather than asking for `--override`.
 
 ### Scan corpora, goldens and floors
 
@@ -3405,9 +3432,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     worktrees, and `--list` -- a fleet leg's form -- can only carry aliases. So a shell change's
     pre-push is `prepush`, then that closing command, and the rule to run the whole tier before
     pushing a shell change is retired to CI, which runs it on every PR. `--affected` reads
-    `affected --harnesses --since BASE`'s stdout, never evaluates it (each line is `HARNESS` or
+    `affected --harnesses --since BASE`'s stdout (or `--files PATH...`'s, for paths no diff
+    states), never evaluates it (each line is `HARNESS` or
     `HARNESS --only 'ERE'`, HARNESS a member listed once, anything else exit 2 before the slot),
-    and runs those commands in manifest order under the aggregate's one `--cpu` slot and footer.
+    and runs those commands in manifest order under the aggregate's one `--cpu` slot and footer;
+    a group keeps that group's members, the merge build's form (gh-ocannl-1994).
     The form exists because a change reaching six harnesses meant six slot launches, or a scratch
     loop: a single harness takes no slot itself. A change reaching none exits 0 with no slot, where
     an empty group is refused: the first is a result, the second a broken manifest.
