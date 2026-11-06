@@ -695,6 +695,8 @@ tools/test-promotion-record.sh uses the shared harness contract: true
 tools/test-promotion-record.sh parses: true
 tools/test-refusal-manifest-sync.sh uses the shared harness contract: true
 tools/test-refusal-manifest-sync.sh parses: true
+tools/test-row-trace-compact.sh uses the shared harness contract: true
+tools/test-row-trace-compact.sh parses: true
 tools/test-run.sh parses: true
 tools/test-test-harnesses.sh uses the shared harness contract: true
 tools/test-test-harnesses.sh parses: true

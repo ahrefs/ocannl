@@ -990,8 +990,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   ordinary `FAIL  leg naming: ...`. Gated and alone-clean so far: `tools/test-test-run.sh`,
   `tools/test-mutation-run.sh`, `tools/test-promote.sh`, `tools/test-machine-verify.sh`,
   `scripts/test-setup-ocaml-env.sh`, `tools/test-merge-build-check.sh`,
-  `tools/test-merge-build-replay.sh`, `tools/test-affected-tests.sh` and the two
-  `benchmarks/test-*box*.sh`.
+  `tools/test-merge-build-replay.sh`, `tools/test-row-trace-compact.sh`,
+  `tools/test-affected-tests.sh` and the two `benchmarks/test-*box*.sh`.
 - **A leg that cannot go on ends itself, never the harness** (gh-ocannl-1374). Each leg of
   `tools/test-test-run.sh` is a function run by `harness_leg_run 'NAME' leg_N`; a check it cannot
   get past (an extraction or mutant that matched nothing, a fixture repository that will not
