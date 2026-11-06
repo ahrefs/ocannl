@@ -9,7 +9,8 @@ leg_tools=$(cd "$(dirname "$sweep")" && pwd)
 leg_root=$tmp/leg-scripts
 leg_bin=$tmp/leg-bin
 mkdir -p "$leg_root/tools" "$leg_bin"
-for leg in vendor-idents-check.sh cuda-tf32-parity.sh cuda-native-ptx-rerun.sh credential-env.sh; do
+for leg in vendor-idents-check.sh cuda-tf32-parity.sh cuda-native-ptx-rerun.sh ci-failed-rules.sh \
+  credential-env.sh; do
   cp "$leg_tools/$leg" "$leg_root/tools/$leg"
 done
 leg_calls=$tmp/leg-dune.calls
@@ -101,24 +102,60 @@ LEG_DUNE_PREBUILD_RC=1 run_leg cuda-tf32-parity.sh --fixture-dir "$leg_fixtures"
 [ "$(leg_verdict)" = 'cuda-tf32-parity: verdict: unavailable: bench_conv_diag.exe did not build' ]
 absent 'exec --no-build' "$leg_calls"
 
-# native ptx: the whole suite (by default) at the native target, its failing files named.
+# native ptx: the whole suite (by default) at the native target, its failed rules counted and named.
 : >"$leg_calls"
 LEG_DUNE_RC=0 run_leg cuda-native-ptx-rerun.sh
 [ "$leg_rc" -eq 0 ]
 [ "$(leg_verdict)" = 'cuda-native-ptx: verdict: holds (dune build @runtest @train: the suite passes at the native PTX target)' ]
 grep -qx 'build @runtest @train | backend=cuda ptx=native tf32= parity= materialize= fixture= credentials=' \
   "$leg_calls"
-LEG_DUNE_OUT='File "test/operations/a.expected", line 1, characters 0-0:
-File "test/operations/a.expected", line 9, characters 0-0:
-File "test/operations/dune", line 3, characters 0-60:' LEG_DUNE_RC=1 \
+# The shape of the 2026-11-06 rog-nv log (gh-ocannl-2005): two failing rules in one dune file and a
+# golden between them, each named, the header dune repeated for the golden counted once.
+LEG_DUNE_OUT='File "test/operations/dune", line 5816, characters 7-24:
+5816 |  (name branchless_select)
+              ^^^^^^^^^^^^^^^^^
+FAIL: bs_where_zero: no conditional branch on the select'"'"'s lines: false
+File "test/operations/cache_key_agreement.expected", line 1, characters 0-0:
+--- a/test/operations/cache_key_agreement.expected
++++ b/test/operations/cache_key_agreement.exe.output
+File "test/operations/cache_key_agreement.expected", line 1, characters 0-0:
+--- a/test/operations/cache_key_agreement.expected
++++ b/test/operations/cache_key_agreement.exe.output
+File "test/operations/dune", lines 5835-5846, characters 0-308:
+5835 | (rule
+5836 |  (target branchless_select-no_hip_fast_math.actual)
+5837 |  (package neural_nets_lib)
+......
+5845 |    %{target}
+5846 |    (run %{dep:branchless_select.exe} --ocannl_hip_fast_math=false))))
+FAIL: bs_where_zero: no conditional branch on the select'"'"'s lines: false' LEG_DUNE_RC=1 \
   run_leg cuda-native-ptx-rerun.sh -j 3 @test/operations/runtest
 [ "$leg_rc" -eq 1 ]
-[ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; 2 failing files: test/operations/a.expected, test/operations/dune)' ]
+[ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; 3 failed rules: branchless_select, cache_key_agreement.expected, branchless_select-no_hip_fast_math)' ]
 grep -q '^build -j 3 @test/operations/runtest | backend=cuda ptx=native ' "$leg_calls"
-LEG_DUNE_OUT='File "a", line 1:
-File "b", line 1:
-File "c", line 1:
-File "d", line 1:' LEG_DUNE_RC=1 run_leg cuda-native-ptx-rerun.sh
-[ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; 4 failing files: a, b, c, ...)' ]
+LEG_DUNE_OUT='File "a.ml", line 1, characters 0-1:
+Error: Unbound value a
+File "b.ml", line 1, characters 0-1:
+Error: Unbound value b
+File "c.ml", line 1, characters 0-1:
+Error: Unbound value c
+File "d.ml", line 1, characters 0-1:
+Error: Unbound value d' LEG_DUNE_RC=1 run_leg cuda-native-ptx-rerun.sh
+[ "$leg_rc" -eq 1 ]
+[ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; 4 failed rules: a.ml, b.ml, c.ml, ...)' ]
+LEG_DUNE_OUT='Error: Alias "nope" specified on the command line is empty.' LEG_DUNE_RC=1 \
+  run_leg cuda-native-ptx-rerun.sh
+[ "$leg_rc" -eq 1 ]
+[ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; 1 failed rule: Error: Alias "nope" specified on the command line is empty.)' ]
+# Red stays red where nothing can be named: a dune that died mid-run, and the reader itself gone.
+LEG_DUNE_OUT='Killed' LEG_DUNE_RC=137 run_leg cuda-native-ptx-rerun.sh
+[ "$leg_rc" -eq 1 ]
+[ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 137; no failed rule in its output)' ]
+mv "$leg_root/tools/ci-failed-rules.sh" "$leg_root/ci-failed-rules.sh.aside"
+LEG_DUNE_OUT='File "a.ml", line 1, characters 0-1:
+Error: Unbound value a' LEG_DUNE_RC=1 run_leg cuda-native-ptx-rerun.sh
+mv "$leg_root/ci-failed-rules.sh.aside" "$leg_root/tools/ci-failed-rules.sh"
+[ "$leg_rc" -eq 1 ]
+[ "$(leg_verdict)" = 'cuda-native-ptx: verdict: NATIVE TARGET RED (dune exited 1; no failed rule in its output)' ]
 absent 'credentials=[A-Z]' "$leg_calls"
 printf 'sweep diagnostic leg scripts: PASS\n'

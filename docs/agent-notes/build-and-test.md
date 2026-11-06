@@ -4012,7 +4012,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   dune-file header whose excerpt omits the first or last line it names (dune quotes both); a
   harness that replays fixture logs as its failure output prefixes them (`sweep_harness.sh`'s
   `replayed`, `| `), so neither side alone carries it (gh-ocannl-1590). Out of reach: a test
-  printing a bare, self-consistent dune block. **A pipe into `tee` reports tee's status**:
+  printing a bare, self-consistent dune block. A script that reports a red dune run in one line
+  reads `--names` (one short name per entry; the native-PTX leg's verdict, gh-ocannl-2005) rather
+  than dune's `File "..."` paths, where every failing `(test)` is its dune file. **A pipe into `tee` reports tee's status**:
   each such bash step says `shell: bash` (GitHub's `-eo pipefail`; the implicit default `bash -e`
   has no pipefail, and the build would read green), and the PowerShell one ends `exit
   $LASTEXITCODE`; `test/operations/ci_matrix.sh` holds both, with mutants.

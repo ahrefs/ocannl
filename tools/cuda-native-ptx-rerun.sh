@@ -18,10 +18,11 @@
 #   cuda-native-ptx: verdict: holds (...)            0  the suite passes at the native target
 #   cuda-native-ptx: verdict: NATIVE TARGET RED (...) 1  dune failed: a test, a golden or a compile
 #                                                       the floor run passed (the sweep runs this only
-#                                                       after a green floor unit); the first few
-#                                                       failing files are named
+#                                                       after a green floor unit); the failed rules
+#                                                       are counted and the first few named
 #   cuda-native-ptx: verdict: unavailable: ...        2  the run could not start (the credential scrub)
-# Its boundary: it reads dune's exit status and its `File "..."` lines, nothing else of its output.
+# Its boundary: it reads dune's exit status and what tools/ci-failed-rules.sh --names reads of its
+# output, nothing else of it. A red run that reader names nothing in (dune killed, say) is still red.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 cd "$root" || exit 2
@@ -47,9 +48,11 @@ OCANNL_BACKEND=cuda OCANNL_CUDA_PTX_TARGET=native dune build "$@" >"$work/out" 2
 rc=$?
 cat "$work/out"
 [ "$rc" != 0 ] || verdict 0 "holds (dune build $*: the suite passes at the native PTX target)"
-files=$(sed -n 's/^File "\([^"]*\)".*/\1/p' "$work/out" | awk '!seen[$0]++')
-count=$(printf '%s' "$files" | grep -c .)
-first=$(printf '%s\n' "$files" | head -n 3 | paste -sd, - | sed 's/,/, /g')
-more=
+rules=$(bash tools/ci-failed-rules.sh --names "$work/out" 2>/dev/null) || rules=
+[ -n "$rules" ] || verdict 1 "NATIVE TARGET RED (dune exited $rc; no failed rule in its output)"
+count=$(printf '%s\n' "$rules" | grep -c .)
+first=$(printf '%s\n' "$rules" | awk 'NR > 3 { exit } { printf "%s%s", (NR > 1 ? ", " : ""), $0 }')
+noun=rules more=
+[ "$count" != 1 ] || noun=rule
 [ "$count" -le 3 ] || more=', ...'
-verdict 1 "NATIVE TARGET RED (dune exited $rc; $count failing files${first:+: $first$more})"
+verdict 1 "NATIVE TARGET RED (dune exited $rc; $count failed $noun: $first$more)"
