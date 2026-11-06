@@ -129,7 +129,8 @@ files.
   scope at a `Set`'s root is judged at `store_precs` of its VALUE, because collapsing
   changes that answer (`x16 = Scope f32 { read f64 }` rounds twice kept). An update can render at
   `acc_prec`, which on a GPU is wider than `comp_prec` and would read a cast unrounded, so it needs
-  the two equal. CSE runs first, so a scope with a `Get_local` reader stays, which `collapsible`
+  the two equal; and a collapse must not MAKE an update, since `out = Scope { out + x }` narrows
+  every iteration and would localize and narrow once, on cc's default too. CSE runs first, so a scope with a `Get_local` reader stays, which `collapsible`
   never had to ask. A draw stays: `mentions_rng_conversion` stops at a scope.
   **Its reach is narrow.** What it recovers on cc's default is gh-ocannl-1788's arithmetic scopes.
   It does NOT recover the tiles gh-ocannl-1866 cost: a cast on a wide-compute backend has `R` f16 and

@@ -438,6 +438,22 @@ let cast_in_update ~name ~scope =
   let cancelling = Array.init n ~f:(fun k -> if k % 2 = 0 then 1.0029296875 else -1.) in
   (o, [ (x_tn, cancelling); (out, Array.create ~len:n 0.) ], out)
 
+(* A collapse that would make an update: not one with the scope around it, so the store narrows
+   every iteration, and with increments a quarter of the ulp at 1 the value never moves. Collapsed,
+   it would localize at the residency and narrow once, and they would add up. On cc's default too,
+   whose accumulator is its compute precision. *)
+let exposed_update ~name ~scope =
+  let s, i, tns = statement_nodes ~name [ f32; bf ] in
+  let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
+  let at0 = [| Ll_test.fixed 0 |] in
+  let sum = LL.Binop (Ops.Add, (Ll_test.get out at0, bf), (Ll_test.get x_tn i, bf)) in
+  let write v = Ll_test.loop_n s n (Ll_test.set out at0 v) in
+  let o =
+    Ll_test.optimize_scoped ~name ~raw:(write sum)
+      (write (scope ~orig_indices:i (bnode (name ^ "_mid")) sum))
+  in
+  (o, [ (x_tn, Array.create ~len:n 0.001953125); (out, Array.create ~len:n 1.) ], out)
+
 (* A scope at the root of a store. Kept, a double is converted to the scope's single and then to
    fp8; collapsed, [store_precs] would see a copy and convert it in one step, and [double_to_fp8]
    does not round twice: 1.125 + 2^-40 is an f32 tie, broken to 1, and above the fp8 tie, so
@@ -622,6 +638,7 @@ let () =
           must_agree "shared" ~policy shared_read;
           must_agree "truth" ~policy truth_quotient;
           must_agree "recip" ~policy reciprocal;
+          must_agree "exposed_update" ~policy exposed_update;
           must_agree "draw" ~policy wide_draw;
           must_agree "where" ~policy where_condition;
           must_agree "nested" ~policy ~collapses:(collapses narrow_product) nested;

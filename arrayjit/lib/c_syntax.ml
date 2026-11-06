@@ -4275,12 +4275,18 @@ module C_syntax (B : C_syntax_config) = struct
           let store_prec = Lazy.force tn.Tn.storage_prec in
           (* A recognized update can render at the accumulator's residency instead
              ([decide_accum_width]). Where that differs the slot is not known here, and a cast read
-             at the wider one would go unrounded. *)
+             at the wider one would go unrounded. And it holds the accumulator across the level, so
+             a collapse must not make one: [out = Scope { out + x }] narrows every iteration, and
+             collapsed it would localize and narrow once. [accum_update_parts] is the one
+             classification reading operand positions, which a collapse moves; a read's own
+             predicates ([scalar_reads_scope], [scalar_touches_tn]) descend into scopes. *)
+          let updates v = Option.is_some (Low_level.accum_update_parts ~tn ~idcs v) in
+          let collapsed = stored ~store_prec llsc in
           if
-            Option.is_some (Low_level.accum_update_parts ~tn ~idcs llsc)
-            && not (Ops.equal_prec (acc_prec store_prec) (comp_prec store_prec))
+            (updates llsc && not (Ops.equal_prec (acc_prec store_prec) (comp_prec store_prec)))
+            || not (Bool.equal (updates llsc) (updates collapsed))
           then c
-          else Set { set with llsc = stored ~store_prec llsc }
+          else Set { set with llsc = collapsed }
       | Set_local (id, value) ->
           let scope_prec = scope_prec_in ~accum_scope_ids id in
           Set_local (id, scalar ~slot:(set_local_value_prec ~scope_prec id value) value)

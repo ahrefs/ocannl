@@ -54,6 +54,8 @@ truth: the kept form's values, bitwise: true
 truth: the local stays unless the collapse is exact: true
 recip: the kept form's values, bitwise: true
 recip: the local stays unless the collapse is exact: true
+exposed_update: the kept form's values, bitwise: true
+exposed_update: the local stays unless the collapse is exact: true
 draw: the kept form's values, bitwise: true
 draw: the local stays unless the collapse is exact: true
 where: the kept form's values, bitwise: true
@@ -124,6 +126,8 @@ truth: the kept form's values, bitwise: true
 truth: the local stays unless the collapse is exact: true
 recip: the kept form's values, bitwise: true
 recip: the local stays unless the collapse is exact: true
+exposed_update: the kept form's values, bitwise: true
+exposed_update: the local stays unless the collapse is exact: true
 draw: the kept form's values, bitwise: true
 draw: the local stays unless the collapse is exact: true
 where: the kept form's values, bitwise: true
