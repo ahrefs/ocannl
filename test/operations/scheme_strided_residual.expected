@@ -34,6 +34,15 @@ control (off): no scheme event, where check had some: true
 output dims: single prec 2x1
 check and off give the same output dims: true
 check and off give the same output, loss, parameters and gradients, bitwise: true
+under check, the network builds without a shape error: true
+control (off): the network builds: true
+its scheme is traced: true
+and its application is checked against the scheme: true
+no scheme event leaves it unschemed: true
+control (off): no scheme event, where check had some: true
+output dims: single prec 2x1
+check and off give the same output dims: true
+check and off give the same output, loss, parameters and gradients, bitwise: true
 the scheme or the body raises a shape error: true
 width 12 gives outputs 6 and 4, over the input and y's 66: true
 control: width 10 is no multiple of 3: true
@@ -173,3 +182,43 @@ window first: a padded stride-1 window resolves v = 4 of bcast_if_1: true
 extent first: a padded stride-1 window resolves v = 4 of bcast_if_1: true
 a window with nothing solved stays deferred: neither solved nor refused: true
 a different size is refused: v = bcast 4, conv(v + kernel 1) = bcast 5: true
+the output, kernel and input keep their tags or the system is refused: true
+the input is the extent's, in every order: true
+and agrees with solving the same window over solved dims in place: true
+a padded window does not wait for its kernel: true
+with nothing else about it, conv3(v) = 3 holds the equation back: true
+and binds nothing: true
+retried, it is still held and binds nothing: true
+a later constraint decides it: true
+and keeps its tag: true
+with nothing else at all, closing settles it on default: true
+control, the gate against over-deferral: a default output above 1 solves at Stage1: true
+window first in one closing pass: v keeps h: true
+extent first in one closing pass: v keeps h: true
+over a nested window, settling keeps to a tag that window can derive: true
+a nested window with an unsolved kernel stays deferred: neither solved nor refused: true
+and solves once the kernel arrives: true
+bound first: settling an output keeps to its bound: true
+window first: settling an output keeps to its bound: true
+h first: two open windows of different kernels settle on default: true
+j first: two open windows of different kernels settle on default: true
+the issue: v = 1 of bcast_if_1, conv3(v) = 3 of default, extent first, window on the left: true
+the issue: v = 1 of bcast_if_1, conv3(v) = 3 of default, extent first, window on the right: true
+the issue: v = 1 of bcast_if_1, conv3(v) = 3 of default, window first, window on the left: true
+the issue: v = 1 of bcast_if_1, conv3(v) = 3 of default, window first, window on the right: true
+a named span-1 kernel: v = 4 of default, conv(v, 1 of h) = 4 of h, extent first, window on the left: true
+a named span-1 kernel: v = 4 of default, conv(v, 1 of h) = 4 of h, extent first, window on the right: true
+a named span-1 kernel: v = 4 of default, conv(v, 1 of h) = 4 of h, window first, window on the left: true
+a named span-1 kernel: v = 4 of default, conv(v, 1 of h) = 4 of h, window first, window on the right: true
+the reverse arm refuses what forward refuses: conv(v, 3 of h) = 3 of default: true
+a kernel closed to the top makes no claim, solved: true
+a kernel closed to the top makes no claim, reversed: true
+window first: a kernel inferred under 5 of x over 2 of default is 4 of x: true
+extent first: a kernel inferred under 5 of x over 2 of default is 4 of x: true
+kernels of h and j have no common input (pair first): true
+kernels of h and j have no common input (outputs first): true
+kernels of h and default disagree over a default extent (pair first): true
+kernels of h and default disagree over a default extent (outputs first): true
+a held pair over an unsolved inner kernel ends: neither solved nor refused: true
+and solves once its sizes arrive: true
+control: the same named kernel solves, and the held pair is discharged: true

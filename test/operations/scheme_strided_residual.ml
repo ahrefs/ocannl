@@ -17,7 +17,11 @@
    gh-ocannl-1972: strides that do not divide each other (2 and 3) relate no output to the other as
    a function, and the same reduction refused them, so [check] killed a program [off] ran. The pair
    now waits for one side. Pinned by the [windows_2_3] network against [off], by [late_sized] on a
-   width arriving after the windows, and by the solver claims. *)
+   width arriving after the windows, and by the solver claims.
+
+   gh-ocannl-1968: the solved arms derived a window's basis three ways, so acceptance depended on
+   which constraint arrived first. Pinned by the matrix at the end and the [whole_width] network,
+   whose outputs wait on that rule. *)
 
 (* cc-fp-contract: same-shape -- check and off build the same graph, so both arms compile the same
    kernel code and contract alike *)
@@ -109,12 +113,20 @@ let make_net net =
       let c2, c3 = make_windows_2_3 () in
       let%op windows_2_3 x = c2 x ++ "...|... => 0" + (c3 x ++ "...|... => 0") in
       ("windows_2_3", windows_2_3)
+  | `Whole_width ->
+      let c =
+        Nn_blocks.conv2d ~label:[ "whole" ] ~kernel_size:8 ~use_padding:false ~out_channels:4 ()
+      in
+      let%op whole_width x = relu (c x) ++ "...|... => 0" in
+      ("whole_width", whole_width)
 
 (* Non-square, batch 2, 3 channels: 8x12 for one block (and for the stride-4 shortcut), 16x24 for
-   two. *)
+   two. [Whole_width]'s kernel covers its square input, so the window's outputs are the width-1 ones
+   whose tag the equation leaves open (gh-ocannl-1968). *)
 let input net =
-  let k = match net with `S2 | `S4 -> 1 | `S2_s3 -> 2 | `Windows_2_3 -> 3 in
-  TDSL.range_of_shape ~label:[ "input" ] ~batch_dims:[ 2 ] ~output_dims:[ 8 * k; 12 * k; 3 ] ()
+  let k = match net with `S2 | `S4 | `Whole_width -> 1 | `S2_s3 -> 2 | `Windows_2_3 -> 3 in
+  let width = match net with `Whole_width -> 8 | _ -> 12 * k in
+  TDSL.range_of_shape ~label:[ "input" ] ~batch_dims:[ 2 ] ~output_dims:[ 8 * k; width; 3 ] ()
 
 let run net ~mode =
   Tensor.For_testing.set_op_shape_schemes (Some mode);
@@ -148,7 +160,7 @@ let run net ~mode =
               :: List.concat_map params ~f:(fun t -> [ values t; grads t ]) )) ))
 
 let () =
-  List.iter [ `S2; `S2_s3; `S4; `Windows_2_3 ] ~f:(fun net ->
+  List.iter [ `S2; `S2_s3; `S4; `Windows_2_3; `Whole_width ] ~f:(fun net ->
       let name = fst (make_net net) in
       Verdict.case (name ^ ": traces, checks and agrees with off") (fun () ->
           let log_check, check = run net ~mode:`Check in
@@ -696,3 +708,300 @@ let () =
         (is_refused
            (solve_strict ~incremental:true
               [ eq (Var v) (bcast 4); eq (identity_window (Var v)) (bcast 5) ])))
+
+(* {2 A window's basis does not depend on constraint order (gh-ocannl-1968)}
+
+   [staged] drives a system the way construction and closure do: each constraint arrives at Stage1,
+   what was deferred stays pending, and the closing stages run last. A valid window derives its
+   input's basis from its extent's and its kernel's. That rule is not injective, so an output or a
+   kernel the equation leaves open waits for another constraint, and takes [default] once none will
+   come. *)
+
+let stages_closing = [ Row.Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ]
+
+let staged ?(closing = stages_closing) cs =
+  let step stage acc cs =
+    Result.bind acc ~f:(fun (deferred, env) ->
+        match Row.solve_inequalities ~stage (deferred @ cs) env with
+        | result -> Ok result
+        | exception Row.Shape_error (msg, _) -> Error (`Refused msg))
+  in
+  let arrived =
+    List.fold cs ~init:(Ok ([], Row.empty_env)) ~f:(fun acc c -> step Stage1 acc [ c ])
+  in
+  List.fold closing ~init:arrived ~f:(fun acc stage -> step stage acc [])
+
+let finished = Result.bind ~f:(function [], env -> Ok env | _ :: _, _ -> Error `Left_deferred)
+
+let window ?(stride = 1) ?(dilation = 1) ~kernel over =
+  Row.Affine
+    { stride; over; conv = Some { dilation; kernel; use_padding = false }; stride_offset = 0 }
+
+let padded_window ~stride ~kernel over =
+  Row.Affine
+    { stride; over; conv = Some { dilation = 1; kernel; use_padding = true }; stride_offset = 0 }
+
+let tag_of env v =
+  match Row.get_dim_from_env env v with Some (Dim { d; basis; _ }) -> Some (d, basis) | _ -> None
+
+let solves_tag (v, d, basis) = function
+  | Error _ -> false
+  | Ok env -> (
+      match tag_of env v with Some (got, b) -> got = d && String.equal b basis | None -> false)
+
+(* The rule, stated apart from the solver so that two orders cannot agree on a wrong answer. *)
+let rule ~o:(ob, od) ~k:(kb, kd) =
+  let free basis d =
+    String.equal basis Row.default_basis || (String.equal basis Row.bcast_if_1 && d = 1)
+  in
+  match (free ob od, free kb kd) with
+  | _ when String.equal ob kb -> Some ob
+  | true, true -> Some Row.default_basis
+  | true, false -> Some kb
+  | false, true -> Some ob
+  | false, false -> None
+
+let tags = [ Row.default_basis; Row.bcast_if_1; "h"; "j" ]
+
+let tag_triples =
+  List.concat_map tags ~f:(fun o ->
+      List.concat_map tags ~f:(fun k -> List.map tags ~f:(fun i -> (o, k, i))))
+
+let () =
+  Verdict.case "every tag triple, window shape and constraint order agrees with the rule" (fun () ->
+      (* stride, dilation, kernel size, output size. The first is the issue's: no output but 1 is
+         contested at a reserved kernel. *)
+      let shapes =
+        [
+          (1, 1, 3, 1);
+          (2, 1, 1, 1);
+          (2, 1, 1, 3);
+          (1, 1, 3, 4);
+          (1, 2, 2, 1);
+          (2, 1, 3, 4);
+          (1, 1, 1, 4);
+          (1, 1, 1, 1);
+        ]
+      in
+      let cells = List.cartesian_product shapes tag_triples in
+      let orders = permutations [ 0; 1; 2; 3 ] in
+      let agrees (((stride, dilation, ksize, osize), (ob, kb, ib)) as _cell) order =
+        let isize = (stride * (osize - 1)) + (dilation * (ksize - 1)) + 1 in
+        let v = Row.get_var () and k = Row.get_var () and w = Row.get_var () in
+        let cs =
+          [|
+            eq (Var w) (window ~stride ~dilation ~kernel:(Var k) (Var v));
+            eq (Var v) (tagged osize ob);
+            eq (Var k) (tagged ksize kb);
+            eq (tagged isize ib) (Var w);
+          |]
+        in
+        let result = finished (staged (List.map order ~f:(Array.get cs))) in
+        let is_identity =
+          stride = 1
+          && (dilation * (ksize - 1)) + 1 = 1
+          && (String.equal kb Row.default_basis || String.equal kb Row.bcast_if_1)
+        in
+        let expected =
+          if is_identity then String.equal ob ib
+          else Option.equal String.equal (rule ~o:(ob, osize) ~k:(kb, ksize)) (Some ib)
+        in
+        let ok =
+          if expected then
+            solves_tag (v, osize, ob) result
+            && solves_tag (k, ksize, kb) result
+            && solves_tag (w, isize, ib) result
+          else is_refused result
+        in
+        if not ok then
+          Stdio.eprintf
+            "stride %d dilation %d kernel %d of %s output %d of %s input %d of %s, order %s: %s \
+             (not part of the golden)\n"
+            stride dilation ksize kb osize ob isize ib
+            (String.concat ~sep:"" (List.map order ~f:Int.to_string))
+            (if expected then "should solve" else "should be refused");
+        ok
+      in
+      p_all ~min:512 "the output, kernel and input keep their tags or the system is refused" cells
+        ~f:(fun cell -> List.for_all orders ~f:(agrees cell)));
+  Verdict.case "a padded window keeps its extent's basis, whatever the kernel" (fun () ->
+      let cells = List.cartesian_product tags tags in
+      let orders = permutations [ 0; 1; 2 ] in
+      p_all ~min:16 "the input is the extent's, in every order" cells ~f:(fun (ob, kb) ->
+          List.for_all orders ~f:(fun order ->
+              let v = Row.get_var () and k = Row.get_var () and w = Row.get_var () in
+              let cs =
+                [|
+                  eq (Var w) (padded_window ~stride:2 ~kernel:(Var k) (Var v));
+                  eq (Var v) (tagged 4 ob);
+                  eq (Var k) (tagged 3 kb);
+                |]
+              in
+              solves_tag (w, 8, ob) (finished (staged (List.map order ~f:(Array.get cs))))));
+      p "and agrees with solving the same window over solved dims in place"
+        (is_solved
+           (finished
+              (staged [ eq (dim 8) (padded_window ~stride:2 ~kernel:(tagged 3 "h") (dim 4)) ])));
+      let v = Row.get_var () and k = Row.get_var () and w = Row.get_var () in
+      p "a padded window does not wait for its kernel"
+        (solves_tag (w, 8, Row.default_basis)
+           (Result.map ~f:snd
+              (staged ~closing:[]
+                 [
+                   eq (Var w) (padded_window ~stride:2 ~kernel:(Var k) (Var v)); eq (Var v) (dim 4);
+                 ]))));
+  Verdict.case "an open output waits, then settles on default" (fun () ->
+      let conv3 v = eq (window ~kernel:(dim 3) (Var v)) (dim 3) in
+      let v = Row.get_var () in
+      let held = staged ~closing:[] [ conv3 v ] in
+      (match held with
+      | Ok (deferred, env) ->
+          p "with nothing else about it, conv3(v) = 3 holds the equation back"
+            (List.length deferred = 1);
+          p "and binds nothing" (Option.is_none (tag_of env v));
+          let again, env = Row.solve_inequalities ~stage:Stage1 deferred env in
+          p "retried, it is still held and binds nothing"
+            (List.length again = 1 && Option.is_none (tag_of env v));
+          let rest, env =
+            Row.solve_inequalities ~stage:Stage1 (again @ [ eq (Var v) (bcast 1) ]) env
+          in
+          p "a later constraint decides it" (is_solved (finished (Ok (rest, env))));
+          p "and keeps its tag" (solves_tag (v, 1, Row.bcast_if_1) (Ok env))
+      | Error _ -> p "with nothing else about it, conv3(v) = 3 holds the equation back" false);
+      let v = Row.get_var () in
+      p "with nothing else at all, closing settles it on default"
+        (solves_tag (v, 1, Row.default_basis) (finished (staged [ conv3 v ])));
+      let v = Row.get_var () in
+      p "control, the gate against over-deferral: a default output above 1 solves at Stage1"
+        (solves_tag (v, 4, Row.default_basis)
+           (Result.map ~f:snd (staged ~closing:[] [ eq (window ~kernel:(dim 3) (Var v)) (dim 6) ])));
+      (* A constraint first read at the closing stage, as a trailing setter's is: settling at a
+         stage fixpoint rather than in the pass lets it land first, wherever the list has it. *)
+      List.iter [ true; false ] ~f:(fun window_first ->
+          let v = Row.get_var () in
+          let cs =
+            [ eq (window ~kernel:(tagged 3 "h") (Var v)) (tagged 3 "h"); eq (Var v) (tagged 1 "h") ]
+          in
+          let cs = if window_first then cs else List.rev cs in
+          p
+            ((if window_first then "window" else "extent") ^ " first in one closing pass: v keeps h")
+            (solves_tag (v, 1, "h")
+               (Result.map ~f:snd
+                  (match Row.solve_inequalities ~stage:Stage2 cs Row.empty_env with
+                  | result -> Ok result
+                  | exception Row.Shape_error (msg, _) -> Error (`Refused msg)))));
+      let v = Row.get_var () in
+      let w x = window ~kernel:(tagged 3 "h") x in
+      p "over a nested window, settling keeps to a tag that window can derive"
+        (solves_tag (v, 3, Row.default_basis)
+           (finished (staged [ eq (w (w (Var v))) (tagged 7 "h") ])));
+      (* A nested window waiting on its own kernel settles nothing, so closing ends and the equation
+         stays with it; a settlement that binds nothing would repeat forever. *)
+      let nested k v = eq (w (window ~kernel:k (Var v))) (tagged 7 "h") in
+      let v = Row.get_var () and k = Row.get_var () in
+      let held = staged [ nested (Var k) v ] in
+      p "a nested window with an unsolved kernel stays deferred: neither solved nor refused"
+        ((not (is_solved (finished held))) && not (is_refused held));
+      p "and solves once the kernel arrives"
+        (solves_tag (v, 3, Row.default_basis)
+           (finished (staged [ nested (Var k) v; eq (Var k) (dim 3) ])));
+      (* What an open output's bounds say comes with it: [3 of h] below [v] rules [default] out. *)
+      List.iter [ true; false ] ~f:(fun bound_first ->
+          let v = Row.get_var () in
+          let bound : Row.constraint_ =
+            Dim_ineq { res = tagged 3 "h"; opnd = Var v; from_ = Sexp.Atom "test"; origin }
+          and open_window = eq (w (Var v)) (tagged 5 "h") in
+          p
+            ((if bound_first then "bound first" else "window first")
+            ^ ": settling an output keeps to its bound")
+            (solves_tag (v, 3, "h")
+               (finished
+                  (staged (if bound_first then [ bound; open_window ] else [ open_window; bound ])))));
+      (* Two open windows over one output, with kernels that conflict: [default] is the choice both
+         allow, in either order. *)
+      List.iter [ true; false ] ~f:(fun h_first ->
+          let v = Row.get_var () in
+          let conv b = eq (window ~kernel:(tagged 3 b) (Var v)) (tagged 3 b) in
+          let cs = if h_first then [ conv "h"; conv "j" ] else [ conv "j"; conv "h" ] in
+          p
+            ((if h_first then "h first" else "j first")
+            ^ ": two open windows of different kernels settle on default")
+            (solves_tag (v, 1, Row.default_basis) (finished (staged cs)))));
+  Verdict.case "what the rule refuses or infers, by name" (fun () ->
+      let v () = Row.get_var () in
+      let both_ways name ~extent ~window ~input ~want =
+        List.iter [ true; false ] ~f:(fun extent_first ->
+            List.iter [ true; false ] ~f:(fun window_left ->
+                let o = v () in
+                let window_eq =
+                  if window_left then eq (window (Row.Var o)) input
+                  else eq input (window (Row.Var o))
+                and extent_eq = eq (Var o) extent in
+                p
+                  (name
+                  ^ (if extent_first then ", extent first" else ", window first")
+                  ^ if window_left then ", window on the left" else ", window on the right")
+                  (solves_tag
+                     (o, fst want, snd want)
+                     (finished
+                        (staged
+                           (if extent_first then [ extent_eq; window_eq ]
+                            else [ window_eq; extent_eq ]))))))
+      in
+      both_ways "the issue: v = 1 of bcast_if_1, conv3(v) = 3 of default" ~extent:(bcast 1)
+        ~window:(window ~kernel:(dim 3))
+        ~input:(dim 3) ~want:(1, Row.bcast_if_1);
+      both_ways "a named span-1 kernel: v = 4 of default, conv(v, 1 of h) = 4 of h" ~extent:(dim 4)
+        ~window:(window ~kernel:(tagged 1 "h"))
+        ~input:(tagged 4 "h") ~want:(4, Row.default_basis);
+      p "the reverse arm refuses what forward refuses: conv(v, 3 of h) = 3 of default"
+        (is_refused
+           (staged [ eq (window ~kernel:(tagged 3 "h") (Var (v ()))) (dim 3) ] |> finished));
+      p "a kernel closed to the top makes no claim, solved"
+        (is_solved (finished (staged [ eq (window ~stride:2 ~kernel:(bcast 1) (dim 3)) (dim 5) ])));
+      let o = v () in
+      p "a kernel closed to the top makes no claim, reversed"
+        (solves_tag (o, 3, Row.default_basis)
+           (finished (staged [ eq (window ~stride:2 ~kernel:(bcast 1) (Var o)) (dim 5) ])));
+      List.iter [ true; false ] ~f:(fun window_first ->
+          let o = v () and k = v () in
+          let cs = [ eq (window ~kernel:(Var k) (Var o)) (tagged 5 "x"); eq (Var o) (dim 2) ] in
+          p
+            ((if window_first then "window" else "extent")
+            ^ " first: a kernel inferred under 5 of x over 2 of default is 4 of x")
+            (solves_tag (k, 4, "x") (finished (staged (if window_first then cs else List.rev cs))))));
+  Verdict.case "a window pair's size equation does not drop a kernel's claim" (fun () ->
+      let refused_both name ~k1 ~k2 =
+        List.iter [ true; false ] ~f:(fun pair_first ->
+            let o1 = Row.get_var () and o2 = Row.get_var () in
+            let pair = eq (window ~kernel:k1 (Var o1)) (window ~kernel:k2 (Var o2))
+            and outputs = [ eq (Var o1) (dim 4); eq (Var o2) (dim 4) ] in
+            p
+              (name ^ if pair_first then " (pair first)" else " (outputs first)")
+              (is_refused
+                 (finished (staged (if pair_first then pair :: outputs else outputs @ [ pair ])))))
+      in
+      refused_both "kernels of h and j have no common input" ~k1:(tagged 3 "h") ~k2:(tagged 3 "j");
+      refused_both "kernels of h and default disagree over a default extent" ~k1:(tagged 3 "h")
+        ~k2:(dim 3);
+      (* A pair held over a reduction that itself waits holds one equation, not a growing list. *)
+      let x = Row.get_var () and y = Row.get_var () and k = Row.get_var () in
+      let w x = window ~kernel:(tagged 3 "h") x in
+      let held_pair = eq (w (window ~kernel:(Var k) (Var x))) (w (Var y)) in
+      p "a held pair over an unsolved inner kernel ends: neither solved nor refused"
+        (let result = staged [ held_pair ] in
+         (not (is_solved (finished result))) && not (is_refused result));
+      p "and solves once its sizes arrive"
+        (solves_tag (y, 4, Row.default_basis)
+           (finished (staged [ held_pair; eq (Var k) (dim 3); eq (Var x) (dim 2) ])));
+      let o1 = Row.get_var () and o2 = Row.get_var () in
+      p "control: the same named kernel solves, and the held pair is discharged"
+        (is_solved
+           (finished
+              (staged
+                 [
+                   eq
+                     (window ~kernel:(tagged 3 "h") (Var o1))
+                     (window ~kernel:(tagged 3 "h") (Var o2));
+                   eq (Var o1) (dim 4);
+                 ]))))
