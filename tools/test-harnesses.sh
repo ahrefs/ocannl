@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Run the shell-harness tier CI runs, from any working directory.
 # Usage: tools/test-harnesses.sh [--shell|--toolchain|--promotion] [--list]
-#                               [--expected-skips FILE]
-#        tools/test-harnesses.sh --ci-shell [--list]
-#        tools/test-harnesses.sh --ci-real-dune [--list]
-#        tools/test-harnesses.sh [GROUP] --affected [--list] --since BASE
-#        tools/test-harnesses.sh [GROUP] --affected [--list] --files PATH...
+#                               [--expected-skips FILE] [--jobs N]
+#        tools/test-harnesses.sh --ci-shell [--list] [--jobs N]
+#        tools/test-harnesses.sh --ci-real-dune [--list] [--jobs N]
+#        tools/test-harnesses.sh [GROUP] --affected [--list] [--jobs N] --since BASE
+#        tools/test-harnesses.sh [GROUP] --affected [--list] [--jobs N] --files PATH...
 # With no group, run all three. --shell needs no OCaml toolchain; --toolchain
 # runs the formatter controls and the scan-case type check (which links
 # ppxlib) and --promotion the controls of tools that read
@@ -14,6 +14,21 @@
 # its toolchain, and --promotion again at the declared Dune floor.
 # Every selected harness runs after ordinary failures; any failure exits 1.
 # HUP/INT/TERM stop immediately and preserve the interruption status.
+#
+# --jobs N runs up to N members at once (gh-ocannl-2002), started in the
+# manifest's order: a member is a program of its own with its own scratch
+# directory, and much of what the slow ones spend is fixtures waiting, not
+# computing -- the six members of tools/test-run.sh's harness, about 760 s one
+# after another on a MacBook Pro, take 165 s beside one another on two cores'
+# worth of CPU. Each member's output is kept and printed whole, in the
+# manifest's order, once it and every member before it has ended, between the
+# same HARNESS lines, so the log reads as a run of one at a time does and
+# every count and check below reads what it read. A member that ends
+# interrupted (129, 130, 143) ends the run with that status as soon as it is
+# seen to have ended -- no member starts after it, the members beside it are
+# sent a TERM, and what ran is printed -- and so does a signal to this
+# script. N is a positive integer; 1, the default, runs one member at a time
+# with its output live, as before the option.
 #
 # --expected-skips FILE runs every member strict (OCANNL_TOOL_HARNESS_STRICT=1)
 # except for the skips FILE lists, so a skip that newly appears on the
@@ -98,7 +113,7 @@ slot_record=${OCANNL_TOOL_HARNESSES_IN_SLOT-}
 unset OCANNL_TOOL_HARNESSES_IN_SLOT
 [ -z "$slot_record" ] || : >"$slot_record" || exit 2
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
-group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since= files=()
+group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since= files=() jobs=1
 original_args=("$@")
 while [ $# -gt 0 ]; do
   arg=$1
@@ -110,6 +125,11 @@ while [ $# -gt 0 ]; do
     --ci-shell) ci_shell=1 ;;
     --ci-real-dune) ci_real_dune=1 ;;
     --affected) affected=1 ;;
+    --jobs)
+      [ $# -ge 2 ] && [[ $2 =~ ^[1-9][0-9]*$ ]] ||
+        { echo "test-harnesses.sh: --jobs needs a positive integer" >&2; exit 2; }
+      jobs=$2
+      shift ;;
     --since)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --since needs a base revision" >&2; exit 2; }
       since=$2
@@ -166,7 +186,12 @@ shell scripts/test-harness-support.sh
 shell tools/test-test-harnesses.sh
 shell tools/test-harness-legs-alone.sh
 shell tools/test-pin-revisions.sh
-shell tools/test-test-run.sh
+shell tools/test-test-run-options.sh
+shell tools/test-test-run-digest.sh
+shell tools/test-test-run-devices.sh
+shell tools/test-test-run-lifecycle.sh
+shell tools/test-test-run-last.sh
+shell tools/test-test-run-bisect.sh
 shell tools/test-mutation-run.sh
 shell scripts/test-setup-ocaml-env.sh
 shell tools/test-windows-opam-cache.sh
@@ -196,7 +221,9 @@ HARNESS_LIST
 # --ci-real-dune's legs: `HARNESS<TAB>ERE`, the --only selector of the legs
 # holding HARNESS's real-dune checks (each is checked to PASS, not trusted).
 real_dune_legs() {
-  printf '%s\t%s\n' tools/test-test-run.sh '^(79|80b|84|89|92b):'
+  printf '%s\t%s\n' tools/test-test-run-options.sh '^89:'
+  printf '%s\t%s\n' tools/test-test-run-digest.sh '^(80b|84|92b):'
+  printf '%s\t%s\n' tools/test-test-run-bisect.sh '^79:'
 }
 members() {
   local tier script
@@ -376,13 +403,16 @@ if [ "$ci_real_dune" = 1 ]; then
 fi
 failures=0 total=0
 cd "$root" || exit 2
+# The members this run selects, in the manifest's order: its script, the
+# command --list prints for it, and its arguments as one --only selector
+# (empty: every leg).
+run_scripts=() run_commands=() run_selectors=() run_tiers=()
 while read -r tier script; do
   [ "$group" = all ] || [ "$tier" = "$group" ] || continue
-  args=()
+  selector=
   if [ "$ci_real_dune" = 1 ]; then
     selector=$(real_dune_legs | awk -F '\t' -v s="$script" '$1 == s { print $2 }')
     [ -n "$selector" ] || continue
-    args=(--only "$selector")
   fi
   command=$script
   if [ "$affected" = 1 ]; then
@@ -390,35 +420,111 @@ while read -r tier script; do
     reached=$(awk -F '\t' -v s="$script" '$1 == s { print "+" $2 }' "$affected_table")
     [ -n "$reached" ] || continue
     selector=${reached#+}
-    if [ -n "$selector" ]; then
-      args=(--only "$selector")
-      command="$script --only '$selector'"
-    fi
+    [ -z "$selector" ] || command="$script --only '$selector'"
   fi
   total=$((total + 1))
   if [ "$list" = 1 ]; then
     printf '%s\n' "$command"
     continue
   fi
-  printf '\nHARNESS %s (%s)\n' "$command" "$tier"
-  rc=0
-  if [ "$ci_real_dune" = 1 ]; then
-    # Kept for the PASS check below, and shown as it runs.
-    OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" "${args[@]}" | tee "$outputs/${script//\//_}.out"
-    rc=${PIPESTATUS[0]}
-  else
-    OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" ${args[@]+"${args[@]}"} || rc=$?
-  fi
-  printf 'HARNESS %s exit: %s\n' "$script" "$rc"
-  case $rc in
-    129|130|143)
-      printf 'harnesses: interrupted (exit %s)\n' "$rc" >&2
-      exit "$rc" ;;
-  esac
-  [ "$rc" = 0 ] || failures=$((failures + 1))
+  run_scripts+=("$script") run_commands+=("$command") run_selectors+=("$selector") run_tiers+=("$tier")
 done < <(manifest)
 [ "$total" -gt 0 ] || { echo "no harnesses selected" >&2; exit 2; }
 [ "$list" = 1 ] && exit 0
+member_ended() { # INDEX RC: its closing line and what its status means for the run
+  printf 'HARNESS %s exit: %s\n' "${run_scripts[$1]}" "$2"
+  case $2 in
+    129|130|143)
+      stop_members
+      printf 'harnesses: interrupted (exit %s)\n' "$2" >&2
+      exit "$2" ;;
+  esac
+  [ "$2" = 0 ] || failures=$((failures + 1))
+}
+pids=() ended=()
+stop_members() { # TERM every member still running beside the others, and wait for each
+  local i rc
+  for ((i = 0; i < ${#pids[@]}; i++)); do
+    [ -z "${ended[i]-}" ] || continue
+    kill -TERM "${pids[i]}" 2>/dev/null
+    rc=0
+    wait "${pids[i]}" 2>/dev/null || rc=$?
+    ended[i]=$rc
+  done
+}
+member_argv() { # INDEX: sets args
+  args=()
+  [ -z "${run_selectors[$1]}" ] || args=(--only "${run_selectors[$1]}")
+}
+if [ "$jobs" = 1 ]; then
+  for ((i = 0; i < total; i++)); do
+    script=${run_scripts[i]}
+    member_argv "$i"
+    printf '\nHARNESS %s (%s)\n' "${run_commands[i]}" "${run_tiers[i]}"
+    rc=0
+    if [ "$ci_real_dune" = 1 ]; then
+      # Kept for the PASS check below, and shown as it runs.
+      OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" "${args[@]}" | tee "$outputs/${script//\//_}.out"
+      rc=${PIPESTATUS[0]}
+    else
+      OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" ${args[@]+"${args[@]}"} || rc=$?
+    fi
+    member_ended "$i" "$rc"
+  done
+else
+  # Up to $jobs members at once (see the header), each this shell's own
+  # child, so its status is this shell's to wait for. No `wait -n`: this runs
+  # under the Bash 3.2 a Mac ships, so a member's end is seen by polling its
+  # pid, which the shell has reaped by then. $pool/N.out is member N's output.
+  pool=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-jobs.XXXXXX") ||
+    { echo "test-harnesses.sh: cannot create the --jobs output directory" >&2; exit 2; }
+  scratch+=("$pool")
+  trap 'stop_members; exit 129' HUP
+  trap 'stop_members; exit 130' INT
+  trap 'stop_members; exit 143' TERM
+  started=0 printed=0 running=0 interrupted=
+  while [ "$printed" -lt "$total" ] && [ -z "$interrupted" ]; do
+    progressed=0
+    for ((i = printed; i < started; i++)); do
+      [ -z "${ended[i]-}" ] && ! kill -0 "${pids[i]}" 2>/dev/null || continue
+      rc=0
+      wait "${pids[i]}" || rc=$?
+      ended[i]=$rc running=$((running - 1)) progressed=1
+      # Seen as it ends, not when its output comes up: no member starts after it.
+      case $rc in 129|130|143) interrupted=$rc; break ;; esac
+    done
+    [ -z "$interrupted" ] || break
+    while [ "$started" -lt "$total" ] && [ "$running" -lt "$jobs" ]; do
+      script=${run_scripts[started]}
+      member_argv "$started"
+      OCANNL_TOOL_HARNESS_NAME=$script "$root/$script" ${args[@]+"${args[@]}"} \
+        >"$pool/$started.out" 2>&1 </dev/null &
+      pids[started]=$!
+      started=$((started + 1)) running=$((running + 1)) progressed=1
+    done
+    while [ "$printed" -lt "$started" ] && [ -n "${ended[printed]-}" ]; do
+      printf '\nHARNESS %s (%s)\n' "${run_commands[printed]}" "${run_tiers[printed]}"
+      cat "$pool/$printed.out"
+      [ "$ci_real_dune" = 0 ] || cp "$pool/$printed.out" "$outputs/${run_scripts[printed]//\//_}.out"
+      member_ended "$printed" "${ended[printed]}"
+      printed=$((printed + 1)) progressed=1
+    done
+    [ "$progressed" = 1 ] || sleep 0.2
+  done
+  trap - HUP INT TERM
+  if [ -n "$interrupted" ]; then
+    # The members beside it are stopped, then every member that ran is
+    # printed, in order, before the run ends with the interrupting status.
+    stop_members
+    for ((i = printed; i < started; i++)); do
+      printf '\nHARNESS %s (%s)\n' "${run_commands[i]}" "${run_tiers[i]}"
+      cat "$pool/$i.out"
+      printf 'HARNESS %s exit: %s\n' "${run_scripts[i]}" "${ended[i]}"
+    done
+    printf 'harnesses: interrupted (exit %s)\n' "$interrupted" >&2
+    exit "$interrupted"
+  fi
+fi
 stale=0
 if [ -n "$expected" ]; then
   # A listed skip that did not occur is coverage the list no longer

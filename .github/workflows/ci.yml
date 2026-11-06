@@ -1220,8 +1220,10 @@ jobs:
     # A no-op after a successful pre-install; otherwise the plain install.
     - name: Install zsh
       run: sudo apt-get install -y zsh
+    # Four members at once, the runner's four cores (gh-ocannl-2002): the slow
+    # members wait on their fixtures more than they compute.
     - name: Test shell harnesses
-      run: tools/test-harnesses.sh --ci-shell
+      run: tools/test-harnesses.sh --ci-shell --jobs 4
 
   # The shell harnesses' real-dune checks, per PR (gh-ocannl-1650). The job
   # above hides dune and skips them, by its list

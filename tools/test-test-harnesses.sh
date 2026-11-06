@@ -10,6 +10,8 @@
 # fleet's run-time slot through the shared probe (gh-ocannl-1576), and run
 # exactly what a change reaches (--affected, with the real `affected
 # --harnesses` on a fixture change reaching two members).
+# --jobs runs members beside one another and prints each one's output whole,
+# in the manifest's order (gh-ocannl-2002).
 # Usage: tools/test-test-harnesses.sh [--keep|--help]
 set -u
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -45,6 +47,19 @@ while IFS= read -r script; do
 name=${0#"$FIXTURE/"}
 printf '%s\n' "$name" >>"$RECORD"
 [ "$PWD" = "$FIXTURE" ] || exit 90
+if [ -n "${BARRIER:-}" ]; then
+  # Passed only beside another member: two of them here at once, ever.
+  : >"$BARRIER/$$"
+  i=0
+  while [ "$(ls "$BARRIER" | wc -l)" -lt 2 ]; do
+    i=$((i + 1))
+    [ "$i" -lt 60 ] || exit 9
+    sleep 0.05
+  done
+fi
+[ -z "${ECHO_NAME:-}" ] || echo "ran $name"
+# Held until stopped: a TERM ends it as a harness's cleanup trap would.
+if [ "$name" = "${HOLD_MEMBER:-}" ]; then trap 'exit 143' TERM; while :; do sleep 0.1; done; fi
 [ -z "${SLOT_RECORD:-}" ] || printf '%s slot=%s\n' "$name" "${FAKE_SLOT_HELD-none}" >>"$SLOT_RECORD"
 if [ -n "${ENV_RECORD:-}" ]; then
   wake=unset
@@ -362,7 +377,7 @@ printf '# dune\n%s\t%s\n' "$rd_member" "$rd_label" >"$dune_list"
 PASS_MEMBER=$rd_member PASS_LABEL=$rd_label
 rd_run --ci-real-dune
 if [ "$got" = 0 ] && cmp -s "$TMP/real-dune" "$RECORD" \
-   && [ "$(cat "$ARGS_RECORD")" = "$rd_member strict=1 args=--only $rd_selector" ] \
+   && [ "$(cat "$ARGS_RECORD")" = "$(real_dune_legs | awk -F '\t' '{ print $1 " strict=1 args=--only " $2 }')" ] \
    && grep -q '^harnesses: [0-9]* run, 0 failed; 0 real-dune check(s) did not pass$' "$TMP/out"; then
   report 0 '--ci-real-dune runs only the selected members, strict with their selectors, and passes on every listed PASS'
 else report 1 '--ci-real-dune runs only the selected members, strict with their selectors, and passes on every listed PASS' \
@@ -680,8 +695,7 @@ unset AF_COMMANDS
 for mutant in every-member no-selector; do
   case $mutant in
     every-member) af_from='[ -n "$reached" ] || continue' af_to=':' ;;
-    no-selector) af_from='args=(--only "$selector")
-      command=' af_to='command=' ;;
+    no-selector) af_from='[ -z "${run_selectors[$1]}" ] || args=(--only "${run_selectors[$1]}")' af_to=':' ;;
   esac
   af_twin=$fixture/tools/affected-twin.sh
   if ! AF_FROM=$af_from AF_TO=$af_to perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{AF_FROM}\E/$ENV{AF_TO}/g; END { exit($n == 1 ? 0 : 1) }' \
@@ -729,4 +743,60 @@ if [ -z "$probe_copies" ] && grep -q 'slot --probe' "$here/fleet-worker-candidat
    grep -q 'execution slot --wait' "$here/fleet-worker-candidates.sh"; then
   report 0 'the fleet askers share one probe and one rerun helper'
 else report 1 'the fleet askers share one probe and one rerun helper' "${probe_copies# }"; fi
+# --jobs N (gh-ocannl-2002): members beside one another. Each stub passes only
+# once two of them have been running at once, so one at a time fails them all:
+# the control.
+unset FAIL_MEMBER FAIL_SIGNAL
+export BARRIER="$TMP/barrier" ECHO_NAME=1
+rm -rf "$BARRIER"; mkdir "$BARRIER"
+run --shell --jobs 3
+# What a run of one at a time prints, member by member, in the manifest's order.
+while IFS= read -r script; do
+  printf '\nHARNESS %s (shell)\nran %s\nHARNESS %s exit: 0\n' "$script" "$script" "$script"
+done <"$TMP/shell" >"$TMP/jobs-want"
+printf '\nharnesses: %s run, 0 failed\n' "$(wc -l <"$TMP/shell" | tr -d ' ')" >>"$TMP/jobs-want"
+if [ "$got" = 0 ] && cmp -s "$TMP/jobs-want" "$TMP/out" && cmp -s <(sort "$TMP/shell") <(sort "$RECORD"); then
+  report 0 '--jobs 3 runs members beside one another, each output whole and in the manifest order'
+else
+  report 1 '--jobs 3 runs members beside one another, each output whole and in the manifest order' \
+    "exit $got: $(diff "$TMP/jobs-want" "$TMP/out" | head -n 8 | tr '\n' '|')"
+fi
+rm -rf "$BARRIER"; mkdir "$BARRIER"
+head -n 2 "$TMP/shell" >"$TMP/jobs-two"
+run --shell --jobs 1
+if [ "$got" = 1 ] && grep -qxF "HARNESS $(head -n 1 "$TMP/shell") exit: 9" "$TMP/out"; then
+  report 0 'negative control: one at a time, no member ever runs beside another'
+else report 1 'negative control: one at a time, no member ever runs beside another' "exit $got: $(tail -n 3 "$TMP/out" | tr '\n' '|')"; fi
+unset BARRIER
+export FAIL_MEMBER
+FAIL_MEMBER=$(sed -n 2p "$TMP/shell")
+run --shell --jobs 4
+if [ "$got" = 1 ] && cmp -s <(sort "$TMP/shell") <(sort "$RECORD") &&
+   grep -qxF "HARNESS $FAIL_MEMBER exit: 7" "$TMP/out" && grep -q ' run, 1 failed$' "$TMP/out"; then
+  report 0 '--jobs: a failing member stays red while every other member runs'
+else report 1 '--jobs: a failing member stays red while every other member runs' "exit $got: $(tail -n 3 "$TMP/out" | tr '\n' '|')"; fi
+# A member that ends on a signal ends the run with that status as soon as it
+# is seen to have ended: the first member, still running, is stopped, and the
+# third, whose turn its slot was, never starts -- though the second's output
+# comes after the first's in the log.
+export FAIL_SIGNAL=TERM HOLD_MEMBER
+HOLD_MEMBER=$(head -n 1 "$TMP/shell")
+run --shell --jobs 2
+if [ "$got" = 143 ] && grep -q '^harnesses: interrupted (exit 143)$' "$TMP/out" &&
+   [ "$(head -n 2 "$TMP/shell" | sort)" = "$(sort "$RECORD")" ] && ! grep -q ' run, ' "$TMP/out" &&
+   grep -qxF "HARNESS $HOLD_MEMBER exit: 143" "$TMP/out" && grep -qxF "HARNESS $FAIL_MEMBER exit: 143" "$TMP/out"; then
+  report 0 '--jobs: an interrupted member ends the run with its status at once, stopping the member beside it and starting no further one'
+else report 1 '--jobs: an interrupted member ends the run with its status at once, stopping the member beside it and starting no further one' "exit $got: ran $(tr '\n' ' ' <"$RECORD"); $(tail -n 4 "$TMP/out" | tr '\n' '|')"; fi
+unset HOLD_MEMBER
+unset FAIL_MEMBER FAIL_SIGNAL ECHO_NAME
+jobs_bad=
+for jobs_argv in '--jobs' '--jobs 0' '--jobs x' '--jobs -1' '--jobs 2x'; do
+  # shellcheck disable=SC2086
+  run --shell $jobs_argv
+  { [ "$got" = 2 ] && [ ! -s "$RECORD" ] && grep -q 'needs a positive integer' "$TMP/out"; } ||
+    jobs_bad="$jobs_bad [$jobs_argv: exit $got]"
+done
+if [ -z "$jobs_bad" ]; then report 0 '--jobs refuses anything but a positive integer before a member starts'
+else report 1 '--jobs refuses anything but a positive integer before a member starts' "$jobs_bad"; fi
+
 finish

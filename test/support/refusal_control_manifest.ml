@@ -709,6 +709,9 @@ let raw_entries =
         "[scanner-refusal:2d086d94d5a797eb9901008d71d5c241] errexit-and-list fixture";
         "[scanner-refusal:3f096017191c7a4d9f63d7a94dcfb6ff] reaches the one-predicate-per-statement";
         "[scanner-refusal:36dfd5919c0215c23122a0ec198d2739] errexit execution control";
+        "[scanner-refusal:730f080d2e13414d67084e34416888e9] takes its lifecycle";
+        "[scanner-refusal:711cc6b5aa70f8e1ec411351c89c6ccc] lifecycle or redefines";
+        "[scanner-refusal:348d853f9ff7699418e79b2c7469d193] the command running";
         "[scanner-refusal:beeb940e51aa3dff752296c0bd236146] lifecycle are accepted";
         "[scanner-refusal:0d15e8eb18e96635004da2561ab0917c] harnesses are discovered";
         "[scanner-refusal:2a0fdaf225cc691ffc63804ceb591d29] production test-run is";

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Exercise shared harness lifecycle, counted skips (and a strict run's list of
 # expected ones), the shared real-dune probe and its hiding switch, the --only
-# leg filter with its coverage account, function leg bodies that abandon
+# leg filter with its coverage account, the leg clock, function leg bodies that abandon
 # themselves or are abandoned at a failed errexit check, legs that declare
 # themselves not applicable (and the shapes of that declaration it refuses),
 # and reason-specific rejection.
@@ -47,6 +47,8 @@ case $MODE in
     skip 'other check' 'no other host' ;;
   legs)
     # Each body leaves a trace, so a filtered leg is seen not to have run.
+    # harness_args took the leg clock's file out of the environment.
+    [ -z "${OCANNL_TOOL_HARNESS_LEG_TIMES+x}" ] || echo 'the leg clock is still exported'
     if harness_leg 'alpha leg #odd'; then echo alpha >>"$RECORD.ran"; report 0 'alpha body'; fi
     if harness_leg 'beta leg #even'; then
       echo beta >>"$RECORD.ran"; report 0 'beta body'
@@ -320,6 +322,22 @@ if [ "$rc" = 0 ] && grep -q 'all legs passed (0 skipped)' "$TMP/out" && ! grep -
    && [ "$(grep -c '^PASS  .* body$' "$TMP/out")" = 3 ]; then
   report 0 'unfiltered: every leg runs and earns the full-pass line'
 else report 1 'unfiltered: every leg runs and earns the full-pass line' "exit $rc; $(cat "$TMP/out")"; fi
+# The leg clock (gh-ocannl-2002): one line per stretch, charged to the gate
+# that opened it, in a filtered run as in a full one; no file unasked.
+clock_want=$(printf 'N\tfixture\t%s\n' '(before any gate)' 'alpha leg #odd' 'beta leg #even' 'gamma leg #odd')
+clock_bad=
+for clock_argv in '' "--only #even\$"; do
+  rm -f "$TMP/clock"
+  # shellcheck disable=SC2086
+  OCANNL_TOOL_HARNESS_LEG_TIMES=$TMP/clock OCANNL_TOOL_HARNESS_NAME=fixture MODE=legs probe $clock_argv
+  [ "$(sed 's/^[0-9][0-9]*/N/' "$TMP/clock" 2>/dev/null)" = "$clock_want" ] && ! grep -q 'still exported' "$TMP/out" ||
+    clock_bad="$clock_bad [${clock_argv:-full}: $(tr '\n\t' '| ' <"$TMP/clock" 2>&1); $(grep 'still exported' "$TMP/out")]"
+done
+rm -f "$TMP/clock"
+MODE=legs probe
+[ ! -e "$TMP/clock" ] || clock_bad="$clock_bad [a file with no variable]"
+if [ -z "$clock_bad" ]; then report 0 'the leg clock charges each stretch to the gate that opened it, and is kept from a nested harness'
+else report 1 'the leg clock charges each stretch to the gate that opened it, and is kept from a nested harness' "$clock_bad"; fi
 legs_probe 'alpha' --only alpha; rc=$?
 if [ "$rc" = 0 ] && grep -q '^PASS  alpha body$' "$TMP/out" \
    && grep -q '^FILTERED  beta leg #even$' "$TMP/out" && grep -q '^FILTERED  gamma leg #odd$' "$TMP/out" \
