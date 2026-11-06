@@ -2641,9 +2641,8 @@ else echo 'check-box: not at this revision'; exit 3; fi" "$log" "$path_prefix" b
 # against the default pipeline (tools/cuda-tf32-parity.sh), a real graph where the sweep's own CUDA
 # suite runs with tf32 off. native ptx: the unit's suite again at the device's own PTX target
 # (tools/cuda-native-ptx-rerun.sh), after a green floor suite only, since a red one compares nothing.
-# Known reds of that leg on rog (2026-11-03): cache_key_agreement, whose golden gains a line under
-# any environment-stated Keyed key, the leg's own included (ahrefs/ocannl#1819, the cause cc-outlined
-# shares); and branchless_select, whose selects ptxas branches on at sm_120 only (ahrefs/ocannl#1822).
+# Known red of that leg on rog (2026-11-03): branchless_select, whose selects ptxas branches on at
+# sm_120 only (ahrefs/ocannl#1822).
 DIAGNOSTIC_LEGS='hip|ran|-|wmma-probe|wmma probe|hip-wmma-probe|bash tools/hip-wmma-probe.sh|the bitwise HIP tensorized claims rest on that rule (docs/agent-notes/backend-precision-and-simd.md)
 hip|ran|-|vendor-idents|vendor idents|vendor-idents|opam exec -- bash tools/vendor-idents-check.sh hip|a routine named like the new declaration fails to compile until the table is regenerated (docs/agent-notes/backend-dialects-and-idents.md)
 cuda|ran|-|vendor-idents|vendor idents|vendor-idents|opam exec -- bash tools/vendor-idents-check.sh cuda|a routine named like the new declaration fails to compile until the table is regenerated (docs/agent-notes/backend-dialects-and-idents.md)

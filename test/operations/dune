@@ -284,6 +284,7 @@
   (alias runtest-test_uniform_virtual_lane-lane_checked)
   (alias runtest-thread_private_gate-outlined)
   (alias runtest-branchless_select-outlined)
+  (alias runtest-cache_key_agreement-outranked)
   (alias runtest-scheme_error_rendering-trimmed)
   (alias runtest-scheme_error_rendering-full_sexp)
   (alias runtest-heap_local_arrays-outlined)
@@ -6778,12 +6779,47 @@
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
+ (locks cache_key_agreement)
  (modules cache_key_agreement)
  (action
   (run %{test} %{dep:../../arrayjit/lib/utils.ml}))
  (libraries base ocannl stdio unix fresh_process test_utils arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1819: the same run under the plain run's golden with Keyed keys stated in the
+; environment, one for each ambient statement the sweep makes (its cc-outlined unit's, its native-PTX
+; leg's): an outranked flip announces its skip on stderr and leaves stdout byte-identical. The
+; `outranked` argument claims those flips were outranked, so the diff is not vacuous. Both runs share
+; the build_files/cache_key_agreement/ that Generated.init empties, hence the shared lock.
+
+(rule
+ (target cache_key_agreement-outranked.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (locks cache_key_agreement)
+ (action
+  (with-stdout-to
+   %{target}
+   (setenv
+    OCANNL_CC_KERNEL_PART_WEIGHT
+    1
+    (setenv
+     OCANNL_CUDA_PTX_TARGET
+     native
+     (run
+      %{dep:cache_key_agreement.exe}
+      %{dep:../../arrayjit/lib/utils.ml}
+      outranked))))))
+
+(rule
+ (alias runtest-cache_key_agreement-outranked)
+ (package neural_nets_lib)
+ (action
+  (diff cache_key_agreement.expected cache_key_agreement-outranked.actual)))
 
 (test
  (name fresh_build_kernel_text)

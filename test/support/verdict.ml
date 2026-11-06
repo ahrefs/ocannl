@@ -642,7 +642,13 @@ type skip_aggregation = [ `Backend | `Environment | `Outside_sweep ]
     [stdio] and [unix]: reporting a verdict is not a reason to link OCANNL's configuration
     machinery. *)
 
-let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
+(** [announce_skip ~backend name] is {!skipped} without its stdout row: the [SKIPPED] line and the
+    skip record, on stderr and in the action's record file, and nothing the golden sees. It is for a
+    skip whose OCCURRENCE depends on the run's configuration rather than on a claim the golden holds
+    a row for: which keys a sweep over the configuration cannot flip depends on which are stated
+    ([cache_key_agreement], gh-ocannl-1819), so a row per skip would make the golden a function of
+    the ambient environment. A claim with a row of its own keeps {!skipped}, which prints it. *)
+let announce_skip ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
   Stdio.eprintf "SKIPPED on %s (vacuous): %s\n%!" (one_line backend) (one_line name);
   (* A second, machine-oriented record gives cross-run consumers a stable test-leg identity without
      changing the human line above (the documented [grep SKIPPED] convention). The executable
@@ -657,7 +663,10 @@ let skipped ?(aggregation = (`Backend : skip_aggregation)) ~backend name =
       | `Outside_sweep -> "outside-sweep");
       record_executable ();
       Stdlib.String.escaped name;
-    ];
+    ]
+
+let skipped ?aggregation ~backend name =
+  announce_skip ?aggregation ~backend name;
   announcing_skip := true;
   Exn.protect ~f:(fun () -> p name true) ~finally:(fun () -> announcing_skip := false)
 

@@ -5334,8 +5334,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   A skip caused by a host or configuration capability rather than the selected backend (a compiler
   target, preprocessing flag or filesystem feature) uses
   ``Verdict.skipped ~aggregation:`Environment``: its human stderr line stays visible, while the
-  record's scope keeps it out of the backend intersection. The sweep's stdout summary quotes the
-  report's `result:` verdict and each `FAIL:`/`POTENTIAL:` finding line (indented, under the
+  record's scope keeps it out of the backend intersection. A skip whose occurrence varies with the
+  run's own configuration, with no golden row of its claim to print (which flips a stated key
+  outranks), uses `Verdict.announce_skip` instead: the same stderr line and record, no stdout row,
+  so the golden does not depend on the ambient environment (gh-ocannl-1819); a rule forcing such a
+  skip on every box records it `Outside_sweep`, or the intersection reads the fleet as never
+  covering a claim the plain run covers. The sweep's stdout
+  summary quotes the report's `result:` verdict and each `FAIL:`/`POTENTIAL:` finding line (indented, under the
   `skip coverage:` line that carries the report path), so consumers of sweep output — the daily
   scheduled routine's report and notification foremost — see zero-coverage findings without
   opening the report file; the routine diffs the latest report's finding set against the previous

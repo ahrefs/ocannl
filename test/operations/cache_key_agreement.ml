@@ -419,9 +419,18 @@ let () =
   let ctx = Context.auto () in
   (* A flip a commandline or environment statement outranks is not made, and says so as a skip
      rather than leaving a claim that reads as if it had been (Codex P2, round 3): rerunning a test
-     under an [OCANNL_<KEY>] is supported, and the key it states is the one this run cannot flip. *)
+     under an [OCANNL_<KEY>] is supported, and the key it states is the one this run cannot flip.
+     Announced, not printed: which keys are stated is the run's, and the golden holds no row per key
+     (gh-ocannl-1819; the [-outranked] rule pins it). *)
+  let outranked = ref [] in
+  (* The [-outranked] rule forces these skips on every box, where the plain run makes the flips: its
+     records must not read as the fleet never covering them. *)
+  let forced_outranked = Array.mem Stdlib.Sys.argv "outranked" ~equal:String.equal in
   let skip_outranked ~what key =
-    Verdict.skipped ~aggregation:`Environment ~backend:(Context.backend_name ctx)
+    outranked := (what, key) :: !outranked;
+    Verdict.announce_skip
+      ~aggregation:(if forced_outranked then `Outside_sweep else `Environment)
+      ~backend:(Context.backend_name ctx)
       (Printf.sprintf
          "%s of %s: the key, or the regime it is flipped in, is stated on the commandline or in \
           the environment, or already resolves to every candidate value"
@@ -470,7 +479,7 @@ let () =
      through [restore_settings], never by a config poke that would change nothing. *)
   let settings_borne =
     match Stdlib.Sys.argv with
-    | [| _; utils_ml |] ->
+    | [| _; utils_ml |] | [| _; utils_ml; _ |] ->
         Test_utils.Config_key_scan.settings_field_initializers (In_channel.read_all utils_ml)
         |> List.concat_map ~f:snd
         |> Set.of_list (module String)
@@ -922,6 +931,13 @@ let () =
       Verdict.fail
         "output_debug_files_in_build_directory is stated on the commandline or in the environment, \
          so the oracle cannot read the kernels it compiles");
+  (* The [-outranked] rule states these keys so that the plain golden is diffed against a run whose
+     flips were outranked: a claim, printing no row, so its stdout stays the golden's. Without it
+     the diff passes as well in a run where nothing outranked anything. *)
+  if forced_outranked then
+    List.iter [ "cc_kernel_part_weight"; "cuda_ptx_target" ] ~f:(fun key ->
+        claimf "the stated %s outranked its Keyed flip" key
+          (List.mem !outranked ("the Keyed flip", key) ~equal:Poly.equal));
   (* The reviewable part: what this sweep takes on trust, and why. *)
   printf "\nKeyed keys this sweep cannot flip in-process:\n";
   List.iter unflippable ~f:(fun (key, why) -> printf "  %s -- %s\n" key why);

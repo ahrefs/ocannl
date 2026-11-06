@@ -179,6 +179,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-branchless_select-outlined
   test/operations/dune                     @runtest-cache_dir_ignores
   test/operations/dune                     @runtest-cache_dir_ignores_control
+  test/operations/dune                     @runtest-cache_key_agreement-outranked
   test/operations/dune                     @runtest-cc_dlopen_cause
   test/operations/dune                     @runtest-cc_dlopen_cause_debug
   test/operations/dune                     @runtest-cc_dlopen_cause_dll

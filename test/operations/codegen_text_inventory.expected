@@ -51,7 +51,7 @@ arrayjit/test/test_vectorized_codegen.expected [c] markers c-align-attr c-decl-b
 arrayjit/test/test_zero_out_codegen.expected [c] markers c-align-attr c-decl-banner c-for c-logic-banner c-prec-cast; re-run by @arrayjit/test/runtest-test_zero_out_codegen
 test/einsum/inline_permuted_view-c_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/einsum/runtest-inline_permuted_view-c_fwd
 test/einsum/test_cse-cse_d_fwd.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end ll-loop; re-run by @test/einsum/runtest-test_cse-cse_d_fwd
-test/operations/cache_key_agreement.expected [derived] beside test/operations/cache_key_agreement.ml; re-run by @test/operations/runtest-cache_key_agreement
+test/operations/cache_key_agreement.expected [derived] beside test/operations/cache_key_agreement.ml; re-run by @test/operations/runtest-cache_key_agreement, @test/operations/runtest-cache_key_agreement-outranked
 test/operations/canonical_render.expected [ll] markers ll-assign; re-run by @test/operations/runtest-canonical_render
 test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml; re-run by @test/operations/runtest-concat_loop_symbols
 test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml; re-run by @test/operations/runtest-cost_model_floor
@@ -122,7 +122,7 @@ test/operations/branchless_select.ml [run by @test/operations/runtest-branchless
     ") != 0.0 ? ("
     ... ^ "_v["
 test/operations/build_file_descriptors.ml [run by @test/operations/runtest-build_file_descriptors; also pins text this scan cannot name: untraced callback]
-test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement]
+test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement, @test/operations/runtest-cache_key_agreement-outranked]
 test/operations/canonical_render.ml [renders generated text in memory; run by @test/operations/runtest-canonical_render; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
     "[b0,]:=0.;}"
@@ -635,6 +635,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-branchless_select-outlined
 @test/operations/runtest-build_file_descriptors
 @test/operations/runtest-cache_key_agreement
+@test/operations/runtest-cache_key_agreement-outranked
 @test/operations/runtest-canonical_render
 @test/operations/runtest-cc_kernel_outline
 @test/operations/runtest-cc_march_census-emission
