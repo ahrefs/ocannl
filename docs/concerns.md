@@ -27,8 +27,9 @@ defects that are not all confirmed by execution yet. Reference:
 
 ### Surface language
 
-`%op` and `%cd` are stable in daily use; what remains is typing corners and rules worth fixing once,
-such as operand evaluation order. Reference: [syntax_extensions.md](syntax_extensions.md).
+`%op` and `%cd` are stable in daily use, and statements, block components and capture lists
+evaluate in source order; what remains is typing corners and the order of operator operands.
+Reference: [syntax_extensions.md](syntax_extensions.md).
 
 - Syntax-extension typing and evaluation-order rules
 - The ppx's dependency surface
