@@ -3368,8 +3368,10 @@ let set_equal delayed_ref1 delayed_ref2 =
        product, or compared two products, depending on what inference had solved by the time of the
        call. A solution a reference holds already has its own constraint on [var] ([set_dim] pushed
        it, or the solver reached it), so nothing else is needed here. A closed reference contributes
-       the row its closure carried; with both closed, the solver compares the two rows when it next
-       runs. *)
+       the row its closure carried. With both closed the two rows hold no variable, so the verdict
+       is available now, and it is the solver's: the closed-rows arm of [Row.unify_row] writes
+       nothing, and raising here leaves the session as it was (gh-ocannl-1969). Otherwise the
+       mismatch would surface only at the next closure, far from this call. *)
     let label1 = delayed_ref1.var_ref.ref_label and label2 = delayed_ref2.var_ref.ref_label in
     let r1 = row_for_set_equal ~other:label2 delayed_ref1 in
     let r2 = row_for_set_equal ~other:label1 delayed_ref2 in
@@ -3390,6 +3392,18 @@ let set_equal delayed_ref1 delayed_ref2 =
             ];
         }
     in
+    (if bound_before_closure delayed_ref1 && bound_before_closure delayed_ref2 then
+       try
+         ignore
+           (Row.solve_inequalities ~stage:Row.Stage1 [ equation ] Row.empty_env
+             : Row.constraint_ list * Row.environment)
+       with Row.Shape_error (msg, trace) ->
+         raise
+         @@ Row.Shape_error
+              ( [%string
+                  "Shape.set_equal: the closed row references %{label1} and %{label2} are \
+                   different rows: %{msg}"],
+                trace ));
     active_constraints := equation :: !active_constraints
   in
   match (delayed_ref1, delayed_ref2) with

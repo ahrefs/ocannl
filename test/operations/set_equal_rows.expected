@@ -71,7 +71,7 @@ closed after a dimension then a row capture, set_equal s r, the open row fixed t
 closed after a row then a dimension capture, set_equal r s, the open row fixed to 3x2: tied by product, a row of the same product is accepted: true
 closed after a row then a dimension capture, set_equal s r, the open row fixed to 3x2: tied by product, a row of the same product is accepted: true
 both references closed, rows 2x3 and 2x3: equal rows are accepted: true
-both references closed, rows 2x3 and 3x2: refused: solved dimensions for axis: mismatch
+both references closed, rows 2x3 and 3x2: refused: Shape.set_equal: the closed row references r and s are different rows: solved dimensions for axis: mismatch
 both references closed, rows 2x3 and 3x2: different rows are refused: true
 unbound r set_dim'd, set_equal r s, then bound to a row: r is unbound at the call: true
 unbound r set_dim'd, set_equal r s, then bound to a row: refused: Variable reference r is captured as a row variable in spec "..r.. => ..r..", but Shape.set_equal related it to the row reference s while it was unbound, which equated only a number (the row's product): bound to a row now, it would leave the two rows tied by product alone, not as rows. Pass r to an operation's ~capture_dims before calling set_equal on it.
@@ -152,7 +152,56 @@ closed row with a concatenated axis, captured again over an open operand: the ro
 closed row with a concatenated axis, captured again over an open operand: the closure carried the sum: true
 closed row with a concatenated axis, captured again over an open operand: w is 5
 closed row with a concatenated axis, captured again over an open operand: the open operand takes the one axis: true
+closed row with a concatenated axis, set_equal r s with a closed 5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, set_equal r s with a closed 5: the closure carried the sum: true
+closed row with a concatenated axis, set_equal r s with a closed 5: equal rows are accepted: true
+closed row with a concatenated axis, set_equal s r with a closed 5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, set_equal s r with a closed 5: the closure carried the sum: true
+closed row with a concatenated axis, set_equal s r with a closed 5: equal rows are accepted: true
+closed row with a concatenated axis, set_equal r s with a closed 1x5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, set_equal r s with a closed 1x5: the closure carried the sum: true
+closed row with a concatenated axis, set_equal r s with a closed 1x5: refused: Shape.set_equal: the closed row references r and s are different rows: Mismatching number of axes
+closed row with a concatenated axis, set_equal r s with a closed 1x5: other rows are refused: true
+closed row with a concatenated axis, set_equal s r with a closed 1x5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, set_equal s r with a closed 1x5: the closure carried the sum: true
+closed row with a concatenated axis, set_equal s r with a closed 1x5: refused: Shape.set_equal: the closed row references s and r are different rows: Mismatching number of axes
+closed row with a concatenated axis, set_equal s r with a closed 1x5: other rows are refused: true
 closed row with a concatenated axis over a symbolic extent: the closure carried nothing: true
 closed row with a concatenated axis over a symbolic extent: a capture is refused, naming the closure: true
 closed row with an affine axis over a symbolic extent: the closure carried nothing: true
 closed row with an affine axis over a symbolic extent: a capture is refused, naming the closure: true
+closed rows 2x3 and 3x2, set_equal r s: refused: Shape.set_equal: the closed row references r and s are different rows: solved dimensions for axis: mismatch
+closed rows 2x3 and 3x2, set_equal r s: refused at the call, naming both: true
+closed rows 2x3 and 3x2, set_equal r s: the next closure passes, with no rewind: true
+closed rows 2x3 and 3x2, set_equal s r: refused: Shape.set_equal: the closed row references s and r are different rows: solved dimensions for axis: mismatch
+closed rows 2x3 and 3x2, set_equal s r: refused at the call, naming both: true
+closed rows 2x3 and 3x2, set_equal s r: the next closure passes, with no rewind: true
+closed rows 2x3 and 6, set_equal r s: refused: Shape.set_equal: the closed row references r and s are different rows: Mismatching number of axes
+closed rows 2x3 and 6, set_equal r s: refused at the call, naming both: true
+closed rows 2x3 and 6, set_equal r s: the next closure passes, with no rewind: true
+closed rows 2x3 and 6, set_equal s r: refused: Shape.set_equal: the closed row references s and r are different rows: Mismatching number of axes
+closed rows 2x3 and 6, set_equal s r: refused at the call, naming both: true
+closed rows 2x3 and 6, set_equal s r: the next closure passes, with no rewind: true
+closed rows no axes and 1, set_equal r s: refused: Shape.set_equal: the closed row references r and s are different rows: Mismatching number of axes
+closed rows no axes and 1, set_equal r s: refused at the call, naming both: true
+closed rows no axes and 1, set_equal r s: the next closure passes, with no rewind: true
+closed rows no axes and 1, set_equal s r: refused: Shape.set_equal: the closed row references s and r are different rows: Mismatching number of axes
+closed rows no axes and 1, set_equal s r: refused at the call, naming both: true
+closed rows no axes and 1, set_equal s r: the next closure passes, with no rewind: true
+closed rows 1 and a claim-free 1, set_equal r s: refused: Shape.set_equal: the closed row references r and s are different rows: solved dimensions for axis: different bases
+closed rows 1 and a claim-free 1, set_equal r s: refused at the call, naming both: true
+closed rows 1 and a claim-free 1, set_equal r s: the next closure passes, with no rewind: true
+closed rows 1 and a claim-free 1, set_equal s r: refused: Shape.set_equal: the closed row references s and r are different rows: solved dimensions for axis: different bases
+closed rows 1 and a claim-free 1, set_equal s r: refused at the call, naming both: true
+closed rows 1 and a claim-free 1, set_equal s r: the next closure passes, with no rewind: true
+closed rows, a symbol and its maximum: refused: Shape.set_equal: the closed row references r and s are different rows: solved dimensions for axis: mismatch
+closed rows, a symbol and its maximum: refused at the call: true
+row = dim = row, within one inference: a is 2x3
+row = dim = row, within one inference: b is 3x2
+row = dim = row, within one inference: the dimension is 6
+row = dim = row, within one inference: each row keeps its axes, over one product: true
+row = dim = row, within one inference, then the rows set_equal: refused: solved dimensions for axis: mismatch
+row = dim = row, within one inference, then the rows set_equal: 2x3 and 3x2 are refused: true
+row = dim = row, across closures: the dimension has the one product: true
+row = dim = row, across closures, then the rows set_equal: refused: Shape.set_equal: the closed row references r and s are different rows: solved dimensions for axis: mismatch
+row = dim = row, across closures, then the rows set_equal: 2x3 and 3x2 are refused: true

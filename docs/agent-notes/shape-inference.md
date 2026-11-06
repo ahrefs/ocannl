@@ -100,8 +100,10 @@ files.
   by the time of the call. `Total_elems` is for a row against a number or a dimension variable only
   (`set_dim` on a row, the Dim-Row arm). In a Row-Row pair a reference bound before the last
   closure (its uid no longer in `open_refs`, its `var` dead) contributes its `carried_row`
-  (`row_for_set_equal`, gh-ocannl-1689); with both closed the solver compares the two concrete
-  rows when it next runs (no eager comparison: the broadcast-top and basis rules are the solver's).
+  (`row_for_set_equal`, gh-ocannl-1689). With both closed the rows hold no variable, so `row_row`
+  asks the solver at the call (gh-ocannl-1969, `Row.solve_inequalities` over `Row.empty_env`): the
+  rank, size, basis and `Sym` rules stay the solver's, the closed-rows arm of `unify_row` writes
+  nothing, and a refusal leaves no constraint behind, so it taints nothing and needs no rewind.
   Pinned under both registration and argument orders by `test/operations/set_equal_rows.ml`.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in

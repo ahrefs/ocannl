@@ -446,6 +446,14 @@ Construction-time writes on operands' tensor nodes, audited for this contract:
 | host-init data and registry entries of discarded nodes | unreachable garbage (memory only) |
 
 
+### Capture references
+
+A capture reference (`Shape.get_variable_ref`, passed through `~capture_dims`) relates the variables of the operations it is passed to, by the kinds of two successive bindings: two dimensions are equated, two rows are the same row, and a dimension and a row share only a number, the row's product. `Shape.set_equal` relates two references the same way.
+
+The tie between a row and a dimension is not transitive (gh-ocannl-1969). With `rowA` tied to `dimA` and `dimA` tied to `rowB`, the two rows have equal products and nothing more: `2, 3` and `3, 2` are accepted. This holds for three bindings of one reference (row, dimension, row) as for three references (`set_equal rowA dimA; set_equal dimA rowB`), within one inference and across closures. A program meaning one row says so with an explicit `set_equal rowA rowB`, and then those two are refused.
+
+A closure ends a reference's variables, so the reference keeps what it reached: a dimension's value, or a row's axes and their product. The axes of a closed row stand in for it: captured again as a row, or related to another row reference by `set_equal`, it is the same row, not the same product. A concatenated axis of concrete components is kept as its sum, since the split belongs to the operation that wrote it. Two closed row references are compared when `set_equal` is called, by the solver, and a mismatch raises there and changes nothing. A reference whose binding at the closure was a dimension keeps only the number.
+
 ### Shape schemes
 
 `Tensor.Scheme` (gh-ocannl-404) gives a tensor function a shape *scheme*. This is the explicit, low-level layer; the automatic `%op` integration (gh-ocannl-1751, [syntax extensions](syntax_extensions.md#automatic-shape-schemes)) wraps it in checking mode: a `%op` closure's scheme is traced when the closure is built, and each application checks it, in a rewound window, before the body registers as usual.
