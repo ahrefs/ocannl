@@ -355,6 +355,19 @@ let parent () =
              ("saved under random seeds " ^ show_int saved_seed ^ ", " ^ show_int scoped_seed)
            ~also:("built under random seeds " ^ show_int saved_seed ^ ", " ^ show_int other_seed)
            (fun () -> Checkpoint.restore ~ctx:prog.ctx prog.state seeded_path));
+      (* A checkpoint from when a seed was recorded each time it was set: the repeat is no other
+         seed. *)
+      let prog = build () in
+      let ctx, _ = Checkpoint.restore ~ctx:prog.ctx prog.state path in
+      let repeated =
+        List.map metadata ~f:(fun (k, v) ->
+            (k, if String.equal k seeds_key then v ^ " " ^ v else v))
+      in
+      Persistence.save ~ctx ~appending:false ~metadata:repeated prog.state malformed_path;
+      let prog = build () in
+      let _, repeated_progress = Checkpoint.restore ~ctx:prog.ctx prog.state malformed_path in
+      p "a checkpoint recording one seed twice restores under that seed"
+        (repeated_progress.step = stop_step);
       (* Rewritten from the checkpoint's own header and values: the state, without the seed. *)
       let prog = build () in
       let ctx, _ = Checkpoint.restore ~ctx:prog.ctx prog.state path in

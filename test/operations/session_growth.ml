@@ -19,7 +19,10 @@
    member is first shown to fire on its graph: its tables grow while the graph is held. Fresh graphs
    then plateau with the bounded analysis cache's window of nodes, and drain to the baseline once
    that cache is cleared. A graph held across the loop keeps its minted nodes' identity through
-   collections, its markers through a memo reset, and computes as before. *)
+   collections, its markers through a memo reset, and computes as before.
+
+   [Tensor.random_seeds] holds values: a graph's scoped seed tensor is reclaimed with the graph, the
+   value stays listed, and re-seeding with it adds nothing. *)
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules
@@ -325,3 +328,29 @@ let () =
     (Ir.Online_softmax.reassociable_local held);
   p "a dropped node's marker goes with it" (Gc_witness.reclaimed witness);
   Ir.Online_softmax.set_backward_enabled None
+
+(* {1 Random seeds} *)
+
+let[@inline never] scoped_seed seed =
+  Tensor.with_saved_random_seed (fun () ->
+      Tensor.set_random_seed ~seed ();
+      let graph = build () in
+      let root = Context.auto () in
+      let ctx = Train.forward_once root graph in
+      let witness = Gc_witness.witness (Tensor.get_random_seed ()) in
+      Context.release ctx;
+      Context.release root;
+      witness)
+
+let () =
+  let before = Tensor.random_seeds () in
+  let witnesses = List.init 6 ~f:(fun _ -> scoped_seed 1859) in
+  (* A closure and its checkpoint outside the scopes, so that the last one's holds nothing of it. *)
+  let root = Context.auto () in
+  let ctx = Train.forward_once root (build ()) in
+  Context.release ctx;
+  Context.release root;
+  Gc_witness.settle ();
+  p "a scoped seed is listed once, however often it is set"
+    (List.equal Int.equal (Tensor.random_seeds ()) (before @ [ 1859 ]));
+  p_all "a dropped graph's scoped seed tensor is reclaimed" witnesses ~f:Gc_witness.reclaimed

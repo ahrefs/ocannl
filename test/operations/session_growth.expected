@@ -25,3 +25,5 @@ prefix_scan: a held graph's nodes keep their markers through a memo reset: true
 prefix_scan: the held graph still computes: true
 a held node keeps its reassociation licence through a memo reset: true
 a dropped node's marker goes with it: true
+a scoped seed is listed once, however often it is set: true
+a dropped graph's scoped seed tensor is reclaimed: true

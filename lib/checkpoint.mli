@@ -37,8 +37,9 @@
     the same seed ([fixed_state_for_init], or {!Ocannl_tensor.Tensor.set_random_seed}) whose
     counters derive from the restored step draws the same numbers as the uninterrupted run. Under
     another seed it would not, so the checkpoint records the seeds
-    ({!Ocannl_tensor.Tensor.random_seeds} at {!save}: every one the session created, a graph built
-    under a scoped seed included) and {!restore} refuses a program built under different ones.
+    ({!Ocannl_tensor.Tensor.random_seeds} at {!save}: every distinct one the session created, a
+    graph built under a scoped seed included) and {!restore} refuses a program built under different
+    ones.
 
     {2 A minimal resume}
 

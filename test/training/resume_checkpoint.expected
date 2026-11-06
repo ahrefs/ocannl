@@ -13,6 +13,7 @@ the checkpoint records the one random seed it was saved under: true
 a resume under a different random seed is refused, naming both seeds: true
 a checkpoint of a graph built under a scoped seed restores under that scoped seed: true
 a resume whose graph was built under another scoped seed is refused, naming both: true
+a checkpoint recording one seed twice restores under that seed: true
 a format-1 checkpoint, recording no seed, restores under another seed with a warning: true
 a format-2 checkpoint missing its seed is refused as malformed: true
 an appending save replaces the metadata key it names and keeps the others: true

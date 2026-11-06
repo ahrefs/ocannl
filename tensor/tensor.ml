@@ -434,10 +434,13 @@ let take_forward_code t =
 (* Global singleton for random seed, used in init_params and random number generation *)
 let random_seed : t option ref = ref None
 
-(* Every seed singleton [set_random_seed] created this session, newest first: a graph built under a
-   scoped seed ([with_saved_random_seed]) keeps drawing from it after the singleton is restored, so
-   the singleton alone does not say which seeds the session's graphs draw from (gh-ocannl-1727). *)
-let random_seeds_created : t list ref = ref []
+(* The distinct seed values [set_random_seed] was given this session, newest first: a graph built
+   under a scoped seed ([with_saved_random_seed]) keeps drawing from it after the singleton is
+   restored, so the singleton alone does not say which seeds the session's graphs draw from
+   (gh-ocannl-1727). The values, not the seed tensors: holding those would keep every dropped
+   graph's seed for the session (gh-ocannl-1859), and holding them weakly would make what a
+   checkpoint records depend on when the GC ran. *)
+let random_seeds_created : int list ref = ref []
 
 (* The nodes the frontend allocated since the last closure, newest first ([note_open_node] at every
    frontend [Tn.create]). A closure closes every shape of the open work, so it empties this. *)
@@ -477,7 +480,7 @@ type globals = {
   g_forward_roots : Weak_root.map;
   g_backprop_roots : Weak_root.map;
   g_random_seed : t option;
-  g_random_seeds_created : t list;
+  g_random_seeds_created : int list;
   g_open_nodes : Tn.t list;
 }
 
@@ -1808,7 +1811,8 @@ let set_random_seed ?seed () =
   (* The seed singleton is restored by a rewind, so replacing it counts (gh-ocannl-1573); [bits]
      above already counted, through [op]. *)
   Row.note_mutation ();
-  random_seeds_created := res :: !random_seeds_created;
+  if not (List.mem !random_seeds_created seed ~equal:Int.equal) then
+    random_seeds_created := seed :: !random_seeds_created;
   random_seed := Some res
 
 let rec get_random_seed () =
@@ -1836,14 +1840,7 @@ let with_saved_random_seed f =
 [@@mutation_serial.boundary
   "a scoped restore: puts back the seed saved at entry, on return and on a raise alike"]
 
-let random_seeds () =
-  List.rev !random_seeds_created
-  |> List.filter ~f:(fun t -> Option.is_none (discarded_by t.value))
-  |> List.map ~f:(fun t ->
-      (* Read back from the seed's own [bits] constant: no second copy to keep in step. *)
-      match t.forward.asgns with
-      | Ir.Assignments.Fetch { fetch_op = Constant_bits i; _ } -> Int64.to_int_exn i
-      | _ -> failwith "Tensor.random_seeds: a random seed is not a bits constant")
+let random_seeds () = List.rev !random_seeds_created
 
 let install_validity_check () =
   Tn.validity_check :=
