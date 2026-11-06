@@ -228,6 +228,19 @@ files.
   the caller passes in counts as pending while its dims are unresolved, like one read from the
   environment. Symptom to recognize: `range_over_offsets` smaller than the param by a whole axis;
   `test_default_init_std.ml` claims distinctness on the executed values.
+- A draw's closure must not trust what the environment says mid-pass (gh-ocannl-1961). A bound
+  solved this pass has already left its operands' `res` while the `Row_ineq` carrying it is still in
+  the list, so a sibling reads as boundless for one pass; adding `res = []` to `closeable` did not
+  fix it, and neither did it once the rest below was in, so it is not there. A variable shared with
+  another row's `Total_elems` shows no bound at all, because a multi-row constraint is stored on no
+  row. Hence round-up siblings close from stage 5 only, and `solve_inequalities` runs draws at
+  quiescence at stages 5 and 6. A parameter never had this: its rows carry `is_in_param`.
+  Non-parameter draws do, since `operation.ml` marks them resolve-at-use; `row_closure_guess.ml`
+  compares them to explicit twins, with shape and count claimed too, since a smaller draw is distinct
+  as well. Non-round-up totals keep the stage-3 closing.
+- A `Row_ineq` that reaches stage 6 unsolved closes its row variable to empty
+  (`solve_row_ineq`'s first arm): the operand broadcasts in. So a size that arrives at stage 6
+  through a chain does not widen a draw; only one arriving by stage 5 does.
 - That spurious axis is also how a shape defect reaches the SCHEDULER, which is where it actually
   got noticed: `Tensorize`'s role check rejects an operand mentioning the third micro symbol, and
   `Stage`'s insertion point L\* is "the deepest loop carrying an outer-part symbol", so an operand
@@ -243,6 +256,9 @@ files.
   (`keep_constr`/`apply_rows_constraint`) instead. Same discipline the `unify_dim` deferral rule
   above states for dim constraints. The equality is up to origins
   (`Row.equal_constraint_up_to_origin`, gh-ocannl-2000): they explain a constraint and say nothing.
+  The one re-emission is the stage-7 pending round-up arm, whose value is stable: it wants the
+  fixpoint, since there `Shape.refuse_unsolved` reports what stayed stuck, and the stored path
+  re-fires on the constraint's own variables, not its GLB's.
 - `Shape_row` constraints (added in `finish_inference` from every update row) are the ONLY mechanism
   that finalizes NON-terminal variables — `Terminal_dim`/`Terminal_row` cover leaf tensors alone. So
   a `process_shape_row` arm that closes a row var via its GLB must RE-EMIT the `Shape_row` unless it
@@ -463,11 +479,11 @@ files.
   Two sit in the closing path. An equation left with `beg_handled = false` solves neither variable,
   and `value` there is the rest of the other side, so `visit_rows_for_row_solution` (which reads
   `v = value` into every bound through `v`) runs only on the arm recording the solution. And closing
-  a row to its GLB is a choice, so the terminal close takes it through `rank_refutes_glb`, a
-  read-only query of the rank graph, and so does `eliminate_row_constraint` when it re-reads the GLB
-  from the environment (`collect_factors` looks at flanks only, so `4,4,..w..` counts as settled).
-  `process_shape_row`'s stage-6 arms close non-terminal rows without asking. The bound itself was
-  true: `pointdiv`'s `grad_asn` builds `-1 *. t1 /. (t2 **. 2)` on the primal, a pointwise result
+  a row to its GLB is a choice, so every close reads the entry through `rank_refutes_glb`, a
+  read-only query of the rank graph: `entry_for_closing` for the terminal close and
+  `process_shape_row`, `eliminate_row_constraint` when it re-reads the GLB from the environment
+  (`collect_factors` looks at flanks only, so `4,4,..w..` counts as settled). A refuted GLB is
+  absent, not an error (gh-ocannl-1961). The bound itself was true: `pointdiv`'s `grad_asn` builds `-1 *. t1 /. (t2 **. 2)` on the primal, a pointwise result
   over both operands, so dividing `h, w, ..c..` by `..c..` bounds the statistic by a spatial row.
   A fresh evaluation never meets that GLB: its bound stays between variables, and stage 2 discharges
   `Total_elems` with no GLB. A compile before training hides both, as the rows arrive solved.

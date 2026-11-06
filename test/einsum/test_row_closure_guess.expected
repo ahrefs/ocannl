@@ -1,0 +1,34 @@
+stage-7 bound, divisible, rows first: stage 6 leaves the row open: true
+stage-7 bound, divisible, rows first: the row derives from it: true
+stage-7 bound, divisible, rows first: nothing is left over: true
+stage-7 bound, divisible, bound first: stage 6 leaves the row open: true
+stage-7 bound, divisible, bound first: the row derives from it: true
+stage-7 bound, divisible, bound first: nothing is left over: true
+stage-7 bound, not divisible, rows first: stage 6 leaves the row open: true
+stage-7 bound, not divisible, rows first: the row derives from it: true
+stage-7 bound, not divisible, rows first: nothing is left over: true
+stage-7 bound, not divisible, bound first: stage 6 leaves the row open: true
+stage-7 bound, not divisible, bound first: the row derives from it: true
+stage-7 bound, not divisible, bound first: nothing is left over: true
+open tail, rows first: the draw fills the bound's tail too: true
+open tail, bound first: the draw fills the bound's tail too: true
+sibling, rows first: enters stage 3 bounded through a var-var chain only: true
+sibling, rows first: the size arriving at stage 3 reaches it: true
+sibling, rows first: the total counts it: true
+sibling, bound first: enters stage 3 bounded through a var-var chain only: true
+sibling, bound first: the size arriving at stage 3 reaches it: true
+sibling, bound first: the total counts it: true
+sibling, rows first: the size arriving at stage 5 reaches it: true
+sibling, bound first: the size arriving at stage 5 reaches it: true
+sibling: a GLB with leading axes only is not empty: true
+refuted GLB, no constraint: closes minimally: true
+refuted GLB, a total: the total closes it instead: true
+control, no bounds: one block: true
+control, resolved bound: fills it: true
+control, empty bound: one element: true
+control, a chain ending unbounded, rows first: the sibling closes empty, one block: true
+control, a chain ending unbounded, bound first: the sibling closes empty, one block: true
+control, an unmarked operation result closes down: true
+control, a genuine rank cycle is still refused: true
+a symbolic bound refuses the total, naming why: true
+mutually bounded draws are left unsolved, not closed: true
