@@ -1451,6 +1451,34 @@ let row_flattened_read_written_cells () =
   flattened_read_partial_write ~label:"flattened_read_written_cells" ~read_from:2 ~verdict:Accepted
     ~expected:[| 1.; 2. |] ~entry:(fun _ -> [])
 
+(* A pair normalized through a trailing [Sub_axis] comes back in the node's axis order, which is
+   what gives the unit-extent test the coordinate it asks about (gh-ocannl-1964, found by
+   [virtual_inliner_oracle]). The write [x[0; Sub_axis]] is cell 0 of dims [1; 2]; read at [x[0; u]]
+   its normalized position meets [u] on the coordinate of extent 2, where a [Fixed_idx 0] takes a
+   guard. Written back in reverse, that position stood on the axis of extent 1, read as the same
+   cell, and the replay wrote cell 1 too. *)
+let row_trailing_sub_axis_write () =
+  let label = "trailing_sub_axis_write" in
+  let x = mk ~dims:[| 1; 2 |] (label ^ "_x") and out = mk ~dims:[| 2 |] (label ^ "_out") in
+  materialize out;
+  let u = sym () in
+  p
+    (label ^ ": the common layout keeps the node's axis order")
+    (match
+       Ir.Affine.common_layout ~dims:[| 1; 2 |] [| fixed 0; Idx.Sub_axis |] [| fixed 0; iter u |]
+     with
+    | Some (write, read) ->
+        Array.equal Idx.equal_axis_index write [| fixed 0; fixed 0 |]
+        && Array.equal Idx.equal_axis_index read [| fixed 0; iter u |]
+    | None -> false);
+  let llc =
+    seq (zero x)
+      (seq
+         (set x [| fixed 0; Idx.Sub_axis |] (c 7.))
+         (loop_n u 2 (set out [| iter u |] (add (get x [| fixed 0; iter u |]) (tick u)))))
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[] ~expected:[| 8.; 2. |] ~verdict:Accepted
+
 (* A partial frame: on dims [2; 3; 2] the producer flattens only the first two axes, [x[Sub_axis; f;
    g]], and the read is per axis. The common frame coarsens just those two -- the read becomes
    [x[Sub_axis; 3a + b; c]] -- and keeps the last axis its own coordinate, so pass 1 binds [f := 3a
@@ -1694,6 +1722,7 @@ let () =
   case "row_flattened_read_zero_structural" row_flattened_read_zero_structural;
   case "row_flattened_read_past_partial" row_flattened_read_past_partial;
   case "row_flattened_read_written_cells" row_flattened_read_written_cells;
+  case "row_trailing_sub_axis_write" row_trailing_sub_axis_write;
   case "row_partial_frame" row_partial_frame;
   case "row_trailing_sub_axis_read" row_trailing_sub_axis_read;
   case "row_hoisted_local" row_hoisted_local;

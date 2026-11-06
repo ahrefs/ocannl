@@ -216,6 +216,10 @@ flattened_read_past_partial: the two placements agree: true
 flattened_read_written_cells: inlined: true
 flattened_read_written_cells: executed values are the reference: true
 flattened_read_written_cells: the two placements agree: true
+trailing_sub_axis_write: the common layout keeps the node's axis order: true
+trailing_sub_axis_write: inlined: true
+trailing_sub_axis_write: executed values are the reference: true
+trailing_sub_axis_write: the two placements agree: true
 partial_frame: inlined: true
 partial_frame: executed values are the reference: true
 partial_frame: the two placements agree: true

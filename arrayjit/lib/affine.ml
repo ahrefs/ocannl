@@ -303,17 +303,20 @@ let common_layout ~(dims : int array) (a : Idx.axis_index array) (b : Idx.axis_i
     | Some [ va; vb ] ->
         let reemit v =
           let out = Array.create ~len:n Idx.Sub_axis in
-          let pos = ref 0 in
-          let ok =
-            Array.for_all v ~f:(fun c ->
-                pos := !pos + coord_span c;
+          (* A fold, left to right: Base's [Array.for_all] runs from the last element, which here
+             wrote the coordinates back in reverse order. Both sides reversing alike hid it from the
+             pairwise solving, and not from [axis_extents], which then read a wide coordinate at a
+             unit axis (gh-ocannl-1964). *)
+          let pos, ok =
+            Array.fold v ~init:(0, true) ~f:(fun (pos, ok) c ->
+                let pos = pos + coord_span c in
                 match c with
                 | Known { terms; offset; _ } ->
-                    out.(!pos - 1) <- Idx.affine ~symbols:terms ~offset;
-                    true
-                | Unknown _ -> false)
+                    out.(pos - 1) <- Idx.affine ~symbols:terms ~offset;
+                    (pos, ok)
+                | Unknown _ -> (pos, false))
           in
-          if ok && !pos = n then Some out else None
+          if ok && pos = n then Some out else None
         in
         Option.both (reemit va) (reemit vb)
     | _ -> None
