@@ -902,6 +902,19 @@ files.
   (`Schedule.init_last_first`). Pin: `test/operations/operand_walk_order.ml`, whose rows turn red
   when one spelled order is reversed. Left unspelled on purpose: walks whose siblings can only raise
   (`Schedule`'s Coalesce/Tensorize remaps), where the order picks among refusals that are all true.
+- **Compiled programs are checked under a uid shift and under reversed creation order**
+  (gh-ocannl-1974): `test/operations/build_order_programs.ml` builds a padded two-conv step and a
+  two-block transformer step with their layers and data created first-to-last or last-to-first
+  (applied in one order, so it is one program), each after 0 or 3 unrelated nodes, and compares the
+  normalized source, every placement, each segment's schedule digest and the loss. Parameters get
+  values by label: the default init's stream is keyed by session id, which the reversal changes.
+  What was order-dependent and is not any more: the padding resets and margin restores of a
+  multi-target assignment (`Assignments`, first occurrence instead of a uid sort) and the schedule
+  digest's companion sections (by the code walk's node numbers; the hand-built leg of the same
+  test fails on the uid-ordered rendering). What still follows creation order, stated at each site:
+  `Backends.partition_layout_groups` (the layout planners' input order -- the scorer and the
+  allocator must share one key, and a code position is not one), and `compare_program_order`'s
+  fallback and `C_syntax.store_order`'s tail (entries the code never names).
 - **A candidate whose captured computation contains a `Scan_loop` is refused, and the refusal has
   two doors** (gh-ocannl-696, `test/operations/scan_loop.ml` legs 5 and 5b): `virtual_llc` threads
   `~in_scan` beside `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in

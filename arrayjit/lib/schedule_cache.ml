@@ -177,7 +177,7 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
       initial_tokens;
     }
     llc;
-  companions ~add ~emit_tn;
+  companions ~add ~emit_tn ~rank:(Hashtbl.find tn_refs);
   let incomplete_reason =
     if !complete then None
     else
@@ -214,14 +214,34 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
     ref_tns = Array.of_list_rev !rev_tns;
   }
 
-(* Codegen-relevant companions of the decided code, sharing the code walk's node numbering. *)
-let companions (opt : LL.optimized) ~add ~emit_tn =
+(* Codegen-relevant companions of the decided code, sharing the code walk's node numbering.
+
+   gh-ocannl-1974: each section lists its members by that numbering ([rank], the position of a
+   node's first occurrence in the code), not in the order of the set or map holding them, which is
+   uid order: the order the schedule minted its tiles in. Two schedules reaching one code with their
+   tiles minted in a different order would digest apart otherwise. A member the code never names has
+   no number yet; those follow the numbered ones, in uid order -- nothing in the program orders
+   them. *)
+let companions (opt : LL.optimized) ~add ~emit_tn ~rank =
+  let in_code_order ~tn_of members =
+    List.sort members ~compare:(fun a b ->
+        let a = tn_of a and b = tn_of b in
+        match (rank a, rank b) with
+        | Some i, Some j -> Int.compare i j
+        | Some _, None -> -1
+        | None, Some _ -> 1
+        | None, None -> Tn.compare a b)
+  in
   add "shared:[";
-  Set.iter opt.LL.workgroup_shared ~f:(fun tn ->
+  List.iter
+    (in_code_order ~tn_of:Fn.id (Set.to_list opt.LL.workgroup_shared))
+    ~f:(fun tn ->
       emit_tn tn;
       add ",");
   add "];fragments:[";
-  Set.iter opt.LL.simdgroup_fragments ~f:(fun tn ->
+  List.iter
+    (in_code_order ~tn_of:Fn.id (Set.to_list opt.LL.simdgroup_fragments))
+    ~f:(fun tn ->
       emit_tn tn;
       add ",");
   (* Emitted only when non-empty so pre-swizzle canonical digests (and their caches) stay valid. The
@@ -231,7 +251,9 @@ let companions (opt : LL.optimized) ~add ~emit_tn =
      section is gated on non-emptiness. *)
   if not (Map.is_empty opt.LL.swizzled) then begin
     add "];swizzled:[";
-    Map.iteri opt.LL.swizzled ~f:(fun ~key:tn ~data:kind ->
+    List.iter
+      (in_code_order ~tn_of:fst (Map.to_alist opt.LL.swizzled))
+      ~f:(fun (tn, kind) ->
         emit_tn tn;
         (match kind with LL.Swizzle_elem -> () | LL.Swizzle_b128 -> add ":b128");
         add ",")
@@ -243,7 +265,9 @@ let companions (opt : LL.optimized) ~add ~emit_tn =
      entry — it is the staging anchor loop, determined by the code itself. *)
   if not (Map.is_empty opt.LL.pipelined) then begin
     add "];pipelined:[";
-    Map.iteri opt.LL.pipelined ~f:(fun ~key:tn ~data:{ LL.pt_depth; pt_rotor = _ } ->
+    List.iter
+      (in_code_order ~tn_of:fst (Map.to_alist opt.LL.pipelined))
+      ~f:(fun (tn, { LL.pt_depth; pt_rotor = _ }) ->
         emit_tn tn;
         add (":" ^ Int.to_string pt_depth);
         add ",")
@@ -292,13 +316,15 @@ let lineage_tag (plc : Tn.Placements.t) (octx : LL.optimize_ctx) tn =
 let canonicalize_source ?(static_indices = []) ?(node_tag = fun _ -> "")
     ~(lineage : Tn.Placements.t) (opt : LL.optimized) : canonical =
   let node_tag tn = lineage_tag lineage opt.LL.optimize_ctx tn ^ node_tag tn in
-  canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) opt.LL.source
+  canonical_of ~static_indices ~node_tag
+    ~companions:(fun ~add:_ ~emit_tn:_ ~rank:_ -> ())
+    opt.LL.source
 
 (* A code fragment's identity under the same walk (gh-ocannl-1274): the flip chain's structural-twin
    rule renders a flipped node's producer/consumer neighbourhood with it, the caller's [node_tag]
    carrying what the flip's pricing reads per node. *)
 let canonicalize_code ?(static_indices = []) ~node_tag (llc : LL.t) : canonical =
-  canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ -> ()) llc
+  canonical_of ~static_indices ~node_tag ~companions:(fun ~add:_ ~emit_tn:_ ~rank:_ -> ()) llc
 
 (** {2 Registries} *)
 

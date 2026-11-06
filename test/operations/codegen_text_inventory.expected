@@ -122,6 +122,7 @@ test/operations/branchless_select.ml [run by @test/operations/runtest-branchless
     ") != 0.0 ? ("
     ... ^ "_v["
 test/operations/build_file_descriptors.ml [run by @test/operations/runtest-build_file_descriptors; also pins text this scan cannot name: untraced callback]
+test/operations/build_order_programs.ml [run by @test/operations/runtest-build_order_programs]
 test/operations/cache_key_agreement.ml [run by @test/operations/runtest-cache_key_agreement, @test/operations/runtest-cache_key_agreement-outranked]
 test/operations/canonical_render.ml [renders generated text in memory; run by @test/operations/runtest-canonical_render; also pins text this scan cannot name: opaque aggregate component, mutation or unseen buffer write]
     "?"
@@ -634,6 +635,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-branchless_select-no_hip_fast_math
 @test/operations/runtest-branchless_select-outlined
 @test/operations/runtest-build_file_descriptors
+@test/operations/runtest-build_order_programs
 @test/operations/runtest-cache_key_agreement
 @test/operations/runtest-cache_key_agreement-outranked
 @test/operations/runtest-canonical_render
