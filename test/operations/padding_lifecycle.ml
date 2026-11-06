@@ -1,14 +1,15 @@
 (* Padding lifecycle: the halo margins and their neutral element are part of a tensor node's
    identity, committed at the node's first compilation (when its [padding] lazy forces).
 
-   Pinned here: - Locked-layout rejection: a data node created via [init] ([Keep_shape_no_padding])
+   Pinned here: - Locked-layout rejection: a data node created via [wrap] ([Keep_shape_no_padding])
    has its layout committed at creation; a padded conv reading it is REJECTED at shape-inference
-   time (before the fix it silently lost the halo and read out of bounds at negative offsets). -
-   Fresh-operand halo: a computed intermediate gets its halo from the padded consumer, the committed
-   padding records the conv's neutral element, and the lowered conv is offset-free in buffer space
-   (a valid conv over the padded buffer) — [detect_conv] sees [cx_offset = 0], so the autotune
-   conv-seed gate admits healthy padded convs. - Compatible late demand: a second same-geometry
-   padded conv on the already-committed operand is accepted (the resolved padding covers it). *)
+   time (before the fix it silently lost the halo and read out of bounds at negative offsets). An
+   [init] leaf owns its array and takes margins instead (padded_conv_init_leaf). - Fresh-operand
+   halo: a computed intermediate gets its halo from the padded consumer, the committed padding
+   records the conv's neutral element, and the lowered conv is offset-free in buffer space (a valid
+   conv over the padded buffer) — [detect_conv] sees [cx_offset = 0], so the autotune conv-seed gate
+   admits healthy padded convs. - Compatible late demand: a second same-geometry padded conv on the
+   already-committed operand is accepted (the resolved padding covers it). *)
 
 open Base
 open Ocannl
@@ -25,6 +26,13 @@ let named name (comp : Asgns.comp) : Asgns.comp =
 let make_x tag =
   NTDSL.init ~l:(tag ^ "x") ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 11; 11; 4 ]
     ~f:(Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1.)
+    ()
+
+let make_wrapped_x tag =
+  let dims = [| 2; 11; 11; 4 |] in
+  let f = Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:7 ~offset:0. ~stride:1. in
+  NTDSL.wrap ~l:(tag ^ "x") ~b:[ 2 ] ~o:[ 11; 11; 4 ]
+    (Ir.Ndarray.init_array ~debug:(tag ^ "x") Ir.Ops.single ~dims ~padding:None ~f)
     ()
 
 let padding_to_string (tn : Ir.Tnode.t) =
@@ -62,8 +70,8 @@ let compile_conv ?ctx tag x =
   (ctx, !site)
 
 let () =
-  (* === Locked layout: padded conv on an [init] data node is rejected === *)
-  let x1 = make_x "locked" in
+  (* === Locked layout: padded conv on a [wrap] data node is rejected === *)
+  let x1 = make_wrapped_x "locked" in
   p "locked: layout committed at creation" (Lazy.is_val x1.Tensor.value.Ir.Tnode.padding);
   (match compile_conv "locked" x1 with
   | exception Row.Shape_error (msg, _) -> pr "locked: REJECTED: %s\n" (String.prefix msg 60)

@@ -5895,10 +5895,14 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
                              right=%{operation_padding.right#Int}) exceeds resolved padding \
                              (left=%{resolved_pad.left#Int}, right=%{resolved_pad.right#Int}): the \
                              operand's buffer layout is already committed with insufficient \
-                             margins. Compose the padded consumer before the operand's first \
-                             compilation, create the data via a padding-aware constructor (e.g. \
-                             wrap_padded), or read through a materialized copy of the operand (for \
-                             a padded max-pool, Nn_blocks.max_pool2d_copy)"],
+                             margins, at creation for a tensor keeping the array it was given \
+                             (wrap, wrap_padded, wrap_param, a loaded checkpoint), and otherwise \
+                             at its first compilation or host access. Create the data through \
+                             reshape or init, which copy it into a padded buffer, or through \
+                             wrap_padded with margins of its own; compose the padded consumer \
+                             before that first compilation or host access; or read through a \
+                             materialized copy of the operand (for a padded max-pool, \
+                             Nn_blocks.max_pool2d_copy)"],
                           [ Projection_mismatch [ proj ] ] )
                | _ -> (
                    (* Update inferred padding to be sufficient for this operation, even if resolved

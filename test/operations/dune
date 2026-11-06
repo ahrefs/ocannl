@@ -8138,6 +8138,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1982: a padded convolution on an init leaf takes margins, in a fresh session and through
+; a training step; a wrap leaf is refused by a message saying where its layout was committed.
+
+(test
+ (name padded_conv_init_leaf)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules padded_conv_init_leaf)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  (name padding_lifecycle)
  (package neural_nets_lib)

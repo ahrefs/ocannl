@@ -1,0 +1,7 @@
+the leaf took margins from its consumer: true
+the convolution is the zero-padded correlation of the leaf's data: true
+the leaf reads back as its data, margins not included: true
+the leaf's gradient is the transposed convolution of w: true
+the refusal says where the layout was committed: true
+the refusal names the constructors that take margins: true
+the refusal says the layout may be committed by a compilation: true

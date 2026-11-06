@@ -960,8 +960,10 @@ let reshape ~l ?b ?(i = []) ?o ndarray =
     ?output_dims:o
 
 (** The dimensions are taken from the provided ndarray, but the split into axis kinds still needs to
-    be inferred (or provided). Assumes no padding. Input axes are not inferred (empty if omitted).
-    See also: {!reshape} and {!TDSL.wrap_param}. *)
+    be inferred (or provided). Input axes are not inferred (empty if omitted). The tensor keeps the
+    array as its layout, committed unpadded at creation: a consumer demanding margins is refused,
+    and {!reshape} (which copies when padding is inferred) or {!wrap_padded} serves it instead. See
+    also: {!TDSL.wrap_param}. *)
 let wrap ~l ?prec ?b ?(i = []) ?o ndarray =
   (* [prec] converts the ndarray at ingestion (gh-ocannl-492): the tensor's storage is natively
      [prec], values converted through float, the original ndarray unchanged. This is the
@@ -990,12 +992,13 @@ let rebatch ~l ndarray =
 
 (** Creates a tensor by initializing values using a function from indices to values. The dimensions
     are split into axis kinds as specified, there is no shape inference. Recall that input axes are
-    rightmost. *)
+    rightmost. The padding is inferred, as for a {!range_of_shape} leaf: nothing else holds the
+    array, so a padded consumer gets its margins, the values copied into a padded buffer. *)
 let init ~l ~prec ?(b = []) ?(i = []) ?(o = []) ~f =
   let all_dims = Array.of_list (b @ o @ i) in
   let ndarray = Ir.Ndarray.init_array ~debug:l prec ~dims:all_dims ~padding:None ~f in
-  Tensor.term ~init_data:(Asgns.Keep_shape_no_padding ndarray) ~batch_dims:b ~label:[ l ]
-    ~input_dims:i ~output_dims:o
+  Tensor.term ~init_data:(Asgns.Reshape ndarray) ~batch_dims:b ~label:[ l ] ~input_dims:i
+    ~output_dims:o
 
 module Make_DSL (Grad_spec : sig
   val grad_spec : Tensor.grad_spec

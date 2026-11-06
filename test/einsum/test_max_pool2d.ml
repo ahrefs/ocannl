@@ -175,9 +175,15 @@ let test_max_pool2d_backprop () =
 
 (* 4x4 input with values -16..-1. All-negative inputs expose wrong margins: 0-margins would make the
    edge maxima 0 instead of the valid-range maxima. *)
+let negative_input_cell idcs = Float.of_int ((4 * idcs.(0)) + idcs.(1)) -. 16.
+
 let make_negative_input () =
-  TDSL.init ~l:"input" ~prec:Ir.Ops.single ~o:[ 4; 4; 1 ]
-    ~f:(fun idcs -> Float.of_int ((4 * idcs.(0)) + idcs.(1)) -. 16.)
+  TDSL.init ~l:"input" ~prec:Ir.Ops.single ~o:[ 4; 4; 1 ] ~f:negative_input_cell ()
+
+let make_wrapped_negative_input () =
+  TDSL.wrap ~l:"input" ~b:[] ~o:[ 4; 4; 1 ]
+    (Ir.Ndarray.init_array ~debug:"input" Ir.Ops.single ~dims:[| 4; 4; 1 |] ~padding:None
+       ~f:negative_input_cell)
     ()
 
 let padding_to_string (tn : Ir.Tnode.t) =
@@ -228,15 +234,15 @@ let test_max_pool2d_padded () =
   printf "operand committed padding = %s\n%!" (padding_to_string pre.value);
   check_padded_values ctx output
 
-(** A data node created via [TDSL.init] wraps an eagerly allocated array: its unpadded layout is
+(** A data node created via [TDSL.wrap] keeps the array it was given: its unpadded layout is
     committed at creation. The clamped-window lowering (gh-504) demands no margins, so the padded
     max-pool reads it directly — before gh-504 this was rejected ("Operation padding exceeds
     resolved padding") with [max_pool2d_copy] as the remedy; the copy variant is kept working. *)
 let test_max_pool2d_padded_locked_data () =
-  printf "Testing max_pool2d use_padding=true on an init data node (locked layout)...\n%!";
+  printf "Testing max_pool2d use_padding=true on a wrap data node (locked layout)...\n%!";
   Tensor.unsafe_reinitialize ();
 
-  let input = make_negative_input () in
+  let input = make_wrapped_negative_input () in
   Verdict.p "data node layout committed at creation" (Lazy.is_val input.value.Ir.Tnode.padding);
   let%op output = max_pool2d ~stride:2 ~window_size:3 ~use_padding:true () input in
   let ctx = Context.auto () in
@@ -250,7 +256,7 @@ let test_max_pool2d_padded_locked_data () =
 let test_max_pool2d_padded_locked_data_copy () =
   (* The materialized-copy variant keeps working (no margins on the copy either). *)
   Tensor.unsafe_reinitialize ();
-  let input = make_negative_input () in
+  let input = make_wrapped_negative_input () in
   let%op output = Nn_blocks.max_pool2d_copy ~stride:2 ~window_size:3 ~use_padding:true () input in
   let ctx = Context.auto () in
   Train.set_materialized input.value;

@@ -4,8 +4,20 @@ under the reference rank walk it closes the same: true
 the result keeps the input's shape: true
 every state tensor has the channel shape: true
 under the reference rank walk it closes the same: true
+the result keeps the input's shape: true
+every state tensor has the channel shape: true
+under the reference rank walk it closes the same: true
 running_mean moved by a tenth of the channel means: true
 running_variance moved by a tenth of the way to the channel variances: true
+the result has the feature map's shape: true
+the running statistics have one value per channel: true
+the step ran: every running variance moved and is finite: true
+the result has the feature map's shape: true
+the running statistics have one value per channel: true
+the step ran: every running variance moved and is finite: true
+the result has the feature map's shape: true
+the running statistics have one value per channel: true
+the step ran: every running variance moved and is finite: true
 the result has the feature map's shape: true
 the running statistics have one value per channel: true
 the step ran: every running variance moved and is finite: true

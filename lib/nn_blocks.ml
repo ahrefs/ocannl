@@ -537,11 +537,12 @@ let%op depthwise_separable_conv2d ~label ?(kernel_size = 3) ?(stride = 1) ?(use_
     an out-of-range position contributes the max-accumulation identity ([-inf]) — the same as not
     visiting it — so clamping is semantically exact and the operand needs NO margins at all. The
     operand therefore composes freely with 0-neutral margin-touching consumers such as padded convs
-    (the Inception-block pattern), with eagerly allocated data nodes (e.g. [TDSL.init]), and with
-    operands already lowered in earlier compilations of a staged flow. The backward argmax scatter
-    transposes the clamp (guarded writes). Interior outputs still see full windows: the guards flip
-    truth only at affine breakpoints of the output axis, so [Schedule.Partition] at
-    [Schedule.partition_breakpoints] specializes guard-free interior segments (gh-508).
+    (the Inception-block pattern), with data nodes committed unpadded at creation (e.g.
+    [TDSL.wrap]), and with operands already lowered in earlier compilations of a staged flow. The
+    backward argmax scatter transposes the clamp (guarded writes). Interior outputs still see full
+    windows: the guards flip truth only at affine breakpoints of the output axis, so
+    [Schedule.Partition] at [Schedule.partition_breakpoints] specializes guard-free interior
+    segments (gh-508).
 
     Overlapping pooling ([stride < window_size], AlexNet-style) has exact gradients: the gradient
     gate lives in the (output x window) product space (gh-512), so each position receives gradient
