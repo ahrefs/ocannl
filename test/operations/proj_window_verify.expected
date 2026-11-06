@@ -17,3 +17,5 @@ a chain over a target of extent 1, u = 2*t with t = 1*y + 3: every axis indexes 
 a chain over a target of extent 1, u = 2*t with t = 1*y + 3, equations reversed: every axis indexes as its windows compose: true
 a cycle of windows, t = 2*u and u = 2*t: Shape_error: projection_of_solved_dims: unknown projection: 1889003 5
 a cycle of windows, t = 2*u and u = 2*t: the refusal is the projection reader's: true
+an executed chain of two windows: reads what the windows read one at a time: true
+an executed chain of three windows with offsets: reads what the windows read one at a time: true

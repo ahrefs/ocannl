@@ -17,8 +17,11 @@
    gh-ocannl-1971: the pass giving each window's target its index read an environment taken before
    the pass, so a window over another window's target ([u = 2*t] with [t = 1*x]) was an unknown
    projection, whichever equation came first, and a target of extent 1 read as [Fixed_idx 0], a
-   silently wrong index. The pass now goes in dependency order. The chains' cases execute the index
+   silently wrong index. The pass now goes in dependency order. The chains' cases evaluate the index
    each axis ends up with against the composition of its windows, for every value of the iterator.
+   The executed cases read a seeded buffer through the index the solver gives the outermost axis, in
+   a hand-built loop over the solver's own iterator, against a materialized run of the same windows
+   taken one at a time.
 
    No route through [Shape] states such a chain: within a step each tensor axis has one role, plain
    label or window, operands that alias are de-aliased ([Shape.dealias_operands]), and a window
@@ -28,6 +31,7 @@ open Base
 open Ocannl.Operation.DSL_modules
 open Verdict.Claims
 module Idx = Ir.Indexing
+module B = Ll_test
 
 let x_dim = Row.get_default_dim ~d:5 ~proj_id:1_889_001 ()
 let one_dim = Row.get_default_dim ~d:1 ~proj_id:1_889_002 ()
@@ -100,6 +104,64 @@ let chain label ?solved constraints ~axes =
                       Option.equal Int.equal (position i ~x ~at) (Some (composed at))))
           | i -> pf "%s: x is iterated, not %s" label (index_to_string i) false))
 
+(* [windows] are [(stride, offset)] pairs, outermost first, each ranging over the axis after it and
+   the last over [x_dim]. *)
+let executes label windows =
+  case label (fun () ->
+      let name = "pwv_" ^ String.tr ~target:' ' ~replacement:'_' label in
+      let axes = List.drop [ outermost_dim; outer_dim; target_dim ] (3 - List.length windows) in
+      let constraints =
+        List.map3_exn axes
+          (List.tl_exn axes @ [ x_dim ])
+          windows
+          ~f:(fun axis over (stride, offset) -> eq axis (window ~offset stride over))
+      in
+      let env = Bounded_run.run label (fun () -> solve constraints) in
+      let x =
+        match Row.get_dim_index env x_dim with
+        | Iterator x -> x
+        | i -> failwith ("x is iterated, not " ^ index_to_string i)
+      in
+      let extents =
+        List.fold_right windows ~init:[ 5 ] ~f:(fun (stride, offset) extents ->
+            ((stride * (List.hd_exn extents - 1)) + offset + 1) :: extents)
+      in
+      let node = B.node_factory ~first_id:1_889_100_000 ~dims:[| 5 |] () in
+      let levels =
+        List.mapi extents ~f:(fun level extent ->
+            node ~dims:[| extent |] (Printf.sprintf "%s_%d" name level))
+      in
+      let src = List.hd_exn levels and reference = List.last_exn levels in
+      let out = node (name ^ "_out") in
+      List.iter (out :: levels) ~f:B.materialize;
+      let one_at_a_time =
+        List.mapi windows ~f:(fun level (stride, offset) ->
+            let i = B.sym () in
+            B.loop_n i
+              (List.nth_exn extents (level + 1))
+              (B.set_at
+                 (List.nth_exn levels (level + 1))
+                 (B.iter i)
+                 (B.get (List.nth_exn levels level)
+                    [| Idx.affine ~symbols:[ (stride, i) ] ~offset |])))
+      in
+      let chained =
+        B.loop_n x 5
+          (B.set_at out (B.iter x) (B.get src [| Row.get_dim_index env (List.hd_exn axes) |]))
+      in
+      let src_values =
+        Array.init (List.hd_exn extents) ~f:(fun i -> Float.of_int (100 + (7 * i)))
+      in
+      let llc = List.fold one_at_a_time ~init:chained ~f:B.seq in
+      match
+        B.optimize_and_execute ~ctx:(Context.cpu ()) ~name llc
+          ~seed:[ (src, src_values) ]
+          ~read:[ out; reference ]
+      with
+      | _, [ got; want ] ->
+          pf_close "%s: reads what the windows read one at a time" label got want ~tol:(fun _ -> 0.)
+      | _ -> pf "%s: two nodes read back" label false)
+
 let () =
   (let s = var "s" in
    (* [1*y + 3] over a dimension-1 axis is the fixed index 3: the slice's own. *)
@@ -162,4 +224,6 @@ let () =
      ~axes:[ (outer_dim, Fn.const 6) ]);
   refuses "a cycle of windows, t = 2*u and u = 2*t"
     ~by:("projection reader", "projection_of_solved_dims: unknown projection")
-    [ eq target_dim (window 2 outer_dim); eq outer_dim (window 2 target_dim) ]
+    [ eq target_dim (window 2 outer_dim); eq outer_dim (window 2 target_dim) ];
+  executes "an executed chain of two windows" [ (2, 0); (1, 0) ];
+  executes "an executed chain of three windows with offsets" [ (3, 1); (2, 2); (1, 1) ]

@@ -857,6 +857,7 @@ test/operations/peel_dead_level.ml [through Ll_test.execute; run by @test/operat
 test/operations/prefix_scan.ml [staged callback; through Ll_test.optimize_and_execute; run by @test/operations/runtest-prefix_scan, @test/operations/runtest-prefix_scan_fp_licences]
 test/operations/prelowered_seam.ml [staged callback; prelowered compile; through Ll_test.link; through Ll_test.optimize_and_execute; run by @test/operations/runtest-prelowered_seam]
 test/operations/privatize_recheck.ml [through Ll_test.execute; run by @test/operations/runtest-privatize_recheck]
+test/operations/proj_window_verify.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-proj_window_verify]
 test/operations/qkv_zero_init.ml [prelowered compile; through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-qkv_zero_init, @test/operations/runtest-qkv_zero_init-approximate]
 test/operations/reduction_accumulator_residency.ml [prelowered compile; through Ll_test.link; run by @test/operations/runtest-reduction_accumulator_residency]
 test/operations/reduction_forms.ml [prelowered compile; run by @test/operations/runtest-reduction_forms]
@@ -980,6 +981,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-prefix_scan_fp_licences
 @test/operations/runtest-prelowered_seam
 @test/operations/runtest-privatize_recheck
+@test/operations/runtest-proj_window_verify
 @test/operations/runtest-qkv_zero_init
 @test/operations/runtest-qkv_zero_init-approximate
 @test/operations/runtest-reduction_accumulator_residency
