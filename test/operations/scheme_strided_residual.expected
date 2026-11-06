@@ -198,6 +198,8 @@ extent first in one closing pass: v keeps h: true
 over a nested window, settling keeps to a tag that window can derive: true
 a nested window with an unsolved kernel stays deferred: neither solved nor refused: true
 and solves once the kernel arrives: true
+bound first: settling an output keeps to its bound: true
+window first: settling an output keeps to its bound: true
 h first: two open windows of different kernels settle on default: true
 j first: two open windows of different kernels settle on default: true
 the issue: v = 1 of bcast_if_1, conv3(v) = 3 of default, extent first, window on the left: true
@@ -217,4 +219,6 @@ kernels of h and j have no common input (pair first): true
 kernels of h and j have no common input (outputs first): true
 kernels of h and default disagree over a default extent (pair first): true
 kernels of h and default disagree over a default extent (outputs first): true
+a held pair over an unsolved inner kernel ends: neither solved nor refused: true
+and solves once its sizes arrive: true
 control: the same named kernel solves, and the held pair is discharged: true

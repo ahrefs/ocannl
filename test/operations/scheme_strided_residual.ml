@@ -905,6 +905,18 @@ let () =
       p "and solves once the kernel arrives"
         (solves_tag (v, 3, Row.default_basis)
            (finished (staged [ nested (Var k) v; eq (Var k) (dim 3) ])));
+      (* What an open output's bounds say comes with it: [3 of h] below [v] rules [default] out. *)
+      List.iter [ true; false ] ~f:(fun bound_first ->
+          let v = Row.get_var () in
+          let bound : Row.constraint_ =
+            Dim_ineq { res = tagged 3 "h"; opnd = Var v; from_ = Sexp.Atom "test"; origin }
+          and open_window = eq (w (Var v)) (tagged 5 "h") in
+          p
+            ((if bound_first then "bound first" else "window first")
+            ^ ": settling an output keeps to its bound")
+            (solves_tag (v, 3, "h")
+               (finished
+                  (staged (if bound_first then [ bound; open_window ] else [ open_window; bound ])))));
       (* Two open windows over one output, with kernels that conflict: [default] is the choice both
          allow, in either order. *)
       List.iter [ true; false ] ~f:(fun h_first ->
@@ -972,6 +984,16 @@ let () =
       refused_both "kernels of h and j have no common input" ~k1:(tagged 3 "h") ~k2:(tagged 3 "j");
       refused_both "kernels of h and default disagree over a default extent" ~k1:(tagged 3 "h")
         ~k2:(dim 3);
+      (* A pair held over a reduction that itself waits holds one equation, not a growing list. *)
+      let x = Row.get_var () and y = Row.get_var () and k = Row.get_var () in
+      let w x = window ~kernel:(tagged 3 "h") x in
+      let held_pair = eq (w (window ~kernel:(Var k) (Var x))) (w (Var y)) in
+      p "a held pair over an unsolved inner kernel ends: neither solved nor refused"
+        (let result = staged [ held_pair ] in
+         (not (is_solved (finished result))) && not (is_refused result));
+      p "and solves once its sizes arrive"
+        (solves_tag (y, 4, Row.default_basis)
+           (finished (staged [ held_pair; eq (Var k) (dim 3); eq (Var x) (dim 2) ])));
       let o1 = Row.get_var () and o2 = Row.get_var () in
       p "control: the same named kernel solves, and the held pair is discharged"
         (is_solved

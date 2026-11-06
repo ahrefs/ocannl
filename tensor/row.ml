@@ -2608,10 +2608,12 @@ let visit_rows_for_row_solution env v ~value =
       let more, data = s_row_one_in_entry v ~value ~in_:data in
       (data, more))
 
-(* [settling], from [solve_inequalities]: a window whose output or kernel the equation leaves open
-   takes [default] rather than waiting, and the flag says one did (gh-ocannl-1968). *)
-let%track6_sexp rec unify_dim ?(settling : bool ref option) ~stage origin (eq : dim * dim) env :
-    constraint_ list * _ =
+(* From [solve_inequalities], at a fixpoint: an equation that leaves a window's output or kernel
+   open takes the first tag whose consequences [fits] accepts, and [settled] says one did
+   (gh-ocannl-1968). *)
+type settling = { mutable settled : bool; fits : constraint_ list -> environment -> bool }
+
+let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   let held = Dim_eq { d1 = dim1; d2 = dim2; origin } in
   (* The size equation of two windows says nothing of a kernel's claim on their input, so a window
@@ -2619,10 +2621,42 @@ let%track6_sexp rec unify_dim ?(settling : bool ref option) ~stage origin (eq : 
   let window_pair ?(kernels = []) ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 () =
     match window_pair_equation ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 with
     | `Equate eq ->
-        let constrs, env = unify_dim ~stage origin eq env in
-        if List.for_all kernels ~f:is_claim_free then (constrs, env) else (held :: constrs, env)
+        let constrs, env' = unify_dim ~stage origin eq env in
+        if List.for_all kernels ~f:is_claim_free then (constrs, env')
+        else if phys_equal env' env then ([ held ], env)
+        else (held :: constrs, env')
     | `Defer -> ([ held ], env)
     | `Refuse msg -> raise @@ Shape_error (msg, [ Dim_mismatch [ dim1; dim2 ] ])
+  in
+  (* Several tags satisfy the equation. [default] suits every window, but a bound on the variable or
+     a nested window can rule it out, so it goes first and the rest follow. A candidate must bind
+     something: one waiting on a nested window's kernel settles nothing, and this equation stays
+     with it. The last candidate needs no vetting, since the solver will say what is wrong with it.
+     A deferral leaves the environment as it was. *)
+  let settle_open bases ~solve =
+    match settling with
+    | None -> ([ held ], env)
+    | Some settling -> (
+        let attempt ~vet basis =
+          match solve basis with
+          | constrs, env' when not (phys_equal env' env) ->
+              if vet then Option.some_if (settling.fits constrs env') (constrs, env')
+              else Some (constrs, env')
+          | _ -> None
+        in
+        let rec first_fit = function
+          | [] -> assert false
+          | [ basis ] -> attempt ~vet:false basis
+          | basis :: rest -> (
+              match attempt ~vet:true basis with
+              | Some _ as fit -> fit
+              | None -> first_fit rest
+              | exception Shape_error _ -> first_fit rest)
+        in
+        let others = List.filter bases ~f:(Fn.non (String.equal default_basis)) in
+        let fit = first_fit (default_basis :: others) in
+        settling.settled <- Option.is_some fit;
+        match fit with None -> ([ held ], env) | Some result -> result)
   in
   match (dim1, dim2) with
   | Dim { basis = b1; _ }, Dim { basis = b2; _ } when not (String.equal b1 b2) ->
@@ -2717,31 +2751,11 @@ let%track6_sexp rec unify_dim ?(settling : bool ref option) ~stage origin (eq : 
                  ( "convolution: conflicting dimension bases between stride and kernel",
                    [ Dim_mismatch [ dim1; dim2 ] ] )
         | [ basis ] -> solve_over basis
-        | bases -> (
-            match settling with
-            | None -> ([ held ], env)
-            | Some settled -> (
-                (* [default] suits a variable. A nested window can derive only some of the tags, so
-                   it takes the first it can. One still waiting on its own kernel settles nothing,
-                   and this equation stays with it: a deferral leaves the environment as it was. *)
-                let attempt basis =
-                  match solve_over basis with
-                  | constrs, env' when not (phys_equal env' env) -> Some (constrs, env')
-                  | _ -> None
-                in
-                let rec first_fit = function
-                  | [] -> assert false
-                  | [ basis ] -> attempt basis
-                  | basis :: rest -> ( try attempt basis with Shape_error _ -> first_fit rest)
-                in
-                let others = List.filter bases ~f:(Fn.non (String.equal default_basis)) in
-                let fit = first_fit (default_basis :: others) in
-                settled := Option.is_some fit;
-                match fit with
-                | None -> ([ held ], env)
-                | Some (constrs, env) ->
-                    let more, env = unify_dim ~stage origin (dim1, dim2) env in
-                    (constrs @ more, env)))
+        | bases ->
+            settle_open bases ~solve:(fun basis ->
+                let constrs, env = solve_over basis in
+                let more, env = unify_dim ~stage origin (dim1, dim2) env in
+                (constrs @ more, env))
       else
         raise
         @@ Shape_error
@@ -2774,12 +2788,7 @@ let%track6_sexp rec unify_dim ?(settling : bool ref option) ~stage origin (eq : 
                    ( "convolution: conflicting dimension bases between stride and kernel",
                      [ Dim_mismatch [ dim1; dim2 ] ] )
           | [ basis ] -> solve_kernel basis
-          | _ -> (
-              match settling with
-              | None -> ([ held ], env)
-              | Some settled ->
-                  settled := true;
-                  solve_kernel default_basis))
+          | bases -> settle_open bases ~solve:solve_kernel)
       | None ->
           raise
           @@ Shape_error
@@ -5593,13 +5602,16 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     let rec settle_window kept = function
       | [] -> None
       | (Dim_eq { d1; d2; origin } as held) :: rest ->
-          let settled = ref false in
+          let fits constrs env =
+            match solve constrs env with _ -> true | exception Shape_error _ -> false
+          in
+          let settling = { settled = false; fits } in
           let more, env =
-            try unify_dim ~settling:settled ~stage origin (d1, d2) env
+            try unify_dim ~settling ~stage origin (d1, d2) env
             with Shape_error (s, trace) ->
               raise @@ Shape_error (s, Constraint_failed held :: trace)
           in
-          if !settled then Some (List.rev_append kept (more @ rest), env)
+          if settling.settled then Some (List.rev_append kept (more @ rest), env)
           else settle_window (held :: kept) rest
       | held :: rest -> settle_window (held :: kept) rest
     in

@@ -535,12 +535,15 @@ files.
   `default` at a fixpoint from Stage2 up. At a fixpoint, not at the stage: `set_dim` and the other
   trailing setters push constraints no Stage1 pass read, so a stage gate would settle a window ahead
   of an older `set_dim` in the same pass. `default` is in every ambiguous set, so it satisfies every
-  open window over an output at once, which `merge_derived_basis`'s answer does not. `bcast_if_1`
+  open window over an output at once, which `merge_derived_basis`'s answer does not; a bound on the
+  variable or a nested window can still rule it out, so a candidate is vetted by solving what it
+  emits, and one that binds nothing settles nothing, or the fixpoint would repeat. `bcast_if_1`
   above size 1 is an atom in the rule, or the whole conv path would be ambiguous and every window
   output would leave Stage1; contested outputs are size 1 and those of a named kernel, and such an
   output is unknown until closure if nothing else solves it. Padded windows take the extent's basis,
   whatever the kernel. A window pair with a kernel that claims a tag stays a `Dim_eq` after its size
-  equation, since that equation carries no basis. Two claim-free kernels still equate their
+  equation, since that equation carries no basis; once the reduction changes nothing, the pair alone
+  stays, or a deferred reduction would pile up a copy a pass. Two claim-free kernels still equate their
   outputs, so `o1 = 1_(bcast_if_1)`, `o2 = 1_default` over equal windows is refused pair-first and
   accepted solved-first: gh-ocannl-1820 needs those outputs merged. Pinned by
   `test/operations/scheme_strided_residual`'s matrix over tags, window shapes and orders.
