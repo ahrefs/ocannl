@@ -3879,12 +3879,15 @@ module Errexit_execution_controls = struct
 end
 
 module Harness_contract = struct
-  (* test-run.sh and test-harnesses.sh are production entrypoints, not fixture harnesses. Standalone
-     harnesses outside the filename convention declare their lifecycle explicitly; Dune actions use
-     the function-only API. *)
+  (* test-run.sh and test-harnesses.sh are production entrypoints, not fixture harnesses, and
+     test-test-run.sh is the command that runs the members of test-run.sh's harness, with no leg of
+     its own (gh-ocannl-2002). Standalone harnesses outside the filename convention declare their
+     lifecycle explicitly; Dune actions use the function-only API. *)
+  let entrypoints = [ "tools/test-run.sh"; "tools/test-harnesses.sh"; "tools/test-test-run.sh" ]
+
   let member path text =
     String.is_suffix path ~suffix:".sh"
-    && (not (List.mem [ "tools/test-run.sh"; "tools/test-harnesses.sh" ] path ~equal:String.equal))
+    && (not (List.mem entrypoints path ~equal:String.equal))
     && (String.is_prefix path ~prefix:"tools/test-"
        || String.is_prefix path ~prefix:"scripts/test-"
        || String.is_substring text ~substring:"# ocannl-harness: standalone\n")
@@ -3910,10 +3913,57 @@ module Harness_contract = struct
                   || String.is_prefix compact ~prefix:("function" ^ name)
                   || String.is_prefix compact ~prefix:("function" ^ String.drop_suffix name 2 ^ "{"))))
 
+  (* The scripts a text sources, by file name, the shared support aside: it defines the very
+     functions a harness may not redefine. *)
+  let sourced_scripts text =
+    String.split_lines text |> List.map ~f:String.strip
+    |> List.filter_map ~f:(fun line ->
+        if String.is_prefix line ~prefix:". " || String.is_prefix line ~prefix:"source " then
+          let name =
+            String.split_on_chars line ~on:[ '/'; ' '; '"'; '\'' ]
+            |> List.filter ~f:(Fn.non String.is_empty)
+            |> List.last |> Option.value ~default:""
+          in
+          Option.some_if
+            (String.is_suffix name ~suffix:".sh" && not (String.equal name "harness-support.sh"))
+            name
+        else None)
+
+  (* A harness split into members takes its lifecycle from the one file they all source
+     (gh-ocannl-2002: tools/test-test-run-NAME.sh over tools/test-test-run-common.sh), so the text
+     judged is the script's with that of each script beside it that it sources, to a fixpoint:
+     [sibling] reads one by its file name, [None] where the directory holds none. A redefinition in
+     any of them is still refused. *)
+  let with_sourced ~sibling text =
+    let rec go seen text =
+      List.fold (sourced_scripts text) ~init:(seen, text) ~f:(fun (seen, acc) name ->
+          if Set.mem seen name then (seen, acc)
+          else
+            match sibling name with
+            | None -> (seen, acc)
+            | Some sourced ->
+                let seen, sourced = go (Set.add seen name) sourced in
+                (seen, acc ^ "\n" ^ sourced))
+    in
+    snd (go (Set.empty (module String)) text)
+
   let controls () =
     let correct =
       ". \"$HERE/harness-support.sh\"\nharness_args \"$@\"\nharness_scratch example\nfinish\n"
     in
+    let member_text = ". \"$HERE/common.sh\"\nleg\nclose\n" in
+    let sibling ~common name = Option.some_if (String.equal name "common.sh") common in
+    Verdict.p "a member takes its lifecycle from the file it sources"
+      ((not (compliant member_text))
+      && compliant (with_sourced ~sibling:(sibling ~common:correct) member_text));
+    Verdict.p "a member whose sourced file holds no lifecycle, or redefines it, does not comply"
+      ((not (compliant (with_sourced ~sibling:(sibling ~common:"helper() { :; }\n") member_text)))
+      && (not
+            (compliant
+               (with_sourced ~sibling:(sibling ~common:(correct ^ "report() { :; }\n")) member_text)))
+      && not (compliant (with_sourced ~sibling:(fun _ -> None) member_text)));
+    Verdict.p "the command running the members is outside the harness family"
+      (not (member "tools/test-test-run.sh" ""));
     Verdict.p "shared harness source and lifecycle are accepted" (compliant correct);
     Verdict.p "new hand-run harnesses are discovered"
       (member "scripts/test-new.sh" ""
@@ -3984,8 +4034,13 @@ let () =
   in
   List.iter scripts ~f:(fun (rel, path) ->
       let text = In_channel.read_all path in
-      if Harness_contract.member rel text then
-        Verdict.pf "%s uses the shared harness contract" rel (Harness_contract.compliant text);
+      (if Harness_contract.member rel text then
+         let sibling name =
+           let beside = Stdlib.Filename.concat (Stdlib.Filename.dirname rel) name in
+           List.Assoc.find scripts beside ~equal:String.equal |> Option.map ~f:In_channel.read_all
+         in
+         Verdict.pf "%s uses the shared harness contract" rel
+           (Harness_contract.compliant (Harness_contract.with_sourced ~sibling text)));
       let first_line = Option.value (first_line_of path) ~default:"" in
       let context = Shell_context.read text in
       Option.iter (Shell_context.note ~rel context) ~f:print_endline;

@@ -254,9 +254,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 - The merge build's shell tier runs what the overlap reaches, and its bound holds the whole tier
   (gh-ocannl-1994). Sized on 2026-11-06 on mac-studio at load about 3, under a `--cpu` slot from a
   fresh clone, `tools/merge-build-check.sh --all` took 1167 s and 1154 s: the shell tier 1071 s and 1056 s, of which
-  `tools/test-test-run.sh` alone is about 735 s; a run at load 3.6 overran the 1200 s it was bounded
+  `tools/test-test-run.sh` alone was about 735 s; a run at load 3.6 overran the 1200 s it was bounded
   by then. `timeout` in `.github/ship-pr-merge-build` is 1800 s, 1.5 times that 1200 s, so the whole
-  tier fits at the load the fleet runs. Re-measure before trusting a figure older than the manifest:
+  tier fits at the load the fleet runs. Since gh-ocannl-2002 the tier runs four members at once
+  (`SHELL_JOBS` in `tools/merge-build-check.sh`, `tools/test-harnesses.sh --jobs`) and that
+  harness is six members: on macbook-pro the whole tier took 301 s where one at a time takes
+  1066 s, so the bound now has room rather than a margin, and it is left at 1800 s until
+  mac-studio, where merges run, has been measured. Re-measure before trusting a figure older than the manifest:
   the tier's cost has tripled since one read 470 s. When the trigger holds, the tier is
   `tools/test-harnesses.sh --shell --affected --files PATH...` over every path changed on both sides,
   both names of a rename, non-scripts too, so `affected --harnesses`'s mapping is asked and not
@@ -976,11 +980,47 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fixture that never becomes ready fails and ends its leg, never the harness. A launcher that
   keeps HUP ignored on purpose (`nohup`) is right to: the fix belongs in the fixture, not in
   the callers.
+- The harness of `tools/test-run.sh` is six members over one shared file (gh-ocannl-2002). As one
+  file, `tools/test-test-run.sh` was some 70 legs and 764 s on macbook-pro (735 s on mac-studio), 70%
+  of the shell tier, and every path its text named reached all of it. The leg clock showed no
+  leg to cut (`OCANNL_TOOL_HARNESS_LEG_TIMES=FILE`, `scripts/harness-support.sh`: every gate
+  appends `SECONDS<TAB>HARNESS<TAB>LEG` for the stretch that ended, charged to the gate that
+  opened it): the slowest four were 71, 67, 65 and 62 s, in four groups, and half of the whole
+  is fixtures waiting (371 CPU-seconds). So the split buys reach and time, not fewer checks.
+  Reach: an edit of a member (`tools/test-test-run-NAME.sh`: `options`, `digest`, `devices`,
+  `lifecycle`, `last`, `bisect`, 86 to 165 s each) reaches that member, where any edit of the
+  one file reached all 764 s; `tools/test-run.sh` and `tools/test-test-run-common.sh` still
+  reach all six, since every leg runs the script. Time: `tools/test-harnesses.sh --jobs N` runs
+  up to N members at once, each one's output kept and printed whole in the manifest's order, so
+  the six take 165 s beside one another and the whole shell tier 301 s at `--jobs 4` against
+  1066 s one at a time (macbook-pro, a shared box at load 2 to 25; shared-box numbers, not a
+  measurement). CI's `harnesses` job and the merge build pass `--jobs 4`; the default stays one
+  at a time, live. What a member shares is `tools/test-test-run-common.sh`, sourced: the
+  options, the hermetic environment, the subject, and the fixtures legs of more than one member
+  read, as STAGES. `shared_through NAME` ahead of a leg runs every stage not yet run up to NAME,
+  in the one order the legs were written against, so a leg starts from what it started from in
+  the one file: the split moved no check (the PASS and SKIP lines of the six are those of the
+  one file, plus each member's own extraction lines and closing leg). A fixture only one member
+  reads sits in that member; one a second member comes to need moves to the common file as a
+  stage. Leg numbers are the harness's, unchanged, so a member's are not consecutive; leg 70
+  (no device probe leaks from a leg that faked one) closes every member. `tools/test-test-run.sh`
+  is now the one command for a person: it runs every member, or with `--only` the members
+  whose `--list-legs` shows a leg the selector matches, so `--only '^81:'` needs no member's
+  name (leg 105 pins it); it takes no slot and is no member of the tier.
+- A harness names its locale (gh-ocannl-2002): `harness_args` exports `LANG=C` where neither
+  `LANG` nor `LC_ALL` is set (a headless ssh session). There a Homebrew bash asks CoreFoundation
+  for the user's preferred languages whenever a script assigns a locale variable (`local
+  LC_ALL=C`), and that lookup segfaults when several processes make it at once: on macOS 27 with
+  bash 5.3.9, 12 of 40 runs of `tools/test-ci-durations.sh` beside seven copies of itself, none
+  of 40 with `LANG=C`; one such crash reddened the first `--jobs 4` run of the tier. It shows as
+  a subject exiting 139 with nothing on stderr, and
+  `~/Library/Logs/DiagnosticReports/bash-*.ips` names `libintl_setlocale`.
 - Selecting legs (gh-ocannl-1202): a harness built on `harness_leg` takes `--only REGEX` over its
-  leg names, and `tools/test-test-run.sh` closes each name with its one group, so
+  leg names, and the members of `tools/test-test-run.sh` close each name with its one group, so
   `--only '#lifecycle'` runs the run/start lifecycle legs with the signal legs and both fork
   negative controls (leg 74's unmasked parent-ownership and inherited-handler twins); the groups
-  are listed in its header. Setup and cleanup outside the gates run as in a full run; a selector
+  are listed in each member's header, and a group can span two (`#lifecycle`: leg 99 sits in
+  `last`), which `tools/test-test-run.sh --only` runs both of. Setup and cleanup outside the gates run as in a full run; a selector
   matching no leg exits 2; a filtered run lists the legs it ran and each check they skipped,
   with its reason, above a `FILTERED RUN, not a full pass` footer. To sample a flaky leg, loop
   over the selected run and count its `FAIL  ` lines.
@@ -1012,9 +1052,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   without running a leg body. Every gate also checks its leg's NAME, in every run: a name selects
   one leg; a leading leg number (`80:`, `2-3:`, `59-63, 66:`) numbers one leg, a further leg beside
   it taking a suffix letter (`80b:`, `40-47b:`); and where the harness header declares its groups
-  as `#NAME (LEGS)` (`tools/test-test-run.sh`), each leg closes with a declared group that lists
+  as `#NAME (LEGS)` (the members of `tools/test-test-run.sh`), each leg closes with a declared group that lists
   its numbers, and each listed number is carried by a leg of that group. A naming defect is an
-  ordinary `FAIL  leg naming: ...`. Gated and alone-clean so far: `tools/test-test-run.sh`,
+  ordinary `FAIL  leg naming: ...`. Gated and alone-clean so far: the six members of
+  `tools/test-test-run.sh`,
   `tools/test-mutation-run.sh`, `tools/test-promote.sh`, `tools/test-machine-verify.sh`,
   `scripts/test-setup-ocaml-env.sh`, `tools/test-merge-build-check.sh`,
   `tools/test-merge-build-replay.sh`, `tools/test-row-trace-compact.sh`,
@@ -3442,7 +3483,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     there rather than UNMAPPED (gh-ocannl-1584), and `tensor/ppx_*.ml` to its `#project` legs 10
     and 11, whose `let%op` arms expand through the built ppx. A marker line outside a header stops the run, so
     a harness's fixture writes one through a variable. gh-ocannl-1797's two CI reds read this way:
-    `tools/test-run.sh` reaches `tools/test-test-run.sh`, `benchmarks/fixture_digest.py`
+    `tools/test-run.sh` reaches the members of `tools/test-test-run.sh`, `benchmarks/fixture_digest.py`
     `benchmarks/test-check-box.sh`.
   - A module of a library this build does not compile (`cuda_backend.ml` on a Mac) stays UNMAPPED,
     exit 3, but an OFF-BUILD line on stderr counts what a build compiling it reaches -- read from
@@ -3503,10 +3544,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     list, and after a cross-cutting or incomplete refusal or a list with nothing to run, since
     the commands are the caller's to run in each case. They change no exit status; a change
     reaching no harness prints no line (`tensor/shape.ml` beside `AGENTS.md`: none; this note
-    reaches `tools/test-test-run.sh`, which names it), and a failed ask runs nothing (exit 2). Named rather than run, by design: the run is ONE supervised dune
+    reaches `tools/test-test-run-devices.sh`, which names it), and a failed ask runs nothing (exit 2). Named rather than run, by design: the run is ONE supervised dune
     invocation whose cap, slot kind, device probe, digest and verdict are all read from dune's
     argv and log, a harness is another program with its own verdict lines and minutes of its own
-    (`tools/test-test-run.sh` whole), a harness of the runner starts runs of its own in fixture
+    (the six members of `tools/test-test-run.sh`), a harness of the runner starts runs of its own in fixture
     worktrees, and `--list` -- a fleet leg's form -- can only carry aliases. So a shell change's
     pre-push is `prepush`, then that closing command, and the rule to run the whole tier before
     pushing a shell change is retired to CI, which runs it on every PR. `--affected` reads

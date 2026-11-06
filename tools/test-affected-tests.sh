@@ -1554,7 +1554,7 @@ rhas() { # LABEL LINE: stdout carries exactly that line, exit 0, no warning
 }
 if harness_leg 'harness legs of this repository'; then
   raffected --files tools/test-run.sh
-  rhas 'tools/test-run.sh reaches its harness whole' tools/test-test-run.sh
+  rhas 'tools/test-run.sh reaches a member of its harness whole' tools/test-test-run-bisect.sh
   raffected --files benchmarks/fixture_digest.py
   rhas 'benchmarks/fixture_digest.py reaches the harness probing it' benchmarks/test-check-box.sh
   raffected --files tools/typecheck-scan-cases.sh

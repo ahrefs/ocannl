@@ -19,8 +19,9 @@
 #            `tools/test-harnesses.sh --shell --affected --files PATH...`, the mapping
 #            `tools/test-run.sh affected --harnesses` owns, read from the merged tree. A member
 #            outside the shell group stays out, so a scoped run is never more than the whole tier
-#            (about 1100 s on mac-studio, measured in docs/agent-notes/build-and-test.md) and needs
-#            nothing the whole tier does not.
+#            (measured in docs/agent-notes/build-and-test.md) and needs nothing the whole tier
+#            does not. The members run four at once (SHELL_JOBS, gh-ocannl-2002): the slow ones
+#            wait on their fixtures more than they compute.
 # The selection is a fail-closed allowlist: the shell tier is skipped only when HEAD is a
 # two-parent merge, its merge base and both sides' changes were read, git listed every changed
 # path unquoted, and no path both sides changed matches `*.sh` by either name. Anything else --
@@ -58,6 +59,9 @@ while [ $# -gt 0 ]; do
   shift
 done
 SHELL_GLOB='*.sh'
+# The shell tier's members run this many at once (tools/test-harnesses.sh --jobs): the width
+# of the `-j 4` build the slot this runs in is sized for, and what the bound was measured at.
+SHELL_JOBS=4
 
 # read_side FROM TO sets side_names (every path the diff names, both names of a rename, one per
 # line) and side_pairs (each rename as OLD<TAB>NEW, one per line). Status 1: git did not answer;
@@ -204,14 +208,14 @@ if [ "$shell" = 1 ]; then
   started=$SECONDS
   rc=0
   if [ "$scoped" = 1 ]; then
-    tools/test-harnesses.sh --shell --affected --files "${asked[@]}" </dev/null || rc=$?
+    tools/test-harnesses.sh --shell --jobs "$SHELL_JOBS" --affected --files "${asked[@]}" </dev/null || rc=$?
     if [ "$rc" = 2 ]; then
       # Every refusal comes before a member starts, so the whole tier still fits the bound.
       echo "$me: shell tier: the scoped run was refused (exit 2), no member run; running the whole tier"
       scoped=0 rc=0
     fi
   fi
-  [ "$scoped" = 1 ] || tools/test-harnesses.sh --shell </dev/null || rc=$?
+  [ "$scoped" = 1 ] || tools/test-harnesses.sh --shell --jobs "$SHELL_JOBS" </dev/null || rc=$?
   if [ "$rc" != 0 ]; then
     echo "$me: shell tier FAILED (tools/test-harnesses.sh exit $rc)" >&2
     exit 1

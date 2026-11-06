@@ -22,7 +22,9 @@
 # Bound. `timeout` covers the command's slowest honest run: the compile tier and the WHOLE shell
 # tier, which every fail-closed fallback of tools/merge-build-check.sh runs. Measured on mac-studio
 # on 2026-11-06 under a --cpu slot, from a fresh clone: 1167 s and 1154 s at load about 3; a run
-# at load 3.6 overran the 1200 s this was (gh-ocannl-1994). 1800 s is 1.5 times that. Re-measure
+# at load 3.6 overran the 1200 s this was (gh-ocannl-1994). 1800 s is 1.5 times that. Those
+# figures are of the tier one member at a time; it now runs four at once (gh-ocannl-2002), a
+# third of that on macbook-pro, and the bound is kept until mac-studio is measured so. Re-measure
 # with `tools/merge-build-check.sh --all` when the shell tier grows.
 #
 # Trust. The command is this repository's own code, trusted as a developer's build is: the

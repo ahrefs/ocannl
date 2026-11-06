@@ -10,10 +10,10 @@
 # lines.
 
 # Windows drive spellings exist only on Windows (MSYS / Git Bash).
-tools/test-test-run.sh	queries: missing state directly below a drive root matches the launch shell without writes
-tools/test-test-run.sh	queries: absent Windows drive spelling matches the launch shell
-tools/test-test-run.sh	queries: drive parent traversal matches the native launch shell without writes
-tools/test-test-run.sh	queries: existing Windows drive spelling matches the launch shell
+tools/test-test-run-options.sh	queries: missing state directly below a drive root matches the launch shell without writes
+tools/test-test-run-options.sh	queries: absent Windows drive spelling matches the launch shell
+tools/test-test-run-options.sh	queries: drive parent traversal matches the native launch shell without writes
+tools/test-test-run-options.sh	queries: existing Windows drive spelling matches the launch shell
 # MSYS link files and the symlink-copy mode exist only under Git Bash.
 tools/test-windows-opam-cache.sh	negative control: switch restored with system link files
 tools/test-windows-opam-cache.sh	negative control: MSYS deepcopy links
