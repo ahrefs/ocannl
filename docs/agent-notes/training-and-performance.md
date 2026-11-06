@@ -27,14 +27,16 @@ files.
   carry observation intent like a parameter's. Optimizing an input therefore takes `?params` on the
   step and needs a DATA-BACKED leaf (`Operation.init`): a `term_init` below
   `limit_constant_fill_size` is a fetch op its forward code re-establishes every run, undoing the
-  step. `sgd_update` refuses any stepped node a `Fetch` in the loss's forward writes, naming
+  step. `sgd_update` refuses a stepped node the loss's forward re-establishes, naming
   `Operation.init` (gh-ocannl-1776); `Context.compile` refuses what never reaches it, `sgd_one` and
-  hand-written `%cd` steps: any routine of a lineage writing a node a forward `Fetch` re-establishes,
-  in either compile order (gh-ocannl-1876, `check_no_fetch_overwrite`). A forward `Fetch` is one
-  into a node whose `(node, Fwd)` fragment the comp owns, which is what tells it from a parameter's
-  initializer (`Tensor.init_params` owns no fragment) and a gradient's zeroing; a `Slice` takes
-  after its parent, since a write through a view of data stays (`test_slice_alias`). Executed:
-  `require_grad_leaves.ml` section 3; the saliency host read, `observable_grads.ml` leg 4.
+  hand-written `%cd` steps: any routine of a lineage writing such a node, in either compile order
+  (gh-ocannl-1876, `check_no_fetch_overwrite`). One rule, `Assignments.forward_fetched`: a `Fetch`
+  into a node whose `(node, Fwd)` fragment the comp owns, which tells it from a parameter's
+  initializer (`Tensor.init_params` owns no fragment) and a gradient's zeroing. `?params` can name a
+  view, and a `Slice` counts unless a write through it lasts, an alias over data (`test_slice_alias`).
+  A copy counts, its parent read again every run, but only `Context.compile` can tell one, as
+  `sgd_update` precedes settled shapes. Executed: `require_grad_leaves.ml` section 3; the saliency
+  host read, `observable_grads.ml` leg 4.
 - Training-loop utilities (gh-465, `lib/train.ml`): `Lr_schedule` (host floats; feed via
   `scheduled_learning_rate`'s data-backed `host_scalar` — a fetch-defined constant would be
   re-fetched each step, undoing `set_values`), `grad_l2_norm`/`clip_by_global_norm` +

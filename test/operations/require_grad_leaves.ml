@@ -31,6 +31,11 @@
    WEIGHT steps along its oracle beside the fetch-defined [x] (a parameter's initializer runs once,
    and the forward that re-fetches [x] writes nothing into it).
 
+   A view in [?params] reads by the compile check's rule, [Assignments.forward_fetched]: over a
+   fetch-defined parent [sgd_update] refuses it; an alias over data is accepted and its steps stay
+   in the selected row of the parent, along the host oracle; a view lowering to a copy, which
+   [sgd_update] cannot yet tell, is refused by [Context.compile], whatever its parent.
+
    (A loss with no parameters at all -- the default stepped set empty, the refusal naming [?params],
    the default reset still selecting the leaf -- is pinned in test/training/loop_utils.ml, beside
    the gh-ocannl-670 refusals.) *)
@@ -236,6 +241,73 @@ let fetch_defined_leaf () =
   let%cd through_view = view =: !.99.0 in
   refused "a write through a view of a fetch-defined parent" ~node:"view" (fun () ->
       ignore (Train.to_routine ctx bindings through_view : Context.t * Context.routine));
+  (* The same reading in [sgd_update], where a view is selected through [?params]. Over a
+     fetch-defined parent, refused early, naming the view. *)
+  let batch_n, _ = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let parent =
+    Tensor.term_init [| 1.; 2.; 3.; 4. |] ~label:[ "pfetchstep" ] ~batch_dims:[ 2 ]
+      ~output_dims:[ 2 ] ~grad_spec:Tensor.Require_grad ()
+  in
+  let%op fetched_view = parent @| batch_n in
+  let%op l = fetched_view *. fetched_view in
+  let learning_rate = fresh_learning_rate () in
+  (match Train.sgd_update ~learning_rate ~params:(Set.singleton (module Tensor) fetched_view) l with
+  | _ -> Verdict.p "sgd_update refuses a view of a fetch-defined parent" false
+  | exception Tensor.Session_error (msg, _) ->
+      Verdict.p "sgd_update refuses a view of a fetch-defined parent" true;
+      Verdict.p "that refusal names the view" (String.is_substring msg ~substring:"fetched_view"));
+  (* Over data the step is real: per cell dl/dv = 2 v, so the selected row goes v <- 3/4 v, from the
+     stepped value, and the other row stays. *)
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let parent =
+    Operation.init ~l:"pdata" ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 2 ]
+      ~f:(function [| i; j |] -> Float.of_int ((2 * i) + j + 1) | _ -> assert false)
+      ~grad_spec:Tensor.Require_grad ()
+  in
+  let%op data_view = parent @| batch_n in
+  let%op l = data_view *. data_view in
+  let learning_rate = fresh_learning_rate () in
+  (match Train.sgd_update ~learning_rate ~params:(Set.singleton (module Tensor) data_view) l with
+  | exception Tensor.Session_error (msg, _) ->
+      Verdict.p ("sgd_update accepts a view of data (refused: " ^ msg ^ ")") false
+  | step ->
+      Verdict.p "sgd_update accepts a view of data" true;
+      let ctx, routine =
+        Train.to_routine (Context.auto ()) bindings (Asgns.sequence [ Train.grad_update l; step ])
+      in
+      Verdict.p "the stepped view is an alias" (Ir.Tnode.is_alias data_view.Tensor.value);
+      IDX.find_exn routine.Context.bindings batch_n := 0;
+      Train.run ctx routine;
+      close "view of data: step 1 reaches the selected row of the parent"
+        (values ctx parent.Tensor.value) [| 0.75; 1.5; 3.; 4. |];
+      Train.run ctx routine;
+      close "view of data: step 2 moves it from the stepped value" (values ctx parent.Tensor.value)
+        [| 0.5625; 1.125; 3.; 4. |]);
+  (* A padded view of data is a copy: the forward re-establishes it from the parent, and the step
+     never reaches the parent. [sgd_update] runs before shapes settle and cannot tell; the compile
+     can. *)
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let images =
+    Operation.init ~l:"imgs" ~prec:Ir.Ops.single ~b:[ 2; 1 ] ~o:[ 3; 3; 1 ]
+      ~f:(fun _ -> 1.)
+      ~grad_spec:Tensor.Require_grad ()
+  in
+  let%op copied_view = images @| batch_n in
+  let processed =
+    Nn_blocks.conv2d ~label:[ "processed" ] ~use_padding:true ~out_channels:1 () copied_view
+  in
+  let learning_rate = fresh_learning_rate () in
+  let step =
+    Train.sgd_update ~learning_rate ~params:(Set.singleton (module Tensor) copied_view) processed
+  in
+  let update = Train.grad_update processed in
+  let ctx = Train.init_params (Context.auto ()) bindings processed in
+  refused "a step on a view lowering to a copy, over data" ~node:"copied_view" (fun () ->
+      ignore
+        (Train.to_routine ctx bindings (Asgns.sequence [ update; step ])
+          : Context.t * Context.routine));
+  Verdict.p "that view cannot alias its parent"
+    (not (Asgns.slice_alias_eligible ~array:copied_view.Tensor.value ~sliced:images.Tensor.value));
   (* Accepted: the weight, literal-initialized, stepped beside the fetch-defined x. Per cell dl/dw =
      x^2 = (1, 4) at the re-fetched x every step: w <- (2, 3) - (1, 4)/8 = (1.875, 2.5), then (1.75,
      2). *)
