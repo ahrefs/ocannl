@@ -105,6 +105,10 @@ val block : ?auto_block:int -> unit -> int
 val set_block : int option -> unit
 (** Programmatic override of [online_softmax_block], like {!set_enabled}. *)
 
+val retained : unit -> int
+(** What the module's tables hold now, memo buckets and markers alike: a diagnostic. Their entries
+    go with their nodes (gh-ocannl-1859). *)
+
 val reassociable_local : Tnode.t -> bool
 (** Whether a node is the fused backward's per-pair [dp] scope local (gh-ocannl-1124), whose
     value-width accumulation the default GPU schedule may give the lanes to compute together and

@@ -135,10 +135,11 @@ let () =
   ignore y;
   let comp = named "mdp_fault" (Train.forward total) in
   let picked = ref false in
+  let is_pick r = String.is_prefix r.Autotune.mc_label ~prefix:"placements[" in
   let run fault =
     Ir.Schedule.with_transform_fault fault (fun () ->
         Autotune.model_default
-          ~report:(fun r -> picked := String.is_prefix r.Autotune.mc_label ~prefix:"placements[")
+          ~report:(fun r -> picked := is_pick r)
           (Context.auto ()) comp Ir.Indexing.Empty)
   in
   let count () =
@@ -176,4 +177,60 @@ let () =
     | `Returned -> false
     | `Other e ->
         Stdio.eprintf "unexpected exception (not part of the golden): %s\n" e;
-        false)
+        false);
+  (* gh-ocannl-1859: the pick's decided context is this call's to give back, whichever way it ends.
+     Each case releases what it holds, and the census must be where it started. *)
+  let unreleased () = Ir.Alloc_census.(unreleased_contexts (snapshot ())) in
+  let leaves_nothing label f =
+    let before = unreleased () in
+    let root = Context.auto () in
+    f root;
+    Context.release root;
+    p (label ^ ": no context the compile minted is left") (unreleased () = before)
+  in
+  let pick ?report root = Autotune.model_default ?report root comp Ir.Indexing.Empty in
+  leaves_nothing "the pick compiled" (fun root ->
+      let ctx, routine = pick root ~report:(fun r -> picked := is_pick r) in
+      p "the owned compile took the pick" !picked;
+      ignore (Context.run ctx routine : Context.t);
+      Context.release ctx);
+  leaves_nothing "the pick's report raised" (fun root ->
+      p "the report's failure reaches the caller"
+        (match pick root ~report:(fun _ -> failwith "gh1859 report") with
+        | (_ : Context.t * Context.routine) -> false
+        | exception Failure m -> String.equal m "gh1859 report"));
+  leaves_nothing "the picked compile raised" (fun root ->
+      let n = ref 0 in
+      p "the injected failure reaches the caller"
+        (match
+           Ir.Schedule.with_transform_fault
+             (fun _ ->
+               Int.incr n;
+               if !n = calls then invalid_arg injected)
+             (fun () -> pick root)
+         with
+        | (_ : Context.t * Context.routine) -> false
+        | exception Invalid_argument _ -> true));
+  leaves_nothing "the pick fell back to the caller's placements" (fun root ->
+      let refused = ref 0 in
+      let ctx, routine =
+        Ir.Resource_fault_injection.with_callback
+          (fun point ->
+            match point with
+            | Ir.Resource_fault_injection.Delta_pool_allocated when !refused = 0 ->
+                Int.incr refused;
+                raise
+                  (Ir.Schedule_outcome.Device_memory_exhausted
+                     {
+                       backend = "simulated";
+                       requested = 1;
+                       free = Some 0;
+                       detail = "gh-ocannl-1859";
+                     })
+            | _ -> ())
+          ~f:(fun () -> pick root ~report:(fun r -> picked := is_pick r))
+      in
+      p "the picked placements' compile was refused, and the pick abandoned"
+        (!refused = 1 && not !picked);
+      ignore (Context.run ctx routine : Context.t);
+      Context.release ctx)

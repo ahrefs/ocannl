@@ -159,9 +159,16 @@ let show_seeds = function
   | [ seed ] -> "random seed " ^ Int.to_string seed
   | seeds -> "random seeds " ^ String.concat ~sep:", " (List.map seeds ~f:Int.to_string)
 
+(* [Tensor.random_seeds]' reading of a list: an earlier version recorded a seed each time it was
+   set, and the repeats say nothing about which seeds the program draws from (gh-ocannl-1859). *)
+let distinct_seeds seeds =
+  List.rev
+    (List.fold seeds ~init:[] ~f:(fun seen seed ->
+         if List.mem seen seed ~equal:Int.equal then seen else seed :: seen))
+
 let check_random_seeds path saved =
   let current = Tensor.random_seeds () in
-  match saved with
+  match Option.map saved ~f:distinct_seeds with
   | Some saved when List.equal Int.equal saved current -> ()
   | Some saved ->
       failwith

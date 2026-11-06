@@ -36,15 +36,17 @@ module Site_key = struct
   type t = int * int * string [@@deriving compare, hash, sexp_of]
 end
 
-let minted : (Site_key.t, Tn.t) Hashtbl.t = Hashtbl.create (module Site_key)
+let minted : (Site_key.t, Tn.t) Hashtbl.t Tn.Weak_table.t = Tn.Weak_table.create 16
 
 (* State node uid to the uid of the target it accumulates into: the census of scans already in a
-   routine, so that a later fixpoint round numbers new sites after them. Never cleared -- a uid is
-   never reused, and the reset must not orphan a state already in some lowered code. *)
-let owners : (int, int) Hashtbl.t = Hashtbl.create (module Int)
-let reset () = Hashtbl.clear minted
+   routine, so that a later fixpoint round numbers new sites after them. Keyed by the state node, so
+   it lasts as long as the node: the reset must not orphan a state already in some lowered code, and
+   a dropped state's goes with it (gh-ocannl-1859). *)
+let owners : int Tn.Weak_table.t = Tn.Weak_table.create 16
+let reset () = Tn.Weak_table.reset minted
+let retained () = Tn.live_entries minted + Tn.live_entries owners
 let () = Tn.before_accessibility_snapshot := reset :: !Tn.before_accessibility_snapshot
-let state_owner (tn : Tn.t) = Hashtbl.find owners tn.Tn.uid
+let state_owner (tn : Tn.t) = Tn.Weak_table.find_opt owners tn
 
 (* The carried state's precision: the target's widened to f32, f64 kept. A target that is not a
    float declines: an f32 state would round an integer sum the composed reduction holds exactly. *)
@@ -55,7 +57,8 @@ let state_prec (tn : Tn.t) =
   | _ -> None
 
 let state_node ~(y : Tn.t) ~ordinal prec =
-  Hashtbl.find_or_add minted
+  Hashtbl.find_or_add
+    (Tn.memo_bucket minted y ~create:(fun () -> Hashtbl.create (module Site_key)))
     (y.Tn.uid, ordinal, Ops.prec_string prec)
     ~default:(fun () ->
       let tn =
@@ -66,7 +69,7 @@ let state_node ~(y : Tn.t) ~ordinal prec =
           ()
       in
       Tn.update_memory_mode tn Tn.Virtual provenance;
-      Hashtbl.set owners ~key:tn.Tn.uid ~data:y.Tn.uid;
+      Tn.Weak_table.replace owners tn y.Tn.uid;
       tn)
 
 (* {1 The index-only domain}

@@ -50,6 +50,7 @@ type reading = {
   freed : int;
   used : int;
   free : int option;
+  host : int;  (** The live host arrays' bytes, {!Ir.Ndarray.get_used_memory}'s gauge. *)
 }
 
 (* The analysis cache keeps the last eight compiles' lowered code, hence their nodes: a bounded
@@ -73,6 +74,7 @@ let read () =
     freed = c.pools_freed;
     used;
     free;
+    host = Ir.Ndarray.get_used_memory ();
   }
 
 let show name r =
@@ -333,7 +335,8 @@ let () =
       p_all "literal: every literal's node is reclaimed" built ~f:(fun b ->
           Gc_witness.reclaimed b.lit_node);
       p_all "literal: every literal's host array is reclaimed" built ~f:(fun b ->
-          Gc_witness.reclaimed b.lit_host));
+          Gc_witness.reclaimed b.lit_host);
+      p "literal: the live host bytes are back to the baseline" (after.host = before.host));
   case "gh-ocannl-1762: a literal two roots bind is freed with the second binder" (fun () ->
       let before = read () in
       let start = (Census.snapshot ()).live_constant_bytes in
@@ -359,5 +362,7 @@ let () =
       p "unreleased literal: the constant bytes grew by each graph's literal"
         (after.constant_bytes - before.constant_bytes
         = List.sum (module Int) built ~f:(fun b -> b.lit_bytes));
+      p "unreleased literal: the live host bytes grew by each graph's literal"
+        (after.host - before.host = List.sum (module Int) built ~f:(fun b -> b.lit_bytes));
       p_all "unreleased literal: every literal's node is kept by the device's constant cache" built
         ~f:(fun b -> Gc_witness.kept b.lit_node))

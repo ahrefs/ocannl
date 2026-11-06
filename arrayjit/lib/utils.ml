@@ -177,6 +177,7 @@ let known_config_keys =
       "debug_check_upload_arenas";
       "debug_check_lane_bounds";
       "debug_check_forward_root_owners";
+      "debug_check_retired_solver_vars";
       "debug_fill_fresh_outputs";
       "cc_parallel_grid";
       "cc_parallel_chunks";
@@ -633,6 +634,7 @@ let config_key_classification : (config_key_class * string * string list) list =
         "autotune_strict_replay";
         "debug_check_upload_arenas";
         "debug_check_forward_root_owners";
+        "debug_check_retired_solver_vars";
         "hip_scratch_validation";
         "cc_backend_verify_codesign";
         "cc_backend_post_compile_timeout";

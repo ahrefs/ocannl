@@ -713,9 +713,12 @@ val get_random_seed : unit -> t
     descend from the first caller's optimization context. *)
 
 val random_seeds : unit -> int list
-(** The seeds of the random-seed singletons this session created ({!set_random_seed}, directly or
-    lazily through {!get_random_seed}), oldest first, without one a rewind discarded: every seed the
-    session's graphs can draw from, including those built under {!with_saved_random_seed}. *)
+(** The distinct seeds of the random-seed singletons this session created ({!set_random_seed},
+    directly or lazily through {!get_random_seed}), in the order they first appeared, without one a
+    rewind discarded: every seed the session's graphs can draw from, including those built under
+    {!with_saved_random_seed}. One value per seed, whether its graphs are held or not, so a session
+    re-seeding with the same values grows nothing, and one choosing a new value per graph keeps one
+    integer for each. *)
 
 val with_saved_random_seed : (unit -> 'a) -> 'a
 (** Runs [f], restoring the global random-seed singleton (the one {!get_random_seed} returns) to its

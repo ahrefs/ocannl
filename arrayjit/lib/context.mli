@@ -958,6 +958,10 @@ val same_release_unit : t -> t -> bool
 (** Whether the two values share a release unit: the same pools and release flag, as the values of a
     linear upload chain do, or a context and what {!run} returned from it. *)
 
+val is_lifecycle_ancestor : t -> ancestor:t -> bool
+(** Whether [ancestor]'s release unit is on [t]'s lifecycle chain: a context [t] was compiled or
+    decided from, directly or not. A context is not its own ancestor. *)
+
 val adopt_ancestor : t -> ancestor:t -> unit
 (** [adopt_ancestor ctx ~ancestor] makes [ctx]'s release unit responsible for [ancestor]: a
     lifecycle ancestor of [ctx] (a context it was compiled or decided from, directly or not) that a
@@ -967,9 +971,11 @@ val adopt_ancestor : t -> ancestor:t -> unit
     release unit holds it: an upload fork of the unit binds [ancestor]'s buffers too and holds it as
     well, while a context compiled from the unit does not (release leaves first). Several ancestors
     are released deepest first. Use it only for a context nobody else holds or derives from:
-    releasing it frees the pools every descendant of it binds. {!Train.run_once} and
-    {!Train.to_routine} adopt the contexts they mint. Raises [Invalid_argument] if [ancestor] is not
-    on [ctx]'s lifecycle chain, and refuses a {!release}d [ctx] like {!compile}. *)
+    releasing it frees the pools every descendant of it binds. {!Train.run_once},
+    {!Train.to_routine}, {!Train.tune_placements} and {!Autotune.model_default} adopt the contexts
+    they mint on the path to what they return, and release the others. Raises [Invalid_argument] if
+    [ancestor] is not on [ctx]'s lifecycle chain, and refuses a {!release}d [ctx] like {!compile}.
+*)
 
 val placements : t -> Ir.Tnode.Placements.t
 (** The context's compilation lineage's memory-mode resolution
@@ -1043,9 +1049,9 @@ val decide_reading : t -> Ir.Low_level.reading -> Ir.Tnode.t list -> t
 val decide_readings :
   ?skip_empty:bool -> t -> Ir.Tnode.t list * Ir.Tnode.t list * Ir.Tnode.t list -> t
 (** Applies a whole decision vector in the [(materialized, inline, footprint)] form
-    {!Ir.Low_level.partition_readings} produces and {!lowered_for_decisions} takes: one
-    {!decide_reading} per reading, in the order [`Materialize], [`Inline], [`Footprint]. With
-    [skip_empty] (the default) an empty list is skipped; without it every reading gets its call. The
-    two differ only in context identity, not in the decisions recorded: a {!decide_reading} with
-    [[]] records nothing, but still derives a fresh child context (a new context id and a backend
-    child counted by the allocation census). *)
+    {!Ir.Low_level.partition_readings} produces and {!lowered_for_decisions} takes, recording the
+    three in one child context, in the order [`Materialize], [`Inline], [`Footprint], so a wrapper
+    that minted it holds the whole decision by adopting that one ({!adopt_ancestor},
+    gh-ocannl-1859). With [skip_empty] (the default) an all-empty vector returns the context itself;
+    without it, it still derives a child: the two differ only in context identity, not in the
+    decisions recorded. *)

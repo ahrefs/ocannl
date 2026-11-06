@@ -240,7 +240,9 @@
   (alias runtest-autotune_device_memory)
   (alias runtest-link_delta_parity)
   (alias runtest-deferred_hit_compiles)
-  (alias runtest-set_values_pool_coalescing)))
+  (alias runtest-set_values_pool_coalescing)
+  (alias runtest-session_growth)
+  (alias runtest-wrapper_release_paths)))
 
 ; This directory's golden-diff rules, aggregated back onto `runtest` (gh-ocannl-726). Each of them
 ; attaches to its own `runtest-<name>` alias and to NOTHING else, so that `dune build
@@ -14026,6 +14028,51 @@
 ; gh-ocannl-1747: a released lineage gives its buffers back (pool table, used-memory gauge, driver
 ; free bytes where there is a reading) and its nodes and host-init data to the GC; an unreleased one
 ; keeps its pools but not its graph; two follow-up retentions pinned as they stand.
+
+; gh-ocannl-1859: what a long fresh-graph session keeps beside its contexts: the solver's tables at
+; closures, and the live-word slope of the loop.
+
+(test
+ (name session_growth)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules session_growth)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.utils
+  arrayjit.verdict
+  gc_witness
+  ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-1859: every context a wrapper mints is returned, adopted or released, on the normal and
+; the raising path.
+
+(test
+ (name wrapper_release_paths)
+ ; cc-vector-width: independent -- its claims count contexts and pools, whatever the search seeds.
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules wrapper_release_paths)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  arrayjit.memory_budget
+  arrayjit.verdict
+  ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl ppx_sexp_conv ppx_compare)))
 
 (test
  (name dropped_graph_buffers)

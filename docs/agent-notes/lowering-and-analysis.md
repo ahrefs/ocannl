@@ -645,7 +645,11 @@ files.
   the rewritten code carries the decision, while a numerics field enters every cache fingerprint
   and would split entries for routines the rewrite never touched. The tier runs the enabled
   members to a fixpoint under a round cap, so a member must be idempotent and consume a pattern
-  instance per application. Two traps from writing the first member: (a) relate nests through the axes of the nodes they
+  instance per application. What a member keeps about a node is keyed by that node (`Tn.Weak_table`,
+  gh-ocannl-1859), a memo by the source node it was minted for and a marker by the minted node, so a
+  session's rewrite state goes with the graphs it drops and code holding a node keeps its marker
+  through a memo reset; `retained` is the census, and it plateaus with the analysis cache's window
+  rather than draining until that cache is cleared. Two traps from writing the first member: (a) relate nests through the axes of the nodes they
   share (a role signature per node), never through loop symbols -- every nest mints its own, and
   the reduced iterator is not reliably innermost; (b) do not force a chain virtual to make the
   `[seq, seq]` buffers disappear -- a lineage decision binds every later routine, and the composed

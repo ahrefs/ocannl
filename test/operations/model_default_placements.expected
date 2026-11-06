@@ -20,3 +20,11 @@ a clean run's op applications are counted, and the pick fires there: true
 the count is stable across clean runs: true
 the injected transform bug fired: true
 an untyped transform exception in the picked compile propagates, never retried from the default placements: true
+the owned compile took the pick: true
+the pick compiled: no context the compile minted is left: true
+the report's failure reaches the caller: true
+the pick's report raised: no context the compile minted is left: true
+the injected failure reaches the caller: true
+the picked compile raised: no context the compile minted is left: true
+the picked placements' compile was refused, and the pick abandoned: true
+the pick fell back to the caller's placements: no context the compile minted is left: true

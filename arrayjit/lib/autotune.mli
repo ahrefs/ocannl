@@ -3971,6 +3971,7 @@ module type Driver = sig
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
   val release : ctx -> unit
+  val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
   val check_launch_bindings : routine -> unit
 

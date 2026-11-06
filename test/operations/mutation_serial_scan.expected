@@ -1,5 +1,7 @@
 tensor/row.ml: uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/row.ml: reserved_uid (ref) -- exempt: a fresh-id counter of the id-neutral windows: never reused, so never restored
+tensor/row.ml: retired_floor (ref) -- exempt: the newest retired variable id: closures only raise it, and a rewind reaches no older variable
+tensor/row.ml: retired_reserved_floor (ref) -- exempt: the newest retired variable id: closures only raise it, and a rewind reaches no older variable
 tensor/row.ml: serial (ref) -- exempt: the serial itself: note_mutation is its writer
 tensor/row.ml: pending_roles (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
 tensor/row.ml: origin_focus (ref) -- exempt: the shape schemes in progress, restored by with_origin_focus's own finally
@@ -26,6 +28,7 @@ tensor/row.ml: global_template_cache (ref) -- accounted: every write noted or at
 tensor/row.ml: fresh (unread state) -- exempt
 tensor/row.ml: boundary commit_symbol_roles -- part of the commit: only a successful finish_inference calls it
 tensor/row.ml: boundary drop_symbol_roles -- part of a rewind or session reset, which clears the taint
+tensor/row.ml: boundary retire_closed_variables -- part of the commit: only a successful closure or a session reset calls it, past every reader
 tensor/row.ml: boundary restore_globals -- part of a rewind: puts back the solver's inference sets as a checkpoint captured them
 tensor/shape.ml: ref_uid (ref) -- exempt: a fresh-id counter: ids are never reused, so a rewind need not restore it
 tensor/shape.ml: open_refs (ref) -- accounted: every write noted or at a boundary; captured by capture_globals

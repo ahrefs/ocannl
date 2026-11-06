@@ -122,6 +122,19 @@ val restore_globals : globals -> unit
 val globals_differences : globals -> globals -> string list
 (** The components that differ between two captures (physically), by name: a diagnostic. *)
 
+val retire_closed_variables : unit -> unit
+(** Empties the per-variable tables {!globals} holds, all but the pending role claims, which
+    {!commit_symbol_roles} drains: the marks, the rank graph and the template cache
+    (gh-ocannl-1859). Called by a successful closure, past every reader of its environment, and by a
+    session reset: a closure leaves no open variable, and a scheme carries its own marks
+    ({!marks_since}), so what these tables hold about a closed variable is never asked for again. A
+    session's solver state therefore grows with its open work, not with the graphs it has built. The
+    setting [debug_check_retired_solver_vars] refuses a read of a retired variable, which an emptied
+    table would answer with a silent "no". *)
+
+val solver_census : unit -> (string * int) list
+(** Each table of {!globals}, by name, with its current size: a diagnostic (gh-ocannl-1859). *)
+
 val rank_search_visits : unit -> int
 (** The rank-cycle check's work counter since the last reset, process-wide (gh-ocannl-1802): the
     variables whose potentials it moved (gh-ocannl-1891), and under {!with_unbounded_rank_search}

@@ -1,0 +1,80 @@
+forward_once: what it returned computes: true
+forward_once: the caller's context still works: true
+forward_once: nothing the call minted is left: true
+to_routine under a budget: what it returned computes: true
+to_routine under a budget: the caller's context still works: true
+to_routine under a budget: nothing the call minted is left: true
+run_once, its run: the fault fired: true
+run_once, its run: the caller sees the fault: true
+run_once, its run: the caller's context still works: true
+run_once, its run: nothing the call minted is left: true
+run_once, its initialization's run: the fault fired: true
+run_once, its initialization's run: the caller sees the fault: true
+run_once, its initialization's run: the caller's context still works: true
+run_once, its initialization's run: nothing the call minted is left: true
+run_once, its initialization's upload: the fault fired: true
+run_once, its initialization's upload: the caller sees the fault: true
+run_once, its initialization's upload: the caller's context still works: true
+run_once, its initialization's upload: nothing the call minted is left: true
+run_once, its compile: the fault fired: true
+run_once, its compile: the caller sees the fault: true
+run_once, its compile: the caller's context still works: true
+run_once, its compile: nothing the call minted is left: true
+run_once, its compile under a budget: the fault fired: true
+run_once, its compile under a budget: the caller sees the fault: true
+run_once, its compile under a budget: the caller's context still works: true
+run_once, its compile under a budget: nothing the call minted is left: true
+init_params, its run: the fault fired: true
+init_params, its run: the caller sees the fault: true
+init_params, its run: the caller's context still works: true
+init_params, its run: nothing the call minted is left: true
+run_once, its budget report: the caller sees the fault: true
+run_once, its budget report: the caller's context still works: true
+run_once, its budget report: nothing the call minted is left: true
+to_routine, its budget report: the caller sees the fault: true
+to_routine, its budget report: the caller's context still works: true
+to_routine, its budget report: nothing the call minted is left: true
+skip_init: the fault reached the caller: true
+skip_init: the caller's initialized context still reads its parameter: true
+skip_init: nothing the call minted is left: true
+decide_readings mints one context for three readings: true
+and adds one lifecycle level: true
+all three are decided in it: true
+nothing to decide mints nothing: true
+decide_readings: nothing the call minted is left: true
+tune_placements, the measured winner: what it returned computes: true
+tune_placements, the measured winner: the caller's context still works: true
+tune_placements, the measured winner: nothing the call minted is left: true
+tune_placements, arm A forced: what it returned computes: true
+tune_placements, arm A forced: the caller's context still works: true
+tune_placements, arm A forced: nothing the call minted is left: true
+tune_placements, arm B forced: what it returned computes: true
+tune_placements, arm B forced: the caller's context still works: true
+tune_placements, arm B forced: nothing the call minted is left: true
+tune_placements, with flips: what it returned computes: true
+tune_placements, with flips: the caller's context still works: true
+tune_placements, with flips: nothing the call minted is left: true
+the flip refinement measured a flip: true
+the timing context stays usable: true
+tune_placements, in a timing lineage: what it returned computes: true
+tune_placements, in a timing lineage: the caller's context still works: true
+tune_placements, in a timing lineage: nothing the call minted is left: true
+tune_placements, recording a decision: what it returned computes: true
+tune_placements, recording a decision: the caller's context still works: true
+tune_placements, recording a decision: nothing the call minted is left: true
+tune_placements, replaying it: what it returned computes: true
+tune_placements, replaying it: the caller's context still works: true
+tune_placements, replaying it: nothing the call minted is left: true
+the second call replayed a search: true
+tune_placements, on_ship: the caller sees the fault: true
+tune_placements, on_ship: the caller's context still works: true
+tune_placements, on_ship: nothing the call minted is left: true
+tune_placements, on_ship of arm B: the caller sees the fault: true
+tune_placements, on_ship of arm B: the caller's context still works: true
+tune_placements, on_ship of arm B: nothing the call minted is left: true
+tune_placements, report: the caller sees the fault: true
+tune_placements, report: the caller's context still works: true
+tune_placements, report: nothing the call minted is left: true
+tune_placements, every arm failing: the caller sees the fault: true
+tune_placements, every arm failing: the caller's context still works: true
+tune_placements, every arm failing: nothing the call minted is left: true

@@ -6391,6 +6391,7 @@ module type Driver = sig
   val run : ?timing:bool -> ctx -> routine -> ctx
   val sync : ctx -> unit
   val release : ctx -> unit
+  val adopt_ancestor : ctx -> ancestor:ctx -> unit
   val check_lineage_runnable : ctx -> routine -> unit
   val check_launch_bindings : routine -> unit
 
@@ -7044,6 +7045,22 @@ module Make (D : Driver) = struct
               validate_segments_for_model ~limits
                 [ Sched.apply_classified ~static_indices (sketch_schedule ~accum_prec ~p opt) opt ])
 
+  (* gh-ocannl-1859: giving back what a caller will never receive. Best-effort, like the search's
+     own: a failure to release must not replace the failure the caller has to act on. *)
+  let release_quietly ~what ctx =
+    try D.release ctx
+    with exn when not (process_fatal_exn exn) ->
+      logf "release of %s failed: %s" what (Exn.to_string exn)
+
+  (* [report]'s exception propagates by design, so the caller never receives [result]. *)
+  let report_or_release ~report result =
+    (try report ()
+     with exn ->
+       let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+       release_quietly ~what:"a compile its report failed on" (fst result);
+       Stdlib.Printexc.raise_with_backtrace exn backtrace);
+    result
+
   let seeded_default ?name ?min_reduction ?seed_gate ?min_serial ?reduction_sink ?seed_narrow
       ?report ctx comp bindings =
     let choice = ref no_seeded_choice in
@@ -7062,16 +7079,13 @@ module Make (D : Driver) = struct
             (Exn.to_string exn);
           choice := { no_seeded_choice with sd_fell_back = true }
         in
-        let result =
-          compile_advisory ?name ~on_fallback
-            ~fallback_if:(fun () ->
-              not
-                (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
-               && List.is_empty !choice.sd_sunk))
-            transform ctx comp bindings
-        in
-        emit ();
-        result
+        compile_advisory ?name ~on_fallback
+          ~fallback_if:(fun () ->
+            not
+              (List.is_empty !choice.sd_seeded && List.is_empty !choice.sd_split
+             && List.is_empty !choice.sd_sunk))
+          transform ctx comp bindings
+        |> report_or_release ~report:emit
 
   (* The hermetic lowering under [readings] (materialized, inline, footprint), in the form a compile
      under those placements hands its transform ([D.lowered_transform_input]): what a decision-only
@@ -7652,9 +7666,8 @@ module Make (D : Driver) = struct
               choice := { !choice with mc_placement_rank_ms = placement_rank_ms };
               result
           | Some (mat, inl, fp) ->
-              (* Every reading gets its call, empty or not — the historical context lineage of this
-                 path, kept as is; skipping would change only context identity, not the
-                 decisions. *)
+              (* A context of its own even for an empty pick: skipping would change only context
+                 identity, not the decisions. *)
               let ctx' = D.decide_readings ~skip_empty:false ctx (mat, inl, fp) in
               let picked = ref true in
               (* A CLASSIFIED rejection that [compile_advisory] had nothing to fall back to under
@@ -7675,7 +7688,19 @@ module Make (D : Driver) = struct
                 applied_pick := false;
                 compile_from ctx
               in
-              let result = compile_from ~on_unrecovered ctx' in
+              (* gh-ocannl-1859: [ctx'] is this call's to give back. What it compiled holds it;
+                 otherwise nothing does, so it goes here. *)
+              let result =
+                match compile_from ~on_unrecovered ctx' with
+                | result ->
+                    if !picked then D.adopt_ancestor (fst result) ~ancestor:ctx'
+                    else release_quietly ~what:"an abandoned placement pick" ctx';
+                    result
+                | exception exn ->
+                    let backtrace = Stdlib.Printexc.get_raw_backtrace () in
+                    release_quietly ~what:"a failed placement pick" ctx';
+                    Stdlib.Printexc.raise_with_backtrace exn backtrace
+              in
               (* The emitted label carries the placement decision. *)
               if !picked then
                 choice :=
@@ -7686,8 +7711,7 @@ module Make (D : Driver) = struct
                   };
               result
         in
-        emit !choice;
-        result
+        report_or_release ~report:(fun () -> emit !choice) result
 
   let model_pick ?name ?target ctx comp bindings =
     let target = match target with Some t -> t | None -> model_target_of ctx in

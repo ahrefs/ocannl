@@ -1557,6 +1557,8 @@ let run ?(timing = false) ctx routine =
   if not timing then Option.iter grad_buffers ~f:(check_accumulation_resets ctx routine);
   if Lazy.force debug_fill_fresh_outputs then fill_fresh_outputs ctx routine;
 
+  Ir.Resource_fault_injection.hit Run_before_launch;
+
   (* Run the routine's task/schedule *)
   Ir.Task.run routine.task;
   Option.iter grad_buffers ~f:(record_accumulations ctx.ledger routine.routine_id);
@@ -2103,23 +2105,23 @@ let same_release_unit a b = phys_equal (release_flag a.wrapped) (release_flag b.
 
 (* gh-ocannl-1762: see the interface. The ancestor is found on [ctx]'s lifecycle chain by its
    release flag, the identity of its unit, as [released_ancestor_depth] finds a released one. *)
+let is_lifecycle_ancestor ctx ~ancestor =
+  let flag = release_flag ancestor.wrapped in
+  Backends.query ctx.wrapped
+    {
+      q =
+        (fun _ c ->
+          let rec walk p =
+            match p with
+            | None -> false
+            | Some p -> phys_equal p.BI.finalized flag || walk p.BI.parent
+          in
+          walk c.BI.parent);
+    }
+
 let adopt_ancestor ctx ~ancestor =
   check_live ~fn:"adopt_ancestor" ctx;
-  let flag = release_flag ancestor.wrapped in
-  let on_chain =
-    Backends.query ctx.wrapped
-      {
-        q =
-          (fun _ c ->
-            let rec walk p =
-              match p with
-              | None -> false
-              | Some p -> phys_equal p.BI.finalized flag || walk p.BI.parent
-            in
-            walk c.BI.parent);
-      }
-  in
-  if not on_chain then
+  if not (is_lifecycle_ancestor ctx ~ancestor) then
     invalid_arg
       (Printf.sprintf
          "Context.adopt_ancestor: context %d is not a lifecycle ancestor of context %d (a context \
@@ -2790,61 +2792,43 @@ let lowered_transform_input = Backends.maybe_sink_zeros
 let decision_surface ?name ctx comp bindings =
   (lowered_for_decisions ?name ctx comp bindings).Ir.Low_level.flip_candidates
 
-let decide_materialized ctx tns =
+(* The child a decision is recorded in: the lineage state forked exactly like a compile would, then
+   [record] in the fork, so the argument context and its other descendants are unaffected. *)
+let decided ~fn ctx record =
   (* A child of a dead handle would inherit its freed buffer locations under a fresh, unset flag. *)
-  check_live ~fn:"decide_materialized" ctx;
+  check_live ~fn ctx;
   let wrapped, () =
     Backends.with_backend ctx.wrapped
       {
         f =
           (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) bctx ->
-            (* Fork the lineage state exactly like a compile would, then record the decisions in the
-               fork: the argument context and its other descendants are unaffected. *)
             let optimize_ctx = Ir.Low_level.copy_optimize_ctx bctx.BI.optimize_ctx in
-            Ir.Low_level.decide_materialized optimize_ctx tns;
+            record optimize_ctx;
             (Backend.make_child ~optimize_ctx bctx, ()));
       }
   in
   derive ctx wrapped
 
+let decide_materialized ctx tns =
+  decided ~fn:"decide_materialized" ctx (fun optimize_ctx ->
+      Ir.Low_level.decide_materialized optimize_ctx tns)
+
+(* The preference is recorded rather than a placement decided, because inlining legality is settled
+   only during optimization ([check_and_store_virtual]) — a preferred node the virtualizer rejects
+   still materializes. A node whose placement THIS lineage already decided (e.g. a cap
+   materialization from an earlier compile of a routine setting it) keeps that decision: decisions
+   are final within a lineage — already-compiled routines depend on them (a consumer compiled
+   against the node's buffer must find it written) — so the preference only steers placements not
+   yet decided. Callers wanting the exemption to take effect fork a pre-compile sibling, as
+   [Train.tune_placements] does. *)
 let decide_inline ctx tns =
-  check_live ~fn:"decide_inline" ctx;
-  let wrapped, () =
-    Backends.with_backend ctx.wrapped
-      {
-        f =
-          (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) bctx ->
-            (* Fork like [decide_materialized]; the preference is recorded rather than a placement
-               decided, because inlining legality is settled only during optimization
-               ([check_and_store_virtual]) — a preferred node the virtualizer rejects still
-               materializes. A node whose placement THIS lineage already decided (e.g. a cap
-               materialization from an earlier compile of a routine setting it) keeps that decision:
-               decisions are final within a lineage — already-compiled routines depend on them (a
-               consumer compiled against the node's buffer must find it written) — so the preference
-               only steers placements not yet decided. Callers wanting the exemption to take effect
-               fork a pre-compile sibling, as [Train.tune_placements] does. *)
-            let optimize_ctx = Ir.Low_level.copy_optimize_ctx bctx.BI.optimize_ctx in
-            Ir.Low_level.prefer_inline optimize_ctx tns;
-            (Backend.make_child ~optimize_ctx bctx, ()));
-      }
-  in
-  derive ctx wrapped
+  decided ~fn:"decide_inline" ctx (fun optimize_ctx -> Ir.Low_level.prefer_inline optimize_ctx tns)
 
+(* A preference like [decide_inline], for the same reasons: the footprint form is served per read
+   site by the virtualizer, which may still decline one. *)
 let decide_footprint ctx tns =
-  check_live ~fn:"decide_footprint" ctx;
-  let wrapped, () =
-    Backends.with_backend ctx.wrapped
-      {
-        f =
-          (fun (type d r e) ((module Backend) : (d, r, e) Backends.backend_module) bctx ->
-            (* Fork like [decide_inline]; a preference for the same reasons — the footprint form is
-               served per read site by the virtualizer, which may still decline one. *)
-            let optimize_ctx = Ir.Low_level.copy_optimize_ctx bctx.BI.optimize_ctx in
-            Ir.Low_level.prefer_footprint optimize_ctx tns;
-            (Backend.make_child ~optimize_ctx bctx, ()));
-      }
-  in
-  derive ctx wrapped
+  decided ~fn:"decide_footprint" ctx (fun optimize_ctx ->
+      Ir.Low_level.prefer_footprint optimize_ctx tns)
 
 let decide_reading ctx (reading : Ir.Low_level.reading) tns =
   match reading with
@@ -2852,8 +2836,12 @@ let decide_reading ctx (reading : Ir.Low_level.reading) tns =
   | `Inline -> decide_inline ctx tns
   | `Footprint -> decide_footprint ctx tns
 
+(* gh-ocannl-1859: one child for all three, in the order the separate recorders would apply them: a
+   chain of three would leave the wrapper that adopts what it minted holding only the last. *)
 let decide_readings ?(skip_empty = true) ctx (materialized, inline, footprint) =
-  List.fold
-    [ (`Materialize, materialized); (`Inline, inline); (`Footprint, footprint) ]
-    ~init:ctx
-    ~f:(fun c (r, tns) -> if skip_empty && List.is_empty tns then c else decide_reading c r tns)
+  if skip_empty && List.for_all [ materialized; inline; footprint ] ~f:List.is_empty then ctx
+  else
+    decided ~fn:"decide_readings" ctx (fun optimize_ctx ->
+        Ir.Low_level.decide_materialized optimize_ctx materialized;
+        Ir.Low_level.prefer_inline optimize_ctx inline;
+        Ir.Low_level.prefer_footprint optimize_ctx footprint)

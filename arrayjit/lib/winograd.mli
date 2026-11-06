@@ -45,6 +45,10 @@
     tier's fixpoint requires: transformed reads index [2 t + i], the contractions have no window,
     and a remainder strip's output loop does not start at 0. *)
 
+val retained : unit -> int
+(** What the module's tables hold now, memo buckets and markers alike: a diagnostic. Their entries
+    go with their nodes (gh-ocannl-1859). *)
+
 val enabled : unit -> bool
 (** Whether the rewrite applies: the programmatic override if one is set, else the config key
     [winograd_conv]. *)

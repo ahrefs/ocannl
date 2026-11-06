@@ -14,12 +14,7 @@ module Tn = Tnode
       so the same node can be initialized into multiple independent contexts / devices;
     - {b lazy in the value}: the buffer is shaped only when forced, i.e. after shape inference. *)
 
-module Init_table = Stdlib.Ephemeron.K1.Make (struct
-  type t = Tn.t
-
-  let equal = Tn.equal
-  let hash = Tn.hash
-end)
+module Init_table = Tn.Weak_table
 
 let table : Nd.t Lazy.t Init_table.t = Init_table.create 16
 
