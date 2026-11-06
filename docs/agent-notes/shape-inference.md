@@ -515,8 +515,7 @@ files.
   `row_entry_*_mentions` do not list, is a missed visit. The whole map also changed entries that
   do not mention the variable -- it summed a stored `Concat` of solved parts, collapsed windows,
   and re-emitted every `Total_elems` row's `Rows_constr` -- which is why written entries stay
-  pending until an unrelated visit leaves them unchanged. `unify_row`'s unbalanced-flank branch
-  discards the visited environment but keeps the visit's inequalities, as the whole map's did.
+  pending until an unrelated visit leaves them unchanged.
   Verify a change here with `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` over the shape tests (it
   fails on the first solution whose indexed visit differs from the whole map's), and
   `test/operations/shape_substitution_chains` for the chains. The eager, resolved representation

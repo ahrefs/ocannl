@@ -226,3 +226,115 @@ let () =
   with
   | _ -> Stdio.printf "%s: no error\n" name
   | exception Row.Shape_error (msg, _) -> Stdio.printf "%s: Shape_error: %s\n" name msg
+
+(* gh-ocannl-1963: [flanked] rows and a walk through every stage, as the driver takes them, for what
+   a waiting mixed-flank equation owes its bounds and what its closing commit may refuse. *)
+let fresh_rows =
+  let sh_id = ref 40 in
+  fun () ->
+    Int.incr sh_id;
+    Row.get_row_for_var (Row.provenance ~sh_id:!sh_id ~kind:`Output) (Row.get_row_var ())
+
+let flanked (r : Row.t) ~beg ~dims = { r with beg_dims = beg; dims }
+let closed dims = closed_row ~sh_id:40 ~beg_dims:[] ~dims:(List.map dims ~f:dim)
+let ineq res opnd = Row.Row_ineq { res; opnd; origin }
+let eq r1 r2 = Row.Row_eq { r1; r2; origin }
+
+let through_stages constraints env =
+  List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ] ~init:(constraints, env)
+    ~f:(fun (constraints, env) stage -> Row.solve_inequalities ~stage constraints env)
+
+let show_axes env (r : Row.t) =
+  let r = Row.subst_row env r in
+  List.map (r.beg_dims @ r.dims) ~f:(function Row.Dim { d; _ } -> Int.to_string d | _ -> "?")
+  |> String.concat ~sep:","
+
+let decide name ~shows solve =
+  match solve () with
+  | env ->
+      Stdio.printf "%s: no error: %s\n" name
+        (String.concat ~sep:" " (List.map shows ~f:(fun r -> "[" ^ show_axes env r ^ "]")))
+  | exception Row.Shape_error (msg, _) -> Stdio.printf "%s: Shape_error: %s\n" name msg
+
+(* Solving nothing keeps every bound on the variable, so the equation's eventual solution still
+   answers to them: [..] <= rho1, then [5].<rho1> = <rho2>.[5] waits, and rho2 = [5; 6] gives rho1 =
+   [6; 5], which [7; 7] does not refine. *)
+let waiting_eq rho1 rho2 =
+  eq (flanked rho1 ~beg:[ dim 5 ] ~dims:[]) (flanked rho2 ~beg:[] ~dims:[ dim 5 ])
+
+let () =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  decide "bound on the waiting variable, its solution refutes it (unsatisfiable)"
+    ~shows:[ rho1; rho2 ] (fun () ->
+      let leftover, env =
+        Row.solve_inequalities ~stage:Stage1
+          [ ineq (closed [ 7; 7 ]) rho1; waiting_eq rho1 rho2 ]
+          Row.empty_env
+      in
+      snd (through_stages (eq rho2 (closed [ 5; 6 ]) :: leftover) env))
+
+let () =
+  let r = fresh_rows () and r0 = fresh_rows () and rho1 = fresh_rows () and rho2 = fresh_rows () in
+  decide "chain to the waiting variable, its solution refutes it (unsatisfiable)"
+    ~shows:[ r; r0; rho1; rho2 ] (fun () ->
+      let leftover, env =
+        Row.solve_inequalities ~stage:Stage1
+          [ ineq r r0; ineq r0 rho1; waiting_eq rho1 rho2 ]
+          Row.empty_env
+      in
+      let leftover, env =
+        Row.solve_inequalities ~stage:Stage1 (eq r (closed [ 7; 7 ]) :: leftover) env
+      in
+      snd (through_stages (eq rho2 (closed [ 5; 6 ]) :: leftover) env))
+
+(* The closing commit must not outrun a bound that fixes the rank: read alone, [5].<rho1> =
+   <rho2>.[7] closes at overlap 1, rho2 = [5], rho1 = [7]; with rho1 <= [6; 7] only the principal
+   family is left. *)
+let () =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  decide "bound fixes the rank of the waiting variable (satisfiable)" ~shows:[ rho1; rho2 ]
+    (fun () ->
+      snd
+        (through_stages
+           [
+             ineq rho1 (closed [ 6; 7 ]);
+             eq (flanked rho1 ~beg:[ dim 5 ] ~dims:[]) (flanked rho2 ~beg:[] ~dims:[ dim 7 ]);
+           ]
+           Row.empty_env))
+
+(* The closing commit skips an overlap on what [unify_dim] would refuse, no less: each store below
+   has its solution at overlap 1, and overlap 0 must read as refuted. *)
+let balanced_close name ~beg ~dims:d =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  decide name ~shows:[ rho1; rho2 ] (fun () ->
+      snd
+        (through_stages
+           [ eq (flanked rho1 ~beg ~dims:[]) (flanked rho2 ~beg:[] ~dims:d) ]
+           Row.empty_env))
+
+let () =
+  balanced_close "balanced flanks, 3 against 1 (satisfiable at overlap 1)"
+    ~beg:[ dim 3 ]
+    ~dims:[ dim 1 ];
+  balanced_close "balanced flanks, equal sizes of different bases (satisfiable at overlap 1)"
+    ~beg:[ Row.get_dim ~d:5 ~basis:"a" () ]
+    ~dims:[ Row.get_dim ~d:5 ~basis:"b" () ];
+  let sym, _ = Ir.Indexing.get_static_symbol ~static_range:5 Ir.Indexing.Empty in
+  balanced_close "balanced flanks, symbol against size (satisfiable at overlap 1)"
+    ~beg:[ Row.get_sym_dim sym ]
+    ~dims:[ dim 5 ]
+
+(* An equation first met at the closing stage conflicts on what its peeled flank has just solved: x
+   := 3 from the outer pair, so [x].<rho1>.[x] = <rho2>.[9; 3] refutes overlap 0 and sets rho2 =
+   [3]. *)
+let () =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  let x = Row.Var (Row.get_var ()) in
+  decide "balanced flanks, variable solved by the peeled flank (satisfiable at overlap 1)"
+    ~shows:[ rho1; rho2 ] (fun () ->
+      snd
+        (Row.solve_inequalities ~stage:Stage7
+           [
+             eq (flanked rho1 ~beg:[ x ] ~dims:[ x ]) (flanked rho2 ~beg:[] ~dims:[ dim 9; dim 3 ]);
+           ]
+           Row.empty_env))
