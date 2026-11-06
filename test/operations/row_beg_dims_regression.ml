@@ -1,7 +1,7 @@
 (** Regression tests for the beg_dims-on-Row.t refactor.
 
-    See docs/proposals/refactor-beg-dims-to-t.md for the design notes. Each test exercises one of
-    the five tests called out in the proposal:
+    See archive/docs/proposals/refactor-beg-dims-to-t.md for the design notes. Each test exercises
+    one of the five tests called out in the proposal:
 
     1. Outer-left alignment in solve_row_ineq. 2. s_row_one composes beg_dims faithfully. 3. Closing
     preserves beg_dims via substitution. 4. GLB merge symmetric on both flanks. 5. Monotonicity via

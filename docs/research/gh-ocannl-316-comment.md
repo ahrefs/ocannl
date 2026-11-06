@@ -1,6 +1,6 @@
 ## Deep dive into DumPy and torchdim — findings
 
-I've done a detailed study of [DumPy](https://dynomight.net/dumpy/) and [torchdim](https://github.com/facebookresearch/torchdim) (now `functorch.dim` in PyTorch). Full write-up in `docs/proposals/gh-ocannl-316.md`. Here's the summary.
+I've done a detailed study of [DumPy](https://dynomight.net/dumpy/) and [torchdim](https://github.com/facebookresearch/torchdim) (now `functorch.dim` in PyTorch). Full write-up in `docs/research/dumpy-torchdim-deep-dive.md`. Here's the summary.
 
 ### Three-way comparison
 
@@ -36,4 +36,4 @@ Named dimensions have genuine advantages for imperative tensor programming (self
 
 The related work section of the workshop paper (#299) has been updated to distinguish three named-dimension approaches (string-named, external-label, object-identity) instead of the previous single-paragraph summary. The dimension units section now includes two additional arguments (row variable compatibility, conciseness).
 
-Full proposal: `docs/proposals/gh-ocannl-316.md`
+Full proposal: `docs/research/dumpy-torchdim-deep-dive.md`

@@ -1380,7 +1380,7 @@ let check_lineage_runnable ctx routine =
          routine.routine_id dep_names)
 
 (* The PER-CANDIDATE half: bind-time validation of launch parameters
-   (docs/proposals/signed-index-precision.md) — each one must have been assigned (gh-ocannl-940:
+   (docs/design/signed-index-precision.md) — each one must have been assigned (gh-ocannl-940:
    linking leaves them unassigned, so a forgotten one is refused rather than run at 0), and each
    bound value must be non-negative, within its declared static range, and within the index width.
    Unlike the lineage checks above this reads the bindings the caller just wrote for THIS routine,

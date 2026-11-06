@@ -5,7 +5,7 @@
 > See the [historical provenance audit](README.md#historical-metal-fixture-provenance).
 
 Measurement report for the rewrite that lands with this issue (`online_softmax=true`; design
-record `docs/proposals/gh-ocannl-483.md`). The question the gh-531 profile left open was scale:
+record `docs/design/gh-ocannl-483.md`). The question the gh-531 profile left open was scale:
 at `gpt2_mini`'s seq 128 the attention-adjacent `seq^2` traffic was 5.4% of a CUDA step, so the
 rewrite's prize had to be measured where the `[seq, seq]` intermediates grow quadratically while
 the matmul work grows linearly. The two long-context legs `gpt2_mini_s512` and `gpt2_mini_s1024`

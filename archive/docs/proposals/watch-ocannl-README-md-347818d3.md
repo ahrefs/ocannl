@@ -23,7 +23,7 @@ Issue: https://github.com/ahrefs/ocannl/issues/412
 ## Status update (2026-07-04)
 
 - **The tiling infrastructure this proposal asked to share with the GPU work now has a
-  concrete home**: [schedule-ir-optops](schedule-ir-optops.md) was elaborated
+  concrete home**: [schedule-ir-optops](../../../docs/design/schedule-ir-optops.md) was elaborated
   2026-07-04 and specifies `Split`/`Swap`/`Unroll`/`Stage` transforms over
   `Low_level.optimized`, applied at the landed `?lowered_transform` seam on
   `Context.compile` (`backend_intf.ml:198`, `backends.ml:492`). The CPU work here is
@@ -33,7 +33,7 @@ Issue: https://github.com/ahrefs/ocannl/issues/412
   and the CPU benchmark/tuning story.
 - **Groundwork landed 2026-07-04** that the CPU tiling directly reuses:
   - the `If` guard statement (`low_level.ml:83`) + interval folding in `simplify_llc`
-    ([interval-analysis-scalar-t](interval-analysis-scalar-t.md), PR #88) — remainder
+    ([interval-analysis-scalar-t](../../../docs/design/interval-analysis-scalar-t.md), PR #88) — remainder
     /edge tiles are expressed as guards that fold away when the tile size divides the
     extent, replacing hand-rolled remainder-loop generation;
   - `axis_type` on `For_loop` (PR #84 + follow-ups), including `Unrolled` (codegen-time
@@ -41,7 +41,7 @@ Issue: https://github.com/ahrefs/ocannl/issues/412
     the copies (schedule-ir-optops §4); `Vectorized`/`Cpu_parallel` axis types are
     deliberately deferred until their codegen exists;
   - signed `int32` loop indices with the per-node numel contract
-    ([signed-index-precision](signed-index-precision.md)) — split-index `Affine`
+    ([signed-index-precision](../../../docs/design/signed-index-precision.md)) — split-index `Affine`
     arithmetic cannot overflow.
 - **Still no tiling/SIMD-FMA work in the tree**: no loop splitting pass, `pp_ll` emits
   plain `for` loops for `Serial` axes, and the matmul kernel remains the naive triple

@@ -65,7 +65,7 @@ let pool_slot_msl_typ () = if pool_slot_is_64 () then "ulong" else "uint"
    [schedule_log_launches]: that one says what geometry a compile launched, this one says why a
    requested rendering was NOT used (declines are silent by design — the fallback is correct — but
    indistinguishable from the fast path in timings, which already cost one wrong conclusion:
-   docs/proposals/tensorize-mma.md's unverified-T3 episode). *)
+   docs/design/tensorize-mma.md's unverified-T3 episode). *)
 let log_declines = lazy (Utils.get_global_flag ~default:false ~arg_name:"schedule_log_declines")
 
 (* How many bytes of [Local]-placement arrays a cc routine may declare on the stack
@@ -1056,7 +1056,7 @@ module type C_syntax_config = sig
   (** The hardware register expression an annotated loop's index binds to (e.g. ["blockIdx.x"],
       ["gid.y"]), or [None] when the backend cannot bind this axis in hardware — the loop then
       renders as a serial [for] (a legal implementation absent barriers; see
-      docs/proposals/axis-types-for-loops.md §2/§5). Slots are positional: 0 = [.x], 1 = [.y], 2 =
+      docs/design/axis-types-for-loops.md §2/§5). Slots are positional: 0 = [.x], 1 = [.y], 2 =
       [.z]. *)
 
   val barrier_syntax : string option
@@ -1080,7 +1080,7 @@ module type C_syntax_config = sig
       synchronous rendering everywhere. *)
 
   val parallel_grid_syntax : [ `None | `Dispatch | `Openmp ]
-  (** Pool-backed [Grid] rendering (docs/proposals/gh-ocannl-164.md): how to render an eligible
+  (** Pool-backed [Grid] rendering (docs/design/gh-ocannl-164.md): how to render an eligible
       outermost [Grid] loop when [hardware_index] does not bind it. [`Dispatch] emits libdispatch's
       [dispatch_apply] over contiguous chunks (macOS; blocks extension), [`Openmp] a
       [#pragma omp parallel for] over the chunk loop; both runtimes own a single process-global
@@ -1170,11 +1170,11 @@ module type C_syntax_config = sig
 
       The width ([vector_file.bytes]): vector register width in bytes for explicit SIMD rendering of
       [Vectorized] loops via GCC/Clang vector extensions (the [Vectorized] codegen follow-up of
-      gh-ocannl-164 / docs/proposals/watch-ocannl-README-md-347818d3.md): eligible loop bodies emit
-      vector-typed loads, arithmetic and stores in [lanes = bytes / element size] chunks plus a
-      serial remainder loop, instead of relying on the compiler's auto-vectorizer (which e.g. cannot
-      reassociate strict-FP reductions — the [Vectorized] retype carries that permission, like
-      [Swap]). A recognized accumulation body renders as independent accumulator chains with a
+      gh-ocannl-164 / archive/docs/proposals/watch-ocannl-README-md-347818d3.md): eligible loop
+      bodies emit vector-typed loads, arithmetic and stores in [lanes = bytes / element size] chunks
+      plus a serial remainder loop, instead of relying on the compiler's auto-vectorizer (which e.g.
+      cannot reassociate strict-FP reductions — the [Vectorized] retype carries that permission,
+      like [Swap]). A recognized accumulation body renders as independent accumulator chains with a
       horizontal reduce at loop exit (gh-ocannl-468; [`Vec_extensions] only). [0] disables explicit
       emission ([vectorize_pragma] fallback).
 
@@ -1239,7 +1239,7 @@ module type C_syntax_config = sig
     b:mma_source ->
     mma_emission option)
     option
-  (** Cooperative tile-MMA emission for [Low_level.Tile_mma] (docs/proposals/tensorize-mma.md §4):
+  (** Cooperative tile-MMA emission for [Low_level.Tile_mma] (docs/design/tensorize-mma.md §4):
       given the per-operand precisions (the backend decides which combinations its units support —
       Metal advertises uniform storage triples but can select an f32 accumulator internally for its
       wide-f16 arm; CUDA wmma's flagship combination is mixed f16×f16→f32), the transposed-storage
@@ -2939,7 +2939,7 @@ struct
   let buffer_prefix = ""
   let buffer_suffix = fun ~pos:_ -> ""
 
-  (* Signed index arithmetic (docs/proposals/signed-index-precision.md); the width tracks
+  (* Signed index arithmetic (docs/design/signed-index-precision.md); the width tracks
      [Ops.index_prec ()]. *)
   let arg_int_prefix = if Utils.settings.large_models then "const int64_t " else "const int32_t "
   let loop_index_type = if Utils.settings.large_models then "int64_t " else "int32_t "
@@ -4019,7 +4019,7 @@ module C_syntax (B : C_syntax_config) = struct
     mma_census_enabled : bool ref;
     current_placements : Tn.Placements.t;
         (** Set by [compile_proc]: the per-compilation-lineage placement resolution
-            (docs/proposals/context-scoped-memory-modes.md). Codegen both consults and settles
+            (docs/design/context-scoped-memory-modes.md). Codegen both consults and settles
             placements here -- never on the tnode. *)
     current_traced_store : Low_level.traced_store;
         (** Set by [compile_proc] so that [pp_ll] can consult per-node tracing info (e.g. to elide a
@@ -4041,8 +4041,8 @@ module C_syntax (B : C_syntax_config) = struct
             RMW sites in both forms. *)
     current_hardware_axes : Low_level.hardware_axis_info list ref;
         (** Set by [compile_proc]: the kernel's hardware-annotated loops with their positional slots
-            (docs/proposals/axis-types-for-loops.md §1/§5), consulted by [pp_ll]'s [For_loop] case
-            to render hardware index bindings. *)
+            (docs/design/axis-types-for-loops.md §1/§5), consulted by [pp_ll]'s [For_loop] case to
+            render hardware index bindings. *)
     current_loop_ranges : Affine.Loop_ranges.t ref;
         (** Every symbol bound by a loop in the routine, with the hull of its iteration ranges. The
             accumulator peel needs the COMPLEMENT: a guard symbol outside this set is bound outside
@@ -4106,7 +4106,7 @@ module C_syntax (B : C_syntax_config) = struct
     active_mma_accumulator : active_mma_accumulator option ref;
     current_parallel_grid : Set.M(Indexing.Symbol).t ref;
         (** Set by [compile_proc]: outermost [Grid] loops eligible for pool-backed parallel
-            rendering (docs/proposals/gh-ocannl-164.md), identified by index symbol. Empty unless
+            rendering (docs/design/gh-ocannl-164.md), identified by index symbol. Empty unless
             [B.parallel_grid_syntax] renders in parallel. *)
     current_grid_private : Tn.t list Map.M(Indexing.Symbol).t ref;
         (** Set by [compile_proc] alongside [current_parallel_grid]: per eligible [Grid] loop, the
@@ -6176,8 +6176,8 @@ module C_syntax (B : C_syntax_config) = struct
             else if PPrint.is_empty d2 then d1
             else d1 ^^ hardline ^^ d2)
     | For_loop { index = i; from_; to_; body; axis } -> (
-        (* Rendering phase of docs/proposals/axis-types-for-loops.md (§5): [Serial] loops render as
-           C [for] statements; [Grid]/[Workgroup]/[Workgroup_reduce] loops bind their index to the
+        (* Rendering phase of docs/design/axis-types-for-loops.md (§5): [Serial] loops render as C
+           [for] statements; [Grid]/[Workgroup]/[Workgroup_reduce] loops bind their index to the
            backend's hardware register (at the signed [loop_index_type] width, with an explicit cast
            from the unsigned register) when [B.hardware_index] provides one, and fall back to a
            serial loop otherwise (legal absent barriers); [Vectorized] loops render serially,
@@ -6773,7 +6773,7 @@ module C_syntax (B : C_syntax_config) = struct
               "C_syntax.pp_ll: Workgroup_barrier not supported by this backend (serialization \
                cannot implement a barrier)")
     | Tile_mma { d; a; b; ta; tb; m; n; k; ldd; lda; ldb; lane; tile; fallback } -> (
-        (* Cooperative tile-MMA (docs/proposals/tensorize-mma.md §4). Backends with an [mma_syntax]
+        (* Cooperative tile-MMA (docs/design/tensorize-mma.md §4). Backends with an [mma_syntax]
            hook emit the intrinsic sequence on every lane; everywhere else (including per-call
            declines and logged runs, which must stay serial and deterministic) the scalar fallback
            runs once per simdgroup, guarded on lane 0 — the lane loop still supplies the launch's

@@ -108,6 +108,6 @@ re-implemented.
 
 ## Relations
 
-[context-scoped-memory-modes](context-scoped-memory-modes.md) (contexts-as-values groundwork;
+[context-scoped-memory-modes](../../../docs/design/context-scoped-memory-modes.md) (contexts-as-values groundwork;
 the optimize_ctx that `make_context` seeds), gh-ocannl-288 (merge-buffer static verification
 that `copy` preserves), gh-ocannl-333 (on-demand host access that the fallback path reuses).

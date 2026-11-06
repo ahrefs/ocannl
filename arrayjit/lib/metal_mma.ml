@@ -42,7 +42,7 @@ let mma_arm ~a_prec ~b_prec ~d_prec ~scope:_ =
   Option.map (mma_accumulator ~d_prec ~a_prec ~b_prec) ~f:(fun arm_accumulator ->
       { Backend_intf.arm_name = "simdgroup"; arm_accumulator; arm_floor = None })
 
-(* [simdgroup_matrix] (docs/proposals/tensorize-mma.md): 8x8x8 tiles cooperatively held by the
+(* [simdgroup_matrix] (docs/design/tensorize-mma.md): 8x8x8 tiles cooperatively held by the
    32-thread simdgroup. Supported storage precisions are decided per call by [mma_accumulator]
    (f32/f16/bf16 uniform, plus f16 or bf16 operands into f32 storage since gh-ocannl-923); under
    [Fp16_wide], the uniform-f16 storage arm uses an f32 accumulator fragment and converts only at

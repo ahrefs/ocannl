@@ -495,7 +495,7 @@
 ; Every backend has a log golden, CUDA's included, but CUDA's is DELIBERATELY a two-line skip
 ; notice, not a log: micrograd_demo_logging.ml exits early on CUDA because its routine logs print
 ; inline expressions differently and read unstable intermediate debug values (commit d63701452;
-; docs/proposals/cuda-runtest-divergences.md lists it as an accepted divergence).
+; archive/docs/proposals/cuda-runtest-divergences.md lists it as an accepted divergence).
 
 (rule
  (target "backend-0-0.log.actual")

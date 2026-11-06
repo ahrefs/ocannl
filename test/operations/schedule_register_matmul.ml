@@ -1,4 +1,4 @@
-(* Schedule IR, Phase S3 (docs/proposals/schedule-ir-optops.md §4): the register-blocktiled matmul
+(* Schedule IR, Phase S3 (docs/design/schedule-ir-optops.md §4): the register-blocktiled matmul
    schedule -- Split + Swap + Stage + materializing Unroll -- executed against the serial twin.
    "Register blocktiling is not a bespoke transform": each output dimension is split twice (block
    tile BM/BN = Grid, then register tile TM/TN), the register loops are sunk innermost by

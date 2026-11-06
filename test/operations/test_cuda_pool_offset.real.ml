@@ -1,7 +1,7 @@
 (* CUDA pool-allocator sub-region addressing regression test. Exercises the AC from
-   docs/proposals/cuda-pool-allocator-region-addressing.md: two non-constant working outputs (p, q)
-   sharing a bump-packed pool slab at distinct byte offsets must hold independent values after the
-   CUDA kernel runs.
+   archive/docs/proposals/cuda-pool-allocator-region-addressing.md: two non-constant working outputs
+   (p, q) sharing a bump-packed pool slab at distinct byte offsets must hold independent values
+   after the CUDA kernel runs.
 
    The invariant under test (failure condition): with the broken `ignore offset; ptr` stub in
    Slab.ptr_at, both p and q map to offset 0 in the pool slab — q's write overwrites p's slot, so

@@ -6,7 +6,7 @@ Issue: https://github.com/ahrefs/ocannl/issues/163
 ## Status update (2026-07-07)
 
 - **Deep dive delivered**: the research note exists at
-  [`../research/ggml-lessons.md`](../research/ggml-lessons.md) (ggml read from
+  [`../research/ggml-lessons.md`](../../../docs/research/ggml-lessons.md) (ggml read from
   llama.cpp `c198af4d`, OCANNL surfaces verified at `605d565a`). It supersedes the
   verdict-relevant assumptions in the 2026-06-12 update below: the #164 CPU bundle,
   explicit `Vectorized` vector-extension codegen (`cc_vector_bytes`), the schedule

@@ -1,5 +1,5 @@
 (* Swizzled shared-memory staging ([Stage ~swizzle], the bank-conflict follow-up of
-   docs/proposals/tensorize-mma.md): the S2 shared-memory matmul schedule with both operand tiles
+   docs/design/tensorize-mma.md): the S2 shared-memory matmul schedule with both operand tiles
    stored XOR-swizzled, executed against the serial twin.
 
    [mc = ma * mb] (32x32 times 32x32) with the same schedule as schedule_smem_matmul.ml — Grid x

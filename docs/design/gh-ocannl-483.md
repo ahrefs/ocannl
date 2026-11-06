@@ -1,7 +1,7 @@
 # The online-softmax attention rewrite
 
 Issue: [#483](https://github.com/ahrefs/ocannl/issues/483) (task 1, the loop-carried recurrence,
-landed as [#696](gh-ocannl-696.md))
+landed as [#696](../../archive/docs/proposals/gh-ocannl-696.md))
 
 **Date**: 2026-09-16
 **Status**: **landed** — the tier `Ir.Rewrites` and its seam in `Assignments.lower`, the pass

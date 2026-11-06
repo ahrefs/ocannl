@@ -130,7 +130,6 @@ let cli_key_of_token ~path token =
 let prefix_free_config_mentions =
   [
     ("docs/agent-notes/conventions.md", "backend", 1);
-    ("docs/proposals/gh-ocannl-409.md", "backend", 3);
     ("tools/calibrate_bandwidth.ml", "backend", 1);
     ("tools/fit_envelope.ml", "backend", 6);
     ("bin/bench_args.ml", "backend", 1);
@@ -228,9 +227,6 @@ let prefixed_occurrences ?(start_ok = fun _ _ -> true) ~path ~prefix ~key_char ~
    disappearing as ordinary non-config prose. *)
 let historical_invalid_config_mentions =
   [
-    ("docs/proposals/gh-ocannl-409.md", "bacend", 1);
-    ("docs/proposals/gh-ocannl-409.md", "output_debug_files_in_run_directory", 1);
-    ("docs/proposals/gh-ocannl-409.md", "randomness_lib", 4);
     ("test/operations/dune", "backedn", 2);
     ("test/operations/dune", "not_a_real_key", 1);
     ("test/operations/startup_streams/ocannl_config", "definitely_not_a_config_key", 1);
@@ -358,15 +354,8 @@ let ambiguous_bare_config_mentions =
     ("docs/agent-notes/backend-dialects-and-idents.md", "backend", 1);
     ("docs/agent-notes/build-and-test.md", "backend", 3);
     ("docs/agent-notes/build-and-test.md", "profile", 1);
-    ("docs/proposals/gh-ocannl-409.md", "backend", 1);
     ("ocannl_config.reference", "profile", 1);
-    ( "docs/proposals/fix-inline-complex-computations-default-doc.md",
-      "inline_complex_computations",
-      1 );
-    ("docs/proposals/gh-ocannl-344.md", "large_models", 2);
-    ("docs/proposals/gh-ocannl-351.md", "inline_complex_computations", 2);
-    ("docs/proposals/gh-ocannl-530-pool-uniformity.md", "cc_pool_core_class", 1);
-    ("docs/proposals/task-73617488.md", "virtualize_max_visits", 3);
+    ("docs/design/gh-ocannl-530-pool-uniformity.md", "cc_pool_core_class", 1);
   ]
 
 let tracked_ambiguous_bare_config path key =
@@ -590,11 +579,6 @@ let non_config_assignment_mentions =
   [
     ("docs/agent-notes/scheduling-and-autotune.md", "max_chain", 1);
     ("docs/precision_inference.md", "top_down_prec", 6);
-    ("docs/proposals/concat-forward-component-data-propagation.md", "a_mc", 1);
-    ("docs/proposals/concat-forward-component-data-propagation.md", "b_mc", 1);
-    ("docs/proposals/concat-forward-component-data-propagation.md", "c_mc", 1);
-    ("docs/proposals/gh-ocannl-263.md", "seq_q", 1);
-    ("docs/proposals/gh-ocannl-536.md", "private_seg_size", 1);
     ("docs/research/lean-attention-feasibility.md", "seq_q", 1);
     ("docs/syntax_extensions.md", "kernel_size", 2);
   ]
@@ -992,8 +976,8 @@ let refusal_control grammar_fixture =
     | Some (key, ambiguous_bare) -> String.equal key "backend" && ambiguous_bare
     | None -> false);
   Verdict.p "a tracked historical one-word typo remains classifiable after registry removal"
-    (match one_assignment ~path:"docs/proposals/gh-ocannl-409.md" "bacend=multicore_cc" with
-    | Some (key, ambiguous_bare) -> String.equal key "bacend" && not ambiguous_bare
+    (match one_assignment ~path:"test/operations/dune" "backedn=multicore_cc" with
+    | Some (key, ambiguous_bare) -> String.equal key "backedn" && not ambiguous_bare
     | None -> false);
   let grammar_text = In_channel.read_all grammar_fixture in
   let grammar_candidates = complete_inline_code_candidates grammar_text in

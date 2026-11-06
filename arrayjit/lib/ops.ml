@@ -131,9 +131,9 @@ let storage_precs =
   List.filter all_precs ~f:(fun prec -> match prec_family prec with No_value -> false | _ -> true)
 
 (** Returns the precision to use for indexing arithmetic: {b signed} int32, or int64 under the
-    [large_models] setting (docs/proposals/signed-index-precision.md). Signedness makes machine
-    index arithmetic agree with mathematical integers (no wrap traps for negative intermediates such
-    as convolution [offset = -padding] forms), and is friendlier to C compilers than defined-wrap
+    [large_models] setting (docs/design/signed-index-precision.md). Signedness makes machine index
+    arithmetic agree with mathematical integers (no wrap traps for negative intermediates such as
+    convolution [offset = -padding] forms), and is friendlier to C compilers than defined-wrap
     unsigned. Unsigned precisions remain for {e data} domains only (uint4x32 RNG state, uint8/uint32
     stored values such as class IDs). Int32 overflow is excluded by contract, not by widening: every
     per-node (padded) element count must fit int32 unless 64-bit indices are in use -- enforced once

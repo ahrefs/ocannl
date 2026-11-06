@@ -634,7 +634,7 @@ module Impl = struct
     let buffer_prefix = "device "
     let buffer_suffix = fun ~pos -> " [[buffer(" ^ Int.to_string pos ^ ")]]"
 
-    (* Signed index arithmetic (docs/proposals/signed-index-precision.md). *)
+    (* Signed index arithmetic (docs/design/signed-index-precision.md). *)
     let arg_int_prefix =
       if Utils.settings.large_models then "const int64_t& " else "const int32_t& "
 
@@ -649,7 +649,7 @@ module Impl = struct
         "uint3 gid [[threadgroup_position_in_grid]]"; "uint3 lid [[thread_position_in_threadgroup]]";
       ]
 
-    (* Hardware axis bindings (docs/proposals/axis-types-for-loops.md §5): [Grid] loops bind
+    (* Hardware axis bindings (docs/design/axis-types-for-loops.md §5): [Grid] loops bind
        threadgroup positions, [Workgroup] loops thread-in-threadgroup positions, both already passed
        via [extra_args]. The binding site casts to the signed [loop_index_type]. *)
     let hardware_index ~kind ~slot =
@@ -1017,15 +1017,15 @@ module Impl = struct
         ]
 
     (* Cooperative tile-MMA emission for [Low_level.Tile_mma] via MSL [simdgroup_matrix]
-       (docs/proposals/tensorize-mma.md §4): fragment blocks of 8×8 tiles held jointly by the
-       32-thread simdgroup, loaded with [simdgroup_load] straight from [device] memory or
-       [threadgroup] tiles (i.e. out of [Stage]'s shared staging), accumulated with
-       [simdgroup_multiply_accumulate], stored once at the end — the accumulator fragments are
-       resident across the whole [k] extent of the block statement. Transposed-stored operands
-       ([ta]/[tb]) load with [simdgroup_load]'s [transpose_matrix] flag and swapped tile-offset
-       arithmetic. Declines (fallback path) on: a precision combination [mma_fragment_types] does
-       not resolve, extents not multiples of 8, thread-space (stack-array) operands (not loadable by
-       [simdgroup_load]), and devices below the Apple7 family. *)
+       (docs/design/tensorize-mma.md §4): fragment blocks of 8×8 tiles held jointly by the 32-thread
+       simdgroup, loaded with [simdgroup_load] straight from [device] memory or [threadgroup] tiles
+       (i.e. out of [Stage]'s shared staging), accumulated with [simdgroup_multiply_accumulate],
+       stored once at the end — the accumulator fragments are resident across the whole [k] extent
+       of the block statement. Transposed-stored operands ([ta]/[tb]) load with [simdgroup_load]'s
+       [transpose_matrix] flag and swapped tile-offset arithmetic. Declines (fallback path) on: a
+       precision combination [mma_fragment_types] does not resolve, extents not multiples of 8,
+       thread-space (stack-array) operands (not loadable by [simdgroup_load]), and devices below the
+       Apple7 family. *)
     let mma_syntax =
       Some
         (fun ~d_prec
@@ -2169,8 +2169,8 @@ using namespace metal;|}
                 Me.ComputeCommandEncoder.set_buffer encoder ~index slots_buf
             | Static_idx s ->
                 let value = !(Indexing.find_exn lowered_bindings s) in
-                (* Bind-time validation (docs/proposals/signed-index-precision.md), mirroring the
-                   CUDA backend's launch-side checks. *)
+                (* Bind-time validation (docs/design/signed-index-precision.md), mirroring the CUDA
+                   backend's launch-side checks. *)
                 Indexing.validate_bound_value ~width64:Utils.settings.large_models s value;
                 let size = Ctypes.sizeof Ctypes.int in
                 let bytes_ptr = Ctypes.(allocate int value |> to_voidp) in

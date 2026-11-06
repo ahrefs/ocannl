@@ -215,7 +215,7 @@ type mma_capability = {
           Empty on CPU backends (cooperative staging is not renderable there). *)
 }
 [@@deriving sexp_of, equal]
-(** Tensor-core capability descriptor (docs/proposals/tensorize-mma.md §6). Which operand precisions
+(** Tensor-core capability descriptor (docs/design/tensorize-mma.md §6). Which operand precisions
     are supported is decided per call by the backend's [mma_syntax] hook (the emission is the source
     of truth); this record carries what schedule construction needs. *)
 
@@ -1857,7 +1857,7 @@ module type Backend = sig
       {!Assignments.get_name_exn}. [lowered_transform] is applied to the optimized lowered code
       before backend compilation — the seam where schedule transforms (and hand-annotating tests)
       rewrite loops with hardware axis types, barriers and shared placements
-      (docs/proposals/axis-types-for-loops.md). It returns the routine's KERNEL SEGMENTS: a
+      (docs/design/axis-types-for-loops.md). It returns the routine's KERNEL SEGMENTS: a
       whole-routine transform returns a singleton ([fun o -> [ f o ]]), while a transform that
       splits the routine into several kernels (fission, {!Schedule.fission_scheduled}) returns one
       element per segment. The segments compile as one fissioned routine and run back-to-back on the

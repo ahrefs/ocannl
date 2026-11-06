@@ -1,6 +1,6 @@
 (* Explicit SIMD rendering of [Vectorized] loops (gh-ocannl-164 follow-up,
-   docs/proposals/watch-ocannl-README-md-347818d3.md): executed parity of vector-rendered kernels
-   against their serial twins, plus structural checks on the generated source.
+   archive/docs/proposals/watch-ocannl-README-md-347818d3.md): executed parity of vector-rendered
+   kernels against their serial twins, plus structural checks on the generated source.
 
    Covered here: - A plain [Retype ~ty:Vectorized] of the innermost loop of an elementwise mul-add
    kernel, with an extent that is not a lane multiple (517), so the serial remainder loop executes.

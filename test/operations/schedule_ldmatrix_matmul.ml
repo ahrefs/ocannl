@@ -1,5 +1,5 @@
 (* [ldmatrix] over b128-swizzled staged tiles (gh-ocannl-481 item 3, D2; the design resolution is
-   docs/proposals/gh-ocannl-481-item3-ldmatrix.md).
+   archive/docs/proposals/gh-ocannl-481-item3-ldmatrix.md).
 
    The staged + tensorized composition of schedule_mma_matmul.ml, with both operand tiles minted
    [Stage ~swizzle:(Some Swizzle_b128)]. On CUDA the inline-PTX [mma.sync] arms then build their

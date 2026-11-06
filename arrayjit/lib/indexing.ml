@@ -139,7 +139,7 @@ let get_static_symbol ?static_range bindings =
   (s, Bind (s, bindings))
 
 (** Validates a launch-parameter value against its declared range (minimum 0 is implicit) and, when
-    [width64] is false, against the int32 index width (docs/proposals/signed-index-precision.md:
+    [width64] is false, against the int32 index width (docs/design/signed-index-precision.md:
     bind-time validation mirroring tinygrad's [bind] assert; one host compare per launch). The
     per-routine node-extent contract is NOT sound for launch parameters -- value-embedded parameters
     (step counters) take runtime values unrelated to any touched node's extent -- so narrowing an

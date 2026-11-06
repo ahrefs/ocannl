@@ -177,7 +177,7 @@
 #default_prng_variant=light
 
 # If true, use int64 for indexing arithmetic. If false (default), use int32 for indexing arithmetic
-# (signed since docs/proposals/signed-index-precision.md; unsigned precisions remain for data
+# (signed since docs/design/signed-index-precision.md; unsigned precisions remain for data
 # domains). This affects all backends' kernel index parameters and local index variables, and the
 # Metal pool offset width (which stays unsigned: uint vs ulong). Set to true for models with
 # tensors/pools larger than 2^31 elements / 2^32 bytes; with the default, each tensor node's padded
@@ -228,7 +228,7 @@
 #multidev_num_devices=0
 
 # If true, on GPU backends (cuda, hip, metal) kernels compiled without an explicit `lowered_transform`
-# get the default GPU schedule (docs/proposals/schedule-ir-optops.md §6): parallelizable loops are
+# get the default GPU schedule (docs/design/schedule-ir-optops.md §6): parallelizable loops are
 # annotated with Grid and Workgroup loops when a conservative analysis proves the kernel
 # race-free under the annotation; otherwise the kernel runs single-threaded as before. Disabled
 # automatically while `debug_log_from_routines` is active (to keep kernel logs serial).
@@ -534,7 +534,7 @@
 #debug_fill_fresh_outputs=false
 
 # How the C backend renders eligible outermost Grid loops (pool-backed Grid rendering,
-# docs/proposals/gh-ocannl-164.md): "dispatch" uses libdispatch's dispatch_apply (macOS),
+# docs/design/gh-ocannl-164.md): "dispatch" uses libdispatch's dispatch_apply (macOS),
 # "openmp" uses `#pragma omp parallel for` (adds -fopenmp to the kernel compile), "none" keeps
 # serial loops, "auto" (default) probes what the configured compiler accepts. Both runtimes own a
 # single process-global thread pool; worker threads run pure C and never touch the OCaml runtime.
@@ -556,7 +556,7 @@
 #cc_parallel_chunks=0
 
 # Worker-pool uniformity policy on hybrid CPUs (gh-ocannl-530,
-# docs/proposals/gh-ocannl-530-pool-uniformity.md). One OpenMP pool mixing two core speeds costs
+# docs/design/gh-ocannl-530-pool-uniformity.md). One OpenMP pool mixing two core speeds costs
 # tuned schedules 20-31% (chunked Grid loops end at a barrier, so the step is set by the slowest
 # worker), while restricting the pool to one core class recovers 25-34% of tuned time at no
 # measured cost to default (untuned) runs. "auto" (default) restricts the process to the

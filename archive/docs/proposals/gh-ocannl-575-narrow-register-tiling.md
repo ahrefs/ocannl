@@ -312,8 +312,8 @@ only native-fp16 hardware is ARM, which takes the NEON rows.
 
 ## Relations
 
-- [tensorize-mma](tensorize-mma.md): the CPU register tiling this extends (gh-ocannl-469), and the
+- [tensorize-mma](../../../docs/design/tensorize-mma.md): the CPU register tiling this extends (gh-ocannl-469), and the
   gh-545 accumulator-precision precedent the residency rule follows.
 - gh-ocannl-516/517: the parent issues; their landed seams are the substrate.
-- [gh-ocannl-530-pool-uniformity](gh-ocannl-530-pool-uniformity.md): supplies
+- [gh-ocannl-530-pool-uniformity](../../../docs/design/gh-ocannl-530-pool-uniformity.md): supplies
   `native_fp16_arithmetic` and the uniform pool the seeds tune for.

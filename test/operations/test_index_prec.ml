@@ -4,7 +4,7 @@ module Utils = Utils
 
 let () =
   (* Default large_models=false: signed int32 index arithmetic
-     (docs/proposals/signed-index-precision.md). *)
+     (docs/design/signed-index-precision.md). *)
   let idx_prec = Ops.index_prec () in
   Stdio.printf "With large_models=false, index precision: %s\n" (Ops.prec_string idx_prec);
   assert (String.equal (Ops.prec_string idx_prec) "int32");

@@ -153,7 +153,7 @@ let known_config_keys =
       "inline_complex_computations";
       "output_prec_in_ll_files";
       "stack_threshold_in_bytes";
-      (* Schedule layer (docs/proposals/schedule-ir-optops.md §6) *)
+      (* Schedule layer (docs/design/schedule-ir-optops.md §6) *)
       "automatic_gpu_schedule";
       "gpu_schedule_block_size";
       "gpu_schedule_min_parallel";

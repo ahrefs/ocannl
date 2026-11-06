@@ -1,4 +1,4 @@
-(* Autotune (docs/proposals/schedule-ir-optops.md, the search-harness half of the OptOps port):
+(* Autotune (docs/design/schedule-ir-optops.md, the search-harness half of the OptOps port):
    canonical schedule identities and the empirical schedule search.
 
    Covered here, backend-independent (every printed verdict holds on every backend):

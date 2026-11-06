@@ -342,7 +342,7 @@ lowered IR:
   schedule — the all-`Serial` kernel launches 1×1 as today.
 
 The matmul preset is the composition from
-[gh-ocannl-412](gh-ocannl-412.md): `Split i (BM)` → `Split j (BN)` → `Split k (BK)` →
+[gh-ocannl-412](../../archive/docs/proposals/gh-ocannl-412.md): `Split i (BM)` → `Split j (BN)` → `Split k (BK)` →
 retype `i_o,j_o=Grid`, `i_i,j_i=Workgroup` → `Swap` k_o outward → `Stage A ~shared` +
 `Stage B ~shared` → `Split i_i (TM)`/`Split j_i (TN)` + materializing `Unroll` for the
 register tile. Each prefix of that schedule is independently runnable and
@@ -425,7 +425,7 @@ barrier, so fission remains the portable mechanism.
 - Cache winners keyed by (canonicalized kernel hash, device identity); OCANNL's
   runtime compilation makes per-shape specialization natural.
 - Cost models and search policy belong to
-  [gh-ocannl-261](gh-ocannl-261.md) follow-ups; v1 ships the presets of §6 plus the
+  [gh-ocannl-261](../../archive/docs/proposals/gh-ocannl-261.md) follow-ups; v1 ships the presets of §6 plus the
   hand-written matmul schedule, no search.
 
 ## Phasing
@@ -440,7 +440,7 @@ barrier, so fission remains the portable mechanism.
 - **Phase S3 — register tiling**: materializing `Unroll`, the full matmul preset;
   benchmark against S2 and the naive baseline (the #412 >10× criterion lives here).
 - **Phase S4 — CPU**: non-shared `Stage` (packing) + cache-sized `Split` presets for
-  cc ([watch-ocannl-README-md-347818d3](watch-ocannl-README-md-347818d3.md) scope);
+  cc ([watch-ocannl-README-md-347818d3](../../archive/docs/proposals/watch-ocannl-README-md-347818d3.md) scope);
   vectorization/`Upcast` remains a follow-up (`Cpu_parallel` is retired — CPU
   parallelism is pool-backed `Grid` rendering; see [gh-ocannl-164](gh-ocannl-164.md)).
 - **Phase S5 — kernel fission** (§7): segmentation at cross-workgroup edges, per-segment
@@ -484,10 +484,10 @@ barrier, shared placement, `If`, validation, rendering, launch),
 discharge), [signed-index-precision](signed-index-precision.md) (**landed** — index
 width and extent bounds),
 [#412](https://github.com/ahrefs/ocannl/issues/412) (GPU tiling — the consumer;
-[gh-ocannl-412](gh-ocannl-412.md) is now the requirements/benchmarks doc, this is the
-mechanism doc), [watch-ocannl-README-md-347818d3](watch-ocannl-README-md-347818d3.md)
+[gh-ocannl-412](../../archive/docs/proposals/gh-ocannl-412.md) is now the requirements/benchmarks doc, this is the
+mechanism doc), [watch-ocannl-README-md-347818d3](../../archive/docs/proposals/watch-ocannl-README-md-347818d3.md)
 (CPU matmul — Phase S4), [gh-ocannl-164](gh-ocannl-164.md) (CPU SIMD floor),
-[gh-ocannl-267](gh-ocannl-267.md) (Tiramisu — thesis is this layer),
-[gh-ocannl-242](gh-ocannl-242.md) (TVM/Ansor lineage),
-[gh-ocannl-261](gh-ocannl-261.md) (search/cost functions),
-[gh-ocannl-263](gh-ocannl-263.md) (Flash attention — eventual `Stage` consumer).
+[gh-ocannl-267](../../archive/docs/proposals/gh-ocannl-267.md) (Tiramisu — thesis is this layer),
+[gh-ocannl-242](../../archive/docs/proposals/gh-ocannl-242.md) (TVM/Ansor lineage),
+[gh-ocannl-261](../../archive/docs/proposals/gh-ocannl-261.md) (search/cost functions),
+[gh-ocannl-263](../research/lean-attention-feasibility.md) (Flash attention — eventual `Stage` consumer).

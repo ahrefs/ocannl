@@ -1747,9 +1747,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   mistake is: the action runs the bare executable before dune has built it, and `posix_spawn` fails
   with ENOENT naming `<name>.exe` (gh-ocannl-1748).
 - A Windows checkout with `core.symlinks=false` (git's default there without Developer Mode) writes
-  every git symlink as a small TEXT FILE holding the link target. The repository has around twenty —
-  `docs/in-progress/` and `docs/research/` are views onto `docs/proposals/` — so any scan that reads
-  documentation sees 29-byte stubs, and `config_usage_scan` reports an exemption count drifting to
+  every git symlink as a small TEXT FILE holding the link target. `docs/research/` indexes two notes
+  at the `docs/` root that way, so any scan that reads documentation sees short stubs, and `config_usage_scan` reports an exemption count drifting to
   zero. It is not a repository bug and must not be "fixed" in the exemption list: CI's Windows job
   enables symlink evaluation (setup-ocaml runs `fsutil behavior set symlinkEvaluation`) and sees the
   real files. On a hand-run Windows box, `git config core.symlinks true`, then delete and re-check-out

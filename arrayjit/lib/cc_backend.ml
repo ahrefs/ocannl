@@ -440,12 +440,12 @@ let simd_flags =
     | "none" -> ""
     | flags -> flags
 
-(* Pool-backed Grid rendering (docs/proposals/gh-ocannl-164.md): eligible outermost [Grid] loops
-   render as chunked parallel loops on a process-global native pool -- libdispatch's
-   [dispatch_apply] on macOS (blocks; no pool state in the compiled kernel), OpenMP elsewhere
-   (libgomp/libomp is likewise process-global). The worker threads run pure C on raw kernel
-   arguments; the OCaml runtime is never involved. "auto" probes what the configured compiler
-   accepts, once per process (and once per machine, via [cached_probe]). *)
+(* Pool-backed Grid rendering (docs/design/gh-ocannl-164.md): eligible outermost [Grid] loops render
+   as chunked parallel loops on a process-global native pool -- libdispatch's [dispatch_apply] on
+   macOS (blocks; no pool state in the compiled kernel), OpenMP elsewhere (libgomp/libomp is
+   likewise process-global). The worker threads run pure C on raw kernel arguments; the OCaml
+   runtime is never involved. "auto" probes what the configured compiler accepts, once per process
+   (and once per machine, via [cached_probe]). *)
 let parallel_grid_of_string = function
   | "dispatch" -> Some `Dispatch
   | "openmp" -> Some `Openmp
@@ -730,9 +730,9 @@ let kernel_link_flags =
     | "Win32" | "Cygwin" -> "-shared"
     | _ -> "-shared -fPIC -Wl,-Bsymbolic -lm")
 
-(* gh-ocannl-530 (docs/proposals/gh-ocannl-530-pool-uniformity.md): on hybrid CPUs, one pool mixing
-   two core speeds costs the tuned schedules 20-31% -- chunked Grid loops end at a barrier, so the
-   step is set by the slowest worker -- while restricting the pool to a uniform core class recovers
+(* gh-ocannl-530 (docs/design/gh-ocannl-530-pool-uniformity.md): on hybrid CPUs, one pool mixing two
+   core speeds costs the tuned schedules 20-31% -- chunked Grid loops end at a barrier, so the step
+   is set by the slowest worker -- while restricting the pool to a uniform core class recovers
    25-34% of tuned time at no measured cost to the default (untuned) baselines. So [cc] restricts
    its worker pool to the highest-performance core class by default, on hybrid, native
    (non-virtualized) topologies; everything else -- libdispatch pools, fabricated guest topologies

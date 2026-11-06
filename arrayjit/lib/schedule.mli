@@ -3,7 +3,7 @@
     Halide-style schedules over the lowered, optimized IR: a list of {!optop}s applied as a pure
     [Low_level.optimized -> Low_level.optimized] pass at the [?lowered_transform] seam of backend
     [compile]. See docs/schedules_and_autotuning.md for the system view (composition recipes,
-    default presets, fission, autotuning) and docs/proposals/schedule-ir-optops.md for the design
+    default presets, fission, autotuning) and docs/design/schedule-ir-optops.md for the design
     rationale, including the pass-ordering contract (§2): schedules run after the whole
     [optimize_proc] pipeline (so they see fused code), {!apply} folds freshly constructed guards by
     re-running [simplify_llc] (plus CSE and hoisting when a transform duplicated code), and there is
@@ -164,8 +164,8 @@ type optop =
           barriers. The source must not be written in the routine.
 
           [cooperative = Some w] is the lane-aware mode for composing with {!constructor-Tensorize}
-          (docs/proposals/tensorize-mma.md, "Lane-aware Stage"): shared staging with all-[Serial]
-          tile loops whose load nest is wrapped in a {e fresh} extent-[w] [Workgroup] lane loop —
+          (docs/design/tensorize-mma.md, "Lane-aware Stage"): shared staging with all-[Serial] tile
+          loops whose load nest is wrapped in a {e fresh} extent-[w] [Workgroup] lane loop —
           positionally the same slot 0 the tensorized micro-kernel's lane loop binds, with extent
           agreement enforced downstream by [Low_level.validate_parallel]'s barrier-strength
           uniformity (pass the backend's {!field:Backend_intf.mma_simd_width} to both ops). The lane
@@ -176,7 +176,7 @@ type optop =
           workgroup slot 0 for the staging-point coverage rule by construction.
 
           [swizzle = Some kind] stores the tile in an XOR-swizzled layout (the
-          bank-conflict-avoidance follow-up of docs/proposals/tensorize-mma.md): the tile node is
+          bank-conflict-avoidance follow-up of docs/design/tensorize-mma.md): the tile node is
           recorded in the [optimized] record's {!field:Low_level.swizzled} map under [kind] and
           codegen remaps every element access [P*C + col] to a per-row bijection of the minor axis,
           so semantics are unchanged while same-column accesses (the classic strided read of a
@@ -383,7 +383,7 @@ type optop =
               Part of the schedule's identity (the cache saves it, the canonical render digests it).
               The intrinsic (tensor-core) emissions ignore it. *)
     }
-      (** Tensor-core emission (docs/proposals/tensorize-mma.md §3): replace the perfectly nested
+      (** Tensor-core emission (docs/design/tensorize-mma.md §3): replace the perfectly nested
           serial [i × j × k] matmul micro-kernel — whose body is the single accumulation
           [d[..., i, j] += a[..., i, k] * b[..., k, j]] (plain-add or FMA form; each operand's tile
           spans its last two axes with unit coefficients, transposed layouts rejected in v1) — with
@@ -1004,14 +1004,13 @@ val default_gpu :
 
 val default_cpu : ?min_work:int -> Low_level.optimized -> schedule
 (** The default CPU annotator preset (gh-ocannl-1458): per top-level nest, at most one loop is
-    retyped to [Grid] -- pool-backed Grid rendering in the C backend
-    (docs/proposals/gh-ocannl-164.md) partitions it into contiguous chunks on a process-global
-    native thread pool, and a [Workgroup] split would only add loop structure that runs serially
-    inside a chunk. The candidate is the nest's first path loop whose index is a plain [Iterator] in
-    every materialized write -- in every scratch write for a nest writing only scratch ([Local], one
-    function-scope array on the C backends; gh-ocannl-1343) -- with at least two iterations and the
-    per-nest hazard analysis passing over that ONE symbol: the loop actually made parallel is the
-    one proven independent.
+    retyped to [Grid] -- pool-backed Grid rendering in the C backend (docs/design/gh-ocannl-164.md)
+    partitions it into contiguous chunks on a process-global native thread pool, and a [Workgroup]
+    split would only add loop structure that runs serially inside a chunk. The candidate is the
+    nest's first path loop whose index is a plain [Iterator] in every materialized write -- in every
+    scratch write for a nest writing only scratch ([Local], one function-scope array on the C
+    backends; gh-ocannl-1343) -- with at least two iterations and the per-nest hazard analysis
+    passing over that ONE symbol: the loop actually made parallel is the one proven independent.
 
     No cross-nest alignment, unlike {!default_gpu}. The C renderer runs each pool-parallel [Grid]
     loop as one synchronous dispatch ([dispatch_apply] / [#pragma omp parallel for]) that joins

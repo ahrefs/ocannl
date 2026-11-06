@@ -2,7 +2,7 @@
 
     These drive [tensor/row.ml] directly because the targeted arms have no determinate high-level
     [%op] fixture that demonstrably routes through them (see
-    [docs/proposals/concat-dim-solver-hardening.md], the AC1 reachability note): a broadcast
+    [archive/docs/proposals/concat-dim-solver-hardening.md], the AC1 reachability note): a broadcast
     inequality between two [Concat] bounds only reaches [solve_dim_ineq]'s GLB merge when an operand
     dimension variable already carries a [Concat] greatest-lower-bound, and a variables-only
     [Concat = Concat] of unequal arity only reaches [unify_dim]'s generalized pairing arm. Building

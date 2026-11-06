@@ -556,7 +556,7 @@ module type C_syntax_config = sig
   (** The hardware register expression an annotated loop's index binds to (e.g. ["blockIdx.x"],
       ["gid.y"]), or [None] when the backend cannot bind this axis in hardware — the loop then
       renders as a serial [for] (a legal implementation absent barriers; see
-      docs/proposals/axis-types-for-loops.md §2/§5). Slots are positional: 0 = [.x], 1 = [.y], 2 =
+      docs/design/axis-types-for-loops.md §2/§5). Slots are positional: 0 = [.x], 1 = [.y], 2 =
       [.z]. *)
 
   val barrier_syntax : string option
@@ -580,7 +580,7 @@ module type C_syntax_config = sig
       synchronous rendering everywhere. *)
 
   val parallel_grid_syntax : [ `None | `Dispatch | `Openmp ]
-  (** Pool-backed [Grid] rendering (docs/proposals/gh-ocannl-164.md): how to render an eligible
+  (** Pool-backed [Grid] rendering (docs/design/gh-ocannl-164.md): how to render an eligible
       outermost [Grid] loop when [hardware_index] does not bind it. [`Dispatch] emits libdispatch's
       [dispatch_apply] over contiguous chunks (macOS; blocks extension), [`Openmp] a
       [#pragma omp parallel for] over the chunk loop; both runtimes own a single process-global
@@ -670,11 +670,11 @@ module type C_syntax_config = sig
 
       The width ([vector_file.bytes]): vector register width in bytes for explicit SIMD rendering of
       [Vectorized] loops via GCC/Clang vector extensions (the [Vectorized] codegen follow-up of
-      gh-ocannl-164 / docs/proposals/watch-ocannl-README-md-347818d3.md): eligible loop bodies emit
-      vector-typed loads, arithmetic and stores in [lanes = bytes / element size] chunks plus a
-      serial remainder loop, instead of relying on the compiler's auto-vectorizer (which e.g. cannot
-      reassociate strict-FP reductions — the [Vectorized] retype carries that permission, like
-      [Swap]). A recognized accumulation body renders as independent accumulator chains with a
+      gh-ocannl-164 / archive/docs/proposals/watch-ocannl-README-md-347818d3.md): eligible loop
+      bodies emit vector-typed loads, arithmetic and stores in [lanes = bytes / element size] chunks
+      plus a serial remainder loop, instead of relying on the compiler's auto-vectorizer (which e.g.
+      cannot reassociate strict-FP reductions — the [Vectorized] retype carries that permission,
+      like [Swap]). A recognized accumulation body renders as independent accumulator chains with a
       horizontal reduce at loop exit (gh-ocannl-468; [`Vec_extensions] only). [0] disables explicit
       emission ([vectorize_pragma] fallback).
 
@@ -739,7 +739,7 @@ module type C_syntax_config = sig
     b:mma_source ->
     mma_emission option)
     option
-  (** Cooperative tile-MMA emission for [Low_level.Tile_mma] (docs/proposals/tensorize-mma.md §4):
+  (** Cooperative tile-MMA emission for [Low_level.Tile_mma] (docs/design/tensorize-mma.md §4):
       given the per-operand precisions (the backend decides which combinations its units support —
       Metal advertises uniform storage triples but can select an f32 accumulator internally for its
       wide-f16 arm; CUDA wmma's flagship combination is mixed f16×f16→f32), the transposed-storage

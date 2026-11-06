@@ -1,7 +1,7 @@
 # gh-ocannl-481: CUDA tensor-core profile completeness — what landed
 
 Outcome record for [ahrefs/ocannl#481](https://github.com/ahrefs/ocannl/issues/481), the T4 ceiling
-chase of [tensorize-mma](tensorize-mma.md) plus the fp8 profile gaps. The design resolution for
+chase of [tensorize-mma](../../../docs/design/tensorize-mma.md) plus the fp8 profile gaps. The design resolution for
 item 3 is [gh-ocannl-481-item3-ldmatrix](gh-ocannl-481-item3-ldmatrix.md); this file records what
 was implemented against it, what deviated, and what is still blocked and why.
 
@@ -169,7 +169,7 @@ evidence that changes this.
 ## Measured (2026-08-04): rendered, correct, neutral
 
 The gh-476 sweep ran on rog-nv (RTX 5070 Ti, sm_120) over `mlp_small` and `mlp_wide` at f32 and
-bf16 — full protocol and numbers in [benchmarks/report-gh481-cuda.md](../../benchmarks/report-gh481-cuda.md).
+bf16 — full protocol and numbers in [benchmarks/report-gh481-cuda.md](../../../benchmarks/report-gh481-cuda.md).
 Summary:
 
 - **The mechanism works end to end.** Per `mlp_wide` bf16 search: 12 distinct swizzled twins

@@ -781,7 +781,7 @@ end
 let%track6_sexp lower_assignments ~(facts : backend_facts) ~limits optim_ctx ?name bindings asgns =
   (* Fork the lineage state (computations and placements) so this compile's decisions do not leak
      into the incoming context or into sibling compiles from the same context
-     (docs/proposals/context-scoped-memory-modes.md). The forked state travels with the code and
+     (docs/design/context-scoped-memory-modes.md). The forked state travels with the code and
      reaches the child context at link time. *)
   let optim_ctx = Low_level.copy_optimize_ctx optim_ctx in
   let name : string =
@@ -1081,7 +1081,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
               | segments -> segments)
           | None ->
               (* No explicit schedule: the default annotator parallelizes kernels it can prove safe
-                 (docs/proposals/schedule-ir-optops.md §6) -- Grid x Workgroup on GPU backends,
+                 (docs/design/schedule-ir-optops.md §6) -- Grid x Workgroup on GPU backends,
                  pool-rendered Grid on CPU backends; the identity otherwise. Kernel fission may
                  split the routine into several kernels at cross-workgroup dependency edges; they
                  run back-to-back on the routine's stream (see [link]). *)

@@ -1,6 +1,6 @@
 # Superoptimizers for tensor programs — research notes
 
-Companion evidence base for [gh-ocannl-261](../proposals/gh-ocannl-261.md), which is
+Companion evidence base for [gh-ocannl-261](../../archive/docs/proposals/gh-ocannl-261.md), which is
 the decision record (reading-list verdict, technique-to-seam map, follow-ups F1–F5,
 skip decisions). This document holds the detailed paper extractions and the verified
 literature survey those decisions rest on, plus cross-cutting observations that

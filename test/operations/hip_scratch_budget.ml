@@ -6,8 +6,8 @@
    out of synchronize, on a stream that is already dead. During the gh-ocannl-484 sweep one autotune
    candidate in that state took the whole benchmark process down.
 
-   So the fix is prediction, not recovery (docs/proposals/gh-ocannl-536.md): the HIP backend reads
-   the linked kernel's private segment size and declines it as a typed [Resource_exceeded
+   So the fix is prediction, not recovery (archive/docs/proposals/gh-ocannl-536.md): the HIP backend
+   reads the linked kernel's private segment size and declines it as a typed [Resource_exceeded
    Thread_scratch] at [Backend_link]. This test pins both halves of that claim: the over-budget
    kernel is declined with that cause, and — the part that would be worthless to assert structurally
    alone — the device is still usable afterwards, with a following reduction computing the right

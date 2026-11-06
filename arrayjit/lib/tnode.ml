@@ -259,7 +259,7 @@ end = struct
 end
 
 (** Per-tensor scalar value bounds: the interprocedural layer of the interval analysis
-    (docs/proposals/interval-analysis-scalar-t.md), the third instance of the {!delayed_prec}
+    (docs/design/interval-analysis-scalar-t.md), the third instance of the {!delayed_prec}
     propose/settle lifecycle. Writers {e propose} bounds (joined, like [Inferred] promotion); a
     reader that discharges a guard against the candidate {e settles} it (like forcing the prec
     lazy); a post-settlement proposal that does not fit the settled interval is an error (like
@@ -281,7 +281,7 @@ type bounds_state =
 let default_namespace = "ocannl"
 
 (** Namespaces must be legal C-family identifiers so they can prefix generated-code identifiers and
-    debug names verbatim (rendered as [ns__n42]); see docs/proposals gh-ocannl-372. *)
+    debug names verbatim (rendered as [ns__n42]); see gh-ocannl-372. *)
 let validate_namespace ns =
   let ok_first c = Char.is_alpha c || Char.equal c '_' in
   let ok c = Char.is_alphanum c || Char.equal c '_' in
@@ -341,13 +341,13 @@ type t = {
       (** The tnode's {e declared intent} -- requests made at graph-construction time (parameter and
           constant marking, [Train.set_materialized], op-support [Never_virtual]), paired with a
           {!provenance} tag saying which request it was. Since the context-scoped memory-modes split
-          (docs/proposals/context-scoped-memory-modes.md) this is monotone, side-effect free to
-          read, and never written by the compilation pipeline: placement {e decisions} are
+          (docs/design/context-scoped-memory-modes.md) this is monotone, side-effect free to read,
+          and never written by the compilation pipeline: placement {e decisions} are
           per-compilation-lineage, recorded in {!module-Placements} tables riding
           [Low_level.optimize_ctx]. *)
   mutable observable : bool;
-      (** Declared host-observation intent (docs/proposals/context-scoped-memory-modes.md category
-          2): someone intends to read this node's values (printing, persistence, inspection).
+      (** Declared host-observation intent (docs/design/context-scoped-memory-modes.md category 2):
+          someone intends to read this node's values (printing, persistence, inspection).
           Monotone-upward (set, never cleared) and side-effect free to read. Observation does
           {b not} require materialization -- a [Virtual] resolution stays observable via
           recomputation -- so the only constraint this imposes on placement is: do not resolve the
@@ -912,14 +912,14 @@ end
 
 (** {2 Per-context placement resolution}
 
-    The context-scoped side of the memory-mode split
-    (docs/proposals/context-scoped-memory-modes.md): {!field-memory_mode_intent} on the tnode is
-    *declared intent* -- requests made at graph-construction time (user [set_materialized],
-    parameter/constant marking, op-support [Never_virtual]) -- while the *decisions* (resolving to
-    [Virtual] / [Local] / [On_device]) are recorded here, per compilation lineage. A [Placements]
-    table rides [Low_level.optimize_ctx]: it is copied at the start of each backend [compile], so
-    sibling compiles from the same context are hermetic (a candidate compile cannot poison another's
-    placement resolution), while child contexts inherit the lineage's decisions.
+    The context-scoped side of the memory-mode split (docs/design/context-scoped-memory-modes.md):
+    {!field-memory_mode_intent} on the tnode is *declared intent* -- requests made at
+    graph-construction time (user [set_materialized], parameter/constant marking, op-support
+    [Never_virtual]) -- while the *decisions* (resolving to [Virtual] / [Local] / [On_device]) are
+    recorded here, per compilation lineage. A [Placements] table rides [Low_level.optimize_ctx]: it
+    is copied at the start of each backend [compile], so sibling compiles from the same context are
+    hermetic (a candidate compile cannot poison another's placement resolution), while child
+    contexts inherit the lineage's decisions.
 
     Lookups fall back to the tnode's intent when the lineage has not yet decided; updates apply the
     same lattice as {!update_memory_mode} but never write the tnode. Intent strengthened after a
@@ -994,7 +994,7 @@ module Placements = struct
   let debug p tn = debug_memory_mode (get p tn)
 
   (** Mirrors the retired tnode-level [default_to_most_local], resolving into the placements table,
-      with two observation guards (docs/proposals/context-scoped-memory-modes.md):
+      with two observation guards (docs/design/context-scoped-memory-modes.md):
 
       - An observable node never defaults to [Local]: [Local] is the unobservable class, and unlike
         [Virtual] it cannot be served by recomputation.
@@ -1226,7 +1226,7 @@ end)
 
 let registry = Registry.create 16
 
-(* docs/proposals/signed-index-precision.md: index arithmetic is signed int32 unless [large_models]
+(* docs/design/signed-index-precision.md: index arithmetic is signed int32 unless [large_models]
    selects int64. Int32 overflow is excluded by contract, not by widening: every index intermediate
    is bounded by some node's extent by projection construction (axis indices by their dims, conv
    affine forms by the padded input dim, flat offsets by numel), so validating the padded element

@@ -22,10 +22,9 @@ or tests, with a pointer from the note.
 
 For an intentional exclusion, write `ocaml doc-skip` followed by a reason on the fence. Use
 this for historical APIs or illustrative pseudocode; do not exclude a present-tense example
-merely because it fails to compile. In proposals, dated historical sections may remain
+merely because it fails to compile. In design records, dated historical sections may remain
 exempt, but an update that recommends today's API must use a checked self-contained example.
-The [routine-context proposal](proposals/centered-init-and-to-routine-context.md) demonstrates
-both forms. Plain `ocaml` fences remain unchecked for gradual adoption.
+Plain `ocaml` fences remain unchecked for gradual adoption.
 
 ## Excerpts of library code
 

@@ -1,5 +1,5 @@
 (** Schedule IR: loop-nest transforms as values, applied to [Low_level.optimized] at the
-    [?lowered_transform] seam of backend [compile]. See docs/proposals/schedule-ir-optops.md — that
+    [?lowered_transform] seam of backend [compile]. See docs/design/schedule-ir-optops.md — that
     document records the normative pass-ordering contract (§2): the schedule runs after the whole
     [optimize_proc] pipeline, transforms fold their own guards by re-running [simplify_llc] (plus
     CSE/hoisting when a transform duplicated code), and there is no re-virtualization. *)
@@ -506,11 +506,11 @@ type pad_mask = {
    renderer applies unless the backend's compile pins contraction off. *)
 let fused_accumulation = Low_level.fused_accumulation
 
-(* docs/proposals/tensorize-mma.md §3: replace the innermost serial [i × j × k] matmul micro-kernel
-   — whose body is a single accumulation [d[...] += a[...] * b[...]] (plain-add or FMA form,
-   whichever the contraction licence left), possibly under pad/remainder guards (gh-ocannl-485) —
-   with a [Tile_mma] block statement wrapped in a fresh extent-[simd_width] [Workgroup] lane loop.
-   The statement covers the whole [m×n×k] block, so fragment residency across the reduction is an
+(* docs/design/tensorize-mma.md §3: replace the innermost serial [i × j × k] matmul micro-kernel —
+   whose body is a single accumulation [d[...] += a[...] * b[...]] (plain-add or FMA form, whichever
+   the contraction licence left), possibly under pad/remainder guards (gh-ocannl-485) — with a
+   [Tile_mma] block statement wrapped in a fresh extent-[simd_width] [Workgroup] lane loop. The
+   statement covers the whole [m×n×k] block, so fragment residency across the reduction is an
    intra-statement codegen concern; the original (guarded) nest becomes the scalar [fallback], its
    accumulation in the form the licence left (the renderer fuses it unless the backend's compile
    pins contraction off, gh-ocannl-1457). Divisibility by the backend's intrinsic tile is checked at
@@ -2096,7 +2096,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
           Ternop (Ops.Where, (cond, iprec), (rhs, prec), (Constant 0., prec)))
     in
     let load_stmt = Set { tn = tile; idcs = tile_store_idcs; llsc = guarded_get; debug = "" } in
-    (* Lane-aware cooperative staging (docs/proposals/tensorize-mma.md, "Lane-aware Stage"): a fresh
+    (* Lane-aware cooperative staging (docs/design/tensorize-mma.md, "Lane-aware Stage"): a fresh
        extent-[w] [Workgroup] lane loop will wrap the load nest, so the loads are partitioned (or
        restricted) along the same hardware slot the tensorized micro-kernel's lane loop binds —
        positional slot assignment aligns the two loops at slot 0, and [validate_parallel]'s

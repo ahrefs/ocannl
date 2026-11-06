@@ -244,7 +244,7 @@ OCANNL follows different design choices than [OWL](https://ocaml.xyz/). For exam
   * Shape inference is fully handled by OCANNL and not extensible, other than changing OCANNL code.
   * [`Tensor`](tensor/tensor.ml) implements "putting pieces together".
   * [`Train`](lib/train.ml) has the optimization "frontend" and utilities.
-  * [`arrayjit`](arrayjit/), which may one day become a standalone library: generates the code, performs backend-agnostic optimizations (_virtual nodes_ whose computation is inlined), implements the backends.
+  * [`arrayjit`](arrayjit), which may one day become a standalone library: generates the code, performs backend-agnostic optimizations (_virtual nodes_ whose computation is inlined), implements the backends.
 * Some aspects that are more core to OWL are less encapsulated in OCANNL, so it should be more natural to extend them.
   * Specifically, [`Operation`](tensor/operation.ml) and [`Train`](lib/train.ml) are just collections of functions.
 * OCANNL provides lower-level compilation backends than OWL, it is more self-contained in this sense.

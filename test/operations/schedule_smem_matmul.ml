@@ -1,4 +1,4 @@
-(* Schedule IR, Phase S2 (docs/proposals/schedule-ir-optops.md §5): the hand-written shared-memory
+(* Schedule IR, Phase S2 (docs/design/schedule-ir-optops.md §5): the hand-written shared-memory
    matmul schedule, built from Split/Retype/Stage optops and executed against the serial twin.
 
    [mc = ma * mb] (32x32 times 32x32) lowers to a zeroing nest (2 loops) plus the naive triple loop.

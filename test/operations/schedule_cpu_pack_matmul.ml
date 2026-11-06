@@ -1,4 +1,4 @@
-(* Schedule IR, Phase S4 (docs/proposals/schedule-ir-optops.md §5, watch-ocannl-README-md-347818d3
+(* Schedule IR, Phase S4 (docs/design/schedule-ir-optops.md §5, watch-ocannl-README-md-347818d3
    scope): cache-sized tiling + operand packing for the C backends, built from Split / Swap /
    non-shared Stage optops and executed against the naive twin.
 

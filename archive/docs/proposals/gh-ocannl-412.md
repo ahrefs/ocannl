@@ -5,10 +5,10 @@
 
 ## Status update (2026-07-04) — infrastructure landed; transform layer is the remaining work
 
-The [axis-types-for-loops](axis-types-for-loops.md) proposal landed in full (Phase A in
+The [axis-types-for-loops](../../../docs/design/axis-types-for-loops.md) proposal landed in full (Phase A in
 PR #84 on 2026-07-03; Phases B+C plus the `validate_parallel` write-coverage hardening
-on 2026-07-04), together with [interval-analysis-scalar-t](interval-analysis-scalar-t.md)
-and the [signed-index-precision](signed-index-precision.md) core migration (both PR #88).
+on 2026-07-04), together with [interval-analysis-scalar-t](../../../docs/design/interval-analysis-scalar-t.md)
+and the [signed-index-precision](../../../docs/design/signed-index-precision.md) core migration (both PR #88).
 This delivers, in different form, most of what Phases 2–3 below planned as
 infrastructure:
 
@@ -57,7 +57,7 @@ infrastructure:
    not a sequence.
 
 **Remaining work** — the transform layer, now specified in
-[schedule-ir-optops](schedule-ir-optops.md) (elaborated 2026-07-04), which supersedes
+[schedule-ir-optops](../../../docs/design/schedule-ir-optops.md) (elaborated 2026-07-04), which supersedes
 Phases 1–5 as the implementation plan; this document remains the requirements and
 benchmark-criteria reference:
 
@@ -170,7 +170,7 @@ The optimization techniques are well-documented in the articles collected in iss
 
 > **Superseded as a plan (2026-07-04).** The five phases below are kept as the
 > catalogue of transforms and benchmark targets; the implementation plan is now
-> [schedule-ir-optops](schedule-ir-optops.md) (Phases S1–S4), operating at the
+> [schedule-ir-optops](../../../docs/design/schedule-ir-optops.md) (Phases S1–S4), operating at the
 > `?lowered_transform` seam with Metal-first backend ordering. Mapping: Phase 1 → S1
 > `Split` (as a schedule transform, not a `loop_accum` change); Phase 2 → landed
 > infrastructure + S1's default annotator preset; Phase 3 → landed IR constructs + S2

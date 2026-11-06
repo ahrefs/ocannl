@@ -2,7 +2,7 @@
 
 Deliverable of [gh-ocannl-253](https://github.com/ahrefs/ocannl/issues/253)
 ("Study and Incorporate llm.c Lessons"); companion evidence base for
-[`docs/proposals/gh-ocannl-253.md`](../proposals/gh-ocannl-253.md). Every llm.c
+[`archive/docs/proposals/gh-ocannl-253.md`](../../archive/docs/proposals/gh-ocannl-253.md). Every llm.c
 claim below was extracted from fetched source, and every OCANNL claim was
 verified against the repository — not taken from the proposal's (stale) 2026-06-12
 status update.
@@ -83,7 +83,7 @@ weights) does not exist — though the precision *types* (`half`, `bfloat16`,
 in `arrayjit/lib/ops.ml`).
 
 **Driver workload framing.** GPT-2 (and Gemma) end-to-end inference has been
-promoted to a ready task (repo home: `docs/proposals/gh-ocannl-377.md`), and is
+promoted to a ready task (repo home: `archive/docs/proposals/gh-ocannl-377.md`), and is
 the designated driver for v0.8/v0.9 performance work. The optimizer chain —
 **AdamW → mixed-precision optimizer states → quantized AdamW → stochastic
 rounding** — is the other open arc these lessons feed. (Quantization verdicts
@@ -360,10 +360,10 @@ prerequisite/milestone.
 | 6 | Epilogue fusion: bias/GELU into matmul (§2.4) | Virtual-node inlining fuses elementwise producers/consumers into the matmul loop nest by default; fission only cuts at materialized cross-nest edges | **(a)** |
 | 7 | TF32 / tensor-core precision modes (§2.4) | `Tensorize` precision choices; Metal `simdgroup_matrix` is uniform-precision, CUDA wmma pending | **(d)** — CUDA Tensorize bring-up |
 | 8 | Online softmax, single pass max+sum (§2.6) | Needs two accumulators in one loop; lowering gives each reduction its own loop (`Assignments` → `Low_level`); gh-134 shared-loop virtualization is the seam | **(d)** — gh-134 / schedule-level loop sharing |
-| 9 | Fused classifier: softmax+CE+dlogits, probs never materialized (§2.6) | `docs/in-progress/cross-entropy-loss.md` (frontend helper, no GH issue yet); virtualization can already elide probs if the graph is written well; needs a fission/inlining guarantee + backward fusion | **(b)** — issue B3 |
+| 9 | Fused classifier: softmax+CE+dlogits, probs never materialized (§2.6) | `archive/docs/proposals/cross-entropy-loss.md` (frontend helper, no GH issue yet); virtualization can already elide probs if the graph is written well; needs a fission/inlining guarantee + backward fusion | **(b)** — issue B3 |
 | 10 | Fused residual+layernorm (§2.5) | Residual adds inline into consumers when virtual; mean/var remain two loops (same limit as #8) | **(a)** for the add; the reduction pair is #8 **(d)** |
 | 11 | LayerNorm-backward scratch+flag cross-block reduction (§2.5) | OCANNL never emits data atomics; cross-workgroup reductions become separate fission segments (same effect, cleaner semantics) | **(c)** |
-| 12 | GELU (tanh approx) (§2.8) | Absent from tree; explicitly scoped as GPT-2 prerequisite in `docs/proposals/gh-ocannl-377.md` Phase 1 | **(a)** — tracked by #377 |
+| 12 | GELU (tanh approx) (§2.8) | Absent from tree; explicitly scoped as GPT-2 prerequisite in `archive/docs/proposals/gh-ocannl-377.md` Phase 1 | **(a)** — tracked by #377 |
 | 13 | AdamW (lerp moments, decoupled decay) (§2.9) | `lib/train.ml` has only `sgd_one`; AdamW is the head of the open optimizer task chain; `%cd` inline-declaration style of `sgd_one` extends directly | **(a)** — open task; design notes §4 |
 | 14 | FP32 master weights + `init_from_master` + saved RNG state (§2.9) | Mixed-precision-optimizer-states task (open chain); per-tensor precision plumbing exists (`Ops`, tensor-level prec args); persistence has the checkpoint side | **(a)** — open task; design notes §4 |
 | 15 | Stochastic rounding via counter-based RNG (§2.9) | Stochastic-rounding task (open chain); OCANNL's Threefry4x32 (`Ops.Threefry4x32_light`, `uniform_at` counter-based API) is a *better* fit than SquirrelNoise5; needs a rounding primitive in `ops.ml` + backend builtins | **(a)** — open task; design notes §4 |
@@ -445,7 +445,7 @@ open tasks' proposals:
    multi-accumulator loops**: online softmax (max and rescaled sum together),
    layernorm's mean+var pair, and the fused classifier's loss+dlogits pass all
    want ≥2 reductions sharing one traversal. OCANNL lowers each assignment to
-   its own loop nest (`docs/proposals/gh-ocannl-134.md` is the shared-loop
+   its own loop nest (`archive/docs/proposals/gh-ocannl-134.md` is the shared-loop
    seam; memory: high-level never shares for-loops). This is the same gap
    Mirage's for-loop `Accum`s highlight (`docs/research/superoptimizers.md`
    §4.3). It is *the* structural prerequisite for llm.c-class normalization
@@ -545,7 +545,7 @@ same way cc does, and expose it to the autotune Retype-Vectorized menu action
 
 Adopt llm.c's `fused_classifier` contract (`llmc/fused_classifier.cuh`) at the
 OCANNL level: a `Nn_blocks.cross_entropy_loss` helper (absorbing
-`docs/in-progress/cross-entropy-loss.md`, which has no GH issue yet) written
+`archive/docs/proposals/cross-entropy-loss.md`, which has no GH issue yet) written
 so that (i) the softmax-probabilities intermediate stays `Virtual`, (ii) the
 backward produces `p - onehot(target)` directly against logits, and (iii)
 kernel fission keeps max-reduce, sum-reduce, loss, and dlogits in as few
@@ -625,15 +625,15 @@ la llm.c is an acceptable phase-2 if the per-row loop is insufficient.
 
 ## 9. Cross-references
 
-- `docs/proposals/gh-ocannl-253.md` — the task proposal this note discharges.
-- `docs/proposals/gh-ocannl-412.md` (tiling), `gh-ocannl-164.md` (SIMD/AVX),
+- `archive/docs/proposals/gh-ocannl-253.md` — the task proposal this note discharges.
+- `archive/docs/proposals/gh-ocannl-412.md` (tiling), `gh-ocannl-164.md` (SIMD/AVX),
   `docs/research/megakernel-deep-dive.md` (#318),
-  `docs/proposals/schedule-ir-optops.md` — the landed/ongoing performance arcs
+  `docs/design/schedule-ir-optops.md` — the landed/ongoing performance arcs
   the proposal predicted; verdicts above assume their current state, not their
   proposal-time state.
-- `docs/proposals/gh-ocannl-377.md` — GPT-2 inference pipeline (driver
+- `archive/docs/proposals/gh-ocannl-377.md` — GPT-2 inference pipeline (driver
   workload; owns GELU and weight conversion).
-- `docs/in-progress/cross-entropy-loss.md` — absorbed by draft issue B3.
+- `archive/docs/proposals/cross-entropy-loss.md` — absorbed by draft issue B3.
 - `docs/research/lean-attention-feasibility.md` — flash/lean attention as
   schedule search, the (c)-verdict counterpart of llm.c's cuDNN path.
 - `docs/research/superoptimizers.md` — §4.3 multi-accumulator observation

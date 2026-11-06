@@ -1,7 +1,7 @@
 (** {1 Process-independent schedule identities and the schedule disk cache}
 
-    Support for persisting and replaying {!Schedule.schedule} values (docs/proposals: the autotune
-    companion of schedule-ir-optops.md). Schedules embed {!Indexing.symbol}s and {!Tnode.t}s whose
+    Support for persisting and replaying {!Schedule.schedule} values (the autotune companion of
+    docs/design/schedule-ir-optops.md). Schedules embed {!Indexing.symbol}s and {!Tnode.t}s whose
     identities are process-local (global counters), so a schedule value is only meaningful against
     the one lowering it was built for — and every backend [compile] lowers afresh. This module gives
     both a {e canonical}, structural identity:

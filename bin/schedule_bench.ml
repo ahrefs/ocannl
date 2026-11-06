@@ -1,4 +1,4 @@
-(* Matmul schedule benchmark (docs/proposals/schedule-ir-optops.md, phases S1-S3; gh-ocannl-412
+(* Matmul schedule benchmark (docs/design/schedule-ir-optops.md, phases S1-S3; gh-ocannl-412
    acceptance): times the naive 1x1-launch kernel against three hand-written schedules on the
    configured backend --
 

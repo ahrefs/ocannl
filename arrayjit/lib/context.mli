@@ -202,7 +202,7 @@ val compile :
     {!Ir.Assignments.get_name_exn}, which raises if the comp contains no block comment.
     [lowered_transform] rewrites the optimized lowered code before backend compilation — the seam
     for schedule transforms and for hand-annotating hardware axis types in tests
-    (docs/proposals/axis-types-for-loops.md). It returns the routine's kernel segments, so a
+    (docs/design/axis-types-for-loops.md). It returns the routine's kernel segments, so a
     whole-routine transform returns a singleton ([fun o -> [ f o ]]) and a transform that splits the
     routine into several kernels (fission) returns one element per segment; the segments run
     back-to-back on the routine's stream with device-side events at the boundaries, like
@@ -951,7 +951,7 @@ val adopt_ancestor : t -> ancestor:t -> unit
 
 val placements : t -> Ir.Tnode.Placements.t
 (** The context's compilation lineage's memory-mode resolution
-    (docs/proposals/context-scoped-memory-modes.md): which nodes this lineage decided to inline
+    (docs/design/context-scoped-memory-modes.md): which nodes this lineage decided to inline
     ([Virtual]), keep as routine-scoped scratch ([Local]), or give a device buffer ([On_device]).
     Reads are side-effect free; chiefly for tests and diagnostics. *)
 

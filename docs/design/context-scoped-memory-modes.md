@@ -184,7 +184,7 @@ compiles honor the stronger intent.
 ## Relations
 
 [schedule-ir-optops](schedule-ir-optops.md) (§7 search needs hermetic sibling compiles),
-[gh-ocannl-261](gh-ocannl-261.md) (autotuning consumer),
+[gh-ocannl-261](../../archive/docs/proposals/gh-ocannl-261.md) (autotuning consumer),
 [memory-mode-streamlined; Local contract] (the 2026-07-03 lattice this splits),
 [interval-analysis-scalar-t](interval-analysis-scalar-t.md) (the bounds-settlement
 precedent for lineage-scoped monotonic facts),

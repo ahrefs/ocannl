@@ -1,6 +1,6 @@
 # Efficiency lessons from ggml — research notes
 
-Deliverable for [gh-ocannl-163](../proposals/gh-ocannl-163.md)
+Deliverable for [gh-ocannl-163](../../archive/docs/proposals/gh-ocannl-163.md)
 ([ahrefs/ocannl#163](https://github.com/ahrefs/ocannl/issues/163)): what OCANNL can
 learn from [ggml](https://github.com/ggml-org/ggml) for CPU efficiency, converted
 into per-technique verdicts and follow-up drafts.
@@ -22,7 +22,7 @@ the loader under `src/`. All ggml claims cite file + function/struct names at th
 commit. OCANNL surfaces were verified at HEAD `605d565a` of this repository; all
 cited OCaml symbols were grepped at that commit.
 
-**Quantization constraint.** [gh-ocannl-137](../proposals/gh-ocannl-137.md)
+**Quantization constraint.** [gh-ocannl-137](../../archive/docs/proposals/gh-ocannl-137.md)
 (quantization) was **closed NOT-PLANNED** (disposition memo recommendation (A):
 nothing on the roadmap before v1.1 needs quantization). Quantization verdicts below
 are therefore `future` / `not applicable` / `file follow-up issue` — never "covered
@@ -30,7 +30,7 @@ by 137".
 
 **Driver workloads.** The framing target is CPU inference for the just-promoted
 driver tasks: GPT-2 Small ([#377](https://github.com/ahrefs/ocannl/issues/377),
-proposal [gh-ocannl-377](../proposals/gh-ocannl-377.md)) and a Gemma-class
+proposal [gh-ocannl-377](../../archive/docs/proposals/gh-ocannl-377.md)) and a Gemma-class
 follow-up (RoPE landed via #398; #377's issue title is "inference for one of:
 Llama, GPT-2, Gemma"). This is exactly ggml's home turf — single-machine CPU
 transformer inference — which is why the comparison is worth doing now.
@@ -78,9 +78,9 @@ Still-open gaps confirmed at `605d565a` (these are where several verdicts land):
   Int32, Uint32, Int64, Uint64, Uint4x32, Half, Bfloat16, Fp8, Single, Double` —
   no signed int8, no 4-bit weight type.
 - **GPT-2 driver still missing** GeLU, the weight-conversion script, and the
-  inference executable ([gh-ocannl-377](../proposals/gh-ocannl-377.md) status).
+  inference executable ([gh-ocannl-377](../../archive/docs/proposals/gh-ocannl-377.md) status).
 
-[gh-ocannl-164](../proposals/gh-ocannl-164.md) (AVX/AVX2) is the load-bearing
+[gh-ocannl-164](../design/gh-ocannl-164.md) (AVX/AVX2) is the load-bearing
 "already covered" target for intrinsics-level items: its CPU-improvements bundle
 (restrict, alignment, pragmas, flags/macros) landed 2026-07-05/06 per its status
 updates, with explicit vector-extension emission noted as landed there too.
@@ -306,7 +306,7 @@ compiled separately from prefill (a #377 pipeline decision).
 `arrayjit/lib/schedule.ml` (`Tensorize`, `Tile_mma`), `arrayjit/lib/autotune.ml`
 (`sketch_candidates` — currently rank-2 v1), `arrayjit/lib/c_syntax.ml` (a
 `Tile_mma` rendering path that keeps the RM×RN accumulator tile in vector
-variables; the `docs/proposals/tensorize-mma.md` seam). The ggml numbers to steal:
+variables; the `docs/design/tensorize-mma.md` seam). The ggml numbers to steal:
 micro-tile sized to fill the register file (RM×RN + RM + RN vectors ≤ 32/16
 registers); accumulate-in-registers across the whole k-loop; peel edges into
 separate kernels.

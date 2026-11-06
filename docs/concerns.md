@@ -206,7 +206,7 @@ Shared helpers that keep each test from restating what another part of the syste
 
 ### Measurement
 
-Performance claims rest on checked-in [reports](../benchmarks/) and record their nulls. Many
+Performance claims rest on checked-in [reports](../benchmarks) and record their nulls. Many
 comparisons are owed but need an exclusive window on a quiet machine.
 
 - Protocol: timing modes, drift control, exclusivity

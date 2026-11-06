@@ -1,5 +1,5 @@
-(* Interval analysis, Phase B v1 (docs/proposals/interval-analysis-scalar-t.md): executed parity of
-   a kernel whose gather guard folded away against [Tnode] bounds (binding constraint 10).
+(* Interval analysis, Phase B v1 (docs/design/interval-analysis-scalar-t.md): executed parity of a
+   kernel whose gather guard folded away against [Tnode] bounds (binding constraint 10).
 
    The gh-343 embedding gather [emb[b,o] = C[o, ids[b]]] carries an in-range guard on the dynamic
    index. When [ids] is a host-initialized, never-device-written uint32 tensor, its upload scans and
