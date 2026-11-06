@@ -625,13 +625,9 @@ let prefill tn =
   Option.map (prefill_value prec 0) ~f:(fun _ ->
       Array.init (Tn.num_elems tn) ~f:(fun i -> Option.value_exn (prefill_value prec i)))
 
-(** The materialized nodes [routine] writes before reading them, if at all: its [outputs] less its
-    required [inputs]. A node with registered host initialization data leaves [inputs] whether or
-    not it is read first ([Context.routine]'s [inputs]), so it is not known to be written first and
-    is left out. *)
-let written_before_read (routine : Context.routine) =
-  Set.filter (Set.diff routine.Context.outputs routine.Context.inputs) ~f:(fun tn ->
-      not (Ir.Host_inits.mem tn))
+(** The materialized nodes [routine] writes before reading them, if at all: its
+    [Context.written_first], the set the [debug_fill_fresh_outputs] key fills too. *)
+let written_before_read (routine : Context.routine) = routine.Context.written_first
 
 (** [run_linked (ctx, routine) ~seed] drives the executed leg of an ALREADY-LINKED pair: uploads
     [seed], runs, and returns the context the values can be read from. It is the half of {!run} that
@@ -652,9 +648,11 @@ let written_before_read (routine : Context.routine) =
     prefilled again. Cells no writer covers are not written over by the routine, so a test reading
     them seeds them itself, with {!blank}, rather than relying on either fill.
 
-    [~fresh_zero] opts nodes out, each with the reason the test relies on the fresh zero buffer; it
-    raises on an empty reason, and on a node the routine does not write before reading, which a
-    stale opt-out would otherwise pass through silently. *)
+    [~fresh_zero] opts nodes out, each with the reason the test relies on starting from zero, which
+    it uploads for a node [ctx] holds no value for: under [debug_fill_fresh_outputs]
+    (gh-ocannl-1873) the buffer would otherwise not start from zero. It raises on an empty reason,
+    and on a node the routine does not write before reading, which a stale opt-out would otherwise
+    pass through silently. *)
 let run_linked ?(fresh_zero : (Tn.t * string) list = []) (ctx, routine)
     ~(seed : (Tn.t * float array) list) =
   let candidates = written_before_read routine in
@@ -671,7 +669,11 @@ let run_linked ?(fresh_zero : (Tn.t * string) list = []) (ctx, routine)
   let named tns tn = List.exists tns ~f:(fun (tn', _) -> Tn.equal tn tn') in
   let ctx =
     Set.fold candidates ~init:ctx ~f:(fun ctx tn ->
-        if named seed tn || named fresh_zero tn || Context.is_initialized ctx tn then ctx
+        if named seed tn || Context.is_initialized ctx tn then ctx
+        else if named fresh_zero tn then
+          (* Stated, not inherited: [debug_fill_fresh_outputs] may be on, and a run starts this
+             buffer from its pattern unless something wrote it. *)
+          Context.set_values ctx tn (Array.create ~len:(Tn.num_elems tn) 0.)
         else match prefill tn with Some vs -> Context.set_values ctx tn vs | None -> ctx)
   in
   let ctx = List.fold seed ~init:ctx ~f:(fun ctx (tn, vs) -> Context.set_values ctx tn vs) in

@@ -524,6 +524,15 @@
 # switch, on across the test suite: off by default, no effect on behavior beyond the check.
 #debug_check_forward_root_owners=false
 
+# gh-ocannl-1873: Context.run starts every buffer a routine writes before reading it, and that
+# nothing has written yet, from NaN (for an integer storage, the Ops.debug_fill_value byte pattern)
+# rather than allocation's zero, so a missing write -- a dropped zero, a cell no writer covers --
+# shows in the results instead of computing the same values from a fresh zero. On in test/config, so
+# every executed test discriminates against a missing write. A correct routine's results do not
+# change, and neither does any emitted code. Reaches Context.run only, and not a liveness-aliased
+# buffer or a host-initialized node. A debugging/soak switch: off by default.
+#debug_fill_fresh_outputs=false
+
 # How the C backend renders eligible outermost Grid loops (pool-backed Grid rendering,
 # docs/proposals/gh-ocannl-164.md): "dispatch" uses libdispatch's dispatch_apply (macOS),
 # "openmp" uses `#pragma omp parallel for` (adds -fopenmp to the kernel compile), "none" keeps

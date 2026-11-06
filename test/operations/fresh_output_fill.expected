@@ -1,0 +1,47 @@
+test/config turns the key on, so that every executed test runs under it: true
+a node the routine writes before reading is written first: true
+a node the routine reads is not: true
+the routine's own writes land over the fill: true
+cells no writer covers read back the fill: true
+a seeded node keeps its seed: true
+a second run does not fill over the values the buffer holds: true
+a node an earlier routine wrote keeps what it wrote: true
+a host-initialized node is not written first: true
+a host-initialized node keeps its host values: true
+embedded state read first is no required input: true
+embedded state read first is not written first: true
+embedded state read first starts from zero: true
+a padded node's margin keeps the padding value: true
+a padded node's unwritten interior cell reads the fill: true
+single: the routine's write lands: true
+single: an unwritten cell reads NaN: true
+half: the routine's write lands: true
+half: an unwritten cell reads NaN: true
+bfloat16: the routine's write lands: true
+bfloat16: an unwritten cell reads NaN: true
+fp8: the routine's write lands: true
+fp8: an unwritten cell reads NaN: true
+byte: the routine's write lands: true
+byte: an unwritten cell reads the integer pattern: true
+byte: the pattern is clear of zero: true
+uint16: the routine's write lands: true
+uint16: an unwritten cell reads the integer pattern: true
+uint16: the pattern is clear of zero: true
+int32: the routine's write lands: true
+int32: an unwritten cell reads the integer pattern: true
+int32: the pattern is clear of zero: true
+uint32: the routine's write lands: true
+uint32: an unwritten cell reads the integer pattern: true
+uint32: the pattern is clear of zero: true
+int64: the routine's write lands: true
+int64: an unwritten cell reads the integer pattern: true
+int64: the pattern is clear of zero: true
+uint64: the routine's write lands: true
+uint64: an unwritten cell reads the integer pattern: true
+uint64: the pattern is clear of zero: true
+double: an unwritten cell reads NaN: true
+packed RNG state holds no scalar to fill: true
+with the key off, the same program leaves allocation's zero in the unwritten cells: true
+the operands' products sum exactly in f32: true
+the matmul's output is written first: true
+the default pipeline's matmul from the fill is the closed form: true

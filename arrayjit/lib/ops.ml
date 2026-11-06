@@ -101,6 +101,22 @@ let prec_family = function
 (** Scalar integer arithmetic only; excludes packed [uint4x32] and [Void_prec]. *)
 let is_integer prec = match prec_family prec with Scalar_integer -> true | _ -> false
 
+(** What the [debug_fill_fresh_outputs] key writes into a cell of a fresh output stored at [prec]
+    (gh-ocannl-1873), as the [float] host writers take it: NaN for a float storage, because a read
+    of it survives every later reduction visibly, and for an integer storage, which has no NaN, the
+    alternating byte pattern [0xA5] across its width, rounded to a [float] for the 64-bit ones: far
+    from any index or count a kernel computes, and readable as a pattern in a dump. [None] for the
+    packed RNG state and [Void_prec], which hold no scalar value. *)
+let debug_fill_value = function
+  | Void_prec | Uint4x32_prec _ -> None
+  | Half_prec _ | Bfloat16_prec _ | Fp8_prec _ | Single_prec _ | Double_prec _ -> Some Float.nan
+  | Byte_prec _ -> Some 0xA5p0
+  | Uint16_prec _ -> Some 0xA5A5p0
+  | Int32_prec _ -> Some (-0x5A5A5A5Bp0)
+  | Uint32_prec _ -> Some 0xA5A5A5A5p0
+  | Int64_prec _ -> Some (-0x5A5A5A5A5A5A5A5Bp0)
+  | Uint64_prec _ -> Some 0xA5A5A5A5A5A5A5A5p0
+
 let is_float prec = match prec_family prec with Scalar_float -> true | _ -> false
 
 (** Scalar arithmetic formats, including integer and floating-point formats. *)

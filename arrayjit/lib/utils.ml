@@ -177,6 +177,7 @@ let known_config_keys =
       "debug_check_upload_arenas";
       "debug_check_lane_bounds";
       "debug_check_forward_root_owners";
+      "debug_fill_fresh_outputs";
       "cc_parallel_grid";
       "cc_parallel_chunks";
       "cc_pool_core_class";
@@ -640,6 +641,11 @@ let config_key_classification : (config_key_class * string * string list) list =
         "shape_substitution_cross_check";
         "device_init_deadline";
       ] );
+    ( Execution_neutral,
+      "a host-side write ahead of a run, into buffers a correct routine overwrites before reading \
+       them (gh-ocannl-1873): nothing it emits differs, and a routine's results depend on it only \
+       where the routine is wrong",
+      [ "debug_fill_fresh_outputs" ] );
     ( Execution_neutral,
       "shape-only checking at graph construction (gh-ocannl-1751): a scheme check is rewound and \
        its traces allocate no session id, so the graph, its tensor ids and the code it lowers to \

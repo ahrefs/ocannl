@@ -14,3 +14,5 @@ clean_up_log_files_on_startup=false
 output_debug_files_in_build_directory=false
 # gh-ocannl-1899: suite-wide, a missing owner edge fails its consume_forward_code.
 debug_check_forward_root_owners=true
+# gh-ocannl-1873: suite-wide, a routine's fresh written-first outputs start from NaN.
+debug_fill_fresh_outputs=true

@@ -2775,6 +2775,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1873: the debug_fill_fresh_outputs key, which test/config turns on for every test here.
+
+(test
+ (name fresh_output_fill)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules fresh_output_fill)
+ (libraries base stdio unix ocannl fresh_process arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-878: real-graph maximum-one reachability and executed index-zero-write probe.
 
 (test

@@ -55,12 +55,24 @@ let rec innermost_loop (llc : LL.t) : Idx.symbol option =
   | LL.If { body; _ } -> innermost_loop body
   | _ -> None
 
+(* The nodes a transform took the lowered [Zero_out] of. Nothing in the routine zeroes them now, and
+   the accumulation reads them first, so the run states the zero they start from: allocation's would
+   be an accident, and is not one under [debug_fill_fresh_outputs] (gh-ocannl-1873). *)
+let dropped_zeros = ref []
+
+let state_dropped_zeros ctx =
+  let nodes = !dropped_zeros in
+  dropped_zeros := [];
+  List.fold nodes ~init:ctx ~f:(fun ctx tn ->
+      Context.set_values ctx tn (Array.create ~len:(Tn.num_elems tn) 0.))
+
 (* Replace the lowered serial reduction with a single [Vectorized] accumulation loop over a fresh
    index; the renderer owns the chains. The transform drops the lowered [Zero_out] of the
-   accumulator, so un-mark [zero_initialized_by_code]: allocation then zeroes the buffer, giving the
-   accumulation the same all-zeros starting point as the serial lowering. *)
+   accumulator, so un-mark [zero_initialized_by_code], which no longer holds, and record the node:
+   the run gives the accumulation the same all-zeros starting point as the serial lowering. *)
 let reduce_transform ~n ~body_of (s : Tn.t) (opt : LL.optimized) : LL.optimized =
   (LL.get_node opt.traced_store s).LL.zero_initialized_by_code <- false;
+  dropped_zeros := s :: !dropped_zeros;
   let i = Idx.get_symbol () in
   {
     opt with
@@ -73,7 +85,7 @@ let run ~name ~transform t =
   let ctx, routine =
     Context.compile ~lowered_transform:(fun o -> [ transform o ]) ctx comp Ir.Indexing.Empty
   in
-  let ctx = Context.run ctx routine in
+  let ctx = Context.run (state_dropped_zeros ctx) routine in
   (Context.get_values ctx t.Tensor.value).(0)
 
 let it i = Idx.Iterator i

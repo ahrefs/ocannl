@@ -80,6 +80,13 @@ type routine = private {
           (gh-ocannl-1654), so no other root's write can reach it. *)
   outputs : Set.M(Ir.Tnode).t;
       (** The materialized nodes the routine writes — what {!run} marks initialized. *)
+  written_first : Set.M(Ir.Tnode).t;
+      (** The {!outputs} the routine writes before reading them, if at all: those outside the
+          backend's raw read set, so an embedded node the routine reads first is not among them, for
+          all that {!inputs} leaves it out, and with no registered host initialization data, whose
+          nodes hold a value the routine did not put there. Decided before scheduling: a transform
+          that drops a zero leaves the node here, and that is the failure the
+          [debug_fill_fresh_outputs] configuration key exists to expose. *)
   routine_id : int;
       (** A unique integer identifying the routine within its root context's lifetime. *)
   execution_deps : Set.M(Int).t;
@@ -362,6 +369,11 @@ val run : ?timing:bool -> t -> routine -> t
     binds, not merely the node in some context -- unless allocation-time zero is declared its
     correct value ({!Ir.Tnode.mark_zero_valid}; every gradient is marked at creation, being an
     accumulator), so a forgotten data input is refused rather than read as zeros (gh-ocannl-1462).
+
+    With the [debug_fill_fresh_outputs] configuration key (gh-ocannl-1873, on in the test suite's
+    configuration), a {!field-written_first} node whose buffer nothing has written yet starts from
+    {!Ir.Ops.debug_fill_value} instead of allocation's zero, so a write the routine owed and did not
+    do shows in its results. Such a node is no more written, to the checks above, than it was.
 
     Before any of that, the routine's {!field-requires} (gh-ocannl-1724): each backprop fragment its
     gradient writes flow into must be owned by a routine of its lineage, or nothing would ever
