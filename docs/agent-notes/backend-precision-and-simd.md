@@ -1140,6 +1140,14 @@ files.
   f16 consumer before this, forward and backward), and a kept scope used to declare its local at
   `compute_prec`. The simplifier cannot ask which applies: numerics are never in the lowered code
   (gh-ocannl-568), so the scope stays on every backend and the renderer decides what it costs.
+  The value renders at that storage precision too, as a materialized copy's does
+  (`renders_at_store_prec`), and not at `compute_prec` first (gh-ocannl-1956): through f32, an f64
+  source just off an f32 tie rounded twice, so `1.125 + 2^-40` read 1 virtual and 1.25 materialized
+  in fp8, the double rounding gh-ocannl-648 removed from `double_to_fp8`. Only an f64 source can
+  show it, and only where `compute_prec` widens a cast's precision, which among the backends with
+  an f64 is cc: CUDA and HIP compute at storage precision and agreed before the fix. The placements
+  agreeing is not the backends agreeing: f64 to half or bf16 goes through f32 on cc and HIP and is
+  one step on CUDA, so `f64_master` claims those as parity, and only fp8's value.
   The rule is the read, not `Operation.cast`: `Precision_policy` stores a model's batch slice f16
   over f32 data, a virtual node of the same shape, so it rounds too. That is why a recipe run moves
   even with materialized twins, and why such a comparison needs the slice materialized as well:

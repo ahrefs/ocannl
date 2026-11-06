@@ -142,8 +142,10 @@ files.
   every iteration and would localize and narrow once, on cc's default too. CSE runs first, so a scope with a `Get_local` reader stays, which `collapsible`
   never had to ask. A draw stays: `mentions_rng_conversion` stops at a scope.
   **Its reach is narrow.** What it recovers on cc's default is gh-ocannl-1788's arithmetic scopes.
-  It does NOT recover the tiles gh-ocannl-1866 cost: a cast on a wide-compute backend has `R` f16 and
-  `V` f32 and must stay, and `serial_kernel_of` works on the lowered scope anyway. It does nothing for
+  It does NOT recover the tiles gh-ocannl-1866 cost: a cast on a wide-compute backend has `R` and
+  `V` f16 and `S` f32 wherever arithmetic reads it, so it must stay, and `serial_kernel_of` works on
+  the lowered scope anyway; only at the root of a store of its own precision does it collapse, into
+  the copy a materialized twin is. It does nothing for
   gh-ocannl-1884's integer scopes, where `compute_prec` is the identity. A cast that does collapse
   (`narrow_compute_f32=false`, a GPU) loses its local and still gets no SIMD, since `vec_expr`
   refuses a load at another width. `Vectorized` comes from retypes, so the default schedule gains

@@ -106,11 +106,11 @@ type shape = {
 }
 
 (* Whether the render-time collapse should take a kept scope: the three precisions of [T_R v =
-   conv(V->R)(e@V); ... conv(R->S)(v)] agree. *)
+   conv(V->R)(e@V); ... conv(R->S)(v)] agree. A cast's [R] and [V] are its node's precision,
+   anything else's are the compute precision. *)
 let collapses shape =
-  let value_prec = compute shape.scope_prec and slot_prec = compute shape.slot in
-  let scope_prec = if shape.cast then shape.scope_prec else value_prec in
-  Ops.equal_prec scope_prec value_prec && Ops.equal_prec scope_prec slot_prec
+  let scope_prec = if shape.cast then shape.scope_prec else compute shape.scope_prec in
+  Ops.equal_prec scope_prec (compute shape.slot)
 
 (* [out[i] = x[i] + scope(value)], with [x] at the slot's precision and [y] at the other one.
    [`Oracle] runs it under {!kept_scope}, [`Scheduled] through [Schedule.apply]'s trailing simplify,
@@ -469,8 +469,8 @@ let double_at_store_root ~name ~scope =
   in
   (o, [ (x_tn, Array.create ~len:n (1.125 +. Float.ldexp 1. (-40))) ], out)
 
-(* The same at a cast's own precision, where the store's conversion is what the scope would have
-   done but for its value rendering at [comp_prec] first: [R] is the slot's, [V] is not. *)
+(* The same at a cast's own precision: the three precisions are the store's on every backend, so the
+   scope goes, and the kept form has to give the copy's one step (gh-ocannl-1956). *)
 let cast_at_store_root ~name ~scope =
   let s, i, tns = statement_nodes ~name [ f64; fp8 ] in
   let x_tn, out = match tns with [ a; b ] -> (a, b) | _ -> assert false in
@@ -649,11 +649,7 @@ let () =
               ~on:backend_name ()
           in
           must_agree ~leg:f64_leg "root_double" ~policy double_at_store_root;
-          (* Only this file's kept form is at stake here: a materialized copy converts in one step
-             (gh-ocannl-1956). *)
-          must_agree ~leg:f64_leg "root_cast" ~policy
-            ~collapses:(collapses { cast_into_own_prec with scope_prec = fp8; slot = fp8 })
-            cast_at_store_root));
+          must_agree ~leg:f64_leg "root_cast" ~policy ~collapses:true cast_at_store_root));
   Ir.Numerics.set_policy
     { saved with Ir.Numerics.narrow_compute_f32 = false; bf16_arithmetic = Bf16_wide };
   Verdict.case "a bfloat16 accumulator wider than the arithmetic" (fun () ->
