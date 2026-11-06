@@ -1300,7 +1300,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   run's own wrapper living on after its verdict is not mistaken for a launch to come. A `-c`
   string is never parsed (staging#1678 spent rounds 2-7 on a shell-text reader, one corner per
   round, before it was cut back to argv): a launch a shell's own control flow still holds is
-  seen once its own process runs it. The
+  seen once its own process runs it (leg 105 pins it: `last` is A while B is still the shell's
+  text, and B is followed once its process runs). A relative script word is resolved where the
+  command runs: an `env -C DIR` or `--chdir=DIR` prefix carries that directory through the peel
+  (gh-ocannl-1913; before, a wrapper outside the worktree carrying `-- env -C /repo tools/test-run.sh
+  run` was missed and one in it moving to a sibling over-read). A launch of the worktree under
+  another OCANNL_TOOL_TEST_RUNS is no launch under this root when its argv says so (an `env`
+  assignment, or `-u` or `-i` before the script word: the default root; a relative root is the
+  worktree's, where the script cds first) or its environment can be read (/proc/PID/environ;
+  a Mac shows no other process its environment, so one exported to it there is still the loud
+  over-read: a wait that times out, then `unpublished:`). The
   one fact stored is the sighting (a `queued-after` mark in the run `last` named then, or
   `queued-<key>` before the first run), since a launch that left without publishing leaves
   nothing else; a mark is a file's existence per run, so no late reader can overwrite a newer
@@ -1308,7 +1317,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   does not settle gh-ocannl-607: the gap is before any publication, so deriving `last` from the
   run directories would leave it exactly as it was. `list` lists this worktree's runs (by `wt`,
   `--all` for the state root's): the newest entry of a shared root is as likely a sibling
-  checkout's, and an `ls -td` there read one. Legs 99-100 of `tools/test-test-run.sh`.
+  checkout's, and an `ls -td` there read one. Legs 99-100 and 105 of `tools/test-test-run-last.sh`.
 - Every liveness question in that script — per pid and per process GROUP — reads process STATE and
   not only the signal, because `kill -0` succeeds on a ZOMBIE exactly as on a live process, and an
   identity token does not rescue the check either: a zombie leader still prints its recorded
