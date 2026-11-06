@@ -1448,6 +1448,23 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   pair the old commit with the new tree's clean status. An edit made after the launch — during a
   fleet slot's wait, or while dune runs — is in neither. Legs 59–63 of `tools/test-test-run.sh` pin
   clean, dirty, an inherited `GIT_DIR`, the absent cases and that mid-record commit.
+- **A checkout with unmerged paths is refused: `UNMERGED REFUSED`, exit 2, nothing ran**
+  (gh-ocannl-1991). Mid-merge or mid-rebase, HEAD is one side of an operation still in progress, so
+  a verdict's `source:` commit would name a tree that is not what ran — and `dune build @check`
+  passing is no guard when the conflict sits in a file no rule compiles: a Metal run launched
+  mid-rebase that way, its only conflict in a Markdown file (gh-ocannl-1954's hand-back). `run`,
+  `start`, `fresh` and `repeat` refuse first of all, before the alias check asks dune anything,
+  naming each path as the launch record's own line (`UU docs/notes.md`); `plan` says run would
+  refuse. The refusal READS the `dirty` record above rather than asking git again, so it and the
+  digest's `source:` line state one launch-time fact, and it has the record's scope (none outside
+  Git or below a checkout's top level). Only unmerged INDEX entries count: a conflict resolved and
+  staged runs, mid-merge, as any dirty tree, which is what the conflict drill under *Promotion and
+  formatting* needs. `OCANNL_TOOL_TEST_UNMERGED=allow` runs the tree as it is, for the one drill
+  that wants it — regenerating a golden that is itself the conflict, which `tools/promote.sh` then
+  promotes and deliberately leaves unstaged — and that run's `source:` line counts the unmerged
+  paths (`+ 2 uncommitted paths, 1 of them unmerged`), so it cannot be quoted as a commit's. Leg
+  104 of `tools/test-test-run.sh`, which fails in five checks against the script before this
+  (`--subject`).
 - **Whether a run left anything to promote is dune's answer, recorded at the run's end**
   (gh-ocannl-1087): the run's last phase writes `promotions` beside `head`/`dirty` (what
   `dune promotion list` prints, one source path per line, empty when there is nothing) before the
