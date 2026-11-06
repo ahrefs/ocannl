@@ -138,3 +138,25 @@ pipeline deferral-only: the target stayed virtual: true
 pipeline consumer on a w2-less chain: rejected at link (spliced input demanded): true
 pipeline incremental arc: compute leaf, defer, consume — matches the reference: true
 pipeline write-mentioned spliced leaf: demanded despite the embedded-write mention: true
+cycle at the cap: both members charged the 8 inputs: true
+cycle at the cap: both stay virtual: true
+cycle at the cap: the consumer is charged the shared set, and lands: true
+cycle at the cap: executes the reference: true
+cycle one above the cap: both members charged the 9 inputs: true
+cycle one above the cap: both land on it: true
+cycle one above the cap: the landing resets the consumer: true
+cycle one above the cap: executes the reference: true
+cycle, overlapping inputs: charged 7, not 10: true
+cycle, overlapping inputs: executes the reference: true
+cycle: the union crosses a member's setters: true
+cycle: the crossing union lands both: true
+cycle, across setters: executes the reference: true
+cycle, branch select: all arms' inputs are charged: true
+cycle, branch select: executes the reference: true
+cycle, blend select: all arms' inputs are charged: true
+cycle, blend select: executes the reference: true
+cycle with a materialized member: the traversal stops there: true
+cycle with a materialized member: executes the reference: true
+cycle with an exempt member: it is charged the set and does not land: true
+cycle with an exempt member: the other member lands: true
+cycle with an exempt member: executes the reference: true

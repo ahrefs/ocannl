@@ -944,7 +944,7 @@ type traced_array = {
           candidate's private store copy); multiplies into the proxy [fa_recompute_cost] — the
           fallback where the cost model's count is not exact (gh-ocannl-637) — so the search and the
           memory-budget planner see the true cost of re-inlining a node the fanin cap materialized.
-      *)
+          The members of a cycle of nodes headed for inlining share one count (gh-ocannl-1962). *)
 }
 [@@deriving sexp_of]
 
@@ -10533,103 +10533,145 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      renders it (gh-ocannl-1775, {!resolve_charge} in [max_expansion] below): the union of its arms
      where it blends; where it short-circuits, the arm whose reads are the most AFTER transitive
      expansion (gh-ocannl-1874) -- an arm loading one virtual node can replay more than an arm
-     loading three materialized ones. *)
+     loading three materialized ones.
+
+     A cycle of nodes still headed for inlining (gh-ocannl-1962) has no bottom to start from: a node
+     with several setters can read, in one of them, a node reading the cells another of its setters
+     wrote ([a] over its first half, [b] from it, [a]'s second half from [b]), every read covered.
+     So the graph is condensed first and walked dependencies first, and a strongly connected
+     component is charged as one: its members share the union of what all their charges load from
+     outside it, across setters and across select arms, because both "one setter per read" and "one
+     arm per evaluation" hold per cell, and a chain through a cycle evaluates several cells. The set
+     is finished before any member lands, each member lands on its own eligibility, and nothing
+     reads the traversal: a component's set is a commutative union over facts of the program and
+     finished dependencies. *)
   if virtualize_settings.max_inline_fanin >= 0 then
     (* The reads a stored computation replays when [inline_computation] inlines it: the one read
        collector ({!read_charge_of_proc}, gh-ocannl-1451) that [trace_node_facts] uses for this
        routine's own setters. Used for a dependency this routine only READS whose definition an
        earlier routine in the lineage committed [Virtual] — its traced entry here has no setters,
-       but its computation will be replayed all the same. *)
+       but its computation will be replayed all the same. A node committed [Virtual] by an earlier
+       routine: its stored computation's reads stand in for setters this routine does not see (one
+       stored component ≈ one setter, so the same per-setter maximum applies). Computed even when
+       this routine sets the node too — a read replays the stored definition AND the local updates,
+       and the local update's excluded self-read must not hide the prefix — so the inherited maximum
+       unions with the local one. Only prior routines' components exist here: this routine's are
+       stored later, by the virtualizer this pass feeds. *)
+    let inherited_reads tn =
+      if not (Tn.Placements.known_virtual plc tn) then []
+      else
+        match Hashtbl.find optim_ctx.computations tn with
+        | Some comps -> List.map comps ~f:(fun (_, code) -> read_charge_of_proc ~self:tn code)
+        | None -> []
+    in
+    let setter_reads tn =
+      match Hashtbl.find traced_store tn with Some traced -> traced.setter_reads | None -> []
+    in
+    (* Every node a charge can load, whichever way its selects go. *)
+    let rec all_loads acc { loads; selects } =
+      List.fold selects ~init:(Set.union acc loads) ~f:(fun acc { arms; _ } ->
+          List.fold arms ~init:acc ~f:all_loads)
+    in
+    let charge_loads tn =
+      List.fold (setter_reads tn @ inherited_reads tn) ~init:(Set.empty (module Tnode)) ~f:all_loads
+    in
+    (* A dependency already materialized contributes itself, and is not entered: expanding it could
+       not change its decision (the cap only materializes), and the setter-reads graph of a whole
+       step is cyclic through exactly such nodes — a parameter reads its gradient, which reads the
+       activations that read the parameter (gh-ocannl-1777). The node's own set is still computed,
+       as a root below. An undecided dependency expands as though it will be virtual, though
+       inlining legality is only settled later ([check_and_store_virtual], inside the virtualizer
+       this pass feeds) — an over-approximation erring toward materialization, the safe direction
+       shared with the multiplicity bound; the opposite default would let a chain of undecided links
+       through the cap on every first compile. A consumer spuriously materialized this way stays an
+       [`Inline] flip candidate, the search's channel for undoing it. *)
+    let entered p = not (Tn.Placements.known_non_virtual plc p) in
+    (* Tarjan over the entered graph, as this pass found it: nothing lands until it is done. The
+       components come out dependencies first. *)
+    let components =
+      let index = Hashtbl.create (module Tnode) in
+      let on_stack = Hash_set.create (module Tnode) in
+      let stack = ref [] and finished = ref [] in
+      let rec visit tn =
+        let i = Hashtbl.length index in
+        Hashtbl.set index ~key:tn ~data:i;
+        Hash_set.add on_stack tn;
+        stack := tn :: !stack;
+        let low =
+          Set.fold (charge_loads tn) ~init:i ~f:(fun low p ->
+              if not (entered p) then low
+              else
+                match Hashtbl.find index p with
+                | None -> Int.min low (visit p)
+                | Some j -> if Hash_set.mem on_stack p then Int.min low j else low)
+        in
+        (if low = i then
+           let rec pop members =
+             match !stack with
+             | [] -> assert false
+             | top :: rest ->
+                 stack := rest;
+                 Hash_set.remove on_stack top;
+                 if Tn.equal top tn then top :: members else pop (top :: members)
+           in
+           finished := pop [] :: !finished);
+        low
+      in
+      (* In program order, never the table's, whose iteration follows the nodes' uids: no decision
+         reads the order, but the placements land in it. *)
+      Hashtbl.keys traced_store
+      |> List.sort ~compare:(compare_program_order (Lazy.force program_position))
+      |> List.iter ~f:(fun tn -> if not (Hashtbl.mem index tn) then ignore (visit tn : int));
+      List.rev !finished
+    in
     let memo = Hashtbl.create (module Tnode) in
-    let rec fanin tn : Set.M(Tnode).t =
-      match Hashtbl.find memo tn with
-      | Some s -> s
-      | None ->
-          (* Cycle guard: a node re-entered during its own expansion counts as one contributor, as
-             if materialized. A cycle through a node ALREADY materialized never reaches it: [expand]
-             does not enter such a node (below) -- which covers a cyclically-read node with an
-             uncovered read, placed [On_device] by the coverage rule above. What is left is a cycle
-             through nodes still headed for inlining, every read covered: a node with several
-             setters, one of them reading a node that reads another's cells ([a] over its first
-             half, [b] from it, [a]'s second half from [b]). The set memoized for a node inside such
-             a cycle was computed under the placeholder of the node the traversal entered the cycle
-             at, so it depends on where the traversal starts: the top-level iteration below is in
-             program order for that reason (gh-ocannl-1877). *)
-          Hashtbl.set memo ~key:tn ~data:(Set.singleton (module Tnode) tn);
-          let expand acc p =
-            (* A dependency already materialized contributes itself, and is not entered: expanding
-               it could not change its decision (the cap only materializes), and the setter-reads
-               graph of a whole step is cyclic through exactly such nodes — a parameter reads its
-               gradient, which reads the activations that read the parameter. Entering them let the
-               guard above cut those cycles wherever the traversal happened to start, and the sets
-               memoized under a cut node's placeholder depended on the [traced_store] iteration
-               order, hence on node uids, hence on how many nodes the session minted before
-               (gh-ocannl-1777). The node's own set is still computed, from the top-level iteration
-               below. Otherwise recurse first: the dependency's own decision lands before its
-               placement is consulted, making the result traversal-order-independent. An undecided
-               dependency expands as though it will be virtual, though inlining legality is only
-               settled later ([check_and_store_virtual], inside the virtualizer this pass feeds) —
-               an over-approximation erring toward materialization, the safe direction shared with
-               the multiplicity bound; the opposite default would let a chain of undecided links
-               through the cap on every first compile. A consumer spuriously materialized this way
-               stays an [`Inline] flip candidate, the search's channel for undoing it. *)
-            if Tn.Placements.known_non_virtual plc p then Set.add acc p
-            else
-              let s_p = fanin p in
-              if Tn.Placements.known_non_virtual plc p then Set.add acc p else Set.union acc s_p
-          in
-          (* Per-setter maximum over the per-setter charges (see [setter_reads]), each resolved
-             under the backend's reading of a select with every load expanded first, so a
-             short-circuiting select is charged by its arms' expansions (gh-ocannl-1874). *)
-          let max_expansion charges =
-            List.fold charges
-              ~init:(Set.empty (module Tnode))
-              ~f:(fun best charge ->
-                let s = resolve_charge ~blends:blends_value_selects ~expand charge in
-                if Set.length s > Set.length best then s else best)
-          in
-          (* A node committed [Virtual] by an earlier routine in the lineage: its stored
-             computation's reads stand in for setters this routine does not see (one stored
-             component ≈ one setter, so the same per-setter maximum applies). Computed even when
-             this routine sets the node too — a read replays the stored definition AND the local
-             updates, and the local update's excluded self-read must not hide the prefix — so the
-             inherited maximum unions with the local one. Only prior routines' components exist
-             here: this routine's are stored later, by the virtualizer this pass feeds. *)
-          let inherited_reads () =
-            if not (Tn.Placements.known_virtual plc tn) then []
-            else
-              match Hashtbl.find optim_ctx.computations tn with
-              | Some comps -> List.map comps ~f:(fun (_, code) -> read_charge_of_proc ~self:tn code)
-              | None -> []
-          in
+    let expand ~inside acc p =
+      if not (entered p) then Set.add acc p
+      else if inside p then acc
+      else Set.union acc (Hashtbl.find_exn memo p)
+    in
+    (* Per-setter maximum over the per-setter charges (see [setter_reads]), each resolved under the
+       backend's reading of a select with every load expanded first, so a short-circuiting select is
+       charged by its arms' expansions (gh-ocannl-1874). *)
+    let max_expansion charges =
+      List.fold charges
+        ~init:(Set.empty (module Tnode))
+        ~f:(fun best charge ->
           let s =
+            resolve_charge ~blends:blends_value_selects
+              ~expand:(expand ~inside:(fun _ -> false))
+              charge
+          in
+          if Set.length s > Set.length best then s else best)
+    in
+    List.iter components ~f:(fun members ->
+        let s =
+          match members with
+          | [ tn ]
+            when Option.is_none (Hashtbl.find traced_store tn) && List.is_empty (inherited_reads tn)
+            ->
+              Set.singleton (module Tnode) tn
+          | [ tn ] ->
+              Set.union (max_expansion (setter_reads tn)) (max_expansion (inherited_reads tn))
+          | _ ->
+              let members_set = Set.of_list (module Tnode) members in
+              List.fold members
+                ~init:(Set.empty (module Tnode))
+                ~f:(fun acc tn ->
+                  Set.fold (charge_loads tn) ~init:acc ~f:(expand ~inside:(Set.mem members_set)))
+        in
+        List.iter members ~f:(fun tn -> Hashtbl.set memo ~key:tn ~data:s);
+        List.iter members ~f:(fun tn ->
             match Hashtbl.find traced_store tn with
-            | None -> (
-                match inherited_reads () with
-                | [] -> Set.singleton (module Tnode) tn
-                | charges -> max_expansion charges)
+            | None -> ()
             | Some traced ->
-                let s =
-                  Set.union (max_expansion traced.setter_reads) (max_expansion (inherited_reads ()))
-                in
                 traced.inline_fanin <- max 1 (Set.length s);
                 if
                   Set.length s > virtualize_settings.max_inline_fanin
                   && traced.has_assignment && traced.read_by_other && undecided tn
                   && (not (cap_exempt traced))
                   && not (Hashtbl.mem footprint_scoped tn)
-                then land_on_cap traced Inline_fanin_cap;
-                s
-          in
-          Hashtbl.set memo ~key:tn ~data:s;
-          s
-    in
-    (* In program order, never the table's: its iteration order follows the nodes' uids, hence how
-       many nodes the session minted before, and a cycle is cut where the traversal enters it
-       (gh-ocannl-1877; see the cycle guard above). *)
-    Hashtbl.keys traced_store
-    |> List.sort ~compare:(compare_program_order (Lazy.force program_position))
-    |> List.iter ~f:(fun tn -> ignore (fanin tn : Set.M(Tnode).t))
+                then land_on_cap traced Inline_fanin_cap))
 
 type recompute_pricer_fn =
   static_indices:Indexing.static_symbol list ->

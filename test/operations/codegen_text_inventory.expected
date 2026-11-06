@@ -820,6 +820,7 @@ test/operations/default_prefill.ml [through Ll_test.link; run by @test/operation
 test/operations/division_special_values.ml [through Ll_test.execute; run by @test/operations/runtest-division_special_values, @test/operations/runtest-division_special_values-reproducible]
 test/operations/dynamic_axis_coverage.ml [through Ll_test.execute; run by @test/operations/runtest-dynamic_axis_coverage]
 test/operations/fixed_name_temporaries.ml [through Ll_test.execute; through Ll_test.execute_with_census; through Ll_test.run_routine; run by @test/operations/runtest-fixed_name_temporaries-logged, @test/operations/runtest-fixed_name_temporaries-plain]
+test/operations/flip_order_minting.ml [through Ll_test.execute; run by @test/operations/runtest-flip_order_minting]
 test/operations/float_literal_forms.ml [through Ll_test.execute; run by @test/operations/runtest-float_literal_forms]
 test/operations/footprint_materialization.ml [through Ll_test.execute; run by @test/operations/runtest-footprint_materialization]
 test/operations/fp_licence_values.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-fp_licence_values]
@@ -936,6 +937,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-dynamic_axis_coverage
 @test/operations/runtest-fixed_name_temporaries-logged
 @test/operations/runtest-fixed_name_temporaries-plain
+@test/operations/runtest-flip_order_minting
 @test/operations/runtest-float_literal_forms
 @test/operations/runtest-footprint_materialization
 @test/operations/runtest-fp_licence_values
