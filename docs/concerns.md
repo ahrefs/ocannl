@@ -38,8 +38,8 @@ Reference: [syntax_extensions.md](syntax_extensions.md).
 ### Lineage and lifetime
 
 Routine composition is checked per lineage, and a virtual node reads by recomputation. What remains
-sits at the edges of those rules: who owns gradient zeroing once a consumer is reclaimed, and what a
-host write means for a node the next forward pass recomputes. Reference:
+sits at the edges of those rules: when a reclaimed consumer's gradient zeroing comes back is the GC's
+to time, and what a host write means for a node the next forward pass recomputes. Reference:
 [tensors_and_contexts.md](tensors_and_contexts.md).
 
 - Ownership across contexts: fragments, gradient zeroing, reclaimed consumers

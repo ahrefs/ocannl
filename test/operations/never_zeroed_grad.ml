@@ -26,18 +26,21 @@ let gh = "gh-ocannl-1781"
 let param prefix = TDSL.param ~values:[| 1.; 2.; 3. |] (prefix ^ "_w") ~output_dims:[ 3 ] ()
 
 (* A first consumer of [w], built and evaluated forward-only: it carries [w]'s zeroing, so a later
-   loss over [w] accumulates into [w.grad] without zeroing it. *)
+   loss over [w] accumulates into [w.grad] without zeroing it. The case holds it past that loss's
+   construction: a reclaimed consumer would give the zeroing back (gh-ocannl-1804). *)
 let forward_only_consumer ctx w =
   let%op c = w *. 2. in
-  Train.forward_once ctx c
+  (Train.forward_once ctx c, c)
 
+let hold (c : Tensor.t) = ignore (Stdlib.Sys.opaque_identity c : Tensor.t)
 let names_grad msg w = LC.has msg (Ir.Tnode.label_name (LC.grad_of w))
 
 let () =
   case "never zeroed anywhere in the lineage" (fun () ->
       let w = param "nz" in
-      let ctx = forward_only_consumer (Context.auto ()) w in
+      let ctx, c = forward_only_consumer (Context.auto ()) w in
       let%op l = w *. w in
+      hold c;
       let update = Train.grad_update l in
       p "the update accumulates into w's gradient without zeroing it"
         (Set.mem update.accumulates (LC.grad_of w) && not (Set.mem update.zeroes (LC.grad_of w)));
@@ -72,8 +75,9 @@ let () =
           LC.exact "a second such cycle: the same" (Context.get_values ctx (LC.grad_of w)) two_w);
   case "a zeroing routine compiled and not run" (fun () ->
       let w = param "nr" in
-      let ctx = forward_only_consumer (Context.auto ()) w in
+      let ctx, c = forward_only_consumer (Context.auto ()) w in
       let%op l = w *. w in
+      hold c;
       let ctx, zero = compile ctx (Train.zero_params_grads ~params:(one w) l) in
       let ctx, step = compile ctx (Train.grad_update l) in
       let ctx = run_all ctx [ zero; step; zero; step ] in

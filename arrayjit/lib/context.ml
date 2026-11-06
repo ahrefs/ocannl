@@ -1067,7 +1067,9 @@ let check_requirements ctx routine =
    this computation found the operand a root: an earlier-constructed consumer had taken its backprop
    and zeroing (gh-ocannl-1744), and -- as no routine of the lineage zeroes it -- that consumer is
    not compiled here. The lineage cannot tell which consumer, nor whether it was evaluated
-   forward-only or compiled elsewhere, so the message names the typical case as typical. *)
+   forward-only or compiled elsewhere, so the message names the typical case as typical. A consumer
+   reclaimed with its backprop unconsumed gives the reset back (gh-ocannl-1804), so a computation
+   built after that lands here only if the GC had not got to it yet: the message says so. *)
 let lacks_node_error ctx (comp : Asgns.comp) tn =
   let base = "The linked context lacks node " ^ Tn.debug_name tn in
   let fragment = (tn, Asgns.Bprop) in
@@ -1112,10 +1114,14 @@ let lacks_node_error ctx (comp : Asgns.comp) tn =
           no routine of its lineage zeroes it. Its reset is carried by an earlier-constructed \
           consumer of its tensor, beside that consumer's backprop (gh-ocannl-1744), and that \
           consumer is not compiled in this lineage -- typically a parameter's first consumer that \
-          was evaluated forward-only (Train.forward_once, Train.forward), whether or not it has \
-          since been dropped, or one compiled outside this lineage.%s Compile a zeroing of the \
-          gradient first -- Train.zero_params_grads ~params for a parameter's -- then compile this \
-          routine from the context that compile returned, and run the zeroing before each step."
+          was evaluated forward-only (Train.forward_once, Train.forward), or one compiled outside \
+          this lineage.%s Compile a zeroing of the gradient first -- Train.zero_params_grads \
+          ~params for a parameter's -- then compile this routine from the context that compile \
+          returned, and run the zeroing before each step. A consumer dropped with its backprop \
+          unconsumed gives the reset back once the GC reclaims it, to tensors constructed after \
+          that (gh-ocannl-1804), so until then this outcome depends on GC timing: rebuilding this \
+          computation after Gc.full_major () settles it. Losses summed over one reset spell \
+          Train.grad_update ~accum_steps:1, which holds whether or not the reset came back."
          base (Tn.debug_name tn) outside)
   else Utils.User_error base
 

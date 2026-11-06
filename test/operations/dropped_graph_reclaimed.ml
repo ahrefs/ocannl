@@ -3,7 +3,8 @@
    root -- a loss built over it later trains through it (gh-ocannl-1724's leg B) -- but only while
    the caller can still name it: once dropped, the GC reclaims it, the closure checkpoint and
    explicit checkpoints included. Since gh-ocannl-1796 the forward-root map is weak too: a graph
-   dropped unevaluated is reclaimed, and so is a root only the last closure captured.
+   dropped unevaluated is reclaimed, and so is a root only the last closure captured. A reclaimed
+   consumer gives back only the leaves it absorbed (gh-ocannl-1804, [reclaimed_consumer_zeroing]).
    [consume_forward_code]'s conflicting-roots refusal reads the owner cells, not the map, so it does
    not depend on GC timing: a held owner and a dropped one are both refused, and the cell verdict
    equals the old live-root scan wherever every root is held.
@@ -98,14 +99,13 @@ let[@inline never] trunk_owner_dropped () =
   (LC.grad_of h, l2, ctx, witness l1)
 
 (* The consumer [u] embeds the child [c]'s forward and backprop; [u] is evaluated and dropped, [c]
-   is kept. *)
+   and the leaf [w] are kept. *)
 let[@inline never] consumer_dropped () =
   let w = leaf "dg_cn_w" in
   let%op c = w *. w in
   let%op u = c *. 2. in
   let ctx = Train.forward_once (Context.auto ()) u in
-  ignore (Stdlib.Sys.opaque_identity ctx : Context.t);
-  (c, witness u)
+  (w, c, ctx, witness u)
 
 (* [t] is built, the parameters' initialization closes its shapes while it is still an unconsumed
    forward root, and only then is its forward run and [t] dropped: the last closure's checkpoint
@@ -272,9 +272,10 @@ let () =
       Gc_witness.settle ();
       Tensor.rewind ck;
       p "rewind: an external handout stays excluded" (not (Tensor.is_bprop_root t)));
-  case "a reclaimed consumer gives no ownership back" (fun () ->
-      let c, u = consumer_dropped () in
+  case "a reclaimed consumer gives its leaves back, and nothing else" (fun () ->
+      let w, c, ctx, u = consumer_dropped () in
       p "consumer: the dropped consumer is reclaimed" (Gc_witness.reclaimed u);
+      p "consumer: the leaf below its child is a backprop root again" (Tensor.is_bprop_root w);
       p "consumer: its embedded child is neither root"
         ((not (Tensor.is_fwd_root c)) && not (Tensor.is_bprop_root c));
       let refused =
@@ -282,7 +283,12 @@ let () =
         | _ -> false
         | exception Tensor.Session_error (msg, _) -> LC.has msg "is not a forward root"
       in
-      p "consumer: consuming the child's forward code is still refused" refused);
+      p "consumer: consuming the child's forward code is still refused" refused;
+      let%op l = w *. w in
+      let ctx = Train.update_once ctx l in
+      LC.exact "consumer: the next loss over the leaf zeroes its gradient: w.grad = 2 w"
+        (Context.get_values ctx (LC.grad_of w))
+        [| 2.; 4.; 6. |]);
   case "the last closure's checkpoint does not hold a forward root it captured" (fun () ->
       let w = closed_before_evaluation () in
       p "closure: the dropped root is reclaimed before any next closure" (Gc_witness.reclaimed w));

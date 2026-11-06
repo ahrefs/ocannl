@@ -108,7 +108,14 @@ val is_bprop_root : t -> bool
     {!Train.forward_once}), and which the caller then dropped, is reclaimed by the GC. A loss built
     over a tensor the caller still holds embeds its backprop as before. A dropped root no longer
     vetoes {!consume_backprop_code}; a dependence on its code is refused by the compilation
-    lineage's requirement check ({!Context.run}). *)
+    lineage's requirement check ({!Context.run}).
+
+    A reclaimed root, its backprop never consumed, can never run, so the leaves (terms and
+    parameters) it absorbed, transitively, are backprop roots again (gh-ocannl-1804): the next
+    consumer of such a leaf carries its gradient's zeroing. This reader, [Tensor.op] over such a
+    leaf and every closure see it. Computed tensors the root absorbed are not given back.
+    Reclamation is the GC's to time: a consumer dropped but not yet collected still holds the leaf,
+    and [Gc.full_major ()] settles it. *)
 
 val take_forward_code : t -> comp
 (** The unchecked half of {!consume_forward_code}, for a tensor the caller has established is a
