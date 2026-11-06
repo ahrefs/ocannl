@@ -3301,52 +3301,58 @@ let output_to_build_file ~fname =
 
 exception User_error of string
 
+(* Whether the lines reached the debug trace: the block below is compiled out unless the build set
+   [OCANNL_LOG_LEVEL_UTILS], and only its body sets [reached] (gh-ocannl-1999). Local to the call:
+   the worker domains of [multidev_cc] deliver their routines' logs concurrently. *)
 let%diagn_sexp log_trace_tree _logs =
-  [%log_block
-    "trace tree";
-    let split_with_seps sep s =
-      let tokens = Re.split_full sep s in
-      List.map tokens ~f:(function `Text tok -> tok | `Delim sep -> Re.Group.get sep 0)
-    in
-    let header_sep =
-      let open Re in
-      compile (seq [ str " "; opt any; str "="; str " " ])
-    in
-    let sep s = String.concat ~sep:"\n" @@ String.split ~on:'$' s in
-    let rec loop = function
-      | [] -> []
-      | line :: more when String.is_empty line -> loop more
-      | "COMMENT: end" :: more -> more
-      | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
-          let more =
-            [%log_entry
-              sep @@ String.chop_prefix_exn ~prefix:"COMMENT: " comment;
-              loop more]
-          in
-          loop more
-      | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
-          (let source = sep @@ String.chop_prefix_exn ~prefix:"# " source in
-           match split_with_seps header_sep @@ sep trace with
-           | [] | [ "" ] -> [%log source]
-           | header1 :: assign1 :: header2 :: body ->
-               let header = String.concat [ header1; assign1; header2 ] in
-               let body = String.concat body in
-               let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
-               [%log (_message : Sexp.t)]
-           | _ -> [%log source, trace]);
-          loop more
-      | _line :: more ->
-          [%log sep _line];
-          loop more
-    in
-    let rec loop_logs logs =
-      let output = loop logs in
-      if not (List.is_empty output) then
-        [%log_block
-          "TRAILING LOGS:";
-          loop_logs output]
-    in
-    loop_logs _logs]
+  let reached = ref false in
+  ([%log_block
+     "trace tree";
+     reached := true;
+     let split_with_seps sep s =
+       let tokens = Re.split_full sep s in
+       List.map tokens ~f:(function `Text tok -> tok | `Delim sep -> Re.Group.get sep 0)
+     in
+     let header_sep =
+       let open Re in
+       compile (seq [ str " "; opt any; str "="; str " " ])
+     in
+     let sep s = String.concat ~sep:"\n" @@ String.split ~on:'$' s in
+     let rec loop = function
+       | [] -> []
+       | line :: more when String.is_empty line -> loop more
+       | "COMMENT: end" :: more -> more
+       | comment :: more when String.is_prefix comment ~prefix:"COMMENT: " ->
+           let more =
+             [%log_entry
+               sep @@ String.chop_prefix_exn ~prefix:"COMMENT: " comment;
+               loop more]
+           in
+           loop more
+       | source :: trace :: more when String.is_prefix source ~prefix:"# " ->
+           (let source = sep @@ String.chop_prefix_exn ~prefix:"# " source in
+            match split_with_seps header_sep @@ sep trace with
+            | [] | [ "" ] -> [%log source]
+            | header1 :: assign1 :: header2 :: body ->
+                let header = String.concat [ header1; assign1; header2 ] in
+                let body = String.concat body in
+                let _message = Sexp.(List [ Atom header; Atom source; Atom body ]) in
+                [%log (_message : Sexp.t)]
+            | _ -> [%log source, trace]);
+           loop more
+       | _line :: more ->
+           [%log sep _line];
+           loop more
+     in
+     let rec loop_logs logs =
+       let output = loop logs in
+       if not (List.is_empty output) then
+         [%log_block
+           "TRAILING LOGS:";
+           loop_logs output]
+     in
+     loop_logs _logs]);
+  !reached
 
 include Datatypes
 module Cpu_topology = Cpu_topology
@@ -3542,7 +3548,9 @@ let capture_stdout_logs arg =
     empties the device's printf buffer, and every line of this launch is in the stream file when it
     returns. Inside a caller's window it only runs [launch]: that window collects the lines, as
     before. With the key off the lines are relogged through the debug trace, which needs the
-    caller's window, as before; [never_capture_stdout] still turns every capture off. *)
+    caller's window, as before -- and a default build compiles that trace out, so there the lines
+    are dropped with {!log_debug_routine_logs}'s one notice (gh-ocannl-1999); [never_capture_stdout]
+    still turns every capture off. *)
 let routine_log_window ~drain launch =
   if
     Atomic.get stdout_capture_depth > 0
@@ -3553,12 +3561,30 @@ let routine_log_window ~drain launch =
         launch ();
         drain ())
 
+(* Whether this process has said that it drops routine log lines (gh-ocannl-1999). *)
+let routine_logs_dropped_noticed = Atomic.make false
+
+let routine_logs_dropped_notice =
+  "OCANNL notice: routine log lines are being dropped. debug_log_from_routines is on, but \
+   debug_log_to_stream_files is off and this build's debug trace is compiled out \
+   (OCANNL_LOG_LEVEL_UTILS was not set at build time). Set debug_log_to_stream_files=true to read \
+   them in the log files directory. The kernels are still compiled for logging: serial and \
+   unvectorized, formatting every line. This notice is printed once."
+
 let log_debug_routine_logs ~log_contents ~stream_name =
   if get_global_flag ~default:false ~arg_name:"debug_log_to_stream_files" then
     let stream_file_name = diagn_log_file @@ stream_name ^ ".log" in
     Stdio.Out_channel.with_file stream_file_name ~append:true ~f:(fun oc ->
         List.iter log_contents ~f:(fun line -> Stdio.Out_channel.output_line oc line))
-  else log_trace_tree log_contents
+  else
+    let traced = log_trace_tree log_contents in
+    (* A default build compiles the trace out, so the lines end here, unread: say so, once, rather
+       than leave the user looking for them (gh-ocannl-1999). *)
+    if
+      (not traced)
+      && (not (List.is_empty log_contents))
+      && Atomic.compare_and_set routine_logs_dropped_noticed false true
+    then Stdio.eprintf "%s\n%!" routine_logs_dropped_notice
 
 let log_debug_routine_file ~log_file_name ~stream_name =
   let log_contents = Stdio.In_channel.read_lines log_file_name in

@@ -580,8 +580,13 @@ val capture_stdout_logs : (unit -> 'a) -> 'a
 val routine_log_window : drain:(unit -> unit) -> (unit -> unit) -> unit
 (** Runs a logged GPU [launch] (then [drain]) in a capture window when stream-file logs need one. *)
 
+val routine_logs_dropped_notice : string
+(** What {!log_debug_routine_logs} prints on stderr, once per process, when it drops lines. *)
+
 val log_debug_routine_logs : log_contents:string List.t -> stream_name:String.t -> unit
-(** Appends routine log lines to the stream's log file, or to the debug trace when that is off. *)
+(** Appends routine log lines to the stream's log file, or to the debug trace when that is off. A
+    build without [OCANNL_LOG_LEVEL_UTILS] compiles that trace out: the lines are then dropped, and
+    the first such call that had lines prints {!routine_logs_dropped_notice}. *)
 
 val log_debug_routine_file : log_file_name:string -> stream_name:String.t -> unit
 (** {!log_debug_routine_logs} of a file's lines, then removes the file. *)
