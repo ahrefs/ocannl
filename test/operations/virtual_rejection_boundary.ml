@@ -1451,6 +1451,95 @@ let row_flattened_read_written_cells () =
   flattened_read_partial_write ~label:"flattened_read_written_cells" ~read_from:2 ~verdict:Accepted
     ~expected:[| 1.; 2. |] ~entry:(fun _ -> [])
 
+(* gh-ocannl-1896: single-component pass-1 and single-term structural bindings carry no range guard,
+   and the write-index ranges those templates trust are sound only because a read beyond a
+   single-component producer's loops never reaches the inliner: the coverage rule gives the node a
+   buffer holding its entry values first. The shapes the rule has to stop, each with the contained
+   read beside it to show the shape does inline where the rule holds. [~span] is how many cells the
+   read covers; the producer writes the first two. *)
+let uncovered_read ~label ~dims ~span ~write_idx ~read_idx =
+  let x = mk ~dims:[| dims |] (label ^ "_x") and out = mk ~dims:[| span |] (label ^ "_out") in
+  materialize out;
+  let s = sym () and t = sym () in
+  let llc =
+    seq
+      (loop_n s 2 (set x [| write_idx s |] (tick s)))
+      (loop_n t span (set out [| iter t |] (add (get x [| read_idx t |]) (tick t))))
+  in
+  (x, out, llc)
+
+let uncovered_entries ~dims = Array.init dims ~f:(fun i -> 101. +. Float.of_int i)
+
+let row_uncovered_iterator ~span () =
+  let label = Printf.sprintf "uncovered_iterator_%d" span in
+  let x, out, llc = uncovered_read ~label ~dims:4 ~span ~write_idx:iter ~read_idx:iter in
+  let written t = if t < 2 then Float.of_int (t + 1) else 101. +. Float.of_int t in
+  row ~label ~llc ~cand:x ~out
+    ~seed:(if span > 2 then [ (x, uncovered_entries ~dims:4) ] else [])
+    ~expected:(Array.init span ~f:(fun t -> written t +. Float.of_int (t + 1)))
+    ~verdict:(if span > 2 then Rejected (Coverage, Ir.Tnode.Read_before_write) else Accepted)
+
+let row_uncovered_single_term ~span () =
+  let label = Printf.sprintf "uncovered_single_term_%d" span in
+  let doubled s = aff [ (2, s) ] 0 in
+  let x, out, llc = uncovered_read ~label ~dims:6 ~span ~write_idx:doubled ~read_idx:doubled in
+  let written t = if t < 2 then Float.of_int (t + 1) else 101. +. Float.of_int (2 * t) in
+  row ~label ~llc ~cand:x ~out
+    ~seed:(if span > 2 then [ (x, uncovered_entries ~dims:6) ] else [])
+    ~expected:(Array.init span ~f:(fun t -> written t +. Float.of_int (t + 1)))
+    ~verdict:(if span > 2 then Rejected (Coverage, Ir.Tnode.Read_before_write) else Accepted)
+
+(* The nested template: the wide read of [x] sits in the stored computation of an intermediate [y],
+   replayed at [y]'s own read, so the coverage rule has to judge [x] by a read that reaches no read
+   site of its own. *)
+let row_uncovered_nested_template ~span () =
+  let label = Printf.sprintf "uncovered_nested_template_%d" span in
+  let x = mk ~dims:[| 4 |] (label ^ "_x")
+  and y = mk ~dims:[| 4 |] (label ^ "_y")
+  and out = mk ~dims:[| span |] (label ^ "_out") in
+  materialize out;
+  let s = sym () and t = sym () and u = sym () in
+  let llc =
+    seq
+      (loop_n s 2 (set x [| iter s |] (tick s)))
+      (seq
+         (loop_n t span (set y [| iter t |] (add (get x [| iter t |]) (tick t))))
+         (loop_n u span (set out [| iter u |] (add (get y [| iter u |]) (tick u)))))
+  in
+  let written t = if t < 2 then Float.of_int (t + 1) else 101. +. Float.of_int t in
+  row ~label ~llc ~cand:x ~out
+    ~seed:(if span > 2 then [ (x, uncovered_entries ~dims:4) ] else [])
+    ~expected:(Array.init span ~f:(fun t -> written t +. (2. *. Float.of_int (t + 1))))
+    ~verdict:(if span > 2 then Rejected (Coverage, Ir.Tnode.Read_before_write) else Accepted)
+
+(* A pair normalized through a trailing [Sub_axis] comes back in the node's axis order, which is
+   what gives the unit-extent test the coordinate it asks about (gh-ocannl-1964, found by
+   [virtual_inliner_oracle]). The write [x[0; Sub_axis]] is cell 0 of dims [1; 2]; read at [x[0; u]]
+   its normalized position meets [u] on the coordinate of extent 2, where a [Fixed_idx 0] takes a
+   guard. Written back in reverse, that position stood on the axis of extent 1, read as the same
+   cell, and the replay wrote cell 1 too. *)
+let row_trailing_sub_axis_write () =
+  let label = "trailing_sub_axis_write" in
+  let x = mk ~dims:[| 1; 2 |] (label ^ "_x") and out = mk ~dims:[| 2 |] (label ^ "_out") in
+  materialize out;
+  let u = sym () in
+  p
+    (label ^ ": the common layout keeps the node's axis order")
+    (match
+       Ir.Affine.common_layout ~dims:[| 1; 2 |] [| fixed 0; Idx.Sub_axis |] [| fixed 0; iter u |]
+     with
+    | Some (write, read) ->
+        Array.equal Idx.equal_axis_index write [| fixed 0; fixed 0 |]
+        && Array.equal Idx.equal_axis_index read [| fixed 0; iter u |]
+    | None -> false);
+  let llc =
+    seq (zero x)
+      (seq
+         (set x [| fixed 0; Idx.Sub_axis |] (c 7.))
+         (loop_n u 2 (set out [| iter u |] (add (get x [| fixed 0; iter u |]) (tick u)))))
+  in
+  row ~label ~llc ~cand:x ~out ~seed:[] ~expected:[| 8.; 2. |] ~verdict:Accepted
+
 (* A partial frame: on dims [2; 3; 2] the producer flattens only the first two axes, [x[Sub_axis; f;
    g]], and the read is per axis. The common frame coarsens just those two -- the read becomes
    [x[Sub_axis; 3a + b; c]] -- and keeps the last axis its own coordinate, so pass 1 binds [f := 3a
@@ -1694,6 +1783,13 @@ let () =
   case "row_flattened_read_zero_structural" row_flattened_read_zero_structural;
   case "row_flattened_read_past_partial" row_flattened_read_past_partial;
   case "row_flattened_read_written_cells" row_flattened_read_written_cells;
+  case "row_uncovered_iterator ~span:3" (row_uncovered_iterator ~span:3);
+  case "row_uncovered_iterator ~span:2" (row_uncovered_iterator ~span:2);
+  case "row_uncovered_single_term ~span:3" (row_uncovered_single_term ~span:3);
+  case "row_uncovered_single_term ~span:2" (row_uncovered_single_term ~span:2);
+  case "row_uncovered_nested_template ~span:3" (row_uncovered_nested_template ~span:3);
+  case "row_uncovered_nested_template ~span:2" (row_uncovered_nested_template ~span:2);
+  case "row_trailing_sub_axis_write" row_trailing_sub_axis_write;
   case "row_partial_frame" row_partial_frame;
   case "row_trailing_sub_axis_read" row_trailing_sub_axis_read;
   case "row_hoisted_local" row_hoisted_local;

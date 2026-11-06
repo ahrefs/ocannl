@@ -204,6 +204,7 @@ test/operations/stored_template_elision.ml -- 13 142 154 155 156
 test/operations/virtual_chain_fanin.ml -- 13 41
 test/operations/virtual_diagonal.ml -- 13 52
 test/operations/virtual_guarded_setter.ml -- 142
+test/operations/virtual_inliner_oracle.ml -- 13 157 158
 test/operations/virtual_rejection_boundary.expected -- 1 4 7 9 10 13 19 36 51 142 147 148 157 158
 test/operations/virtual_rejection_boundary.ml -- 1 4 5 7 8 9 10 11 12 13 14 17 19 36 39 40 41 51 52 140 141 142 143 144 145 146 147 148 149 154 155 156 157 158
 test/operations/virtual_uncaptured_loop.expected -- 147

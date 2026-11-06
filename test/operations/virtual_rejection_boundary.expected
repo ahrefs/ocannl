@@ -216,6 +216,28 @@ flattened_read_past_partial: the two placements agree: true
 flattened_read_written_cells: inlined: true
 flattened_read_written_cells: executed values are the reference: true
 flattened_read_written_cells: the two placements agree: true
+uncovered_iterator_3: rejected by the coverage rule as 36:read-before-write: true
+uncovered_iterator_3: executed values are the reference: true
+uncovered_iterator_3: the two placements agree: true
+uncovered_iterator_2: inlined: true
+uncovered_iterator_2: executed values are the reference: true
+uncovered_iterator_2: the two placements agree: true
+uncovered_single_term_3: rejected by the coverage rule as 36:read-before-write: true
+uncovered_single_term_3: executed values are the reference: true
+uncovered_single_term_3: the two placements agree: true
+uncovered_single_term_2: inlined: true
+uncovered_single_term_2: executed values are the reference: true
+uncovered_single_term_2: the two placements agree: true
+uncovered_nested_template_3: rejected by the coverage rule as 36:read-before-write: true
+uncovered_nested_template_3: executed values are the reference: true
+uncovered_nested_template_3: the two placements agree: true
+uncovered_nested_template_2: inlined: true
+uncovered_nested_template_2: executed values are the reference: true
+uncovered_nested_template_2: the two placements agree: true
+trailing_sub_axis_write: the common layout keeps the node's axis order: true
+trailing_sub_axis_write: inlined: true
+trailing_sub_axis_write: executed values are the reference: true
+trailing_sub_axis_write: the two placements agree: true
 partial_frame: inlined: true
 partial_frame: executed values are the reference: true
 partial_frame: the two placements agree: true

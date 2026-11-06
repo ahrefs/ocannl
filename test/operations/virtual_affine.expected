@@ -78,6 +78,16 @@ zeroed-read-inside: virtual and materialized arms agree: true
 zeroed-synthetic: a whole-node write prices no guard: true
 zeroed-synthetic: a partial write prices one: true
 zeroed-synthetic: a flattened whole-node write prices no guard: true
+zeroed-static-inside producer virtual: true
+zeroed-static-inside producer inlined (no array reads survive): true
+zeroed-static-inside reads under a guard: an unknown range is not containment: true
+zeroed-static-inside: the cell holds its write or the zero: true
+zeroed-static-inside: virtual and materialized arms agree: true
+zeroed-static-past producer virtual: true
+zeroed-static-past producer inlined (no array reads survive): true
+zeroed-static-past reads under a guard: an unknown range is not containment: true
+zeroed-static-past: the cell holds its write or the zero: true
+zeroed-static-past: virtual and materialized arms agree: true
 unit-solve(plain) producer virtual: true
 unit-solve(plain) producer inlined (no array reads survive): true
 unit-solve(plain) producer setter dropped: true

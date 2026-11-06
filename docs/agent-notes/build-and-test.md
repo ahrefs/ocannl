@@ -2599,6 +2599,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   array. Neither constructor reaches `optimize` through the ordinary pipeline (lowering emits
   neither, and the rewrite runs after both virtualization arms), so hand-built IR is the only way
   to put one in front of the analyses; `gather_table_placement.ml` is what that looks like.
+- `Ll_test.interpret` evaluates a `Low_level.t` in-process, for a test running far more programs
+  than it could compile: a compiled routine costs on the order of 100 ms, an `optimize` tens of
+  microseconds (gh-ocannl-1964). It raises `Interp_fault` on what a compiled run would swallow: an
+  access outside the node, a local read before any assignment, an unwritten cell of a node with no
+  entries. Values are f64, so a program keeps them exact in its storage precision. It runs `Where`
+  lazily, so a scope in a discarded arm does not run here though codegen hoists it. It is a test
+  instrument: a test leaning on it pins it to a backend and to a reference outside it, as
+  `virtual_inliner_oracle`'s Tier B and replay do.
 - An executed reference must DISCRIMINATE, not merely run: give every producer a value that varies
   with every symbol of its iteration and stays clear of the init/sentinel value (`1 + i`,
   `1 + 10*outer + inner` — the `tick`/`tag` helpers in `test/operations/virtual_diagonal.ml`). A

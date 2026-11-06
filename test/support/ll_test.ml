@@ -793,6 +793,141 @@ let close ?(tol = 1e-5) values expected =
     length — a mismatched [~read] is a test bug, not a failed assertion. *)
 let same ?tol got expected = List.for_all2_exn got expected ~f:(close ?tol)
 
+(** {1 Interpreting}
+
+    An evaluator of hand-built and optimized {!Ir.Low_level.t}, for a test that has to run far more
+    programs than it could compile: a compiled routine costs on the order of a hundred milliseconds
+    and an {!optimize} tens of microseconds (gh-ocannl-1964). It is a test instrument, never the
+    system under test, so a test leaning on it holds it to a real backend on a sample of what it
+    evaluates, and to a reference that does not go through it
+    ([test/operations/virtual_inliner_oracle.ml] does both).
+
+    Values are f64: nothing here narrows to a node's storage precision, so a program it evaluates
+    keeps its values exact in that precision. Every {!Ir.Ops} operation goes through
+    [Ops.interpret_*]; only [Where] is evaluated here, lazily, condition first, because a guarded
+    replay's discarded arm can index outside the node ([Low_level.instantiate_computations]'s
+    comment on the then-arm). What it does not model is that codegen hoists a [Local_scope] body
+    ahead of its enclosing statement, so a scope in a discarded arm runs on a backend and not here;
+    scope purity makes that unobservable in value, not in the addresses it touches.
+
+    What a compiled run would answer with a garbage value, an undeclared identifier or a silent read
+    of a neighbouring cell, this raises {!Interp_fault} on: an access outside the node, a read of a
+    local with no assignment, a read of a cell of a node given no entries and not yet written, and a
+    constructor it does not evaluate. *)
+
+exception Interp_fault of string
+
+let interp_fault fmt = Printf.ksprintf (fun msg -> raise (Interp_fault msg)) fmt
+
+(** [interp_memory entries] is a store holding a copy of each array of [entries], the cells each
+    node starts from. A node it does not name appears at its first write, with every other cell
+    unwritten. *)
+let interp_memory (entries : (Tn.t * float array) list) =
+  let memory = Hashtbl.create (module Tn) in
+  List.iter entries ~f:(fun (tn, cells) -> Hashtbl.set memory ~key:tn ~data:(Array.copy cells));
+  memory
+
+(** [interpret memory llc] runs [llc] over [memory], in place. [~launch] gives each launch parameter
+    the code mentions its value, as {!run}'s does. A second call on the same [memory] sees what the
+    first left in the nodes, and none of its locals: a routine's locals are its own. An unwritten
+    cell is NaN, so a program computing a NaN reads as an unwritten cell; the callers' values stay
+    finite by construction. *)
+let interpret ?(launch = []) memory (llc : LL.t) =
+  let cells tn =
+    Hashtbl.find_or_add memory tn ~default:(fun () -> Array.create ~len:(Tn.num_elems tn) Float.nan)
+  in
+  let locals = Hashtbl.create (module LL.Scope_id) in
+  let env_of launch =
+    List.fold launch
+      ~init:(Map.empty (module Idx.Symbol))
+      ~f:(fun env ((sym : Idx.static_symbol), v) -> Map.set env ~key:sym.Idx.static_symbol ~data:v)
+  in
+  let index env (idx : Idx.axis_index) =
+    let symbol s =
+      match Map.find env s with
+      | Some v -> v
+      | None -> interp_fault "symbol %s is bound by no loop" (Idx.symbol_ident s)
+    in
+    match idx with
+    | Idx.Fixed_idx i -> i
+    | Idx.Iterator s -> symbol s
+    | Idx.Affine { symbols; offset } ->
+        List.fold symbols ~init:offset ~f:(fun acc (coeff, s) -> acc + (coeff * symbol s))
+    | Idx.Sub_axis -> 0
+    | Idx.Concat _ -> interp_fault "a Concat index"
+  in
+  let offset env tn idcs =
+    let dims = Lazy.force tn.Tn.dims in
+    if Array.length idcs <> Array.length dims then
+      interp_fault "%d indices of the %d-axis node %s" (Array.length idcs) (Array.length dims)
+        (Tn.label_name tn);
+    let off, _ =
+      Array.foldi idcs
+        ~init:(0, Tn.num_elems tn)
+        ~f:(fun ax (off, stride) idx ->
+          let stride = stride / dims.(ax) in
+          (off + (index env idx * stride), stride))
+    in
+    if off < 0 || off >= Tn.num_elems tn then
+      interp_fault "offset %d outside the %d cells of %s" off (Tn.num_elems tn) (Tn.label_name tn);
+    off
+  in
+  let local id =
+    match Hashtbl.find locals id with
+    | Some v -> v
+    | None -> interp_fault "a read of a local of %s with no assignment" (Tn.label_name id.LL.tn)
+  in
+  let rec stmt env : LL.t -> unit = function
+    | LL.Noop | LL.Comment _ -> ()
+    | LL.Seq (a, b) ->
+        stmt env a;
+        stmt env b
+    | LL.For_loop { index; from_; to_; body; axis = _ } ->
+        for i = from_ to to_ do
+          stmt (Map.set env ~key:index ~data:i) body
+        done
+    | LL.Zero_out tn ->
+        let c = cells tn in
+        Array.fill c ~pos:0 ~len:(Array.length c) 0.
+    | LL.Set { tn; idcs; llsc; debug = _ } ->
+        let v = scalar env llsc in
+        (cells tn).(offset env tn idcs) <- v
+    | LL.Set_local (id, llsc) -> Hashtbl.set locals ~key:id ~data:(scalar env llsc)
+    | LL.Declare_local { id; needs_init } ->
+        if needs_init then Hashtbl.set locals ~key:id ~data:0. else Hashtbl.remove locals id
+    | LL.If { cond = cond, _; body } -> if Float.(scalar env cond <> 0.) then stmt env body
+    | LL.Scan_loop _ -> interp_fault "a Scan_loop"
+    | LL.Set_dynamic _ -> interp_fault "a Set_dynamic"
+    | LL.Set_from_vec _ -> interp_fault "a Set_from_vec"
+    | LL.Tile_mma _ -> interp_fault "a Tile_mma"
+    | LL.Workgroup_barrier -> interp_fault "a Workgroup_barrier"
+    | LL.Staged_compilation _ -> interp_fault "a Staged_compilation"
+  and scalar env : LL.scalar_t -> float = function
+    | LL.Constant v -> v
+    | LL.Embed_index idx -> Float.of_int (index env idx)
+    | LL.Get (tn, idcs) ->
+        let off = offset env tn idcs in
+        let v = (cells tn).(off) in
+        if Float.is_nan v then
+          interp_fault "a read of unwritten cell %d of %s" off (Tn.label_name tn);
+        v
+    | LL.Get_local id -> local id
+    | LL.Local_scope { id; body; orig_indices = _; mint = _ } ->
+        Hashtbl.remove locals id;
+        stmt env body;
+        local id
+    | LL.Ternop (Ops.Where, (cond, _), (a, _), (b, _)) ->
+        if Float.(scalar env cond <> 0.) then scalar env a else scalar env b
+    | LL.Ternop (op, (a, _), (b, _), (d, _)) ->
+        Ops.interpret_ternop op (scalar env a) (scalar env b) (scalar env d)
+    | LL.Binop (op, (a, _), (b, _)) -> Ops.interpret_binop op (scalar env a) (scalar env b)
+    | LL.Unop (op, (a, _)) -> Ops.interpret_unop op (scalar env a)
+    | LL.Constant_bits _ -> interp_fault "a Constant_bits"
+    | LL.Get_dynamic _ -> interp_fault "a Get_dynamic"
+    | LL.Get_merge_buffer _ -> interp_fault "a Get_merge_buffer"
+  in
+  stmt (env_of launch) llc
+
 (** {1 Claims}
 
     A hand-built-IR test reaches the claim surface the same way every other test does, by

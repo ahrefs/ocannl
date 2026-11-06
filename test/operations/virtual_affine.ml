@@ -28,7 +28,9 @@ open Ll_test
 open Verdict.Claims
 
 let mk = node_factory ~first_id:2000 ~dims:[| 6 |] ()
-let optimize ?materialized llc = optimize ?materialized ~name:"virtual_affine" llc
+
+let optimize ?materialized ?static_indices llc =
+  optimize ?materialized ?static_indices ~name:"virtual_affine" llc
 
 (* The materialized arm's prefill of a zero-initialized producer: per cell, negative, so off the
    zero init and every producer value. A fresh device buffer is already zero, so without it a
@@ -303,6 +305,41 @@ let zeroed_cases () =
       p "zeroed-synthetic: a flattened whole-node write prices no guard"
         (synthetic_guards ~dims:[| 2; 2 |] ~write:(fun s -> [| Idx.Sub_axis; iter s |]) = 0))
 
+(* === Case 1e: a read at a static index (gh-ocannl-1953) === A launch parameter has no enclosing
+   loop, so [needs_range_guard] finds no range to hold against the producer's loop: [call_range]
+   answers [None] and [within_loop] cannot prove containment, which on a zeroed partial node must
+   read as a guard. Nothing else reaches that arm: a binding priced at a synthetic read
+   ([zeroed-synthetic]) folds against the reader's ranges. Declared with no [~static_range], so no
+   bound could stand in for the unknown one; each launch is a separate run of one optimized form. *)
+let case_zeroed_static ~name ~launch ~expected () =
+  let tgt = mk ~dims:[| 4 |] (name ^ "_x") and out = mk ~dims:[| 1 |] (name ^ "_out") in
+  materialize out;
+  let param, bindings = Idx.get_static_symbol Idx.Empty in
+  let s = sym () in
+  let llc =
+    seq (zero tgt)
+      (seq
+         (loop_n s 2 (set tgt [| iter s |] (tick s)))
+         (set out [| fixed 0 |] (get tgt [| iter param.Idx.static_symbol |])))
+  in
+  let o = optimize ~static_indices:[ param ] llc in
+  p (name ^ " producer virtual") (known_virtual o tgt);
+  p (name ^ " producer inlined (no array reads survive)") (count_get o tgt = 0);
+  let wh, _, _ = count_guard_ops o in
+  p (name ^ " reads under a guard: an unknown range is not containment") (wh >= 1);
+  let seed = [ (out, blank 1) ] and read = [ out ] in
+  let launch = [ (param, launch) ] in
+  let virt = execute ~name:("va_" ^ name) ~bindings ~launch o ~seed ~read in
+  let mat =
+    execute
+      ~name:("va_" ^ name ^ "_mat")
+      ~bindings ~launch
+      (optimize ~materialized:[ tgt ] ~static_indices:[ param ] llc)
+      ~seed:(prefill tgt :: seed) ~read
+  in
+  p (name ^ ": the cell holds its write or the zero") (same virt [ expected ]);
+  p (name ^ ": virtual and materialized arms agree") (same virt mat)
+
 (* === Case 2: unit-coefficient solving at a plain iterator === *)
 let case_unit_solve_plain () =
   let tgt = mk ~dims:[| 6 |] "usolve" and out = mk ~dims:[| 6 |] "out2" in
@@ -448,6 +485,10 @@ let () =
   case "normalized-contained"
     (case_normalized_bounds ~name:"normalized-contained" ~u_n:3 ~v_n:2 ~contained:true);
   zeroed_cases ();
+  case "zeroed-static-inside"
+    (case_zeroed_static ~name:"zeroed-static-inside" ~launch:1 ~expected:[| 2. |]);
+  case "zeroed-static-past"
+    (case_zeroed_static ~name:"zeroed-static-past" ~launch:3 ~expected:[| 0. |]);
   case "unit-solve(plain)" case_unit_solve_plain;
   case "triangular" case_triangular;
   case "non-injective" case_noninjective;
