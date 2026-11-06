@@ -45,7 +45,13 @@ let is_mode m ctx (t : Tensor.t) =
 
 (* The program; [~materialize] is the one difference between the two arms. *)
 let build ~materialize =
-  let x = TDSL.ndarray x_values ~label:[ "pt_x" ] ~output_dims:[ rows; cols ] () in
+  (* Data-backed: the host writes it after the forward is compiled, which a literal this small, a
+     fetch, refuses (gh-ocannl-1959). *)
+  let x =
+    Operation.init ~l:"pt_x" ~prec:Ir.Ops.single ~o:[ rows; cols ]
+      ~f:(function [| i; j |] -> x_values.((i * cols) + j) | _ -> assert false)
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
   (* 3x, 3x^2 + 1, 3x^2 - 2x + 1, 3x^2 + x + 1, 3x^2 + 2x + 1. *)
   let%op v1 = (x *. 2) + x in
   let%op v2 = (v1 *. x) + 1 in

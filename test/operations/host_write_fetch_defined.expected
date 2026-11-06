@@ -1,0 +1,75 @@
+set_values, compiled and not yet run: the refusal names Context.set_values: true
+set_values, compiled and not yet run: the refusal names x_after: true
+set_values, compiled and not yet run: the refusal names fwd_after: true
+set_values, compiled and not yet run: the refusal names gh-ocannl-1959: true
+set_values, compiled and not yet run: the refusal names Operation.init: true
+set_values, after a run: the refusal names Context.set_values: true
+set_values, after a run: the refusal names x_after: true
+set_values, after a run: the refusal names fwd_after: true
+set_values, after a run: the refusal names gh-ocannl-1959: true
+set_values, after a run: the refusal names Operation.init: true
+set_value: the refusal names Context.set_value: true
+set_value: the refusal names x_after: true
+set_value: the refusal names fwd_after: true
+set_value: the refusal names gh-ocannl-1959: true
+set_value: the refusal names Operation.init: true
+from_host: the refusal names Context.from_host: true
+from_host: the refusal names x_after: true
+from_host: the refusal names fwd_after: true
+from_host: the refusal names gh-ocannl-1959: true
+from_host: the refusal names Operation.init: true
+x reads as the fetch left it: true
+x after the next run: true
+the forward's result after the next run: true
+an inlined fetch: the refusal names Context.set_values: true
+an inlined fetch: the refusal names x_inlined: true
+an inlined fetch: the refusal names fwd_inlined: true
+an inlined fetch: the refusal names gh-ocannl-1959: true
+an inlined fetch: the refusal names Operation.init: true
+a one-element literal: the refusal names Context.set_values: true
+a one-element literal: the refusal names x_literal: true
+a one-element literal: the refusal names fwd_literal: true
+a one-element literal: the refusal names gh-ocannl-1959: true
+a one-element literal: the refusal names Operation.init: true
+a range: the refusal names Context.set_values: true
+a range: the refusal names x_range: true
+a range: the refusal names fwd_range: true
+a range: the refusal names gh-ocannl-1959: true
+a range: the refusal names Operation.init: true
+a materialized literal the routine reads: the refusal names Context.set_values: true
+a materialized literal the routine reads: the refusal names x_ndarray: true
+a materialized literal the routine reads: the refusal names fwd_ndarray: true
+a materialized literal the routine reads: the refusal names gh-ocannl-1959: true
+a materialized literal the routine reads: the refusal names Operation.init: true
+the parent: the refusal names Context.set_values: true
+the parent: the refusal names x_parent: true
+the parent: the refusal names fwd_parent: true
+the parent: the refusal names gh-ocannl-1959: true
+the parent: the refusal names Operation.init: true
+the view's refusal names the parent: true
+the seed: true
+a routine that does not carry the fetch runs on the seed: true
+the forward's run re-establishes the node: true
+a write once it is compiled: the refusal names Context.set_values: true
+a write once it is compiled: the refusal names x_seed: true
+a write once it is compiled: the refusal names fwd_seed: true
+a write once it is compiled: the refusal names gh-ocannl-1959: true
+a write once it is compiled: the refusal names Operation.init: true
+the reader follows the fetch from there: true
+the forward's lineage: the refusal names Context.set_values: true
+the forward's lineage: the refusal names x_sibling: true
+the forward's lineage: the refusal names fwd_sibling: true
+the forward's lineage: the refusal names gh-ocannl-1959: true
+the forward's lineage: the refusal names Operation.init: true
+a context that does not descend from it: true
+the sibling's write reads back: true
+a data-backed node: written after the forward's run: true
+a data-backed node: the write lasts over a run: true
+a data-backed node: the run computes from it: true
+a parameter: written after the forward's run: true
+a parameter: the write lasts over a run: true
+a parameter: the run computes from it: true
+a host scalar: written after the forward's run: true
+a host scalar: the run computes from it: true
+the host round trip: true
+the node reads as its literal: true

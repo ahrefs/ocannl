@@ -37,9 +37,21 @@ files.
   A copy counts, its parent read again every run, but only `Context.compile` can tell one, as
   `sgd_update` precedes settled shapes. Executed: `require_grad_leaves.ml` section 3; the saliency
   host read, `observable_grads.ml` leg 4.
+- A host write obeys the same rule (gh-ocannl-1959): `from_host`, `set_values` and `set_value`
+  refuse a node the lineage's `fetch_defined` holds, O(1), before anything of the write happens
+  (`Context.check_host_write_lasts`; `host_write_fetch_defined.ml`). Only after the forward is
+  compiled: a seed before that is legal, and is what a routine that does not carry the fetch runs
+  on until the forward's first run (`shared_grad_refusal`'s `upload`, `require_grad_leaves`
+  section 3). A routine carries the fetch when it is the first to embed the leaf: in a `%cd` too, so
+  construct the forward's consumer first if a reader is to go without it. A materialized literal
+  the routine reads has lost the fetch (lowering-and-analysis.md) and a write would stay in its
+  buffer, yet it is refused, hoisting reading the registered values; a test exercising host writes
+  needs a data-backed leaf at any size (`recompute_on_read`). `copy` is not refused, and the
+  autotuner's timing restore reaches no such node: a hosted constant has no written code and a view
+  of a fetched parent no assignment (`timing_state_nodes`).
 - Training-loop utilities (gh-465, `lib/train.ml`): `Lr_schedule` (host floats; feed via
-  `scheduled_learning_rate`'s data-backed `host_scalar` — a fetch-defined constant would be
-  re-fetched each step, undoing `set_values`), `grad_l2_norm`/`clip_by_global_norm` +
+  `scheduled_learning_rate`'s data-backed `host_scalar` — `set_values` refuses a fetch-defined
+  constant, re-fetched each step), `grad_l2_norm`/`clip_by_global_norm` +
   `sgd_update ~grad_scale` (scale folded into the gradient read; buffers untouched — the norm
   can be recomputed on the host from the buffers to cross-check), `grad_update ~accum_steps` +
   `zero_params_grads` (leaf-gradient zeroing is filtered OUT of the micro-step's `zero_grads` tree

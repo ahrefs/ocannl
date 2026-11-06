@@ -827,8 +827,8 @@ let check_node_valid tn = Option.iter !Tn.validity_check ~f:(fun check -> check 
    any other write to it in the lineage -- an optimizer step ([Train.sgd_one], which sees no loss to
    check against), a hand-written [%cd] update -- is silently undone the next time that routine
    runs, or at once when the write precedes the fetch. Refused in either compile order, and within
-   one routine, before lowering. Siblings are alternatives and never collide. A host write
-   ([set_values]) is not a routine and is not checked. *)
+   one routine, before lowering. Siblings are alternatives and never collide. A host write, which no
+   routine carries, is {!check_host_write_lasts}'s (gh-ocannl-1959). *)
 let check_no_fetch_overwrite ?name ctx (comp : Asgns.comp) =
   let fetched = forward_fetched ctx.frontier comp and written = overwritten comp in
   let routine (id, name) = Printf.sprintf "routine %s (id=%d)" name id in
@@ -2370,9 +2370,36 @@ let to_host_all ctx (tns : Tn.t list) : Nd.t list =
   List.iter recomputed ~f:(fun (tn, nd) -> Hashtbl.set read ~key:tn ~data:nd);
   List.map tns ~f:(fun tn -> Hashtbl.find_or_add read tn ~default:(fun () -> to_host ctx tn))
 
+(* gh-ocannl-1959: {!check_no_fetch_overwrite}'s rule for a host write. Only once the forward is
+   compiled: a seed before that is what a routine reading the node runs on until the forward first
+   runs ([shared_grad_refusal.ml], [require_grad_leaves.ml]). A materialized literal the routine
+   reads has lost its in-kernel fetch (gh-ocannl-633), so a write would stay in its buffer, but the
+   literal's values are declared constant: a schedule hoisting it reads the registered ones
+   ([Schedule.hoistable_constant]), so the write is refused all the same. {!copy} does not come
+   here: it moves a node's value between contexts, the fetch's own unless the source was seeded. A
+   view is left to {!upload}'s refusal, which names the parent to write. Runs before anything of the
+   write happens, so a refused [set_values] leaves the node's host buffer as it was. *)
+
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
-let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
+let check_host_write_lasts ~fn ctx (tn : Tn.t) =
+  match (Tn.slice_of tn, Map.find ctx.frontier.fetch_defined tn.Tn.uid) with
+  | None, Some (id, name) ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Context.%s: node %s is fetch-defined in this lineage: routine %s (id=%d) carries \
+               its forward code, a fetch, so this write would be silently lost: a run fetches the \
+               node again, or reads a literal's own values, inlined or hoisted (gh-ocannl-1959). A \
+               fetch-defined node -- a Tensor.term_init or literal with at most \
+               limit_constant_fill_size values, a range, an embedded symbol -- is code, not data. \
+               Build a node the host writes data-backed, with Operation.init or Train.host_scalar, \
+               or make it a parameter. A seed for a routine that reads the node before the forward \
+               runs goes in before the forward's routine is compiled."
+              fn (Tn.debug_name tn) name id)
+  | _ -> ()
+
+let upload ctx (tn : Tn.t) (nd : Nd.t) : t =
   check_live ~fn:"from_host" ctx;
   check_node_valid tn;
   check_not_poisoned ctx;
@@ -2418,6 +2445,11 @@ let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
   in
   record_external_writes (derive ctx wrapped) (Set.singleton (module Tn) tn)
 
+let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
+  check_live ~fn:"from_host" ctx;
+  check_host_write_lasts ~fn:"from_host" ctx tn;
+  upload ctx tn nd
+
 (** Copies [tn]'s device buffer from [src] into [dst] (or into [dst]'s stream's merge buffer for
     [~into_merge_buffer:Copy]), returning the updated destination context. When both contexts come
     from the same backend, {!Backends.pair_contexts} recovers type equality and the copy dispatches
@@ -2441,7 +2473,7 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
      raises where the fallback would engage. *)
   let host_roundtrip what =
     match into_merge_buffer with
-    | BI.No -> from_host dst tn (to_host src tn)
+    | BI.No -> upload dst tn (to_host src tn)
     | BI.Copy ->
         raise
         @@ Utils.User_error
@@ -2591,10 +2623,11 @@ let set_values ctx (tn : Tn.t) (values : float array) : t =
   (* Before [host_buffer] forces the node's dims: [from_host] checks only after (gh-ocannl-1505). *)
   check_live ~fn:"set_values" ctx;
   check_node_valid tn;
+  check_host_write_lasts ~fn:"set_values" ctx tn;
   let nd = host_buffer tn in
   let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
   Nd.set_flat_values ?padding nd values;
-  from_host ctx tn nd
+  upload ctx tn nd
 
 let get_value ctx (tn : Tn.t) (idx : int array) : float =
   let nd = to_host ctx tn in
@@ -2609,10 +2642,12 @@ let get_value ctx (tn : Tn.t) (idx : int array) : float =
 (* Reads the current device buffer, sets one element, and uploads the whole buffer back, so that the
    other elements are preserved. *)
 let set_value ctx (tn : Tn.t) (idx : int array) (v : float) : t =
+  check_live ~fn:"set_value" ctx;
+  check_host_write_lasts ~fn:"set_value" ctx tn;
   let nd = to_host ctx tn in
   let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
   Nd.set_from_float ?padding nd idx v;
-  from_host ctx tn nd
+  upload ctx tn nd
 
 let points_1d ?from_axis ~xdim ctx (tn : Tn.t) =
   let nd = to_host ctx tn in
