@@ -1,12 +1,14 @@
 (* The link refusal "The linked context lacks node <g>" names the missing reset when [g] is a
    gradient the computation accumulates into and nothing in its lineage zeroes (wave-20261031
    post-1-task-7, from lukstafi/ocannl-staging#1558). [Tensor.op] carries a gradient's zeroing in
-   its tensor's first-constructed consumer only (gh-ocannl-1744); when that consumer was evaluated
-   forward-only -- and, since gh-ocannl-1745, dropped and reclaimed -- a later loss over the
-   parameter accumulates into a gradient no routine resets, and the link fails over it. The golden
-   pins that message in full; the suggested remedy (a [Train.zero_params_grads] routine compiled
-   first) is run here with exact values, and a step skipping it is refused (gh-ocannl-1781); and the
-   other "lacks node" refusals keep their text: the bare one over a non-gradient node, and
+   its tensor's first-constructed consumer only (gh-ocannl-1744); while that consumer can still run
+   -- evaluated forward-only and held -- a later loss over the parameter accumulates into a gradient
+   no routine resets, and the link fails over it. The golden pins that message in full; the
+   suggested remedy (a [Train.zero_params_grads] routine compiled first) is run here with exact
+   values, and a step skipping it is refused (gh-ocannl-1781). Once that consumer is dropped and
+   reclaimed it gives the reset back, and the next loss links and computes the gradient with no
+   zeroing of the caller's (gh-ocannl-1804; the rest of that rule is [reclaimed_consumer_zeroing]).
+   The other "lacks node" refusals keep their text: the bare one over a non-gradient node, and
    gh-ocannl-1724's hint over an unpropagated intermediate gradient. When a routine compiled outside
    the lineage -- a sibling's update -- zeroes the gradient, the hint names it (gh-ocannl-1797); the
    first case, where no routine zeroes it, is the control that keeps the wording without one. Values
@@ -27,17 +29,36 @@ let reset_hint = "without zeroing it, and no routine of its lineage zeroes it"
 let outside_zeroer = "zeroes it, compiled outside this lineage -- in a sibling"
 let param prefix = TDSL.param ~values:[| 1.; 2.; 3. |] (prefix ^ "_w") ~output_dims:[ 3 ] ()
 
-(* #1558's first consumer: built, evaluated forward-only, and dropped -- it carried [w]'s zeroing.
-   Returns the context and an observer on the consumer. *)
+(* #1558's first consumer: built, evaluated forward-only, and dropped -- it carried [w]'s zeroing,
+   and gives it back once reclaimed. Returns the context and an observer on the consumer. *)
 let[@inline never] forward_only_consumer ctx w =
   let%op c = w *. 2. in
   (Train.forward_once ctx c, Gc_witness.witness c)
 
 let () =
-  case "a parameter whose first consumer was evaluated forward-only and dropped" (fun () ->
-      let w = param "lh" in
+  case "a parameter whose first consumer was evaluated forward-only and reclaimed" (fun () ->
+      let w = param "lh_rc" in
       let ctx, c = forward_only_consumer (Context.auto ()) w in
       p "the forward-only first consumer is dropped and reclaimed" (Gc_witness.reclaimed c);
+      claim "control: the parameter the case still holds is kept"
+        (Gc_witness.kept (Gc_witness.witness w));
+      (* No closure since the consumer died: the loss's own construction takes the reset back. *)
+      let%op l = w *. w in
+      let update = Train.grad_update l in
+      p "the next loss carries the gradient's zeroing itself"
+        (Set.mem update.zeroes (LC.grad_of w) && Set.mem update.embedded_nodes (LC.grad_of w));
+      let ctx, step = compile ctx update in
+      let ctx = Context.run ctx step in
+      LC.exact "one step: w.grad = 2 w" (Context.get_values ctx (LC.grad_of w)) [| 2.; 4.; 6. |];
+      let ctx = Context.run ctx step in
+      LC.exact "a second step resets: w.grad = 2 w"
+        (Context.get_values ctx (LC.grad_of w))
+        [| 2.; 4.; 6. |]);
+  case "a parameter whose first consumer was evaluated forward-only and is held" (fun () ->
+      let w = param "lh" in
+      let%op c = w *. 2. in
+      let ctx = Train.forward_once (Context.auto ()) c in
+      claim "control: the consumer the case holds is kept" (Gc_witness.kept (Gc_witness.witness c));
       claim "control: the parameter the case still holds is kept"
         (Gc_witness.kept (Gc_witness.witness w));
       let%op l = w *. w in
@@ -63,7 +84,8 @@ let () =
         (LC.has msg (Ir.Tnode.label_name (LC.grad_of w)) && LC.has msg "has not run since");
       LC.exact "the refusal dispatched nothing"
         (Context.get_values ctx (LC.grad_of w))
-        [| 2.; 4.; 6. |]);
+        [| 2.; 4.; 6. |];
+      ignore (Stdlib.Sys.opaque_identity c : Tensor.t));
   case "a parameter whose first consumer's update was compiled in a sibling" (fun () ->
       let w = param "lh_sib" in
       let%op c = w *. 2. in

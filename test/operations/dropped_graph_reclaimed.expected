@@ -17,8 +17,10 @@ rewind: the consumer embedded t's backprop: true
 rewind: the held root is a root again, its marker reset: true
 rewind: an external handout stays excluded: true
 consumer: the dropped consumer is reclaimed: true
+consumer: the leaf below its child is a backprop root again: true
 consumer: its embedded child is neither root: true
 consumer: consuming the child's forward code is still refused: true
+consumer: the next loss over the leaf zeroes its gradient: w.grad = 2 w: true
 closure: the dropped root is reclaimed before any next closure: true
 unevaluated: t is a forward and a backprop root: true
 unevaluated: the dropped graph is reclaimed: true

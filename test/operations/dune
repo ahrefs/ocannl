@@ -11722,6 +11722,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-1804: a consumer dropped and reclaimed with its backprop unconsumed gives back the leaves
+; it absorbed, transitively, and nothing else; a held copy, a compiled consumer and handed-out code
+; keep the ownership, tensors built earlier are not retrofitted, and rewinds and scoped restores
+; neither lose a leaf nor resurrect a handed-out one. Executed values, every backend.
+
+(test
+ (name reclaimed_consumer_zeroing)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules reclaimed_consumer_zeroing)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims gc_witness)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1781: a gradient accumulated into without zeroing is refused once its routine has run
 ; as many times as its computation allows (one, or k under Train.grad_update ~accum_steps:k) since
 ; the gradient's last reset -- a zeroing routine's run or an upload; the timing loop's repeats are

@@ -60,11 +60,31 @@ files.
   claim needs its own reset; a routine reading a term whose init another consumer embeds needs the
   value uploaded (`Context.set_values`), and a hand-built owner (`l1.grad =: 1; l1.backprop`)
   needs `l1.forward` for its constants (`shared_grad_refusal.ml`). A loss over a leaf whose first
-  consumer is not compiled in the lineage (evaluated forward-only, since dropped, or a sibling's
-  update) accumulates into a gradient it neither zeroes nor embeds, so no routine allocates it: the
-  LINK fails before this check sees anything, and `Context.lacks_node_error` names the missing reset
-  and `zero_params_grads`, plus any routine of the root compiled outside the lineage that zeroes it
+  consumer is not compiled in the lineage (evaluated forward-only and held, or a sibling's update)
+  accumulates into a gradient it neither zeroes nor embeds, so no routine allocates it: the LINK
+  fails before this check sees anything, and `Context.lacks_node_error` names the missing reset and
+  `zero_params_grads`, plus any routine of the root compiled outside the lineage that zeroes it
   (the ledger's `zeroing_registry`, gh-ocannl-1797; `lacks_grad_reset_hint.ml`).
+- The "first-constructed consumer" is the first that can still run (gh-ocannl-1804): a backprop
+  root reclaimed with its backprop unconsumed gives back the LEAVES it absorbed, transitively, so
+  the next-constructed consumer carries their zeroing. Each root's `Weak_root` entry keeps the
+  leaves' own entries in a shared rope, and `Weak_root.prune` returns them. Only a dead entry still
+  in the map gives back: a consumer handed out (its routine still owns the zeroing), or embedded by
+  a live parent, has left the map, and a held record copy keeps the entry alive. Computed tensors
+  stay unrestored, forward ownership and owner cells are untouched, and a tensor built earlier is
+  not retrofitted. `Tensor.op` decides at construction, and no closure need separate a consumer's
+  death from the next loss, so the prune runs in `op` too, for a non-root leaf operand. Traps: `op`
+  settles its operands' rootness ONCE into `bck_roots` before any read, because a GC between two
+  reads (or a nested op under `grad_asn`) could embed a gradient whose zeroing the first skipped; a
+  restore filters `handouts.bprop_out` BEFORE pruning, through the entry's `grad_uid`, since a dead
+  owner's code can outlive it in a routine. The outcome is the GC's to time, on purpose: a consumer
+  dropped but not yet collected refuses as a held one does, and the next loss then links only after
+  collection. Both outcomes are safe, a correct gradient or the loud refusal, whose text says so;
+  `Train.zero_params_grads` works in both, `Gc.full_major ()` after the drop settles it, and summed
+  losses over one reset spell `grad_update ~accum_steps:1`, since an `A1; A2` with neither zeroing
+  is refused once the first takes the zeroing back. So a test of "this loss does not zero" must HOLD
+  its consumer past the loss's construction (native code keeps no dead local alive), and a test of
+  the hand-back must observe the reclamation with `Gc_witness` first (`reclaimed_consumer_zeroing.ml`).
 - Past the link, a gradient a routine accumulates into without zeroing is a RUN-history question
   (gh-ocannl-1781): the ledger's `accumulated` counts, per gradient buffer and per routine, the runs
   since the buffer's last reset (a run of a routine whose `zeroes` holds it, or
@@ -92,7 +112,8 @@ files.
 - Both root maps are weak: backprop since gh-ocannl-1745, forward since gh-ocannl-1796. An entry
   is an ephemeron keyed by the tensor's `consumption` cell (`Weak_root` in `tensor.ml`), live
   while any ownership-preserving record copy is reachable, so a dropped graph is reclaimed,
-  evaluated or not, checkpoints and the last closure included. `consume_forward_code`'s
+  evaluated or not, checkpoints and the last closure included; a handed-out comp a caller keeps
+  pins its tensor through the projections. `consume_forward_code`'s
   conflicting-roots check does not read the map: it reads OWNER CELLS (`owner_cell`, in
   `consumption.fwd_owner`), a GC-independent shadow of "is a forward root" with one owner edge per
   embedding (a DAG, not chains: code replayed into two roots is owned by both, and neither owns the

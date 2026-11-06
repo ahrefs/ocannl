@@ -138,53 +138,104 @@ let sexp_of_comparator_witness _ = Sexp.Atom "comparator_witness"
    session can read the entry without holding it. The entry lives exactly while some such copy is
    reachable from outside the root maps; once the caller drops the graph, the GC reclaims it and the
    entry reads as absent. Entries are immutable once made: the persistent maps holding them are
-   shared with checkpoints. *)
+   shared with checkpoints.
+
+   gh-ocannl-1804: a backprop root also remembers the leaves it absorbed, transitively, as the
+   leaves' own entries: a weak handle each, shared rather than copied, so absorbing costs one node
+   and an absorbed computed root's entry is not retained. A root that dies while still in the map
+   can never run, so {!prune} gives those leaves back. A root that left the map gave nothing: its
+   code was handed out, or a live consumer embedded it, and that code still owns the zeroing. *)
 module Weak_root : sig
   type entry
   type map = entry Map.M(Int).t
 
-  val make : t -> entry
-  val get : entry -> t option
+  val make : ?absorbed:entry list -> t -> entry
+  (** [absorbed]: the entries of the backprop roots whose code [t]'s backprop embeds. *)
 
   val cell : entry -> owner_cell
   (** The tensor's forward owner cell, held strongly: a restore resets the cell of a root the GC
       reclaimed as deterministically as a live one's (gh-ocannl-1796). *)
+
+  val grad_uid : entry -> int option
+  (** The gradient of the tensor registered, readable after the GC reclaimed it. *)
+
+  val find : map -> int -> entry option
+  (** Present and live. *)
 
   val mem : map -> int -> bool
   (** Present and live. *)
 
   val live : map -> t list
 
+  val is_leaf : t -> bool
+  (** Differentiable, with a backprop owning no fragment: a term, parameters included. *)
+
   val prune : map -> map
-  (** Drops the dead entries; physically the same map when there are none. *)
+  (** Drops the dead entries and gives back the live leaves they absorbed, never replacing an entry
+      in the map; physically the same map when there are no dead entries. *)
 end = struct
   type entry = {
     anchor : consumption Stdlib.Weak.t;
     root : (consumption, t) Stdlib.Ephemeron.K1.t;
     cell : owner_cell;
+    grad_uid : int option;
+    is_leaf : bool;
+    leaves : leaves;
   }
+
+  and leaves = One of entry | Many of leaves list
 
   type map = entry Map.M(Int).t
 
-  let make t =
+  (* The test [Tensor.op] applies for gh-ocannl-1724's [requires]. *)
+  let is_leaf t =
+    match t.diff with
+    | Some d -> not (Set.mem d.backprop.owned (d.grad, Asgns.Bprop))
+    | None -> false
+
+  let make ?(absorbed = []) t =
     let anchor = Stdlib.Weak.create 1 in
     Stdlib.Weak.set anchor 0 (Some t.consumption);
-    { anchor; root = Stdlib.Ephemeron.K1.make t.consumption t; cell = t.consumption.fwd_owner }
+    let leaves =
+      List.filter_map absorbed ~f:(fun e ->
+          match e with
+          | { is_leaf = true; _ } -> Some (One e)
+          | { leaves = Many []; _ } -> None
+          | { leaves; _ } -> Some leaves)
+    in
+    {
+      anchor;
+      root = Stdlib.Ephemeron.K1.make t.consumption t;
+      cell = t.consumption.fwd_owner;
+      grad_uid = Option.map t.diff ~f:(fun d -> d.grad.Tn.uid);
+      is_leaf = is_leaf t;
+      leaves = Many leaves;
+    }
 
   let cell e = e.cell
+  let grad_uid e = e.grad_uid
 
-  let get { anchor; root; cell = _ } =
+  let get { anchor; root; _ } =
     match Stdlib.Weak.get anchor 0 with
     | None -> None
     | Some key -> Stdlib.Ephemeron.K1.query root key
 
-  let find m id = Option.bind (Map.find m id) ~f:get
+  let find m id = Option.bind (Map.find m id) ~f:(fun e -> Option.map (get e) ~f:(fun _ -> e))
   let mem m id = Option.is_some (find m id)
   let live m = List.filter_map (Map.data m) ~f:get
 
+  let rec hand_back m = function
+    | Many leaves -> List.fold leaves ~init:m ~f:hand_back
+    | One e -> (
+        match get e with
+        | Some t when not (Map.mem m t.value.id) -> Map.add_exn m ~key:t.value.id ~data:e
+        | Some _ | None -> m)
+
   let prune m =
     if Map.for_all m ~f:(fun e -> Option.is_some (get e)) then m
-    else Map.filter m ~f:(fun e -> Option.is_some (get e))
+    else
+      let dead, live = Map.partition_tf m ~f:(fun e -> Option.is_none (get e)) in
+      Map.fold dead ~init:live ~f:(fun ~key:_ ~data m -> hand_back m data.leaves)
 end
 
 (* The session's graph state. Its writes are held to the mutation-serial obligation field by field
@@ -340,7 +391,20 @@ let remove_fwd_root t =
       set_not_root (Weak_root.cell e));
   session_state.forward_roots <- Map.remove session_state.forward_roots t.value.id
 
-let is_bprop_root t = Weak_root.mem session_state.backprop_roots t.value.id
+(* The map as it stands. [Tensor.op] reads this, after settling its operands once: see there. *)
+let in_bprop_roots t = Weak_root.mem session_state.backprop_roots t.value.id
+
+(* gh-ocannl-1804: a reclaimed root's leaves go back before anything reads the map for them. A
+   closure does this too, but the next consumer need not come after one. *)
+let hand_back_reclaimed () =
+  let pruned = Weak_root.prune session_state.backprop_roots in
+  if not (phys_equal pruned session_state.backprop_roots) then (
+    Row.note_mutation ();
+    session_state.backprop_roots <- pruned)
+
+let is_bprop_root t =
+  hand_back_reclaimed ();
+  in_bprop_roots t
 
 let remove_bprop_root t =
   Row.note_mutation ();
@@ -448,7 +512,8 @@ let last_closure = ref (take_checkpoint ~closure:true ~label:"")
 let record_checkpoint () =
   (* The dead backprop-root entries of graphs the caller dropped (gh-ocannl-1745) are pruned at the
      closure, before it is captured: a forward-only evaluation loop closes on every compile. Pruning
-     drops only entries no one can name, so it changes no root's status. *)
+     changes the status of no root anyone can name, but the leaves those entries absorbed are roots
+     again (gh-ocannl-1804). *)
   session_state.backprop_roots <- Weak_root.prune session_state.backprop_roots;
   (* So are the dead forward roots (gh-ocannl-1796): their cells keep the roots' status, and no
      restore reads them -- except an open [with_unchanged_roots] scope's, which needs the roots its
@@ -1138,7 +1203,18 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* Apply delayed top-down precision updates to parameter gradient subtensors *)
     List.iter top_down_ts ~f:(fun ti ->
         Option.iter ti.diff ~f:(fun d -> update_infer_prec ti d.grad g.Tn.storage_prec));
-    let is_bck_root = is_bprop_root in
+    (* Which operands are backprop roots is settled once, here (gh-ocannl-1804): whether a dropped
+       consumer gives a leaf back moves with the GC, and with the nested ops [grad_asn] builds, so a
+       second read of the map could embed a gradient whose zeroing the first read skipped. The scan
+       runs only for an operand it can change. *)
+    if List.exists ordered_ts ~f:(fun ti -> Weak_root.is_leaf ti && not (in_bprop_roots ti)) then
+      hand_back_reclaimed ();
+    let bck_roots =
+      List.filter_map ordered_ts ~f:(fun ti ->
+          Option.map (Weak_root.find session_state.backprop_roots ti.value.id) ~f:(fun e ->
+              (ti.value.id, e)))
+    in
+    let is_bck_root ti = List.Assoc.mem bck_roots ~equal:Int.equal ti.value.id in
     let zero_grads =
       let zero_g ti =
         Option.value_map ti.diff ~default:Asgns.empty_comp ~f:(fun diff -> diff.zero_grads)
@@ -1258,13 +1334,14 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     in
     (* As in the forward-only branch: the root changes below count, and nothing after them fails. *)
     Row.note_mutation ();
-    List.iter ordered_ts ~f:(fun ti ->
-        session_state.backprop_roots <- Map.remove session_state.backprop_roots ti.value.id);
+    List.iter bck_roots ~f:(fun (ti_id, _) ->
+        session_state.backprop_roots <- Map.remove session_state.backprop_roots ti_id);
     let diff = Some { grad = g; zero_grads; backprop } in
     let t = { t with diff } in
     add_fwd_root t;
     session_state.backprop_roots <-
-      Map.add_exn session_state.backprop_roots ~key:id ~data:(Weak_root.make t);
+      Map.add_exn session_state.backprop_roots ~key:id
+        ~data:(Weak_root.make ~absorbed:(List.map bck_roots ~f:snd) t);
     t
 
 type param_op_fun =
@@ -1812,14 +1889,14 @@ let restore_checkpoint ?omit ~provenance ck =
        not taken back. *)
     let fwd = Map.filter_keys g_forward_roots ~f:(fun id -> not (Set.mem handouts.fwd_out id)) in
     (* The surviving backprop roots (gh-ocannl-1745): a root the GC reclaimed since the checkpoint
-       had no holder, so no one can name it again. *)
-    let bprop =
-      Map.filter g_backprop_roots ~f:(fun e ->
-          match Weak_root.get e with
-          | None -> false
-          | Some { diff = Some d; _ } -> not (Set.mem handouts.bprop_out d.grad.Tn.uid)
-          | Some { diff = None; _ } -> true)
+       had no holder, so no one can name it again, and its leaves go back (gh-ocannl-1804) -- unless
+       its code was handed out, which a routine outlives the tensor with. So the handouts are
+       filtered first, and again for a leaf handed out after an earlier hand-back. *)
+    let not_handed_out =
+      Map.filter ~f:(fun e ->
+          not (Option.exists (Weak_root.grad_uid e) ~f:(Set.mem handouts.bprop_out)))
     in
+    let bprop = not_handed_out (Weak_root.prune (not_handed_out g_backprop_roots)) in
     (* The owner cells follow (gh-ocannl-1796), a reclaimed root's included: its entry holds its
        cell, so whether the GC got to it changes nothing about its readers. *)
     restore_root_cells ~restored:fwd;

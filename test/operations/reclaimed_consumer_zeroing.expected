@@ -1,0 +1,34 @@
+deep: the consumer and its child are reclaimed: true
+deep: both leaves are roots again: true
+deep: w1.grad = 2 w1: true
+deep: w2.grad = 2 w2: true
+unevaluated: the consumer is reclaimed: true
+unevaluated: w.grad = 2 w: true
+generations: the first consumer is reclaimed: true
+generations: the second consumer is reclaimed: true
+generations: w.grad = 2 w: true
+sibling: the first consumer is reclaimed: true
+sibling: its leaf is a root again: true
+sibling: the loss built while the consumer lived lacks the reset, and is told why: true
+sibling: the next-constructed loss zeroes the gradient: true
+sibling: the one after it does not: the first-constructed rule stands: true
+sibling: the next-constructed loss computes w.grad = 2 w: true
+non-owner: the sibling, which absorbed nothing, is reclaimed: true
+non-owner: the live owner keeps the leaf: true
+copy: the consumer's entry lives on the copy, so the leaf stays absorbed: true
+compiled: the consumer is reclaimed: true
+compiled: its routine still owns the zeroing: true
+compiled: the routine still runs: w.grad = 2: true
+handout: the consumer is reclaimed: true
+handout: the rewind leaves the leaf with the code handed out: true
+rewind: the consumer is reclaimed: true
+rewind: the construction since took the leaf: true
+rewind: the leaf is a root again: true
+rewind: w.grad = 2 w: true
+scope: the consumer is reclaimed: true
+scope: the leaf is a root inside: true
+scope: a construction took it: true
+scope: the restore leaves it a root: true
+scope: w.grad = 2 w: true
+retention: the consumer is reclaimed under a checkpoint: true
+retention: so is the leaf it would have given back: true
