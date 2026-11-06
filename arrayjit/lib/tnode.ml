@@ -236,31 +236,32 @@ end = struct
         | _ -> set cell (Specified prec)
 
   let update_infer_prec ?only_if ~name cell delayed_prec =
-    let settled = cell.storage in
     if passes only_if cell then
-      if Lazy.is_val settled then
-        raise
-        @@ Utils.User_error
-             (String.concat
-                [
-                  "Tnode.update_infer_prec: cannot update precision for ";
-                  name ();
-                  " because it has already been forced";
-                ])
-      else
-        match (cell.value, only_if) with
-        | Specified _, _ -> () (* User-specified precision has higher priority *)
-        | Default old_prec, Some cond -> if cond old_prec then set cell (Inferred delayed_prec)
-        | Default _, None -> set cell (Inferred delayed_prec)
-        | Inferred old_prec, Some cond ->
-            set cell
-              (Inferred
-                 (lazy
-                   (let old = Lazy.force old_prec in
-                    if cond old then Ops.promote_prec old (Lazy.force delayed_prec) else old)))
-        | Inferred old_prec, None ->
-            set cell
-              (Inferred (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec))))
+      match (cell.value, only_if) with
+      | Specified _, _ ->
+          (* User-specified precision has higher priority, so this link changes nothing, and it
+             cannot contradict a read of it either: a settled [Specified] cell is no refusal. *)
+          ()
+      | _ when Lazy.is_val cell.storage ->
+          raise
+          @@ Utils.User_error
+               (String.concat
+                  [
+                    "Tnode.update_infer_prec: cannot update precision for ";
+                    name ();
+                    " because it has already been forced";
+                  ])
+      | Default old_prec, Some cond -> if cond old_prec then set cell (Inferred delayed_prec)
+      | Default _, None -> set cell (Inferred delayed_prec)
+      | Inferred old_prec, Some cond ->
+          set cell
+            (Inferred
+               (lazy
+                 (let old = Lazy.force old_prec in
+                  if cond old then Ops.promote_prec old (Lazy.force delayed_prec) else old)))
+      | Inferred old_prec, None ->
+          set cell
+            (Inferred (lazy (Ops.promote_prec (Lazy.force old_prec) (Lazy.force delayed_prec))))
 
   let follow ?only_if ~name cell delayed_prec =
     let before = cell.value in

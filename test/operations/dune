@@ -1925,6 +1925,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2011: data-backed leaves keep their stated precision under a consumer, whether or not it
+; was read first; a leaf with no data takes top-down precision and refuses a link after a read.
+
+(test
+ (name data_leaf_top_down_prec)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules data_leaf_top_down_prec)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 (test
  ; ocannl-backend: cc -- `Context.cpu ()`: precision inference precedes every backend, and the
  ; parameters are double, which Metal does not evaluate.
