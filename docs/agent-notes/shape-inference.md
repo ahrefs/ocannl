@@ -521,9 +521,12 @@ files.
   environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on
   `dim_env`/`row_env` elsewhere, or a mention a visit reads that `dim_entry_mentions`/
   `row_entry_*_mentions` do not list, is a missed visit. The whole map also changed entries that
-  do not mention the variable -- it summed a stored `Concat` of solved parts, collapsed windows,
-  and re-emitted every `Total_elems` row's `Rows_constr` -- which is why written entries stay
-  pending until an unrelated visit leaves them unchanged.
+  do not mention the variable -- it summed a stored `Concat` of solved parts and collapsed
+  windows -- which is why written entries stay pending until an unrelated visit leaves them
+  unchanged. A `Total_elems` row no longer does: a solution reaching no divisor is no change, where
+  it used to re-emit and stay pending, rows times solutions (gh-ocannl-1977). Summing eagerly in
+  `subst_dim` to retire the pending sets fails `set_equal_rows` and `test_concat_dim_solver`: a
+  `Concat` kept as parts is what they pin.
   Verify a change here with `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` over the shape tests (it
   fails on the first solution whose indexed visit differs from the whole map's), and
   `test/operations/shape_substitution_chains` for the chains. The eager, resolved representation

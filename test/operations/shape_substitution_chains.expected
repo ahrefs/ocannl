@@ -20,6 +20,9 @@ an incompatible bound: the indexed and the whole-environment substitution agree:
 a bound the endpoint's eventual value violates fails: true
 a Total_elems row: the indexed and the whole-environment substitution agree: true
 the constraint survives the unrelated solutions and solves the row once its divisor is known: true
+fifty unrelated solutions visit it once: true
+and leave its divisors as they were: true
+it needs no unrelated solution to wake it: true
 two continuations: the indexed and the whole-environment substitution agree: true
 each continuation solves the chain its own way, and the saved environment stays unsolved: true
 a newest-first chain twice as long takes 1.8x-2.2x the indexed visits: true

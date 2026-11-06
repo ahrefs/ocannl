@@ -8,8 +8,9 @@
     index must not miss: alias chains in both orders ending concrete and symbolic, aliases inside
     [Concat] and windows, a stored [Concat] only an unrelated solution normalizes, an occurs check
     reached through aliases, row chains on both flanks, bounds set before their endpoint resolves, a
-    [Total_elems] row alive across a chain and a stage change, and two continuations of one saved
-    environment. Drives [tensor/row.ml] directly, as [test_concat_dim_solver] does. *)
+    [Total_elems] row alive across a chain and a stage change, one no solution reaches, and two
+    continuations of one saved environment. Drives [tensor/row.ml] directly, as
+    [test_concat_dim_solver] does. *)
 
 open! Base
 open Ocannl
@@ -289,6 +290,67 @@ let () =
         "the constraint survives the unrelated solutions and solves the row once its divisor is \
          known"
         (equal_outcome got (Values [ Some 3; Some 4 ])));
+  (* gh-ocannl-1977: a row outside a solution stays out of it: it used to re-emit at every dimension
+     solution, reversing its divisors and staying pending for the next one. *)
+  Verdict.case "a Total_elems row the solutions do not reach" (fun () ->
+      let visits_with row =
+        Row.reset_subst_visits ();
+        let r = Row.get_row_var () and x = Row.get_var () and y = Row.get_var () in
+        let constr =
+          Row.Total_elems { numerator = Num_elems 12; divided_by = [ x; y ]; keep_axis = false }
+        in
+        let start =
+          if row then [ [ Row.Rows_constr { r = [ row_var r ]; constr; origin } ] ] else []
+        in
+        let unrelated = List.init 51 ~f:(fun i -> [ eq (Var (Row.get_var ())) (dim (i + 1)) ]) in
+        let _, env = solve_steps (start @ unrelated) Row.empty_env in
+        (Row.subst_visits (), Row.find_row_entry env r, x, y)
+      in
+      let bare, _, _, _ = visits_with false in
+      let visits, entry, x, y = visits_with true in
+      p "fifty unrelated solutions visit it once" (visits - bare <= 2);
+      p "and leave its divisors as they were"
+        (match entry with
+        | Some (Bounds_row { constr = Total_elems { divided_by = [ a; b ]; _ }; _ }) ->
+            Row.equal_dim_var a x && Row.equal_dim_var b y
+        | _ -> false));
+  Verdict.case "a Total_elems numerator solved before the stage that reads it" (fun () ->
+      let closes ~unrelated =
+        let r = Row.get_row_var () and x = Row.get_var () in
+        let constr =
+          Row.Total_elems
+            {
+              numerator =
+                Strided_var
+                  { coeff = Utils.safe_value "gh-1977" 2; var = x; denom = 1; round_up = false };
+              divided_by = [];
+              keep_axis = false;
+            }
+        in
+        let pending, env =
+          solve_steps
+            [
+              [
+                Row.Rows_constr { r = [ row_var r ]; constr; origin };
+                Row.Shape_row (row_var r, origin);
+              ];
+              [ eq (Var x) (dim 3) ];
+            ]
+            Row.empty_env
+        in
+        let pending, env =
+          Row.solve_inequalities ~stage:Stage2
+            (pending @ if unrelated then [ eq (Var (Row.get_var ())) (dim 9) ] else [])
+            env
+        in
+        let _, env =
+          List.fold [ Row.Stage3; Stage4; Stage5; Stage6; Stage7 ] ~init:(pending, env)
+            ~f:(fun (pending, env) stage -> Row.solve_inequalities ~stage pending env)
+        in
+        List.map (Row.subst_row env (row_var r)).dims ~f:Row.dim_to_int_exn
+      in
+      p "it needs no unrelated solution to wake it"
+        (List.equal Int.equal (closes ~unrelated:false) (closes ~unrelated:true)));
   Verdict.case "two continuations of one saved environment" (fun () ->
       let got, _, _ =
         both "two continuations" (fun () ->

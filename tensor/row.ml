@@ -587,8 +587,7 @@ type environment = {
     solved variable leaves it unchanged -- unless it is pending. [pending_dims] / [pending_rows] are
     the entries a visit by an unrelated dimension solution can still change or make emit: every
     written entry, until a visit leaves it unchanged without emitting. That covers the
-    normalizations [s_dim_one] applies whatever the variable ([Concat] sums, collapsing windows),
-    and [Total_elems] constraints, which re-emit at every dimension solution. *)
+    normalizations [s_dim_one] applies whatever the variable ([Concat] sums, collapsing windows). *)
 
 let add_mentions index ~vars ~key ~empty =
   Set.fold vars ~init:index ~f:(fun index w ->
@@ -1740,13 +1739,19 @@ let subst_row_constraint_unprotected ~subst_in_dim ~get_dim_val stage constr =
   let subst_total_elems_divided_by numerator divided_by ~keep_axis =
     let substituted_divided_by = List.map divided_by ~f:(fun v -> subst_in_dim (Var v)) in
     fail_if_total_elems_over_sym substituted_divided_by;
+    let untouched =
+      List.for_all2_exn divided_by substituted_divided_by ~f:(fun v d -> equal_dim (Var v) d)
+    in
     match collect_factors substituted_divided_by with
+    (* A solution that reaches no divisor says nothing new: reapplying here made every such row
+       re-emit at every dimension solution (gh-ocannl-1977). *)
+    | _ when untouched -> Total_elems { numerator; divided_by; keep_axis }
     | Some (known_product, residual_vars) ->
         reapply_rows_constr := true;
         Total_elems
           {
             numerator = total_elems_divide numerator known_product;
-            divided_by = residual_vars;
+            divided_by = List.rev residual_vars;
             keep_axis;
           }
     | None ->
