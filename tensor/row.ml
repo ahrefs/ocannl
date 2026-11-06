@@ -275,10 +275,6 @@ let window_output_bases ~size ~(input : solved_dim) ~(kernel : solved_dim) =
   window_bases ~size ~tags:[ input.basis; kernel.basis ] ~derives:(fun extent ->
       Option.equal String.equal (window_input_basis ~extent ~kernel) (Some input.basis))
 
-let window_kernel_bases ~size ~(input : solved_dim) ~(extent : solved_dim) =
-  window_bases ~size ~tags:[ input.basis; extent.basis ] ~derives:(fun kernel ->
-      Option.equal String.equal (window_input_basis ~extent ~kernel) (Some input.basis))
-
 let effective_kernel_span ~dilation ~kernel_size =
   (* The effective kernel span with dilation is: 1 + (kernel_size - 1) * dilation This is the actual
      range of input indices covered by the kernel. *)
@@ -308,6 +304,14 @@ let is_identity_window ~stride ~conv =
   | Some { dilation; kernel = Dim k; use_padding = false } ->
       effective_kernel_span ~dilation ~kernel_size:k.d = 1 && is_reserved_basis k.basis
   | Some { kernel = Var _ | Sym _ | Affine _ | Concat _; use_padding = false; _ } -> false
+
+(* A kernel inferred from its window: a reserved tag can make the window the identity, whose input
+   is its extent's whatever the rule says. *)
+let window_kernel_bases ~stride ~dilation ~size ~(input : solved_dim) ~(extent : solved_dim) =
+  window_bases ~size ~tags:[ input.basis; extent.basis ] ~derives:(fun kernel ->
+      let conv = Some { dilation; kernel = Dim kernel; use_padding = false } in
+      if is_identity_window ~stride ~conv then String.equal extent.basis input.basis
+      else Option.equal String.equal (window_input_basis ~extent ~kernel) (Some input.basis))
 
 type 'a dim_hashtbl = 'a Hashtbl.M(Dim_var).t [@@deriving sexp]
 
@@ -2716,19 +2720,28 @@ let%track6_sexp rec unify_dim ?(settling : bool ref option) ~stage origin (eq : 
         | bases -> (
             match settling with
             | None -> ([ held ], env)
-            | Some settled ->
-                settled := true;
+            | Some settled -> (
                 (* [default] suits a variable. A nested window can derive only some of the tags, so
-                   it takes the first it can. *)
+                   it takes the first it can. One still waiting on its own kernel settles nothing,
+                   and this equation stays with it: a deferral leaves the environment as it was. *)
+                let attempt basis =
+                  match solve_over basis with
+                  | constrs, env' when not (phys_equal env' env) -> Some (constrs, env')
+                  | _ -> None
+                in
                 let rec first_fit = function
                   | [] -> assert false
-                  | [ basis ] -> solve_over basis
-                  | basis :: rest -> ( try solve_over basis with Shape_error _ -> first_fit rest)
+                  | [ basis ] -> attempt basis
+                  | basis :: rest -> ( try attempt basis with Shape_error _ -> first_fit rest)
                 in
                 let others = List.filter bases ~f:(Fn.non (String.equal default_basis)) in
-                let constrs, env = first_fit (default_basis :: others) in
-                let more, env = unify_dim ~stage origin (dim1, dim2) env in
-                (constrs @ more, env))
+                let fit = first_fit (default_basis :: others) in
+                settled := Option.is_some fit;
+                match fit with
+                | None -> ([ held ], env)
+                | Some (constrs, env) ->
+                    let more, env = unify_dim ~stage origin (dim1, dim2) env in
+                    (constrs @ more, env)))
       else
         raise
         @@ Shape_error
@@ -2754,7 +2767,7 @@ let%track6_sexp rec unify_dim ?(settling : bool ref option) ~stage origin (eq : 
             let more, env = unify_dim ~stage origin (dim1, dim2) env in
             (constrs @ more, env)
           in
-          match window_kernel_bases ~size:k ~input:i ~extent:s with
+          match window_kernel_bases ~stride ~dilation ~size:k ~input:i ~extent:s with
           | [] ->
               raise
               @@ Shape_error

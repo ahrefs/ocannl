@@ -780,19 +780,10 @@ let () =
           (1, 2, 2, 1);
           (2, 1, 3, 4);
           (1, 1, 1, 4);
+          (1, 1, 1, 1);
         ]
       in
-      let cells =
-        List.concat_map shapes ~f:(fun shape ->
-            List.filter_map tag_triples ~f:(fun ((_, kb, _) as tags) ->
-                let stride, dilation, ksize, _ = shape in
-                let span = (dilation * (ksize - 1)) + 1 in
-                let is_identity =
-                  stride = 1 && span = 1
-                  && (String.equal kb Row.default_basis || String.equal kb Row.bcast_if_1)
-                in
-                if is_identity then None else Some (shape, tags)))
-      in
+      let cells = List.cartesian_product shapes tag_triples in
       let orders = permutations [ 0; 1; 2; 3 ] in
       let agrees (((stride, dilation, ksize, osize), (ob, kb, ib)) as _cell) order =
         let isize = (stride * (osize - 1)) + (dilation * (ksize - 1)) + 1 in
@@ -806,7 +797,15 @@ let () =
           |]
         in
         let result = finished (staged (List.map order ~f:(Array.get cs))) in
-        let expected = Option.equal String.equal (rule ~o:(ob, osize) ~k:(kb, ksize)) (Some ib) in
+        let is_identity =
+          stride = 1
+          && (dilation * (ksize - 1)) + 1 = 1
+          && (String.equal kb Row.default_basis || String.equal kb Row.bcast_if_1)
+        in
+        let expected =
+          if is_identity then String.equal ob ib
+          else Option.equal String.equal (rule ~o:(ob, osize) ~k:(kb, ksize)) (Some ib)
+        in
         let ok =
           if expected then
             solves_tag (v, osize, ob) result
@@ -823,7 +822,7 @@ let () =
             (if expected then "should solve" else "should be refused");
         ok
       in
-      p_all ~min:416 "the output, kernel and input keep their tags or the system is refused" cells
+      p_all ~min:512 "the output, kernel and input keep their tags or the system is refused" cells
         ~f:(fun cell -> List.for_all orders ~f:(agrees cell)));
   Verdict.case "a padded window keeps its extent's basis, whatever the kernel" (fun () ->
       let cells = List.cartesian_product tags tags in
@@ -896,6 +895,16 @@ let () =
       p "over a nested window, settling keeps to a tag that window can derive"
         (solves_tag (v, 3, Row.default_basis)
            (finished (staged [ eq (w (w (Var v))) (tagged 7 "h") ])));
+      (* A nested window waiting on its own kernel settles nothing, so closing ends and the equation
+         stays with it; a settlement that binds nothing would repeat forever. *)
+      let nested k v = eq (w (window ~kernel:k (Var v))) (tagged 7 "h") in
+      let v = Row.get_var () and k = Row.get_var () in
+      let held = staged [ nested (Var k) v ] in
+      p "a nested window with an unsolved kernel stays deferred: neither solved nor refused"
+        ((not (is_solved (finished held))) && not (is_refused held));
+      p "and solves once the kernel arrives"
+        (solves_tag (v, 3, Row.default_basis)
+           (finished (staged [ nested (Var k) v; eq (Var k) (dim 3) ])));
       (* Two open windows over one output, with kernels that conflict: [default] is the choice both
          allow, in either order. *)
       List.iter [ true; false ] ~f:(fun h_first ->

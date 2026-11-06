@@ -196,6 +196,8 @@ control, the gate against over-deferral: a default output above 1 solves at Stag
 window first in one closing pass: v keeps h: true
 extent first in one closing pass: v keeps h: true
 over a nested window, settling keeps to a tag that window can derive: true
+a nested window with an unsolved kernel stays deferred: neither solved nor refused: true
+and solves once the kernel arrives: true
 h first: two open windows of different kernels settle on default: true
 j first: two open windows of different kernels settle on default: true
 the issue: v = 1 of bcast_if_1, conv3(v) = 3 of default, extent first, window on the left: true
