@@ -13,3 +13,6 @@ eq, rho2 ~ [] then cross surpluses (same store, pinned first): no error
 eq, mirror cross surpluses then rho2 ~ [] (flat-satisfiable, accepted): no error
 eq, balanced conflicting flanks (family solution, accepted): no error
 eq waiting for the rank, then bounds through its variable (satisfiable): no error
+bound on the waiting variable, its solution refutes it (unsatisfiable): Shape_error: dimension comparison for axis: mismatch
+chain to the waiting variable, its solution refutes it (unsatisfiable): Shape_error: dimension comparison for axis: mismatch
+bound fixes the rank of the waiting variable (satisfiable): no error: [6,7] [5,6]
