@@ -30,7 +30,7 @@
 # 68-69, 71-73, 80, 87, 92), #fresh (81), #lifecycle (40-47, 65, 74, 97, 99: the run/start
 # lifecycle with its signal legs, both fork-window negative controls, and a
 # launch queued before it publishes),
-# #source (59-63, 66), #slot (53-58, 78, 88, 93), #device (75-77, 91), #credentials (79, 90),
+# #source (59-63, 66, 104), #slot (53-58, 78, 88, 93), #device (75-77, 91), #credentials (79, 90),
 # #bisect (82), #harness (86, 102). A body that cannot go on (an extraction that
 # matched nothing, a fixture that is not what its checks assume) ends with
 # `harness_abandon DETAIL; return`, failing that leg alone: never `exit`,
@@ -409,6 +409,13 @@
 #      record never pairs the older HEAD with the newer tree's status.
 #  66 sits after leg 63: the digest's `source:` line reads the record -- the
 #      commit and `(clean)`, or `+ N uncommitted paths`; nothing unrecorded.
+# 104 sits after leg 66: a checkout with unmerged paths is refused
+#      (gh-ocannl-1991). The fixture checkout runs green before the merge (the
+#      control); stopped on a conflict, `run`, `start` and `repeat` each exit
+#      2 naming the unmerged path alone, dune not started, the digest and
+#      `wait last` under UNMERGED REFUSED, and `plan` says run would refuse;
+#      OCANNL_TOOL_TEST_UNMERGED=allow runs it, the `source:` line counting
+#      the unmerged path; resolved and staged, it runs as any dirty tree.
 #  67 sits after leg 8: a lock whose acquirer exited, held through the
 #      description it shared, is found by `stop`'s census and reaped, though
 #      /proc/locks names only the dead acquirer, or nobody (gh-ocannl-1107).
@@ -565,6 +572,9 @@ unset DUNE_DIFF_COMMAND
 # legs that want one export it. The box's own devices are masked as soon as
 # the scratch directory exists (hermetic_probes, below).
 unset OCANNL_BACKEND
+# Hermetic against a caller that allowed its own unmerged tree
+# (gh-ocannl-1991): leg 104 sets the override where it means it.
+unset OCANNL_TOOL_TEST_UNMERGED
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # The subject as named, until the scratch directory exists to stage it in.
@@ -6298,6 +6308,133 @@ EOF
 fi
 }
 harness_leg_run '59-63, 66: the source a run tested #source' leg_59_63_66
+
+# ---------------------------------------------------------------------------
+# Leg 104: a checkout with unmerged paths is refused (gh-ocannl-1991)
+# ---------------------------------------------------------------------------
+# A committed fixture checkout of the staged script, as legs 59-63 build one,
+# merged with a branch that conflicts in NOTES and adds OTHER: the merge stops
+# with `UU NOTES` unmerged and `A  OTHER` staged. The lifecycle fixture's fake
+# dune prints `built ok` into the run's log, which is how "dune never started"
+# is read; the launch before the merge is the control that it does print it.
+leg_104() {
+if ! command -v git >/dev/null 2>&1; then
+  skip 'unmerged: a checkout with unmerged paths is refused (leg 104)' 'no git on PATH'
+  return
+fi
+um_git() { GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git "$@"; }
+um_runs=$TMP/unmerged-runs
+um_root=$TMP/unmerged-repo
+um() { # test-run.sh argv...; sets um_rc, um_out (stdout and stderr)
+  um_out=$(GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null OCANNL_TOOL_TEST_RUNS=$um_runs \
+    PATH=$life_bin:$PATH "$um_root/tools/test-run.sh" "$@" 2>&1)
+  um_rc=$?
+}
+um_last() { um_dir=$(OCANNL_TOOL_TEST_RUNS=$um_runs "$um_root/tools/test-run.sh" paths run last 2>/dev/null) || um_dir=; }
+um_ran() { grep -Fqx 'built ok' "$um_dir/log" 2>/dev/null; }
+um_check() { # LABEL: reports on $um_detail
+  if [ -z "$um_detail" ]; then report 0 "unmerged: $1"; else report 1 "unmerged: $1" "$um_detail"; fi
+}
+stage_error="cannot copy the script into $um_root"
+{ mkdir -p "$um_root/tools" "$um_root/scripts" && cp "$SRC" "$um_root/tools/test-run.sh" &&
+    stage_sourced "$um_root" && chmod +x "$um_root/tools/test-run.sh"; } ||
+  { harness_abandon "unmerged: fixture root: $stage_error"; return; }
+printf 'base\n' >"$um_root/NOTES"
+{ um_git init -q "$um_root" &&
+    um_git -C "$um_root" config user.name harness &&
+    um_git -C "$um_root" config user.email harness@invalid &&
+    um_git -C "$um_root" config commit.gpgsign false &&
+    um_git -C "$um_root" config core.autocrlf false &&
+    um_git -C "$um_root" add -A &&
+    um_git -C "$um_root" commit -q --no-verify -m fixture &&
+    um_git -C "$um_root" checkout -q -b side &&
+    printf 'theirs\n' >"$um_root/NOTES" && printf 'other\n' >"$um_root/OTHER" &&
+    um_git -C "$um_root" add -A &&
+    um_git -C "$um_root" commit -q --no-verify -m side &&
+    um_git -C "$um_root" checkout -q - &&
+    printf 'ours\n' >"$um_root/NOTES" &&
+    um_git -C "$um_root" commit -q --no-verify -am ours; } >/dev/null 2>&1 ||
+  { harness_abandon 'unmerged: the fixture repository could not be committed'; return; }
+um_head=$(um_git -C "$um_root" rev-parse HEAD)
+
+# The control: before the merge the same launch runs dune and is green.
+um run --cap 30 ok; um_last
+um_detail=
+{ [ "$um_rc" = 0 ] && um_ran && grep -Fqx "source:  $um_head (clean)" <<<"$um_out"; } ||
+  um_detail="exit $um_rc; $um_out"
+um_check 'control: the checkout runs green before the merge'
+um_control=$um_dir
+
+um_git -C "$um_root" merge -q --no-edit side >/dev/null 2>&1
+if [ "$(um_git -C "$um_root" status --porcelain | sort | tr '\n' ';')" != 'A  OTHER;UU NOTES;' ]; then
+  harness_abandon "unmerged: the merge did not stop on the one conflict: $(um_git -C "$um_root" status --porcelain | tr '\n' ';')"
+  return
+fi
+
+# `run`: exit 2, the unmerged path named (and not the staged one), a run of
+# its own on record whose dune never started.
+um run --cap 30 ok; um_last
+um_detail=
+{ [ "$um_rc" = 2 ] && [ -n "$um_dir" ] && [ "$um_dir" != "$um_control" ] && ! um_ran &&
+    grep -Fqx 'verdict: UNMERGED REFUSED (the checkout has unmerged paths; nothing ran) (exit 2)' <<<"$um_out" &&
+    grep -Fqx 'unmerged refused: UU NOTES' <<<"$um_out" &&
+    [ "$(grep -c '^unmerged refused: ' <<<"$um_out")" = 1 ] &&
+    grep -Fqx 'test-run: UNMERGED REFUSED: UU NOTES' "$um_dir/log" &&
+    grep -Fqx "source:  $um_head + 2 uncommitted paths, 1 of them unmerged" <<<"$um_out"; } ||
+  um_detail="exit $um_rc; run ${um_dir:-?}; $um_out"
+um_check 'run refuses, exit 2, naming the unmerged path alone, dune not started'
+
+# `start`: refused in the launcher's own exit, nothing left detached, and
+# `wait last` answers with the refusal rather than the run before it.
+um_before=$um_dir
+um start --cap 30 ok; um_last
+um_detail=
+{ [ "$um_rc" = 2 ] && [ -n "$um_dir" ] && [ "$um_dir" != "$um_before" ] && ! um_ran &&
+    ! grep -q '^started: ' <<<"$um_out" &&
+    grep -Fqx 'unmerged refused: UU NOTES' <<<"$um_out"; } ||
+  um_detail="start: exit $um_rc; run ${um_dir:-?}; $um_out"
+um wait last --timeout 30
+{ [ "$um_rc" = 2 ] && grep -q '^verdict: UNMERGED REFUSED ' <<<"$um_out"; } ||
+  um_detail="$um_detail${um_detail:+; }wait last: exit $um_rc; $um_out"
+um_check 'start refuses in its own exit, and wait last reads the refusal'
+
+# `repeat`: no iteration ran.
+um repeat --cap 30 2 ok; um_last
+um_detail=
+{ [ "$um_rc" = 2 ] && ! um_ran && [ ! -d "$um_dir/iteration-1" ] &&
+    grep -Fqx 'test-run: repeat: UNMERGED REFUSED: UU NOTES; no iteration ran' <<<"$um_out"; } ||
+  um_detail="exit $um_rc; run ${um_dir:-?}; $um_out"
+um_check 'repeat refuses before its first iteration'
+
+# `plan` runs nothing either way, and says what run would do.
+um plan --cap 30 ok
+um_detail=
+{ [ "$um_rc" = 0 ] &&
+    grep -Fqx 'unmerged: run would refuse this checkout (UNMERGED REFUSED, exit 2)' <<<"$um_out" &&
+    grep -Fqx '  UU NOTES' <<<"$um_out"; } ||
+  um_detail="exit $um_rc; $um_out"
+um_check 'plan says run would refuse, naming the path'
+
+# The override runs the tree as it is, and the digest says what it was.
+OCANNL_TOOL_TEST_UNMERGED=allow um run --cap 30 ok; um_last
+um_detail=
+{ [ "$um_rc" = 0 ] && um_ran && [ ! -e "$um_dir/unmerged-refused" ] &&
+    grep -Fqx "source:  $um_head + 2 uncommitted paths, 1 of them unmerged" <<<"$um_out"; } ||
+  um_detail="exit $um_rc; run ${um_dir:-?}; $um_out"
+um_check 'OCANNL_TOOL_TEST_UNMERGED=allow runs it, the source line counting the unmerged path'
+
+# Resolved and staged, mid-merge still: an ordinary dirty tree, and it runs.
+printf 'resolved\n' >"$um_root/NOTES"
+um_git -C "$um_root" add NOTES >/dev/null 2>&1
+um run --cap 30 ok; um_last
+um_detail=
+{ [ "$um_rc" = 0 ] && um_ran && um_git -C "$um_root" rev-parse -q --verify MERGE_HEAD >/dev/null &&
+    grep -Fqx "source:  $um_head + 2 uncommitted paths" <<<"$um_out"; } ||
+  um_detail="exit $um_rc; run ${um_dir:-?}; $um_out"
+um_check 'a conflict resolved and staged runs, mid-merge, as any dirty tree'
+lifecycle_cleanup
+}
+harness_leg_run '104: a checkout with unmerged paths is refused #source' leg_104
 
 # ---------------------------------------------------------------------------
 # Legs 53-58: the fleet's run-time slot, taken by the runner (gh-ocannl-1004)

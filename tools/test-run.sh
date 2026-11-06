@@ -331,7 +331,13 @@
 # -- `; ocannl-backend: …` malformed, misplaced, or twice on one stanza --
 # exits 2 under the verdict `MARKER REFUSED`, the digest naming each marker's
 # dune file and line, before the slot and dune: an unreadable marker is not
-# read as every backend (tools/batch-backends.sh).
+# read as every backend (tools/batch-backends.sh). And a checkout the launch
+# found with unmerged paths -- a merge, rebase or cherry-pick stopped on a
+# conflict -- exits 2 under the verdict `UNMERGED REFUSED`, the digest naming
+# each path, first of all and with nothing built: HEAD there is one side of an
+# operation still in progress, so the run's `source:` commit would not be what
+# ran (see unmerged_paths; OCANNL_TOOL_TEST_UNMERGED=allow runs it, and the
+# digest then counts the unmerged paths).
 #
 # Everything after the options is dune's argv, verbatim (default: `runtest`):
 #   tools/test-run.sh run runtest test/operations
@@ -2257,6 +2263,30 @@ record_checkout() {
   )
 }
 
+# The unmerged paths of the launch-time record above, as its own lines (`UU
+# docs/notes.md`): the seven XY pairs porcelain v1 gives an unmerged entry and
+# no other. A launch that found any is refused in `_resolve`, before anything
+# is built (gh-ocannl-1991, UNMERGED REFUSED, exit 2): mid-merge or mid-rebase
+# HEAD is one side of an operation still in progress, so the `source:` commit
+# of a verdict would name a tree that is not the one that ran -- and `dune
+# build @check` passing says nothing, when the conflict sits in a file no rule
+# compiles (the case that filed this: a Markdown file, a GPU run launched
+# mid-rebase). It reads the record, not the checkout again, so the refusal and
+# the digest's `source:` line state one launch-time fact, and it has the
+# record's scope: no refusal where none was taken (outside Git, a root that is
+# not the checkout's top level). A conflict resolved and staged is no longer
+# unmerged, and that launch runs with its paths counted as uncommitted.
+#
+# OCANNL_TOOL_TEST_UNMERGED=allow runs the batch anyway, for the one drill
+# that needs it: regenerating a golden that is itself the conflict, which
+# tools/promote.sh then promotes and deliberately leaves unstaged. The digest
+# of such a run counts the unmerged paths on its `source:` line, so the
+# verdict cannot be quoted as a commit's.
+unmerged_paths() { # <run dir>
+  [ -s "$1/head" ] && [ -s "$1/dirty" ] || return 0
+  sed -n -E '/^(DD|AU|UD|UA|DU|AA|UU) /p' "$1/dirty"
+}
+
 # Dune's own promotion list, recorded at the run's end (gh-ocannl-1087): the
 # `promotions` file holds one source path per line, the files `dune promote`
 # would update right then, and is empty when dune has nothing to promote. The
@@ -3520,7 +3550,9 @@ digest() {
   case $rc in
     0) verdict=pass ;;
     2)
-      if [ -s "$dir/alias-refused" ]; then
+      if [ -s "$dir/unmerged-refused" ]; then
+        verdict="UNMERGED REFUSED (the checkout has unmerged paths; nothing ran)"
+      elif [ -s "$dir/alias-refused" ]; then
         verdict="ALIAS REFUSED (dune knows no such alias; nothing ran)"
       elif [ -s "$dir/marker-refused" ]; then
         verdict="MARKER REFUSED (a backend marker env_var_deps refuses; nothing ran)"
@@ -3597,7 +3629,7 @@ digest() {
   # so a digest quoted as evidence carries its revision. Nothing is printed
   # for a run that recorded none (outside Git, or launched before the record).
   if [ -s "$dir/head" ]; then
-    local src_head src_n
+    local src_head src_n src_unmerged
     src_head=$(sed -n 1p "$dir/head")
     if [ ! -f "$dir/dirty" ]; then
       echo "source:  $src_head (uncommitted state not recorded)"
@@ -3605,13 +3637,17 @@ digest() {
       echo "source:  $src_head (clean)"
     else
       src_n=$(grep -c '' "$dir/dirty")
+      # An unmerged path is said so: this tree is no commit's (unmerged_paths).
+      src_unmerged=$(unmerged_paths "$dir" | grep -c '')
+      [ "$src_unmerged" != 0 ] && src_unmerged=", $src_unmerged of them unmerged" || src_unmerged=
       if [ "$src_n" = 1 ]; then
-        echo "source:  $src_head + 1 uncommitted path"
+        echo "source:  $src_head + 1 uncommitted path${src_unmerged:+, unmerged}"
       else
-        echo "source:  $src_head + $src_n uncommitted paths"
+        echo "source:  $src_head + $src_n uncommitted paths$src_unmerged"
       fi
     fi
   fi
+  [ ! -s "$dir/unmerged-refused" ] || sed 's/^/unmerged refused: /' "$dir/unmerged-refused"
   [ ! -s "$dir/alias-refused" ] || sed 's/^/alias refused: /' "$dir/alias-refused"
   [ ! -s "$dir/marker-refused" ] || sed 's/^/marker refused: /' "$dir/marker-refused"
   if [ -s "$dir/backend-refused" ]; then
@@ -4354,7 +4390,10 @@ case $sub in
       # A resolution its supervisor ended -- its cap (142), a kill -- ran no iteration, and the set
       # exits with that status, as a run whose resolution was cut short does (repeat_exit records
       # it); a resolution that finished without its bounds is this script's own failure.
-      if [ "$resolve_rc" != 0 ] && [ -s "$run_dir/alias-refused" ]; then
+      if [ "$resolve_rc" != 0 ] && [ -s "$run_dir/unmerged-refused" ]; then
+        sed 's/^/test-run: repeat: UNMERGED REFUSED: /; $s/$/; no iteration ran/' "$run_dir/unmerged-refused"
+        exit "$resolve_rc"
+      elif [ "$resolve_rc" != 0 ] && [ -s "$run_dir/alias-refused" ]; then
         sed 's/^/test-run: repeat: ALIAS REFUSED: /; $s/$/; no iteration ran/' "$run_dir/alias-refused"
         exit "$resolve_rc"
       elif [ "$resolve_rc" != 0 ] && [ -s "$run_dir/marker-refused" ]; then
@@ -4812,7 +4851,19 @@ case $sub in
     mode=$1 cap=$2 test_cap=$3 DUNE=$4
     shift 4
     run_dir=$testrun_own
-    # An alias dune does not know is refused first (plan_aliases): before the
+    # A checkout the launch found with unmerged paths is refused first of all
+    # (unmerged_paths): nothing is asked of dune about a tree no commit names.
+    unmerged=
+    [ "${OCANNL_TOOL_TEST_UNMERGED:-}" = allow ] || unmerged=$(unmerged_paths "$run_dir")
+    if [ -n "$unmerged" ] && [ "$mode" != plan ]; then
+      { printf '%s\n' "$unmerged" >"$run_dir/unmerged-refused.tmp" &&
+          mv -f "$run_dir/unmerged-refused.tmp" "$run_dir/unmerged-refused"; } ||
+        { echo "test-run: cannot record the unmerged refusal in $run_dir"; exit 126; }
+      printf '%s\n' "$unmerged" | sed 's/^/test-run: UNMERGED REFUSED: /'
+      echo "test-run: the checkout is mid-merge (or rebase, cherry-pick): resolve and stage these, or abort the operation, then launch again; OCANNL_TOOL_TEST_UNMERGED=allow runs the tree as it is, e.g. to regenerate a conflicted golden; nothing ran"
+      exit 2
+    fi
+    # An alias dune does not know is refused next (plan_aliases): before the
     # backends' resolution builds anything, and before the slot and the probe.
     plan_aliases "$@"
     if [ -n "$alias_refusal" ] && [ "$mode" != plan ]; then
@@ -4897,6 +4948,10 @@ case $sub in
         echo "command: dune $*"
         echo "backends: $(batch_summary)"
         sed -n 's/^test-run: batch: /  /p' "$run_dir/log"
+        if [ -n "$unmerged" ]; then
+          echo "unmerged: run would refuse this checkout (UNMERGED REFUSED, exit 2)"
+          printf '%s\n' "$unmerged" | sed 's/^/  /'
+        fi
         if [ -n "$alias_refusal" ]; then
           echo "aliases: run would refuse this batch (ALIAS REFUSED, exit 2)"
           printf '%s\n' "$alias_refusal" | sed 's/^/  /'
