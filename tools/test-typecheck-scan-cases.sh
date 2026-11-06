@@ -17,6 +17,13 @@
 # arm sees a neighbouring arm's compiled unit; and an `~interface:` snippet is compiled as a
 # signature.
 #
+# Another dune holding the build directory's lock refuses every build the subject asks for, which
+# is no verdict on any of the above: the subject exits 75 (LOCK HELD) and this harness abandons the
+# run there, with one ABANDONED line and exit 75, where it used to print a FAIL per check and pass
+# the checks expecting a failure (gh-ocannl-1940). Leg 13 holds the lock of a build directory of
+# its own with a real dune and runs the subject, and this harness, against it; a refusal met by the
+# dune the engine runs for an owning module's context is that same dune's text replayed.
+#
 # The legs tagged #project check project-syntax arms (`let%op`, extensions) in an owning module's
 # context, which builds that module of this repository and so needs the project's dependencies:
 # leg 10 checks every arm of the repository tables that leg 1 refuses (run without the context), and
@@ -56,6 +63,13 @@ out="$TMP/out" err="$TMP/err"
 run() { # run the subject; its status in $rc, stdout in $out, stderr in $err
   rc=0
   "$subject" "$@" >"$out" 2>"$err" || rc=$?
+  held_lock_abandons
+}
+# The subject's exit 75 is its word that another dune holds the build lock: every later run meets
+# the same refusal, so the run ends here, said once (gh-ocannl-1940).
+held_lock_abandons() {
+  [ "$rc" != 75 ] || harness_abandon_run \
+    "another dune holds the build directory's lock, so the subject checked nothing: run this again when that dune is done ($(grep -m1 -F 'LOCK HELD' "$err"))"
 }
 expect_rc() { # LABEL WANT
   if [ "$rc" = "$2" ]; then report 0 "$1 exits $2"
@@ -213,6 +227,7 @@ leg8() {
   local moved="$TMP/moved-build"
   rc=0
   DUNE_BUILD_DIR=$moved "$subject" --no-stub "$TMP/t/planted_scan_cases.ml" >"$out" 2>"$err" || rc=$?
+  held_lock_abandons
   expect_rc "a run with DUNE_BUILD_DIR moved" 1
   has "still runs the engine dune built there" "REJECTED  $table:4: an ill-typed arm"
 }
@@ -385,5 +400,105 @@ CASES
   has "as a type error, not as a value declaration outside a signature" "Unbound type constructor no_such_type"
 }
 harness_leg_run '12: project syntax refused without its context, owning-module declarations and interface snippets' leg12
+
+# A real dune holding the lock of a build directory of this harness's own: its one rule waits for
+# the release file. The project's own build directory is never the one held.
+holder_pid=
+hold_release() {
+  [ -n "$holder_pid" ] || return 0
+  : >"$TMP/hold/release"
+  wait "$holder_pid" 2>/dev/null
+  holder_pid=
+}
+cleanup_fixture() { hold_release; }
+hold_lock() { # start the holder; 0 once its rule runs, which is after dune took the lock
+  local n=0
+  mkdir -p "$TMP/hold/project" || return 1
+  printf '(lang dune 3.0)\n' >"$TMP/hold/project/dune-project"
+  printf '%s\n' '(rule (alias hold) (deps hold.sh) (action (run bash hold.sh)))' >"$TMP/hold/project/dune"
+  printf '%s\n' ': >"$HOLD_STARTED"' 'while [ ! -e "$HOLD_RELEASE" ]; do sleep 0.1; done' \
+    >"$TMP/hold/project/hold.sh"
+  # Credentials stay out of this dune's trace as they stay out of the subject's.
+  ( . "$script_dir/credential-env.sh" && eval "$(credential_env_scrub_text)" &&
+    DUNE_BUILD_DIR=$TMP/hold/build HOLD_STARTED=$TMP/hold/started HOLD_RELEASE=$TMP/hold/release \
+      exec dune build --root "$TMP/hold/project" @hold ) >"$TMP/hold/holder.log" 2>&1 &
+  holder_pid=$!
+  while [ ! -e "$TMP/hold/started" ]; do
+    n=$((n + 1))
+    [ "$n" -le 1200 ] && kill -0 "$holder_pid" 2>/dev/null || return 1
+    sleep 0.1
+  done
+}
+
+leg13() {
+  if ! hold_lock; then
+    harness_abandon "the dune holding the lock never ran its rule: $(tail -n 4 "$TMP/hold/holder.log" 2>/dev/null | tr '\n' '|')"
+    hold_release
+    return
+  fi
+  # The subject, raw: `run` would abandon this run at the status under test.
+  rc=0
+  DUNE_BUILD_DIR=$TMP/hold/build "$subject" --no-stub "$table" >"$out" 2>"$err" || rc=$?
+  expect_rc "the subject, its build directory's lock held by another dune," 75
+  if grep -qF "LOCK HELD: another dune holds the lock of $TMP/hold/build" "$err"; then
+    report 0 "says the lock is held, naming the build directory"
+  else report 1 "says the lock is held, naming the build directory" "stderr: $(tr '\n' '|' <"$err")"
+  fi
+  if grep -qF 'the engine did not build' "$err"; then
+    report 1 "does not call it an engine that did not build" "stderr: $(tr '\n' '|' <"$err")"
+  else report 0 "does not call it an engine that did not build"
+  fi
+  lacks "reaches no table" "== "
+  # What dune itself said, for the replay below: the subject's stderr but its own line.
+  grep -vF 'typecheck-scan-cases:' "$err" >"$TMP/hold/refusal"
+
+  # This harness against the held lock: every leg but this one, then a leg whose every check
+  # expects the subject to fail, which the refusal used to pass.
+  local inner="$TMP/hold/inner" only
+  for only in '^([1-9]|1[0-2]):' '^5:'; do
+    rc=0
+    DUNE_BUILD_DIR=$TMP/hold/build "${BASH:-bash}" "$script_dir/test-typecheck-scan-cases.sh" --only "$only" \
+      >"$inner" 2>&1 || rc=$?
+    if [ "$rc" = 75 ] && [ "$(grep -c '^ABANDONED  ' "$inner")" = 1 ] &&
+      grep -q "^ABANDONED  another dune holds the build directory's lock" "$inner" &&
+      ! grep -q '^FAIL\|^PASS\|legs passed\|leg(s) failed\|no failure\|aborted before finish' "$inner"; then
+      report 0 "this harness (--only '$only') is abandoned once: no FAIL, no PASS, exit 75"
+    else
+      report 1 "this harness (--only '$only') is abandoned once: no FAIL, no PASS, exit 75" \
+        "exited $rc; $(grep -c '^FAIL' "$inner") FAIL, $(grep -c '^PASS' "$inner") PASS: $(head -n 6 "$inner" | tr '\n' '|')"
+    fi
+  done
+  hold_release
+
+  # The lock taken after the engine was built: the engine's own dune, building an owning module's
+  # context, is the one refused. A dune ahead on PATH answers that one build with the refusal the
+  # real one printed above, and hands every other call to the real one.
+  local real
+  real=$(command -v dune)
+  mkdir -p "$TMP/hold/bin"
+  cat >"$TMP/hold/bin/dune" <<'DUNE'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case $arg in @@*check) cat "$HOLD_REFUSAL" >&2; exit 1 ;; esac
+done
+exec "$HOLD_REAL_DUNE" "$@"
+DUNE
+  chmod +x "$TMP/hold/bin/dune"
+  rc=0
+  HOLD_REFUSAL=$TMP/hold/refusal HOLD_REAL_DUNE=$real PATH=$TMP/hold/bin:$PATH \
+    "$subject" "$ptable" >"$out" 2>"$err" || rc=$?
+  expect_rc "the subject, the lock taken before an owning module's context is built," 75
+  if grep -qF 'LOCK HELD' "$err" && grep -qF "context does not build" "$err"; then
+    report 0 "says the lock is held, after the engine's own account"
+  else report 1 "says the lock is held, after the engine's own account" "stderr: $(tr '\n' '|' <"$err")"
+  fi
+  # The same build failing for any other reason is still the exit 2 it was.
+  printf 'Error: some other failure of the build\n' >"$TMP/hold/refusal"
+  rc=0
+  HOLD_REFUSAL=$TMP/hold/refusal HOLD_REAL_DUNE=$real PATH=$TMP/hold/bin:$PATH \
+    "$subject" "$ptable" >"$out" 2>"$err" || rc=$?
+  expect_rc "the subject, an owning module's context failing to build for another reason," 2
+}
+harness_leg_run '13: a build lock another dune holds abandons the run once, with no FAIL per check' leg13
 
 finish
