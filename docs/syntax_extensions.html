@@ -2139,14 +2139,12 @@ is one check, whose scheme gives the whole model’s signature, for <a href="sha
 pattern, each a fraction of one build</a>. <code>sokoban_cnn</code> and
 <code>mobile_cnn</code> are schemed the same way.</p>
 <p><strong>Refused traces degrade, with a warning.</strong> A function
-whose trace a scheme cannot carry – random number generation inside it
-(including a closure built inside it whose parameters take the default
-random initialization), <code>Shape.set_dim</code> or the like on a
-capture reference made outside it, forcing dims or projections, a body
-that cannot run on tracers – stays unschemed, once the trace’s rewind
-succeeded. It is a valid function, and its applications report what they
-always reported. The refusal is printed to stderr once per function and
-reason in a process
+whose trace a scheme cannot carry – <code>Shape.set_dim</code> or the
+like on a capture reference made outside it, forcing dims or
+projections, a body that cannot run on tracers – stays unschemed, once
+the trace’s rewind succeeded. It is a valid function, and its
+applications report what they always reported. The refusal is printed to
+stderr once per function and reason in a process
 (<code>OCANNL warning: the shape scheme of &lt;function&gt; was refused ...</code>),
 with the reason rendered as a shape error is. Opting out,
 <code>op_shape_schemes=off</code>, and a closure built inside another
@@ -2159,6 +2157,11 @@ applied) print nothing.</p>
 application to what earlier applications bound it to, so an application
 conflicting with them is refused at that application, before the body
 runs.</p>
+<p>Random draws in the body are no refusal either (gh-ocannl-1890),
+default-initialized <code>{ w }</code> declarations included: the scheme
+checks the shapes around a draw, and the body’s own registration sizes
+it. Only the explicit <code>Tensor.Scheme.instantiate</code>, which has
+no body to run, refuses a scheme with draws.</p>
 <p><strong>Side effects.</strong> The trace runs the body once more per
 closure (once per presence pattern with option-valued tensors). Under
 the rewind it leaves no shape state, no tensor and no session id behind
