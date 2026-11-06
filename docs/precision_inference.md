@@ -38,6 +38,8 @@ and later the top-down pass, here from the value node `v`:
   List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti.value v.Tn.prec);
 ```
 
+A tensor whose data fixes its precision never takes this link: `init`, `reshape`, `wrap`, `wrap_padded` and the other data-backed terms create their node `Specified` at the data's precision, so a top-down update of one changes nothing, even after that precision has been read (gh-ocannl-2011). Only a node the update could change refuses it once forced: a term with no data of its own, or a result, read before its consumer was built.
+
 ## Initializers follow their parameter
 
 A parameter's initialization expression fills the parameter, so its float tensors are at least as precise as the parameter (gh-ocannl-1967): otherwise a `double` parameter over the `single` default would start from f32-quantized draws, since the bottom-up pass stops at the first operation none of whose operands states a precision (the default initializer's centering `sub`), which settles at `Tensor.default_value_prec`. `Tensor.param` therefore links every float tensor of the expression (stopping at other parameters) to the parameter's precision, whether that one is set by the user, pinned by `Mixed_prec.with_master_weights ~master_prec`, or inferred top-down from a consumer.
