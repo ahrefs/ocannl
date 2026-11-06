@@ -183,22 +183,40 @@ if harness_leg 'a trace with no solve_row_ineq names the gate and fails #partial
     'return 1 if unparsed or calls == 0 else 0' 'return 1 if unparsed else 0'
 fi
 
-if harness_leg 'a reader that stops early costs no traceback #usage'; then
-  # Past any pipe buffer, so the tool is still writing when its reader leaves.
-  for i in $(seq 1 8000); do
+if harness_leg 'a reader that has left costs no traceback #usage'; then
+  # Its read end closed before the tool starts: which write meets that is then no race. A short
+  # digest stays in the buffer to the last flush, a long one overflows it in mid-run.
+  ineq Stage1 "$V83" "$BC" >"$TMP/short"
+  for i in $(seq 1 1000); do
     ineq Stage1 "(beg_dims ()) (dims ()) (bcast (Row_var (Row_var $i)))" "$BC"
   done >"$TMP/long"
-  check_pipe() { # TOOL
-    python3 "$1" "$TMP/long" 2>"$err" | head -n 1 >"$out"
-    [ "$(cat "$out")" = '1 Stage1 ..1.. >= <bc>' ] && [ ! -s "$err" ]
+  check_reader_gone() { # TOOL TRACE
+    python3 - "$1" "$2" "$err" <<'PYTHON'
+import os, subprocess, sys
+tool, trace, err = sys.argv[1:]
+read_end, write_end = os.pipe()
+os.close(read_end)
+with open(err, "w") as stderr:
+    subprocess.run([sys.executable, tool, trace], stdout=write_end, stderr=stderr)
+PYTHON
+    [ ! -s "$err" ]
   }
-  if check_pipe "$SRC"; then report 0 'the pipe closing is quiet'
-  else report 1 'the pipe closing is quiet' "$(cat "$out" "$err")"; fi
-  if ! faulted pipe-loud 'except BrokenPipeError:' 'except ZeroDivisionError:'; then
-    report 1 'negative control: the pipe closing is handled' 'the fault did not apply'
-  elif check_pipe "$TMP/pipe-loud.py"; then
-    report 1 'negative control: the pipe closing is handled' 'the oracle accepted the fault'
-  else report 0 'negative control: the pipe closing is handled'; fi
+  check_gone_short() { check_reader_gone "$1" "$TMP/short"; } # TOOL
+  check_gone_long() { check_reader_gone "$1" "$TMP/long"; } # TOOL
+  if check_gone_short "$SRC"; then report 0 'quiet when the last flush meets a closed pipe'
+  else report 1 'quiet when the last flush meets a closed pipe' "$(cat "$err")"; fi
+  if check_gone_long "$SRC"; then report 0 'quiet when a write in mid-run meets a closed pipe'
+  else report 1 'quiet when a write in mid-run meets a closed pipe' "$(cat "$err")"; fi
+  gone_control() { # LABEL CHECK NAME OLD NEW: as control, where the fault's only symptom is noise
+    if ! faulted "$3" "$4" "$5"; then report 1 "negative control: $1" 'the fault did not apply'
+    elif "$2" "$TMP/$3.py"; then report 1 "negative control: $1" 'the oracle accepted the fault'
+    else report 0 "negative control: $1"; fi
+  }
+  gone_control 'the last flush is the tool'"'"'s own' check_gone_short no-flush \
+    '    sys.stdout.flush()
+' ''
+  gone_control 'the closed pipe is handled' check_gone_long loud 'except BrokenPipeError:' \
+    'except ZeroDivisionError:'
 fi
 
 if harness_leg 'usage errors exit 2 #usage'; then

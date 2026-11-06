@@ -34,7 +34,7 @@ it out: the first sighting is the mint, as every later one is a cache hit.
 A record that does not parse prints as `LINE STAGE <unparsed>` where it would have stood. The
 counts go to stderr. Exit status: 0 for a whole digest; 1 when a record did not parse or the trace
 holds no `solve_row_ineq` at all (a build without the gate looks just like a solver with nothing
-to do); 2 for a usage error.
+to do), or its reader left; 2 for a usage error.
 """
 
 import argparse
@@ -185,6 +185,9 @@ def main(argv):
         return 2
     with trace:
         calls, distinct, mints, unparsed = digest(trace)
+    # Here, not at interpreter exit: that is where the last block of a short digest would meet a
+    # reader that has left, past any handler.
+    sys.stdout.flush()
     print(
         f"row-trace-compact: {calls} solve_row_ineq, {distinct} distinct, {mints} template mints, "
         f"{unparsed} unparsed",
@@ -204,6 +207,6 @@ if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1:]))
     except BrokenPipeError:
-        # A reader such as `head` has what it wanted; keep the shutdown flush from complaining.
+        # A reader such as `head` has what it wanted; the buffered rest must not retry at exit.
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
         sys.exit(1)
