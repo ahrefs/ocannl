@@ -737,6 +737,28 @@ let rec dim_to_int_exn = function
   | Affine _ -> invalid_arg "dim_to_int: affine dimension cannot be converted to single int"
   | Concat dims -> List.sum (module Int) dims ~f:dim_to_int_exn
 
+(* The axis a concatenation of solved components is: their sum. *)
+let sum_solved_components (solved_dims : solved_dim list) =
+  let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
+  (* Reserved (claim-free) tags don't constrain the concat basis; all named tags must agree, and the
+     concatenated axis takes that common named tag (else [default]). *)
+  let named_bases =
+    List.filter_map solved_dims ~f:(fun s ->
+        if is_reserved_basis s.basis then None else Some s.basis)
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  let basis =
+    match named_bases with
+    | [] -> default_basis
+    | [ b ] -> b
+    | _ ->
+        raise
+        @@ Shape_error
+             ( "concat: conflicting dimension bases",
+               [ Dim_mismatch (List.map solved_dims ~f:(fun s -> Dim s)) ] )
+  in
+  { d = total_d; basis; proj_id = None }
+
 let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
   match in_ with
   | Var v2 when equal_dim_var v v2 -> value
@@ -810,28 +832,19 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
       | res when keep_affine -> Concat res
       | _ ->
           if List.for_all dims ~f:(function Dim _ -> true | _ -> false) then
-            let solved_dims = List.filter_map dims ~f:(function Dim s -> Some s | _ -> None) in
-            let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
-            (* Reserved (claim-free) tags don't constrain the concat basis; all named tags must
-               agree, and the concatenated axis takes that common named tag (else [default]). *)
-            let named_bases =
-              List.filter_map solved_dims ~f:(fun s ->
-                  if is_reserved_basis s.basis then None else Some s.basis)
-              |> List.dedup_and_sort ~compare:String.compare
-            in
-            let basis =
-              match named_bases with
-              | [] -> default_basis
-              | [ b ] -> b
-              | _ ->
-                  raise
-                  @@ Shape_error
-                       ( "concat: conflicting dimension bases",
-                         [ Dim_mismatch (List.map solved_dims ~f:(fun s -> Dim s)) ] )
-            in
-            Dim { d = total_d; basis; proj_id = None }
+            Dim
+              (sum_solved_components
+                 (List.filter_map dims ~f:(function Dim s -> Some s | _ -> None)))
           else Concat dims)
   | Dim _ | Sym _ | Var _ -> in_
+
+(** The extent of an axis made of concrete sizes alone: a [Dim], or a [Concat] of them at any depth.
+    Unlike [s_dim_one], it needs no variable to substitute. *)
+let rec concrete_extent = function
+  | Dim s -> Some s
+  | Concat dims ->
+      Option.map (Option.all (List.map dims ~f:concrete_extent)) ~f:sum_solved_components
+  | Var _ | Sym _ | Affine _ -> None
 
 (* Helper functions for total_elems operations *)
 let total_elems_to_string = function

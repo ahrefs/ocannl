@@ -684,12 +684,15 @@ axes (gh-ocannl-1689) together with their product. A row captured again after th
 same row -- after `2, 3`, an operand of `3, 2` or `6` is refused -- and a dimension captured again
 has the row's product. A reference whose last binding before the closure was a dimension carries
 only the number, so a row captured from it later is tied by product, as within one inference.
+That tie is not transitive (gh-ocannl-1969): row, dimension, row leaves two rows of one product, not
+one row, and identifying them takes an explicit `set_equal` of two row references.
 
 `Shape.set_equal` on two row references equates the rows themselves, not their products, whatever
 either reference has been solved to so far (gh-ocannl-1617): rows `2, 3` and `6` do not unify.
 Product equality is what relates a dimension to a row (`set_equal` on a dimension and a row
 reference, or `Shape.set_dim` on a row reference). A row reference bound before a closure takes
-part in a Row-Row pair with the row it carried. A row holding a symbolic extent has no numeric
+part in a Row-Row pair with the row it carried, and two such references are compared at the call:
+different rows raise there, naming both. A row holding a symbolic extent has no numeric
 product: after its closure it can be captured again as a row, or `set_equal`-ed with a row
 reference, but a capture as a dimension, `set_dim` or a dimension `set_equal` is refused, naming
 the closure (gh-ocannl-1655). And a reference made by `Shape.get_variable_ref` that `set_equal` relates to a

@@ -336,9 +336,10 @@ let shape_writer = Ir.Indexing.claim_shape_writer ()
     the variable inference bound it to. Private (gh-ocannl-1573): read and matched freely, written
     only through the setters here, each of which refuses a reference a rewind discarded and records
     the write as a session mutation of open work ({!touch_ref}). Rebinding [var] is legitimate --
-    every operation the reference is passed to binds it to its own variable, and projection
-    derivation rebinds it to projection-local ones -- whereas a solution is reached once
-    ({!Ir.Indexing.set_solved_dim}, which only [shape_writer]'s holder can call). *)
+    every operation the reference is passed to binds it to its own variable -- whereas a solution is
+    reached once ({!Ir.Indexing.set_solved_dim}, which only [shape_writer]'s holder can call).
+    Projection derivation does not rebind it (gh-ocannl-1969): [var] is the latest binding a shape
+    inference made, so after a closure its kind is the kind of the binding at the closure. *)
 module Delayed_ref : sig
   type t = private {
     var_ref : Ir.Indexing.variable_ref;
@@ -346,15 +347,11 @@ module Delayed_ref : sig
     mutable carried_row : Row.dim list option; [@sexp_drop_if Option.is_none]
         (** The axes of the row the reference was bound to when its inference closed, if it was
             bound to a row that resolved (gh-ocannl-1689): concrete [Dim]s and symbolic [Sym]s,
-            outer to inner, without projection ids. Across the closure it stands in for that row,
-            whose variable belongs to the reset environment. [None] when the binding at the closure
-            was a dimension (a dimension and a row share only the product), or the row held an axis
-            that is neither. *)
-    mutable closed_kind : [ `Row | `Dim ] option; [@sexp_drop_if Option.is_none]
-        (** The kind of the binding the reference had when its inference last closed: what a closed
-            reference is to {!set_equal}. Not [var]'s kind, which projection derivation rebinds
-            after the closure (newest step first), so a reference bound as a dimension and then as a
-            row is left with a dimension variable. *)
+            outer to inner, without projection ids, a concatenated axis of concrete components as
+            its sum (gh-ocannl-1969). Across the closure it stands in for that row, whose variable
+            belongs to the reset environment. [None] when the binding at the closure was a dimension
+            (a dimension and a row share only the product), or the row held a concatenated or affine
+            axis over a symbolic extent. *)
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
         (** The reference's identity for the rewind's tracking; not part of its value. *)
     mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
@@ -381,9 +378,9 @@ module Delayed_ref : sig
   val set_solved_dim : t -> int -> unit
   val set_solved_sym : t -> Ir.Indexing.static_symbol -> unit
 
-  val set_closed_binding : t -> [ `Row of Row.dim list option | `Dim ] -> unit
-  (** Sets {!field-closed_kind} and {!field-carried_row} at a closure, from the binding the
-      reference has then; writing the values already held is not a mutation. *)
+  val set_carried_row : t -> Row.dim list option -> unit
+  (** Sets {!field-carried_row} at a closure, from the binding the reference has then; writing the
+      value already held is not a mutation. *)
 
   type snapshot
   (** A reference's binding and solution at a checkpoint, bound to the reference (gh-ocannl-903). *)
@@ -405,7 +402,6 @@ end = struct
     var_ref : Ir.Indexing.variable_ref;
     mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
     mutable carried_row : Row.dim list option; [@sexp_drop_if Option.is_none]
-    mutable closed_kind : [ `Row | `Dim ] option; [@sexp_drop_if Option.is_none]
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
     mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
   }
@@ -431,7 +427,6 @@ end = struct
         var_ref = Ir.Indexing.variable_ref ref_label;
         var = `Not_set_yet;
         carried_row = None;
-        closed_kind = None;
         uid = !ref_uid;
         discarded_by = None;
       }
@@ -481,48 +476,38 @@ end = struct
       Ir.Indexing.set_solved_sym shape_writer r.var_ref sym;
       touch_ref r.uid)
 
-  let set_closed_binding r binding =
+  let set_carried_row r row =
     check_live r;
-    let kind, row = match binding with `Row row -> (`Row, row) | `Dim -> (`Dim, None) in
-    if
-      not
-        ([%equal: Row.dim list option] r.carried_row row
-        && [%equal: [ `Row | `Dim ] option] r.closed_kind (Some kind))
-    then (
+    if not ([%equal: Row.dim list option] r.carried_row row) then (
       touch_ref r.uid;
-      r.carried_row <- row;
-      r.closed_kind <- Some kind)
+      r.carried_row <- row)
 
   type snapshot = {
     snap_ref : t;
     snap_var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
     snap_carried_row : Row.dim list option;
-    snap_closed_kind : [ `Row | `Dim ] option;
     snap_var_ref : Ir.Indexing.variable_ref_snapshot;
   }
 
-  let snapshot ({ var_ref; var; carried_row; closed_kind; uid = _; discarded_by = _ } as r) =
+  let snapshot ({ var_ref; var; carried_row; uid = _; discarded_by = _ } as r) =
     {
       snap_ref = r;
       snap_var = var;
       snap_carried_row = carried_row;
-      snap_closed_kind = closed_kind;
       snap_var_ref = Ir.Indexing.snapshot_variable_ref var_ref;
     }
 
   let snapshot_live () = Live.fold (fun r acc -> snapshot r :: acc) live []
   let snapshot_uid s = s.snap_ref.uid
 
-  let restore { snap_ref; snap_var; snap_carried_row; snap_closed_kind; snap_var_ref } =
+  let restore { snap_ref; snap_var; snap_carried_row; snap_var_ref } =
     snap_ref.var <- snap_var;
     snap_ref.carried_row <- snap_carried_row;
-    snap_ref.closed_kind <- snap_closed_kind;
     Ir.Indexing.restore_variable_ref shape_writer snap_var_ref
 
-  let snapshot_changed { snap_ref; snap_var; snap_carried_row; snap_closed_kind; snap_var_ref } =
+  let snapshot_changed { snap_ref; snap_var; snap_carried_row; snap_var_ref } =
     (not (phys_equal snap_ref.var snap_var))
     || (not (phys_equal snap_ref.carried_row snap_carried_row))
-    || (not (phys_equal snap_ref.closed_kind snap_closed_kind))
     || Ir.Indexing.variable_ref_snapshot_changed snap_var_ref
 end
 
@@ -530,7 +515,6 @@ type delayed_var_ref = Delayed_ref.t = private {
   var_ref : Ir.Indexing.variable_ref;
   mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
   mutable carried_row : Row.dim list option; [@sexp_drop_if Option.is_none]
-  mutable closed_kind : [ `Row | `Dim ] option; [@sexp_drop_if Option.is_none]
   uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
   mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
 }
@@ -591,21 +575,12 @@ let bound_before_closure (r : delayed_var_ref) =
   (match r.var with `Not_set_yet -> false | `Dim _ | `Row _ -> true)
   && not (List.mem !open_refs r.uid ~equal:Int.equal)
 
-(* What the reference is bound to as a kind: for one bound before the closure, the kind its binding
-   had at the closure ([closed_kind]), since projection derivation rebinds [var] afterwards. *)
-let binding_kind (r : delayed_var_ref) =
-  match (r.var, r.closed_kind) with
-  | `Not_set_yet, _ -> `Not_set_yet
-  | _, Some kind when bound_before_closure r -> (kind :> [ `Row | `Dim | `Not_set_yet ])
-  | `Row _, _ -> `Row
-  | `Dim _, _ -> `Dim
-
 (* A reference bound before the last closure with no solution recorded has lost its constraint: its
-   [var] names a variable of the reset environment, or a projection-local one, which nothing in the
-   open work constrains (gh-ocannl-1655). Relating it is refused rather than letting the relation
-   bind a dead variable. A row holding a symbolic extent has no numeric product, but its closure
-   carries the row itself ([carried_row], gh-ocannl-1689): that is a value for [as_row] uses -- a
-   row binding, a Row-Row [set_equal] -- and none for the uses needing a number. *)
+   [var] names a variable of the reset environment, which nothing in the open work constrains
+   (gh-ocannl-1655). Relating it is refused rather than letting the relation bind a dead variable. A
+   row holding a symbolic extent has no numeric product, but its closure carries the row itself
+   ([carried_row], gh-ocannl-1689): that is a value for [as_row] uses -- a row binding, a Row-Row
+   [set_equal] -- and none for the uses needing a number. *)
 let refuse_closed_unsolved_ref ?(as_row = false) ~operation (r : delayed_var_ref) =
   if
     bound_before_closure r
@@ -614,7 +589,7 @@ let refuse_closed_unsolved_ref ?(as_row = false) ~operation (r : delayed_var_ref
     && not (as_row && Option.is_some r.carried_row)
   then
     let label = r.var_ref.ref_label in
-    let kind = match binding_kind r with `Row -> "row" | `Dim | `Not_set_yet -> "dimension" in
+    let kind = match r.var with `Row _ -> "row" | `Dim _ | `Not_set_yet -> "dimension" in
     raise
     @@ Row.Shape_error
          ( [%string
@@ -1327,7 +1302,9 @@ let binding_constraints ~for_projections ~as_input ~error_shapes ~previous_bindi
    [carried_row] (the pre-pass refused a reference holding none), and a tie to the dead variable
    would constrain nothing ({!previous_of}). Inside a shape-scheme trace, a reference made before it
    is the scheme's input (gh-ocannl-1791): its first binding there ties to nothing outside, and the
-   trace's frame records it. *)
+   trace's frame records it. Projection derivation reads [binding] and leaves [var] alone
+   (gh-ocannl-1969): its variables are local to one step, and [var] has to go on saying what the
+   closure saw. *)
 let bind_ref ~for_projections ~error_shapes (delayed_ref : delayed_var_ref) (binding : ref_binding)
     =
   check_ref_live delayed_ref;
@@ -1342,8 +1319,9 @@ let bind_ref ~for_projections ~error_shapes (delayed_ref : delayed_var_ref) (bin
     | _ when for_projections -> (`Not_set_yet, None)
     | _ -> previous_of delayed_ref
   in
-  Delayed_ref.set_var delayed_ref
-    (binding :> [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ]);
+  if not for_projections then
+    Delayed_ref.set_var delayed_ref
+      (binding :> [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ]);
   let constraints =
     binding_constraints ~for_projections ~as_input:(Option.is_some frame) ~error_shapes
       ~previous_binding ~carried_row delayed_ref binding
@@ -1368,9 +1346,8 @@ let bind_ref ~for_projections ~error_shapes (delayed_ref : delayed_var_ref) (bin
     symbolic extent in the row this is refused, symbolic dimensions taking no part in total-elements
     arithmetic). Across a closure the reference carries its value in [solved_dim]/[solved_sym], a
     row's as its product and as its axes ([carried_row], gh-ocannl-1689): [var] then names a
-    variable of the reset environment (or a projection-local one, rebound by [derive_projections]),
-    free in the open work, so the tie to it constrains nothing, and a row binding is [Row_eq]-tied
-    to the carried row instead.
+    variable of the reset environment, free in the open work, so the tie to it constrains nothing,
+    and a row binding is [Row_eq]-tied to the carried row instead.
 
     Projection derivation emits no tie and no row constraint, but it does emit a dim binding's
     solved value, tagged {!projection_sizing_operation}: the closed shapes carry every axis's extent
@@ -1380,8 +1357,8 @@ let bind_ref ~for_projections ~error_shapes (delayed_ref : delayed_var_ref) (bin
     (and a dimension-1 value there would pin the axis to [Fixed_idx 0]). *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
-  (* Every refusal before any binding (gh-ocannl-1655). Projection derivation rebinds references to
-     projection-local variables on purpose and emits no ties, so it is exempt. *)
+  (* Every refusal before any binding (gh-ocannl-1655). Projection derivation binds nothing and
+     emits no ties, so it is exempt. *)
   if not for_projections then
     List.iter dim_refs ~f:(fun delayed_ref ->
         let label = delayed_ref.var_ref.ref_label in
@@ -3346,10 +3323,9 @@ let%track7_sexp set_sym_dim (delayed_var_ref : delayed_var_ref) (sym : Ir.Indexi
              [] )
 
 (* The row a row reference names, for a Row-Row [set_equal]. One bound before the last closure (or
-   session reset) no longer names it by [var], a variable of the reset environment or a
-   projection-local one: it names the row its closure carried ([carried_row], gh-ocannl-1689). Its
-   product is not a substitute (gh-ocannl-1617), so a closed reference that carries no row -- its
-   row held an axis other than a concrete or symbolic extent -- is refused. Binding a reference in
+   session reset) no longer names it by [var], a variable of the reset environment: it names the row
+   its closure carried ([carried_row], gh-ocannl-1689). Its product is not a substitute
+   (gh-ocannl-1617), so a closed reference that carries no row is refused. Binding a reference in
    the open work records it in [open_refs] ({!touch_ref}); a closure empties that list. *)
 let row_for_set_equal ~other (delayed_ref : delayed_var_ref) =
   match delayed_ref.var with
@@ -3384,9 +3360,7 @@ let set_equal delayed_ref1 delayed_ref2 =
      dead variable first (gh-ocannl-1655). A Row-Row pair relates the rows, which a closure carries
      even without a product. *)
   let as_row =
-    match (binding_kind delayed_ref1, binding_kind delayed_ref2) with
-    | `Row, `Row -> true
-    | _ -> false
+    match (delayed_ref1.var, delayed_ref2.var) with `Row _, `Row _ -> true | _ -> false
   in
   refuse_closed_unsolved_ref ~as_row ~operation:"Shape.set_equal" delayed_ref1;
   refuse_closed_unsolved_ref ~as_row ~operation:"Shape.set_equal" delayed_ref2;
@@ -3405,12 +3379,15 @@ let set_equal delayed_ref1 delayed_ref2 =
        reference's [solved_dim] holds only its product, so deciding on it first tied the rows by
        product, or compared two products, depending on what inference had solved by the time of the
        call. A solution a reference holds already has its own constraint on [var] ([set_dim] pushed
-       it, or the solver reached it), so nothing else is needed here. A closed reference is a row
-       reference by its binding at the closure ({!binding_kind}), and contributes the row its
-       closure carried; with both closed, the solver compares the two rows when it next runs. *)
-    let r1 = row_for_set_equal ~other:delayed_ref2.var_ref.ref_label delayed_ref1 in
-    let r2 = row_for_set_equal ~other:delayed_ref1.var_ref.ref_label delayed_ref2 in
-    active_constraints :=
+       it, or the solver reached it), so nothing else is needed here. A closed reference contributes
+       the row its closure carried. With both closed the two rows hold no variable, so the verdict
+       is available now, and it is the solver's: the closed-rows arm of [Row.unify_row] writes
+       nothing, and raising here leaves the session as it was (gh-ocannl-1969). Otherwise the
+       mismatch would surface only at the next closure, far from this call. *)
+    let label1 = delayed_ref1.var_ref.ref_label and label2 = delayed_ref2.var_ref.ref_label in
+    let r1 = row_for_set_equal ~other:label2 delayed_ref1 in
+    let r2 = row_for_set_equal ~other:label1 delayed_ref2 in
+    let equation =
       Row.Row_eq
         {
           r1;
@@ -3418,18 +3395,31 @@ let set_equal delayed_ref1 delayed_ref2 =
           origin =
             [
               {
-                lhs_name = delayed_ref1.var_ref.ref_label;
+                lhs_name = label1;
                 lhs_kind = `Output;
-                rhs_name = delayed_ref2.var_ref.ref_label;
+                rhs_name = label2;
                 rhs_kind = `Output;
                 operation = Some "Shape.set_equal Row-Row";
               };
             ];
         }
-      :: !active_constraints
+    in
+    (if bound_before_closure delayed_ref1 && bound_before_closure delayed_ref2 then
+       try
+         ignore
+           (Row.solve_inequalities ~stage:Row.Stage1 [ equation ] Row.empty_env
+             : Row.constraint_ list * Row.environment)
+       with Row.Shape_error (msg, trace) ->
+         raise
+         @@ Row.Shape_error
+              ( [%string
+                  "Shape.set_equal: the closed row references %{label1} and %{label2} are \
+                   different rows: %{msg}"],
+                trace ));
+    active_constraints := equation :: !active_constraints
   in
   match (delayed_ref1, delayed_ref2) with
-  | _ when as_row -> row_row ()
+  | { var = `Row _; _ }, { var = `Row _; _ } -> row_row ()
   | { var_ref = { solved_sym = Some sym1; _ }; _ }, { var_ref = { solved_sym = Some sym2; _ }; _ }
     ->
       if Ir.Indexing.equal_static_symbol sym1 sym2 then ()
@@ -3490,11 +3480,6 @@ let set_equal delayed_ref1 delayed_ref2 =
               ];
           }
         :: !active_constraints
-  | { var = `Row _; _ }, { var = `Row _; _ } ->
-      (* Two row variables whose binding kinds are not both rows: a closed reference whose binding
-         at the closure was a dimension holds its number, so an earlier arm takes it. Kept as the
-         Row-Row relation rather than a silent drop. *)
-      row_row ()
   | { var = `Dim dim_var; _ }, { var = `Row row_var; _ }
   | { var = `Row row_var; _ }, { var = `Dim dim_var; _ } ->
       (* One is dim var, one is row var - equality via Total_elems constraint *)
@@ -4307,16 +4292,22 @@ let compute_row_product env (row : Row.t) : int option =
     (gh-ocannl-1689): the axes of its row when it is bound to a row whose solution is closed --
     [Broadcastable], every axis a [Dim] or a [Sym] -- whether or not it holds a number already (a
     [set_dim] on a row reference sets the product early), and [None] when it is bound to a
-    dimension. The binding at the closure decides, not the first row to resolve: within one
-    inference a row captured after a dimension binding is tied to it by product, whatever row an
-    earlier binding had, and publishing a row as it resolved would make the carried value depend on
-    whether it resolved at a registration's Stage1 or at the closure. *)
+    dimension. A [Concat] of concrete components is its sum (gh-ocannl-1969): the solver takes it
+    for one, and the split belongs to the operation that wrote it. Only a scheme instance's internal
+    row closes with one unsummed, since a step holding one fails its projections. One with a
+    symbolic component stays [None], as does an [Affine] over a symbolic extent: carried into the
+    next inference, it would reach projections there. The binding at the closure decides, not the
+    first row to resolve: within one inference a row captured after a dimension binding is tied to
+    it by product, whatever row an earlier binding had, and publishing a row as it resolved would
+    make the carried value depend on whether it resolved at a registration's Stage1 or at the
+    closure. *)
 let carried_row_of env row_var =
   let row = Row.subst_row env (Row.get_row_for_var Row.empty_provenance row_var) in
   let carried = function
     | Row.Dim d -> Some (Row.Dim { d with proj_id = None })
     | Row.Sym s -> Some (Row.Sym { s with sym_proj_id = None })
-    | Row.Var _ | Row.Affine _ | Row.Concat _ -> None
+    | Row.Concat _ as d -> Option.map (Row.concrete_extent d) ~f:(fun s -> Row.Dim s)
+    | Row.Var _ | Row.Affine _ -> None
   in
   match row.bcast with
   | Row.Row_var _ -> None
@@ -4330,9 +4321,8 @@ let publish_ref_solutions ~closure env var_refs =
       in
       (if closure && not (is_trace_input delayed_ref) then
          match delayed_ref.var with
-         | `Row row_var ->
-             Delayed_ref.set_closed_binding delayed_ref (`Row (carried_row_of env row_var))
-         | `Dim _ -> Delayed_ref.set_closed_binding delayed_ref `Dim
+         | `Row row_var -> Delayed_ref.set_carried_row delayed_ref (carried_row_of env row_var)
+         | `Dim _ -> Delayed_ref.set_carried_row delayed_ref None
          | `Not_set_yet -> ());
       match delayed_ref.var with
       | _ when not unsolved -> ()

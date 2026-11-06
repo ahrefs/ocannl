@@ -124,12 +124,9 @@ type delayed_var_ref = private {
   mutable carried_row : Row.dim list option;
       (** The axes of the row the reference was bound to when its inference closed, if it was bound
           to a row that resolved (gh-ocannl-1689), outer to inner, [Sym] axes included: across the
-          closure it stands in for that row. [None] when the binding at the closure was a dimension.
-          Omitted from sexps when [None]. *)
-  mutable closed_kind : [ `Row | `Dim ] option;
-      (** The kind of the reference's binding when its inference last closed: what a closed
-          reference is to {!set_equal}. [var]'s kind can differ after the closure, as projection
-          derivation rebinds it. Omitted from sexps when [None]. *)
+          closure it stands in for that row. A concatenated axis of concrete components is its sum
+          (gh-ocannl-1969). [None] when the binding at the closure was a dimension, or the row held
+          a concatenated or affine axis over a symbolic extent. Omitted from sexps when [None]. *)
   uid : int;  (** The reference's identity for rewind tracking; ignored by [equal] and sexps. *)
   mutable discarded_by : string option;
       (** The provenance of the rewind that discarded the reference, which every setter then refuses
@@ -155,6 +152,10 @@ val get_variable_ref : string -> delayed_var_ref
     dimension capture has the row's product. A reference bound to a dimension when its inference
     closed carries only the number, so a row captured from it afterwards is tied by product, as it
     would be within one inference.
+
+    That tie is not transitive (gh-ocannl-1969): row, dimension, row leaves the two rows with one
+    product, not one row, on one reference as on two ([set_equal row1 dim; set_equal dim row2]).
+    Only an explicit {!set_equal} of two row references identifies them.
 
     A row holding a symbolic extent has no numeric product: across its closure it can be captured
     again as a row, or related to a row reference by {!set_equal}, but capturing it as a dimension,
@@ -187,8 +188,10 @@ val set_equal : delayed_var_ref -> delayed_var_ref -> unit
     other is a row variable, this means they have the same number of total elements.
 
     A row reference bound by an inference that has since closed takes part in a Row-Row call with
-    the row it carries ([carried_row], gh-ocannl-1689): the other row is made equal to it. A closed
-    row reference that carries no row (its row held an axis other than a concrete or symbolic
+    the row it carries ([carried_row], gh-ocannl-1689): the other row is made equal to it. Two such
+    references are compared at the call, by the solver: rows of different rank, sizes or bases raise
+    [Row.Shape_error] there, naming both references, and change nothing (gh-ocannl-1969). A closed
+    row reference that carries no row (its row held a concatenated or affine axis over a symbolic
     extent) raises [Row.Shape_error]: relate such rows before the closure.
 
     An unbound reference (from {!get_variable_ref}, not yet passed to [~capture_dims]) paired with a

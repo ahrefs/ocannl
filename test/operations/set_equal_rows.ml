@@ -62,6 +62,43 @@ let order_name (first_r1, swap) =
     (if first_r1 then "r" else "s")
     (if swap then "s r" else "r s")
 
+(* Binds [r] as a dimension and as a row in one inference, in the given order, and closes it: the
+   last binding decides what the closed reference is. A row 2x3 and a dimension of 6. *)
+let close_both_kinds order r =
+  let dim_capture () = NTDSL.einsum1 ~capture_dims:[ r ] "r => r" (open_leaf "v") () in
+  let ys =
+    match order with
+    | `Dim_then_row ->
+        let y = dim_capture () in
+        [ y; capture_row r (fixed "x" [ 2; 3 ]) ]
+    | `Row_then_dim ->
+        let y = capture_row r (fixed "x" [ 2; 3 ]) in
+        [ y; dim_capture () ]
+  in
+  List.iter ys ~f:(fun y -> ignore (dims y : int list))
+
+let order_kind = function `Dim_then_row -> "a row" | `Row_then_dim -> "a dimension"
+
+(* Closes [r] on the row of [operand x], which the scheme's body makes and does not return: an
+   explicit instance stands for the body, so no update step holds that row and no projections run on
+   it. This is the one way a row with a [Concat] or [Affine] axis closes: a step holding one fails
+   its projections. Returns the scheme's rendering. *)
+let close_scheme_internal_row r ~arg operand =
+  let s =
+    Tensor.Scheme.trace ~label:"internal" 1 (fun args ->
+        let x = List.hd_exn args in
+        ignore (capture_row r (operand x) : Tensor.t);
+        [ x ])
+  in
+  let x = arg () and res = open_leaf "res" in
+  Tensor.Scheme.instantiate s ~args:[ x.Tensor.shape ] ~results:[ res.Tensor.shape ];
+  ignore (dims res : int list);
+  Tensor.Scheme.to_string s
+
+(* No variable of the spec gets solved here: one that did would have the solver sum the axis on the
+   way, leaving the row nothing but a [Dim] (so ["a => 2^3"] does not exercise this). *)
+let literal_concat x = NTDSL.einsum1 " => 2^3" x ()
+
 let () =
   (* A fixed operand solves its reference at its own registration step; the open one is unsolved.
      Before the fix the open row got only the product, 6, and closed to one axis. *)
@@ -173,10 +210,9 @@ let () =
               | _, refused ->
                   Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
                   p (name ^ ": the open row takes the closed row") false)));
-  (* The kind of a closed reference is that of its binding at the closure, not of [var]: projection
-     derivation rebinds [var] after the closure, newest step first, so a reference bound as a
-     dimension and then as a row is left holding the dimension's projection-local variable. Bound
-     last as a row, it carries the row; bound last as a dimension, it carries a number. *)
+  (* A closed reference is what its binding at the closure was: bound last as a row, it carries the
+     row; bound last as a dimension, it carries a number. Projection derivation runs newest step
+     first, and used to leave [var] holding the oldest step's kind (gh-ocannl-1969). *)
   List.iter
     [ (`Dim_then_row, [ 3; 2 ], false); (`Row_then_dim, [ 3; 2 ], true) ]
     ~f:(fun (order, sizes, accepted) ->
@@ -192,17 +228,7 @@ let () =
           Verdict.case name (fun () ->
               Tensor.unsafe_reinitialize ();
               let r1 = Shape.get_variable_ref "r" and r2 = Shape.get_variable_ref "s" in
-              let dim_capture () = NTDSL.einsum1 ~capture_dims:[ r1 ] "r => r" (open_leaf "v") () in
-              let ys =
-                match order with
-                | `Dim_then_row ->
-                    let y = dim_capture () in
-                    [ y; capture_row r1 (fixed "x" [ 2; 3 ]) ]
-                | `Row_then_dim ->
-                    let y = capture_row r1 (fixed "x" [ 2; 3 ]) in
-                    [ y; dim_capture () ]
-              in
-              List.iter ys ~f:(fun y -> ignore (dims y : int list));
+              close_both_kinds order r1;
               let w = open_leaf "w" in
               ignore (capture_row r2 w : Tensor.t);
               let refused =
@@ -217,7 +243,8 @@ let () =
                   (name ^ ": tied by product, a row of the same product is accepted")
                   (Option.is_none refused)
               else p (name ^ ": a row of the same product is refused") (Option.is_some refused))));
-  (* Both closed: each carries its row, and the solver compares the two when it next runs. *)
+  (* Both closed: each carries its row. The cases after the last below pin that the comparison is
+     made at the call. *)
   List.iter
     [ ([ 2; 3 ], true); ([ 3; 2 ], false) ]
     ~f:(fun (sizes, equal) ->
@@ -362,4 +389,272 @@ let () =
           show name [ ("w", w) ];
           p
             (name ^ ": the dimension takes the closed product")
-            (List.equal Int.equal (dims y) [ 6 ])))
+            (List.equal Int.equal (dims y) [ 6 ])));
+  (* What a closed reference is, for the uses reading its kind (gh-ocannl-1969): [set_scale] refuses
+     a row and takes a dimension, at either position and for a factor of 1, which goes through
+     [set_equal]. Each of the two orders used to read as the other. *)
+  List.iter
+    [ (`Dim_then_row, None); (`Row_then_dim, Some 6) ]
+    ~f:(fun (order, closed_dim) ->
+      List.iter
+        [ (1, `Large, 6); (2, `Large, 3); (1, `Small, 6); (2, `Small, 12) ]
+        ~f:(fun (factor, position, want) ->
+          let name =
+            Printf.sprintf "set_scale ~factor:%d, %s closed reference is %s" factor
+              (match position with `Large -> "the larger," | `Small -> "the smaller,")
+              (order_kind order)
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r = Shape.get_variable_ref "r" and s = Shape.get_variable_ref "s" in
+              close_both_kinds order r;
+              let refused =
+                shape_error (fun () ->
+                    match position with
+                    | `Large -> Shape.set_scale ~factor r s
+                    | `Small -> Shape.set_scale ~factor s r)
+              in
+              Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+              match closed_dim with
+              | None ->
+                  refused_with (name ^ ": a row is refused") refused ~f:(fun msg ->
+                      String.is_substring msg ~substring:"requires two dimension variables")
+              | Some _ ->
+                  p
+                    (name ^ ": the dimension relates the other reference")
+                    (Option.is_none refused
+                    && Option.equal Int.equal s.var_ref.solved_dim (Some want)))));
+  (* The setters dispatch on the solved value first, so a closed reference never reaches their [var]
+     arms: an equal number is no change, and a different one or a symbol is refused, whichever kind
+     the reference closed as. *)
+  List.iter [ `Dim_then_row; `Row_then_dim ] ~f:(fun order ->
+      let name = "setters on a closed reference that is " ^ order_kind order in
+      Verdict.case name (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let r = Shape.get_variable_ref "r" in
+          close_both_kinds order r;
+          Shape.set_dim r 6;
+          p
+            (name ^ ": the number it holds is no change")
+            (Option.equal Int.equal r.var_ref.solved_dim (Some 6));
+          p
+            (name ^ ": a different number is refused")
+            (Option.is_some (shape_error (fun () -> Shape.set_dim r 7)));
+          let seq = fst (Ir.Indexing.get_static_symbol ~static_range:6 Ir.Indexing.Empty) in
+          p (name ^ ": a symbol is refused")
+            (Option.is_some (shape_error (fun () -> Shape.set_sym_dim r seq)))));
+  (* An unbound reference [set_equal] pairs with a closed row is a number to the call, so bound to a
+     row afterwards it would leave the two tied by product: refused, as for an open row. Paired with
+     a closed dimension, a row bound afterwards is tied by product by design. *)
+  List.iter
+    [ (`Dim_then_row, false); (`Row_then_dim, true) ]
+    ~f:(fun (order, accepted) ->
+      List.iter [ false; true ] ~f:(fun swap ->
+          let name =
+            Printf.sprintf
+              "unbound u, set_equal %s with a closed reference that is %s, then u a row"
+              (if swap then "r u" else "u r")
+              (order_kind order)
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r = Shape.get_variable_ref "r" and u = Shape.get_variable_ref "u" in
+              close_both_kinds order r;
+              set_equal ~swap u r;
+              let refused =
+                shape_error (fun () -> ignore (capture_row u (fixed "z" [ 3; 2 ]) : Tensor.t))
+              in
+              Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+              if accepted then
+                p (name ^ ": tied by product, 3x2 is accepted") (Option.is_none refused)
+              else
+                refused_with (name ^ ": the row binding is refused") refused ~f:(fun msg ->
+                    String.is_substring msg ~substring:"Variable reference u "
+                    && String.is_substring msg ~substring:"the row reference r "))));
+  (* A closed row with a [Concat] axis of concrete components carries it as its sum: the axis is 5,
+     whichever way it was written, and the row is that row, not the product 5 (gh-ocannl-1969). *)
+  let closed_concat name r =
+    let scheme = close_scheme_internal_row r ~arg:(fun () -> fixed "x" []) literal_concat in
+    p
+      (name ^ ": the row closed with its axis unsummed")
+      (String.is_substring scheme ~substring:"capture r = (2^3)");
+    p
+      (name ^ ": the closure carried the sum")
+      (Option.equal (List.equal Int.equal)
+         (Option.map r.Shape.carried_row ~f:(List.map ~f:Row.dim_to_int_exn))
+         (Some [ 5 ]))
+  in
+  List.iter
+    [ ([ 5 ], true); ([ 1; 5 ], false); ([ 6 ], false) ]
+    ~f:(fun (sizes, accepted) ->
+      let name =
+        Printf.sprintf "closed row with a concatenated axis, captured again over %s"
+          (String.concat ~sep:"x" (List.map sizes ~f:Int.to_string))
+      in
+      Verdict.case name (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let r = Shape.get_variable_ref "r" in
+          closed_concat name r;
+          let refused =
+            shape_error (fun () -> ignore (dims (capture_row r (fixed "w" sizes)) : int list))
+          in
+          Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+          p
+            (name ^ if accepted then ": the same row is accepted" else ": another row is refused")
+            (Bool.equal accepted (Option.is_none refused))));
+  let name = "closed row with a concatenated axis, captured again over an open operand" in
+  Verdict.case name (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "r" in
+      closed_concat name r;
+      let w = open_leaf "w" in
+      ignore (capture_row r w : Tensor.t);
+      show name [ ("w", w) ];
+      p (name ^ ": the open operand takes the one axis") (List.equal Int.equal (dims w) [ 5 ]));
+  List.iter
+    [ ([ 5 ], true); ([ 1; 5 ], false) ]
+    ~f:(fun (sizes, accepted) ->
+      List.iter [ false; true ] ~f:(fun swap ->
+          let name =
+            Printf.sprintf "closed row with a concatenated axis, set_equal %s with a closed %s"
+              (if swap then "s r" else "r s")
+              (String.concat ~sep:"x" (List.map sizes ~f:Int.to_string))
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r = Shape.get_variable_ref "r" and s = Shape.get_variable_ref "s" in
+              closed_concat name r;
+              ignore (dims (capture_row s (fixed "y" sizes)) : int list);
+              let refused = shape_error (fun () -> set_equal ~swap r s) in
+              Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+              p
+                (name ^ if accepted then ": equal rows are accepted" else ": other rows are refused")
+                (Bool.equal accepted (Option.is_none refused)))));
+  (* Over a symbolic extent a compound axis has no sum and the row no product. Such a row is not
+     carried: in the next inference it would reach projections, which no step holding it survives.
+     Its reuse stays refused, naming the closure. *)
+  List.iter
+    [ ("a => a^3", "a concatenated axis"); ("a => 2*a", "an affine axis") ]
+    ~f:(fun (spec, axis) ->
+      let name = "closed row with " ^ axis ^ " over a symbolic extent" in
+      Verdict.case name (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let r = Shape.get_variable_ref "r" in
+          let operand x =
+            let a = Shape.get_variable_ref "a" in
+            Shape.set_sym_dim a
+              (fst (Ir.Indexing.get_static_symbol ~static_range:6 Ir.Indexing.Empty));
+            NTDSL.einsum1 ~capture_dims:[ a ] spec x ()
+          in
+          ignore (close_scheme_internal_row r ~arg:(fun () -> open_leaf "x") operand : string);
+          p
+            (name ^ ": the closure carried nothing")
+            (Option.is_none r.carried_row && Option.is_none r.var_ref.solved_dim);
+          let refused = shape_error (fun () -> ignore (capture_row r (open_leaf "w") : Tensor.t)) in
+          refused_with (name ^ ": a capture is refused, naming the closure") refused ~f:(fun msg ->
+              String.is_substring msg ~substring:"has since closed")));
+  (* Two closed rows are compared at the call (gh-ocannl-1969): the mismatch raises from [set_equal]
+     itself, with no later operation to expose it, and leaves nothing behind -- no rewind, and the
+     next closure passes. The verdict is the solver's, so it covers what no comparison of sizes
+     would: a claim-free 1 is not a plain 1, and a symbol's maximum is not its size. *)
+  let closed_operands =
+    [
+      ("2x3 and 3x2", (fun () -> fixed "x" [ 2; 3 ]), fun () -> fixed "y" [ 3; 2 ]);
+      ("2x3 and 6", (fun () -> fixed "x" [ 2; 3 ]), fun () -> fixed "y" [ 6 ]);
+      ("no axes and 1", (fun () -> fixed "x" []), fun () -> fixed "y" [ 1 ]);
+      ("1 and a claim-free 1", (fun () -> fixed "x" [ 1 ]), fun () -> NTDSL.number 2.);
+    ]
+  in
+  List.iter closed_operands ~f:(fun (rows, x, y) ->
+      List.iter [ false; true ] ~f:(fun swap ->
+          let name =
+            Printf.sprintf "closed rows %s, set_equal %s" rows (if swap then "s r" else "r s")
+          in
+          Verdict.case name (fun () ->
+              Tensor.unsafe_reinitialize ();
+              let r1 = Shape.get_variable_ref "r" and r2 = Shape.get_variable_ref "s" in
+              ignore (dims (capture_row r1 (x ())) : int list);
+              ignore (dims (capture_row r2 (y ())) : int list);
+              let refused =
+                match set_equal ~swap r1 r2 with
+                | () -> None
+                | exception Row.Shape_error (msg, _) -> Some msg
+              in
+              Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+              refused_with (name ^ ": refused at the call, naming both") refused ~f:(fun msg ->
+                  String.is_prefix msg ~prefix:"Shape.set_equal: the closed row references ");
+              let z = open_leaf "z" in
+              fix z [ 4; 5 ];
+              p
+                (name ^ ": the next closure passes, with no rewind")
+                (List.equal Int.equal (dims z) [ 4; 5 ]))));
+  Verdict.case "closed rows, a symbol and its maximum" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let name = "closed rows, a symbol and its maximum" in
+      let r = closed_row ~symbolic:true and s = Shape.get_variable_ref "s" in
+      ignore (dims (capture_row s (fixed "y" [ 6 ])) : int list);
+      let refused =
+        match Shape.set_equal r s with () -> None | exception Row.Shape_error (msg, _) -> Some msg
+      in
+      Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+      p (name ^ ": refused at the call") (Option.is_some refused));
+  (* A row and a dimension share a number, and that tie does not pass through the dimension
+     (gh-ocannl-1969, the maintainer's call; [capture_per_call]'s [rebind_scenarios] pins it for one
+     reference bound row, dimension, row). Two rows tied to one dimension keep their own axes, over
+     one product, within one inference and across closures. An explicit [set_equal] of the two rows
+     is what makes them one row. *)
+  let name = "row = dim = row, within one inference" in
+  let tied ~explicit =
+    Tensor.unsafe_reinitialize ();
+    let r = Shape.get_variable_ref "r" and s = Shape.get_variable_ref "s" in
+    let d = Shape.get_variable_ref "d" in
+    let a = open_leaf "a" and b = open_leaf "b" in
+    ignore (capture_row r a : Tensor.t);
+    ignore (capture_row s b : Tensor.t);
+    let v = NTDSL.einsum1 ~capture_dims:[ d ] "d => d" (open_leaf "v") () in
+    Shape.set_equal r d;
+    Shape.set_equal d s;
+    if explicit then Shape.set_equal r s;
+    fix a [ 2; 3 ];
+    fix b [ 3; 2 ];
+    (a, b, v)
+  in
+  Verdict.case name (fun () ->
+      let a, b, v = tied ~explicit:false in
+      show name [ ("a", a); ("b", b); ("the dimension", v) ];
+      p
+        (name ^ ": each row keeps its axes, over one product")
+        (List.equal Int.equal (dims a) [ 2; 3 ]
+        && List.equal Int.equal (dims b) [ 3; 2 ]
+        && List.equal Int.equal (dims v) [ 6 ]));
+  let name = name ^ ", then the rows set_equal" in
+  Verdict.case name (fun () ->
+      let refused =
+        shape_error (fun () ->
+            let a, b, _ = tied ~explicit:true in
+            ignore (dims a : int list);
+            ignore (dims b : int list))
+      in
+      Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+      p (name ^ ": 2x3 and 3x2 are refused") (Option.is_some refused));
+  let name = "row = dim = row, across closures" in
+  let closed_tied () =
+    Tensor.unsafe_reinitialize ();
+    let r = Shape.get_variable_ref "r" and s = Shape.get_variable_ref "s" in
+    let d = Shape.get_variable_ref "d" in
+    ignore (dims (capture_row r (fixed "a" [ 2; 3 ])) : int list);
+    ignore (dims (capture_row s (fixed "b" [ 3; 2 ])) : int list);
+    let v = NTDSL.einsum1 ~capture_dims:[ d ] "d => d" (open_leaf "v") () in
+    Shape.set_equal r d;
+    Shape.set_equal d s;
+    (r, s, v)
+  in
+  Verdict.case name (fun () ->
+      let _, _, v = closed_tied () in
+      p (name ^ ": the dimension has the one product") (List.equal Int.equal (dims v) [ 6 ]));
+  let name = name ^ ", then the rows set_equal" in
+  Verdict.case name (fun () ->
+      let r, s, _ = closed_tied () in
+      let refused = shape_error (fun () -> Shape.set_equal r s) in
+      Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+      p (name ^ ": 2x3 and 3x2 are refused") (Option.is_some refused))
