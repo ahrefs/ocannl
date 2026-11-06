@@ -3003,7 +3003,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its constructor so), and exclude the scan's own golden, as `codegen_text_inventory`'s `excluded` list does — else a
   promote takes two rounds to converge. Where EVERY token of a shape is read, as the provenance
   inventory reads every tag-shaped token so that a retired one is refused, pieces cannot hide an
-  invented fixture tag: that scan excludes its cases file and golden by name instead.
+  invented fixture tag: that scan excludes its cases file and golden by name instead. That shape
+  (digits, a colon, a kebab-case reason of two or more words) is reserved for tags in every file
+  read, shell included: a `case` label of that shape reads as a stale citation, so spell such a
+  pair status last (`some-state/0`). The scan exempts no syntax, because a label branching on a real
+  tag is a citation a retirement has to find.
 
 ## Aliases and goldens
 
