@@ -1407,6 +1407,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   fails it until it is pinned there. `lock_census`'s own bulk join is self-checking (a pid is
   paired only while `census_same` holds on the joined token). `tools/per-test-cap.sh` renders
   its own tokens, compared only against itself.
+- **An embedded Perl program holds no single quote** (gh-ocannl-1945). `tools/test-run.sh` and
+  the files it sources carry their Perl as `NAME_perl='` … `'` assignments, text `bash -n` never
+  reads: a `'` inside one ends the string where it stands. A lone one usually breaks the shell
+  parse; a pair around a word (`sub 'census_token' {`) leaves a script `bash -n` accepts and a
+  program `perl -c` accepts too, the shell having joined the pieces back. So leg 1b of
+  `tools/test-test-run.sh` requires each program's text to be quote-free (write `\x27` or `q{}`
+  in the Perl), then compiles the value the shell assigns with `perl -c`, and requires every
+  `$NAME_perl` the script expands to be one of the programs it checked. Run
+  `tools/test-test-run.sh --only '^1b:'` after editing one. The inline `perl -e '...'` programs
+  inside functions are not covered.
 - **A cancelled run settles inside the fleet wrappers' 10 s grace** (gh-ocannl-1808).
   `fleet-worker.sh execution slot` and `bg-run.sh stop` send KILL 10 s after their TERM, so a
   supervisor that spent 5 s reaping and then up to 30 s in the slowest-actions reader was KILLed

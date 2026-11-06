@@ -60,6 +60,10 @@
 #
 # Legs:
 #   1. extraction -- the functions came out of the shipping script.
+#  1b. each Perl program the script embeds (every NAME_perl='...' in it and in
+#      the files it sources) holds no single quote and compiles under
+#      `perl -c`; a lone quote, a quoted word and an open brace planted in a
+#      copy each fail it (gh-ocannl-1945).
 #   2. a genuinely live group reads ALIVE (the other side of leg 4: without
 #      this, a group_alive that answered "dead" always would pass leg 4).
 #   3. a group with no members at all reads DEAD, and so does the bare signal.
@@ -819,6 +823,145 @@ fi
 }
 harness_leg_run '1: group_alive has one shared production definition #group-alive' leg_1
 
+# A copy of the script with whole lines changed, for the negative controls of
+# legs 1b and 101.
+token_mutant() { # <out> [FROM TO]...: $SRC with each whole line FROM replaced by TO; 0 iff each FROM was one line
+  perl -e '
+    my ($src, $out, %to) = @ARGV;
+    my %n;
+    open(my $in, "<", $src) or exit 1;
+    open(my $o, ">", $out) or exit 1;
+    while (my $l = <$in>) {
+      chomp $l;
+      if (exists $to{$l}) { $n{$l}++; $l = $to{$l} }
+      print $o "$l\n";
+    }
+    close $o or exit 1;
+    exit((grep { ($n{$_} || 0) != 1 } keys %to) ? 1 : 0);
+  ' "$SRC" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# Leg 1b: each embedded Perl program compiles (gh-ocannl-1945)
+# ---------------------------------------------------------------------------
+# The script carries its Perl programs as single-quoted assignments,
+# `NAME_perl='` through a closing `'` on a line of its own, and `bash -n`
+# reads none of that text: a `'` landing in one closes the string where it
+# stands. So each program -- every NAME_perl assigned at a line's start in the
+# script and in the files it sources, the list derived as stage_sourced
+# derives its own -- is held to two things. Its text holds no `'` at all: the
+# one check that sees a PAIR of them, which leaves a script `bash -n` accepts
+# and, where the unquoted word still reads as Perl, a program `perl -c`
+# accepts too. And the value the shell assigns compiles under `perl -c`, the
+# assignment evaluated in a subshell only once it is known to hold no quote,
+# so a program cut short never runs as shell. A program another one is
+# prepended to (supervisor_perl opens with $lock_census_perl) is compiled as
+# the shell joins them, so it fails with its prefix. The names the script
+# expands are the other side: each must be one of the programs checked, so an
+# assignment respelled out of the scan's reach fails here and is not left out.
+# The negative controls are the script with one line of lock_census_perl
+# changed: a lone quote, a quoted word (which `bash -n` must still accept, or
+# the control shows nothing bash could not), and a brace left open with no
+# quote in sight (`perl -c` alone can fail that one).
+perl_program_rows() { # <script>: "NAME<TAB>STATE<TAB>PREFIX" per NAME_perl assigned at a line's start, in file order
+  awk -v q="'" '
+    function row() { if (name != "") print name "\t" state "\t" prefix; name = "" }
+    /^[A-Za-z_][A-Za-z0-9_]*_perl=/ {
+      if (name != "") { state = "unclosed"; row() }
+      name = $0; sub(/=.*/, "", name)
+      prefix = ""
+      if ($0 ~ ("^[A-Za-z_][A-Za-z0-9_]*=(\\$[A-Za-z_][A-Za-z0-9_]*)?" q "$")) {
+        state = "ok"
+        if ($0 ~ /=\$/) { prefix = $0; sub(/^[^$]*\$/, "", prefix); sub(/.$/, "", prefix) }
+      } else { state = "form"; row() }
+      next
+    }
+    name != "" && $0 == q { row(); next }
+    name != "" && state == "ok" && index($0, q) { state = "quote:" NR }
+    END { if (name != "") { state = "unclosed"; row() } }
+  ' "$1"
+}
+perl_program_compile() { # <script> <name> <its rows>: 0 iff the value the shell assigns compiles; prints why not
+  (
+    local m state prefix out
+    while IFS=$'\t' read -r m state prefix; do unset "$m"; done <<<"$3"
+    while IFS=$'\t' read -r m state prefix; do
+      if [ "$state" = ok ]; then
+        if [ -n "$prefix" ] && [ -z "${!prefix:-}" ]; then
+          [ "$m" != "$2" ] || { printf 'it prepends $%s, which this file does not assign cleanly before it' "$prefix"; exit 1; }
+        else
+          # No quote inside, so this is the assignment and nothing else.
+          eval "$(awk -v q="'" -v open="$m=" 'index($0, open) == 1 { f = 1 } f { print } f && $0 == q { exit }' "$1")" ||
+            { [ "$m" != "$2" ] || { printf 'its assignment does not evaluate'; exit 1; }; }
+        fi
+      fi
+      [ "$m" != "$2" ] || break
+    done <<<"$3"
+    [ -n "${!2:-}" ] || { printf 'its assignment leaves it empty'; exit 1; }
+    out=$(perl -c -e "${!2}" 2>&1) || { printf 'perl -c: %s' "$(tr '\n' ' ' <<<"$out")"; exit 1; }
+  )
+}
+perl_program_verdicts() { # <script>...: "NAME<TAB>pass", or "NAME<TAB>fail<TAB>WHY", per program
+  local f rows name state prefix why
+  for f in "$@"; do
+    rows=$(perl_program_rows "$f") || return 1
+    while IFS=$'\t' read -r name state prefix; do
+      [ -n "$name" ] || continue
+      case $state in
+        ok) why=$(perl_program_compile "$f" "$name" "$rows") && why= ;;
+        quote:*) why="line ${state#quote:} of ${f##*/} holds a single quote, which ends the program there" ;;
+        unclosed) why="no closing quote on a line of its own in ${f##*/}" ;;
+        *) why="its assignment in ${f##*/} does not open a single-quoted program at the line's end" ;;
+      esac
+      if [ -z "$why" ]; then printf '%s\tpass\n' "$name"; else printf '%s\tfail\t%s\n' "$name" "$why"; fi
+    done <<<"$rows"
+  done
+}
+perl_program_control() { # <label> <bash -n must accept it: 0|1> <why pattern> FROM TO
+  local mutant=$TMP/perl-program-mutant.sh rows failed why
+  token_mutant "$mutant" "$4" "$5" ||
+    { harness_abandon "the line '$4' is not in $SRC exactly once; the mutant is broken"; return 1; }
+  rows=$(perl_program_verdicts "$mutant")
+  failed=$(awk -F '\t' '$2 != "pass" { printf "%s%s", sep, $1; sep = " " }' <<<"$rows")
+  why=$(awk -F '\t' '$1 == "lock_census_perl" { print $3 }' <<<"$rows")
+  if [ "$2" = 1 ] && ! bash -n "$mutant" 2>/dev/null; then
+    report 1 "$1" "bash -n refuses this mutant, so it shows nothing bash -n could not"
+  elif [ "$failed" = "lock_census_perl supervisor_perl" ] && [[ $why == $3 ]]; then
+    report 0 "$1"
+  else
+    report 1 "$1" "failed: ${failed:-none} (want lock_census_perl and supervisor_perl, which opens with it); lock_census_perl: ${why:-passed} (want $3)"
+  fi
+}
+leg_1b() {
+local l_all="each embedded Perl program of the script and of the files it sources holds no single quote and compiles under perl -c"
+local l_refs="every NAME_perl the script expands is one of the programs checked"
+local files=("$SRC") rel rows bad refs missing=
+while IFS= read -r rel; do files+=("$HERE/../$rel"); done < <(sed -n 's/^\. \([A-Za-z0-9_./-]*\)$/\1/p' "$SRC")
+rows=$(perl_program_verdicts "${files[@]}")
+bad=$(awk -F '\t' '$2 != "pass" { printf "%s: %s; ", $1, $3 }' <<<"$rows")
+if [ -n "$rows" ] && [ -z "$bad" ]; then
+  report 0 "$l_all ($(grep -c . <<<"$rows") programs)"
+else
+  report 1 "$l_all" "${bad:-no program found in ${files[*]}}"
+fi
+refs=$(grep -v '^[[:space:]]*#' "$SRC" | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*_perl' | tr -d '${' | sort -u)
+for rel in $refs; do
+  grep -q "^$rel"$'\t' <<<"$rows" || missing="$missing $rel"
+done
+if [ -n "$refs" ] && [ -z "$missing" ]; then
+  report 0 "$l_refs"
+else
+  report 1 "$l_refs" "$([ -n "$refs" ] && echo "no NAME_perl=' at a line's start assigns:$missing" || echo 'the script expands no NAME_perl; the scan is broken')"
+fi
+perl_program_control "negative control: a lone quote in a program fails it, and the program that opens with it" 0 \
+  'line * holds a single quote*' 'sub census_token {' "sub census_token { # it's" || return
+perl_program_control "negative control: a quoted word in a program, which bash -n accepts, fails it" 1 \
+  'line * holds a single quote*' 'sub census_token {' "sub 'census_token' {" || return
+perl_program_control "negative control: a program that is not Perl, which bash -n accepts, fails perl -c" 1 \
+  'perl -c: *' 'sub census_token {' 'sub census_token {{' || return
+}
+harness_leg_run '1b: each embedded Perl program compiles and holds no quote #group-alive' leg_1b
+
 # ---------------------------------------------------------------------------
 # Leg 2: a live group reads alive
 # ---------------------------------------------------------------------------
@@ -1549,21 +1692,6 @@ token_diff() { # <script>; sets token_rows, token_self (this shell's row), token
   token_rows=$(token_views "$1") || token_rows=
   token_self=$(awk -F '\t' -v p="$$" '$1 == p' <<<"$token_rows")
   token_bad=$(awk -F '\t' 'NF && !($2 == $3 && $3 == $4)' <<<"$token_rows")
-}
-token_mutant() { # <out> [FROM TO]...: $SRC with each whole line FROM replaced by TO; 0 iff each FROM was one line
-  perl -e '
-    my ($src, $out, %to) = @ARGV;
-    my %n;
-    open(my $in, "<", $src) or exit 1;
-    open(my $o, ">", $out) or exit 1;
-    while (my $l = <$in>) {
-      chomp $l;
-      if (exists $to{$l}) { $n{$l}++; $l = $to{$l} }
-      print $o "$l\n";
-    }
-    close $o or exit 1;
-    exit((grep { ($n{$_} || 0) != 1 } keys %to) ? 1 : 0);
-  ' "$SRC" "$@"
 }
 leg_101() {
 local l_one="start tokens: ps_token, the launch chain's bulk join and census_token render one string for this shell and each ancestor"
