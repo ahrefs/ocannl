@@ -608,6 +608,10 @@ val float_valued : scalar_t -> bool
     scope boundaries and folds that conversion depends on. Meaningless at a float precision, where
     every value is a float. *)
 
+val rounded_read_prec : t -> Tnode.t -> Ops.prec option
+(** The precision the code rounds some read of the node to ({!Ops.Round_prec}), if it does:
+    (gh-ocannl-1975). What a schedule has to know about an operand a recognizer sees through. *)
+
 val mentions_rng_conversion : scalar_t -> bool
 (** Whether an RNG lane conversion occurs anywhere in the expression (not inside a [Local_scope]).
     Such a conversion picks its result type and the random bits it consumes from the precision it

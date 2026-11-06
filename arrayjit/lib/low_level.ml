@@ -6085,6 +6085,25 @@ let narrowing_read ~scope_prec (llsc : scalar_t) =
   in
   Ops.is_narrow_float scope_prec && read llsc
 
+let rounded_read_prec (llc : t) (tn : Tn.t) =
+  let open Access_fold in
+  let policy =
+    {
+      discarded_operands = Visit;
+      gated_operands = Visit;
+      dead_loops = Visit;
+      local_scopes = Visit;
+      guards = Ignore;
+      scan_implicit = Visit;
+    }
+  in
+  let scalar _ acc (sc : scalar_t) =
+    match sc with
+    | Unop (Ops.Round_prec, (Get (read, _), t)) when Tn.equal read tn -> Prune (Some t)
+    | _ -> Continue acc
+  in
+  fold ~policy ~hooks:{ (hooks ()) with scalar } ~init:None llc
+
 (* gh-ocannl-1884: whether collapsing a [Local_scope] of integer precision [scope_prec], over [v],
    into a slot evaluating at [eval] leaves its value alone. A collapse drops two things: the
    conversion to the scope's precision, where C's integer promotion computes byte and uint16
@@ -9355,7 +9374,12 @@ let has_opaque_zero_forwarding_effect ~allow_workgroup_barriers (body : t) =
 
 let zero_seed_candidate ?(allow_workgroup_barriers = false) (tn : Tn.t) (next : t) :
     (Tn.t Affine.access * Indexing.symbol list) option =
-  if has_opaque_zero_forwarding_effect ~allow_workgroup_barriers next then None
+  (* gh-ocannl-1975: a [Round_prec] holds a read, and forwarding the zero would put a [Where] there.
+     What it rounds is no accumulator either, any more than the scope it replaces. *)
+  if
+    has_opaque_zero_forwarding_effect ~allow_workgroup_barriers next
+    || Option.is_some (rounded_read_prec next tn)
+  then None
   else
     let same_map = Array.equal Indexing.equal_axis_index in
     let accesses =

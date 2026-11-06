@@ -5,3 +5,20 @@ half hoisted-packed matmul matches the serial twin bitwise: true
 half hoisted pack converts on the host; only d crosses the narrow bridge: true
 pure-f16 packed+tensorized matmul matches the serial twin bitwise: true
 pure-f16 register tiling: half lanes, identity bridges: true
+a: the tile reads the rounded values, exactly: true
+a: an unrounded read would have computed another product: true
+a: rendered as scheduled, the pack holding the rounding: true
+b: the tile reads the rounded values, exactly: true
+b: an unrounded read would have computed another product: true
+b: rendered as scheduled, the pack holding the rounding: true
+both: the tile reads the rounded values, exactly: true
+both: an unrounded read would have computed another product: true
+both: rendered as scheduled, the pack holding the rounding: true
+edge: a non-dividing pack rounds every cell it loads: true
+f64 master: the pack rounds to fp8 in one step: true
+a rounded and a raw read of one source do not share a tile: true
+Tensorize refuses a rounded operand a pack has not absorbed: true
+a hoisted panel cannot round a read: true
+tuned: the matmul seeds of a site reading twins round, and some ship a tile: true
+tuned: the shipped routine computes the rounded values: true
+tuned: the search seeds the site through its twins: true

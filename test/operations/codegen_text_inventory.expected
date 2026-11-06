@@ -247,6 +247,7 @@ test/operations/ll_test_dump.ml [run by @test/operations/runtest-ll_test_dump]
 test/operations/masked_persistent_fragment.ml [pins through Ll_test.resident_regions, haystack unvalidated; run by @test/operations/runtest-masked_persistent_fragment; also pins text this scan cannot name: untraced callback, opaque aggregate component]
 test/operations/mixed_prec_twin_rounding.ml [run by @test/operations/runtest-mixed_prec_twin_rounding; also pins text this scan cannot name: computed fragment]
     "= FLOAT_TO_HALF(" ^ ... ^ "[0])"
+    "FLOAT_TO_HALF(" ^ ... ^ "[0])"
 test/operations/mma_operand_loads.ml [run by @test/operations/runtest-mma_operand_loads]
     "ldmatrix.sync.aligned.m8n8.x2"
     "ldmatrix.sync.aligned.m8n8.x4"
@@ -543,6 +544,7 @@ test/operations/tile_mma_geometry.ml [run by @test/operations/runtest-tile_mma_g
     sprintf "%s = %s[%d];"
     sprintf "%s = ocannl_pv__[%d];"
 test/operations/tile_mma_narrow.ml [run by @test/operations/runtest-tile_mma_narrow; also pins text this scan cannot name: computed fragment]
+    "FLOAT_TO_HALF"
     "HALF_T tile_"
     "OCANNL_VEC_NARROW_BFLOAT16"
     "OCANNL_VEC_NARROW_HALF"

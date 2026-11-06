@@ -1,5 +1,6 @@
 a rounding reads as what it rounded to, so the cast around it still rounds: true
 roundings to two precisions are two programs: true
+zero forwarding leaves a rounded self-read alone: a rounding holds a read, never a select: true
 narrow: the uncollapsed oracle runs its scope, and the schedule's simplify keeps it: true
 narrow: the scheduled form computes the oracle's values bitwise: true
 narrow: optimize inlines the virtual node and keeps its scope, computing the oracle's values bitwise: true

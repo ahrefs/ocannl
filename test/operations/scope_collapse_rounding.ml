@@ -714,7 +714,15 @@ let () =
   p "a rounding reads as what it rounded to, so the cast around it still rounds"
     (LL.narrowing_read ~scope_prec:bf (rounded half));
   let digest t = LL.alpha_digest (Ll_test.set out at0 (rounded t)) in
-  p "roundings to two precisions are two programs" (not (String.equal (digest half) (digest bf)))
+  p "roundings to two precisions are two programs" (not (String.equal (digest half) (digest bf)));
+  let s = Ll_test.sym () in
+  let i = [| Ll_test.iter s |] in
+  let update =
+    LL.Binop
+      (Ops.Add, (LL.Unop (Ops.Round_prec, (Ll_test.get out i, half)), f32), (Ll_test.get x i, f32))
+  in
+  p "zero forwarding leaves a rounded self-read alone: a rounding holds a read, never a select"
+    (Option.is_none (LL.zero_seed_candidate out (Ll_test.loop_n s n (Ll_test.set out i update))))
 
 let () =
   let saved = Ir.Numerics.get () in

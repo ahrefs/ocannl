@@ -278,7 +278,15 @@ type optop =
           exact and its round-trip is the identity, making the transform unconditionally
           numerics-preserving; a narrowing tile would change values and is rejected. Composes with
           [hoisted] (the host-side pack converts) and with the in-kernel copy nest; the edge-guard
-          zero fill is at the tile's precision either way. *)
+          zero fill is at the tile's precision either way.
+
+          A staged read under an {!Ops.Round_prec} (a virtual cast of a wider source,
+          gh-ocannl-1975) stages what it reads: the load nest rounds, once per cell, and the
+          consumers read a plain [Get] of the tile, the one form [Tensorize] takes, since a
+          [Tile_mma]'s operands are a node and indices. The tile holds the rounded value, so
+          [tile_prec = None] mints it at the rounding's precision, a narrower one than the source's,
+          and [Some p] may widen that. Staged reads must agree on the rounding, and [hoisted]
+          refuses it: a host-side pack has no load nest to round in. *)
   | Privatize of { target : Tn.t; over : Indexing.symbol; acc_prec : Ops.prec }
       (** Accumulator privatization: contract the read-modify-write accumulation of the materialized
           [target] across the (Serial) [over] loop's whole subtree into a per-thread [Local]

@@ -296,6 +296,11 @@ type matmul_site = {
   m_d : Ir.Tnode.t;
   m_a : Ir.Tnode.t;
   m_b : Ir.Tnode.t;
+  m_a_round : Ir.Ops.prec option;
+      (** The precision [m_a] is read rounded to ({!Ir.Ops.Round_prec}, gh-ocannl-1975), a virtual
+          cast of a wider source. Such an operand only tiles through an in-kernel [Stage], whose
+          load nest does the rounding. *)
+  m_b_round : Ir.Ops.prec option;  (** {!field-m_a_round}, for [m_b]. *)
   m_zeroed : bool;  (** A whole-node [Zero_out] of [m_d] is present (needed by [expand_zero]). *)
   m_tb : bool option;
       (** [m_b]'s stored layout: [Some false] = [m_j] on its minor axis ([..., k, ..., j]),
@@ -509,6 +514,8 @@ let classify_matmul ~(loops : (Idx.symbol * int) list) ~(d : Ir.Tnode.t)
                       m_d = d;
                       m_a = a;
                       m_b = b;
+                      m_a_round = None;
+                      m_b_round = None;
                       m_zeroed = zeroed;
                       m_tb;
                       m_fma = fma;
@@ -663,7 +670,20 @@ let detect_matmul (llc : LL.t) : matmul_site option =
          invalid_arg
            "Autotune.detect_matmul crosscheck: the relation-based and procedural matchers diverge \
             — detection must be behavior-preserving");
-  site
+  Option.map site ~f:(fun site ->
+      {
+        site with
+        m_a_round = LL.rounded_read_prec llc site.m_a;
+        m_b_round = LL.rounded_read_prec llc site.m_b;
+      })
+
+(* The precision an operand's values reach the site at. *)
+let operand_prec (site : matmul_site) tn =
+  let round = if phys_equal tn site.m_a then site.m_a_round else site.m_b_round in
+  Option.value round ~default:(Lazy.force tn.Ir.Tnode.storage_prec)
+
+let reads_rounded (site : matmul_site) =
+  Option.is_some site.m_a_round || Option.is_some site.m_b_round
 
 let sink sym below = List.map below ~f:(fun inner -> Sched.Swap { outer = sym; inner })
 
@@ -2239,7 +2259,9 @@ let hoistable = Sched.hoistable_constant
    family-tree verdict asks this, never [hoistable] directly, so a shape the tree proposes stages
    its operands exactly as the builder will. *)
 let site_hoistable (site : matmul_site) tn =
-  hoistable tn && (site.m_row_stride = 1 || not (phys_equal tn site.m_a))
+  hoistable tn
+  && (site.m_row_stride = 1 || not (phys_equal tn site.m_a))
+  && Ir.Ops.equal_prec (operand_prec site tn) (Lazy.force tn.Ir.Tnode.storage_prec)
 
 (* Why a strided-row site whose only constant operand is its A packs nothing at link time
    (gh-ocannl-1148). *)
@@ -2692,10 +2714,10 @@ let cpu_mma_pack_sketch_schedule (site : matmul_site)
     (* [sk_pack_prec] is the site's compute precision; mint the packed tile there where the source
        stores narrower (gh-ocannl-575) — the widening rides the packing copy and the register-tiled
        micro-kernel reads uniform compute-precision panels. Normalized to [None] when the source
-       already stores at it, keeping the [Stage] canonical. *)
+       already reaches the site at it, keeping the [Stage] canonical. *)
     let tile_prec =
       Option.bind sk_pack_prec ~f:(fun p ->
-          if Ir.Ops.equal_prec p (Lazy.force source.Ir.Tnode.storage_prec) then None else Some p)
+          if Ir.Ops.equal_prec p (operand_prec site source) then None else Some p)
     in
     Sched.Stage
       {
@@ -3730,8 +3752,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
   in
   let blocktile_child ~(batch : batch_layout) =
     if is_gpu then
-      let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
-      let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
+      let a_prec = operand_prec site site.m_a in
+      let b_prec = operand_prec site site.m_b in
       subt (fun () ->
           (* The menu's pad waste is judged relative to its least-padded proposed geometry
              (gh-ocannl-740, [judge_pad_waste]); a dividing geometry has ratio 1. *)
@@ -3848,8 +3870,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
     else Sspace.Refuted "backend kind seeds no scalar blocktile pipeline"
   in
   let mma_child ~(batch : batch_layout) =
-    let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
-    let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
+    let a_prec = operand_prec site site.m_a in
+    let b_prec = operand_prec site site.m_b in
     let d_prec = Lazy.force site.m_d.Ir.Tnode.storage_prec in
     match
       ( tensorized_capability_refutation ~is_gpu ~is_cpu ~limits ~a_prec ~b_prec ~d_prec,
@@ -4264,6 +4286,9 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                 [
                   ( site.m_row_stride = 1,
                     strided_row_in_place_witness site ~what:"the whole-triple form" );
+                  ( not (reads_rounded site),
+                    "an operand is read rounded: only a pack's load nest can round it, and the \
+                     whole-triple form reads both in place" );
                   ( not tb_in_place,
                     "stored B is transposed: whole-triple reads B in place, which the register \
                      tiling statically declines" );
@@ -4308,8 +4333,8 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                    schedule builder normalizes back to [None] per [Stage] whose source already
                    stores at the compute precision. *)
                 if
-                  Ir.Ops.equal_prec prec (Lazy.force site.m_a.Ir.Tnode.storage_prec)
-                  && Ir.Ops.equal_prec prec (Lazy.force site.m_b.Ir.Tnode.storage_prec)
+                  Ir.Ops.equal_prec prec (operand_prec site site.m_a)
+                  && Ir.Ops.equal_prec prec (operand_prec site site.m_b)
                 then None
                 else Some prec
               in
@@ -4485,6 +4510,10 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                          stage. *)
                       Sspace.Refuted
                         (strided_row_in_place_witness site ~what:"the hoisted-grid shape")
+                    else if reads_rounded site then
+                      Sspace.Refuted
+                        "an operand is read rounded: this shape reads what it does not hoist in \
+                         place, and only a pack's load nest can round it"
                     else if
                       (* A non-hoistable B is read in place by this shape (its stage is omitted), so
                          only the clean untransposed orientation survives: transposed B statically
@@ -5709,8 +5738,8 @@ let sketch_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (opt :
       | None -> fun _path -> 0
       | Some site -> conv_path_traffic_floor ~limits site)
   | Some (site, _, _) -> (
-      let a_prec = Lazy.force site.m_a.Ir.Tnode.storage_prec in
-      let b_prec = Lazy.force site.m_b.Ir.Tnode.storage_prec in
+      let a_prec = operand_prec site site.m_a in
+      let b_prec = operand_prec site site.m_b in
       let pa = Ir.Ops.prec_in_bytes a_prec and pb = Ir.Ops.prec_in_bytes b_prec in
       let tile_bytes ~bm ~bn ~bk = (bm * bk * pa) + (bk * bn * pb) in
       let w =

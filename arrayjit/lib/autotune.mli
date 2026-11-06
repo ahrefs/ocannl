@@ -350,6 +350,8 @@ type matmul_site = {
   m_d : Ir.Tnode.t;
   m_a : Ir.Tnode.t;
   m_b : Ir.Tnode.t;
+  m_a_round : Ir.Ops.prec option;
+  m_b_round : Ir.Ops.prec option;
   m_zeroed : bool;
   m_tb : bool option;
   m_fma : bool;

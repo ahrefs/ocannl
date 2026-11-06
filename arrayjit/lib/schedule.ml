@@ -1385,9 +1385,11 @@ let add_symbol (idx : Indexing.axis_index) (s : Indexing.symbol) : Indexing.axis
    dummied out) and the outermost [Local_scope] the read sits in: [Some (d, id)] when it is in the
    body of scope [id], whose enclosing statement is under the first [d] loops of the stack — so the
    loops from depth [d] on are bound inside that scope body (gh-ocannl-1534). Writes to [source] are
-   rejected. *)
+   rejected. The last component is the precision the read rounds to, if a [Round_prec] holds it
+   directly (gh-ocannl-1975). *)
 let collect_source_accesses ~source (llc : Low_level.t) :
-    (Indexing.axis_index array * floop list * (int * Low_level.scope_id) option) list =
+    (Indexing.axis_index array * floop list * (int * Low_level.scope_id) option * Ops.prec option)
+    list =
   let open Low_level in
   let acc = ref [] in
   let scope_at = ref None in
@@ -1440,7 +1442,10 @@ let collect_source_accesses ~source (llc : Low_level.t) :
         code stack body;
         scope_at := outer
     | Get_local _ | Constant _ | Constant_bits _ | Embed_index _ -> ()
-    | Get (tn, idcs) -> if Tn.equal tn source then acc := (idcs, List.rev stack, !scope_at) :: !acc
+    | Unop (Ops.Round_prec, (Get (tn, idcs), t)) when Tn.equal tn source ->
+        acc := (idcs, List.rev stack, !scope_at, Some t) :: !acc
+    | Get (tn, idcs) ->
+        if Tn.equal tn source then acc := (idcs, List.rev stack, !scope_at, None) :: !acc
     | Get_dynamic { tn; dyn_value = v, _; _ } ->
         if Tn.equal tn source then
           refuse "Schedule.Stage: dynamically indexed source reads are unsupported";
@@ -1459,9 +1464,10 @@ let collect_source_accesses ~source (llc : Low_level.t) :
   !acc
 
 (* Replaces reads [Get (source, idcs)] — and, when [writes] is set, writes [Set { tn = source; idcs;
-   _ }] — with [idcs] equal to [from_idcs] by accesses of [tile] at [tile_idcs]. *)
-let remap_reads ?(writes = false) ~source ~from_idcs ~tile ~tile_idcs (llc : Low_level.t) :
-    Low_level.t =
+   _ }] — with [idcs] equal to [from_idcs] by accesses of [tile] at [tile_idcs]. A [Round_prec] read
+   goes whole when [rounded] (gh-ocannl-1975): the tile holds the rounded value. *)
+let remap_reads ?(writes = false) ?(rounded = false) ~source ~from_idcs ~tile ~tile_idcs
+    (llc : Low_level.t) : Low_level.t =
   let open Low_level in
   let rec code llc =
     match llc with
@@ -1490,6 +1496,9 @@ let remap_reads ?(writes = false) ~source ~from_idcs ~tile ~tile_idcs (llc : Low
     | If { cond = c, p; body } -> If { cond = (scalar c, p); body = code body }
   and scalar (llsc : scalar_t) : scalar_t =
     match llsc with
+    | Unop (Ops.Round_prec, (Get (tn, idcs), _))
+      when rounded && Tn.equal tn source && Array.equal Indexing.equal_axis_index idcs from_idcs ->
+        Get (tile, tile_idcs)
     | Get (tn, idcs) when Tn.equal tn source && Array.equal Indexing.equal_axis_index idcs from_idcs
       ->
         Get (tile, tile_idcs)
@@ -1644,11 +1653,12 @@ let written_nodes (llc : Low_level.t) : Set.M(Tn).t =
   code llc;
   !acc
 
-(* The precision a schedule-minted scratch tile of [tn] may take: [tn]'s storage precision or an
-   exact widening of it (a narrow float to f32/f64). [Stage.tile_prec] and [Privatize.acc_prec]
-   share it: a narrowing tile would change values the schedule is not licensed to change. *)
-let exact_widening ~what (tn : Tn.t) (p : Ops.prec) : Ops.prec =
-  let storage = Lazy.force tn.Tn.storage_prec in
+(* The precision a schedule-minted scratch tile of [tn] may take: the precision its values hold,
+   [tn]'s storage precision unless they are read rounded ([holds], gh-ocannl-1975), or an exact
+   widening of it (a narrow float to f32/f64). [Stage.tile_prec] and [Privatize.acc_prec] share it:
+   a narrowing tile would change values the schedule is not licensed to change. *)
+let exact_widening ?holds ~what (tn : Tn.t) (p : Ops.prec) : Ops.prec =
+  let storage = Option.value holds ~default:(Lazy.force tn.Tn.storage_prec) in
   match p with
   | _ when Ops.equal_prec p storage -> p
   | (Ops.Single_prec _ | Ops.Double_prec _) when Ops.is_narrow_float storage -> p
@@ -1662,14 +1672,6 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
   let open Low_level in
   if List.is_empty tile_loops then refuse "Schedule.Stage: empty tile_loops";
   let source_prec = Lazy.force source.Tn.storage_prec in
-  (* [tile_prec] admits exact widenings only (gh-ocannl-575): a widening is value-preserving and its
-     round-trip is the identity, so the transform stays numerics-preserving no matter which
-     precision the consumers compute at. *)
-  let stage_prec =
-    match tile_prec with
-    | None -> source_prec
-    | Some p -> exact_widening ~what:"Schedule.Stage: tile_prec" source p
-  in
   Option.iter cooperative ~f:(fun w ->
       if not shared then refuse "Schedule.Stage: cooperative staging requires shared = true";
       if w <= 0 then refuse "Schedule.Stage: cooperative simd width must be positive");
@@ -1705,19 +1707,38 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
      With no staged read at all, the first read stands in, so the tile-loop occurrence check below
      names the missing loop. *)
   let staged =
-    List.filter accesses ~f:(fun (idcs, _, _) ->
+    List.filter accesses ~f:(fun (idcs, _, _, _) ->
         Array.exists idcs ~f:(Indexing.axis_index_mentions_any tile_loops))
   in
-  let idcs0, stack0, scope0 =
+  let idcs0, stack0, scope0, round0 =
     match (staged, accesses) with
     | [], [] -> refuse ("Schedule.Stage: no reads of " ^ Tn.debug_name source ^ " in the routine")
     | hd :: _, _ | [], hd :: _ -> hd
   in
-  List.iter staged ~f:(fun (idcs, _, _) ->
+  List.iter staged ~f:(fun (idcs, _, _, round) ->
       if not (Array.equal Indexing.equal_axis_index idcs idcs0) then
         refuse
           ("Schedule.Stage: v1 requires all reads of " ^ Tn.debug_name source
-         ^ " under the tile loops to use identical index vectors"));
+         ^ " under the tile loops to use identical index vectors");
+      if not (Option.equal Ops.equal_prec round round0) then
+        refuse
+          ("Schedule.Stage: reads of " ^ Tn.debug_name source
+         ^ " under the tile loops round differently, and one tile holds one value per cell"));
+  (* gh-ocannl-1975: a tile of a rounded read holds what the read reads, so the rounding happens
+     once per cell, in the load nest, and the consumers read a plain [Get]: the only form
+     [Tensorize] takes and the only one a [Tile_mma] can honour, its operands being a node and
+     indices. [hoisted] has no load nest to hold it. *)
+  if hoisted && Option.is_some round0 then
+    refuse
+      ("Schedule.Stage: a hoisted panel has no load nest to round " ^ Tn.debug_name source ^ " in");
+  (* [tile_prec] admits exact widenings only (gh-ocannl-575): a widening is value-preserving and its
+     round-trip is the identity, so the transform stays numerics-preserving no matter which
+     precision the consumers compute at. *)
+  let stage_prec =
+    match tile_prec with
+    | None -> Option.value round0 ~default:source_prec
+    | Some p -> exact_widening ?holds:round0 ~what:"Schedule.Stage: tile_prec" source p
+  in
   let stack0 =
     Array.of_list stack0
     (* outermost-first *)
@@ -1986,7 +2007,7 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        (copies of a materializing mint share their binders). *)
     Option.iter lstar_depth ~f:(fun ld ->
         let anchor = stack0.(ld).index in
-        List.iter staged ~f:(fun (_, stack, scope) ->
+        List.iter staged ~f:(fun (_, stack, scope, _) ->
             match scope with
             | None -> ()
             | Some (d, id) -> (
@@ -2117,10 +2138,13 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
        accumulation identity — instead of staying uninitialized, so edge tiles of a non-dividing or
        padded staging (gh-ocannl-485) are safe to read over their whole index space. The tile is
        recorded in {!Low_level.optimized.zero_fringe} accordingly. *)
+    let load =
+      match round0 with
+      | Some t -> Unop (Ops.Round_prec, (Get (source, load_src_idcs), t))
+      | None -> Get (source, load_src_idcs)
+    in
     let guarded_get =
-      Array.fold tile_axes
-        ~init:(Get (source, load_src_idcs))
-        ~f:(fun rhs (a, _) ->
+      Array.fold tile_axes ~init:load ~f:(fun rhs (a, _) ->
           let cond =
             Binop
               ( Ops.Cmplt,
@@ -2366,7 +2390,10 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
           in
           For_loop { index = w_sym; from_ = 0; to_ = w - 1; axis = Workgroup; body }
     in
-    let remap llc = remap_reads ~source ~from_idcs:idcs0 ~tile ~tile_idcs:tile_read_idcs llc in
+    let remap llc =
+      remap_reads ~rounded:(Option.is_some round0) ~source ~from_idcs:idcs0 ~tile
+        ~tile_idcs:tile_read_idcs llc
+    in
     (* Same-anchor load-phase grouping at depth 1 (gh-ocannl-567; the [build_pipelined] arm below is
        the same recognizer one depth up). A previous shared stage anchored at THIS loop left the
        body as [loads; barrier; compute...; barrier]. Wrapping it again would render the k-block as
