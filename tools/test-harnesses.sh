@@ -41,9 +41,10 @@
 # hidden from every real-dune probe (OCANNL_TOOL_HARNESS_NO_DUNE=1,
 # scripts/harness-support.sh's harness_real_dune), FLEET_BOXES unset and the
 # fleet anchor's wake-lab.sh pointed away (OCANNL_TOOL_SWEEP_WAKE_LAB). On
-# macOS the further skips of Linux-only legs that
-# tools/harness-skips-ci-shell-darwin.txt lists are expected too, under the
-# same rules. The dune list is held to exactly the skips the hidden dune
+# macOS the further skips tools/harness-skips-ci-shell-darwin.txt lists are
+# expected too, under the same rules: coverage a macOS host loses, none now,
+# and never a leg for a Linux-only facility, which declares itself not
+# applicable instead (gh-ocannl-1930). The dune list is held to exactly the skips the hidden dune
 # caused, told by their reason (gh-ocannl-1650): such a skip listed in another
 # file, or a dune-list skip with another reason, fails the tier. It takes no
 # group and no --expected-skips. Without it, an ambient
@@ -246,7 +247,7 @@ readable_lists() { # OPTION FILE...
 }
 dune_list=$root/tools/harness-skips-ci-shell-dune.txt
 if [ "$ci_shell" = 1 ]; then
-  # The job's list, the hidden dune's, and on macOS the Linux-only legs'
+  # The job's list, the hidden dune's, and on macOS that host's own
   # skips, as ONE list validated and checked like any other: its line numbers
   # run on through the later files.
   lists=("$root/tools/harness-skips-ci-shell.txt" "$dune_list")

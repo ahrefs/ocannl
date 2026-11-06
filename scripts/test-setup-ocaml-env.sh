@@ -30,8 +30,11 @@
 #
 # Legs:
 #   1. `bounded` — the watchdog: TERM at the bound, KILL 5s later, process-group
-#      kill, rc preservation, no orphans, and a group holding only a zombie
-#      read as empty rather than as work.
+#      kill, rc preservation, no orphans.
+#   1b. `bounded` (f) — a group holding only a zombie reads as empty rather
+#      than as work. Not applicable where the kernel's killpg already answers
+#      dead for such a group (macOS): the misreading cannot occur there
+#      (gh-ocannl-1930).
 #   2. counting — behind/ahead wording and recovery command, offline fallback,
 #      ref-ambiguity, FETCH_HEAD untouched, no-origin silence.
 #   3. SSH launcher gating — which program git ends up invoking and whether the
@@ -385,92 +388,116 @@ else
       report 1 "bounded (e): fast exit preserves rc and reaps the watchdog" \
         "rc=$rc elapsed=${el}s (want ~0s) watchdog-sleeps=$left"
     fi
-
-    # (f) A group holding nothing but a zombie must read as EMPTY. This is the
-    #     misreading that cost the hook 30s on every failed ssh fetch: `kill -0`
-    #     answers yes for a zombie exactly as for a live process. Under a PID 1
-    #     that reaps, such a zombie is transient and the old check merely lost a
-    #     race with it; under one that does not — the common container case — it
-    #     is PERMANENT, so no amount of waiting would have cleared it. Leg (d)
-    #     is the other side of the question — a group that really is occupied
-    #     still waits — and ssh (15) is the end-to-end symptom.
-    #
-    #     Making a zombie that is reliably still a zombie when looked at, and
-    #     that leaves nothing behind afterwards, takes some care. The parent
-    #     puts the child in a process group of ITS OWN (so the group holds the
-    #     zombie and nothing else), then STOPs itself before the child exits: a
-    #     stopped shell runs no SIGCHLD handler, so it cannot reap, and the
-    #     child stays a zombie for as long as we need. Killing that parent would
-    #     orphan the zombie onto a PID 1 that — in the very environment this leg
-    #     is for — never reaps it, leaking a process-table entry per run. So it
-    #     is CONTinued instead, and reaps its own child on the way out.
-    zpidfile="$TMP/zombie.pid"; rm -f "$zpidfile"
-    bash -c 'set -m
-             sleep 0.5 >/dev/null 2>&1 </dev/null &
-             echo $! >"$1"
-             set +m
-             kill -STOP $$
-             wait' _ "$zpidfile" >/dev/null 2>&1 </dev/null &
-    zparent=$!
-    zpid=""
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-      [ -s "$zpidfile" ] && zpid="$(cat "$zpidfile")" && break
-      sleep 0.1
-    done
-    # Wait for real zombiehood rather than guessing at it, and read the state
-    # with `ps -p`, independently of the `group_alive` under test.
-    zstate=""
-    if [ -n "$zpid" ]; then
-      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
-        zstate="$(ps -o stat= -p "$zpid" 2>/dev/null | tr -d ' ')"
-        case "$zstate" in Z*) break ;; esac
-        sleep 0.1
-      done
-    fi
-    if [ -z "$zpid" ]; then
-      report 1 "bounded (f): a group holding nothing but a zombie reads as empty" \
-        "could not start the zombie maker"
-    else
-      case "$zstate" in
-        Z*)
-          if ! kill -0 -- -"$zpid" 2>/dev/null; then
-            skip "bounded (f): a group holding nothing but a zombie reads as empty" \
-              "this kernel's killpg already answers dead, so the leg cannot distinguish the shared state reader from the bare signal probe"
-          elif group_alive "$zpid"; then
-            report 1 "bounded (f): a group holding nothing but a zombie reads as empty" \
-              "group_alive counted a zombie as work — bounded would wait out the whole bound"
-          else
-            report 0 "bounded (f): a group holding nothing but a zombie reads as empty"
-          fi
-          ;;
-        *)
-          report 1 "bounded (f): a group holding nothing but a zombie reads as empty" \
-            "the child never reached state Z (saw '${zstate:-gone}'), so the leg tested nothing"
-          ;;
-      esac
-    fi
-    # Let the parent reap its own child, rather than orphaning the zombie onto
-    # a PID 1 that may never reap it; then check we really left nothing behind.
-    kill -CONT "$zparent" 2>/dev/null
-    wait "$zparent" 2>/dev/null
-    zleft=""
-    if [ -n "$zpid" ]; then
-      for _ in 1 2 3 4 5 6 7 8 9 10; do
-        zleft="$(ps -o stat= -p "$zpid" 2>/dev/null | tr -d ' ')"
-        [ -z "$zleft" ] && break
-        sleep 0.1
-      done
-    fi
-    if [ -z "$zleft" ]; then
-      report 0 "bounded (f): the leg reaps its own zombie, leaving no process-table entry"
-    else
-      report 1 "bounded (f): the leg reaps its own zombie, leaving no process-table entry" \
-        "pid $zpid is still present as '$zleft'"
-    fi
   fi
 fi
 }
 harness_leg_run '1: bounded, the watchdog' leg_1
+
+# ---------------------------------------------------------------------------
+# Leg 1b: bounded (f), a zombie-only group
+# ---------------------------------------------------------------------------
+leg_1b() {
+local zlabel="bounded (f): a group holding nothing but a zombie reads as empty"
+local zreap_label="bounded (f): the leg reaps its own zombie, leaving no process-table entry"
+local zkillpg="" zgroup="" zleft=""
+# The predicate alone, from the working-tree shared helper as leg 1 takes it.
+sed -n '/^group_alive() {/,/^}/p' "$GROUP_SRC" >"$TMP/group-alive.sh"
+case "$(head -n1 "$TMP/group-alive.sh")" in
+  "group_alive() {"*) ;;
+  *) harness_abandon "sed did not capture group_alive from $GROUP_SRC"; return ;;
+esac
+# shellcheck disable=SC1090
+. "$TMP/group-alive.sh"
+
+# A group holding nothing but a zombie must read as EMPTY. This is the
+# misreading that cost the hook 30s on every failed ssh fetch: `kill -0`
+# answers yes for a zombie exactly as for a live process. Under a PID 1
+# that reaps, such a zombie is transient and the old check merely lost a
+# race with it; under one that does not — the common container case — it
+# is PERMANENT, so no amount of waiting would have cleared it. Leg 1's (d)
+# is the other side of the question — a group that really is occupied
+# still waits — and ssh (15) is the end-to-end symptom.
+#
+# Making a zombie that is reliably still a zombie when looked at, and
+# that leaves nothing behind afterwards, takes some care. The parent
+# puts the child in a process group of ITS OWN (so the group holds the
+# zombie and nothing else), then STOPs itself before the child exits: a
+# stopped shell runs no SIGCHLD handler, so it cannot reap, and the
+# child stays a zombie for as long as we need. Killing that parent would
+# orphan the zombie onto a PID 1 that — in the very environment this leg
+# is for — never reaps it, leaking a process-table entry per run. So it
+# is CONTinued instead, and reaps its own child on the way out.
+zpidfile="$TMP/zombie.pid"; rm -f "$zpidfile"
+bash -c 'set -m
+         sleep 0.5 >/dev/null 2>&1 </dev/null &
+         echo $! >"$1"
+         set +m
+         kill -STOP $$
+         wait' _ "$zpidfile" >/dev/null 2>&1 </dev/null &
+zparent=$!
+zpid=""
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  [ -s "$zpidfile" ] && zpid="$(cat "$zpidfile")" && break
+  sleep 0.1
+done
+# Wait for real zombiehood rather than guessing at it, and read the state
+# with `ps -p`, independently of the `group_alive` under test.
+zstate=""
+if [ -n "$zpid" ]; then
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+    zstate="$(ps -o stat= -p "$zpid" 2>/dev/null | tr -d ' ')"
+    case "$zstate" in Z*) break ;; esac
+    sleep 0.1
+  done
+fi
+# What the kernel's bare signal probe and the predicate under test each say of
+# the group, taken while the zombie is one. The verdict waits for the zombie's
+# parent to reap it: where killpg already answers dead the leg is not
+# applicable, and that is the first thing a leg decides.
+case "$zstate" in
+  Z*)
+    if kill -0 -- -"$zpid" 2>/dev/null; then zkillpg=alive; else zkillpg=dead; fi
+    if group_alive "$zpid"; then zgroup=alive; else zgroup=empty; fi
+    ;;
+esac
+# Let the parent reap its own child, rather than orphaning the zombie onto
+# a PID 1 that may never reap it; then check we really left nothing behind.
+kill -CONT "$zparent" 2>/dev/null
+wait "$zparent" 2>/dev/null
+if [ -n "$zpid" ]; then
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    zleft="$(ps -o stat= -p "$zpid" 2>/dev/null | tr -d ' ')"
+    [ -z "$zleft" ] && break
+    sleep 0.1
+  done
+fi
+# Not applicable (gh-ocannl-1930) where this kernel's killpg was SEEN to answer
+# dead for the zombie-only group (macOS): the misreading (f) pins -- `kill -0`
+# answering yes for a zombie as for a live process -- does not occur there, so
+# the predicate's state reader has nothing to be told apart from and no
+# coverage is lost. Any other answer runs the checks: a child that never
+# reached state Z is a FAIL below, never a reason. A zombie left behind is a
+# FAIL here too, before the declaration.
+if [ "$zkillpg" = dead ] && [ -z "$zleft" ]; then
+  harness_not_applicable "this kernel's killpg answers dead for a group holding only a zombie (pid $zpid, state $zstate), so the bare signal probe cannot misread one as work here and the state reader has nothing to be told from"
+  return
+fi
+if [ -z "$zpid" ]; then
+  report 1 "$zlabel" "could not start the zombie maker"
+elif [ -z "$zkillpg" ]; then
+  report 1 "$zlabel" "the child never reached state Z (saw '${zstate:-gone}'), so the leg tested nothing"
+elif [ "$zkillpg" = alive ] && [ "$zgroup" = alive ]; then
+  report 1 "$zlabel" "group_alive counted a zombie as work — bounded would wait out the whole bound"
+elif [ "$zkillpg" = alive ]; then
+  report 0 "$zlabel"
+fi
+if [ -z "$zleft" ]; then
+  report 0 "$zreap_label"
+else
+  report 1 "$zreap_label" "pid $zpid is still present as '$zleft'"
+fi
+}
+harness_leg_run '1b: a group holding nothing but a zombie reads as empty' leg_1b
 
 # ---------------------------------------------------------------------------
 # Shared machinery for the hook-invoking legs
