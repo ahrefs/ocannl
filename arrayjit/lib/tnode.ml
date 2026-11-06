@@ -957,6 +957,32 @@ let hash nd = Int.hash nd.uid
 let hash_fold_t acc nd = hash_fold_int acc nd.uid
 let hash_t = hash
 
+(** A table whose entries go with their key node (gh-ocannl-1859): what a pass records about a node
+    lasts exactly as long as the node, however long the session, so nothing has to clear it and code
+    holding the node keeps the record. The value may refer to the key: that keeps neither alive. Its
+    [length] counts entries the GC has not swept out yet, so {!live_entries} is what a census reads.
+*)
+module Weak_table = Stdlib.Ephemeron.K1.Make (struct
+  type nonrec t = t
+
+  let equal = equal
+  let hash = hash
+end)
+
+let live_entries table =
+  Weak_table.clean table;
+  Weak_table.length table
+
+(** The per-[tn] bucket of a table of memos, made with [create] on first use: a memo keyed by what
+    it was minted for, so that the entry goes with that node. *)
+let memo_bucket table tn ~create =
+  match Weak_table.find_opt table tn with
+  | Some bucket -> bucket
+  | None ->
+      let bucket = create () in
+      Weak_table.replace table tn bucket;
+      bucket
+
 module Comp = struct
   type nonrec t = t
   type nonrec comparator_witness = comparator_witness

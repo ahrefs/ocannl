@@ -154,6 +154,7 @@ let exempt_zero_reference_exports =
     "Tnode.bounds_scan_worthwhile";
     "Tnode.current_namespace";
     "Tnode.fresh_uid";
+    "Tnode.hash";
     "Tnode.hash_t";
     "Tnode.initial_default_prec";
     "Tnode.is_alphanum_";

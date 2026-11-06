@@ -7,3 +7,21 @@ a failed closure keeps the open work's tables: true
 a rewind to the closure restores the empty tables: true
 a graph over a closed one computes: true
 the retired-read guard refuses exactly when it is enabled: true
+online_softmax: it fired on its graph: true
+online_softmax: fresh graphs plateau with the analysis cache: true
+online_softmax: dropped graphs' entries are gone once that cache is: true
+online_softmax: the held graph still computes: true
+winograd_conv: it fired on its graph: true
+winograd_conv: fresh graphs plateau with the analysis cache: true
+winograd_conv: dropped graphs' entries are gone once that cache is: true
+winograd_conv: a held graph keeps its minted nodes' identity: true
+winograd_conv: a held graph's nodes keep their markers through a memo reset: true
+winograd_conv: the held graph still computes: true
+prefix_scan: it fired on its graph: true
+prefix_scan: fresh graphs plateau with the analysis cache: true
+prefix_scan: dropped graphs' entries are gone once that cache is: true
+prefix_scan: a held graph keeps its minted nodes' identity: true
+prefix_scan: a held graph's nodes keep their markers through a memo reset: true
+prefix_scan: the held graph still computes: true
+a held node keeps its reassociation licence through a memo reset: true
+a dropped node's marker goes with it: true

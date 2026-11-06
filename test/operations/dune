@@ -14019,7 +14019,14 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules session_growth)
- (libraries base ocannl stdio arrayjit.utils arrayjit.verdict gc_witness)
+ (libraries
+  base
+  ocannl
+  stdio
+  arrayjit.utils
+  arrayjit.verdict
+  gc_witness
+  ll_test)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

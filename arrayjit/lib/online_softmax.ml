@@ -32,21 +32,25 @@ let fresh_id =
 
 (* Sibling lowerings of one program -- placement arms, autotune candidates -- must mint the SAME
    nodes, or the analysis cache, which keys nodes by identity, misses on every one of them: a local
-   is memoized by the node it stands for and its role, and the memo is cleared with the other
-   node-retaining caches: ahead of an accessibility snapshot, and at a session reset through the
-   tier's [Rewrites.reset]. *)
+   is memoized by the node it stands for and its role, in a bucket that goes with that node
+   (gh-ocannl-1859), and the memo is cleared with the other node-retaining caches: ahead of an
+   accessibility snapshot, and at a session reset through the tier's [Rewrites.reset]. *)
 module Minted_key = struct
   type t = int * string [@@deriving compare, hash, sexp_of]
 end
 
-let minted : (Minted_key.t, Tn.t) Hashtbl.t = Hashtbl.create (module Minted_key)
-let reset () = Hashtbl.clear minted
+let minted : (Minted_key.t, Tn.t) Hashtbl.t Tn.Weak_table.t = Tn.Weak_table.create 16
+let reset () = Tn.Weak_table.reset minted
+
+let minted_for (like : Tn.t) =
+  Tn.memo_bucket minted like ~create:(fun () -> Hashtbl.create (module Minted_key))
+
 let () = Tn.before_accessibility_snapshot := reset :: !Tn.before_accessibility_snapshot
 
 (* Memoized per [like], label AND precision: one scalar per role and width, so a request at another
    precision is a node of its own rather than the first request's node at the wrong width. *)
 let scalar_node ~label ~(like : Tn.t) prec =
-  Hashtbl.find_or_add minted
+  Hashtbl.find_or_add (minted_for like)
     (like.Tn.uid, label ^ "@" ^ Ops.prec_string prec)
     ~default:(fun () ->
       let tn =
@@ -64,15 +68,15 @@ let scalar_node ~label ~(like : Tn.t) prec =
 let dprob_label = "bwd_dprob"
 
 (* The identities [mint_dprob] minted: the marker is membership here, which no public field of a
-   node can forge (a node built with this module's namespace and label is not in it). Never cleared
-   -- a node's uid is never reused, and a [reset] of the memo table must not revoke the license of a
-   node already in some lowered code. *)
-let reassociable : int Hash_set.t = Hash_set.create (module Int)
-let reassociable_local (tn : Tn.t) = Hash_set.mem reassociable tn.Tn.uid
+   node can forge (a node built with this module's namespace and label is not in it). Keyed by the
+   node, so it lasts as long as the node: a [reset] of the memo table must not revoke the license of
+   a node already in some lowered code, and a dropped node's goes with it. *)
+let reassociable : unit Tn.Weak_table.t = Tn.Weak_table.create 16
+let reassociable_local (tn : Tn.t) = Tn.Weak_table.mem reassociable tn
 
 let mint_dprob ~like prec =
   let tn = scalar_node ~label:dprob_label ~like prec in
-  Hash_set.add reassociable tn.Tn.uid;
+  Tn.Weak_table.replace reassociable tn ();
   tn
 
 (* {1 Axis roles}
@@ -569,7 +573,7 @@ let backward_provenance = Tn.Site "1002:fused-backward-row-dot"
    virtual, which would replay its reduction at every pair; whether it is routine scratch or a
    buffer is the placements' call. *)
 let row_node ~label ~(like : Tn.t) prec =
-  Hashtbl.find_or_add minted (like.Tn.uid, label) ~default:(fun () ->
+  Hashtbl.find_or_add (minted_for like) (like.Tn.uid, label) ~default:(fun () ->
       let tn =
         Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ()) ~label:(label :: like.Tn.label)
           ~unpadded_dims:(lazy (Lazy.force like.Tn.dims))
@@ -1276,24 +1280,25 @@ let block ?(auto_block = 0) () =
    memory, so the test pins that decision, not a request of ours. Memoized like the scope-local
    nodes, per shape: a session sweeping the block size mints one tile per size.
 
-   A tile's role is what the minting recorded for its uid, which no public field of a node can forge
-   -- the [reassociable] argument (gh-ocannl-1722); the labels are display names only. Never
-   cleared, for the same reason: a [reset] of the memo table must not strip the role from a tile
-   already in some lowered code. *)
-let tile_roles : (int, [ `Scores | `Numerator ]) Hashtbl.t = Hashtbl.create (module Int)
-let fold_tile_role (tn : Tn.t) = Hashtbl.find tile_roles tn.Tn.uid
+   A tile's role is what the minting recorded for it, which no public field of a node can forge --
+   the [reassociable] argument (gh-ocannl-1722); the labels are display names only. Keyed by the
+   node for the same reason: a [reset] of the memo table must not strip the role from a tile already
+   in some lowered code. *)
+let tile_roles : [ `Scores | `Numerator ] Tn.Weak_table.t = Tn.Weak_table.create 16
+let fold_tile_role (tn : Tn.t) = Tn.Weak_table.find_opt tile_roles tn
+let retained () = Tn.live_entries minted + Tn.live_entries reassociable + Tn.live_entries tile_roles
 
 let tile_node ~role ~(like : Tn.t) ~dims prec =
   let label = match role with `Scores -> "block_scores" | `Numerator -> "block_numerator" in
   let key = label ^ ":" ^ String.concat_array ~sep:"x" (Array.map dims ~f:Int.to_string) in
-  Hashtbl.find_or_add minted (like.Tn.uid, key) ~default:(fun () ->
+  Hashtbl.find_or_add (minted_for like) (like.Tn.uid, key) ~default:(fun () ->
       let tn =
         Tn.create ~namespace (Tn.Specified prec) ~id:(fresh_id ()) ~label:(label :: like.Tn.label)
           ~unpadded_dims:(lazy dims)
           ~padding:(lazy None)
           ()
       in
-      Hashtbl.set tile_roles ~key:tn.Tn.uid ~data:role;
+      Tn.Weak_table.replace tile_roles tn role;
       tn)
 
 (* Whether a reduction nest writes every cell of its node: each target axis a distinct plain

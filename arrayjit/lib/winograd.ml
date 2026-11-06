@@ -48,23 +48,26 @@ let fresh_id =
    or the analysis cache, which keys nodes by identity, misses on every one of them. The key is the
    whole site -- the matched statement's nodes and index maps, its loop domains -- plus the role, so
    two statements that differ in any of those never share a buffer; the nest's loop symbols, which
-   every lowering mints afresh, enter it by their position in the nest (alpha-normalized). Cleared
-   with the other node-retaining caches: ahead of an accessibility snapshot, and at a session reset
-   through the tier's [Rewrites.reset]. *)
-let minted : (string, Tn.t) Hashtbl.t = Hashtbl.create (module String)
-let reset () = Hashtbl.clear minted
+   every lowering mints afresh, enter it by their position in the nest (alpha-normalized). The
+   entries of a site go with the source node they were minted [like] (gh-ocannl-1859), and are
+   cleared with the other node-retaining caches: ahead of an accessibility snapshot, and at a
+   session reset through the tier's [Rewrites.reset]. *)
+let minted : (string, Tn.t) Hashtbl.t Tn.Weak_table.t = Tn.Weak_table.create 16
+let reset () = Tn.Weak_table.reset minted
 let () = Tn.before_accessibility_snapshot := reset :: !Tn.before_accessibility_snapshot
 
 (* The identities this module minted, by role: the membership is the marker, which no public field
-   of a node can forge. Never cleared -- a node's uid is never reused. *)
-let roles : (int, [ `Kernel | `Input | `Product ]) Hashtbl.t = Hashtbl.create (module Int)
-let minted_role (tn : Tn.t) = Hashtbl.find roles tn.Tn.uid
+   of a node can forge. Keyed by the node, so it lasts as long as the node. *)
+let roles : [ `Kernel | `Input | `Product ] Tn.Weak_table.t = Tn.Weak_table.create 16
+let minted_role (tn : Tn.t) = Tn.Weak_table.find_opt roles tn
+let retained () = Tn.live_entries minted + Tn.live_entries roles
 
 let mint ~site_key ~role ~(like : Tn.t) prec dims =
   let role_label =
     match role with `Kernel -> "wino_u" | `Input -> "wino_v" | `Product -> "wino_m"
   in
-  Hashtbl.find_or_add minted
+  Hashtbl.find_or_add
+    (Tn.memo_bucket minted like ~create:(fun () -> Hashtbl.create (module String)))
     (role_label ^ "|" ^ site_key)
     ~default:(fun () ->
       let tn =
@@ -75,7 +78,7 @@ let mint ~site_key ~role ~(like : Tn.t) prec dims =
           ()
       in
       Tn.update_memory_mode tn Tn.Never_virtual provenance;
-      Hashtbl.set roles ~key:tn.Tn.uid ~data:role;
+      Tn.Weak_table.replace roles tn role;
       tn)
 
 (* {1 Recognition}

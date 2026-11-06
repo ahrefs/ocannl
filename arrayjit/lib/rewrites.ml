@@ -11,6 +11,7 @@ type rewrite = {
   enabled : unit -> bool;
   apply : target -> Low_level.t -> Low_level.t;
   reset : unit -> unit;
+  retained : unit -> int;
 }
 
 let tier : rewrite list =
@@ -20,28 +21,33 @@ let tier : rewrite list =
       enabled = Online_softmax.enabled;
       apply = (fun target -> Online_softmax.rewrite ~auto_block:target.online_softmax_auto_block);
       reset = Online_softmax.reset;
+      retained = Online_softmax.retained;
     };
     {
       name = "winograd_conv";
       enabled = Winograd.enabled;
       apply = (fun _target -> Winograd.rewrite);
       reset = Winograd.reset;
+      retained = Winograd.retained;
     };
     {
       name = "prefix_scan";
       enabled = Prefix_scan.enabled;
       apply = (fun _target -> Prefix_scan.rewrite);
       reset = Prefix_scan.reset;
+      retained = Prefix_scan.retained;
     };
     {
       name = "fp_contract, fp_reassociate, fp_finite_math";
       enabled = Fp_algebra.enabled;
       apply = (fun _target -> Fp_algebra.rewrite (Low_level.Fp_licence.of_config ()));
       reset = Fn.id;
+      retained = Fn.const 0;
     };
   ]
 
 let reset () = List.iter tier ~f:(fun r -> r.reset ())
+let retained () = List.map tier ~f:(fun r -> (r.name, r.retained ()))
 let max_rounds = 8
 
 let apply ?(target = conservative_target) (llc : Low_level.t) : Low_level.t =
