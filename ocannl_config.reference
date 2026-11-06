@@ -533,7 +533,7 @@
 # shows in the results instead of computing the same values from a fresh zero. On in test/config, so
 # every executed test discriminates against a missing write. So does a node embedded in the routine
 # that it reads first, unless declared to start from zero (Tnode.mark_zero_valid, in %cd
-# { x; zero_valid = true }; gh-ocannl-1966). A correct routine's results do not change, and neither
+# { x; zero_valid = true }; gh-ocannl-1966) or opened by an =+, =- or =|| (gh-ocannl-2013). A correct routine's results do not change, and neither
 # does any emitted code. Reaches Context.run only, and not a host-initialized node; of a
 # liveness-aliased buffer, its first occupant. A debugging/soak switch: off by default.
 #debug_fill_fresh_outputs=false

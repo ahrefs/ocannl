@@ -159,6 +159,14 @@ val forward_fetched :
     again whatever its parent. Pass {!slice_alias_eligible} once shapes are settled; a caller before
     that leaves the copies to one after. *)
 
+val accumulates_from_zero : comp -> Set.M(Tnode).t
+(** The nodes [comp] first touches with an accumulation whose neutral element is zero and which
+    resets nothing: [=+], [=-], [=||] (gh-ocannl-2013). The operator says the node builds on what it
+    holds, and on a fresh buffer that is the neutral element, so the program states its own start. A
+    reduction, [=:+], is not among them: it owes its init, and reading its target first means it
+    lost it. Neither is a node something reads before accumulating into it, or that its own
+    right-hand side reads. *)
+
 val forward_recomputed : comp -> Set.M(Tnode).t
 (** The nodes [comp] re-establishes without using the value they had (gh-ocannl-1998): a node it
     writes whose resulting value is not built from its incoming value, directly or through the nodes

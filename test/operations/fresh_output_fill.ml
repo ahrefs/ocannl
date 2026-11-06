@@ -168,6 +168,40 @@ let part1 () =
           lost))
     ~f:(Float.equal 6.)
 
+(* An accumulation from zero states its own start (gh-ocannl-2013); a reduction owes its init. *)
+let accumulation_openers () =
+  let accum ~initialize_neutral ?(op = Ops.Add) lhs rhs =
+    Asgns.Accum_op
+      {
+        initialize_neutral;
+        accum = op;
+        lhs;
+        rhs = Unop { op = Identity; rhs = Node rhs };
+        projections = lazy (failwith "the classification forces no projections");
+        projections_debug = "";
+      }
+  in
+  let s = node "fof_acc_s" and a = node "fof_acc_a" and b = node "fof_acc_b" in
+  let opens name leaves ~from_zero =
+    let code = List.reduce_exn leaves ~f:(fun l r -> Asgns.Seq (l, r)) in
+    let got = Asgns.accumulates_from_zero (Asgns.to_comp code) in
+    p ("accumulation opener: " ^ name) (Set.equal got (Set.of_list (module Tn) from_zero))
+  in
+  let add = accum ~initialize_neutral:false in
+  let reset = accum ~initialize_neutral:true in
+  opens "=+" [ add s a ] ~from_zero:[ s ];
+  opens "=- and =||, by their zero neutral"
+    [ add ~op:Ops.Sub s a; add ~op:Ops.Or b a ]
+    ~from_zero:[ s; b ];
+  opens "=* has another neutral" [ add ~op:Ops.Mul s a ] ~from_zero:[];
+  opens "=: reads nothing of its target" [ add ~op:Ops.Arg2 s a ] ~from_zero:[];
+  opens "a reduction owes its init" [ reset s a ] ~from_zero:[];
+  opens "a later =+ does not excuse a reduction" [ reset s a; add s b ] ~from_zero:[];
+  opens "a read before the =+ is a read of the old value"
+    [ add ~op:Ops.Arg2 b s; add s a ]
+    ~from_zero:[];
+  opens "nor does an =+ reading its own target state a start" [ add s s ] ~from_zero:[]
+
 (* The declaration through [%cd]: the field goes to the node, not to [term]. *)
 let declared_inline () =
   let run_ctr ~name comp =
@@ -186,7 +220,11 @@ let declared_inline () =
     run_ctr ~name:"fof_plain" [%cd { fof_plain; o = [ 2 ] } =: (!.1.0 *. fof_plain) + 1]
   in
   p "{ x } alone declares nothing" (Set.mem routine.read_first_undeclared ctr);
-  p_all "so it reads the fill" (Array.to_list got) ~f:Float.is_nan
+  p_all "so it reads the fill" (Array.to_list got) ~f:Float.is_nan;
+  let routine, ctr, got = run_ctr ~name:"fof_sum" [%cd { fof_sum; o = [ 2 ] } =+ 1] in
+  p "an embedded node an =+ opens is an output" (Set.mem routine.outputs ctr);
+  p "and no undeclared read" (not (Set.mem routine.read_first_undeclared ctr));
+  p_all "so it starts from zero" (Array.to_list got) ~f:(Float.equal 1.)
 
 (* A padded node's interior starts from the fill, and its margins from the padding value: what a
    reader of a margin must read, written or not. Cells [1] and [2] are written, of the padded
@@ -416,6 +454,7 @@ let () =
   if Array.mem Stdlib.Sys.argv child_flag ~equal:String.equal then child ()
   else (
     part1 ();
+    accumulation_openers ();
     declared_inline ();
     padded ();
     precisions ();

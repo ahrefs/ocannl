@@ -284,6 +284,33 @@ let collect_written (asgns : t) : Tn.t_set =
       | Fetch { array; _ } -> acc + one array
       | Noop | Seq _ | Block_comment _ -> acc)
 
+(* Documented in the interface. *)
+let accumulates_from_zero (comp : comp) =
+  let nodes buffers =
+    List.filter_map buffers ~f:(function Node tn -> Some tn | Merge_buffer _ -> None)
+  in
+  let touched_by = function
+    | Accum_op { lhs; rhs; _ } -> lhs :: nodes (buffers_of_accum_rhs rhs)
+    | Set_vec_unop { lhs; rhs; _ } -> lhs :: nodes [ rhs ]
+    | Fetch { array; fetch_op = Slice { sliced; _ }; _ } -> [ array; sliced ]
+    | Fetch { array; _ } -> [ array ]
+    | Noop | Seq _ | Block_comment _ -> []
+  in
+  fst
+  @@ fold_leaves comp.asgns ~init:(no_nodes, no_nodes) ~f:(fun (from_zero, touched) leaf ->
+      let touches = touched_by leaf in
+      let opens_from_zero =
+        match leaf with
+        | Accum_op { initialize_neutral = false; accum = Add | Sub | Or; lhs; rhs; _ }
+          when not (is_rev_sides rhs) ->
+            (not (Set.mem touched lhs)) && not (List.mem (List.tl_exn touches) lhs ~equal:Tn.equal)
+        | _ -> false
+      in
+      ( (if opens_from_zero then
+           match leaf with Accum_op { lhs; _ } -> Set.add from_zero lhs | _ -> from_zero
+         else from_zero),
+        List.fold touches ~init:touched ~f:Set.add ))
+
 (* A view's storage: a [Slice] is taken on trust as an alias of its parent, as [forward_fetched]
    takes it where shapes may still be open. *)
 let rec slice_storage parents tn =
