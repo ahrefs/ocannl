@@ -1,10 +1,11 @@
 (* gh-ocannl-1866: a mixed-precision cast twin rounds its master at the twin's precision, whichever
    placement it gets, on every backend and under either [narrow_compute_f32].
 
-   Placement is the compiler's choice, so it must not change what the model computes. A materialized
-   twin rounds at its store. A virtual one is inlined as a scope over a load of the master, and two
-   things used to skip its rounding wherever compute is wider than the twin (cc's default for f16
-   and bf16, every backend for fp8). A scope read in an equally narrow slot collapsed into the slot
+   Placement is the compiler's choice, so it must not change what a read of the twin gives. (Other
+   nodes are another matter: gh-ocannl-1965's narrow_placement_contract.) A materialized twin rounds
+   at its store. A virtual one is inlined as a scope over a load of the master, and two things used
+   to skip its rounding wherever compute is wider than the twin (cc's default for f16 and bf16,
+   every backend for fp8). A scope read in an equally narrow slot collapsed into the slot
    (gh-ocannl-1788's rule held that collapse exact), and the slot then renders at the wider compute
    precision; and a scope kept in a wider slot declared its local at that wider precision. Both are
    exercised here: [slot]'s two cases are the two arms of that sentence, each with a value that only

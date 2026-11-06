@@ -446,7 +446,7 @@ Construction-time writes on operands' tensor nodes, audited for this contract:
 | memory mode, context ownership, gradient observability (`Tensor.param`) | `param` over a closed tensor is refused |
 | memory mode, `host_constant` (literals), `slice_of` (`@\|`) | written on the new node only |
 | `alias_of` | written at lowering, not at construction |
-| `observable` (Train's loss) | only ever turned on; can pessimise placement, never values |
+| `observable` (Train's loss) | only ever turned on; can pessimise placement, and so change a value only as [placement can](precision_inference.md#storage-compute-and-placement) |
 | static-symbol roles (`used_as_extent` / `used_as_slice`) | claims are deferred to a successful closure, dropped by a rewind; only `Shape` can write the flags |
 | any write to a node the open work allocated (precision, memory mode, ownership, observability, ...) | undone by an explicit rewind: the checkpoint snapshots every mutable field of the open nodes |
 | a static symbol's declared range (`static_range`) | a user declaration, not inference state: not restored |

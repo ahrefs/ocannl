@@ -1,0 +1,287 @@
+half arithmetic: the rounded and the unrounded value differ: true
+half arithmetic, read in an f32 slot, materialized: placed as asked: true
+half arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+half arithmetic, read in an f32 slot, virtual: placed as asked: true
+half arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+half arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+half arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+half arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half constant: the rounded and the unrounded value differ: true
+half constant, read in an f32 slot, materialized: placed as asked: true
+half constant, read in an f32 slot, materialized: gives what the precisions predict: true
+half constant, read in an f32 slot, virtual: placed as asked: true
+half constant, read in an f32 slot, virtual: gives what the precisions predict: true
+half constant, read in a slot of its own precision, materialized: placed as asked: true
+half constant, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half constant, read in a slot of its own precision, virtual: placed as asked: true
+half constant, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision: the rounded and the unrounded value differ: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic: the rounded and the unrounded value differ: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half reduction: the three outcomes differ: true
+half reduction, read in an f32 slot, materialized: placed as asked: true
+half reduction, read in an f32 slot, materialized: gives what the precisions predict: true
+half reduction, read in an f32 slot, virtual: placed as asked: true
+half reduction, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 arithmetic: the rounded and the unrounded value differ: true
+bfloat16 arithmetic, read in an f32 slot, materialized: placed as asked: true
+bfloat16 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 arithmetic, read in an f32 slot, virtual: placed as asked: true
+bfloat16 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+bfloat16 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+bfloat16 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+bfloat16 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+bfloat16 constant: the rounded and the unrounded value differ: true
+bfloat16 constant, read in an f32 slot, materialized: placed as asked: true
+bfloat16 constant, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 constant, read in an f32 slot, virtual: placed as asked: true
+bfloat16 constant, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 constant, read in a slot of its own precision, materialized: placed as asked: true
+bfloat16 constant, read in a slot of its own precision, materialized: gives what the precisions predict: true
+bfloat16 constant, read in a slot of its own precision, virtual: placed as asked: true
+bfloat16 constant, read in a slot of its own precision, virtual: gives what the precisions predict: true
+bfloat16 cast of virtual arithmetic to its own precision: the rounded and the unrounded value differ: true
+bfloat16 cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: placed as asked: true
+bfloat16 cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: placed as asked: true
+bfloat16 cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: placed as asked: true
+bfloat16 cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: gives what the precisions predict: true
+bfloat16 cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: placed as asked: true
+bfloat16 cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: gives what the precisions predict: true
+bfloat16 narrowing cast of virtual f32 arithmetic: the rounded and the unrounded value differ: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: placed as asked: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: placed as asked: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+bfloat16 reduction: the three outcomes differ: true
+bfloat16 reduction, read in an f32 slot, materialized: placed as asked: true
+bfloat16 reduction, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 reduction, read in an f32 slot, virtual: placed as asked: true
+bfloat16 reduction, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 arithmetic: the rounded and the unrounded value differ: true
+fp8 arithmetic, read in an f32 slot, materialized: placed as asked: true
+fp8 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 arithmetic, read in an f32 slot, virtual: placed as asked: true
+fp8 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+fp8 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+fp8 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+fp8 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+fp8 constant: the rounded and the unrounded value differ: true
+fp8 constant, read in an f32 slot, materialized: placed as asked: true
+fp8 constant, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 constant, read in an f32 slot, virtual: placed as asked: true
+fp8 constant, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 constant, read in a slot of its own precision, materialized: placed as asked: true
+fp8 constant, read in a slot of its own precision, materialized: gives what the precisions predict: true
+fp8 constant, read in a slot of its own precision, virtual: placed as asked: true
+fp8 constant, read in a slot of its own precision, virtual: gives what the precisions predict: true
+fp8 cast of virtual arithmetic to its own precision: the rounded and the unrounded value differ: true
+fp8 cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: placed as asked: true
+fp8 cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: placed as asked: true
+fp8 cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: placed as asked: true
+fp8 cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: gives what the precisions predict: true
+fp8 cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: placed as asked: true
+fp8 cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: gives what the precisions predict: true
+fp8 narrowing cast of virtual f32 arithmetic: the rounded and the unrounded value differ: true
+fp8 narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: placed as asked: true
+fp8 narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: placed as asked: true
+fp8 narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+fp8 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+fp8 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+fp8 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+fp8 reduction: the three outcomes differ: true
+fp8 reduction, read in an f32 slot, materialized: placed as asked: true
+fp8 reduction, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 reduction, read in an f32 slot, virtual: placed as asked: true
+fp8 reduction, read in an f32 slot, virtual: gives what the precisions predict: true
+half arithmetic: the rounded and the unrounded value differ: true
+half arithmetic, read in an f32 slot, materialized: placed as asked: true
+half arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+half arithmetic, read in an f32 slot, virtual: placed as asked: true
+half arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+half arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+half arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+half arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half constant: the rounded and the unrounded value differ: true
+half constant, read in an f32 slot, materialized: placed as asked: true
+half constant, read in an f32 slot, materialized: gives what the precisions predict: true
+half constant, read in an f32 slot, virtual: placed as asked: true
+half constant, read in an f32 slot, virtual: gives what the precisions predict: true
+half constant, read in a slot of its own precision, materialized: placed as asked: true
+half constant, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half constant, read in a slot of its own precision, virtual: placed as asked: true
+half constant, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision: the rounded and the unrounded value differ: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic: the rounded and the unrounded value differ: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half reduction: the three outcomes differ: true
+half reduction, read in an f32 slot, materialized: placed as asked: true
+half reduction, read in an f32 slot, materialized: gives what the precisions predict: true
+half reduction, read in an f32 slot, virtual: placed as asked: true
+half reduction, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 arithmetic: the rounded and the unrounded value differ: true
+bfloat16 arithmetic, read in an f32 slot, materialized: placed as asked: true
+bfloat16 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 arithmetic, read in an f32 slot, virtual: placed as asked: true
+bfloat16 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+bfloat16 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+bfloat16 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+bfloat16 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+bfloat16 constant: the rounded and the unrounded value differ: true
+bfloat16 constant, read in an f32 slot, materialized: placed as asked: true
+bfloat16 constant, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 constant, read in an f32 slot, virtual: placed as asked: true
+bfloat16 constant, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 constant, read in a slot of its own precision, materialized: placed as asked: true
+bfloat16 constant, read in a slot of its own precision, materialized: gives what the precisions predict: true
+bfloat16 constant, read in a slot of its own precision, virtual: placed as asked: true
+bfloat16 constant, read in a slot of its own precision, virtual: gives what the precisions predict: true
+bfloat16 cast of virtual arithmetic to its own precision: the rounded and the unrounded value differ: true
+bfloat16 cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: placed as asked: true
+bfloat16 cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: placed as asked: true
+bfloat16 cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: placed as asked: true
+bfloat16 cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: gives what the precisions predict: true
+bfloat16 cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: placed as asked: true
+bfloat16 cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: gives what the precisions predict: true
+bfloat16 narrowing cast of virtual f32 arithmetic: the rounded and the unrounded value differ: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: placed as asked: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: placed as asked: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+bfloat16 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+bfloat16 reduction: the three outcomes differ: true
+bfloat16 reduction, read in an f32 slot, materialized: placed as asked: true
+bfloat16 reduction, read in an f32 slot, materialized: gives what the precisions predict: true
+bfloat16 reduction, read in an f32 slot, virtual: placed as asked: true
+bfloat16 reduction, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 arithmetic: the rounded and the unrounded value differ: true
+fp8 arithmetic, read in an f32 slot, materialized: placed as asked: true
+fp8 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 arithmetic, read in an f32 slot, virtual: placed as asked: true
+fp8 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+fp8 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+fp8 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+fp8 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+fp8 constant: the rounded and the unrounded value differ: true
+fp8 constant, read in an f32 slot, materialized: placed as asked: true
+fp8 constant, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 constant, read in an f32 slot, virtual: placed as asked: true
+fp8 constant, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 constant, read in a slot of its own precision, materialized: placed as asked: true
+fp8 constant, read in a slot of its own precision, materialized: gives what the precisions predict: true
+fp8 constant, read in a slot of its own precision, virtual: placed as asked: true
+fp8 constant, read in a slot of its own precision, virtual: gives what the precisions predict: true
+fp8 cast of virtual arithmetic to its own precision: the rounded and the unrounded value differ: true
+fp8 cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: placed as asked: true
+fp8 cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: placed as asked: true
+fp8 cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: placed as asked: true
+fp8 cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: gives what the precisions predict: true
+fp8 cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: placed as asked: true
+fp8 cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: gives what the precisions predict: true
+fp8 narrowing cast of virtual f32 arithmetic: the rounded and the unrounded value differ: true
+fp8 narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: placed as asked: true
+fp8 narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: placed as asked: true
+fp8 narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+fp8 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+fp8 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+fp8 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+fp8 narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+fp8 reduction: the three outcomes differ: true
+fp8 reduction, read in an f32 slot, materialized: placed as asked: true
+fp8 reduction, read in an f32 slot, materialized: gives what the precisions predict: true
+fp8 reduction, read in an f32 slot, virtual: placed as asked: true
+fp8 reduction, read in an f32 slot, virtual: gives what the precisions predict: true
+half arithmetic: the rounded and the unrounded value differ: true
+half arithmetic, read in an f32 slot, materialized: placed as asked: true
+half arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+half arithmetic, read in an f32 slot, virtual: placed as asked: true
+half arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+half arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+half arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+half arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half constant: the rounded and the unrounded value differ: true
+half constant, read in an f32 slot, materialized: placed as asked: true
+half constant, read in an f32 slot, materialized: gives what the precisions predict: true
+half constant, read in an f32 slot, virtual: placed as asked: true
+half constant, read in an f32 slot, virtual: gives what the precisions predict: true
+half constant, read in a slot of its own precision, materialized: placed as asked: true
+half constant, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half constant, read in a slot of its own precision, virtual: placed as asked: true
+half constant, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision: the rounded and the unrounded value differ: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, materialized: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in an f32 slot, virtual: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: placed as asked: true
+half cast of virtual arithmetic to its own precision, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic: the rounded and the unrounded value differ: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, materialized: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in an f32 slot, virtual: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, materialized: gives what the precisions predict: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: placed as asked: true
+half narrowing cast of virtual f32 arithmetic, read in a slot of its own precision, virtual: gives what the precisions predict: true
+half reduction: the three outcomes differ: true
+half reduction, read in an f32 slot, materialized: placed as asked: true
+half reduction, read in an f32 slot, materialized: gives what the precisions predict: true
+half reduction, read in an f32 slot, virtual: placed as asked: true
+half reduction, read in an f32 slot, virtual: gives what the precisions predict: true

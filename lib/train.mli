@@ -585,20 +585,29 @@ val tune_placements :
     the time comparison outright — so "the smaller [best_ms] shipped" is no longer a rule a consumer
     can apply, and applying it is exactly the misattribution [on_ship] exists to prevent. The
     reports are measurements of two searches; [on_ship] is the identity of the returned artifact.
+
     That separation is what makes "a [Schedule.Tensorize] was crowned in an arm that did not ship"
     reportable (gh-ocannl-546): [best_tensorized] on the other arm's report, with [mma_best_ms]
     against [best_ms] for the margin. The same conclusion is logged here under config
-    [autotune_log]. [log] and [progress] override configs [autotune_log] and [autotune_progress] for
-    the whole call -- its own arm lines and every search it runs -- as {!Autotune.tune}'s do for one
-    search. Other arguments are forwarded to {!Autotune.tune}; the same caveats apply (notably
-    [timing_ctx] and non-idempotent routines — both arms share [timing_ctx]'s device for their
-    searches, and its buffers: each search restores the training state it found when it ends,
-    gh-ocannl-1621, so every arm and flip is timed from the caller's values). [name] included
-    (gh-ocannl-669): it names both arms' compiles and the flip refinement's decision-surface
-    lowerings, and is what lets a comp carrying no {!Ir.Assignments.Block_comment} — one
-    {!Context.compile} would name at the call site — be tuned here at all. The whole call is one
-    search ({!Autotune.exclusive_search}, gh-ocannl-1352): made while another domain searches, it
-    raises {!Autotune.Concurrent_search} before doing anything.
+    [autotune_log].
+
+    The guarantee is about time, not values. Where a backend computes a narrow float wider than it
+    stores it, the arms need not compute the same values, since a materialized node rounds where a
+    virtual one does not, so the timing also picks what the model computes (gh-ocannl-1965;
+    docs/precision_inference.md). With [autotune_search=false] neither arm is timed, and arm A ships
+    unless the schedule cache replays an entry for arm B alone.
+
+    [log] and [progress] override configs [autotune_log] and [autotune_progress] for the whole call
+    -- its own arm lines and every search it runs -- as {!Autotune.tune}'s do for one search. Other
+    arguments are forwarded to {!Autotune.tune}; the same caveats apply (notably [timing_ctx] and
+    non-idempotent routines — both arms share [timing_ctx]'s device for their searches, and its
+    buffers: each search restores the training state it found when it ends, gh-ocannl-1621, so every
+    arm and flip is timed from the caller's values). [name] included (gh-ocannl-669): it names both
+    arms' compiles and the flip refinement's decision-surface lowerings, and is what lets a comp
+    carrying no {!Ir.Assignments.Block_comment} — one {!Context.compile} would name at the call site
+    — be tuned here at all. The whole call is one search ({!Autotune.exclusive_search},
+    gh-ocannl-1352): made while another domain searches, it raises {!Autotune.Concurrent_search}
+    before doing anything.
 
     [call_budget] (config [tune_call_budget_seconds], gh-ocannl-1440; zero or less means none) is a
     wall-clock budget for the whole call, on one clock from its start, the placement-store replay

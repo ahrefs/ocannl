@@ -1954,6 +1954,9 @@
 # it is strictly more accurate than per-operator rounding, and it is what makes the vectorized
 # renderings reachable for narrow-storage kernels. Set to false to recover per-operator rounding
 # (per-reduction-step included).
+# "Each store" means an actual store: a virtual narrow node has none, so while this is on its
+# arithmetic and constants stay in f32 past the node, and placement can decide the value
+# (gh-ocannl-1965; the contract is in docs/precision_inference.md).
 # GPU backends compute narrow arithmetic natively and their pointwise numerics are unaffected
 # either way; their reduction-accumulator width follows the tensor-unit formats (gh-ocannl-663):
 # serial bf16 reductions on CUDA and fp8 reductions everywhere accumulate in f32 and narrow once

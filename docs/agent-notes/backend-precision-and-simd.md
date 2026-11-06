@@ -1171,16 +1171,29 @@ files.
   over f32 data, a virtual node of the same shape, so it rounds too. That is why a recipe run moves
   even with materialized twins, and why such a comparison needs the slice materialized as well:
   before the fix, materializing `batch_x` beside the twins reproduced the fixed code's losses
-  bit for bit, while Metal's never moved. Limits: only a read. A virtual narrow node with
-  **arithmetic** in its body, and a narrow `Constant`, still skip their store's rounding where
-  compute is wider; that is gh-ocannl-517's policy, which `narrow_storage_compute` pins, so
-  placement can still change those values. An accumulator opened by a narrowing init keeps its
+  bit for bit, while Metal's never moved. Limits: only a read (the next bullet is the policy for
+  everything else). An accumulator opened by a narrowing init keeps its
   residency (the census needs every `Set_local` to be the read). A statement reading a kept scope is
   out of reach of `serial_kernel_of` and the vectorizer, so a virtual twin at a matmul site seeds no
   tile: the fix's known cost on a tuned cc run, which the render-time collapse does not recover
   (virtualization-and-inlining.md). `mixed_prec_twin_rounding` pins all three placements
   at each narrow precision with exact claims, and `Context.placements` reads what the compile
   resolved; `scope_collapse_rounding`'s cast shapes compare bitwise against a materialized node.
+- **Placement decides a narrow value only where a rendered precision is wider than storage, and that
+  is accepted policy** (gh-ocannl-1965; the contract is `docs/precision_inference.md`, *Storage,
+  compute and placement*). A virtual narrow node with arithmetic in its body, a narrow `Constant`
+  and a virtual accumulation have no store, so they stay at `compute_prec` or `accum_prec` of their
+  storage precision; only a store and a `narrowing_read` round. Do not "fix" a virtual-vs-materialized
+  difference there: it is the gh-ocannl-517 trade, a rounding mode at node boundaries was declined
+  (reasons and the measured scale: the issue's reconciled-plan comment), and a value test comparing
+  placements on a narrow model has to predict from `compute_prec`/`accum_prec`, as
+  `narrow_placement_contract` does for every backend and policy. That test also shows the traps
+  in the handles: `narrow_compute_f32=false` restores per-operator arithmetic, not a neutral mode
+  (accumulators have their own keys; Metal computes fp8 in f32 regardless); a same-precision
+  `Operation.cast` is an identity, so it rounds nothing; and `Train.every_non_literal_materialized`,
+  arm B of `tune_placements`, skips literals, so a virtual narrow constant stays wide there too.
+  The contract does not explain a difference at f32, or one between schedules of one placement: a
+  k-blocked schedule's stored partials are the schedule's (`numerics.mli`).
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a
   second fragment type** (gh-ocannl-789, rewired by gh-ocannl-1064; `arrayjit/lib/hip_backend.ml`'s
   `mma_d_boundary_lines`). Under `Fp16_wide`/`Bf16_wide` the uniform arm pairs a `float` accumulator

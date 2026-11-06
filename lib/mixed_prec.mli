@@ -15,10 +15,12 @@
       backend and under either [narrow_compute_f32], so the choice never changes what a read of the
       twin gives (gh-ocannl-1866); it can still decide which schedules are reachable, since a matmul
       reads a virtual twin through a scope. That guarantee is the cast's: a virtual narrow node
-      computing {e arithmetic} elsewhere in the model keeps the compute-precision policy of
-      gh-ocannl-517, and skips its store's rounding where compute is wider than storage. The twin's
-      gradient flows back into the master's f32 gradient through an accumulating assignment, which
-      is where the f16 -> f32 widening happens.
+      computing {e arithmetic} elsewhere in the model, a narrow constant and a virtual accumulation
+      keep the compute-precision policy of gh-ocannl-517, and have no store to round them where
+      compute is wider than storage, the twin's gradient among them while it is virtual. So a
+      model's other placements can still change its values (gh-ocannl-1965; the contract is in
+      docs/precision_inference.md). The twin's gradient flows back into the master's f32 gradient
+      through an accumulating assignment, which is where the f16 -> f32 widening happens.
     - {b Loss scaling} ({!Loss_scaler}): f16's exponent range underflows on small gradients, so the
       backprop is seeded with a scale factor ([Train.grad_update ~loss_scale]) and gradients are
       unscaled in the optimizer step ([Train.sgd_update ~grad_unscale]). The dynamic schedule backs
