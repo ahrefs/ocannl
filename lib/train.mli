@@ -248,8 +248,9 @@ end
 val host_scalar : l:string -> float -> Tensor.t
 (** A device-resident, broadcastable scalar the host can overwrite with [Context.set_values].
     Data-backed on purpose: a 1-element [term_init] would come out as a [Constant] fetch, re-fetched
-    by every step's forward code, silently undoing [Context.set_values]. The [bcast_if_1] axis basis
-    (as in [Tensor.number]) lets the scalar broadcast into tensors of any shape. *)
+    by every step's forward code, so [Context.set_values] would refuse it (gh-ocannl-1959). The
+    [bcast_if_1] axis basis (as in [Tensor.number]) lets the scalar broadcast into tensors of any
+    shape. *)
 
 val scheduled_learning_rate :
   ?label:string -> Lr_schedule.t -> Tensor.t * (Context.t -> step:int -> Context.t)

@@ -47,7 +47,13 @@ let says msg substrings =
 
 (* The program; [~materialize] is the one difference between the two arms. *)
 let build ~materialize =
-  let x = TDSL.ndarray x_values ~label:[ "ror_x" ] ~output_dims:[ rows; cols ] () in
+  (* Data-backed: the host writes it after the forward is compiled, which a literal this small, a
+     fetch, refuses (gh-ocannl-1959). *)
+  let x =
+    Operation.init ~l:"ror_x" ~prec:Ir.Ops.single ~o:[ rows; cols ]
+      ~f:(function [| i; j |] -> x_values.((i * cols) + j) | _ -> assert false)
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
   let x1 =
     TDSL.ndarray
       (Array.sub x_values ~pos:0 ~len:cols)

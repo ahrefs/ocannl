@@ -13969,3 +13969,16 @@
   (diff
    scheme_error_rendering-full_sexp.expected
    scheme_error_rendering-full_sexp.actual)))
+
+; gh-ocannl-1959: a host write to a node a forward fetch of the lineage re-establishes is refused.
+
+(test
+ (name host_write_fetch_defined)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules host_write_fetch_defined)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

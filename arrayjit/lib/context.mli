@@ -266,8 +266,8 @@ val compile :
     node whose forward fragment ({!Ir.Assignments.field-owned}) the comp carries, so a parameter's
     initializer (which owns no fragment) and a gradient's zeroing do not count. A slice takes after
     its parent: a write through a view of data reaches the parent and stays, while over a
-    fetch-defined parent it is undone like any other. A host write ({!set_values}) is not a
-    routine's and is not checked, and siblings never collide. *)
+    fetch-defined parent it is undone like any other. Siblings never collide. A host write, once the
+    forward is compiled, is refused by the same rule at {!from_host}. *)
 
 type retained
 (** Compiled code that a successful {!compile_outcome} handed to its [retain] callback: the
@@ -724,7 +724,18 @@ val from_host : t -> Ir.Tnode.t -> Ir.Ndarray.t -> t
 (** Uploads the host buffer into the node's device buffer (allocating it if needed) and returns a
     context in which the node is marked initialized and this explicit write supersedes any compiled
     reader/writer frontier entry for the node. Raises if this lineage placed the node [Local]: no
-    routine reads the uploaded buffer. *)
+    routine reads the uploaded buffer.
+
+    Also raises {!Ir.Utils.User_error}, naming the node and the routine, if a routine of this
+    lineage carries the node's forward code as a fetch (gh-ocannl-1959): a run of that routine
+    fetches the node again, silently undoing the write, as in {!compile}'s refusal. That covers a
+    literal at most [limit_constant_fill_size] values long even where lowering moved its fetch to
+    link time: its values are declared constant, so an inlined or hoisted read never sees a write.
+    The remedy is the same: a node the host writes is built data-backed, with [Operation.init] or
+    [Train.host_scalar], or is a parameter. Only a write after the forward is compiled is refused:
+    one from a context that does not descend from the forward's routine is a sibling's, or a seed,
+    which a routine reading the node runs on until the forward first runs. {!copy} is not refused:
+    it moves a node's value between contexts, not a value of the host's. *)
 
 val get_values : t -> Ir.Tnode.t -> float array
 (** Retrieves all (unpadded) values of the node via an on-demand device-to-host transfer. The host
@@ -733,14 +744,14 @@ val get_values : t -> Ir.Tnode.t -> float array
 
 val set_values : t -> Ir.Tnode.t -> float array -> t
 (** Sets all (unpadded) values of the node via an on-demand host-to-device transfer, returning a
-    context in which the node is marked initialized. *)
+    context in which the node is marked initialized. Refuses what {!from_host} refuses. *)
 
 val get_value : t -> Ir.Tnode.t -> int array -> float
 (** Retrieves a single value at the given index via an on-demand device-to-host transfer. *)
 
 val set_value : t -> Ir.Tnode.t -> int array -> float -> t
 (** Sets a single value at the given index, preserving the other elements. Returns a context in
-    which the node is marked initialized. *)
+    which the node is marked initialized. Refuses what {!from_host} refuses. *)
 
 val points_1d : ?from_axis:int -> xdim:int -> t -> Ir.Tnode.t -> float array
 (** Like {!get_values} but extracts a 1d slice of points for plotting. *)
