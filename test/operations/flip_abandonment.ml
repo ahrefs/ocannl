@@ -104,8 +104,11 @@ let window_admission_controls () =
             && scripted.samples = window.samples && !measured = 1);
           p_all "the scripted scope still refuses invalid physical readings"
             [ 0.; -1.; Float.nan; Float.infinity ] ~f:(fun ms -> refused { window with ms });
-          p "the scripted scope still refuses unresolved queued batching"
-            (refused { window with unbatched = true } && !measured = 1);
+          p "the scripted scope admits an unbatched window at the script's reading"
+            (Option.equal Float.equal
+               (Autotune.admitted_timing_ms (apply { window with unbatched = true }))
+               (Some 7.)
+            && !measured = 2);
           p_all "the scripted scope still refuses invalid scripted readings"
             [ 0.; -1.; Float.nan; Float.infinity ] ~f:(fun ms ->
               (Autotune.Seam.set Autotune.on_candidate_measured @@ fun ~label:_ ~digest:_ _ -> ms);

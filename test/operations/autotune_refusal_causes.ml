@@ -15,7 +15,8 @@
    returning NaN, with host contention cleared so the scripted reading is the one refused, and
    contention through [Autotune.with_contended_test_windows]. Each search's report, its
    [search_done] progress line and its log lines must all name that cause and only that one.
-   ([unbatched] is a CUDA/HIP queued calibration's verdict, pinned by autotune_timing_modes.)
+   ([unbatched] is a CUDA/HIP queued calibration's verdict, pinned by autotune_timing_modes; here
+   its scope claims, and the search under it in autotune_seeded_singles.)
 
    The program is a row sum, as in autotune_report_drops: no matmul site, so each search is a
    handful of candidates. *)
@@ -90,7 +91,32 @@ let () =
               Autotune.with_contended_test_windows (fun () -> admitted_as (reading 1.0))))
          Autotune.Refused_contended);
   p "leaving the scopes restores the window's own flag"
-    (Poly.equal (admitted_as (reading 1.0)) Autotune.Admitted)
+    (Poly.equal (admitted_as (reading 1.0)) Autotune.Admitted);
+  (* gh-ocannl-1995: an unbatched window is refused for what its reading would rank by, so the
+     uncontended scope lifts that only where a script replaces the reading. *)
+  let unbatched = reading ~unbatched:true 1.0 in
+  let scripted f =
+    Autotune.Seam.with_value Autotune.on_candidate_measured (fun ~label:_ ~digest:_ _ -> 7.) f
+  in
+  p "outside the scopes a script does not admit an unbatched window"
+    (Poly.equal (scripted (fun () -> admitted_as unbatched)) Autotune.Refused_unbatched);
+  p "the uncontended scope leaves an unbatched window with no script its cause"
+    (Poly.equal
+       (Autotune.with_uncontended_test_windows (fun () -> admitted_as unbatched))
+       Autotune.Refused_unbatched);
+  p "the uncontended scope admits an unbatched window a script reads"
+    (Poly.equal
+       (scripted (fun () ->
+            Autotune.with_uncontended_test_windows (fun () -> admitted_as unbatched)))
+       Autotune.Admitted);
+  p "the contended scope leaves an unbatched window its cause, script or none"
+    (Poly.equal
+       (Autotune.with_contended_test_windows (fun () -> admitted_as unbatched))
+       Autotune.Refused_unbatched
+    && Poly.equal
+         (scripted (fun () ->
+              Autotune.with_contended_test_windows (fun () -> admitted_as unbatched)))
+         Autotune.Refused_unbatched)
 
 (* --- Searches whose every window is refused for one cause. --- *)
 

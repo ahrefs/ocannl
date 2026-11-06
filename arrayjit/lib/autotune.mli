@@ -3801,23 +3801,26 @@ val on_candidate_measured : (label:string -> digest:string -> float -> float) Se
     time replaces the reading before the admission gate, so it is what the search ranks, records and
     reports: the beam, the best-so-far incumbent, {!on_candidate_callback},
     [report.best_ms]/[baseline_ms], the calibration rows and the schedule cache's stored times. A
-    refused window (contended, or a degenerate clock reading) never reaches it unless the test
-    explicitly opts into {!with_uncontended_test_windows}; degenerate readings still never reach it.
-    A returned time that is not finite and positive refuses the window the way a degenerate reading
-    does, and is counted as one ([timings_unreadable]). It must return rather than raise: it runs
-    outside the search's containment boundaries. It exists so a test about the nonwinner paths can
-    pin the ranking — make the first admitted window the fastest and every later one slower —
-    instead of depending on the machine's timings. The default is the identity and no configuration
-    selects it. *)
+    refused window (contended, unbatched, or a degenerate clock reading) never reaches it unless the
+    test explicitly opts into {!with_uncontended_test_windows}; degenerate readings still never
+    reach it. A returned time that is not finite and positive refuses the window the way a
+    degenerate reading does, and is counted as one ([timings_unreadable]). It must return rather
+    than raise: it runs outside the search's containment boundaries. It exists so a test about the
+    nonwinner paths can pin the ranking — make the first admitted window the fastest and every later
+    one slower — instead of depending on the machine's timings. The default is the identity and no
+    configuration selects it. *)
 
 val with_uncontended_test_windows : (unit -> 'a) -> 'a
 (** Explicit test-only scope (gh-ocannl-1156) for scripted measurements: clear the physical window's
-    contention flag before candidate admission and {!on_candidate_measured}. Invalid physical or
-    scripted readings and unresolved queued batching still refuse admission. Calibration and
-    dispatch remain real. Restores the previous mode on return or exception, including for nested
-    scopes. No configuration selects it; normal searches retain production contention refusal. Like
-    the {!Seam} test hooks it is per domain: it covers the searches the calling domain runs, and
-    neither reaches nor disturbs a search in another domain. *)
+    contention flag before candidate admission and {!on_candidate_measured}, and, where a script is
+    in force, its [unbatched] flag (gh-ocannl-1995): both are verdicts on the host's load, so what a
+    scripted search admits, ranks and stores is the script's. Invalid physical or scripted readings
+    still refuse admission, and so does an unbatched window with no script, whose depth-1 reading
+    would rank. Calibration and dispatch remain real. Restores the previous mode on return or
+    exception, including for nested scopes. No configuration selects it; normal searches retain
+    production contention refusal. Like the {!Seam} test hooks it is per domain: it covers the
+    searches the calling domain runs, and neither reaches nor disturbs a search in another domain.
+*)
 
 val with_contended_test_windows : (unit -> 'a) -> 'a
 (** The opposite test-only scope (gh-ocannl-1517): SET every window's contention flag before
@@ -3846,9 +3849,10 @@ val on_batch_wall : (depth:int -> ordinal:int -> float -> float) Seam.t
 
 val apply_measurement_seam : label:string -> digest:string -> timing_result -> timing_result
 (** Candidate-window admission and scripted measurement, shared by real searches and deterministic
-    opposing controls. Production refuses contended windows before calling {!on_candidate_measured};
-    {!with_uncontended_test_windows} explicitly opts a scripted fixture out of that refusal only,
-    and {!with_contended_test_windows} into it for every window. *)
+    opposing controls. Production refuses contended and unbatched windows before calling
+    {!on_candidate_measured}; {!with_uncontended_test_windows} explicitly opts a scripted fixture
+    out of those refusals only, and {!with_contended_test_windows} into the first for every window.
+*)
 
 val staffed_singles_setting : unit -> bool
 (** Config [autotune_staffed_singles] as {!tune} resolves it (gh-ocannl-1138, default [false]):
