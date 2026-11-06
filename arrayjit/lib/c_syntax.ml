@@ -4147,8 +4147,10 @@ module C_syntax (B : C_syntax_config) = struct
   (* The precision a [Set_local]'s value renders at, given the precision its local is declared at.
      The reasons are at [pp_ll]'s [Set_local] arm. *)
   let set_local_value_prec ~scope_prec (id : Low_level.scope_id) value =
-    if Low_level.scalar_reads_scope ~id value then scope_prec
-    else if Hash_set.mem rng_scope_ids id then scope_prec
+    if
+      Low_level.scalar_reads_scope ~id value
+      || Hash_set.mem rng_scope_ids id || narrowing_cast_scope id
+    then scope_prec
     else comp_prec (Lazy.force id.tn.Tn.storage_prec)
 
   (* Whether a value's rendering at [prec] has the C type of [prec]. Rendered at a precision is not
@@ -4193,10 +4195,11 @@ module C_syntax (B : C_syntax_config) = struct
      goes, wherever the text's C type is [R] ({!typed_at}). Cc's default then collapses an f16 scope
      over arithmetic in an f32 slot ([R] is f32 there: gh-ocannl-517 computes it wide on purpose),
      and a backend computing f16 at f16 collapses a cast in a real f16 slot, though [vec_expr] still
-     declines a load at another width. A cast on a wide-compute backend stays ([R] is its storage
-     precision, [V] is f32), as it does in any slot wider than itself: that rounding is the cast
-     (gh-ocannl-1866). An integer scope stays too: [compute_prec] is the identity there, so render
-     time knows nothing [Low_level.integer_scope_exact] did not.
+     declines a load at another width. A cast's [R] and [V] are both its storage precision
+     (gh-ocannl-1956), so at the root of a store of that precision it collapses into the
+     materialized copy it is. Anywhere wider, a wide-compute backend's narrow operators included, it
+     stays: that rounding is the cast (gh-ocannl-1866). An integer scope stays too: [compute_prec]
+     is the identity there, so render time knows nothing [Low_level.integer_scope_exact] did not.
 
      This is a pass, not an arm of [pp_scalar], because everything that pattern-matches a statement
      has to read the same tree: [scalar_mentions], [no_written_reads], [renders_at_store_prec],
@@ -6679,7 +6682,10 @@ module C_syntax (B : C_syntax_config) = struct
            A [Set_local] that does NOT read its own local is an INIT — the inlined image of a
            separate source assignment — and renders as that assignment's store would: at [comp_prec]
            (the rng carve-out rides [scope_prec_of]'s storage pin), converted once into the scope's
-           residency. Where scope and compute precision coincide (the CPU backends, non-accumulator
+           residency. A cast is a copy, so its store renders at storage precision
+           ([renders_at_store_prec]), and so does its init (gh-ocannl-1956): through [comp_prec], an
+           f64 source would round to f32 and then to fp8, where the store's [double_to_fp8] is one
+           step. Where scope and compute precision coincide (the CPU backends, non-accumulator
            scopes) this is the identity, and the store's narrowing is the part the init does not
            repeat (gh-ocannl-517), except for a cast, whose residency is its storage precision
            (gh-ocannl-1866); where an accumulator resides wider than the arithmetic (gh-ocannl-663),
