@@ -1,0 +1,9 @@
+a cycle leaves under 400 live words: true
+the live-word slope is not an artifact of a shrinking heap: true
+the open work wrote each solver table but the role claims: true
+every closure left every solver table empty: true
+an unsized concatenation component fails its closure: true
+a failed closure keeps the open work's tables: true
+a rewind to the closure restores the empty tables: true
+a graph over a closed one computes: true
+the retired-read guard refuses exactly when it is enabled: true

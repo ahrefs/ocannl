@@ -119,6 +119,32 @@ let with_reserved_vars f =
         reserved_uid := max !reserved_uid !uid;
         uid := saved)
 
+(* gh-ocannl-1859: a successful closure retires every variable minted so far
+   ([retire_closed_variables]): its shapes are ground and the environment empty, so nothing should
+   ask the solver's per-variable tables about one of them again. The two floors, the newest retired
+   id of each range, let [debug_check_retired_solver_vars] refuse a read that does, since the
+   emptied table would quietly answer "no". *)
+let retired_floor = ref 0
+[@@mutation_serial.exempt
+  "the newest retired variable id: closures only raise it, and a rewind reaches no older variable"]
+
+let retired_reserved_floor = ref reserved_uid_base
+[@@mutation_serial.exempt
+  "the newest retired variable id: closures only raise it, and a rewind reaches no older variable"]
+
+let check_retired_reads =
+  lazy (Utils.get_global_flag ~default:false ~arg_name:"debug_check_retired_solver_vars")
+
+let refuse_retired_read ~table id =
+  if
+    Lazy.force check_retired_reads
+    && id <= if id >= reserved_uid_base then !retired_reserved_floor else !retired_floor
+  then
+    failwith
+      [%string
+        "debug_check_retired_solver_vars: %{table} was asked about variable %{id#Int}, minted \
+         before the last closure, which retired it"]
+
 let get_var ?name () : dim_var =
   Int.incr uid;
   { id = !uid; name }
@@ -2378,7 +2404,9 @@ let add_resolve_at_use_dim v =
     note_mutation ();
     resolve_at_use_dim := Set.add !resolve_at_use_dim v)
 
-let is_resolve_at_use_dim v = Set.mem !resolve_at_use_dim v
+let is_resolve_at_use_dim v =
+  refuse_retired_read ~table:"resolve_at_use_dim" v.Dim_var.id;
+  Set.mem !resolve_at_use_dim v
 
 (* Two strided windows over one input extent, both in the valid form [input = stride * (output - 1)
    + span]. A valid window's span is its effective kernel span; a padded window or a plain affine of
@@ -3129,7 +3157,10 @@ let add_concat_component v =
     note_mutation ();
     concat_component_vars := Set.add !concat_component_vars v)
 
+let row_var_id (Row_var.Row_var id) = id
+
 let refuse_concat_component_guess env v =
+  refuse_retired_read ~table:"concat_component_vars" v.Dim_var.id;
   if Set.mem !concat_component_vars v && not (Set.mem env.discardable_vars v) then
     raise
     @@ Shape_error
@@ -3155,7 +3186,9 @@ let add_resolve_at_use v =
     note_mutation ();
     resolve_at_use := Set.add !resolve_at_use v)
 
-let is_resolve_at_use v = Set.mem !resolve_at_use v
+let is_resolve_at_use v =
+  refuse_retired_read ~table:"resolve_at_use" (row_var_id v);
+  Set.mem !resolve_at_use v
 
 (* Persistent rank-relation graph, global like [global_template_cache] (row variable ids are never
    reused, so entries from unrelated inference problems are unreachable). An edge [v -> (w, k)] with
@@ -3293,6 +3326,8 @@ let rank_cycle_walk ~src:v ~dst:w k =
    would otherwise diverge by minting ever-fresh template variables (rank-cycle check, transitive
    generalization of the one-step self-reference check). *)
 let add_rank_edge ~rows v w k =
+  refuse_retired_read ~table:"global_rank_edges" (row_var_id v);
+  refuse_retired_read ~table:"global_rank_edges" (row_var_id w);
   if equal_row_var v w then (
     if k > 0 then
       raise @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch rows ]))
@@ -3316,6 +3351,8 @@ let add_rank_edge ~rows v w k =
    answer and records nothing, for a commitment that is a choice rather than an entailment. A
    variable new to the graph has no path to close. *)
 let rank_edge_refuted v w k =
+  refuse_retired_read ~table:"global_rank_potentials" (row_var_id v);
+  refuse_retired_read ~table:"global_rank_potentials" (row_var_id w);
   let refuted =
     if equal_row_var v w then k > 0
     else
@@ -3439,6 +3476,8 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
           match r2.bcast with
           | Row_var v2 ->
               let beg_dims2 = r2.beg_dims in
+              refuse_retired_read ~table:"the row-variable marks" (row_var_id v);
+              refuse_retired_read ~table:"the row-variable marks" (row_var_id v2);
               if Set.mem !safe_to_guess v2 then add_safe_to_guess v;
               if Set.mem !used_in_spec_or_compose v2 then add_used_in_spec_or_compose v;
               if Set.mem !used_in_pointwise v2 then add_used_in_pointwise v;
@@ -4088,6 +4127,37 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
 
 let global_template_cache : (row_var * int * int, row_var) Map.Poly.t ref = ref Map.Poly.empty
 
+let retire_closed_variables () =
+  if !uid >= reserved_uid_base then retired_reserved_floor := !uid
+  else (
+    retired_floor := !uid;
+    retired_reserved_floor := !reserved_uid);
+  resolve_at_use_dim := dim_var_set_empty;
+  safe_to_guess := row_var_set_empty;
+  used_in_spec_or_compose := row_var_set_empty;
+  used_in_pointwise := row_var_set_empty;
+  concat_component_vars := dim_var_set_empty;
+  resolve_at_use := row_var_set_empty;
+  global_rank_edges := Map.empty (module Row_var);
+  global_rank_potentials := Map.empty (module Row_var);
+  global_template_cache := Map.Poly.empty
+[@@mutation_serial.boundary
+  "part of the commit: only a successful closure or a session reset calls it, past every reader"]
+
+let solver_census () =
+  [
+    ("pending_roles", List.length !pending_roles);
+    ("resolve_at_use_dim", Set.length !resolve_at_use_dim);
+    ("safe_to_guess", Set.length !safe_to_guess);
+    ("used_in_spec_or_compose", Set.length !used_in_spec_or_compose);
+    ("used_in_pointwise", Set.length !used_in_pointwise);
+    ("concat_component_vars", Set.length !concat_component_vars);
+    ("resolve_at_use", Set.length !resolve_at_use);
+    ("global_rank_edges", Map.sum (module Int) !global_rank_edges ~f:List.length);
+    ("global_rank_potentials", Map.length !global_rank_potentials);
+    ("global_template_cache", Map.length !global_template_cache);
+  ]
+
 (* {2 Checkpoint capture (gh-ocannl-903)}
 
    Every module-level binding above whose writes count as session mutations is a persistent value,
@@ -4597,6 +4667,7 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
       let templ_key : row_var * int * int =
         (res_v, opnd_dims_l - res_dims_l, opnd_beg_dims_l - res_beg_dims_l)
       in
+      refuse_retired_read ~table:"global_template_cache" (row_var_id res_v);
       let templ_v : row_var =
         match Map.find !global_template_cache templ_key with
         | Some v -> v
@@ -4930,6 +5001,7 @@ let dim_var_is_in_param v env =
   | _ -> false
 
 let is_safe_to_guess v =
+  refuse_retired_read ~table:"safe_to_guess" (row_var_id v);
   Set.mem !safe_to_guess v
   || (Set.mem !used_in_pointwise v && not (Set.mem !used_in_spec_or_compose v))
 

@@ -385,6 +385,15 @@ files.
   environment. Export everything else substituted under that environment, so it holds only unsolved
   variables. A reference made before the trace may already be in `open_refs`, which lists each once
   per inference: the trace records its own touches (`trace_touches`).
+- A closure retires the solver's per-variable tables (gh-ocannl-1859, `Row.retire_closed_variables`):
+  the marks, the rank graph and the template cache, ahead of `on_closure` so the closure checkpoint
+  does not pin them, and `Shape.unused_shapes` beside them. They were about 96% of what a session
+  building fresh graphs retained per graph. A closed variable is therefore unknown to the solver, so
+  a scheme applied after a closure generalizes even the variables from before its trace, and its
+  anchors pin the fresh ones to the now-ground shapes: without that, shared-parameter variables
+  re-entered the solver asking about facts that were gone. `debug_check_retired_solver_vars`, on
+  across the suite, refuses any read of a retired variable, the only way to see the emptied table
+  answer "no"; a new read of these tables goes through `refuse_retired_read`.
 - External capture references in schemes (gh-ocannl-1791, `ref_inputs`): a reference made before
   the trace that the body binds is an input, not a refusal. During the trace it must read as unbound
   AND unsolved in every branch of `binding_constraints` -- the `unsolved` flag behind the mixed

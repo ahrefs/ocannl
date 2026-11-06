@@ -3645,7 +3645,9 @@ let unsafe_reinitialize () =
   checkpoint_lineage := [];
   failed_reads := [];
   Row.reset_transient ();
-  Row.drop_symbol_roles ()
+  Row.drop_symbol_roles ();
+  unused_shapes := Set.empty (module Int);
+  Row.retire_closed_variables ()
 [@@mutation_serial.boundary "the session reset: it discards all state and clears the taint"]
 
 let all_rows_w_origin update_step =
@@ -4567,6 +4569,10 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   active_instances := [];
   (* There should not be any shape variables remaining in any inference-undergoing update steps. *)
   state := Row.empty_env;
+  (* gh-ocannl-1859: so nothing the solver keeps per variable or per shape outlives them. Ahead of
+     [on_closure], whose checkpoint would otherwise pin these tables. *)
+  unused_shapes := Set.empty (module Int);
+  Row.retire_closed_variables ();
   !on_closure ()
 [@@mutation_serial.boundary
   "the commit point: finish_inference taints the session on any failure of this body"]
@@ -5154,8 +5160,9 @@ let parse_n5_layout priorities =
     the internal rows closure finalizes, the rows of the pre-existing shapes the trace used -- is
     exported substituted under that environment, so it holds only unsolved variables, which the
     equations relate. Variables minted since the trace began are renamed per application
-    (generalized); older ones stay (fixed), and the anchors re-tie them to their shapes' current
-    rows, which keeps them valid across a closure. *)
+    (generalized); older ones stay (fixed) until a closure retires them, and the anchors re-tie them
+    to their shapes' current rows, which keeps them valid across it: a closed anchor pins a fresh
+    variable as it did the retired one. *)
 module Scheme = struct
   type shape = t
   type rows = { r_batch : Row.t; r_input : Row.t; r_output : Row.t }
@@ -5636,8 +5643,14 @@ module Scheme = struct
             [%string
               "inference closed since the trace, and the scheme depends on open state no shape it \
                used holds (%{vars}) -- trace it again after the closure"]);
+    (* A variable from before the trace is shared by the applications while it is open. Once a
+       closure retired it, the check above leaves only variables of the anchors' shapes, now ground,
+       which the anchor equations below pin whatever the variable is called: each application gets a
+       fresh one, so a retired variable never re-enters the solver (gh-ocannl-1859). *)
+    let closed_since_trace = !closure_count <> s.closure_at_trace in
     let generalize id =
-      if sabotaged No_generalization then false else sabotaged Sever_shared || id > s.mark
+      if sabotaged No_generalization then false
+      else sabotaged Sever_shared || closed_since_trace || id > s.mark
     in
     let dim_tbl = Hashtbl.create (module Int) and row_tbl = Hashtbl.create (module Int) in
     let rn =

@@ -6071,7 +6071,8 @@ box.
   `hip_kernel_cache_mib`, `hip_printf_fifo_size`, `hip_scratch_validation`, `log_level`.
 - `metal_backend.ml`: `metal_kernel_cache_mib`.
 - `persistence.ml`: `checkpoint_load_mmap`.
-- `row.ml`: `max_shape_error_origins`, `shape_substitution_cross_check`.
+- `row.ml`: `debug_check_retired_solver_vars`, `max_shape_error_origins`,
+  `shape_substitution_cross_check`.
 - `schedule.ml`: `automatic_cpu_schedule`, `automatic_gpu_schedule`, `gpu_fission_keep_mapping`,
   `schedule_fission`, `schedule_log_launches`.
 - `schedule_outcome.ml`: `strict_failure_classification`.
