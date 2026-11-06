@@ -26,7 +26,7 @@ The version sequence so far is `0.7 → 0.8 → 0.9 → 1.0 → 1.0.1 → 1.0.2 
 | **1.1.1** | Oct 15, 2026 | **released** (bounded set) | **Consolidation after the transformer work**: the release gate met (CI green, three soundness fixes, the full-step training comparison), backward-contraction sketches for training, and broad search and diagnostics follow-through |
 | **1.1.2** | Oct 25, 2026 | **released** | **Performance beyond transformers**: a reduced ResNet-style leg, Winograd under `approximate`, CPU sketch economy, and a 5× faster untuned GPU training step at batch 256 |
 | **1.1.3** | Oct 29, 2026 | **released** | **The training experience a newcomer meets**: resumable checkpoints, persistent state declared by its update, virtual nodes readable by recomputation, plot legends, lineage composition checks, and a 2.2–3.65× faster untuned cc `cifar_resnet` step |
-| 1.2 | Nov 15, 2026 | issues closed, tag pending | Shape inference: reusable, checked tensor programs — shape schemes with checkpoint rollback, row-solver correctness, shape-error reporting, an end-to-end newcomer path |
+| **1.2** | Nov 15, 2026 | **released** | **Shape inference: reusable, checked tensor programs**: shape schemes with checkpoint rollback, row-solver correctness and 8–34× faster inference on deep stacks, shape-error reporting, reclamation of dropped graphs, and refusals of silently wrong gradients |
 
 ---
 
@@ -578,33 +578,64 @@ memory policy (#565).
 
 ---
 
-## v1.2 — November 15, 2026
-**Theme: Reusable tensor programs**
+## v1.2 — November 15, 2026 (released)
+**Theme: Shape inference: reusable, checked tensor programs**
 
-> **Not yet tagged.** This section is the October 13 cut. The November 3 rebalance refilled the milestone and all its issues have closed; the tag writes the outcome here.
+It shipped November 6, ahead of its November 15 target. The October 13 rebalance cut the release to
+one architectural track, chosen because it tests the project's founding bet, constraint-based shape
+inference with row variables, in its most demanding form, plus the user path that makes it
+reachable. The November 3 rebalance refilled the milestone with eighteen shape-inference issues.
+All 30 issues in it closed, 27 completed and 3 not planned (#1800, #1892, #1912). About 183 issues
+were completed between the v1.1.3 tag and this one, most of them in v1.2.1.
 
-v1.2 is the release the schedule is anchored on. The October 13 rebalance cut it to one
-architectural track, chosen because it tests the project's founding bet — constraint-based shape
-inference with row variables — in its most demanding form, plus the user path that makes it
-reachable.
+- [x] Reusable tensor functions (#404, #1751, #1813): a `%op` function's constraint scheme is traced
+  once and checked at every application, and a contradictory application is refused before the
+  body runs, naming the function and the argument. Generalization follows the Hindley–Milner level
+  discipline: the function's own variables generalize, parameters captured in its closure stay
+  shared. Schemes settled as a check, on by default, and never as a registration path: guided
+  registration (#1761) landed and was removed.
+- [x] Checkpoint rollback (#903, #1624, #1789): `Tensor.checkpoint` and `rewind` snapshot the open
+  frontier. Completeness is over field types, checked by exhaustive record patterns.
+- [x] Scheme coverage: option-valued parameters per presence pattern (#1792), external capture
+  references and random draws (#1791, #1890), nested applications (#1814), whole-model schemes for
+  the transformer stacks and CNNs (#1891), and every benchmark model under `check` with `off`'s
+  shapes (#1820, #1908).
+- [x] Row-solver correctness: window, stride and capture fixes (#1689, #1692, #1823, #1824, #1734,
+  #1790, #1889, #1955), and the inferred-shape default initializer (#1868).
+- [x] Row-solver cost (#1802, #1904, #1891): a solution visits only the entries it can change, and a rank potential replaces most cycle
+  searches, so inference of a 16-block `decoder` with schemes off went from 9.4 s to 275 ms (paired,
+  shared slot, cc, M4 Max).
+- [x] Shape-error reporting: readable at a toplevel (#1799), origins by relevance (#1903), and errors
+  at the definition (#1803). Of the 14 refused programs in the error catalogue, 6 report in an
+  earlier phase under `check` and none later.
+- [x] Syntax-extension edges: `%cd` and `%op` source order (#1770, #1869), and parameter handling
+  (#1787, #1885).
+- [x] Newcomer path (#1753): the tutorial shows one function at two shapes, its printed scheme, a
+  contradictory application reported at the application, and a session recovered with a rewind.
+  The demonstration spans two files (`test/operations/reusable_tensor_programs.ml` and
+  `test/training/resume_checkpoint.ml`), joined by `docs/tensors_and_contexts.md` and the README's
+  learning route rather than one program, and its inference runs an untrained model. "At the call
+  site" holds as naming the function and argument: the error carries no source location.
+- **Beyond the milestone**: dropped graphs reclaim their memory (#1745, #1747, #1762, #1796).
+  Silently wrong gradient composition is refused (#1744, #1746, #1781), and so are writes the next
+  forward pass would undo (#1776, #1876). Inlining, mixed-precision and integer miscomputes are
+  fixed (#1795, #1866, #1884, #1896, #1897, #1953, #1954). Untuned cc direct convs take per-channel
+  vector accumulators, 92.35 to 69.59 ms on `cifar_resnet` on an M4 Max (#1630). Prefix scans lower
+  cumsum to a `Scan_loop` under `approximate` (#1758).
+- **What did not land**: schemes do not make inference cheaper, the second benefit #404 claimed
+  (#1752), so `check` costs about 2× on block stacks and 5× on a decoder. A closer reading of the row solver raised suspected
+  defects, tracked in v1.2.1 and not all confirmed by execution (#1960, #1961, #1963, #1968). The
+  standalone ArrayJIT split (#852) and cumulative/top-k operations (#952) moved to v1.3 on October
+  29. Winograd's backward data gradient was built and reverted (#1548), and a pinned staging pool
+  did not pay (#170). No GPT or ResNet benchmark was re-run at this release's head.
 
-| Track | Issue | Deliverable |
-|-------|-------|-------------|
-| Reusable tensor functions | #404 | Infer a function's constraint scheme once, freshen it at each application, and report a contradictory application at the call site with its provenance. Demonstrate reuse at different shapes and measure inference cost against re-tracing. Generalization follows the Hindley–Milner level discipline: the function's own variables generalize, while parameters captured in its closure stay shared. |
-| Checkpoint rollback | #903 | #404's first work package: an explicit checkpoint snapshots the mutable fields of the **open** inference state (closed state cannot change), and a rewind restores it and discards what was created since. #404 infers a scheme by tracing inside a checkpoint and rewinding. Completeness is over field types, checked by exhaustive record patterns, rather than over write sites. |
-| Newcomer path | v1.1.3 | Train, checkpoint, resume and run inference on one small model through `lib/`'s stated interfaces, recovering from a shape error in a notebook-style session. |
-
-The release demonstration pairs one tensor function reused at several shapes, including an
-application whose shapes contradict the scheme, reported at the call site, with the newcomer path.
-
-**Optional:** the standalone ArrayJIT package split (#852), with a reference driver and an
-executed non-neural example. It matters most if the project is ever handed over, since a separable
-loop-nest compiler is easier to adopt.
+The release went through the daily gates: the last cross-machine sweep before the tag passed on cc,
+Metal, CUDA, HIP on two boxes and multidev_cc, and the full CI matrix passed on master. The
+`cc-outlined` sweep unit's red was #1819, fixed after that sweep ran.
 
 Session-owned persistent shapes and reentrance (one inference session per domain) were considered
 for #903 and dropped: they would make the solver harder to change, and nothing asks for concurrent
-graph construction. If #404 cannot fit by November 15, finish a coherent subset and defer the
-remainder explicitly, preserving the date.
+graph construction.
 
 **Moved to v1.3 on October 13** (undated): CDNA MFMA (#477, which needs CDNA hardware), CUDA
 pinned host buffers and `__constant__` arrays (#170, #195), PoPE (#444), the design question of a
