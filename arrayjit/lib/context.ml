@@ -758,11 +758,13 @@ let finish_link ctx comp wrapped
   in
   (* gh-ocannl-1966: the embedded nodes the raw read set calls read first and nothing declares to
      start from zero. Not refused: the raw read set is conservative, so this holds correct routines
-     too (a vectorized write whose cell reads have unknown coverage, a read of a padded margin). *)
+     too (a vectorized write whose cell reads have unknown coverage, a read of a padded margin). An
+     accumulation opening with [=+] declares its own start (gh-ocannl-2013). *)
   let read_first_undeclared =
+    let from_zero = Asgns.accumulates_from_zero comp in
     Set.filter
       (Set.inter (Set.inter outputs backend_inputs) comp.Asgns.embedded_nodes)
-      ~f:(fun tn -> not (Ir.Host_inits.mem tn || Tn.is_zero_valid tn))
+      ~f:(fun tn -> not (Ir.Host_inits.mem tn || Tn.is_zero_valid tn || Set.mem from_zero tn))
   in
   let routine =
     {

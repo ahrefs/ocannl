@@ -19,11 +19,22 @@ nor is it written first: true
 it is an undeclared read: true
 undeclared state read first reads the fill: true
 undeclared state keeps a seed: true
+accumulation opener: =+: true
+accumulation opener: =- and =||, by their zero neutral: true
+accumulation opener: =* has another neutral: true
+accumulation opener: =: reads nothing of its target: true
+accumulation opener: a reduction owes its init: true
+accumulation opener: a later =+ does not excuse a reduction: true
+accumulation opener: a read before the =+ is a read of the old value: true
+accumulation opener: nor does an =+ reading its own target state a start: true
 { x; zero_valid = true } marks the node: true
 so it is no undeclared read: true
 and starts from zero: true
 { x } alone declares nothing: true
 so it reads the fill: true
+an embedded node an =+ opens is an output: true
+and no undeclared read: true
+so it starts from zero: true
 a padded node's margin keeps the padding value: true
 a padded node's unwritten interior cell reads the fill: true
 single: the routine's write lands: true

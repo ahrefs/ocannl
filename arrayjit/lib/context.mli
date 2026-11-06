@@ -89,7 +89,8 @@ type routine = private {
           [debug_fill_fresh_outputs] configuration key exists to expose. *)
   read_first_undeclared : Set.M(Ir.Tnode).t;
       (** The embedded {!outputs} in the backend's raw read set that are not
-          {!Ir.Tnode.is_zero_valid} as of this compile, and with no registered host initialization
+          {!Ir.Tnode.is_zero_valid} as of this compile, not opened by an accumulation from zero
+          ({!Ir.Assignments.accumulates_from_zero}), and with no registered host initialization
           data: neither required inputs nor {!field-written_first}. The state a routine starts from
           allocation's zero belongs to the class by default, and declares itself out of it; what
           stays is a routine that lost an init, or a correct one the conservative read set could not
