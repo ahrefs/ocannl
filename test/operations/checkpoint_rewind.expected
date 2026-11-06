@@ -21,7 +21,8 @@ negative control: omitting "seed" fails an independent oracle: true
 negative control: omitting "nodes" fails an independent oracle: true
 negative control: omitting "shapes" fails an independent oracle: true
 negative control: omitting "steps" fails an independent oracle: true
-negative control: omitting "steps" leaves the projections over the window's size: true
+negative control: omitting "steps" leaves projections over the window's size, which are refused: true
+negative control: omitting "steps" leaves a reduction's operand projections, which are refused: true
 negative control: omitting "refs" fails an independent oracle: true
 negative control: omitting "shape globals" fails an independent oracle: true
 negative control: omitting "row globals" fails an independent oracle: true
@@ -30,6 +31,7 @@ steps, control: the step's projections iterate 3, its shape closes to 3
 steps: the window's closure fails on the older step's padding neutral: true
 steps: the failed closure had published projections of a step older than the checkpoint: true
 steps, a failed closure rewound: the step's projections iterate the control's dims: true
+steps, a failed closure rewound: a reduction's projections iterate the control's dims: true
 steps, a failed closure rewound: its shape closes to the control's dims: true
 nested: the window's tensor is discarded by the outer rewind: true
 nested: the inner checkpoint is abandoned by the outer rewind: true
