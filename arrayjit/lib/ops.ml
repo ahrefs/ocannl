@@ -300,6 +300,10 @@ let integer_range = function
     backend's dialect promotes as C does, with a 32-bit [int]. *)
 let promoted_to_int = function Byte_prec _ | Uint16_prec _ -> true | _ -> false
 
+(** The precision an operator evaluated at [prec] computes its result in: [int32] where
+    {!promoted_to_int}, otherwise [prec]. A leaf, by contrast, is converted to [prec] itself. *)
+let operator_prec prec = if promoted_to_int prec then int32 else prec
+
 (** Whether every value of precision [from] converts to [to_] exactly, so that a conversion through
     [to_] is the identity on it: equal precisions; a float widening (fp8 into any wider float --
     both e4m3 and e5m2 fit half's and bfloat16's exponent ranges and significands -- half or

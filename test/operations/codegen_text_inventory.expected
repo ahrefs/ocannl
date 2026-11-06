@@ -837,6 +837,7 @@ test/operations/heap_local_arrays.ml [through Ll_test.execute; run by @test/oper
 test/operations/hip_half_load.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_load]
 test/operations/hip_half_masked_gradient.ml [through Ll_test.link; run by @test/operations/runtest-hip_half_masked_gradient]
 test/operations/integer_power_domain.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-integer_power_domain]
+test/operations/integer_promotion_folds.ml [through Ll_test.execute; run by @test/operations/runtest-integer_promotion_folds]
 test/operations/integer_scope_collapse.ml [through Ll_test.execute; run by @test/operations/runtest-integer_scope_collapse]
 test/operations/lane_bounds_check.ml [through Ll_test.execute; run by @test/operations/runtest-lane_bounds_check]
 test/operations/launch_predicate_parity.ml [through Ll_test.execute; through Ll_test.execute_with_census; run by @test/operations/runtest-launch_predicate_parity, @test/operations/runtest-launch_predicate_parity-tf32]
@@ -955,6 +956,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-hip_half_load
 @test/operations/runtest-hip_half_masked_gradient
 @test/operations/runtest-integer_power_domain
+@test/operations/runtest-integer_promotion_folds
 @test/operations/runtest-integer_scope_collapse
 @test/operations/runtest-lane_bounds_check
 @test/operations/runtest-launch_predicate_parity

@@ -1,0 +1,81 @@
+a nested %cd comparison reads its operand's node, which holds the wrapped sum: true
+byte sum against 255: with its literals as written it gives the worked value: true
+byte sum against 255: with each literal in a node it gives the worked value: true
+byte sum against 255: the comparison survives: true
+byte sum over 255 from bounds: with its literals as written it gives the worked value: true
+byte sum over 255 from bounds: with each literal in a node it gives the worked value: true
+byte sum over 255 from bounds: the interval analysis decides it: true
+byte sum not below zero: with its literals as written it gives the worked value: true
+byte sum not below zero: with each literal in a node it gives the worked value: true
+byte sum not below zero: the interval analysis decides it: true
+uint16 sum against 65535: with its literals as written it gives the worked value: true
+uint16 sum against 65535: with each literal in a node it gives the worked value: true
+uint16 sum against 65535: the comparison survives: true
+uint16 product against 65535: with its literals as written it gives the worked value: true
+uint16 product against 65535: with each literal in a node it gives the worked value: true
+uint16 product against 65535: the comparison survives: true
+byte difference below zero: with its literals as written it gives the worked value: true
+byte difference below zero: with each literal in a node it gives the worked value: true
+byte difference below zero: the comparison survives: true
+byte difference not below zero, the other way round: with its literals as written it gives the worked value: true
+byte difference not below zero, the other way round: with each literal in a node it gives the worked value: true
+byte difference not below zero, the other way round: the comparison survives: true
+byte negation below zero: with its literals as written it gives the worked value: true
+byte negation below zero: with each literal in a node it gives the worked value: true
+byte negation below zero: the comparison survives: true
+byte negation never above zero: with its literals as written it gives the worked value: true
+byte negation never above zero: with each literal in a node it gives the worked value: true
+byte negation never above zero: the interval analysis decides it: true
+byte product against 255: with its literals as written it gives the worked value: true
+byte product against 255: with each literal in a node it gives the worked value: true
+byte product against 255: the comparison survives: true
+byte triple product against 255: with its literals as written it gives the worked value: true
+byte triple product against 255: with each literal in a node it gives the worked value: true
+byte triple product against 255: the comparison survives: true
+byte Max of a sum against 255: with its literals as written it gives the worked value: true
+byte Max of a sum against 255: with each literal in a node it gives the worked value: true
+byte Max of a sum against 255: the comparison survives: true
+byte Relu of a sum against 255: with its literals as written it gives the worked value: true
+byte Relu of a sum against 255: with each literal in a node it gives the worked value: true
+byte Relu of a sum against 255: the comparison survives: true
+byte Trunc of a sum against 255: with its literals as written it gives the worked value: true
+byte Trunc of a sum against 255: with each literal in a node it gives the worked value: true
+byte Trunc of a sum against 255: the comparison survives: true
+byte open gate over a sum against 255: with its literals as written it gives the worked value: true
+byte open gate over a sum against 255: with each literal in a node it gives the worked value: true
+byte open gate over a sum against 255: the comparison survives: true
+byte select arm against 255: with its literals as written it gives the worked value: true
+byte select arm against 255: with each literal in a node it gives the worked value: true
+byte select arm against 255: the comparison survives: true
+byte remainder of a negative difference: with its literals as written it gives the worked value: true
+byte remainder of a negative difference: with each literal in a node it gives the worked value: true
+byte remainder of a negative difference: the comparison survives: true
+a select condition over a byte sum: with its literals as written it gives the worked value: true
+a select condition over a byte sum: with each literal in a node it gives the worked value: true
+a select condition over a byte sum: the comparison survives: true
+a statement guard over a byte sum: with its literals as written it gives the worked value: true
+a statement guard over a byte sum: with each literal in a node it gives the worked value: true
+a statement guard over a byte sum: the comparison survives: true
+byte Exp against 255: with its literals as written it gives the worked value: true
+byte Exp against 255: with each literal in a node it gives the worked value: true
+byte Exp against 255: the comparison survives: true
+byte Sin below zero: with its literals as written it gives the worked value: true
+byte Sin below zero: with each literal in a node it gives the worked value: true
+byte Sin below zero: the comparison survives: true
+uint32 Sin below zero: with its literals as written it gives the worked value: true
+uint32 Sin below zero: with each literal in a node it gives the worked value: true
+uint32 Sin below zero: the comparison survives: true
+byte sum following a Sin below zero: with its literals as written it gives the worked value: true
+byte sum following a Sin below zero: with each literal in a node it gives the worked value: true
+byte sum following a Sin below zero: the comparison survives: true
+byte Log of a Recip below zero: with its literals as written it gives the worked value: true
+byte Log of a Recip below zero: with each literal in a node it gives the worked value: true
+byte Log of a Recip below zero: the comparison survives: true
+a byte comparison in a single slot: with its literals as written it gives the worked value: true
+a byte comparison in a single slot: with each literal in a node it gives the worked value: true
+a byte comparison in a single slot: the comparison survives: true
+a uint32 comparison in a single slot: with its literals as written it gives the worked value: true
+a uint32 comparison in a single slot: with each literal in a node it gives the worked value: true
+a uint32 comparison in a single slot: the comparison survives: true
+a one-hot sum over a float-valued index stays a sum: true
+a float-valued one-hot index selects by its value at the byte reads: true
