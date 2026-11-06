@@ -829,22 +829,28 @@ files.
   decision read off a Tnode-keyed table's iteration order has the same trap; equal-cost flip
   candidates are ordered by first access in the raw code, never by uid, and consumers sort stably.
   `test/operations/flip_order_minting.ml` is the shift-the-uids pattern for checking a decision.
-- **A cycle of covered reads through nodes still headed for inlining is cut where the fan-in
-  traversal enters it, so the traversal runs in program order** (gh-ocannl-1877). Not entering
-  materialized nodes removed the cycles through parameters, not every cycle: a node with several
-  setters can read, in one of them, a node that reads the cells another of its setters wrote (`a`
-  over its first half, `b` from it, `a`'s second half from `b`), with every read covered and neither
-  node materialized. The set memoized for the node inside the cut is computed under the entry
-  node's placeholder (`b` counts `a` once when entered at `a`, and all of `a`'s inputs when entered
-  at `b`), which moved `b` across `virtualize_max_inline_fanin` with the uids. The top-level
-  iteration is sorted by `compare_program_order` over `first_access_positions`; what remains is
-  that the cut node is under-counted by design, and that within one setter's loads the recursion
-  follows the `Set`'s uid order (creation order, which a uid shift keeps). Pin: part 2b of
-  `flip_order_minting`. The audit behind it (every hash iteration in `low_level`, `schedule`,
-  `autotune` and their neighbours, classified) is the gh-ocannl-1877 issue comment; the other live
-  site was `C_syntax.parallel_grid_safe`, which privatized a pool chunk's locals in the order of a
-  uid-keyed table: the chunk's declarations and which of two equal-sized tiles kept the stack
-  followed the uids (now first-access order; `heap_local_arrays`' two-tile leg).
+- **A cycle of covered reads through nodes still headed for inlining is charged as one**
+  (gh-ocannl-1962). Not entering materialized nodes removes the cycles through parameters, not every
+  cycle: a node with several setters can read, in one of them, a node that reads the cells another
+  of its setters wrote (`a` over its first half, `b` from it, `a`'s second half from `b`), with every
+  read covered and neither node materialized. The pass condenses the setter-reads graph as it finds
+  it (edges into a `known_non_virtual` node dropped) and walks the components dependencies first. A
+  component of one node takes the per-setter maximum above. A cycle's members share one set, the
+  union of what all their charges load from outside it, across setters and across select arms and
+  whatever the backend's `blends_value_selects`: "one setter per read" and "one arm per evaluation"
+  hold per cell, and a chain through a cycle evaluates several. So it is a conservative estimate,
+  which can join mutually exclusive setters. The set is finished before any member lands, and each
+  member lands on its own eligibility, so an exempt member stays and the others land; that can
+  materialize more members than breaking the cycle needs, and each stays an `Inline` flip
+  candidate. Cutting at an entry node instead, with the loads in the `Set`'s uid order, let creation
+  order pick the node left under the cap. No traversal order reaches a decision now; the roots stay
+  in program order only because placements land in it. Pins: `virtual_chain_fanin` phase 7, parts 2b
+  and 2c of `flip_order_minting` (2c enters from outside the cycle: a cycle the code touches first
+  is entered at the same node in every creation order, so it cannot show the dependence). The audit of every hash iteration in
+  `low_level`, `schedule`, `autotune` and their neighbours is the gh-ocannl-1877 issue comment; the
+  other live site was `C_syntax.parallel_grid_safe`, which privatized a pool chunk's locals in the
+  order of a uid-keyed table: the chunk's declarations and which of two equal-sized tiles kept the
+  stack followed the uids (now first-access order; `heap_local_arrays`' two-tile leg).
 - **The shift-the-uids check reads what a compile ships, not only the decision surface**
   (gh-ocannl-1877): `flip_order_minting` part 1 compares, across builds minted at different uid
   offsets, the emitted source up to minted identifiers (`Generated.normalize_minted`) and every

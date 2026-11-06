@@ -1347,7 +1347,8 @@ type traced_array = {
   mutable inline_fanin : int;
       (** The transitive inline fan-in [decide_placements] computed for this node under the current
           placements (at least 1); multiplies into the proxy [fa_recompute_cost] (gh-ocannl-637: the
-          fallback where the cost model's count is not exact). *)
+          fallback where the cost model's count is not exact). The members of a cycle of nodes
+          headed for inlining share one count (gh-ocannl-1962). *)
 }
 [@@deriving sexp_of]
 

@@ -15,6 +15,14 @@ hand-built: both nodes are candidates, at one cost: true
 hand-built: equal-cost candidates come in program order, built a first: true
 hand-built: equal-cost candidates come in program order, built b first: true
 control: the minting changes which of a and b the lowered store iterates first: true
-cycle: both nodes' fan-in and placement are the same whatever was minted before: true
-cycle: it is entered at the node the code touches first, so b counts a once: true
+control: both creation orders of a and b are built: true
+cycle: both nodes' fan-in and placement are the same whatever was minted before and whichever was built first: true
+cycle: each member is charged all the cycle's inputs: true
+cycle: over the cap, both members land on it: true
+sink control: both creation orders of a and b are built: true
+sink: every creation order charges and places the three nodes the same: true
+sink: both members are charged all the inputs and land on the cap, whatever entered the cycle: true
+sink: the sink then loads the two members as buffers: true
+sink: every creation order executes the independent reference: true
+sink: every creation order executes what the materialized twin does: true
 ranking: equal ranks keep the input order: true

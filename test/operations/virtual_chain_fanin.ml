@@ -37,7 +37,13 @@
    Phase 4 pins gh-ocannl-611: a routine whose entire content virtualizes away is legal — it
    optimizes to an empty schedule ([Noop]) whose stored computations persist in the lineage,
    compiles and runs as a no-op, and a later routine consumes the deferred chain, executed against
-   the same reference. *)
+   the same reference.
+
+   Phase 7 pins the charge of a cycle through nodes still headed for inlining (gh-ocannl-1962): the
+   members share the union of what all their charges load from outside the cycle, across setters and
+   select arms, decided at the cap and one above it, with a consumer charged the shared set or reset
+   by the landing. Each leg executes against the reference. The creation-order claims are
+   [flip_order_minting]'s. *)
 
 open Base
 open Ll_test
@@ -1762,6 +1768,154 @@ let phase6 () =
   in
   p "pipeline write-mentioned spliced leaf: demanded despite the embedded-write mention" rejected_w
 
+(* === Phase 7: a cycle is charged as one (gh-ocannl-1962) === *)
+
+let phase7 () =
+  let cells = 2 * dim in
+  let mk = node_factory ~first_id:8100 ~dims:[| dim |] () in
+  let ws =
+    Array.init 10 ~f:(fun k ->
+        let w = mk (Printf.sprintf "cw%d" (k + 1)) in
+        materialize w;
+        w)
+  in
+  let m = mk "cm" in
+  materialize m;
+  let m_vals = Array.init dim ~f:(fun i -> Float.of_int (i % 2)) in
+  let dw_vals = Array.init cells ~f:(fun j -> Float.of_int (5000 + j)) in
+  let sum i ks =
+    List.fold ks ~init:(Ll_test.c 0.) ~f:(fun acc k -> add acc (get ws.(k) [| iter i |]))
+  in
+  let sum_ref ks i = List.fold ks ~init:0. ~f:(fun acc k -> acc +. (w_vals k).(i)) in
+  (* [a[i] = sum first; b[i] = a[i] + sum second; a[i+dim] = tail; d[j] = a[j] + dw[j]; out[j] =
+     d[j]; out2[i] = b[i]], where [tail] reads [b]: every read covered, and within the visit cap as
+     a copy position, so the cycle a -> b -> a reaches the fan-in guard. *)
+  let fixture label ~first ~second ~tail =
+    let a = mk ~dims:[| cells |] ("ca_" ^ label) and b = mk ("cb_" ^ label) in
+    let d = mk ~dims:[| cells |] ("cd_" ^ label) in
+    let dw = mk ~dims:[| cells |] ("cdw_" ^ label) in
+    let out = mk ~dims:[| cells |] ("co_" ^ label) and out2 = mk ("co2_" ^ label) in
+    List.iter [ dw; out; out2 ] ~f:materialize;
+    let i1 = sym () and i2 = sym () and i3 = sym () in
+    let j1 = sym () and j2 = sym () and i4 = sym () in
+    let tail_value, tail_ref =
+      match tail with
+      | `Plain ks ->
+          ( add (add (get b [| iter i3 |]) (sum i3 ks)) (Ll_test.c 1.),
+            fun bv i -> bv +. sum_ref ks i +. 1. )
+      | `Select (then_ks, else_ks) ->
+          ( LL.Ternop
+              ( Ir.Ops.Where,
+                (get m [| iter i3 |], single),
+                (sum i3 then_ks, single),
+                (add (get b [| iter i3 |]) (sum i3 else_ks), single) ),
+            fun bv i -> if i % 2 <> 0 then sum_ref then_ks i else bv +. sum_ref else_ks i )
+    in
+    let llc =
+      List.reduce_exn ~f:seq
+        [
+          loop_n i1 dim (set a [| iter i1 |] (sum i1 first));
+          loop_n i2 dim (set b [| iter i2 |] (add (get a [| iter i2 |]) (sum i2 second)));
+          loop_n i3 dim (set a [| aff [ (1, i3) ] dim |] tail_value);
+          loop_n j1 cells (set d [| iter j1 |] (add (get a [| iter j1 |]) (get dw [| iter j1 |])));
+          loop_n j2 cells (set out [| iter j2 |] (get d [| iter j2 |]));
+          loop_n i4 dim (set out2 [| iter i4 |] (get b [| iter i4 |]));
+        ]
+    in
+    let b_ref = Array.init dim ~f:(fun i -> sum_ref first i +. sum_ref second i) in
+    let a_ref =
+      Array.init cells ~f:(fun j ->
+          if j < dim then sum_ref first j else tail_ref b_ref.(j - dim) (j - dim))
+    in
+    let expected = [ Array.mapi a_ref ~f:(fun j v -> v +. dw_vals.(j)); b_ref ] in
+    let seed =
+      (dw, dw_vals) :: (m, m_vals) :: (Array.to_list ws |> List.mapi ~f:(fun k w -> (w, w_vals k)))
+    in
+    (a, b, d, llc, seed, [ out; out2 ], expected)
+  in
+  let fanin (o : LL.optimized) tn = (Hashtbl.find_exn o.traced_store tn).LL.inline_fanin in
+  let on_cap o tn =
+    Option.equal Tn.equal_provenance (rejection_code o tn) (Some Tn.Inline_fanin_cap)
+  in
+  let runs ~name o (seed, read, expected) = same (execute ~name o ~seed ~read) expected in
+  (* The cap itself: eight inputs stay, and the consumer's one more trips it. *)
+  let a, b, d, llc, seed, read, expected =
+    fixture "at" ~first:[ 0; 1; 2; 3; 4 ] ~second:[ 5; 6; 7 ] ~tail:(`Plain [])
+  in
+  let o = optimize ~name:"vcf_cycle_at" llc in
+  p "cycle at the cap: both members charged the 8 inputs" (fanin o a = 8 && fanin o b = 8);
+  p "cycle at the cap: both stay virtual" (known_virtual o a && known_virtual o b);
+  p "cycle at the cap: the consumer is charged the shared set, and lands" (on_cap o d);
+  p "cycle at the cap: executes the reference" (runs ~name:"vcf_cycle_at" o (seed, read, expected));
+  (* One above: both land, and the consumer is reset to the member and its own input. *)
+  let a, b, d, llc, seed, read, expected =
+    fixture "over" ~first:[ 0; 1; 2; 3; 4 ] ~second:[ 5; 6; 7; 8 ] ~tail:(`Plain [])
+  in
+  let o = optimize ~name:"vcf_cycle_over" llc in
+  p "cycle one above the cap: both members charged the 9 inputs" (fanin o a = 9 && fanin o b = 9);
+  p "cycle one above the cap: both land on it" (on_cap o a && on_cap o b);
+  p "cycle one above the cap: the landing resets the consumer" (fanin o d = 2 && known_virtual o d);
+  p "cycle one above the cap: executes the reference"
+    (runs ~name:"vcf_cycle_over" o (seed, read, expected));
+  (* Inputs both setters load count once. *)
+  let a, b, _, llc, seed, read, expected =
+    fixture "dedup" ~first:[ 0; 1; 2; 3; 4 ] ~second:[ 2; 3; 4; 5; 6 ] ~tail:(`Plain [])
+  in
+  let o = optimize ~name:"vcf_cycle_dedup" llc in
+  p "cycle, overlapping inputs: charged 7, not 10" (fanin o a = 7 && fanin o b = 7);
+  p "cycle, overlapping inputs: executes the reference"
+    (runs ~name:"vcf_cycle_dedup" o (seed, read, expected));
+  (* A read through the cycle replays [a]'s two setters: each node's own widest setter, 4 and 1,
+     would leave this under the cap. *)
+  let a, b, _, llc, seed, read, expected =
+    fixture "setters" ~first:[ 0; 1; 2; 3 ] ~second:[ 8 ] ~tail:(`Plain [ 4; 5; 6; 7 ])
+  in
+  let o = optimize ~name:"vcf_cycle_setters" llc in
+  p "cycle: the union crosses a member's setters" (fanin o a = 9 && fanin o b = 9);
+  p "cycle: the crossing union lands both" (on_cap o a && on_cap o b);
+  p "cycle, across setters: executes the reference"
+    (runs ~name:"vcf_cycle_setters" o (seed, read, expected));
+  (* A select's arms: [m] + the 4 inputs of the cycle's other setters + one arm's 3 would stay at
+     the cap; each cell of a chain through the cycle takes its own arm, so the other arm's input
+     counts too, whether or not the backend blends. *)
+  let selects ~blends =
+    let label = if blends then "blend" else "branch" in
+    let a, b, _, llc, seed, read, expected =
+      fixture label ~first:[ 0; 1 ] ~second:[ 2; 3 ] ~tail:(`Select ([ 4; 5; 6 ], [ 7 ]))
+    in
+    let name = "vcf_cycle_" ^ label in
+    let o = optimize ~blends_value_selects:blends ~name llc in
+    p
+      (Printf.sprintf "cycle, %s select: all arms' inputs are charged" label)
+      (fanin o a = 9 && fanin o b = 9 && on_cap o a && on_cap o b);
+    p
+      (Printf.sprintf "cycle, %s select: executes the reference" label)
+      (runs ~name o (seed, read, expected))
+  in
+  selects ~blends:false;
+  selects ~blends:true;
+  (* A member materialized ahead of the pass is a boundary: there is no cycle left to charge. *)
+  let a, b, _, llc, seed, read, expected =
+    fixture "preset" ~first:[ 0; 1; 2; 3; 4 ] ~second:[ 5; 6; 7; 8 ] ~tail:(`Plain [])
+  in
+  let o = optimize ~materialized:[ b ] ~name:"vcf_cycle_preset" llc in
+  p "cycle with a materialized member: the traversal stops there"
+    (fanin o a = 5 && known_virtual o a);
+  p "cycle with a materialized member: executes the reference"
+    (runs ~name:"vcf_cycle_preset" o (seed, read, expected));
+  (* Sharing a charge is not sharing a decision: an exempt member stays. *)
+  let a, b, _, llc, seed, read, expected =
+    fixture "exempt" ~first:[ 0; 1; 2; 3; 4 ] ~second:[ 5; 6; 7; 8 ] ~tail:(`Plain [])
+  in
+  let ctx = LL.empty_optimize_ctx () in
+  Hash_set.add ctx.LL.inline_preferences a;
+  let o = optimize_in ctx ~name:"vcf_cycle_exempt" llc in
+  p "cycle with an exempt member: it is charged the set and does not land"
+    (fanin o a = 9 && not (on_cap o a));
+  p "cycle with an exempt member: the other member lands" (on_cap o b);
+  p "cycle with an exempt member: executes the reference"
+    (runs ~name:"vcf_cycle_exempt" o (seed, read, expected))
+
 let () =
   phase1 ();
   phase1b ();
@@ -1773,4 +1927,5 @@ let () =
   phase3 ();
   phase4 ();
   phase5 ();
-  phase6 ()
+  phase6 ();
+  phase7 ()

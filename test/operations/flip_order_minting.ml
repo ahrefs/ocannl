@@ -26,11 +26,16 @@
    The surface lists them in program order both times (master: in uid order, so the creation order
    decided which came first).
 
-   2b. Hand-built IR (gh-ocannl-1877): a cycle of covered reads through two nodes headed for
-   inlining, after minting a different number of unrelated nodes each time. The transitive
-   inline-fanin pass cuts the cycle where its traversal enters it; entered in program order, both
-   nodes' fan-in and placement are the same every time (master: in the traced store's order, so one
-   node was materialized by the fan-in cap or left virtual depending on the uids).
+   2b. Hand-built IR (gh-ocannl-1877, gh-ocannl-1962): a cycle of covered reads through two nodes
+   headed for inlining, after minting a different number of unrelated nodes each time, with the two
+   nodes created in either order. The transitive inline-fanin pass charges a cycle as one, so both
+   nodes' fan-in and placement are the same every time, and each is charged all the cycle's inputs.
+
+   2c. Hand-built IR (gh-ocannl-1962): the same cycle reached from outside it, by a sink the code
+   touches first and whose one setter reads both members, in every creation order of the three
+   nodes. With the cycle cut at an entry node, the uid order of the setter's loads chose that node,
+   and the node created second landed on the cap or not accordingly. Both orders execute against a
+   materialized twin and an independent reference.
 
    3. [Autotune.rank_flip_candidates] keeps its input's order among equal ranks, rather than
    re-sorting ties by uid. *)
@@ -311,24 +316,31 @@ let () =
 
 (* [a]'s first half sums [n_x] inputs, [b] adds [n_y] more to it, and [a]'s second half reads [b]:
    every read is covered, so neither node is materialized by the coverage rule, and the setter-reads
-   graph has the cycle a -> b -> a. The fan-in pass cuts it where its traversal enters it. Entered
-   at [a], the node the code touches first, [b]'s set is [a] itself and the [n_y] inputs: within the
-   cap. Entered at [b] it is all [n_x + n_y] inputs: over the cap, and [b] is materialized. On
-   master the traversal followed the traced store's iteration order, so the unrelated nodes minted
-   before the program -- [mint] of them -- decided which. *)
-let cycle ~mint =
+   graph has the cycle a -> b -> a. A read of [b] or of [a]'s second half replays all [n_x + n_y]
+   inputs, one over the cap, so both nodes land on it. Cut at a node the traversal entered, [b]
+   counted [a] once and [a] counted [b] once, the cap let both through, and the unrelated nodes
+   minted before the program -- [mint] of them -- decided, on a traversal of the traced store, which
+   node was cut. *)
+let cycle ~mint ~b_first =
   let cap = LL.virtualize_settings.max_inline_fanin in
   let n_x = (cap / 2) + 1 in
   let n_y = cap - n_x + 1 in
-  let mk = Ll_test.node_factory ~first_id:(18770 + (100 * mint)) ~dims:[| 8 |] () in
+  let first_id = 18770 + (100 * mint) + if b_first then 50 else 0 in
+  let mk = Ll_test.node_factory ~first_id ~dims:[| 8 |] () in
   for _ = 1 to mint do
     ignore (mk "unrelated" : Tn.t)
   done;
   let inputs prefix n = List.init n ~f:(fun k -> mk (prefix ^ Int.to_string k)) in
   let xs = inputs "x" n_x and ys = inputs "y" n_y in
   let out = mk "out" and out2 = mk ~dims:[| 4 |] "out2" in
-  let a = mk "a" in
-  let b = mk ~dims:[| 4 |] "b" in
+  let a, b =
+    if b_first then
+      let b = mk ~dims:[| 4 |] "b" in
+      (mk "a", b)
+    else
+      let a = mk "a" in
+      (a, mk ~dims:[| 4 |] "b")
+  in
   List.iter (xs @ ys @ [ out; out2 ]) ~f:Ll_test.materialize;
   let open Ll_test in
   let over n f =
@@ -346,7 +358,7 @@ let cycle ~mint =
         over 4 (fun i -> set_at out2 (iter i) (get b [| iter i |]));
       ]
   in
-  let o = optimize ~name:(Printf.sprintf "fo_cycle_%d" mint) llc in
+  let o = optimize ~name:(Printf.sprintf "fo_cycle_%d_%b" mint b_first) llc in
   let decided tn =
     ( (Hashtbl.find_exn o.LL.traced_store tn).LL.inline_fanin,
       Tn.debug_memory_mode (Tn.Placements.get o.LL.optimize_ctx.LL.placements tn) )
@@ -355,29 +367,145 @@ let cycle ~mint =
     List.find_map_exn (Hashtbl.keys o.LL.traced_store) ~f:(fun tn ->
         if Tn.equal tn a then Some true else if Tn.equal tn b then Some false else None)
   in
-  eprintf "cycle, mint %d (not part of the golden): a %d %s, b %d %s, the table has %s first\n%!"
-    mint
+  eprintf
+    "cycle, mint %d, b first %b (not part of the golden): a %d %s, b %d %s, the table has %s first\n\
+     %!"
+    mint b_first
     (fst (decided a))
     (snd (decided a))
     (fst (decided b))
     (snd (decided b))
     (if a_ahead then "a" else "b");
-  (a_ahead, decided a, decided b, (n_x, n_y))
+  let on_cap tn =
+    Option.equal Tn.equal_provenance (Ll_test.rejection_code o tn) (Some Tn.Inline_fanin_cap)
+  in
+  (a_ahead, Tn.compare a b < 0, decided a, decided b, on_cap a && on_cap b, n_x + n_y)
 
 let () =
-  let builds = List.map [ 0; 1; 2; 3; 4; 5; 6; 7 ] ~f:(fun mint -> cycle ~mint) in
-  let _, a0, b0, (n_x, n_y) = List.hd_exn builds in
+  let builds =
+    List.cartesian_product [ 0; 1; 2; 3; 4; 5; 6; 7 ] [ false; true ]
+    |> List.map ~f:(fun (mint, b_first) -> cycle ~mint ~b_first)
+  in
+  let _, _, a0, b0, on_cap0, all_inputs = List.hd_exn builds in
   (* The minting does reorder a table over the two nodes. The lowered store is not the table the
      pass walks (that is the analysis' own copy), so this shows the shift reaching node-keyed
      tables, not which node the pass would have entered first. *)
   p "control: the minting changes which of a and b the lowered store iterates first"
-    (List.exists builds ~f:(fun (a_ahead, _, _, _) -> a_ahead)
-    && List.exists builds ~f:(fun (a_ahead, _, _, _) -> not a_ahead));
+    (List.exists builds ~f:(fun (a_ahead, _, _, _, _, _) -> a_ahead)
+    && List.exists builds ~f:(fun (a_ahead, _, _, _, _, _) -> not a_ahead));
+  p "control: both creation orders of a and b are built"
+    (List.exists builds ~f:(fun (_, a_older, _, _, _, _) -> a_older)
+    && List.exists builds ~f:(fun (_, a_older, _, _, _, _) -> not a_older));
   let same (f1, m1) (f2, m2) = f1 = f2 && String.equal m1 m2 in
-  p_all "cycle: both nodes' fan-in and placement are the same whatever was minted before"
-    (List.tl_exn builds) ~f:(fun (_, a, b, _) -> same a a0 && same b b0);
-  p "cycle: it is entered at the node the code touches first, so b counts a once"
-    (fst a0 = n_x && fst b0 = 1 + n_y)
+  p_all
+    "cycle: both nodes' fan-in and placement are the same whatever was minted before and whichever \
+     was built first"
+    (List.tl_exn builds) ~f:(fun (_, _, a, b, _, _) -> same a a0 && same b b0);
+  p "cycle: each member is charged all the cycle's inputs"
+    (fst a0 = all_inputs && fst b0 = all_inputs);
+  p "cycle: over the cap, both members land on it" on_cap0
+
+(* === Part 2c: the cycle reached from outside it (gh-ocannl-1962) === *)
+
+(* [t] is touched first, so the top-level walk reaches it before the cycle, and its second setter
+   loads both members. Over those loads the walk follows the [Set]'s uid order, so with the cycle
+   cut at the first node reached, the creation order of [a] and [b] chose the cut: [b] created first
+   counted all the inputs and landed on the cap, [a] created first counted [a] once and did not. The
+   reads stay within the visit cap as copy positions. [materialized_cycle] is the executed twin. *)
+let n_sink_builds = ref 0
+
+let sink ~order ~materialized_cycle =
+  let cap = LL.virtualize_settings.max_inline_fanin in
+  let n_x = (cap / 2) + 1 in
+  let n_y = cap - n_x + 1 in
+  Int.incr n_sink_builds;
+  let mk = Ll_test.node_factory ~first_id:(19770 + (100 * !n_sink_builds)) ~dims:[| 8 |] () in
+  let inputs prefix n = List.init n ~f:(fun k -> mk (prefix ^ Int.to_string k)) in
+  let xs = inputs "x" n_x and ys = inputs "y" n_y in
+  let out = mk "out" in
+  let created =
+    List.map order ~f:(fun name ->
+        (name, if String.equal name "b" then mk ~dims:[| 4 |] name else mk name))
+  in
+  let node name = List.Assoc.find_exn created ~equal:String.equal name in
+  let a = node "a" and b = node "b" and t = node "t" in
+  List.iter (xs @ ys @ [ out; t ]) ~f:Ll_test.materialize;
+  if materialized_cycle then List.iter [ a; b ] ~f:Ll_test.materialize;
+  let open Ll_test in
+  let over n f =
+    let s = sym () in
+    loop_n s n (f s)
+  in
+  let sum_at i tns = List.map tns ~f:(fun tn -> get tn [| iter i |]) |> List.reduce_exn ~f:add in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        over 4 (fun i -> set_at t (aff [ (1, i) ] 4) (embed i));
+        over 4 (fun i -> set_at a (iter i) (sum_at i xs));
+        over 4 (fun i -> set_at b (iter i) (add (get a [| iter i |]) (sum_at i ys)));
+        over 4 (fun i -> set_at a (aff [ (1, i) ] 4) (add (get b [| iter i |]) (c 1.)));
+        over 4 (fun i ->
+            set_at t (iter i) (add (get a [| aff [ (1, i) ] 4 |]) (get b [| iter i |])));
+        over 8 (fun i -> set_at out (iter i) (get a [| iter i |]));
+      ]
+  in
+  let name =
+    Printf.sprintf "fo_sink_%s%s" (String.concat order) (if materialized_cycle then "_mat" else "")
+  in
+  let o = optimize ~name llc in
+  let input_value series k i = Float.of_int ((series * (k + 1)) + (10 * (i + 1))) in
+  let seed_of series tns =
+    List.mapi tns ~f:(fun k tn -> (tn, Array.init 8 ~f:(input_value series k)))
+  in
+  let sum_ref series tns i =
+    List.foldi tns ~init:0. ~f:(fun k acc _ -> acc +. input_value series k i)
+  in
+  let a_low i = sum_ref 100 xs i in
+  let b_ref i = a_low i +. sum_ref 1000 ys i in
+  let a_high i = b_ref i +. 1. in
+  let t_ref =
+    Array.init 8 ~f:(fun j -> if j < 4 then a_high j +. b_ref j else Float.of_int (j - 4))
+  in
+  let out_ref = Array.init 8 ~f:(fun j -> if j < 4 then a_low j else a_high (j - 4)) in
+  let got = execute ~name o ~seed:(seed_of 100 xs @ seed_of 1000 ys) ~read:[ t; out ] in
+  let on_cap tn =
+    Option.equal Tn.equal_provenance (rejection_code o tn) (Some Tn.Inline_fanin_cap)
+  in
+  let decided tn = ((Hashtbl.find_exn o.LL.traced_store tn).LL.inline_fanin, on_cap tn) in
+  eprintf "sink, created %s, materialized %b (not part of the golden): a %d, b %d, t %d\n%!"
+    (String.concat ~sep:" " order) materialized_cycle
+    (fst (decided a))
+    (fst (decided b))
+    (fst (decided t));
+  ((decided a, decided b, decided t), Tn.compare a b < 0, got, [ t_ref; out_ref ], n_x + n_y)
+
+let () =
+  let rec permutations = function
+    | [] -> [ [] ]
+    | names ->
+        List.concat_map names ~f:(fun name ->
+            List.filter names ~f:(fun other -> not (String.equal other name))
+            |> permutations
+            |> List.map ~f:(fun rest -> name :: rest))
+  in
+  let orders = permutations [ "a"; "b"; "t" ] in
+  let builds = List.map orders ~f:(fun order -> sink ~order ~materialized_cycle:false) in
+  let twins = List.map orders ~f:(fun order -> sink ~order ~materialized_cycle:true) in
+  let (a0, b0, t0), _, _, _, all_inputs = List.hd_exn builds in
+  p "sink control: both creation orders of a and b are built"
+    (List.exists builds ~f:(fun (_, a_older, _, _, _) -> a_older)
+    && List.exists builds ~f:(fun (_, a_older, _, _, _) -> not a_older));
+  p_all "sink: every creation order charges and places the three nodes the same"
+    (List.tl_exn builds) ~f:(fun ((a, b, t), _, _, _, _) ->
+      Poly.equal a a0 && Poly.equal b b0 && Poly.equal t t0);
+  p "sink: both members are charged all the inputs and land on the cap, whatever entered the cycle"
+    (Poly.equal a0 (all_inputs, true) && Poly.equal b0 (all_inputs, true));
+  p "sink: the sink then loads the two members as buffers" (Poly.equal t0 (2, false));
+  p_all "sink: every creation order executes the independent reference" builds
+    ~f:(fun (_, _, got, reference, _) -> Ll_test.same got reference);
+  p_all "sink: every creation order executes what the materialized twin does"
+    (List.zip_exn builds twins) ~f:(fun ((_, _, got, _, _), (_, _, got_twin, _, _)) ->
+      Ll_test.same got got_twin)
 
 (* === Part 3: the autotuner's ranking keeps the surface's order among ties === *)
 
