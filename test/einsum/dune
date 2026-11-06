@@ -541,3 +541,14 @@
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu (): the claims are about
+ ; projection derivation.
+ (name concat_axis_consumers)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules concat_axis_consumers)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

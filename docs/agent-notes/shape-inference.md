@@ -144,6 +144,16 @@ files.
   `get_proj_equations` (a dimension-1 size there would pin the axis at 0). Closure refuses to guess
   a concat component to 1 (`Row.add_concat_component`); `++^`'s discardable components still
   guess 0. Executed: `test/einsum/concat_extraction`.
+- No route through `Shape` chains windows in one step: a tensor axis has one role per step (plain
+  label, window, concat or fixed index), operands that alias are de-aliased, and a window ranges
+  over a label, so a target is never what a window ranges over. `solve_proj_equations` still goes
+  in dependency order (gh-ocannl-1971, hand-built in `test/operations/proj_window_verify`), for
+  windows among themselves only: a window over a concat target is still an unknown projection.
+  Likewise a later step sees a concatenation with a variable component as a plain `Dim`
+  (`test/einsum/concat_axis_consumers` executes slices, fixed indices and windows over one):
+  substitution is what sums the components, so `Concat` stays in a closed row for a symbolic
+  component, refused by `symbolic_concat_error`, and for integer components alone (`=> 2^3`),
+  whose own step dies in `Row.get_dim_padding`.
 - An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
   at or past the stride, or on an unpadded window, indexes past the extent. On the result side
   those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an

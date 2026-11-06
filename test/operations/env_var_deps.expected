@@ -430,7 +430,7 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   lib/dune: nothing that runs a test executable
   tensor/dune: nothing that runs a test executable
   test/config/dune: declares OCANNL_BACKEND; markers: none
-  test/einsum/dune: declares OCANNL_BACKEND; markers: none
+  test/einsum/dune: declares OCANNL_BACKEND; markers: cc, none
   test/gpt2/dune: declares OCANNL_BACKEND; markers: none
   test/operations/atomic_file_rename_scan_fixture/dune: markers: none
   test/operations/dune: declares OCANNL_BACKEND; markers: cc, cuda, metal, multidev_cc, none
