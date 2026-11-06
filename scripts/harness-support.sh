@@ -247,6 +247,21 @@ harness_leg_na_settle() { # at the end of a leg body: count and print its N/A, o
 harness_abandon() { # DETAIL -- inside a harness_leg_run body, then `return`
   report 1 "${harness_leg_running:-a leg}: abandoned, its later checks did not run" "$1"
 }
+# The run's outcome when the host refuses the subject as a whole, for a reason
+# no leg after this one escapes and no defect of the tree explains -- another
+# dune holding the build directory's lock (gh-ocannl-1940): `harness_abandon_run
+# REASON`, from the harness's own shell (a leg body or between legs, never a
+# subshell, which the exit would end alone). One `ABANDONED` line and a footer
+# of what was decided before it, then exit 75: a retry is the remedy, where a
+# FAIL per check that met the refusal names fifty defects that are not there
+# and passes every check expecting a failure. No verdict on the tree either way,
+# so never green; the checks decided before it keep their lines.
+harness_abandon_run() { # REASON
+  harness_finished=1
+  printf 'ABANDONED  %s\n\n' "${1:-(no reason)}"
+  echo "run abandoned${harness_leg_running:+ inside leg: $harness_leg_running}; $failures failure(s) before it ($(harness_tally)); no later check ran"
+  exit 75
+}
 # Run one leg whose body checks under errexit: `harness_leg_run_errexit 'NAME'
 # leg_fn`, gated as harness_leg gates (gh-ocannl-1539). The body runs in a
 # subshell of its own with errexit on and the ERR trap inherited by its

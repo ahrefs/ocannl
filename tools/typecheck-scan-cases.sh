@@ -28,7 +28,9 @@
 #
 # Exit status: the worst over the tables -- 0 clean, 1 a rejected snippet or a stale known
 # rejection, 2 a usage error, a build or stub that fails (an owning module's context included), or a
-# table in which nothing was checked.
+# table in which nothing was checked. 75, whatever the tables before it said: another dune holds the
+# build directory's lock, so a build here was refused before it started and the run says nothing
+# about the tables (gh-ocannl-1940) -- run it again once that dune is done.
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
 usage() { sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
@@ -77,17 +79,29 @@ eval "$(credential_env_scrub_text)" || {
   echo "typecheck-scan-cases: cannot remove credential variables:$credential_env_left" >&2
   exit 2
 }
+# Where dune builds: DUNE_BUILD_DIR moves the build tree (as tools/batch-backends.sh reads it), a
+# relative one from the workspace root.
+build_dir=${DUNE_BUILD_DIR:-_build}
+case $build_dir in /*) ;; *) build_dir=$root/$build_dir ;; esac
+# Whether the dune output in FILE is its refusal to start beside another dune holding the build
+# directory's lock, in the wording of dune 3.24 or of the versions before it (gh-ocannl-1940). No
+# defect of the engine, a stub or a table: the run is abandoned with a status of its own.
+dune_lock_held() { # FILE
+  grep -qE 'Another Dune instance is currently running|instance has locked the (_build|build) directory' "$1"
+}
+lock_held() {
+  echo "typecheck-scan-cases: LOCK HELD: another dune holds the lock of $build_dir; nothing more was checked" >&2
+  exit 75
+}
 build_log=$(mktemp "${TMPDIR:-/tmp}/typecheck-scan-cases-build.XXXXXX") || exit 2
-trap 'rm -f "$build_log"' EXIT
+engine_err=$(mktemp "${TMPDIR:-/tmp}/typecheck-scan-cases-engine.XXXXXX") || { rm -f "$build_log"; exit 2; }
+trap 'rm -f "$build_log" "$engine_err"' EXIT
 if ! dune build --root "$root" tools/scan_case_snippets.exe >"$build_log" 2>&1; then
   cat "$build_log" >&2
+  ! dune_lock_held "$build_log" || lock_held
   echo "typecheck-scan-cases: the engine did not build" >&2
   exit 2
 fi
-# Where dune just put it: DUNE_BUILD_DIR moves the build tree (as tools/batch-backends.sh reads it),
-# a relative one from the workspace root.
-build_dir=${DUNE_BUILD_DIR:-_build}
-case $build_dir in /*) ;; *) build_dir=$root/$build_dir ;; esac
 engine=$build_dir/default/tools/scan_case_snippets.exe
 
 worst=0
@@ -103,8 +117,12 @@ for table in "${tables[@]}"; do
   esac
   printf '== %s%s\n' "$table" "${stub_args[1]:+ (stub ${stub_args[1]})}"
   rc=0
+  # The engine's stderr is kept to be read: it builds an owning module's context with a dune of its
+  # own, which a dune started since the build above refuses the same way.
   "$engine" --root "$root" ${verbose[@]+"${verbose[@]}"} ${context[@]+"${context[@]}"} \
-    ${stub_args[@]+"${stub_args[@]}"} ${includes[@]+"${includes[@]}"} "$table" || rc=$?
+    ${stub_args[@]+"${stub_args[@]}"} ${includes[@]+"${includes[@]}"} "$table" 2>"$engine_err" || rc=$?
+  cat "$engine_err" >&2
+  [ "$rc" != 2 ] || ! dune_lock_held "$engine_err" || lock_held
   [ "$rc" -le "$worst" ] || worst=$rc
 done
 exit "$worst"

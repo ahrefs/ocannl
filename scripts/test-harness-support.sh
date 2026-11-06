@@ -27,6 +27,14 @@ case $MODE in
   abort) exit 50 ;;
   errexit) set -e; (exit 7) ;;
   unfinished) exit 0 ;;
+  abandon-run)
+    report 0 'a check decided before the refusal'
+    report 1 'a failure decided before the refusal'
+    skip 'a skip decided before the refusal' 'no such platform'
+    lock_leg() { harness_abandon_run 'the host refused the subject'; }
+    harness_leg_run '1: a leg that meets the refusal' lock_leg
+    harness_leg_run '2: a leg after it' false
+    report 1 'a check after the refusal' ;;
   dune)
     # Asked twice, as several legs of one harness ask it.
     for asked in 1 2; do
@@ -274,6 +282,20 @@ for mode in abort errexit unfinished; do
     report 0 "$mode reports unfinished harness and preserves exit $want"
   else report 1 "$mode reports unfinished harness and preserves exit $want"; fi
 done
+# A run the host refuses as a whole (gh-ocannl-1940): one ABANDONED line, the
+# checks decided before it counted, nothing after it run, and exit 75 -- no
+# green footer, no failure footer, and no "aborted before finish".
+MODE=abandon-run probe; rc=$?
+path=$(cat "$RECORD")
+if [ "$rc" = 75 ] && [ ! -d "$path" ] \
+   && [ "$(grep -c '^ABANDONED  ' "$TMP/out")" = 1 ] \
+   && grep -qxF 'ABANDONED  the host refused the subject' "$TMP/out" \
+   && grep -qxF 'run abandoned inside leg: 1: a leg that meets the refusal; 1 failure(s) before it (1 skipped); no later check ran' "$TMP/out" \
+   && [ "$(grep -c '^FAIL  ' "$TMP/out")" = 1 ] \
+   && ! grep -q 'a leg after it\|a check after the refusal\|legs passed\|leg(s) failed\|aborted before finish' "$TMP/out"; then
+  report 0 'an abandoned run says so once, counts what it decided, runs nothing more and exits 75'
+else report 1 'an abandoned run says so once, counts what it decided, runs nothing more and exits 75' \
+  "exit $rc; $(tr '\n' '|' <"$TMP/out")"; fi
 MODE=abort probe --keep; rc=$?
 path=$(cat "$RECORD")
 if [ "$rc" = 50 ] && [ -d "$path" ] && grep -q '^aborted before finish (rc=50)$' "$TMP/out"; then

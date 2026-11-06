@@ -1033,6 +1033,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   harness (leg 79 abandoned, leg 70 after it still reporting) against that copy with the check
   spelled as an `exit`; `scripts/test-harness-support.sh` pins the primitives. `set -u`'s
   unbound-variable abort is not containable this way and still ends the run.
+- **A run the host refuses as a whole is abandoned once, never failed per check**
+  (gh-ocannl-1940). Another dune holding `_build`'s lock refuses every build a harness's subject
+  asks for (`Error: Another Dune instance is currently running. Aborting...` on dune 3.24), and
+  `tools/test-typecheck-scan-cases.sh` used to read that as 53 FAILs, with 18 PASSes from the
+  checks that expect the subject to fail: a worker's own concurrent run, read as a broken tree.
+  `tools/typecheck-scan-cases.sh` now exits 75 with `LOCK HELD` for it (from its own engine build,
+  or from the dune its engine runs for an owning module's context), and the harness ends there
+  through `harness_abandon_run REASON`: one `ABANDONED  REASON` line, a footer counting what was
+  decided before it, exit 75, no `FAIL`. It is the exception to the rule above, for a refusal no
+  later leg escapes and no defect of the tree explains; the remedy is to run it again once the
+  other dune is done (one dune per worktree at a time). The subject's exit status is the signal,
+  never dune's wording read by the harness; its leg 13 holds the lock of a scratch build
+  directory with a real dune, so a dune that rewords the refusal turns that leg red.
 - **A harness whose checks are bare commands under errexit runs each leg contained**
   (gh-ocannl-1539): `harness_leg_run_errexit 'NAME' leg_N` runs the body in a subshell of its own
   (`harness_errexit_subshell`, a function whose body is a `( )`, so its `set -eE` is its own and
