@@ -853,6 +853,7 @@ test/operations/observability_query.ml [through Ll_test.link; run by @test/opera
 test/operations/online_softmax.ml [staged callback; through Ll_test.execute; run by @test/operations/runtest-online_softmax, @test/operations/runtest-online_softmax_fast_math, @test/operations/runtest-online_softmax_fp_licences]
 test/operations/op_table_compile.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-op_table_compile]
 test/operations/operand_precision_annotation.ml [through Ll_test.link; run by @test/operations/runtest-operand_precision_annotation]
+test/operations/operand_walk_order.ml [through Ll_test.execute; run by @test/operations/runtest-operand_walk_order]
 test/operations/padded_conv_cache.ml [through Ll_test.optimize_and_execute; run by @test/operations/runtest-padded_conv_cache]
 test/operations/peel_census.ml [prelowered compile; run by @test/operations/runtest-peel_census]
 test/operations/peel_dead_level.ml [through Ll_test.execute; run by @test/operations/runtest-peel_dead_level]
@@ -980,6 +981,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-online_softmax_fp_licences
 @test/operations/runtest-op_table_compile
 @test/operations/runtest-operand_precision_annotation
+@test/operations/runtest-operand_walk_order
 @test/operations/runtest-padded_conv_cache
 @test/operations/runtest-peel_census
 @test/operations/runtest-peel_dead_level

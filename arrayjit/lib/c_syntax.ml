@@ -7773,7 +7773,11 @@ module C_syntax (B : C_syntax_config) = struct
               | Div -> " / "
               | _ -> raise Vectorization_declined
             in
-            parens (vec_expr a pa ^^ string inf ^^ vec_expr b pb)
+            (* gh-ocannl-1974: the second operand's loads are numbered and emitted first, spelled
+               (OCaml's unspecified argument evaluation, as it runs in practice). *)
+            let db = vec_expr b pb in
+            let da = vec_expr a pa in
+            parens (da ^^ string inf ^^ db)
         | Ternop (Ops.FMA, (a, pa), (b, pb), (c, pc)) ->
             (* Fused, matching the scalar path's [fmaf]/[fma] single rounding (the simplifier
                synthesizes [FMA] from mul-add trees, so this is the hot case). A plain [a * b + c]
@@ -7785,7 +7789,9 @@ module C_syntax (B : C_syntax_config) = struct
               emit (string (vtyp ^ " " ^ name ^ " = ") ^^ vec_operand llsc p ^^ semi);
               name
             in
-            let na = bind a pa and nb = bind b pb and nc = bind c pc in
+            let na = bind a pa in
+            let nb = bind b pb in
+            let nc = bind c pc in
             let nr = fresh "vfma" in
             emit (string (vtyp ^ " " ^ nr ^ " = ") ^^ string nc ^^ semi);
             emit (vec_acc_fma ~prec ~lanes ~dst:nr ~a:na ~b:nb);

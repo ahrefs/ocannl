@@ -887,6 +887,21 @@ files.
   mid-range `Bytes` budget's plan. A dependence planted downstream of the surface (kernel
   parameters in table order) fails the source claims alone; one planted in `decide_placements`
   fails the placement claims too.
+- **A pass that mints or dedups walks a statement's operands in a spelled order, last operand
+  first** (gh-ocannl-1974). `virtual_llc` mints a scope (and a footprint prologue, a placement, a
+  capture hit) at each inlined read, `instantiate_computations` freshens a nested scope's loops, the
+  scalar CSE keeps one of a statement's alpha-equal scopes, `Schedule.rewrite_loop` calls its
+  rewrite once per copy of a loop; and `pp_local_defs` emits definitions by ascending id, so the
+  walk order is the order of the emitted text. These used to be sibling calls inside one
+  constructor (`Binop (op, (loop a, _), (loop b, _))`), a record or a `let ... and`, whose
+  evaluation order OCaml leaves unspecified. In practice it ran right to left (label order for a
+  record: an `If`'s body before its condition), and that is the order now written with `let`
+  bindings, so no kernel moved: within a statement the LAST operand gets the lowest scope id and
+  the last alpha-equal copy survives the CSE, while statements still go first to last. Write a new
+  effectful arm the same way; `Base.List.init` promises no calling order either
+  (`Schedule.init_last_first`). Pin: `test/operations/operand_walk_order.ml`, whose rows turn red
+  when one spelled order is reversed. Left unspelled on purpose: walks whose siblings can only raise
+  (`Schedule`'s Coalesce/Tensorize remaps), where the order picks among refusals that are all true.
 - **A candidate whose captured computation contains a `Scan_loop` is refused, and the refusal has
   two doors** (gh-ocannl-696, `test/operations/scan_loop.ml` legs 5 and 5b): `virtual_llc` threads
   `~in_scan` beside `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in

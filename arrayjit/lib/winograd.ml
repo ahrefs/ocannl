@@ -431,7 +431,8 @@ let rewrite_site (s : site) : LL.t =
      order (so the output channel, [d]'s minor axis, is the innermost write loop), the reduction
      innermost -- the lowered shape of a product, for the matmul sketches. *)
   let product =
-    let xi = Idx.get_symbol () and nu = Idx.get_symbol () in
+    let xi = Idx.get_symbol () in
+    let nu = Idx.get_symbol () in
     let fm = fresh (m_axes @ [ s.ic ]) in
     let xi_i = Idx.Iterator xi and nu_i = Idx.Iterator nu in
     let mi = node_idx fm ~xi:xi_i ~nu:nu_i m_axes in
