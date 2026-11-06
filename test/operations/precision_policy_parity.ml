@@ -179,4 +179,18 @@ let () =
   Verdict.p "a parameter reading a node the model reads keeps param_prec"
     (Ir.Ops.equal_prec (Lazy.force w.Tensor.value.storage_prec) Ir.Ops.bfloat16);
   Verdict.p "a node both an initializer and the model read is an activation"
-    (Ir.Ops.equal_prec (Lazy.force shared.Tensor.value.storage_prec) Ir.Ops.half)
+    (Ir.Ops.equal_prec (Lazy.force shared.Tensor.value.storage_prec) Ir.Ops.half);
+  (* A plain parameter under [param_prec = None] is no f32 master: lib/precision_policy.mli sends a
+     reader who wants one to [with_master_weights], because the parameter follows its consumers. The
+     same graph with its consumers left alone is what makes the half the policy's doing. *)
+  let plain_param_prec activation_prec =
+    let input = NTDSL.number 5. in
+    let w = TDSL.param "plain_w" () in
+    let%op y = w *. input in
+    PP.apply { PP.param_prec = None; activation_prec; grad_prec = None } y;
+    Lazy.force w.Tensor.value.storage_prec
+  in
+  Verdict.p "under param_prec = None a plain parameter follows its half consumers"
+    (Ir.Ops.equal_prec (plain_param_prec (Some Ir.Ops.half)) Ir.Ops.half);
+  Verdict.p "a plain parameter whose consumers stay at the default stays there"
+    (Ir.Ops.equal_prec (plain_param_prec None) Ir.Ops.single)
