@@ -79,6 +79,26 @@ let close_both_kinds order r =
 
 let order_kind = function `Dim_then_row -> "a row" | `Row_then_dim -> "a dimension"
 
+(* Closes [r] on the row of [operand x], which the scheme's body makes and does not return: an
+   explicit instance stands for the body, so no update step holds that row and no projections run on
+   it. This is the one way a row with a [Concat] or [Affine] axis closes: a step holding one fails
+   its projections. Returns the scheme's rendering. *)
+let close_scheme_internal_row r ~arg operand =
+  let s =
+    Tensor.Scheme.trace ~label:"internal" 1 (fun args ->
+        let x = List.hd_exn args in
+        ignore (capture_row r (operand x) : Tensor.t);
+        [ x ])
+  in
+  let x = arg () and res = open_leaf "res" in
+  Tensor.Scheme.instantiate s ~args:[ x.Tensor.shape ] ~results:[ res.Tensor.shape ];
+  ignore (dims res : int list);
+  Tensor.Scheme.to_string s
+
+(* No variable of the spec gets solved here: one that did would have the solver sum the axis on the
+   way, leaving the row nothing but a [Dim] (so ["a => 2^3"] does not exercise this). *)
+let literal_concat x = NTDSL.einsum1 " => 2^3" x ()
+
 let () =
   (* A fixed operand solves its reference at its own registration step; the open one is unsolved.
      Before the fix the open row got only the product, 6, and closed to one axis. *)
@@ -449,4 +469,67 @@ let () =
               else
                 refused_with (name ^ ": the row binding is refused") refused ~f:(fun msg ->
                     String.is_substring msg ~substring:"Variable reference u "
-                    && String.is_substring msg ~substring:"the row reference r "))))
+                    && String.is_substring msg ~substring:"the row reference r "))));
+  (* A closed row with a [Concat] axis of concrete components carries it as its sum: the axis is 5,
+     whichever way it was written, and the row is that row, not the product 5 (gh-ocannl-1969). *)
+  let closed_concat name r =
+    let scheme = close_scheme_internal_row r ~arg:(fun () -> fixed "x" []) literal_concat in
+    p
+      (name ^ ": the row closed with its axis unsummed")
+      (String.is_substring scheme ~substring:"capture r = (2^3)");
+    p
+      (name ^ ": the closure carried the sum")
+      (Option.equal (List.equal Int.equal)
+         (Option.map r.Shape.carried_row ~f:(List.map ~f:Row.dim_to_int_exn))
+         (Some [ 5 ]))
+  in
+  List.iter
+    [ ([ 5 ], true); ([ 1; 5 ], false); ([ 6 ], false) ]
+    ~f:(fun (sizes, accepted) ->
+      let name =
+        Printf.sprintf "closed row with a concatenated axis, captured again over %s"
+          (String.concat ~sep:"x" (List.map sizes ~f:Int.to_string))
+      in
+      Verdict.case name (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let r = Shape.get_variable_ref "r" in
+          closed_concat name r;
+          let refused =
+            shape_error (fun () -> ignore (dims (capture_row r (fixed "w" sizes)) : int list))
+          in
+          Option.iter refused ~f:(Stdio.printf "%s: refused: %s\n" name);
+          p
+            (name ^ if accepted then ": the same row is accepted" else ": another row is refused")
+            (Bool.equal accepted (Option.is_none refused))));
+  let name = "closed row with a concatenated axis, captured again over an open operand" in
+  Verdict.case name (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let r = Shape.get_variable_ref "r" in
+      closed_concat name r;
+      let w = open_leaf "w" in
+      ignore (capture_row r w : Tensor.t);
+      show name [ ("w", w) ];
+      p (name ^ ": the open operand takes the one axis") (List.equal Int.equal (dims w) [ 5 ]));
+  (* Over a symbolic extent a compound axis has no sum and the row no product. Such a row is not
+     carried: in the next inference it would reach projections, which no step holding it survives.
+     Its reuse stays refused, naming the closure. *)
+  List.iter
+    [ ("a => a^3", "a concatenated axis"); ("a => 2*a", "an affine axis") ]
+    ~f:(fun (spec, axis) ->
+      let name = "closed row with " ^ axis ^ " over a symbolic extent" in
+      Verdict.case name (fun () ->
+          Tensor.unsafe_reinitialize ();
+          let r = Shape.get_variable_ref "r" in
+          let operand x =
+            let a = Shape.get_variable_ref "a" in
+            Shape.set_sym_dim a
+              (fst (Ir.Indexing.get_static_symbol ~static_range:6 Ir.Indexing.Empty));
+            NTDSL.einsum1 ~capture_dims:[ a ] spec x ()
+          in
+          ignore (close_scheme_internal_row r ~arg:(fun () -> open_leaf "x") operand : string);
+          p
+            (name ^ ": the closure carried nothing")
+            (Option.is_none r.carried_row && Option.is_none r.var_ref.solved_dim);
+          let refused = shape_error (fun () -> ignore (capture_row r (open_leaf "w") : Tensor.t)) in
+          refused_with (name ^ ": a capture is refused, naming the closure") refused ~f:(fun msg ->
+              String.is_substring msg ~substring:"has since closed")))

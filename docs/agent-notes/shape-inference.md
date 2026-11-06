@@ -57,7 +57,12 @@ files.
   gh-ocannl-1616) and a row's numeric product (none for a row holding a `Sym`). The carried row is
   published at the CLOSURE only (`~closure:true`, from `finish_inference`), from the binding the
   reference has then: a `Row` binding whose substituted row is `Broadcastable` with only `Dim`/`Sym`
-  axes writes it (even over a held product, e.g. `set_dim` on a row reference), a `Dim` binding clears it. Do not publish it as a row resolves mid-inference: within one inference a row captured
+  axes writes it (even over a held product, e.g. `set_dim` on a row reference; a `Concat` of `Dim`s
+  counts as its sum, `Row.concrete_extent`), a `Dim` binding clears it. A step holding a surviving
+  `Concat`/`Affine` axis cannot close at all (`padding_of_row`), so only a scheme instance's internal
+  row reaches `carried_row_of` with one (no update step, no projections): pin such a case through
+  `Tensor.Scheme.instantiate`. One over a `Sym` stays uncarried: carried into the next inference it
+  would crash there. Do not publish it as a row resolves mid-inference: within one inference a row captured
   after a dimension binding is product-tied (row, dim, row ties the last row to the first by
   product only), and an early publication would make the carried value depend on whether the row
   resolved at a registration's Stage1 or at the closure. The parity table in

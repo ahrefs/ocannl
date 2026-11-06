@@ -124,8 +124,9 @@ type delayed_var_ref = private {
   mutable carried_row : Row.dim list option;
       (** The axes of the row the reference was bound to when its inference closed, if it was bound
           to a row that resolved (gh-ocannl-1689), outer to inner, [Sym] axes included: across the
-          closure it stands in for that row. [None] when the binding at the closure was a dimension.
-          Omitted from sexps when [None]. *)
+          closure it stands in for that row. A concatenated axis of concrete components is its sum
+          (gh-ocannl-1969). [None] when the binding at the closure was a dimension, or the row held
+          a concatenated or affine axis over a symbolic extent. Omitted from sexps when [None]. *)
   uid : int;  (** The reference's identity for rewind tracking; ignored by [equal] and sexps. *)
   mutable discarded_by : string option;
       (** The provenance of the rewind that discarded the reference, which every setter then refuses
@@ -184,7 +185,7 @@ val set_equal : delayed_var_ref -> delayed_var_ref -> unit
 
     A row reference bound by an inference that has since closed takes part in a Row-Row call with
     the row it carries ([carried_row], gh-ocannl-1689): the other row is made equal to it. A closed
-    row reference that carries no row (its row held an axis other than a concrete or symbolic
+    row reference that carries no row (its row held a concatenated or affine axis over a symbolic
     extent) raises [Row.Shape_error]: relate such rows before the closure.
 
     An unbound reference (from {!get_variable_ref}, not yet passed to [~capture_dims]) paired with a
