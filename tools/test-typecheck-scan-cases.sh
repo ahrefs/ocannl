@@ -307,7 +307,10 @@ leg11() {
   has "the op arm the stanza's ppx makes well-typed is accepted" "ok        $ptable:3: a well-typed op arm"
   has "an op arm without its unit parameter is rejected by name" \
     "REJECTED  $ptable:4: an op arm without its unit parameter"
-  has "with the compiler's reading of the expansion" "The value stride has type Tensor.t"
+  # The ppx refuses it itself, naming the fix (gh-ocannl-1987); it was the compiler's "The value
+  # stride has type Tensor.t" at the expansion's use.
+  has "with the ppx's refusal, which names the fix" \
+    "the unlabelled parameter stride is taken for a tensor"
   has "at its own line of the table, through the ppx" "File \"$ptable\", line 4"
   has "an extension no preprocessor expands is rejected" \
     "REJECTED  $ptable:5: an extension no preprocessor expands"
@@ -319,7 +322,7 @@ leg11() {
 
   local stub="$TMP/p/variant.mli"
   { cat "$pstub"
-    printf '%s\n' '[@@@known_rejection ("an op arm without its unit parameter", "has type Tensor.t")]'
+    printf '%s\n' '[@@@known_rejection ("an op arm without its unit parameter", "is taken for a tensor")]'
     printf '%s\n' '[@@@known_rejection ("an extension no preprocessor expands", "Uninterpreted extension")]'
   } >"$stub"
   run --stub "$stub" "$ptable"

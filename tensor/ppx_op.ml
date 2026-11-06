@@ -13,7 +13,77 @@ let dsl_open_o ~loc dsl_name expr =
     (Ast_builder.Default.open_infos ~loc ~expr:popen_expr ~override:Override)
     expr
 
-let make_p ~dsl_name ~opt_label ~loc ?value ?values ?param_init ~extra_args name =
+(* Whether a pattern in [body] binds [name]. *)
+let rebinds name body =
+  let found = ref false in
+  let visitor =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! pattern p =
+        (match p.ppat_desc with
+        | (Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ })) when String.equal txt name ->
+            found := true
+        | _ -> ());
+        super#pattern p
+    end
+  in
+  visitor#expression body;
+  !found
+
+(* Where a parameter that is bound too late for the inline declarations was written: by the function
+   directly under [%op] when it has no [()], or by a function below -- after the [()], or nested. *)
+type late_kind = No_unit | Under_function
+
+let params_idents params =
+  List.concat_map params ~f:(fun param ->
+      match param.pparam_desc with
+      | Pparam_val (_, _, pat) -> Set.to_list (collect_pat_idents pat)
+      | Pparam_newtype _ -> [])
+
+(* An inline declaration is lifted: bound where the enclosing [()] is applied, or without one where
+   the function is defined. A field of it that names a parameter bound later than that used to be
+   OCaml's "Unbound value" at the parameter's use, or a silent capture of an outer value of the same
+   name (gh-ocannl-1987). [late]: those parameters, innermost first. *)
+let guard_late ~late ~decl (e : expression) =
+  let found = ref None in
+  let visitor =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e' =
+        (match e'.pexp_desc with
+        | Pexp_ident { txt = Lident n; loc } when Option.is_none !found -> (
+            match List.Assoc.find late ~equal:String.equal n with
+            | Some kind when not (rebinds n e) -> found := Some (n, kind, loc)
+            | _ -> ())
+        | _ -> ());
+        super#expression e'
+    end
+  in
+  visitor#expression e;
+  match !found with
+  | None -> e
+  | Some (n, No_unit, loc) ->
+      Ast_builder.Default.pexp_extension ~loc
+      @@ Location.error_extensionf ~loc
+           "ppx_ocannl %%op: the inline declaration { %s } is created once, when the function is \
+            defined, where the parameter %s is not bound. Give the function a unit parameter with \
+            %s before it -- fun ~%s () ... -- so that the declaration is created at each () \
+            application"
+           decl n n n
+  | Some (n, Under_function, loc) ->
+      Ast_builder.Default.pexp_extension ~loc
+      @@ Location.error_extensionf ~loc
+           "ppx_ocannl %%op: the inline declaration { %s } is created where the enclosing () is \
+            applied (without a unit parameter: when the function is defined), where the parameter \
+            %s is not bound yet. Bind %s before the unit parameter: fun ~%s () ..."
+           decl n n n
+
+let make_p ~dsl_name ~opt_label ~late ~loc ?value ?values ?param_init ~extra_args name =
+  let guard = guard_late ~late ~decl:name.txt in
+  let param_init = Option.map param_init ~f:guard in
+  let extra_args = List.map extra_args ~f:(fun (label, value) -> (label, guard value)) in
   let more_label = match opt_label with Some more_label -> more_label | None -> [%expr None] in
   let value = match value with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
   let values = match values with Some c -> [%expr Some [%e c]] | None -> [%expr None] in
@@ -47,13 +117,13 @@ let make_p ~dsl_name ~opt_label ~loc ?value ?values ?param_init ~extra_args name
   in
   [%expr [%e with_extra_args] ()]
 
-let make_vb ~dsl_name ~opt_label ?value ?param_init ~extra_args ~loc name =
+let make_vb ~dsl_name ~opt_label ~late ?value ?param_init ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
-  let v = make_p ~dsl_name ~opt_label ~loc ?value ?param_init ~extra_args name in
+  let v = make_p ~dsl_name ~opt_label ~late ~loc ?value ?param_init ~extra_args name in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
 
-let make_vb_nd ~dsl_name ~opt_label ~init_nd ~extra_args ~loc name =
+let make_vb_nd ~dsl_name ~opt_label ~late ~init_nd ~extra_args ~loc name =
   let pat = Ast_helper.Pat.var ~loc:name.loc name in
   let values, batch_dims, output_dims, input_dims = ndarray_constant init_nd in
   let v =
@@ -70,7 +140,7 @@ let make_vb_nd ~dsl_name ~opt_label ~init_nd ~extra_args ~loc name =
         :: ({ txt = Lident output_name; loc }, output_expr)
         :: extra_args
       in
-      make_p ~dsl_name ~opt_label ~loc ~values ~extra_args name
+      make_p ~dsl_name ~opt_label ~late ~loc ~values ~extra_args name
   in
   let vb = Ast_helper.Vb.mk ~loc pat v in
   (pat, vb)
@@ -138,8 +208,9 @@ let translate_block_tensor ~loc ~loop ~label ~opt_label:_ axis_kind elems =
    operand of a tensor operation below, and its name is never rebound in the body; - other optional
    and defaulted parameters, and any other pattern, are not. A function with any other parameter
    stays unschemed, its expansion unchanged. A wrong classification -- an unlabelled non-tensor
-   parameter, a shadowed operator -- is a compile error, which [[@@ocannl.no_scheme]] escapes. The
-   result needs no classification: the trace ignores it. *)
+   parameter, a shadowed operator -- is a compile error, which [[@@ocannl.no_scheme]] escapes; an
+   unlabelled parameter with [non_tensor_evidence] is refused with the fix named (gh-ocannl-1987).
+   The result needs no classification: the trace ignores it. *)
 
 let no_scheme_attr = "ocannl.no_scheme"
 let scheme_attr = "ocannl.scheme"
@@ -242,23 +313,60 @@ let tensor_operand_evidence name body =
   visitor#expression body;
   !found
 
-(* Whether a pattern in [body] binds [name]. *)
-let rebinds name body =
-  let found = ref false in
+(* Why [name] cannot be a tensor, when [body] uses it directly as an integer or a float (outside
+   [%oc]): a stride or dilation of a literal einsum spec, or the operand of a number embedding or
+   the exponent of the pointwise power (gh-ocannl-1987). *)
+let non_tensor_evidence name body =
+  let found = ref None in
+  let note why = if Option.is_none !found then found := Some why in
+  let positional args = List.filter_map args ~f:(function Nolabel, a -> Some a | _ -> None) in
   let visitor =
     object
       inherit Ast_traverse.iter as super
 
-      method! pattern p =
-        (match p.ppat_desc with
-        | (Ppat_var { txt; _ } | Ppat_alias (_, { txt; _ })) when String.equal txt name ->
-            found := true
-        | _ -> ());
-        super#pattern p
+      method! expression e =
+        match e.pexp_desc with
+        | Pexp_extension ({ txt = "oc"; _ }, _) -> ()
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident op; _ }; _ }, args) ->
+            (match (op, positional args) with
+            | "!.", a :: _ when is_ident name a -> note "it is the float that !. embeds"
+            | "!..", a :: _ when is_ident name a -> note "it is the integer that !.. embeds"
+            | "**.", [ _; a ] when is_ident name a -> note "it is the float exponent of **."
+            | _ when List.mem Einsum_parser.operators_with_generated_specs op ~equal:String.equal ->
+                List.iter (positional args) ~f:(fun a ->
+                    let spec =
+                      match a.pexp_desc with
+                      | Pexp_constant (Pconst_string (spec, _, _))
+                      | Pexp_apply ({ pexp_desc = Pexp_constant (Pconst_string (spec, _, _)); _ }, _)
+                        ->
+                          Some spec
+                      | _ -> None
+                    in
+                    Option.iter spec ~f:(fun spec ->
+                        if List.mem (einsum_spec_identifiers spec) name ~equal:String.equal then
+                          note (Printf.sprintf "the einsum spec %S reads it as an integer" spec)))
+            | _ -> ());
+            super#expression e
+        | _ -> super#expression e
     end
   in
   visitor#expression body;
-  !found
+  if rebinds name body then None else !found
+
+(* The first unlabelled, unannotated parameter with [non_tensor_evidence], as the error naming the
+   fix. Such a parameter is read as a tensor -- a label source without [()], a scheme's argument
+   after it -- which used to be a type error at its use, naming neither. *)
+let unlabelled_non_tensor params body =
+  List.find_map params ~f:(fun param ->
+      match param.pparam_desc with
+      | Pparam_val (Nolabel, None, { ppat_desc = Ppat_var { txt; loc }; _ }) ->
+          Option.map (non_tensor_evidence txt body) ~f:(fun why ->
+              Ast_builder.Default.pexp_extension ~loc
+              @@ Location.error_extensionf ~loc
+                   "ppx_ocannl %%op: the unlabelled parameter %s is taken for a tensor, but %s. \
+                    Label it (~%s), or bind it before a unit parameter: fun %s () ..."
+                   txt why txt txt)
+      | _ -> None)
 
 (* A tensor parameter's kind: a tensor, or an option-valued tensor (gh-ocannl-1792), whose presence
    patterns get one scheme each. *)
@@ -415,13 +523,15 @@ let default_scheme_name ~loc ?name () =
         (Printf.sprintf "%%op function at %s:%d" loc.loc_start.pos_fname loc.loc_start.pos_lnum)
 
 let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?scheme_name ~opt_label
-    ?label expr =
+    ~late ?label expr =
   let loc = expr.pexp_loc in
-  let loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label in
+  let loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late in
   (* Block-element loop: like [loop] but flags that the immediate sub-expression sits in
      block-tensor element position, so a bare tuple there denotes an input-axis stack (not OCaml
      tuple grouping). Used only for the operands of a block-tensor stack. *)
-  let block_loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~in_block:true ~opt_label in
+  let block_loop =
+    translate ~dsl_name ~num_configs ~is_toplevel:false ~in_block:true ~opt_label ~late
+  in
   let dsl_fn = dsl_fn ~loc dsl_name in
   match expr with
   (* %oc anti-quotation: preserve the expression without transformation *)
@@ -635,7 +745,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       match first_label.txt with
       | Lident tensor_name ->
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~dsl_name ~opt_label ~value ~extra_args ~loc name in
+          let pat, vb = make_vb ~dsl_name ~opt_label ~late ~value ~extra_args ~loc name in
           ([ vb ], pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -654,7 +764,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       | Lident tensor_name ->
           let value = [%expr Float.of_int [%e int_val]] in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~dsl_name ~opt_label ~value ~extra_args ~loc name in
+          let pat, vb = make_vb ~dsl_name ~opt_label ~late ~value ~extra_args ~loc name in
           ([ vb ], pat2expr pat)
       | _ ->
           ( no_vbs,
@@ -673,7 +783,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       match first_label.txt with
       | Lident tensor_name ->
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb_nd ~dsl_name ~opt_label ~init_nd ~extra_args ~loc name in
+          let pat, vb = make_vb_nd ~dsl_name ~opt_label ~late ~init_nd ~extra_args ~loc name in
           (* Note: expect a type error if batch_dims exist or extra_args modify the shape *)
           ([ vb ], pat2expr pat)
       | _ ->
@@ -697,7 +807,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
                 (vbs, Some e)
           in
           let name = { loc = first_label.loc; txt = tensor_name } in
-          let pat, vb = make_vb ~dsl_name ~opt_label ?param_init ~extra_args ~loc name in
+          let pat, vb = make_vb ~dsl_name ~opt_label ~late ?param_init ~extra_args ~loc name in
           (* Combine with any bindings from the initialization *)
           let all_vbs = reduce_vbss [ init_vbs; [ vb ] ] in
           (all_vbs, pat2expr pat)
@@ -851,7 +961,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
               if opted_out expr || not (String.equal dsl_name "TDSL") then body
               else mark_tail ~name:(default_scheme_name ~loc ?name:scheme_name ()) body
             in
-            translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ?label body
+            translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late ?label body
           in
           let inner_body = let_opt ~loc vbs inner_body in
           ( no_vbs,
@@ -861,24 +971,56 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
                 Pexp_function (before_unit @ [ unit_param ], constr, Pfunction_body inner_body);
               pexp_attributes = drop_attr_named no_scheme_attr expr.pexp_attributes;
             } )
-      | None ->
+      | None -> (
           (* No unit parameter, everything is "after_unit": each tensor parameter is a label source.
              An optional one is not (gh-ocannl-1787): [?x] is an option in the body, never a tensor,
              and a defaulted one is configuration ([?(stride = 2)]). A labelled one is by the
              evidence [tensor_params] asks for -- a [Tensor.t] annotation, or a direct operand use
              (gh-ocannl-1885): read as a tensor, [~hid_dim] failed to type-check at the parameter
              ("not a record type"), with nothing naming the missing [()]. *)
-          let labelled_tensor_evidence name =
-            let body =
-              match body with
-              | Pfunction_body body -> body
-              | Pfunction_cases _ -> { expr with pexp_desc = Pexp_function ([], None, body) }
-            in
-            tensor_operand_evidence name body && not (rebinds name body)
+          let orig_body =
+            match body with
+            | Pfunction_body body -> body
+            | Pfunction_cases _ -> { expr with pexp_desc = Pexp_function ([], None, body) }
           in
+          let labelled_tensor_evidence name =
+            tensor_operand_evidence name orig_body && not (rebinds name orig_body)
+          in
+          (* The parameter labelled [label] is the [string list] that enriches the result's label,
+             unless it is a tensor by the evidence above (gh-ocannl-1987): accepted since
+             gh-ocannl-1885, it was ignored. The inline declarations cannot take it as they do
+             before a [()]: they are created when the function is defined. *)
+          let is_label_list pat =
+            match pat.ppat_desc with
+            | Ppat_var { txt; _ } -> not (labelled_tensor_evidence txt)
+            | Ppat_constraint ({ ppat_desc = Ppat_var _; _ }, t) ->
+                Option.is_none (annotated_kind t)
+            | _ -> false
+          in
+          let late = List.map (params_idents args) ~f:(fun n -> (n, No_unit)) @ late in
+          let loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late in
           let labels =
             Option.to_list label
             @ List.filter_map args ~f:(function
+              | {
+                  pparam_desc =
+                    Pparam_val (((Labelled "label" | Optional "label") as l), default, pat);
+                  _;
+                }
+                when is_label_list pat -> (
+                  let loc = pat.ppat_loc in
+                  (* Without the annotation, which for an un-defaulted [?label] states the
+                     option. *)
+                  let v =
+                    match pat.ppat_desc with
+                    | Ppat_constraint (pat, _) -> pat2expr pat
+                    | _ -> pat2expr pat
+                  in
+                  match (l, default) with
+                  | Optional _, None ->
+                      Some
+                        [%expr match [%e v] with Some label -> (label : string list) | None -> []]
+                  | _ -> Some [%expr ([%e v] : string list)])
               | { pparam_desc = Pparam_val (Optional _, _, _); _ } -> None
               (* An annotation other than [Tensor.t]: an option-valued tensor, which may be absent,
                  or a non-tensor (gh-ocannl-1792) -- not a label source. *)
@@ -930,29 +1072,36 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
                 (List.concat vbs, Pfunction_cases (cases, loc, attrs))
           in
           let fn = { expr with pexp_desc = Pexp_function (args, constr, body) } in
-          let fn =
-            match (expr.pexp_desc, String.equal dsl_name "TDSL" && not (opted_out expr)) with
-            | Pexp_function (_ :: _, _, Pfunction_body orig_body), true -> (
-                match tensor_params args orig_body with
-                | Some params ->
-                    wrap_schemed ~loc ~at_unit:false
-                      ~name:(default_scheme_name ~loc ?name:scheme_name ())
-                      ~params
-                      {
-                        fn with
-                        pexp_attributes = drop_attr_named no_scheme_attr fn.pexp_attributes;
-                      }
-                | None -> fn)
-            | _ -> { fn with pexp_attributes = drop_attr_named no_scheme_attr fn.pexp_attributes }
-          in
-          (vbs, fn))
+          match unlabelled_non_tensor args orig_body with
+          | Some error -> (no_vbs, error)
+          | None ->
+              let fn =
+                match (expr.pexp_desc, String.equal dsl_name "TDSL" && not (opted_out expr)) with
+                | Pexp_function (_ :: _, _, Pfunction_body orig_body), true -> (
+                    match tensor_params args orig_body with
+                    | Some params ->
+                        wrap_schemed ~loc ~at_unit:false
+                          ~name:(default_scheme_name ~loc ?name:scheme_name ())
+                          ~params
+                          {
+                            fn with
+                            pexp_attributes = drop_attr_named no_scheme_attr fn.pexp_attributes;
+                          }
+                    | None -> fn)
+                | _ ->
+                    { fn with pexp_attributes = drop_attr_named no_scheme_attr fn.pexp_attributes }
+              in
+              (vbs, fn)))
   | { pexp_desc = Pexp_function (args, constr, body); _ } -> (
+      let orig_body = body in
       let scheme =
         match (schemed_name expr, body) with
         | Some name, Pfunction_body orig_body ->
             Option.map (tensor_params args orig_body) ~f:(fun params -> (name, params))
         | _ -> None
       in
+      let late = List.map (params_idents args) ~f:(fun n -> (n, Under_function)) @ late in
+      let loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late in
       let vbs, body =
         match body with
         | Pfunction_body body ->
@@ -978,9 +1127,12 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         }
       in
       ( vbs,
-        match scheme with
-        | Some (name, params) -> wrap_schemed ~loc ~at_unit:true ~name ~params fn
-        | None -> fn ))
+        match (scheme, orig_body) with
+        | Some (name, params), Pfunction_body orig_body -> (
+            match unlabelled_non_tensor args orig_body with
+            | Some error -> error
+            | None -> wrap_schemed ~loc ~at_unit:true ~name ~params fn)
+        | _ -> fn ))
   | [%expr
       while [%e? test_expr] do
         [%e? body_expr]
@@ -1063,7 +1215,7 @@ let translate ?(dsl_name = "TDSL") ?ident_label ?(bind_vbs_under_open = true) ex
     match ident_label with Some { ppat_desc = Ppat_var { txt; _ }; _ } -> Some txt | _ -> None
   in
   let vbs, expr =
-    translate ~dsl_name ~num_configs:(ref 0) ~is_toplevel:true ?scheme_name ~opt_label:None
+    translate ~dsl_name ~num_configs:(ref 0) ~is_toplevel:true ?scheme_name ~opt_label:None ~late:[]
       ~label:(opt_pat2string_list ~loc:expr.pexp_loc ident_label)
       expr
   in

@@ -197,16 +197,15 @@ let ndarray_constant expr =
 
     Example: ["stride*x=+k; y => z"] where [stride] is a variable, generates an expression that
     evaluates to e.g. ["2*x=+k; y => z"] if [stride = 2]. *)
+let is_int_literal s =
+  try
+    ignore (Int.of_string s);
+    true
+  with _ -> false
+
 let substitute_identifiers_in_einsum_spec ~loc str_input =
   let open Ast_builder.Default in
   let open Einsum_parser in
-  (* Helper to check if a string is an integer literal *)
-  let is_int_literal s =
-    try
-      ignore (Int.of_string s);
-      true
-    with _ -> false
-  in
   (* Convert a string that might be an identifier to a runtime int expression *)
   let int_value_expr s =
     if is_int_literal s then estring ~loc s
@@ -343,6 +342,37 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
     with Parse_error msg ->
       (* Fall back to returning the original string with an error note *)
       pexp_extension ~loc @@ Location.error_extensionf ~loc "Failed to parse einsum spec: %s" msg)
+
+(** The identifiers [substitute_identifiers_in_einsum_spec] reads as integers at run time: the
+    strides and dilations of the spec that are not integer literals. Empty for a spec that does not
+    parse. *)
+let einsum_spec_identifiers str_input =
+  let open Einsum_parser in
+  let of_axis = function
+    | Affine_spec { stride; conv; _ } ->
+        stride :: (match conv with Some c -> [ c.dilation ] | None -> [])
+    | Label _ | Fixed_index _ | Concat_spec _ -> []
+  in
+  let of_parsed parsed =
+    List.concat_map
+      [
+        parsed.given_beg_batch;
+        parsed.given_batch;
+        parsed.given_beg_input;
+        parsed.given_input;
+        parsed.given_beg_output;
+        parsed.given_output;
+      ]
+      ~f:(List.concat_map ~f:of_axis)
+  in
+  let all =
+    try
+      let rhs_labels, labels_r = einsum_of_spec str_input in
+      List.concat_map (rhs_labels @ [ labels_r ]) ~f:of_parsed
+    with Parse_error _ -> (
+      try of_parsed (axis_labels_of_spec str_input) with Parse_error _ -> [])
+  in
+  List.filter all ~f:(fun s -> not (is_int_literal s))
 
 let string_expr ~loc s = Ast_helper.Exp.constant @@ Ast_helper.Const.string ~loc s
 

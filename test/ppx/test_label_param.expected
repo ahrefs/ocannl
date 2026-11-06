@@ -1,0 +1,18 @@
+with (): the result: [*; unit_layer]
+with (): the result: the label is as stated: true
+with (): the inline declaration: [*.; ul_w; L]
+with (): the inline declaration: it carries L: true
+without (): the result: [*; late_layer; L; 0...2; x]
+without (): the result: the label is as stated: true
+without (): the inline declaration: [*.; ll_w]
+without (): the inline declaration: it does not carry L: true
+?label given: [+; late_opt; O; 0...2; x]
+?label given: the label is as stated: true
+?label omitted: [+; late_opt; 0...2; x]
+?label omitted: the label is as stated: true
+?(label = ...) omitted: [+; late_default; dflt; 0...2; x]
+?(label = ...) omitted: the label is as stated: true
+?(label = ...) given: [+; late_default; G; 0...2; x]
+?(label = ...) given: the label is as stated: true
+~label after the tensor: [relu; late_after; 0...2; x; A]
+~label after the tensor: the label is as stated: true
