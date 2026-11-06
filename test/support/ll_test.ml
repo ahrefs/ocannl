@@ -428,12 +428,19 @@ let reduction_cells ~out ~over term =
     [~blends_value_selects] optimizes as for a backend whose fact of that name holds
     (gh-ocannl-1775: the inline fan-in guard then charges a speculable select the union of its
     arms). Default [false], the short-circuiting reading, whatever backend later executes the
-    result: a decision that moves with it is tested under both values explicitly. *)
+    result: a decision that moves with it is tested under both values explicitly.
+
+    The IR goes where a backend's own lowering leaves it, under that lowering's gate: with
+    [output_debug_files_in_build_directory] on (for one run,
+    [OCANNL_OUTPUT_DEBUG_FILES_IN_BUILD_DIRECTORY=true dune build @test/operations/runtest-<name>])
+    [build_files/<exe>/] gets [<name>-unoptimized.ll] and [<name>.ll]. *)
 let optimize_in ?(materialized = []) ?(static_indices = []) ?blends_value_selects
     (ctx : LL.optimize_ctx) ~name llc : LL.optimized =
   LL.decide_materialized ~provenance:(Tn.Site "589:test-ll-materialize") ctx materialized;
-  LL.optimize ?blends_value_selects ctx ~unoptim_ll_source:None ~ll_source:None ~name static_indices
-    llc
+  LL.optimize ?blends_value_selects ctx
+    ~unoptim_ll_source:(Utils.output_to_build_file ~fname:(name ^ "-unoptimized.ll"))
+    ~ll_source:(Utils.output_to_build_file ~fname:(name ^ ".ll"))
+    ~name static_indices llc
 
 (** [optimize ~name llc] is {!optimize_in} in a fresh lineage. *)
 let optimize ?materialized ?static_indices ?blends_value_selects ~name llc =
@@ -447,6 +454,14 @@ let optimize ?materialized ?static_indices ?blends_value_selects ~name llc =
     spelling the same nodes, reads and writes WITHOUT the scope: optimizing it builds the traced
     store and the placements the record needs, and [scoped] then replaces the schedule wholesale,
     reaching the backend through the [?prelowered] seam.
+
+    [raw] need not be the unscoped twin of [scoped]: the two-statement program that computes the
+    node into its materialized cell and then reads it serves as well, and is the only option when
+    the value's operands cannot be annotated validly at both the scope's precision and the slot's
+    ([run]'s [two_loops] in [test/operations/integer_scope_collapse.ml] is the pattern).
+
+    Its [.ll] dumps (see {!optimize_in}) are therefore [raw]'s. The program that executes is
+    [scoped]: the backend's source for the routine, under the same gate, is what shows it.
 
     Optimizing [scoped] itself is what used to collapse it into an identity copy of the accumulator
     — green for the wrong reason, which is how two [accum_width.ml] legs passed while executing
