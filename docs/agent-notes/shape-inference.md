@@ -421,7 +421,16 @@ files.
   environment (`env`) and the printer walks `Bounds_row`/`Bounds_dim` monotone chains through the
   intermediate variables (`res` side: refines; `opnd` side: refined). Names go by first appearance
   in reading order, never by id: a trace's ids come from the reserved range, and so do the ids in
-  its errors' constraint sexps, which a golden must not pin.
+  its errors' constraint sexps, which a golden must not pin. The chains stop at the printed
+  variables -- the boundary's and those a lower bound names -- and at the fixed ones, and the
+  relations are computed structurally first, then ordered by a name-independent key (a boundary
+  variable by its header position; a fixed one by the sorted list of its relations to named
+  variables, then by its pre-trace id) and only then rendered, so the naming follows the reading
+  order and the text does not follow the solver's traversal (gh-ocannl-1988; before, the
+  `nn_blocks_definitions` golden churned on solver-only changes). An intermediate that refines two
+  printed variables with none refining it prints as `_ ⊑ a, b` -- a common refinement, dropped
+  when a printed variable's own group witnesses it (`test/operations/scheme_printed_relations.ml`
+  is the pin, with `cross_entropy_loss` in the inventory as the library's case).
 - The results of an automatic scheme (gh-ocannl-1801, `Tensor.Scheme.traced_results`): the ppx
   cannot name a function's result type, so its tracer hands the body's value over untyped and the
   runtime finds the tensors in it by physical identity, among the tensors `add_fwd_root` saw while

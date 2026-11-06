@@ -5213,21 +5213,39 @@ module Scheme = struct
   let arity s = List.length s.arg_rows
   let num_results s = List.length s.result_rows
 
+  (* A boundary (argument or result) or fixed variable, as the relations relate them; the
+     intermediates between them are eliminated. *)
+  type var = D of Row.dim_var | R of Row.row_var
+
   (* Variables are named by first appearance, so the text does not depend on the session's id
      counters: generalized ones ['a], ['b], ...; fixed ones -- shared with what the function closes
      over, e.g. a lifted parameter -- ['_a], ['_b], ..., as OCaml prints weak type variables.
      Dimension and row variables share the alphabet. The indented lines are the broadcasting
      inequalities among the boundary's variables and the fixed ones under the trace's final
-     environment, with the function's intermediate variables eliminated along monotone chains. *)
+     environment, with the function's intermediate variables eliminated along monotone chains:
+     grouped by left side, [v ⊑ w1, w2, ...] for every boundary variable [v] and for every fixed
+     variable refining one, then [_ ⊑ w1, w2, ...] for the variables an eliminated intermediate
+     refines together when no printed variable does (gh-ocannl-1988: arguments consumed together by
+     a reduction), then the lower bounds [b ⊑ v]. The order is canonical and name-independent -- by
+     first appearance in the header for the boundary's variables, and by their relations to those
+     for the fixed ones -- so that the text does not follow the solver's traversal either, and
+     naming follows the order. *)
   let to_string s =
     let names = Hashtbl.create (module String) in
     let counts = [| 0; 0 |] in
+    let appearance = ref 0 in
+    (* [names] holds (fixed, the letter index, the appearance order). *)
     let name ~fixed key =
-      Hashtbl.find_or_add names key ~default:(fun () ->
-          let k = if fixed then 1 else 0 in
-          let n = counts.(k) in
-          counts.(k) <- n + 1;
-          (if fixed then "'_" else "'") ^ letter_name n)
+      let _, n, _ =
+        Hashtbl.find_or_add names key ~default:(fun () ->
+            let k = if fixed then 1 else 0 in
+            let n = counts.(k) in
+            counts.(k) <- n + 1;
+            let a = !appearance in
+            Int.incr appearance;
+            (fixed, n, a))
+      in
+      (if fixed then "'_" else "'") ^ letter_name n
     in
     let dim_key v = "d" ^ Int.to_string (Row.dim_var_id v) in
     let row_key v = "r" ^ Int.to_string (Row.row_var_id v) in
@@ -5253,6 +5271,7 @@ module Scheme = struct
     let args = side s.arg_rows in
     (* [_]: the scheme constrains no result. *)
     let results = match s.result_rows with [] -> "_" | rows -> side rows in
+    let header = [%string "%{s.label} : %{args} => %{results}"] in
     (* The capture inputs (gh-ocannl-1791): what each first binding is under the final
        environment. *)
     let captures =
@@ -5265,73 +5284,179 @@ module Scheme = struct
           in
           [%string "capture %{label} = %{bound}"])
     in
-    let boundary = s.arg_rows @ s.result_rows in
-    let b_dims, b_rows =
-      List.concat_map boundary ~f:(fun { r_batch; r_input; r_output } ->
-          List.map [ r_batch; r_input; r_output ] ~f:Row.row_vars)
-      |> List.unzip
-      |> fun (ds, rs) -> (List.concat ds, List.concat rs)
-    in
-    (* Monotone chains from each boundary variable, through generalized non-boundary (intermediate)
-       variables: upward to every variable it refines, downward to the fixed ones refining it (a
-       boundary one is found by its own upward search). *)
-    let relations (type v) ~(vars : v list) ~(key : v -> string) ~(fixed : v -> bool)
-        ~(bounds : v -> v list * v list) ~(pr : v -> string) =
-      let is_boundary =
-        let keys = Set.of_list (module String) (List.map vars ~f:key) in
-        fun v -> Set.mem keys (key v)
-      in
-      let found = ref [] in
-      let add rel = if not (List.mem !found rel ~equal:String.equal) then found := rel :: !found in
-      let search ~up start =
-        let visited = Hash_set.create (module String) in
-        let rec go v =
-          if not (Hash_set.mem visited (key v)) then (
-            Hash_set.add visited (key v);
-            let res, opnd = bounds v in
-            List.iter
-              (if up then opnd else res)
-              ~f:(fun w ->
-                if String.equal (key w) (key start) then ()
-                else if is_boundary w || fixed w then (
-                  if up then add [%string "%{pr start} ⊑ %{pr w}"]
-                  else if not (is_boundary w) then add [%string "%{pr w} ⊑ %{pr start}"])
-                else go w))
-        in
-        go start
-      in
-      List.iter vars ~f:(fun v ->
-          search ~up:true v;
-          search ~up:false v);
-      List.rev !found
-    in
-    let dim_rels =
-      relations ~vars:b_dims ~key:dim_key ~fixed:dim_fixed ~pr:dim_name ~bounds:(fun v ->
+    let key = function D v -> dim_key v | R v -> row_key v in
+    let fixed = function D v -> dim_fixed v | R v -> row_fixed v in
+    let pr = function D v -> dim_name v | R v -> row_name v in
+    let id = function D v -> Row.dim_var_id v | R v -> Row.row_var_id v in
+    let same v w = String.equal (key v) (key w) in
+    let bounds = function
+      | D v -> (
           match Row.find_dim_entry s.env v with
-          | Some (Row.Bounds_dim { res; opnd; _ }) -> (res, opnd)
+          | Some (Row.Bounds_dim { res; opnd; _ }) ->
+              (List.map res ~f:(fun v -> D v), List.map opnd ~f:(fun v -> D v))
+          | _ -> ([], []))
+      | R v -> (
+          match Row.find_row_entry s.env v with
+          | Some (Row.Bounds_row { res; opnd; _ }) ->
+              (List.map res ~f:(fun v -> R v), List.map opnd ~f:(fun v -> R v))
           | _ -> ([], []))
     in
-    let row_rels =
-      relations ~vars:b_rows ~key:row_key ~fixed:row_fixed ~pr:row_name ~bounds:(fun v ->
-          match Row.find_row_entry s.env v with
-          | Some (Row.Bounds_row { res; opnd; _ }) -> (res, opnd)
-          | _ -> ([], []))
+    let dedup vars =
+      List.fold vars ~init:[] ~f:(fun acc v ->
+          if List.exists acc ~f:(same v) then acc else v :: acc)
+      |> List.rev
+    in
+    (* In reading order ([Row.row_vars] sorts by id, which a lower bound's variables must not
+       follow). *)
+    let rec vars_of_dim = function
+      | Row.Var v -> [ D v ]
+      | Dim _ | Sym _ -> []
+      | Affine { over; conv; _ } ->
+          vars_of_dim over
+          @ Option.value_map conv ~default:[] ~f:(fun c -> vars_of_dim c.Row.kernel)
+      | Concat dims -> List.concat_map dims ~f:vars_of_dim
+    in
+    let vars_of_row (r : Row.t) =
+      List.concat_map r.beg_dims ~f:vars_of_dim
+      @ (match r.bcast with Row.Row_var v -> [ R v ] | Broadcastable -> [])
+      @ List.concat_map r.dims ~f:vars_of_dim
+    in
+    let boundary =
+      dedup
+        (List.concat_map (s.arg_rows @ s.result_rows) ~f:(fun { r_batch; r_input; r_output } ->
+             List.concat_map [ r_batch; r_input; r_output ] ~f:vars_of_row))
+    in
+    (* The lower bounds of the boundary's variables, with the variables each names. *)
+    let glbs =
+      List.filter_map boundary ~f:(fun v ->
+          match v with
+          | D d -> (
+              match Row.find_dim_entry s.env d with
+              | Some (Row.Bounds_dim { glb = Some b; _ }) ->
+                  Some ((fun () -> dim_str b), vars_of_dim b, v)
+              | _ -> None)
+          | R r -> (
+              match Row.find_row_entry s.env r with
+              | Some (Row.Bounds_row { glb = Some b; _ }) ->
+                  Some ((fun () -> row_str b), vars_of_row b, v)
+              | _ -> None))
+    in
+    let mem vars v = List.exists vars ~f:(same v) in
+    (* The printed variables: the boundary's, and the generalized ones a lower bound names
+       (gh-ocannl-1988: the class dimension of a reduced axis, below one argument's row as its lower
+       bound while refining the other's axis). The chains stop at them and at the fixed ones; the
+       variables in between are the eliminated intermediates. *)
+    let glb_vars =
+      List.concat_map glbs ~f:(fun (_, vars, _) -> vars)
+      |> dedup
+      |> List.filter ~f:(fun v -> not (mem boundary v || fixed v))
+    in
+    let printed = boundary @ glb_vars in
+    let endpoint v = mem printed v || fixed v in
+    (* The intermediates the searches pass through. *)
+    let intermediates = Hashtbl.create (module String) in
+    (* Monotone chains from [start], through the intermediates: upward to every variable it refines,
+       downward to the ones refining it; the endpoints found, deduplicated. *)
+    let search ~up start =
+      let visited = Hash_set.create (module String) in
+      let found = ref [] in
+      let rec go v =
+        if not (Hash_set.mem visited (key v)) then (
+          Hash_set.add visited (key v);
+          let res, opnd = bounds v in
+          List.iter
+            (if up then opnd else res)
+            ~f:(fun w ->
+              if same w start then ()
+              else if endpoint w then found := w :: !found
+              else (
+                Hashtbl.set intermediates ~key:(key w) ~data:w;
+                go w)))
+      in
+      go start;
+      dedup (List.rev !found)
+    in
+    (* [v ⊑ w]: a printed variable's upward endpoints; of its downward endpoints, the fixed ones (a
+       printed one is found by its own upward search). *)
+    let edges =
+      List.concat_map printed ~f:(fun v ->
+          List.map (search ~up:true v) ~f:(fun w -> (v, w))
+          @ List.filter_map (search ~up:false v) ~f:(fun w ->
+              if mem printed w then None else Some (w, v)))
+    in
+    (* Grouped by left side: [(left, rights)]. *)
+    let groups =
+      List.fold edges ~init:[] ~f:(fun acc (l, r) ->
+          match List.partition_tf acc ~f:(fun (l', _) -> same l l') with
+          | [ (_, rs) ], rest -> (l, rs @ [ r ]) :: rest
+          | _ -> (l, [ r ]) :: acc)
+      |> List.rev_map ~f:(fun (l, rs) -> (l, dedup rs))
+    in
+    let subset vs ws = List.for_all vs ~f:(mem ws) in
+    (* What an eliminated intermediate refines together, when no printed variable does: a group's
+       left side witnesses its own rights. The intermediates are those the searches passed through,
+       so each refines a printed variable or is refined by one. *)
+    let commons =
+      Hashtbl.data intermediates
+      |> List.map ~f:(search ~up:true)
+      |> List.filter ~f:(fun ws -> List.length ws >= 2)
+      |> List.filter ~f:(fun ws -> not (List.exists groups ~f:(fun (l, rs) -> subset ws (l :: rs))))
+      |> List.fold ~init:[] ~f:(fun acc ws ->
+          if List.exists acc ~f:(fun ws' -> subset ws ws') then acc
+          else ws :: List.filter acc ~f:(fun ws' -> not (subset ws' ws)))
+    in
+    (* The canonical order. A variable the header or a capture named sorts by its appearance; one a
+       lower bound names after every other; a fixed one not yet named by its relations to the named
+       ones, then by id (fixed ids precede the trace, so they follow the program, not the
+       solver). *)
+    let named v = Option.map (Hashtbl.find names (key v)) ~f:(fun (_, _, a) -> a) in
+    let signature v =
+      let tag t w = Option.map (named w) ~f:(fun a -> (t, a)) in
+      List.concat_map groups ~f:(fun (l, rs) ->
+          if same l v then List.filter_map rs ~f:(tag 0)
+          else if mem rs v then Option.to_list (tag 1 l)
+          else [])
+      @ List.concat_map commons ~f:(fun ws ->
+          if mem ws v then List.filter_map ws ~f:(tag 2) else [])
+      |> List.sort ~compare:[%compare: int * int]
+    in
+    let unnamed =
+      List.concat_map groups ~f:(fun (l, rs) -> l :: rs) @ List.concat commons
+      |> dedup
+      |> List.filter ~f:(fun v -> Option.is_none (named v) && not (mem glb_vars v))
+      |> List.map ~f:(fun v -> (signature v, id v, v))
+      |> List.sort ~compare:(fun (s1, i1, _) (s2, i2, _) ->
+          [%compare: (int * int) list * int] (s1, i1) (s2, i2))
+      |> List.mapi ~f:(fun i (_, _, v) -> (key v, i))
+      |> Hashtbl.of_alist_exn (module String)
+    in
+    let order v =
+      match named v with
+      | Some a -> (0, a)
+      | None -> (
+          match List.findi glb_vars ~f:(fun _ w -> same v w) with
+          | Some (i, _) -> (2, i)
+          | None -> (1, Hashtbl.find_exn unnamed (key v)))
+    in
+    let by_order = List.sort ~compare:(fun v w -> [%compare: int * int] (order v) (order w)) in
+    let rights ws = String.concat ~sep:", " (List.map (by_order ws) ~f:pr) in
+    let lines =
+      List.sort groups ~compare:(fun (l, _) (l', _) -> [%compare: int * int] (order l) (order l'))
+      |> List.map ~f:(fun (l, rs) -> fun () -> [%string "%{pr l} ⊑ %{rights rs}"])
+    in
+    let commons =
+      List.map commons ~f:(fun ws -> (List.map (by_order ws) ~f:order, ws))
+      |> List.sort ~compare:(fun (o, _) (o', _) -> [%compare: (int * int) list] o o')
+      |> List.map ~f:(fun (_, ws) -> fun () -> [%string "_ ⊑ %{rights ws}"])
     in
     let glbs =
-      List.filter_map b_dims ~f:(fun v ->
-          match Row.find_dim_entry s.env v with
-          | Some (Row.Bounds_dim { glb = Some d; _ }) ->
-              Some [%string "%{dim_str d} ⊑ %{dim_name v}"]
-          | _ -> None)
-      @ List.filter_map b_rows ~f:(fun v ->
-          match Row.find_row_entry s.env v with
-          | Some (Row.Bounds_row { glb = Some r; _ }) ->
-              Some [%string "%{row_str r} ⊑ %{row_name v}"]
-          | _ -> None)
+      List.sort glbs ~compare:(fun (_, _, v) (_, _, w) -> [%compare: int * int] (order v) (order w))
+      |> List.map ~f:(fun (b, _, v) -> fun () -> [%string "%{b ()} ⊑ %{pr v}"])
     in
-    let header = [%string "%{s.label} : %{args} => %{results}"] in
+    (* Rendered in order: names follow the reading order. *)
     String.concat ~sep:"\n"
-      (header :: List.map (captures @ dim_rels @ row_rels @ glbs) ~f:(fun r -> "  " ^ r))
+      ((header :: List.map captures ~f:(fun r -> "  " ^ r))
+      @ List.map (lines @ commons @ glbs) ~f:(fun r -> "  " ^ r ()))
 
   let rows_of env (sh : shape) =
     {

@@ -465,11 +465,17 @@ module Scheme : sig
       so the text does not depend on the session's id counters: a generalized variable (renamed per
       application) as ['a], ['b], ...; a fixed one (shared with what the function closes over, such
       as a parameter lifted to its [()] scope) as ['_a], ['_b], ..., the way OCaml prints weak type
-      variables. Then, one per indented line, the broadcasting inequalities [r ⊑ o] (the result side
-      refines the operand side) among the boundary's variables and the fixed ones, and the lower
-      bounds of the boundary's variables, under the trace's final environment, with the function's
-      intermediate variables eliminated along monotone chains. Other constraints (totals,
-      concatenations) are not printed. [test/operations/reusable_tensor_programs.ml] shows one. *)
+      variables. Then the indented lines: the broadcasting inequalities [r ⊑ o1, o2, ...] (the
+      result side refines each operand side) among the boundary's variables and the fixed ones,
+      grouped by left side; then [_ ⊑ o1, o2, ...] for the variables some eliminated intermediate
+      refines together when no printed variable does (gh-ocannl-1988: arguments consumed together by
+      a reduction, whose common refinement the result no longer carries); then the lower bounds of
+      the boundary's variables, [b ⊑ v], the variables such a bound names related like the
+      boundary's. All under the trace's final environment, with the function's intermediate
+      variables eliminated along monotone chains. The order is canonical: the boundary's variables
+      by their appearance in the header, a fixed one by its relations to them -- never the solver's
+      traversal order. Other constraints (totals, concatenations) are not printed.
+      [test/operations/reusable_tensor_programs.ml] shows one. *)
 
   val trace : label:string -> int -> (tensor list -> tensor list) -> t
   (** [trace ~label n f] applies [f] to [n] tracing tensors whose shapes are fresh row variables,
