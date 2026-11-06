@@ -575,25 +575,12 @@ type retained = {
    device compile it defers to link time. *)
 let backend_compiles = Utils.backend_compiles
 
-(* gh-ocannl-1876: the nodes whose forward code [comp] carries as a [Fetch] -- a [Fetch] into a node
-   whose forward fragment [comp] owns. Only [Tensor.term] emits a forward [Fetch] (a fetch-defined
-   leaf: a [Tensor.term_init] or literal with at most [limit_constant_fill_size] values, a range, an
-   embedded symbol or id), as that leaf's whole forward code; a gradient's zeroing [Fetch] has no
-   forward fragment, and a parameter's initializer owns none ([Tensor.init_params]). A [Slice] takes
-   after its parent, which forward code orders before it: over data a write through an
-   alias-eligible view reaches the parent and stays, and over a fetch-defined parent it is undone
-   whichever way lowering settles eligibility -- an alias's parent is fetched again, a copy is
-   copied again. [frontier] answers for a parent another routine of the lineage fetches. *)
-let forward_fetched frontier (comp : Asgns.comp) =
-  let fetch_defined acc (tn : Tn.t) = Set.mem acc tn || Map.mem frontier.fetch_defined tn.uid in
-  Asgns.fold_leaves comp.asgns
-    ~init:(Set.empty (module Tn))
-    ~f:(fun acc -> function
-      | Asgns.Fetch { array; fetch_op; _ } when Set.mem comp.owned (array, Asgns.Fwd) -> (
-          match fetch_op with
-          | Slice { sliced; _ } when not (fetch_defined acc sliced) -> acc
-          | _ -> Set.add acc array)
-      | _ -> acc)
+(* gh-ocannl-1876: {!Asgns.forward_fetched} over a lineage: [frontier] answers for a parent another
+   routine of it fetches. Shapes are settled here, lowering being the next step. *)
+let forward_fetched frontier comp =
+  Asgns.forward_fetched
+    ~fetched_elsewhere:(fun tn -> Map.mem frontier.fetch_defined tn.Tn.uid)
+    ~view_aliases:Asgns.slice_alias_eligible comp
 
 (* The nodes [comp] writes other than by a [Fetch]: [Rev_sides]' buffers, any other [Accum_op]'s and
    [Set_vec_unop]'s [lhs]. *)
@@ -878,11 +865,12 @@ let check_no_fetch_overwrite ?name ctx (comp : Asgns.comp) =
             "Context.compile%s: this computation and this context's lineage write nodes that a \
              forward fetch re-establishes on every run (gh-ocannl-1876): %s. A fetch-defined node \
              -- a Tensor.term_init or literal with at most limit_constant_fill_size values, a \
-             range, an embedded symbol -- is code, not data: each run of the routine carrying its \
-             forward code fetches its value again, silently undoing the write (an optimizer step \
-             on it never accumulates). Build a node that is to be updated data-backed, with \
-             Operation.init (~grad_spec:Require_grad for an optimized input), or make it a \
-             parameter, whose initializer runs once (Train.init_params). A sibling, compiled from \
+             range, an embedded symbol, a slice of one or a slice lowering to a copy -- is code, \
+             not data: each run of the routine carrying its forward code fetches its value again, \
+             silently undoing the write (an optimizer step on it never accumulates). Build a node \
+             that is to be updated data-backed, with Operation.init (~grad_spec:Require_grad for \
+             an optimized input), or make it a parameter, whose initializer runs once \
+             (Train.init_params); write a sliced node through its parent. A sibling, compiled from \
              a context that does not descend from the other routine, is an alternative and is not \
              refused."
             (match name with None -> "" | Some n -> " (" ^ n ^ ")")

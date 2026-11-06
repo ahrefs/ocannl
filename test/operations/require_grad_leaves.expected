@@ -41,6 +41,17 @@ a write through a view of a fetch-defined parent: refused: true
 a write through a view of a fetch-defined parent: the refusal names view: true
 a write through a view of a fetch-defined parent: the refusal names Operation.init: true
 a write through a view of a fetch-defined parent: the refusal names gh-ocannl-1876: true
+sgd_update refuses a view of a fetch-defined parent: true
+that refusal names the view: true
+sgd_update accepts a view of data: true
+the stepped view is an alias: true
+view of data: step 1 reaches the selected row of the parent: true
+view of data: step 2 moves it from the stepped value: true
+a step on a view lowering to a copy, over data: refused: true
+a step on a view lowering to a copy, over data: the refusal names copied_view: true
+a step on a view lowering to a copy, over data: the refusal names Operation.init: true
+a step on a view lowering to a copy, over data: the refusal names gh-ocannl-1876: true
+that view cannot alias its parent: true
 the literal-initialized weight: step 1 moves w by lr * x^2: true
 the literal-initialized weight: step 2 moves w again: true
 the data-backed twin is accepted: true
