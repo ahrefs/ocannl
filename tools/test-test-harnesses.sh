@@ -596,11 +596,38 @@ if [ "$got" = 0 ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ] &&
    [ "$(tail -n 1 "$TMP/out")" = 'harnesses: 0 run, 0 failed (this change reaches no harness)' ]; then
   report 0 '--affected on a change reaching no harness is green, with no slot and no member run'
 else report 1 '--affected on a change reaching no harness is green, with no slot and no member run' "$(af_detail)"; fi
-for args in no-since since-alone group expected ci-shell ci-real-dune bad-base; do
+# --files asks the same of named paths, and a group keeps its own members of
+# what the paths reach: one shell member here, one promotion member, no
+# toolchain one, which is a result like any change reaching nothing.
+af_slot -- --affected --files "$af_path"
+if [ "$got" = 0 ] && af_ran; then
+  report 0 '--affected --files runs what those paths reach, as --since runs a diff'
+else report 1 '--affected --files runs what those paths reach, as --since runs a diff' "$(af_detail)"; fi
+af_slot -- --affected --files no/such/path.sh
+if [ "$got" = 0 ] && [ ! -s "$RECORD" ] && [ ! -s "$FAKE_FW_CALLS" ]; then
+  report 0 '--affected --files on a path no harness reaches runs nothing, with no slot'
+else report 1 '--affected --files on a path no harness reaches runs nothing, with no slot' "$(af_detail)"; fi
+af_slot -- --shell --affected --list --files "$af_path"
+if [ "$got" = 0 ] && [ "$(grep -v '^affected: ' "$TMP/out")" = "$af_whole" ]; then
+  report 0 '--shell --affected --list keeps the shell member, leaving out the promotion one'
+else report 1 '--shell --affected --list keeps the shell member, leaving out the promotion one' "$(af_detail)"; fi
+af_slot -- --promotion --affected --since HEAD~1
+if [ "$got" = 0 ] && [ "$(cat "$RECORD")" = "$af_leg" ] && [ "$(cat "$ARGV_RECORD")" = "$af_leg [--only] [$af_ere]" ]; then
+  report 0 '--promotion --affected runs the promotion member alone, with its --only'
+else report 1 '--promotion --affected runs the promotion member alone, with its --only' "$(af_detail)"; fi
+af_slot -- --toolchain --affected --since HEAD~1
+if [ "$got" = 0 ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ] &&
+   [ "$(tail -n 1 "$TMP/out")" = 'harnesses: 0 run, 0 failed (this change reaches no harness of the toolchain group)' ]; then
+  report 0 'a group the change does not reach is green, with no slot and no member run'
+else report 1 'a group the change does not reach is green, with no slot and no member run' "$(af_detail)"; fi
+for args in no-since since-alone files-alone no-files both-asks option-path expected ci-shell ci-real-dune bad-base; do
   case $args in
     no-since) af_slot -- --affected ;;
     since-alone) af_slot -- --since HEAD~1 ;;
-    group) af_slot -- --affected --since HEAD~1 --shell ;;
+    files-alone) af_slot -- --files "$af_path" ;;
+    no-files) af_slot -- --affected --files ;;
+    both-asks) af_slot -- --affected --since HEAD~1 --files "$af_path" ;;
+    option-path) af_slot -- --affected --files "$af_path" --list ;;
     expected) af_slot -- --affected --since HEAD~1 --expected-skips "$TMP/expected-none" ;;
     ci-shell) af_slot -- --affected --since HEAD~1 --ci-shell ;;
     ci-real-dune) af_slot -- --affected --since HEAD~1 --ci-real-dune ;;
@@ -639,6 +666,13 @@ for bad in unknown evaluated option double-quoted two-selectors twice failed-ask
     report 0 "--affected refuses $bad before a slot or any harness"
   else report 1 "--affected refuses $bad before a slot or any harness" "$(af_detail)"; fi
 done
+# A group narrows what the allowlist passes, not what it reads: a good line of
+# another group is left out, a line naming no member still refuses.
+{ echo "$af_leg"; echo tools/no-such-harness.sh; } >"$AF_COMMANDS"
+af_slot -- --shell --affected --since HEAD~1
+if [ "$got" = 2 ] && [ ! -s "$FAKE_FW_CALLS" ] && [ ! -s "$RECORD" ] && grep -q '^test-harnesses.sh: --affected: ' "$TMP/out"; then
+  report 0 '--shell --affected still refuses a line naming no member'
+else report 1 '--shell --affected still refuses a line naming no member' "$(af_detail)"; fi
 mv "$TMP/test-run.aside" "$fixture/tools/test-run.sh" || exit 2
 unset AF_COMMANDS
 # Negative controls of the run's oracle: a twin at the same tools/ depth that

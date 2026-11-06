@@ -6,20 +6,37 @@
 #
 # HEAD is read as the merge to judge: first parent the base, second parent the PR head (the
 # order `git merge` and ship-pr's `commit-tree -p <base tip> -p <head>` give). Two tiers:
-#   compile  always: `dune build @check @test/operations/scans` (about 40 s from a fresh tree
+#   compile  always: `dune build @check @test/operations/scans` (about 100 s from a fresh tree
 #            on mac-studio: the compile and the repository scans, which read the repository
 #            itself -- dune stanzas, sources, scripts, Markdown notes and docs, goldens -- so
 #            the config makes every shared path an input).
-#   shell    `tools/test-harnesses.sh --shell`, the toolchain-free harness tier CI runs (about
-#            470 s on mac-studio), only when a path BOTH sides changed since their merge base
-#            matches `*.sh`: the whole path, `*` crossing `/`, as the config's `input` globs read,
-#            a path a rename on either side touched (git's -M detection) counting by its other
-#            name too -- the merge build's own trigger, narrowed to shell scripts.
+#   shell    only when a path BOTH sides changed since their merge base matches `*.sh`: the
+#            whole path, `*` crossing `/`, as the config's `input` globs read, a path a rename on
+#            either side touched (git's -M detection) counting by its other name too -- the merge
+#            build's own trigger, narrowed to shell scripts. What runs then is the part of
+#            `tools/test-harnesses.sh --shell`, the toolchain-free harness tier CI runs, that the
+#            paths changed on both sides reach, both names of a rename and non-scripts included:
+#            `tools/test-harnesses.sh --shell --affected --files PATH...`, the mapping
+#            `tools/test-run.sh affected --harnesses` owns, read from the merged tree. A member
+#            outside the shell group stays out, so a scoped run is never more than the whole tier
+#            (about 1100 s on mac-studio, measured in docs/agent-notes/build-and-test.md) and needs
+#            nothing the whole tier does not.
 # The selection is a fail-closed allowlist: the shell tier is skipped only when HEAD is a
 # two-parent merge, its merge base and both sides' changes were read, git listed every changed
 # path unquoted, and no path both sides changed matches `*.sh` by either name. Anything else --
-# a one-parent HEAD, a failed git read, a path git had to quote -- runs every tier.
-# --all runs every tier whatever HEAD is. --plan prints the selection and runs nothing.
+# a one-parent HEAD, a failed git read, a path git had to quote -- runs every tier. The scope is
+# one too: the tier narrows only when each matching path, asked alone, reaches a member of the
+# tier, and the ask for them all answers. An ask that fails (test-harnesses.sh refuses a line of
+# `affected --harnesses` it does not recognize, a path reading as an option, a failed `affected`),
+# a matching path no member reaches, or a scoped run refused before any member started (exit 2)
+# runs the whole tier, never less.
+# The shared-red comparison (ship-pr's build of the base alone) stays like with like: that build
+# carries the merge's two parents on the base's tree, so it reads the same two sides here and
+# narrows to the same paths, the reach read from the base's text. A reach the two trees answer
+# differently prints lines the base's log lacks, which ship-pr reads as the merge's own failure:
+# a refusal, never a red waved through as shared.
+# --all runs every tier whatever HEAD is. --plan prints the selection, asking what it reaches
+# (no slot, no dune), and runs nothing.
 #
 # Toolchain: a non-interactive shell can lack the profile that puts the opam switch on PATH
 # (on mac-studio `zsh -c` resolves opam but not dune). When `dune` does not resolve, this sources
@@ -62,11 +79,40 @@ $out
 EOF
 }
 
-# select_tiers sets `shell` (1 = run the shell tier) and `why`, and prints what it read.
+# ask_reach PATH... sets `reach`, the commands of the shell tier's members PATH reaches, one per
+# line. It fails when the ask does; `--list` takes no slot and runs nothing.
+ask_reach() {
+  reach=$("${BASH:-bash}" "$root/tools/test-harnesses.sh" --shell --affected --list --files "$@" \
+    2>/dev/null </dev/null)
+}
+
+# scope_tier narrows a selected tier to what `asked` reaches (`scoped` 1, `reach` its commands), or
+# says in `scope_why` why the whole tier runs. `scripts` is every asked path matching SHELL_GLOB: a
+# reach the others make up for would hide one nothing maps, so each is asked alone.
+scope_tier() {
+  local s rc
+  for s in "${scripts[@]}"; do
+    ask_reach "$s" || {
+      rc=$?
+      scope_why="what $s reaches could not be asked (test-harnesses.sh exit $rc)"
+      return
+    }
+    [ -n "$reach" ] || { scope_why="no member of the tier reaches $s"; return; }
+  done
+  ask_reach "${asked[@]}" || {
+    rc=$?
+    scope_why="what the paths changed on both sides reach could not be asked (test-harnesses.sh exit $rc)"
+    return
+  }
+  scoped=1
+}
+
+# select_tiers sets `shell` (1 = run the shell tier), `why` and, for a tier it could narrow,
+# `scoped`, `reach` and `asked` (or `scope_why`), and prints what it read.
 select_tiers() {
-  shell=1
+  shell=1 scoped=0 scope_why= reach= asked=() scripts=()
   if [ "$all" = 1 ]; then why='--all'; return; fi
-  local base head mb base_names base_pairs both p old new other n=0 rc=0
+  local base head mb base_names base_pairs both p old new other n=0 rc=0 hit=
   if ! base=$(git -C "$root" rev-parse --verify --quiet 'HEAD^1^{commit}') ||
      ! head=$(git -C "$root" rev-parse --verify --quiet 'HEAD^2^{commit}'); then
     why='HEAD is not a two-parent merge, so every tier runs'
@@ -87,15 +133,21 @@ select_tiers() {
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     n=$((n + 1))
+    asked+=("$p")
     case $p in
-      $SHELL_GLOB) why="$p, changed on both sides, matches $SHELL_GLOB"; return ;;
+      $SHELL_GLOB)
+        scripts+=("$p")
+        [ -n "$hit" ] || hit="$p, changed on both sides, matches $SHELL_GLOB" ;;
     esac
     # A path counts by its other name when a rename on either side touched it.
     while IFS=$'\t' read -r old new; do
       [ -n "$old" ] || continue
       if [ "$old" = "$p" ]; then other=$new; elif [ "$new" = "$p" ]; then other=$old; else continue; fi
+      asked+=("$other")
       case $other in
-        $SHELL_GLOB) why="$p, changed on both sides, was renamed from or to $other, which matches $SHELL_GLOB"; return ;;
+        $SHELL_GLOB)
+          scripts+=("$other")
+          [ -n "$hit" ] || hit="$p, changed on both sides, was renamed from or to $other, which matches $SHELL_GLOB" ;;
       esac
     done <<EOF
 $base_pairs$side_pairs
@@ -103,6 +155,11 @@ EOF
   done <<EOF
 $both
 EOF
+  if [ -n "$hit" ]; then
+    why=$hit
+    scope_tier
+    return
+  fi
   shell=0
   why="none of the $n path(s) changed on both sides matches $SHELL_GLOB, by either name of a rename"
 }
@@ -111,6 +168,14 @@ select_tiers
 echo "$me: compile tier: dune build @check @test/operations/scans (always)"
 if [ "$shell" = 1 ]; then
   echo "$me: shell tier: SELECTED -- $why"
+  if [ "$scoped" = 1 ]; then
+    echo "$me: shell tier: scoped to what the ${#asked[@]} shared path(s) reach:"
+    while IFS= read -r line; do echo "$me:   $line"; done <<EOF
+$reach
+EOF
+  elif [ -n "$scope_why" ]; then
+    echo "$me: shell tier: whole -- $scope_why"
+  fi
 else
   echo "$me: shell tier: skipped -- $why"
 fi
@@ -137,11 +202,20 @@ dune build --root . @check @test/operations/scans || {
 echo "$me: compile tier passed in $((SECONDS - started))s"
 if [ "$shell" = 1 ]; then
   started=$SECONDS
-  tools/test-harnesses.sh --shell </dev/null || {
-    rc=$?
+  rc=0
+  if [ "$scoped" = 1 ]; then
+    tools/test-harnesses.sh --shell --affected --files "${asked[@]}" </dev/null || rc=$?
+    if [ "$rc" = 2 ]; then
+      # Every refusal comes before a member starts, so the whole tier still fits the bound.
+      echo "$me: shell tier: the scoped run was refused (exit 2), no member run; running the whole tier"
+      scoped=0 rc=0
+    fi
+  fi
+  [ "$scoped" = 1 ] || tools/test-harnesses.sh --shell </dev/null || rc=$?
+  if [ "$rc" != 0 ]; then
     echo "$me: shell tier FAILED (tools/test-harnesses.sh exit $rc)" >&2
     exit 1
-  }
+  fi
   echo "$me: shell tier passed in $((SECONDS - started))s"
 fi
 echo "$me: passed"

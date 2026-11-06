@@ -9126,10 +9126,15 @@ pp_harness_check() { # CASE -> $pp_detail, empty when prepush answers it as writ
     { case $args in *--list*) [ "$argv_out" = "$(grep -E '/runtest-|^@@runtest-' "$out")" ] ;; esac; } &&
     { if [ "$named" = named ]; then
         [ "$n_count" = 1 ] && [ "$n_named" = 2 ] &&
-          [ "$(tail -n 4 <<<"$argv_err")" = "$(grep '^test-run: prepush: 2 harness command(s) this change reaches, named here and NOT run' <<<"$argv_err")
+          [ "$(tail -n 4 <<<"$argv_err" | sed '$d')" = "$(grep '^test-run: prepush: 2 harness command(s) this change reaches, named here and NOT run' <<<"$argv_err")
 test-run: prepush: harness: tools/test-a.sh
-test-run: prepush: harness: tools/test-b.sh --only '^1:'
-test-run: prepush: run them before pushing, as one command that takes its own --cpu slot: tools/test-harnesses.sh --affected --since base" ]
+test-run: prepush: harness: tools/test-b.sh --only '^1:'" ] &&
+          # The closing line's command is held by tools/test-test-harnesses.sh, which runs it as
+          # printed: naming the runner here would make every edit of it reach this whole harness.
+          case $(tail -n 1 <<<"$argv_err") in
+            'test-run: prepush: run them before pushing, as one command that takes its own --cpu slot: '*' --affected --since base') ;;
+            *) false ;;
+          esac
       else
         [ "$n_count" = 0 ] && [ "$n_named" = 0 ]
       fi; } &&

@@ -4,7 +4,8 @@
 #                               [--expected-skips FILE]
 #        tools/test-harnesses.sh --ci-shell [--list]
 #        tools/test-harnesses.sh --ci-real-dune [--list]
-#        tools/test-harnesses.sh --affected --since BASE [--list]
+#        tools/test-harnesses.sh [GROUP] --affected [--list] --since BASE
+#        tools/test-harnesses.sh [GROUP] --affected [--list] --files PATH...
 # With no group, run all three. --shell needs no OCaml toolchain; --toolchain
 # runs the formatter controls and the scan-case type check (which links
 # ppxlib) and --promotion the controls of tools that read
@@ -60,8 +61,13 @@
 # `tools/test-run.sh prepush` closes by naming: exactly the commands
 # `tools/test-run.sh affected --harnesses --since BASE` prints, each member with
 # the --only printed for it, in manifest order, under one slot and one footer
-# instead of a launch per command. The selection is the change's, so it takes
-# no group, no --expected-skips and no CI form, and --since belongs to it alone.
+# instead of a launch per command. --files PATH... asks the same of those
+# repository paths instead of a diff, for a caller whose paths no revision range
+# states (tools/merge-build-check.sh: the paths both sides of a merge changed);
+# it takes every word after it, none of them reading as an option. A group keeps
+# the members of that group, for a caller bound to it; what it leaves out is
+# still checked below. The selection is the change's, so it takes no
+# --expected-skips and no CI form, and --since and --files belong to it alone.
 # Those commands are read, never evaluated, through a fail-closed allowlist:
 # each line is `HARNESS` or `HARNESS --only 'ERE'`, HARNESS a member listed once
 # and ERE free of quotes, tabs and carriage returns. Any other line, or an ask
@@ -91,7 +97,7 @@ slot_record=${OCANNL_TOOL_HARNESSES_IN_SLOT-}
 unset OCANNL_TOOL_HARNESSES_IN_SLOT
 [ -z "$slot_record" ] || : >"$slot_record" || exit 2
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 2
-group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since=
+group=all list=0 expected= ci_shell=0 ci_real_dune=0 affected=0 since= files=()
 original_args=("$@")
 while [ $# -gt 0 ]; do
   arg=$1
@@ -107,6 +113,11 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --since needs a base revision" >&2; exit 2; }
       since=$2
       shift ;;
+    --files)
+      shift
+      [ $# -ge 1 ] || { echo "test-harnesses.sh: --files needs at least one path" >&2; exit 2; }
+      files=("$@")
+      break ;;
     --expected-skips)
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "test-harnesses.sh: --expected-skips needs a file" >&2; exit 2; }
       expected=$2
@@ -128,13 +139,23 @@ if [ "$ci_shell" = 1 ] || [ "$ci_real_dune" = 1 ]; then
   group=shell
 fi
 if [ "$affected" = 1 ]; then
-  [ -n "$since" ] || { echo "test-harnesses.sh: --affected needs --since BASE" >&2; exit 2; }
-  [ "$group" = all ] && [ -z "$expected" ] || {
-    echo "test-harnesses.sh: --affected selects what the change reaches, so it takes no group, no --expected-skips and no CI form" >&2
+  if [ -n "$since" ] && [ ${#files[@]} -gt 0 ]; then
+    echo "test-harnesses.sh: --affected: choose one of --since and --files" >&2
+    exit 2
+  fi
+  [ -n "$since" ] || [ ${#files[@]} -gt 0 ] ||
+    { echo "test-harnesses.sh: --affected needs --since BASE or --files PATH..." >&2; exit 2; }
+  [ -z "$expected" ] && [ "$ci_shell" = 0 ] && [ "$ci_real_dune" = 0 ] || {
+    echo "test-harnesses.sh: --affected selects what the change reaches, so it takes no --expected-skips and no CI form" >&2
     exit 2
   }
-elif [ -n "$since" ]; then
-  echo "test-harnesses.sh: --since is --affected's" >&2
+  for path in ${files[@]+"${files[@]}"}; do
+    case $path in
+      ''|-*) echo "test-harnesses.sh: --affected: '$path' is no repository path --files can ask about" >&2; exit 2 ;;
+    esac
+  done
+elif [ -n "$since" ] || [ ${#files[@]} -gt 0 ]; then
+  echo "test-harnesses.sh: --since and --files are --affected's" >&2
   exit 2
 fi
 # This is the sole membership list: CI selects groups from this entrypoint.
@@ -269,19 +290,23 @@ fi
 # move; what reached what was already said, so only a failure speaks there.
 affected_table=
 read_affected() {
-  local dir rc=0 line n=0 seen=$'\n' selected reached
+  local dir rc=0 line n=0 seen=$'\n' every selected reached ask
   # The two forms `affected --harnesses` prints (tools/affected-tests.sh).
   local form=$'^([^ \t\r\']+)( --only \'([^\t\r\']+)\')?$'
   dir=$(mktemp -d "${TMPDIR:-/tmp}/test-harnesses-affected.XXXXXX") ||
     { echo "test-harnesses.sh: cannot create the --affected scratch directory" >&2; exit 2; }
   scratch+=("$dir")
-  "${BASH:-bash}" "$root/tools/test-run.sh" affected --harnesses --since "$since" >"$dir/commands" 2>"$dir/err" || rc=$?
+  ask=(--since "$since")
+  [ ${#files[@]} = 0 ] || ask=(--files "${files[@]}")
+  "${BASH:-bash}" "$root/tools/test-run.sh" affected --harnesses "${ask[@]}" >"$dir/commands" 2>"$dir/err" || rc=$?
   if [ "$rc" != 0 ]; then
     cat "$dir/err" >&2
-    echo "test-harnesses.sh: --affected: affected --harnesses --since $since exited $rc (above), so what this change reaches is not known; nothing run" >&2
+    echo "test-harnesses.sh: --affected: affected --harnesses ${ask[*]} exited $rc (above), so what this change reaches is not known; nothing run" >&2
     exit 2
   fi
   [ -n "$slot_record" ] || cat "$dir/err" >&2
+  # A line is judged against every member: a group only keeps some of the good ones.
+  every=$'\n'$(group=all members)$'\n'
   selected=$'\n'$(members)$'\n'
   affected_table=$dir/table
   while IFS= read -r line || [ -n "$line" ]; do
@@ -289,8 +314,10 @@ read_affected() {
     reached=
     if [[ $line =~ $form ]]; then
       reached=${BASH_REMATCH[1]}
-      printf '%s\t%s\n' "$reached" "${BASH_REMATCH[3]}"
-      case $selected in *$'\n'"$reached"$'\n'*) ;; *) reached= ;; esac
+      case $selected in
+        *$'\n'"$reached"$'\n'*) printf '%s\t%s\n' "$reached" "${BASH_REMATCH[3]}" ;;
+      esac
+      case $every in *$'\n'"$reached"$'\n'*) ;; *) reached= ;; esac
       case $seen in *$'\n'"$reached"$'\n'*) reached= ;; esac
       seen=$seen$reached$'\n'
     fi
@@ -302,7 +329,10 @@ read_affected() {
 }
 [ "$affected" = 0 ] || read_affected
 if [ "$affected" = 1 ] && [ ! -s "$affected_table" ]; then
-  [ "$list" = 1 ] || printf '\nharnesses: 0 run, 0 failed (this change reaches no harness)\n'
+  if [ "$list" = 0 ]; then
+    if [ "$group" = all ]; then what='no harness'; else what="no harness of the $group group"; fi
+    printf '\nharnesses: 0 run, 0 failed (this change reaches %s)\n' "$what"
+  fi
   exit 0
 fi
 # The fleet's run-time correctness slot (see the header): the whole run, this
