@@ -167,7 +167,7 @@ alias family, slow test or golden format.
 
 **Important Debug Settings**:
 - `output_debug_files_in_build_directory=true` - enables `build_files/` generation; files go to `build_files/<exe-name>/` (override with `build_files_prefix`; `build_files_prefix=.` for a flat layout)
-- `debug_log_from_routines=true` - enables runtime logging from kernels aka. routines
+- `debug_log_from_routines=true` - enables runtime logging from kernels aka. routines; emits nothing unless `log_level > 1`, and needs `debug_log_to_stream_files=true` in a test with a stdout golden: without it a default build drops the lines on cc/Metal and CUDA/HIP print them to stdout
 - `debug_log_to_stream_files=true` - writes logs from kernels/routines to `log_files/<exe-name>/<backend>-<device>-<stream>.log`
 - `clean_up_build_files_on_startup=false` and `clean_up_log_files_on_startup=false` - preserve debug files between runs
 - CUDA/HIP routine logs need `Utils.capture_stdout_logs` unless `debug_log_to_stream_files=true` (see README)

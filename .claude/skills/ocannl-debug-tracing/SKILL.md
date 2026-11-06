@@ -5,7 +5,7 @@ description: How to get debug output out of OCANNL: kernel/routine runtime logs,
 
 # Debugging and Logging
 
-- Set `debug_log_from_routines=true` in config for kernel/routine-level debugging
+- Set `debug_log_from_routines=true` in config for kernel/routine-level debugging; it needs `log_level > 1` (`Utils.debug_log_from_routines ()` tests both) and is silent below that. Add `debug_log_to_stream_files=true` to read the lines: with the key off they go to `Utils.log_trace_tree`, which preprocesses to a no-op unless the build sets `OCANNL_LOG_LEVEL_UTILS`, so cc and Metal drop them
 - Use `log_level=2` for verbose ppx_minidebug output
 - CUDA and HIP routine logs are device-side `printf`, written to process stdout at a sync point. With `debug_log_to_stream_files=true` the backend keeps them off stdout itself: outside any `Utils.capture_stdout_logs` window it opens one around each logged launch and synchronizes the device inside it (gh-ocannl-1636; pinned by `test/operations/routine_log_stream_files.ml`). With the key off they are relogged into the debug trace only through a capture window the caller opens: wrap the runs in `Utils.capture_stdout_logs` and `Context.sync` before leaving it, or they reach stdout (and any `.expected` golden). `never_capture_stdout=true` turns both captures off
 - Debug files generated in `log_files/<exe-name>/` (this process's subdirectory is cleaned on startup by default)

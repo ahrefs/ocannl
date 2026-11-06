@@ -1370,7 +1370,9 @@
 # wide-oriented (a cookie stream cannot be).
 #collapse_foreign_stderr_noise=true
 
-# If `false`, debug logs from routines are re-logged via the ppx_minidebug framework.
+# If `false`, debug logs from routines are re-logged via the ppx_minidebug framework, but only in a
+# build with the preprocessing-time OCANNL_LOG_LEVEL_UTILS set: otherwise the cc and Metal backends
+# drop the lines, so `true` is how to read them there.
 # If `true`, the logs are in stream-specific files. WARNING: files are appended to, not overwritten.
 # On CUDA and HIP, where routine logs are device-side `printf` on process stdout, `true` also has
 # the backend capture each logged launch's output itself when no `Utils.capture_stdout_logs`
