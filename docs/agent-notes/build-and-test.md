@@ -4676,14 +4676,24 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   each GPU lane addressed.
 - A unit whose backend field is not a backend is a configuration VARIANT (gh-ocannl-1778), keyed by
   its own name in logs, history, unit state, `--only` and the run record, and mapped back to its
-  backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). The one so
-  far, `cc-outlined`, last in the local lane, runs `@runtest` on cc with
+  backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). Two so
+  far, both after cc and metal in the local lane. `cc-outlined` runs `@runtest` on cc with
   `OCANNL_CC_KERNEL_PART_WEIGHT=1 OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0`: every kernel large enough
   outlined, so a kernel-text reader added after the per-test `-outlined` reruns is still checked
   against outlined text. A VALUE golden that moves there is a finding (outlining runs the same
-  statements in order); a golden holding kernel text moves by design. A variant takes no `@train`
-  or `@slow` and is left out of the skip aggregation, which covers backends. The two keys are in
+  statements in order); a golden holding kernel text moves by design. The two keys are in
   the ambient record, so the local cc unit and this one each rebuild the other's test runs.
+  `cc-oracle-widen` (gh-ocannl-1964) builds one alias on cc,
+  `@test/operations/slow-virtual_inliner_oracle-widen`: the inliner oracle's full cross of every
+  write with every read on every shape (9 million programs, 10 to 16 minutes on one core), which
+  the default run `dune runtest` and CI hold thins on the large shapes. That cross is the only run
+  holding every pair there to the semantics, and the oracle's first run found a silent wrong value,
+  so it runs daily; the alias is a `slow-` member, so `tools/test-run.sh affected` names it to a
+  change reaching the inliner, and on Sunday the cc unit's `@slow` builds it first (the variant then
+  finds it built: same worktree, same environment). A variant takes no `@train` or `@slow` and is
+  left out of the skip aggregation, which covers backends. The sweep harness pins each variant's
+  one dune call (`sweep_harness.sh`, the `gh-ocannl-1778` and `gh-ocannl-1964` cases) and the run
+  record's backend map.
   Each machine's units form a lane — sequential within the box, which shares one worktree, lock and
   device, concurrent with the other boxes' lanes (gh-ocannl-976) — so wall-clock is the longest lane
   (the local one, metal's suite), and the remote units start while the routine's freshly woken WSL

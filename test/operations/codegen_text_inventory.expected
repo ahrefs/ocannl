@@ -893,7 +893,7 @@ test/operations/virtual_affine.ml [through Ll_test.execute; through Ll_test.run;
 test/operations/virtual_chain_fanin.ml [through Ll_test.execute; through Ll_test.link; through Ll_test.run; run by @test/operations/runtest-virtual_chain_fanin]
 test/operations/virtual_diagonal.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_diagonal]
 test/operations/virtual_guarded_setter.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-virtual_guarded_setter]
-test/operations/virtual_inliner_oracle.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_inliner_oracle]
+test/operations/virtual_inliner_oracle.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_inliner_oracle, @test/operations/slow-virtual_inliner_oracle-widen]
 test/operations/virtual_rejection_boundary.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-virtual_rejection_boundary, @test/operations/runtest-virtual_rejection_boundary_raise]
 test/operations/virtual_shared_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_shared_loop]
 test/operations/virtual_uncaptured_loop.ml [through Ll_test.execute; run by @test/operations/runtest-virtual_uncaptured_loop]
@@ -1036,6 +1036,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-zero_out_local_decl-extension
 @test/operations/runtest-zero_out_local_decl-unoptimized
 @test/operations/runtest-zero_run_reorder
+@test/operations/slow-virtual_inliner_oracle-widen
 
 == tests calling a backend's compiler with source of their own ==
 They pin nothing and build no kernel through the pipeline, and a change to a backend's

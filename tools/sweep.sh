@@ -39,13 +39,14 @@
 # boxes do not wait for each other.
 #
 # Usage:
-#   tools/sweep.sh                     # cc + metal + cc-outlined locally; cuda on rog-nv, hip +
-#                                      # multidev_cc on minix, and hip again on tuf (discrete
-#                                      # memory), if up
+#   tools/sweep.sh                     # cc + metal + cc-outlined + cc-oracle-widen locally; cuda on
+#                                      # rog-nv, hip + multidev_cc on minix, and hip again on tuf
+#                                      # (discrete memory), if up
 #   tools/sweep.sh --slow             # also `dune build @slow`
 #   tools/sweep.sh --force             # cold rebuild and re-execute every test alias
 #   tools/sweep.sh --only metal        # one backend (repeatable)
 #   tools/sweep.sh --only cc-outlined  # the cc suite with outlining forced (unit_backend)
+#   tools/sweep.sh --only cc-oracle-widen  # virtual_inliner_oracle --widen on cc (unit_suite)
 #   tools/sweep.sh --target test/einsum  # narrower dune target, for smoke-testing
 #   tools/sweep.sh --ref origin/master   # what to test (default: origin/master)
 #   OCANNL_TOOL_SWEEP_LOCAL_BOX=m4-max tools/sweep.sh  # required stable local box ID
@@ -461,22 +462,33 @@ UNITS=(
   "minix:multidev_cc:@minix"
   "tuf:hip:@tuf"
   "$LOCAL_BOX:cc-outlined:"
+  "$LOCAL_BOX:cc-oracle-widen:"
 )
 
-# A unit whose backend field is not a backend is a backend run under extra configuration, keyed
-# by its own name everywhere a unit is (logs, history, unit state, --only, the run record) and
-# mapped back to its backend wherever the backend itself decides something (OCANNL_BACKEND, the
-# CPU/GPU gates). One so far, cc-outlined (gh-ocannl-1778): the cc suite with every kernel large
-# enough forced outlined -- each top-level statement its own part, every part batch its own
-# translation unit (OCANNL_CC_KERNEL_PART_WEIGHT=1, OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0). At the
-# default part weight no test-size kernel is outlined, so a reader of kernel text added after
-# gh-ocannl-1708's reruns is checked against outlined text only here. Outlining runs the same
-# statements in the same order, so a VALUE golden that moves under it is a finding; a golden
-# holding the kernel's text moves by design. Last in the table, so it runs after cc and metal in
-# the local lane, and @runtest only (unit_suite): it is a check of the renderer, not of training.
+# A unit whose backend field is not a backend is a backend run under extra configuration, or of a
+# single alias, keyed by its own name everywhere a unit is (logs, history, unit state, --only, the
+# run record) and mapped back to its backend wherever the backend itself decides something
+# (OCANNL_BACKEND, the CPU/GPU gates). Two so far, both after cc and metal in the local lane, and
+# neither takes @train or @slow (unit_suite, unit_takes_slow).
+#
+# cc-outlined (gh-ocannl-1778): the cc suite with every kernel large enough forced outlined -- each
+# top-level statement its own part, every part batch its own translation unit
+# (OCANNL_CC_KERNEL_PART_WEIGHT=1, OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0). At the default part weight
+# no test-size kernel is outlined, so a reader of kernel text added after gh-ocannl-1708's reruns
+# is checked against outlined text only here. Outlining runs the same statements in the same order,
+# so a VALUE golden that moves under it is a finding; a golden holding the kernel's text moves by
+# design. @runtest only: it is a check of the renderer, not of training.
+#
+# cc-oracle-widen (gh-ocannl-1964): `virtual_inliner_oracle --widen` on cc, through its
+# `@test/operations/slow-virtual_inliner_oracle-widen` alias alone -- the inliner oracle's full cross
+# of every write with every read on every shape (9 million programs, 10 to 16 minutes on one core),
+# where the default run, the one `dune runtest` and CI hold, thins the large shapes to fit a test's
+# budget. It is the only run crossing every pair on those shapes, and the oracle's first run found a
+# real silent wrong value, so it runs daily rather than on Sunday's --slow alone. Last in the table:
+# the local lane is the sweep's wall-clock, and this unit is single-threaded.
 unit_backend() { # unit-backend
   case $1 in
-    cc-outlined) printf cc ;;
+    cc-outlined | cc-oracle-widen) printf cc ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -491,10 +503,14 @@ unit_dune_env() { # unit-backend
 unit_suite() { # unit-backend
   case $1 in
     cc-outlined) printf '@runtest' ;;
+    cc-oracle-widen) printf '@test/operations/slow-virtual_inliner_oracle-widen' ;;
     *) printf '@runtest @train' ;;
   esac
 }
-unit_takes_slow() { [ "$SLOW" = 1 ] && [ "$1" != cc-outlined ]; }
+# A variant's suite is its own; @slow is the backends' (on Sunday the cc unit's @slow builds the
+# oracle's widen alias too, which the cc-oracle-widen unit then finds built, in the same worktree
+# under the same environment).
+unit_takes_slow() { [ "$SLOW" = 1 ] && ! unit_is_variant "$1"; }
 # A configuration variant adds no backend whose skips need covering, and covers a narrower scope
 # than the skip report's, so the skip aggregation neither counts it nor reads its records.
 unit_is_variant() { [ "$(unit_backend "$1")" != "$1" ]; }
