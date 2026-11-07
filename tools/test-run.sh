@@ -3262,9 +3262,19 @@ sub dir_at {
 # prefix gives it, or, unnamed, any -- the launch is here when this root
 # could be it, a `.ocannl-test-runs` of some home -- and a launch whose
 # prefix unsets HOME is here too (it dies unpublished).
+# Two roots are one as the launch shell resolves them (query_physical_path:
+# `cd ROOT && pwd -P`): `.` and `..` collapsed on the text first, as a logical
+# cd does -- `link/../runs` is `runs` beside the link, not beside its target --
+# and only then the symlinks of what exists.
 sub same_root {
   my ($a, $b) = @_;
-  for ($a, $b) { $_ = Cwd::abs_path($_) // $_ if -d $_; s{(?<=.)/+\z}{} }
+  for ($a, $b) {
+    my @out;
+    for my $c (split m{/+}, $_) { next if $c eq "" || $c eq "."; if ($c eq "..") { pop @out if @out && $out[-1] ne ".." } else { push @out, $c } }
+    $_ = (m{\A/} ? "/" : "") . join("/", @out);
+    $_ = Cwd::abs_path($_) // $_ if -d $_;
+    s{(?<=.)/+\z}{};
+  }
   return $a eq $b;
 }
 sub runs_here {

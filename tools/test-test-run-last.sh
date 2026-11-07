@@ -60,7 +60,8 @@
 #      `-c` string) is seen once its own process runs it, `last` being A till
 #      then (the stated boundary, pinned); a launch under another
 #      OCANNL_TOOL_TEST_RUNS named by an `env` assignment in its argv (a `--`
-#      or an interpreter's `--` after it) is no launch under this root and
+#      or an interpreter's `--` after it; a symlink then `..` in it, read as
+#      a logical cd does) is no launch under this root and
 #      one under that, an `env -i` (or a bare `-`) clears an exported root,
 #      `-u` (spaced or attached, or in a cluster) with a HOME assignment is a
 #      launch under that HOME's default root, `-u` alone one under any
@@ -755,7 +756,8 @@ if [ -z "$q_detail" ]; then report 0 "$q_held_label"; else report 1 "$q_held_lab
 
 # A launch of this worktree under another state root: named by an `env`
 # assignment in its argv (a trailing slash, an `-u` before it, a `--` after
-# it, an interpreter and its `--` after it) it is no launch under this root
+# it, an interpreter and its `--` after it, a symlink then `..` in it, which
+# the launch shell's logical cd resolves beside the link) it is no launch under this root
 # and one under that (the control); an `env -i` clears the exported root (the
 # default root: none of these); the default root is under the launch's HOME,
 # so `-u OCANNL_TOOL_TEST_RUNS HOME=DIR` is a launch under DIR's default
@@ -771,9 +773,11 @@ if [ -z "$q_detail" ]; then report 0 "$q_held_label"; else report 1 "$q_held_lab
 # that times out and then `unpublished:`, as stated.
 q_detail=
 q_home=$TMP/queued-home
-mkdir -p "$q_home"
+mkdir -p "$q_home" "$TMP/queued-actual/child"
+ln -sfn "$TMP/queued-actual/child" "$TMP/queued-link"
 q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" tools/test-run.sh run build @red &&
   q_case 0 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS "OCANNL_TOOL_TEST_RUNS=$q_other/" -- tools/test-run.sh run build @red &&
+  q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$TMP/queued-link/../${q_other##*/}" tools/test-run.sh run build @red &&
   q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" bash -- tools/test-run.sh run build @red &&
   q_case 0 0 0 "$q_root" env -i "HOME=$HOME" "PATH=$PATH" tools/test-run.sh run build @red &&
   Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 0 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS "HOME=$q_home" tools/test-run.sh run build @red &&
