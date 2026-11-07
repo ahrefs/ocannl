@@ -3139,7 +3139,9 @@ sub cwd_read {
 # it ("" for `-u OCANNL_TOOL_TEST_RUNS` or `-i`, which clear it: the default,
 # unless an assignment after them), and `home`, the HOME an env prefix gives
 # or clears the same way (the default root is under the HOME of the launch, not
-# that of the reader); undef where no prefix said. Within one env invocation the
+# that of the reader); undef where no prefix said. Options are read in getopt
+# grammar: `--unset=NAME` or `--unset NAME`, `-uNAME` or `-u NAME`, clusters
+# (`-iC DIR`). Within one env invocation the
 # last `-C` wins, resolved against the directory env was entered in (GNU
 # env replaces, never composes); between nested ones they compose. A start
 # after a `--` -- of a wrapper, or of an interpreter -- at the very word a
@@ -3176,19 +3178,36 @@ sub positions {
         while ($j <= $#w && ($w[$j] =~ /\A-/ || ($b eq "env" && $w[$j] =~ /=/))) {
           last if $w[$j] eq "--";
           if ($b eq "env") {
-            my $operand = $j < $#w ? $w[$j + 1] : undef;
+            # env in getopt grammar: a long option with its operand attached
+            # (`--unset=NAME`) or spaced; a cluster of short ones (`-iC DIR`,
+            # `-uNAME`), the first that takes an operand taking the rest of
+            # the word, else the next word; an assignment.
             my $home = defined $home_at ? $home_at : $ENV{HOME};
-            if ($w[$j] =~ /\A(?:-C|--chdir)\z/) { $dir = env_dir($entry, $operand, $home) if defined $operand }
-            elsif ($w[$j] =~ /\A(?:-C(.+)|--chdir=(.*))\z/s) { $dir = env_dir($entry, defined $1 ? $1 : $2, $home) }
-            elsif ($w[$j] =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_at = $1 }
-            elsif ($w[$j] =~ /\AHOME=(.*)\z/s) { $home_at = $1 }
-            elsif ($w[$j] =~ /\A(?:-u|--unset)\z/ && defined $operand) {
-              $runs_at = "" if $operand eq "OCANNL_TOOL_TEST_RUNS";
-              $home_at = "" if $operand eq "HOME";
+            my ($opt, $val) = ($w[$j], undef);
+            my @short;
+            if ($opt =~ /\A--(unset|chdir|ignore-environment)(?:=(.*))?\z/s) { ($opt, $val) = ($1, $2) }
+            elsif ($opt =~ /\A-([^-].*)\z/s) { @short = split //, $1; $opt = "" }
+            elsif ($opt =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_at = $1; $opt = "" }
+            elsif ($opt =~ /\AHOME=(.*)\z/s) { $home_at = $1; $opt = "" }
+            else { $opt = "" }
+            while (@short) {
+              my $o = shift @short;
+              if ($o eq "i") { $runs_at = ""; $home_at = "" }
+              elsif ($o =~ /\A[uCPS]\z/) { $opt = $o eq "u" ? "unset" : $o eq "C" ? "chdir" : "operand"; $val = join("", @short) if @short; @short = () }
             }
-            elsif ($w[$j] eq "--unset=OCANNL_TOOL_TEST_RUNS") { $runs_at = "" }
-            elsif ($w[$j] eq "--unset=HOME") { $home_at = "" }
-            elsif ($w[$j] =~ /\A(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment)\z/) { $runs_at = ""; $home_at = "" }
+            if (length $opt) {
+              if ($opt eq "ignore-environment") { $runs_at = ""; $home_at = "" }
+              else {
+                unless (defined $val) { $val = $w[$j + 1] if $j < $#w; $j++ }
+                if (defined $val && $opt eq "chdir") { $dir = env_dir($entry, $val, $home) }
+                elsif (defined $val && $opt eq "unset") {
+                  $runs_at = "" if $val eq "OCANNL_TOOL_TEST_RUNS";
+                  $home_at = "" if $val eq "HOME";
+                }
+              }
+            }
+            $j++;
+            next;
           }
           $j++ if $w[$j] =~ $op;
           $j++;
