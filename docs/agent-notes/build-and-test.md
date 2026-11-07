@@ -1311,7 +1311,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   /proc/PID/environ is the exec-time one and a wrapper that exports a root before it runs its
   command shows the old one there (staging#1788 round 4), so a root exported to a launch is the
   loud over-read: a wait that times out, then `unpublished:`. A default root (`-u`, `-i`) is
-  under the HOME the prefix names, or, unnamed, any: the launch is here when this root could be it. The
+  under the HOME the prefix names, else unknown, and a launch under an unknown root is here; a
+  root is read literally (`~` unexpanded), as the script reads its own. The
   one fact stored is the sighting (a `queued-after` mark in the run `last` named then, or
   `queued-<key>` before the first run), since a launch that left without publishing leaves
   nothing else; a mark is a file's existence per run, so no late reader can overwrite a newer

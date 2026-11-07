@@ -3014,8 +3014,8 @@ group_identity_matches() {
 # runs it, not before (leg 105 of tools/test-test-run.sh pins it). And it
 # runs under THIS state root: the OCANNL_TOOL_TEST_RUNS an `env` prefix of
 # its argv assigns (or unsets, `-u` or `-i`: the default root, under the HOME
-# the prefix gives it or else any; a relative one is relative to the worktree,
-# where the script cds first), else, unknown, here -- environments are never
+# the prefix gives it, else unknown; a relative one is relative to the worktree,
+# where the script cds first, and `~` is literal), else, unknown, here -- environments are never
 # read (/proc/PID/environ is the exec-time one, stale under a wrapper that
 # exports before it runs its command).
 #
@@ -3149,9 +3149,8 @@ sub cwd_read {
 # prefix peeled to keeps what the prefix carried.
 my %interp = map { $_ => 1 } qw(sh bash zsh dash ksh);
 sub absolute { return $_[0] =~ m{\A(?:/|[A-Za-z]:[/\\])} } # a Windows drive spelling too (MSYS)
-sub env_dir { # the directory env was entered in, a `-C` operand, the HOME in effect
-  my ($prev, $d, $home) = @_;
-  $d =~ s{\A~(?=/|\z)}{$home} if defined $home && length $home;
+sub env_dir { # the directory env was entered in, a `-C` operand (literal: env expands no `~`)
+  my ($prev, $d) = @_;
   return $d if absolute($d) || !defined $prev;
   return "$prev/$d";
 }
@@ -3186,7 +3185,6 @@ sub positions {
             # assignment. `-S STRING` / `--split-string` hands its string to
             # the command: flattened, its words are the words that follow (an
             # attached one starts in this very word, which is rewritten to it).
-            my $home = defined $home_at ? $home_at : $ENV{HOME};
             my ($opt, $val) = ($w[$j], undef);
             my @short;
             if ($opt =~ /\A--(unset|chdir|ignore-environment|argv0|split-string)(?:=(.*))?\z/s) { ($opt, $val) = ($1, $2) }
@@ -3212,7 +3210,7 @@ sub positions {
               if ($opt eq "ignore-environment") { $runs_at = ""; $home_at = "" }
               else {
                 unless (defined $val) { $val = $w[$j + 1] if $j < $#w; $j++ }
-                if (defined $val && $opt eq "chdir") { $dir = env_dir($entry, $val, $home) }
+                if (defined $val && $opt eq "chdir") { $dir = env_dir($entry, $val) }
                 elsif (defined $val && $opt eq "unset") {
                   $runs_at = "" if $val eq "OCANNL_TOOL_TEST_RUNS";
                   $home_at = "" if $val eq "HOME";
@@ -3259,9 +3257,10 @@ sub dir_at {
 # command shows the old one there, so a reading would exclude a launch that
 # is ours (the under-read every rule here is against). The default root
 # (`-u`, `-i`) is .ocannl-test-runs under the HOME of the LAUNCH: the one its
-# prefix gives it, or, unnamed, any -- the launch is here when this root
-# could be it, a `.ocannl-test-runs` of some home -- and a launch whose
-# prefix unsets HOME is here too (it dies unpublished).
+# prefix gives it, else unknown, and a launch under an unknown root is here
+# (so is one whose prefix unsets HOME: it dies unpublished). A root is read
+# as the script reads it: literally (no `~` expansion: `~/runs` is a
+# directory `~` of the worktree), a relative one from the worktree root.
 # Two roots are one as the launch shell resolves them (query_physical_path:
 # `cd ROOT && pwd -P`): `.` and `..` collapsed on the text first, as a logical
 # cd does -- `link/../runs` is `runs` beside the link, not beside its target --
@@ -3285,12 +3284,9 @@ sub runs_here {
     : defined $ENV{HOME} && length $ENV{HOME} ? "$ENV{HOME}/.ocannl-test-runs" : undef;
   return 1 unless defined $here;
   if (!length $v) {
-    if (!defined $h) { (my $n = $here) =~ s{/+\z}{}; return $n =~ m{/\.ocannl-test-runs\z} ? 1 : 0 }
-    return 1 unless length $h;
+    return 1 unless defined $h && length $h;
     $v = "$h/.ocannl-test-runs";
   }
-  $h = $ENV{HOME} unless defined $h && length $h;
-  $v =~ s{\A~(?=/|\z)}{$h} if defined $h && length $h;
   # The script reads a relative root after its own cd to the worktree root.
   $v = "$root/$v" unless absolute($v);
   return same_root($v, $here);
