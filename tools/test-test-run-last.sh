@@ -66,9 +66,10 @@
 #      one under that, an `env -i` (or a bare `-`) clears an exported root,
 #      `-u` (spaced or attached, or in a cluster) with a HOME assignment is a
 #      launch under that HOME's default root, `-u` alone one under every
-#      root asked (its root is unknown), a `~` in a root is literal, and one
-#      exported alone is the loud over-read on every host (environments are
-#      never read).
+#      root asked (its root is unknown), a `~` in a root is literal, a value
+#      or `-C` operand still holding shell text (`${HOME}` in an `-S` string)
+#      is unknown and so here, and one exported alone is the loud over-read
+#      on every host (environments are never read).
 # 102 sits last: this harness, run on leg 99 with --subject naming a copy of
 #      the script whose `prepush --list` rule is taken out of proc_table_perl,
 #      exits 1 with exactly the one check that rule answers failed, having
@@ -776,7 +777,10 @@ if [ -z "$q_detail" ]; then report 0 "$q_held_label"; else report 1 "$q_held_lab
 # literally, so `~/queued-tilde` is the directory `~` of the worktree, as the
 # script's own `cd "$RUNS"` reads it; the harness's own default root is never
 # read, so the `-i` case is checked under the two roots that are not it.
-# Exported alone, the root is over-read: environments are never read
+# A value still holding shell text (`${HOME}/...` inside an `-S` string,
+# which env expands and the reader does not) names an unknown root, and an
+# unknown `-C` operand an unknown directory: the launch is here, in every
+# worktree asked. Exported alone, the root is over-read: environments are never read
 # (/proc/PID/environ is the exec-time one, stale under a wrapper that exports
 # before it runs its command), so the launch is in flight here, loud: a wait
 # that times out and then `unpublished:`, as stated.
@@ -796,6 +800,8 @@ q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" tools/test-run.sh ru
   Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 0 0 3 "$q_root" env - "HOME=$q_home" "PATH=$PATH" tools/test-run.sh run build @red &&
   Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 3 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS tools/test-run.sh run build @red &&
   Q_OTHER_RUNS="$q_root/~/queued-tilde" q_case 0 0 3 "$q_root" env 'OCANNL_TOOL_TEST_RUNS=~/queued-tilde' tools/test-run.sh run build @red &&
+  q_case 3 0 3 "$q_root" env -S 'OCANNL_TOOL_TEST_RUNS=${HOME}/queued-unread tools/test-run.sh run build @red' &&
+  q_case 3 3 - "$TMP" env -S '-C ${QUEUED_REPO} tools/test-run.sh run build @red' &&
   Q_ENV_RUNS=$q_other q_case 3 0 3 "$q_root" tools/test-run.sh run build @red || :
 if [ -z "$q_detail" ]; then report 0 "$q_root_label"; else report 1 "$q_root_label" "$q_detail"; fi
 }

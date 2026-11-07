@@ -3149,6 +3149,10 @@ sub cwd_read {
 # prefix peeled to keeps what the prefix carried.
 my %interp = map { $_ => 1 } qw(sh bash zsh dash ksh);
 sub absolute { return $_[0] =~ m{\A(?:/|[A-Za-z]:[/\\])} } # a Windows drive spelling too (MSYS)
+# A value still holding shell text -- `$`, a quote, a backslash: the words of
+# an `env -S` string before env expands them -- is not read: the root or the
+# directory it names is unknown, and an unknown one keeps the launch here.
+sub plain { return $_[0] !~ /[\$`\x27"\\]/ }
 sub env_dir { # the directory env was entered in, a `-C` operand (literal: env expands no `~`)
   my ($prev, $d) = @_;
   return $d if absolute($d) || !defined $prev;
@@ -3162,7 +3166,7 @@ sub positions {
   $text = @w unless defined $text;
   my @starts = (0, grep { $w[$_ - 1] eq "--" } 1 .. $text - 1);
   for my $j (@starts) {
-    my ($dir, $runs_at, $home_at);
+    my ($dir, $runs_at, $home_at, $dir_unknown);
     while ($j <= $#w) {
       (my $b = base($w[$j])) =~ s/\A-//;
       $b =~ s/\.exe\z//;
@@ -3190,8 +3194,8 @@ sub positions {
             if ($opt =~ /\A--(unset|chdir|ignore-environment|argv0|split-string)(?:=(.*))?\z/s) { ($opt, $val) = ($1, $2) }
             elsif ($opt eq "-") { $runs_at = ""; $home_at = ""; $opt = "" }
             elsif ($opt =~ /\A-([^-].*)\z/s) { @short = split //, $1; $opt = "" }
-            elsif ($opt =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_at = $1; $opt = "" }
-            elsif ($opt =~ /\AHOME=(.*)\z/s) { $home_at = $1; $opt = "" }
+            elsif ($opt =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_at = plain($1) ? $1 : undef; $opt = "" }
+            elsif ($opt =~ /\AHOME=(.*)\z/s) { $home_at = plain($1) ? $1 : undef; $opt = "" }
             else { $opt = "" }
             while (@short) {
               my $o = shift @short;
@@ -3210,7 +3214,7 @@ sub positions {
               if ($opt eq "ignore-environment") { $runs_at = ""; $home_at = "" }
               else {
                 unless (defined $val) { $val = $w[$j + 1] if $j < $#w; $j++ }
-                if (defined $val && $opt eq "chdir") { $dir = env_dir($entry, $val) }
+                if (defined $val && $opt eq "chdir") { if (plain($val)) { $dir = env_dir($entry, $val) } else { $dir = undef; $dir_unknown = 1 } }
                 elsif (defined $val && $opt eq "unset") {
                   $runs_at = "" if $val eq "OCANNL_TOOL_TEST_RUNS";
                   $home_at = "" if $val eq "HOME";
@@ -3233,7 +3237,7 @@ sub positions {
         last if $j > $#w || $w[$j] eq "-c";
         if ($w[$j] eq "--") { $j++; next }
       }
-      $at{$j} = { dir => $dir, runs => $runs_at, home => $home_at } unless exists $at{$j};
+      $at{$j} = { dir => $dir, runs => $runs_at, home => $home_at, dir_unknown => $dir_unknown } unless exists $at{$j};
       last;
     }
   }
@@ -3346,6 +3350,9 @@ for my $p (sort { $a <=> $b } keys %args) {
     last if base($w[$i]) eq "ssh" || ($w[$i] eq "execution" && $w[$i + 1] eq "leg");
     next unless base($w[$i]) eq "test-run.sh" && $verb{$w[$i + 1]};
     next if $w[$i + 1] eq "prepush" && grep { /\A--list(?:=|\z)/ } @w[$i + 2 .. $#w];
+    # A relative script word behind a `-C` whose operand is unread text: the
+    # directory is unknown, so the launch may be of this worktree -- here.
+    if ($at->{$i} && $at->{$i}{dir_unknown} && $w[$i] !~ m{\A[/~]}) { $hit = 1; $hit_at = $at->{$i}; next }
     my $found;
     for my $j (reverse(($i > 8 ? $i - 8 : 0) .. $i)) {
       my $path = join(" ", @w[$j .. $i]);
