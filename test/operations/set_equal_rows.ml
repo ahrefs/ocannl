@@ -20,12 +20,15 @@ let capture_row (r : Shape.delayed_var_ref) t =
   let l = r.var_ref.ref_label in
   NTDSL.einsum1 ~capture_dims:[ r ] (Printf.sprintf "..%s.. => ..%s.." l l) t ()
 
-(* An independent capture fixes [t]'s axes to [sizes], one axis per size. *)
+(* An independent capture fixes [t]'s axes to [sizes], one axis per size. The labels are
+   multi-letter, so the spec must be in multichar mode: with two or more axes their separating comma
+   selects it, with one axis a trailing comma does -- in single-char mode [f0 => f0] lexes as the
+   axis [f] followed by the fixed index [0], and the capture fails as "Variable f0 not found". *)
 let fix t sizes =
   let labels = List.mapi sizes ~f:(fun i _ -> Printf.sprintf "f%d" i) in
   let refs = List.map labels ~f:Shape.get_variable_ref in
   List.iter2_exn refs sizes ~f:Shape.set_dim;
-  let axes = String.concat ~sep:", " labels in
+  let axes = match labels with [ l ] -> l ^ "," | _ -> String.concat ~sep:", " labels in
   ignore (NTDSL.einsum1 ~capture_dims:refs (axes ^ " => " ^ axes) t () : Tensor.t)
 
 let dims t = Array.to_list (Lazy.force t.Tensor.value.dims)
