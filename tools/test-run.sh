@@ -3037,9 +3037,13 @@ group_identity_matches() {
 # OCANNL_TOOL_TEST_RUNS its argv does not name (one exported to it) is in
 # flight here, and once gone, one that ended unpublished.
 #
-# The table comes from /proc where it exists (Linux, Cygwin/MSYS), from `ps`
-# elsewhere, and start tokens are ps_token's renderings (stat's starttime, or
-# lstart under C/UTC), so the chain a launcher recorded compares as strings.
+# The table comes from /proc where it exists (Linux, Cygwin/MSYS) -- the argv
+# words exact, whitespace and all -- from `ps` elsewhere, flattened, a word
+# that held whitespace split with it (a root holding whitespace is then not
+# this reader's to recognize: a reader whose own root holds whitespace
+# excludes no launch by its root); start tokens are ps_token's renderings
+# (stat's starttime, or lstart under C/UTC), so the chain a launcher recorded
+# compares as strings.
 # Modes: `chain` prints "PID TOKEN ARGV-MD5" for this reader's parent and each ancestor
 # above it; `pending ROOT UID RUNS [LAST]` prints "PID ARGV" for each launch
 # in flight, RUNS being the state root whose run directories hold the chains
@@ -3048,7 +3052,7 @@ group_identity_matches() {
 proc_table_perl='
 use strict; use warnings; use Cwd (); use Digest::MD5 (); use POSIX (); use Time::Local ();
 my ($mode, $root, $uid, $runs, $last) = @ARGV;
-my (%pp, %uid, %tok, %args);
+my (%pp, %uid, %tok, %args, %argv);
 sub slurp { open(my $f, "<", $_[0]) or return undef; local $/; my $s = <$f>; close $f; return $s }
 my $proc = -d "/proc/$$";
 if ($proc) {
@@ -3064,6 +3068,7 @@ if ($proc) {
     my $c = slurp("/proc/$p/cmdline");
     $c = "" unless defined $c;
     $c =~ s/\0+\z//;
+    $argv{$p} = [split /\0/, $c]; # the words as exec got them, whitespace and all
     $c =~ tr/\0/ /;
     $args{$p} = $c;
   }
@@ -3207,7 +3212,9 @@ sub positions {
               }
             }
             if ($opt eq "split-string") {
-              if (defined $val && length $val) { $w[$j] = $val } else { $j++ }
+              # The string, one word where the table kept it whole, is
+              # split on whitespace as env splits it (quotes unread: plain).
+              if (defined $val && length $val) { splice(@w, $j, 1, split(" ", $val)) } else { $j++; splice(@w, $j, 1, split(" ", $w[$j])) if $j <= $#w }
               next;
             }
             if (length $opt) {
@@ -3301,6 +3308,9 @@ sub runs_here {
   my $here = defined $runs && length $runs ? $runs
     : defined $ENV{HOME} && length $ENV{HOME} ? "$ENV{HOME}/.ocannl-test-runs" : undef;
   return 1 unless defined $here;
+  # A root holding whitespace: a table without /proc splits it, so the
+  # spelling of this root cannot be recognized -- no launch is excluded by it.
+  return 1 if $here =~ /\s/ && !%argv;
   if (!length $v) {
     return 1 unless defined $h && length $h;
     $v = "$h/.ocannl-test-runs";
@@ -3341,7 +3351,9 @@ sub credited { my $p = shift; return $known{"$p $tok{$p} " . Digest::MD5::md5_he
 for my $p (sort { $a <=> $b } keys %args) {
   next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
   next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
-  my @w = split " ", $args{$p};
+  # The words: exact from /proc; from ps, the flattened line split again, a
+  # word that held whitespace split with it (the spaced-path join below).
+  my @w = $argv{$p} ? @{$argv{$p}} : split " ", $args{$p};
   next unless @w && base($w[0]) =~ $prog;
   my ($at, $ww) = positions(@w);
   @w = @$ww; # an attached `-S` string split off its option
