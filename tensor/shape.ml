@@ -4502,10 +4502,122 @@ let refuse_unsized_kernels (update_step : update_step) =
           let v = Row.get_var ~name () in
           raise @@ Row.unsized_kernel_error ~spec ~use_padding:true v (Row.Var v)))
 
+(** The concatenations of a spec that have no meaning, whatever the shapes (gh-ocannl-2017). A
+    concatenated axis is one axis of alternatives: a position lies in one segment, and an integer
+    component is a segment the spec skips. Refused before anything is written, like
+    [refuse_unsized_kernels], and from the spec, not the rows: closure sums a concatenated axis
+    away, so a check on them would see a different program for a closed operand than for an open
+    one.
+
+    - One tensor's axes needing two components of a concatenation: no position has both, so
+      lowering's segment blocks reach that access for none of them, at any extent but 1.
+    - A result concatenation no component of which an operand names: nothing says what its segments
+      hold. It was iterated like a plain axis, every cell taking the reduced operand, against what
+      the components say everywhere else ([2^b => 2^b] skips the [2]). An operand concatenation no
+      component of which the result names is a reduction over every cell, and stays.
+    - Block operands out of the order of the segments they fill: an operand of a width-1 segment
+      indexes at [Fixed_idx 0] and names no segment, so the lowering of a block selects its operand
+      by position (in [Assignments]), and two swapped width-1 operands would swap silently. Other
+      einsums multiply their operands, which may share a segment. *)
+let refuse_meaningless_concats (update_step : update_step) =
+  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, _) ->
+      let ls_rhs_list, ls_lhs = einsum_of_spec spec in
+      let refuse msg =
+        raise
+        @@ Row.Shape_error
+             ([%string "einsum spec \"%{spec}\": %{msg}"], [ Shape_mismatch [ update_step.shape ] ])
+      in
+      let axes_of (ls : parsed_axis_labels) = Map.data ls.labels in
+      let outside_concats axes =
+        List.concat_map axes ~f:(function
+          | Label l -> [ l ]
+          | Affine_spec { over_label; conv; _ } ->
+              over_label
+              :: Option.value_map conv ~default:[] ~f:(fun { kernel_label; _ } -> [ kernel_label ])
+          | Fixed_index _ | Concat_spec _ -> [])
+        |> List.dedup_and_sort ~compare:String.compare
+      in
+      let in_concats axes =
+        List.concat_map axes ~f:(function
+          | Concat_spec components ->
+              List.filter_map components ~f:(function
+                | Concat_label l -> Some l
+                | Concat_size _ -> None)
+          | Label _ | Fixed_index _ | Affine_spec _ -> [])
+      in
+      let concats axes =
+        List.filter_map axes ~f:(function Concat_spec components -> Some components | _ -> None)
+      in
+      let concat_text components =
+        String.concat ~sep:"^" (List.map components ~f:concat_component_text)
+      in
+      let slots = List.map (ls_lhs :: ls_rhs_list) ~f:axes_of in
+      let result_axes = axes_of ls_lhs in
+      let operands = List.map ls_rhs_list ~f:axes_of in
+      List.iter (List.concat_map slots ~f:concats) ~f:(fun components ->
+          let labels = in_concats [ Concat_spec components ] in
+          List.iter slots ~f:(fun axes ->
+              match List.filter (outside_concats axes) ~f:(List.mem labels ~equal:String.equal) with
+              | first :: second :: _ ->
+                  refuse
+                    [%string
+                      "one tensor's axes need both %{first} and %{second}, components of the \
+                       concatenated axis %{concat_text components}, but a position of that axis \
+                       lies in one segment, so no position has both and the operation would \
+                       compute nothing. Name one component per tensor (x ++ \"a^b => a\" takes a \
+                       segment; (x, y) ++^ \"a; b => a^b\" joins two)"]
+              | _ -> ()));
+      let operand_labels =
+        List.concat_map operands ~f:(fun axes -> outside_concats axes @ in_concats axes)
+      in
+      let result_concats = concats result_axes in
+      List.iter result_concats ~f:(fun components ->
+          if
+            not
+              (List.exists
+                 (in_concats [ Concat_spec components ])
+                 ~f:(List.mem operand_labels ~equal:String.equal))
+          then
+            let text = concat_text components in
+            refuse
+              [%string
+                "no operand names a component of the concatenated result axis %{text}, so nothing \
+                 says what its segments hold. To write part of the axis, name the segment (a => \
+                 2^a^3 writes a between two skipped segments); to repeat a reduced operand in \
+                 every cell, use a plain axis and size it (x ++ \"a => b\" [\"b\"], then \
+                 Shape.set_dim b 5)"]);
+      match (update_step.logic, result_concats) with
+      | Block _, [ components ] when List.length components = List.length operands ->
+          let position label =
+            List.findi components ~f:(fun _ c ->
+                match c with Concat_label l -> String.equal l label | Concat_size _ -> false)
+            |> Option.map ~f:fst
+          in
+          let filled =
+            List.filter_map operands ~f:(fun axes ->
+                match
+                  List.filter_map
+                    (List.dedup_and_sort ~compare:String.compare
+                       (outside_concats axes @ in_concats axes))
+                    ~f:position
+                with
+                | [ position ] -> Some position
+                | _ -> None)
+          in
+          if not (List.is_sorted filled ~compare:Int.compare) then
+            let text = concat_text components in
+            refuse
+              [%string
+                "the operands are not in the order of the segments of the concatenated result axis \
+                 %{text}. List them in that order: (y, x) ++^ \"a; b => a^b\" rather than (x, y) \
+                 ++^ \"b; a => a^b\""]
+      | _ -> ())
+
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   check_untainted ();
   refuse_discarded_operands update_step;
   refuse_unsized_kernels update_step;
+  refuse_meaningless_concats update_step;
   if tracing_in_progress () then propagate_inline update_step
   else timed `Inline_step (fun () -> propagate_inline update_step)
 

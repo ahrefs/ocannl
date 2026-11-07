@@ -152,8 +152,19 @@ files.
   Likewise a later step sees a concatenation with a variable component as a plain `Dim`
   (`test/einsum/concat_axis_consumers` executes slices, fixed indices and windows over one):
   substitution is what sums the components, so `Concat` stays in a closed row for a symbolic
-  component, refused by `symbolic_concat_error`, and for integer components alone (`=> 2^3`),
-  whose own step dies in `Row.get_dim_padding`.
+  component, refused by `symbolic_concat_error`, and for an operand's integer components alone
+  (`2^3 =>`), whose own step dies in `Row.get_dim_padding`.
+- A concat's segments are alternatives, and a block that cannot substitute an access is silently
+  empty, so a form with no meaning used to compute all zeros or partly zeros: `p^q => p, q`,
+  `a, b => a^b`. A result concat no operand names was iterated like a plain axis, each cell taking
+  the reduced operand (`a => 2^3`, `p^q => r^s`), though an integer is a skipped segment everywhere
+  else (`2^b => 2^b` is `[0 0 3 4 5]`). `Shape.refuse_meaningless_concats` decides these from the
+  spec, since closure sums the axis and a width-1 axis indexes at `Fixed_idx 0`, and `loop_accum`
+  refuses an operand no block reached; refusing empty BLOCKS or unreached segments would be wrong,
+  replacements leave segments unwritten (gh-ocannl-2017). Only a single LHS `Concat` of one segment
+  per operand selects operands by position, and only if each operand names its own segment (or none,
+  at width 1): `block_selector` otherwise lets substitution decide, so two viable operands are
+  refused as ambiguous rather than filling a segment from the wrong one.
 - An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
   at or past the stride, or on an unpadded window, indexes past the extent. On the result side
   those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an

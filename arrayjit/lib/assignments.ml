@@ -56,7 +56,9 @@ type accum_rhs =
           an argument axis or producing part of a result axis. The corresponding [projections] must
           use [Concat] in such a way that every choice of [Concat] components uses at most one of
           the [rhses] (note: none is allowed). Note: it is also allowed that there is no LHS (i.e.
-          no valid LHS projection) for some choices of the [Concat] components. *)
+          no valid LHS projection) for some choices of the [Concat] components. Every operand must
+          be used by some choice, though: one no choice reaches is refused at lowering
+          (gh-ocannl-2017). *)
   | Rev_sides of { op : Ops.unop; lhses : buffer array }
       (** Causes the [Accum_op] to completely reverse its semantics: left-hand side and right-hand
           side are swapped. [lhs] becomes the read-from tensor and [rhs], i.e. [lhses] above, become
@@ -765,8 +767,9 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
   in
   (* gh-ocannl-764: the product-loop machinery, written once. [Empty_block] is raised while
      substituting an index that needs a product iterator the current block did not descend into --
-     the index belongs to a different concat segment, so this block contributes no statement for
-     it. *)
+     the index belongs to a different concat segment, so this block contributes no statement for it.
+     That is what a partial block is, and it cannot define an access that needs two segments at
+     once: [loop_accum] refuses an operand no block reached (gh-ocannl-2017). *)
   let exception Empty_block in
   (* The per-block substitution from product iterators to this block's fresh loop symbols, plus the
      loop widths of those fresh symbols (the gh-504 clamp bounds). Fresh loop symbols are needed
@@ -805,13 +808,15 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       in
       Option.value ~default:0 offset
     in
+    let inactive s =
+      Set.mem all_prod_iters s && not (Array.mem ~equal:Indexing.equal_symbol block_iters s)
+    in
     let subst_index = function
       | (Indexing.Fixed_idx _ | Indexing.Sub_axis) as idx -> idx
-      | Indexing.Iterator s
-        when Set.mem all_prod_iters s && not (Array.mem ~equal:Indexing.equal_symbol block_iters s)
-        ->
-          raise Empty_block
+      | Indexing.Iterator s when inactive s -> raise Empty_block
       | Indexing.Iterator s as idx -> Option.value ~default:idx (Map.find subst_map s)
+      | Indexing.Affine { symbols; _ } when List.exists symbols ~f:(fun (_, s) -> inactive s) ->
+          raise Empty_block
       | Indexing.Affine { symbols; offset } ->
           (* [subst_map] only ever maps to [Iterator], so the two failing branches are unreachable;
              they are spelled out rather than wildcarded so that widening the map is a build error
@@ -860,6 +865,32 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     in
     (subst_index, fresh_sizes)
   in
+  let segment_width (projections : Indexing.projections) sym =
+    Array.find_map projections.components
+      ~f:(List.find_map ~f:(fun (d, s) -> Option.some_if (Indexing.equal_symbol s sym) d))
+  in
+  (* Which operand each segment of a single LHS [Concat] selects, when there is one per operand: the
+     operand at the segment's position (Shape refuses operands out of order). An operand that names
+     no segment is a width-1 one, whose axis indexes at [Fixed_idx 0]. Any other operand -- naming
+     another segment, or none where its position's segment is wider -- makes the positions
+     meaningless, and every operand takes part, so that blocks are told apart by what they can
+     substitute and two viable operands are refused as ambiguous. *)
+  let block_selector ~arity (projections : Indexing.projections) =
+    match
+      Array.filter_map projections.project_lhs ~f:(function
+        | Indexing.Concat syms -> Some syms
+        | _ -> None)
+    with
+    | [| syms |] when List.length syms = arity ->
+        let syms = Array.of_list syms in
+        let selects i idcs =
+          let names s = Array.exists idcs ~f:(Indexing.axis_index_mentions_symbol s) in
+          (names syms.(i) || Option.equal Int.equal (segment_width projections syms.(i)) (Some 1))
+          && not (Array.existsi syms ~f:(fun j s -> j <> i && names s))
+        in
+        Option.some_if (Array.for_alli projections.project_rhs ~f:selects) syms
+    | _ -> None
+  in
   (* The product-space loop nest of one assignment: one loop per SEGMENT of each component (a fresh
      symbol each, gh-ocannl-765), extent-guarded, calling [f] at the innermost level of every block
      -- i.e. once per choice of concat segments. [f] receives the block's substitution, the fresh
@@ -904,22 +935,14 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
               extent is bound to. This is the maximum-one symbolic axis: use a concrete dimension \
               of 1, or leave the extent unbound to generate the declared maximum shape"];
     let iter_sizes = Indexing.iterator_sizes projections in
-    let concat_syms_opt =
-      match
-        Array.filter_map projections.project_lhs ~f:(function
-          | Indexing.Concat syms -> Some syms
-          | _ -> None)
-      with
-      | [| syms |] when List.length syms = arity -> Some (Array.of_list syms)
-      | _ -> None
-    in
+    let selector = block_selector ~arity projections in
     let basecase block_iters rev_iters =
       let block_iters = Array.of_list_rev block_iters in
       let subst_index, fresh_sizes =
         block_subst ~iter_sizes ~all_prod_iters ~on_concat:(`Resolve role) ~block_iters ~rev_iters
       in
       let is_allowed i =
-        match concat_syms_opt with
+        match selector with
         | None -> true
         | Some syms -> Array.mem ~equal:Indexing.equal_symbol block_iters syms.(i)
       in
@@ -954,6 +977,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       =
     let projections : Indexing.projections = Lazy.force projections in
     let margin_writes = ref [] in
+    let reached = Array.create ~len:(Array.length rhses) false in
     let for_loops =
       with_product_loops ~projections ~lhs ~arity:(Array.length rhses) ~role:"Block"
         ~f:(fun ~subst_index ~fresh_sizes ~is_allowed ->
@@ -969,6 +993,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                   if not (is_allowed i) then None
                   else
                     let rhs_idcs = Array.map ~f:subst_index rhs_idcs in
+                    reached.(i) <- true;
                     Some (get ~clamp:(accum, fresh_sizes, rhs_conds) rhses.(i) rhs_idcs)
                 with Empty_block -> None)
           in
@@ -1003,6 +1028,23 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
           | [] -> stmt
           | conds -> Low_level.If { cond = and_all conds; body = stmt })
     in
+    (* A block that substitutes neither the result nor an operand contributes nothing, and an
+       assignment can be partial that way: a replacement leaves segments unwritten. But an operand
+       no block reached was silently never read, and the result stayed at its initialization
+       wherever it should have depended on it (gh-ocannl-2017): the access needs two segments, or
+       the result and the operand need different ones. *)
+    (match Array.filter_mapi reached ~f:(fun i reached -> Option.some_if (not reached) (i + 1)) with
+    | [||] -> ()
+    | unreached ->
+        let unreached = String.concat_array ~sep:", " (Array.map unreached ~f:Int.to_string) in
+        raise
+        @@ Utils.User_error
+             [%string
+               "Concatenation in einsum spec \"%{projections.debug_info.spec}\" of %{Tn.debug_name \
+                lhs}: no segment of a concatenated axis reaches operand(s) %{unreached} (counted \
+                from 1). A position of that axis lies in one segment, and the result and each \
+                operand can only use the segment it lies in: the result or the operand needs \
+                another one, or two at once, so the operand would never be read"]);
     (* Need initialization if: initialize_neutral is true AND (not surjective OR not injective)
 
        Not surjective: some positions never written (need init to avoid garbage)
@@ -1080,19 +1122,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
   and loop_accum_rev ~initialize_neutral ~accum ~(op : Ops.op) ~lhs ~lhses projections : Low_level.t
       =
     let projections : Indexing.projections = Lazy.force projections in
-    let selector =
-      match
-        Array.filter_map projections.project_lhs ~f:(function
-          | Indexing.Concat syms -> Some syms
-          | _ -> None)
-      with
-      | [| syms |] when List.length syms = Array.length lhses -> Some (Array.of_list syms)
-      | _ -> None
-    in
-    let segment_width sym =
-      Array.find_map projections.components
-        ~f:(List.find_map ~f:(fun (d, s) -> Option.some_if (Indexing.equal_symbol s sym) d))
-    in
+    let selector = block_selector ~arity:(Array.length lhses) projections in
     let target_projections =
       Array.mapi projections.project_rhs ~f:(fun i project_lhs ->
           let target_dims = projections.rhs_dims.(i) in
@@ -1126,7 +1156,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                 let project_lhs =
                   if Array.exists project_lhs ~f:(Indexing.axis_index_mentions_symbol selected) then
                     Some project_lhs
-                  else if Option.equal Int.equal (segment_width selected) (Some 1) then
+                  else if Option.equal Int.equal (segment_width projections selected) (Some 1) then
                     Array.findi project_lhs ~f:(fun ax idx ->
                         match idx with Indexing.Fixed_idx 0 -> target_dims.(ax) = 1 | _ -> false)
                     |> Option.map ~f:(fun (ax, _) ->

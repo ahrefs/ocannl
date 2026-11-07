@@ -41,3 +41,79 @@ a symbolic component, at a fixed index: Shape_error: a concatenation component h
 a symbolic component, at a fixed index: the refusal names the symbolic component: true
 a symbolic component, sliced: Shape_error: a concatenation component has a symbolic extent, which is not supported: where the segments after it start would depend on the launch-time extent. Concatenate along an axis of fixed size
 a symbolic component, sliced: the refusal names the symbolic component: true
+the result needs both components, a binary einsum: einsum spec "p^q; 2*p => p, q": one tensor's axes need both p and q, components of the concatenated axis p^q, but a position of that axis lies in one segment, so no position has both and the operation would compute nothing. Name one component per tensor (x ++ "a^b => a" takes a segment; (x, y) ++^ "a; b => a^b" joins two)
+the result needs both components, a binary einsum: the refusal says why: true
+the result needs both components, through %op: einsum spec "p ^ q; 2*p => p, q": one tensor's axes need both p and q, components of the concatenated axis p^q, but a position of that axis lies in one segment, so no position has both and the operation would compute nothing. Name one component per tensor (x ++ "a^b => a" takes a segment; (x, y) ++^ "a; b => a^b" joins two)
+the result needs both components, through %op: the refusal says why: true
+the result needs both components, sized by captures: einsum spec "p^q => p, q": one tensor's axes need both p and q, components of the concatenated axis p^q, but a position of that axis lies in one segment, so no position has both and the operation would compute nothing. Name one component per tensor (x ++ "a^b => a" takes a segment; (x, y) ++^ "a; b => a^b" joins two)
+the result needs both components, sized by captures: the refusal says why: true
+a window needs one of them: einsum spec "2*a, b => a^b": one tensor's axes need both a and b, components of the concatenated axis a^b, but a position of that axis lies in one segment, so no position has both and the operation would compute nothing. Name one component per tensor (x ++ "a^b => a" takes a segment; (x, y) ++^ "a; b => a^b" joins two)
+a window needs one of them: the refusal says why: true
+an operand needs both components: einsum spec "a, b => a^b": one tensor's axes need both a and b, components of the concatenated axis a^b, but a position of that axis lies in one segment, so no position has both and the operation would compute nothing. Name one component per tensor (x ++ "a^b => a" takes a segment; (x, y) ++^ "a; b => a^b" joins two)
+an operand needs both components: the refusal says why: true
+an operand needs both, and one component is a single cell: einsum spec "a, b => a^b": one tensor's axes need both a and b, components of the concatenated axis a^b, but a position of that axis lies in one segment, so no position has both and the operation would compute nothing. Name one component per tensor (x ++ "a^b => a" takes a segment; (x, y) ++^ "a; b => a^b" joins two)
+an operand needs both, and one component is a single cell: the refusal says why: true
+an operand needs two of three: einsum spec "a, b; c => a^b^c": one tensor's axes need both a and b, components of the concatenated axis a^b^c, but a position of that axis lies in one segment, so no position has both and the operation would compute nothing. Name one component per tensor (x ++ "a^b => a" takes a segment; (x, y) ++^ "a; b => a^b" joins two)
+an operand needs two of three: the refusal says why: true
+an operand needs both, another fills one: einsum spec "a, b; b => a^b": one tensor's axes need both a and b, components of the concatenated axis a^b, but a position of that axis lies in one segment, so no position has both and the operation would compute nothing. Name one component per tensor (x ++ "a^b => a" takes a segment; (x, y) ++^ "a; b => a^b" joins two)
+an operand needs both, another fills one: the refusal says why: true
+integers alone, a closed operand: einsum spec "a => 2^3": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+integers alone, a closed operand: the refusal says why: true
+integers alone, the operand as long as the axis: einsum spec "a => 2^3": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+integers alone, the operand as long as the axis: the refusal says why: true
+integers alone, an open operand: einsum spec "a => 2^3": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+integers alone, an open operand: the refusal says why: true
+integers alone, through %op: einsum spec "a => 2 ^ 3": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+integers alone, through %op: the refusal says why: true
+integers alone, no operand axis: einsum spec " => 2^3": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+integers alone, no operand axis: the refusal says why: true
+beside a plain axis: einsum spec "a, c => 2^3, c": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+beside a plain axis: the refusal says why: true
+integers both ways: einsum spec "2^3 => 2^3": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+integers both ways: the refusal says why: true
+two operands: einsum spec "a; b => 2^3": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+two operands: the refusal says why: true
+a captured component: einsum spec "a => 2^b": no operand names a component of the concatenated result axis 2^b, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+a captured component: the refusal says why: true
+captured components: einsum spec "c => a^b": no operand names a component of the concatenated result axis a^b, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+captured components: the refusal says why: true
+other components on both sides: einsum spec "p^q => r^s": no operand names a component of the concatenated result axis r^s, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+other components on both sides: the refusal says why: true
+other components, other counts: einsum spec "a^b^c => d^e": no operand names a component of the concatenated result axis d^e, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+other components, other counts: the refusal says why: true
+through %cd: einsum spec "a => 2^3": no operand names a component of the concatenated result axis 2^3, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+through %cd: the refusal says why: true
+swapped operands: einsum spec "b; a => a^b": the operands are not in the order of the segments of the concatenated result axis a^b. List them in that order: (y, x) ++^ "a; b => a^b" rather than (x, y) ++^ "b; a => a^b"
+swapped operands: the refusal says why: true
+swapped single cells, which nothing else tells apart: einsum spec "b; a => a^b": the operands are not in the order of the segments of the concatenated result axis a^b. List them in that order: (y, x) ++^ "a; b => a^b" rather than (x, y) ++^ "b; a => a^b"
+swapped single cells, which nothing else tells apart: the refusal says why: true
+swapped, one of them sliced: einsum spec "b; 1^a => a^b": the operands are not in the order of the segments of the concatenated result axis a^b. List them in that order: (y, x) ++^ "a; b => a^b" rather than (x, y) ++^ "b; a => a^b"
+swapped, one of them sliced: the refusal says why: true
+in the order of the segments, the same operands: true
+the result needs the segment only the other operand has: Concatenation in einsum spec "a; b => a^b, b" of n2: no segment of a concatenated axis reaches operand(s) 1 (counted from 1). A position of that axis lies in one segment, and the result and each operand can only use the segment it lies in: the result or the operand needs another one, or two at once, so the operand would never be read
+the result needs the segment only the other operand has: the refusal says why: true
+the result and the operand need different segments: Concatenation in einsum spec "a^b, b => a" of n1: no segment of a concatenated axis reaches operand(s) 1 (counted from 1). A position of that axis lies in one segment, and the result and each operand can only use the segment it lies in: the result or the operand needs another one, or two at once, so the operand would never be read
+the result and the operand need different segments: the refusal says why: true
+a window over the segment the result does not need: Concatenation in einsum spec "p^q; 2*p => q" of n2: no segment of a concatenated axis reaches operand(s) 2 (counted from 1). A position of that axis lies in one segment, and the result and each operand can only use the segment it lies in: the result or the operand needs another one, or two at once, so the operand would never be read
+a window over the segment the result does not need: the refusal says why: true
+two operands viable for one segment: Ambiguous indices in concatenation: multiple blocks viable for same position
+two operands viable for one segment: the refusal says why: true
+an operand's integer components, reduced: true
+an operand's integer components, reduced into a plain axis: true
+an operand's captured components, reduced: true
+a plain axis repeats a reduced operand, which is what a => 2^3 is refused in favour of: true
+one component named by the result and the other operand: true
+a diagonal of a slice: true
+the same concatenation on two axes: true
+the integers of a slice are skipped on both sides: true
+and move with the segment: true
+two segments swapped: true
+a segment between skipped ones, an unnamed component among them: true
+a pointwise product of two concatenated operands: true
+two operands multiplied into one segment: true
+joining a single cell and a vector: true
+joining a vector and a single cell: true
+joining two single cells: true
+the result concatenation is refused: true
+the two components are refused: true
+the same operands, a valid operation: true
