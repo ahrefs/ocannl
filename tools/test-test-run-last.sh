@@ -53,16 +53,17 @@
 # 105. the residuals of following a queued launch (gh-ocannl-1913): a
 #      relative script word behind `env -C DIR` (`--chdir=DIR`, a relative
 #      DIR, a nested env's `-C`, the last of two `-C` in one env, BSD env's
-#      `-P` operand) is DIR's worktree's, not the wrapper's directory's,
+#      `-P` operand, a `-S STRING` holding the command) is DIR's worktree's,
+#      not the wrapper's directory's,
 #      and released, the moved launch is followed to its own verdict; a launch
 #      a shell's own control flow still holds (`run A; <wait>; run B` in one
 #      `-c` string) is seen once its own process runs it, `last` being A till
 #      then (the stated boundary, pinned); a launch under another
 #      OCANNL_TOOL_TEST_RUNS named by an `env` assignment in its argv (a `--`
 #      or an interpreter's `--` after it) is no launch under this root and
-#      one under that, an `env -i` clears an exported root, `-u` (spaced or
-#      attached, or in a cluster) with a HOME assignment is a launch under
-#      that HOME's default root, and one
+#      one under that, an `env -i` (or a bare `-`) clears an exported root,
+#      `-u` (spaced or attached, or in a cluster) with a HOME assignment is a
+#      launch under that HOME's default root, and one
 #      exported alone is read from the environment where /proc shows one,
 #      over-read (loud) where none does.
 # 102 sits last: this harness, run on leg 99 with --subject naming a copy of
@@ -688,13 +689,16 @@ q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q
 # relative word resolved against the wrapper's directory); a `--chdir=DIR`
 # relative to the wrapper's directory; a nested env's `-C`, relative to the
 # outer one's; two `-C` in one env, the last winning, relative to the
-# directory env was entered in (as GNU env does); BSD env's `-P` operand.
+# directory env was entered in (as GNU env does); BSD env's `-P` operand; a
+# `-S STRING` whose string is the command, spaced or attached.
 q_case 3 0 - "$TMP" env -C "$q_root" tools/test-run.sh run build @red &&
   q_case 0 3 - "$q_root" env -C "$q_sib" tools/test-run.sh run build @red &&
   q_case 3 0 - "$TMP" env --chdir=queued-repo tools/test-run.sh run build @red &&
   q_case 3 0 - "$q_sib" env -C "$TMP" env -C queued-repo tools/test-run.sh run build @red &&
   q_case 3 0 - "$q_root" env -C "$TMP" -C . tools/test-run.sh run build @red &&
-  q_case 3 0 - "$q_root" env -P /usr/bin tools/test-run.sh run build @red || :
+  q_case 3 0 - "$q_root" env -P /usr/bin tools/test-run.sh run build @red &&
+  q_case 3 0 - "$q_root" env -S 'tools/test-run.sh run build @red' &&
+  q_case 3 0 - "$q_root" env '-Stools/test-run.sh run build @red' || :
 # Released, the moved launch publishes its run in this worktree, and the
 # wait that followed it ends with that run's verdict.
 if [ -z "$q_detail" ]; then
@@ -756,7 +760,8 @@ if [ -z "$q_detail" ]; then report 0 "$q_held_label"; else report 1 "$q_held_lab
 # default root: none of these); the default root is under the launch's HOME,
 # so `-u OCANNL_TOOL_TEST_RUNS HOME=DIR` is a launch under DIR's default
 # root and none here, spaced or attached (`-uNAME`), and so is the cluster
-# `-iC WORKTREE HOME=DIR` from outside the worktree; the harness's own default root is never read, so the
+# `-iC WORKTREE HOME=DIR` from outside the worktree and `env - HOME=DIR`
+# (a bare `-` is `-i`); the harness's own default root is never read, so the
 # `-i` case is checked under the two roots that are not it. Exported alone,
 # the root is read from the environment where /proc shows one (Linux), and
 # over-read here where none does (a Mac): loud, a wait that times out and
@@ -772,6 +777,7 @@ q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" tools/test-run.sh ru
   Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 0 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS "HOME=$q_home" tools/test-run.sh run build @red &&
   Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 0 0 3 "$q_root" env -uOCANNL_TOOL_TEST_RUNS "HOME=$q_home" tools/test-run.sh run build @red &&
   Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 0 0 3 "$TMP" env -iC "$q_root" "HOME=$q_home" "PATH=$PATH" tools/test-run.sh run build @red &&
+  Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 0 0 3 "$q_root" env - "HOME=$q_home" "PATH=$PATH" tools/test-run.sh run build @red &&
   Q_ENV_RUNS=$q_other q_case "$q_env_want" 0 3 "$q_root" tools/test-run.sh run build @red || :
 if [ -z "$q_detail" ]; then report 0 "$q_root_label"; else report 1 "$q_root_label" "$q_detail"; fi
 }

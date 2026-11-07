@@ -3141,7 +3141,8 @@ sub cwd_read {
 # or clears the same way (the default root is under the HOME of the launch, not
 # that of the reader); undef where no prefix said. Options are read in getopt
 # grammar: `--unset=NAME` or `--unset NAME`, `-uNAME` or `-u NAME`, clusters
-# (`-iC DIR`). Within one env invocation the
+# (`-iC DIR`), a bare `-` for `-i`, and `-S STRING` whose string is the
+# command (its words, once the table flattened them, are the words after it). Within one env invocation the
 # last `-C` wins, resolved against the directory env was entered in (GNU
 # env replaces, never composes); between nested ones they compose. A start
 # after a `--` -- of a wrapper, or of an interpreter -- at the very word a
@@ -3181,11 +3182,15 @@ sub positions {
             # env in getopt grammar: a long option with its operand attached
             # (`--unset=NAME`) or spaced; a cluster of short ones (`-iC DIR`,
             # `-uNAME`), the first that takes an operand taking the rest of
-            # the word, else the next word; an assignment.
+            # the word, else the next word; a bare `-`, which is `-i`; an
+            # assignment. `-S STRING` / `--split-string` hands its string to
+            # the command: flattened, its words are the words that follow (an
+            # attached one starts in this very word, which is rewritten to it).
             my $home = defined $home_at ? $home_at : $ENV{HOME};
             my ($opt, $val) = ($w[$j], undef);
             my @short;
-            if ($opt =~ /\A--(unset|chdir|ignore-environment)(?:=(.*))?\z/s) { ($opt, $val) = ($1, $2) }
+            if ($opt =~ /\A--(unset|chdir|ignore-environment|argv0|split-string)(?:=(.*))?\z/s) { ($opt, $val) = ($1, $2) }
+            elsif ($opt eq "-") { $runs_at = ""; $home_at = ""; $opt = "" }
             elsif ($opt =~ /\A-([^-].*)\z/s) { @short = split //, $1; $opt = "" }
             elsif ($opt =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_at = $1; $opt = "" }
             elsif ($opt =~ /\AHOME=(.*)\z/s) { $home_at = $1; $opt = "" }
@@ -3193,7 +3198,15 @@ sub positions {
             while (@short) {
               my $o = shift @short;
               if ($o eq "i") { $runs_at = ""; $home_at = "" }
-              elsif ($o =~ /\A[uCPS]\z/) { $opt = $o eq "u" ? "unset" : $o eq "C" ? "chdir" : "operand"; $val = join("", @short) if @short; @short = () }
+              elsif ($o =~ /\A[uCPaLUS]\z/) {
+                $opt = $o eq "u" ? "unset" : $o eq "C" ? "chdir" : $o eq "S" ? "split-string" : "operand";
+                $val = join("", @short) if @short;
+                @short = ();
+              }
+            }
+            if ($opt eq "split-string") {
+              if (defined $val && length $val) { $w[$j] = $val } else { $j++ }
+              next;
             }
             if (length $opt) {
               if ($opt eq "ignore-environment") { $runs_at = ""; $home_at = "" }
@@ -3226,7 +3239,7 @@ sub positions {
       last;
     }
   }
-  return \%at;
+  return (\%at, \@w);
 }
 # The directory a command at a position runs in: its `env -C`, relative to
 # the directory of the process, else that one; undef when unknown.
@@ -3306,7 +3319,8 @@ for my $p (sort { $a <=> $b } keys %args) {
   next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
   my @w = split " ", $args{$p};
   next unless @w && base($w[0]) =~ $prog;
-  my $at = positions(@w);
+  my ($at, $ww) = positions(@w);
+  @w = @$ww; # an attached `-S` string split off its option
   my ($hit, $hit_at) = (0, undef);
   for my $i (0 .. $#w - 1) {
     last if base($w[$i]) eq "ssh" || ($w[$i] eq "execution" && $w[$i + 1] eq "leg");
