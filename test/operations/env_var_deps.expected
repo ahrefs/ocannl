@@ -361,6 +361,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @slow-half_codec_exhaustive
   test/operations/dune                     @slow-hip_scratch_budget
   test/operations/dune                     @slow-hip_scratch_tune_survives
+  test/operations/dune                     @slow-metal_gpu_hang_failure
   test/operations/dune                     @slow-tune_ship_arm
   test/operations/dune                     @slow-virtual_inliner_oracle-widen
   test/operations/profiles/dune            @runtest

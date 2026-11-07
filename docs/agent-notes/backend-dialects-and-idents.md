@@ -357,9 +357,9 @@ files.
   so no OCaml may run there. The backend installs ocaml-metal's native
   `LogState.add_buffered_log_handler`, which copies each message into a C-side buffer, and `await`
   drains it on the host thread with `drain_log_buffer` into `Utils.log_debug_routine_logs`
-  (gh-ocannl-1594). Under logging, `await` also waits for its own signalling command buffer to
-  complete before draining, since no Metal document promises delivery by either point. A message
-  that arrives late lands in the next `await`. The trap behind it is general: never hand Metal a
+  (gh-ocannl-1594). `await`'s `sync` has waited for its signalling command buffer to complete by
+  then, and that is the later of the two points; no Metal document promises delivery by either. A
+  message that arrives late lands in the next `await`. The trap behind it is general: never hand Metal a
   ctypes `Runtime.Block` whose body is OCaml. The old `add_log_handler` did, and its block literal
   lived in ctypes-managed memory that Metal kept pointing at (a global-flagged block's
   `Block_copy` returns the same pointer), so the next log message after a GC reused that memory
@@ -367,6 +367,19 @@ files.
   (`add_completed_handler`, `notify_listener`, the no-copy buffer deallocator) share the shape, and
   OCANNL uses none of them. `test/operations/metal_routine_log_delivery` pins delivery: exactly one
   copy of each store line by the next sync, on cc and Metal.
+- A failed Metal command buffer reaches the host only through its status, so an event wait alone
+  misses it both ways (gh-ocannl-2083, read off a kernel the watchdog killed, about 3 s in on
+  mac-studio). The buffers discarded behind a hang still deliver their event signals, so the wait
+  returns over stale cells, once while the failing buffer still read `Scheduled`; from about the
+  second hang in a process Metal answers "Ignored (for causing prior/excessive GPU errors)", every
+  submission fails, zero fills included, and an ignored signal never fires, so the wait never
+  ended. Every commit therefore goes through `commit_tracked` and `sync` ends only on a final status
+  for what it covers. That extra wait costs about 70 us per sync on a loop of empty kernels. The
+  first failure stays in `runner.failure` for the process, as a `dev_error` does under `Multidev`: a
+  best-effort `await` in cleanup would otherwise swallow the only report, and more work can queue
+  behind a signal that never fires. A hang did not fail a concurrent process's command buffers in
+  one try. No cheap fault exists (wild accesses and a purgeable-emptied pool all complete with no
+  error), so `slow-metal_gpu_hang_failure` stalls the GPU for real.
 
 ## Backend capability facts
 

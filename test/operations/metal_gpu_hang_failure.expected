@@ -1,0 +1,6 @@
+a routine before the fault ran and read back: true
+the wait over the killed kernel raised: true
+the report names the kernel: true
+the report carries Metal's error text: true
+reading the kernel's output raised, not returned stale cells: true
+a fresh lineage on the failed device raised the same report: true

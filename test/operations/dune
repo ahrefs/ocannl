@@ -98,6 +98,7 @@
   (alias slow-bf16_codec_exhaustive)
   (alias slow-hip_scratch_budget)
   (alias slow-hip_scratch_tune_survives)
+  (alias slow-metal_gpu_hang_failure)
   (alias slow-virtual_inliner_oracle-widen)))
 
 ; The repo-wide scans, as one family (gh-ocannl-703). These parse the repository's own
@@ -9236,6 +9237,34 @@
      hip_scratch_budget.actual
      (run %{dep:hip_scratch_budget.exe}))
     (diff hip_scratch_budget.expected hip_scratch_budget.actual)))))
+
+; gh-ocannl-2083: a command buffer the GPU fails raises, with Metal's text. Gated behind `slow`: the
+; kernel stalls the GPU until the OS kills it, seconds of stall and a GPU recovery on every run, which
+; a default test run should not put a Mac through.
+
+(executable
+ (name metal_gpu_hang_failure)
+ (modules metal_gpu_hang_failure)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ (alias slow-metal_gpu_hang_failure)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  (alias slow-env_spelling_gate)
+  metal_gpu_hang_failure.expected
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     metal_gpu_hang_failure.actual
+     (run %{dep:metal_gpu_hang_failure.exe}))
+    (diff metal_gpu_hang_failure.expected metal_gpu_hang_failure.actual)))))
 
 ; gh-ocannl-533, the containment half: a declined baseline must not end the search. Same gating as
 ; above — HIP-meaningful, and it runs a (small) autotune search.
