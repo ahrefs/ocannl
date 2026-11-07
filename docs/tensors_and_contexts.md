@@ -561,15 +561,19 @@ their applications are checked against -- and `Tensor.Scheme.to_string` prints o
 `batch|input->output` for the argument, then `=>` and the result. A row variable `..'a..` stands for any number of axes and is
 generalized: each application gets its own. `..'_a..` is fixed, shared by every application
 (here, the input row of `w`), the way OCaml prints a weak type variable. The indented lines are
-the broadcasting relations, `r ⊑ o` reading "the result row `r` refines the operand row `o`":
+the broadcasting relations, grouped by their left side, `r ⊑ o1, o2` reading "the result row `r`
+refines each operand row `o1`, `o2`":
 
 ```text doc-excerpt=test/operations/reusable_tensor_programs.ml
 mlp_layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
-  ..'_a.. ⊑ ..'c..
   ..'d.. ⊑ ..'a..
-  ..'e.. ⊑ ..'_b..
-  ..'e.. ⊑ ..'b..
+  ..'e.. ⊑ ..'b.., ..'_a..
+  ..'_b.. ⊑ ..'c..
 ```
+
+Two arguments consumed together by a reduction, such as a loss's logits and targets, are
+related through a row the result no longer carries: that prints as `_ ⊑ ..'a.., ..'d..`, an
+anonymous witness that the two rows broadcast together.
 
 The same `layer` then applies at batch shapes `2` and `5,7`, each application checked against
 the scheme before its body builds, giving results of shapes `2|4` and `5,7|4`.

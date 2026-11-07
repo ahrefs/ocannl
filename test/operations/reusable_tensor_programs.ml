@@ -97,10 +97,9 @@ let%expect_test "a tensor function defined once, applied at two shapes" =
   [%expect
     {|
     mlp_layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
-      ..'_a.. ⊑ ..'c..
       ..'d.. ⊑ ..'a..
-      ..'e.. ⊑ ..'_b..
-      ..'e.. ⊑ ..'b..
+      ..'e.. ⊑ ..'b.., ..'_a..
+      ..'_b.. ⊑ ..'c..
     |}];
   (* Two applications at different batch shapes: each checks the scheme, then builds as usual. *)
   let y1 = layer (input ~batch:[ 2 ] "x1" [ 3 ]) in
@@ -120,8 +119,7 @@ let%expect_test "a tensor function defined once, applied at two shapes" =
     {|
     layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
       ..'d.. ⊑ ..'a..
-      ..'e.. ⊑ ..'_a..
-      ..'e.. ⊑ ..'b..
+      ..'e.. ⊑ ..'b.., ..'_a..
       ..'_b..,3 ⊑ ..'c..
     |}]
 

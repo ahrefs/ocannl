@@ -1,0 +1,20 @@
+joined : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ()|()->'g
+  _ ⊑ ..'a.., ..'d..
+  _ ⊑ ..'b.., ..'e..
+  _ ⊑ ..'c.., ..'f..
+each of the three rows of x and y prints as a common refinement: true
+joined_kept : ..'a..|..'b..->..'c.., ..'d..|..'e..->..'f.. => ..'g..|..'h..->..'i..
+  ..'g.. ⊑ ..'a.., ..'d..
+  ..'h.. ⊑ ..'b.., ..'e..
+  ..'i.. ⊑ ..'c.., ..'f..
+no common refinement prints where the result refines both arguments: true
+biased : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,'g
+  ..'d.. ⊑ ..'a..
+  ..'e.. ⊑ ..'b.., ..'_a.., ..'_b.., ..'_c..
+  ..'f.. ⊑ ..'_d.., ..'_e.., ..'h..
+  'g ⊑ '_f, '_g, 'i
+  ..'h.. ⊑ ..'_h..
+  'i ⊑ '_i
+  ..'h..,'i ⊑ ..'c..
+no two lines share a left side: true
+a line lists several upper bounds: true

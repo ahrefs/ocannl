@@ -1,8 +1,7 @@
 layer : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4
-  ..'_a.. ⊑ ..'c..
   ..'d.. ⊑ ..'a..
-  ..'e.. ⊑ ..'_b..
-  ..'e.. ⊑ ..'b..
+  ..'e.. ⊑ ..'b.., ..'_a..
+  ..'_b.. ⊑ ..'c..
 the closure built at () traced one scheme, under its function's name: true
 the scheme has the function's argument and its result: true
 it prints as the explicit trace of the closure does: true
@@ -10,12 +9,12 @@ y: 2|4; at x' the scheme predicts 5,7|4, the body builds 5,7|4
 instantiated at an argument, the scheme predicts the shape the body's result gets: true
 a later application is checked against the scheme exposed, tracing none: true
 pair : ..'a..|..'b..->..'c.. => ..'d..|..'e..->..'f..,4, ..'g..|..'h..->..'i..,4
-  ..'_a.. ⊑ ..'c..
   ..'d.. ⊑ ..'a..
   ..'e.. ⊑ ..'b..
   ..'g.. ⊑ ..'d..
   ..'h.. ⊑ ..'e..
   ..'i.. ⊑ ..'f..
+  ..'_a.. ⊑ ..'c..
 a returned pair gives two results, in order, an intermediate among them: true
 each predicts its component's shape: true
 passthrough : ..'a..|..'b..->..'c.. => ..'a..|..'b..->..'c..

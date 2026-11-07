@@ -13786,6 +13786,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-1988: what Tensor.Scheme.to_string prints among the boundary variables: common
+;; refinements through eliminated intermediates, grouped and canonically ordered relations.
+
+(test
+ (name scheme_printed_relations)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules scheme_printed_relations)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ;; gh-ocannl-1801: the scheme an %op closure traced, exposed by Tensor.Scheme.traced_by, with its
 ;; results read off what the traced body returns.
 
