@@ -20,12 +20,16 @@
 # both are the integration loop's, on master.
 #
 # Bound. `timeout` covers the command's slowest honest run: the compile tier and the WHOLE shell
-# tier, which every fail-closed fallback of tools/merge-build-check.sh runs. Measured on mac-studio
-# on 2026-11-06 under a --cpu slot, from a fresh clone: 1167 s and 1154 s at load about 3; a run
-# at load 3.6 overran the 1200 s this was (gh-ocannl-1994). 1800 s is 1.5 times that. Those
-# figures are of the tier one member at a time; it now runs four at once (gh-ocannl-2002), a
-# third of that on macbook-pro, and the bound is kept until mac-studio is measured so. Re-measure
-# with `tools/merge-build-check.sh --all` when the shell tier grows.
+# tier, which every fail-closed fallback of tools/merge-build-check.sh runs, the tier's members
+# four at once (gh-ocannl-2002). Measured on mac-studio on 2026-11-07 under a --cpu slot, each from
+# a fresh clone: 404 s and 403 s (compile 105 s and 107 s, shell 299 s and 295 s). These are
+# shared-box numbers, not a measurement: the load was about 5, peaking at 14 and 17, beside the
+# rest of a wave. 1200 s is three times that, sized from what load does: `merge`'s recorded builds
+# of the compile tier alone ran from 100 s to 204 s over the wave before, and with the dune cache
+# off that tier still took 102 s, so the spread is the box's and not a cold tree's. Twice these
+# runs leaves half as much again, the slowest pass at a third of the bound. A bound near a measured
+# pass is what overran here: 1200 s over a one-at-a-time 1167 s, at load 3.6 (gh-ocannl-1994).
+# Re-measure with `tools/merge-build-check.sh --all` when the shell tier grows.
 #
 # Trust. The command is this repository's own code, trusted as a developer's build is: the
 # scratch repository is a place to build, not a sandbox. It runs from whatever environment
@@ -33,4 +37,4 @@
 # cost and how it finds dune when that environment lacks the opam switch.
 command tools/merge-build-check.sh
 input *
-timeout 1800
+timeout 1200

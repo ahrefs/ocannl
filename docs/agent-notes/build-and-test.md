@@ -276,15 +276,19 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   zoneless one with the local zone. `tools/test-merge-build-replay.sh` pins its shell-tier replay
   to the script's own `--plan` merge by merge.
 - The merge build's shell tier runs what the overlap reaches, and its bound holds the whole tier
-  (gh-ocannl-1994). Sized on 2026-11-06 on mac-studio at load about 3, under a `--cpu` slot from a
-  fresh clone, `tools/merge-build-check.sh --all` took 1167 s and 1154 s: the shell tier 1071 s and 1056 s, of which
-  `tools/test-test-run.sh` alone was about 735 s; a run at load 3.6 overran the 1200 s it was bounded
-  by then. `timeout` in `.github/ship-pr-merge-build` is 1800 s, 1.5 times that 1200 s, so the whole
-  tier fits at the load the fleet runs. Since gh-ocannl-2002 the tier runs four members at once
-  (`SHELL_JOBS` in `tools/merge-build-check.sh`, `tools/test-harnesses.sh --jobs`) and that
-  harness is six members: on macbook-pro the whole tier took 301 s where one at a time takes
-  1066 s, so the bound now has room rather than a margin, and it is left at 1800 s until
-  mac-studio, where merges run, has been measured. Re-measure before trusting a figure older than the manifest:
+  (gh-ocannl-1994). Sized on 2026-11-07 on mac-studio, under a `--cpu` slot from a fresh clone at
+  the tier's `--jobs 4` (`SHELL_JOBS` in `tools/merge-build-check.sh`, `tools/test-harnesses.sh
+  --jobs`, gh-ocannl-2002), `tools/merge-build-check.sh --all` took 404 s and 403 s: compile 105 s
+  and 107 s, shell 299 s and 295 s. Shared-box numbers, at load about 5 peaking at 14 and 17.
+  `timeout` in `.github/ship-pr-merge-build` is 1200 s, three times that, sized from what load
+  does. `merge` records each build's duration in
+  `~/.local/state/ship-pr/merge-builds/<owner>--<name>.jsonl`; the wave before, all 26 were the
+  compile tier alone and ran from 99 s to 204 s, and a third `--all` run with `DUNE_CACHE=disabled`
+  still compiled in 102 s (396 s whole), so that spread is the box's and not a cold tree's. Twice
+  these runs leaves half as much again, the slowest pass at a third of the bound where ship-pr's
+  overrun refusal calls four fifths tight. The width is what buys the room: one member at a time
+  the same tier took 1071 s and 1056 s, a whole run 1167 s and 1154 s at load 3, and one at load 3.6
+  overran the 1200 s of that day, a bound barely over a measured pass. Re-measure before trusting a figure older than the manifest:
   the tier's cost has tripled since one read 470 s. When the trigger holds, the tier is
   `tools/test-harnesses.sh --shell --affected --files PATH...` over every path changed on both sides,
   both names of a rename, non-scripts too, so `affected --harnesses`'s mapping is asked and not
