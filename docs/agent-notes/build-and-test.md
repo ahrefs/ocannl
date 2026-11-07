@@ -54,6 +54,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is anchored to the directory that generates them. And where the premise is "this value happens to
   equal that constant", read the constant from where it is defined rather than restating the
   coincidence: an unchecked default is the one name no call site spells.
+- **The `scans` family is derived, with one hand-listed member.** `env_var_deps` recognises a
+  repo-wide scan by its corpus: a `(rule)` whose deps glob the repository recursively, take its
+  source tree, or name a root document. `schedule_refusal_scan` is a `(test)` whose corpus is two
+  named library sources (`schedule.ml`, `sketch_families.ml`), so no derivation puts it in the
+  family and the stanza lists it by hand (its comment says why). Before that, an unmarked raise
+  added to `schedule.ml` passed `tools/fmt-check.sh`'s scans and went red in CI
+  (lukstafi/ocannl-staging#1766). A scan reading named library sources is in the same position:
+  list it by hand, or widen the derivation to cover that corpus shape.
 - **What reaches the scans is wider than what looks like infrastructure.** Two members of
   `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
   turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
