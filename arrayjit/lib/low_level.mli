@@ -608,6 +608,10 @@ val float_valued : scalar_t -> bool
     scope boundaries and folds that conversion depends on. Meaningless at a float precision, where
     every value is a float. *)
 
+val rounded_read_prec : t -> Tnode.t -> Ops.prec option
+(** The precision the code rounds some read of the node to ({!Ops.Round_prec}), if it does:
+    (gh-ocannl-1975). What a schedule has to know about an operand a recognizer sees through. *)
+
 val mentions_rng_conversion : scalar_t -> bool
 (** Whether an RNG lane conversion occurs anywhere in the expression (not inside a [Local_scope]).
     Such a conversion picks its result type and the random bits it consumes from the precision it
@@ -632,7 +636,9 @@ val narrowing_read : scope_prec:Ops.prec -> scalar_t -> bool
 (** Whether a scope of precision [scope_prec] holding this value is a cast that rounds: a narrow
     float scope over a read -- of a tensor node or of another scope -- at a precision that does not
     widen exactly into it (gh-ocannl-1866). This is what a virtual cast twin lowers to, an identity
-    of its master. {!simplify_llc} keeps such a scope, and code generation gives it its node's
+    of its master. {!simplify_llc} turns such a scope over a plain load, or over another rounding,
+    into an {!Ops.Round_prec} in the expression (gh-ocannl-1975), where the schedule's recognizers
+    and the vectorizer see it, and keeps any other as a scope; code generation gives that its node's
     storage precision, so that the read rounds as the materialized node's store does, wherever
     compute is wider than storage. A [uint4x32] source is not a cast: a conversion from it is keyed
     by where it renders. Narrow arithmetic is not covered: it computes at the compute precision on

@@ -339,6 +339,7 @@ let rec statement o k arm : LL.t =
         (LL.Binop (Ops.Mod, (LL.Ternop (op, read o.a s, read o.b s, read o.c s), s), read o.c s))
   | Under_mod arm -> statement o k arm
   | Unary op when Ops.is_homogeneous_prec_unop op -> store (LL.Unop (op, read o.a s))
+  | Unary Ops.Round_prec -> store (LL.Unop (Ops.Round_prec, read o.a s))
   | Unary op -> store (LL.Unop (op, read o.block Ops.uint4x32))
   | Binary op when Ops.is_homogeneous_prec_binop op -> store (LL.Binop (op, read o.a s, read o.b s))
   | Binary op -> store (LL.Binop (op, read o.block Ops.uint4x32, read o.lane Ops.int32))

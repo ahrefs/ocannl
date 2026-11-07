@@ -1173,12 +1173,36 @@ files.
   before the fix, materializing `batch_x` beside the twins reproduced the fixed code's losses
   bit for bit, while Metal's never moved. Limits: only a read (the next bullet is the policy for
   everything else). An accumulator opened by a narrowing init keeps its
-  residency (the census needs every `Set_local` to be the read). A statement reading a kept scope is
-  out of reach of `serial_kernel_of` and the vectorizer, so a virtual twin at a matmul site seeds no
-  tile: the fix's known cost on a tuned cc run, which the render-time collapse does not recover
-  (virtualization-and-inlining.md). `mixed_prec_twin_rounding` pins all three placements
+  residency (the census needs every `Set_local` to be the read). `mixed_prec_twin_rounding` pins all three placements
   at each narrow precision with exact claims, and `Context.placements` reads what the compile
   resolved; `scope_collapse_rounding`'s cast shapes compare bitwise against a materialized node.
+- **A cast rounds in the expression, and on a tile in the pack** (gh-ocannl-1975). A kept scope hid
+  its read from `serial_kernel_of` (a scope body is another path to `Affine.same_statement`), from
+  `Tensorize`, `gets` and the vectorizer, so `simplify_llc` turns a single-assignment scope over a
+  plain load, or over another rounding, into `Unop (Ops.Round_prec, (read, t))`: the read at exactly
+  `t` in one step, then into the slot. The operator is internal, heterogeneous, and its target is the
+  operand's annotation, which every structural map copies; `simplify_llc` has its own arm because
+  `Arg1`/`Arg2` answer with the inner annotation, and `validate_operand_precisions` refuses one over
+  anything but a read. It is a required conversion, not a numeric decision: lowered code stays free
+  of `compute_prec` (gh-ocannl-568). What stays a scope, pinned by the census: dynamic, merge-buffer
+  and local reads, multi-statement bodies, accumulators, and any `uint4x32` slot. A `Round_prec`
+  goes away in exactly two places. At the root of a store of `t`, whose conversion is that rounding,
+  and never because a slot's ANNOTATION says `t`, which was gh-ocannl-1866's bug. And in `Stage`,
+  since seeding is not shipping: a `Tile_mma`'s operands are a node and indices with nowhere for an
+  expression, `Tensorize` refuses anything but a bare `Get` (keep that: admitting a wrapper makes the
+  tile read the unrounded value and diverge from its fallback), and a per-element rounding in the
+  register tile would cost a narrow and a widen per column in the k-loop and cannot exist on a GPU.
+  So a staged read takes its rounding into the load nest, inside the edge guards, and the tile holds
+  the rounded value, at `t` or an exact widening of it. The rest follows: a hoisted panel has no load
+  nest (`site_hoistable` is false for a rounded operand), the whole-triple and hoisted-grid shapes
+  read in place and are refuted, and `operand_prec` is what the capability checks judge, `m_a` being
+  the master. In lanes `vec_expr` narrows and widens through `vec_bridge`'s own storage bridges into
+  a stack array of `t`, so a lane rounds as the serial remainder does; a source computing at another
+  width declines, keeping an f64 master one step and serial, and `lane_expr` declines the operator.
+  On tuned `mlp_wide` (mac-studio, cc, f16, smoke fixture) arm A's matmul candidates go from 10 to
+  56, its winner from a non-tensorized split to a tile. `tile_mma_narrow` drives A, B and both
+  through the pack, the seeds and a search against values worked out in the test;
+  `cpu_vectorized` compares lanes bitwise with a materialized twin at rounding boundaries.
 - **Placement decides a narrow value only where a rendered precision is wider than storage, and that
   is accepted policy** (gh-ocannl-1965; the contract is `docs/precision_inference.md`, *Storage,
   compute and placement*). A virtual narrow node with arithmetic in its body, a narrow `Constant`

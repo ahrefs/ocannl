@@ -7827,6 +7827,7 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; cc-vector-width: independent -- a 64 by 64 site seeds at every width, and its values are worked out in the test.
  (name tile_mma_narrow)
  (package neural_nets_lib)
  (deps

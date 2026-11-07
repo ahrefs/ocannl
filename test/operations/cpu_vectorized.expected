@@ -1,4 +1,10 @@
 vectorized mul-add values match the serial twin: true
 vectorized rendering with serial remainder: true
+cast read in an f32 sum: every lane matches a materialized twin bitwise: true
+cast read in an f32 sum: the rounding runs in lanes: true
+cast read in an f32 reduction: every lane matches a materialized twin bitwise: true
+cast read in an f32 reduction: the rounding runs in lanes: true
+cast read uniform across the lanes: every lane matches a materialized twin bitwise: true
+cast read uniform across the lanes: the rounding runs in lanes: true
 split+vectorized values match the serial twin: true
 affine-indexed vector accesses rendered: true

@@ -1434,7 +1434,7 @@ module Impl = struct
         | _ -> math_doc fn
       in
       match (op, prec) with
-      | Ops.Identity, _ -> fun v -> v
+      | (Ops.Identity | Ops.Round_prec), _ -> fun v -> v
       | Neg, _ -> fun v -> string "-" ^^ v
       | Exp, _ -> widened_math "exp"
       | Log, _ -> widened_math "log"

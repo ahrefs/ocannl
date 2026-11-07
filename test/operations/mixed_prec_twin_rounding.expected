@@ -158,6 +158,13 @@ fp8 twin of an f64 master read in a slot of its own precision, virtual: placed a
 fp8 twin of an f64 master read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 fp8 twin of an f64 master read in a slot of its own precision, auto: placed as asked: true
 fp8 twin of an f64 master read in a slot of its own precision, auto: the twin's rounding reaches the value: true
+bfloat16 twin of a half twin: every placement gives 0x1.8p+1
+bfloat16 twin of a half twin, materialized: placed as asked: true
+bfloat16 twin of a half twin, materialized: the twin's rounding reaches the value: true
+bfloat16 twin of a half twin, virtual: placed as asked: true
+bfloat16 twin of a half twin, virtual: the twin's rounding reaches the value: true
+bfloat16 twin of a half twin, auto: placed as asked: true
+bfloat16 twin of a half twin, auto: the twin's rounding reaches the value: true
 half twin read by a matmul: every placement gives 0x1.8p+1
 half twin read by a matmul, materialized: placed as asked: true
 half twin read by a matmul, materialized: the twin's rounding reaches the value: true
@@ -191,4 +198,4 @@ half slice of f32 data, auto: placed as asked: true
 half slice of f32 data, auto: the twin's rounding reaches the value: true
 a materialized twin reads its buffer: true
 the virtual twin reads no buffer of its own: true
-the virtual twin narrows its master into a local at its own precision: true
+the virtual twin rounds its master in the expression, through no local: true

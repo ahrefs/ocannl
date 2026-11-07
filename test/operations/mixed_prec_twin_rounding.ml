@@ -145,6 +145,26 @@ let f64_master prec =
       (name ^ " read in a slot of its own precision")
       ~twin in_own_prec)
 
+(* A cast of a cast rounds twice, each at its own precision: the outer read rounds from what the
+   inner one rounded to (gh-ocannl-1975). 1 + 3 * 2^-10 is exact in half and under half a bfloat16
+   ulp above 1, and three of it would round to 3 + 2^-6 at the store: reading the half value in a
+   bfloat16 slot, which renders wider on cc, the outer rounding goes missing. *)
+let cast_of_cast () =
+  let master = 1. +. (3. *. (2. **. -10.)) in
+  case "bfloat16 twin of a half twin" ~expected:3.
+    ~twin:(fun ~placement ->
+      let inner = twin_of ~placement ~prec:Ops.half [| master |] in
+      let outer = Ocannl.Operation.cast ~grad_spec:Tensor.If_needed inner () in
+      Tn.update_prec outer.Tensor.value Ops.bfloat16;
+      (match placement with
+      | MP.Twin_auto -> ()
+      | Twin_virtual -> Train.set_virtual outer.Tensor.value
+      | Twin_materialized -> Train.set_materialized outer.Tensor.value);
+      outer)
+    (fun ~label:_ t ->
+      let%op y = t *. 3.0 in
+      forward y ~out_prec:Ops.bfloat16)
+
 (* A reduction over the twin: the accumulation stays wide, and its reads of the twin round. *)
 let reduction () =
   let prec = Ops.half in
@@ -219,8 +239,8 @@ let slice () =
       forward ~bindings ~launch_values:[ (batch_n, 1) ] y ~out_prec:prec)
 
 (* What the virtual path emits: no buffer for the twin, which is what a materialized twin's accesses
-   show the text would otherwise hold, and on cc the rounding is the conversion of the master into a
-   local of the twin's precision. *)
+   show the text would otherwise hold, and on cc the rounding is the master's conversion to the
+   twin's precision, in the expression (gh-ocannl-1975), which is what lets a loop vectorize. *)
 let emission () =
   let module G = Test_utils.Generated in
   let prec = Ops.half in
@@ -239,8 +259,10 @@ let emission () =
   compile MP.Twin_virtual;
   G.assert_omits ~routine ~contains:twin_access "the virtual twin reads no buffer of its own";
   gated ~when_:(String.equal backend_name "cc") ~on:"cc"
-    "the virtual twin narrows its master into a local at its own precision"
-    (String.is_substring (G.read routine) ~substring:("= FLOAT_TO_HALF(" ^ ident "w" ^ "[0])"))
+    "the virtual twin rounds its master in the expression, through no local"
+    (let text = G.read routine in
+     String.is_substring text ~substring:("FLOAT_TO_HALF(" ^ ident "w" ^ "[0])")
+     && not (String.is_substring text ~substring:("= FLOAT_TO_HALF(" ^ ident "w" ^ "[0])")))
 
 let () =
   let saved = Ir.Numerics.get () in
@@ -254,6 +276,7 @@ let () =
               slot prec;
               f64_master prec)));
   Ir.Numerics.set_policy saved;
+  cast_of_cast ();
   reduction ();
   backward ();
   refresh ();

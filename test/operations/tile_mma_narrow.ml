@@ -83,7 +83,8 @@ let half_vec_typ =
 (* The composed packed pipeline, parameterized by the packed tiles' precision override (and, for the
    gh-ocannl-639 section, by the k blocking — [bk = n] makes the single register tile cover the
    whole k extent, so the C-tile narrows once per cell like the serial fallback). *)
-let composed_schedule ?(bk = bk) ~hoist_b ~tile_prec ~a ~b (opt : LL.optimized) : Sched.schedule =
+let composed_schedule ?(bk = bk) ?(tensorize = on_cpu) ~hoist_b ~tile_prec ~a ~b
+    (opt : LL.optimized) : Sched.schedule =
   let paths = Ll_test.nest_paths opt.LL.llc in
   let i, j, k =
     match List.find_exn paths ~f:(fun p -> List.length p = 3) with
@@ -108,7 +109,7 @@ let composed_schedule ?(bk = bk) ~hoist_b ~tile_prec ~a ~b (opt : LL.optimized) 
   in
   [ sp_i; sp_k ] @ sink j [ k_o ] @ sink i_i [ k_o ] @ sink i_o [ k_o ]
   @ [ stage ~hoisted:hoist_b b [ k_i; j ]; stage ~hoisted:false a [ i_i; k_i ] ]
-  @ if on_cpu then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 ()) ] else []
+  @ if tensorize then [ fst (Sched.tensorize ~i:i_i ~j ~k:k_i ~simd_width:1 ()) ] else []
 
 (* Which way each compiled [Tile_mma] went is the routine's mma census to say, never the emitted
    text (gh-ocannl-1316): on the C backends the schedule ends in [Tensorize], and every statement
@@ -306,3 +307,260 @@ let () =
          Verdict.skipped ~aggregation:`Environment ~backend:backend_name structure_name)
        else raise e);
   Numerics.set_policy saved_policy
+
+(* === gh-ocannl-1975: a virtual cast twin on the tile path ===
+
+   A twin of a wider master reads as [Round_prec] of the master, so the matmul recognizers seed on
+   it, and a tile cannot honour the operator: its operands are a node and indices. The rounding is
+   the pack's, once per cell, and the micro-kernel reads a plain panel. These masters sit under half
+   an f16 ulp above values with few bits, so a tile reading them unrounded computes another product,
+   and what the rounded values give is worked out here in double, whatever renders it: multiples of
+   1/16 bounded by 4, 64 of them to a cell, which f32 holds as they are. *)
+let () =
+  let eps = 2. **. -12. in
+  let dims = [| n; n |] in
+  let a_base = Ll_test.cycle ~dims ~modulus:3 ~offset:4. ~stride:0.25 in
+  let b_base = Ll_test.cycle ~dims ~modulus:5 ~offset:4. ~stride:0.25 in
+  let master label base =
+    NTDSL.init ~l:label ~prec:Ir.Ops.single ~i:[ n ] ~o:[ n ] ~f:(fun idcs -> base idcs +. eps) ()
+  in
+  let twin_at prec (m : Tensor.t) =
+    let t = Operation.cast ~grad_spec:Tensor.Prohibit_grad m () in
+    Tn.update_prec t.Tensor.value prec;
+    Train.set_virtual t.Tensor.value;
+    t
+  in
+  let matmul a_cell b_cell =
+    Array.init (n * n) ~f:(fun flat ->
+        let i = flat / n and j = flat % n in
+        Array.sum
+          (module Float)
+          (Array.init n ~f:Fn.id)
+          ~f:(fun k -> a_cell [| i; k |] *. b_cell [| k; j |]))
+  in
+  let leg ~label ~round_a ~round_b =
+    let ma = master ("ma_" ^ label) a_base and mb = master ("mb_" ^ label) b_base in
+    let a = if round_a then twin_at Ir.Ops.half ma else ma in
+    let b = if round_b then twin_at Ir.Ops.half mb else mb in
+    let%op c = a * b in
+    Tn.update_prec c.Tensor.value Ir.Ops.single;
+    let name = "nrw_round_" ^ label in
+    let got, census =
+      run_census ~name
+        ~schedule:
+          (composed_schedule ~hoist_b:false ~tile_prec:(Some Ir.Ops.single) ~a:ma.Tensor.value
+             ~b:mb.Tensor.value)
+        c
+    in
+    let cell rounded base idcs = if rounded then base idcs else base idcs +. eps in
+    let want = matmul (cell round_a a_base) (cell round_b b_base) in
+    p_all2
+      (Printf.sprintf "%s: the tile reads the rounded values, exactly" label)
+      got want ~f:Float.equal;
+    p
+      (Printf.sprintf "%s: an unrounded read would have computed another product" label)
+      (not
+         (Array.equal Float.equal want
+            (matmul (fun idcs -> a_base idcs +. eps) (fun idcs -> b_base idcs +. eps))));
+    let src = Generated.read name in
+    p
+      (Printf.sprintf "%s: rendered as scheduled, the pack holding the rounding" label)
+      (rendered_as_scheduled ~what:name census
+      && ((not on_cpu) || String.is_substring src ~substring:"FLOAT_TO_HALF"))
+  in
+  leg ~label:"a" ~round_a:true ~round_b:false;
+  leg ~label:"b" ~round_a:false ~round_b:true;
+  leg ~label:"both" ~round_a:true ~round_b:true;
+
+  (* A pack's edge guard stays out of the rounding's way: a block size that does not divide the
+     extent leaves the load's [Where] live, and the store it sits in renders at compute
+     precision. *)
+  (let ma = master "ma_edge" a_base and mb = master "mb_edge" b_base in
+   let a = twin_at Ir.Ops.half ma in
+   let%op c = a * mb in
+   Tn.update_prec c.Tensor.value Ir.Ops.single;
+   let got =
+     run ~name:"nrw_round_edge"
+       ~schedule:
+         (composed_schedule ~tensorize:false ~bk:24 ~hoist_b:false ~tile_prec:(Some Ir.Ops.single)
+            ~a:ma.Tensor.value ~b:mb.Tensor.value)
+       c
+   in
+   p_all2 "edge: a non-dividing pack rounds every cell it loads" got
+     (matmul a_base (fun idcs -> b_base idcs +. eps))
+     ~f:Float.equal);
+
+  (* An f64 master goes to fp8 in one step on the pack too: through the tile's f32 it would round
+     twice, and 1.125 + 2^-40 would read 1. *)
+  (let supports_f64 =
+     (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.supports_f64
+   in
+   let leg = Verdict.leg ~when_:supports_f64 ~on:backend_name () in
+   in_leg ~leg "f64 master: the pack rounds to fp8 in one step" (fun label ->
+       let off_tie = 1.125 +. (2. **. -40.) in
+       let scale = Ll_test.weighted ~weights:[| 1; 1 |] ~modulus:2 ~offset:1. ~stride:1. in
+       let m =
+         NTDSL.init ~l:"m_f64" ~prec:Ir.Ops.double ~i:[ n ] ~o:[ n ]
+           ~f:(fun idcs -> off_tie *. scale idcs)
+           ()
+       in
+       let mb = master "mb_f64" b_base in
+       let a = twin_at Ir.Ops.fp8 m in
+       let%op c = a * mb in
+       Tn.update_prec c.Tensor.value Ir.Ops.single;
+       let got =
+         run ~name:"nrw_round_f64"
+           ~schedule:
+             (composed_schedule ~hoist_b:false ~tile_prec:(Some Ir.Ops.single) ~a:m.Tensor.value
+                ~b:mb.Tensor.value)
+           c
+       in
+       p_all2 label got
+         (matmul (fun idcs -> 1.25 *. scale idcs) (fun idcs -> b_base idcs +. eps))
+         ~f:Float.equal));
+
+  (* One tile holds one value per cell, and a hoisted panel has no load nest to round in. *)
+  let refused name ~because schedule_of (out : Tensor.t) =
+    let refusal = ref None in
+    let transform opt =
+      (refusal :=
+         match Sched.apply (schedule_of opt) opt with
+         | _ -> Some false
+         | exception Invalid_argument why -> Some (String.is_substring why ~substring:because));
+      opt
+    in
+    let comp = named name (Train.forward out) in
+    let (_ : Context.t * _) =
+      Context.compile
+        ~lowered_transform:(fun o -> [ transform o ])
+        (Context.auto ()) comp Ir.Indexing.Empty
+    in
+    p name (Option.value !refusal ~default:false)
+  in
+  (let m = master "m_mixed" a_base in
+   let t = twin_at Ir.Ops.half m in
+   let%op c = t *. m in
+   Tn.update_prec c.Tensor.value Ir.Ops.single;
+   refused "a rounded and a raw read of one source do not share a tile" ~because:"round differently"
+     (fun opt ->
+       let i, j =
+         match List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 2) with
+         | [ i; j ] -> (i, j)
+         | _ -> assert false
+       in
+       [
+         Sched.Stage
+           {
+             source = m.Tensor.value;
+             tile_loops = [ i; j ];
+             shared = false;
+             cooperative = None;
+             hoisted = false;
+             swizzle = None;
+             pad_stride = None;
+             pipeline_depth = 1;
+             tile_prec = None;
+           };
+       ])
+     c);
+  (* And a tile reads memory: a rounding it took for an operand would be a rounding it dropped. *)
+  (let ma = master "ma_place" a_base and mb = master "mb_place" b_base in
+   let a = twin_at Ir.Ops.half ma in
+   let%op c = a * mb in
+   Tn.update_prec c.Tensor.value Ir.Ops.single;
+   refused "Tensorize refuses a rounded operand a pack has not absorbed" ~because:"product of reads"
+     (fun opt ->
+       match List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 3) with
+       | [ i; j; k ] -> [ fst (Sched.tensorize ~i ~j ~k ~simd_width:1 ()) ]
+       | _ -> assert false)
+     c);
+  let ma = master "ma_hoist" a_base and mb = master "mb_hoist" b_base in
+  let b = twin_at Ir.Ops.half mb in
+  let%op c = ma * b in
+  Tn.update_prec c.Tensor.value Ir.Ops.single;
+  refused "a hoisted panel cannot round a read" ~because:"no load nest"
+    (composed_schedule ~hoist_b:true ~tile_prec:(Some Ir.Ops.single) ~a:ma.Tensor.value
+       ~b:mb.Tensor.value)
+    c
+
+(* The tuner's own path to the same tile (gh-ocannl-1975; the default schedule ships none). Every
+   matmul seed of a site reading two twins goes through its real pipeline, and then a search ships
+   whatever it ships: which seed wins is the box's business, what it computes is not. *)
+let () =
+  let eps = 2. **. -12. in
+  let dims = [| n; n |] in
+  let a_base = Ll_test.cycle ~dims ~modulus:3 ~offset:4. ~stride:0.25 in
+  let b_base = Ll_test.cycle ~dims ~modulus:5 ~offset:4. ~stride:0.25 in
+  let product () =
+    let master label base =
+      NTDSL.init ~l:label ~prec:Ir.Ops.single ~i:[ n ] ~o:[ n ] ~f:(fun idcs -> base idcs +. eps) ()
+    in
+    let twin (m : Tensor.t) =
+      let t = Operation.cast ~grad_spec:Tensor.Prohibit_grad m () in
+      Tn.update_prec t.Tensor.value Ir.Ops.half;
+      Train.set_virtual t.Tensor.value;
+      t
+    in
+    let a = twin (master "ma_tuned" a_base) and b = twin (master "mb_tuned" b_base) in
+    let%op c = a * b in
+    Tn.update_prec c.Tensor.value Ir.Ops.single;
+    c
+  in
+  let want =
+    Array.init (n * n) ~f:(fun flat ->
+        let i = flat / n and j = flat % n in
+        Array.sum
+          (module Float)
+          (Array.init n ~f:Fn.id)
+          ~f:(fun k -> a_base [| i; k |] *. b_base [| k; j |]))
+  in
+  let exact got = Array.equal Float.equal got want in
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let caps = Context.codegen_capabilities (Context.auto ()) in
+  let seeds =
+    let found = ref [] in
+    let comp = named "nrw_seeds" (Train.forward (product ())) in
+    let (_ : Context.t * Context.routine) =
+      Context.compile
+        ~lowered_transform:(fun opt ->
+          found :=
+            Autotune.sketch_seed_params
+              ~is_gpu:(Ir.Backend_intf.binds_hardware_grid facts)
+              ~is_cpu:on_cpu ~limits opt;
+          [ opt ])
+        (Context.auto ()) comp Ir.Indexing.Empty
+    in
+    List.filter !found ~f:(fun p -> p.Autotune.sk_mma && not p.sk_conv)
+  in
+  let leg = Verdict.leg ~when_:on_cpu ~on:backend_name () in
+  in_leg ~leg "tuned: the matmul seeds of a site reading twins round, and some ship a tile"
+    (fun label ->
+      let runs =
+        List.mapi (List.take seeds 6) ~f:(fun i p ->
+            let name = Printf.sprintf "nrw_seed_%d" i in
+            run_census ~name
+              ~schedule:(fun opt ->
+                Autotune.sketch_schedule ~accum_prec:caps.Ir.Backend_intf.accum_prec ~p opt)
+              (product ()))
+      in
+      p label
+        (List.for_all runs ~f:(fun (got, _) -> exact got)
+        && List.exists runs ~f:(fun (_, census) ->
+            List.exists census ~f:(Ir.C_syntax.equal_mma_rendering Mma_register_tiled))));
+  let cache_dir = "autotune_cache_tile_mma_narrow" in
+  if Stdlib.Sys.file_exists cache_dir then
+    Array.iter (Stdlib.Sys.readdir cache_dir) ~f:(fun f ->
+        Stdlib.Sys.remove (Stdlib.Filename.concat cache_dir f));
+  let reports = ref [] in
+  let out = product () in
+  let comp = named "nrw_tuned" (Train.forward out) in
+  let ctx, routine =
+    Train.tune_placements ~beam_width:2 ~rounds:0 ~repeats:1 ~cache_dir
+      ~report:(fun r -> reports := r :: !reports)
+      (Context.auto ()) out comp Ir.Indexing.Empty
+  in
+  let ctx = Context.run ctx routine in
+  p "tuned: the shipped routine computes the rounded values"
+    (exact (Context.get_values ctx out.Tensor.value));
+  in_leg ~leg "tuned: the search seeds the site through its twins" (fun label ->
+      p label (List.exists !reports ~f:(fun r -> r.Autotune.mma_candidates > 0)))

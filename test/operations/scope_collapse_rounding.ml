@@ -4,8 +4,9 @@
    collapses a single-assignment scope into the expression around it, which drops that step, so the
    collapse is exact only when the slot evaluates at the scope's precision, or when the value is a
    load whose storage precision the scope's widens exactly, and it is never exact for a cast
-   (gh-ocannl-1866): a narrow scope over a read it does not widen exactly stays a scope even in a
-   slot of its own precision, which can render wider, and code generation gives it its node's
+   (gh-ocannl-1866): a narrow scope over a read it does not widen exactly keeps its rounding even in
+   a slot of its own precision, which can render wider, as an [Ops.Round_prec] in the expression
+   (gh-ocannl-1975) or, over anything but a plain load, as a scope code generation gives its node's
    precision whatever the compute precision. Before gh-ocannl-1788 it collapsed every float scope: a
    bfloat16 scope over a single product, read in a single sum, lost its rounding wherever the
    scope's local is declared at bfloat16 -- Metal, CUDA and HIP, and cc under
@@ -284,19 +285,21 @@ let render_time_collapse shape ~policy =
   let kept, _, _ = run ~extent:long shape ~form:`Oracle ~policy in
   let simd, simd_scopes, _ = run ~extent:long shape ~form:`Simd ~policy in
   pf "%s: the oracle holds its local in the kernel" shape.label (holds_local keep_name);
-  pf "%s: the scope survives lowering" shape.label (simd_scopes = 1);
-  pf "%s: the kernel holds the local unless the backend's compute precision makes it exact"
+  pf "%s: a scope survives lowering, a cast rounding in the expression instead" shape.label
+    (simd_scopes = if shape.cast then 0 else 1);
+  pf "%s: the kernel holds the local unless it rounds in the expression or compute makes it exact"
     shape.label
-    (Bool.equal (holds_local vec_name) (not (collapses shape)));
+    (Bool.equal (holds_local vec_name) (not (shape.cast || collapses shape)));
   pf "%s: the retyped form computes the oracle's values bitwise" shape.label (same_bits kept simd);
-  (* A collapsed cast loses its local and no more: its load computes at another width than the
-     lanes, which [vec_expr] refuses. *)
-  in_legf ~leg:cc_leg "%s: explicit SIMD exactly where arithmetic collapsed" shape.label
+  (* A cast rounds in lanes where its load computes at the lanes' width: at a narrower one,
+     [vec_expr] would be narrowing what it had not loaded yet. *)
+  in_legf ~leg:cc_leg
+    "%s: explicit SIMD exactly where the expression has no scope and fits the lanes" shape.label
     (fun label ->
       p label
         (Bool.equal
            (String.is_substring (Generated.read vec_name) ~substring:"ocannl_vec")
-           (collapses shape && not shape.cast)))
+           (if shape.cast then Ops.equal_prec (compute shape.slot) Ops.single else collapses shape)))
 
 let every_backend = Verdict.leg ~when_:true ~on:backend_name ()
 
@@ -702,6 +705,25 @@ let reduction ~policy =
            (String.is_substring (Generated.read name) ~substring:"Vectorized reduction rendering")
            collapsed))
 
+(* What a [Round_prec] rounds to is an annotation (gh-ocannl-1975), so it has to count wherever a
+   read's precision does: as the source of a cast of a cast, where a simplifier revisiting the outer
+   scope sees the inner one as an expression, and in the code's identity. *)
+let () =
+  let x = fnode "_rounded_x" and out = fnode "_rounded_out" and at0 = [| Ll_test.fixed 0 |] in
+  let rounded t = LL.Unop (Ops.Round_prec, (Ll_test.get x at0, t)) in
+  p "a rounding reads as what it rounded to, so the cast around it still rounds"
+    (LL.narrowing_read ~scope_prec:bf (rounded half));
+  let digest t = LL.alpha_digest (Ll_test.set out at0 (rounded t)) in
+  p "roundings to two precisions are two programs" (not (String.equal (digest half) (digest bf)));
+  let s = Ll_test.sym () in
+  let i = [| Ll_test.iter s |] in
+  let update =
+    LL.Binop
+      (Ops.Add, (LL.Unop (Ops.Round_prec, (Ll_test.get out i, half)), f32), (Ll_test.get x i, f32))
+  in
+  p "zero forwarding leaves a rounded self-read alone: a rounding holds a read, never a select"
+    (Option.is_none (LL.zero_seed_candidate out (Ll_test.loop_n s n (Ll_test.set out i update))))
+
 let () =
   let saved = Ir.Numerics.get () in
   List.iter [ true; false ] ~f:(fun narrow_compute_f32 ->
@@ -770,8 +792,8 @@ let () =
               let mat, _, _ = run shape ~form:`Materialized ~policy in
               let raw, _, _ = run shape ~form:`Unscoped ~policy in
               p
-                (Printf.sprintf "%s: a cast stays a scope, scheduled and inlined" shape.label)
-                (sch_scopes = 1 && inlined && inl_scopes = 1);
+                (Printf.sprintf "%s: a cast leaves no scope, scheduled or inlined" shape.label)
+                (sch_scopes = 0 && inlined && inl_scopes = 0);
               p
                 (Printf.sprintf
                    "%s: every form of the cast computes the materialized values bitwise" shape.label)

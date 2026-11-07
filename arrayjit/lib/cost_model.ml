@@ -441,7 +441,7 @@ let op_census ~on_ops (code : Low_level.t) : int * bool * bool =
         | Ops.Both_operands ->
             let i1, h1 = arg a1 and i2, h2 = arg a2 in
             (1 + i1 + i2, h1 + h2))
-    | Unop (Ops.Identity, a1) -> arg a1
+    | Unop ((Ops.Identity | Ops.Round_prec), a1) -> arg a1
     | Unop (_, a1) ->
         let i1, h1 = arg a1 in
         (1 + i1, h1)
@@ -588,7 +588,7 @@ let floor_flops ~open_placement (code : Low_level.t) : int * bool =
         | Ops.Both_operands ->
             let i1, h1 = arg a1 and i2, h2 = arg a2 in
             (1 + i1 + i2, h1 + h2))
-    | Unop (Ops.Identity, a1) -> arg a1
+    | Unop ((Ops.Identity | Ops.Round_prec), a1) -> arg a1
     | Unop (_, a1) ->
         let i1, h1 = arg a1 in
         (1 + i1, h1)
