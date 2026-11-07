@@ -497,6 +497,10 @@ val is_pure_index_conjunction : scalar_t -> bool
     simplifier separately checks the active domains before replacing [And] with [Mul]. *)
 
 val scalar_precision : scalar_t -> Ops.prec
+
+val neutral_scalar : Ops.prec -> Ops.binop -> scalar_t
+(** {!Ops.neutral_elem_at} as a scalar, a [Constant] or a [Constant_bits]. *)
+
 val apply_op : Ops.op -> scalar_t array -> scalar_t
 val flat_lines : t list -> t list
 val unflat_lines : t list -> t

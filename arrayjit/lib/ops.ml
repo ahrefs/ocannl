@@ -726,6 +726,29 @@ let neutral_elem = function
   | Uint4x32_to_prec_uniform_lane (* | Shl | Shr *) ->
       0.
 
+(** {!neutral_elem} as a slot of [prec] holds it, for lowering, where the node's precision is known.
+    [neutral_elem] itself stays the operator's: shape inference reads the accumulation off it before
+    any precision is settled, and a non-finite answer is what makes it clamp a padded window
+    (gh-504).
+
+    [Max]'s and [Min]'s infinities reach no integer slot: the conversion is undefined behaviour, and
+    clang dropped the whole accumulation over it (gh-ocannl-2081). There the neutral element is the
+    range's other end. [First c] is a [Constant], [Second bits] a [Constant_bits]: an upper bound
+    above 2^24 goes as bits, since Metal has no [double] to read [2147483647.0] at and 2^63-1 and
+    2^64-1 have none anywhere ([Uint64]'s bit pattern is [-1L]). *)
+let neutral_elem_at prec op : (float, int64) Either.t =
+  match (op, prec) with
+  | Max, (Byte_prec _ | Uint16_prec _ | Uint32_prec _ | Uint64_prec _) -> First 0.
+  | Max, Int32_prec _ -> First (-0x1p31)
+  | Max, Int64_prec _ -> First (-0x1p63)
+  | Min, Byte_prec _ -> First 255.
+  | Min, Uint16_prec _ -> First 65535.
+  | Min, Int32_prec _ -> Second 0x7FFF_FFFFL
+  | Min, Uint32_prec _ -> Second 0xFFFF_FFFFL
+  | Min, Int64_prec _ -> Second Int64.max_value
+  | Min, Uint64_prec _ -> Second (-1L)
+  | _ -> First (neutral_elem op)
+
 let interpret_binop =
   (* Exact integral float exponents need no conversion to a machine int. Host interpretation uses
      f64 multiplication; lowering leaves integer powers for the target-precision codegen helper. *)
