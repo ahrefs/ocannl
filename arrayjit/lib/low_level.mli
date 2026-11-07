@@ -1814,10 +1814,13 @@ module Fp_licence : sig
   (** Each licence under its config key, for reports. *)
 end
 
-val fp_algebra_step : Fp_licence.t -> scalar_t * Ops.prec -> (scalar_t * Ops.prec) option
+val fp_algebra_step :
+  ?eval:Ops.prec -> Fp_licence.t -> scalar_t * Ops.prec -> (scalar_t * Ops.prec) option
 (** One step of the licensed algebra at the root of the expression: the first licensed rewrite that
     matches (first-match order matters), not yet re-simplified, or [None]. A [ToPowOf] is expected
-    with its operands already simplified. *)
+    with its operands already simplified. [eval] is the precision the slot evaluates the expression
+    at, by default its annotation: at an integer one, a rewrite that would mint a constant no leaf
+    can hold does not match. *)
 
 val simplify_llc : Indexing.static_symbol list -> t -> t
 (** Top-down algebraic simplification with interval-driven comparison folding (in particular, it
@@ -1831,9 +1834,11 @@ val simplify_llc : Indexing.static_symbol list -> t -> t
 
     Exact: every rewrite preserves IEEE results (the [x * 1] and [x - (+0)] identities, constant
     folding, guard folds); integer arithmetic is reassociated as {!fp_algebra_step} does with no
-    licence. A single-assignment [Local_scope] is collapsed into its reader only where its rounding
-    to its own precision is not part of the value (gh-ocannl-1788): the slot evaluates at the
-    scope's precision, or the value is a load whose storage precision the scope's widens exactly
+    licence. At an integer evaluation precision a constant is folded only where a leaf holds the
+    result unchanged ({!Ops.integer_leaf_holds}); otherwise the operator stays, and computes what
+    the renderer does. A single-assignment [Local_scope] is collapsed into its reader only where its
+    rounding to its own precision is not part of the value (gh-ocannl-1788): the slot evaluates at
+    the scope's precision, or the value is a load whose storage precision the scope's widens exactly
     ([Ops.widens_exactly]). An integer scope collapses only where the value provably stays the same
     (gh-ocannl-1884): such a load, the same unpromoted type with no truth in it, or machine values
     that agree at the scope's precision and at the slot's, so a sum C's integer promotion would

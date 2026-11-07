@@ -5859,9 +5859,17 @@ end
    matches, unsimplified (the caller re-simplifies the result), or [None]. Arm order is the
    first-match order of the simplifier it was lifted from. Integer precisions take every licence but
    the floating-only arms (multiplication/division interchange, contraction): their reassociation is
-   exact in wrapping arithmetic. [ToPowOf] expects its operands simplified. *)
-let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec) :
+   exact in wrapping arithmetic, but a constant an arm mints is a leaf, rendered at the slot's
+   [eval] (gh-ocannl-2018): [Ops.integer_leaf_holds] gates it, so [(x + 3) - 5] stays as it is at
+   uint32 and [0 - x] stays a subtraction at any unsigned precision. [ToPowOf] expects its operands
+   simplified. *)
+let fp_algebra_step ?eval (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec) :
     (scalar_t * Ops.prec) option =
+  let eval = Option.value eval ~default:prec in
+  let mintable c = (not (Ops.is_integer eval)) || Ops.integer_leaf_holds eval c in
+  (* Declining here, not in the arm's guard: an or-pattern's bindings cannot reach a guard, and no
+     later arm matches the shapes these do. *)
+  let minted c build = if mintable c then Some (build (Constant c)) else None in
   let licensed flag = flag || not (Ops.is_float prec) in
   let float_only flag = flag && Ops.is_float prec in
   let identities = licensed licence.finite_math in
@@ -5874,7 +5882,7 @@ let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec
   | Binop (Add, (Constant 0., _), (llsc, prec1))
     when identities ->
       Some (llsc, prec1)
-  | Binop (Sub, (Constant 0., _), (llsc, prec1)) when identities ->
+  | Binop (Sub, (Constant 0., _), (llsc, prec1)) when identities && mintable (-1.) ->
       Some (Binop (Mul, (Constant (-1.), prec1), (llsc, prec1)), prec1)
   | Binop (Mul, (_, prec1), (Constant 0., _))
   | Binop (Div, (Constant 0., _), (_, prec1))
@@ -5892,14 +5900,14 @@ let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec
         ( Binop (Add, (Constant c2, prec2), llsc), prec3
         | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
     when reassociate ->
-      Some (Binop (Add, (Constant (c1 +. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
+      minted (c1 +. c2) (fun c -> (Binop (Add, (c, Ops.promote_prec prec1 prec2), llsc), prec3))
   | Binop
       ( Sub,
         ( Binop (Add, (Constant c2, prec2), llsc), prec3
         | Binop (Add, llsc, (Constant c2, prec2)), prec3 ),
         (Constant c1, prec1) )
     when reassociate ->
-      Some (Binop (Add, (Constant (c2 -. c1), Ops.promote_prec prec2 prec1), llsc), prec3)
+      minted (c2 -. c1) (fun c -> (Binop (Add, (c, Ops.promote_prec prec2 prec1), llsc), prec3))
   | Binop
       ( Sub,
         (Constant c1, prec1),
@@ -5907,7 +5915,7 @@ let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec
         | Binop (Add, llsc, (Constant c2, prec2)), prec3 ) )
     when reassociate ->
       (* c1 - (c2 + x) = (c1 - c2) - x: the summand keeps its negation. *)
-      Some (Binop (Sub, (Constant (c1 -. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
+      minted (c1 -. c2) (fun c -> (Binop (Sub, (c, Ops.promote_prec prec1 prec2), llsc), prec3))
   | Binop (Add, llv1, (Binop (Sub, llv2, llv3), prec3))
   | Binop (Add, (Binop (Sub, llv2, llv3), prec3), llv1)
     when reassociate ->
@@ -5927,7 +5935,7 @@ let fp_algebra_step (licence : Fp_licence.t) ((llsc, prec) : scalar_t * Ops.prec
         ( Binop (Mul, (Constant c2, prec2), llsc), prec3
         | Binop (Mul, llsc, (Constant c2, prec2)), prec3 ) )
     when reassociate ->
-      Some (Binop (Mul, (Constant (c1 *. c2), Ops.promote_prec prec1 prec2), llsc), prec3)
+      minted (c1 *. c2) (fun c -> (Binop (Mul, (c, Ops.promote_prec prec1 prec2), llsc), prec3))
   | Binop
       ( Div,
         ( Binop (Mul, (Constant c2, prec2), llsc), prec3
@@ -6481,6 +6489,11 @@ let simplify_llc static_indices llc =
     | Embed_index (Fixed_idx _ | Sub_axis)
       when match Ops.prec_family prec with Packed_integer -> true | _ -> false ->
         (llsc, prec)
+    (* gh-ocannl-2018: an index past an integer slot's range converts from an integer, modularly. A
+       [Constant] would convert from a double, where that is undefined. *)
+    | Embed_index (Fixed_idx i)
+      when Ops.is_integer eval && not (Ops.integer_leaf_holds eval (Float.of_int i)) ->
+        (llsc, prec)
     | Embed_index (Fixed_idx i) -> (Constant (Float.of_int i), prec)
     | Embed_index Sub_axis -> (Constant 0., prec)
     | Embed_index (Iterator _) -> (llsc, prec)
@@ -6512,9 +6525,20 @@ let simplify_llc static_indices llc =
     (* gh-ocannl-1785: at an integer evaluation precision the renderer converts each constant
        operand to the integer precision first, so folding in double agrees with it only over
        integral constants -- [10 rem 2.83] would fold to 1.51 where [Mod] converts its operand and
-       gives [10 % 2]. *)
-    | Binop (_, (Constant c1, _), (Constant c2, _))
-      when Ops.is_integer eval && not (Float.is_integer c1 && Float.is_integer c2) ->
+       gives [10 % 2].
+
+       gh-ocannl-2018: and only where a leaf can hold the result. [(uchar)300.0] is undefined, so a
+       byte [200 + 100] stays an operator: the store converts its [int] 300 to 44, and [Min] reads
+       300, which no wrapped fold would give. A uint32 [3 - 5] stays too, wrapping in the kernel. An
+       out-of-range operand needs no check: its conversion is undefined as written, so a fold to a
+       value that fits is a refinement. An integer [Div] truncates, and a double quotient can round
+       onto a neighboring integer, so it folds only where it divides exactly. *)
+    | Binop (op, (Constant c1, _), (Constant c2, _))
+      when Ops.is_integer eval
+           && not
+                (Float.is_integer c1 && Float.is_integer c2
+                && Ops.integer_leaf_holds eval (Ops.interpret_binop op c1 c2)
+                && ((not (Ops.equal_binop op Div)) || Float.(Stdlib.Float.rem c1 c2 = 0.))) ->
         (llsc, prec)
     | Binop (op, (Constant c1, prec1), (Constant c2, prec2)) ->
         (* Folded in double and rounded once where the constant is rendered. For operands
@@ -6539,9 +6563,9 @@ let simplify_llc static_indices llc =
         let v1 = loop_scalar llv1 in
         let v2 = loop_scalar llv2 in
         let result = (Binop (ToPowOf, v1, v2), prec) in
-        match fp_algebra_step licence result with Some r -> loop_scalar r | None -> result)
+        match fp_algebra_step ~eval licence result with Some r -> loop_scalar r | None -> result)
     | Binop (op, llv1, llv2) -> (
-        match fp_algebra_step licence (llsc, prec) with
+        match fp_algebra_step ~eval licence (llsc, prec) with
         | Some rewritten -> loop_scalar rewritten
         | None ->
             let v1 = loop_scalar llv1 in
@@ -6597,11 +6621,14 @@ let simplify_llc static_indices llc =
     (* gh-ocannl-1785: at an integer evaluation precision a real-valued operator yields a float the
        renderer carries in float to its conversion point, where a folded [Constant] would be
        converted wherever it is read -- [2 * sin(1)] would fold its sine to 0.84 and render [2 *
-       (uchar)0.84]. A non-integral operand is converted first by the renderer, unlike the fold. *)
+       (uchar)0.84]. A non-integral operand is converted first by the renderer, unlike the fold. As
+       for a binop, a leaf must also hold the result (gh-ocannl-2018): uint32 [Neg 3] compares above
+       zero, where a fold to -3 compared below it. *)
     | Unop (op, (Constant c, _))
       when Ops.is_integer eval
            && (Ops.equal_integer_valuation (Ops.unop_integer_valuation op) Ops.Real_valued
-              || not (Float.is_integer c)) ->
+              || (not (Float.is_integer c))
+              || not (Ops.integer_leaf_holds eval (Ops.interpret_unop op c))) ->
         (llsc, prec)
     | Unop (op, (Constant c, _)) -> (Constant (Ops.interpret_unop op c), prec)
     | Unop (op, llsc) ->

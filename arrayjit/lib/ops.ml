@@ -304,6 +304,19 @@ let promoted_to_int = function Byte_prec _ | Uint16_prec _ -> true | _ -> false
     {!promoted_to_int}, otherwise [prec]. A leaf, by contrast, is converted to [prec] itself. *)
 let operator_prec prec = if promoted_to_int prec then int32 else prec
 
+(** Whether the float [c] renders as a leaf of integer precision [prec] with its value unchanged:
+    integral, in [prec]'s own range, and below {!exact_int_cutoff}. An operator can leave that range
+    where a leaf cannot, since {!operator_prec} is wider at byte and uint16, and unsigned arithmetic
+    wraps (gh-ocannl-2018). For [Add], [Sub] and [Mul] over integral doubles this is also the proof
+    that double arithmetic computed [c] exactly: rounding is monotonic, so a true result at or past
+    the cutoff rounds to at or past it, which also keeps the outward-rounded 64-bit endpoints of
+    {!integer_range} out of the question. *)
+let integer_leaf_holds prec c =
+  match integer_range prec with
+  | None -> false
+  | Some (lo, hi) ->
+      Float.is_integer c && Float.(abs c < exact_int_cutoff) && Float.(lo <= c && c <= hi)
+
 (** Whether every value of precision [from] converts to [to_] exactly, so that a conversion through
     [to_] is the identity on it: equal precisions; a float widening (fp8 into any wider float --
     both e4m3 and e5m2 fit half's and bfloat16's exponent ranges and significands -- half or

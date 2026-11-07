@@ -424,6 +424,20 @@ files.
   comparison, which `Assignments` never emits: a nested `%cd` expression gets a node, so `(a + b) <=
   255.` reads a kept byte scope and is rightly 1 at 300, since the node holds 44.
   `test/operations/integer_promotion_folds` runs each shape against the same literal in a node.
+- **A constant fold makes a leaf, and a leaf has less room than an operator** (gh-ocannl-2018). An
+  operator at byte or uint16 computes in `int` and unsigned arithmetic wraps, but a `Constant`
+  converts from double straight to its slot's precision, which C leaves undefined out of range: the
+  store vanished, leaving the prefill, on cc and Metal, with `Cmplt(Neg 3, 0)` at uint32 also
+  wrongly 1. So at an integer `eval` every constant arm of `simplify_llc` fires only where
+  `Ops.integer_leaf_holds` does, and otherwise the operator stays and the renderer computes it. No
+  wrapped constant could replace it: `Min(Add(200, 100), 250)` is 250 at byte, not 44. That covers
+  the `Binop` and `Unop` folds, a fixed index (which converts from an integer, modularly, until it
+  folds), and the constants `fp_algebra_step` mints, whose `Sub(0, x)` to `Mul(-1, x)` was the route
+  from `%op`: `0. - a` over an unsigned node. An integer `Div` also needs exact divisibility: a
+  double quotient can round onto the next integer. An out-of-range literal as written is not
+  covered, and signed overflow stays C's. `integer_promotion_folds` runs each shape as written and
+  with its literals in nodes, and pins a structural claim on `simplify_llc`, since what a compiler
+  does with an undefined conversion is no oracle.
 - **An integer table arm is integer-TYPED, in its operands' common type** (gh-ocannl-1883). cc's
   integer `Max`/`Min`/`Relu`/`Satur01` were `fmax`/`fmin` calls, `Trunc` a `truncf` and `Not` a
   `? 1.0 : 0.0`; CUDA's and HIP's `Relu`/`Satur01`/`Trunc`/`Not`, and Metal's `Trunc`, `Satur01`
@@ -1086,8 +1100,8 @@ files.
   bottom-up per assignment, after `Online_softmax` (contraction would hide `o := o + w * v` from
   the hoist). `simplify_llc` -- after virtualization and again after scheduling -- applies no
   licence: it keeps only IEEE identities (`x * 1`, `x - (+0)`, `x + (-0)`), constant folding and,
-  for integer precisions, the unlicensed reassociation the index canonicalizer needs. Two things
-  it still changes. Constant folds compute in double and round once at the target, where a kernel
+  for integer precisions, the unlicensed reassociation the index canonicalizer needs (integer
+  folds: gh-ocannl-2018, above). Two things it still changes. Constant folds compute in double and round once at the target, where a kernel
   rounds each operand first: equal for operands representable at the target, not otherwise
   (`(2^24 + 1) - 2^24` is 1 folded, 0 in f32). And a fixed embedded index folds to a `Constant`
   only into a scalar precision: into a `uint4x32` slot it stays an index (gh-ocannl-1468), because
