@@ -3013,10 +3013,11 @@ group_identity_matches() {
 # control flow holds (`run A; sleep 60; run B`) is seen once its own process
 # runs it, not before (leg 105 of tools/test-test-run.sh pins it). And it
 # runs under THIS state root: the OCANNL_TOOL_TEST_RUNS an `env` prefix of
-# its argv assigns (or unsets, `-u` or `-i`: the default root; a relative one
-# is relative to the worktree, where the script cds first), else the one its
-# environment holds where that can be read (/proc/PID/environ; a Mac shows
-# no other process its environment), else, unknown, here.
+# its argv assigns (or unsets, `-u` or `-i`: the default root, under the HOME
+# the prefix gives it or else any; a relative one is relative to the worktree,
+# where the script cds first), else, unknown, here -- environments are never
+# read (/proc/PID/environ is the exec-time one, stale under a wrapper that
+# exports before it runs its command).
 #
 # It is NOT in flight when a run of this worktree recorded it in its launch
 # chain (`launchers`, below): the launcher of that run and every ancestor it
@@ -3033,9 +3034,8 @@ group_identity_matches() {
 # this cannot resolve (a variable, a path with two spaces in a row);
 # `bisect`'s steps (its frozen runner is another tree's); a launch on another
 # box. Over-read, loudly: a launch of this worktree under another
-# OCANNL_TOOL_TEST_RUNS that neither its argv nor a readable environment
-# names (one exported to it, on a Mac) is in flight here, and once gone, one
-# that ended unpublished.
+# OCANNL_TOOL_TEST_RUNS its argv does not name (one exported to it) is in
+# flight here, and once gone, one that ended unpublished.
 #
 # The table comes from /proc where it exists (Linux, Cygwin/MSYS), from `ps`
 # elsewhere, and start tokens are ps_token's renderings (stat's starttime, or
@@ -3252,37 +3252,37 @@ sub dir_at {
   return defined $d ? "$c/$d" : $c;
 }
 # Whether a launch at a position runs under THIS state root (gh-ocannl-1913):
-# the OCANNL_TOOL_TEST_RUNS its `env` prefix assigns, else the one in its
-# environment where that can be read (/proc; a Mac shows no other process its
-# environment), else here, fail-open to the loud over-read: a wait on it
-# times out, then `unpublished:`. The default root is .ocannl-test-runs under
-# the HOME of the LAUNCH -- what its prefix or environment gives it, else the
-# HOME of the reader -- and a launch with neither a root nor a HOME is here
-# too (it dies unpublished).
+# the OCANNL_TOOL_TEST_RUNS its `env` prefix assigns, else here, fail-open to
+# the loud over-read: a wait on it times out, then `unpublished:`. Process
+# environments are never read: /proc/PID/environ is the environment a process
+# was EXECUTED with, and a wrapper that exports a root before it runs its
+# command shows the old one there, so a reading would exclude a launch that
+# is ours (the under-read every rule here is against). The default root
+# (`-u`, `-i`) is .ocannl-test-runs under the HOME of the LAUNCH: the one its
+# prefix gives it, or, unnamed, any -- the launch is here when this root
+# could be it, a `.ocannl-test-runs` of some home -- and a launch whose
+# prefix unsets HOME is here too (it dies unpublished).
 sub same_root {
   my ($a, $b) = @_;
   for ($a, $b) { $_ = Cwd::abs_path($_) // $_ if -d $_; s{(?<=.)/+\z}{} }
   return $a eq $b;
 }
 sub runs_here {
-  my ($p, $pos) = @_;
+  my ($pos) = @_;
   my ($v, $h) = defined $pos ? ($pos->{runs}, $pos->{home}) : (undef, undef);
-  if ($proc && (!defined $v || !defined $h)) {
-    my $e = slurp("/proc/$p/environ");
-    if (defined $e) {
-      $v = $e =~ /(?:\A|\0)OCANNL_TOOL_TEST_RUNS=([^\0]*)/ ? $1 : "" unless defined $v;
-      $h = $e =~ /(?:\A|\0)HOME=([^\0]*)/ ? $1 : "" unless defined $h;
-    }
-  }
   return 1 unless defined $v;
-  $h = $ENV{HOME} unless defined $h;
-  return 1 unless defined $h && length $h;
-  $v = "$h/.ocannl-test-runs" unless length $v;
-  $v =~ s{\A~(?=/|\z)}{$h};
+  my $here = defined $runs && length $runs ? $runs
+    : defined $ENV{HOME} && length $ENV{HOME} ? "$ENV{HOME}/.ocannl-test-runs" : undef;
+  return 1 unless defined $here;
+  if (!length $v) {
+    if (!defined $h) { (my $n = $here) =~ s{/+\z}{}; return $n =~ m{/\.ocannl-test-runs\z} ? 1 : 0 }
+    return 1 unless length $h;
+    $v = "$h/.ocannl-test-runs";
+  }
+  $h = $ENV{HOME} unless defined $h && length $h;
+  $v =~ s{\A~(?=/|\z)}{$h} if defined $h && length $h;
   # The script reads a relative root after its own cd to the worktree root.
   $v = "$root/$v" unless absolute($v);
-  return 1 unless defined $ENV{HOME} || (defined $runs && length $runs);
-  my $here = defined $runs && length $runs ? $runs : "$ENV{HOME}/.ocannl-test-runs";
   return same_root($v, $here);
 }
 # Processes of this uid by argv: an orphan of parent 1 carrying the argv of a
@@ -3348,7 +3348,7 @@ for my $p (sort { $a <=> $b } keys %args) {
     my $c = dir_at($p, $at->{$i});
     if (defined $c && (Cwd::abs_path($c) // "") eq $root) { $hit = 1; $hit_at = $at->{$i} }
   }
-  next unless $hit && !credited($p) && runs_here($p, $hit_at);
+  next unless $hit && !credited($p) && runs_here($hit_at);
   # Asked only of a launch, as it reads directories (lsof on a Mac).
   if (orphan($p)) {
     # One argv in another directory is another launch (a relative word names

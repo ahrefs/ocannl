@@ -1307,9 +1307,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   run` was missed and one in it moving to a sibling over-read). A launch of the worktree under
   another OCANNL_TOOL_TEST_RUNS is no launch under this root when its argv says so (an `env`
   assignment, or `-u` or `-i` before the script word: the default root; a relative root is the
-  worktree's, where the script cds first) or its environment can be read (/proc/PID/environ;
-  a Mac shows no other process its environment, so one exported to it there is still the loud
-  over-read: a wait that times out, then `unpublished:`). The
+  worktree's, where the script cds first) — and only so: process environments are never read, since
+  /proc/PID/environ is the exec-time one and a wrapper that exports a root before it runs its
+  command shows the old one there (staging#1788 round 4), so a root exported to a launch is the
+  loud over-read: a wait that times out, then `unpublished:`. A default root (`-u`, `-i`) is
+  under the HOME the prefix names, or, unnamed, any: the launch is here when this root could be it. The
   one fact stored is the sighting (a `queued-after` mark in the run `last` named then, or
   `queued-<key>` before the first run), since a launch that left without publishing leaves
   nothing else; a mark is a file's existence per run, so no late reader can overwrite a newer
