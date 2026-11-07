@@ -4139,7 +4139,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   has no pipefail, and the build would read green), and the PowerShell one ends `exit
   $LASTEXITCODE`; `test/operations/ci_matrix.sh` holds both, with mutants.
   `tools/test-ci-failed-rules.sh` (the `promotion` harness group, so current Dune and the floor)
-  builds a fixture project red and green.
+  builds a fixture project red and green, with dune's colour forced as setup-ocaml forces it
+  job-wide (`CLICOLOR_FORCE=1` in its `build()`, whatever the ambient setting; gh-ocannl-1928): a
+  leg reading a raw log without stripping the escapes fails locally as it did in CI, where two
+  such reads cost lukstafi/ocannl-staging#1669 a round; a leg pins that the built logs carry them.
 - **Each listed rule quotes why it failed** (gh-ocannl-1831): under its entry, behind `| `, the
   first 3 lines of its own block holding `FAIL:`, `FAILED:`, `AssertionError`, `Error:` or
   `Fatal error:` (of a golden diff, only the `+` lines), and a count of the rest; the annotation
