@@ -147,6 +147,10 @@ the syntax extension %op</a>
 binding</a></li>
 <li><a href="#label-from-function-argument" id="toc-label-from-function-argument">Label from function
 argument</a></li>
+<li><a href="#the-label-parameter" id="toc-the-label-parameter">The
+<code>label</code> parameter</a></li>
+<li><a href="#parameters-that-need-a-unit-parameter-or-a-label" id="toc-parameters-that-need-a-unit-parameter-or-a-label">Parameters
+that need a unit parameter, or a label</a></li>
 <li><a href="#configuring-inline-declarations-inline-output-dimensions-initial-values" id="toc-configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
 inline declarations: inline output dimensions, initial values</a></li>
 <li><a href="#need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter" id="toc-need-to-lift-the-applications-of-configuration-arguments-up-to-the-unit-parameter">Need
@@ -200,6 +204,10 @@ features of the syntax extension %op</a>
 <li><a href="#name-from-binding">Name from binding</a></li>
 <li><a href="#label-from-function-argument">Label from function
 argument</a></li>
+<li><a href="#the-label-parameter">The <code>label</code>
+parameter</a></li>
+<li><a href="#parameters-that-need-a-unit-parameter-or-a-label">Parameters that
+need a unit parameter, or a label</a></li>
 <li><a href="#configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
 inline declarations: inline output dimensions, initial values</a></li>
 <li><a href="#lifting-of-the-applications-of-config-arguments-if-an-error-refactor-your-code">Lifting
@@ -280,6 +288,14 @@ are associated with infix operators, in addition to having alphabetic
 identifiers. This stems from the following restriction: in the
 <code>%cd</code> syntax, the assignment is always an infix operator, and
 it needs to pick the accumulation operation.</p>
+<p>In <code>%op</code>, the uncurried form <code>op (a, b)</code> or
+<code>op (a, b, c)</code> of a binary or ternary primitive operation is
+the curried call <code>op a b</code> or <code>op a b c</code>:
+<code>where (c, x, y)</code> is <code>where c x y</code>, and
+<code>( + ) (x, y)</code> is <code>x + y</code>. The operands are
+<code>%op</code> expressions, so they can hold inline declarations. The
+identifier must be one the DSL’s <code>O</code> module binds, as for the
+curried form.</p>
 <p>The unary primitive operations:</p>
 <table>
 <thead>
@@ -1068,6 +1084,24 @@ a second <code>{ x }</code> for the same name is rejected with
 Declare the tensor in whichever arm reads most naturally – typically the
 one whose right-hand side carries the best label information – and refer
 to it by bare name in the others.</p>
+<ul>
+<li><strong><code>%cd</code> state that starts from zero</strong>:
+<code>{ tensor_name; zero_valid = true }</code> declares that
+allocation’s zero is a correct value of the tensor
+(<code>Tnode.mark_zero_valid</code>), for a routine that reads it before
+writing it. The rest of its behavior is unchanged, and without the
+declaration the routine still runs from that zero, but the
+<code>debug_fill_fresh_outputs</code> configuration key, on in the test
+suite, starts an undeclared tensor from NaN so that a dropped
+initialization shows. An accumulation opening with <code>=+</code>,
+<code>=-</code> or <code>=||</code> needs no declaration: zero is its
+neutral element, so the operator states the start. A statement reading
+the tensor any other way, such as <code>{ x } =: (0.9 *. x) + y</code>,
+does. <code>{ sgd_momentum; zero_valid = true }</code> in
+<code>Train.sgd_one</code> is the pattern. The field goes with the other
+inline-declaration fields (<code>o</code>, <code>i</code>,
+<code>b</code>), at the one declaration site.</li>
+</ul>
 <p><code>Train.sgd_one</code> in <code>lib/train.ml</code> is the worked
 example: its <code>%cd</code> payload is written once, with
 <code>{ sgd_delta }</code> and <code>{ sgd_momentum }</code> each
@@ -1420,19 +1454,24 @@ one-operand spec the kernel label is captured and set,
 gradients included; unpadded (<code>&lt;+</code>) windows work the same
 way (gh-ocannl-1691). A padded window’s extents do not determine its
 kernel, so a padded kernel nothing sizes (not captured, or never set) is
-refused with a shape error naming it; an unpadded window’s kernel is
-solved from its extents like any other dimension. Solved, not refused,
-even when only the input size is known: one equation in two unknowns, so
-the solver’s least-commitment guess closes the output at 1 and the
-kernel takes the rest – an uncaptured
-<code>x ++ &quot;s, 2*o&lt;+k =&gt; s, o&quot;</code> over an input of 8 resolves
-to <code>o = 1</code>, <code>k = 8</code>, a full reduction rather than
-a pool. Size the kernel (capture <code>k</code> and
-<code>Shape.set_dim</code> it, or give the window a kernel operand of
-known extent) or the output (gh-ocannl-1741; pinned in the same test).
-The pooling layers’ constant kernel operand (<code>stretch 0.0</code> in
-<code>Nn_blocks.max_pool2d</code>) is the two-operand form of the same
-window. Executed in
+refused with a shape error naming it: an uncaptured one where the
+operation is built, naming the spec as well, the rest at the closure. So
+is one only an axis of the result carries,
+<code>x ++ &quot;s, 2*o=+k =&gt; s, o, k&quot;</code>, unless that axis is sized:
+a capture and <code>Shape.set_dim</code>, or an einsum consumer, but not
+a broadcast, which leaves the axis at 1 and cannot widen it
+(gh-ocannl-1983). An unpadded window’s kernel is solved from its extents
+like any other dimension. Solved, not refused, even when only the input
+size is known: one equation in two unknowns, so the solver’s
+least-commitment guess closes the output at 1 and the kernel takes the
+rest – an uncaptured <code>x ++ &quot;s, 2*o&lt;+k =&gt; s, o&quot;</code> over an
+input of 8 resolves to <code>o = 1</code>, <code>k = 8</code>, a full
+reduction rather than a pool. Size the kernel (capture <code>k</code>
+and <code>Shape.set_dim</code> it, or give the window a kernel operand
+of known extent) or the output (gh-ocannl-1741; pinned in the same
+test). The pooling layers’ constant kernel operand
+(<code>stretch 0.0</code> in <code>Nn_blocks.max_pool2d</code>) is the
+two-operand form of the same window. Executed in
 <code>test/einsum/padded_operand_offset_windows.ml</code>.</p></li>
 <li><p><strong>Offsets stay inside the axis</strong>: shape inference
 sizes an affine axis without its constant offset, so an offset must be
@@ -1600,6 +1639,38 @@ and leaves the rest of <code>target</code> unchanged. The gradient of an
 extraction flows into the selected segment only. These forms are
 executed against oracles in
 <code>test/einsum/concat_extraction.ml</code>.</p>
+<p><strong>What a concatenated axis cannot say</strong>: a concatenated
+axis is one axis of alternatives, so a position lies in one segment.
+Three forms therefore have no meaning, and are refused with a shape
+error when the operation is built, whatever the sizes
+(gh-ocannl-2017):</p>
+<ul>
+<li>One tensor’s axes needing two components of the same concatenation:
+<code>p^q =&gt; p, q</code>, <code>a, b =&gt; a^b</code>,
+<code>a, b; c =&gt; a^b^c</code>. No position has both. Name one
+component per tensor.</li>
+<li>A result concatenation no component of which an operand names:
+<code>a =&gt; 2^3</code>, <code>c =&gt; a^b</code>,
+<code>p^q =&gt; r^s</code>, <code>2^3 =&gt; 2^3</code>. Nothing says
+what the segments hold, and integers are segments the spec skips. Name
+the segment to write part of the axis (<code>a =&gt; 2^a^3</code>); to
+repeat the reduced operand in every cell, use a plain axis and size it
+(<code>x ++ &quot;a =&gt; b&quot; [&quot;b&quot;]</code>, then
+<code>Shape.set_dim b 5</code>).</li>
+<li>A <code>++^</code> concatenation with its operands out of the order
+of the segments they fill: <code>(x, y) ++^ &quot;b; a =&gt; a^b&quot;</code>.
+Write <code>(y, x) ++^ &quot;a; b =&gt; a^b&quot;</code>.</li>
+</ul>
+<p>The same forms on an operand are defined where every cell has a
+reading: an operand concatenation no component of which the result names
+is a reduction over all its cells (<code>2^3 =&gt;</code>,
+<code>p^q =&gt; c</code>), and every other access to that operand sees a
+plain axis of the summed size. When compiling, an operand that no
+segment reaches is refused too: in <code>a; b =&gt; a^b, b</code> the
+result’s plain <code>b</code> rules out the segment <code>a</code> that
+the first operand fills, and in <code>a^b, b =&gt; a</code> the result
+and the operand need different segments. The forms are executed in
+<code>test/einsum/concat_axis_consumers.ml</code>.</p>
 <p><strong>N-ary einsum for multiple tensors</strong>: The einsum parser
 supports any number of RHS tensors separated by semicolons. This enables
 operations like:</p>
@@ -1697,8 +1768,10 @@ after it. (OCaml itself evaluates the elements of a list, array or tuple
 right to left; the expansion binds the components with <code>let</code>
 first.) This holds only for these literals. The operands of an operator
 or a function application keep OCaml’s order: <code>f x + g y</code>
-creates <code>g y</code> first, inside <code>%op</code> as outside
-it.</li>
+creates <code>g y</code> first, inside <code>%op</code> as outside it.
+This is a decision, not an omission (gh-ocannl-1986): the order changes
+no value, and creating operands left to right would shift tensor ids
+throughout existing code.</li>
 <li>Nested block tensors are supported at arbitrary depth, including
 three-way across all axis kinds: a nested literal reproduces the shape
 the corresponding nested ndarray literal would have. The delimiters nest
@@ -1748,7 +1821,10 @@ row – after <code>2, 3</code>, an operand of <code>3, 2</code> or
 <code>6</code> is refused – and a dimension captured again has the row’s
 product. A reference whose last binding before the closure was a
 dimension carries only the number, so a row captured from it later is
-tied by product, as within one inference.</p>
+tied by product, as within one inference. That tie is not transitive
+(gh-ocannl-1969): row, dimension, row leaves two rows of one product,
+not one row, and identifying them takes an explicit
+<code>set_equal</code> of two row references.</p>
 <p><code>Shape.set_equal</code> on two row references equates the rows
 themselves, not their products, whatever either reference has been
 solved to so far (gh-ocannl-1617): rows <code>2, 3</code> and
@@ -1756,11 +1832,12 @@ solved to so far (gh-ocannl-1617): rows <code>2, 3</code> and
 dimension to a row (<code>set_equal</code> on a dimension and a row
 reference, or <code>Shape.set_dim</code> on a row reference). A row
 reference bound before a closure takes part in a Row-Row pair with the
-row it carried. A row holding a symbolic extent has no numeric product:
-after its closure it can be captured again as a row, or
-<code>set_equal</code>-ed with a row reference, but a capture as a
-dimension, <code>set_dim</code> or a dimension <code>set_equal</code> is
-refused, naming the closure (gh-ocannl-1655). And a reference made by
+row it carried, and two such references are compared at the call:
+different rows raise there, naming both. A row holding a symbolic extent
+has no numeric product: after its closure it can be captured again as a
+row, or <code>set_equal</code>-ed with a row reference, but a capture as
+a dimension, <code>set_dim</code> or a dimension <code>set_equal</code>
+is refused, naming the closure (gh-ocannl-1655). And a reference made by
 <code>Shape.get_variable_ref</code> that <code>set_equal</code> relates
 to a row reference before it is bound is a number, the row’s product:
 binding it to a row afterwards is refused, since the rows would be tied
@@ -1920,9 +1997,9 @@ be in the last component of the sequence, other syntax constructs are
 handled analogously.</p>
 <p>The example
 <code>let%op mlp_layer ~label ~hid_dim () x = relu ({ w } * x + { b; o = [ hid_dim ] })</code>
-also illustrates providing additional string list to populate the label
-of the tensor: <code>label</code> must be of type
-<code>string list</code>.</p>
+also illustrates providing an additional string list to populate labels:
+<code>label</code> must be of type <code>string list</code> (see <a href="#the-label-parameter">The <code>label</code> parameter</a> for
+which tensors take it).</p>
 <h3 id="label-from-function-argument">Label from function argument</h3>
 <p>When the function directly under <code>%op</code> has no unit
 parameter <code>()</code>, the resulting (primary) tensor’s label also
@@ -1942,11 +2019,57 @@ annotated. An optional parameter (<code>?scale</code>,
 <code>?(stride = 2)</code>) is not a label source and may be anything
 (gh-ocannl-1787). If the function has a unit parameter <code>()</code>,
 like <code>mlp_layer</code> above, no parameter is a label source: the
-label comes from the binding’s name and the <code>~label</code>
-parameter.</p>
-<p>When there is the unit parameter, and a <code>~label</code> or
-<code>?label</code> parameter (specifically a parameter with label
-<code>label</code>), this label is also incorporated.</p>
+label comes from the binding’s name.</p>
+<h3 id="the-label-parameter">The <code>label</code> parameter</h3>
+<p>A parameter with the label <code>label</code> – <code>~label</code>,
+<code>?label</code> or <code>?(label = [ ... ])</code> – is a
+<code>string list</code> that <code>%op</code> puts into the labels of
+the tensors the function creates per application (gh-ocannl-1987):</p>
+<ul>
+<li>Before a unit parameter, as in
+<code>let%op mlp_layer ~label ~hid_dim () x = ...</code>, it enriches
+the inline declarations, which are created at the <code>()</code>
+application: <code>mlp_layer ~label:[ &quot;L1&quot; ] ~hid_dim:3 ()</code>
+creates <code>w</code> and <code>b</code> labelled with <code>L1</code>.
+The result’s label is not enriched.</li>
+<li>Without a unit parameter, as in
+<code>let%op scaled ~label x = { gamma } *. x</code>, the inline
+declarations are created once, when the function is defined, where
+<code>label</code> is not bound; instead it enriches the result’s label,
+at its position among the label sources of the previous section: the
+binding’s name, then <code>label</code> and the tensor parameters’
+labels in parameter order. An omitted <code>?label</code> contributes
+nothing.</li>
+</ul>
+<p><code>label</code> is not otherwise reserved: a <code>~label</code>
+that is a tensor by the evidence of the previous section (an operand
+use, a <code>Tensor.t</code> annotation) is a tensor, and an optional
+one with that evidence (<code>?(label = fallback)</code> used as an
+operand) is left alone like any other optional parameter.</p>
+<h3 id="parameters-that-need-a-unit-parameter-or-a-label">Parameters
+that need a unit parameter, or a label</h3>
+<p>Two uses of a parameter cannot work where a new user is likely to
+write them, and <code>%op</code> refuses them with an error naming the
+fix (gh-ocannl-1987):</p>
+<ul>
+<li>An inline declaration field that names a parameter bound after the
+declaration is created:
+<code>let%op layer ~hid_dim x = ({ w } * x) + { b; o = [ hid_dim ] }</code>
+creates <code>b</code> once, at definition, where <code>hid_dim</code>
+is not bound. Give the function a unit parameter, with the configuration
+before it: <code>let%op layer ~hid_dim () x = ...</code>. The same holds
+for a parameter after the <code>()</code> and for the parameters of a
+function nested in the body.</li>
+<li>An unlabelled parameter that the body uses as an integer or a float
+– a stride or dilation in a literal einsum spec
+(<code>&quot;stride*o+k&quot;</code>), the operand of <code>!.</code> or
+<code>!..</code>, the exponent of <code>**.</code>: an unlabelled
+parameter is taken for a tensor, both as a label source and as an
+argument of the function’s <a href="#automatic-shape-schemes">shape
+scheme</a>. Label it (<code>~stride</code>) or bind it before a unit
+parameter. Other non-tensor uses of an unlabelled parameter are not
+detected and remain type errors at the use.</li>
+</ul>
 <h3 id="configuring-inline-declarations-inline-output-dimensions-initial-values">Configuring
 inline declarations: inline output dimensions, initial values</h3>
 <p>In the <code>%op</code> syntax, inline declarations use record syntax

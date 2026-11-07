@@ -632,6 +632,17 @@ as <code>Train.grad_update</code> of a loss over their sum; or compile
 <code>Train.grad_update ~accum_steps:1</code> per objective, neither of
 which zeroes the shared leaf: after the reset and both runs, its
 gradient is the sum’s.</p>
+<p>The first-constructed consumer is the first that can still run. One
+dropped and reclaimed by the GC with its backprop unconsumed – say a
+forward-only evaluation of a model – can never run, so it gives back the
+terms and parameters it absorbed, and the next loss constructed over
+them carries their zeroing (gh-ocannl-1804). The GC times this: a loss
+built after the drop but before the collection does not get the zeroing,
+and is refused at compile with the missing reset named. A compiled
+<code>Train.zero_params_grads ~params</code> works either way,
+<code>Gc.full_major ()</code> after the drop settles it, and the
+<code>~accum_steps:1</code> spelling above holds whether or not the
+zeroing came back.</p>
 <p>A routine that accumulates into a gradient without zeroing it sums
 every run’s contribution until something resets the gradient.
 <code>Context.run</code> therefore refuses its run once it has run as
@@ -743,10 +754,11 @@ records no progress. Device-side randomness needs no generator state
 saved: random operations are counter-based (see <a href="#counter-based-prng">Counter-Based PRNG</a>), so the same seed
 with counters derived from the restored step draws the same numbers. The
 checkpoint therefore records the seeds
-(<code>Tensor.random_seeds</code>: every one the session created,
-including a graph’s scoped seed), and <code>Checkpoint.restore</code>
-refuses a program built under different ones, naming both; a checkpoint
-from before the seed was recorded restores with a warning instead.
+(<code>Tensor.random_seeds</code>: every distinct one the session
+created, including a graph’s scoped seed), and
+<code>Checkpoint.restore</code> refuses a program built under different
+ones, naming both; a checkpoint from before the seed was recorded
+restores with a warning instead.
 <code>test/training/resume_checkpoint.ml</code> resumes a run in a fresh
 process and checks it matches the uninterrupted one bit for bit.</p>
 <h2 id="reusable-tensor-programs">Reusable Tensor Programs</h2>
@@ -774,9 +786,14 @@ stands for any number of axes and is generalized: each application gets
 its own. <code>..&#39;_a..</code> is fixed, shared by every application
 (here, the input row of <code>w</code>), the way OCaml prints a weak
 type variable. The indented lines are the broadcasting relations,
-<code>r ⊑ o</code> reading “the result row <code>r</code> refines the
-operand row <code>o</code>”:</p>
-<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml mlp_layer : ..&#39;a..|..&#39;b..-&gt;..&#39;c.. =&gt; ..&#39;d..|..&#39;e..-&gt;..&#39;f..,4   ..&#39;_a.. ⊑ ..&#39;c..   ..&#39;d.. ⊑ ..&#39;a..   ..&#39;e.. ⊑ ..&#39;_b..   ..&#39;e.. ⊑ ..&#39;b..</code></p>
+grouped by their left side, <code>r ⊑ o1, o2</code> reading “the result
+row <code>r</code> refines each operand row <code>o1</code>,
+<code>o2</code>”:</p>
+<p><code>text doc-excerpt=test/operations/reusable_tensor_programs.ml mlp_layer : ..&#39;a..|..&#39;b..-&gt;..&#39;c.. =&gt; ..&#39;d..|..&#39;e..-&gt;..&#39;f..,4   ..&#39;d.. ⊑ ..&#39;a..   ..&#39;e.. ⊑ ..&#39;b.., ..&#39;_a..   ..&#39;_b.. ⊑ ..&#39;c..</code></p>
+<p>Two arguments consumed together by a reduction, such as a loss’s
+logits and targets, are related through a row the result no longer
+carries: that prints as <code>_ ⊑ ..&#39;a.., ..&#39;d..</code>, an anonymous
+witness that the two rows broadcast together.</p>
 <p>The same <code>layer</code> then applies at batch shapes
 <code>2</code> and <code>5,7</code>, each application checked against
 the scheme before its body builds, giving results of shapes
