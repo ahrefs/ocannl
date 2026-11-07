@@ -1,0 +1,77 @@
+byte max reads the hand-computed cells: true
+byte min reads the hand-computed cells: true
+byte max neutral reads the hand-computed cells: true
+byte min neutral reads the hand-computed cells: true
+byte window max reads the hand-computed cells: true
+byte the clamped window leaves its operand unpadded: true
+byte window min reads the hand-computed cells: true
+byte min read through a scope reads the hand-computed cells: true
+byte the reduction is virtualized into its reader: true
+byte split max reads the hand-computed cells: true
+byte split min reads the hand-computed cells: true
+uint16 max reads the hand-computed cells: true
+uint16 min reads the hand-computed cells: true
+uint16 max neutral reads the hand-computed cells: true
+uint16 min neutral reads the hand-computed cells: true
+uint16 window max reads the hand-computed cells: true
+uint16 the clamped window leaves its operand unpadded: true
+uint16 window min reads the hand-computed cells: true
+uint16 min read through a scope reads the hand-computed cells: true
+uint16 the reduction is virtualized into its reader: true
+uint16 split max reads the hand-computed cells: true
+uint16 split min reads the hand-computed cells: true
+int32 max reads the hand-computed cells: true
+int32 min reads the hand-computed cells: true
+int32 max neutral reads the hand-computed cells: true
+int32 min neutral reads the hand-computed cells: true
+int32 window max reads the hand-computed cells: true
+int32 the clamped window leaves its operand unpadded: true
+int32 window min reads the hand-computed cells: true
+int32 min read through a scope reads the hand-computed cells: true
+int32 the reduction is virtualized into its reader: true
+int32 split max reads the hand-computed cells: true
+int32 split min reads the hand-computed cells: true
+uint32 max reads the hand-computed cells: true
+uint32 min reads the hand-computed cells: true
+uint32 max neutral reads the hand-computed cells: true
+uint32 min neutral reads the hand-computed cells: true
+uint32 window max reads the hand-computed cells: true
+uint32 the clamped window leaves its operand unpadded: true
+uint32 window min reads the hand-computed cells: true
+uint32 min read through a scope reads the hand-computed cells: true
+uint32 the reduction is virtualized into its reader: true
+uint32 split max reads the hand-computed cells: true
+uint32 split min reads the hand-computed cells: true
+int64 max reads the hand-computed cells: true
+int64 min reads the hand-computed cells: true
+int64 max neutral reads the hand-computed cells: true
+int64 min neutral reads the hand-computed cells: true
+int64 window max reads the hand-computed cells: true
+int64 the clamped window leaves its operand unpadded: true
+int64 window min reads the hand-computed cells: true
+int64 min read through a scope reads the hand-computed cells: true
+int64 the reduction is virtualized into its reader: true
+int64 split max reads the hand-computed cells: true
+int64 split min reads the hand-computed cells: true
+uint64 max reads the hand-computed cells: true
+uint64 min reads the hand-computed cells: true
+uint64 max neutral reads the hand-computed cells: true
+uint64 min neutral reads the hand-computed cells: true
+uint64 window max reads the hand-computed cells: true
+uint64 the clamped window leaves its operand unpadded: true
+uint64 window min reads the hand-computed cells: true
+uint64 min read through a scope reads the hand-computed cells: true
+uint64 the reduction is virtualized into its reader: true
+uint64 split max reads the hand-computed cells: true
+uint64 split min reads the hand-computed cells: true
+single max reads the hand-computed cells: true
+single min reads the hand-computed cells: true
+single max neutral reads the hand-computed cells: true
+single min neutral reads the hand-computed cells: true
+single window max reads the hand-computed cells: true
+single the clamped window leaves its operand unpadded: true
+single window min reads the hand-computed cells: true
+single min read through a scope reads the hand-computed cells: true
+single the reduction is virtualized into its reader: true
+single split max reads the hand-computed cells: true
+single split min reads the hand-computed cells: true

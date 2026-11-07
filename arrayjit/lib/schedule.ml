@@ -3494,10 +3494,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
             in
             let identity =
               match op with
-              | Ops.Add -> 0.
-              | Ops.Max -> Float.neg_infinity
-              | Ops.Min -> Float.infinity
-              | Ops.Mul -> 1.
+              | Ops.Add | Ops.Max | Ops.Min | Ops.Mul -> Low_level.neutral_scalar prec op
               | _ ->
                   refuse
                     ("Schedule.Split_reduce: unsupported accumulation operator "
@@ -3569,7 +3566,7 @@ let apply_split_reduce ~axis ~target ~num_blocks ~block_index ~inner_index ~comb
               remap_reads ~writes:true ~source:target ~from_idcs:idcs ~tile:partials
                 ~tile_idcs:p_idcs (subst fc.body)
             in
-            let init = Set { tn = partials; idcs = p_idcs; llsc = Constant identity; debug = "" } in
+            let init = Set { tn = partials; idcs = p_idcs; llsc = identity; debug = "" } in
             let range_of s =
               List.find_exn enclosing ~f:(fun fl -> Indexing.equal_symbol fl.index s)
             in

@@ -805,6 +805,11 @@ let elided_operand : scalar_arg =
   let c = Constant 0. in
   (c, scalar_precision c)
 
+let neutral_scalar prec op =
+  Either.value_map (Ops.neutral_elem_at prec op)
+    ~first:(fun c -> Constant c)
+    ~second:(fun bits -> Constant_bits bits)
+
 (** Helper to construct binary/ternary/unary ops with proper precision *)
 let mk_binop op arg1 arg2 = Binop (op, (arg1, scalar_precision arg1), (arg2, scalar_precision arg2))
 

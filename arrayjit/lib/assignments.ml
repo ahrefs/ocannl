@@ -987,7 +987,8 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
             | [] -> rhs2
             | conds ->
                 let cond, _ = and_all conds in
-                apply_op (Ops.Ternop Ops.Where) [| cond; rhs2; Constant (Ops.neutral_elem accum) |]
+                apply_op (Ops.Ternop Ops.Where)
+                  [| cond; rhs2; Low_level.neutral_scalar (Lazy.force lhs.storage_prec) accum |]
           in
           let clamp = (accum, fresh_sizes, lhs_conds) in
           let stmt =
@@ -1019,7 +1020,6 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
        accompanies every writer of a padded node. A writer whose unguarded window write lands in the
        margins (a padded convolution's input gradient) fills them again after its loop nest
        ([margin_restores], gh-ocannl-1496). *)
-    let neutral_value = Ops.neutral_elem accum in
     let padding_resets =
       match Lazy.force lhs.padding with Some (_, v) -> reset_padding_regions lhs v | None -> []
     in
@@ -1029,7 +1029,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       else Low_level.unflat_lines (padding_resets @ [ for_loops ] @ restores)
     in
     if needs_init then
-      let init = neutral_init ~projections lhs neutral_value in
+      let init = neutral_init ~projections lhs accum in
       Low_level.Seq (init, for_loops_with_resets)
     else for_loops_with_resets
   (* An initialization pass fills only the cells the accumulation can reach. An axis of [tn] indexed
@@ -1048,7 +1048,8 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
      a padded target's margins; the guarded nest stores only semantic cells, and leaves them to the
      margin resets both callers emit for every node they write ([loop_accum]'s [lhs],
      [loop_accum_rev]'s targets). *)
-  and neutral_init ~(projections : Indexing.projections) tn neutral_value : Low_level.t =
+  and neutral_init ~(projections : Indexing.projections) tn accum : Low_level.t =
+    let prec = Lazy.force tn.storage_prec in
     let extents =
       Array.map projections.project_lhs ~f:(function
         | Indexing.Iterator iter -> bound_extent ~projections iter
@@ -1056,10 +1057,15 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     in
     if Array.for_all extents ~f:Option.is_none then
       let dims = lazy projections.lhs_dims in
-      loop (Fetch { array = tn; fetch_op = Constant neutral_value; dims })
+      let fetch_op =
+        Either.value_map (Ops.neutral_elem_at prec accum)
+          ~first:(fun c -> Constant c)
+          ~second:(fun bits -> Constant_bits bits)
+      in
+      loop (Fetch { array = tn; fetch_op; dims })
     else
       let rec init_loop rev_idcs = function
-        | [] -> set tn (Array.of_list_rev rev_idcs) (Low_level.Constant neutral_value)
+        | [] -> set tn (Array.of_list_rev rev_idcs) (Low_level.neutral_scalar prec accum)
         | (d, _) :: axes when not (Indexing.iterated d) ->
             init_loop (Indexing.Fixed_idx 0 :: rev_idcs) axes
         | (d, extent) :: axes ->
@@ -1197,14 +1203,17 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                  "Ambiguous indices in concatenation: multiple blocks viable for same position";
           let i, target_buf, lhs_idcs = targets.(0) in
           let rhs2 = apply_op op [| rhs_ll |] in
+          let target_tn = target_tn_exn target_buf in
           let rhs2 =
             match !rhs_conds with
             | [] -> rhs2
             | conds ->
                 let cond, _ = and_all conds in
-                apply_op (Ops.Ternop Ops.Where) [| cond; rhs2; Constant (Ops.neutral_elem accum) |]
+                apply_op (Ops.Ternop Ops.Where)
+                  [|
+                    cond; rhs2; Low_level.neutral_scalar (Lazy.force target_tn.storage_prec) accum;
+                  |]
           in
-          let target_tn = target_tn_exn target_buf in
           let clamp = (accum, fresh_sizes, lhs_conds) in
           let stmt =
             if initialize_neutral && target_can_skip.(i) then
@@ -1217,7 +1226,6 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
           | [] -> stmt
           | conds -> Low_level.If { cond = and_all conds; body = stmt })
     in
-    let neutral_value = Ops.neutral_elem accum in
     (* The padding contract, as [loop_accum] keeps it for its [lhs]: every writer of a padded node
        carries the (idempotent) fill of its margins, since device buffers are allocated raw. Here
        the written nodes are the targets, on every path: an initializing scatter whose init is
@@ -1262,7 +1270,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                 project_lhs = projections.project_rhs.(i);
               }
             in
-            Some (neutral_init ~projections array neutral_value))
+            Some (neutral_init ~projections array accum))
       |> Array.to_list
     in
     if List.is_empty init_ops then for_loops_with_resets

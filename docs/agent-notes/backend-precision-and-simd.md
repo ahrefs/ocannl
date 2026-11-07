@@ -439,6 +439,17 @@ files.
   float-typed arm, and its executed cases pin the values. Not covered: cc's `Satur01_gate` passes
   at 0 where the other backends and `Ops.interpret_binop` do not, at float and integer precisions
   alike, and its integer spelling tests `abs()`, an `int` function.
+- **A `Max`/`Min` neutral element is the slot's extreme at an integer precision** (gh-ocannl-2081).
+  `Ops.neutral_elem` stays the operator's and answers infinities: shape inference reads it before
+  any precision is settled, and a non-finite answer is what clamps a padded window, which is also
+  why no padding ever carries one (gh-504). The value a kernel stores is `Ops.neutral_elem_at`
+  (`Low_level.neutral_scalar`), at the initialization, the clamp's `Where` and `Split_reduce`'s
+  partials: `(unsigned char)(-INFINITY)` is undefined, and clang dropped the whole accumulation over
+  it, so the cell kept its contents, `debug_fill_fresh_outputs`' `0xA5` under `test/config` (the
+  165 of the report). An upper bound of 2^31-1 or more goes as `Constant_bits`: Metal has no `double`
+  to read `2147483647.0` at, 2^63-1 and 2^64-1 have none anywhere, and `Interval` reads the bits as
+  `top`, so nothing folds through them. `prefix_scan` needs none of this: its state is float only.
+  `integer_minmax_neutral` reads every route off the raw buffer at each integer precision.
 - **A plain conversion out of `uint4x32` is refused on every backend** (gh-ocannl-1785), with one
   message, `Ops.no_plain_uint4x32_conversion`, from every `convert_precision`. Metal used to read
   it as the uniform conversion and CUDA/HIP as lane 0's bits. Random bits reach a scalar through
