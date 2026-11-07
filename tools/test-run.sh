@@ -3261,20 +3261,34 @@ sub dir_at {
 # (so is one whose prefix unsets HOME: it dies unpublished). A root is read
 # as the script reads it: literally (no `~` expansion: `~/runs` is a
 # directory `~` of the worktree), a relative one from the worktree root.
-# Two roots are one as the launch shell resolves them (query_physical_path:
-# `cd ROOT && pwd -P`): `.` and `..` collapsed on the text first, as a logical
-# cd does -- `link/../runs` is `runs` beside the link, not beside its target --
-# and only then the symlinks of what exists.
+# Two roots are one when they are under either reading the launch shell may
+# give a path (query_physical_path: `mkdir -p ROOT`, `cd ROOT && pwd -P`): the
+# LOGICAL one, `.` and `..` collapsed on the text first as a logical cd does
+# (`link/../runs` is `runs` beside the link), and the PHYSICAL one, each
+# component resolved as met (`runs` beside the link TARGET: what mkdir -p
+# makes, and where the cd of bash falls back when the logical path is absent).
+# Which the shell takes depends on what exists at launch, so a match under
+# either keeps the launch (the under-read is the error, never the over-read).
+sub logical {
+  my @out;
+  for my $c (split m{/+}, $_[0]) { next if $c eq "" || $c eq "."; if ($c eq "..") { pop @out if @out && $out[-1] ne ".." } else { push @out, $c } }
+  return ($_[0] =~ m{\A/} ? "/" : "") . join("/", @out);
+}
+sub physical { # symlinks resolved as far as the path exists, the rest appended
+  my $cur = $_[0] =~ m{\A/} ? "" : ".";
+  for my $c (split m{/+}, $_[0]) {
+    next if $c eq "" || $c eq ".";
+    my $next = "$cur/$c";
+    if ($c eq ".." && -d $cur) { $next = Cwd::abs_path("$cur/..") // $next }
+    $cur = -e $next ? (Cwd::abs_path($next) // $next) : $next;
+  }
+  return length $cur ? $cur : "/";
+}
+sub norm { (my $p = $_[0]) =~ s{(?<=.)/+\z}{}; return $p }
 sub same_root {
   my ($a, $b) = @_;
-  for ($a, $b) {
-    my @out;
-    for my $c (split m{/+}, $_) { next if $c eq "" || $c eq "."; if ($c eq "..") { pop @out if @out && $out[-1] ne ".." } else { push @out, $c } }
-    $_ = (m{\A/} ? "/" : "") . join("/", @out);
-    $_ = Cwd::abs_path($_) // $_ if -d $_;
-    s{(?<=.)/+\z}{};
-  }
-  return $a eq $b;
+  my %of_b = map { norm($_) => 1 } logical($b), physical($b), physical(logical($b));
+  return scalar grep { $of_b{norm($_)} } logical($a), physical($a), physical(logical($a));
 }
 sub runs_here {
   my ($pos) = @_;

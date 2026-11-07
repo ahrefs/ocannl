@@ -1312,7 +1312,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   command shows the old one there (staging#1788 round 4), so a root exported to a launch is the
   loud over-read: a wait that times out, then `unpublished:`. A default root (`-u`, `-i`) is
   under the HOME the prefix names, else unknown, and a launch under an unknown root is here; a
-  root is read literally (`~` unexpanded), as the script reads its own. The
+  root is read literally (`~` unexpanded), as the script reads its own, and under both the logical
+  and the physical reading of a symlinked `..` (bash's cd takes either, by what exists): a match
+  under either keeps the launch. The
   one fact stored is the sighting (a `queued-after` mark in the run `last` named then, or
   `queued-<key>` before the first run), since a launch that left without publishing leaves
   nothing else; a mark is a file's existence per run, so no late reader can overwrite a newer

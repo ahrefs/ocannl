@@ -61,7 +61,8 @@
 #      then (the stated boundary, pinned); a launch under another
 #      OCANNL_TOOL_TEST_RUNS named by an `env` assignment in its argv (a `--`
 #      or an interpreter's `--` after it; a symlink then `..` in it, read as
-#      a logical cd does) is no launch under this root and
+#      a logical cd does and as a physical one, a launch under either) is no
+#      launch under this root and
 #      one under that, an `env -i` (or a bare `-`) clears an exported root,
 #      `-u` (spaced or attached, or in a cluster) with a HOME assignment is a
 #      launch under that HOME's default root, `-u` alone one under every
@@ -664,6 +665,7 @@ q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q
   (cd "$dir" && OCANNL_TOOL_TEST_RUNS=${Q_ENV_RUNS:-$q_runs} PATH=$q_bin:$PATH \
     exec bash "$q_slot" "$TMP/queued.never" exec -- "$@") >/dev/null 2>&1 &
   pid=$!
+  q_wraps+=("$pid:$TMP/queued.never") # for the harness's interrupted exit (q_kill_all)
   sleep .5
   q_capture "$q_root" status last
   rc_root=$q_rc out_root=$q_out
@@ -678,6 +680,9 @@ q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q
   fi
   kill -KILL "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
+  local w kept=()
+  for w in ${q_wraps[@]+"${q_wraps[@]}"}; do [ "${w%%:*}" = "$pid" ] || kept+=("$w"); done
+  q_wraps=(${kept[@]+"${kept[@]}"})
   sleep 1.5 # its guardian, alone for a second once its wrapper is gone
   q "$q_root" run build @ok >/dev/null 2>&1
   q "$q_sib" run build @ok >/dev/null 2>&1
@@ -758,7 +763,9 @@ if [ -z "$q_detail" ]; then report 0 "$q_held_label"; else report 1 "$q_held_lab
 # A launch of this worktree under another state root: named by an `env`
 # assignment in its argv (a trailing slash, an `-u` before it, a `--` after
 # it, an interpreter and its `--` after it, a symlink then `..` in it, which
-# the launch shell's logical cd resolves beside the link) it is no launch under this root
+# the launch shell's logical cd resolves beside the link, or, the logical
+# destination absent, beside the link's target: a launch is one under either
+# reading) it is no launch under this root
 # and one under that (the control); an `env -i` clears the exported root (the
 # default root: none of these); the default root is under the launch's HOME,
 # so `-u OCANNL_TOOL_TEST_RUNS HOME=DIR` is a launch under DIR's default
@@ -780,6 +787,7 @@ ln -sfn "$TMP/queued-actual/child" "$TMP/queued-link"
 q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" tools/test-run.sh run build @red &&
   q_case 0 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS "OCANNL_TOOL_TEST_RUNS=$q_other/" -- tools/test-run.sh run build @red &&
   q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$TMP/queued-link/../${q_other##*/}" tools/test-run.sh run build @red &&
+  Q_OTHER_RUNS=$TMP/queued-actual/queued-absent q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$TMP/queued-link/../queued-absent" tools/test-run.sh run build @red &&
   q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" bash -- tools/test-run.sh run build @red &&
   q_case 0 0 0 "$q_root" env -i "HOME=$HOME" "PATH=$PATH" tools/test-run.sh run build @red &&
   Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 0 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS "HOME=$q_home" tools/test-run.sh run build @red &&
