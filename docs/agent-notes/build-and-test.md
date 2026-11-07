@@ -24,6 +24,22 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   that file (gh-ocannl-1265); a fence captioned `from <file>.ml` must declare it or
   `doc-adapted=<path>`.
 
+- The repo-wide scans share one aggregate, `dune build @test/operations/scans` (the `(name scans)`
+  stanza in `test/operations/dune` lists them), which `tools/fmt-check.sh` builds after the formatter
+  (gh-ocannl-1321; `OCANNL_TOOL_FMT_CHECK_SCANS=0` skips it). What makes a scan rerun is the text it
+  reads, not the code it links, so the trigger for running the aggregate alone mid-change is a kind
+  of edit, not a subsystem: a config key, a dune stanza, a printed claim, an agent note, a new script
+  or source file, an emitted-text pin, or a reference to a library value or type -- test-only edits
+  included, since the scans read test sources, goldens and dune files as text (gh-ocannl-1431). The
+  focused aggregates `@metal-codegen` and `@lifecycle` are slices of the Metal-pinned tests and the
+  run/start lifecycle legs, not of the scans. For shell changes the second half of the batch is
+  `tools/test-harnesses.sh --affected --since BASE` (gh-ocannl-1929): exactly the harness commands
+  `affected --harnesses` prints (gh-ocannl-1900; a harness's `--only` selects its legs), under one
+  slot and one footer, the command `prepush` closes with and does not run; `tools/test-harnesses.sh`
+  alone, the full tier, is CI's. Either form is a test batch like any other, taking its `--cpu` slot
+  itself through the probe `test-run.sh` and `fmt-check.sh` share (gh-ocannl-1576), foreground or
+  detached (gh-ocannl-1236; The harness, shells and processes).
+
 - A repository-wide scanning check (`config_dep_completeness`, `env_var_deps`, `cache_dir_ignores`)
   is only as good as the distance between what it asserts and what it claims, and a proxy that
   coincides with the property today reads exactly like the property. The working test is: name a
@@ -3324,6 +3340,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   consumers, grep the sexp shape: `rg -F "(field_name " --glob '*.expected'` (the trailing space
   disambiguates longer identifiers). Budget the resulting promote as expected work, in its own
   commit, after diff-confirming the delta is rename-only.
+- Before broad testing of a config-gated path, grep whether any test or test config enables the
+  gate: a path no test turns on is exercised by none of them, however wide the batch, and the
+  evidence is a test that sets the key (or `OCANNL_<KEY>=...` on the run), not a green suite with
+  the gate at its default. The full regular and `@slow` suites are reserved for cross-cutting
+  changes, where `affected`'s list (below) spans over half the suite anyway; everything narrower
+  runs the aliases `affected` ranks and the `slow-` members it names.
 - **Which per-test aliases a change reaches is dune's answer, not a guess**:
   `tools/test-run.sh affected --since BASE | REV | REV..REV [-- PATHSPEC]` (or `--files PATH...`)
   prints them, one `@DIR/runtest-NAME` (or `train-`, `slow-`) per line, ready for `tools/test-run.sh
