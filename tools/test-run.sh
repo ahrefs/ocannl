@@ -3001,15 +3001,23 @@ group_identity_matches() {
 # `test-run.sh`, followed by a launching verb (run, start, fresh, repeat, or
 # prepush without `--list`), with no `ssh` and no `execution leg` before it
 # (those launch on another box). That word names THIS worktree's script:
-# absolute, `~/`, or relative to the process's working directory
-# (/proc/PID/cwd, else lsof), its directory's parent being this worktree; one
+# absolute, `~/`, or relative to the directory the command runs in -- the
+# process's working directory (/proc/PID/cwd, else lsof), or where an `env
+# -C DIR` / `--chdir=DIR` before the word moves it (gh-ocannl-1913) -- its
+# directory's parent being this worktree; one
 # that resolves to no file is tried again joined with up to eight words
 # before it (a path holding spaces, split by the table's flattening), and a
-# relative one that still names none, from a process whose directory IS this
+# relative one that still names none, from a command whose directory IS this
 # worktree, is this script after its own `cd` to the root (`cd tools && bash
 # ./test-run.sh run`). A `-c` string is never parsed: a launch a shell's own
 # control flow holds (`run A; sleep 60; run B`) is seen once its own process
-# runs it, not before.
+# runs it, not before (leg 105 of tools/test-test-run.sh pins it). And it
+# runs under THIS state root: the OCANNL_TOOL_TEST_RUNS an `env` prefix of
+# its argv assigns (or unsets, `-u` or `-i`: the default root, under the HOME
+# the prefix gives it, else unknown; a relative one is relative to the worktree,
+# where the script cds first, and `~` is literal), else, unknown, here -- environments are never
+# read (/proc/PID/environ is the exec-time one, stale under a wrapper that
+# exports before it runs its command).
 #
 # It is NOT in flight when a run of this worktree recorded it in its launch
 # chain (`launchers`, below): the launcher of that run and every ancestor it
@@ -3026,12 +3034,16 @@ group_identity_matches() {
 # this cannot resolve (a variable, a path with two spaces in a row);
 # `bisect`'s steps (its frozen runner is another tree's); a launch on another
 # box. Over-read, loudly: a launch of this worktree under another
-# OCANNL_TOOL_TEST_RUNS (environments are not read) is in flight here, and
-# once gone, one that ended unpublished.
+# OCANNL_TOOL_TEST_RUNS its argv does not name (one exported to it) is in
+# flight here, and once gone, one that ended unpublished.
 #
-# The table comes from /proc where it exists (Linux, Cygwin/MSYS), from `ps`
-# elsewhere, and start tokens are ps_token's renderings (stat's starttime, or
-# lstart under C/UTC), so the chain a launcher recorded compares as strings.
+# The table comes from /proc where it exists (Linux, Cygwin/MSYS) -- the argv
+# words exact, whitespace and all -- from `ps` elsewhere, flattened, a word
+# that held whitespace split with it (a root holding whitespace is then not
+# this reader's to recognize: a reader whose own root holds whitespace
+# excludes no launch by its root); start tokens are ps_token's renderings
+# (stat's starttime, or lstart under C/UTC), so the chain a launcher recorded
+# compares as strings.
 # Modes: `chain` prints "PID TOKEN ARGV-MD5" for this reader's parent and each ancestor
 # above it; `pending ROOT UID RUNS [LAST]` prints "PID ARGV" for each launch
 # in flight, RUNS being the state root whose run directories hold the chains
@@ -3040,7 +3052,7 @@ group_identity_matches() {
 proc_table_perl='
 use strict; use warnings; use Cwd (); use Digest::MD5 (); use POSIX (); use Time::Local ();
 my ($mode, $root, $uid, $runs, $last) = @ARGV;
-my (%pp, %uid, %tok, %args);
+my (%pp, %uid, %tok, %args, %argv);
 sub slurp { open(my $f, "<", $_[0]) or return undef; local $/; my $s = <$f>; close $f; return $s }
 my $proc = -d "/proc/$$";
 if ($proc) {
@@ -3056,6 +3068,7 @@ if ($proc) {
     my $c = slurp("/proc/$p/cmdline");
     $c = "" unless defined $c;
     $c =~ s/\0+\z//;
+    $argv{$p} = [split /\0/, $c]; # the words as exec got them, whitespace and all
     $c =~ tr/\0/ /;
     $args{$p} = $c;
   }
@@ -3124,7 +3137,32 @@ sub cwd_read {
 # each, a prefix program (env and its assignments, nohup, setsid, nice,
 # timeout and its duration, caffeinate, or an interpreter and its options) is
 # peeled to the word it runs. A `-c` string is no command: never parsed.
+# Each position maps to what its prefixes carried (gh-ocannl-1913): `dir`,
+# the directory an `env -C DIR` / `--chdir=DIR` moves the command to (a
+# relative one is relative to the directory of the process, or to the `-C` before it), and
+# `runs`, the state root an `env OCANNL_TOOL_TEST_RUNS=ROOT` assignment gives
+# it ("" for `-u OCANNL_TOOL_TEST_RUNS` or `-i`, which clear it: the default,
+# unless an assignment after them), and `home`, the HOME an env prefix gives
+# or clears the same way (the default root is under the HOME of the launch, not
+# that of the reader); undef where no prefix said. Options are read in getopt
+# grammar: `--unset=NAME` or `--unset NAME`, `-uNAME` or `-u NAME`, clusters
+# (`-iC DIR`), a bare `-` for `-i`, and `-S STRING` whose string is the
+# command (its words, once the table flattened them, are the words after it). Within one env invocation the
+# last `-C` wins, resolved against the directory env was entered in (GNU
+# env replaces, never composes); between nested ones they compose. A start
+# after a `--` -- of a wrapper, or of an interpreter -- at the very word a
+# prefix peeled to keeps what the prefix carried.
 my %interp = map { $_ => 1 } qw(sh bash zsh dash ksh);
+sub absolute { return $_[0] =~ m{\A(?:/|[A-Za-z]:[/\\])} } # a Windows drive spelling too (MSYS)
+# A value still holding shell text -- `$`, a quote, a backslash: the words of
+# an `env -S` string before env expands them -- is not read: the root or the
+# directory it names is unknown, and an unknown one keeps the launch here.
+sub plain { return $_[0] !~ /[\$`\x27"\\]/ }
+sub env_dir { # the directory env was entered in, a `-C` operand (literal: env expands no `~`)
+  my ($prev, $d) = @_;
+  return $d if absolute($d) || !defined $prev;
+  return "$prev/$d";
+}
 sub positions {
   my @w = @_;
   my %at;
@@ -3133,19 +3171,66 @@ sub positions {
   $text = @w unless defined $text;
   my @starts = (0, grep { $w[$_ - 1] eq "--" } 1 .. $text - 1);
   for my $j (@starts) {
+    my ($dir, $runs_at, $home_at, $dir_unknown);
     while ($j <= $#w) {
       (my $b = base($w[$j])) =~ s/\A-//;
       $b =~ s/\.exe\z//;
       if ($b eq "nohup" || $b eq "setsid") { $j++; next }
       # A prefix program: its options, the operand of each that takes one
       # (spaced; `--opt=V` is one word), then, for timeout, its duration.
-      my %takes = (env => "u|C|-unset|-chdir", nice => "n|-adjustment", caffeinate => "t|w",
+      my %takes = (env => "u|C|P|S|-unset|-chdir", nice => "n|-adjustment", caffeinate => "t|w",
                    timeout => "k|s|-kill-after|-signal", gtimeout => "k|s|-kill-after|-signal");
       if (exists $takes{$b}) {
         my $op = qr/\A-(?:$takes{$b})\z/;
+        my $entry = $dir;
         $j++;
         while ($j <= $#w && ($w[$j] =~ /\A-/ || ($b eq "env" && $w[$j] =~ /=/))) {
           last if $w[$j] eq "--";
+          if ($b eq "env") {
+            # env in getopt grammar: a long option with its operand attached
+            # (`--unset=NAME`) or spaced; a cluster of short ones (`-iC DIR`,
+            # `-uNAME`), the first that takes an operand taking the rest of
+            # the word, else the next word; a bare `-`, which is `-i`; an
+            # assignment. `-S STRING` / `--split-string` hands its string to
+            # the command: flattened, its words are the words that follow (an
+            # attached one starts in this very word, which is rewritten to it).
+            my ($opt, $val) = ($w[$j], undef);
+            my @short;
+            if ($opt =~ /\A--(unset|chdir|ignore-environment|argv0|split-string)(?:=(.*))?\z/s) { ($opt, $val) = ($1, $2) }
+            elsif ($opt eq "-") { $runs_at = ""; $home_at = ""; $opt = "" }
+            elsif ($opt =~ /\A-([^-].*)\z/s) { @short = split //, $1; $opt = "" }
+            elsif ($opt =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_at = plain($1) ? $1 : undef; $opt = "" }
+            elsif ($opt =~ /\AHOME=(.*)\z/s) { $home_at = plain($1) ? $1 : undef; $opt = "" }
+            else { $opt = "" }
+            while (@short) {
+              my $o = shift @short;
+              if ($o eq "i") { $runs_at = ""; $home_at = "" }
+              elsif ($o =~ /\A[uCPaLUS]\z/) {
+                $opt = $o eq "u" ? "unset" : $o eq "C" ? "chdir" : $o eq "S" ? "split-string" : "operand";
+                $val = join("", @short) if @short;
+                @short = ();
+              }
+            }
+            if ($opt eq "split-string") {
+              # The string, one word where the table kept it whole, is
+              # split on whitespace as env splits it (quotes unread: plain).
+              if (defined $val && length $val) { splice(@w, $j, 1, split(" ", $val)) } else { $j++; splice(@w, $j, 1, split(" ", $w[$j])) if $j <= $#w }
+              next;
+            }
+            if (length $opt) {
+              if ($opt eq "ignore-environment") { $runs_at = ""; $home_at = "" }
+              else {
+                unless (defined $val) { $val = $w[$j + 1] if $j < $#w; $j++ }
+                if (defined $val && $opt eq "chdir") { if (plain($val)) { $dir = env_dir($entry, $val) } else { $dir = undef; $dir_unknown = 1 } }
+                elsif (defined $val && $opt eq "unset") {
+                  $runs_at = "" if $val eq "OCANNL_TOOL_TEST_RUNS";
+                  $home_at = "" if $val eq "HOME";
+                }
+              }
+            }
+            $j++;
+            next;
+          }
           $j++ if $w[$j] =~ $op;
           $j++;
         }
@@ -3157,13 +3242,82 @@ sub positions {
         $j++;
         $j++ while $j <= $#w && $w[$j] =~ /\A-/ && $w[$j] ne "-c" && $w[$j] ne "--";
         last if $j > $#w || $w[$j] eq "-c";
-        next if $w[$j] eq "--";
+        if ($w[$j] eq "--") { $j++; next }
       }
-      $at{$j} = 1;
+      $at{$j} = { dir => $dir, runs => $runs_at, home => $home_at, dir_unknown => $dir_unknown } unless exists $at{$j};
       last;
     }
   }
-  return \%at;
+  return (\%at, \@w);
+}
+# The directory a command at a position runs in: its `env -C`, relative to
+# the directory of the process, else that one; undef when unknown.
+sub dir_at {
+  my ($p, $pos) = @_;
+  my $d = defined $pos ? $pos->{dir} : undef;
+  return $d if defined $d && absolute($d);
+  my $c = cwd_of($p);
+  return undef unless defined $c && length $c;
+  return defined $d ? "$c/$d" : $c;
+}
+# Whether a launch at a position runs under THIS state root (gh-ocannl-1913):
+# the OCANNL_TOOL_TEST_RUNS its `env` prefix assigns, else here, fail-open to
+# the loud over-read: a wait on it times out, then `unpublished:`. Process
+# environments are never read: /proc/PID/environ is the environment a process
+# was EXECUTED with, and a wrapper that exports a root before it runs its
+# command shows the old one there, so a reading would exclude a launch that
+# is ours (the under-read every rule here is against). The default root
+# (`-u`, `-i`) is .ocannl-test-runs under the HOME of the LAUNCH: the one its
+# prefix gives it, else unknown, and a launch under an unknown root is here
+# (so is one whose prefix unsets HOME: it dies unpublished). A root is read
+# as the script reads it: literally (no `~` expansion: `~/runs` is a
+# directory `~` of the worktree), a relative one from the worktree root.
+# Two roots are one when they are under either reading the launch shell may
+# give a path (query_physical_path: `mkdir -p ROOT`, `cd ROOT && pwd -P`): the
+# LOGICAL one, `.` and `..` collapsed on the text first as a logical cd does
+# (`link/../runs` is `runs` beside the link), and the PHYSICAL one, each
+# component resolved as met (`runs` beside the link TARGET: what mkdir -p
+# makes, and where the cd of bash falls back when the logical path is absent).
+# Which the shell takes depends on what exists at launch, so a match under
+# either keeps the launch (the under-read is the error, never the over-read).
+sub logical {
+  my @out;
+  for my $c (split m{/+}, $_[0]) { next if $c eq "" || $c eq "."; if ($c eq "..") { pop @out if @out && $out[-1] ne ".." } else { push @out, $c } }
+  return ($_[0] =~ m{\A/} ? "/" : "") . join("/", @out);
+}
+sub physical { # symlinks resolved as far as the path exists, the rest appended
+  my $cur = $_[0] =~ m{\A/} ? "" : ".";
+  for my $c (split m{/+}, $_[0]) {
+    next if $c eq "" || $c eq ".";
+    my $next = "$cur/$c";
+    if ($c eq ".." && -d $cur) { $next = Cwd::abs_path("$cur/..") // $next }
+    $cur = -e $next ? (Cwd::abs_path($next) // $next) : $next;
+  }
+  return length $cur ? $cur : "/";
+}
+sub norm { (my $p = $_[0]) =~ s{(?<=.)/+\z}{}; return $p }
+sub same_root {
+  my ($a, $b) = @_;
+  my %of_b = map { norm($_) => 1 } logical($b), physical($b), physical(logical($b));
+  return scalar grep { $of_b{norm($_)} } logical($a), physical($a), physical(logical($a));
+}
+sub runs_here {
+  my ($pos) = @_;
+  my ($v, $h) = defined $pos ? ($pos->{runs}, $pos->{home}) : (undef, undef);
+  return 1 unless defined $v;
+  my $here = defined $runs && length $runs ? $runs
+    : defined $ENV{HOME} && length $ENV{HOME} ? "$ENV{HOME}/.ocannl-test-runs" : undef;
+  return 1 unless defined $here;
+  # A root holding whitespace: a table without /proc splits it, so the
+  # spelling of this root cannot be recognized -- no launch is excluded by it.
+  return 1 if $here =~ /\s/ && !%argv;
+  if (!length $v) {
+    return 1 unless defined $h && length $h;
+    $v = "$h/.ocannl-test-runs";
+  }
+  # The script reads a relative root after its own cd to the worktree root.
+  $v = "$root/$v" unless absolute($v);
+  return same_root($v, $here);
 }
 # Processes of this uid by argv: an orphan of parent 1 carrying the argv of a
 # process that is not one is a fork of that process (the guardian of a slot
@@ -3197,35 +3351,43 @@ sub credited { my $p = shift; return $known{"$p $tok{$p} " . Digest::MD5::md5_he
 for my $p (sort { $a <=> $b } keys %args) {
   next if $anc{$p} || (defined $uid{$p} && $uid{$p} ne $uid);
   next if defined $pp{$p} && exists $args{$pp{$p}} && $args{$pp{$p}} eq $args{$p};
-  my @w = split " ", $args{$p};
+  # The words: exact from /proc; from ps, the flattened line split again, a
+  # word that held whitespace split with it (the spaced-path join below).
+  my @w = $argv{$p} ? @{$argv{$p}} : split " ", $args{$p};
   next unless @w && base($w[0]) =~ $prog;
-  my $at = positions(@w);
-  my $hit = 0;
+  my ($at, $ww) = positions(@w);
+  @w = @$ww; # an attached `-S` string split off its option
+  my ($hit, $hit_at) = (0, undef);
   for my $i (0 .. $#w - 1) {
     last if base($w[$i]) eq "ssh" || ($w[$i] eq "execution" && $w[$i + 1] eq "leg");
     next unless base($w[$i]) eq "test-run.sh" && $verb{$w[$i + 1]};
     next if $w[$i + 1] eq "prepush" && grep { /\A--list(?:=|\z)/ } @w[$i + 2 .. $#w];
-    my ($c, $found);
+    # A relative script word behind a `-C` whose operand is unread text: the
+    # directory is unknown, so the launch may be of this worktree -- here.
+    if ($at->{$i} && $at->{$i}{dir_unknown} && $w[$i] !~ m{\A[/~]}) { $hit = 1; $hit_at = $at->{$i}; next }
+    my $found;
     for my $j (reverse(($i > 8 ? $i - 8 : 0) .. $i)) {
       my $path = join(" ", @w[$j .. $i]);
       $path =~ s{\A~(?=/)}{$ENV{HOME}};
       if ($path !~ m{\A/}) {
-        $c = cwd_of($p) unless defined $c;
-        next unless defined $c && length $c;
+        # Relative to where the command runs: an `env -C` before the word
+        # moved it (gh-ocannl-1913), else the directory of the process.
+        my $c = dir_at($p, $at->{$j});
+        next unless defined $c;
         $path = "$c/$path";
       }
       next unless -f $path;
       (my $dir = $path) =~ s{/[^/]*\z}{};
       my $r = Cwd::abs_path("$dir/..");
       $found = 1;
-      $hit = 1 if $at->{$j} && defined $r && $r eq $root;
+      if ($at->{$j} && defined $r && $r eq $root) { $hit = 1; $hit_at = $at->{$j} }
       last;
     }
     next if $found || $w[$i] =~ m{\A[/~]} || !$at->{$i};
-    $c = cwd_of($p) unless defined $c;
-    $hit = 1 if defined $c && length $c && (Cwd::abs_path($c) // "") eq $root;
+    my $c = dir_at($p, $at->{$i});
+    if (defined $c && (Cwd::abs_path($c) // "") eq $root) { $hit = 1; $hit_at = $at->{$i} }
   }
-  next unless $hit && !credited($p);
+  next unless $hit && !credited($p) && runs_here($hit_at);
   # Asked only of a launch, as it reads directories (lsof on a Mac).
   if (orphan($p)) {
     # One argv in another directory is another launch (a relative word names
