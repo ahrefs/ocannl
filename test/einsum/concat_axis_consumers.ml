@@ -12,14 +12,13 @@
    solver filled in) and made by a shape scheme, whose row is instantiated. Then the forms holding a
    window or a fixed index in the step that concatenates.
 
-   Substitution is what sums the components, so two closed rows keep their [Concat]. One is an
-   operand's row of integer components alone (["2^3 => "]), with no variable to substitute: its own
-   step does not derive, which is not pinned here. The other has a symbolic component, with no [Dim]
-   to sum to. No such program ever ran: the concatenation's own step died on an assertion in
-   [Row.get_dim_padding], and a slice or a fixed index reading it, derived first, got the verifier's
-   refusal about a window missing a solved index, which says nothing of what is wrong. Where the
-   segments after a symbolic component start depends on the launch-time extent, so it stays refused,
-   by [Row.get_proj_equations], under a message naming that.
+   Substitution sums the components, so one closed row keeps its [Concat]: a symbolic component has
+   no [Dim] to sum to. No such program ever ran: the concatenation's own step died on an assertion
+   in [Row.get_dim_padding], and a slice or a fixed index reading it, derived first, got the
+   verifier's refusal about a window missing a solved index, which says nothing of what is wrong.
+   Where the segments after a symbolic component start depends on the launch-time extent, so it
+   stays refused, by [Row.get_proj_equations], under a message naming that. Integer components alone
+   (["2^3 =>"]) are [concat_integer_components]'s.
 
    gh-ocannl-2017: the forms with no meaning used to compute one. A concatenated axis is one axis of
    alternatives, so a tensor needing two of its components got no value at all (all zeros), and a

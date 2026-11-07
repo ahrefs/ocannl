@@ -570,3 +570,14 @@
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu (): the claims are about
+ ; shape closure and projection derivation.
+ (name concat_integer_components)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules concat_integer_components)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

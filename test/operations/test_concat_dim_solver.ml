@@ -59,55 +59,59 @@ let forced_to_size ~env v n =
   | `Shape _ -> true
   | _ -> false
 
+(* A shared free component keeps a bound a [Concat]: substitution sums one of concrete components
+   (gh-ocannl-2019), and a [Dim] bound never reaches the arms below. *)
+let bound a parts = Row.Concat (Row.Var a :: List.map parts ~f:dim)
+
 (* AC1 — GLB merge of two COMPATIBLE Concat bounds (stage 4) COMMITS: it forces the operand var
-   through the merged GLB (and does not merely avoid raising). First inequality banks [Concat 2^3]
-   (size 5) as the glb of a fresh operand var; the second feeds [Concat 1^4] (also size 5) into the
+   through the merged GLB (and does not merely avoid raising). First inequality banks [a^2^3] (size
+   a + 5) as the glb of a fresh operand var; the second feeds [a^1^4] (the same size) into the
    merge, which [unify_dim] reconciles, so at stage >= 4 the merge commits. Pre-task: [assert
    false].
 
    The PASS condition pins the recipe, not just "Ok": - no residual [Dim_ineq] survives — a Stage4
    RE-DEFER mutation would leave one (this is exactly the residual the postpone test below asserts
-   IS present at Stage1); - the operand is forced to size 5 — equating v = 5 is consistent, v = 6
-   conflicts. A mutation that succeeds without forcing the operand through the GLB (drops the bound,
-   or demotes to bcast-top) fails [forced_to_size] (under bcast-top v = 5 itself would conflict). *)
+   IS present at Stage1); - with a = 1, the operand is forced to size 6 — equating v = 6 is
+   consistent, v = 7 conflicts. A mutation that succeeds without forcing the operand through the GLB
+   (drops the bound, or demotes to bcast-top) fails [forced_to_size] (under bcast-top v = 6 itself
+   would conflict). *)
 let test_ac1_glb_merge_compatible () =
   Stdio.printf "AC1: GLB merge of two compatible Concat bounds (stage 4) commits (forces operand)\n";
-  let v = Row.get_var () in
-  match
-    run_solve ~stage:Stage4
-      [ ineq (Row.Concat [ dim 2; dim 3 ]) v; ineq (Row.Concat [ dim 1; dim 4 ]) v ]
-  with
+  let v = Row.get_var () and a = Row.get_var () in
+  match run_solve ~stage:Stage4 [ ineq (bound a [ 2; 3 ]) v; ineq (bound a [ 1; 4 ]) v ] with
   | `Ok (remaining, env) ->
       let no_residual =
         (not (has_dim_ineq remaining)) && not (has_dim_ineq (Row.unsolved_constraints env))
       in
-      let forced = forced_to_size ~env v 5 in
+      let forced =
+        match run_solve_env ~stage:Stage4 [ eq (Row.Var a) (dim 1) ] env with
+        | `Ok (_, env) -> forced_to_size ~env v 6
+        | _ -> false
+      in
       if no_residual && forced then
-        Stdio.printf "  PASS: operand committed to the merged size-5 GLB; no residual deferral\n"
+        Stdio.printf "  PASS: operand committed to the merged GLB; no residual deferral\n"
       else fail "expected commit (no_residual=%b forced_to_5=%b)" no_residual forced
   | `Shape m -> fail "unexpected Shape_error: %s" m
   | `Other e -> fail "regression (expected no assert false): %s" e
 
 (* AC1 — GLB merge of two INCOMPATIBLE Concat bounds (stage 4) DEMOTES the operand to the broadcast-
    top GLB (size 1), swallowing the failed equality rather than propagating a Shape_error or
-   committing to either bound. [Concat 2^3] (size 5) vs [Concat 2^4] (size 6): [unify_dim] fails.
-   Pre-task: [assert false].
+   committing to either bound. [a^2^3] vs [a^2^4] differ by 1: [unify_dim] fails. Pre-task: [assert
+   false].
 
    The PASS condition pins demotion specifically: the operand is solved to size 1 — the
-   broadcast-top that is distinct from BOTH bounds (5 and 6). A mutation that commits to either
-   bound (5 or 6), or re-defers (operand unsolved), or drops the GLB yields [get_dim_val <> Some 1]
-   and flips the assertion; merely "not raising" is not enough. *)
+   broadcast-top that is distinct from BOTH bounds. A mutation that commits to either bound, or
+   re-defers (operand unsolved), or drops the GLB yields [get_dim_val <> Some 1] and flips the
+   assertion; merely "not raising" is not enough. *)
 let test_ac1_glb_merge_incompatible_demotes () =
   Stdio.printf "AC1: GLB merge of two incompatible Concat bounds (stage 4) demotes to bcast-top\n";
-  let v = Row.get_var () in
-  match
-    run_solve ~stage:Stage4
-      [ ineq (Row.Concat [ dim 2; dim 3 ]) v; ineq (Row.Concat [ dim 2; dim 4 ]) v ]
-  with
+  let v = Row.get_var () and a = Row.get_var () in
+  match run_solve ~stage:Stage4 [ ineq (bound a [ 2; 3 ]) v; ineq (bound a [ 2; 4 ]) v ] with
   | `Ok (_remaining, env) -> (
       match Row.get_dim_val env v with
       | Some 1 ->
-          Stdio.printf "  PASS: operand demoted to broadcast-top (size 1), not committed to 5/6\n"
+          Stdio.printf
+            "  PASS: operand demoted to broadcast-top (size 1), not committed to a bound\n"
       | other ->
           fail "expected demote to size 1, got %s"
             (match other with Some n -> Int.to_string n | None -> "<unsolved>"))
@@ -120,11 +124,8 @@ let test_ac1_glb_merge_incompatible_demotes () =
    mutation would solve it — [get_dim_val] would be [Some _]). Pre-task: [assert false]. *)
 let test_ac1_glb_merge_postpone_below_stage4 () =
   Stdio.printf "AC1: GLB merge below stage 4 postpones (defers, operand left unsolved)\n";
-  let v = Row.get_var () in
-  match
-    run_solve ~stage:Stage1
-      [ ineq (Row.Concat [ dim 2; dim 3 ]) v; ineq (Row.Concat [ dim 1; dim 4 ]) v ]
-  with
+  let v = Row.get_var () and a = Row.get_var () in
+  match run_solve ~stage:Stage1 [ ineq (bound a [ 2; 3 ]) v; ineq (bound a [ 1; 4 ]) v ] with
   | `Ok (remaining, env) ->
       let deferred = has_dim_ineq remaining in
       let not_committed = Option.is_none (Row.get_dim_val env v) in
@@ -250,6 +251,50 @@ let test_ac3_affine_residual_not_overconstrained () =
   | `Shape m -> fail "first solve raised Shape_error: %s" m
   | `Other e -> fail "regression: %s" e
 
+(* gh-ocannl-2019: a [Concat] of concrete components, which substitution takes for its sum, against
+   what the solver held it against as parts. A variable [w] stores one. *)
+let test_concrete_concat () =
+  Stdio.printf "Concrete Concat: its sum, against a stored Concat and a named basis\n";
+  let c23 = Row.Concat [ dim 2; dim 3 ] in
+  let solves name cs ~check =
+    match run_solve ~stage:Stage4 cs with
+    | `Ok (_, env) ->
+        if check env then Stdio.printf "  PASS: %s\n" name else fail "%s: wrong solution" name
+    | `Shape m -> fail "%s: unexpected Shape_error: %s" name m
+    | `Other e -> fail "%s: regression: %s" name e
+  in
+  let refuses name cs ~needle =
+    match run_solve ~stage:Stage4 cs with
+    | `Shape m when String.is_substring m ~substring:needle ->
+        Stdio.printf "  PASS: %s: refused: %s\n" name m
+    | `Shape m -> fail "%s: refused otherwise: %s" name m
+    | `Ok _ -> fail "%s: accepted" name
+    | `Other e -> fail "%s: regression: %s" name e
+  in
+  (let w = Row.get_var () and a = Row.get_var () in
+   solves "a stored 2^3 solves a^3"
+     [ eq (Row.Var w) c23; eq (Row.Concat [ Row.Var a; dim 3 ]) (Row.Var w) ]
+     ~check:(fun env ->
+       Option.equal Int.equal (Row.get_dim_val env w) (Some 5)
+       && Option.equal Int.equal (Row.get_dim_val env a) (Some 2)));
+  (let w = Row.get_var () and a = Row.get_var () and b = Row.get_var () in
+   match
+     run_solve ~stage:Stage4
+       [ eq (Row.Var w) c23; eq (Row.Concat [ Row.Var a; Row.Var b ]) (Row.Var w) ]
+   with
+   | `Ok (remaining, env) when not (List.is_empty remaining) ->
+       if Option.is_none (Row.get_dim_val env a) && Option.is_none (Row.get_dim_val env b) then
+         Stdio.printf "  PASS: a stored 2^3 leaves a^b to the closure's refusal\n"
+       else fail "a^b guessed from a stored 2^3"
+   | _ -> fail "a^b against a stored 2^3 did not stay deferred");
+  solves "2^3 = 5" [ eq c23 (dim 5) ] ~check:(fun _ -> true);
+  refuses "2^3 = 6" [ eq c23 (dim 6) ] ~needle:"mismatch";
+  solves "a named component names the sum"
+    [ eq (Row.Concat [ dim ~basis:"rgb" 2; dim 3 ]) (dim ~basis:"rgb" 5) ]
+    ~check:(fun _ -> true);
+  (* As a [Dim] of 5 is, and as this was before the sum: all-integer components claim [default]. *)
+  refuses "a plain 2^3 against a named 5" [ eq c23 (dim ~basis:"rgb" 5) ] ~needle:"different bases"
+
 let () =
   Stdio.printf "=== Concat dim-solver hardening (solver-level) ===\n";
   Tensor.unsafe_reinitialize ();
@@ -260,4 +305,5 @@ let () =
   test_ac3_one_side_all_var_other_has_solved ();
   test_nested_concat_flattened ();
   test_ac3_affine_residual_not_overconstrained ();
+  test_concrete_concat ();
   Stdio.printf "=== Done ===\n"

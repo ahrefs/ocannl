@@ -194,11 +194,6 @@ val sym_dim_extent_exn : sym_dim -> int
 (** The maximum extent of a symbolic dimension: the declared range of its static symbol. *)
 
 val dim_to_int_exn : dim -> int
-
-val concrete_extent : dim -> solved_dim option
-(** The extent of an axis made of concrete sizes alone: a [Dim], or a [Concat] of them at any depth,
-    as their sum under the basis rule substitution applies. [None] for anything else. *)
-
 val vars_of_dim : dim -> dim_var_set
 
 type print_style = Only_bases | Axis_size | Axis_number_and_size | Projection_and_size

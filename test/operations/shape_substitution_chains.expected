@@ -6,8 +6,8 @@ a chain ending symbolic: the indexed and the whole-environment substitution agre
 a chain ending symbolic solves every link to the symbol: true
 a concatenation and a window over alias chains: the indexed and the whole-environment substitution agree: true
 the concatenation sums its resolved components, the strided window doubles its, and the valid window adds its kernel's span: true
-a stored concatenation an unrelated solution normalizes: the indexed and the whole-environment substitution agree: true
-a stored concatenation of solved parts is summed by the next solution, related or not: true
+a concatenation of solved parts: the indexed and the whole-environment substitution agree: true
+a concatenation of solved parts is stored as its sum: true
 an indirect cycle: the indexed and the whole-environment substitution agree: true
 the cycle closed through the alias chain fails the occurs check: true
 an oldest-first row chain: the indexed and the whole-environment substitution agree: true

@@ -81,8 +81,8 @@ let order_kind = function `Dim_then_row -> "a row" | `Row_then_dim -> "a dimensi
 
 (* Closes [r] on the row of [operand x], which the scheme's body makes and does not return: an
    explicit instance stands for the body, so no update step holds that row and no projections run on
-   it. This is the one way a row with a [Concat] or [Affine] axis closes: a step holding one fails
-   its projections. Returns the scheme's rendering. *)
+   it. This is the one way a row with an [Affine] axis, or a [Concat] with a symbolic component,
+   closes: a step holding one fails its projections. Returns the scheme's rendering. *)
 let close_scheme_internal_row r ~arg operand =
   let s =
     Tensor.Scheme.trace ~label:"internal" 1 (fun args ->
@@ -95,9 +95,8 @@ let close_scheme_internal_row r ~arg operand =
   ignore (dims res : int list);
   Tensor.Scheme.to_string s
 
-(* The row of an operand reduced over a concatenated axis. No variable of the spec gets solved here:
-   one that did would have the solver sum the axis on the way, leaving the row nothing but a [Dim]
-   (so ["2^3 => a"] does not exercise this). *)
+(* The row of an operand reduced over a concatenated axis, which substitution sums though no
+   variable of the spec gets solved. *)
 let literal_concat _x =
   let c = open_leaf "c" in
   ignore (NTDSL.einsum1 "2^3 => " c () : Tensor.t);
@@ -475,13 +474,13 @@ let () =
                 refused_with (name ^ ": the row binding is refused") refused ~f:(fun msg ->
                     String.is_substring msg ~substring:"Variable reference u "
                     && String.is_substring msg ~substring:"the row reference r "))));
-  (* A closed row with a [Concat] axis of concrete components carries it as its sum: the axis is 5,
-     whichever way it was written, and the row is that row, not the product 5 (gh-ocannl-1969). *)
+  (* A closed row with a [Concat] axis of concrete components is a row of their sum: the axis is 5,
+     and the row is that row, not the product 5 (gh-ocannl-1969, gh-ocannl-2019). *)
   let closed_concat name r =
     let scheme = close_scheme_internal_row r ~arg:(fun () -> fixed "x" []) literal_concat in
     p
-      (name ^ ": the row closed with its axis unsummed")
-      (String.is_substring scheme ~substring:"capture r = (2^3)");
+      (name ^ ": the row closed with its axis summed")
+      (String.is_substring scheme ~substring:"capture r = 5");
     p
       (name ^ ": the closure carried the sum")
       (Option.equal (List.equal Int.equal)

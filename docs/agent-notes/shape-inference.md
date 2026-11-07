@@ -57,12 +57,11 @@ files.
   gh-ocannl-1616) and a row's numeric product (none for a row holding a `Sym`). The carried row is
   published at the CLOSURE only (`~closure:true`, from `finish_inference`), from the binding the
   reference has then: a `Row` binding whose substituted row is `Broadcastable` with only `Dim`/`Sym`
-  axes writes it (even over a held product, e.g. `set_dim` on a row reference; a `Concat` of `Dim`s
-  counts as its sum, `Row.concrete_extent`), a `Dim` binding clears it. A step holding a surviving
-  `Concat`/`Affine` axis cannot close at all (`padding_of_row`), so only a scheme instance's internal
-  row reaches `carried_row_of` with one (no update step, no projections): pin such a case through
-  `Tensor.Scheme.instantiate`. One over a `Sym` stays uncarried: carried into the next inference it
-  would crash there. Do not publish it as a row resolves mid-inference: within one inference a row captured
+  axes writes it (even over a held product, e.g. `set_dim` on a row reference), a `Dim` binding
+  clears it. A step holding a surviving `Concat` (a symbolic component) or `Affine` axis cannot close
+  at all (`padding_of_row`), so only a scheme instance's internal row reaches `carried_row_of` with
+  one (no update step, no projections): pin such a case through `Tensor.Scheme.instantiate`. One
+  over a `Sym` stays uncarried: carried into the next inference it would crash there. Do not publish it as a row resolves mid-inference: within one inference a row captured
   after a dimension binding is product-tied (row, dim, row ties the last row to the first by
   product only), and an early publication would make the carried value depend on whether the row
   resolved at a registration's Stage1 or at the closure. The parity table in
@@ -149,11 +148,13 @@ files.
   over a label, so a target is never what a window ranges over. `solve_proj_equations` still goes
   in dependency order (gh-ocannl-1971, hand-built in `test/operations/proj_window_verify`), for
   windows among themselves only: a window over a concat target is still an unknown projection.
-  Likewise a later step sees a concatenation with a variable component as a plain `Dim`
-  (`test/einsum/concat_axis_consumers` executes slices, fixed indices and windows over one):
-  substitution is what sums the components, so `Concat` stays in a closed row for a symbolic
-  component, refused by `symbolic_concat_error`, and for an operand's integer components alone
-  (`2^3 =>`), whose own step dies in `Row.get_dim_padding`.
+  Likewise a later step sees a concatenation as a plain `Dim` (`test/einsum/concat_axis_consumers`
+  executes slices, fixed indices and windows over one): `subst_dim` sums concrete components with
+  a variable behind them or not, so `Concat` stays in a closed row only for a symbolic component,
+  refused by `symbolic_concat_error`. Only `keep_affine` keeps concrete parts, for projections
+  (integer components alone, `2^3 =>`: `test/einsum/concat_integer_components`, gh-ocannl-2019).
+  The solver holds such an axis as a `Dim`, so a hand-built case reaching a `Concat` arm of
+  `unify_dim` or the GLB merge needs a free component.
 - A concat's segments are alternatives, and a block that cannot substitute an access is silently
   empty, so a form with no meaning used to compute all zeros or partly zeros: `p^q => p, q`,
   `a, b => a^b`. A result concat no operand names was iterated like a plain axis, each cell taking
@@ -556,9 +557,7 @@ files.
   do not mention the variable -- it summed a stored `Concat` of solved parts and collapsed
   windows -- which is why written entries stay pending until an unrelated visit leaves them
   unchanged. A `Total_elems` row no longer does: a solution reaching no divisor is no change, where
-  it used to re-emit and stay pending, rows times solutions (gh-ocannl-1977). Summing eagerly in
-  `subst_dim` to retire the pending sets fails `set_equal_rows` and `test_concat_dim_solver`: a
-  `Concat` kept as parts is what they pin.
+  it used to re-emit and stay pending, rows times solutions (gh-ocannl-1977).
   Verify a change here with `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` over the shape tests (it
   fails on the first solution whose indexed visit differs from the whole map's), and
   `test/operations/shape_substitution_chains` for the chains. Under it `scheme_payoff` runs one
