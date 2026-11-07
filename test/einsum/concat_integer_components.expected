@@ -1,0 +1,34 @@
+a closed operand, for reference: true
+as written: the sum of the axis: true
+as written: the operand takes the one axis: true
+made by a shape scheme: the sum of the axis: true
+made by a shape scheme: the operand takes the one axis: true
+a named result of the same reduction: true
+beside a batch axis: true
+the gradient of the squared sum: true
+as written: a plain read: true
+as written: a fixed index: true
+as written: a pointwise operation: true
+as written: another concatenation of the size: true
+as written: a capture of its dimension: true
+as written: a capture of its row: true
+made by a shape scheme: a plain read: true
+made by a shape scheme: a fixed index: true
+made by a shape scheme: a pointwise operation: true
+made by a shape scheme: another concatenation of the size: true
+made by a shape scheme: a capture of its dimension: true
+made by a shape scheme: a capture of its row: true
+a window, a size it divides: true
+a row's total over two of them: true
+a closed operand of another size: refused: solved dimensions for axis: mismatch
+a closed operand of another size: refused with a shape error: true
+a fixed index past the axis: refused: At_least_dim constraint failed, expected 8
+a fixed index past the axis: refused with a shape error: true
+a window of a stride that does not divide it: refused: solved dimensions for axis: incompatible stride
+a window of a stride that does not divide it: refused with a shape error: true
+a capture of another size: refused: Cannot set dimension for variable reference with label d
+a capture of another size: refused with a shape error: true
+a row's total of another size: refused: Cannot set dimension for variable reference with label r
+a row's total of another size: refused with a shape error: true
+a named basis on the operand: refused: solved dimensions for axis: different bases
+a named basis on the operand: refused with a shape error: true

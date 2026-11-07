@@ -347,11 +347,10 @@ module Delayed_ref : sig
     mutable carried_row : Row.dim list option; [@sexp_drop_if Option.is_none]
         (** The axes of the row the reference was bound to when its inference closed, if it was
             bound to a row that resolved (gh-ocannl-1689): concrete [Dim]s and symbolic [Sym]s,
-            outer to inner, without projection ids, a concatenated axis of concrete components as
-            its sum (gh-ocannl-1969). Across the closure it stands in for that row, whose variable
-            belongs to the reset environment. [None] when the binding at the closure was a dimension
-            (a dimension and a row share only the product), or the row held a concatenated or affine
-            axis over a symbolic extent. *)
+            outer to inner, without projection ids. Across the closure it stands in for that row,
+            whose variable belongs to the reset environment. [None] when the binding at the closure
+            was a dimension (a dimension and a row share only the product), or the row held a
+            concatenated or affine axis over a symbolic extent. *)
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
         (** The reference's identity for the rewind's tracking; not part of its value. *)
     mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
@@ -4294,22 +4293,18 @@ let compute_row_product env (row : Row.t) : int option =
     (gh-ocannl-1689): the axes of its row when it is bound to a row whose solution is closed --
     [Broadcastable], every axis a [Dim] or a [Sym] -- whether or not it holds a number already (a
     [set_dim] on a row reference sets the product early), and [None] when it is bound to a
-    dimension. A [Concat] of concrete components is its sum (gh-ocannl-1969): the solver takes it
-    for one, and the split belongs to the operation that wrote it. Only a scheme instance's internal
-    row closes with one unsummed, since a step holding one fails its projections. One with a
-    symbolic component stays [None], as does an [Affine] over a symbolic extent: carried into the
-    next inference, it would reach projections there. The binding at the closure decides, not the
-    first row to resolve: within one inference a row captured after a dimension binding is tied to
-    it by product, whatever row an earlier binding had, and publishing a row as it resolved would
-    make the carried value depend on whether it resolved at a registration's Stage1 or at the
-    closure. *)
+    dimension. Substitution leaves a [Concat] only for a symbolic component, which stays [None], as
+    does an [Affine] over a symbolic extent: carried into the next inference, it would reach
+    projections there. The binding at the closure decides, not the first row to resolve: within one
+    inference a row captured after a dimension binding is tied to it by product, whatever row an
+    earlier binding had, and publishing a row as it resolved would make the carried value depend on
+    whether it resolved at a registration's Stage1 or at the closure. *)
 let carried_row_of env row_var =
   let row = Row.subst_row env (Row.get_row_for_var Row.empty_provenance row_var) in
   let carried = function
     | Row.Dim d -> Some (Row.Dim { d with proj_id = None })
     | Row.Sym s -> Some (Row.Sym { s with sym_proj_id = None })
-    | Row.Concat _ as d -> Option.map (Row.concrete_extent d) ~f:(fun s -> Row.Dim s)
-    | Row.Var _ | Row.Affine _ -> None
+    | Row.Var _ | Row.Affine _ | Row.Concat _ -> None
   in
   match row.bcast with
   | Row.Row_var _ -> None

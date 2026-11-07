@@ -137,32 +137,32 @@ unbound u, set_equal r u with a closed reference that is a row, then u a row: re
 unbound u, set_equal r u with a closed reference that is a row, then u a row: the row binding is refused: true
 unbound u, set_equal u r with a closed reference that is a dimension, then u a row: tied by product, 3x2 is accepted: true
 unbound u, set_equal r u with a closed reference that is a dimension, then u a row: tied by product, 3x2 is accepted: true
-closed row with a concatenated axis, captured again over 5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, captured again over 5: the row closed with its axis summed: true
 closed row with a concatenated axis, captured again over 5: the closure carried the sum: true
 closed row with a concatenated axis, captured again over 5: the same row is accepted: true
-closed row with a concatenated axis, captured again over 1x5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, captured again over 1x5: the row closed with its axis summed: true
 closed row with a concatenated axis, captured again over 1x5: the closure carried the sum: true
 closed row with a concatenated axis, captured again over 1x5: refused: Mismatching number of axes
 closed row with a concatenated axis, captured again over 1x5: another row is refused: true
-closed row with a concatenated axis, captured again over 6: the row closed with its axis unsummed: true
+closed row with a concatenated axis, captured again over 6: the row closed with its axis summed: true
 closed row with a concatenated axis, captured again over 6: the closure carried the sum: true
 closed row with a concatenated axis, captured again over 6: refused: solved dimensions for axis: mismatch
 closed row with a concatenated axis, captured again over 6: another row is refused: true
-closed row with a concatenated axis, captured again over an open operand: the row closed with its axis unsummed: true
+closed row with a concatenated axis, captured again over an open operand: the row closed with its axis summed: true
 closed row with a concatenated axis, captured again over an open operand: the closure carried the sum: true
 closed row with a concatenated axis, captured again over an open operand: w is 5
 closed row with a concatenated axis, captured again over an open operand: the open operand takes the one axis: true
-closed row with a concatenated axis, set_equal r s with a closed 5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, set_equal r s with a closed 5: the row closed with its axis summed: true
 closed row with a concatenated axis, set_equal r s with a closed 5: the closure carried the sum: true
 closed row with a concatenated axis, set_equal r s with a closed 5: equal rows are accepted: true
-closed row with a concatenated axis, set_equal s r with a closed 5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, set_equal s r with a closed 5: the row closed with its axis summed: true
 closed row with a concatenated axis, set_equal s r with a closed 5: the closure carried the sum: true
 closed row with a concatenated axis, set_equal s r with a closed 5: equal rows are accepted: true
-closed row with a concatenated axis, set_equal r s with a closed 1x5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, set_equal r s with a closed 1x5: the row closed with its axis summed: true
 closed row with a concatenated axis, set_equal r s with a closed 1x5: the closure carried the sum: true
 closed row with a concatenated axis, set_equal r s with a closed 1x5: refused: Shape.set_equal: the closed row references r and s are different rows: Mismatching number of axes
 closed row with a concatenated axis, set_equal r s with a closed 1x5: other rows are refused: true
-closed row with a concatenated axis, set_equal s r with a closed 1x5: the row closed with its axis unsummed: true
+closed row with a concatenated axis, set_equal s r with a closed 1x5: the row closed with its axis summed: true
 closed row with a concatenated axis, set_equal s r with a closed 1x5: the closure carried the sum: true
 closed row with a concatenated axis, set_equal s r with a closed 1x5: refused: Shape.set_equal: the closed row references s and r are different rows: Mismatching number of axes
 closed row with a concatenated axis, set_equal s r with a closed 1x5: other rows are refused: true

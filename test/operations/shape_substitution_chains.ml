@@ -165,15 +165,15 @@ let () =
          valid window adds its kernel's span"
         (equal_outcome got (Values [ Some 5; Some 8; Some 7 ]));
       let got, _, _ =
-        both "a stored concatenation an unrelated solution normalizes" (fun () ->
+        both "a concatenation of solved parts" (fun () ->
             let w = Row.get_var () and u = Row.get_var () in
             let _, env = solve_steps [ [ eq (Var w) (Concat [ dim 2; dim 3 ]) ] ] Row.empty_env in
             let before = Row.get_dim_val env w in
             let _, env = solve_steps [ [ eq (Var u) (dim 1) ] ] env in
             [ before; Row.get_dim_val env w ])
       in
-      p "a stored concatenation of solved parts is summed by the next solution, related or not"
-        (equal_outcome got (Values [ None; Some 5 ])));
+      p "a concatenation of solved parts is stored as its sum"
+        (equal_outcome got (Values [ Some 5; Some 5 ])));
   Verdict.case "an occurs check reached through aliases" (fun () ->
       let got, _, _ =
         both "an indirect cycle" (fun () ->

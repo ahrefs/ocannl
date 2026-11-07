@@ -888,7 +888,8 @@ let rec s_dim_one ?(keep_affine = false) v ~value ~in_ =
   | Dim _ | Sym _ | Var _ -> in_
 
 (** The extent of an axis made of concrete sizes alone: a [Dim], or a [Concat] of them at any depth.
-    Unlike [s_dim_one], it needs no variable to substitute. *)
+    Unlike [s_dim_one], it needs no variable to substitute: [subst_dim] sums such an axis with it.
+*)
 let rec concrete_extent = function
   | Dim s -> Some s
   | Concat dims ->
@@ -1895,12 +1896,21 @@ let s_dim_one_in_row_entry stage v ~value ~key ~data =
   in
   result
 
+(* A concatenated axis of concrete components is a plain axis of their sum whatever brought it
+   there: substituting a variable, or a spec with none to substitute ([2^3 =>], gh-ocannl-2019).
+   Under [keep_affine] the parts stay, for the projections to index. *)
 let subst_dim ?(keep_affine = false) env dim =
   let vars = vars_of_dim dim in
-  List.fold (Set.elements vars) ~init:dim ~f:(fun acc v ->
-      match find_dim env.dim_env v with
-      | Some (Solved_dim d) -> s_dim_one ~keep_affine v ~value:d ~in_:acc
-      | _ -> acc)
+  let dim =
+    List.fold (Set.elements vars) ~init:dim ~f:(fun acc v ->
+        match find_dim env.dim_env v with
+        | Some (Solved_dim d) -> s_dim_one ~keep_affine v ~value:d ~in_:acc
+        | _ -> acc)
+  in
+  match dim with
+  | Concat _ when not keep_affine ->
+      Option.value_map (concrete_extent dim) ~default:dim ~f:(fun s -> Dim s)
+  | _ -> dim
 
 (** Substitute [value] for row variable [v] inside [in_], uniformly composing both flanks.
 
@@ -6839,9 +6849,8 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
      does not reach passed silently. Checked last, nothing here fails on a consistent program, so
      nothing is caught. An [Iterator] equals the [Concat] of that one iterator, as in the
      concat-target pass. A [Concat] side comes from an axis that did not close to a plain [Dim]:
-     hand-built equations, or through [Shape] an operand's row of integer components alone (["2^3 =>
-     "]), which no substitution sums, and whose own step does not derive. A symbolic component is
-     refused by [get_proj_equations] (gh-ocannl-1971). *)
+     hand-built equations, since a symbolic component is refused by [get_proj_equations]
+     (gh-ocannl-1971). *)
   let same_index idx1 idx2 =
     Idx.equal_axis_index idx1 idx2
     ||

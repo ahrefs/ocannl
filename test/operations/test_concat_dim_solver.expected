@@ -1,8 +1,8 @@
 === Concat dim-solver hardening (solver-level) ===
 AC1: GLB merge of two compatible Concat bounds (stage 4) commits (forces operand)
-  PASS: operand committed to the merged size-5 GLB; no residual deferral
+  PASS: operand committed to the merged GLB; no residual deferral
 AC1: GLB merge of two incompatible Concat bounds (stage 4) demotes to bcast-top
-  PASS: operand demoted to broadcast-top (size 1), not committed to 5/6
+  PASS: operand demoted to broadcast-top (size 1), not committed to a bound
 AC1: GLB merge below stage 4 postpones (defers, operand left unsolved)
   PASS: inequality deferred and operand left unsolved for a later stage
 AC3: variables-only Concat=Concat at unequal arity (3 vs 2) links oldest vars
@@ -13,4 +13,11 @@ Nested Concat: Concat[Concat[a;b];c] = Concat[d;e;f] flattens, links a=d,b=e,c=f
   PASS: nested concat flattened; d=2 e=3 f=4 (a=d, b=e, c=f)
 AC3: all-Var side vs Affine-bearing side — pairing must NOT over-constrain
   PASS: a and b left independent (a:=5, b:=7 both consistent)
+Concrete Concat: its sum, against a stored Concat and a named basis
+  PASS: a stored 2^3 solves a^3
+  PASS: a stored 2^3 leaves a^b to the closure's refusal
+  PASS: 2^3 = 5
+  PASS: 2^3 = 6: refused: solved dimensions for axis: mismatch
+  PASS: a named component names the sum
+  PASS: a plain 2^3 against a named 5: refused: solved dimensions for axis: different bases
 === Done ===
