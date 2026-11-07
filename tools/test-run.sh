@@ -3137,13 +3137,18 @@ sub cwd_read {
 # relative one is relative to the directory of the process, or to the `-C` before it), and
 # `runs`, the state root an `env OCANNL_TOOL_TEST_RUNS=ROOT` assignment gives
 # it ("" for `-u OCANNL_TOOL_TEST_RUNS` or `-i`, which clear it: the default,
-# unless an assignment after them); undef where no prefix said. A start after
-# a `--` at the very word a prefix peeled to keeps what the prefix carried.
+# unless an assignment after them), and `home`, the HOME an env prefix gives
+# or clears the same way (the default root is under the HOME of the launch, not
+# that of the reader); undef where no prefix said. Within one env invocation the
+# last `-C` wins, resolved against the directory env was entered in (GNU
+# env replaces, never composes); between nested ones they compose. A start
+# after a `--` -- of a wrapper, or of an interpreter -- at the very word a
+# prefix peeled to keeps what the prefix carried.
 my %interp = map { $_ => 1 } qw(sh bash zsh dash ksh);
 sub absolute { return $_[0] =~ m{\A(?:/|[A-Za-z]:[/\\])} } # a Windows drive spelling too (MSYS)
-sub env_dir { # the directory in effect so far, a `-C` operand
-  my ($prev, $d) = @_;
-  $d =~ s{\A~(?=/|\z)}{$ENV{HOME}} if defined $ENV{HOME};
+sub env_dir { # the directory env was entered in, a `-C` operand, the HOME in effect
+  my ($prev, $d, $home) = @_;
+  $d =~ s{\A~(?=/|\z)}{$home} if defined $home && length $home;
   return $d if absolute($d) || !defined $prev;
   return "$prev/$d";
 }
@@ -3155,28 +3160,35 @@ sub positions {
   $text = @w unless defined $text;
   my @starts = (0, grep { $w[$_ - 1] eq "--" } 1 .. $text - 1);
   for my $j (@starts) {
-    my ($dir, $runs_at);
+    my ($dir, $runs_at, $home_at);
     while ($j <= $#w) {
       (my $b = base($w[$j])) =~ s/\A-//;
       $b =~ s/\.exe\z//;
       if ($b eq "nohup" || $b eq "setsid") { $j++; next }
       # A prefix program: its options, the operand of each that takes one
       # (spaced; `--opt=V` is one word), then, for timeout, its duration.
-      my %takes = (env => "u|C|-unset|-chdir", nice => "n|-adjustment", caffeinate => "t|w",
+      my %takes = (env => "u|C|P|S|-unset|-chdir", nice => "n|-adjustment", caffeinate => "t|w",
                    timeout => "k|s|-kill-after|-signal", gtimeout => "k|s|-kill-after|-signal");
       if (exists $takes{$b}) {
         my $op = qr/\A-(?:$takes{$b})\z/;
+        my $entry = $dir;
         $j++;
         while ($j <= $#w && ($w[$j] =~ /\A-/ || ($b eq "env" && $w[$j] =~ /=/))) {
           last if $w[$j] eq "--";
           if ($b eq "env") {
             my $operand = $j < $#w ? $w[$j + 1] : undef;
-            if ($w[$j] =~ /\A(?:-C|--chdir)\z/) { $dir = env_dir($dir, $operand) if defined $operand }
-            elsif ($w[$j] =~ /\A(?:-C(.+)|--chdir=(.*))\z/s) { $dir = env_dir($dir, defined $1 ? $1 : $2) }
+            my $home = defined $home_at ? $home_at : $ENV{HOME};
+            if ($w[$j] =~ /\A(?:-C|--chdir)\z/) { $dir = env_dir($entry, $operand, $home) if defined $operand }
+            elsif ($w[$j] =~ /\A(?:-C(.+)|--chdir=(.*))\z/s) { $dir = env_dir($entry, defined $1 ? $1 : $2, $home) }
             elsif ($w[$j] =~ /\AOCANNL_TOOL_TEST_RUNS=(.*)\z/s) { $runs_at = $1 }
-            elsif ($w[$j] =~ /\A(?:-u|--unset)\z/) { $runs_at = "" if defined $operand && $operand eq "OCANNL_TOOL_TEST_RUNS" }
+            elsif ($w[$j] =~ /\AHOME=(.*)\z/s) { $home_at = $1 }
+            elsif ($w[$j] =~ /\A(?:-u|--unset)\z/ && defined $operand) {
+              $runs_at = "" if $operand eq "OCANNL_TOOL_TEST_RUNS";
+              $home_at = "" if $operand eq "HOME";
+            }
             elsif ($w[$j] eq "--unset=OCANNL_TOOL_TEST_RUNS") { $runs_at = "" }
-            elsif ($w[$j] =~ /\A(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment)\z/) { $runs_at = "" }
+            elsif ($w[$j] eq "--unset=HOME") { $home_at = "" }
+            elsif ($w[$j] =~ /\A(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment)\z/) { $runs_at = ""; $home_at = "" }
           }
           $j++ if $w[$j] =~ $op;
           $j++;
@@ -3189,9 +3201,9 @@ sub positions {
         $j++;
         $j++ while $j <= $#w && $w[$j] =~ /\A-/ && $w[$j] ne "-c" && $w[$j] ne "--";
         last if $j > $#w || $w[$j] eq "-c";
-        next if $w[$j] eq "--";
+        if ($w[$j] eq "--") { $j++; next }
       }
-      $at{$j} = { dir => $dir, runs => $runs_at } unless exists $at{$j};
+      $at{$j} = { dir => $dir, runs => $runs_at, home => $home_at } unless exists $at{$j};
       last;
     }
   }
@@ -3211,7 +3223,10 @@ sub dir_at {
 # the OCANNL_TOOL_TEST_RUNS its `env` prefix assigns, else the one in its
 # environment where that can be read (/proc; a Mac shows no other process its
 # environment), else here, fail-open to the loud over-read: a wait on it
-# times out, then `unpublished:`. The default root is $HOME/.ocannl-test-runs.
+# times out, then `unpublished:`. The default root is .ocannl-test-runs under
+# the HOME of the LAUNCH -- what its prefix or environment gives it, else the
+# HOME of the reader -- and a launch with neither a root nor a HOME is here
+# too (it dies unpublished).
 sub same_root {
   my ($a, $b) = @_;
   for ($a, $b) { $_ = Cwd::abs_path($_) // $_ if -d $_; s{(?<=.)/+\z}{} }
@@ -3219,17 +3234,23 @@ sub same_root {
 }
 sub runs_here {
   my ($p, $pos) = @_;
-  my $v = defined $pos ? $pos->{runs} : undef;
-  if (!defined $v && $proc) {
+  my ($v, $h) = defined $pos ? ($pos->{runs}, $pos->{home}) : (undef, undef);
+  if ($proc && (!defined $v || !defined $h)) {
     my $e = slurp("/proc/$p/environ");
-    $v = $1 if defined $e && $e =~ /(?:\A|\0)OCANNL_TOOL_TEST_RUNS=([^\0]*)/;
+    if (defined $e) {
+      $v = $e =~ /(?:\A|\0)OCANNL_TOOL_TEST_RUNS=([^\0]*)/ ? $1 : "" unless defined $v;
+      $h = $e =~ /(?:\A|\0)HOME=([^\0]*)/ ? $1 : "" unless defined $h;
+    }
   }
-  return 1 unless defined $v && defined $ENV{HOME};
-  my $here = defined $runs && length $runs ? $runs : "$ENV{HOME}/.ocannl-test-runs";
-  $v = "$ENV{HOME}/.ocannl-test-runs" unless length $v;
-  $v =~ s{\A~(?=/|\z)}{$ENV{HOME}};
+  return 1 unless defined $v;
+  $h = $ENV{HOME} unless defined $h;
+  return 1 unless defined $h && length $h;
+  $v = "$h/.ocannl-test-runs" unless length $v;
+  $v =~ s{\A~(?=/|\z)}{$h};
   # The script reads a relative root after its own cd to the worktree root.
   $v = "$root/$v" unless absolute($v);
+  return 1 unless defined $ENV{HOME} || (defined $runs && length $runs);
+  my $here = defined $runs && length $runs ? $runs : "$ENV{HOME}/.ocannl-test-runs";
   return same_root($v, $here);
 }
 # Processes of this uid by argv: an orphan of parent 1 carrying the argv of a

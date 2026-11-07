@@ -52,15 +52,18 @@
 #      detached one queued here hides nothing here.
 # 105. the residuals of following a queued launch (gh-ocannl-1913): a
 #      relative script word behind `env -C DIR` (`--chdir=DIR`, a relative
-#      DIR, a second `-C`) is DIR's worktree's, not the wrapper's directory's,
+#      DIR, a nested env's `-C`, the last of two `-C` in one env, BSD env's
+#      `-P` operand) is DIR's worktree's, not the wrapper's directory's,
 #      and released, the moved launch is followed to its own verdict; a launch
 #      a shell's own control flow still holds (`run A; <wait>; run B` in one
 #      `-c` string) is seen once its own process runs it, `last` being A till
 #      then (the stated boundary, pinned); a launch under another
-#      OCANNL_TOOL_TEST_RUNS named by an `env` assignment in its argv is no
-#      launch under this root and one under that, an `env -i` clears an
-#      exported root, and one exported alone is read from the environment
-#      where /proc shows one, over-read (loud) where none does.
+#      OCANNL_TOOL_TEST_RUNS named by an `env` assignment in its argv (a `--`
+#      or an interpreter's `--` after it) is no launch under this root and
+#      one under that, an `env -i` clears an exported root, `-u` with a HOME
+#      assignment is a launch under that HOME's default root, and one
+#      exported alone is read from the environment where /proc shows one,
+#      over-read (loud) where none does.
 # 102 sits last: this harness, run on leg 99 with --subject naming a copy of
 #      the script whose `prepush --list` rule is taken out of proc_table_perl,
 #      exits 1 with exactly the one check that rule answers failed, having
@@ -647,11 +650,12 @@ q "$q_root" run build @ok >/dev/null 2>&1 || { harness_abandon "the green run be
 q "$q_sib" run build @ok >/dev/null 2>&1 || { harness_abandon "the sibling's green run"; return; }
 q_under "$q_other" "$q_root" run build @ok >/dev/null 2>&1 || { harness_abandon "the green run under the other root"; return; }
 # One wrapper, killed and never released, read from both worktrees under this
-# state root and, unless `-` is wanted, from this worktree under the other;
-# the runs published afterwards clear the sightings it leaves. The wrapper
-# exports Q_ENV_RUNS as its state root, the harness's by default.
-q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q_root, in q_sib, in q_root under q_other
-  local want_root=$1 want_sib=$2 want_other=$3 dir=$4 pid rc_root out_root rc_sib out_sib
+# state root and, unless `-` is wanted, from this worktree under the other
+# (q_other, or Q_OTHER_RUNS); the runs published afterwards clear the
+# sightings it leaves. The wrapper exports Q_ENV_RUNS as its state root, the
+# harness's by default.
+q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q_root, in q_sib, in q_root under the other root
+  local want_root=$1 want_sib=$2 want_other=$3 dir=$4 pid rc_root out_root rc_sib out_sib other=${Q_OTHER_RUNS:-$q_other}
   shift 4
   (cd "$dir" && OCANNL_TOOL_TEST_RUNS=${Q_ENV_RUNS:-$q_runs} PATH=$q_bin:$PATH \
     exec bash "$q_slot" "$TMP/queued.never" exec -- "$@") >/dev/null 2>&1 &
@@ -664,7 +668,7 @@ q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q
   if [ "$want_other" = - ]; then
     q_rc=- q_out=
   else
-    q_under "$q_other" "$q_root" status last >"$TMP/queued.out" 2>&1
+    q_under "$other" "$q_root" status last >"$TMP/queued.out" 2>&1
     q_rc=$?
     q_out=$(cat "$TMP/queued.out")
   fi
@@ -673,7 +677,7 @@ q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q
   sleep 1.5 # its guardian, alone for a second once its wrapper is gone
   q "$q_root" run build @ok >/dev/null 2>&1
   q "$q_sib" run build @ok >/dev/null 2>&1
-  q_under "$q_other" "$q_root" run build @ok >/dev/null 2>&1
+  q_under "$other" "$q_root" run build @ok >/dev/null 2>&1
   [ "$rc_root" = "$want_root" ] && [ "$rc_sib" = "$want_sib" ] && [ "$q_rc" = "$want_other" ] && return 0
   q_detail="status last beside a queued \`$*\` from $dir: $rc_root in the worktree, $rc_sib in the sibling, $q_rc under the other root (want $want_root, $want_sib, $want_other): $out_root | $out_sib | $q_out"
   return 1
@@ -681,11 +685,15 @@ q_case() { # want-root want-sib want-other dir argv...: the statuses wanted in q
 # A wrapper outside any worktree, its command moved into this one; one in
 # this worktree, its command moved into the sibling (over-read before: the
 # relative word resolved against the wrapper's directory); a `--chdir=DIR`
-# relative to the wrapper's directory; a second `-C`, relative to the first.
+# relative to the wrapper's directory; a nested env's `-C`, relative to the
+# outer one's; two `-C` in one env, the last winning, relative to the
+# directory env was entered in (as GNU env does); BSD env's `-P` operand.
 q_case 3 0 - "$TMP" env -C "$q_root" tools/test-run.sh run build @red &&
   q_case 0 3 - "$q_root" env -C "$q_sib" tools/test-run.sh run build @red &&
   q_case 3 0 - "$TMP" env --chdir=queued-repo tools/test-run.sh run build @red &&
-  q_case 3 0 - "$q_sib" env -C "$TMP" env -C queued-repo tools/test-run.sh run build @red || :
+  q_case 3 0 - "$q_sib" env -C "$TMP" env -C queued-repo tools/test-run.sh run build @red &&
+  q_case 3 0 - "$q_root" env -C "$TMP" -C . tools/test-run.sh run build @red &&
+  q_case 3 0 - "$q_root" env -P /usr/bin tools/test-run.sh run build @red || :
 # Released, the moved launch publishes its run in this worktree, and the
 # wait that followed it ends with that run's verdict.
 if [ -z "$q_detail" ]; then
@@ -742,18 +750,24 @@ if [ -z "$q_detail" ]; then report 0 "$q_held_label"; else report 1 "$q_held_lab
 
 # A launch of this worktree under another state root: named by an `env`
 # assignment in its argv (a trailing slash, an `-u` before it, a `--` after
-# it) it is no launch under this root and one under that (the control); an
-# `env -i` clears the exported root (the default root: none of these); the
-# default root is never read here, so that case is checked under the two
-# roots that are not it. Exported to it alone, the root is read from the
-# environment where /proc shows one (Linux), and over-read here where none
-# does (a Mac): loud, a wait that times out and then `unpublished:`, as
-# stated.
+# it, an interpreter and its `--` after it) it is no launch under this root
+# and one under that (the control); an `env -i` clears the exported root (the
+# default root: none of these); the default root is under the launch's HOME,
+# so `-u OCANNL_TOOL_TEST_RUNS HOME=DIR` is a launch under DIR's default
+# root and none here; the harness's own default root is never read, so the
+# `-i` case is checked under the two roots that are not it. Exported alone,
+# the root is read from the environment where /proc shows one (Linux), and
+# over-read here where none does (a Mac): loud, a wait that times out and
+# then `unpublished:`, as stated.
 q_detail=
+q_home=$TMP/queued-home
+mkdir -p "$q_home"
 if [ -d "/proc/$$" ]; then q_env_want=0; else q_env_want=3; fi
 q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" tools/test-run.sh run build @red &&
   q_case 0 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS "OCANNL_TOOL_TEST_RUNS=$q_other/" -- tools/test-run.sh run build @red &&
+  q_case 0 0 3 "$q_root" env "OCANNL_TOOL_TEST_RUNS=$q_other" bash -- tools/test-run.sh run build @red &&
   q_case 0 0 0 "$q_root" env -i "HOME=$HOME" "PATH=$PATH" tools/test-run.sh run build @red &&
+  Q_OTHER_RUNS=$q_home/.ocannl-test-runs q_case 0 0 3 "$q_root" env -u OCANNL_TOOL_TEST_RUNS "HOME=$q_home" tools/test-run.sh run build @red &&
   Q_ENV_RUNS=$q_other q_case "$q_env_want" 0 3 "$q_root" tools/test-run.sh run build @red || :
 if [ -z "$q_detail" ]; then report 0 "$q_root_label"; else report 1 "$q_root_label" "$q_detail"; fi
 }
