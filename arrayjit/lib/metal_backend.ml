@@ -38,6 +38,10 @@ module Device_config = struct
 
   let sexp_of_dev = Me.Device.sexp_of_t
 
+  (* A committed command buffer the host has not yet seen finish. [seq] is its commit order on the
+     runner's queue; [what] names its work in a failure report. *)
+  type in_flight = { seq : int; what : string; buffer : Me.CommandBuffer.t }
+
   (* Represents a command queue + event for synchronization *)
   type runner = {
     queue : Me.CommandQueue.t;
@@ -47,11 +51,23 @@ module Device_config = struct
         (* While [Some], kernel launches encode into this open serial compute pass instead of
            committing their own command buffer — set for the span of one fissioned routine's segment
            batch by [sequence_segments]. Only the task running on this queue touches it. *)
+    mutable committed : int; (* The [seq] of the latest commit. *)
+    mutable in_flight : (in_flight list[@sexp.opaque]); (* Newest first; see [reap]. *)
+    mutable failure : string option;
+        (* The first failed command buffer's report, kept for the rest of the process: see
+           [raise_on_failure]. *)
   }
   [@@deriving sexp_of]
 
-  (* Represents a point in time on a specific runner *)
-  type event = { shared : Me.SharedEvent.t; value : ullong } [@@deriving sexp_of]
+  (* Represents a point in time on a specific runner: [seq] is the commit of the command buffer that
+     signals [value] *)
+  type event = {
+    shared : Me.SharedEvent.t;
+    value : ullong;
+    seq : int;
+    owner : (runner[@sexp.opaque]);
+  }
+  [@@deriving sexp_of]
 
   let name = "metal"
 end
@@ -69,6 +85,110 @@ let track_allocation (buffer : Me.Buffer.t) =
   let size = Me.Resource.get_allocated_size (Me.Buffer.super buffer) in
   Stdlib.Gc.finalise (fun _ -> ignore (Atomic.fetch_and_add allocated_memory (-size))) buffer;
   ignore (Atomic.fetch_and_add allocated_memory size)
+
+(* --- Failed command buffers (gh-ocannl-2083) ---
+
+   A command buffer that fails does not fail anything else, so the host has to look. What it finds
+   there, on an Apple GPU (test/operations/metal_gpu_hang_failure):
+
+   - A kernel the GPU watchdog kills ends in status [Error] ("Caused GPU Hang Error"), and the
+   command buffers queued behind it are "Discarded (victim of GPU error/recovery)". - The discarded
+   buffers' event signals are delivered anyway, so [waitUntilSignaledValue] returns as if the work
+   had run, and it returned while the failing buffer still read [Scheduled]. The event alone would
+   report success over stale data. - After a few failures Metal ignores the process's submissions
+   ("Ignored (for causing prior/excessive GPU errors)"). An ignored signal is never delivered, so a
+   wait on it alone never returns.
+
+   So every commit goes through [commit_tracked], which keeps the buffer until the host reads a
+   final status for it, and a wait ends only once it has read one for everything it covers. Status
+   reads rather than [addCompletedHandler]: a ctypes block with an OCaml body is not safe to hand
+   Metal (docs/agent-notes/backend-dialects-and-idents.md).
+
+   A failure stays with the device for the rest of the process, like the [Multidev] scheduler's
+   [dev_error]. Buffers already queued may be waiting for a signal that will never come, and
+   [commandBuffer] blocks once 64 are outstanding, so more work on that queue can wedge the host.
+   Reporting once would also let a best-effort [await] in cleanup swallow the only report. *)
+let commit_tracked runner ~what buffer =
+  Me.CommandBuffer.commit buffer;
+  let seq = runner.committed + 1 in
+  runner.committed <- seq;
+  runner.in_flight <- { seq; what; buffer } :: runner.in_flight;
+  seq
+
+(* How long the report of a failure waits for older buffers still reading as unfinished. *)
+let victim_grace_seconds = 1.
+
+(* Reads every in-flight buffer once and drops the finished ones. All of them, not only the oldest:
+   an old buffer waiting on a signal that was ignored never finishes, and the buffer that explains
+   it is a newer one. The report is the oldest failure, since the buffers behind a hang are only its
+   victims. Statuses arrive independently, so a victim may read [Error] while the kernel that caused
+   it does not yet: a failure with older buffers unfinished waits for them, within the grace. *)
+let rec reap ?deadline runner =
+  let oldest_failed = ref None in
+  runner.in_flight <-
+    List.filter runner.in_flight ~f:(fun tracked ->
+        Me.CommandBuffer.Status.(
+          match Me.CommandBuffer.get_status tracked.buffer with
+          | Completed -> false
+          | Error ->
+              oldest_failed := Some tracked;
+              true
+          | NotEnqueued | Enqueued | Committed | Scheduled -> true));
+  match (runner.failure, !oldest_failed) with
+  | None, Some failed ->
+      let now = Unix.gettimeofday () in
+      let deadline = Option.value deadline ~default:(now +. victim_grace_seconds) in
+      if (List.last_exn runner.in_flight).seq = failed.seq || Float.(now >= deadline) then
+        let { what; buffer; _ } = failed in
+        let error =
+          Option.value (Me.CommandBuffer.get_error buffer) ~default:"Metal gave no error text"
+        in
+        runner.failure <-
+          Some
+            [%string
+              "Metal: the command buffer of %{what} failed: %{error}. The device takes no more \
+               work in this process."]
+      else (
+        Unix.sleepf 0.001;
+        reap ~deadline runner)
+  | _ -> ()
+
+let raise_on_failure runner =
+  reap runner;
+  Option.iter runner.failure ~f:failwith
+
+let is_done event =
+  let current_value = Me.SharedEvent.get_signaled_value event.shared in
+  Unsigned.ULLong.compare current_value event.value >= 0
+
+(* How long one wait for an event lasts before the host looks at the command buffers again. The wait
+   returns as soon as the event fires, so this bounds only how late a failure is noticed. *)
+let failure_poll_ms = Unsigned.ULLong.of_int 100
+
+let sync event =
+  let runner = event.owner in
+  let rec wait_for_signal () =
+    raise_on_failure runner;
+    if
+      (not (is_done event))
+      && not
+           (Me.SharedEvent.wait_until_signaled_value event.shared ~value:event.value
+              ~timeout_ms:failure_poll_ms)
+    then wait_for_signal ()
+  in
+  wait_for_signal ();
+  (* With the event fired, nothing covered here waits for a signal of this runner, so these end. *)
+  List.iter (List.rev runner.in_flight) ~f:(fun tracked ->
+      if tracked.seq <= event.seq then Me.CommandBuffer.wait_until_completed tracked.buffer);
+  raise_on_failure runner
+
+(* Makes [buffer] signal the next value of the runner's event, and commits it. *)
+let commit_signalling runner ~what buffer =
+  let value = Unsigned.ULLong.succ runner.counter in
+  runner.counter <- value;
+  Me.CommandBuffer.encode_signal_event buffer (Me.SharedEvent.super runner.event) value;
+  let seq = commit_tracked runner ~what buffer in
+  { shared = runner.event; value; seq; owner = runner }
 
 (* gh-ocannl-344: every pool uses Shared storage (unified memory, WriteCombined for CPU writes), so
    host transfers are a direct memcpy with no staging blit, and a context delta never splits across
@@ -112,6 +232,7 @@ module Slab = struct
      write a neighbouring region of the same shared slab next. *)
   let zero_ranges (device : device) ranges =
     if not (List.is_empty ranges) then (
+      raise_on_failure device.runner;
       let command_buffer = Me.CommandBuffer.on_queue device.runner.queue in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
       List.iter ranges ~f:(fun ({ pool_id; offset }, size_in_bytes) ->
@@ -120,8 +241,7 @@ module Slab = struct
             { location = offset; length = size_in_bytes }
             ~value:0);
       Me.BlitCommandEncoder.end_encoding blit_encoder;
-      Me.CommandBuffer.commit command_buffer;
-      Me.CommandBuffer.wait_until_completed command_buffer)
+      sync (commit_signalling device.runner ~what:"a zero fill" command_buffer))
 
   let resolve_pool (device : device) { pool_id; offset = _ } : buffer_ptr =
     (* Resolve the slab [Me.Buffer.t] for [pool_id]. Metal buffers are objects, not raw pointers, so
@@ -193,7 +313,16 @@ module Impl = struct
     let shared_event_obj = Me.SharedEvent.on_device metal_device in
     let counter = Unsigned.ULLong.one in
     (* Next value = 1 *)
-    ({ queue = actual_queue; event = shared_event_obj; counter; fused = None }, opt_log_buffer)
+    ( {
+        queue = actual_queue;
+        event = shared_event_obj;
+        counter;
+        fused = None;
+        committed = 0;
+        in_flight = [];
+        failure = None;
+      },
+      opt_log_buffer )
 
   let get_device ~(ordinal : int) : device =
     (* See the note in [Cuda_backend.get_device]: no Metal device at all is the discovery failure
@@ -224,59 +353,39 @@ module Impl = struct
     num_devs ()
 
   (* --- Event Handling --- *)
-  let is_done event =
-    let current_value = Me.SharedEvent.get_signaled_value event.shared in
-    Unsigned.ULLong.compare current_value event.value >= 0
-
-  let sync event =
-    if not (is_done event) then
-      let timeout_max = Unsigned.ULLong.max_int in
-      ignore
-        (Me.SharedEvent.wait_until_signaled_value event.shared ~value:event.value
-           ~timeout_ms:timeout_max)
+  let is_done = is_done
+  let sync = sync
 
   let will_wait_for context event =
     let device = context.device in
     let queue = device.runner.queue in
+    raise_on_failure device.runner;
     let command_buffer = Me.CommandBuffer.on_queue queue in
     Me.CommandBuffer.encode_wait_for_event command_buffer
       (Me.SharedEvent.super event.shared)
       event.value;
-    Me.CommandBuffer.commit command_buffer
+    ignore (commit_tracked device.runner ~what:"a wait for another stream" command_buffer : int)
 
-  (* Commits a command buffer signalling the device's event after all current work; returns the
-     event and that command buffer. *)
-  let signal_after_all_work device =
-    let queue = device.runner.queue in
-    let shared_event = device.runner.event in
-    let counter = device.runner.counter in
-    let next_value = Unsigned.ULLong.add counter Unsigned.ULLong.one in
-    device.runner.counter <- next_value;
-    let command_buffer = Me.CommandBuffer.on_queue queue in
-    Me.CommandBuffer.encode_signal_event command_buffer
-      (Me.SharedEvent.super shared_event)
-      next_value;
-    Me.CommandBuffer.commit command_buffer;
-    ({ shared = shared_event; value = next_value }, command_buffer)
-
-  let all_work device = fst (signal_after_all_work device)
+  (* Commits a command buffer signalling the device's event after all current work. *)
+  let all_work device =
+    raise_on_failure device.runner;
+    let command_buffer = Me.CommandBuffer.on_queue device.runner.queue in
+    commit_signalling device.runner ~what:"an all-work signal" command_buffer
 
   let await device =
     (* Signal an event after all current work and wait for it. This ensures all previously submitted
        command buffers complete. *)
-    let event, command_buffer = signal_after_all_work device in
-    sync event;
+    sync (all_work device);
     (* Drain the captured routine logs, if logging is on for this device. The event firing is a GPU
-       timeline fact, while Metal hands log messages to the handler on the CPU side, so under
-       logging [await] also waits for the signalling command buffer (the queue's last) to complete
-       before draining: no Metal document promises delivery by either point, and completion is the
-       later of the two. test/operations/metal_routine_log_delivery pins that every message of the
-       work is drained by then (it held 10 of 10 runs even without this wait). A message that does
-       arrive later is not lost: it is in the next [await]'s drain. *)
+       timeline fact, while Metal hands log messages to the handler on the CPU side, so what matters
+       here is that [sync] also waited for the signalling command buffer (the queue's last) to
+       complete: no Metal document promises delivery by either point, and completion is the later of
+       the two. test/operations/metal_routine_log_delivery pins that every message of the work is
+       drained by then (it held 10 of 10 runs even without this wait). A message that does arrive
+       later is not lost: it is in the next [await]'s drain. *)
     if Utils.debug_log_from_routines () then
       match Hashtbl.find stream_logs device.device_id with
       | Some log_buffer ->
-          Me.CommandBuffer.wait_until_completed command_buffer;
           (* The drain detaches the batch: if writing it out raises, the batch is lost, never
              written twice. *)
           let entries, dropped = Me.LogState.drain_log_buffer log_buffer in
@@ -542,13 +651,15 @@ module Impl = struct
 
     let memcpy ~dst_ptr ~dst_offset =
       (* Always use explicit copy as Metal doesn't have peer-to-peer memory access like CUDA *)
-      let command_buffer = Me.CommandBuffer.on_queue dst.device.runner.queue in
+      let runner = dst.device.runner in
+      raise_on_failure runner;
+      let command_buffer = Me.CommandBuffer.on_queue runner.queue in
       let blit_encoder = Me.BlitCommandEncoder.on_buffer command_buffer in
       Me.BlitCommandEncoder.copy_from_buffer blit_encoder ~source_buffer:src_ptr
         ~source_offset:src_loc.offset ~destination_buffer:dst_ptr ~destination_offset:dst_offset
         ~size:size_in_bytes;
       Me.BlitCommandEncoder.end_encoding blit_encoder;
-      Me.CommandBuffer.commit command_buffer
+      ignore (commit_tracked runner ~what:"a device-to-device copy" command_buffer : int)
     in
 
     match (into_merge_buffer, dst_loc) with
@@ -2130,6 +2241,7 @@ using namespace metal;|}
           match fused with
           | Some (cb, enc) -> (cb, enc)
           | None ->
+              raise_on_failure dev.runner;
               let cb = Me.CommandBuffer.on_queue queue in
               encode_wait_for_enqueued dev cb;
               (cb, Me.ComputeCommandEncoder.on_buffer cb)
@@ -2197,7 +2309,7 @@ using namespace metal;|}
         | Some _ -> () (* [sequence_segments] ends the pass and commits once, after all segments. *)
         | None ->
             Me.ComputeCommandEncoder.end_encoding encoder;
-            Me.CommandBuffer.commit command_buffer
+            ignore (commit_tracked dev.runner ~what:("kernel " ^ func_name) command_buffer : int)
         (* Make execution synchronous for debugging/simplicity, remove later *)
         (* Me.CommandBuffer.wait_until_completed command_buffer; *)
       with exn ->
@@ -2250,14 +2362,16 @@ using namespace metal;|}
   let sequence_segments (context : context) ~name ~bindings:_ ~uses_merge_buffer:_
       (tasks : Task.t list) : (Task.t * (unit -> unit)) option =
     let dev = context.device in
+    let segments = "fused segments of " ^ name in
     (* The command buffer is built afresh every run, so nothing outlives a run to release. *)
     Some
       ( Task.Task
           {
             context_lifetime = tasks;
-            description = "fused segments of " ^ name ^ " on " ^ get_name dev;
+            description = segments ^ " on " ^ get_name dev;
             work =
               (fun () ->
+                raise_on_failure dev.runner;
                 let command_buffer = Me.CommandBuffer.on_queue dev.runner.queue in
                 encode_wait_for_enqueued dev command_buffer;
                 let encoder =
@@ -2270,7 +2384,7 @@ using namespace metal;|}
                   ~finally:(fun () ->
                     dev.runner.fused <- None;
                     Me.ComputeCommandEncoder.end_encoding encoder;
-                    Me.CommandBuffer.commit command_buffer));
+                    ignore (commit_tracked dev.runner ~what:segments command_buffer : int)));
           },
         fun () -> () )
 end
