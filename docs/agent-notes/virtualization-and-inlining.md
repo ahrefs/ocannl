@@ -417,7 +417,11 @@ files.
   placement: a census table on stdout moves when the boundary moves, floor claims keep it
   non-vacuous, and a compiled sample holds the interpreter to a backend. Add a form to `coord_forms`
   or a step shape to `enumerate`, not a row, when a new inliner path appears; a stderr `FINDING` names
-  a program, and `--only` on the built executable prints its code. Its first run found
+  a program, and `--only` on the built executable prints its code. The default run thins the large
+  shapes to fit a test's budget; `--widen` is the full cross (9 million programs, 10 to 16 minutes on one core),
+  on its own alias `@test/operations/slow-virtual_inliner_oracle-widen`, which the daily sweep's
+  `cc-oracle-widen` unit builds and `tools/test-run.sh affected` names to a change reaching the
+  inliner — run it before pushing such a change. Its first run found
   `Affine.common_layout` writing coordinates back in reverse (`Array.for_all` in Base runs from the
   last element, so a side effect in its predicate runs backwards): both sides reversed alike, which
   the pairwise solving could not see, while `same_unit_cell` read a wide coordinate at a unit axis

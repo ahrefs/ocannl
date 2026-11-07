@@ -32,7 +32,10 @@
    A program's descriptor is its name. [--only <substring>] prints the raw and optimized code of the
    programs whose descriptor contains it and checks nothing, for a finding printed on stderr;
    [--widen] lifts the pools below, for someone changing the inliner. Both are for a direct run of
-   the built executable from [_build/default/test/operations], which finds [ocannl_config] there. *)
+   the built executable from [_build/default/test/operations], which finds [ocannl_config] there;
+   [--widen] also has an alias of its own, [@test/operations/slow-virtual_inliner_oracle-widen] (10
+   to 16 minutes on one core), which the daily sweep's [cc-oracle-widen] unit builds
+   (tools/sweep.sh) and [tools/test-run.sh affected] names to a change reaching the inliner. *)
 
 open Base
 open Ll_test

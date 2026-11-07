@@ -957,6 +957,17 @@ grep -q 'm4-max/cc-outlined: incremental-pass ' <<<"$outlined_run"
 [ "$(awk -F '\t' 'END { print $2 ":" $3 ":" $5 }' "$state/history.tsv")" = 'm4-max:cc:incremental-pass' ]
 [ "$(awk -F '\t' '$3 == "cc-outlined" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
 
+# gh-ocannl-1964: the cc-oracle-widen unit is `virtual_inliner_oracle --widen` on cc -- one dune
+# call building the oracle's widen alias alone (no @runtest, no @train, and no @slow even under
+# --slow, which would build that same alias a second time), with no outlining key -- recorded under
+# its own name, once.
+widen_env=$tmp/opam.env-calls-widen
+widen_run=$(SWEEP_TEST_ENV_CALLS=$widen_env run_sweep_backend cc-oracle-widen --slow)
+grep -q 'm4-max/cc-oracle-widen: incremental-pass ' <<<"$widen_run"
+[ "$(cat "$widen_env")" = \
+  "$(printf 'cc||\texec -- dune build @test/operations/slow-virtual_inliner_oracle-widen')" ]
+[ "$(awk -F '\t' '$3 == "cc-oracle-widen" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
+
 # Per-unit state distinguishes a standing red from two transitions that need an
 # operator's attention: red after green, and red after the failing golden was
 # edited. It also compares against the previous FAILURE across an intervening
@@ -2936,7 +2947,7 @@ lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
     minix/hip:skip:0 minix/multidev_cc:skip:0 rog-nv/cuda:skip:0 tuf/hip:gate:0 | sort)" ]
 [ "$(awk -F '\t' '$1 == "backend" { print $2 ":" $3 }' "$lanes_record")" = \
   "$(printf '%s\n' cc:m4-max metal:m4-max cuda:rog-nv hip:minix multidev_cc:minix hip:tuf \
-  cc-outlined:m4-max)" ]
+  cc-outlined:m4-max cc-oracle-widen:m4-max)" ]
 # ...and the memory model each unit exercised: hip twice, once on each side of the unified/discrete
 # line, which is what the second hip unit is for.
 [ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $11 }' "$lanes_record" | sort)" = \
