@@ -27,6 +27,10 @@
 #     The deny-list is tools/credential-env.sh, shared with the sweep and
 #     machine-verify; everything else (opam, PATH, OCANNL_*) passes through.
 #
+# Native wave workers follow their brief's `execution slot --bg` plus
+# `bg-run.sh wait` form. `wait last` is only for a run launched without --bg;
+# the wave brief supplies the run record and readiness boundary for --bg runs.
+#
 # Usage:
 #   tools/test-run.sh run   [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]...
 #                           [DUNE ARGS...]             # foreground; digest; dune's status (2: refused)
