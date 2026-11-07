@@ -578,7 +578,7 @@ let non_config_environment_mentions =
 let non_config_assignment_mentions =
   [
     ("docs/agent-notes/scheduling-and-autotune.md", "max_chain", 1);
-    ("docs/precision_inference.md", "top_down_prec", 6);
+    ("docs/precision_inference.md", "top_down_prec", 10);
     ("docs/research/lean-attention-feasibility.md", "seq_q", 1);
     ("docs/syntax_extensions.md", "kernel_size", 2);
   ]
