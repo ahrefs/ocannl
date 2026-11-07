@@ -521,8 +521,11 @@ files.
   `dim_cycle_visits` still grows 4x with a small constant. What is left past depth 16 is not the
   solver's: tensor construction's set unions (schemes off too), and each closure's trace
   checkpointing the session's open frontier (quadratic in closures, 11.7 s of 43.9 s tracing at
-  decoder depth 128). Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy. A
-  `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` run of `scheme_payoff` takes about 13 minutes.
+  decoder depth 128). Allocation (`OCAMLRUNPARAM=v=0x400`) is a deterministic proxy when the box is noisy.
+  `scheme_payoff`'s allocation bands assume the default `max_shape_error_origins` and the
+  cross-check off (gh-ocannl-1968; its header): cap 0 drops the origin lists, a term linear in the
+  merges, and the decoder trace's deepest doubling reads 2.88 against its 2.9 ceiling; under the
+  cross-check they are a skipped leg.
 - What a row solution owes the entries it bounds (gh-ocannl-1977, `s_row_one_in_entry`'s comment):
   rows have no GLB transport but the visit, so `value ⊑ opnd` (a value with axes) and `glb ⊑ value`
   are load-bearing, and for a long time nothing pinned them; dropping both passed the whole shape
@@ -547,7 +550,11 @@ files.
   `Concat` kept as parts is what they pin.
   Verify a change here with `OCANNL_SHAPE_SUBSTITUTION_CROSS_CHECK=true` over the shape tests (it
   fails on the first solution whose indexed visit differs from the whole map's), and
-  `test/operations/shape_substitution_chains` for the chains. The eager, resolved representation
+  `test/operations/shape_substitution_chains` for the chains. Under it `scheme_payoff` runs one
+  depth shallower in every table (gh-ocannl-1968): at its full depths the cross-check took over 12
+  minutes, nearly all in the depth-16 decoder stacks, where the default run takes about 25 s; one
+  depth shallower it takes under 3 minutes. The counts it claims are the default run's at every
+  depth, so the check loses nothing but the deepest doubling. The eager, resolved representation
   stays quadratic on an alias chain solved oldest-first (`x1:=x2, x2:=x3, ...`); no model workload
   showed one.
 - A trace solves symbolically what inline construction solves numerically (gh-ocannl-1820): a

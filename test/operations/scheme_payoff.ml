@@ -6,7 +6,18 @@
    The deterministic counts are claimed (stdout); the full count and timing tables go to stderr,
    which is not part of the golden. [--bench REPS N...] times the workloads instead: the measurement
    behind docs/shape_inference.md's numbers; [--bench-result N...] is its form for the A/B driver;
-   [--stacks REPS N...] measures whole-stack traces against one build. *)
+   [--stacks REPS N...] measures whole-stack traces against one build.
+
+   Two settings the allocation-ratio claims assume (gh-ocannl-1968). They read the default
+   [max_shape_error_origins]: the origin lists a merge trims are an allocation linear in the
+   solver's merges, so cap 0 drops a term the bands dilute by, and the decoder trace's deepest
+   doubling reads 2.88 against its 2.9 ceiling where the default reads 2.76 (the counts do not
+   move). And they need [shape_substitution_cross_check] off (a leg skips them under it): under the
+   cross-check every solution also substitutes into the whole environment, so the allocation is the
+   whole environment's again, and the deepest cells take minutes each -- the run then drops the
+   deepest depth of every table ([shallower]), which keeps every workload and the doublings the
+   count claims read, and the counts are those of the default run at every depth (the reference
+   visit does not count). *)
 
 open Base
 open Ocannl.Nn_blocks.DSL_modules
@@ -168,7 +179,12 @@ let decoder_stack ~train_step n =
   in
   on_x_mask (fun x mask -> model ~train_step:(train_step ()) x ~mask)
 
-let stack_depths = [ 2; 4; 8; 16 ]
+(* Under [shape_substitution_cross_check=true] every table loses its deepest depth (the header):
+   over 12 minutes at the full depths, under 3 minutes one depth shallower, where the default run
+   takes about 25 s. *)
+let cross_checked = Ocannl.Row.substitution_cross_checked ()
+let shallower ns = if cross_checked then List.drop_last_exn ns else ns
+let stack_depths = shallower [ 2; 4; 8; 16 ]
 
 let stacks =
   [
@@ -205,7 +221,7 @@ let stacks =
     (* Convolutions and batch norms, whose rows stay unsolved longer than attention's. *)
     {
       s_name = "resnet";
-      depths = [ 2; 4; 8 ];
+      depths = shallower [ 2; 4; 8 ];
       arity = 1;
       model =
         (fun n ->
@@ -322,7 +338,9 @@ let depths = [ 1; 2; 4 ]
 (* gh-ocannl-1904's scaling cells: deep enough for the whole environment's quadratic term to show in
    each doubling. *)
 let scaling_cells =
-  [ ("distinct", [ 4; 8; 16 ]); ("shared", [ 4; 8; 16 ]); ("decoder", [ 2; 4; 8 ]) ]
+  List.map
+    ~f:(fun (w, ns) -> (w, shallower ns))
+    [ ("distinct", [ 4; 8; 16 ]); ("shared", [ 4; 8; 16 ]); ("decoder", [ 2; 4; 8 ]) ]
 
 let find_workload name = List.find_exn workloads ~f:(fun x -> String.equal x.w_name name)
 
@@ -476,7 +494,7 @@ let () =
                 stack_build decoder_cell n ) ))
       in
       let resnet_cell = List.find_exn stacks ~f:(fun s -> String.equal s.s_name "resnet") in
-      let resnet_depths = [ 4; 8; 16 ] in
+      let resnet_depths = shallower [ 4; 8; 16 ] in
       let resnet_builds =
         List.map resnet_depths ~f:(fun n ->
             (n, (stack_build resnet_cell n, stack_build ~transitive:true resnet_cell n)))
@@ -602,8 +620,7 @@ let () =
       (* Under the cross-check setting every solution also visits the whole environment, so the
          allocation is the whole environment's again: those claims need the setting off. *)
       let leg =
-        Verdict.leg ~aggregation:`Environment
-          ~when_:(not (Ocannl.Row.substitution_cross_checked ()))
+        Verdict.leg ~aggregation:`Environment ~when_:(not cross_checked)
           ~on:"shape_substitution_cross_check=true" ()
       in
       Verdict.case "a solution substitutes itself into the entries it can change" (fun () ->
