@@ -79,3 +79,366 @@ a uint32 comparison in a single slot: with each literal in a node it gives the w
 a uint32 comparison in a single slot: the comparison survives: true
 a one-hot sum over a float-valued index stays a sum: true
 a float-valued one-hot index selects by its value at the byte reads: true
+byte 6 * 7 folds to its value: true
+byte 6 / 3 folds to its value: true
+byte 7 % 3 folds to its value: true
+byte Max 3 4 folds to its value: true
+byte 3 < 4 folds to its value: true
+uint16 6 * 7 folds to its value: true
+uint16 6 / 3 folds to its value: true
+uint16 7 % 3 folds to its value: true
+uint16 Max 3 4 folds to its value: true
+uint16 3 < 4 folds to its value: true
+int32 6 * 7 folds to its value: true
+int32 6 / 3 folds to its value: true
+int32 7 % 3 folds to its value: true
+int32 Max 3 4 folds to its value: true
+int32 3 < 4 folds to its value: true
+uint32 6 * 7 folds to its value: true
+uint32 6 / 3 folds to its value: true
+uint32 7 % 3 folds to its value: true
+uint32 Max 3 4 folds to its value: true
+uint32 3 < 4 folds to its value: true
+int64 6 * 7 folds to its value: true
+int64 6 / 3 folds to its value: true
+int64 7 % 3 folds to its value: true
+int64 Max 3 4 folds to its value: true
+int64 3 < 4 folds to its value: true
+uint64 6 * 7 folds to its value: true
+uint64 6 / 3 folds to its value: true
+uint64 7 % 3 folds to its value: true
+uint64 Max 3 4 folds to its value: true
+uint64 3 < 4 folds to its value: true
+int64 a quotient a double rounds onto an integer stays a division: true
+uint64 a quotient a double rounds onto an integer stays a division: true
+byte 3 - 5: with its literals as written it gives the worked value: true
+byte 3 - 5: with each literal in a node it gives the worked value: true
+byte 3 - 5: no constant is left outside the slot's range: true
+byte 3 - 5: simplifying again changes nothing: true
+byte 3 - 5: the operator stays: true
+byte Neg 3: with its literals as written it gives the worked value: true
+byte Neg 3: with each literal in a node it gives the worked value: true
+byte Neg 3: no constant is left outside the slot's range: true
+byte Neg 3: simplifying again changes nothing: true
+byte Neg 3: the operator stays: true
+byte 0 - x: with its literals as written it gives the worked value: true
+byte 0 - x: with each literal in a node it gives the worked value: true
+byte 0 - x: no constant is left outside the slot's range: true
+byte 0 - x: simplifying again changes nothing: true
+byte 0 - x: the operator stays: true
+byte (x + 3) - 5: with its literals as written it gives the worked value: true
+byte (x + 3) - 5: with each literal in a node it gives the worked value: true
+byte (x + 3) - 5: no constant is left outside the slot's range: true
+byte (x + 3) - 5: simplifying again changes nothing: true
+byte (x + 3) - 5: the operator stays: true
+byte Neg 3 below zero: with its literals as written it gives the worked value: true
+byte Neg 3 below zero: with each literal in a node it gives the worked value: true
+byte Neg 3 below zero: no constant is left outside the slot's range: true
+byte Neg 3 below zero: simplifying again changes nothing: true
+byte 3 - 5 below zero: with its literals as written it gives the worked value: true
+byte 3 - 5 below zero: with each literal in a node it gives the worked value: true
+byte 3 - 5 below zero: no constant is left outside the slot's range: true
+byte 3 - 5 below zero: simplifying again changes nothing: true
+byte 3 + 4: with its literals as written it gives the worked value: true
+byte 3 + 4: with each literal in a node it gives the worked value: true
+byte 3 + 4: no constant is left outside the slot's range: true
+byte 3 + 4: simplifying again changes nothing: true
+byte 3 + 4: it folds to a leaf: true
+byte 7 / 2: with its literals as written it gives the worked value: true
+byte 7 / 2: with each literal in a node it gives the worked value: true
+byte 7 / 2: no constant is left outside the slot's range: true
+byte 7 / 2: simplifying again changes nothing: true
+byte 7 / 2: the operator stays: true
+uint16 3 - 5: with its literals as written it gives the worked value: true
+uint16 3 - 5: with each literal in a node it gives the worked value: true
+uint16 3 - 5: no constant is left outside the slot's range: true
+uint16 3 - 5: simplifying again changes nothing: true
+uint16 3 - 5: the operator stays: true
+uint16 Neg 3: with its literals as written it gives the worked value: true
+uint16 Neg 3: with each literal in a node it gives the worked value: true
+uint16 Neg 3: no constant is left outside the slot's range: true
+uint16 Neg 3: simplifying again changes nothing: true
+uint16 Neg 3: the operator stays: true
+uint16 0 - x: with its literals as written it gives the worked value: true
+uint16 0 - x: with each literal in a node it gives the worked value: true
+uint16 0 - x: no constant is left outside the slot's range: true
+uint16 0 - x: simplifying again changes nothing: true
+uint16 0 - x: the operator stays: true
+uint16 (x + 3) - 5: with its literals as written it gives the worked value: true
+uint16 (x + 3) - 5: with each literal in a node it gives the worked value: true
+uint16 (x + 3) - 5: no constant is left outside the slot's range: true
+uint16 (x + 3) - 5: simplifying again changes nothing: true
+uint16 (x + 3) - 5: the operator stays: true
+uint16 Neg 3 below zero: with its literals as written it gives the worked value: true
+uint16 Neg 3 below zero: with each literal in a node it gives the worked value: true
+uint16 Neg 3 below zero: no constant is left outside the slot's range: true
+uint16 Neg 3 below zero: simplifying again changes nothing: true
+uint16 3 - 5 below zero: with its literals as written it gives the worked value: true
+uint16 3 - 5 below zero: with each literal in a node it gives the worked value: true
+uint16 3 - 5 below zero: no constant is left outside the slot's range: true
+uint16 3 - 5 below zero: simplifying again changes nothing: true
+uint16 3 + 4: with its literals as written it gives the worked value: true
+uint16 3 + 4: with each literal in a node it gives the worked value: true
+uint16 3 + 4: no constant is left outside the slot's range: true
+uint16 3 + 4: simplifying again changes nothing: true
+uint16 3 + 4: it folds to a leaf: true
+uint16 7 / 2: with its literals as written it gives the worked value: true
+uint16 7 / 2: with each literal in a node it gives the worked value: true
+uint16 7 / 2: no constant is left outside the slot's range: true
+uint16 7 / 2: simplifying again changes nothing: true
+uint16 7 / 2: the operator stays: true
+int32 3 - 5: with its literals as written it gives the worked value: true
+int32 3 - 5: with each literal in a node it gives the worked value: true
+int32 3 - 5: no constant is left outside the slot's range: true
+int32 3 - 5: simplifying again changes nothing: true
+int32 3 - 5: it folds to a leaf: true
+int32 Neg 3: with its literals as written it gives the worked value: true
+int32 Neg 3: with each literal in a node it gives the worked value: true
+int32 Neg 3: no constant is left outside the slot's range: true
+int32 Neg 3: simplifying again changes nothing: true
+int32 Neg 3: it folds to a leaf: true
+int32 0 - x: with its literals as written it gives the worked value: true
+int32 0 - x: with each literal in a node it gives the worked value: true
+int32 0 - x: no constant is left outside the slot's range: true
+int32 0 - x: simplifying again changes nothing: true
+int32 0 - x: the operator stays: true
+int32 (x + 3) - 5: with its literals as written it gives the worked value: true
+int32 (x + 3) - 5: with each literal in a node it gives the worked value: true
+int32 (x + 3) - 5: no constant is left outside the slot's range: true
+int32 (x + 3) - 5: simplifying again changes nothing: true
+int32 (x + 3) - 5: the operator stays: true
+int32 Neg 3 below zero: with its literals as written it gives the worked value: true
+int32 Neg 3 below zero: with each literal in a node it gives the worked value: true
+int32 Neg 3 below zero: no constant is left outside the slot's range: true
+int32 Neg 3 below zero: simplifying again changes nothing: true
+int32 3 - 5 below zero: with its literals as written it gives the worked value: true
+int32 3 - 5 below zero: with each literal in a node it gives the worked value: true
+int32 3 - 5 below zero: no constant is left outside the slot's range: true
+int32 3 - 5 below zero: simplifying again changes nothing: true
+int32 3 + 4: with its literals as written it gives the worked value: true
+int32 3 + 4: with each literal in a node it gives the worked value: true
+int32 3 + 4: no constant is left outside the slot's range: true
+int32 3 + 4: simplifying again changes nothing: true
+int32 3 + 4: it folds to a leaf: true
+int32 7 / 2: with its literals as written it gives the worked value: true
+int32 7 / 2: with each literal in a node it gives the worked value: true
+int32 7 / 2: no constant is left outside the slot's range: true
+int32 7 / 2: simplifying again changes nothing: true
+int32 7 / 2: the operator stays: true
+uint32 3 - 5: with its literals as written it gives the worked value: true
+uint32 3 - 5: with each literal in a node it gives the worked value: true
+uint32 3 - 5: no constant is left outside the slot's range: true
+uint32 3 - 5: simplifying again changes nothing: true
+uint32 3 - 5: the operator stays: true
+uint32 Neg 3: with its literals as written it gives the worked value: true
+uint32 Neg 3: with each literal in a node it gives the worked value: true
+uint32 Neg 3: no constant is left outside the slot's range: true
+uint32 Neg 3: simplifying again changes nothing: true
+uint32 Neg 3: the operator stays: true
+uint32 0 - x: with its literals as written it gives the worked value: true
+uint32 0 - x: with each literal in a node it gives the worked value: true
+uint32 0 - x: no constant is left outside the slot's range: true
+uint32 0 - x: simplifying again changes nothing: true
+uint32 0 - x: the operator stays: true
+uint32 (x + 3) - 5: with its literals as written it gives the worked value: true
+uint32 (x + 3) - 5: with each literal in a node it gives the worked value: true
+uint32 (x + 3) - 5: no constant is left outside the slot's range: true
+uint32 (x + 3) - 5: simplifying again changes nothing: true
+uint32 (x + 3) - 5: the operator stays: true
+uint32 Neg 3 below zero: with its literals as written it gives the worked value: true
+uint32 Neg 3 below zero: with each literal in a node it gives the worked value: true
+uint32 Neg 3 below zero: no constant is left outside the slot's range: true
+uint32 Neg 3 below zero: simplifying again changes nothing: true
+uint32 3 - 5 below zero: with its literals as written it gives the worked value: true
+uint32 3 - 5 below zero: with each literal in a node it gives the worked value: true
+uint32 3 - 5 below zero: no constant is left outside the slot's range: true
+uint32 3 - 5 below zero: simplifying again changes nothing: true
+uint32 3 + 4: with its literals as written it gives the worked value: true
+uint32 3 + 4: with each literal in a node it gives the worked value: true
+uint32 3 + 4: no constant is left outside the slot's range: true
+uint32 3 + 4: simplifying again changes nothing: true
+uint32 3 + 4: it folds to a leaf: true
+uint32 7 / 2: with its literals as written it gives the worked value: true
+uint32 7 / 2: with each literal in a node it gives the worked value: true
+uint32 7 / 2: no constant is left outside the slot's range: true
+uint32 7 / 2: simplifying again changes nothing: true
+uint32 7 / 2: the operator stays: true
+int64 3 - 5: with its literals as written it gives the worked value: true
+int64 3 - 5: with each literal in a node it gives the worked value: true
+int64 3 - 5: no constant is left outside the slot's range: true
+int64 3 - 5: simplifying again changes nothing: true
+int64 3 - 5: it folds to a leaf: true
+int64 Neg 3: with its literals as written it gives the worked value: true
+int64 Neg 3: with each literal in a node it gives the worked value: true
+int64 Neg 3: no constant is left outside the slot's range: true
+int64 Neg 3: simplifying again changes nothing: true
+int64 Neg 3: it folds to a leaf: true
+int64 0 - x: with its literals as written it gives the worked value: true
+int64 0 - x: with each literal in a node it gives the worked value: true
+int64 0 - x: no constant is left outside the slot's range: true
+int64 0 - x: simplifying again changes nothing: true
+int64 0 - x: the operator stays: true
+int64 (x + 3) - 5: with its literals as written it gives the worked value: true
+int64 (x + 3) - 5: with each literal in a node it gives the worked value: true
+int64 (x + 3) - 5: no constant is left outside the slot's range: true
+int64 (x + 3) - 5: simplifying again changes nothing: true
+int64 (x + 3) - 5: the operator stays: true
+int64 Neg 3 below zero: with its literals as written it gives the worked value: true
+int64 Neg 3 below zero: with each literal in a node it gives the worked value: true
+int64 Neg 3 below zero: no constant is left outside the slot's range: true
+int64 Neg 3 below zero: simplifying again changes nothing: true
+int64 3 - 5 below zero: with its literals as written it gives the worked value: true
+int64 3 - 5 below zero: with each literal in a node it gives the worked value: true
+int64 3 - 5 below zero: no constant is left outside the slot's range: true
+int64 3 - 5 below zero: simplifying again changes nothing: true
+int64 3 + 4: with its literals as written it gives the worked value: true
+int64 3 + 4: with each literal in a node it gives the worked value: true
+int64 3 + 4: no constant is left outside the slot's range: true
+int64 3 + 4: simplifying again changes nothing: true
+int64 3 + 4: it folds to a leaf: true
+int64 7 / 2: with its literals as written it gives the worked value: true
+int64 7 / 2: with each literal in a node it gives the worked value: true
+int64 7 / 2: no constant is left outside the slot's range: true
+int64 7 / 2: simplifying again changes nothing: true
+int64 7 / 2: the operator stays: true
+uint64 3 - 5: with its literals as written it gives the worked value: true
+uint64 3 - 5: with each literal in a node it gives the worked value: true
+uint64 3 - 5: no constant is left outside the slot's range: true
+uint64 3 - 5: simplifying again changes nothing: true
+uint64 3 - 5: the operator stays: true
+uint64 Neg 3: with its literals as written it gives the worked value: true
+uint64 Neg 3: with each literal in a node it gives the worked value: true
+uint64 Neg 3: no constant is left outside the slot's range: true
+uint64 Neg 3: simplifying again changes nothing: true
+uint64 Neg 3: the operator stays: true
+uint64 0 - x: with its literals as written it gives the worked value: true
+uint64 0 - x: with each literal in a node it gives the worked value: true
+uint64 0 - x: no constant is left outside the slot's range: true
+uint64 0 - x: simplifying again changes nothing: true
+uint64 0 - x: the operator stays: true
+uint64 (x + 3) - 5: with its literals as written it gives the worked value: true
+uint64 (x + 3) - 5: with each literal in a node it gives the worked value: true
+uint64 (x + 3) - 5: no constant is left outside the slot's range: true
+uint64 (x + 3) - 5: simplifying again changes nothing: true
+uint64 (x + 3) - 5: the operator stays: true
+uint64 Neg 3 below zero: with its literals as written it gives the worked value: true
+uint64 Neg 3 below zero: with each literal in a node it gives the worked value: true
+uint64 Neg 3 below zero: no constant is left outside the slot's range: true
+uint64 Neg 3 below zero: simplifying again changes nothing: true
+uint64 3 - 5 below zero: with its literals as written it gives the worked value: true
+uint64 3 - 5 below zero: with each literal in a node it gives the worked value: true
+uint64 3 - 5 below zero: no constant is left outside the slot's range: true
+uint64 3 - 5 below zero: simplifying again changes nothing: true
+uint64 3 + 4: with its literals as written it gives the worked value: true
+uint64 3 + 4: with each literal in a node it gives the worked value: true
+uint64 3 + 4: no constant is left outside the slot's range: true
+uint64 3 + 4: simplifying again changes nothing: true
+uint64 3 + 4: it folds to a leaf: true
+uint64 7 / 2: with its literals as written it gives the worked value: true
+uint64 7 / 2: with each literal in a node it gives the worked value: true
+uint64 7 / 2: no constant is left outside the slot's range: true
+uint64 7 / 2: simplifying again changes nothing: true
+uint64 7 / 2: the operator stays: true
+byte 200 + 100: with its literals as written it gives the worked value: true
+byte 200 + 100: with each literal in a node it gives the worked value: true
+byte 200 + 100: no constant is left outside the slot's range: true
+byte 200 + 100: simplifying again changes nothing: true
+byte 200 + 100: the operator stays: true
+uint16 40000 + 30000: with its literals as written it gives the worked value: true
+uint16 40000 + 30000: with each literal in a node it gives the worked value: true
+uint16 40000 + 30000: no constant is left outside the slot's range: true
+uint16 40000 + 30000: simplifying again changes nothing: true
+uint16 40000 + 30000: the operator stays: true
+uint16 256 * 256: with its literals as written it gives the worked value: true
+uint16 256 * 256: with each literal in a node it gives the worked value: true
+uint16 256 * 256: no constant is left outside the slot's range: true
+uint16 256 * 256: simplifying again changes nothing: true
+uint16 256 * 256: the operator stays: true
+uint32 4e9 + 5e8: with its literals as written it gives the worked value: true
+uint32 4e9 + 5e8: with each literal in a node it gives the worked value: true
+uint32 4e9 + 5e8: no constant is left outside the slot's range: true
+uint32 4e9 + 5e8: simplifying again changes nothing: true
+uint32 4e9 + 5e8: the operator stays: true
+uint32 65536 * 65536: with its literals as written it gives the worked value: true
+uint32 65536 * 65536: with each literal in a node it gives the worked value: true
+uint32 65536 * 65536: no constant is left outside the slot's range: true
+uint32 65536 * 65536: simplifying again changes nothing: true
+uint32 65536 * 65536: the operator stays: true
+byte Min of a sum over the range: with its literals as written it gives the worked value: true
+byte Min of a sum over the range: with each literal in a node it gives the worked value: true
+byte Min of a sum over the range: no constant is left outside the slot's range: true
+byte Min of a sum over the range: simplifying again changes nothing: true
+byte Min of a sum over the range: the operator stays: true
+uint16 Min of a sum over the range: with its literals as written it gives the worked value: true
+uint16 Min of a sum over the range: with each literal in a node it gives the worked value: true
+uint16 Min of a sum over the range: no constant is left outside the slot's range: true
+uint16 Min of a sum over the range: simplifying again changes nothing: true
+uint16 Min of a sum over the range: the operator stays: true
+a select on a byte sum of 256: with its literals as written it gives the worked value: true
+a select on a byte sum of 256: with each literal in a node it gives the worked value: true
+a select on a byte sum of 256: no constant is left outside the slot's range: true
+a select on a byte sum of 256: simplifying again changes nothing: true
+a guard on a byte sum of 256: with its literals as written it gives the worked value: true
+a guard on a byte sum of 256: with each literal in a node it gives the worked value: true
+a guard on a byte sum of 256: no constant is left outside the slot's range: true
+a guard on a byte sum of 256: simplifying again changes nothing: true
+byte (x + 200) + 100: with its literals as written it gives the worked value: true
+byte (x + 200) + 100: with each literal in a node it gives the worked value: true
+byte (x + 200) + 100: no constant is left outside the slot's range: true
+byte (x + 200) + 100: simplifying again changes nothing: true
+byte (x + 200) + 100: the operator stays: true
+byte (x * 100) * 3: with its literals as written it gives the worked value: true
+byte (x * 100) * 3: with each literal in a node it gives the worked value: true
+byte (x * 100) * 3: no constant is left outside the slot's range: true
+byte (x * 100) * 3: simplifying again changes nothing: true
+byte (x * 100) * 3: the operator stays: true
+byte fixed index 300: with its literals as written it gives the worked value: true
+byte fixed index 300: with each literal in a node it gives the worked value: true
+byte fixed index 300: no constant is left outside the slot's range: true
+byte fixed index 300: simplifying again changes nothing: true
+uint16 fixed index 300: with its literals as written it gives the worked value: true
+uint16 fixed index 300: with each literal in a node it gives the worked value: true
+uint16 fixed index 300: no constant is left outside the slot's range: true
+uint16 fixed index 300: simplifying again changes nothing: true
+uint16 fixed index 300: it folds to a leaf: true
+int64 2^53 + 1 against 2^53: with its literals as written it gives the worked value: true
+int64 2^53 + 1 against 2^53: with each literal in a node it gives the worked value: true
+int64 2^53 + 1 against 2^53: no constant is left outside the slot's range: true
+int64 2^53 + 1 against 2^53: simplifying again changes nothing: true
+uint64 2^53 + 1 against 2^53: with its literals as written it gives the worked value: true
+uint64 2^53 + 1 against 2^53: with each literal in a node it gives the worked value: true
+uint64 2^53 + 1 against 2^53: no constant is left outside the slot's range: true
+uint64 2^53 + 1 against 2^53: simplifying again changes nothing: true
+a single condition in a byte store: with its literals as written it gives the worked value: true
+a single condition in a byte store: with each literal in a node it gives the worked value: true
+a single condition in a byte store: no constant is left outside the slot's range: true
+a single condition in a byte store: simplifying again changes nothing: true
+a single condition in a byte store: it folds to a leaf: true
+a byte condition in a single store: with its literals as written it gives the worked value: true
+a byte condition in a single store: with each literal in a node it gives the worked value: true
+a byte condition in a single store: no constant is left outside the slot's range: true
+a byte condition in a single store: simplifying again changes nothing: true
+byte 2.5 + 3.5: with its literals as written it gives the worked value: true
+byte 2.5 + 3.5: with each literal in a node it gives the worked value: true
+byte 2.5 + 3.5: no constant is left outside the slot's range: true
+byte 2.5 + 3.5: simplifying again changes nothing: true
+byte 2.5 + 3.5: the operator stays: true
+byte %op 0. - a is a negation: true
+byte %op a + 3. - 5. is a shift: true
+byte %op 3. - 5. at the node's precision: true
+uint16 %op 0. - a is a negation: true
+uint16 %op a + 3. - 5. is a shift: true
+uint16 %op 3. - 5. at the node's precision: true
+int32 %op 0. - a is a negation: true
+int32 %op a + 3. - 5. is a shift: true
+int32 %op 3. - 5. at the node's precision: true
+uint32 %op 0. - a is a negation: true
+uint32 %op a + 3. - 5. is a shift: true
+uint32 %op 3. - 5. at the node's precision: true
+int64 %op 0. - a is a negation: true
+int64 %op a + 3. - 5. is a shift: true
+int64 %op 3. - 5. at the node's precision: true
+uint64 %op 0. - a is a negation: true
+uint64 %op a + 3. - 5. is a shift: true
+uint64 %op 3. - 5. at the node's precision: true
+byte %op 200. + 100. stores the wrapped sum: true
