@@ -95,9 +95,13 @@ let close_scheme_internal_row r ~arg operand =
   ignore (dims res : int list);
   Tensor.Scheme.to_string s
 
-(* No variable of the spec gets solved here: one that did would have the solver sum the axis on the
-   way, leaving the row nothing but a [Dim] (so ["a => 2^3"] does not exercise this). *)
-let literal_concat x = NTDSL.einsum1 " => 2^3" x ()
+(* The row of an operand reduced over a concatenated axis. No variable of the spec gets solved here:
+   one that did would have the solver sum the axis on the way, leaving the row nothing but a [Dim]
+   (so ["2^3 => a"] does not exercise this). *)
+let literal_concat _x =
+  let c = open_leaf "c" in
+  ignore (NTDSL.einsum1 "2^3 => " c () : Tensor.t);
+  c
 
 let () =
   (* A fixed operand solves its reference at its own registration step; the open one is unsolved.

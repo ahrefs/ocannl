@@ -6839,9 +6839,9 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
      does not reach passed silently. Checked last, nothing here fails on a consistent program, so
      nothing is caught. An [Iterator] equals the [Concat] of that one iterator, as in the
      concat-target pass. A [Concat] side comes from an axis that did not close to a plain [Dim]:
-     hand-built equations, or through [Shape] a row of integer components alone (["=> 2^3"]), which
-     no substitution sums, and whose own step does not derive. A symbolic component is refused by
-     [get_proj_equations] (gh-ocannl-1971). *)
+     hand-built equations, or through [Shape] an operand's row of integer components alone (["2^3 =>
+     "]), which no substitution sums, and whose own step does not derive. A symbolic component is
+     refused by [get_proj_equations] (gh-ocannl-1971). *)
   let same_index idx1 idx2 =
     Idx.equal_axis_index idx1 idx2
     ||

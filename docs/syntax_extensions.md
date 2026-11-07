@@ -619,6 +619,14 @@ No other slot names an integer component, so it is skipped: an extraction does n
 
 **Extraction and replacement**: a concatenated axis exactly one of whose components the other side names is a slice: its index is the named component's index shifted by the sizes of the components before it, and the other components are iterated by nothing. `++` and `++^` results are zero-initialized, so a replacement into a fresh result zero-pads it (`a => 2^a^1`); a `%cd` assignment `target =: source ~logic:"a => a^b"` writes the segment and leaves the rest of `target` unchanged. The gradient of an extraction flows into the selected segment only. These forms are executed against oracles in `test/einsum/concat_extraction.ml`.
 
+**What a concatenated axis cannot say**: a concatenated axis is one axis of alternatives, so a position lies in one segment. Three forms therefore have no meaning, and are refused with a shape error when the operation is built, whatever the sizes (gh-ocannl-2017):
+
+- One tensor's axes needing two components of the same concatenation: `p^q => p, q`, `a, b => a^b`, `a, b; c => a^b^c`. No position has both. Name one component per tensor.
+- A result concatenation no component of which an operand names: `a => 2^3`, `c => a^b`, `p^q => r^s`, `2^3 => 2^3`. Nothing says what the segments hold, and integers are segments the spec skips. Name the segment to write part of the axis (`a => 2^a^3`); to repeat the reduced operand in every cell, use a plain axis and size it (`x ++ "a => b" ["b"]`, then `Shape.set_dim b 5`).
+- A `++^` concatenation with its operands out of the order of the segments they fill: `(x, y) ++^ "b; a => a^b"`. Write `(y, x) ++^ "a; b => a^b"`.
+
+The same forms on an operand are defined where every cell has a reading: an operand concatenation no component of which the result names is a reduction over all its cells (`2^3 =>`, `p^q => c`). When compiling, an operand that no segment reaches is refused too: in `a; b => a^b, b` the result's plain `b` rules out the segment `a` that the first operand fills, and in `a^b, b => a` the result and the operand need different segments. The forms are executed in `test/einsum/concat_axis_consumers.ml`.
+
 **N-ary einsum for multiple tensors**: The einsum parser supports any number of RHS tensors separated by semicolons. This enables operations like:
 ```ocaml
 (* Concatenate 3 output-axes-only tensors along the first axis *)
