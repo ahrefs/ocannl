@@ -60,7 +60,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   is anchored to the directory that generates them. And where the premise is "this value happens to
   equal that constant", read the constant from where it is defined rather than restating the
   coincidence: an unchecked default is the one name no call site spells.
-- **The `scans` family is derived, with one hand-listed member.** `env_var_deps` recognises a
+- **The `scans` family is derived, with two hand-listed members.** `env_var_deps` recognises a
   repo-wide scan by its corpus: a `(rule)` whose deps glob the repository recursively, take its
   source tree, or name a root document. `schedule_refusal_scan` is a `(test)` whose corpus is two
   named library sources (`schedule.ml`, `sketch_families.ml`), so no derivation puts it in the
@@ -68,6 +68,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   added to `schedule.ml` passed `tools/fmt-check.sh`'s scans and went red in CI
   (lukstafi/ocannl-staging#1766). A scan reading named library sources is in the same position:
   list it by hand, or widen the derivation to cover that corpus shape.
+  The other member, `benchmarks/runtest-capped_fixture_scan`, has globs that stay inside
+  `benchmarks/`, so `env_var_deps` cannot derive it. It is listed so every push through
+  `tools/fmt-check.sh` checks fixture guards: fixtures are copied from neighbours, and a local
+  corpus is no reason to let their startup races return.
 - **What reaches the scans is wider than what looks like infrastructure.** Two members of
   `@test/operations/scans` census sources across the tree, tests included, so a test-only edit can
   turn them red with no config key, stanza or new file in the diff. `codegen_text_inventory`
@@ -1514,6 +1518,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `CellTimeoutTest.run_cell`) holds the wait that carries the cap until the publication, and
   `interrupt_once_published` replaces an interval timer armed before the spawn. A new capped or
   interrupted fixture whose test reads what it wrote before the kill goes through one of them.
+  `test_every_capped_evidence_fixture_waits_for_publication` guards that structure with synthetic
+  controls, on `@benchmarks/runtest-capped_fixture_scan` and `@test/operations/scans`. Its AST
+  dialect covers literal short timeouts, patched timeout constants, alarms, subsequent assertions
+  or file reads, and same-class forwarding wrappers; its docstring states the boundary, including
+  computed caps and control-flow ordering it does not prove.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`

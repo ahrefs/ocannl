@@ -112,15 +112,20 @@
 ; A scan whose per-test alias this list omits is one `@scans` skips silently. `env_var_deps` checks
 ; that: it derives the family from rules that either glob the repository recursively or declare its
 ; source tree -- which is what makes a scan repo-wide -- rather than from a second copy of this list.
-; `schedule_refusal_scan` is the one member that derivation does not see: its corpus is two named
+; Two members are listed by hand. `schedule_refusal_scan` reads two named
 ; library sources (schedule.ml, sketch_families.ml), not a glob, a source tree or a root document,
 ; and it is a `(test)`. It is listed by hand because an edit to those sources trips it exactly as a
 ; config key trips `test_config_consistency`, and a push whose last step ran `@scans` without it went
 ; red in CI on an unmarked raise (lukstafi/ocannl-staging#1766).
+; `benchmarks/runtest-capped_fixture_scan` has globs that stay inside benchmarks/, so
+; `env_var_deps` cannot derive it. Fixtures are copied from neighbours, so its guards should run
+; on every push through `tools/fmt-check.sh`, even though their corpus is local.
 
 (alias
  (name scans)
  (deps
+  ; Python benchmark fixture guards read a local corpus, so membership is explicit.
+  (alias ../../benchmarks/runtest-capped_fixture_scan)
   (alias runtest-env_spelling_gate)
   (alias runtest-test_config_consistency)
   (alias runtest-digest_completeness)
