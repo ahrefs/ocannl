@@ -26,6 +26,7 @@
 # First the unmutated test runs once, the BASELINE, and must pass: a golden not promoted
 # after a change to the test, or a test red on its own, would read every mutant as caught or
 # stopped early, so a red baseline refuses (exit 2) before anything is mutated (gh-ocannl-1364).
+# Infrastructure refusals (69: DEVICE UNHEALTHY, 75: SLOT REFUSED) retain their status.
 # It costs one more test run per mutation; the report names it (`baseline: <run>`).
 # The alias names ONE test -- @<dir>/runtest-<name>, slow-<name> or train-<name>
 # -- whose golden is <dir>/<name>.expected: a mutated run counts as evidence only
@@ -445,6 +446,8 @@ if ($baseline_stop || $baseline_status) {
     unlink "$scratch/baseline";
     rmdir $scratch;
     exit $baseline_stop if $baseline_stop;
+    # Infrastructure refusals say nothing about the golden or its claims.
+    exit $baseline_status if $baseline_status == 69 || $baseline_status == 75;
     my $remedy = 'promote the golden';
     if (defined $baseline_log) {
         my $baseline_dir = dirname($baseline_log);
