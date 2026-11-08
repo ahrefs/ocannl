@@ -133,6 +133,8 @@ let raw_entries =
         "[scanner-refusal:6f380ec6130d7d24a10cfd39521bdaec] synthesized guide at";
         "[scanner-refusal:2c8e54e9bdb6518252759d38c07973aa] synthesized guide one";
         "[scanner-refusal:c32f3dd124b270ba497cf74ca1bc7e77] synthesized guide of";
+        "[scanner-refusal:87f68dbf665f63c6666dc15bdfe9bc9b] longest-line advice is";
+        "[scanner-refusal:fbbca570493f5d6fe407e047220ac6fa] longest-line advice keeps";
       ] );
     ( "agent_notes_structure.ml",
       [
@@ -350,6 +352,7 @@ let raw_entries =
       ] );
     ( "config_usage_scan.ml",
       [
+        "[scanner-refusal:f748463375c6c3bb8ff68aaf554ccf03] counted config mentions";
         "[scanner-refusal:3b2d3f635929bbf3953b407c49ee91fd] Builtins_cc";
         "[scanner-refusal:7f7db667dc63d73faefa570451cf5f2b] ambiguous command-line value";
         "[scanner-refusal:7a3d690e9ef5541a1c754952c6cf6877] ambiguous bare config";
@@ -360,14 +363,7 @@ let raw_entries =
          docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors";
         "[scanner-refusal:8acb2b9087cf4a7e4112382c5e058e1a] Utils.known_config_keys";
         "[scanner-refusal:085d7b5a19f012e46728008a42120c74] non-config environment exemptions";
-        "[scanner-refusal:5d123838dd21fb3fd4a7529e51b8a74f] non-config environment-mention \
-         occurrence";
         "[scanner-refusal:3252eebc4149f3005426dbd4385702c1] non-config assignment exemptions";
-        "[scanner-refusal:4f2e0da970aa70c6ff3549e9e435561f] non-config assignment exemption";
-        "[scanner-refusal:2908ea301f2b18efa6c95e6ab0302abf] historical invalid-config exemption";
-        "[scanner-refusal:6d76bc1e86b8d630263d70bd7c30e50b] config-mention occurrence counts";
-        "[scanner-refusal:8c14e661ffe9cdf859b5111394d557a8] prefix-free config-mention occurrence";
-        "[scanner-refusal:7c5c4cc0bd161e76fe99e9983d2db70f] command-line value occurrence";
         "[scanner-refusal:1b21aa78af1c8c8d33b55c395590e92a] spelling unregistered keys";
         "[scanner-refusal:e592c4ffcb391edf546553bd50accc7a] runtime value separator";
         "[scanner-refusal:cb1b0916f3d396c6fb100a6cf2ba4a2e] scanner command-line prefix";
@@ -382,6 +378,9 @@ let raw_entries =
         "[scanner-refusal:f39c89d1f700c14082d119fea8a9fb93] tracked historical one-word";
         "[scanner-refusal:6bb17d62436571b3e716c4bba5c0f746] promised non-OCANNL assignment";
         "[scanner-refusal:b8ac42648b6918233995586551724f6f] documented OCANNL assignment";
+        "[scanner-refusal:735bd758b11340c1c2fe69f71e3c2cc5] assignment count drift";
+        "[scanner-refusal:94c80c1e5ccb09d9d100419e38faa03b] removal remedy when";
+        "[scanner-refusal:60932c89821f23ba9cddb3464b18ffbe] reviewed replacement instead";
         "[scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal";
         "[scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is";
         "[scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control";
