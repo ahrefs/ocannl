@@ -64,7 +64,12 @@ type fixture = { comp : Ir.Assignments.comp; y : Tensor.t; w : Tensor.t; nd : Ir
 let fixture name =
   let values = [| -2.; -1.; 3.; 4. |] in
   let x = TDSL.ndarray values ~label:[ name ^ "_x" ] ~output_dims:[ 4 ] () in
-  let w = TDSL.ndarray values ~label:[ name ^ "_w" ] ~output_dims:[ 4 ] () in
+  (* A fresh upload needs a mutable target; literals refuse host writes (gh-ocannl-2021). *)
+  let w =
+    Operation.init ~l:(name ^ "_w") ~prec:Ir.Ops.single ~o:[ 4 ]
+      ~f:(fun i -> values.(i.(0)))
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
   let%op y = relu x in
   let nd =
     Ir.Ndarray.init_array ~debug:(name ^ " upload") Ir.Ops.single ~dims:[| 4 |] ~padding:None

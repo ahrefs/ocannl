@@ -324,9 +324,12 @@ files.
   coverage rule, so for them the proof is all there is. A component fixed at a cell other than a
   fixed read's is omitted at that read site before any guard is built (`Omitted`; all omitted is
   still 13). A host-constant literal (`Tn.known_host_constant`) takes neither the union nor the
-  omission: its per-cell `Constant_fill` components would replay as a guard per cell, and a later
-  `Context.set_values` must reach its readers, so a multi-cell literal read off its own cell stays
-  a buffer read (`recompute_on_read`, `test_one_hot_embedding_lookup` pin what that keeps). Rows: `fixed_component_*` and `declared_virtual_union` in
+  omission: its per-cell `Constant_fill` components would replay as a guard per cell, so a
+  multi-cell literal read off its own cell stays a buffer read. For intent-constant nodes
+  (`Effectively_constant`, such as small `term_init`/`number`), this also keeps permitted seeds
+  visible to readers before the fetch-owning routine is compiled (`recompute_on_read`,
+  `test_one_hot_embedding_lookup` pin what that keeps). Marked `host_constant` ndarray literals
+  instead refuse host writes even before compilation (gh-ocannl-2021). Rows: `fixed_component_*` and `declared_virtual_union` in
   `virtual_rejection_boundary.ml`.
 - **Every guard on a node that skipped the coverage rule needs that proof** (gh-ocannl-1897).
   Equality guards (a repeated symbol `x[i; i]`, an unsolved affine `x[2s]` with its loop kept) and

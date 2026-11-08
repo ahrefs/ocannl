@@ -638,6 +638,9 @@ let set_context_owned tn = tn.context_owned <- true
     Parameterization clears this declaration when the value becomes mutable. *)
 let set_host_constant tn = tn.host_constant <- true
 
+(** Withdraws literal constancy when parameterization makes the value mutable. *)
+let clear_host_constant tn = tn.host_constant <- false
+
 (** Declares that allocation-time zero is a correct value of [tn] (see {!field-zero_valid}): a
     routine may then read it, read-only, before anything writes it, and embedded state the routine
     reads first stays at that zero under [debug_fill_fresh_outputs]. Gradients are marked at

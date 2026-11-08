@@ -2435,8 +2435,8 @@ let check_host_write_lasts ~fn ctx (tn : Tn.t) =
               "Context.%s: node %s is a literal with constant host values (gh-ocannl-2021). A \
                hoisted schedule reads its registered values, so a host write would be silently \
                ignored, regardless of limit_constant_fill_size or whether a routine is compiled. \
-               Build mutable data with Operation.init or Train.host_scalar, or make it a \
-               parameter."
+               Build mutable data with Operation.init or Train.host_scalar, use TDSL.wrap or \
+               TDSL.rebatch for ndarray data, or make it a parameter."
               fn (Tn.debug_name tn))
   | _ -> ()
 

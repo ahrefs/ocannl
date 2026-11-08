@@ -59,9 +59,16 @@ let clean_dir dir =
 let () =
   let values = [| -2.; -1.; 3.; 4. |] in
   let x = TDSL.ndarray values ~label:[ "rfi_x" ] ~output_dims:[ 4 ] () in
-  let z = TDSL.ndarray values ~label:[ "rfi_z" ] ~output_dims:[ 4 ] () in
   let%op y = relu x in
   let comp = Train.forward y in
+  (* Upload fixtures are mutable data, not the forward's literal (gh-ocannl-2021). *)
+  let upload_target name =
+    Operation.init ~l:name ~prec:Ir.Ops.single ~o:[ 4 ]
+      ~f:(fun i -> values.(i.(0)))
+      ~grad_spec:Tensor.Prohibit_grad ()
+  in
+  let x = upload_target "rfi_up" in
+  let z = upload_target "rfi_z" in
   let expected = [| 0.; 0.; 3.; 4. |] in
 
   (* Partial allocation: the pool is already in the backend table and census when the injected
@@ -285,8 +292,8 @@ let () =
     Ir.Ndarray.init_array ~debug:"gh1125 arena" Ir.Ops.single ~dims:[| 4 |] ~padding:None
       ~f:(fun i -> values.(i.(0)) +. shift)
   in
-  let w = TDSL.ndarray values ~label:[ "rfi_w" ] ~output_dims:[ 4 ] () in
-  let v = TDSL.ndarray values ~label:[ "rfi_v" ] ~output_dims:[ 4 ] () in
+  let w = upload_target "rfi_w" in
+  let v = upload_target "rfi_v" in
   let nd_w = arena_nd 20. and nd_v = arena_nd 30. in
   let before_arena = AC.snapshot () in
   let arena_ctx = Context.from_host (Context.cpu ()) x.Tensor.value nd in
