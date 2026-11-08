@@ -930,11 +930,11 @@ let () =
   printf
     "\n\
      == the aliases a codegen change runs on every GPU backend ==\n\
-     This section lists the kernel-execution routes only, not the whole acceptance set. On each\n\
-     GPU backend, also run the applicable golden routes from the earlier sections \"the aliases a\n\
-     codegen change runs\" and \"of those, the aliases re-running a golden only on one backend\".\n\
-     For example, @test/operations/runtest-micrograd_demo_logging is required by those earlier\n\
-     sections but is absent from this kernel-execution list.\n";
+     # This section lists the kernel-execution routes only, not the whole acceptance set. On each\n\
+     # GPU backend, also run the applicable golden routes from the earlier sections \"the aliases a\n\
+     # codegen change runs\" and \"of those, the aliases re-running a golden only on one backend\".\n\
+     # For example, @test/operations/runtest-micrograd_demo_logging is required by those earlier\n\
+     # sections but is absent from this kernel-execution list.\n";
   List.concat_map kernel_exec ~f:(fun (_, _, runs) -> List.map runs ~f:(fun r -> r.Rerun.alias))
   |> List.dedup_and_sort ~compare:String.compare
   |> List.iter ~f:print_endline;
