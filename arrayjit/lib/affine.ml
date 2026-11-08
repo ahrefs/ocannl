@@ -1569,7 +1569,11 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
               in
               match vec_run_frame ~range ~len:w.a_vec_len v with
               | Some (frame, _) -> frame
-              | None -> v
+              | None ->
+                  (* A one-lane tail still shares the body's frame after trailing unit axes have
+                     been folded into the minor coordinate. *)
+                  let outer, minor = split_minor v in
+                  Array.append outer [| minor |]
             else v
           in
           let r_view, w_view =

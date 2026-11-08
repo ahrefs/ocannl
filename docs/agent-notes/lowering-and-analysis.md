@@ -747,4 +747,3 @@ files.
   This does not check declaration order or definite initialization. `local_binder_gate` pins
   refusals and executed in-scope accesses; `local_scope_sibling_reads` protects the
   hoisted-definition ordering boundary.
-

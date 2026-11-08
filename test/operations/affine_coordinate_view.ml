@@ -592,6 +592,17 @@ let () =
     ()
 
 let () =
+  let c = sym () and h = sym () in
+  covered ~name:"one-lane tail shares body's trailing-unit frame" ~dims:[| 9; 1 |]
+    ~read:(plain [| it h; fx 0 |], [ (h, (0, 8)) ])
+    ~writes:
+      [
+        (vector ~length:4 [| aff [ (4, c) ] 0; fx 0 |], [ (c, (0, 1)) ]);
+        (vector ~length:1 [| aff [ (4, c) ] 0; fx 0 |], [ (c, (2, 2)) ]);
+      ]
+    ()
+
+let () =
   (* gh-ocannl-1174: a dynamic read's data-dependent axis is a universal coordinate over its extent
      (the enumeration reads every row), so a gather is covered exactly when the writes fill every
      row at the cells its known coordinates name. *)
