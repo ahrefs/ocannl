@@ -430,15 +430,16 @@ let outcome_of b (os : LL.optimized list) =
     ^ Option.value_map (rejection_code o b.x) ~default:"undecided" ~f:Ir.Tnode.provenance_to_string
 
 (* The ways a node with no materialization to decline to says so. The first three are the
-   consumption-time refusals [declared_uninlinable_rejection] words; the last two are a dead write,
-   which stored no computation, and a store-time refusal meeting the commitment. *)
+   consumption-time refusals [declared_uninlinable_rejection] words; the fourth is a dead write,
+   which stored no computation, and the last two are store-time legality refusals. *)
 let recognized_refusals =
   [
     "13:call-site-index-mismatch";
     "157:guard-fallback-unproven";
     "158:accumulation-without-init";
     "stored a computation to inline";
-    "is already virtual";
+    "10:escaping-index-symbol";
+    "51:affine-not-injective";
   ]
 
 let census = Hashtbl.create (module String)
@@ -517,7 +518,14 @@ let check_program prog =
       match optimize_routines b with
       | exception Utils.User_error msg -> (
           match
-            List.find recognized_refusals ~f:(fun code -> String.is_substring msg ~substring:code)
+            List.find recognized_refusals ~f:(fun code ->
+                (* The placement collision also names the code: require the diagnostic's rejection
+                   phrase so regressing to that collision is a finding. *)
+                let substring =
+                  if String.equal code "stored a computation to inline" then code
+                  else "rejection " ^ code ^ ":"
+                in
+                String.is_substring msg ~substring)
           with
           | Some code -> tally ("refused:" ^ code)
           | None ->

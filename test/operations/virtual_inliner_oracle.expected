@@ -1,11 +1,11 @@
 342732 programs
-comps=1 accumulate declared: inlined-guarded=602 inlined=724 refused:13:call-site-index-mismatch=102 refused:157:guard-fallback-unproven=840 refused:158:accumulation-without-init=212 refused:is already virtual=108 refused:stored a computation to inline=172
+comps=1 accumulate declared: inlined-guarded=602 inlined=724 refused:13:call-site-index-mismatch=102 refused:157:guard-fallback-unproven=840 refused:158:accumulation-without-init=212 refused:51:affine-not-injective=108 refused:stored a computation to inline=172
 comps=1 accumulate inherited: inlined-guarded=602 inlined=724 materialized:36:read-before-write=1208 materialized:37:read-only-input=226
 comps=1 accumulate undecided: inlined-guarded=454 inlined=672 materialized:1:visit-cap=236 materialized:36:read-before-write=1208 materialized:37:read-only-input=172 materialized:51:affine-not-injective=18
-comps=1 reduce declared: inlined-guarded=460 inlined=548 refused:13:call-site-index-mismatch=38 refused:157:guard-fallback-unproven=634 refused:158:accumulation-without-init=164 refused:is already virtual=744 refused:stored a computation to inline=172
+comps=1 reduce declared: inlined-guarded=460 inlined=548 refused:10:escaping-index-symbol=636 refused:13:call-site-index-mismatch=38 refused:157:guard-fallback-unproven=634 refused:158:accumulation-without-init=164 refused:51:affine-not-injective=108 refused:stored a computation to inline=172
 comps=1 reduce inherited: inlined-guarded=294 inlined=446 materialized:36:read-before-write=1208 materialized:37:read-only-input=812
 comps=1 reduce undecided: inlined-guarded=348 inlined=478 materialized:10:escaping-index-symbol=224 materialized:1:visit-cap=312 materialized:36:read-before-write=1208 materialized:37:read-only-input=172 materialized:51:affine-not-injective=18
-comps=1 store declared: inlined-guarded=29036 inlined=46158 refused:13:call-site-index-mismatch=1821 refused:157:guard-fallback-unproven=48941 refused:is already virtual=3787 refused:stored a computation to inline=3255
+comps=1 store declared: inlined-guarded=29036 inlined=46158 refused:13:call-site-index-mismatch=1821 refused:157:guard-fallback-unproven=48941 refused:51:affine-not-injective=3787 refused:stored a computation to inline=3255
 comps=1 store inherited: inlined-guarded=8653 inlined=24999 materialized:37:read-only-input=543 refused:13:call-site-index-mismatch=264 refused:157:guard-fallback-unproven=17111
 comps=1 store undecided: inlined-guarded=28328 inlined=49365 materialized:13:call-site-index-mismatch=1649 materialized:1:visit-cap=19 materialized:36:read-before-write=48168 materialized:37:read-only-input=2565 materialized:51:affine-not-injective=2904
 comps=2 store declared: inlined-guarded=1013 inlined=1238 refused:13:call-site-index-mismatch=104 refused:157:guard-fallback-unproven=675 refused:158:accumulation-without-init=12 refused:stored a computation to inline=268
