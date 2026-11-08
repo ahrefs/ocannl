@@ -46,6 +46,14 @@ driver_run() { # LOG ARGS...; status in driver_rc
   [ "$driver_cancelled" = 0 ] || exit "$driver_cancelled"
 }
 
+report_refused() { # LABEL RC FILE
+  if [ "$2" = 1 ] && grep -qF 'refused blocking wait on a live job' "$3"; then
+    report 0 "$1"
+  else
+    report 1 "$1" "exit $2; $(cat "$3")"
+  fi
+}
+
 write_status_probe() {
   cat >"$TMP/status-probe.sh" <<'PROBE'
 set -u
@@ -130,11 +138,7 @@ status_leg() {
   report "$?" 'only completed jobs reach wait; child status is 37/41/43/143, non-child is 127' "$(cat "$TMP/status")"
   local rc=0
   /bin/bash "$TMP/status-probe.sh" "$HERE/process-group.sh" bare >"$TMP/status-bare" 2>&1 || rc=$?
-  if [ "$rc" = 1 ] && grep -qF 'refused blocking wait on a live job' "$TMP/status-bare"; then
-    report 0 'structural negative control: a bare wait on a live child is refused'
-  else
-    report 1 'structural negative control: a bare wait on a live child is refused' "exit $rc; $(cat "$TMP/status-bare")"
-  fi
+  report_refused 'structural negative control: a bare wait on a live child is refused' "$rc" "$TMP/status-bare"
 }
 harness_leg_run '1: child status survives a returning trap' status_leg
 
@@ -159,30 +163,43 @@ if source.count(old) != 1:
 Path(sys.argv[2]).write_text(source.replace(old, 'wait_jobs=$(jobs -pr; jobs -ps)'))
 MUTANT
   [ "$?" = 0 ] || { harness_abandon 'cannot build unmasked-query mutant'; return; }
-  local mode helper rc
-  for mode in shared unmasked; do
-    helper=$HERE/process-group.sh
-    [ "$mode" != unmasked ] || helper=$TMP/unmasked.sh
-    # Own the group before injecting kill -TERM 0; never signal the harness.
-    # Use this harness's Bash, covering /bin/bash 3.2 and CI's PATH Bash.
-    python3 - "$BASH" "$TMP/status-probe.sh" "$helper" "$TMP/query-$mode.marker" >"$TMP/query-$mode" 2>&1 <<'DRIVER'
+  local mode helper rc shell shell_index=0
+  local shells=("$BASH")
+  [ "$BASH" = /bin/bash ] || shells+=(/bin/bash)
+  for shell in "${shells[@]}"; do
+    shell_index=$((shell_index + 1))
+    for mode in shared unmasked; do
+      helper=$HERE/process-group.sh
+      [ "$mode" != unmasked ] || helper=$TMP/unmasked.sh
+      # Own the group before injecting kill -TERM 0; never signal the harness.
+      # Exercise both this harness's Bash and /bin/bash (3.2 on macOS).
+      python3 - "$shell" "$TMP/status-probe.sh" "$helper" "$TMP/query-$shell_index-$mode.marker" >"$TMP/query-$mode" 2>&1 <<'DRIVER'
+import os
+import signal
 import subprocess
 import sys
+probe = subprocess.Popen([sys.argv[1], sys.argv[2], sys.argv[3], 'query', sys.argv[4]],
+                         start_new_session=True)
 try:
-    result = subprocess.run([sys.argv[1], sys.argv[2], sys.argv[3], 'query', sys.argv[4]],
-                            start_new_session=True, timeout=10)
+    rc = probe.wait(timeout=10)
 except subprocess.TimeoutExpired:
+    # The session belongs to this driver; reclaim the FIFO child as well as
+    # the shell, whose EXIT trap cannot run after a forced termination.
+    try:
+        os.killpg(probe.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    probe.wait()
     raise SystemExit('query probe exceeded its 10-second bound')
-raise SystemExit(result.returncode)
+raise SystemExit(rc)
 DRIVER
-    rc=$?
-    if [ "$mode" = shared ]; then
-      report "$rc" 'masked job-table query survives group TERM and preserves child status' "$(cat "$TMP/query-$mode")"
-    elif [ "$rc" = 1 ] && grep -qF 'refused blocking wait on a live job' "$TMP/query-$mode"; then
-      report 0 'unmasked-query negative control: blocking wait on a live child is refused'
-    else
-      report 1 'unmasked-query negative control: blocking wait on a live child is refused' "exit $rc; $(cat "$TMP/query-$mode")"
-    fi
+      rc=$?
+      if [ "$mode" = shared ]; then
+        report "$rc" 'masked job-table query survives group TERM and preserves child status' "$(cat "$TMP/query-$mode")"
+      else
+        report_refused 'unmasked-query negative control: blocking wait on a live child is refused' "$rc" "$TMP/query-$mode"
+      fi
+    done
   done
 }
 harness_leg_run '1b: group TERM inside the job-table query' query_leg
