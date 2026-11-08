@@ -209,7 +209,7 @@ git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
 out=$TMP/out err=$TMP/err
 affected() { # ARGS... -> $out, $err, $rc
   rc=0
-  (cd "$TMP" && "$repo/tools/affected-tests.sh" "$@") >"$out" 2>"$err" || rc=$?
+  (cd "$TMP" && harness_dune_colour "$repo/tools/affected-tests.sh" "$@") >"$out" 2>"$err" || rc=$?
 }
 trailer() { # -> $verdict: the one `affected: verdict=` line when it is stderr's last, else <none>
   verdict=$(sed -n 's/^affected: verdict=//p' "$err")
@@ -280,7 +280,7 @@ fi
 if harness_leg 'library chain'; then
   affected --files lib/helper.ml
   # shellcheck disable=SC2086 # the list is words by design
-  expect 'a library module reaches tests through a library chain, an executable of another name, a variant, a scan reading it' 0 $reached_by_core
+  expect 'with forced dune colour, a library module reaches tests through a library chain, an executable of another name, a variant, a scan reading it' 0 $reached_by_core
   grep -q 'lib/helper.ml: module Helper of library core (lib)' "$err" ||
     report 1 'the mapping names the owning module and library' "$(cat "$err")"
 fi

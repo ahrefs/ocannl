@@ -207,12 +207,12 @@ build() { # LOG TARGET...
   # escapes there; forced here too, whatever the ambient setting, so a leg's
   # own read of a raw log sees what CI's does (gh-ocannl-1928: two legs that
   # read their log unstripped passed locally and failed in CI).
-  (cd "$proj" && CI=true CLICOLOR_FORCE=1 dune build --root . "$@") >"$log" 2>&1
+  (cd "$proj" && CI=true harness_dune_colour dune build --root . "$@") >"$log" 2>&1
 }
 # A log's lines as the reader sees them: build() forces dune's colour as CI's
 # environment does (CLICOLOR_FORCE), which these legs' own reads of a raw log
 # must look past.
-plain() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" "$1"; }
+plain() { harness_plain "$1"; }
 first_two='Failed dune rules (1), in the order dune reported them:
   t/dune:6-17  (rule) target bad.actual'
 ran_re="^      ran: \(cd _build/default/t && [^ ]*sh -c 'echo noise from the failing test; exit 3'\) > _build/default/t/bad\.actual$"

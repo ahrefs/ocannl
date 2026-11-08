@@ -85,7 +85,7 @@ snapshot() {
 # Whether dune finds ppxlib, asked of the planted project, never of whatever project the caller
 # stands in: a dune already running there holds its build lock, and a failed probe is no absence.
 # Its `_build` is ignored, so the snapshot below does not see it.
-if ! dune installed-libraries --root "$R" >"$TMP/libs" 2>"$TMP/libs.err"; then
+if ! harness_dune_colour dune installed-libraries --root "$R" >"$TMP/libs" 2>"$TMP/libs.err"; then
   report 1 "dune lists the installed libraries" "$(tr '\n' '|' <"$TMP/libs.err")"
   finish
 fi

@@ -161,10 +161,12 @@ resolve_and_test() { # resolve_and_test REPO
     printf 'from B\n' >gen.txt
     printf 'from A\n' >foo.expected
     g add gen.txt foo.expected >/dev/null 2>&1 || exit 1
-    dune build @runtest >/dev/null 2>&1
+    harness_dune_colour dune build @runtest >"$TMP/colour-build.log" 2>&1
+    # A real coloured diff, followed by the same promotion-list oracle.
+    LC_ALL=C grep -q "$(printf '\033')\[" "$TMP/colour-build.log" || exit 1
     # The golden diff must be PENDING; a leg that promotes nothing proves
     # nothing, and would let legs 1 and 2 agree for the wrong reason.
-    [ -n "$(dune promotion list --root . 2>&1)" ] || exit 1
+    [ -n "$(harness_dune_colour dune promotion list --root . 2>&1)" ] || exit 1
   )
 }
 
@@ -235,8 +237,8 @@ else
     printf 'from B\n' >gen.txt
     g add gen.txt >/dev/null 2>&1 || exit 1
     printf 'from A\n' >foo.expected
-    dune build @runtest >/dev/null 2>&1
-    [ -n "$(dune promotion list --root . 2>&1)" ] || exit 1
+    harness_dune_colour dune build @runtest >"$TMP/colour-build.log" 2>&1
+    [ -n "$(harness_dune_colour dune promotion list --root . 2>&1)" ] || exit 1
     [ -n "$(g ls-files --unmerged -- foo.expected)" ] || exit 1
   ) || ok=0
   if [ "$ok" = 0 ]; then
@@ -295,8 +297,8 @@ DUNE
   g add -A >/dev/null 2>&1 || exit 1
   g commit -qm base >/dev/null 2>&1 || exit 1
   g rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 && exit 1 # not mid-merge
-  dune build @runtest >/dev/null 2>&1
-  [ -n "$(dune promotion list --root . 2>&1)" ] || exit 1
+  harness_dune_colour dune build @runtest >"$TMP/colour-build.log" 2>&1
+  [ -n "$(harness_dune_colour dune promotion list --root . 2>&1)" ] || exit 1
 ) || ok=0
 if [ "$ok" = 0 ]; then
   report 1 "leg 4 setup: non-merge repository with a pending promotion"
@@ -355,8 +357,8 @@ else
 DUNE
     : >bar.expected # empty golden: untracked, so absent from the index
     g add dune gen2.txt >/dev/null 2>&1 || exit 1
-    dune build @runtest >/dev/null 2>&1
-    dune promotion list --root . 2>&1 | grep -q '^bar\.expected$' || exit 1
+    harness_dune_colour dune build @runtest >"$TMP/colour-build.log" 2>&1
+    harness_dune_colour dune promotion list --root . 2>&1 | grep -q '^bar\.expected$' || exit 1
     [ -z "$(g ls-files -- bar.expected)" ] || exit 1 # genuinely untracked
   ) || ok=0
   if [ "$ok" = 0 ]; then
