@@ -49,7 +49,8 @@ let () =
       in
       let (_ : int array) = Lazy.force a.value.dims in
       p "forcing frontend dimensions closes the shape" a.shape.Shape.closed;
-      let before = Lazy.force a.value.storage_prec in
+      (* Keep precision unread so only the shape-closure guard can block the link. *)
+      let before = !Tensor.default_value_prec in
       let%op t = a + a in
       Tn.update_prec t.value Ir.Ops.double;
       p "a closed operand keeps its committed precision"

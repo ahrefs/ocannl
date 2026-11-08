@@ -191,4 +191,6 @@ files.
   (gh-ocannl-2026). The precision cell owns the forced-read refusal and the `Specified` no-op.
   `dims_top_down_prec` supplies known layout on open tensor record copies to separate these
   states: ordinary dataless frontend dims close inference when forced, while data-backed leaves
-  already have specified precision. The algorithm is in `docs/precision_inference.md`.
+  already have specified precision. Wrapped leaves are born with forced dims on an open shape;
+  they now reach the `Specified` no-op before the forced-read check, pinned by the read-first
+  `wrap` rows in `data_leaf_top_down_prec`. The algorithm is in `docs/precision_inference.md`.
