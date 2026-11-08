@@ -6712,7 +6712,7 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let (local_defs, value_doc), _ =
           (with_volatile_accumulation_reads ctx) ~scope_ids:[ id.Low_level.scope_id ] volatile_reads
-            (fun () -> (pp_scalar ctx) value_prec value)
+            (fun () -> (pp_scalar ctx) ~log_set_locals value_prec value)
         in
         let value_doc =
           wrap_conversion (B.convert_precision ~from:value_prec ~to_:prec) value_doc
@@ -8856,13 +8856,14 @@ module C_syntax (B : C_syntax_config) = struct
      that is not pure-index, a sibling statement, or any other inner loop stops the peel at that
      level (the recognizer then fails or the localization shrinks to that sub-nest). Two more
      declines, both unchanged by gh-ocannl-693: under [debug_log_from_routines] the per-step [Set]
-     form is kept — a [Local_scope] body renders with [log_set_locals:false], so the rewrite would
-     silence the per-iteration trace; the SIMD renderings bail there for the same reason, and logged
-     narrow runs already differ numerically from plain runs (every tensorized rendering declines
-     under logging). And an update mentioning an RNG conversion is never localized: the conversion
-     picks its result type AND which random bits it consumes from the precision it renders at
-     (gh-ocannl-517's carve-out, [renders_at_store_prec]), so rendering it inside a scope's
-     precision would change the draw, not just move it.
+     form is kept — a [Local_scope] in a [Set]'s value renders its body quietly (only [Set_local]
+     values carry the trace, gh-ocannl-2065), so the rewrite would silence the per-iteration trace;
+     the SIMD renderings bail there for the same reason, and logged narrow runs already differ
+     numerically from plain runs (every tensorized rendering declines under logging). And an update
+     mentioning an RNG conversion is never localized: the conversion picks its result type AND which
+     random bits it consumes from the precision it renders at (gh-ocannl-517's carve-out,
+     [renders_at_store_prec]), so rendering it inside a scope's precision would change the draw, not
+     just move it.
 
      Interaction with [volatile_serial_accumulation] (Metal) has two forms. Localization lifts the
      node [Set] out of exactly the invariant-address loops, so the device-memory RMW predicate is
@@ -8959,7 +8960,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Some doc -> doc
     | None -> (serial_loop ctx loop) ()
 
-  and pp_scalar ctx (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+  and pp_scalar ctx ?(log_set_locals = false) (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       local_def list * PPrint.document =
     (* Returns (local definitions, value expression) *)
     let open PPrint in
@@ -8971,7 +8972,10 @@ module C_syntax (B : C_syntax_config) = struct
         let scope_prec = (scope_prec_of ctx) id in
         let num_typ = string ((scope_decl_type ctx) id) in
         let init_zero =
-          if Low_level.reads_scope_before_set id body then
+          if
+            Low_level.reads_scope_before_set id body
+            || (log_set_locals && Utils.debug_log_from_routines ())
+          then
             let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
             string " = " ^^ string prefix ^^ string "0" ^^ string postfix
           else empty
@@ -8980,7 +8984,10 @@ module C_syntax (B : C_syntax_config) = struct
         (* A [Local_scope] body is a nested sub-computation; conservatively treat it like a loop
            body so a [Zero_out] reached through it is never mistaken for the function-scope
            first-touch that the declaration's [= {0}] covers. *)
-        let body_doc = (pp_ll ctx) ~log_set_locals:false ~in_loop:true body in
+        (* A kept scope logs its assignments, including definitions nested in an assignment
+           value (gh-ocannl-2065). Carry that choice through scalar operands; initializing
+           above also makes the trace's old-value read well-defined. *)
+        let body_doc = (pp_ll ctx) ~log_set_locals ~in_loop:true body in
         let def_doc = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
@@ -9036,7 +9043,7 @@ module C_syntax (B : C_syntax_config) = struct
         let dims = Lazy.force tn.dims in
         let from_prec = Lazy.force tn.storage_prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let dyn_defs, dyn_expr = (pp_scalar ctx) iprec iv in
+        let dyn_defs, dyn_expr = (pp_scalar ctx) ~log_set_locals iprec iv in
         let idx_typ = B.typ_of_prec (Ops.index_prec ()) in
         let dyn_idx_doc = string ("((" ^ idx_typ ^ ")(") ^^ dyn_expr ^^ string "))" in
         let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
@@ -9074,7 +9081,8 @@ module C_syntax (B : C_syntax_config) = struct
         let idx_doc = if affine_needs_parens idx then parens idx_doc else idx_doc in
         let expr = string prefix ^^ idx_doc ^^ string postfix in
         ([], expr)
-    | Ternop _ | Binop _ | Unop _ -> pp_scalar_op ~operand:(pp_scalar ctx) prec vcomp
+    | Ternop _ | Binop _ | Unop _ ->
+        pp_scalar_op ~operand:((pp_scalar ctx) ~log_set_locals) prec vcomp
 
   and debug_float ctx ?guard (prec : Ops.prec) (value : Low_level.scalar_t) :
       PPrint.document * PPrint.document list =
