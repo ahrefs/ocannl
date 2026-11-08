@@ -1218,9 +1218,16 @@ files.
   tile read the unrounded value and diverge from its fallback), and a per-element rounding in the
   register tile would cost a narrow and a widen per column in the k-loop and cannot exist on a GPU.
   So a staged read takes its rounding into the load nest, inside the edge guards, and the tile holds
-  the rounded value, at `t` or an exact widening of it. The rest follows: a hoisted panel has no load
-  nest (`site_hoistable` is false for a rounded operand), the whole-triple and hoisted-grid shapes
-  read in place and are refuted, and `operand_prec` is what the capability checks judge, `m_a` being
+  the rounded value, at `t` or an exact widening of it. Frozen f32 masters under half twins can
+  also round in the host pack (gh-ocannl-2079), before widening into the panel, even when source
+  and panel are both f32. `Schedule.hoisted_read_rounding` is the shared admission rule: only
+  NaN-free f32-to-half is verified; f64 and bf16/fp8 retain their in-kernel packs because the
+  conversions have backend-specific boundaries. Metal's f32-to-half-to-f32 round trip canonicalizes NaN payloads differently
+  from the host: a pure conversion/copy exposes that mismatch, while multiplication hides it. NaN-bearing masters stay in-kernel; their cache identity differs from NaN-free ones.
+  `Host_inits.single_nan_free` memoizes the classification per registered buffer, invalidated on
+  replacement without retaining its weak key. The whole-triple still reads in place and is refuted;
+  hoisted-grid refuses only a rounded operand it cannot hoist. `operand_prec` is what the
+  capability checks judge, `m_a` being
   the master. In lanes `vec_expr` narrows and widens through `vec_bridge`'s own storage bridges into
   a stack array of `t`, so a lane rounds as the serial remainder does; a source computing at another
   width declines, keeping an f64 master one step and serial, and `lane_expr` declines the operator.

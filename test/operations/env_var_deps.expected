@@ -109,7 +109,6 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   test/operations/dune, test autotune_timing_state_restore (Autotune.tune): independent, by its marker
   test/operations/dune, test deferred_hit_compiles (Autotune.tune_deferred, Train.tune_placements): independent, by its marker
   test/operations/dune, test fission_replay_segmentation (Autotune.tune): independent, by its marker
-  test/operations/dune, test frozen_master_pack (Train.tune_placements): independent, by its marker
   test/operations/dune, test gpu_kernel_cache (Autotune.tune): independent, by its marker
   test/operations/dune, test inline_flip_tune (Train.tune_placements): independent, by its marker
   test/operations/dune, test never_zeroed_grad (Autotune.tune): independent, by its marker

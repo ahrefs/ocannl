@@ -18,7 +18,7 @@ edge: a non-dividing pack rounds every cell it loads: true
 f64 master: the pack rounds to fp8 in one step: true
 a rounded and a raw read of one source do not share a tile: true
 Tensorize refuses a rounded operand a pack has not absorbed: true
-a hoisted panel cannot round a read: true
+a hoisted panel refuses an unverified host conversion: true
 tuned: the matmul seeds of a site reading twins round, and some ship a tile: true
 tuned: the shipped routine computes the rounded values: true
 tuned: the search seeds the site through its twins: true

@@ -1528,6 +1528,15 @@ let remap_reads ?(writes = false) ?(rounded = false) ~source ~from_idcs ~tile ~t
    site; Codex P2 on PR #123). *)
 let hoistable_constant tn = Tn.known_host_constant tn && Host_inits.mem tn
 
+(* gh-ocannl-2079: host packing must perform the very conversion the read performs, before any
+   widening into the panel. Admit only NaN-free f32 -> half: NaN payload conversion, f64 -> half and
+   bf16/fp8 have backend-specific boundaries. *)
+let hoisted_read_rounding ~source ~round_prec =
+  match (Lazy.force source.Tn.storage_prec, round_prec) with
+  | Ops.Single_prec _, Ops.Half_prec _ when Host_inits.single_nan_free source ->
+      Some (fun v -> Ops.half_to_single (Ops.single_to_half v))
+  | _ -> None
+
 (* The constancy half of [apply_stage]'s hoisted-source preconditions, named so that what the op
    admits and what the device-memory floor leaves out ([may_replace_by_packed_tile]) are one
    test. *)
@@ -1546,8 +1555,8 @@ let may_replace_by_packed_tile plc tn = Host_inits.mem tn && hoist_known_constan
    host-initialized constant. [src_prog]/[packed_prog] are the per-axis affine index programs:
    [(coefficient, position in sym_extents) array * offset], evaluated over the odometer enumeration
    of the tile and outer loop symbols. *)
-let pack_constant_tile ~debug ~(src_nd : Ndarray.t) ~(src_dims : int array) ~(src_prec : Ops.prec)
-    ~(prec : Ops.prec) ~(packed_dims : int array) ~(sym_extents : int array)
+let pack_constant_tile ~round_value ~debug ~(src_nd : Ndarray.t) ~(src_dims : int array)
+    ~(src_prec : Ops.prec) ~(prec : Ops.prec) ~(packed_dims : int array) ~(sym_extents : int array)
     ~(src_prog : ((int * int) array * int) array) ~(packed_prog : ((int * int) array * int) array) :
     Ndarray.t =
   (* invariant: forced at link time, long after [apply] returned, against the precision and dims the
@@ -1581,21 +1590,22 @@ let pack_constant_tile ~debug ~(src_nd : Ndarray.t) ~(src_dims : int array) ~(sr
     in
     go 0
   in
-  if Ops.equal_prec src_prec prec then
-    Ndarray.apply2
-      {
-        f2 =
-          (fun src dstb ->
-            pack ~set_elem:(fun () ->
-                Stdlib.Bigarray.Genarray.set dstb dst_idx (Stdlib.Bigarray.Genarray.get src src_idx)));
-      }
-      src_nd dst
-  else
-    (* The widening pack (gh-ocannl-575): [tile_prec] only admits exact widenings (narrow float to
-       f32/f64), so the float round-trip is the identity on every element and matches the kernels'
-       own conversions bitwise. *)
-    pack ~set_elem:(fun () ->
-        Ndarray.set_from_float dst dst_idx (Ndarray.get_as_float src_nd src_idx));
+  (if Option.is_none round_value && Ops.equal_prec src_prec prec then
+     Ndarray.apply2
+       {
+         f2 =
+           (fun src dstb ->
+             pack ~set_elem:(fun () ->
+                 Stdlib.Bigarray.Genarray.set dstb dst_idx
+                   (Stdlib.Bigarray.Genarray.get src src_idx)));
+       }
+       src_nd dst
+   else
+     (* An unrounded pack only widens exactly (gh-ocannl-575). A rounded pack first narrows at the
+        read's precision, even when source and panel are both f32. *)
+     let round = Option.value round_value ~default:Fn.id in
+     pack ~set_elem:(fun () ->
+         Ndarray.set_from_float dst dst_idx (round (Ndarray.get_as_float src_nd src_idx))));
   dst
 
 (* "[Tile_mma] is a barrier": the intrinsic's emission contract brackets the block in workgroup
@@ -1729,13 +1739,19 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
         refuse
           ("Schedule.Stage: reads of " ^ Tn.debug_name source
          ^ " under the tile loops round differently, and one tile holds one value per cell"));
-  (* gh-ocannl-1975: a tile of a rounded read holds what the read reads, so the rounding happens
-     once per cell, in the load nest, and the consumers read a plain [Get]: the only form
-     [Tensorize] takes and the only one a [Tile_mma] can honour, its operands being a node and
-     indices. [hoisted] has no load nest to hold it. *)
-  if hoisted && Option.is_some round0 then
-    refuse
-      ("Schedule.Stage: a hoisted panel has no load nest to round " ^ Tn.debug_name source ^ " in");
+  (* A tile holds the read's rounded value. In-kernel staging rounds in the load nest; a hoisted
+     panel must have a host conversion with the same one-step semantics. *)
+  let round_value =
+    if not hoisted then None
+    else
+      Option.map round0 ~f:(fun round_prec ->
+          match hoisted_read_rounding ~source ~round_prec with
+          | Some round -> round
+          | None ->
+              refuse
+                ("Schedule.Stage: no verified host rounding for hoisted source "
+               ^ Tn.debug_name source))
+  in
   (* [tile_prec] admits exact widenings only (gh-ocannl-575): a widening is value-preserving and its
      round-trip is the identity, so the transform stays numerics-preserving no matter which
      precision the consumers compute at. *)
@@ -1983,9 +1999,12 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
                  ("Schedule.Stage: host-init data for " ^ Tn.debug_name source
                 ^ " disappeared before link")
          in
-         pack_constant_tile ~debug ~src_nd ~src_dims ~src_prec:source_prec ~prec ~packed_dims
-           ~sym_extents ~src_prog ~packed_prog));
-    let llc = remap_reads ~source ~from_idcs:idcs0 ~tile ~tile_idcs:packed_read_idcs opt.llc in
+         pack_constant_tile ~round_value ~debug ~src_nd ~src_dims ~src_prec:source_prec ~prec
+           ~packed_dims ~sym_extents ~src_prog ~packed_prog));
+    let llc =
+      remap_reads ~rounded:(Option.is_some round0) ~source ~from_idcs:idcs0 ~tile
+        ~tile_idcs:packed_read_idcs opt.llc
+    in
     (* [pack_constant_tile] zero-fills pad slots of edge tiles, so the packed buffer satisfies the
        [zero_fringe] contract over its whole index space. *)
     { opt with llc; zero_fringe = Set.add opt.zero_fringe tile })

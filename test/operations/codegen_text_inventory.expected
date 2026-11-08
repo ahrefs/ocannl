@@ -175,6 +175,8 @@ test/operations/flip_order_minting.ml [run by @test/operations/runtest-flip_orde
 test/operations/float_literal_forms.ml [run by @test/operations/runtest-float_literal_forms]
     "(float)(" ^ ... ^ ")"
 test/operations/fresh_build_kernel_text.ml [run by @test/operations/runtest-fresh_build_kernel_text; also pins text this scan cannot name: untraced callback]
+test/operations/frozen_master_pack.ml [run by @test/operations/runtest-frozen_master_pack; also pins text this scan cannot name: untraced callback]
+    ... ^ "["
 test/operations/gpu_lane_reduction.ml [run by @test/operations/runtest-gpu_lane_reduction; also pins text this scan cannot name: computed fragment, untraced callback]
     " " ^ ... ^ " = ("
     " " ^ ... ^ " = 0;"
@@ -674,6 +676,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-flip_order_minting
 @test/operations/runtest-float_literal_forms
 @test/operations/runtest-fresh_build_kernel_text
+@test/operations/runtest-frozen_master_pack
 @test/operations/runtest-gpu_lane_reduction
 @test/operations/runtest-gpu_packed_prec
 @test/operations/runtest-gpu_serial_lanes

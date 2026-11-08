@@ -2278,7 +2278,10 @@ let hoistable = Sched.hoistable_constant
 let site_hoistable (site : matmul_site) tn =
   hoistable tn
   && (site.m_row_stride = 1 || not (phys_equal tn site.m_a))
-  && Ir.Ops.equal_prec (operand_prec site tn) (Lazy.force tn.Ir.Tnode.storage_prec)
+  &&
+  let round = if phys_equal tn site.m_a then site.m_a_round else site.m_b_round in
+  Option.for_all round ~f:(fun round_prec ->
+      Option.is_some (Sched.hoisted_read_rounding ~source:tn ~round_prec))
 
 (* Why a strided-row site whose only constant operand is its A packs nothing at link time
    (gh-ocannl-1148). *)
@@ -4531,10 +4534,12 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                          stage. *)
                       Sspace.Refuted
                         (strided_row_in_place_witness site ~what:"the hoisted-grid shape")
-                    else if reads_rounded site then
+                    else if
+                      (Option.is_some site.m_a_round && not (site_hoistable site site.m_a))
+                      || (Option.is_some site.m_b_round && not (site_hoistable site site.m_b))
+                    then
                       Sspace.Refuted
-                        "an operand is read rounded: this shape reads what it does not hoist in \
-                         place, and only a pack's load nest can round it"
+                        "an operand is read rounded in place: this shape omits its pack"
                     else if
                       (* A non-hoistable B is read in place by this shape (its stage is omitted), so
                          only the clean untransposed orientation survives: transposed B statically

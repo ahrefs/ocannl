@@ -19,3 +19,8 @@ val find : Tnode.t -> Ndarray.t Lazy.t option
 
 val mem : Tnode.t -> bool
 (** Whether [tn] has registered host initialization data. *)
+
+val single_nan_free : Tnode.t -> bool
+(** Whether the registered buffer holds NaN-free f32 data. The lazy classification belongs to that
+    registration, so replacing it invalidates the result. Other precisions and absent data return
+    false. *)

@@ -1,10 +1,13 @@
-the frozen master has host-init-backed constant data: true
-the virtual half twin lowers to a rounded master read: true
-frozen rounded inference executes with nonzero output: true
-runtime packing computes the rounded host oracle: true
-tuned frozen inference matches the packed reference: true
-tuned frozen inference matches the packed reference: true
-retimed inference still computes the rounded reference: true
-retimed inference still computes the rounded reference: true
-both arms admit enough timing calls to state a spread: true
-base refuses rounded hoisting: true
+the conversion oracle reads the materialized f32 master on device: true
+frozen_half_panel: no per-invocation master access remains: true
+frozen_half_panel: host packing matches the device conversion bitwise: true
+frozen_wide_panel: no per-invocation master access remains: true
+frozen_wide_panel: host packing matches the device conversion bitwise: true
+inference products have f32-exact partial sums: true
+the frozen twin's serial inference matches the rounded oracle: true
+frozen twins seed hoisted matmul packing: true
+frozen twins seed hoisted grid packing: true
+NaN-free frozen masters admit host rounding: true
+a NaN-bearing master refuses host rounding: true
+ordinary finite values share a cache identity, NaN eligibility separates it: true
+replacement host data refreshes cached NaN eligibility: true
