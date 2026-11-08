@@ -2603,6 +2603,17 @@
   (pps ppx_here ppx_ocannl ppx_sexp_conv)))
 
 (test
+ (name row_glb_transport_executed)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules row_glb_transport_executed)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name row_closure_guess)
  (package neural_nets_lib)
  (deps

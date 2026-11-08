@@ -1,0 +1,30 @@
+u *. c[5|3]
+  two hops   u = 5|3, 15 distinct values for 15 cells
+  use site   u = 5|3, 15 distinct values for 15 cells
+  transitive u = 5|3, 15 distinct values for 15 cells
+u *. c[5|3]: every transport draws the same: true
+u *. c[5|3]: the draw fills its use site: true
+(u + 1) *. c[5|3]
+  two hops   u = 5|1, 5 distinct values for 15 cells
+  use site   u = 5|1, 5 distinct values for 15 cells
+  transitive u = 5|1, 5 distinct values for 15 cells
+(u + 1) *. c[5|3]: every transport draws the same: true
+(u + 1) *. c[5|3]: the draw repeats along its use site (gh-544's close-down): true
+stretch (stretch (stretch u)) *. c[5|3]
+  two hops   u = 5|3, 15 distinct values for 15 cells
+  use site   u = 5|3, 15 distinct values for 15 cells
+  transitive u = 5|3, 15 distinct values for 15 cells
+stretch (stretch (stretch u)) *. c[5|3]: every transport draws the same: true
+stretch (stretch (stretch u)) *. c[5|3]: the draw fills its use site: true
+(u *. 2) *. 2, then a fixed index, batch 4
+  two hops   u = 4|1, 4 distinct values for 16 cells
+  use site   u = 4|1, 4 distinct values for 16 cells
+  transitive u = 4|1, 4 distinct values for 16 cells
+(u *. 2) *. 2, then a fixed index, batch 4: every transport draws the same: true
+(u *. 2) *. 2, then a fixed index, batch 4: the draw repeats along its use site (gh-544's close-down): true
+u *. 2, then a fixed index, batch 4
+  two hops   u = 4|4, 16 distinct values for 16 cells
+  use site   u = 4|4, 16 distinct values for 16 cells
+  transitive u = 4|4, 16 distinct values for 16 cells
+u *. 2, then a fixed index, batch 4: every transport draws the same: true
+u *. 2, then a fixed index, batch 4: the draw fills its use site: true
