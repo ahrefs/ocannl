@@ -69,4 +69,24 @@
 (alias
  (name runtest)
  (deps
-  (alias runtest-test_orchestrate)))
+  (alias runtest-test_orchestrate)
+  (alias runtest-capped_fixture_scan)))
+
+; Source-only fixture guards, also run by the full orchestrator suite above.
+
+(rule
+ ; ocannl-backend: none -- Python source scans; no benchmark or device is run.
+ (alias runtest-capped_fixture_scan)
+ (deps
+  ocannl_config
+  (glob_files *.py)
+  (glob_files test/*.py)
+  (glob_files_rec runners/*.py)
+  (sandbox always preserve_file_kind))
+ (action
+  (run
+   python3
+   %{dep:test_orchestrate.py}
+   CellGroupTest.test_every_published_pid_goes_through_publish_pid
+   CellGroupTest.test_capped_evidence_scan_controls
+   CellGroupTest.test_every_capped_evidence_fixture_waits_for_publication)))

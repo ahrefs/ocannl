@@ -1514,6 +1514,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `CellTimeoutTest.run_cell`) holds the wait that carries the cap until the publication, and
   `interrupt_once_published` replaces an interval timer armed before the spawn. A new capped or
   interrupted fixture whose test reads what it wrote before the kill goes through one of them.
+  `test_every_capped_evidence_fixture_waits_for_publication` guards that structure with synthetic
+  controls, on `@benchmarks/runtest-capped_fixture_scan` and `@test/operations/scans`. Its AST
+  dialect covers literal short timeouts, patched timeout constants, alarms, subsequent assertions
+  or file reads, and same-class forwarding wrappers; its docstring states the boundary, including
+  computed caps and control-flow ordering it does not prove.
 - **`/proc/locks` names a flock's ACQUIRER, not its holders** (gh-ocannl-1107): the lock lives on
   the open file description, so after `take_lock`'s perl exits the line keeps its dead pid (0 from
   inside a pid namespace; some kernels drop the row) while the supervisor, dune and a `setsid`

@@ -143,6 +143,104 @@ def interrupt_once_published(case, published, within=120):
     case.addCleanup(stop.set)
 
 
+def ungated_evidence_fixtures(source, filename="<source>"):
+    """Find published-pid tests with short caps/alarms and subsequent evidence checks.
+
+    This is a structural guard, not a control-flow proof: assertions (including checkpoint/log
+    checks) and file reads after a cap site count as evidence reads. Literal numeric timeout=
+    arguments and mock.patch.object(..., "*_TIMEOUT_S", number) supply caps; setitimer supplies
+    alarms. Embedded driver text also exposes literal timeout= caps and setitimer calls.
+    Helpers may be direct, in embedded child source, or reached through a same-class
+    wrapper. A wrapper forwarding a parameter to cap_counted_from requires that argument at the
+    call site. Arbitrary aliases, computed caps and ordering/dominance are outside this dialect.
+    """
+    tree = ast.parse(source, filename=filename)
+
+    def name(call):
+        return (call.func.id if isinstance(call.func, ast.Name) else
+                call.func.attr if isinstance(call.func, ast.Attribute) else "")
+
+    def calls(node):
+        return [n for n in ast.walk(node) if isinstance(n, ast.Call)]
+
+    def embedded(node):
+        # Adjacent literals are already joined by the parser. f-strings retain their literal
+        # pieces, so a generated driver with an interpolated cap still exposes its helper.
+        return "".join(n.value for n in ast.walk(node)
+                       if isinstance(n, ast.Constant) and isinstance(n.value, str))
+
+    def helper_calls(node):
+        return [c for c in calls(node)
+                if name(c) in ("cap_counted_from", "interrupt_once_published")]
+
+    def guarded(node, methods):
+        if helper_calls(node):
+            return True
+        for call in calls(node):
+            if not (isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == "self"):
+                continue
+            wrapper = methods.get(name(call))
+            if wrapper is None:
+                continue
+            parameters = {a.arg for a in (*wrapper.args.args, *wrapper.args.kwonlyargs)}
+            for helper in helper_calls(wrapper):
+                argument = helper.args[-1] if name(helper) == "interrupt_once_published" else helper.args[0]
+                if isinstance(argument, ast.Name) and argument.id in parameters:
+                    supplied = {kw.arg: kw.value for kw in call.keywords}
+                    positional = [a.arg for a in wrapper.args.args][1:]
+                    supplied.update(zip(positional, call.args))
+                    value = supplied.get(argument.id)
+                    if value is not None and not (isinstance(value, ast.Constant) and value.value is None):
+                        return True
+            if re.search(r"\b(?:cap_counted_from|interrupt_once_published)\s*\(", embedded(wrapper)):
+                return True
+        return bool(re.search(r"\b(?:cap_counted_from|interrupt_once_published)\s*\(", embedded(node)))
+
+    def short(value):
+        return (isinstance(value, ast.Constant) and type(value.value) in (int, float)
+                and 0 < value.value < 10)
+
+    def cap_site(call):
+        if name(call) in ("setitimer", "interrupt_once_published"):
+            return True
+        if any(kw.arg == "timeout" and short(kw.value) for kw in call.keywords):
+            return True
+        return (name(call) == "object" and len(call.args) >= 3
+                and isinstance(call.args[1], ast.Constant)
+                and isinstance(call.args[1].value, str)
+                and call.args[1].value.endswith("_TIMEOUT_S") and short(call.args[2]))
+
+    offenders = []
+    for case in ast.walk(tree):
+        if not isinstance(case, (ast.ClassDef, ast.Module)):
+            continue
+        methods = {m.name: m for m in case.body if isinstance(m, ast.FunctionDef)}
+        for method in methods.values():
+            if not method.name.startswith("test"):
+                continue
+            sites = calls(method)
+            if not any(name(c) == "publish_pid" for c in sites):
+                continue
+            caps = [c.lineno for c in sites if cap_site(c)]
+            for literal in ast.walk(method):
+                if not (isinstance(literal, ast.Constant) and isinstance(literal.value, str)):
+                    continue
+                if (re.search(r"\bsetitimer\s*\(", literal.value)
+                        or any(0 < float(n) < 10 for n in re.findall(
+                            r"\btimeout\s*=\s*(\d+(?:\.\d*)?)", literal.value))):
+                    caps.append(literal.lineno)
+            if not caps:
+                continue
+            reads = [c for c in sites if c.lineno > min(caps)
+                     and (name(c).startswith("assert") or name(c) in ("read_text", "read_bytes"))]
+            if reads and not guarded(method, methods):
+                owner = case.name if isinstance(case, ast.ClassDef) else "<module>"
+                offenders.append(f"{owner}.{method.name}:{method.lineno}")
+    return offenders
+
+
 # Short read-only probes a driver may run directly: they finish in moments and fork no workers of
 # their own, unlike a benchmark cell or a build, which go through `cell_group`.
 READ_ONLY_PROBES = ("git", "ps", "sysctl")
@@ -747,6 +845,63 @@ class CellGroupTest(unittest.TestCase):
             if truncating.search(line)
         ]
         self.assertEqual(offenders, [], "pid files written in place, not via publish_pid")
+
+    def test_capped_evidence_scan_controls(self):
+        fixture = """class FreshTest:
+    def test_fresh(self):
+        cell = publish_pid("path", "pid")
+        result = self.run_cell(cell, timeout=0.5)
+        self.assertEqual(result["checkpoint"], expected)
+"""
+        self.assertEqual(ungated_evidence_fixtures(fixture), ["FreshTest.test_fresh:2"])
+        for cap in ("timeout=2", "timeout=9.9"):
+            self.assertTrue(ungated_evidence_fixtures(fixture.replace("timeout=0.5", cap)))
+        for cap in ("timeout=10", "timeout=60"):
+            self.assertEqual(ungated_evidence_fixtures(fixture.replace("timeout=0.5", cap)), [])
+        fixed = fixture.replace("        result =", "        with cap_counted_from(pidfile):\n            result =")
+        self.assertEqual(ungated_evidence_fixtures(fixed), [])
+        self.assertTrue(ungated_evidence_fixtures("\n".join(
+            line[4:] for line in fixture.splitlines()[1:])))
+        embedded = fixture.replace("result = self.run_cell(cell, timeout=0.5)",
+                                   'driver = "run(cell, timeout=0.5)"')
+        self.assertTrue(ungated_evidence_fixtures(embedded))
+        self.assertEqual(ungated_evidence_fixtures(embedded.replace(
+            '"run(cell, timeout=0.5)"',
+            '"with cap_counted_from(pidfile): run(cell, timeout=0.5)"')), [])
+        alarm = fixture.replace("result = self.run_cell(cell, timeout=0.5)",
+                                "signal.setitimer(signal.ITIMER_REAL, 0.5)\n        result = run(cell)")
+        self.assertTrue(ungated_evidence_fixtures(alarm))
+        self.assertEqual(ungated_evidence_fixtures(alarm.replace(
+            "        signal.setitimer(signal.ITIMER_REAL, 0.5)",
+            "        interrupt_once_published(self, pidfile)")), [])
+        patched = fixture.replace("result = self.run_cell(cell, timeout=0.5)",
+                                  'mock.patch.object(driver, "CELL_TIMEOUT_S", 1)')
+        self.assertTrue(ungated_evidence_fixtures(patched))
+        wrapper = """
+    def run_cell(self, cell, timeout, started=None):
+        with cap_counted_from(started):
+            return run(cell, timeout=timeout)
+"""
+        self.assertTrue(ungated_evidence_fixtures(fixture + wrapper))
+        self.assertEqual(ungated_evidence_fixtures(fixture.replace(
+            "timeout=0.5", "timeout=0.5, started=pidfile") + wrapper), [])
+        self.assertEqual(ungated_evidence_fixtures(fixture.replace(
+            '        self.assertEqual(result["checkpoint"], expected)\n', "")), [])
+
+    def test_every_capped_evidence_fixture_waits_for_publication(self):
+        sources = sorted([*HERE.glob("test*.py"), *HERE.glob("test/test*.py")])
+        self.assertIn(HERE / "test_orchestrate.py", sources)
+        self.assertIn(HERE / "test" / "test_cell_group.py", sources)
+        # Removing the gates from the actual corpus must expose fixtures too, so this census
+        # cannot pass because its predicates stopped reaching the current fixture dialect.
+        mutant_hits = [site for path in sources for site in ungated_evidence_fixtures(
+            path.read_text().replace("cap_counted_from", "ungated_cap")
+            .replace("interrupt_once_published", "setitimer"), str(path))]
+        self.assertTrue(mutant_hits, "removing publication gates must expose real fixtures")
+        offenders = [f"{path.relative_to(HERE)}:{site}" for path in sources
+                     for site in ungated_evidence_fixtures(path.read_text(), str(path))]
+        self.assertEqual(offenders, [], "capped evidence fixtures need cap_counted_from / "
+                         "interrupt_once_published (or a forwarding wrapper)")
 
     def test_every_sleeping_fixture_is_killed_on_cleanup(self):
         # Fixtures here are written by copying a neighbour, and one that parks a sleeper with no
