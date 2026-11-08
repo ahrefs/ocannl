@@ -1446,7 +1446,7 @@ reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 for mode in fail pass short; do
   export PROBE_MODE=$mode
   rc=0
-  CDPATH=$fixture tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+  tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
   case $mode in pass) [ "$rc" = 0 ] ;; short) [ "$rc" = 4 ] ;; *) [ "$rc" = 1 ] ;; esac
   cmp module.ml "$fixture/pristine"
   grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
@@ -1492,5 +1492,43 @@ cp "$fixture/with-byte-guard" tools/mutation-run.sh
 printf 'PASS one-shot perl edits report claims, require a green baseline and distinguish incomplete runs, restore bytes and refuse no-ops or syntax errors before launch\n'
 }
 harness_leg_run_errexit '24: one-shot perl edits and no-op negative controls' leg_24
+
+leg_24a() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
+export PROBE_MODE=fail
+local rc count
+# Unlike $fixture, $fixture/repo has a tools directory: CDPATH resolves tools/..
+# there and cd prints that path. The old root capture then contains TWO lines.
+rc=0
+CDPATH=$fixture/repo tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+[ "$rc" = 1 ]
+grep -q '^FAIL: first: false$' "$fixture/result"
+grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
+cmp module.ml "$fixture/pristine"
+# Recreate only the old dispatch from PR #1838, c5a8b217: keep the shipping
+# runner and its evidence guards, so this twin isolates the CDPATH lookup.
+perl - tools/mutant.sh > tools/mutant-old-root.sh <<'PERL'
+use strict; use warnings;
+local $/;
+my $s = <>;
+my $dispatch = 'exec bash "$(dirname -- "$0")/mutation-run.sh" --perl "$@"';
+my $old = 'root=$(cd "$(dirname "$0")/.." && pwd)' . "\n" .
+          'exec bash "$root/tools/mutation-run.sh" --perl "$@"';
+$s =~ s/\Q$dispatch\E/$old/ or die "wrapper dispatch seam missing\n";
+print $s;
+PERL
+count=$(wc -l < "$fixture/invocations")
+rc=0
+CDPATH=$fixture/repo bash tools/mutant-old-root.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+[ "$rc" = 127 ]
+[ "$(wc -l < "$fixture/invocations")" = "$count" ]
+grep -q 'mutation-run.sh: No such file or directory' "$fixture/result"
+if grep -Eq '^(FAIL: first: false|restored: byte-identical \(cmp\))$' "$fixture/result"; then
+  cat "$fixture/result"; echo 'old CDPATH dispatch retained the oracle'; exit 1
+fi
+cmp module.ml "$fixture/pristine"
+printf 'PASS inherited CDPATH preserves the one-shot oracle; the old root-capturing wrapper loses it before launch\n'
+}
+harness_leg_run_errexit '24a: one-shot dispatch under CDPATH and old-wrapper negative control' leg_24a
 
 finish
