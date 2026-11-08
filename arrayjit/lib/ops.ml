@@ -295,6 +295,18 @@ let integer_range = function
   | Double_prec _ ->
       None
 
+(** Whether [c] is an integral value within [prec]'s exact integer range. Unlike
+    [integer_leaf_holds], this imposes no bound for proving the exactness of a floating-point fold.
+    The 64-bit upper endpoints in [integer_range] round outward and must be excluded. *)
+let integer_value_fits prec c =
+  Float.is_integer c
+  &&
+  match integer_range prec with
+  | None -> false
+  | Some (lo, hi) -> (
+      Float.(lo <= c)
+      && match prec with Int64_prec _ | Uint64_prec _ -> Float.(c < hi) | _ -> Float.(c <= hi))
+
 (** Whether C's integer promotion evaluates an operator at this precision in [int], so that its
     result can leave the precision's range before anything converts it back (gh-ocannl-1884). Every
     backend's dialect promotes as C does, with a 32-bit [int]. *)
@@ -311,11 +323,7 @@ let operator_prec prec = if promoted_to_int prec then int32 else prec
     that double arithmetic computed [c] exactly: rounding is monotonic, so a true result at or past
     the cutoff rounds to at or past it, which also keeps the outward-rounded 64-bit endpoints of
     {!integer_range} out of the question. *)
-let integer_leaf_holds prec c =
-  match integer_range prec with
-  | None -> false
-  | Some (lo, hi) ->
-      Float.is_integer c && Float.(abs c < exact_int_cutoff) && Float.(lo <= c && c <= hi)
+let integer_leaf_holds prec c = Float.(abs c < exact_int_cutoff) && integer_value_fits prec c
 
 (** Whether every value of precision [from] converts to [to_] exactly, so that a conversion through
     [to_] is the identity on it: equal precisions; a float widening (fp8 into any wider float --

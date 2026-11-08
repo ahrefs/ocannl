@@ -889,7 +889,10 @@ module type C_syntax_config = sig
   val typ_of_prec : Ops.prec -> string
 
   val constant_literal : Ops.prec -> float -> string
-  (** The token for a [Constant] converted to the given evaluation precision. *)
+  (** The token for a [Constant] at the given evaluation precision. The renderer still wraps it with
+      [convert_precision ~from:Ops.double ~to_:prec]. The default ignores [prec] and uses
+      [c_float_literal]; a dialect may override it to avoid parsing an integer target through a
+      floating-point type. *)
 
   val supports_f64 : bool
   (** Whether [typ_of_prec] accepts f64 tensor storage. Explicit so capability queries need not
@@ -1556,7 +1559,11 @@ let is_f32_tie c =
     hexadecimal literal takes it away instead of moving it: it is exact by construction, so there is
     no parse-time rounding for either reading to disagree about, and both round [c] itself. It is
     spelled only for ties — a handful of values that were otherwise a coin toss — so the ordinary
-    constant keeps its readable decimal, and C99, CUDA, HIP and MSL all accept the form. *)
+    constant keeps its readable decimal, and C99, CUDA, HIP and MSL all accept the form.
+
+    Integer targets on Metal bypass that f32 parse through [C_syntax_config.constant_literal]: its
+    override truncates on the host and spells the in-range integer result directly. The default hook
+    keeps this floating spelling for the other dialects. *)
 let c_float_literal c =
   if Float.(c = infinity) then "INFINITY"
   else if Float.(c = neg_infinity) then "(-INFINITY)"

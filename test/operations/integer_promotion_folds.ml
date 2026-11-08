@@ -524,6 +524,19 @@ let () =
       case "uint64 literal 2^63 + 2048" ~slot:Ops.uint64 ~inputs:[] ~expect:Value_only
         (fun e -> fst (e.lit e.p 9223372036854777856.))
         (flat 9223372036854777856.);
+      (* A fractional constant truncates from the host value, not from an f32 parse. *)
+      case "int32 literal 16777217.5" ~slot:Ops.int32 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p 16777217.5))
+        (flat 16777217.);
+      case "int32 literal -16777217.5" ~slot:Ops.int32 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p (-16777217.5)))
+        (flat (-16777217.));
+      case "int32 literal 0.99999999" ~slot:Ops.int32 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p 0.99999999))
+        (flat 0.);
+      case "int32 literal -0.99999999" ~slot:Ops.int32 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p (-0.99999999)))
+        (flat 0.);
       (* Past 2^53 a double cannot compute it, in range or not. *)
       case "int64 2^53 + 1 against 2^53" ~slot:Ops.int64 ~inputs:[] ~expect:Value_only
         (fun e ->
