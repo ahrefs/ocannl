@@ -8,7 +8,20 @@
  (name test_utils_linkage)
  (package neural_nets_lib)
  (modules test_utils_linkage)
- (libraries base stdio unix dynlink test_utils arrayjit.verdict)
+ ; These libraries are deliberately named even without calling their values: the probe guards
+ ; their declared dependency closures against a force-linked compiler archive.
+ (libraries
+  base
+  stdio
+  unix
+  dynlink
+  test_utils
+  fresh_process
+  bounded_run
+  stderr_capture
+  gc_witness
+  integer_power_cases
+  arrayjit.verdict)
  (deps ocannl_config)
  (action
   (run
