@@ -147,6 +147,11 @@ files.
   has anything to round; C99, CUDA, HIP and MSL all accept the form, and only ties are spelled that
   way. Guard: `test/operations/float_literal_forms`, bitwise at f64/f32/f16 plus the emitted
   tokens, and its three tie cases fail on Metal without the hex spelling.
+- Metal integer-target `Constant`s beyond 2^24 use `C_syntax_config.constant_literal` to emit
+  in-range integral values as integer tokens (gh-ocannl-2084); floating tokens would round to f32
+  before the cast. The shared 2^53 fold bound stays unchanged. Out-of-range literals retain their
+  prior rendering (gh-ocannl-2085). `integer_promotion_folds` checks folded and bare literals against
+  materialized nodes, including negative values and 64-bit endpoints.
 - Two of those three obligations are not C's: an IR dump wants a floating literal that round-trips
   for the same reasons a kernel does, and the `.ll`/`.cd` printers (`Low_level.to_doc_cstyle`,
   `Low_level.to_doc`) used to render a `Constant` with a bare `%.16g` of their own — so `2.` showed

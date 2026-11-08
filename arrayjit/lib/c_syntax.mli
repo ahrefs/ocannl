@@ -388,6 +388,9 @@ module type C_syntax_config = sig
   val extra_args : string list
   val typ_of_prec : Ops.prec -> string
 
+  val constant_literal : Ops.prec -> float -> string
+  (** The token for a [Constant] converted to the given evaluation precision. *)
+
   val supports_f64 : bool
   (** Whether [typ_of_prec] accepts f64 tensor storage. Explicit so capability queries need not
       deliberately raise through a rendering function. *)
