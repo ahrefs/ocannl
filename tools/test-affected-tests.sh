@@ -1524,14 +1524,14 @@ STUB
   if [ "$rc" = 0 ] && [ "$(cat "$out")" = "tools/test-h.sh --only '^1:'" ] && [ "$rc2" = 2 ]; then
     report 0 'tools/test-run.sh affected --harnesses runs while a run holds the worktree, the alias query refusing'
   else report 1 'tools/test-run.sh affected --harnesses runs while a run holds the worktree, the alias query refusing' "exit $rc, alias query $rc2; $(tr '\n' '|' <"$err")"; fi
-  # The shipping run's verdict is its exit status, so the control's is too.
+  # The mutant must report this stub as UNMAPPED, rather than fail for another reason.
   if FROM='unless (!@ix && $harness_read{$p}) {' TO='unless (0) {' \
        perl -0pe 'BEGIN { $n = 0 } $n += s/\Q$ENV{FROM}\E/$ENV{TO}/g; END { exit($n == 1 ? 0 : 1) }' \
        "$repo/tools/affected-tests.sh" >"$repo/tools/affected-mutant.sh"; then
     rc=0
     (cd "$TMP" && bash "$repo/tools/affected-mutant.sh" --files stubs/s.mli) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" = 3 ]; then report 0 'negative control: the harness reading it is what keeps that stub from UNMAPPED'
-    else report 1 'negative control: the harness reading it is what keeps that stub from UNMAPPED' "mutant exit $rc"; fi
+    if [ "$rc" = 3 ] && grep -qF 'UNMAPPED: stubs/s.mli' "$err"; then report 0 'negative control: the harness reading it is what keeps that stub from UNMAPPED'
+    else report 1 'negative control: the harness reading it is what keeps that stub from UNMAPPED' "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
   else
     report 1 'negative control: the harness reading it is what keeps that stub from UNMAPPED' 'the mutation anchor does not occur exactly once'
   fi
@@ -2028,8 +2028,10 @@ if harness_leg 'probe controls'; then
        "$repo/tools/affected-tests.sh" >"$repo/tools/affected-mutant.sh"; then
     rc=0
     (cd "$TMP" && bash "$repo/tools/affected-mutant.sh" --files p6/p6.txt) >"$out" 2>"$err" || rc=$?
-    if [ "$rc" = 2 ]; then report 0 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run'
-    else report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' "mutant exit $rc"; fi
+    if [ "$rc" = 2 ] && grep -qF 'p6/dune' "$err" &&
+      grep -qE 'unexpected line from dune show aliases:|dune show aliases failed:' "$err"; then
+      report 0 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run'
+    else report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' "mutant exit $rc; $(tr '\n' '|' <"$err")"; fi
   else
     report 1 'negative control: comparing the probe'"'"'s aliases with the worktree'"'"'s is what keeps a probe dune does not load from stopping the run' 'the mutation anchor does not occur exactly once'
   fi

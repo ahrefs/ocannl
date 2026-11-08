@@ -16,6 +16,8 @@
 # owning module, and a usage error each exit 2; the engine is found under a moved DUNE_BUILD_DIR; no
 # arm sees a neighbouring arm's compiled unit; and an `~interface:` snippet is compiled as a
 # signature.
+# Exit-2 expectations also require the refusal reason: leg 14 forces an engine build failure
+# under leg 5 and checks that neither refusal assertion passes.
 #
 # Another dune holding the build directory's lock refuses every build the subject asks for, which
 # is no verdict on any of the above: the subject exits 75 (LOCK HELD) and this harness abandons the
@@ -71,9 +73,11 @@ held_lock_abandons() {
   [ "$rc" != 75 ] || harness_abandon_run \
     "another dune holds the build directory's lock, so the subject checked nothing: run this again when that dune is done ($(grep -m1 -F 'LOCK HELD' "$err"))"
 }
-expect_rc() { # LABEL WANT
-  if [ "$rc" = "$2" ]; then report 0 "$1 exits $2"
-  else report 1 "$1 exits $2" "exited $rc; stdout: $(tr '\n' '|' <"$out") stderr: $(tr '\n' '|' <"$err")"
+expect_rc() { # LABEL WANT [STDERR-REASON]; exit 2 always needs its reason
+  if [ "$rc" = "$2" ] &&
+    { [ "$2" != 2 ] || { [ -n "${3:-}" ] && grep -qF -- "$3" "$err"; }; }; then
+    report 0 "$1 exits $2${3:+: $3}"
+  else report 1 "$1 exits $2${3:+: $3}" "exited $rc; stdout: $(tr '\n' '|' <"$out") stderr: $(tr '\n' '|' <"$err")"
   fi
 }
 has() { # LABEL FIXED-TEXT: stdout carries a line containing the text
@@ -196,10 +200,10 @@ leg5() {
   local empty="$TMP/t/empty_cases.ml" refused="$TMP/t/refused_cases.ml"
   printf '%s\n' 'let cases = [ ("a plain string", "let x = 1") ]' >"$empty"
   run --no-stub "$empty"
-  expect_rc "a table with no snippet" 2
+  expect_rc "a table with no snippet" 2 "$empty: no snippet was checked"
   printf '%s\n' 'let cases = [ ("only project syntax", {ocaml|let%op f x = x|ocaml}) ]' >"$refused"
   run --no-stub "$refused"
-  expect_rc "a table whose every snippet is refused" 2
+  expect_rc "a table whose every snippet is refused" 2 "$refused: no snippet was checked"
 }
 harness_leg_run '5: a table in which nothing was checked exits 2' leg5
 
@@ -207,19 +211,19 @@ leg6() {
   local broken="$TMP/t/broken.mli" malformed="$TMP/t/malformed.mli"
   printf '%s\n' 'val stand_in : no_such_type' >"$broken"
   run --stub "$broken" "$table"
-  expect_rc "a stub that does not compile" 2
+  expect_rc "a stub that does not compile" 2 "the stub $broken does not compile"
   { cat "$stub"; printf '%s\n' '[@@@known_rejection "an ill-typed arm"]'; } >"$malformed"
   run --stub "$malformed" "$table"
-  expect_rc "a known rejection without its error text" 2
+  expect_rc "a known rejection without its error text" 2 "[@@@known_rejection] takes a pair of strings"
   { cat "$stub"; printf '%s\n' '[@@@known_rejection ("an ill-typed arm", "")]'; } >"$malformed"
   run --stub "$malformed" "$table"
-  expect_rc "a known rejection whose error text is empty, which every rejection contains" 2
+  expect_rc "a known rejection whose error text is empty, which every rejection contains" 2 "[@@@known_rejection] takes a pair of strings"
   { cat "$stub"
     printf '%s\n' '[@@@known_rejection ("an ill-typed arm", "but an expression was expected of type")]'
     printf '%s\n' '[@@@known_rejection ("an ill-typed arm", "Unbound module")]'
   } >"$malformed"
   run --stub "$malformed" "$table"
-  expect_rc "a case listed twice, whose second text would go unread" 2
+  expect_rc "a case listed twice, whose second text would go unread" 2 "[@@@known_rejection] lists \"an ill-typed arm\" more than once"
 }
 harness_leg_run '6: a stub that does not compile or lists malformed rejections exits 2' leg6
 
@@ -247,11 +251,11 @@ CASES
 }
 leg7() {
   run
-  expect_rc "no table" 2
+  expect_rc "no table" 2 "no cases module given"
   run --frobnicate "$table"
-  expect_rc "an unknown option" 2
+  expect_rc "an unknown option" 2 "unknown option '--frobnicate'"
   run --stubbed "$table"
-  expect_rc "--stubbed with a table" 2
+  expect_rc "--stubbed with a table" 2 "--stubbed takes no table, stub or -I"
 }
 harness_leg_run '7: usage errors exit 2' leg7
 harness_leg_run '8: the engine is run from the build directory dune was told to use' leg8
@@ -353,10 +357,7 @@ leg11() {
   printf '%s\n' 'val use_padding : bool' \
     '[@@@owning_module "lib/nn_blocks.ml", "open No_such_module_anywhere"]' >"$stub"
   run --stub "$stub" "$ptable"
-  expect_rc "a prelude that does not compile" 2
-  if grep -qF "prelude of $stub does not compile" "$err"; then report 0 "is named as the prelude"
-  else report 1 "is named as the prelude" "stderr: $(head -n 6 "$err" | tr '\n' '|')"
-  fi
+  expect_rc "a prelude that does not compile" 2 "prelude of $stub does not compile"
 }
 harness_leg_run '11: a project-syntax arm no compiler builds is rejected in its owning context #project' leg11
 
@@ -370,20 +371,17 @@ leg12() {
   local stub="$TMP/p/declared.mli"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module 3]' >"$stub"
   run --stub "$stub" "$ptable"
-  expect_rc "an owning module that is not a string" 2
+  expect_rc "an owning module that is not a string" 2 "[@@@owning_module] takes a module"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module ""]' >"$stub"
   run --stub "$stub" "$ptable"
-  expect_rc "an empty owning module" 2
+  expect_rc "an empty owning module" 2 "[@@@owning_module] takes a module"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module "lib/nn_blocks.ml"]' \
     '[@@@owning_module "tensor/tensor.ml"]' >"$stub"
   run --stub "$stub" "$ptable"
-  expect_rc "two owning modules" 2
+  expect_rc "two owning modules" 2 "a second [@@@owning_module]"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module "no/such_module.ml"]' >"$stub"
   run --stub "$stub" "$ptable"
-  expect_rc "an owning module the repository does not have" 2
-  if grep -qF 'no such file' "$err"; then report 0 "is named as missing before any build"
-  else report 1 "is named as missing before any build" "stderr: $(head -n 6 "$err" | tr '\n' '|')"
-  fi
+  expect_rc "an owning module the repository does not have" 2 "[@@@owning_module] \"no/such_module.ml\": no such file"
 
   local itable="$TMP/t/interface_cases.ml"
   cat >"$itable" <<'CASES'
@@ -452,7 +450,7 @@ leg13() {
   # What dune itself said, for the replay below: the subject's stderr but its own line.
   grep -vF 'typecheck-scan-cases:' "$err" >"$TMP/hold/refusal"
 
-  # This harness against the held lock: every leg but this one, then a leg whose every check
+  # This harness against the held lock: every leg before this one, then a leg whose every check
   # expects the subject to fail, which the refusal used to pass.
   local inner="$TMP/hold/inner" only
   for only in '^([1-9]|1[0-2]):' '^5:'; do
@@ -497,8 +495,34 @@ DUNE
   rc=0
   HOLD_REFUSAL=$TMP/hold/refusal HOLD_REAL_DUNE=$real PATH=$TMP/hold/bin:$PATH \
     "$subject" "$ptable" >"$out" 2>"$err" || rc=$?
-  expect_rc "the subject, an owning module's context failing to build for another reason," 2
+  expect_rc "the subject, an owning module's context failing to build for another reason," 2 "context does not build"
 }
 harness_leg_run '13: a build lock another dune holds abandons the run once, with no FAIL per check' leg13
+
+# Force the subject to fail before its engine runs. Exit 2 alone used to pass both leg-5 checks.
+leg14() {
+  local bin="$TMP/build-failure/bin" inner="$TMP/build-failure/inner" real
+  real=$(command -v dune)
+  mkdir -p "$bin"
+  cat >"$bin/dune" <<'DUNE'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  case $arg in tools/scan_case_snippets.exe) echo 'Error: planted engine build failure' >&2; exit 1 ;; esac
+done
+exec "$FAILURE_REAL_DUNE" "$@"
+DUNE
+  chmod +x "$bin/dune"
+  local inner_rc=0
+  FAILURE_REAL_DUNE=$real PATH=$bin:$PATH \
+    "${BASH:-bash}" "$script_dir/test-typecheck-scan-cases.sh" --only '^5:' >"$inner" 2>&1 || inner_rc=$?
+  if [ "$inner_rc" = 1 ] && [ "$(grep -c '^FAIL  ' "$inner")" = 2 ] &&
+    ! grep -q '^PASS  ' "$inner" && grep -qF 'the engine did not build' "$inner"; then
+    report 0 "an engine build failure fails both refusal checks, with no false PASS"
+  else
+    report 1 "an engine build failure fails both refusal checks, with no false PASS" \
+      "exited $inner_rc: $(head -n 12 "$inner" | tr '\n' '|')"
+  fi
+}
+harness_leg_run '14: an engine build failure cannot satisfy a fixture refusal' leg14
 
 finish

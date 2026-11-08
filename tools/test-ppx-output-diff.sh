@@ -100,9 +100,11 @@ run() { # run the subject on the planted repository; status in $rc, stdout in $o
   rc=0
   TMPDIR="$TMP/subject-tmp" "$subject" -C "$R" "$@" >"$out" 2>"$err" || rc=$?
 }
-expect_rc() { # LABEL WANT
-  if [ "$rc" = "$2" ]; then report 0 "$1 exits $2"
-  else report 1 "$1 exits $2" "exited $rc; stdout: $(head -n 12 "$out" | tr '\n' '|') stderr: $(tail -n 12 "$err" | tr '\n' '|')"
+expect_rc() { # LABEL WANT [STDERR-REASON]; exit 2 always needs its reason
+  if [ "$rc" = "$2" ] &&
+    { [ "$2" != 2 ] || { [ -n "${3:-}" ] && grep -qF -- "$3" "$err"; }; }; then
+    report 0 "$1 exits $2${3:+: $3}"
+  else report 1 "$1 exits $2${3:+: $3}" "exited $rc; stdout: $(head -n 12 "$out" | tr '\n' '|') stderr: $(tail -n 12 "$err" | tr '\n' '|')"
   fi
 }
 has() { # LABEL FILE FIXED-LINE: FILE carries exactly this line
@@ -180,14 +182,10 @@ harness_leg_run '3: a revision against itself exits 0 over a counted corpus, wha
 leg4() {
   fixture || return
   run base planted -- plain
-  expect_rc "a scope with no preprocessed file" 2
-  has "is refused as nothing to compare" "$err" \
-    "ppx-output-diff: base ($(git -C "$R" rev-parse base)): no preprocessed file in scope (1 director(ies) listed): nothing to compare"
+  expect_rc "a scope with no preprocessed file" 2 "ppx-output-diff: base ($(git -C "$R" rev-parse base)): no preprocessed file in scope (1 director(ies) listed): nothing to compare"
   untouched
   run base broken
-  expect_rc "a revision whose ppx does not build" 2
-  has "is refused as a failed build" "$err" \
-    "ppx-output-diff: head: dune failed to build the renderings of $(git -C "$R" rev-parse broken)"
+  expect_rc "a revision whose ppx does not build" 2 "ppx-output-diff: head: dune failed to build the renderings of $(git -C "$R" rev-parse broken)"
   if [ -s "$out" ]; then report 1 "and prints no diff" "$(head -n 8 "$out" | tr '\n' '|')"
   else report 0 "and prints no diff"
   fi
@@ -208,7 +206,7 @@ leg5() {
   fi
   untouched
   run --out "$TMP/kept" base planted
-  expect_rc "an --out directory that exists" 2
+  expect_rc "an --out directory that exists" 2 "ppx-output-diff: --out $TMP/kept already exists"
   untouched
 }
 harness_leg_run '5: --out keeps both rendered trees and the diff, and never reuses a directory' leg5
@@ -216,14 +214,13 @@ harness_leg_run '5: --out keeps both rendered trees and the diff, and never reus
 leg6() {
   fixture || return
   run base
-  expect_rc "one revision" 2
+  expect_rc "one revision" 2 "ppx-output-diff: usage: tools/ppx-output-diff.sh"
   run base no-such-revision
-  expect_rc "an unresolvable revision" 2
-  has "names it" "$err" 'ppx-output-diff: HEAD does not resolve to a commit: no-such-revision'
+  expect_rc "an unresolvable revision" 2 'ppx-output-diff: HEAD does not resolve to a commit: no-such-revision'
   run base planted -- ../outside
-  expect_rc "a scope outside the repository" 2
+  expect_rc "a scope outside the repository" 2 "ppx-output-diff: a scope DIR is a repository-relative path: '../outside'"
   run -j 0 base planted
-  expect_rc "a zero job count" 2
+  expect_rc "a zero job count" 2 "ppx-output-diff: -j needs a positive count, not '0'"
   untouched
 }
 harness_leg_run '6: usage errors exit 2 before anything is built' leg6
