@@ -7269,12 +7269,11 @@ let validate_scope_bodies (llc : t) : unit =
     local without one renders as an identifier nothing declares, which reaches the user as the
     backend compiler's "undeclared identifier" on a kernel they did not write.
 
-    Existence only, deliberately: whether the binder is emitted AHEAD of the access is codegen's own
-    business ([C_syntax.pp_local_defs] has the emission order in hand), and a rule replicating it
-    here was written and reverted for its false rejections (gh-ocannl-584 review rounds 4-5). So a
-    binder in a block the access cannot see still passes; what this names is the local nothing
-    declares at all, the shape a pass leaves when it removes or renames a binder and misses a reader
-    (the hoist's stale remap inside scope bodies, gh-ocannl-1895).
+    [Declare_local] and scan-carried locals additionally require lexical visibility
+    (gh-ocannl-2050). Their enclosing statement blocks must enclose the access too. [Local_scope]
+    definitions retain the existence-only rule: [C_syntax.pp_local_defs] orders those definitions,
+    and replicating that order here caused false rejections (gh-ocannl-584). This is a visibility
+    check, not a definite-initialization or declaration-order check.
 
     Both sides follow the rendering: a projection's discarded operand is skipped, since
     [C_syntax.pp_scalar] never renders it -- a read there strands nothing, and a binder there
@@ -7290,36 +7289,64 @@ let unbound_local_violation (llc : t) : string option =
       gated_operands = Visit;
       dead_loops = Visit;
       local_scopes = Visit;
-      guards = Ignore;
-      scan_implicit = Skip;
+      guards = Track;
+      (* Initializer definitions live in the synthetic Set_local's block. *)
+      scan_implicit = Visit;
     }
   in
   let bound = Hash_set.create (module Scope_id) in
+  let hoisted = Hash_set.create (module Scope_id) in
+  let lexical = Hashtbl.create (module Scope_id) in
+  let blocks = ref [] and next_block = ref 0 in
+  (* A statement containing scalar definitions renders them in a block shared by its operands. Do
+     not give each Local_scope its own block: sibling definitions can read each other's locals. *)
+  let opens_block = function
+    | For_loop _ | Scan_loop _ | If _ | Tile_mma _ | Set _ | Set_local _ | Set_dynamic _
+    | Set_from_vec _ ->
+        true
+    | Seq _ | Declare_local _ | Noop | Comment _ | Staged_compilation _ | Zero_out _
+    | Workgroup_barrier ->
+        false
+  in
+  (* Body declarations cannot be seen by a scan's inits or a guard's condition. The fold's body
+     depth distinguishes those positions; block ancestry distinguishes sibling constructs.
+     Scan-carried declarations are outside its loop body, and therefore visible to that body. *)
+  let position ctx = (!blocks, List.length ctx.loops + List.length ctx.guards) in
+  let bind ctx id =
+    Hash_set.add bound id;
+    Hashtbl.add_multi lexical ~key:id ~data:(position ctx)
+  in
   (* Innermost first: the scopes whose bodies enclose the walk's position. *)
   let enclosing = ref [] in
   let accesses = ref [] in
-  let access what id = accesses := (what, id, List.hd !enclosing) :: !accesses in
-  let statement _ () = function
+  let access ctx what id = accesses := (what, id, List.hd !enclosing, position ctx) :: !accesses in
+  let statement ctx () stmt =
+    if opens_block stmt then (
+      Int.incr next_block;
+      blocks := !next_block :: !blocks);
+    match stmt with
     | Declare_local { id; _ } ->
-        Hash_set.add bound id;
+        bind ctx id;
         Continue ()
     | Scan_loop { carried; _ } ->
         List.iter carried ~f:(fun c ->
-            Hash_set.add bound c.prev;
-            Hash_set.add bound c.next);
+            bind ctx c.prev;
+            bind ctx c.next);
         Continue ()
     | Set_local (id, _) ->
-        access "Set_local" id;
+        access ctx "Set_local" id;
         Continue ()
     | _ -> Continue ()
   in
-  let scalar _ () = function
+  let after_statement _ () stmt = if opens_block stmt then blocks := List.tl_exn !blocks in
+  let scalar ctx () = function
     | Local_scope { id; mint; _ } ->
         Hash_set.add bound id;
+        Hash_set.add hoisted id;
         enclosing := (id, mint) :: !enclosing;
         Continue ()
     | Get_local id ->
-        access "Get_local" id;
+        access ctx "Get_local" id;
         Continue ()
     | _ -> Continue ()
   in
@@ -7327,11 +7354,20 @@ let unbound_local_violation (llc : t) : string option =
     | Local_scope _ -> enclosing := List.tl_exn !enclosing
     | _ -> ()
   in
-  fold ~policy ~hooks:{ (hooks ()) with statement; scalar; after_scalar } ~init:() llc;
+  fold ~policy
+    ~hooks:{ (hooks ()) with statement; after_statement; scalar; after_scalar }
+    ~init:() llc;
   let local id = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
   (* In program order, so the message names the first stranded access. *)
-  List.find_map (List.rev !accesses) ~f:(fun (what, id, scope) ->
-      if Hash_set.mem bound id then None
+  List.find_map (List.rev !accesses) ~f:(fun (what, id, scope, (access_blocks, access_depth)) ->
+      let visible =
+        Hash_set.mem hoisted id
+        || List.exists (Hashtbl.find_multi lexical id)
+             ~f:(fun (declaration_blocks, declaration_depth) ->
+               declaration_depth <= access_depth
+               && List.is_suffix access_blocks ~suffix:declaration_blocks ~equal:Int.equal)
+      in
+      if visible then None
       else
         let where =
           match scope with
@@ -7346,12 +7382,18 @@ let unbound_local_violation (llc : t) : string option =
           |> Option.value_map ~default:"" ~f:(fun b ->
               "; " ^ local b ^ " shares its integer but names another node, a different local")
         in
-        Some
-          ("a " ^ what ^ " of " ^ local id ^ " " ^ where
-         ^ " names a local the routine never binds: no Local_scope, Declare_local or Scan_loop \
-            carried pair declares it" ^ near
-         ^ " -- the pass that removed or renamed its binder left this access behind \
-            (gh-ocannl-1973)"))
+        if Hash_set.mem bound id then
+          Some
+            ("a " ^ what ^ " of " ^ local id ^ " " ^ where
+           ^ " accesses a Declare_local or Scan_loop carried local outside its lexical scope \
+              (gh-ocannl-2050)")
+        else
+          Some
+            ("a " ^ what ^ " of " ^ local id ^ " " ^ where
+           ^ " names a local the routine never binds: no Local_scope, Declare_local or Scan_loop \
+              carried pair declares it" ^ near
+           ^ " -- the pass that removed or renamed its binder left this access behind \
+              (gh-ocannl-1973)"))
 
 let validate_local_binders ?(site = "Low_level.validate_local_binders") (llc : t) : unit =
   Option.iter (unbound_local_violation llc) ~f:(fun msg -> invalid_arg (site ^ ": " ^ msg))

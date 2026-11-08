@@ -733,3 +733,14 @@ files.
   are not removed: the virtualizer drops the unread chain, and `test/operations/prefix_scan` pins
   that no `[n, n]` node is written after the rewrite.
 
+
+- The local-binder exit gate checks lexical visibility for `Declare_local` and scan-carried
+  locals (gh-ocannl-2050), using block ancestry in `Access_fold`, with whole scope-id identity.
+  A declaration inside a loop or guard cannot serve a read or write after it or in a sibling
+  block. Scalar definitions share their containing statement's block; `Local_scope` binders
+  themselves retain existence-only checking because `C_syntax.pp_local_defs` orders them.
+  This does not check declaration order or definite initialization. The hand-built
+  `local_binder_gate` cases reproduced undeclared-identifier failures in cc for escaped explicit
+  declarations; escaped scan state was already refused by `validate_scan_loops`, and now receives
+  the binder gate's diagnostic first. In-scope and enclosing-block accesses execute beside the
+  refusals; `local_scope_sibling_reads` protects the hoisted-definition ordering boundary.

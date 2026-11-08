@@ -6,9 +6,9 @@
    so the refusal is [C_syntax.compile_proc]'s own; beside it runs the same routine with its binder,
    executed, since the gate is only worth having if it leaves valid code alone.
 
-   The gate asks whether a binder exists, never whether it is emitted ahead of the read: the rows of
-   [local_scope_sibling_reads] are the routines an ordering rule would refuse, and they compile
-   under it. *)
+   The gate checks lexical visibility for explicit declarations and scan state, but does not order
+   hoisted Local_scope definitions: the rows of [local_scope_sibling_reads] are the routines an
+   ordering rule would refuse, and they compile under it. *)
 
 open Base
 open Ll_test
@@ -40,7 +40,7 @@ let local (id : LL.scope_id) label = "v" ^ Int.to_string id.scope_id ^ "_" ^ lab
    stderr: it spells scope ids, which are minted from a process-wide counter. *)
 let refused name ~raw ~naming scoped =
   let o = optimize_scoped ~name ~raw scoped in
-  let msg = match link ~name o with _ -> "compiled" | exception exn -> Exn.to_string exn in
+  let msg = match link ~name o with _ -> "compiled" | exception Invalid_argument msg -> msg in
   Stdio.eprintf "%s (not part of the golden): %s\n%!" name msg;
   p
     (name ^ ": the compile gate refuses it")
@@ -118,7 +118,79 @@ let row_discarded () =
     (set out cell (add (arg1 (c 7.) (scope ~orig_indices:cell ~id:ia a (c 5.))) (LL.Get_local ia)))
     ~naming:[ "Get_local of " ^ local ia (name ^ "_a"); "at statement level" ]
 
+(* gh-ocannl-2050: explicit declarations and scan state cannot escape their blocks. *)
+let row_lexical name block =
+  let a, _, out, raw = program name in
+  let ia = LL.get_scope a in
+  let define = LL.unflat_lines [ declare_local ia; LL.Set_local (ia, c 5.) ] in
+  let read = set out cell (LL.Get_local ia) in
+  refused name ~raw
+    (seq (block define) read)
+    ~naming:[ "Get_local of " ^ local ia (name ^ "_a"); "outside its lexical scope" ];
+  refused (name ^ "_write") ~raw
+    (seq (block define) (LL.Set_local (ia, c 9.)))
+    ~naming:[ "Set_local of " ^ local ia (name ^ "_a"); "outside its lexical scope" ];
+  refused (name ^ "_sibling") ~raw
+    (seq (block define) (block read))
+    ~naming:[ "Get_local of " ^ local ia (name ^ "_a"); "outside its lexical scope" ];
+  accepted (name ^ "_inside") ~raw ~out ~want:5. (block (seq define read));
+  accepted (name ^ "_outer") ~raw ~out ~want:5. (seq define (block read))
+
+let row_guard_condition () =
+  let name = "lbg_guard_condition" in
+  let a, _, out, raw = program name in
+  let ia = LL.get_scope a in
+  refused name ~raw
+    (if_ (LL.Get_local ia)
+       (LL.unflat_lines
+          [ declare_local ia; LL.Set_local (ia, c 5.); set out cell (LL.Get_local ia) ]))
+    ~naming:[ "Get_local of " ^ local ia (name ^ "_a"); "outside its lexical scope" ]
+
+let row_scan_escape () =
+  let name = "lbg_scan_escape" in
+  let a, _, out, raw = program name in
+  let cr = carry ~init:(c 5.) a in
+  let body = set_next cr (add (prev cr) (c 1.)) in
+  let block body = scan ~upto:1 (sym ()) ~carried:[ cr ] body in
+  refused name ~raw
+    (seq (block body) (set out cell (prev cr)))
+    ~naming:[ "Get_local of " ^ local cr.prev (name ^ "_a"); "outside its lexical scope" ];
+  accepted (name ^ "_inside") ~raw ~out ~want:7. (block (seq body (set out cell (next cr))))
+
+let row_scan_init () =
+  let name = "lbg_scan_init" in
+  let a, b, _, raw = program name in
+  let ib = LL.get_scope b in
+  let cr = carry ~init:(LL.Get_local ib) a in
+  let body = LL.unflat_lines [ declare_local ib; LL.Set_local (ib, c 5.); set_next cr (prev cr) ] in
+  refused name ~raw
+    (scan ~upto:1 (sym ()) ~carried:[ cr ] body)
+    ~naming:[ "Get_local of " ^ local ib (name ^ "_b"); "outside its lexical scope" ]
+
+let row_scan_init_local () =
+  let name = "lbg_scan_init_local" in
+  let a, b, out, raw = program name in
+  let ib = LL.get_scope b and init_id = LL.get_scope b in
+  let init =
+    scope_of init_id
+      (LL.unflat_lines
+         [ declare_local ib; LL.Set_local (ib, c 5.); LL.Set_local (init_id, LL.Get_local ib) ])
+  in
+  let cr = carry ~init a in
+  let block body = scan ~upto:1 (sym ()) ~carried:[ cr ] body in
+  refused name ~raw
+    (block (set_next cr (LL.Get_local ib)))
+    ~naming:[ "Get_local of " ^ local ib (name ^ "_b"); "outside its lexical scope" ];
+  accepted (name ^ "_inside") ~raw ~out ~want:7.
+    (block (seq (set_next cr (add (prev cr) (c 1.))) (set out cell (next cr))))
+
 let () =
+  case "loop_escape" (fun () -> row_lexical "lbg_loop_escape" (loop ~upto:1 (sym ())));
+  case "guard_escape" (fun () -> row_lexical "lbg_guard_escape" (if_ (c 1.)));
+  case "guard_condition" row_guard_condition;
+  case "scan_escape" row_scan_escape;
+  case "scan_init" row_scan_init;
+  case "scan_init_local" row_scan_init_local;
   case "statement" row_statement;
   case "body" row_body;
   case "other_node" row_other_node;
