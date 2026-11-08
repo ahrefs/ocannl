@@ -379,12 +379,17 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         # Read the workflow revision GitHub is executing, not expected_sha's
-        # older copy. This covers local actions in every job, before setup.
+        # older copy. Derive every job's actions, but report only in this run
+        # job before its setup; parallel sibling jobs can still hit GitHub's
+        # bare local-action error. This job's annotation explains the floor.
         workflow=$(gh api "repos/$GITHUB_REPOSITORY/contents/.github/workflows/ci.yml?ref=$GITHUB_WORKFLOW_SHA" \
           -H 'Accept: application/vnd.github.raw+json')
-        local_actions=$(printf '%s\n' "$workflow" | sed -nE 's@^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+(\./[^[:space:]#]+).*@\2@p' | sort -u)
+        local_actions=$(printf '%s\n' "$workflow" | sed -nE "s@^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+[\"']?(\./[^[:space:]#\"']+).*@\2@p" | sort -u)
+        if [ -z "$local_actions" ]; then
+          echo "::error::No local actions derived from ci.yml@$GITHUB_WORKFLOW_SHA; refusing an unreadable dispatch workflow"
+          exit 1
+        fi
         while IFS= read -r action; do
-          [ -n "$action" ] || continue
           if [ ! -f "$action/action.yml" ] && [ ! -f "$action/action.yaml" ]; then
             echo "::error::Dispatch checkout lacks local action $action. See docs/agent-notes/build-and-test.md#how-far-back-a-dispatch-reaches; use the branch-dispatch route: push the intended commit to its own branch and dispatch ci.yml on that branch without expected_sha."
             exit 1

@@ -4690,10 +4690,16 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `uses:` of a reusable workflow is loaded from the dispatched ref, not the checkout, and bounds
   nothing.
 - `Verify dispatch commit` fetches `ci.yml` at `GITHUB_WORKFLOW_SHA`, derives its local
-  `uses: ./...` paths, and refuses a checkout missing either `action.yml` or `action.yaml`
-  for any of them, naming the branch-dispatch route below (gh-ocannl-1936). This tests manifest
+  `uses: ./...` paths (optionally quoted), and refuses a checkout with neither `action.yml`
+  nor `action.yaml` for any of them, naming the branch-dispatch route below (gh-ocannl-1936).
+  The derivation covers every job's actions, but only the `run` job reports the refusal before
+  its setup. On an ordinary dispatch, parallel sibling jobs can still fail at their own local
+  action steps with GitHub's bare error; the `run` job's annotation explains the floor. The
+  recorded 5.3.x drill skipped those siblings. An empty derivation is refused too. This tests manifest
   presence, not interface compatibility or the later `run:` steps' script/flag bounds.
-  `ci_matrix.sh` executes the guard against each absent action and new actions in another job;
+  `ci_matrix.sh` takes the expected actions from the floor record below (held equal to the
+  workflows by `workflow_job_timeouts`), then executes the guard against each absent action,
+  quoted paths and new actions in another job;
   a mutant dropping one action from the derivation must fail that same check.
 - The record below lists each local action the dispatched workflows' steps use, oldest first, as
   `` - `<action path>`: YYYY-MM-DD, lukstafi/ocannl-staging#N. `` -- the master merge that first
