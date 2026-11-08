@@ -4352,9 +4352,10 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
 - `test/operations/ci_matrix.sh` extracts and executes the three "List opam's missing
   system dependencies" run blocks from `ci.yml`, `gh-pages-api.yml` and `ci-env.yml`
   against stub `opam`/`dpkg-query` (gh-ocannl-1917). It compares the bodies apart from
-  the resolver's test/doc flags and checks installed, held, provided (including versioned
+  the resolver's test/doc flags, derived from each workflow's system-dependency install
+  (`-d`/`-t` and their long forms), and checks installed, held, provided (including versioned
   aliases), removed and missing packages, empty sets, and command failures with partial output.
-  A copy-drift mutant and a removed-provides-loop mutant exercise both oracles. The named-step
+  Install/resolver flag mismatch, copy-drift and removed-provides-loop mutants exercise the oracles. The named-step
   and literal-block helpers read the workflows' current indentation and `run: |` dialect;
   another scalar style needs reader support. All three steps need explicit `shell: bash`:
   GitHub's implicit `bash -e` masks a failed `dpkg-query` behind successful `awk`, emits a

@@ -20,6 +20,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -479,24 +481,48 @@ def workflow_script(step):
 
 # Hermetic depext listing (gh-ocannl-1917): run all three actual scripts, with
 # only their external commands in PATH, no opam switch or Debian host required.
-import shutil
+def install_mode_flags(step):
+    # The inline opam install dialect used by these system-dependency steps.
+    # ci-env installs both system and opam dependencies in this one command;
+    # the other workflows use a separate --depext-only install.
+    commands = re.findall(r'^ +run: (opam install .+)$', step, re.M)
+    assert len(commands) == 1, 'system-dependency install needs one inline opam install'
+    args = shlex.split(commands[0])[2:]
+    assert args.count('.') == 1 and '--deps-only' in args, commands[0]
+    selected = set()
+    for arg in args:
+        if arg in ('.', '--deps-only', '--depext-only', '--yes'):
+            continue
+        if arg in ('--with-test', '--with-doc'):
+            selected.add(arg)
+        else:
+            assert re.fullmatch(r'-[ydt]+', arg), 'unsupported install option: ' + arg
+            selected.update({'d': '--with-doc', 't': '--with-test'}[char]
+                            for char in arg[1:] if char != 'y')
+    return [flag for flag in ('--with-test', '--with-doc') if flag in selected]
+
 
 workflows = root / '.github/workflows'
-depext_steps = {
-    name: workflow_step((workflows / name).read_text(),
-                        "List opam's missing system dependencies" + suffix)
-    for name, suffix in (('ci.yml', ' (Linux)'), ('gh-pages-api.yml', ''), ('ci-env.yml', ''))
-}
+depext_steps, depext_flags, install_steps = {}, {}, {}
+for name, suffix, install in (
+    ('ci.yml', ' (Linux)', 'Install system dependencies'),
+    ('gh-pages-api.yml', '', 'Install system dependencies'),
+    ('ci-env.yml', '', 'Install dependencies from the opam files'),
+):
+    text = (workflows / name).read_text()
+    depext_steps[name] = workflow_step(text, "List opam's missing system dependencies" + suffix)
+    install_steps[name] = workflow_step(text, install)
+    depext_flags[name] = install_mode_flags(install_steps[name])
 depext_scripts = {name: workflow_script(step) for name, step in depext_steps.items()}
 
 
-def identical_depexts(scripts):
+def identical_depexts(scripts, flags=depext_flags):
     # Only the resolver's flags may differ; don't erase a flag elsewhere in
     # the script (or any other text) and accidentally hide semantic drift.
     normalized = []
     for name, script in scripts.items():
-        flags = ' --with-test --with-doc' if name == 'ci.yml' else ' --with-test'
-        pattern = r'^(    --resolve="\$request")' + re.escape(flags) + r'(\); then)$'
+        options = ''.join(' ' + flag for flag in flags[name])
+        pattern = r'^(    --resolve="\$request")' + re.escape(options) + r'(\); then)$'
         body, count = re.subn(pattern, r'\1\2', script, flags=re.M)
         assert count == 1, name + ': resolver flags moved or changed'
         normalized.append(body)
@@ -504,6 +530,18 @@ def identical_depexts(scripts):
 
 
 identical_depexts(depext_scripts)
+# A changed install must change the resolver too, even if all resolver bodies
+# still agree. Derive this mutant's expectation from its changed command.
+mutant_flags = dict(depext_flags)
+mutant_flags['ci-env.yml'] = install_mode_flags(install_steps['ci-env.yml'].replace(
+    'opam install ', 'opam install --with-doc ', 1))
+try:
+    identical_depexts(depext_scripts, mutant_flags)
+except AssertionError as error:
+    assert 'ci-env.yml: resolver flags' in str(error), error
+    print('PASS rejected mutant: install enables docs but resolver does not')
+else:
+    raise AssertionError('accepted install/resolver flag mismatch')
 mutant = dict(depext_scripts)
 mutant['ci-env.yml'] += 'echo drift\n'
 try:
@@ -556,9 +594,8 @@ def depext_case(name, script, case, listed, present, expected, opam_rc=0, dpkg_r
     assert run.returncode == 0, context
     assert output.read_text() == expected, context + ' output=' + repr(output.read_text())
     invocations = [json.loads(line) for line in calls.read_text().splitlines()]
-    flags = ['--with-test', '--with-doc'] if name == 'ci.yml' else ['--with-test']
     want = [['opam', '--cli=2.1', 'list', '--safe', '--color=never', '--external',
-             '--resolve=alpha,beta'] + flags]
+             '--resolve=alpha,beta'] + depext_flags[name]]
     if not opam_rc:
         want.append(['dpkg-query', '-W', '-f=${db:Status-Abbrev}|${Package}|${Provides}\\n'])
     assert invocations == want, context + ' calls=' + repr(invocations)
@@ -608,16 +645,11 @@ print('PASS the three depext scripts are identical apart from their resolver fla
 # The main shards' weigh step prints what `tools/ci-shard.sh merge-weights` reads back from a run's
 # log (gh-ocannl-1464): run the step's own script for each shard over a fixture trace, beside the
 # real tools, and merge the two jobs' output into the WEIGHTS block it stands for.
-weigh_step = source.split("    - name: Weigh the shard's units\n", 1)
-assert len(weigh_step) == 2, 'the main shards have no weigh step'
-weigh_step = weigh_step[1].split('\n    - ', 1)[0]
+weigh_step = workflow_step(source, "Weigh the shard's units")
 assert "      if: ${{ matrix.shard && matrix.suite == 'main' && !cancelled() }}\n" in weigh_step, \
     'the weigh step does not run on every main shard that built'
 assert '      shell: bash\n' in weigh_step and '        SHARD: ${{ matrix.shard }}\n' in weigh_step
-# The block scalar ends at the first line indented less than its body (the next step's comments).
-weigh_script = '\n'.join(line[8:] for line in itertools.takewhile(
-    lambda line: line.startswith('        ') or not line.strip(),
-    weigh_step.split('      run: |\n', 1)[1].splitlines()))
+weigh_script = workflow_script(weigh_step)
 
 
 def csexp(x):
@@ -663,11 +695,9 @@ print("PASS the weigh step's output, merged over one run's main shards, is the W
 # Run the exact bash guard from the workflow with git reporting a fixture HEAD
 # and gh answering the compare API for the one direction the guard must ask:
 # is the intended commit behind the dispatched head?
-# The step ends at the next line indented as a step or a comment between steps.
-step = re.split(r'\n    (?=\S)', source.split('    - name: Verify dispatch commit\n', 1)[1], maxsplit=1)[0]
+step = workflow_step(source, 'Verify dispatch commit')
 assert "if: github.event_name == 'workflow_dispatch'" in step
-script = step.split('      run: |\n', 1)[1]
-script = '\n'.join(line[8:] for line in script.splitlines())
+script = workflow_script(step)
 sha, other = 'a' * 40, 'b' * 40
 master, branch = 'refs/heads/master', 'refs/heads/topic'
 scratch = sys.argv[2]
@@ -782,13 +812,9 @@ print('PASS the triage job waits for every other job')
 # The disk watchdog (gh-ocannl-1771): run the start step's and the report step's own scripts with
 # stub df/sudo/pkill and the polls shortened, the free space moved under the watchdog's feet.
 def step_script(name):
-    step = source.split('    - name: %s\n' % name, 1)
-    assert len(step) == 2, 'step missing: ' + name
-    step = step[1].split('\n    - ', 1)[0]
+    step = workflow_step(source, name)
     assert "runner.os == 'Linux'" in step.split('      run: |\n', 1)[0], name + ' is not Linux-only'
-    return '\n'.join(line[8:] for line in itertools.takewhile(
-        lambda line: line.startswith('        ') or not line.strip(),
-        step.split('      run: |\n', 1)[1].splitlines()))
+    return workflow_script(step)
 
 
 watch_start = step_script('Free disk space and start the disk watchdog (Linux)')
