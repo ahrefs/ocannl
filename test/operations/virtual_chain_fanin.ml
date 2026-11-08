@@ -46,7 +46,10 @@
    [flip_order_minting]'s.
 
    Phase 8 commutes tied setters: the producer keeps its maximum per-read charge, while consumers
-   see the conservative union of tied contributors, with executed materialized parity. *)
+   see the conservative union of tied contributors, with executed materialized parity.
+
+   Phase 9 crosses inherited and local setter ties in one lineage: each read costs the widest
+   inherited/local pair (4), while a downstream fresh input sees their full union (6). *)
 
 open Base
 open Ll_test
@@ -1992,6 +1995,86 @@ let phase8 () =
   check "unequal" [ [ 0 ]; [ 1 ]; [ 2; 3 ] ] ~first_id:8540 ~cap:3;
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
+(* === Phase 9: local x inherited tied maxima commute === *)
+
+let phase9 () =
+  let saved_cap = LL.virtualize_settings.max_inline_fanin in
+  LL.virtualize_settings.max_inline_fanin <- 4;
+  List.iteri [ false; true ] ~f:(fun inherited_order reverse_inherited ->
+      List.iteri [ false; true ] ~f:(fun local_order reverse_local ->
+          let cells = 2 * dim in
+          let first_id = 8600 + (20 * ((2 * inherited_order) + local_order)) in
+          let mk = node_factory ~first_id ~dims:[| cells |] () in
+          let ws = Array.init 6 ~f:(fun k -> mk (Printf.sprintf "iw%d" k)) in
+          Array.iter ws ~f:materialize;
+          let x = mk "ix" and downstream = mk "idown" and out = mk "iout" in
+          materialize out;
+          let sum idx ks =
+            List.fold ks ~init:(Ll_test.c 0.) ~f:(fun acc k -> add acc (get ws.(k) [| idx |]))
+          in
+          (* a,b,c,d,e,f are ws[0..5]. Each group writes disjoint slices, so either order executes
+             the same program. Updates retain the inherited component through x. *)
+          let setters ~update groups ~reverse =
+            let stmts =
+              List.mapi groups ~f:(fun part ks ->
+                  let i = sym () in
+                  let idx = aff [ (1, i) ] (part * dim) in
+                  let rhs = sum idx ks in
+                  let rhs = if update then add (get x [| idx |]) rhs else rhs in
+                  loop_n i dim (set x [| idx |] rhs))
+            in
+            List.reduce_exn ~f:seq (if reverse then List.rev stmts else stmts)
+          in
+          let inherited_groups = [ [ 0; 1 ]; [ 3; 4 ] ] in
+          let local_groups = [ [ 0; 1 ]; [ 0; 2 ] ] in
+          let llc_a = setters ~update:false inherited_groups ~reverse:reverse_inherited in
+          let i = sym () and j = sym () in
+          let llc_b =
+            List.reduce_exn ~f:seq
+              [
+                setters ~update:true local_groups ~reverse:reverse_local;
+                loop_n i cells
+                  (set downstream [| iter i |] (add (get x [| iter i |]) (sum (iter i) [ 5 ])));
+                loop_n j cells (set out [| iter j |] (get downstream [| iter j |]));
+              ]
+          in
+          let order reversed = if reversed then "reverse" else "forward" in
+          let label = order reverse_inherited ^ "_" ^ order reverse_local in
+          let name = "vcf_inherited_ties_" ^ label in
+          let ctx = LL.empty_optimize_ctx () in
+          let o_a = optimize_in ctx ~name:(name ^ "_a") llc_a in
+          let o_b = optimize_in ctx ~name:(name ^ "_b") llc_b in
+          let prefix = "inherited/local ties, " ^ label ^ ": " in
+          p (prefix ^ "routine A commits the inherited setters virtual") (known_virtual o_a x);
+          let fanin tn = (Hashtbl.find_exn o_b.traced_store tn).LL.inline_fanin in
+          p (prefix ^ "own charge is 4, virtual at the cap") (fanin x = 4 && known_virtual o_b x);
+          p
+            (prefix ^ "downstream charge is 6, materialized by the cap")
+            (fanin downstream = 6
+            && Option.equal Tn.equal_provenance (rejection_code o_b downstream)
+                 (Some Tn.Inline_fanin_cap));
+          (* Each leaf varies with its identity and every iteration index, away from zero. *)
+          let vals w = Array.init cells ~f:(fun i -> Float.of_int ((100 * (w + 1)) + i + 1)) in
+          let seed = Array.to_list (Array.mapi ws ~f:(fun w tn -> (tn, vals w))) in
+          let expected =
+            [
+              Array.init cells ~f:(fun i ->
+                  let part = i / dim in
+                  List.fold
+                    (List.nth_exn inherited_groups part @ List.nth_exn local_groups part @ [ 5 ])
+                    ~init:0.
+                    ~f:(fun acc w -> acc +. (vals w).(i)));
+            ]
+          in
+          let got = execute ~name:(name ^ "_b") o_b ~seed ~read:[ out ] in
+          let mat_name = name ^ "_mat" in
+          let mat = optimize ~materialized:[ x; downstream ] ~name:mat_name (seq llc_a llc_b) in
+          let got_mat = execute ~name:mat_name mat ~seed ~read:[ out ] in
+          p
+            (prefix ^ "execution matches the reference and materialized reading")
+            (same got expected && same got got_mat)));
+  LL.virtualize_settings.max_inline_fanin <- saved_cap
+
 let () =
   phase1 ();
   phase1b ();
@@ -2005,4 +2088,5 @@ let () =
   phase5 ();
   phase6 ();
   phase7 ();
-  phase8 ()
+  phase8 ();
+  phase9 ()

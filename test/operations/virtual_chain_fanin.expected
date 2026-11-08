@@ -184,3 +184,19 @@ setter maxima, unequal reverse: producer keeps the maximum per-read charge: true
 setter maxima, unequal reverse: consumer crosses the fan-in cap: true
 setter maxima, unequal reverse: execution matches the reference and materialized reading: true
 setter maxima, unequal reverse: producer stays virtual at its own per-read cap: true
+inherited/local ties, forward_forward: routine A commits the inherited setters virtual: true
+inherited/local ties, forward_forward: own charge is 4, virtual at the cap: true
+inherited/local ties, forward_forward: downstream charge is 6, materialized by the cap: true
+inherited/local ties, forward_forward: execution matches the reference and materialized reading: true
+inherited/local ties, forward_reverse: routine A commits the inherited setters virtual: true
+inherited/local ties, forward_reverse: own charge is 4, virtual at the cap: true
+inherited/local ties, forward_reverse: downstream charge is 6, materialized by the cap: true
+inherited/local ties, forward_reverse: execution matches the reference and materialized reading: true
+inherited/local ties, reverse_forward: routine A commits the inherited setters virtual: true
+inherited/local ties, reverse_forward: own charge is 4, virtual at the cap: true
+inherited/local ties, reverse_forward: downstream charge is 6, materialized by the cap: true
+inherited/local ties, reverse_forward: execution matches the reference and materialized reading: true
+inherited/local ties, reverse_reverse: routine A commits the inherited setters virtual: true
+inherited/local ties, reverse_reverse: own charge is 4, virtual at the cap: true
+inherited/local ties, reverse_reverse: downstream charge is 6, materialized by the cap: true
+inherited/local ties, reverse_reverse: execution matches the reference and materialized reading: true
