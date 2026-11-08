@@ -234,6 +234,31 @@ DUNE
 }
 family_digest_case family-digest shipping
 report $? 'the default digest reports extension siblings from the recorded worktree'
+legacy_family_digest_case() { # recorded run; caller has a matching family of its own
+  local saved_run=$1 caller mode out
+  caller=$(project legacy-digest-caller "$HERE/test-run.sh" "$HERE/promote.sh") || return 1
+  cat >>"$caller/dune" <<'DUNE'
+(rule (alias runtest)
+ (action (diff "kernel.%{read:extension.txt}.expected" kernel.actual)))
+DUNE
+  printf original >"$caller/kernel.c.expected"
+  printf original >"$caller/kernel.caller.expected"
+  cp "$saved_run/exit" "$caller/recorded-exit" || return 1
+  mv "$saved_run/wt" "$saved_run/wt.original" || return 1
+  for mode in absent empty; do
+    [ "$mode" != empty ] || : >"$saved_run/wt"
+    # Keep the harness shell: Bash 3.2 accepts cd -- "", newer Bash may refuse it.
+    out=$(cd "$caller" && "$BASH" tools/test-run.sh status "$saved_run") || return 1
+    printf '%s\n' "$out" >"$caller/$mode.log"
+    grep -Fx 'golden families: family report unavailable (worktree missing)' "$caller/$mode.log" >/dev/null || return 1
+    if grep -E '^golden families: kernel|^  (NOT )?pending promotion:' "$caller/$mode.log" >/dev/null; then return 1; fi
+    grep -q '^verdict: FAIL' "$caller/$mode.log" || return 1
+    cmp -s "$saved_run/exit" "$caller/recorded-exit" || return 1
+  done
+  mv "$saved_run/wt.original" "$saved_run/wt"
+}
+legacy_family_digest_case "$recorded"
+report $? 'absent and empty legacy worktrees leave caller families uninspected and the recorded verdict unchanged'
 if family_digest_case family-digest-cut cut; then
   report 1 'negative control: cutting the digest report loses the sibling oracle'
 elif [ -s "$TMP/family-digest-cut/record.log" ] && grep -q '^verdict: FAIL' "$TMP/family-digest-cut/record.log"; then
