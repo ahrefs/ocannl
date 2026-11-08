@@ -2834,10 +2834,22 @@ let%diagn_sexp set_log_level level =
      level
       : int)]
 
+(* A disabled routine-log request is diagnosed once per process, including repeated restores. *)
+let routine_log_level_noticed = Atomic.make false
+
+let routine_log_level_notice =
+  "OCANNL notice: debug_log_from_routines=true is currently inactive: routine logging requires \
+   log_level > 1. Set log_level=2 in the configuration, or raise it at runtime with \
+   Utils.set_log_level / Train.CDSL.enable_all_debugs. This notice is printed once."
+
 let restore_settings () =
   set_log_level original_log_level;
   settings.debug_log_from_routines <-
     get_global_flag ~default:false ~arg_name:"debug_log_from_routines";
+  if
+    settings.debug_log_from_routines && settings.log_level <= 1
+    && Atomic.compare_and_set routine_log_level_noticed false true
+  then Stdio.eprintf "%s\n%!" routine_log_level_notice;
   settings.output_debug_files_in_build_directory <-
     get_global_flag ~default:false ~arg_name:"output_debug_files_in_build_directory";
   settings.fixed_state_for_init <-

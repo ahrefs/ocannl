@@ -1,0 +1,5 @@
+requested=true level=0 restore=false: succeeds with empty stdout and the expected stderr notice count: true
+requested=true level=1 restore=false: succeeds with empty stdout and the expected stderr notice count: true
+requested=true level=1 restore=true: succeeds with empty stdout and the expected stderr notice count: true
+requested=true level=2 restore=false: succeeds with empty stdout and the expected stderr notice count: true
+requested=false level=0 restore=false: succeeds with empty stdout and the expected stderr notice count: true
