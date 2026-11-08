@@ -11,6 +11,10 @@
 
    {v cd test/config && dune exec --root ../.. ./tools/host_caps.exe v}
 
+   In the release profile, build with [dune build --release ./tools/host_caps.exe] from the
+   repository root, then run [../../_build/default/tools/host_caps.exe] from [test/config]:
+   [--release] implies [--root .], so it cannot be combined with [--root ../..].
+
    [--save=PATH] also writes the line to PATH (CI saves it for the failure listing that ends a red
    job, tools/ci-failed-rules.sh).
 

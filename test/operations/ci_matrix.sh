@@ -636,6 +636,80 @@ rejects_order(env_release_order, env_source.replace(package, package +
     'a second dev command after a release command', 'dune after package build lacks --release')
 
 
+# Host evidence (gh-ocannl-1948): pin the shared save path, program and
+# configuration directory, not identical command text. ci-env builds from the
+# root then runs from test/config: --release and --root cannot be combined.
+# The shared readers cover direct commands in the current inline/literal dialect.
+def host_evidence(main, clean):
+    name = "Print the host's capabilities"
+    probe = workflow_step(main, name)
+    clean_probe = workflow_step(clean, name)
+    main_args = shlex.split(workflow_script(probe))
+    target, = [arg for arg in main_args if arg.endswith('/host_caps.exe')]
+    save, = [arg for arg in main_args if arg.startswith('--save=')]
+    assert '      working-directory: test/config\n' in probe, 'matrix probe configuration moved'
+    assert '      continue-on-error: true\n' in probe and \
+           '      continue-on-error: true\n' in clean_probe, 'host probe error policy drifted'
+    commands = dune_commands(clean_probe)
+    assert commands and all(command[:2] == ['dune', 'build'] and '--release' in command and
+                            '--root' not in command and target in command for command in commands), \
+        'host probe needs a release build from the root'
+    assert 'working-directory:' not in clean_probe, 'host build must start from the root'
+    launches = [shlex.split(line) for line in workflow_script(clean_probe).splitlines()
+                if line.lstrip().startswith('cd ')]
+    launch, = launches
+    assert launch[:3] == ['cd', 'test/config', '&&'], 'host probe configuration directory drifted'
+    executable = '../../_build/default/' + target.removeprefix('./')
+    assert launch[3:] == ['opam', 'exec', '--', executable, save], 'host launch or save path drifted'
+    listing = workflow_step(main, 'List the failed dune rules')
+    clean_listing = workflow_step(clean, 'List the failed dune rules')
+    assert clean_listing.replace('failure() }}', "failure() && runner.os != 'Windows' }}").rstrip() == listing.rstrip(), \
+        'host failure listings drifted'
+    for step in workflow_steps(clean, 'clean-room'):
+        if dune_commands(step):
+            assert '      shell: bash\n' in step, 'dune log pipe needs bash pipefail'
+            for line in workflow_script(step).splitlines():
+                if dune_commands('      run: ' + line.strip() + '\n'):
+                    assert '2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"' in line, 'missing dune build log'
+
+
+host_evidence(source, env_source)
+print('PASS ci-env preserves the host probe contract, release builds and failure listing')
+for label, mutant, reason in (
+    ('host save path drift', env_source.replace('/host-caps.txt', '/lost-host.txt', 1), 'host launch or save path'),
+    ('host probe dev profile', env_source.replace('dune build --release ./tools/host_caps.exe',
+                                                 'dune build ./tools/host_caps.exe', 1), 'release build'),
+    ('host probe wrong configuration', env_source.replace('cd test/config &&', 'cd test &&', 1), 'configuration directory'),
+    ('failure listing loses host', env_source.replace('--host "$RUNNER_TEMP/host-caps.txt" ', '', 1), 'failure listings'),
+    ('build log loses pipefail', env_source.replace('      shell: bash\n      run: opam exec -- dune build',
+                                                   '      run: opam exec -- dune build', 1), 'bash pipefail'),
+    ('a fourth build omits logging', env_source.replace('    - name: Smoke test',
+        '    - name: Extra build\n      shell: bash\n      run: dune build --release @check\n    - name: Smoke test', 1),
+     'missing dune build log'),
+):
+    assert mutant != env_source, label
+    rejects_order(lambda text: host_evidence(source, text), mutant, label, reason)
+
+
+# Execute the actual failure block in ci-env's reachable states: an early
+# failure has a build log but no host; a failure after the probe has both.
+listing = workflow_script(workflow_step(env_source, 'List the failed dune rules'))
+host_line = 'OCANNL host: cpu=fixture\n'
+for saved_host in (False, True):
+    fixture = Path(sys.argv[2]) / ('host-evidence-%s' % saved_host)
+    fixture.mkdir()
+    (fixture / 'dune-build.log').write_text('File "fixture.ml", line 1, characters 0-1:\nError: fixture build failure\n')
+    if saved_host:
+        (fixture / 'host-caps.txt').write_text(host_line)
+    listed = subprocess.run(['bash', '-eo', 'pipefail', '-c', listing], cwd=root,
+                            env=dict(os.environ, RUNNER_TEMP=str(fixture)),
+                            capture_output=True, text=True)
+    assert listed.returncode == 1 and 'fixture build failure' in listed.stdout, \
+        (listed.returncode, listed.stdout, listed.stderr)
+    assert listed.stdout.startswith(host_line) == saved_host, listed.stdout
+print('PASS ci-env failure listing reports the build failure with and without saved host evidence')
+
+
 # Hermetic depext listing (gh-ocannl-1917): run all three actual scripts, with
 # only their external commands in PATH, no opam switch or Debian host required.
 def install_mode_flags(step):

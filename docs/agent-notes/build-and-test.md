@@ -4352,6 +4352,14 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   GitHub's ubuntu runners come with or without AVX-512, and the auto width (64 or 32) changes what
   the autotune pre-filter keeps (gh-ocannl-1363's flake). The line is repeated above the failure
   listing. Read it first when a red reproduces on one runner and not another.
+  The clean-room `ci-env.yml` builds the probe after its package build, with `--release`
+  from the repository root to reuse those objects, then runs the executable from `test/config`
+  (gh-ocannl-1948): `--release` implies `--root .`, so combining it with `--root ../..` is a
+  usage error. Every dune step saves combined output under explicit `shell: bash` (pipefail);
+  its failure listing repeats the saved host through the same `ci-failed-rules.sh --host` path.
+  `ci_matrix.sh` checks the shared save path, probe executable and configuration directory,
+  release profile and log capture using the shared step/command readers. It executes the
+  failure listing against both reachable states: build log alone, and build log plus host.
 
 ### opam and caches in CI
 
