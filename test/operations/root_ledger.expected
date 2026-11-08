@@ -1,0 +1,14 @@
+every table has bounded retained growth: true
+released compiles keep root heap growth bounded: true
+every table has bounded retained growth: true
+released compiles keep root heap growth bounded: true
+every table has bounded retained growth: true
+released compiles keep root heap growth bounded: true
+retirement preserves writes to surviving ancestor buffers: true
+an upload fork retains the routine records: true
+the surviving fork still executes the routine: true
+the last fork release retires the routine records: true
+repeated release is idempotent: true
+the release fault was injected: true
+failed release retains its routine records for retry: true
+successful retry retires the records: true

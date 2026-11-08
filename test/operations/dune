@@ -14521,3 +14521,13 @@
  (libraries base ocannl stderr_capture scripted_search arrayjit.verdict)
  (preprocess
   (pps ppx_ocannl)))
+
+(test
+ (name root_ledger)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ ; ocannl-backend: cc -- root ledger host retention, explicitly Context.cpu
+ (modules root_ledger)
+ (libraries base ocannl stdio arrayjit.verdict gc_witness)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

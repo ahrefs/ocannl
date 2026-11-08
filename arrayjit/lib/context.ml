@@ -101,13 +101,15 @@ type execution_ledger = {
           compile context -- reaches them through the id. An upload fork takes holds of its own
           ([derive]); a lifecycle child none, since it is released before its ancestors. An entry
           goes once its unit's release has released what it no longer holds. *)
+  routine_units : Set.M(Int).t Hashtbl.M(Int).t;
+      (** Routine ancestry held by each live release unit. Descendants and upload forks each hold
+          their ancestry; record copies sharing the release flag share this entry. *)
+  routine_holders : int Hashtbl.M(Int).t;
+      (** Number of live release units whose ancestry contains this routine. The last release
+          retires its per-routine records without undoing writes to surviving buffers. *)
   routine_names : string Hashtbl.M(Int).t;
-      (** Every routine id of this root's lineages, named for refusal messages: one entry per
-          compile, not retired by {!release}. Intended: an entry is a string, a refusal may name any
-          routine of the root, and the table goes with the root -- the ledger is held only by the
-          root's context values -- so it grows with one root's compiles, not with the process
-          (gh-ocannl-1762). A retired merge-buffer transfer is the one id it forgets
-          (gh-ocannl-1654). *)
+      (** Names of routines held by live release units, plus the current synthetic merge fill.
+          Released routines disappear once no descendant or upload fork holds their ancestry. *)
   mutable executed : Set.M(Int).t;
   mutable current_writers : int Map.M(Buffer_key).t;
       (** The routine whose execution most recently wrote each concrete ordinary buffer. Unlike the
@@ -165,8 +167,8 @@ type execution_ledger = {
   mutable zeroing_registry : (int * string) list Map.M(Int).t;
       (** Every routine (id, name) of this root whose computation zeroes each gradient, by the
           gradient's node uid ({!Asgns.field-zeroes}), sibling lineages included (gh-ocannl-1797).
-          Diagnostic only, like [fragment_registry], and bounded the same way, by the root's
-          compiles: it lets the missing-reset hint of [lacks_node_error] name a zeroing compiled
+          Diagnostic only, like [fragment_registry], and retired with the last release unit holding
+          each routine: it lets the missing-reset hint of [lacks_node_error] name a zeroing compiled
           outside the lineage. Whether a lineage resets a gradient is its frontier's [grad_roles].
       *)
   grad_buffers : grad_buffers Hashtbl.M(Int).t;
@@ -274,6 +276,8 @@ let create_ledger () =
     next_id = 0;
     next_context_id = 1;
     minted_holds = Hashtbl.create (module Int);
+    routine_units = Hashtbl.create (module Int);
+    routine_holders = Hashtbl.create (module Int);
     routine_names = Hashtbl.create (module Int);
     executed = Set.empty (module Int);
     current_writers = Map.empty (module Buffer_key);
@@ -399,6 +403,11 @@ let derive ?frontier ctx wrapped =
   else
     let context_id = ctx.ledger.next_context_id in
     ctx.ledger.next_context_id <- context_id + 1;
+    if not (Set.is_empty frontier.lineage_routines) then (
+      Hashtbl.set ctx.ledger.routine_units ~key:context_id ~data:frontier.lineage_routines;
+      Set.iter frontier.lineage_routines ~f:(fun id ->
+          Hashtbl.update ctx.ledger.routine_holders id ~f:(fun count ->
+              1 + Option.value count ~default:0)));
     let fork = phys_equal (upload_lineage wrapped) (upload_lineage ctx.wrapped) in
     (if fork then
        let readers = ctx.ledger.merge_buffer_readers in
@@ -1696,6 +1705,28 @@ let ledger_entries ctx =
   + Hashtbl.length l.merge_buffer_readers
   + Hashtbl.length l.fresh_writes + Hashtbl.length l.token_undo
 
+let ledger_census ctx =
+  let l = ctx.ledger in
+  let entry name count value = (name, count, Stdlib.Obj.reachable_words (Stdlib.Obj.repr value)) in
+  [
+    entry "minted_holds" (Hashtbl.length l.minted_holds) l.minted_holds;
+    entry "routine_units" (Hashtbl.length l.routine_units) l.routine_units;
+    entry "routine_holders" (Hashtbl.length l.routine_holders) l.routine_holders;
+    entry "routine_names" (Hashtbl.length l.routine_names) l.routine_names;
+    entry "executed" (Set.length l.executed) l.executed;
+    entry "current_writers" (Map.length l.current_writers) l.current_writers;
+    entry "merge_buffer_readers" (Hashtbl.length l.merge_buffer_readers) l.merge_buffer_readers;
+    entry "written_buffers" (Set.length l.written_buffers) l.written_buffers;
+    entry "fresh_writes" (Hashtbl.length l.fresh_writes) l.fresh_writes;
+    entry "observed_tokens" (Map.length l.observed_tokens) l.observed_tokens;
+    entry "token_undo" (Hashtbl.length l.token_undo) l.token_undo;
+    entry "fragment_registry" (Map.length l.fragment_registry) l.fragment_registry;
+    entry "zeroing_registry" (Map.length l.zeroing_registry) l.zeroing_registry;
+    entry "grad_buffers" (Hashtbl.length l.grad_buffers) l.grad_buffers;
+    entry "accumulated" (Map.length l.accumulated) l.accumulated;
+    entry "accumulation_undo" (Hashtbl.length l.accumulation_undo) l.accumulation_undo;
+  ]
+
 let stored_component_total ctx =
   Backends.query ctx.wrapped
     {
@@ -2069,6 +2100,44 @@ let release_minted ctx =
       | Some (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
   | Some _ | None -> ()
 
+(* Retirement is not rollback: a released routine may have written a surviving ancestor's buffer.
+   Its values and write tokens remain valid; only records no live routine can use go. *)
+let retire_routine_unit ctx =
+  let l = ctx.ledger in
+  Option.iter (Hashtbl.find_and_remove l.routine_units ctx.context_id) ~f:(fun ids ->
+      Set.iter ids ~f:(fun id ->
+          match Hashtbl.find l.routine_holders id with
+          | Some n when n > 1 -> Hashtbl.set l.routine_holders ~key:id ~data:(n - 1)
+          | Some _ ->
+              Hashtbl.remove l.routine_holders id;
+              Hashtbl.remove l.routine_names id;
+              Hashtbl.remove l.fresh_writes id;
+              Hashtbl.remove l.token_undo id;
+              Hashtbl.remove l.grad_buffers id;
+              Hashtbl.remove l.accumulation_undo id;
+              (* Other live routines may roll back a reset of these buffers. Scrub both snapshots as
+                 well as the current counts, preserving the equality check that prevents a rollback
+                 from undoing a later write. *)
+              let without_count counts = Map.remove counts id in
+              l.accumulated <- Map.map l.accumulated ~f:without_count;
+              Hashtbl.map_inplace l.accumulation_undo
+                ~f:
+                  (List.map ~f:(fun undo ->
+                       {
+                         undo with
+                         au_before = Option.map undo.au_before ~f:without_count;
+                         au_after = Option.map undo.au_after ~f:without_count;
+                       }));
+              l.executed <- Set.remove l.executed id;
+              l.current_writers <- Map.filter l.current_writers ~f:(fun writer -> writer <> id);
+              let without_id records =
+                let remaining = List.filter records ~f:(fun (owner, _) -> owner <> id) in
+                Option.some_if (not (List.is_empty remaining)) remaining
+              in
+              l.fragment_registry <- Map.filter_map l.fragment_registry ~f:without_id;
+              l.zeroing_registry <- Map.filter_map l.zeroing_registry ~f:without_id
+          | None -> ()))
+
 let release ctx =
   let retire_readers () =
     Hashtbl.to_alist ctx.ledger.merge_buffer_readers
@@ -2092,6 +2161,7 @@ let release ctx =
   | () ->
       retire_written ctx.ledger ~device_id !retired;
       retire_readers ();
+      retire_routine_unit ctx;
       release_minted ctx
   | exception exn ->
       (* gh-ocannl-1445: a release hook (graph execs) that fails runs after the pools were freed and
@@ -2101,6 +2171,7 @@ let release ctx =
       retire_written ctx.ledger ~device_id !retired;
       if Backends.query ctx.wrapped { q = (fun _ c -> Atomic.get c.BI.finalized) } then (
         retire_readers ();
+        retire_routine_unit ctx;
         try release_minted ctx with _ -> ());
       Stdlib.Printexc.raise_with_backtrace exn backtrace
 

@@ -600,6 +600,11 @@ val ledger_entries : t -> int
     adds its routine's; a merge-buffer fill retires its predecessor's entirely, so repeated fills
     keep the count constant (gh-ocannl-1654). A diagnostic. *)
 
+val ledger_census : t -> (string * int * int) list
+(** Diagnostic snapshot of each root-ledger table: name, entry count and reachable OCaml words.
+    Reachable sizes overlap where tables share values; their sum is not a live-heap measurement. The
+    snapshot contains only numbers and names, so it does not retain table contents. *)
+
 val lifecycle_depth : t -> int
 (** How many lifecycle ancestors the context has: the [parent] links {!release}'s refusal of a
     released ancestor walks at every entry point. A root context is at depth 0; {!compile} and the

@@ -275,6 +275,35 @@ files.
   Host arrays have their own counted reading, `Ndarray.get_used_memory`, a gauge a finalizer gives
   back: it covers `Host_inits` data, so "the literal's host array is reclaimed" is a byte claim
   after a settle, with a memory-mapped array outside it (gh-ocannl-1859).
+- **Per-routine ledger history ends at its last live release unit** (gh-ocannl-2063).
+  Keeping one root and compiling/running/releasing the same small forward graph 256 times
+  retained 9,062 live OCaml words in the first probe. With materialized output, disabling the
+  ownership registration retained 10,815 words; a gradient graph retained 17,688. Both final
+  long-loop claims fail with registration disabled. Sequentially replacing tables and settling
+  the GC attributed the 264 warmup/test compiles' payloads (order-dependent sharing, 4-word
+  harness floor): names 1,474 words, executed ids 1,060, `fresh_writes` and `token_undo` 1,474
+  each, forward fragment owners 5,572. The gradient case also held zeroing owners (4,765),
+  gradient-buffer records (4,642), and `accumulation_undo` (1,474); its fragment owners cost
+  4,780. Buffer-keyed tables stayed flat. This destructive probe was temporary; the shipped
+  census is read-only. The earlier 170–490 words/compile report depends on the graph, not a
+  fixed per-compile cost.
+  `Context.ledger_census` separates table entry counts and reachable words; the latter overlap
+  where values are shared and must not be summed as heap usage. `root_ledger` measures the
+  whole heap with `Gc.stat` separately, after settling and clearing the bounded analysis cache.
+  `routine_units` records each release unit's immutable routine ancestry, and `routine_holders`
+  counts its holders. A compile descendant or upload fork takes its own hold; record copies in
+  one release unit share it. Final release retires names, executed ids, per-run rollback records,
+  gradient-buffer records, and diagnostic fragment/zeroing owners. Accumulation counts forget
+  retired ids in both current state and surviving rollback snapshots. This is NOT rollback:
+  values written into surviving ancestor buffers and their write tokens remain valid. A partial
+  release keeps its holds for retry; a committed release (including a later hook failure) retires
+  them once. Live ancestry, buffers and the current merge fill still retain their own records.
+  Hash-table backing capacity may retain its high-water mark; the bound is on repeated
+  compile/release at fixed live ancestry. A third loop accumulates into a surviving ancestor's
+  gradient, verifying that its values survive retirement; disabling just accumulation-count
+  retirement makes that table's bounded-growth claim fail.
+  Guards: `root_ledger`'s three 256-cycle loops, upload fork and cleanup retry;
+  `context_handle_refusals`, `test_execution_deps`, `resource_fault_injection`.
 - **A context a wrapper mints and does not return is adopted by the one it returns**
   (gh-ocannl-1762). `Train.run_once`'s initialization context (the parameters' pools) and a memory
   budget's decision context (rooted constant holds) are lifecycle ancestors of the returned context
