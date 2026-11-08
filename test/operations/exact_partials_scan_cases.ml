@@ -4,7 +4,7 @@
    is in test/support/exact_partials_scan.ml's header; these cases pin it, gaps included. *)
 open Base
 open Verdict.Claims
-module Scan = Test_utils.Exact_partials_scan
+module Scan = Test_scan.Exact_partials_scan
 
 let read source = Scan.read ~prose:(Prose_lexemes.of_source source) source
 

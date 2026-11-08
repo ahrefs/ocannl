@@ -5,9 +5,9 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Sync = Test_utils.Refusal_manifest_sync
-module Scan = Test_utils.Refusal_control_scan
-module Manifest = Test_utils.Refusal_control_manifest
+module Sync = Test_scan.Refusal_manifest_sync
+module Scan = Test_scan.Refusal_control_scan
+module Manifest = Test_scan.Refusal_control_manifest
 
 let markers source = List.map (Scan.diagnostics source) ~f:Scan.marker
 
@@ -122,13 +122,13 @@ let () =
     String.concat ~sep:"\n"
       ([ "the malformed tree is refused: true"; "the malformed tree is refused but not here: true" ]
       @ List.map (markers before) ~f:(fun m -> "  " ^ m)
-      @ [ Test_utils.Refusal_section_heads.closing_row; "" ])
+      @ [ Test_scan.Refusal_section_heads.closing_row; "" ])
   in
   let golden_after =
     String.concat ~sep:"\n"
       ([ "a malformed tree is refused: true"; "the malformed tree is refused but not here: true" ]
       @ List.map (markers after) ~f:(fun m -> "  " ^ m)
-      @ [ Test_utils.Refusal_section_heads.closing_row; "" ])
+      @ [ Test_scan.Refusal_section_heads.closing_row; "" ])
   in
   p "a golden's replaced markers and reworded claim rows are rewritten, and nothing else"
     (String.equal (Sync.rewrite_golden plan golden_before) golden_after);

@@ -33,7 +33,7 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Inventory = Test_utils.Source_inventory
+module Inventory = Test_scan.Source_inventory
 
 let sanctioned = "test/support/gc_witness.ml"
 let in_corpus path = String.is_prefix path ~prefix:"test/" && String.is_suffix path ~suffix:".ml"
@@ -144,7 +144,7 @@ let uses ~file source =
    source's to fix, and any other exception is the reader's own defect. [read] is a thunk so the
    control can plant the defect. *)
 let reading_or_refusal ~fail ~what read =
-  match Test_utils.Scan_attempt.run read with
+  match Test_scan.Scan_attempt.run read with
   | Scanned result -> Some result
   | Unparsed why ->
       fail
@@ -211,7 +211,7 @@ let control () =
     in
     if not routed then
       List.iter messages ~f:(fun m -> eprintf "  %s said: %s\n" label (Verdict.one_line m));
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     p label routed
   in
   let refused label ~format ~fragment sources =
@@ -299,7 +299,7 @@ let control () =
        so the exemption names nothing; follow it here"
     ~fragment:"the one sanctioned site moved"
     [ ("test/operations/plain.ml", "let x = 1\n") ];
-  Test_utils.Refusal_control_manifest.print "gc_witness_scan.ml"
+  Test_scan.Refusal_control_manifest.print "gc_witness_scan.ml"
 
 let () =
   match Array.to_list Stdlib.Sys.argv with
@@ -332,5 +332,5 @@ let () =
       p "the sanctioned site still forces collections and makes the weak observer"
         (List.mem site_uses "Gc.full_major" ~equal:String.equal
         && List.mem site_uses "Weak.create" ~equal:String.equal);
-      Test_utils.Refusal_control_manifest.print "gc_witness_scan.ml"
+      Test_scan.Refusal_control_manifest.print "gc_witness_scan.ml"
   | _ -> Stdlib.exit 2

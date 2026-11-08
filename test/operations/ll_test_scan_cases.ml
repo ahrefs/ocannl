@@ -1,7 +1,7 @@
 (* gh-ocannl-964: parser, membership and shipping-executable negative controls. *)
 open Base
 open Stdio
-module Scan = Test_utils.Ll_test_scan
+module Scan = Test_scan.Ll_test_scan
 open Verdict.Claims
 
 let declaration =
@@ -249,7 +249,7 @@ let () =
     && not (uses "let _ = let module L = Ll_test in 0\nlet _ = L.seq"));
   let linked content =
     Scan.linked ~directory_modules:[ "new"; "other" ] ~module_name:"new"
-      (Test_utils.Dune_stanza_scan.stanzas content)
+      (Test_scan.Dune_stanza_scan.stanzas content)
   in
   p "a sibling stanza's harness does not cover this module"
     (not

@@ -6,7 +6,7 @@
 (executable
  (name api_drift)
  (modules api_drift)
- (libraries base stdio unix test_utils))
+ (libraries base stdio unix test_scan))
 
 ; tools/refusal-manifest-sync.sh's engine (gh-ocannl-1429): rewrites the refusal-control manifest's
 ; stale rows, keys and labels from the scanners' current diagnostics.
@@ -14,7 +14,7 @@
 (executable
  (name refusal_manifest_sync)
  (modules refusal_manifest_sync)
- (libraries base stdio unix test_utils))
+ (libraries base stdio unix test_scan))
 
 ; tools/typecheck-scan-cases.sh's engine: type-checks the {ocaml|...|ocaml} snippets of a scan's
 ; cases module, each as its own unit, against an optional stub module.

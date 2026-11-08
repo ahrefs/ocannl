@@ -11,8 +11,8 @@
     of a source the walk reaches. *)
 
 open Base
-module Scan = Test_utils.Verdict_scan
-module Attempt = Test_utils.Scan_attempt
+module Scan = Test_scan.Verdict_scan
+module Attempt = Test_scan.Scan_attempt
 
 let printf = Stdio.printf
 
@@ -168,8 +168,8 @@ let refusal_corpus =
 
 let scanner_refusal_controls exe =
   let source = "test/operations/verdict_ratchet.ml" in
-  let refuses = Test_utils.Refusal_control_manifest.refuses ~source ~exe in
-  Test_utils.Refusal_control_manifest.with_tree refusal_corpus (fun root ->
+  let refuses = Test_scan.Refusal_control_manifest.refuses ~source ~exe in
+  Test_scan.Refusal_control_manifest.with_tree refusal_corpus (fun root ->
       Verdict.p "verdict_ratchet refuses a corpus built to trip its refusals, exiting 1"
         (refuses ~claim:"verdict_ratchet refuses a corpus built to trip its refusals, exiting 1"
            (root :: List.map refusal_corpus ~f:(fun (path, _) -> Stdlib.Filename.concat root path)));
@@ -442,4 +442,4 @@ let () = printf "a" "b"|ocaml} in
   (match Stdlib.Sys.argv with
   | [| _; exe |] -> scanner_refusal_controls exe
   | _ -> Verdict.fail "usage: verdict_scan_cases <verdict_ratchet.exe>");
-  Test_utils.Refusal_control_manifest.print "verdict_ratchet.ml"
+  Test_scan.Refusal_control_manifest.print "verdict_ratchet.ml"

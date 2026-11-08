@@ -26,11 +26,11 @@ open Stdio
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 module Backends = Context.Backends
-module Dune_scan = Test_utils.Dune_stanza_scan
+module Dune_scan = Test_scan.Dune_stanza_scan
 
 type member = { path : string; family : string; backend : string }
 
@@ -642,4 +642,4 @@ let () =
   Verdict.p
     "backend golden families are complete, self-certifying, and provenance markers are valid"
     complete;
-  Test_utils.Refusal_control_manifest.print "backend_golden_family_scan.ml"
+  Test_scan.Refusal_control_manifest.print "backend_golden_family_scan.ml"

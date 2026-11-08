@@ -45,8 +45,8 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Dune = Test_utils.Dune_stanza_scan
-module Inventory = Test_utils.Source_inventory
+module Dune = Test_scan.Dune_stanza_scan
+module Inventory = Test_scan.Source_inventory
 
 type golden = Every_golden | Golden of string
 type entry = { golden : golden; pattern : string; reason : string }
@@ -474,5 +474,5 @@ let () =
   | _ :: root :: generated ->
       scan root generated;
       controls ();
-      Test_utils.Refusal_control_manifest.print "census_total_ratchet.ml"
+      Test_scan.Refusal_control_manifest.print "census_total_ratchet.ml"
   | _ -> Stdlib.exit 2

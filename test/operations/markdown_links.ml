@@ -1,7 +1,7 @@
 open Base
 open Stdio
-module Inventory = Test_utils.Source_inventory
-module Scan = Test_utils.Markdown_link_scan
+module Inventory = Test_scan.Source_inventory
+module Scan = Test_scan.Markdown_link_scan
 
 let () =
   let root, generated =
@@ -47,4 +47,4 @@ let () =
   in
   eprintf "Scanned %d Markdown files.\n" (List.length files);
   Verdict.p_empty "every recognised relative Markdown link resolves" ~over:files findings;
-  Test_utils.Refusal_control_manifest.print "markdown_links.ml"
+  Test_scan.Refusal_control_manifest.print "markdown_links.ml"

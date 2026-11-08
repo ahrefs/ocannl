@@ -41,7 +41,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   detached (gh-ocannl-1236; The harness, shells and processes).
 
 - `markdown_links` (gh-ocannl-2006) joins `@scans`; its closed dialect is documented in
-  `Test_utils.Markdown_link_scan`. Fragments and images are unchecked; single-slash root-relative
+  `Test_scan.Markdown_link_scan`. Fragments and images are unchecked; single-slash root-relative
   destinations are refused. A new symlinked document must join `aliases` in `markdown_links.ml`,
   since Dune materializes symlinks and its links otherwise resolve from the alias directory.
   Published-site exemptions are exact `(file, target)` pairs, not a blanket `.html` exemption.
@@ -170,7 +170,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `metal`, `ctypes`, `unix` libraries; alias-only aggregation is allowed. Opaque launchers,
   unresolvable alias dependencies and a reader added to the same alias require a gate.
 
-- A scan resolving names in OCaml sources uses `Test_utils.Lexical_scope` and states its fail-loud
+- A scan resolving names in OCaml sources uses `Test_scan.Lexical_scope` and states its fail-loud
   rule in its header before its first review (gh-ocannl-1140). File-wide literal tables and module
   alias sets cannot distinguish a parameter or nested binding from a same-named earlier value;
   controls must exercise shadowing and separate scopes, alongside the nearest honest use.
@@ -326,7 +326,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ### Scan corpora, goldens and floors
 
-- Repository scans derive source membership through `Test_utils.Source_inventory` (gh-ocannl-871):
+- Repository scans derive source membership through `Test_scan.Source_inventory` (gh-ocannl-871):
   the Dune rule declares `(sandbox always)` plus `(source_tree ../..)`, then calls
   `of_dune_sandbox ~workspace_root ~generated` with its executable, redirected target, and copied
   config in `generated`. `files` returns stable `{ path; on_disk }` entries; `select` and `mem` are
@@ -670,7 +670,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   replacement: these rules glob with `glob_files_rec`, so a source in a subdirectory would otherwise
   open a bucket of its own — a new golden line, which is the promote round being removed, and under
   no floor at all.
-- That floor machinery is `Test_utils.Scan_floors`, shared by the configuration scanners and by
+- That floor machinery is `Test_scan.Scan_floors`, shared by the configuration scanners and by
   `codegen_text_inventory`: pass it the root table, and get the census-by-root, the itemised
   diagnostic and the stderr report. Each scan keeps its own table, since which roots it globs and
   how far each may fall are facts about that scan.
@@ -819,7 +819,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   they express the WHOLE shape, since they ignore locations and attributes while keeping arity and
   labels exact. What they cannot reach — a variable-length argument list, a string constant's value,
   a module binding — stays written against the constructors.
-- A scan's failure on a source is classified through `Test_utils.Scan_attempt`, never a
+- A scan's failure on a source is classified through `Test_scan.Scan_attempt`, never a
   `try … with _ ->` that calls every exception "does not parse": `run` tells the parser's errors
   (the input's fault, `Unparsed` carrying the parser's own one-line report: line, columns, what)
   from any other exception (the scanner's, kept with its one-line `Printexc.to_string` text), and a
@@ -1890,7 +1890,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   over (three had crossed it and a fourth was 255 characters short when this was first hit). The
   scans with explicit glob lists therefore pass them as `@<path>` RESPONSE FILES: the rule writes
   the list with dune's own `(echo "%{deps}")`, which runs inside dune and spawns nothing, into a second target of
-  the same rule, and `Test_utils.Scan_argv.expand` splices it back in where the `@` argument stood.
+  the same rule, and `Test_scan.Scan_argv.expand` splices it back in where the `@` argument stood.
   A new whole-tree scan should instead use `Source_inventory`; `env_var_deps` also knows the older
   response-file shape — a target
   the rule hands back to its own action needs no golden diff — and recognizes it by the `@<target>`
@@ -2291,6 +2291,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `(subdir …)` group counting as its own) that resolves to different paths there, naming each
   directory and suggesting `/name` (staging#1593); `../shared/name` from two sibling directories is
   one lock and passes, and a lock name built from a `%{…}` pform is refused as unreadable.
+
+- Runtime test helpers live in `test/support/test_utils.ml`; repository readers live in
+  `test/support/test_scan.ml` (gh-ocannl-2010). Keep `ppxlib` and `compiler-libs` on the scanner
+  side: the compiler archive forces its units into every executable on its dependency path,
+  even one using only a printer. `test_utils_linkage` compares the linked native units with the
+  installed compiler archive's unit census, so this boundary has no hand-maintained byte limit.
+  Compare clean builds with the same aliases before attributing disk growth to source changes;
+  old build trees can contain only a subset of the currently declared executables.
 
 ## Verdict claims
 
@@ -2710,7 +2718,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`Ll_test.rendered_tensorized`/`all_tensorized`/`census_agrees_with_capability`/..., a
   `C_syntax` tensorization comparison, constructor or field). Binding the census and discarding it
   does not count, and a claim in a check helper is also each executing caller's, which must judge
-  too. The closed lists and the boundary are in `Test_utils.Tensorized_census_scan`'s
+  too. The closed lists and the boundary are in `Test_scan.Tensorized_census_scan`'s
   header; the two that matter when writing a test: the granularity is the top-level item, so one
   judgment covers every leg in a big `let () =`, and a label whose tensorization word arrives
   through a function parameter is not read -- name the claim's tensorized leg in its literal text
@@ -2882,7 +2890,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   and the flat `Array.init (r * c) ~f:(fun i -> … i % m …)` — because the sweep that preceded it
   missed a flat site four lines from a multi-index one it listed: to a person reading a file the
   two do not look like the same thing. What it deliberately does not read is stated in
-  `Test_utils.Operand_key_scan`'s header: a remainder of one literal axis, `i % d` with `d` a
+  `Test_scan.Operand_key_scan`'s header: a remainder of one literal axis, `i % d` with `d` a
   trailing run of the length's factors (unflattening), a key computed outside the closure, and
   mixers other than a remainder or bit mask. Masks, including a shifted mix masked with
   `land 1`, follow the same axis reader; the trailing-factor exception applies only to remainders.
@@ -2985,7 +2993,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/test-run.sh run build`. A file is not yet a command — a test's own `runtest-<name>` diffs
   only its own `.expected`, while its kernel snapshots `<name>.<ext>.expected` are compared by the
   hand-written `runtest-<name>-extension` rule, so running a codegen test by its name leaves every
-  snapshot unchecked (staging#1326). `Test_utils.Rerun_aliases` derives them: a golden from the
+  snapshot unchecked (staging#1326). `Test_scan.Rerun_aliases` derives them: a golden from the
   rule whose `(diff …)` names it as the EXPECTED side, matching each `%{…}` against a substituted
   file name and printing the substitution (`when %{read:../config/ocannl_backend_extension.txt} is
   cu (cuda)` — that snapshot is checked only by a CUDA run), or from the `(test)` stanza beside it; a
@@ -3008,7 +3016,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   gh-ocannl-1338 renamed every GPU node identifier to `t_<name>`, all 103 text pins passed on CUDA
   and HIP and master still went red: `shipped_kernels_alone`'s staged callback writes
   `sk_staged[0] = 2.0f;` verbatim, and nothing renames inside a `Staged_compilation`.
-  `Test_utils.Kernel_exec_scan` names three routes: CONSTRUCTING a `Staged_compilation` (a pattern
+  `Test_scan.Kernel_exec_scan` names three routes: CONSTRUCTING a `Staged_compilation` (a pattern
   matching it builds nothing); passing `?prelowered` to `Context.compile`/`compile_outcome`, which
   compiles a hand-held lowering as written (`link_delta`'s `~prelowered:true` links nothing and is
   not the seam); and calling a support value that reaches either, directly or through other values.
@@ -5279,7 +5287,7 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   none of them holds a GPU. It asks two
   questions. First, which backends do the stanzas the run can reach NAME (`; ocannl-backend: cuda`
   and friends, which hold that backend whatever the configuration says): `ocannl_slot_kind`
-  (`test/config`, over `Test_utils.Slot_kind`, reading the markers `env_var_deps` enforces over
+  (`test/config`, over `Test_scan.Slot_kind`, reading the markers `env_var_deps` enforces over
   the closure of the argv's aliases -- dependency aliases across directories, generated
   `runtest-<name>` included, every file a stanza mentions matched by basename to any rule's
   targets, every compilation and every source-like producer -- an over-approximation with a stated

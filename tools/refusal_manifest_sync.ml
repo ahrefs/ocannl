@@ -9,10 +9,10 @@
 
 open Base
 open Stdio
-module Sync = Test_utils.Refusal_manifest_sync
-module Scan = Test_utils.Refusal_control_scan
-module Stanza = Test_utils.Dune_stanza_scan
-module Manifest = Test_utils.Refusal_control_manifest
+module Sync = Test_scan.Refusal_manifest_sync
+module Scan = Test_scan.Refusal_control_scan
+module Stanza = Test_scan.Dune_stanza_scan
+module Manifest = Test_scan.Refusal_control_manifest
 
 let manifest_path = "test/support/refusal_control_manifest.ml"
 let operations = "test/operations"

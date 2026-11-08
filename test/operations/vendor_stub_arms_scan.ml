@@ -37,10 +37,10 @@ open Stdio
 open Verdict.Claims
 
 (* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
-   a Windows command line may be; see [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   a Windows command line may be; see [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Scan = Test_utils.Dune_stanza_scan
+module Scan = Test_scan.Dune_stanza_scan
 
 let stubs_root = "arrayjit/vendor_stubs"
 let package_suffix = "_stub"
@@ -300,7 +300,7 @@ let control () =
     in
     if not routed then
       List.iter messages ~f:(fun m -> eprintf "  %s said: %s\n" label (Verdict.one_line m));
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     p label routed
   in
   (* The whole answer against the expected one: no refusal, and the census's two lists -- so a
@@ -381,7 +381,7 @@ let control () =
   refused "an empty dune-file corpus is refused"
     ~format:"no dune files among the arguments -- the rule's dune-file glob matches nothing"
     ~fragment:"no dune files among the arguments" [];
-  Test_utils.Refusal_control_manifest.print "vendor_stub_arms_scan.ml"
+  Test_scan.Refusal_control_manifest.print "vendor_stub_arms_scan.ml"
 
 let () =
   if Array.length argv = 2 && String.equal argv.(1) "--control" then (
@@ -414,4 +414,4 @@ let () =
   else List.iter census.ungated ~f:(fun arm -> printf "  %s\n" arm);
   Verdict.success_trailer ~blank_line:true
     [ "every vendor-gated select arm is type-checked off its box, against the stand-ins." ];
-  Test_utils.Refusal_control_manifest.print "vendor_stub_arms_scan.ml"
+  Test_scan.Refusal_control_manifest.print "vendor_stub_arms_scan.ml"

@@ -43,8 +43,8 @@ open Ppxlib.Parsetree
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 module Ast_traverse = Ppxlib.Ast_traverse
 
@@ -264,7 +264,7 @@ let field_reads ~fields (source : string) : string list =
         super#pattern p
     end
   in
-  iter#structure (Test_utils.Config_key_scan.structure_of source);
+  iter#structure (Test_scan.Config_key_scan.structure_of source);
   List.rev !found
 
 (* Whether a source names [name] as a value (bare or qualified). *)
@@ -281,7 +281,7 @@ let references ~name (source : string) : bool =
         super#expression e
     end
   in
-  iter#structure (Test_utils.Config_key_scan.structure_of source);
+  iter#structure (Test_scan.Config_key_scan.structure_of source);
   !found
 
 let offset (loc : Ppxlib.Location.t) = loc.loc_start.pos_cnum
@@ -292,7 +292,7 @@ let offset (loc : Ppxlib.Location.t) = loc.loc_start.pos_cnum
    way the reach over-approximates. [drop] lists the start offsets of bare identifiers that are not
    references: the sanctioned spellings of {!searchless_fallback}, and nothing else. *)
 let top_level_graph ?(drop = []) (source : string) : (string * string list) list =
-  let structure = Test_utils.Config_key_scan.structure_of source in
+  let structure = Test_scan.Config_key_scan.structure_of source in
   let refs_of visit =
     let acc = ref [] in
     let iter =
@@ -395,7 +395,7 @@ let plan_without_digest ~root source =
    (gh-ocannl-1491).
 
    The fallback is read off the code, not named, by these forms and no others. Every name a form
-   reads resolves through [Test_utils.Lexical_scope] at the point it is spelled; a local [open] or
+   reads resolves through [Test_scan.Lexical_scope] at the point it is spelled; a local [open] or
    [include] of a module the scan does not read hides every name beneath it, and a hidden name
    satisfies no form (review round 4). The file's top-level opens are libraries, taken to bind
    nothing the forms read.
@@ -499,7 +499,7 @@ type resolution = Resolved of binding | Opaque | Free
 (* The frame a local [open] or [include] pushes: no identifier can spell it. *)
 let opaque_frame = "<opaque>"
 
-let resolve (env : (binding, unit) Test_utils.Lexical_scope.env) name =
+let resolve (env : (binding, unit) Test_scan.Lexical_scope.env) name =
   List.find_map env.frames ~f:(fun frame ->
       if Map.mem frame opaque_frame then Some Opaque
       else Option.map (Map.find frame name) ~f:(fun b -> Resolved b))
@@ -584,7 +584,7 @@ let marked_head (e : expression) =
 (* [flag_holders]: the start offsets of the top-level bindings whose search parameter is the flag --
    [tune]'s and the tied ones'. *)
 let walk_fallback ~flag_holders (source : string) : fallback_walk =
-  let structure = Test_utils.Config_key_scan.structure_of source in
+  let structure = Test_scan.Config_key_scan.structure_of source in
   let branches = ref [] and sites = ref [] and locals = ref (Set.empty (module Int)) in
   let local_names = ref (Map.empty (module Int)) in
   let references = ref [] and qualified = ref [] and markers = ref [] in
@@ -601,7 +601,7 @@ let walk_fallback ~flag_holders (source : string) : fallback_walk =
   in
   let iter =
     object (self)
-      inherit [binding, unit] Test_utils.Lexical_scope.scoped as super
+      inherit [binding, unit] Test_scan.Lexical_scope.scoped as super
       method local = { at = None; flag = false }
 
       (* Every module path and binding is recorded as some module, so [Option] bound by the source
@@ -615,7 +615,7 @@ let walk_fallback ~flag_holders (source : string) : fallback_walk =
       method! opened ~top ~include_:_ env _ =
         if top then env
         else
-          Test_utils.Lexical_scope.push_frame env
+          Test_scan.Lexical_scope.push_frame env
             (Map.singleton (module String) opaque_frame self#local)
 
       (* Only a top-level function's own parameter is the flag: a nested helper's [~search] is
@@ -626,8 +626,8 @@ let walk_fallback ~flag_holders (source : string) : fallback_walk =
           names_flag_label label && !fun_depth = 1
           && match !enclosing with [ at ] -> Set.mem flag_holders at | _ -> false
         then
-          Test_utils.Lexical_scope.bind_values env
-            (Test_utils.Lexical_scope.pattern_vars [ pattern ])
+          Test_scan.Lexical_scope.bind_values env
+            (Test_scan.Lexical_scope.pattern_vars [ pattern ])
             { at = None; flag = true }
         else super#bind_parameter env label pattern
 
@@ -647,7 +647,7 @@ let walk_fallback ~flag_holders (source : string) : fallback_walk =
           | _ -> false
         in
         let library_option =
-          (not (Map.mem env.Test_utils.Lexical_scope.modules "Option"))
+          (not (Map.mem env.Test_scan.Lexical_scope.modules "Option"))
           && not (List.exists env.frames ~f:(fun frame -> Map.mem frame opaque_frame))
         in
         let preserves =
@@ -679,8 +679,7 @@ let walk_fallback ~flag_holders (source : string) : fallback_walk =
         if (not (List.is_empty !enclosing)) && deferred then (
           locals := Set.add !locals at;
           local_names :=
-            Map.set !local_names ~key:at
-              ~data:(Test_utils.Lexical_scope.pattern_vars [ vb.pvb_pat ]));
+            Map.set !local_names ~key:at ~data:(Test_scan.Lexical_scope.pattern_vars [ vb.pvb_pat ]));
         enclosing := at :: !enclosing;
         if deferred then List.iter !open_branches ~f:(fun (_, muted) -> Int.incr muted);
         let vb = super#value_binding env vb in
@@ -764,7 +763,7 @@ let walk_fallback ~flag_holders (source : string) : fallback_walk =
   in
   ignore
     (iter#structure
-       { Test_utils.Lexical_scope.frames = []; modules = Map.empty (module String) }
+       { Test_scan.Lexical_scope.frames = []; modules = Map.empty (module String) }
        structure
       : structure);
   {
@@ -781,7 +780,7 @@ let walk_fallback ~flag_holders (source : string) : fallback_walk =
    them. *)
 let top_level_spans (source : string) : (string * int * int) list =
   let span name (loc : Ppxlib.Location.t) = (name, offset loc, loc.loc_end.pos_cnum) in
-  List.concat_map (Test_utils.Config_key_scan.structure_of source) ~f:(fun item ->
+  List.concat_map (Test_scan.Config_key_scan.structure_of source) ~f:(fun item ->
       match item.pstr_desc with
       | Pstr_value (_, bindings) ->
           List.filter_map bindings ~f:(fun vb ->
@@ -804,7 +803,7 @@ type fallback = {
 
 (* The top-level functions with a parameter labelled [search]. *)
 let flag_candidates (source : string) : (string * int) list =
-  List.concat_map (Test_utils.Config_key_scan.structure_of source) ~f:(fun item ->
+  List.concat_map (Test_scan.Config_key_scan.structure_of source) ~f:(fun item ->
       match item.pstr_desc with
       | Pstr_value (_, bindings) ->
           List.filter_map bindings ~f:(fun vb ->
@@ -1230,7 +1229,7 @@ let () =
       p "tune is a top-level definition of autotune.ml"
         (List.Assoc.mem (top_level_graph source) "tune" ~equal:String.equal);
       p "tune takes the ?search flag its search-less branches test"
-        (List.exists (Test_utils.Config_key_scan.structure_of source) ~f:(fun item ->
+        (List.exists (Test_scan.Config_key_scan.structure_of source) ~f:(fun item ->
              match item.pstr_desc with
              | Pstr_value (_, bindings) ->
                  List.exists bindings ~f:(fun vb ->
@@ -1285,4 +1284,4 @@ let () =
         "nothing Autotune.tune reaches past the seeded plan and the search-less fallback reads an \
          Untimed field"
         ~over:reached readers);
-  Test_utils.Refusal_control_manifest.print "limits_field_classes.ml"
+  Test_scan.Refusal_control_manifest.print "limits_field_classes.ml"

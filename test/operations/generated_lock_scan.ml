@@ -12,7 +12,7 @@
    the race is silent. A shared [(locks …)] serializes the runs, which restores the premise.
 
    WHAT IT READS. Every dune file in the repository, and every OCaml source. The STANZA side is
-   dune's own semantics as [Test_utils.Dune_stanza_scan] models them for the other per-program
+   dune's own semantics as [Test_scan.Dune_stanza_scan] models them for the other per-program
    checks, reused unchanged through [Scan.stanza_programs], which [env_var_deps] reads programs with
    too: a program is a name of a [(test)], [(tests)], [(executable)] or [(executables)] stanza, in
    the directory the stanza applies to ([(subdir …)] resolved); its modules are [Scan.modules_of]
@@ -58,11 +58,11 @@ open Base
 open Stdio
 
 (* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
-   a Windows command line may be; see [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   a Windows command line may be; see [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Scan = Test_utils.Dune_stanza_scan
-module Sources = Test_utils.Config_key_scan
+module Scan = Test_scan.Dune_stanza_scan
+module Sources = Test_scan.Config_key_scan
 
 let marker_sentinel = "generated-lock:"
 let marker_declaration = "none"
@@ -113,7 +113,7 @@ let locks_of ~fail s =
 let init_calls_or_refusal ?(reader = Sources.generated_init_calls_in_source) ~fail ~source content =
   if not (Sources.could_call_generated_init content) then []
   else
-    match Test_utils.Scan_attempt.run (fun () -> reader content) with
+    match Test_scan.Scan_attempt.run (fun () -> reader content) with
     | Scanned calls -> calls
     | Unparsed where ->
         fail
@@ -375,7 +375,7 @@ let control () =
     in
     if not routed then
       List.iter messages ~f:(fun m -> eprintf "  %s said: %s\n" label (Verdict.one_line m));
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     Verdict.p label routed
   in
   (* The whole answer against the expected one: no refusal, the callers the reader found, and the
@@ -587,7 +587,7 @@ let control () =
     let messages = ref [] in
     require_inputs ~fail:(fun m -> messages := m :: !messages) ~dune_files ~sources;
     let routed = match !messages with [ m ] -> String.equal m format | _ -> false in
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     Verdict.p label routed
   in
   input_case "an empty dune-file corpus is refused"
@@ -611,7 +611,7 @@ let control () =
     | _ -> false
   in
   if routed then
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "the Generated.init reader raised %s on %s, which parses -- a defect in the scanner rather \
          than in the source, so its program went unchecked";
@@ -619,7 +619,7 @@ let control () =
     "a reader exception on a source that parses reaches the scanner-defect refusal, not the parse \
      one"
     routed;
-  Test_utils.Refusal_control_manifest.print "generated_lock_scan.ml"
+  Test_scan.Refusal_control_manifest.print "generated_lock_scan.ml"
 
 let () =
   if Array.length argv = 2 && String.equal argv.(1) "--control" then (
@@ -660,4 +660,4 @@ let () =
   print_census census;
   Verdict.success_trailer ~blank_line:true
     [ "every such program's runners share a lock, or its stanza says why none is needed." ];
-  Test_utils.Refusal_control_manifest.print "generated_lock_scan.ml"
+  Test_scan.Refusal_control_manifest.print "generated_lock_scan.ml"

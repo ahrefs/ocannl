@@ -21,10 +21,10 @@ open Base
 open Stdio
 
 (* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
-   a Windows command line may be; see [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   a Windows command line may be; see [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Read = Test_utils.Config_key_scan
+module Read = Test_scan.Config_key_scan
 module Ast_traverse = Ppxlib.Ast_traverse
 
 type reference = { source : string; line : int; identifier : string list }
@@ -123,7 +123,7 @@ let require_sources ~fail sources =
    reported as a parse failure of a file that is fine. [scan] is the reader, a parameter so the
    refusal control can plant the defect. *)
 let references_or_refusal ?(scan = rename_references) ~fail ~source contents =
-  match Test_utils.Scan_attempt.run (fun () -> scan ~source contents) with
+  match Test_scan.Scan_attempt.run (fun () -> scan ~source contents) with
   | Scanned references -> references
   | Unparsed where ->
       fail
@@ -145,7 +145,7 @@ let refusal_control () =
       match run () with
       | _ -> false
       | exception Failure _ ->
-          Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+          Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
           true
     in
     Verdict.p label refused
@@ -176,7 +176,7 @@ let refusal_control () =
     let refused = ref false in
     let fail _message =
       refused := true;
-      Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+      Test_scan.Refusal_control_manifest.observe_failure ~source ~format
     in
     run fail;
     Verdict.p label !refused
@@ -192,7 +192,7 @@ let refusal_control () =
     let routed =
       match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
     in
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     Verdict.p label routed
   in
   routed_case "an invalid OCaml source reaches the parse refusal"
@@ -211,7 +211,7 @@ let refusal_control () =
            ~scan:(fun ~source:_ _ -> invalid_arg "planted")
            ~fail ~source:"good.ml" "let x = 1"
           : reference list));
-  Test_utils.Refusal_control_manifest.print source
+  Test_scan.Refusal_control_manifest.print source
 
 let () =
   if Array.length argv = 2 && String.equal argv.(1) "--refusal-control" then (
@@ -226,9 +226,9 @@ let () =
        <source...>\n"
       argv.(0);
     Stdlib.exit 1);
-  let base = Test_utils.Dune_stanza_scan.base_dir argv.(1) in
+  let base = Test_scan.Dune_stanza_scan.base_dir argv.(1) in
   let corpus = Array.to_list (Array.subo argv ~pos:2) |> parse_corpus in
-  let repo_relative path = Test_utils.Dune_stanza_scan.repo_relative base path in
+  let repo_relative path = Test_scan.Dune_stanza_scan.repo_relative base path in
   let generators = List.map corpus.generators ~f:repo_relative in
   let generated = List.map corpus.generated ~f:repo_relative in
   let expected_generated =
@@ -300,4 +300,4 @@ let () =
   Verdict.p_all "every named raw rename exemption matches exactly one live reference"
     exempt_references ~f:(fun exemption ->
       Map.Poly.find !remaining (exemption_key exemption) |> Option.value ~default:0 |> Int.equal 0);
-  Test_utils.Refusal_control_manifest.print "atomic_file_rename_scan.ml"
+  Test_scan.Refusal_control_manifest.print "atomic_file_rename_scan.ml"

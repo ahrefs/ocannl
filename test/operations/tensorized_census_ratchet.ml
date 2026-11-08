@@ -5,8 +5,8 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Scan = Test_utils.Tensorized_census_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Tensorized_census_scan
+module Inventory = Test_scan.Source_inventory
 
 (* A row absorbs every unjudged tensorized parity claim of its file with this label (the label
    expression as the refusal prints it), and says why that claim needs no census. A row nothing
@@ -16,7 +16,7 @@ let exemptions : Scan.exemption list = []
 let scan ?(pin_harness = true) ~exemptions root generated =
   let inventory = Inventory.of_dune_sandbox ~workspace_root:root ~generated in
   let sources =
-    Inventory.select inventory ~f:Test_utils.Ll_test_scan.test_source
+    Inventory.select inventory ~f:Test_scan.Ll_test_scan.test_source
     |> List.map ~f:(fun (file : Inventory.file) -> (file.path, In_channel.read_all file.on_disk))
   in
   let read =
@@ -66,5 +66,5 @@ let () =
         root []
   | _ :: root :: generated ->
       scan ~exemptions root generated;
-      Test_utils.Refusal_control_manifest.print "tensorized_census_ratchet.ml"
+      Test_scan.Refusal_control_manifest.print "tensorized_census_ratchet.ml"
   | _ -> Stdlib.exit 2

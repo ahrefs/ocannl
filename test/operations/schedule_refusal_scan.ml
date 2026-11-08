@@ -32,7 +32,7 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Read = Test_utils.Config_key_scan
+module Read = Test_scan.Config_key_scan
 module Ast_traverse = Ppxlib.Ast_traverse
 
 let marker = "(* invariant:"

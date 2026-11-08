@@ -10,10 +10,10 @@ open Verdict.Claims
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Config_key_scan = Test_utils.Config_key_scan
+module Config_key_scan = Test_scan.Config_key_scan
 
 (* A lower bound on the config keys the call-site scan finds: a floor, not a count, so that adding a
    key moves nothing (gh-ocannl-1046). There were 120 on 2026-09-25; leave it well below that. *)
@@ -148,7 +148,7 @@ let () =
                (marker "END")));
   (* 6. Both consistency tests (this one and digest_completeness) find a configuration read by
      scanning sources for the key spelled as a string literal at the call site
-     (Test_utils.Config_key_scan). That convention is load-bearing: a helper that takes the key as a
+     (Test_scan.Config_key_scan). That convention is load-bearing: a helper that takes the key as a
      parameter hides every key routed through it from BOTH scanners -- on staging PR #337 one such
      helper hid three real keys, and a deliberately unregistered fake key stayed green until the
      helper was removed. So the label must carry a literal everywhere except in the functions that
@@ -390,7 +390,7 @@ let () =
   let in_library path =
     List.mem
       [ "arrayjit/lib"; "tensor"; "lib" ]
-      (Test_utils.Scan_floors.directory_of path)
+      (Test_scan.Scan_floors.directory_of path)
       ~equal:String.equal
   in
   let library_modules =
@@ -485,4 +485,4 @@ let () =
       Printf.sprintf "scanned %s."
         (String.concat ~sep:", " (Config_key_scan.scan_roots source_files));
     ];
-  Test_utils.Refusal_control_manifest.print "test_config_consistency.ml"
+  Test_scan.Refusal_control_manifest.print "test_config_consistency.ml"

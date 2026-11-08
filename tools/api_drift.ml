@@ -1,6 +1,6 @@
 open Base
 open Stdio
-module Surface = Test_utils.Api_drift
+module Surface = Test_scan.Api_drift
 
 let git_raw args =
   let channel = Unix.open_process_args_in "git" (Array.of_list ("git" :: args)) in
@@ -18,7 +18,7 @@ let source_paths rev =
   let dunes =
     List.filter paths ~f:(fun p ->
         String.equal (Stdlib.Filename.basename p) "dune"
-        && Test_utils.Dead_export_scan.in_scan_root p)
+        && Test_scan.Dead_export_scan.in_scan_root p)
     |> List.map ~f:(fun p -> (p, git_raw [ "show"; rev ^ ":" ^ p ]))
   in
   Surface.sources ~dunes paths
@@ -33,7 +33,7 @@ let read rev source =
   let inventory = if String.equal (Stdlib.Filename.basename source) "dune" then paths rev else [] in
   let contents = git_raw [ "show"; rev ^ ":" ^ source ] in
   match
-    Test_utils.Scan_attempt.run (fun () -> Surface.declarations ~paths:inventory ~source contents)
+    Test_scan.Scan_attempt.run (fun () -> Surface.declarations ~paths:inventory ~source contents)
   with
   | Scanned declarations -> declarations
   | Unparsed where ->

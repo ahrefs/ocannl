@@ -1,8 +1,8 @@
 (* gh-ocannl-964: adoption ratchet over the two packages' test sources. *)
 open Base
 open Stdio
-module Scan = Test_utils.Ll_test_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Ll_test_scan
+module Inventory = Test_scan.Source_inventory
 
 (* Existing debt is exact by path and capped independently in both detected metrics. Decreases
    remain valid; adoption (or eliminating all detected debt) makes the row stale. The canonical

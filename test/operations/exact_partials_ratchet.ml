@@ -16,9 +16,9 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Scan = Test_utils.Exact_partials_scan
-module Dune = Test_utils.Dune_stanza_scan
-module Sources = Test_utils.Config_key_scan
+module Scan = Test_scan.Exact_partials_scan
+module Dune = Test_scan.Dune_stanza_scan
+module Sources = Test_scan.Config_key_scan
 
 let exemptions : Scan.exemption list =
   let debt =
@@ -97,8 +97,8 @@ let exemptions : Scan.exemption list =
   ]
 
 (* The sources arrive as a `@<path>` response file, as verdict_ratchet's do; see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 let () =
   if Array.length argv < 2 then (
@@ -113,7 +113,7 @@ let () =
   let on_disk = Map.of_alist_reduce (module String) arguments ~f:(fun first _ -> first) in
   let sources =
     Sources.sources_among (List.map arguments ~f:fst)
-    |> List.filter ~f:Test_utils.Ll_test_scan.test_source
+    |> List.filter ~f:Test_scan.Ll_test_scan.test_source
   in
   let rows =
     List.filter_map sources ~f:(fun source ->
@@ -148,4 +148,4 @@ let () =
       match e.allowance with
       | Uncovered n -> printf "%s -- %d uncovered: %s\n" e.path n e.reason
       | Every -> printf "%s -- every sentence: %s\n" e.path e.reason);
-  Test_utils.Refusal_control_manifest.print "exact_partials_ratchet.ml"
+  Test_scan.Refusal_control_manifest.print "exact_partials_ratchet.ml"

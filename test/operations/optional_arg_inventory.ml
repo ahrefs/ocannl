@@ -1,19 +1,19 @@
 (** Live inventory enforcing caller-visible honesty for optional arguments in [lib/]
     (gh-ocannl-811). The classifier and its synthetic negative controls live in
-    [Test_utils.Optional_arg_scan] and [optional_arg_scan_cases.ml]. *)
+    [Test_scan.Optional_arg_scan] and [optional_arg_scan_cases.ml]. *)
 
 open Base
 open Stdio
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Scan = Test_utils.Optional_arg_scan
-module Dune = Test_utils.Dune_stanza_scan
-module Sources = Test_utils.Config_key_scan
-module Refusal_manifest = Test_utils.Refusal_control_manifest
+module Scan = Test_scan.Optional_arg_scan
+module Dune = Test_scan.Dune_stanza_scan
+module Sources = Test_scan.Config_key_scan
+module Refusal_manifest = Test_scan.Refusal_control_manifest
 
 let read path = Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all
 

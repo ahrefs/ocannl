@@ -54,13 +54,13 @@ open Stdio
 open Verdict.Claims
 
 (* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
-   a Windows command line may be; see [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   a Windows command line may be; see [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Scan = Test_utils.Cache_dir_scan
+module Scan = Test_scan.Cache_dir_scan
 
-let base_dir = Test_utils.Dune_stanza_scan.base_dir
-let repo_relative = Test_utils.Dune_stanza_scan.repo_relative
+let base_dir = Test_scan.Dune_stanza_scan.base_dir
+let repo_relative = Test_scan.Dune_stanza_scan.repo_relative
 
 let require_ignore_file ~fail = function
   | Some on_disk -> Some on_disk
@@ -100,7 +100,7 @@ let refuse_unreadable_patterns ~fail patterns =
    defect. *)
 let read_source_or_refusal ?(reader = fun ~source content -> Scan.read ~source content) ~fail
     ~source content =
-  match Test_utils.Scan_attempt.run (fun () -> reader ~source content) with
+  match Test_scan.Scan_attempt.run (fun () -> reader ~source content) with
   | Scanned reading -> Some reading
   | Unparsed where ->
       fail
@@ -170,7 +170,7 @@ let refusal_control () =
     let refused = ref false in
     let fail _message =
       refused := true;
-      Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+      Test_scan.Refusal_control_manifest.observe_failure ~source ~format
     in
     run fail;
     Verdict.p label !refused
@@ -201,7 +201,7 @@ let refusal_control () =
     let routed =
       match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
     in
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     Verdict.p label routed
   in
   routed_case "an invalid OCaml source reaches the parse refusal"
@@ -256,7 +256,7 @@ let refusal_control () =
       check_effectively_ignored ~fail
         (Scan.ignore_patterns "/autotune_cache*/\n!/autotune_cache_leak/")
         "autotune_cache_leak");
-  Test_utils.Refusal_control_manifest.print source
+  Test_scan.Refusal_control_manifest.print source
 
 let () =
   if Array.length argv = 2 && String.equal argv.(1) "--refusal-control" then (
@@ -353,4 +353,4 @@ let () =
     (List.length naming);
   Verdict.success_trailer ~blank_line:true
     [ "every source listed names one; the ignore list needs no entry per directory." ];
-  Test_utils.Refusal_control_manifest.print "cache_dir_ignores.ml"
+  Test_scan.Refusal_control_manifest.print "cache_dir_ignores.ml"

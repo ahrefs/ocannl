@@ -999,4 +999,4 @@ let () =
      List.length deep = 2
      && List.exists deep ~f:(fun bullet -> mentions bullet "inside Unreleased")
      && not (List.exists deep ~f:(fun bullet -> mentions bullet "released, uncited")));
-  Test_utils.Refusal_control_manifest.print "changelog_unreleased_scan.ml"
+  Test_scan.Refusal_control_manifest.print "changelog_unreleased_scan.ml"

@@ -99,14 +99,14 @@ open Stdio
 open Verdict.Claims
 
 (* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
-   a Windows command line may be; see [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   a Windows command line may be; see [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Scan = Test_utils.Dune_stanza_scan
-module Lifecycle = Test_utils.Lifecycle_scan
-module Sources = Test_utils.Config_key_scan
-module Refusals = Test_utils.Refusal_control_scan
-module Refusal_manifest = Test_utils.Refusal_control_manifest
+module Scan = Test_scan.Dune_stanza_scan
+module Lifecycle = Test_scan.Lifecycle_scan
+module Sources = Test_scan.Config_key_scan
+module Refusals = Test_scan.Refusal_control_scan
+module Refusal_manifest = Test_scan.Refusal_control_manifest
 
 (* gh-ocannl-1425: the stable fragment of the refusal of a declaration the ambient record makes
    redundant, which the controls look for. *)
@@ -279,7 +279,7 @@ let rec relative_locks = function
 
 (* The alias vocabulary -- what a stanza attaches to, what its `deps` build, what an `(alias …)`
    stanza defines -- lives in the shared scanner, which tools/batch-backends.sh's reachability
-   question (Test_utils.Slot_kind) reads too: two readers of one dune grammar must not drift. *)
+   question (Test_scan.Slot_kind) reads too: two readers of one dune grammar must not drift. *)
 let aliases_of = Scan.aliases_of
 let alias_deps = Scan.alias_deps
 let alias_stanza_name = Scan.alias_stanza_name
@@ -1219,7 +1219,7 @@ let module_reads_or_refusal
       fun content ->
         (Sources.tracing_gates_in_source content, Sources.env_var_reads_in_source content)) ~fail
     ~source content =
-  match Test_utils.Scan_attempt.run (fun () -> read content) with
+  match Test_scan.Scan_attempt.run (fun () -> read content) with
   | Scanned reads -> Some reads
   | Unparsed where ->
       fail

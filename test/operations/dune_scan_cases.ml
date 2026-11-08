@@ -1,4 +1,4 @@
-(** How {!Test_utils.Dune_stanza_scan} reads a dune file, exercised directly.
+(** How {!Test_scan.Dune_stanza_scan} reads a dune file, exercised directly.
 
     The scan decides which stanzas are subject to the dependency rule, so every one of its mistakes
     is silent in the same way [Config_key_scan]'s are: a stanza it fails to recognise looks exactly
@@ -8,7 +8,7 @@
     is easiest to write for. *)
 
 open Base
-module Scan = Test_utils.Dune_stanza_scan
+module Scan = Test_scan.Dune_stanza_scan
 
 let printf = Stdio.printf
 
@@ -1773,7 +1773,7 @@ let configured dir extra =
   (dir ^ "/dune", "(copy_files " ^ up ^ "config/ambient/ocannl_config)\n" ^ extra)
 
 let render_resolution_verdict = function
-  | Test_utils.Config_dep_resolution.Counted -> "counted"
+  | Test_scan.Config_dep_resolution.Counted -> "counted"
   | Exempt -> "exempt"
   | No_config_in_reach -> "no config in reach"
   | Unestablished_directory -> "directory cannot be established"
@@ -1783,7 +1783,7 @@ let render_resolution_verdict = function
   | Undeclared -> "undeclared"
 
 let render_resolution ~exemptions tree =
-  let module R = Test_utils.Config_dep_resolution in
+  let module R = Test_scan.Config_dep_resolution in
   let is name (path, _) = String.equal (Stdlib.Filename.basename path) name in
   let report =
     R.analyze ~exemption_keys:exemptions
@@ -2085,8 +2085,8 @@ let host_unread_tree =
 
 let scanner_refusal_controls exe =
   let source = "test/operations/config_dep_completeness.ml" in
-  let refuses = Test_utils.Refusal_control_manifest.refuses ~source ~exe in
-  Test_utils.Refusal_control_manifest.with_tree refusal_tree (fun root ->
+  let refuses = Test_scan.Refusal_control_manifest.refuses ~source ~exe in
+  Test_scan.Refusal_control_manifest.with_tree refusal_tree (fun root ->
       Verdict.p "config_dep_completeness refuses a tree built to trip its refusals, exiting 1"
         (refuses
            ~claim:"config_dep_completeness refuses a tree built to trip its refusals, exiting 1"
@@ -2113,13 +2113,13 @@ let scanner_refusal_controls exe =
       let tree =
         ("test/operations/" ^ scanner_source, Stdio.In_channel.read_all scanner_source) :: files
       in
-      Test_utils.Refusal_control_manifest.with_tree tree (fun root ->
+      Test_scan.Refusal_control_manifest.with_tree tree (fun root ->
           let claim = "config_dep_completeness refuses " ^ what ^ ", exiting 1" in
           let refused =
             Stdlib.Sys.chdir root;
             Exn.protect
               ~f:(fun () ->
-                Test_utils.Refusal_control_manifest.refuses ~source ~claim ~exe
+                Test_scan.Refusal_control_manifest.refuses ~source ~claim ~exe
                   ("." :: List.map files ~f:fst))
               ~finally:(fun () -> Stdlib.Sys.chdir here)
           in
@@ -2261,4 +2261,4 @@ let () =
   (match Stdlib.Sys.argv with
   | [| _; exe |] -> scanner_refusal_controls exe
   | _ -> Verdict.fail "usage: dune_scan_cases <config_dep_completeness.exe>");
-  Test_utils.Refusal_control_manifest.print "config_dep_completeness.ml"
+  Test_scan.Refusal_control_manifest.print "config_dep_completeness.ml"

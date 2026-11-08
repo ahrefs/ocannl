@@ -100,7 +100,7 @@
 #  57. every tracked ocannl_config naming a backend is one the backends are
 #      read from.
 #  58. the readers batch-backends.sh builds are test/config's: ocannl_read_config
-#      answers --read=backend (through test/config/config_reads.ml), ocannl_slot_kind asks Test_utils.Slot_kind and
+#      answers --read=backend (through test/config/config_reads.ml), ocannl_slot_kind asks Test_scan.Slot_kind and
 #      prints the grammar batch_resolve parses, and Slot_kind's config_dirs is
 #      BATCH_CONFIG_DIRS.
 #  93 sits after leg 58: a tree carrying a backend marker env_var_deps refuses
@@ -945,8 +945,8 @@ fi
   slot_detail="test/config/config_reads.ml does not list backend among its backend_keys"
 [ -n "$slot_detail" ] || grep -q '^  | "backend" -> Some (canonical_backend setting)$' "$HERE/../test/config/config_reads.ml" ||
   slot_detail="test/config/config_reads.ml does not answer --read=backend"
-[ -n "$slot_detail" ] || grep -q 'Test_utils.Slot_kind.answer' "$HERE/../$slot_reach_exe.ml" ||
-  slot_detail="$slot_reach_exe.ml does not ask Test_utils.Slot_kind"
+[ -n "$slot_detail" ] || grep -q 'Test_scan.Slot_kind.answer' "$HERE/../$slot_reach_exe.ml" ||
+  slot_detail="$slot_reach_exe.ml does not ask Test_scan.Slot_kind"
 # The reachability tool's grammar is the one batch_resolve parses: a `names
 # <backend>: <why>` line per backend, a `reads config: <why>` line when a
 # configuration counts, then `end`; or one `unknown: <why>`; or a `refused:

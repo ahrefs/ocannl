@@ -201,7 +201,7 @@ my %before;
 # What a Verdict.case prints when its case raises (test/support/verdict.ml): the
 # case's own failed claim, standing in for rows the raise kept from printing.
 my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
-# A refusal-manifest marker row, as Test_utils.Refusal_control_manifest.print_section writes one: a
+# A refusal-manifest marker row, as Test_scan.Refusal_control_manifest.print_section writes one: a
 # claim's marker prints only once Verdict recorded that claim passing, so a run in which the
 # claim failed is a marker row short of the golden while it still reached its last row
 # (gh-ocannl-1216). tools/test-mutation-run.sh replays a run that printer ended, so this shape is

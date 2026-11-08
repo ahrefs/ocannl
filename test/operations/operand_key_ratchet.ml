@@ -3,8 +3,8 @@
    are in test/support/operand_key_scan.ml's header. *)
 open Base
 open Stdio
-module Scan = Test_utils.Operand_key_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Operand_key_scan
+module Inventory = Test_scan.Source_inventory
 
 (* A [Site] row absorbs ONE site: the file, the site's source text with whitespace collapsed (what
    the refusal prints), and why it is not an operand the guard should check. A [File] row absorbs
@@ -47,7 +47,7 @@ let exemptions =
 
 let scan ~exemptions root generated =
   let inventory = Inventory.of_dune_sandbox ~workspace_root:root ~generated in
-  let sources = Inventory.select inventory ~f:Test_utils.Ll_test_scan.test_source in
+  let sources = Inventory.select inventory ~f:Test_scan.Ll_test_scan.test_source in
   let rows =
     List.map sources ~f:(fun (file : Inventory.file) ->
         (file.path, Scan.sites (In_channel.read_all file.on_disk)))

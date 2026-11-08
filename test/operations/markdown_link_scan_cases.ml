@@ -1,6 +1,6 @@
 open Base
 open Verdict.Claims
-module Scan = Test_utils.Markdown_link_scan
+module Scan = Test_scan.Markdown_link_scan
 
 let () =
   let check = Scan.check ~exists:(String.equal "docs/target.md") ~from_file:"docs/from.md" in

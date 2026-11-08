@@ -4,7 +4,7 @@
 open Base
 open Stdio
 open Verdict.Claims
-module E = Test_utils.Doc_examples_scan
+module E = Test_scan.Doc_examples_scan
 
 let compile ~compiler ~interface code =
   let source = Stdlib.Filename.temp_file "doc_examples_control" ".ml" in

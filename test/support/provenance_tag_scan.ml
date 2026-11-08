@@ -592,7 +592,7 @@ let foreign_carriers ~carriers ~foreign ~owner ~source content =
     A constructor with a carrier's name is taken for the owner's unless it names another: a module
     in [foreign] declares its own [string]-carrying constructor of that name (as [Operand_key_scan]
     declares [Site of string]), so an application qualified by it -- directly or through a chain of
-    module bindings in the source ([module Scan = Test_utils.Operand_key_scan]) -- is not a
+    module bindings in the source ([module Scan = Test_scan.Operand_key_scan]) -- is not a
     provenance; an unqualified one changes identity only after its declaration or include. A module
     name is resolved against the binding in scope where it is used -- structure items bind for the
     items after them, [let module] for its body, a nested structure for itself -- and a binding

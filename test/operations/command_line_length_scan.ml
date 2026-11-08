@@ -11,9 +11,9 @@
    {1 What it reads}
 
    Every [dune] file (and [dune-file], dune's alternative name) in dune's own source tree: the rule
-   declares [(sandbox always)] and [(source_tree ../..)], and [Test_utils.Source_inventory] lists
+   declares [(sandbox always)] and [(source_tree ../..)], and [Test_scan.Source_inventory] lists
    what dune copied, so a directory dune excludes is excluded here too. Each file is read through
-   [Test_utils.Dune_stanza_scan], which refuses one that sexplib and dune would read differently. In
+   [Test_scan.Dune_stanza_scan], which refuses one that sexplib and dune would read differently. In
    every stanza, at any depth, it reads each [(action ...)] field -- rules, aliases, tests, a
    [(preprocess (action ...))] -- and a rule's short form, whose body IS its action. It walks dune's
    action language: [run], [dynamic-run], [system] and [bash] spawn a process, [chdir] moves where
@@ -42,7 +42,7 @@
    upper one, so such an expansion on a spawned command line is REFUSED, whatever its size today: it
    grows with the repository, and the only reading that cannot go stale is that it may not appear
    there. The fix is gh-ocannl-1720's: write [%{deps}] to a response file in a non-spawning [(echo
-   ...)], hand the program [@<file>], and read it through [Test_utils.Scan_argv.expand]. Equally
+   ...)], hand the program [@<file>], and read it through [Test_scan.Scan_argv.expand]. Equally
    refused: a pform with no bound on this list, [%{read:}] of a file {!judged_reads} does not name,
    and a dependency form it does not know.
 
@@ -61,8 +61,8 @@
 
 open Base
 open Stdio
-module Scan = Test_utils.Dune_stanza_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Dune_stanza_scan
+module Inventory = Test_scan.Source_inventory
 
 (** The bound at which a spawned command line fails: 4,767 characters short of Windows' 32,767, so a
     rule fails on Linux while the repository has a few hundred paths of growth left. *)
@@ -409,7 +409,7 @@ let scan ~root ~generated ~live =
     eprintf
       "A dependency set belongs in a response file: `(with-stdout-to <x>.filelist (echo \
        \"%%{deps}\"))`, then `(run <exe> @<x>.filelist)`, read through \
-       `Test_utils.Scan_argv.expand` (gh-ocannl-1720).\n";
+       `Test_scan.Scan_argv.expand` (gh-ocannl-1720).\n";
   List.iter over ~f:(eprintf "%s\n");
   (* The floors keep a scan that stopped finding dune files or spawns from passing; a synthetic
      control tree is far smaller than the repository, so they apply to the live run only. *)
@@ -609,7 +609,7 @@ let control () =
        included);
   Verdict.p "a dune file sexplib would read with a hole in it is refused"
     (refused "unreadable" ~messages:[ "a/dune: " ] unreadable);
-  Test_utils.Refusal_control_manifest.print "command_line_length_scan.ml";
+  Test_scan.Refusal_control_manifest.print "command_line_length_scan.ml";
   remove_tree fixture
 
 let usage () =

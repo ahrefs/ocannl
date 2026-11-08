@@ -1,5 +1,5 @@
 open Base
-module Surface = Test_utils.Api_drift
+module Surface = Test_scan.Api_drift
 
 let declarations ?(paths = []) source text = Surface.declarations ~paths ~source text
 
@@ -18,7 +18,7 @@ let () =
       "lib/sub/f.mli";
     ]
   in
-  let implicit = Test_utils.Dead_export_scan.implicit_implementations inventory in
+  let implicit = Test_scan.Dead_export_scan.implicit_implementations inventory in
   Verdict.p "editorial implicit modules are selected by the dead-export census"
     (List.equal String.equal implicit [ "lib/b.ml"; "arrayjit/lib/d.ml" ]
     && List.equal String.equal (Surface.sources inventory)
@@ -365,9 +365,9 @@ let () =
   Verdict.p "named pattern aliases remain exported declarations"
     (List.length (changed "lib/a.ml" "let ([] as exported) = []" "let ([] as exported) = [1]") = 1
     && List.equal String.equal
-         (Test_utils.Dead_export_scan.exports_of_source ~source:"lib/a.ml"
+         (Test_scan.Dead_export_scan.exports_of_source ~source:"lib/a.ml"
             "let ([] as exported) = []"
-         |> List.map ~f:Test_utils.Dead_export_scan.export_key)
+         |> List.map ~f:Test_scan.Dead_export_scan.export_key)
          [ "A.exported" ]);
   Verdict.p "named module unpack bindings remain exported declarations"
     (match

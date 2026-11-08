@@ -890,11 +890,11 @@ let is_action relative =
 let is_shell_script relative = String.is_suffix relative ~suffix:".sh"
 
 let scan workspace_root paths =
-  let base = Test_utils.Dune_stanza_scan.base_dir workspace_root in
+  let base = Test_scan.Dune_stanza_scan.base_dir workspace_root in
   let discovered ~f =
     List.filter paths ~f:(fun path -> not (Stdlib.Sys.is_directory path))
     |> List.filter_map ~f:(fun path ->
-        let relative = Test_utils.Dune_stanza_scan.repo_relative base path in
+        let relative = Test_scan.Dune_stanza_scan.repo_relative base path in
         Option.some_if (f relative) (relative, path))
     |> List.dedup_and_sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
@@ -954,7 +954,7 @@ let scan workspace_root paths =
   let record =
     match
       List.find paths ~f:(fun path ->
-          String.equal (Test_utils.Dune_stanza_scan.repo_relative base path) floor_note)
+          String.equal (Test_scan.Dune_stanza_scan.repo_relative base path) floor_note)
     with
     | None -> No_record "nothing: the note was not handed to this scan"
     | Some path -> read_record (In_channel.read_all path)
@@ -1927,14 +1927,14 @@ let control () =
     (refused "unbounded action refresh"
        ~messages:[ unbounded ~file:".github/actions/refresh/action.yml" ~line:7 "apt-get" ]
        apt_action);
-  Test_utils.Refusal_control_manifest.print "workflow_job_timeouts.ml";
+  Test_scan.Refusal_control_manifest.print "workflow_job_timeouts.ml";
   remove_tree fixture
 
 (* Every file this scan reads arrives as a `@<path>` response file, because the list a repository-
-   wide glob produces may be longer than a Windows command line; see [Test_utils.Scan_argv]. The
+   wide glob produces may be longer than a Windows command line; see [Test_scan.Scan_argv]. The
    synthetic controls pass their handful of paths directly, which reaches the same argv. *)
 let () =
-  match Array.to_list (Test_utils.Scan_argv.expand Stdlib.Sys.argv) with
+  match Array.to_list (Test_scan.Scan_argv.expand Stdlib.Sys.argv) with
   | _ :: "--scan-only" :: workspace_root :: paths -> scan workspace_root paths
   | _ :: workspace_root :: paths ->
       scan workspace_root paths;

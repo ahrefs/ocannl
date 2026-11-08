@@ -52,10 +52,9 @@
    reasons.
 
    This file reads the repository and words the verdicts; deciding them is
-   [Test_utils.Config_dep_resolution.analyze], which takes the tree as data so that
-   `dune_scan_cases` can hand it synthetic trees with known answers (gh-ocannl-603). The golden
-   below can only say that today's tree is consistent; those cases say that a tree where X is wrong
-   is rejected. *)
+   [Test_scan.Config_dep_resolution.analyze], which takes the tree as data so that `dune_scan_cases`
+   can hand it synthetic trees with known answers (gh-ocannl-603). The golden below can only say
+   that today's tree is consistent; those cases say that a tree where X is wrong is rejected. *)
 
 open Base
 open Stdio
@@ -70,10 +69,10 @@ open Verdict.Claims
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Scan = Test_utils.Dune_stanza_scan
+module Scan = Test_scan.Dune_stanza_scan
 
 (* Rules that run something which reads no configuration. Keyed by "<dir>:<what the scan reports>",
    and each entry has to earn its place on every run (see the staleness check): an exemption is a
@@ -133,7 +132,7 @@ let exempt_sites =
        is no configuration in reach -- and a Python process would not read one anyway" );
   ]
 
-module Resolution = Test_utils.Config_dep_resolution
+module Resolution = Test_scan.Config_dep_resolution
 
 let () =
   if Array.length argv < 2 then (
@@ -422,4 +421,4 @@ let () =
          apart from the sites exempted above."
         Scan.config_file;
     ];
-  Test_utils.Refusal_control_manifest.print "config_dep_completeness.ml"
+  Test_scan.Refusal_control_manifest.print "config_dep_completeness.ml"

@@ -89,10 +89,10 @@ open Stdio
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
-let base_dir = Test_utils.Dune_stanza_scan.base_dir
-let repo_relative = Test_utils.Dune_stanza_scan.repo_relative
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
+let base_dir = Test_scan.Dune_stanza_scan.base_dir
+let repo_relative = Test_scan.Dune_stanza_scan.repo_relative
 
 (* The scripts tracked when this check was written, and the floor it holds the scan to. A floor
    rather than a count: adding a script must not make anyone promote a number, while a scan that
@@ -2671,7 +2671,7 @@ module Shell_context = struct
       report ~fail:(fun message -> messages := message :: !messages) ~rel:"fixture.sh" (read text);
       let refused = List.mem !messages expected ~equal:String.equal in
       if refused then
-        Test_utils.Refusal_control_manifest.observe_failure
+        Test_scan.Refusal_control_manifest.observe_failure
           ~source:"test/operations/shell_scripts_parse.ml" ~format;
       refused
     in
@@ -3193,7 +3193,7 @@ module Errexit_negation = struct
         ]
     in
     if refused then
-      Test_utils.Refusal_control_manifest.observe_failure
+      Test_scan.Refusal_control_manifest.observe_failure
         ~source:"test/operations/shell_scripts_parse.ml"
         ~format:
           "%s:%d: statement-position `! command` is inert under errexit; route the assertion \
@@ -3561,7 +3561,7 @@ module Errexit_and_list = struct
         ]
     in
     if refused then
-      Test_utils.Refusal_control_manifest.observe_failure
+      Test_scan.Refusal_control_manifest.observe_failure
         ~source:"test/operations/shell_scripts_parse.ml"
         ~format:
           "%s:%d: statement-position `[ A ] && [ B ]` passes silently when its FIRST test fails \
@@ -4092,4 +4092,4 @@ let () =
   List.iter missing ~f:(fun rel -> eprintf "not reached by the scan: %s\n" rel);
   Verdict.p_empty "the scan reached the session hook and the suite runner" ~over:must_be_scanned
     missing;
-  Test_utils.Refusal_control_manifest.print "shell_scripts_parse.ml"
+  Test_scan.Refusal_control_manifest.print "shell_scripts_parse.ml"

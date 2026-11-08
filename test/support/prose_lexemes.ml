@@ -11,10 +11,9 @@
     string literal over as a token carrying its DECODED value.
 
     Its own library because it reads through [compiler-libs], whose top-level [Location] and
-    [Parser] are not ppxlib's: the scans in [test_utils] parse through ppxlib, and keeping the two
-    in separate compilation units keeps each file's spelling unambiguous (the reason
-    [emitter_frontier] stands apart too). The interface is plain data, so a consumer never sees
-    either. *)
+    [Parser] are not ppxlib's: the scans in [test_scan] parse through ppxlib, and keeping the two in
+    separate compilation units keeps each file's spelling unambiguous (the reason [emitter_frontier]
+    stands apart too). The interface is plain data, so a consumer never sees either. *)
 
 open Base
 

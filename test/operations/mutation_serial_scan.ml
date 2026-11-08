@@ -11,7 +11,7 @@
    ends as a negative control: its golden is the findings, and it must exit 1. *)
 open Base
 open Stdio
-module Scan = Test_utils.Mutation_serial_scan
+module Scan = Test_scan.Mutation_serial_scan
 
 (* The corpus is a policy, not a census: the three modules holding the inference session's state. *)
 let corpus = [ "tensor/row.ml"; "tensor/shape.ml"; "tensor/tensor.ml" ]
@@ -28,7 +28,7 @@ let scan_file ~root ~suffix file =
   | Some source -> (
       let interface = read (file ^ "i") in
       match
-        Test_utils.Scan_attempt.run (fun () ->
+        Test_scan.Scan_attempt.run (fun () ->
             Scan.scan ~file
               ~serial_owner:(String.is_suffix file ~suffix:"row.ml")
               ~require_capture:true ?interface source)
