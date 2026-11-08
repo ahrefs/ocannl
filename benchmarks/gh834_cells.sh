@@ -56,6 +56,7 @@
 #   mode's pair, so order effects cancel.
 set -u
 . "$(dirname "$0")/box-gate.sh"
+. "$(dirname "$0")/../scripts/process-group.sh"
 box_gate_args "$@"; shift "$box_gate_shift"
 # Hermetic against ambient configuration, as gh612_cells.sh is: every treatment is pinned on the
 # command line, so an exported OCANNL_* or BENCH_* could only contaminate every cell consistently.
@@ -199,8 +200,7 @@ step() {
   capped "$@" >"$out/$name.out" 2>"$out/$name.err" &
   local sup=$! interrupted=
   trap 'interrupted=1; kill -TERM "$sup" 2>/dev/null' INT TERM HUP
-  while kill -0 "$sup" 2>/dev/null; do wait "$sup"; done
-  wait "$sup"
+  wait_child "$sup"
   rc=$?
   trap - INT TERM HUP
   [ -n "$interrupted" ] && { echo "== step $name: interrupted (exit $rc); stopping"; exit 130; }

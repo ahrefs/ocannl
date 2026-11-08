@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared process-group liveness predicate for the shell harnesses and tools.
+# Shared process liveness and signal-responsive child waits for harnesses and tools.
 #
 # A signal probe alone counts zombies as alive on Linux.  Narrow that answer
 # with process state where the host publishes it, while retaining the signal as
@@ -67,4 +67,39 @@ pid_alive() { # <pid>; exits 0 iff the process exists and is not a zombie
   # No row: reaped since the probe, or no state reader answered, which as above
   # over-reports it as alive.
   kill -0 "$pid" 2>/dev/null
+}
+
+# Let a trapped signal run within a second even when Bash holds it in front
+# of a blocking wait (gh-ocannl-1504). The foreground tick ends sooner when
+# PID exits; Bash reaps it before running the trap, so a trap that exits cannot
+# leave a tick behind in the caller's process group. A background tick plus
+# `wait $!` bounded the trap too, but leaked that tick on cancellation
+# (gh-ocannl-1914's sweep cancellation leg).
+# A PID-directed cancellation waits for the current tick (up to one second);
+# a group signal ends the tick immediately.
+# Close the run's descriptors: lock fd 9 and repeat's witness fds 6 and 8.
+wait_tick() { # PID
+  # Apply redirections only in the exec child, so a trap keeps the caller's
+  # streams and lock descriptors even if it lands during tick setup.
+  (exec perl -e 'my $n = 0; select undef, undef, undef, 0.05 while kill(0, $ARGV[0]) && ++$n < 20' "$1" \
+    </dev/null >/dev/null 2>&1 6>&- 8>&- 9>&-)
+}
+
+# Wait for an unreaped direct child, preserving its exit status. PID must be
+# `$!` of a simple background command, not the last process of a pipeline. The job table
+# belongs to this shell, so an exited child's recycled pid cannot extend the
+# wait. Select running and stopped jobs: Bash 3.2 can retain completed jobs
+# in `jobs -p`, and a stopped job's eventual wait would still block.
+# Callers' traps may relay cancellation and return; check again after each tick
+# rather than treating an interrupted wait's status as the child's verdict.
+wait_child() { # PID
+  local wait_jobs
+  while :; do
+    wait_jobs=$(trap '' INT TERM HUP; jobs -pr; jobs -ps)
+    case $'\n'"$wait_jobs"$'\n' in
+      *$'\n'"$1"$'\n'*) wait_tick "$1" || : ;;
+      *) break ;;
+    esac
+  done
+  wait "$1"
 }

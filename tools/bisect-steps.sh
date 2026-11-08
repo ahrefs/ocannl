@@ -89,15 +89,15 @@ bisect_lines() { # <file> -> the array bisect_read_out, one element per line
 }
 
 # A child in a process group of its own, waited for through signals: a
-# trapped signal returns `wait` early, and the cancellation it set is acted on
-# (bisect_cancel) before waiting again. Sets bisect_rc; the group is
+# trapped signal is relayed within a tick, even in bash's wait-entry race
+# (bisect_cancel), before waiting again. Sets bisect_rc; the group is
 # bisect_pgid until it is gone (bisect_drain). A cancellation already flagged
 # starts nothing; one that landed while the child was being launched, before
 # its pgid was known here (so bisect_cancel had nothing to signal), is
 # delivered as soon as it is -- to the group, or to the child itself if it
 # has not made the group yet (it is still this shell's unreaped child, so
 # its pid names nothing else).
-bisect_pgid= bisect_rc= bisect_cancelled= bisect_pending=
+bisect_pgid= bisect_rc= bisect_cancelled=
 bisect_cancel_rc() { case $bisect_cancelled in INT) echo 130 ;; HUP) echo 129 ;; *) echo 143 ;; esac; }
 bisect_spawn() { # command...
   bisect_pgid=
@@ -110,16 +110,11 @@ bisect_spawn() { # command...
   if [ -n "$bisect_cancelled" ]; then
     kill -TERM -- "-$bisect_pgid" 2>/dev/null || kill -TERM "$bisect_pgid" 2>/dev/null
   fi
-  wait "$bisect_pgid"
+  wait_child "$bisect_pgid"
   bisect_rc=$?
-  while [ -n "$bisect_pending" ]; do
-    bisect_pending=
-    wait "$bisect_pgid"
-    bisect_rc=$?
-  done
 }
 bisect_cancel() { # <signal name>
-  bisect_cancelled=$1 bisect_pending=1
+  bisect_cancelled=$1
   [ -z "$bisect_pgid" ] || kill -TERM -- "-$bisect_pgid" 2>/dev/null
 }
 # Once the child is reaped: the rest of its group (a step's runner launcher and

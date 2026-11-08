@@ -677,7 +677,11 @@ for name, target, old, new, oracle in controls:
     for file in [harness, harness.parent / 'sweep_remote_fixture.sh']:
         shutil.copy2(file, dest / 'test/operations' / file.name)
     for support in ['harness-support.sh', 'process-group.sh']:
-        shutil.copy2(harness.parent.parent.parent / 'scripts' / support, dest / 'scripts' / support)
+        destination = dest / 'scripts' / support
+        # A sourced sweep helper may already have staged this support file,
+        # with Dune's read-only mode. Do not overwrite that copy.
+        if not destination.exists():
+            shutil.copy2(harness.parent.parent.parent / 'scripts' / support, destination)
     # A target is the harness, the sweep, or one of the helpers it sources, by file name.
     file = dest / ('test/operations/' + harness.name if target == 'harness'
                    else 'tools/' + (sweep.name if target == 'sweep' else target))

@@ -2973,22 +2973,6 @@ proc_alive() { # pid-file token-file
 # repeat iterations; delete with the legacy paths.
 sup_alive() { proc_alive "$1/pid" "$1/ptoken" || legacy_owner_alive "$1"; }
 legacy_owner_alive() { [ ! -f "$1/runs" ] && proc_alive "$1/wpid" "$1/wtoken"; }
-# Wait for this shell's child PID -- the supervisor a launcher or a repeat
-# coordinator relays its trapped signals to -- for at most a second: it
-# returns when PID exits (bash reaps it, and the tick's kill 0 fails), when a
-# trapped signal interrupts the wait, or when the tick ends. Never a bare
-# `wait PID`: a trapped signal landing after bash's last check for pending
-# traps and before that wait blocks is HELD, its trap not run until PID exits
-# -- a cancellation relayed only once the run it was meant to stop is over
-# (gh-ocannl-1504; about 1 in 2000 cancellations of a forwarding loop on
-# bash 3.2, and under load on bash 5.2). Waiting on the tick instead, the
-# held trap runs within a second. The tick holds none of the run's
-# descriptors (lock fd 9, repeat's witness fds 6 and 8) and needs no reaping.
-wait_tick() { # PID
-  perl -e 'my $n = 0; select undef, undef, undef, 0.05 while kill(0, $ARGV[0]) && ++$n < 20' "$1" \
-    </dev/null >/dev/null 2>&1 6>&- 8>&- 9>&- &
-  wait "$!" 2>/dev/null
-}
 # Group signaling demands a RECORDED leader token: proc_alive's empty-token
 # fallback exists for supervisor pids on platforms without lstart,
 # and is too weak to aim a signal at a whole, possibly recycled, process
@@ -4600,10 +4584,9 @@ case $sub in
     { printf '%s\n' "$repeat_sup" >"$resolve_dir/pid" &&
       ps_token "$repeat_sup" >"$resolve_dir/ptoken"; } ||
       kill -TERM "$repeat_sup" 2>/dev/null
-    # A second at a time, so a held trap still reaches it (wait_tick); its
-    # status once it is gone.
-    while proc_alive "$resolve_dir/pid" "$resolve_dir/ptoken"; do wait_tick "$repeat_sup"; done
-    wait "$repeat_sup"
+    # This shell's direct child; token files remain the identity record used
+    # by the group cleanup after its status has been collected.
+    wait_child "$repeat_sup"
     resolve_rc=$?
     repeat_sup=
     # The resolution touches nothing repeat_build holds, so a group of only zombies it leaves behind
@@ -4751,11 +4734,10 @@ case $sub in
       { printf '%s\n' "$repeat_sup" >"$sdir/pid" &&
         ps_token "$repeat_sup" >"$sdir/ptoken"; } ||
         kill -TERM "$repeat_sup" 2>/dev/null
-      while proc_alive "$sdir/pid" "$sdir/ptoken"; do wait_tick "$repeat_sup"; done
-      wait "$repeat_sup"
+      wait_child "$repeat_sup"
       step_rc=$?
-      # The numeric pid is no longer ours once wait/proc_alive prove the
-      # supervisor gone. Clear it before the slower orphan-group reap so a
+      # The numeric pid is no longer ours once wait_child has reaped the
+      # supervisor. Clear it before the slower orphan-group reap so a
       # cancellation cannot signal a recycled, unrelated process.
       repeat_sup=
       # SIGKILL can remove the supervisor without reaching the Dune process
@@ -5605,7 +5587,7 @@ case $sub in
     if [ ! -s "$run_dir/pid" ]; then
       # Gone, or given up, before recording itself: its verdict, if it left
       # one, says why (nothing ran); otherwise only its log can.
-      wait "$sup" 2>/dev/null
+      wait_child "$sup" 2>/dev/null
       sup=
       trap - INT TERM HUP
       [ "$sub" != plan ] || plan_finish "$@"

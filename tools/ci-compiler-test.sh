@@ -59,6 +59,8 @@
 # never reaches the requested compiler fails rather than being certified.
 
 set -u
+# shellcheck source=../scripts/process-group.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/../scripts/process-group.sh"
 
 die() { echo "ci-compiler-test: $*" >&2; exit 2; }
 
@@ -228,7 +230,7 @@ trap 'forward_signal 143' TERM HUP
 run_tracked() {
   "$@" &
   active_child=$!
-  wait "$active_child"
+  wait_child "$active_child"
   tracked_rc=$?
   active_child=
   return "$tracked_rc"
@@ -239,7 +241,7 @@ run_tracked_in() {
   shift
   (cd "$tracked_dir" && exec "$@") &
   active_child=$!
-  wait "$active_child"
+  wait_child "$active_child"
   tracked_rc=$?
   active_child=
   return "$tracked_rc"

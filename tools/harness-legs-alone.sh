@@ -42,6 +42,8 @@
 # stop the check and keep their status (129, 130, 143).
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P) || exit 2
+# shellcheck source=../scripts/process-group.sh
+. "$root/scripts/process-group.sh"
 logs= harnesses=()
 while [ $# -gt 0 ]; do
   case $1 in
@@ -148,7 +150,7 @@ member() { # LOG SCRIPT [ARG...] -- one run; rc in $rc
   child=$!
   # A signal to this check runs stop(); the member's own status, 143
   # included, is the member's verdict.
-  wait "$child" || rc=$?
+  wait_child "$child" || rc=$?
   child= current_log=
   after=$(checkout_state)
   if [ "$after" != "$baseline" ]; then

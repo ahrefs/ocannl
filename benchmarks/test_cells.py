@@ -551,6 +551,8 @@ class DriverTreeTest(StubRunTest):
         self.root = self.dir / "root"
         bench = self.root / "benchmarks"
         bench.mkdir(parents=True)
+        (self.root / "scripts").mkdir()
+        shutil.copy2(HERE.parent / "scripts/process-group.sh", self.root / "scripts/process-group.sh")
         for f in [*HERE.glob("*.py"), *HERE.glob("*.sh")]:
             shutil.copy2(f, bench / f.name)
         env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
