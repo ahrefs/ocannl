@@ -468,6 +468,8 @@ files.
   message, `Ops.no_plain_uint4x32_conversion`, from every `convert_precision`. Metal used to read
   it as the uniform conversion and CUDA/HIP as lane 0's bits. Random bits reach a scalar through
   the uniform operators only, `Uint4x32_to_prec_uniform_lane` naming the lane.
+- Scalar arithmetic typing and its scope-collapse requirements are owned by
+  [virtualization-and-inlining.md](virtualization-and-inlining.md), the gh-ocannl-1958 entry.
 ## Accumulator localization and legality
 - **A reduction accumulator's WIDTH is policy and its RESIDENCY is unconditional; its narrowing
   POINTS are schedule** (gh-ocannl-639, gh-ocannl-693). The plain serial fallback of an

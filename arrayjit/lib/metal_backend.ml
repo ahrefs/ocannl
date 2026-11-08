@@ -1608,6 +1608,9 @@ module Impl = struct
       | Tanh_approx, Ops.Bfloat16_prec _ ->
           fun v -> group (string "(bfloat)precise::tanh((float)" ^^ parens v ^^ rparen)
       | Tanh_approx, _ -> math_doc "precise::tanh"
+      (* A floating Not is numeric, so composing two of them under [/] must not divide bools. *)
+      | Not, p when Ops.is_float p ->
+          fun v -> group (string (typ_of_prec p) ^^ parens (string "!" ^^ parens v))
       | Not, _ -> fun v -> string "!" ^^ v
       | Uint4x32_to_prec_uniform1, _ ->
           fun v -> func_doc ("uint4x32_to_" ^ Ops.prec_string prec ^ "_uniform") v

@@ -332,11 +332,12 @@ let must_agree ?(leg = every_backend) ?(collapses = false) label ~policy build =
    wider type (or, for two truths under [/], divides C integers). [simplify] keeps such a scope
    ([keeps_scopes]) by {!Ir.Low_level.typed_at}. Each value is computed into virtual nodes, read in
    the expression [read], and compared with the scope kept, with the schedule's trailing simplify
-   and, unless wide compute takes the node's rounding from the scope, with a materialized node.
-   [observable]: the leg of the backends rendering the value wider, where it written straight into
-   the expression has to come out different, so the claims above can fail. *)
-let wider_rendering ?(materialized_agrees = true) ?observable ?(keeps_scopes = true) label ~policy
-    ~prec ~inputs ~values ~read =
+   and, unless wide compute takes the node's rounding from the scope, with a materialized node. cc's
+   f32 reciprocal, Not and gates now render at f32 (gh-ocannl-2045), so these cases collapse and the
+   unscoped form must agree too. Restoring their double literals while enabling collapse makes the
+   bitwise claims fail. *)
+let same_precision_scope ?(materialized_agrees = true) ?(keeps_scopes = true) label ~policy ~prec
+    ~inputs ~values ~read =
   let run form =
     let tag =
       match form with
@@ -411,16 +412,15 @@ let wider_rendering ?(materialized_agrees = true) ?observable ?(keeps_scopes = t
      let _, mat, _, _ = run `Materialized in
      pf "%s: every placement computes the materialized node's values bitwise" label
        (same_bits mat kept && same_bits mat inl));
-  Option.iter observable ~f:(fun leg ->
-      in_legf ~leg "%s: the value written straight into the expression differs" label (fun claim ->
-          let _, raw, _, _ = run `Unscoped in
-          p claim (not (same_bits kept raw))))
+  if not keeps_scopes then
+    let _, raw, _, _ = run `Unscoped in
+    pf "%s: the unscoped form computes the oracle's values bitwise" label (same_bits kept raw)
 
 (* What a single holds of a double: the value a [float] local would. *)
 let single_of v = Stdlib.Int32.(float_of_bits (bits_of_float v))
 let two_to_minus_30 = 0.000000000931322574615478515625
 
-let rendered_wider ~policy =
+let same_precision_scopes ~policy =
   let tiny = Array.create ~len:n two_to_minus_30 in
   let unary op = function [ x; _ ] -> [ LL.Unop (op, x) ] | _ -> assert false in
   let sum reads operands =
@@ -429,37 +429,58 @@ let rendered_wider ~policy =
   (* [(gate + tiny) - y], the gate passing [y]. Single gives 0: [y + tiny] rounds back to [y]. In
      double, [tiny] survives. The sum alone could not tell: 53 bits make double rounding of one
      operator exact. *)
-  let gated op =
+  let gated ?(prec = f32) op =
     ( (function [ x; y; _ ] -> [ LL.Binop (op, x, y) ] | _ -> assert false),
       fun reads operands ->
         match (reads, operands) with
-        | [ v ], [ _; y; tiny ] -> LL.Binop (Ops.Sub, (LL.Binop (Ops.Add, v, tiny), f32), y)
+        | [ v ], [ _; y; tiny ] -> LL.Binop (Ops.Sub, (LL.Binop (Ops.Add, v, tiny), prec), y)
         | _ -> assert false )
   in
   let x = [| 3.; 7.; 11.; 13. |] in
-  wider_rendering "f32_recip" ~policy ~prec:f32 ~observable:cc_leg
+  same_precision_scope "f32_recip" ~policy ~prec:f32 ~keeps_scopes:false
     ~inputs:[ x; Array.map x ~f:(fun v -> -.single_of (1. /. v)) ]
     ~values:(unary Ops.Recip) ~read:sum;
-  wider_rendering "f32_recip_sqrt" ~policy ~prec:f32 ~observable:cc_leg
+  same_precision_scope "f32_recip_sqrt" ~policy ~prec:f32 ~keeps_scopes:false
     ~inputs:[ x; Array.map x ~f:(fun v -> -.single_of (1. /. single_of (Float.sqrt v))) ]
     ~values:(unary Ops.Recip_sqrt) ~read:sum;
   let y = [| 1.; 1.5; 2.; 2.5 |] in
   let values, read = gated Ops.Relu_gate in
-  wider_rendering "f32_relu_gate" ~policy ~prec:f32 ~observable:cc_leg ~inputs:[ x; y; tiny ]
+  same_precision_scope "f32_relu_gate" ~policy ~prec:f32 ~keeps_scopes:false ~inputs:[ x; y; tiny ]
     ~values ~read;
   let values, read = gated Ops.Satur01_gate in
-  wider_rendering "f32_satur01_gate" ~policy ~prec:f32 ~observable:cc_leg
+  same_precision_scope "f32_satur01_gate" ~policy ~prec:f32 ~keeps_scopes:false
     ~inputs:[ [| 0.125; 0.25; 0.5; 0.75 |]; y; tiny ]
     ~values ~read;
-  (* [Not] is no truth at a float precision: cc spells it [x == 0.0 ? 1.0 : 0.0], so it reads as the
-     gates do. *)
-  wider_rendering "f32_not" ~policy ~prec:f32 ~observable:cc_leg
+  (* [Not] returns a float at the requested precision, as the gates do. *)
+  same_precision_scope "f32_not" ~policy ~prec:f32 ~keeps_scopes:false
     ~inputs:[ [| 0.; 0.; 1.; 0. |]; [| 1.; 1.; 0.; 1. |]; tiny ]
     ~values:(function [ x; _; _ ] -> [ LL.Unop (Ops.Not, x) ] | _ -> assert false)
     ~read:(snd (gated Ops.Relu_gate));
+  let not_quotient label prec =
+    same_precision_scope label ~policy ~prec ~keeps_scopes:false
+      ~inputs:[ [| 0.; 0.; 1.; 0. |]; [| 0.; 1.; 0.; 0. |]; [| 0.; 0.; 0.; 1. |] ]
+      ~values:(fun xs -> List.map xs ~f:(fun x -> LL.Unop (Ops.Not, x)))
+      ~read:(fun reads _ ->
+        match reads with
+        | [ a; b; c ] -> LL.Binop (Ops.Div, a, (LL.Binop (Ops.Add, b, c), prec))
+        | _ -> assert false)
+  in
+  (* Numeric Not must not turn a quotient into integer division when its scopes collapse. *)
+  not_quotient "f32_not_quotient" f32;
+  not_quotient "half_not" half;
+  (* Wide compute intentionally retains more bits than a materialized half intermediate, so the kept
+     scope is the oracle under both policies, as for [half_sin] below. *)
+  let half_of v = Ops.half_to_single (Ops.single_to_half v) in
+  same_precision_scope "half_recip" ~policy ~prec:half ~materialized_agrees:false
+    ~keeps_scopes:false
+    ~inputs:[ x; Array.map x ~f:(fun v -> -.half_of (1. /. v)) ]
+    ~values:(unary Ops.Recip) ~read:sum;
+  let values, read = gated ~prec:bf Ops.Relu_gate in
+  same_precision_scope "bf16_relu_gate" ~policy ~prec:bf ~keeps_scopes:false ~inputs:[ x; y; tiny ]
+    ~values ~read;
   (* Two truths are C [int], so the collapsed quotient divides integers. 1/0 traps on x86, which is
      the negative control there. *)
-  wider_rendering "f32_truth" ~policy ~prec:f32
+  same_precision_scope "f32_truth" ~policy ~prec:f32
     ~inputs:[ [| 1.; 1.5; 3.; 4. |]; Array.create ~len:n 2. ]
     ~values:(function
       | [ x; two ] -> [ LL.Binop (Ops.Cmplt, x, two); LL.Binop (Ops.Cmplt, two, x) ]
@@ -468,7 +489,7 @@ let rendered_wider ~policy =
       match reads with [ a; b ] -> LL.Binop (Ops.Div, a, b) | _ -> assert false);
   (* Outside a division a truth converts exactly, and it has to collapse: the select would test a
      local, and the one-hot gather would not see its [Cmpeq]. *)
-  wider_rendering "f32_truth_tested" ~policy ~prec:f32 ~keeps_scopes:false
+  same_precision_scope "f32_truth_tested" ~policy ~prec:f32 ~keeps_scopes:false
     ~inputs:[ [| 1.; 1.5; 3.; 4. |]; Array.create ~len:n 2. ]
     ~values:(function [ x; two ] -> [ LL.Binop (Ops.Cmplt, x, two) ] | _ -> assert false)
     ~read:(fun reads operands ->
@@ -480,7 +501,7 @@ let rendered_wider ~policy =
      wide compute no local narrows it, so a materialized node, whose store does, is not the
      oracle. *)
   let x = [| 1.; 1.25; 1.5; 1.75 |] in
-  wider_rendering "half_sin" ~policy ~prec:half ~materialized_agrees:false ~keeps_scopes:false
+  same_precision_scope "half_sin" ~policy ~prec:half ~materialized_agrees:false ~keeps_scopes:false
     ~inputs:[ x; Array.map x ~f:(fun v -> -.(Float.round (Float.sin v *. 2048.) /. 2048.)) ]
     ~values:(unary Ops.Sin) ~read:sum
 
@@ -528,8 +549,8 @@ let truth_quotient ~name ~scope =
   in
   (Ll_test.optimize_scoped ~name ~raw scoped, [ (x_tn, f32_inputs n) ], out)
 
-(* A value whose rendering is wider than its precision: [Recip] is [1.0 / x], a double at single, so
-   the local is what rounds it. Kept, this subtracts the single nearest a third from itself. *)
+(* A bfloat16 scope over a reciprocal: it can collapse when the backend computes it in single, since
+   [Recip] now renders [1.0f / x] there. Narrow arithmetic still needs the bfloat16 local. *)
 let reciprocal ~name ~scope =
   let s, i, tns = statement_nodes ~name [ f32; f32; f32 ] in
   let x_tn, y_tn, out = match tns with [ a; b; c ] -> (a, b, c) | _ -> assert false in
@@ -815,10 +836,10 @@ let () =
             ]
             ~f:(render_time_collapse ~policy);
           reduction ~policy;
-          rendered_wider ~policy;
+          same_precision_scopes ~policy;
           must_agree "shared" ~policy shared_read;
           must_agree "truth" ~policy truth_quotient;
-          must_agree "recip" ~policy reciprocal;
+          must_agree "recip" ~policy ~collapses:(collapses narrow_product) reciprocal;
           must_agree "exposed_update" ~policy exposed_update;
           must_agree "draw" ~policy wide_draw;
           must_agree "where" ~policy where_condition;

@@ -18,8 +18,8 @@
    gates a [Relu_gate] shut, and [Satur01_gate] yields its operand where its test FAILS. Legs at
    f32, f64, a half-precision condition beside an f32 result, and bf16 storage computing at f32;
    and, on cc, a gate and a [Where] composed into further arithmetic, whose rounding follows the
-   [?:] spelling's C type (a gate's [0.0] literal makes it double, a [Where] of floats stays float).
-   - Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. - Guards,
+   [?:] spelling's C type (a gate's [0.0f] literal and a [Where] of floats both stay float). -
+   Emission, on cc: those legs call the blend and keep no [?:] spelling of their select. - Guards,
    on cc: an index-guarded out-of-range read and a value-guarded [Get_dynamic] gather (its index
    runs far out of range on the inactive lanes) keep [?:]; a value select over an index guard blends
    outside and keeps the inner guard. Executed with the hazardous reads inactive. - Assembly, on
@@ -351,11 +351,10 @@ let gate_leg ?axis ~name ~op ~semantics ~xv ~gv () =
     want = Array.init n ~f:(fun i -> semantics xv.(i) gv.(i));
   }
 
-(* A select inlined into further arithmetic, [out = (sel + h) - k] at f32. The expected values are
-   the C semantics of the short-circuiting spelling, which the blend must keep: [x > 0.0 ? g : 0.0]
-   is a DOUBLE (its [0.0] literal), so the gate's sum and difference are exact; a [Where] of float
-   arms is a float, so both round at f32. An f32-typed blend would flip the first (review round 1).
-   cc only: another dialect types the literal its own way. *)
+(* A select inlined into further arithmetic, [out = (sel + h) - k] at f32. Both a gate's [0.0f] arm
+   and a [Where] of float arms keep the result at f32, so each arithmetic step rounds. The gate used
+   to inherit double from [0.0]; gh-ocannl-2045 makes its spelling agree with the requested
+   precision. The inputs distinguish those two evaluation types. *)
 let composed_leg ~name ~select =
   let x = mk_single (name ^ "_x") and g = mk_single (name ^ "_g") and e = mk_single (name ^ "_e") in
   let h = mk_single (name ^ "_h") and k = mk_single (name ^ "_k") in
@@ -366,18 +365,17 @@ let composed_leg ~name ~select =
   let big = Array.create ~len:n 16777216. in
   let i = sym () in
   let at tn = (get tn [| iter i |], single) in
-  let sel, want =
+  let sel, selected =
     match select with
     | `Relu_gate ->
         ( LL.Binop (Ops.Relu_gate, at x, at g),
           Array.init n ~f:(fun i -> if Float.(xv.(i) > 0.) then gv.(i) else 0.) )
     | `Where ->
-        let to_f32 v = Int32.float_of_bits (Int32.bits_of_float v) in
         ( LL.Ternop (Ops.Where, at x, at g, at e),
-          Array.init n ~f:(fun i ->
-              let s = if Float.(xv.(i) <> 0.) then gv.(i) else ev.(i) in
-              to_f32 (to_f32 (s +. big.(i)) -. big.(i))) )
+          Array.init n ~f:(fun i -> if Float.(xv.(i) <> 0.) then gv.(i) else ev.(i)) )
   in
+  let to_f32 v = Int32.float_of_bits (Int32.bits_of_float v) in
+  let want = Array.mapi selected ~f:(fun i s -> to_f32 (to_f32 (s +. big.(i)) -. big.(i))) in
   let sum = LL.Binop (Ops.Add, (sel, single), at h) in
   let llsc = LL.Binop (Ops.Sub, (sum, single), at k) in
   {

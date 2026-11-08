@@ -6069,21 +6069,19 @@ let rec renders_no_wider ~prec (value : scalar_t) =
       true
   | Unop ((Identity | Neg), a) -> fits a
   | Unop
-      ( ( Relu | Satur01 | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Trunc
-        | Uint4x32_to_prec_uniform1 ),
+      ( ( Relu | Satur01 | Exp | Log | Exp2 | Log2 | Sin | Cos | Sqrt | Trunc | Recip | Recip_sqrt
+        | Not | Uint4x32_to_prec_uniform1 ),
         _ ) ->
       true
   | Unop (Tanh_approx, _) -> not double
-  | Unop ((Recip | Recip_sqrt | Not), _) -> double
   | Binop (Arg1, a, _) | Binop (Arg2, _, a) -> fits a
   | Binop ((Add | Sub | Mul | Div), a, b) -> fits a && fits b
   | Binop
-      ( ( ToPowOf | Max | Min | Mod | Cmplt | Cmple | Cmpeq | Cmpne | Or | And
-        | Uint4x32_to_prec_uniform_lane ),
+      ( ( ToPowOf | Max | Min | Mod | Cmplt | Cmple | Cmpeq | Cmpne | Or | And | Relu_gate
+        | Satur01_gate | Uint4x32_to_prec_uniform_lane ),
         _,
         _ ) ->
       true
-  | Binop ((Relu_gate | Satur01_gate), _, _) -> double
   | Binop ((Threefry4x32_crypto | Threefry4x32_light), _, _) -> false
   | Ternop (Where, _, a, b) -> fits a && fits b
   | Ternop (Mul3, a, b, c) -> fits a && fits b && fits c

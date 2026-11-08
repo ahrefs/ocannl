@@ -129,22 +129,21 @@ files.
   uncollapsed `?prelowered` form under both policies; `top_down_prec`'s goldens show it end to end
   (a half sum read in a bfloat16 product was computed at bfloat16 on Metal). A kept scope is what
   the schedule's recognizers then see; the renderer can still drop it, next entry.
-- **Agreeing precisions are not a typed value** (gh-ocannl-1958). A scope of the slot's own precision
-  still rounds where its value renders as another C type, since the local's declaration is the
-  conversion. `Low_level.typed_at` owns that list, and both collapses ask it. At single, cc's
-  `Recip` is `1.0 / x`, a gate `c ? y : 0.0` and `Not` `x == 0.0 ? 1.0 : 0.0`, doubles; `tanhf` is a
-  float at double. Collapsed,
-  `1/x + y` adds in double where a materialized node rounds first. A gate needs two operators
-  around it to show: one sum in double rounds to single exactly, since 53 bits are at least
-  2 * 24 + 2. cc is the only dialect with these double literals: Metal, CUDA and HIP spell `1.0f`
-  and `0.0f`, so there the entry costs a local and no value; a backend-blind lowering can state no
-  less. A library call at a narrow precision is typed either way: at storage width its text rounds
-  it (`FLOAT_TO_HALF(sinf(..))`, `hsin`), and under wide compute local and slot agree on f32.
-  `Recip`, `Not` and gates at a narrow precision are listed for that wide compute. A truth is C `int` but
-  converts exactly, so `simplify_llc` keeps one only under a `Div` (`~divided`), where two divide
-  integers (1/0 traps on x86): the one-hot gather needs its `Cmpeq` in the product, and
-  `branchless_select`'s census its test in the select. `scope_collapse_rounding`'s `rendered_wider`
-  executes each.
+- **Agreeing precisions are not a typed value** (gh-ocannl-1958, gh-ocannl-2045). A scope of the
+  slot's own precision still converts where its value renders as another C type.
+  `Low_level.typed_at` owns that list, and both collapses ask it: cc's `Tanh_approx` uses `tanhf`, a
+  float at double, and the Threefry operators return packed integers rather than a float.
+  `Recip`, `Recip_sqrt`, `Not` and the gates render in their arithmetic precision's numeric
+  type on every dialect; cc's literal spelling and gate blend share `Ops.c_float_literal`.
+  Floating `Not` is numeric too: Metal converts its boolean result, CUDA/HIP f32 uses float
+  literals. At narrow storage width the operator's text rounds its result, while under wide
+  compute the local and expression agree on f32, so these scopes can collapse under either
+  policy. A truth remains C `int` (Metal `bool`) but converts exactly: `simplify_llc` keeps one
+  only under a `Div`, where two would divide integers. The one-hot gather needs its `Cmpeq`
+  in the product, and the select census needs its test in the select.
+  `scope_collapse_rounding`'s `same_precision_scopes` compares kept, collapsed and materialized
+  forms bitwise, including a quotient of numeric `Not` expressions; `branchless_select` checks
+  that composed f32 gates round each arithmetic step at f32.
 - **A kept scope collapses at render time where compute precision makes it exact** (gh-ocannl-1887).
   Rendered, a kept scope is `T_R v = conv(V->R)(e@V); ... conv(R->S)(v)`, with `R` the local's
   precision (`scope_prec_of`), `V` the value's and `S` the slot's. `C_syntax.collapse_exact_scopes`

@@ -3535,13 +3535,14 @@ module C_syntax (B : C_syntax_config) = struct
        arms in its order: [Satur01_gate] yields its second operand where the test FAILS. *)
     match op with
     | Ops.Relu_gate | Ops.Satur01_gate -> (
+        let zero = string (Ops.c_float_literal prec "0.0") in
         match (op, gate_blend (), prec) with
         | Ops.Relu_gate, Some (Blend_truth blend), _ ->
-            blend (parens e1 ^^ string " > 0.0") e2 (string "0.0")
+            blend (parens e1 ^^ string " > " ^^ zero) e2 zero
         | _, Some (Blend_truth blend), Ops.Single_prec _ ->
-            blend (string "fabsf(floorf(" ^^ e1 ^^ string ")) > 0.0") (string "0.0") e2
+            blend (string "fabsf(floorf(" ^^ e1 ^^ string ")) > " ^^ zero) zero e2
         | _, Some (Blend_truth blend), _ ->
-            blend (string "fabs(floor(" ^^ e1 ^^ string ")) > 0.0") (string "0.0") e2
+            blend (string "fabs(floor(" ^^ e1 ^^ string ")) > " ^^ zero) zero e2
         | _, Some (Blend_over_locals decl), _ ->
             (* The dialect's own gate over its operand's value: the GPU [Satur01_gate] tests [0 < x
                && x < 1], not cc's [fabs(floor(x)) > 0]. *)

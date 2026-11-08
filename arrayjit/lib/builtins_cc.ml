@@ -1875,14 +1875,14 @@ ARRAYJIT_BUILTIN_LINKAGE int32_t OCANNL_CHECKED_LANE(int64_t lane, int32_t lanes
        [select_blend_syntax]), applied to the select's truth expression and the two arm locals. gcc
        at x86 keeps a conditional branch for a [?:] even over two values: a float EQUALITY test
        needs two flags (parity says unordered), which defeats its if-conversion ([ucomiss], [jp],
-       [je]), and an arm converted to the result type (a gate's double [0.0] against a float) is
-       sunk into a branch of its own. Selecting the bit patterns under an all-ones or all-zeros mask
-       leaves it nothing to branch on -- it turns the mask into [setcc] and [cmov], or vectorizes it
-       -- and moves the bits unchanged, NaN payloads, infinities and signed zeros included (a
-       multiply by the mask would not). Each arm is first converted to the result type, as [?:]
-       converts it, so the value and C type are those of the [?:]. The untaken width's block still
-       type-checks, so the 64-bit one copies [sizeof] the value: a float result never reads past its
-       4 bytes there. clang if-converts the plain spelling already and keeps it. *)
+       [je]), and an arm converted to the result type can be sunk into a branch of its own.
+       Selecting the bit patterns under an all-ones or all-zeros mask leaves it nothing to branch on
+       -- it turns the mask into [setcc] and [cmov], or vectorizes it -- and moves the bits
+       unchanged, NaN payloads, infinities and signed zeros included (a multiply by the mask would
+       not). Each arm is first converted to the result type, as [?:] converts it, so the value and C
+       type are those of the [?:]. The untaken width's block still type-checks, so the 64-bit one
+       copies [sizeof] the value: a float result never reads past its 4 bytes there. clang
+       if-converts the plain spelling already and keeps it. *)
     ( "OCANNL_SELECT",
       {|
 /* The selection step of a branchless value select (gh-ocannl-1622, gh-ocannl-1660): T is its truth
