@@ -405,10 +405,11 @@ else
       "$gcc_keyring" "$s" >>"$gcc_apt/sources.list" ||
       die "cannot write the isolated $gcc_suite source"
   done
+  # Disable global trust stores; each source names its signing key.
   gcc_apt_options=(
     -o "Dir::Etc::sourcelist=$gcc_apt/sources.list"
     -o "Dir::Etc::sourceparts=$gcc_apt/sourceparts"
-    -o "Dir::Etc::trusted=/dev/null"
+    -o "Dir::Etc::trusted="
     -o "Dir::Etc::trustedparts=$gcc_apt/trustedparts"
     -o "Dir::State::lists=$gcc_apt/lists"
     -o "Dir::State::status=$gcc_apt/status"
@@ -448,12 +449,12 @@ if [ "$aarch64_clang" -eq 1 ]; then
   llvm_sourceparts="$llvm_apt/sourceparts"
   llvm_trustedparts="$llvm_apt/trusted.gpg.d"
   llvm_source="$llvm_apt/llvm.list"
-  llvm_key="$llvm_trustedparts/apt.llvm.org.asc"
+  llvm_key="$llvm_apt/apt.llvm.org.asc"
   mkdir -p "$llvm_lists/partial" "$llvm_archives/partial" "$llvm_sourceparts" \
     "$llvm_trustedparts" "$llvm_apt/cache" || die "cannot stage the isolated apt.llvm.org index"
   llvm_url="https://apt.llvm.org/$llvm_codename/"
   llvm_suite="llvm-toolchain-$llvm_codename-21"
-  printf 'deb %s %s main\n' "$llvm_url" "$llvm_suite" >"$llvm_source" ||
+  printf 'deb [signed-by=%s] %s %s main\n' "$llvm_key" "$llvm_url" "$llvm_suite" >"$llvm_source" ||
     die "cannot write the isolated apt.llvm.org source"
   # An empty dpkg status, as the GCC index has: a host with its distribution's
   # own clang-21 installed (resolute's 1:21.1.8-6ubuntu1 on minix) would offer
@@ -468,10 +469,11 @@ if [ "$aarch64_clang" -eq 1 ]; then
   expected_llvm_key_sha=8b2a587ffd672c4687e7581dad4b2f6c1bb2ad6b480cd9771ba2ff48e0b8c75d
   [ "$llvm_key_sha" = "$expected_llvm_key_sha" ] ||
     die "apt.llvm.org signing key digest changed: $llvm_key_sha (expected $expected_llvm_key_sha)"
+  # trustedparts stays empty: the pinned key belongs only to this source.
   llvm_apt_options=(
     -o "Dir::Etc::sourcelist=$llvm_source"
     -o "Dir::Etc::sourceparts=$llvm_sourceparts"
-    -o "Dir::Etc::trusted=/dev/null"
+    -o "Dir::Etc::trusted="
     -o "Dir::Etc::trustedparts=$llvm_trustedparts"
     -o "Dir::State::lists=$llvm_lists"
     -o "Dir::State::status=$llvm_apt/status"

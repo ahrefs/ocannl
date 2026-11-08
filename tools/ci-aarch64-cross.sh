@@ -78,10 +78,11 @@ for s in "$suite" "$suite-updates" "$suite-security"; do
   printf 'deb [arch=amd64 signed-by=%s] http://archive.ubuntu.com/ubuntu %s main universe\n' \
     "$keyring" "$s" >>"$apt_dir/sources.list"
 done
+# Disable global trust stores; each source names its signing key.
 apt_options=(
   -o "Dir::Etc::sourcelist=$apt_dir/sources.list"
   -o "Dir::Etc::sourceparts=$apt_dir/sourceparts"
-  -o "Dir::Etc::trusted=/dev/null"
+  -o "Dir::Etc::trusted="
   -o "Dir::Etc::trustedparts=$apt_dir/trustedparts"
   -o "Dir::State::lists=$apt_dir/lists"
   -o "Dir::Cache::archives=$apt_dir/archives"
