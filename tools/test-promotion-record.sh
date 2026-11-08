@@ -234,7 +234,7 @@ DUNE
 }
 family_digest_case family-digest shipping
 report $? 'the default digest reports extension siblings from the recorded worktree'
-legacy_family_digest_case() { # recorded run; caller has a matching family of its own
+legacy_family_digest_case() ( # recorded run; caller has a matching family of its own
   local saved_run=$1 caller mode out
   caller=$(project legacy-digest-caller "$HERE/test-run.sh" "$HERE/promote.sh") || return 1
   cat >>"$caller/dune" <<'DUNE'
@@ -245,6 +245,7 @@ DUNE
   printf original >"$caller/kernel.caller.expected"
   cp "$saved_run/exit" "$caller/recorded-exit" || return 1
   mv "$saved_run/wt" "$saved_run/wt.original" || return 1
+  trap 'mv "$saved_run/wt.original" "$saved_run/wt" || exit 1' EXIT
   for mode in absent empty; do
     [ "$mode" != empty ] || : >"$saved_run/wt"
     # Keep the harness shell: Bash 3.2 accepts cd -- "", newer Bash may refuse it.
@@ -255,8 +256,7 @@ DUNE
     grep -q '^verdict: FAIL' "$caller/$mode.log" || return 1
     cmp -s "$saved_run/exit" "$caller/recorded-exit" || return 1
   done
-  mv "$saved_run/wt.original" "$saved_run/wt"
-}
+)
 legacy_family_digest_case "$recorded"
 report $? 'absent and empty legacy worktrees leave caller families uninspected and the recorded verdict unchanged'
 if family_digest_case family-digest-cut cut; then
