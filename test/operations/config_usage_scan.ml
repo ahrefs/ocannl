@@ -767,7 +767,10 @@ let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
         (Printf.sprintf "non-config assignment exemption occurrence counts drifted: %s"
            (drifted_non_config
            |> List.map ~f:(fun (path, key, expected, actual) ->
-               Printf.sprintf "%s:%s expected %d, saw %d" path key expected actual)
+               Printf.sprintf
+                 "%s:%s expected %d, saw %d; review non_config_assignment_mentions in \
+                  test/operations/config_usage_scan.ml: (%S, %S, %d)"
+                 path key expected actual path key actual)
            |> String.concat ~sep:", "));
     let drifted_historical =
       List.filter_map control_historical_invalid_config_mentions ~f:(fun (path, key, expected) ->
@@ -1015,6 +1018,12 @@ let refusal_control grammar_fixture =
       occurrence ~ambiguous_bare:true ~path:"new-one-word.md" ~key:"backend"
         ~spelling:"backend=metal" ~kind:Markdown_assignment ();
     ];
+  Verdict.p_exists "assignment count drift names the list and replacement entry to review" !messages
+    ~f:(fun message ->
+      String.is_substring message
+        ~substring:
+          "review non_config_assignment_mentions in test/operations/config_usage_scan.ml: \
+           (\"docs/precision_inference.md\", \"top_down_prec\", 0)");
   Verdict.p_all ~min:15 "every config-usage direct refusal format is observed"
     direct_refusal_formats ~f:(Hash_set.mem observed);
   Verdict.p_all ~min:15 "a config-usage refusal is credited to the same format in reversed order"

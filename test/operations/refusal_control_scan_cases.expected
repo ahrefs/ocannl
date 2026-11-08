@@ -75,6 +75,7 @@ agents_md_size.ml: [scanner-refusal:6e5c887df5f7f65a45a232ef22d04e62] synthesize
 agents_md_size.ml: [scanner-refusal:6f380ec6130d7d24a10cfd39521bdaec] synthesized guide at (claim) is catalogued beside agents_md_size.expected: true
 agents_md_size.ml: [scanner-refusal:2c8e54e9bdb6518252759d38c07973aa] synthesized guide one (claim) is catalogued beside agents_md_size.expected: true
 agents_md_size.ml: [scanner-refusal:c32f3dd124b270ba497cf74ca1bc7e77] synthesized guide of (claim) is catalogued beside agents_md_size.expected: true
+agents_md_size.ml: [scanner-refusal:fbbca570493f5d6fe407e047220ac6fa] longest-line advice keeps (claim) is catalogued beside agents_md_size.expected: true
 agent_notes_structure.ml has exactly the explicitly assigned refusal controls: true
 agent_notes_structure.ml: [scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:2ac555c09ba6fe90fc6321fecba16cab] the notes' bullets (claim) is catalogued beside agent_notes_structure.expected: true
@@ -302,6 +303,7 @@ config_usage_scan.ml: [scanner-refusal:7e32dcb7afdd8103e02384cf64776cae] assignm
 config_usage_scan.ml: [scanner-refusal:f39c89d1f700c14082d119fea8a9fb93] tracked historical one-word (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:6bb17d62436571b3e716c4bba5c0f746] promised non-OCANNL assignment (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:b8ac42648b6918233995586551724f6f] documented OCANNL assignment (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
+config_usage_scan.ml: [scanner-refusal:c5b4a3be4b7a831135a2402c9b65d86e] assignment count drift (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true

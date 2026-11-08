@@ -693,15 +693,34 @@ if harness_leg 'the steps after the build lend no last output line #dune'; then
       '##[endgroup]' 'OCANNL host: cpu="fixture" cpus=3'; } >"$TMP/steps.log"
   out=$(cd "$proj" && subject "$TMP/steps.log" 2>&1); rc=$?
   report "$(missing_ok "$out" "$rc"; echo $?)" 'the steps after the build lend no last output line' "exit $rc; $out"
+  # Test the marker boundary independently of the JOB/STEP boundary: raw job logs have no prefix.
+  cut -f3- "$TMP/steps.log" >"$TMP/steps-unprefixed.log"
+  out=$(cd "$proj" && subject "$TMP/steps-unprefixed.log" 2>&1); rc=$?
+  report "$(missing_ok "$out" "$rc"; echo $?)" 'a raw job log closes at the completion marker' "exit $rc; $out"
   # The negative control: without the `##[` boundary the last line of the job is the rule's.
   if mut=$(mutant no-step-boundary '{ sub(/^      else if \(s ~ \/\^##\\\[\/\) qopen = 0$/, "      # step boundary removed") } 1'); then
-    out=$(cd "$proj" && bash "$mut" "$TMP/steps.log" 2>&1); rc=$?
+    out=$(cd "$proj" && bash "$mut" "$TMP/steps-unprefixed.log" 2>&1); rc=$?
     if grep -q '^      # step boundary removed$' "$mut" && ! missing_ok "$out" "$rc" &&
        [ "$(printf '%s\n' "$out" | sed -n '4p')" = '      last output: OCANNL host: cpu="fixture" cpus=3' ]; then
       report 0 'negative control: without the step boundary a later step'"'"'s line is quoted'
     else report 1 'negative control: without the step boundary a later step'"'"'s line is quoted' \
       "mutant applied: $(grep -c 'step boundary removed' "$mut"); $out"; fi
   else report 1 'negative control: without the step boundary a later step'"'"'s line is quoted' 'mutant did not build'; fi
+fi
+if harness_leg 'a changed job or step closes the block without a completion marker #canned'; then
+  printf 'job\tbuild\t2026-11-06T19:53:18Z %s\n' \
+    'File "unit/dune", line 1, characters 0-1:' '1 | (rule)' '(cd _build/default && ./unit.exe)' 'unit failed' >"$TMP/changed-step.log"
+  want='Failed dune rules (1), in the order dune reported them:
+  unit/dune:1  (rule)
+      ran: (cd _build/default && ./unit.exe)
+      last output: unit failed'
+  for prefix in $'job\tcleanup' $'other job\tbuild'; do
+    printf '%s\t2026-11-06T19:53:20Z %s\n' "$prefix" 'FAILED: unrelated cleanup' >"$TMP/changed-step-tail.log"
+    cat "$TMP/changed-step.log" "$TMP/changed-step-tail.log" >"$TMP/changed-step-full.log"
+    out=$(cd "$TMP" && subject changed-step-full.log 2>&1); rc=$?
+    report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" \
+      "a changed prefix closes the block: $prefix" "exit $rc; $out"
+  done
 fi
 if harness_leg 'the green build prints nothing #dune'; then
   write_fixture 0

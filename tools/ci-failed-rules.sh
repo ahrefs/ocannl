@@ -58,7 +58,7 @@
 # said. Under a display that prints no command lines (not CI's), a later
 # action's output can run on into the block above it. In a job log GitHub
 # serves, a block also ends at a `##[` line (`##[error]Process completed ...`
-# closes the build step), so the steps after the build lend it nothing.
+# closes the build step), or a change of JOB/STEP prefix, so later steps lend it nothing.
 # An entry that shows the command it ran and has no such line -- a shell error,
 # a signal, a bare exit status -- shows the last non-blank line of its block
 # instead, behind `last output:` so that `| ` keeps its one meaning
@@ -137,7 +137,8 @@ bom=$(printf '\357\273\277')
 # Bytes, not characters: under a UTF-8 locale an awk may read the BOM as one
 # character, or refuse a log's invalid UTF-8.
 LC_ALL=C awk -v esc="$esc" -v tab="$tab" -v bom="$bom" -v github="$github" -v names="$names" '
-function clean(s) {
+function clean(s, prefix) {
+  log_step = ""
   if (index(s, bom) == 1) s = substr(s, length(bom) + 1)
   sub(/\r$/, "", s)
   gsub(esc "\\[[0-9;]*[A-Za-z]", "", s)
@@ -147,6 +148,8 @@ function clean(s) {
   gsub(/\^\[\[[0-9;]*[A-Za-z]/, "", s)
   # `gh run view --log` puts JOB<TAB>STEP<TAB> before the timestamp.
   if (match(s, "^[^" tab "]*" tab "[^" tab "]*" tab ts)) {
+    prefix = s; sub(tab ts ".*$", "", prefix)
+    log_step = prefix
     sub("^[^" tab "]*" tab "[^" tab "]*" tab, "", s)
   }
   sub("^" ts, "", s)
@@ -306,6 +309,12 @@ BEGIN {
 }
 {
   s = clean($0)
+  if (log_step != "" && previous_step != "" && log_step != previous_step) {
+    flush_pend()
+    close_block()
+    inchain = 0
+  }
+  if (log_step != "") previous_step = log_step
   if (pend != "") {
     if (s ~ /^-> required by /) {
       # A wrapped message reads as dune printed it before wrapping.

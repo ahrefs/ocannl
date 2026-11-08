@@ -133,6 +133,7 @@ let raw_entries =
         "[scanner-refusal:6f380ec6130d7d24a10cfd39521bdaec] synthesized guide at";
         "[scanner-refusal:2c8e54e9bdb6518252759d38c07973aa] synthesized guide one";
         "[scanner-refusal:c32f3dd124b270ba497cf74ca1bc7e77] synthesized guide of";
+        "[scanner-refusal:fbbca570493f5d6fe407e047220ac6fa] longest-line advice keeps";
       ] );
     ( "agent_notes_structure.ml",
       [
@@ -382,6 +383,7 @@ let raw_entries =
         "[scanner-refusal:f39c89d1f700c14082d119fea8a9fb93] tracked historical one-word";
         "[scanner-refusal:6bb17d62436571b3e716c4bba5c0f746] promised non-OCANNL assignment";
         "[scanner-refusal:b8ac42648b6918233995586551724f6f] documented OCANNL assignment";
+        "[scanner-refusal:c5b4a3be4b7a831135a2402c9b65d86e] assignment count drift";
         "[scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal";
         "[scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is";
         "[scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control";

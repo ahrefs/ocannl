@@ -41,6 +41,14 @@ let warn_at = 31 * 1024
 (** Whether [bytes] sits in the warning band: under the cap, at or above [warn_at]. *)
 let warns ~bytes = fits ~bytes && bytes >= warn_at
 
+(* Stable ties use source order; lengths are byte counts like the cap. *)
+let longest_lines content =
+  String.split_lines content
+  |> List.mapi ~f:(fun i line -> (i + 1, line))
+  |> List.stable_sort ~compare:(fun (_, a) (_, b) ->
+      Int.compare (String.length b) (String.length a))
+  |> fun lines -> List.take lines 5
+
 let () =
   let path =
     match Array.to_list Stdlib.Sys.argv |> List.tl_exn with
@@ -54,11 +62,14 @@ let () =
   let bytes = String.length content in
   eprintf "AGENTS.md: %d bytes; cap %d, warning band from %d, floor %d (not part of the golden)\n"
     bytes cap warn_at floor;
-  if warns ~bytes then
+  if warns ~bytes then (
     eprintf
       "WARNING: AGENTS.md is %d bytes, within %d bytes of the 32 KiB cap; trim it before the next \
        rule lands (docs/agent-notes/build-and-test.md#repository-scans, the AGENTS.md bullet)\n"
       bytes (cap - bytes);
+    List.iter (longest_lines content) ~f:(fun (line_number, line) ->
+        eprintf "AGENTS.md:%d: %d bytes: %s (not part of the golden)\n" line_number
+          (String.length line) line));
   (* The guide's identity, held independently of its size: the file dune handed over is named
      AGENTS.md and opens with the guide's own title line. A floor alone accepts any prose of the
      right size, and a misrouted rule would then measure the wrong document forever. *)
@@ -85,4 +96,9 @@ let () =
   p "a synthesized guide one byte below the warning band is not warned about"
     (not (warns ~bytes:31_743));
   p "a synthesized guide of exactly 32 KiB is refused, not warned about" (not (warns ~bytes:32_768));
+  p "longest-line advice keeps five lines ranked by bytes with stable source locations"
+    (Poly.equal
+       (longest_lines "a\ncccc\nbb\ndddd\neee\nffffff\nggggg")
+       [ (6, "ffffff"); (7, "ggggg"); (2, "cccc"); (4, "dddd"); (5, "eee") ]
+    && Poly.equal (longest_lines "x") [ (1, "x") ]);
   Test_scan.Refusal_control_manifest.print "agents_md_size.ml"

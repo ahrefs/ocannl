@@ -836,7 +836,9 @@ let sub_leg ?aggregation (outer : leg) ~when_ ~on : leg =
 let fresh now ~before = List.take now (List.length now - List.length before)
 
 (** [in_leg ~leg label make] is [make label] where [leg] is open, held to making exactly the one
-    [<label>: <bool>] claim, and [skipped label] where it is closed (see above). *)
+    [<label>: <bool>] claim, and [skipped label] where it is closed (see above). If the run itself
+    makes claims (for example a test helper that checks execution), run it outside [make] and pass
+    its result in: those extra claims would violate this one-claim boundary. *)
 let in_leg ~leg label make =
   match Lazy.force leg with
   | Leg_closed { on; aggregation } -> skipped ?aggregation ~backend:on label

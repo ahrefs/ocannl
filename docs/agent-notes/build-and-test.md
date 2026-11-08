@@ -1948,6 +1948,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ## Dune mechanics
 
+- **Do not delete a `(test)`'s `.exe.output` from `_build` by hand.** Dune can retain the
+  successful action in its cache while the automatic golden diff sees no output, then reports
+  that the `.expected` should be deleted. `--force` does not repair this target-producing action.
+  Run `dune clean` and rebuild the test's alias through the runner; accept no golden deletion.
+
 - `(copy_files ...)` creates PASSIVE rules: they do not fire just because you build a sibling target
   in the same directory — only when listed in that target's `(deps ...)` or requested explicitly. A
   rule consuming copy_files output must therefore declare it. And validate a `(mode promote)` target
@@ -3506,8 +3511,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (on Linux, `metal_backend` requiring `metal_math_api_runtime`).
   `tools/test-affected-tests.sh` pins it on a fixture project, a negative control per reach path.
   - Reach is link-level: a module reaches its whole library, and every stanza requiring it.
-    So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches 380
-    to 470 of the ~500 per-test aliases, including `arrayjit/test` and the `test/training` members:
+    So a change in `arrayjit/lib`, `tensor/` or a widely linked `test/support` library reaches
+    much of the per-test alias set, including `arrayjit/test` and the `test/training` members:
     a cross-cutting change in AGENTS.md's sense, and the list is the reach CI will exercise. The
     three misses that filed the issue are all inside it: `Cost_model` (staging#1011) lists
     `@test/operations/runtest-cost_model_template`, `Register_tile` (staging#1035)
@@ -3525,12 +3530,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     module. What made the cut blunt before gh-ocannl-1651: a helper library counted whole, so a
     test calling one `Ll_test` function named every module any of its ~90 definitions or comments
     named; and a re-export counted bare, so `module Lazy = Utils.Lazy` in `hip_backend.ml` made
-    every `Lazy.force` a mention of Utils. On `low_level.ml`: the whole module 325 referenced (397
-    before); one function changed, 27 (`optimize_proc`, which every compile runs and no test names:
-    the reason the default keeps them) to 42 (`simplify_llc`, 281 before). `utils.ml` as a whole
-    stays at every alias, honestly: `ocannl_ambient_env`, which every config-reading test's rule
-    runs, names Utils. A dune-only library split (staging's builtins_metal move) ranks by the
-    moved modules' names, 27 referenced of 682. Three readings narrowed it further (gh-ocannl-1765).
+    every `Lazy.force` a mention of Utils. Whole-module edits to `low_level.ml` reach more
+    referenced aliases than a single function edit; `optimize_proc` still reaches tests by linking even where none names it.
+    `utils.ml` as a whole reaches every config-reading alias through `ocannl_ambient_env`.
+    A dune-only library split ranks by the moved modules' names. Read current counts from
+    `tools/test-run.sh affected` rather than preserving a census here.
+    Three readings narrowed it further (gh-ocannl-1765).
     A re-export is read through its re-exporter: `Tn` names `Tnode` where `Context.Tn` qualifies it
     (a local `module C = Context` too), or in a file that opens or includes the re-exporter (`open`,
     `let open`, `X.( )`), or in the re-exporter's own source -- an open in a helper opens nothing in
@@ -3878,6 +3883,11 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `test/operations/provenance_tag_scan_cases.ml`), with the scanner taking a structure.
 
 ## What CI actually covers
+
+- **Shards that die before dune leave every merge in that span blind to their tests.** A green
+  setup or side job supplies no substitute. Once the shards return, CI-red triage re-runs `main`
+  on master's current tip, rather than treating a later merge's green metadata as coverage of
+  the span (gh-ocannl-2014).
 
 - Two workflows, split by what each proves (gh-ocannl-1816). `ci.yml`, the full matrix (ubuntu
   shards, macOS, the side jobs; Windows and the OCaml floor on the schedule), runs per PR -- the
@@ -4356,6 +4366,9 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   That step exits 1 deliberately, so `gh run view <id> --log-failed` includes it. The script reads
   a log GitHub serves too (timestamps, colour, CRLF, `--log-failed`'s JOB/STEP prefixes), so
   `gh run view <id> --log-failed | tools/ci-failed-rules.sh` is the first read of any red job; it
+  takes log text on stdin or a log file path, never a run id. To save a job log, use
+  `gh api repos/lukstafi/ocannl-staging/actions/jobs/<job-id>/logs --allow-escape-sequences > job.log`
+  (the id is a job id, not a run id), then `tools/ci-failed-rules.sh job.log`. It
   names a stanza from the source tree only when every line dune quoted still matches, so a log
   from another revision falls back to dune's excerpt. A failing test's own output can hold
   dune-shaped text, so the reader takes a header only at the start of its line and drops a

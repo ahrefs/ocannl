@@ -2009,6 +2009,14 @@ subreaper_kernel_probe() { # UNAME
   kernel=$("$1" -s 2>/dev/null) || return 0
   [ -z "$kernel" ] || [ "$kernel" = Linux ] || echo absent
 }
+# Empty output means the stand-in is available; arguments make both missing capabilities testable.
+subreaper_skip_reason() { # PYTHON PROBE
+  if [ -z "$1" ]; then
+    echo "no python3 on PATH (the child subreaper probe needs it)"
+  elif ! "$1" "$2" >/dev/null 2>&1; then
+    echo "python3 is available, but the child subreaper probe failed (prctl PR_SET_CHILD_SUBREAPER)"
+  fi
+}
 reap_label="zombie-only groups under a parent that reaps no orphans: repeat keeps TIMEOUT and a GPU set passes, run keeps its verdict, nothing refused"
 reap_nc_trap_label="negative control: without the iteration shell's reaping trap, a capped repeat under that parent is refused"
 reap_nc_resolve_label="negative control: without the resolution's inert-zombie branch, a GPU set under that parent is refused"
@@ -2090,9 +2098,8 @@ if [ "$(subreaper_kernel_probe uname)" = absent ]; then
   return
 fi
 renamed_dune_readable
-if ! command -v python3 >/dev/null 2>&1 || ! python3 "$reap_stub" >/dev/null 2>&1; then
-  why="needs a child subreaper (prctl PR_SET_CHILD_SUBREAPER, through python3), which this host did not give"
-elif [ -z "${test_cap_named_ok:-}" ] || [ "$have_state" != 1 ]; then
+why=$(subreaper_skip_reason "$(command -v python3 || :)" "$reap_stub")
+if [ -z "$why" ] && { [ -z "${test_cap_named_ok:-}" ] || [ "$have_state" != 1 ]; }; then
   why="a process renamed through \$0 does not read back as dune in ps here, or no state reader"
 fi
 if [ -n "$why" ]; then
@@ -2167,6 +2174,23 @@ leg_85b() {
   fi
 }
 harness_leg_run '85b: only a kernel that named itself, and not as Linux, makes 85 not applicable #repeat' leg_85b
+
+leg_85c() {
+  local d=$TMP/85c missing refused available
+  mkdir -p "$d"
+  printf '#!/bin/sh\nexit 1\n' >"$d/refused"
+  printf '#!/bin/sh\nexit 0\n' >"$d/available"
+  chmod +x "$d/refused" "$d/available"
+  missing=$(subreaper_skip_reason "" "$reap_stub")
+  refused=$(subreaper_skip_reason "$d/refused" "$reap_stub")
+  available=$(subreaper_skip_reason "$d/available" "$reap_stub")
+  report "$([ "$missing" = 'no python3 on PATH (the child subreaper probe needs it)' ] &&
+    [ "$refused" = 'python3 is available, but the child subreaper probe failed (prctl PR_SET_CHILD_SUBREAPER)' ] &&
+    [ -z "$available" ]; echo $?)" \
+    '85c: the skip names the missing capability, and a successful probe needs no skip' \
+    "missing=$missing; refused=$refused; available=$available"
+}
+harness_leg_run '85c: subreaper skip diagnostics name the missing capability #repeat' leg_85c
 
 # ---------------------------------------------------------------------------
 # Leg 84: repeat --direct builds once and replays the rules (gh-ocannl-1377)
