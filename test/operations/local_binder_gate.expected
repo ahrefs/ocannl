@@ -1,3 +1,37 @@
+lbg_loop_escape: the compile gate refuses it: true
+lbg_loop_escape: the refusal names the access, the local and where it sits: true
+lbg_loop_escape_write: the compile gate refuses it: true
+lbg_loop_escape_write: the refusal names the access, the local and where it sits: true
+lbg_loop_escape_sibling: the compile gate refuses it: true
+lbg_loop_escape_sibling: the refusal names the access, the local and where it sits: true
+lbg_loop_escape_inside: the gate leaves it alone, and it runs: true
+lbg_loop_escape_outer: the gate leaves it alone, and it runs: true
+lbg_guard_escape: the compile gate refuses it: true
+lbg_guard_escape: the refusal names the access, the local and where it sits: true
+lbg_guard_escape_write: the compile gate refuses it: true
+lbg_guard_escape_write: the refusal names the access, the local and where it sits: true
+lbg_guard_escape_sibling: the compile gate refuses it: true
+lbg_guard_escape_sibling: the refusal names the access, the local and where it sits: true
+lbg_guard_escape_inside: the gate leaves it alone, and it runs: true
+lbg_guard_escape_outer: the gate leaves it alone, and it runs: true
+lbg_guard_condition: the compile gate refuses it: true
+lbg_guard_condition: the refusal names the access, the local and where it sits: true
+lbg_scan_escape: the compile gate refuses it: true
+lbg_scan_escape: the refusal names the access, the local and where it sits: true
+lbg_scan_escape_inside: the gate leaves it alone, and it runs: true
+lbg_scan_init: the compile gate refuses it: true
+lbg_scan_init: the refusal names the access, the local and where it sits: true
+lbg_scan_init_local: the compile gate refuses it: true
+lbg_scan_init_local: the refusal names the access, the local and where it sits: true
+lbg_scan_init_local_inside: the gate leaves it alone, and it runs: true
+lbg_guard_condition_loop: the compile gate refuses it: true
+lbg_guard_condition_loop: the refusal names the access, the local and where it sits: true
+lbg_scan_init_loop: the compile gate refuses it: true
+lbg_scan_init_loop: the refusal names the access, the local and where it sits: true
+lbg_guard_condition_guard: the compile gate refuses it: true
+lbg_guard_condition_guard: the refusal names the access, the local and where it sits: true
+lbg_scan_init_guard: the compile gate refuses it: true
+lbg_scan_init_guard: the refusal names the access, the local and where it sits: true
 lbg_statement: the compile gate refuses it: true
 lbg_statement: the refusal names the access, the local and where it sits: true
 lbg_statement_bound: the gate leaves it alone, and it runs: true
