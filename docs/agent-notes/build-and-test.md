@@ -3596,6 +3596,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     `autotune_mma_companion`); the ALIAS REFUSED digest now also names a refused per-test alias's
     siblings under the other families. It reads names, not the build graph: a helper module names no
     test (exit 1, pointing at `affected --files`).
+  - For library paths (`arrayjit/`, `tensor/`, `lib/`), `prepush --referenced-only --since BASE [--start] [build -j 4]` runs only the first tier, filtering slow/train and naming slow aliases as below; run tests exercising the change beside it and name them in the PR body. Its FIRST TIER ONLY scope leaves full reach to PR CI; a wide first tier still refuses (gh-ocannl-2072).
   - The pre-push run is one command (gh-ocannl-1829): `tools/test-run.sh prepush --since BASE
     [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build -j 4]` asks `affected --since BASE`
     for its default list (link-only aliases included), leaves off the `slow-` and `train-` members

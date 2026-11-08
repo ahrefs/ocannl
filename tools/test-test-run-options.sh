@@ -2529,6 +2529,54 @@ if [ -z "$pp_detail" ]; then
     grep -qF '@train-dir/runtest-q' "$argv_dir/cmd"; } ||
     pp_detail="options: exit $argv_rc; dune calls: ${argv_calls:-<none>} (want $pp_want); cap: $(cat "$argv_dir/cap" 2>/dev/null); stderr: $argv_err"
 fi
+# First-tier mode must pass the flag to affected, preserve filtering, and
+# label the result even after the shared launcher's green verdict.
+pp_tier_check() {
+  local mode rc
+  pp_tier_detail=
+  for mode in run list start; do
+    local opts=()
+    case $mode in list) opts=(--list) ;; start) opts=(--start) ;; esac
+    pp_probe "pp-tier-$mode" 0 --referenced-only --since base ${opts[@]+"${opts[@]}"}
+    { [ "$argv_rc" = 0 ] && [ "$pp_asked" = '--referenced-only --since base' ] &&
+      grep -qF 'FIRST TIER ONLY (--referenced-only)' <<<"$argv_err" &&
+      grep -qxF 'test-run: prepush: slow: @a/slow-y' <<<"$argv_err" &&
+      [ -z "$(pp_left)" ]; } || {
+      pp_tier_detail="$mode: exit $argv_rc; affected=$pp_asked; $argv_err"; return;
+    }
+    if [ "$mode" = list ]; then
+      [ "$argv_out" = "$(printf '%s\n' '@a/runtest-x' '@@runtest-root' '@a/runtest-slow-ish' '@train-dir/runtest-q')" ] &&
+        [ -z "$argv_calls" ] || { pp_tier_detail="list: $argv_out; calls=$argv_calls"; return; }
+    else
+      if [ "$mode" = start ]; then
+        rc=0
+        OCANNL_TOOL_TEST_RUNS="$TMP/argv-runs-pp-tier-start" \
+          "$repeat_root/tools/test-run.sh" wait --timeout 60 "$argv_dir" >"$TMP/pp-tier-wait" 2>&1 || rc=$?
+        [ "$rc" = 0 ] && grep -qF "verdict: pass; FIRST TIER ONLY" "$TMP/pp-tier-wait" || {
+          pp_tier_detail="wait: exit $rc; $(cat "$TMP/pp-tier-wait")"; return; }
+      fi
+      [ "$mode" != run ] || grep -qF "verdict: pass; FIRST TIER ONLY" <<<"$argv_out" || {
+        pp_tier_detail="run verdict: $argv_out"; return; }
+      [ "$(cat "$TMP/pp-tier-$mode.calls")" = 'build @a/runtest-x @@runtest-root @a/runtest-slow-ish @train-dir/runtest-q' ] || {
+        pp_tier_detail="$mode: wrong dune argv"; return;
+      }
+    fi
+  done
+}
+pp_tier_check
+if [ -z "$pp_tier_detail" ]; then report 0 "prepush --referenced-only: run/list/start filter the first tier and label its scope";
+else report 1 "prepush --referenced-only: run/list/start filter the first tier and label its scope" "$pp_tier_detail"; fi
+# Negative control: accepting the flag without passing it through must fail.
+perl -pe 's/affected \$\{pp_affected_opts\[\@\]\+"\$\{pp_affected_opts\[\@\]\}"\} --since/affected --since/' "$SRC" >"$repeat_root/tools/test-run.sh"
+if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
+  report 1 "prepush --referenced-only: missing-forwarding mutant loses the oracle" "mutant was not made"
+else
+  pp_tier_check
+  if [ -n "$pp_tier_detail" ]; then report 0 "prepush --referenced-only: missing-forwarding mutant loses the oracle";
+  else report 1 "prepush --referenced-only: missing-forwarding mutant loses the oracle" "mutant survived"; fi
+fi
+cp "$SRC" "$repeat_root/tools/test-run.sh"
+
 # Detached prepush shares the foreground cap intake, including a slow alias
 # explicitly appended after build (#2091); its launch succeeds even when the
 # action fails, and both wait forms deliver that failure. An accidental
@@ -2637,11 +2685,12 @@ for probe in "usage|0|build -j 2|--since BASE is required" \
              "usage|0|--since base build @w --start|--start belongs before the dune arguments" \
              "usage|0|--since base --list --cap 9|--list prints the list and runs nothing" \
              "usage|0|--since base --targets-file f|the list is affected's" \
-             "usage|0|--since base --referenced-only|unknown option --referenced-only" \
+             "usage|0|--since base build @w --referenced-only|--referenced-only belongs before the dune arguments" \
+             "usage|0|--since base --referenced-only=1|is a flag and takes no value" \
              "usage|0|--since base runtest|only dune's build takes" \
              "usage|0|--since base --cpu|fleet-worker.sh execution slot --" \
              "usage|0|--since base --list=1|is a flag and takes no value" \
-             "usage|0|--since base build @w --cap 9|tools/test-run.sh prepush --since BASE [--list |" \
+             "usage|0|--since base build @w --cap 9|tools/test-run.sh prepush --since BASE [--referenced-only] [--list |" \
              "asked|2|--since base|exited 2" \
              "asked|3|--since base|the list is INCOMPLETE"; do
   IFS='|' read -r kind rc args want <<<"$probe"
@@ -2658,6 +2707,8 @@ done
 pp_cc_err=$TMP/prepush-affected-cc.err
 printf '%s\n' 'affected: CROSS-CUTTING: 9 of the 10 per-test aliases rank first' 'affected: verdict=cross-cutting' >"$pp_cc_err"
 for probe in "cc|$pp_out|$pp_cc_err|--since base|2|is CROSS-CUTTING" \
+             "cc-tier|$pp_out|$pp_cc_err|--since base --referenced-only|2|is CROSS-CUTTING" \
+             "cc-tier-start|$pp_out|$pp_cc_err|--since base --referenced-only --start|2|is CROSS-CUTTING" \
              "cc-list|$pp_out|$pp_cc_err|--since base --list|2|is CROSS-CUTTING" \
              "aggregate|$TMP/prepush-aggregate.out|$pp_err|--since base|2|no per-test alias of runtest, slow or train: '@x/scans'" \
              "spaced|$TMP/prepush-spaced.out|$pp_err|--since base --list|2|no per-test alias of runtest, slow or train: '@x/runtest-a @x/runtest-b'" \

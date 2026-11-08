@@ -67,14 +67,14 @@
 #                                                      # (tools/affected-tests.sh)
 #   tools/test-run.sh aliases PATH...                 # a test's per-test aliases, by family;
 #                                                      # runs none
-#   tools/test-run.sh prepush --since BASE [--start] [--cap N] [--test-cap N] [--expect-backend B]...
+#   tools/test-run.sh prepush --since BASE [--referenced-only] [--start] [--cap N] [--test-cap N] [--expect-backend B]...
 #                             [build [DUNE OPTIONS...]] # the pre-push run: affected's default
 #                                                      # list without slow-/train-, as `run`
 #   tools/test-run.sh prepush --since BASE --list      # that list, one alias per line; runs none
 #
 # `prepush --since BASE` (gh-ocannl-1829) is the pre-push run as one command:
-# `affected --since BASE`'s default list (link-only aliases included, never
-# `--referenced-only`'s) without its `slow-` and `train-` members, run exactly
+# `affected --since BASE`'s default list (link-only aliases included) without
+# its `slow-` and `train-` members, run exactly
 # as `run [OPTIONS] --targets-file LIST [build DUNE OPTIONS...]` would run it
 # (the same verdict, digest and exit status). `--start` uses `start` instead;
 # follow a successful launch with `wait last` or `wait DIR`. An empty kept
@@ -108,6 +108,13 @@
 # refusal alike, for the caller to run before pushing. They change no exit
 # status. A change reaching no harness (most `.ml`-only ones) prints no such
 # line; an `affected --harnesses` that fails runs nothing (exit 2).
+#
+# `prepush --referenced-only` (gh-ocannl-2072) passes that flag to affected:
+# only the first tier is filtered and launched (with --start or --list too).
+# Its recorded verdict and closing scope line say FIRST TIER ONLY: a batch does not
+# stand for the full reach. A wide first tier still refuses as cross-cutting;
+# incomplete and invalid lists keep the same refusal. Run the tests exercising
+# the change beside this tier, and its applicable slow- aliases, in the PR body.
 #
 # `--targets-file FILE` (repeatable; gh-ocannl-1740) adds the aliases FILE lists
 # to dune's argv, after its own words (before dune's `--`, if any): one `@`
@@ -505,7 +512,7 @@ reject_misplaced_options() {
     case $arg in
       --) return 0 ;;
       --cpu | --cpu=* | --gpu | --gpu=*) refuse_slot_option "$arg" ;;
-      --start | --start=*)
+      --start | --start=* | --referenced-only | --referenced-only=*)
         [ "$sub" != prepush ] || die "$arg belongs before the dune arguments, not after them:
   tools/test-run.sh $pp_usage
   dune has no such option, so this would have exited 1 having run nothing." ;;
@@ -2732,6 +2739,7 @@ new_run() {
     printf '%s\n' "$RUNS" >"$run_dir/runs" &&
     { perl -e "$proc_table_perl" chain 2>/dev/null || :; } >"$run_dir/launchers" &&
     record_checkout &&
+    { [ -z "${pp_scope:-}" ] || printf '%s\n' "$pp_scope" >"$run_dir/prepush-scope"; } &&
     if explicit_diff_command "$@"; then
       echo 'on the command line' >"$run_dir/diff-command"
     elif [ -n "${DUNE_DIFF_COMMAND:-}" ]; then
@@ -3810,6 +3818,9 @@ digest() {
     fi
   fi
   echo "command: dune $(cat "$dir/cmd")"
+  if [ -s "$dir/prepush-scope" ]; then
+    verdict="$verdict; $(cat "$dir/prepush-scope")"
+  fi
   echo "verdict: $verdict (exit $digest_rc)"
   echo "log:     $dir/log"
   # The source the run tested, from the launch-time record (record_checkout),
@@ -4052,6 +4063,7 @@ hold_query_lock() {
     die "a run is active in this worktree; $sub asks dune too, so wait for it (status last)"
 }
 
+pp_scope=
 sub=${1:-}
 [ -n "$sub" ] || die "usage: tools/test-run.sh run|start|plan|repeat|fresh|bisect|status|wait|stop|list|idle|paths|lock-status|affected|aliases|prepush ... (see header)"
 shift
@@ -4070,11 +4082,12 @@ shift
 # what this build cannot place), nor without a verdict (exit 2), so no green
 # verdict ever stands for a list that was not the pre-push one.
 if [ "$sub" = prepush ]; then
-  pp_usage='prepush --since BASE [--list | [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
-  pp_base= pp_print=0 pp_mode=run pp_run_opts=()
+  pp_usage='prepush --since BASE [--referenced-only] [--list | [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
+  pp_base= pp_print=0 pp_mode=run pp_run_opts=() pp_affected_opts=()
   while [ $# -gt 0 ]; do
     case $1 in
       --since | --since=*) opt_value "a base revision" "$@"; pp_base=$opt_value; shift "$opt_shift" ;;
+      --referenced-only | --referenced-only=*) opt_flag "$1"; pp_affected_opts=(--referenced-only); pp_scope="FIRST TIER ONLY (--referenced-only; full reach belongs to PR CI)"; shift ;;
       --list | --list=*) opt_flag "$1"; pp_print=1; shift ;;
       --start | --start=*) opt_flag "$1"; pp_mode=start; shift ;;
       --cap | --cap=* | --test-cap | --test-cap=* | --expect-backend | --expect-backend=*)
@@ -4105,6 +4118,9 @@ if [ "$sub" = prepush ]; then
   # carries them. Nothing is printed when the change reaches none.
   pp_harness=()
   pp_close() {
+    if [ ${#pp_affected_opts[@]} -gt 0 ]; then
+      echo "test-run: prepush: FIRST TIER ONLY (--referenced-only): any batch verdict covers only this tier; the full reach belongs to PR CI. Also run the tests exercising the change and its slow- aliases, named in the PR body." >&2
+    fi
     if [ ${#pp_harness[@]} -gt 0 ]; then
       {
         printf 'test-run: prepush: %d harness command(s) this change reaches, named here and NOT run (they are no dune aliases, so no part of prepush'\''s list):\n' \
@@ -4118,7 +4134,7 @@ if [ "$sub" = prepush ]; then
   }
   trap pp_close EXIT
   pp_rc=0
-  bash "$runner_root/tools/test-run.sh" affected --since "$pp_base" >"$pp_dir/affected" 2>"$pp_dir/affected.err" ||
+  bash "$runner_root/tools/test-run.sh" affected ${pp_affected_opts[@]+"${pp_affected_opts[@]}"} --since "$pp_base" >"$pp_dir/affected" 2>"$pp_dir/affected.err" ||
     pp_rc=$?
   cat "$pp_dir/affected.err" >&2
   case $pp_rc in
