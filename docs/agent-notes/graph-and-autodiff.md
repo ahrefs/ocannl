@@ -194,3 +194,10 @@ files.
   already have specified precision. Wrapped leaves are born with forced dims on an open shape;
   they now reach the `Specified` no-op before the forced-read check, pinned by the read-first
   `wrap` rows in `data_leaf_top_down_prec`. The algorithm is in `docs/precision_inference.md`.
+
+- A seed singleton's embedding does not initialize it (gh-ocannl-2023). Independent models
+  compiled as siblings need `Tensor.set_random_seed` before each model is built, or an explicit
+  seed initialization in their shared ancestor. `embedded_read_only` reproduces an initializer
+  whose seed's forward code another graph absorbed: before the refusal its draws matched an
+  explicitly initialized zero seed bit for bit, not the requested 42. `Tensor.init_params` adding
+  the seed to `embedded_nodes` supplies no write and no exemption from the read-only input check.

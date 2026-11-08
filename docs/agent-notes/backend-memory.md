@@ -175,7 +175,8 @@ files.
   instead of resting on every caller of `upload_slot` writing first. `Context.buffer_written`
   reads the record, released contexts included (`set_values_pool_coalescing`'s reused-tail case,
   `resource_fault_injection`'s partial free). Allocation-time zeros no longer count. A READ-ONLY
-  input must be written the same way unless `Tnode.zero_valid` declares zero its correct value
+  input, embedded or not (gh-ocannl-2023), must be written the same way unless
+  `Tnode.zero_valid` declares zero its correct value
   (gh-ocannl-1462): `Tensor` marks every gradient at creation (both sites, `op` and
   `force_param_diff`), `Tnode.mark_zero_valid` marks any other read-only accumulator, and the mark
   never excuses read-before-write state. Before, a read-only input passed once merely allocated, and
@@ -183,7 +184,7 @@ files.
   reads may live in a constant pool of its root that compile siblings SHARE, so a sibling-seeding
   test makes it `context_owned` to get a buffer per sibling (`chr_read_only_buffer`). Hand-built
   tests that accumulate from zero therefore seed the accumulator (`peel_census`) or mark it; state
-  meant to start from zero inside a model is an embedded node, excluded from `inputs`, and declares
+  meant to start from zero inside a model is an embedded output, excluded from `inputs`, and declares
   so with the mark (`{ sgd_momentum; zero_valid = true }`, gh-ocannl-1966). An SGD step compiled without `Train.init_params` never
   reaches this check: linking already refuses a parameter the prior context lacks.
 - **Constants are cached per root; only host literals are shared across roots** (gh-ocannl-1654,

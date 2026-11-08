@@ -1,0 +1,9 @@
+an initializer whose seed owner did not run is refused: true
+explicitly initialized seeds produce distinct draws: true
+the input is embedded and read-only: true
+unwritten embedded read-only input is refused: true
+uploading the embedded input permits the correct result: true
+the input is embedded and read-only: true
+declared zero-valid embedded input runs from zero: true
+the literal is embedded and host-initialized: true
+embedded host literal initializes at link and runs: true

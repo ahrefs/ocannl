@@ -63,6 +63,8 @@ let find_consumer root master =
 let prec_str tn = Ir.Ops.prec_string (Lazy.force tn.Tn.storage_prec)
 
 let build_leg ~input_l ~build ~prepare =
+  (* Each model is compiled from the base, not from the previous seed owner. *)
+  Tensor.set_random_seed ();
   let f = build () in
   let x =
     NTDSL.init ~l:input_l ~prec:Ir.Ops.single

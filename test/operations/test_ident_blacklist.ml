@@ -8,7 +8,9 @@ module Tn = Ir.Tnode
    like [float float[1] = ...] or [return return[1] = ...]. A bare math-function name would shadow
    the callee in the same generated routine. *)
 
-let mk label = Tensor.term ~label:[ label ] ~grad_spec:Prohibit_grad ~output_dims:[ 1 ] ()
+let mk label =
+  Tensor.term ~label:[ label ] ~grad_spec:Prohibit_grad ~output_dims:[ 1 ]
+    ~fetch_op:(Ir.Assignments.Constant 1.) ()
 
 let print_code_name label tn =
   match tn.Tn.code_name with
