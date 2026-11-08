@@ -1704,6 +1704,11 @@ files.
   GPU-only paths only on a GPU sweep: `schedule_refusal_scan` requires every untyped raise bound
   before `apply_typed` to carry its own `(* invariant: ... *)` comment.
   `Schedule.with_transform_fault` injects one for tests (`schedule_refusal_classification`).
+- **Materializing `Unroll` drops a dead loop before inspecting its body** (gh-ocannl-2031).
+  Compare `to_ < from_` before computing the trip count: subtraction can wrap, and even a
+  zero-copy accumulation must not mint an accumulator load/store. The pure-IR cases in
+  `schedule_refusal_classification` cover ordinary stores, mintable updates and extreme bounds.
+  Live ranges whose trip count cannot fit an integer refuse typed rather than wrapping to empty.
 - **The same holds one level up, for the sketch builder and the advisory fallbacks** (gh-ocannl-1390).
   `sketch_schedule` no longer converts every `Invalid_argument` escaping the builder into
   `Illegal_schedule "Autotune.sketch"`: a builder precondition (no site of the family's kind, Grid

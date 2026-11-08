@@ -181,3 +181,51 @@ let () =
          | Ok _ | Error _ -> false));
   p "the builder fault seam is scoped: the typed refusal is back once it returns"
     (Option.equal String.equal (refusal ()) builder_detail)
+
+(* gh-ocannl-2031: retain the dead loop at the post-lowering schedule seam, so simplification cannot
+   erase the reproducer before Unroll sees it. Both an ordinary store and a mintable accumulation
+   must disappear, including all reads and writes. *)
+let () =
+  let open Ll_test in
+  let acc = node "dead_unroll_acc" in
+  materialize acc;
+  let idcs = [| fixed 0 |] in
+  let store = set acc idcs (c 7.) in
+  let update = set acc idcs (add (get acc idcs) (c 1.)) in
+  let axis = sym () in
+  let live = loop_n axis 2 update in
+  let opt = optimize_scoped ~name:"mintable_unroll" ~raw:store live in
+  let result = Sched.apply_classified [ Sched.Unroll { axis; materialize = true } ] opt in
+  p "the live accumulation control mints a schedule accumulator scope"
+    (match result.LL.llc with
+    | LL.Set { llsc = LL.Local_scope { mint = LL.Schedule_minted; _ }; _ } -> true
+    | _ -> false);
+  List.iter
+    [ ("store", store); ("accumulation", update) ]
+    ~f:(fun (kind, body) ->
+      List.iter
+        [ (5, 3); (5, 4); (0, -2); (Int.max_value, Int.min_value) ]
+        ~f:(fun (from_, upto) ->
+          let axis = sym () in
+          let dead = loop ~from_ ~upto axis body in
+          let opt = optimize_scoped ~name:"dead_unroll" ~raw:store dead in
+          pf "%s [%d..%d]: materializing Unroll removes the dead body entirely" kind from_ upto
+            (match Sched.apply_classified [ Sched.Unroll { axis; materialize = true } ] opt with
+            | result -> ( match result.LL.llc with LL.Noop -> true | _ -> false)
+            | exception _ -> false)));
+  let axis = sym () in
+  let live = loop ~from_:2 ~upto:2 axis store in
+  let opt = optimize_scoped ~name:"singleton_unroll" ~raw:store live in
+  let result = Sched.apply_classified [ Sched.Unroll { axis; materialize = true } ] opt in
+  p "materializing Unroll retains a singleton loop's store"
+    (match result.LL.llc with LL.Set _ -> true | _ -> false);
+  List.iter
+    [ (0, Int.max_value); (Int.min_value, 0) ]
+    ~f:(fun (from_, upto) ->
+      let axis = sym () in
+      let live = loop ~from_ ~upto axis store in
+      let opt = optimize_scoped ~name:"oversized_unroll" ~raw:store live in
+      pf "live [%d..%d]: an unrepresentable trip count refuses typed" from_ upto
+        (match Sched.apply_classified [ Sched.Unroll { axis; materialize = true } ] opt with
+        | _ -> false
+        | exception Outcome.Cause_at (Outcome.Transform, Outcome.Illegal_schedule _) -> true))

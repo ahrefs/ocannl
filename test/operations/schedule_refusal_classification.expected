@@ -15,3 +15,15 @@ an injected Invalid_argument escapes the builder untyped: true
 strict: an untyped builder exception is fatal, its own exception and no cause: true
 permissive: the same exception is contained as Unclassified, never as Illegal_schedule: true
 the builder fault seam is scoped: the typed refusal is back once it returns: true
+the live accumulation control mints a schedule accumulator scope: true
+store [5..3]: materializing Unroll removes the dead body entirely: true
+store [5..4]: materializing Unroll removes the dead body entirely: true
+store [0..-2]: materializing Unroll removes the dead body entirely: true
+store [4611686018427387903..-4611686018427387904]: materializing Unroll removes the dead body entirely: true
+accumulation [5..3]: materializing Unroll removes the dead body entirely: true
+accumulation [5..4]: materializing Unroll removes the dead body entirely: true
+accumulation [0..-2]: materializing Unroll removes the dead body entirely: true
+accumulation [4611686018427387903..-4611686018427387904]: materializing Unroll removes the dead body entirely: true
+materializing Unroll retains a singleton loop's store: true
+live [0..4611686018427387903]: an unrepresentable trip count refuses typed: true
+live [-4611686018427387904..0]: an unrepresentable trip count refuses typed: true
