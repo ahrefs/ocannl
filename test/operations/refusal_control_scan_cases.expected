@@ -1,3 +1,4 @@
+the marker grammar reads every real diagnostic identity: true
 direct, `failwith`, formatted, `@@`, quantified, `p_all2`, `pf`, and short refusal formats are extracted: true
 comments, quoted code, and a dynamic value contribute no diagnostic string constant: true
 Printf substitutions are holes and a stable literal fragment becomes the fragment: true

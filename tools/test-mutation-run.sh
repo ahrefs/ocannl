@@ -270,8 +270,10 @@ export PATH="$fixture/bin:$PATH" PROBE_HOME="$fixture" OCANNL_TOOL_TEST_RUNS="$f
 export OCANNL_TOOL_FLEET_WORKER=none OCANNL_TOOL_DXG_DEVICE="$fixture/no-such-dxg" \
   OCANNL_TOOL_KFD_TOPOLOGY="$fixture/no-such-kfd" OCANNL_TOOL_NVIDIA_DEVICE="$fixture/no-such-nvidia"
 cd "$fixture/repo"
+# The staged owner's verbatim fields, also read by the stand-in test above.
+section_head() { sed -n "s/^let $1 = \"\\(.*\\)\"\$/\\1/p" "$heads"; }
 # The closing row as the staged owner binds it, which the stand-in test prints too.
-closing_row=$(sed -n 's/^let closing_row = "\(.*\)"$/\1/p' "$heads")
+closing_row=$(section_head closing_row)
 [ -n "$closing_row" ] || { echo "no closing_row binding read from $heads" >&2; exit 2; }
 printf 'first: true\nnested: label: true\nlast: true\n' > probe.expected
 printf 'first: true\n\nSynthetic controls: scanner refusal diagnostics exercised by this control golden:\n%s\n%s\nlast: true\n' \
@@ -623,7 +625,15 @@ reached
 # The marker a replayed child omitted: the passing child's marker rows its stdout lacks, derived
 # from the transcripts rather than restated here.
 omitted_marker() {
-  grep -E '^  \[scanner-refusal:[0-9a-f]{32}\] ' replay.expected | grep -vxF -f "$fixture/replay.stdout"
+  perl -ne '
+    BEGIN {
+      my ($indent, $prefix, $chars, $width, $separator) = splice @ARGV, 0, 5;
+      our $marker_row = qr/^\Q$indent$prefix\E[\Q$chars\E]{$width}\Q$separator\E/;
+    }
+    print if /$marker_row/;
+  ' "$(section_head marker_indent)" "$(section_head marker_prefix)" \
+    "$(section_head marker_hex_chars)" "$(section_head marker_hex_length)" \
+    "$(section_head marker_separator)" replay.expected | grep -vxF -f "$fixture/replay.stdout"
 }
 replay manifest_failed @manifest_held 1
 grep -q '^refusal markers omitted: 1 ' "$fixture/result" ||
@@ -667,6 +677,8 @@ reached
 perl -pi -e 's/scanner-refusal:/changed-refusal:/g' "$heads" replay.expected "$fixture/replay.stdout" "$fixture/replay.stderr"
 PROBE_ALIAS=@runtest-replay run_case 1
 grep -q '^refusal markers omitted: 1 ' "$fixture/result"
+marker=$(omitted_marker)
+[ -n "$marker" ] || { echo 'the harness reader missed the changed prefix'; exit 1; }
 cp tools/mutation-run.sh "$fixture/derived-marker-reader"
 perl -pi -e 's/^my \$marker_row =/\$head{marker_prefix} = "[scanner-refusal:"; my \$marker_row =/' tools/mutation-run.sh
 PROBE_ALIAS=@runtest-replay run_case 1

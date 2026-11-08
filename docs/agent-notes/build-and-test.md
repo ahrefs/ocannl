@@ -577,7 +577,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   reader names it, `--accept-offer KEY=CLAIM` as the offer prints it, and the tool writes exactly
   that entry and re-runs its source's goldens (gh-ocannl-1840). After a rewording,
   one `tools/refusal-manifest-sync.sh` does the rest (gh-ocannl-1429; `--dry-run` shows the plan):
-  it rewrites each stale row, re-keys the `raw_direct_evidence`/`raw_catalogue_only` entry of a
+  it rewrites each stale row and reports a paired or dropped old marker outside the current
+  grammar as unresolved, leaving its key and golden marker for a hand edit (gh-ocannl-1931).
+  For recognized markers, it re-keys the `raw_direct_evidence`/`raw_catalogue_only` entry of a
   reworded direct failure, relabels an evidence entry whose control claim was reworded in its
   scanner's own source (one reworded in another test source changed since `--base`, default HEAD,
   is reported with its new text, never relabeled: the label may back another scanner's evidence),

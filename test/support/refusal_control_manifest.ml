@@ -1500,10 +1500,10 @@ let doubly_classified =
   List.filter_map direct_evidence ~f:(fun (key, _) ->
       Option.some_if (List.Assoc.mem catalogue_only key ~equal:String.equal) key)
 
-(** The [(key, claim)] pairs [entries] holds more than once, each named once, in table order
-    (gh-ocannl-1840). A key may carry several entries, one per claim whose run prints it
-    (gh-ocannl-1572), but the same pair twice says nothing the first did not: it is a copy-paste
-    slip, which the catalogue audit refuses rather than reads past. *)
+(** The elements written more than once, each named once, in table order (gh-ocannl-1840). Applied
+    to direct-evidence pairs or catalogue-only keys: a duplicate adds nothing, so the audit refuses
+    it as a copy-paste slip. Distinct claims under one direct-evidence key remain meaningful
+    (gh-ocannl-1572). *)
 let repeated_pairs entries =
   List.filter_mapi entries ~f:(fun i pair ->
       let earlier = List.take entries i in
@@ -1512,7 +1512,8 @@ let repeated_pairs entries =
 (** The [raw_direct_evidence] pairs written more than once ({!repeated_pairs}). *)
 let repeated_evidence = repeated_pairs direct_evidence
 
-(** A catalogue-only key cannot name several claims: every entry says none answers for it. *)
+(** A catalogue-only key says no control answers for it; a second entry adds nothing whatever its
+    reason. *)
 let repeated_catalogue_keys entries = repeated_pairs (List.map entries ~f:fst)
 
 type offer = { key : string; claim : string }

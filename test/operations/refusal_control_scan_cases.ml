@@ -5,6 +5,7 @@ open Base
 open Stdio
 module Scan = Test_scan.Refusal_control_scan
 module Manifest = Test_scan.Refusal_control_manifest
+module Heads = Test_scan.Refusal_section_heads
 
 let minus = Manifest.minus
 
@@ -54,6 +55,9 @@ let dynamic reason = Verdict.fail reason
 |ocaml}
   in
   let diagnostics = Scan.diagnostics source in
+  Verdict.p_all ~min:9 "the marker grammar reads every real diagnostic identity" diagnostics
+    ~f:(fun d ->
+      Option.equal String.equal (Heads.marker_identity (Scan.marker d)) (Some d.Scan.identity));
   let fragments = List.map diagnostics ~f:(fun diagnostic -> diagnostic.Scan.fragment) in
   Verdict.p_all ~min:9
     "direct, `failwith`, formatted, `@@`, quantified, `p_all2`, `pf`, and short refusal formats \
@@ -88,7 +92,11 @@ let dynamic reason = Verdict.fail reason
      and the direct failures it asks evidence for, over a row the synthetic source has outgrown. *)
   let extracted = List.map diagnostics ~f:Scan.marker in
   let first = List.hd_exn extracted and second = List.nth_exn extracted 1 in
-  let reworded = "[scanner-refusal:00000000000000000000000000000000] reworded" in
+  let reworded =
+    Heads.marker
+      ~identity:(String.make (Int.of_string Heads.marker_hex_length) '0')
+      ~fragment:"reworded"
+  in
   Verdict.p "a row holding the extraction in order has no difference"
     (Option.is_none (Manifest.row_difference ~registered:extracted ~extracted));
   Verdict.p "a reworded format is one marker added and one removed, with no order to report"
@@ -447,7 +455,7 @@ let dynamic reason = Verdict.fail reason
       eprintf
         "%s: its `raw_catalogue_only` key is written more than once; drop the copy (not part of \
          the golden)\n"
-        key);
+        (Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key));
   Verdict.p_empty "no `raw_catalogue_only` entry repeats another's key"
     ~over:Manifest.catalogue_only repeated
 

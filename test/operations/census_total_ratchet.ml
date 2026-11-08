@@ -47,6 +47,7 @@ open Stdio
 open Verdict.Claims
 module Dune = Test_scan.Dune_stanza_scan
 module Inventory = Test_scan.Source_inventory
+module Heads = Test_scan.Refusal_section_heads
 
 type golden = Every_golden | Golden of string
 type entry = { golden : golden; pattern : string; reason : string }
@@ -66,7 +67,12 @@ let allowed =
     citation;
     {
       golden = Every_golden;
-      pattern = {|\[scanner-refusal:[0-9a-f]+\]|};
+      pattern =
+        Str.quote Heads.marker_prefix
+        ^ String.concat
+            (List.init (Int.of_string Heads.marker_hex_length) ~f:(fun _ ->
+                 "[" ^ Heads.marker_hex_chars ^ "]"))
+        ^ Str.quote Heads.marker_separator;
       reason =
         "a refusal marker's digest names one diagnostic format (Refusal_control_manifest) and \
          moves only with that format's text";
