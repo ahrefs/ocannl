@@ -714,12 +714,24 @@ if harness_leg 'a changed job or step closes the block without a completion mark
   unit/dune:1  (rule)
       ran: (cd _build/default && ./unit.exe)
       last output: unit failed'
+  prefix_mutant=
+  if prefix_mutant=$(mutant no-prefix-boundary '
+    /if \(log_step != "" && previous_step != "" && log_step != previous_step\)/ {
+      sub(/if \(.*\) \{/, "if (0) { # prefix boundary removed")
+    } 1') && grep -q 'prefix boundary removed' "$prefix_mutant"; then :
+  else report 1 'negative control: the prefix boundary mutant was built' 'mutation did not apply'; fi
   for prefix in $'job\tcleanup' $'other job\tbuild'; do
     printf '%s\t2026-11-06T19:53:20Z %s\n' "$prefix" 'FAILED: unrelated cleanup' >"$TMP/changed-step-tail.log"
     cat "$TMP/changed-step.log" "$TMP/changed-step-tail.log" >"$TMP/changed-step-full.log"
     out=$(cd "$TMP" && subject changed-step-full.log 2>&1); rc=$?
     report "$([ "$rc" = 0 ] && [ "$out" = "$want" ]; echo $?)" \
       "a changed prefix closes the block: $prefix" "exit $rc; $out"
+    if [ -n "$prefix_mutant" ]; then
+      out=$(cd "$TMP" && bash "$prefix_mutant" changed-step-full.log 2>&1); rc=$?
+      report "$([ "$rc" = 0 ] && [ "$out" != "$want" ] &&
+        grep -q '^      | FAILED: unrelated cleanup$' <<<"$out"; echo $?)" \
+        "negative control: without the prefix boundary cleanup is quoted: $prefix" "exit $rc; $out"
+    fi
   done
 fi
 if harness_leg 'the green build prints nothing #dune'; then

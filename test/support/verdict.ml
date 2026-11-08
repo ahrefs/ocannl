@@ -837,8 +837,11 @@ let fresh now ~before = List.take now (List.length now - List.length before)
 
 (** [in_leg ~leg label make] is [make label] where [leg] is open, held to making exactly the one
     [<label>: <bool>] claim, and [skipped label] where it is closed (see above). If the run itself
-    makes claims (for example a test helper that checks execution), run it outside [make] and pass
-    its result in: those extra claims would violate this one-claim boundary. *)
+    makes claims (for example a test helper that checks execution), run it ahead of the [in_leg]
+    calls, under the leg's own gate, as [mixed_prec_twin_rounding]'s [run_placements] does, and pass
+    its result in. The run's own claims must print no golden row or must themselves be leg claims,
+    so the closed side retains the same golden rows. Extra claims inside [make] violate this
+    one-claim boundary. *)
 let in_leg ~leg label make =
   match Lazy.force leg with
   | Leg_closed { on; aggregation } -> skipped ?aggregation ~backend:on label

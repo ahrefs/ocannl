@@ -70,8 +70,8 @@
 #      environment it compares leaves out none of the runner's own variables.
 #  85 sits after leg 83 (not applicable off Linux, gh-ocannl-1930: the
 #      stand-in is a Linux facility, and so is the PID 1 it stands in for;
-#      85b is that probe's own control): under a stand-in for a PID 1 that reaps
-#      no orphans -- a child subreaper that waits for its own child only --
+#      85b checks the kernel probe, 85c checks missing-capability diagnostics): under a stand-in
+#      for a PID 1 that reaps no orphans -- a child subreaper that waits for its own child only --
 #      the zombie-only groups `repeat` and `run` leave are read as gone, not
 #      refused: a capped set keeps TIMEOUT, a GPU set passes through the
 #      resolution's inert-zombie branch, and `run` keeps its verdict, while
@@ -2013,8 +2013,14 @@ subreaper_kernel_probe() { # UNAME
 subreaper_skip_reason() { # PYTHON PROBE
   if [ -z "$1" ]; then
     echo "no python3 on PATH (the child subreaper probe needs it)"
-  elif ! "$1" "$2" >/dev/null 2>&1; then
-    echo "python3 is available, but the child subreaper probe failed (prctl PR_SET_CHILD_SUBREAPER)"
+  else
+    local rc=0
+    "$1" "$2" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      0) ;;
+      97) echo "python3 is available, but prctl PR_SET_CHILD_SUBREAPER refused the child subreaper" ;;
+      *) echo "python3 is available, but the child subreaper probe exited $rc" ;;
+    esac
   fi
 }
 reap_label="zombie-only groups under a parent that reaps no orphans: repeat keeps TIMEOUT and a GPU set passes, run keeps its verdict, nothing refused"
@@ -2176,19 +2182,22 @@ leg_85b() {
 harness_leg_run '85b: only a kernel that named itself, and not as Linux, makes 85 not applicable #repeat' leg_85b
 
 leg_85c() {
-  local d=$TMP/85c missing refused available
+  local d=$TMP/85c missing refused failed available
   mkdir -p "$d"
-  printf '#!/bin/sh\nexit 1\n' >"$d/refused"
+  printf '#!/bin/sh\nexit 97\n' >"$d/refused"
+  printf '#!/bin/sh\nexit 1\n' >"$d/failed"
   printf '#!/bin/sh\nexit 0\n' >"$d/available"
-  chmod +x "$d/refused" "$d/available"
+  chmod +x "$d/refused" "$d/failed" "$d/available"
   missing=$(subreaper_skip_reason "" "$reap_stub")
   refused=$(subreaper_skip_reason "$d/refused" "$reap_stub")
+  failed=$(subreaper_skip_reason "$d/failed" "$reap_stub")
   available=$(subreaper_skip_reason "$d/available" "$reap_stub")
   report "$([ "$missing" = 'no python3 on PATH (the child subreaper probe needs it)' ] &&
-    [ "$refused" = 'python3 is available, but the child subreaper probe failed (prctl PR_SET_CHILD_SUBREAPER)' ] &&
+    [ "$refused" = 'python3 is available, but prctl PR_SET_CHILD_SUBREAPER refused the child subreaper' ] &&
+    [ "$failed" = 'python3 is available, but the child subreaper probe exited 1' ] &&
     [ -z "$available" ]; echo $?)" \
     '85c: the skip names the missing capability, and a successful probe needs no skip' \
-    "missing=$missing; refused=$refused; available=$available"
+    "missing=$missing; refused=$refused; failed=$failed; available=$available"
 }
 harness_leg_run '85c: subreaper skip diagnostics name the missing capability #repeat' leg_85c
 

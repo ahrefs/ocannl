@@ -8,6 +8,7 @@ a synthesized guide one byte under the cap is accepted: true
 a synthesized guide at the warning band's lower edge is warned about: true
 a synthesized guide one byte below the warning band is not warned about: true
 a synthesized guide of exactly 32 KiB is refused, not warned about: true
+longest-line advice is offered in the warning band and at or over the cap: true
 longest-line advice keeps five lines ranked by bytes with stable source locations: true
 
 Synthetic controls: scanner refusal diagnostics exercised by this control golden:
@@ -18,5 +19,6 @@ Synthetic controls: scanner refusal diagnostics exercised by this control golden
   [scanner-refusal:6f380ec6130d7d24a10cfd39521bdaec] synthesized guide at
   [scanner-refusal:2c8e54e9bdb6518252759d38c07973aa] synthesized guide one
   [scanner-refusal:c32f3dd124b270ba497cf74ca1bc7e77] synthesized guide of
+  [scanner-refusal:87f68dbf665f63c6666dc15bdfe9bc9b] longest-line advice is
   [scanner-refusal:fbbca570493f5d6fe407e047220ac6fa] longest-line advice keeps
 End of synthetic controls.

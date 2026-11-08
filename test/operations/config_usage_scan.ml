@@ -615,6 +615,29 @@ let has_ambiguous_cli_value occurrence =
    form has none, and the hint says so rather than inventing one. *)
 let script_source path = String.is_suffix path ~suffix:".py" || String.is_suffix path ~suffix:".sh"
 
+(* Keep the lookup identity and editable OCaml tuple together for each counted list. *)
+let counted_entry (path, key, expected) =
+  (mention_site path key, expected, fun count -> Printf.sprintf "(%S, %S, %d)" path key count)
+
+let drift_failure ~fail ~list_name ~seen ~entry mentions =
+  let drifted =
+    List.filter_map mentions ~f:(fun mention ->
+        let site, expected, render = entry mention in
+        let actual = Hashtbl.find seen site |> Option.value ~default:0 in
+        Option.some_if
+          (not (Int.equal actual expected))
+          (Printf.sprintf
+             "%s expected %d, saw %d; %s %s in test/operations/config_usage_scan.ml: %s"
+             (render expected) expected actual
+             (if Int.equal actual 0 then "remove" else "review")
+             list_name
+             (render (if Int.equal actual 0 then expected else actual))))
+  in
+  if not (List.is_empty drifted) then
+    fail
+      (Printf.sprintf "counted config mentions drifted in %s: %s" list_name
+         (String.concat ~sep:", " drifted))
+
 let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
     ?(control_non_config_environment_mentions = non_config_environment_mentions)
     ?(control_non_config_assignment_mentions = non_config_assignment_mentions)
@@ -729,21 +752,8 @@ let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
            (newly_real_environment
            |> List.map ~f:(fun (path, key, _) -> path ^ ":" ^ key)
            |> String.concat ~sep:", "));
-    let drifted_non_config_environment =
-      List.filter_map control_non_config_environment_mentions ~f:(fun (path, key, expected) ->
-          let actual =
-            Hashtbl.find seen_non_config_environment (mention_site path key)
-            |> Option.value ~default:0
-          in
-          Option.some_if (not (Int.equal actual expected)) (path, key, expected, actual))
-    in
-    if not (List.is_empty drifted_non_config_environment) then
-      fail
-        (Printf.sprintf "non-config environment-mention occurrence counts drifted: %s"
-           (drifted_non_config_environment
-           |> List.map ~f:(fun (path, key, expected, actual) ->
-               Printf.sprintf "%s:%s expected %d, saw %d" path key expected actual)
-           |> String.concat ~sep:", "));
+    drift_failure ~fail ~list_name:"non_config_environment_mentions"
+      ~seen:seen_non_config_environment ~entry:counted_entry control_non_config_environment_mentions;
     let newly_real =
       List.filter control_non_config_assignment_mentions ~f:(fun (_, key, _) ->
           Set.mem known_keys key)
@@ -755,83 +765,20 @@ let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
            (newly_real
            |> List.map ~f:(fun (path, key, _) -> path ^ ":" ^ key)
            |> String.concat ~sep:", "));
-    let drifted_non_config =
-      List.filter_map control_non_config_assignment_mentions ~f:(fun (path, key, expected) ->
-          let actual =
-            Hashtbl.find seen_non_config (mention_site path key) |> Option.value ~default:0
-          in
-          Option.some_if (not (Int.equal actual expected)) (path, key, expected, actual))
-    in
-    if not (List.is_empty drifted_non_config) then
-      fail
-        (Printf.sprintf "non-config assignment exemption occurrence counts drifted: %s"
-           (drifted_non_config
-           |> List.map ~f:(fun (path, key, expected, actual) ->
-               Printf.sprintf
-                 "%s:%s expected %d, saw %d; review non_config_assignment_mentions in \
-                  test/operations/config_usage_scan.ml: (%S, %S, %d)"
-                 path key expected actual path key actual)
-           |> String.concat ~sep:", "));
-    let drifted_historical =
-      List.filter_map control_historical_invalid_config_mentions ~f:(fun (path, key, expected) ->
-          let actual =
-            Hashtbl.find seen_historical (mention_site path key) |> Option.value ~default:0
-          in
-          Option.some_if (not (Int.equal actual expected)) (path, key, expected, actual))
-    in
-    if not (List.is_empty drifted_historical) then
-      fail
-        (Printf.sprintf "historical invalid-config exemption occurrence counts drifted: %s"
-           (drifted_historical
-           |> List.map ~f:(fun (path, key, expected, actual) ->
-               Printf.sprintf "%s:%s expected %d, saw %d" path key expected actual)
-           |> String.concat ~sep:", "));
-    let drifted_ambiguous_bare =
-      List.filter_map control_ambiguous_bare_config_mentions ~f:(fun (path, key, expected) ->
-          let actual =
-            Hashtbl.find seen_ambiguous_bare_config (mention_site path key)
-            |> Option.value ~default:0
-          in
-          Option.some_if (not (Int.equal actual expected)) (path, key, expected, actual))
-    in
-    if not (List.is_empty drifted_ambiguous_bare) then
-      fail
-        (Printf.sprintf "ambiguous bare config-mention occurrence counts drifted: %s"
-           (drifted_ambiguous_bare
-           |> List.map ~f:(fun (path, key, expected, actual) ->
-               Printf.sprintf "%s:%s expected %d, saw %d" path key expected actual)
-           |> String.concat ~sep:", "));
-    let drifted_prefix_free =
-      List.filter_map control_prefix_free_config_mentions ~f:(fun (path, key, expected) ->
-          let actual =
-            Hashtbl.find seen_prefix_free (mention_site path key) |> Option.value ~default:0
-          in
-          Option.some_if (not (Int.equal actual expected)) (path, key, expected, actual))
-    in
-    if not (List.is_empty drifted_prefix_free) then
-      fail
-        (Printf.sprintf "prefix-free config-mention occurrence counts drifted: %s"
-           (drifted_prefix_free
-           |> List.map ~f:(fun (path, key, expected, actual) ->
-               Printf.sprintf "%s:%s expected %d, saw %d" path key expected actual)
-           |> String.concat ~sep:", "));
-    let drifted_ambiguous_cli_value =
-      List.filter_map control_ambiguous_cli_value_mentions
-        ~f:(fun (path, prefix, suffix, key, expected) ->
-          let spelling = prefix ^ suffix in
-          let actual =
-            Hashtbl.find seen_ambiguous_cli_value (ambiguous_cli_value_site path spelling key)
-            |> Option.value ~default:0
-          in
-          Option.some_if (not (Int.equal actual expected)) (path, spelling, key, expected, actual))
-    in
-    if not (List.is_empty drifted_ambiguous_cli_value) then
-      fail
-        (Printf.sprintf "ambiguous command-line value occurrence counts drifted: %s"
-           (drifted_ambiguous_cli_value
-           |> List.map ~f:(fun (path, spelling, key, expected, actual) ->
-               Printf.sprintf "%s:%s (%s) expected %d, saw %d" path spelling key expected actual)
-           |> String.concat ~sep:", ")))
+    drift_failure ~fail ~list_name:"non_config_assignment_mentions" ~seen:seen_non_config
+      ~entry:counted_entry control_non_config_assignment_mentions;
+    drift_failure ~fail ~list_name:"historical_invalid_config_mentions" ~seen:seen_historical
+      ~entry:counted_entry control_historical_invalid_config_mentions;
+    drift_failure ~fail ~list_name:"ambiguous_bare_config_mentions" ~seen:seen_ambiguous_bare_config
+      ~entry:counted_entry control_ambiguous_bare_config_mentions;
+    drift_failure ~fail ~list_name:"prefix_free_config_mentions" ~seen:seen_prefix_free
+      ~entry:counted_entry control_prefix_free_config_mentions;
+    drift_failure ~fail ~list_name:"ambiguous_cli_value_mentions" ~seen:seen_ambiguous_cli_value
+      ~entry:(fun (path, prefix, suffix, key, expected) ->
+        ( ambiguous_cli_value_site path (prefix ^ suffix) key,
+          expected,
+          fun count -> Printf.sprintf "(%S, %S, %S, %S, %d)" path prefix suffix key count ))
+      control_ambiguous_cli_value_mentions)
 
 (* The formats [check] hands to [fail], read from this file through the extraction the refusal
    manifest itself uses, so the control and the raising site cannot hold two copies of one message.
@@ -1018,15 +965,36 @@ let refusal_control grammar_fixture =
       occurrence ~ambiguous_bare:true ~path:"new-one-word.md" ~key:"backend"
         ~spelling:"backend=metal" ~kind:Markdown_assignment ();
     ];
-  Verdict.p_exists "assignment count drift names the list and replacement entry to review" !messages
+  Verdict.p_exists "assignment count drift names the list and existing entry to remove" !messages
     ~f:(fun message ->
       String.is_substring message
         ~substring:
-          "review non_config_assignment_mentions in test/operations/config_usage_scan.ml: \
-           (\"docs/precision_inference.md\", \"top_down_prec\", 0)");
-  Verdict.p_all ~min:15 "every config-usage direct refusal format is observed"
+          "remove non_config_assignment_mentions in test/operations/config_usage_scan.ml: \
+           (\"docs/precision_inference.md\", \"top_down_prec\", 10)");
+  Verdict.p_all "every counted list names the removal remedy when no mentions remain"
+    [
+      "non_config_environment_mentions";
+      "non_config_assignment_mentions";
+      "historical_invalid_config_mentions";
+      "ambiguous_bare_config_mentions";
+      "prefix_free_config_mentions";
+      "ambiguous_cli_value_mentions";
+    ] ~f:(fun list_name ->
+      List.exists !messages ~f:(fun message ->
+          String.is_substring message
+            ~substring:("remove " ^ list_name ^ " in test/operations/config_usage_scan.ml:")));
+  let seen = Hashtbl.of_alist_exn (module String) [ (mention_site "probe.md" "probe_key", 2) ] in
+  drift_failure ~fail ~list_name:"control_counts" ~seen ~entry:counted_entry
+    [ ("probe.md", "probe_key", 1) ];
+  Verdict.p_exists "nonzero count drift offers a reviewed replacement instead of removal" !messages
+    ~f:(fun message ->
+      String.is_substring message
+        ~substring:
+          "review control_counts in test/operations/config_usage_scan.ml: (\"probe.md\", \
+           \"probe_key\", 2)");
+  Verdict.p_all ~min:10 "every config-usage direct refusal format is observed"
     direct_refusal_formats ~f:(Hash_set.mem observed);
-  Verdict.p_all ~min:15 "a config-usage refusal is credited to the same format in reversed order"
+  Verdict.p_all ~min:10 "a config-usage refusal is credited to the same format in reversed order"
     !messages ~f:(fun message ->
       Option.equal String.equal
         (attribute direct_refusal_formats message)

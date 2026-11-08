@@ -3530,12 +3530,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     module. What made the cut blunt before gh-ocannl-1651: a helper library counted whole, so a
     test calling one `Ll_test` function named every module any of its ~90 definitions or comments
     named; and a re-export counted bare, so `module Lazy = Utils.Lazy` in `hip_backend.ml` made
-    every `Lazy.force` a mention of Utils. Whole-module edits to `low_level.ml` reach more
-    referenced aliases than a single function edit; `optimize_proc` still reaches tests by linking even where none names it.
-    `utils.ml` as a whole reaches every config-reading alias through `ocannl_ambient_env`.
-    A dune-only library split ranks by the moved modules' names. Read current counts from
-    `tools/test-run.sh affected` rather than preserving a census here.
-    Three readings narrowed it further (gh-ocannl-1765).
+    every `Lazy.force` a mention of Utils. Three readings narrowed it further (gh-ocannl-1765).
+    A change to `optimize_proc`, which every compile runs and no test names, still reaches tests
+    by linking -- the reason the default keeps link-only aliases. `utils.ml` as a whole reaches
+    every config-reading alias through `ocannl_ambient_env`. A dune-only library split ranks by
+    the moved modules' names. Read current counts from `tools/test-run.sh affected` rather than
+    preserving a census here.
     A re-export is read through its re-exporter: `Tn` names `Tnode` where `Context.Tn` qualifies it
     (a local `module C = Context` too), or in a file that opens or includes the re-exporter (`open`,
     `let open`, `X.( )`), or in the re-exporter's own source -- an open in a helper opens nothing in
@@ -3885,9 +3885,10 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
 ## What CI actually covers
 
 - **Shards that die before dune leave every merge in that span blind to their tests.** A green
-  setup or side job supplies no substitute. Once the shards return, CI-red triage re-runs `main`
-  on master's current tip, rather than treating a later merge's green metadata as coverage of
-  the span (gh-ocannl-2014).
+  setup or side job supplies no substitute. The span's first coverage is the next full-matrix
+  `ci` run on master's tip: the daily schedule, or a dispatch on `master` with `expected_sha`
+  set to that tip. A later PR's green covers only that PR's merge commit. The CI-red triage
+  routine has no blind-span recovery step (gh-ocannl-2014).
 
 - Two workflows, split by what each proves (gh-ocannl-1816). `ci.yml`, the full matrix (ubuntu
   shards, macOS, the side jobs; Windows and the OCaml floor on the schedule), runs per PR -- the

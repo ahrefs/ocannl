@@ -75,6 +75,7 @@ agents_md_size.ml: [scanner-refusal:6e5c887df5f7f65a45a232ef22d04e62] synthesize
 agents_md_size.ml: [scanner-refusal:6f380ec6130d7d24a10cfd39521bdaec] synthesized guide at (claim) is catalogued beside agents_md_size.expected: true
 agents_md_size.ml: [scanner-refusal:2c8e54e9bdb6518252759d38c07973aa] synthesized guide one (claim) is catalogued beside agents_md_size.expected: true
 agents_md_size.ml: [scanner-refusal:c32f3dd124b270ba497cf74ca1bc7e77] synthesized guide of (claim) is catalogued beside agents_md_size.expected: true
+agents_md_size.ml: [scanner-refusal:87f68dbf665f63c6666dc15bdfe9bc9b] longest-line advice is (claim) is catalogued beside agents_md_size.expected: true
 agents_md_size.ml: [scanner-refusal:fbbca570493f5d6fe407e047220ac6fa] longest-line advice keeps (claim) is catalogued beside agents_md_size.expected: true
 agent_notes_structure.ml has exactly the explicitly assigned refusal controls: true
 agent_notes_structure.ml: [scanner-refusal:bc4968cf04b3b7f3212afef877977199] handed the notes (claim) is catalogued beside agent_notes_structure.expected: true
@@ -275,6 +276,7 @@ config_dep_completeness.ml: [scanner-refusal:328553bf93b184a97ab7d44d97c369a4] e
 config_dep_completeness.ml: [scanner-refusal:c4c555263d62473311fe0cfc7f769958] stanza inline-test library (claim) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_dep_completeness.ml: [scanner-refusal:bdc9f2c15b8f17359eec6d359dfefbdd] that floor applies (claim) is catalogued beside dune_scan_cases.expected, config_dep_completeness.expected: true
 config_usage_scan.ml has exactly the explicitly assigned refusal controls: true
+config_usage_scan.ml: [scanner-refusal:f748463375c6c3bb8ff68aaf554ccf03] counted config mentions (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:3b2d3f635929bbf3953b407c49ee91fd] Builtins_cc (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:7f7db667dc63d73faefa570451cf5f2b] ambiguous command-line value (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:7a3d690e9ef5541a1c754952c6cf6877] ambiguous bare config (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
@@ -283,13 +285,7 @@ config_usage_scan.ml: [scanner-refusal:ad6eb9c910ffa6587a73299cb369cb15] docs/ag
 config_usage_scan.ml: [scanner-refusal:1d10abd79d54b54414b3bf881e90620f] docs/agent-notes/build-and-test.md#scan-corpora-goldens-and-floors (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:8acb2b9087cf4a7e4112382c5e058e1a] Utils.known_config_keys (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:085d7b5a19f012e46728008a42120c74] non-config environment exemptions (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
-config_usage_scan.ml: [scanner-refusal:5d123838dd21fb3fd4a7529e51b8a74f] non-config environment-mention occurrence (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:3252eebc4149f3005426dbd4385702c1] non-config assignment exemptions (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
-config_usage_scan.ml: [scanner-refusal:4f2e0da970aa70c6ff3549e9e435561f] non-config assignment exemption (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
-config_usage_scan.ml: [scanner-refusal:2908ea301f2b18efa6c95e6ab0302abf] historical invalid-config exemption (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
-config_usage_scan.ml: [scanner-refusal:6d76bc1e86b8d630263d70bd7c30e50b] config-mention occurrence counts (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
-config_usage_scan.ml: [scanner-refusal:8c14e661ffe9cdf859b5111394d557a8] prefix-free config-mention occurrence (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
-config_usage_scan.ml: [scanner-refusal:7c5c4cc0bd161e76fe99e9983d2db70f] command-line value occurrence (direct failure) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:1b21aa78af1c8c8d33b55c395590e92a] spelling unregistered keys (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:e592c4ffcb391edf546553bd50accc7a] runtime value separator (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:cb1b0916f3d396c6fb100a6cf2ba4a2e] scanner command-line prefix (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
@@ -303,7 +299,9 @@ config_usage_scan.ml: [scanner-refusal:7e32dcb7afdd8103e02384cf64776cae] assignm
 config_usage_scan.ml: [scanner-refusal:f39c89d1f700c14082d119fea8a9fb93] tracked historical one-word (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:6bb17d62436571b3e716c4bba5c0f746] promised non-OCANNL assignment (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:b8ac42648b6918233995586551724f6f] documented OCANNL assignment (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
-config_usage_scan.ml: [scanner-refusal:c5b4a3be4b7a831135a2402c9b65d86e] assignment count drift (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
+config_usage_scan.ml: [scanner-refusal:735bd758b11340c1c2fe69f71e3c2cc5] assignment count drift (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
+config_usage_scan.ml: [scanner-refusal:94c80c1e5ccb09d9d100419e38faa03b] removal remedy when (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
+config_usage_scan.ml: [scanner-refusal:60932c89821f23ba9cddb3464b18ffbe] reviewed replacement instead (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:84bf7dbb3e9182b1eced5e76a271e5f6] config-usage direct refusal (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:03f2822e76feddd4b79a462013315b06] config-usage refusal is (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
 config_usage_scan.ml: [scanner-refusal:ed12f66c93e310aaa2996f755dd93a06] config-usage refusal control (claim) is catalogued beside config_usage_scan.expected, config_usage_scan_refusal_control.expected: true
