@@ -1119,6 +1119,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   other dune is done (one dune per worktree at a time). The subject's exit status is the signal,
   never dune's wording read by the harness; its leg 13 holds the lock of a scratch build
   directory with a real dune, so a dune that rewords the refusal turns that leg red.
+- A negative status needs the refusal's reason as well (gh-ocannl-2071). Exit 2 from
+  `tools/typecheck-scan-cases.sh` covers both an engine build failure and invalid fixtures;
+  its harness's `expect_rc` therefore requires a matching stderr reason for every exit-2
+  expectation. Leg 14 forces the engine build to fail and requires both leg-5 checks to FAIL,
+  with no PASS; the former status-only helper passes both. The other `expect_rc` harness,
+  `tools/test-ppx-output-diff.sh`, also checks the reasons for its usage refusals, alongside
+  its existing reason checks for build failures, empty scopes and unresolved revisions.
 - **A harness whose checks are bare commands under errexit runs each leg contained**
   (gh-ocannl-1539): `harness_leg_run_errexit 'NAME' leg_N` runs the body in a subshell of its own
   (`harness_errexit_subshell`, a function whose body is a `( )`, so its `set -eE` is its own and

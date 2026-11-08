@@ -209,6 +209,7 @@ leg5() {
   untouched
   run --out "$TMP/kept" base planted
   expect_rc "an --out directory that exists" 2
+  has "names the refusal reason" "$err" "ppx-output-diff: --out $TMP/kept already exists"
   untouched
 }
 harness_leg_run '5: --out keeps both rendered trees and the diff, and never reuses a directory' leg5
@@ -217,13 +218,16 @@ leg6() {
   fixture || return
   run base
   expect_rc "one revision" 2
+  has "names the refusal reason" "$err" "ppx-output-diff: usage: tools/ppx-output-diff.sh [-C REPO] [-j N] [--out DIR] BASE HEAD [-- DIR...]"
   run base no-such-revision
   expect_rc "an unresolvable revision" 2
   has "names it" "$err" 'ppx-output-diff: HEAD does not resolve to a commit: no-such-revision'
   run base planted -- ../outside
   expect_rc "a scope outside the repository" 2
+  has "names the refusal reason" "$err" "ppx-output-diff: a scope DIR is a repository-relative path: '../outside'"
   run -j 0 base planted
   expect_rc "a zero job count" 2
+  has "names the refusal reason" "$err" "ppx-output-diff: -j needs a positive count, not '0'"
   untouched
 }
 harness_leg_run '6: usage errors exit 2 before anything is built' leg6
