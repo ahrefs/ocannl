@@ -8628,6 +8628,16 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ ; ocannl-backend: cc -- explicit Context.cpu contexts exercise CPU conv packing only.
+ (name conv_twin_packing)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules conv_twin_packing)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; Run by a rule (not a test stanza) so the backend and the model_peak_* envelope overrides are
 ; pinned on the command line: the C backends carry no advisory envelope constants, and pinning
 ; makes the roofline-scoring output deterministic across the backend test matrix.

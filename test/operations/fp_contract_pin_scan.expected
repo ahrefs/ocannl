@@ -31,6 +31,7 @@ test/operations/bf16_subnormal_storage.ml -- no-contraction: the legs copy, conv
 test/operations/branchless_select.ml -- exact-operands: selects, adds and a pool gradient multiplying dyadic weights by one
 test/operations/coalesce_numerics.ml -- not-cc: the executed bitwise claims are gated on a hardware grid, so cc skips them
 test/operations/codegen_text_scan_cases.ml -- not-executed: the bitwise text is fixture prose a codegen-text scan classifies
+test/operations/conv_twin_packing.ml -- exact-operands: Ll_test.exact_partials derives the f32 reduction premise from the initialized operands after their required rounding.
 test/operations/cost_model_fill.ml -- not-executed: the bitwise claim compares cost-model scores computed in OCaml
 test/operations/cost_model_transactions.ml -- not-executed: the bitwise claims compare cost-model legs computed in OCaml
 test/operations/cpu_channel_vectors.ml -- pinned off

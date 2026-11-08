@@ -1,0 +1,36 @@
+input: rounded products have exact partial sums at f32: true
+input: an unrounded read differs from the materialized twin: true
+input: conv seeds request compute-precision packs: true
+input: a serial packed seed executes: true
+input: GPU seeds judge the rounded operand formats and stage both operands: true
+input: backing-storage formats alone are refuted at seeding: true
+input: CPU traffic prices the same tiles as a materialized twin: true
+input: GPU traffic prices the same tiles as a materialized twin: true
+input: stages use compute precision for rounded reads: true
+input: the compiled kernel reads f32 packed operands: true
+input: packed execution equals the materialized twin bitwise: true
+input: the packed conv renders a register tile: true
+kernel: rounded products have exact partial sums at f32: true
+kernel: an unrounded read differs from the materialized twin: true
+kernel: conv seeds request compute-precision packs: true
+kernel: a serial packed seed executes: true
+kernel: GPU seeds judge the rounded operand formats and stage both operands: true
+kernel: backing-storage formats alone are refuted at seeding: true
+kernel: CPU traffic prices the same tiles as a materialized twin: true
+kernel: GPU traffic prices the same tiles as a materialized twin: true
+kernel: stages use compute precision for rounded reads: true
+kernel: the compiled kernel reads f32 packed operands: true
+kernel: packed execution equals the materialized twin bitwise: true
+kernel: the packed conv renders a register tile: true
+both: rounded products have exact partial sums at f32: true
+both: an unrounded read differs from the materialized twin: true
+both: conv seeds request compute-precision packs: true
+both: a serial packed seed executes: true
+both: GPU seeds judge the rounded operand formats and stage both operands: true
+both: backing-storage formats alone are refuted at seeding: true
+both: CPU traffic prices the same tiles as a materialized twin: true
+both: GPU traffic prices the same tiles as a materialized twin: true
+both: stages use compute precision for rounded reads: true
+both: the compiled kernel reads f32 packed operands: true
+both: packed execution equals the materialized twin bitwise: true
+both: the packed conv renders a register tile: true
