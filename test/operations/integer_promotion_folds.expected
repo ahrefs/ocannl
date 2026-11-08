@@ -401,6 +401,54 @@ uint16 fixed index 300: with each literal in a node it gives the worked value: t
 uint16 fixed index 300: no constant is left outside the slot's range: true
 uint16 fixed index 300: simplifying again changes nothing: true
 uint16 fixed index 300: it folds to a leaf: true
+int32 2^24 + 1: with its literals as written it gives the worked value: true
+int32 2^24 + 1: with each literal in a node it gives the worked value: true
+int32 2^24 + 1: no constant is left outside the slot's range: true
+int32 2^24 + 1: simplifying again changes nothing: true
+int32 2^24 + 1: it folds to a leaf: true
+int64 70000 * 70000: with its literals as written it gives the worked value: true
+int64 70000 * 70000: with each literal in a node it gives the worked value: true
+int64 70000 * 70000: no constant is left outside the slot's range: true
+int64 70000 * 70000: simplifying again changes nothing: true
+int64 70000 * 70000: it folds to a leaf: true
+int32 literal 16777217: with its literals as written it gives the worked value: true
+int32 literal 16777217: with each literal in a node it gives the worked value: true
+int32 literal 16777217: no constant is left outside the slot's range: true
+int32 literal 16777217: simplifying again changes nothing: true
+int32 literal 16777217: it folds to a leaf: true
+int32 literal -16777217: with its literals as written it gives the worked value: true
+int32 literal -16777217: with each literal in a node it gives the worked value: true
+int32 literal -16777217: no constant is left outside the slot's range: true
+int32 literal -16777217: simplifying again changes nothing: true
+int32 literal -16777217: it folds to a leaf: true
+int64 literal 2^53 + 2: with its literals as written it gives the worked value: true
+int64 literal 2^53 + 2: with each literal in a node it gives the worked value: true
+int64 literal 2^53 + 2: no constant is left outside the slot's range: true
+int64 literal 2^53 + 2: simplifying again changes nothing: true
+int64 literal minimum: with its literals as written it gives the worked value: true
+int64 literal minimum: with each literal in a node it gives the worked value: true
+int64 literal minimum: no constant is left outside the slot's range: true
+int64 literal minimum: simplifying again changes nothing: true
+uint64 literal 2^63 + 2048: with its literals as written it gives the worked value: true
+uint64 literal 2^63 + 2048: with each literal in a node it gives the worked value: true
+uint64 literal 2^63 + 2048: no constant is left outside the slot's range: true
+uint64 literal 2^63 + 2048: simplifying again changes nothing: true
+int32 literal 16777217.5: with its literals as written it gives the worked value: true
+int32 literal 16777217.5: with each literal in a node it gives the worked value: true
+int32 literal 16777217.5: no constant is left outside the slot's range: true
+int32 literal 16777217.5: simplifying again changes nothing: true
+int32 literal -16777217.5: with its literals as written it gives the worked value: true
+int32 literal -16777217.5: with each literal in a node it gives the worked value: true
+int32 literal -16777217.5: no constant is left outside the slot's range: true
+int32 literal -16777217.5: simplifying again changes nothing: true
+int32 literal 0.99999999: with its literals as written it gives the worked value: true
+int32 literal 0.99999999: with each literal in a node it gives the worked value: true
+int32 literal 0.99999999: no constant is left outside the slot's range: true
+int32 literal 0.99999999: simplifying again changes nothing: true
+int32 literal -0.99999999: with its literals as written it gives the worked value: true
+int32 literal -0.99999999: with each literal in a node it gives the worked value: true
+int32 literal -0.99999999: no constant is left outside the slot's range: true
+int32 literal -0.99999999: simplifying again changes nothing: true
 int64 2^53 + 1 against 2^53: with its literals as written it gives the worked value: true
 int64 2^53 + 1 against 2^53: with each literal in a node it gives the worked value: true
 int64 2^53 + 1 against 2^53: no constant is left outside the slot's range: true

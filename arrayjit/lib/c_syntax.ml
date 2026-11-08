@@ -888,6 +888,12 @@ module type C_syntax_config = sig
   val extra_args : string list
   val typ_of_prec : Ops.prec -> string
 
+  val constant_literal : Ops.prec -> float -> string
+  (** The token for a [Constant] at the given evaluation precision. The renderer still wraps it with
+      [convert_precision ~from:Ops.double ~to_:prec]. The default ignores [prec] and uses
+      [c_float_literal]; a dialect may override it to avoid parsing an integer target through a
+      floating-point type. *)
+
   val supports_f64 : bool
   (** Whether [typ_of_prec] accepts f64 tensor storage. Explicit so capability queries need not
       deliberately raise through a rendering function. *)
@@ -1553,7 +1559,11 @@ let is_f32_tie c =
     hexadecimal literal takes it away instead of moving it: it is exact by construction, so there is
     no parse-time rounding for either reading to disagree about, and both round [c] itself. It is
     spelled only for ties — a handful of values that were otherwise a coin toss — so the ordinary
-    constant keeps its readable decimal, and C99, CUDA, HIP and MSL all accept the form. *)
+    constant keeps its readable decimal, and C99, CUDA, HIP and MSL all accept the form.
+
+    Integer targets on Metal bypass that f32 parse through [C_syntax_config.constant_literal]: its
+    override truncates on the host and spells the in-range integer result directly. The default hook
+    keeps this floating spelling for the other dialects. *)
 let c_float_literal c =
   if Float.(c = infinity) then "INFINITY"
   else if Float.(c = neg_infinity) then "(-INFINITY)"
@@ -2946,6 +2956,7 @@ struct
   let loop_index_type = if Utils.settings.large_models then "int64_t " else "int32_t "
   let extra_args = []
   let typ_of_prec = Ops.c_typ_of_prec
+  let constant_literal _prec = c_float_literal
   let supports_f64 = true
   let vec_typ_of_prec = Ops.c_vec_typ_of_prec
 
@@ -9038,7 +9049,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let c_str = c_float_literal c in
+        let c_str = B.constant_literal prec c in
         let expr =
           (* The sign BIT, not [c < 0.]: an unparenthesized [-0.0] beside a subtraction would render
              as [--0.0]. *)
@@ -9143,7 +9154,7 @@ module C_syntax (B : C_syntax_config) = struct
     | Constant c ->
         let from_prec = Ops.double in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        (string prefix ^^ string (c_float_literal c) ^^ string postfix, [])
+        (string prefix ^^ string (B.constant_literal prec c) ^^ string postfix, [])
     | Constant_bits i ->
         let from_prec = Ops.int64 in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in

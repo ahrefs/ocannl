@@ -504,6 +504,39 @@ let () =
       case "uint16 fixed index 300" ~slot:uint16 ~inputs:[] ~expect:Folds_to_leaf
         (fun _ -> LL.Embed_index (Ir.Indexing.Fixed_idx 300))
         (flat 300.);
+      (* Metal must not parse these integer leaves through f32 (gh-ocannl-2084). *)
+      case "int32 2^24 + 1" ~slot:Ops.int32 ~inputs:[] ~expect:Folds_to_leaf
+        (lits Ops.Add 16777216. 1.) (flat 16777217.);
+      case "int64 70000 * 70000" ~slot:Ops.int64 ~inputs:[] ~expect:Folds_to_leaf
+        (lits Ops.Mul 70000. 70000.) (flat 4900000000.);
+      case "int32 literal 16777217" ~slot:Ops.int32 ~inputs:[] ~expect:Folds_to_leaf
+        (fun e -> fst (e.lit e.p 16777217.))
+        (flat 16777217.);
+      case "int32 literal -16777217" ~slot:Ops.int32 ~inputs:[] ~expect:Folds_to_leaf
+        (fun e -> fst (e.lit e.p (-16777217.)))
+        (flat (-16777217.));
+      case "int64 literal 2^53 + 2" ~slot:Ops.int64 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p 9007199254740994.))
+        (flat 9007199254740994.);
+      case "int64 literal minimum" ~slot:Ops.int64 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p (-9223372036854775808.)))
+        (flat (-9223372036854775808.));
+      case "uint64 literal 2^63 + 2048" ~slot:Ops.uint64 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p 9223372036854777856.))
+        (flat 9223372036854777856.);
+      (* A fractional constant truncates from the host value, not from an f32 parse. *)
+      case "int32 literal 16777217.5" ~slot:Ops.int32 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p 16777217.5))
+        (flat 16777217.);
+      case "int32 literal -16777217.5" ~slot:Ops.int32 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p (-16777217.5)))
+        (flat (-16777217.));
+      case "int32 literal 0.99999999" ~slot:Ops.int32 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p 0.99999999))
+        (flat 0.);
+      case "int32 literal -0.99999999" ~slot:Ops.int32 ~inputs:[] ~expect:Value_only
+        (fun e -> fst (e.lit e.p (-0.99999999)))
+        (flat 0.);
       (* Past 2^53 a double cannot compute it, in range or not. *)
       case "int64 2^53 + 1 against 2^53" ~slot:Ops.int64 ~inputs:[] ~expect:Value_only
         (fun e ->

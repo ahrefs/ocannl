@@ -1615,6 +1615,27 @@ module Impl = struct
 
     (* Keep vec_unop_syntax same as in pure C syntax. *)
 
+    let constant_literal prec c =
+      (* MSL parses floating literals as f32 before the integer cast (gh-ocannl-2084). Truncate on
+         the host, then spell the in-range integer result directly. Small integral constants keep
+         their floating spelling; the shared 2^53 fold bound stays unchanged. *)
+      let integer = Float.round_towards_zero c in
+      if
+        Ops.integer_value_fits prec integer
+        && ((not (Float.is_integer c)) || Float.(abs c > 16777216.))
+      then
+        if Float.(integer = -9223372036854775808.) then "(-9223372036854775807L - 1L)"
+        else
+          let suffix =
+            match prec with
+            | Ops.Uint32_prec _ -> "u"
+            | Ops.Int64_prec _ -> "L"
+            | Ops.Uint64_prec _ -> "UL"
+            | _ -> ""
+          in
+          Printf.sprintf "%.0f%s" integer suffix
+      else constant_literal prec c
+
     let convert_precision ~from ~to_ =
       match (from, to_) with
       | Ops.Double_prec _, Ops.Double_prec _
