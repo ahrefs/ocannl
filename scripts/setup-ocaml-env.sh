@@ -3,6 +3,7 @@
 #
 #   scripts/setup-ocaml-env.sh          # check and self-heal; seconds, never compiles
 #   scripts/setup-ocaml-env.sh --deps   # additionally install/refresh opam dependencies
+#   scripts/setup-ocaml-env.sh --switch # only repair the dune root and persist opam env
 #
 # Every step inspects the current state and acts only when something is missing
 # or broken, so running it repeatedly is safe and each run advances the setup by
@@ -51,9 +52,11 @@ fi
 set -u
 
 MODE_DEPS=0
+MODE_SWITCH=0
 for arg in "$@"; do
   case "$arg" in
     --deps|--full) MODE_DEPS=1 ;;
+    --switch) MODE_SWITCH=1 ;;
     -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "setup-ocaml-env.sh: unknown argument '$arg'" >&2; exit 2 ;;
   esac
@@ -162,6 +165,19 @@ if [ -n "$wt_top" ] && [ -e "$wt_top/dune-project" ]; then
     fi
   fi
   # No ancestor holds either file: dune already roots at this checkout.
+fi
+
+# Switch hooks run on every directory change: no fetch, installs or dependency checks.
+# CwdChanged clears its previous environment, so persist it again even when the
+# new directory belongs to the same checkout. Missing opam is harmless here.
+persist_env() {
+  if [ -n "${CLAUDE_ENV_FILE:-}" ] && command -v opam >/dev/null 2>&1; then
+    opam env --shell=sh >>"$CLAUDE_ENV_FILE" 2>/dev/null && ok "environment persisted"
+  fi
+}
+if [ "$MODE_SWITCH" = 1 ]; then
+  persist_env
+  exit 0
 fi
 
 # --- staleness against origin/master ------------------------------------
@@ -315,7 +331,7 @@ else
   todo "opam is not on PATH — see https://opam.ocaml.org/doc/Install.html"
 fi
 
-command -v opam >/dev/null 2>&1 || { echo "=== stopped: opam required ==="; exit $setup_status; }
+command -v opam >/dev/null 2>&1 || { echo "=== stopped: opam required ==="; exit 0; }
 
 # --- opam root -----------------------------------------------------------
 OPAM_ROOT_RAW="$(opam var root 2>/dev/null || true)"
@@ -485,9 +501,7 @@ dune_version="$(opam exec -- dune --version 2>/dev/null || true)"
 [ -n "$dune_version" ] && ok "dune $dune_version" || todo "dune not available"
 
 # Claude Code picks up environment for subsequent commands from this file.
-if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-  opam env --shell=sh >>"$CLAUDE_ENV_FILE" 2>/dev/null && ok "environment persisted"
-fi
+persist_env
 
 if [ "$setup_status" = 0 ]; then echo "=== ready ==="; else echo "=== incomplete (see 'todo' above) ==="; fi
 # A hook must not fail the session; report state through the summary instead.

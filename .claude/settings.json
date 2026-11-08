@@ -2,7 +2,7 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume",
+        "matcher": "startup|resume|fork",
         "hooks": [
           {
             "type": "command",
@@ -16,18 +16,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/setup-ocaml-env.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/setup-ocaml-env.sh --switch"
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "EnterWorktree|ExitWorktree",
+        "matcher": "EnterWorktree",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/setup-ocaml-env.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/setup-ocaml-env.sh --switch"
           }
         ]
       }

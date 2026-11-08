@@ -2066,21 +2066,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   hand-off (and restoring `status`) as its negative controls. CI's `harnesses` job installs zsh for
   that leg, since the image ships none; a Linux box without zsh reports it as an unlisted skip.
 - **Setup follows mid-session directory changes** (gh-ocannl-1920). `.claude/settings.json`
-  runs the same setup command on `SessionStart` (`startup|resume`), `CwdChanged` for shell
-  directory changes, and `PostToolUse` (`EnterWorktree|ExitWorktree`) for explicit worktree
-  switches. The [Claude Code hooks reference](https://code.claude.com/docs/en/hooks#cwdchanged)
-  scopes `CwdChanged` to shell commands, so the tool hooks cover the separate worktree tools;
-  `WorktreeCreate` would replace worktree creation itself and is not an after-switch hook.
-  The [upstream changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md)
-  introduced `CwdChanged` in 2.1.83; the investigated standalone install was 2.1.319
-  (`claude --version`, `claude --help`), whose cached `~/.claude/cache/changelog.md`
-  confirms that history. This was a documentation-based check,
-  without an interactive Claude Code probe. Harness leg 6 dispatches the configured command
-  in the documented current directory with a stale `CLAUDE_PROJECT_DIR`, verifies the nested
-  worktree's `dune-workspace`, and rejects the former startup-only configuration. It tests
-  our wiring and setup behavior, not Claude Code's event delivery. `PostToolUse` does not
-  provide `CLAUDE_ENV_FILE`; its job here is filesystem setup, while `SessionStart` and
-  `CwdChanged` also support persisting the opam environment.
+  runs full setup on `SessionStart` (`startup|resume|fork`). Switch hooks use `--switch`,
+  which only repairs the dune root and persists `opam env` when `CLAUDE_ENV_FILE` is available:
+  no fetch, dependency checks or installs. The [hooks reference](https://code.claude.com/docs/en/hooks#cwdchanged)
+  scopes `CwdChanged` to shell commands, so `PostToolUse:EnterWorktree` covers the worktree tool.
+  `ExitWorktree` returns to the already-prepared original directory. `PostToolUse` has no
+  `CLAUDE_ENV_FILE`; plain stdout from either switch event only reaches the debug log.
+  Harness leg 6 executes the configured commands, checking the dune root, persisted environment
+  and unchanged `origin/master` on switches; it does not probe Claude Code event delivery.
 - **A merged session worktree retires with `--regenerable _build`.** ship-pr's
   `post-merge-cleanup.sh` (lukstafi/ludics-lite) archives a merged session worktree out of the way
   and refuses one carrying ignored data the base checkout lacks, since an archive would put that

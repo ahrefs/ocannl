@@ -47,7 +47,7 @@
 #      roots the worktree; from the outer checkout, from outside any
 #      repository or from another repository it acts on the outer one.
 #   6. hook wiring — dispatch configured startup/resume, directory-change and
-#      worktree-tool hooks; the former startup-only settings miss the switches.
+#      worktree-tool hooks; switches persist env without fetching shared refs.
 
 set -u
 
@@ -987,7 +987,7 @@ harness_leg_run '3: SSH launcher gating' leg_3
 # parameter, and a sourced `exit` closes the caller's shell. The hook hands
 # itself to a bash child whenever bash is not executing it; this leg sources it
 # from zsh and bash and executes it with zsh, each time on the opam-free PATH,
-# so the run ends at the opam stop -- `exit 1`, the very exit that would close a
+# so the run ends at the opam stop -- `exit 0`, the very exit that would close a
 # sourcing shell -- and asserts that the caller ran on, saw that status, and
 # printed no read-only error. Two mutants of the hook, with the hand-off
 # removed and with `status` also restored, are the negative controls: each
@@ -1023,10 +1023,10 @@ src_run() {
   printf 'outer rc=%s\n' "$rc" >>"$out"
 }
 SURVIVE='source scripts/setup-ocaml-env.sh; echo "survived rc=$?"'
-# src_ok OUTFILE -> 0 when the caller survived, saw the opam stop's status 1,
+# src_ok OUTFILE -> 0 when the caller survived, saw the opam stop's status 0,
 # and nothing complained of a read-only variable.
 src_ok() {
-  has "$1" '=== stopped: opam required ===' && has "$1" 'survived rc=1' &&
+  has "$1" '=== stopped: opam required ===' && has "$1" 'survived rc=0' &&
     ! grep -qi 'read-only variable\|readonly variable' "$1"
 }
 src_report() { # LABEL OUTFILE
@@ -1082,7 +1082,7 @@ src_run "$ship" "$TMP/out-src-zsh-fn" zsh -f -c "f() { $SURVIVE; }; f"
 src_report "sourcing (c): sourced from a zsh function, the caller survives" "$TMP/out-src-zsh-fn"
 # Executed by zsh: no caller to keep alive, but the run must be bash's.
 src_run "$ship" "$TMP/out-src-zsh-exec" zsh -f scripts/setup-ocaml-env.sh
-if has "$TMP/out-src-zsh-exec" '=== stopped: opam required ===' && has "$TMP/out-src-zsh-exec" 'outer rc=1' &&
+if has "$TMP/out-src-zsh-exec" '=== stopped: opam required ===' && has "$TMP/out-src-zsh-exec" 'outer rc=0' &&
    ! grep -qi 'read-only variable' "$TMP/out-src-zsh-exec"; then
   report 0 "sourcing (d): executed by zsh, it runs as bash and keeps the hook's status"
 else
@@ -1225,6 +1225,9 @@ git_q -C "$outer" init -q
 printf '(lang dune 3.18)\n' >"$outer/dune-project"
 git_q -C "$outer" add dune-project
 git_q -C "$outer" commit -q -m fixture
+git_q -C "$outer" remote add origin "$outer"
+git_q -C "$outer" update-ref refs/remotes/origin/master HEAD
+git_q -C "$outer" commit -q --allow-empty -m newer
 cp "$HOOK_SRC" "$outer/scripts/setup-ocaml-env.sh"
 stage_sourced "$HOOK_SRC" "$outer" || { harness_abandon "cannot stage hook"; return; }
 wt="$outer/.claude/worktrees/target"
@@ -1235,7 +1238,7 @@ if python3 - "$HERE/../.claude/settings.json" "$outer" "$wt" "$BIN" "$FAKEHOME" 
 import json
 import os
 from pathlib import Path
-import re
+import copy
 import subprocess
 import sys
 
@@ -1245,9 +1248,39 @@ env = dict(HOME=home, PATH=path, CLAUDE_PROJECT_DIR=project,
            GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
            GIT_CONFIG_SYSTEM=os.devnull)
 
-def check(config, event, match, cwd):
+def git(*args):
+    return subprocess.check_output(["git", "-C", project, *args], env=env, text=True).strip()
+
+old_ref, new_ref = git("rev-parse", "HEAD~"), git("rev-parse", "HEAD")
+# Only opam env is permitted in switch mode; every other opam query is recorded
+# and fails. Full session setup uses the original no-opam PATH instead.
+opam_bin = Path(project) / "opam-bin"
+opam_bin.mkdir()
+opam = opam_bin / "opam"
+opam.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$OPAM_CALLS"\n'
+                '[ "$*" = "env --shell=sh" ] || exit 42\n'
+                'echo "export SETUP_SWITCH_FIXTURE=1"\n')
+opam.chmod(0o755)
+calls, env_file = Path(project) / "opam-calls", Path(project) / "hook-env"
+
+def check(config, event, match, with_opam=True):
+    cwd = worktree
+    switching = event != "SessionStart"
     workspace = Path(worktree) / "dune-workspace"
-    workspace.unlink(missing_ok=True)
+    for file in (workspace, calls, env_file):
+        file.unlink(missing_ok=True)
+    # A real local origin has a newer master. Full setup must fetch it;
+    # switch setup must leave the old shared ref and FETCH_HEAD untouched.
+    git("update-ref", "refs/remotes/origin/master", old_ref)
+    fetch_head = Path(git("rev-parse", "--git-common-dir")) / "FETCH_HEAD"
+    if not fetch_head.is_absolute():
+        fetch_head = Path(project) / fetch_head
+    fetch_head.write_text("fixture sentinel\n")
+    run_env = dict(env)
+    if switching and with_opam:
+        run_env.update(PATH=str(opam_bin) + os.pathsep + path, OPAM_CALLS=str(calls))
+        if event == "CwdChanged":
+            run_env["CLAUDE_ENV_FILE"] = str(env_file)
     payload = dict(hook_event_name=event, cwd=cwd)
     if event == "SessionStart":
         payload["source"] = match
@@ -1257,52 +1290,61 @@ def check(config, event, match, cwd):
         payload.update(old_cwd=project, new_cwd=cwd)
     outputs = []
     for group in config.get(event, []):
-        if "matcher" in group and not re.search(group["matcher"], match):
+        if "matcher" in group and match not in group["matcher"].split("|"):
             continue
         for hook in group["hooks"]:
             assert hook["type"] == "command"
             result = subprocess.run([bash, "-c", hook["command"]], cwd=cwd,
-                                    env=env, input=json.dumps(payload), text=True,
+                                    env=run_env, input=json.dumps(payload), text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     timeout=20)
-            # The isolated PATH deliberately lacks opam; setup reports that
-            # after repairing the dune root, with exit 1 (as in run_hook).
-            assert result.returncode == 1, result.stdout
+            assert result.returncode == 0, result.stdout
             outputs.append(result.stdout)
     assert len(outputs) == 1, (event, match, "expected one setup command", outputs)
-    assert "stopped: opam required" in outputs[0], outputs
-    if cwd == worktree:
-        assert workspace.is_file() and workspace.stat().st_size > 0, outputs
-        assert "fixed worktree dune root" in outputs[0], outputs
+    assert workspace.is_file() and workspace.stat().st_size > 0, outputs
+    assert "fixed worktree dune root" in outputs[0], outputs
+    if switching:
+        assert git("rev-parse", "refs/remotes/origin/master") == old_ref, "switch fetched origin/master"
+        assert fetch_head.read_text() == "fixture sentinel\n", "switch changed FETCH_HEAD"
+        if with_opam and event == "CwdChanged":
+            assert calls.read_text().splitlines() == ["env --shell=sh"], outputs
+            assert env_file.read_text() == "export SETUP_SWITCH_FIXTURE=1\n", outputs
+        else:
+            assert not calls.exists() and not env_file.exists(), outputs
     else:
-        assert not (Path(project) / "dune-workspace").exists(), outputs
+        assert git("rev-parse", "refs/remotes/origin/master") == new_ref, "full setup did not fetch"
+        assert "stopped: opam required" in outputs[0], outputs
 
-cases = [("SessionStart", "startup", worktree),
-         ("SessionStart", "resume", worktree),
-         ("CwdChanged", "", worktree),
-         ("PostToolUse", "EnterWorktree", worktree),
-         ("PostToolUse", "ExitWorktree", project)]
+cases = [("SessionStart", "startup"), ("SessionStart", "resume"),
+         ("SessionStart", "fork"), ("CwdChanged", ""),
+         ("PostToolUse", "EnterWorktree")]
 for case in cases:
     check(hooks, *case)
-    print("configured hook:", *case[:2], "passed")
+    print("configured hook:", *case, "passed")
+for case in cases[3:]:
+    check(hooks, *case, with_opam=False)
+    print("switch without opam:", *case, "passed")
 
-# Negative control: the old configuration still handles startup but misses
-# every added event. This checks execution/effects, not just a JSON spelling.
-old = {"SessionStart": [dict(group, matcher="startup")
-                        for group in hooks["SessionStart"]]}
-check(old, *cases[0])
-for case in cases[1:]:
+# Negative control: removing --switch from either configured switch command
+# still repairs the dune root, but wrongly fetches the shared tracking ref.
+for event, match in cases[3:]:
+    expensive = copy.deepcopy(hooks)
+    for group in expensive[event]:
+        for hook in group["hooks"]:
+            hook["command"] = hook["command"].replace(" --switch", "")
     try:
-        check(old, *case)
-    except AssertionError:
-        print("startup-only control rejected:", *case[:2])
+        check(expensive, event, match, with_opam=False)
+    except AssertionError as error:
+        assert str(error) == "switch fetched origin/master", error
+        print("full-setup-on-switch control rejected:", event)
     else:
-        raise AssertionError(("startup-only control unexpectedly passed", case))
+        raise AssertionError(("expensive switch control unexpectedly passed", event))
+
 PY
 then
-  report 0 "hook wiring: startup, resume, directory changes and worktree tools run setup; startup-only control fails"
+  report 0 "hook wiring: full session setup; switches root the worktree and persist env without fetching; full-setup control fails"
 else
-  report 1 "hook wiring: startup, resume, directory changes and worktree tools run setup; startup-only control fails"
+  report 1 "hook wiring: full session setup; switches root the worktree and persist env without fetching; full-setup control fails"
 fi
 }
 harness_leg_run '6: configured hook dispatch' leg_6
