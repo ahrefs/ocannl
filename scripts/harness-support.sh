@@ -564,6 +564,12 @@ harness_real_dune() {
   harness_dune_absent='no dune on PATH, nor through tools/opam-env.sh'
   return 1
 }
+# Real-dune fixtures read the presentation setup-ocaml enables in CI, even
+# when the caller's terminal would disable it. Scope it to the fixture command
+# (which may be a function); keep its status and streams unchanged.
+harness_dune_colour() { CLICOLOR_FORCE=1 "$@"; }
+# Normalize only at the matching boundary; retain the raw log as evidence.
+harness_plain() { LC_ALL=C sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" "$@"; }
 mutant() { # NAME AWK_PROGRAM [AWK_OPTION...], uses caller's SRC and TMP
   local program=$2 out="$TMP/$1.sh"
   shift 2

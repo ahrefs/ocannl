@@ -364,25 +364,25 @@ grep -v '^version' "$script_dir/../.ocamlformat" >"$project/.ocamlformat"
 printf '(** Unclosed code span: [x *)\nlet x = 1\n' >"$project/broken.ml"
 export DUNE_CACHE=disabled
 # Its status is not the point (a promotion would make it 1); its output is.
-(cd "$project" && opam exec -- dune fmt) >"$fixture_dir/dune-fmt.log" 2>&1 || true
-if grep -Fq "Warning: Invalid documentation comment:" "$fixture_dir/dune-fmt.log"; then
-  report 0 "fixture: dune fmt reports the invalid doc comment"
+(cd "$project" && harness_dune_colour opam exec -- dune fmt) >"$fixture_dir/dune-fmt.log" 2>&1 || true
+if harness_plain "$fixture_dir/dune-fmt.log" | grep -Fq "Warning: Invalid documentation comment:"; then
+  report 0 "fixture: forced-colour dune fmt reports the invalid doc comment"
 else
-  report 1 "fixture: dune fmt reports the invalid doc comment" "see $fixture_dir/dune-fmt.log"
+  report 1 "fixture: forced-colour dune fmt reports the invalid doc comment" "see $fixture_dir/dune-fmt.log"
 fi
 # Negative control: an unforced @fmt replays nothing and passes the tree, the
 # trap the default command has to defeat. If dune ever replays the warning,
 # this leg says the next one no longer tests anything.
 got=0
-(cd "$project" && "$subject" opam exec -- dune build @fmt) >"$fixture_dir/unforced.log" 2>&1 || got=$?
+(cd "$project" && harness_dune_colour "$subject" opam exec -- dune build @fmt) >"$fixture_dir/unforced.log" 2>&1 || got=$?
 if [ "$got" -eq 0 ]; then
   report 0 "negative control: unforced @fmt after dune fmt passes"
 else
   report 1 "negative control: unforced @fmt after dune fmt passes" "exited $got; see $fixture_dir/unforced.log"
 fi
 got=0
-(cd "$project" && "$subject") >"$fixture_dir/default.log" 2>&1 || got=$?
-if [ "$got" -eq 1 ] && grep -Fq "Warning: Invalid documentation comment:" "$fixture_dir/default.log"; then
+(cd "$project" && harness_dune_colour "$subject") >"$fixture_dir/default.log" 2>&1 || got=$?
+if [ "$got" -eq 1 ] && harness_plain "$fixture_dir/default.log" | grep -Fq "Warning: Invalid documentation comment:"; then
   report 0 "default command after dune fmt rejects the invalid doc comment"
 else
   report 1 "default command after dune fmt rejects the invalid doc comment" "exited $got; see $fixture_dir/default.log"

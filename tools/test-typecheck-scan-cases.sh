@@ -64,7 +64,7 @@ harness_require dune ocamlc
 out="$TMP/out" err="$TMP/err"
 run() { # run the subject; its status in $rc, stdout in $out, stderr in $err
   rc=0
-  "$subject" "$@" >"$out" 2>"$err" || rc=$?
+  harness_dune_colour "$subject" "$@" >"$out" 2>"$err" || rc=$?
   held_lock_abandons
 }
 # The subject's exit 75 is its word that another dune holds the build lock: every later run meets
@@ -282,11 +282,11 @@ EOF
 # Whether the run just made failed only for want of the project's installed libraries: the one
 # reason a #project leg skips rather than fails.
 project_absent() {
-  [ "$rc" = 2 ] && grep -qE 'Library "[^"]+" not found' "$err"
+  [ "$rc" = 2 ] && harness_plain "$err" | grep -qE 'Library "[^"]+" not found'
 }
 project_absent_reason() {
   printf "the project's libraries are not installed (dune: %s)" \
-    "$(grep -m1 -oE 'Library "[^"]+" not found' "$err")"
+    "$(harness_plain "$err" | grep -m1 -oE 'Library "[^"]+" not found')"
 }
 
 leg10() {
@@ -524,5 +524,23 @@ DUNE
   fi
 }
 harness_leg_run '14: an engine build failure cannot satisfy a fixture refusal' leg14
+
+# Pin the diagnostic this harness reads from dune itself, including the
+# capability-skip path that a fully installed local switch never takes.
+leg15() {
+  mkdir -p "$TMP/missing-library"
+  printf '(lang dune 3.20)\n' >"$TMP/missing-library/dune-project"
+  printf '(library (name missing) (libraries ocannl_nonexistent_colour_fixture))\n' >"$TMP/missing-library/dune"
+  printf 'let x = 1\n' >"$TMP/missing-library/missing.ml"
+  local build_rc=0
+  harness_dune_colour dune build --root "$TMP/missing-library" >"$err" 2>&1 || build_rc=$?
+  # typecheck-scan-cases maps a context build refusal to its own exit 2.
+  rc=2
+  if [ "$build_rc" = 1 ] && LC_ALL=C grep -q "$(printf '\033')\[" "$err" &&
+     project_absent && [ "$(project_absent_reason)" = 'the project'"'"'s libraries are not installed (dune: Library "ocannl_nonexistent_colour_fixture" not found)' ]; then
+    report 0 'a forced-colour missing-library diagnostic still matches the project skip'
+  else report 1 'a forced-colour missing-library diagnostic still matches the project skip' "build exit $build_rc: $(cat "$err")"; fi
+}
+harness_leg_run '15: forced-colour dune diagnostics still identify missing project libraries' leg15
 
 finish

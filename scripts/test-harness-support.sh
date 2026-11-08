@@ -627,4 +627,19 @@ if [ "$failures" = "$((before + 1))" ] && [ "$harness_child_rc" = 137 ]; then
   failures=$before
   report 0 'owned-child deadline kills and reaps the timed-out child'
 else report 1 'owned-child deadline kills and reaps the timed-out child'; fi
+# The CI presentation belongs to the fixture command, including a shell
+# function, with its streams and failure status intact and no caller leak.
+colour_probe() { printf '%s\n' "$CLICOLOR_FORCE"; printf 'diagnostic\n' >&2; return 7; }
+(
+  CLICOLOR_FORCE=0
+  rc=0
+  harness_dune_colour colour_probe >"$TMP/colour.out" 2>"$TMP/colour.err" || rc=$?
+  [ "$rc" = 7 ] && [ "$CLICOLOR_FORCE" = 0 ] &&
+    [ "$(cat "$TMP/colour.out")" = 1 ] && [ "$(cat "$TMP/colour.err")" = diagnostic ]
+)
+report $? 'forced dune colour preserves command streams, status and caller setting'
+printf '\033[1mFile "dune"\033[0m\n\033[31mError\033[0m: missing\n' >"$TMP/ansi"
+[ "$(harness_plain "$TMP/ansi")" = 'File "dune"
+Error: missing' ]
+report $? 'plain matching removes dune ANSI while retaining diagnostic text'
 finish

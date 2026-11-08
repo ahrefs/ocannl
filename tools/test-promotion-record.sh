@@ -74,7 +74,7 @@ SHIM
 }
 record() { # repo; return Dune failure only if a finished failed record exists
   local rc=0
-  (cd "$1" && tools/test-run.sh run --cap "${TEST_PROMOTION_CAP:-60}" build -j 2 @runtest) >"$1/record.log" 2>&1 || rc=$?
+  (cd "$1" && harness_dune_colour tools/test-run.sh run --cap "${TEST_PROMOTION_CAP:-60}" build -j 2 @runtest) >"$1/record.log" 2>&1 || rc=$?
   [ "$rc" = 1 ] || return 1
   recorded=$("$1/tools/test-run.sh" paths run last) || return 1
   [ "$(cat "$recorded/exit")" = 1 ] || return 1

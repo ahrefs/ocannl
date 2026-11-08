@@ -85,7 +85,7 @@ snapshot() {
 # Whether dune finds ppxlib, asked of the planted project, never of whatever project the caller
 # stands in: a dune already running there holds its build lock, and a failed probe is no absence.
 # Its `_build` is ignored, so the snapshot below does not see it.
-if ! dune installed-libraries --root "$R" >"$TMP/libs" 2>"$TMP/libs.err"; then
+if ! harness_dune_colour dune installed-libraries --root "$R" >"$TMP/libs" 2>"$TMP/libs.err"; then
   report 1 "dune lists the installed libraries" "$(tr '\n' '|' <"$TMP/libs.err")"
   finish
 fi
@@ -98,7 +98,7 @@ snapshot >"$TMP/before" 2>&1 || fixture_ok=0
 out="$TMP/out" err="$TMP/err"
 run() { # run the subject on the planted repository; status in $rc, stdout in $out, stderr in $err
   rc=0
-  TMPDIR="$TMP/subject-tmp" "$subject" -C "$R" "$@" >"$out" 2>"$err" || rc=$?
+  TMPDIR="$TMP/subject-tmp" harness_dune_colour "$subject" -C "$R" "$@" >"$out" 2>"$err" || rc=$?
 }
 expect_rc() { # LABEL WANT [STDERR-REASON]; exit 2 always needs its reason
   if [ "$rc" = "$2" ] &&
