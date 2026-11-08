@@ -5,6 +5,7 @@ released compiles keep root heap growth bounded: true
 every table has bounded retained growth: true
 released compiles keep root heap growth bounded: true
 retirement preserves writes to surviving ancestor buffers: true
+a released sibling's surviving writes remain ready for merge copy: true
 an upload fork retains the routine records: true
 the surviving fork still executes the routine: true
 the last fork release retires the routine records: true

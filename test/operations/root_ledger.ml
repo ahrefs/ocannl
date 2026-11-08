@@ -13,18 +13,25 @@ let settle () =
 
 let compile root comp = Train.to_routine root Train.IDX.empty comp
 
+let named name (comp : Ir.Assignments.comp) =
+  { comp with asgns = Ir.Assignments.Block_comment (name, comp.asgns) }
+
 let claim_empty label root =
   p_all label (Context.ledger_census root) ~f:(fun (_, count, _) -> count = 0)
 
 let claim_nonempty label root =
   p_exists label (Context.ledger_census root) ~f:(fun (_, count, _) -> count > 0)
 
-let loop root comp =
+let loop ?(restore_history = false) root comp =
   let cycle () =
     let child, routine = compile root comp in
     let child = Context.run child routine in
     Context.sync child;
-    Context.release child
+    let restore =
+      if restore_history then Context.save_accumulation_history child else fun () -> ()
+    in
+    Context.release child;
+    restore ()
   in
   for _ = 1 to 8 do
     cycle ()
@@ -65,11 +72,32 @@ let () =
       let grad = (Option.value_exn w.diff).grad in
       let grad_root = Context.set_values (Context.cpu ()) w.value [| 1.; 2.; 3. |] in
       let grad_root = Context.set_values grad_root grad [| 0.; 0.; 0. |] in
-      loop grad_root (Train.grad_update ~accum_steps:1 loss);
+      loop ~restore_history:true grad_root (Train.grad_update ~accum_steps:1 loss);
       p "retirement preserves writes to surviving ancestor buffers"
         (Context.buffer_written grad_root grad
         && Poly.equal (Context.get_values grad_root grad) [| 528.; 1056.; 1584. |]);
       Context.release grad_root);
+  case "merge source after sibling writer release" (fun () ->
+      let a, ra = compile root comp in
+      let b, _ = compile a (named "rl_b" [%cd output =: 7]) in
+      let c, rc = compile a (named "rl_c" [%cd output =: 9]) in
+      (* Discard the run results: readiness must come from the shared buffer ledger. *)
+      ignore (Context.run a ra);
+      ignore (Context.run c rc);
+      Context.release c;
+      let destination_root = Context.cpu () in
+      let destination, initial = compile destination_root comp in
+      let destination = Context.run destination initial in
+      let destination = Context.copy ~into_merge_buffer:Copy ~src:b ~dst:destination output.value in
+      let consumer, routine = compile destination (named "rl_merge" [%cd output =: output.merge]) in
+      let consumer = Context.run consumer routine in
+      p "a released sibling's surviving writes remain ready for merge copy"
+        (Poly.equal (Context.get_values consumer output.value) [| 9.; 9.; 9. |]);
+      Context.release consumer;
+      Context.release destination;
+      Context.release destination_root;
+      Context.release b;
+      Context.release a);
   let child, routine = compile root comp in
   let y =
     Operation.init ~l:"ledger_fork" ~prec:Ir.Ops.single ~o:[ 3 ]

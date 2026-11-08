@@ -92,6 +92,10 @@ type minted_hold = { release_ancestor : unit -> unit; depth : int; holders : int
 (* A release unit's holds, and whether its release gave them back yet (once per unit). *)
 type minted_entry = { holds : minted_hold list; mutable given_back : bool }
 
+(* A released writer's values can remain in an ancestor-owned buffer. Keep readiness without
+   retaining the dead routine id, until another write or the buffer's retirement replaces it. *)
+type buffer_writer = Routine_writer of int | Released_writer
+
 type execution_ledger = {
   mutable next_id : int;
   mutable next_context_id : int;
@@ -111,7 +115,7 @@ type execution_ledger = {
       (** Names of routines held by live release units, plus the current synthetic merge fill.
           Released routines disappear once no descendant or upload fork holds their ancestry. *)
   mutable executed : Set.M(Int).t;
-  mutable current_writers : int Map.M(Buffer_key).t;
+  mutable current_writers : buffer_writer Map.M(Buffer_key).t;
       (** The routine whose execution most recently wrote each concrete ordinary buffer. Unlike the
           immutable compile frontier, this follows re-execution order without conflating sibling
           contexts that allocate distinct buffers for the same tnode. External writes remove their
@@ -120,7 +124,7 @@ type execution_ledger = {
           entry per freed buffer for the life of the root. Nothing depended on the entry before
           that: only [upload_slot] re-issues a location (a released upload leaf's arena tail, to a
           survivor, gh-ocannl-1328), and both of its callers ([from_host], [copy]) record an
-          external write over it, and every writer here is executed ([run] adds both,
+          external write over it, and every routine writer here is executed ([run] adds both,
           [rollback_execution] removes both), so it could only ever report "ready". *)
   merge_buffer_readers : (int * int) list Hashtbl.M(Int).t;
       (** [(consumer routine id, owning context id)] by synthetic merge-transfer id, one entry per
@@ -1272,7 +1276,9 @@ let check_not_poisoned ctx = Option.iter (poisoned_failure ctx) ~f:raise
 let rollback_execution ctx routine_id =
   ctx.ledger.executed <- Set.remove ctx.ledger.executed routine_id;
   ctx.ledger.current_writers <-
-    Map.filter ctx.ledger.current_writers ~f:(fun writer_id -> writer_id <> routine_id);
+    Map.filter ctx.ledger.current_writers ~f:(function
+      | Routine_writer id -> id <> routine_id
+      | Released_writer -> true);
   (* Only the write claims this run introduced: a buffer an earlier writer had filled keeps its
      value, so it stays written. *)
   Option.iter (Hashtbl.find_and_remove ctx.ledger.fresh_writes routine_id) ~f:(fun keys ->
@@ -1478,7 +1484,14 @@ let check_accumulation_resets ctx routine gb =
 let save_accumulation_history ctx =
   let ledger = ctx.ledger in
   let saved = ledger.accumulated in
-  fun () -> ledger.accumulated <- saved
+  fun () ->
+    (* A caller may have released a writer since saving. Restoring its values cannot resurrect that
+       routine, nor a freed buffer's accounting. Live writers keep their exact counts. *)
+    ledger.accumulated <-
+      Map.filter_mapi saved ~f:(fun ~key ~data ->
+          Option.some_if
+            (Set.mem ledger.written_buffers key)
+            (Map.filter_keys data ~f:(Hashtbl.mem ledger.routine_holders)))
 
 (* [run]'s record of a routine's resets and accumulations, with the undo [rollback_execution]
    applies. *)
@@ -1583,7 +1596,7 @@ let run ?(timing = false) ctx routine =
         | None -> fresh
         | Some key ->
             ctx.ledger.current_writers <-
-              Map.set ctx.ledger.current_writers ~key ~data:routine.routine_id;
+              Map.set ctx.ledger.current_writers ~key ~data:(Routine_writer routine.routine_id);
             if Set.mem ctx.ledger.written_buffers key then fresh
             else (
               ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key;
@@ -2129,7 +2142,10 @@ let retire_routine_unit ctx =
                          au_after = Option.map undo.au_after ~f:without_count;
                        }));
               l.executed <- Set.remove l.executed id;
-              l.current_writers <- Map.filter l.current_writers ~f:(fun writer -> writer <> id);
+              l.current_writers <-
+                Map.map l.current_writers ~f:(function
+                  | Routine_writer writer when writer = id -> Released_writer
+                  | writer -> writer);
               let without_id records =
                 let remaining = List.filter records ~f:(fun (owner, _) -> owner <> id) in
                 Option.some_if (not (List.is_empty remaining)) remaining
@@ -2604,8 +2620,9 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
     let current_writer = Option.bind (buffer_key src tn) ~f:(Map.find src.ledger.current_writers) in
     let pending_writer =
       match current_writer with
-      | Some writer_id when Set.mem src.ledger.executed writer_id -> None
-      | Some writer_id -> Some writer_id
+      | Some Released_writer -> None
+      | Some (Routine_writer writer_id) when Set.mem src.ledger.executed writer_id -> None
+      | Some (Routine_writer writer_id) -> Some writer_id
       | None when Set.mem src.initialized_nodes tn -> None
       | None -> (
           match Map.find src.frontier.last_writer tn with
