@@ -741,3 +741,15 @@ files.
   This does not check declaration order or definite initialization. `local_binder_gate` pins
   refusals and executed in-scope accesses; `local_scope_sibling_reads` protects the
   hoisted-definition ordering boundary.
+
+
+- **Packed stores may carry across the minor axis** (gh-ocannl-2049). In the ResNet
+  downsample initializer, a `[3; 1; 1; 2]` uniform is stored at `[Sub_axis; 0; 0; 4*c]`
+  in a four-lane body and two-lane tail. The stores advance in flat cells, including across
+  the size-two minor axis. `Affine.read_covered_before`, behind `reads_covered_query`,
+  merges a vector write's coordinate view into flat space unless its whole run is proved
+  to stay within the minor coordinate. The existing progression and box-union proof then
+  combines body and tail; keeping the minor frame had invented a read-before-write and
+  forced the uniform onto the device. `vector_write_coverage` pins the placement and executes
+  the centered/scaled initializer against a materialized twin with distinct values in every
+  cell; `affine_coordinate_view` checks omitted and short tails against enumerated addresses.

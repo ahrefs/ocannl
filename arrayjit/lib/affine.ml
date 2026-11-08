@@ -1557,13 +1557,31 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
           (string * ap array * [ `Full | `Chunk of int * int | `Nope ] array) option =
         let exception Skip in
         try
-          (* A vectorized write's run moves along its minor coordinate, which is then its view's
-             last one — the run's own opacity is modelled below, where the run extends the base. *)
+          (* Extend a vectorized write's base along its final coordinate below. Keep the
+             minor-coordinate frame only when the run cannot carry into the outer coordinates. *)
           let w_view =
             let v = view ?dyn_axis:w.a_dyn_axis ~dims w.a_map in
             if w.a_vec_last then
               let outer, minor = split_minor v in
-              Array.append outer [| minor |]
+              let range s =
+                match List.Assoc.find w.a_loops s ~equal:Idx.equal_symbol with
+                | Some _ as bounds -> bounds
+                | None -> static_range s
+              in
+              let no_spill =
+                Array.is_empty outer
+                ||
+                match minor with
+                | Known k ->
+                    Option.exists
+                      (interval ~range (k.terms, k.offset))
+                      ~f:(fun (lo, hi) -> lo >= 0 && hi + w.a_vec_len <= k.size)
+                | Unknown _ -> false
+              in
+              (* A packed store advances in FLAT cells. When it crosses the minor coordinate
+                 (including a tail whose base already lies beyond it), carry into the outer axes
+                 before comparing with the read. *)
+              if no_spill then Array.append outer [| minor |] else [| merge (Array.to_list v) |]
             else v
           in
           let r_view, w_view =
