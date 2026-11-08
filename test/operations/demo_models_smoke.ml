@@ -25,11 +25,13 @@ let dims_string dims = String.concat ~sep:"x" (List.map dims ~f:Int.to_string)
 let smoke name ~outputs =
   Verdict.case name (fun () ->
       Tensor.unsafe_reinitialize ();
+      (* Initialize the shared seed before unused lifted parameters can absorb it. *)
+      let ctx = Train.forward_once (Context.auto ()) (Tensor.get_random_seed ()) in
       let roots, reads = outputs () in
       List.iter reads ~f:(fun (_, t) ->
           Train.set_materialized t.Tensor.value;
           Ir.Tnode.set_observable t.Tensor.value);
-      let ctx = List.fold roots ~init:(Context.auto ()) ~f:Train.forward_once in
+      let ctx = List.fold roots ~init:ctx ~f:Train.forward_once in
       List.iter reads ~f:(fun (what, t) ->
           Stdio.printf "%s %s dims: %s\n" name what (dims_string (dims_of t));
           p_all

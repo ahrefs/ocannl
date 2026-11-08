@@ -5,6 +5,8 @@ let () =
   Tensor.unsafe_reinitialize ();
   (* Basic transformer test with teacher forcing *)
   let ctx = Context.auto () in
+  (* Lifted parameters in unused model branches may absorb the seed initializer. *)
+  let ctx = Ocannl.Train.forward_once ctx (Tensor.get_random_seed ()) in
   (* Test configuration *)
   let batch_size = 2 in
   let src_seq_len = 10 in

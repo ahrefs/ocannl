@@ -53,6 +53,7 @@ let[@inline never] build () =
   y
 
 let[@inline never] cycle ~update () =
+  Tensor.set_random_seed ();
   let y = build () in
   let open_census = Row.solver_census () in
   let root = Context.auto () in
@@ -121,6 +122,7 @@ let () =
     ~f:(fun n -> n = 0);
   (* A closed graph stays usable as an operand of later open work. *)
   let root = Context.auto () in
+  Tensor.set_random_seed ();
   let held = build () in
   let ctx = Train.forward_once root held in
   let held_values = Context.get_values ctx held.value in
@@ -240,6 +242,7 @@ let minted_in (m : member) role (t : Tensor.t) =
   |> List.dedup_and_sort ~compare:Tn.compare
 
 let[@inline never] rewrite_cycle (m : member) =
+  Tensor.set_random_seed ();
   let y = m.build () in
   let root = Context.auto () in
   let ctx = Train.forward_once root y in
@@ -254,6 +257,7 @@ type held = {
 }
 
 let hold (m : member) =
+  Tensor.set_random_seed ();
   let graph = m.build () in
   Train.set_materialized graph.value;
   let root = Context.auto () in
@@ -348,6 +352,7 @@ let () =
   let witnesses = List.init 6 ~f:(fun _ -> scoped_seed 1859) in
   (* A closure and its checkpoint outside the scopes, so that the last one's holds nothing of it. *)
   let root = Context.auto () in
+  Tensor.set_random_seed ();
   let ctx = Train.forward_once root (build ()) in
   Context.release ctx;
   Context.release root;
