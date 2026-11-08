@@ -174,11 +174,13 @@ let check_logged_dynamic ~first_id =
    [Ll_test.optimize_scoped] and reaches the backend as written. *)
 let check_logged_locals ~first_id =
   let mk = Ll_test.node_factory ~first_id ~dims:[| n |] () in
-  let a = mk "loc_a" and x = mk "loc_x" in
   let one = mk "loc_one" and two = mk "loc_two" in
+  let id1 = LL.get_scope one and id2 = LL.get_scope two in
+  (* A node can spell another node's scope local on cc (gh-ocannl-2012). Its executed reads must
+     survive the local declaration, including under logging. *)
+  let a = mk (Printf.sprintf "v%d_loc_one" id1.scope_id) and x = mk "loc_x" in
   List.iter [ a; x ] ~f:Ll_test.materialize;
   List.iter [ one; two ] ~f:Ll_test.virtualize;
-  let id1 = LL.get_scope one and id2 = LL.get_scope two in
   let i = Ll_test.sym () in
   let at = Ll_test.iter i in
   let v1 = Ll_test.add (get a [| at |]) (Ll_test.c 1.) in
@@ -244,7 +246,9 @@ let count_substring src ~substring =
 let check_vectorized ~first_id =
   let mk = Ll_test.node_factory ~first_id ~dims:[| width |] () in
   let mk1 = Ll_test.node_factory ~first_id:(first_id + 50) ~dims:[| 1 |] () in
-  let a = mk "vec_a" and b = mk "vec_b" and x = mk "vec_x" and y = mk "vec_y" in
+  (* Vector loads declare [vget<n>__] temporaries. A user label with that spelling must still read
+     its own buffer, even after a preceding vector load (gh-ocannl-2012). *)
+  let a = mk "vget1__" and b = mk "vec_b" and x = mk "vec_x" and y = mk "vec_y" in
   let s1 = mk1 "vec_s1" and s2 = mk1 "vec_s2" in
   let nodes = [ a; b; x; y; s1; s2 ] in
   List.iter nodes ~f:Ll_test.materialize;
