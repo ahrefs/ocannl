@@ -2483,6 +2483,12 @@ case " $* " in
     exit "${PP_HARNESS_RC:-0}" ;;
 esac
 printf '%s\n' "$*" >>"$PP_AFFECTED_CALLS"
+case " $* " in
+  *" --referenced-only "*)
+    cat "${PP_TIER_OUT:-$PP_AFFECTED_OUT}"
+    cat "${PP_TIER_ERR:-$PP_AFFECTED_ERR}" >&2
+    exit "${PP_TIER_RC:-${PP_AFFECTED_RC:-0}}" ;;
+esac
 cat "$PP_AFFECTED_OUT"
 cat "$PP_AFFECTED_ERR" >&2
 exit "${PP_AFFECTED_RC:-0}"
@@ -2502,11 +2508,13 @@ pp_inc_err=$TMP/prepush-affected-incomplete.err
 printf '%s\n' 'affected: 7 alias(es) from 2 changed path(s); INCOMPLETE, see UNMAPPED above' \
   'affected: verdict=incomplete' >"$pp_inc_err"
 pp_probe() { # tag rc argv...: prepush against the stand-in's list, its stderr the exit status's
-  local tag=$1 rc=$2 err=$pp_err
+  local tag=$1 rc=$2 err=$pp_err out=$pp_out
   shift 2
   [ "$rc" != 3 ] || err=$pp_inc_err
+  if [ "${pp_tier_fixture:-0}" = 1 ]; then out=$pp_tier_full_out; err=$pp_tier_full_err; fi
   : >"$TMP/$tag.affected"
-  PP_AFFECTED_CALLS=$TMP/$tag.affected PP_AFFECTED_OUT=$pp_out PP_AFFECTED_ERR=$err PP_AFFECTED_RC=$rc \
+  PP_TIER_OUT=$pp_out PP_TIER_ERR=$pp_err PP_TIER_RC=$rc \
+  PP_AFFECTED_CALLS=$TMP/$tag.affected PP_AFFECTED_OUT=$out PP_AFFECTED_ERR=$err PP_AFFECTED_RC=$rc \
     TMPDIR=$pp_tmp argv_probe "$tag" prepush "$@"
   pp_asked=$(cat "$TMP/$tag.affected")
 }
@@ -2531,16 +2539,22 @@ if [ -z "$pp_detail" ]; then
 fi
 # First-tier mode must pass the flag to affected, preserve filtering, and
 # label the result even after the shared launcher's green verdict.
+pp_tier_full_out=$TMP/pp-tier-full.out pp_tier_full_err=$TMP/pp-tier-full.err
+cat "$pp_out" >"$pp_tier_full_out"
+printf '%s\n' '@link/runtest-only' '@link/slow-only' >>"$pp_tier_full_out"
+printf '%s\n' 'affected: verdict=cross-cutting' >"$pp_tier_full_err"
 pp_tier_check() {
-  local mode rc
+  local mode rc pp_tier_fixture=1
   pp_tier_detail=
   for mode in run list start; do
     local opts=()
     case $mode in list) opts=(--list) ;; start) opts=(--start) ;; esac
     pp_probe "pp-tier-$mode" 0 --referenced-only --since base ${opts[@]+"${opts[@]}"}
-    { [ "$argv_rc" = 0 ] && [ "$pp_asked" = '--referenced-only --since base' ] &&
+    { [ "$argv_rc" = 0 ] && [ "$pp_asked" = $'--since base\n--referenced-only --since base' ] &&
       grep -qF 'FIRST TIER ONLY (--referenced-only)' <<<"$argv_err" &&
       grep -qxF 'test-run: prepush: slow: @a/slow-y' <<<"$argv_err" &&
+      grep -qxF 'test-run: prepush: slow: @link/slow-only' <<<"$argv_err" &&
+      grep -qF 'and 3 slow-' <<<"$argv_err" &&
       [ -z "$(pp_left)" ]; } || {
       pp_tier_detail="$mode: exit $argv_rc; affected=$pp_asked; $argv_err"; return;
     }
@@ -2576,7 +2590,7 @@ pp_tier_check
 if [ -z "$pp_tier_detail" ]; then report 0 "prepush --referenced-only: run/list/start filter the first tier and label its scope";
 else report 1 "prepush --referenced-only: run/list/start filter the first tier and label its scope" "$pp_tier_detail"; fi
 # Negative control: accepting the flag without passing it through must fail.
-perl -pe 's/affected \$\{pp_affected_opts\[\@\]\+"\$\{pp_affected_opts\[\@\]\}"\} --since/affected --since/' "$SRC" >"$repeat_root/tools/test-run.sh"
+perl -pe 's/^    pp_query --referenced-only$/    pp_query/' "$SRC" >"$repeat_root/tools/test-run.sh"
 if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
   report 1 "prepush --referenced-only: missing-forwarding mutant loses the oracle" "mutant was not made"
 else
@@ -2585,6 +2599,39 @@ else
   else report 1 "prepush --referenced-only: missing-forwarding mutant loses the oracle" "mutant survived"; fi
 fi
 cp "$SRC" "$repeat_root/tools/test-run.sh"
+
+# Non-cross-cutting changes still require the full local prepush list.
+pp_tier_guard_check() {
+  local mode
+  pp_guard_detail=
+  for mode in run list start; do
+    local opts=()
+    case $mode in list) opts=(--list) ;; start) opts=(--start) ;; esac
+    pp_probe "pp-tier-ok-$mode" 0 --referenced-only --since base ${opts[@]+"${opts[@]}"}
+    { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ "$pp_asked" = '--since base' ] &&
+      grep -qF 'not cross-cutting: the pre-push run is plain prepush' <<<"$argv_err" &&
+      [ -z "$(pp_left)" ]; } || { pp_guard_detail="$mode: exit $argv_rc; $pp_asked; $argv_err"; return; }
+  done
+}
+pp_tier_guard_check
+if [ -z "$pp_guard_detail" ]; then report 0 "prepush --referenced-only: non-cross-cutting defaults refuse run/list/start";
+else report 1 "prepush --referenced-only: non-cross-cutting defaults refuse run/list/start" "$pp_guard_detail"; fi
+# Each blocker has an oracle: losing full-list slow aliases or the default
+# verdict guard must turn the corresponding probe red.
+for pp_control in slow guard; do
+  case $pp_control in
+    slow) perl -pe 's/^    pp_slow=\(\$\{pp_full_slow.*$/    :/' "$SRC" >"$repeat_root/tools/test-run.sh" ;;
+    guard) perl -pe 's/\[ "\$pp_verdict" = cross-cutting \]/[ 1 = 1 ]/' "$SRC" >"$repeat_root/tools/test-run.sh" ;;
+  esac
+  if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
+    report 1 "prepush first tier: $pp_control mutant loses the oracle" "mutant was not made"
+  else
+    case $pp_control in slow) pp_tier_check; pp_control_detail=$pp_tier_detail ;; guard) pp_tier_guard_check; pp_control_detail=$pp_guard_detail ;; esac
+    if [ -n "$pp_control_detail" ]; then report 0 "prepush first tier: $pp_control mutant loses the oracle";
+    else report 1 "prepush first tier: $pp_control mutant loses the oracle" "mutant survived"; fi
+  fi
+  cp "$SRC" "$repeat_root/tools/test-run.sh"
+done
 
 # Detached prepush shares the foreground cap intake, including a slow alias
 # explicitly appended after build (#2091); its launch succeeds even when the
@@ -2788,7 +2835,7 @@ if [ -z "$pp_detail" ]; then report 0 "$pp_verdict_label"; else report 1 "$pp_ve
 # trailer and the exit status say what the prose would have: the first (ok)
 # and the fourth (incomplete, exit 3). Every other case goes red.
 pp_nc_label="negative control: reading affected's prose and exit status instead, every case but the two they also decide goes red"
-perl -0pe 's/\n  pp_verdict=\$\(sed -n .*?\n  \[ "\$pp_cross" = 0 \] \|\|\n/\n  pp_incomplete=\$((pp_rc \/ 3))\n  ! grep -q "^affected: CROSS-CUTTING:" "\$pp_dir\/affected.err" ||\n/s' \
+perl -0pe 's/\n    pp_verdict=.*?\n  }\n  pp_query\n/\n    pp_incomplete=\$((pp_rc \/ 3))\n    pp_cross=0\n    ! grep -q "^affected: CROSS-CUTTING:" "\$pp_dir\/affected.err" || pp_cross=1\n  }\n  pp_query\n/s' \
   "$SRC" >"$repeat_root/tools/test-run.sh"
 if cmp -s "$SRC" "$repeat_root/tools/test-run.sh" || ! bash -n "$repeat_root/tools/test-run.sh" ||
    grep -qF 'verdict=' <(sed -n '/^if \[ "\$sub" = prepush \]; then$/,/^fi$/p' "$repeat_root/tools/test-run.sh" | grep -v '^ *#'); then

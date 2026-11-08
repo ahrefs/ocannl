@@ -48,8 +48,10 @@
 # a per-directory count, the link-only aliases, and what this script could
 # not place. The contract: LINK-ONLY is a heuristic ranking, never a
 # verdict that an alias cannot break. `--referenced-only` is a deliberate
-# trade, faster with a possible miss, for iterating mid-change, never for the
-# run before a push. That run is `tools/test-run.sh prepush --since BASE`
+# trade, faster with a possible miss, for iterating mid-change, except the
+# explicit CROSS-CUTTING local run: `prepush --referenced-only --since BASE`
+# (gh-ocannl-2072), plus exercising tests and applicable slow aliases from the
+# full list, link-only ones included. Otherwise the run before a push is `tools/test-run.sh prepush --since BASE`
 # (gh-ocannl-1829): the default list, link-only aliases included, without its
 # `slow-` and `train-` members (CI's `@train` shards run the `train-` ones; no
 # CI job runs `@slow`, so `prepush` names the `slow-` ones for the caller to
