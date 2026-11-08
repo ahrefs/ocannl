@@ -68,6 +68,7 @@ jobs:
     # An apt mitigation, so kept (above). `--with-test` alone, as the install.
     - name: List opam's missing system dependencies
       id: depexts
+      shell: bash
       run: |
         request=$(printf '%s\n' ./*.opam | sed 's#^\./##; s#\.opam$##' | paste -sd, -)
         if ! listed=$(opam --cli=2.1 list --safe --color=never --external \

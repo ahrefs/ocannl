@@ -4349,6 +4349,18 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
 
 ### opam and caches in CI
 
+- `test/operations/ci_matrix.sh` extracts and executes the three "List opam's missing
+  system dependencies" run blocks from `ci.yml`, `gh-pages-api.yml` and `ci-env.yml`
+  against stub `opam`/`dpkg-query` (gh-ocannl-1917). It compares the bodies apart from
+  the resolver's test/doc flags, derived from each workflow's system-dependency install
+  (`-d`/`-t` and their long forms), and checks installed, held, provided (including versioned
+  aliases), removed and missing packages, empty sets, and command failures with partial output.
+  Install/resolver flag mismatch, copy-drift and removed-provides-loop mutants exercise the oracles. The named-step
+  and literal-block helpers read the workflows' current indentation and `run: |` dialect;
+  another scalar style needs reader support. All three steps need explicit `shell: bash`:
+  GitHub's implicit `bash -e` masks a failed `dpkg-query` behind successful `awk`, emits a
+  partial cache request and bypasses the intended warning/fallback. The fixture follows the
+  step's shell selection so removing `shell: bash` fails the dpkg failure case.
 - **Nothing in this repository pins the opam version.** `ocaml/setup-ocaml@v3` is a moving tag,
   and the action resolves the latest STABLE opam release under its own upper bound at run time, so
   a release reaches CI as soon as that bound admits it and no commit here marks the change: opam

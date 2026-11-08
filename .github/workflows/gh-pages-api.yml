@@ -100,14 +100,15 @@ jobs:
           key: opam-deps-${{ runner.os }}-${{ runner.arch }}-${{ env.OCAML_COMPILER }}-${{ hashFiles('*.opam') }}-${{ steps.pins.outputs.solution-digest }}-${{ steps.pins.outputs.digest }}
 
       # The depexts from a cache: ci.yml's "List opam's missing system
-      # dependencies (Linux)" says how (gh-ocannl-1574). `--with-test` alone,
-      # matching the install below. No `runner.os` guard: ubuntu, as above.
+      # dependencies (Linux)" says how (gh-ocannl-1574). `--with-test --with-doc`,
+      # matching the install below (`-ydt`). No `runner.os` guard: ubuntu, as above.
       - name: List opam's missing system dependencies
         id: depexts
+        shell: bash
         run: |
           request=$(printf '%s\n' ./*.opam | sed 's#^\./##; s#\.opam$##' | paste -sd, -)
           if ! listed=$(opam --cli=2.1 list --safe --color=never --external \
-              --resolve="$request" --with-test); then
+              --resolve="$request" --with-test --with-doc); then
             echo "::warning::could not list opam's system dependencies; the install below fetches them itself"
             exit 0
           fi
