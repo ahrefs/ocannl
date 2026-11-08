@@ -1223,8 +1223,9 @@ let () =
     ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
   p_all2 "Bf16_wide bf16 serial rendering equals the once-narrowed wide reference bitwise" want_bw
     wide_ref_bw ~f:Float.equal;
-  p "Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone"
-    Float.(worst_excess got_bw <= 0.);
+  p_close ~difference_only:true
+    "Bf16_wide uniform-bf16 tensorized matmul errs by the narrowing rounding alone" got_bw exact_bw
+    ~tol:narrowing_bound;
   p_all2 "Bf16_wide uniform-bf16 tensorized matmul equals the once-narrowed wide reference bitwise"
     got_bw wide_ref_bw ~f:Float.equal;
   (let claim =

@@ -139,10 +139,8 @@ let case label ~momentum ?(nesterov = false) ?(weight_decay = 0.0) ?grad_scale ?
   (* Two-sided: the parameters must both match the oracle and have actually moved, so an optimizer
      that emitted nothing at all cannot pass by leaving [p] where a wrong oracle also put it. *)
   let moved = Array.existsi actual ~f:(fun i v -> Float.(abs (v -. p_init.(i)) > 1e-4)) in
-  Verdict.pass_fail
-    (label ^ ": matches the host oracle")
-    Float.(err < 1e-4)
-    ~detail:(fun () -> Printf.sprintf "max abs err %.3e" err);
+  Verdict.pass_fail_close ~difference_only:true (label ^ ": matches the host oracle")
+    actual expected ~tol:(fun _ -> Stdlib.Float.pred 1e-4);
   Verdict.p (label ^ ": the step moved the parameter") moved
 
 let entry_point_case entry_point =
@@ -162,10 +160,8 @@ let entry_point_case entry_point =
   let effect_size = max_abs_diff actual baseline in
   Stdio.eprintf "%s (not part of the golden): oracle err %.3e; option effect %.3e\n%!" label
     oracle_err effect_size;
-  Verdict.pass_fail
-    (label ^ ": matches the host oracle")
-    Float.(oracle_err < 1e-4)
-    ~detail:(fun () -> Printf.sprintf "max abs err %.3e" oracle_err);
+  Verdict.pass_fail_close ~difference_only:true (label ^ ": matches the host oracle")
+    actual expected ~tol:(fun _ -> Stdlib.Float.pred 1e-4);
   Verdict.pass_fail
     (label ^ ": non-default changes the device result")
     Float.(effect_size > 1e-3)

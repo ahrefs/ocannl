@@ -45,10 +45,10 @@ let grad_oracle b i =
   (g.(i) -. mean_g -. (y_hat b i *. mean_gy)) /. sigma x_val.(b)
 
 (* [tol_label] instead of printf %g: Windows printf renders 1e-05 as "1e-005". *)
-let report ~what ~tol ~tol_label max_err =
-  Verdict.pf "layer_norm %s matches hand-computed LayerNorm (max abs err < %s)" what tol_label
-    Float.(max_err < tol);
-  if Float.(max_err >= tol) then Stdio.printf "  max abs err: %.8f\n" max_err
+let report ~what ~tol ~tol_label actual expected =
+  Verdict.pf_close ~difference_only:true
+    "layer_norm %s matches hand-computed LayerNorm (max abs err < %s)" what tol_label actual
+    expected ~tol:(fun _ -> Stdlib.Float.pred tol)
 
 let () =
   let ctx = Context.auto () in
@@ -60,17 +60,18 @@ let () =
   let ln = Ocannl.Nn_blocks.layer_norm ~label:[ "ln" ] ~epsilon () in
   let y = ln x in
   let ctx = Ocannl.Train.forward_once ctx y in
-  let max_err = ref 0. in
+  let actual_values = Array.create ~len:(batch * d) 0. in
   for b = 0 to batch - 1 do
     Stdio.printf "row %d:" b;
     for i = 0 to d - 1 do
       let actual = At.((ctx, y).@{[| b; i |]}) in
       Stdio.printf " %8.5f" actual;
-      max_err := Float.max !max_err (Float.abs (actual -. y_hat b i))
+      actual_values.((b * d) + i) <- actual
     done;
     Stdio.printf "\n"
   done;
-  report ~what:"forward" ~tol:1e-5 ~tol_label:"1e-5" !max_err
+  let expected = Array.init (batch * d) ~f:(fun i -> y_hat (i / d) (i % d)) in
+  report ~what:"forward" ~tol:1e-5 ~tol_label:"1e-5" actual_values expected
 
 let () =
   Tensor.unsafe_reinitialize ();
@@ -93,11 +94,10 @@ let () =
   let ctx = Ocannl.Train.init_params ctx IDX.empty loss in
   let ctx, routine = Context.compile ctx update IDX.empty in
   let ctx = Context.run ctx routine in
-  let max_err = ref 0. in
-  for b = 0 to batch - 1 do
-    for i = 0 to d - 1 do
-      let actual = At.((ctx, x).@%{[| b; i |]}) in
-      max_err := Float.max !max_err (Float.abs (actual -. grad_oracle b i))
-    done
-  done;
-  report ~what:"input gradient" ~tol:1e-4 ~tol_label:"1e-4" !max_err
+  let actual =
+    Array.init (batch * d) ~f:(fun j ->
+        let b = j / d and i = j % d in
+        At.((ctx, x).@%{[| b; i |]}))
+  in
+  let expected = Array.init (batch * d) ~f:(fun j -> grad_oracle (j / d) (j % d)) in
+  report ~what:"input gradient" ~tol:1e-4 ~tol_label:"1e-4" actual expected

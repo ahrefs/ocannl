@@ -899,8 +899,8 @@ two batches' baselines exited 0 (`20261102T215754Z-24690`, `20261102T215951Z-744
 |---|---|---|---|
 | A function bounding an abs-of-difference, reaching a claim, is a hand-rolled tolerance | `verdict_scan.ml`: no inline function read as bounding one | Failed: `refuses a plain claim over an array helper bounding a difference inline`, `refuses a tolerance helper reaching p, p_all and p_exists, and a value computed through one` | `20261102T215803Z-33156` |
 | A value computed through a tolerance helper carries it | `verdict_scan.ml`: only a binding to a function becomes a tolerance name | Failed: refuses a tolerance helper reaching p, p_all and p_exists, and a value computed through one | `20261102T215824Z-40257` |
-| Only a BOUNDED difference counts outside a parity predicate | `verdict_scan.ml`: any abs-of-difference inside a function counts | Failed: `accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and within`, and the corpus claim | `20261102T220013Z-84431` |
-| A maximum-error helper is no tolerance name outside a parity predicate | `verdict_scan.ml`: a parity-only name resolves as a tolerance in any claim | Failed: accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and within, and the corpus claim | `20261102T220034Z-92761` |
+| Only a BOUNDED difference counts outside a parity predicate | `verdict_scan.ml`: any abs-of-difference inside a function counts | Failed: `accepts a scalar bound and a discrimination margin, but refuses a bounded maximum-error helper`, and the corpus claim | `20261102T220013Z-84431` |
+| A maximum-error helper is no tolerance name outside a parity predicate | `verdict_scan.ml`: a parity-only name resolves as a tolerance in any claim | Failed: accepts a scalar bound and a discrimination margin, but refuses a bounded maximum-error helper, and the corpus claim | `20261102T220034Z-92761` |
 | A leg's or a case's closure is not read as the claim's value | `verdict_scan.ml`: `in_leg`, `in_legf` and `case` read as claims | Failed: `does not read the closure of a leg or a case, whose claims are read where written`, and the corpus claim | `20261102T215852Z-51469` |
 | Only Verdict's claims are read, plain ones included | `verdict_scan.ml`: every claim-named callee read as Verdict's | Failed: `does not read a p the source binds itself`, does not read a p_all2 the source binds itself, and the corpus claim | `20261102T215912Z-56632` |
 
@@ -932,3 +932,21 @@ The floor reader's cases are `verdict_scan_cases`' floor rows, run under the
 | A literal is read under a type constraint | `verdict_scan.ml`: the argument is not peeled | a zero written in hexadecimal, with underscores, and under a type constraint | `20261103T015904Z-64405` |
 | A literal is read by its value | `verdict_scan.ml`: only its first character parsed | a negative floor, which the parser folds into one constant; a hexadecimal floor above one, and a floor of one | `20261103T015921Z-73563` |
 | Only Verdict's claims are read | `verdict_scan.ml`: a claim the source binds read as Verdict's | a p_all the source binds itself | `20261103T015939Z-83071` |
+
+## Bound error-fold controls (gh-ocannl-1837)
+
+The control `refuses bound folds and derived metrics, but accepts lower margins and shadowing`
+tracks a direct fold through a renaming, division and Boolean binding, reads a reversed upper
+bound, and accepts an ordering between two error metrics, a lower discrimination bound
+and a shadowed name. The planted-tolerance refusal control now exercises this fold fixture through the shipping
+refusal path. The earlier maximum-error near miss now refuses its upper-bounded claim.
+
+The preceding maximum-error mutation rows record the pre-gh-1837 boundary. Disabling bounded-name
+recognition and restoring the old Ll_test.close in `20261108T164803Z-17874` (mac-studio) exited 1:
+the two bounded-metric controls, the planted-tolerance refusal control, and the helper's worst-cell
+and length diagnostics failed, with no early stop. Restoring the mechanisms passes those controls.
+
+The review control run `20261108T172343Z-30681` (mac-studio, exit 1) removed the scalar-ordering
+filter and the readback index: the derived-metric control detected the spurious ordering refusal,
+the corpus named both affected scalar claims, and the helper's readback-identification claim
+failed. Restoring both mechanisms passed the targeted Metal batch `20261108T172435Z-58975`.

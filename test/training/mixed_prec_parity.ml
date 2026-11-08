@@ -174,8 +174,8 @@ let () =
   Stdio.printf "bf16 leg twin of w1 grad: %s\n"
     (prec_str (Option.value_exn twin_b.Tensor.diff).Tensor.grad);
   Stdio.printf "bf16 leg y activation: %s\n" (prec_str y_b.Tensor.value);
-  Verdict.p "bf16 leg loss trajectory parity within 0.1"
-    Float.(max_abs_diff losses_a losses_b < 0.1);
+  Verdict.p_close ~difference_only:true "bf16 leg loss trajectory parity within 0.1" losses_b
+    losses_a ~tol:(fun _ -> Stdlib.Float.pred 0.1);
 
   (* Leg C: f16 master weights with dynamic loss scaling at a benign initial scale — every step
      runs, and the trajectory tracks the f32 oracle within f16 tolerance. Gradients are stored in
@@ -200,7 +200,8 @@ let () =
   Stdio.printf "f16 leg twin of w1 grad: %s\n"
     (prec_str (Option.value_exn twin_c.Tensor.diff).Tensor.grad);
   Verdict.p_all "f16 leg all steps ran" stepped_c ~f:Fn.id;
-  Verdict.p "f16 leg loss trajectory parity within 0.1" Float.(max_abs_diff losses_a losses_c < 0.1);
+  Verdict.p_close ~difference_only:true "f16 leg loss trajectory parity within 0.1" losses_c
+    losses_a ~tol:(fun _ -> Stdlib.Float.pred 0.1);
 
   (* Leg D: the dynamic-scale backoff/growth cycle. The b2 twin gradient is exactly the scale, so
      init_scale 65536 > 65504 (max finite f16) overflows deterministically: step 1 skips and backs
@@ -254,8 +255,8 @@ let () =
     run_gated ~input_l:"xe" ~scaler:scaler_e1 ~check_interval:1
   in
   Verdict.p_all "gated leg all windows finite" finite_e1 ~f:Fn.id;
-  Verdict.p "gated leg loss trajectory parity within 0.1"
-    Float.(max_abs_diff losses_a losses_e1 < 0.1);
+  Verdict.p_close ~difference_only:true "gated leg loss trajectory parity within 0.1" losses_e1
+    losses_a ~tol:(fun _ -> Stdlib.Float.pred 0.1);
   let scaler_e2 =
     MP.Loss_scaler.create ~init_scale:65536. ~growth_interval:100 ~backoff_factor:0.5 ()
   in
@@ -295,6 +296,6 @@ let () =
       ctx_f
   in
   let losses_f = Array.of_list_rev !losses_f in
-  Verdict.p "static-scale leg loss trajectory parity within 0.1"
-    Float.(max_abs_diff losses_a losses_f < 0.1);
+  Verdict.p_close ~difference_only:true "static-scale leg loss trajectory parity within 0.1"
+    losses_f losses_a ~tol:(fun _ -> Stdlib.Float.pred 0.1);
   Stdio.printf "%!"

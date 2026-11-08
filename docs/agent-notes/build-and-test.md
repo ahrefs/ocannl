@@ -2708,9 +2708,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   partial applications included; and, in any other claim's arguments, a function BOUNDING an
   abs-of-difference (`<`/`<=`) or a name bound to anything holding one -- a helper, or a value
   computed through it (`let ok = Array.for_all2_exn got want ~f:approx in p "x" ok`; gh-ocannl-1470).
-  A scalar bound written in the claim itself, a discrimination margin (`abs (a - b) > m`) and a
-  maximum-error helper stay unread by design; a shared helper of another module
-  (`Ll_test.close`) is beyond it.
+  An unbounded error helper or abs-of-difference fold is tracked through names and arithmetic
+  until an upper comparison bounds it (gh-ocannl-1837). A scalar bound written in the claim itself
+  and a lower discrimination margin (`abs (a - b) > m`) stay unread by design. Ordering two
+  error metrics is a scalar claim too. Ref accumulators, piped max_elt reductions, Stdlib
+  fold_left/fold_right and a shared helper of another module are beyond the reader.
+  `Ll_test.close` and `Ll_test.same` use `Verdict.within` directly,
+  retaining their empty-array and subtraction-only semantics. Migrations of legacy error folds use
+  `~difference_only:true` as compatibility with the original subtraction-based predicate,
+  including its treatment of nonfinite values; a strict positive bound becomes
+  `Stdlib.Float.pred bound`, and relative-error checks retain their original division to avoid
+  changing boundary rounding.
 - Guarantees that fire only on an empty collection are never exercised by a green suite, so
   `verdict_quantified` stages them: the satisfied forms run directly, and each refusal runs as a
   CHILD process whose streams the parent captures. Capturing is not tidiness — a refusal prints
