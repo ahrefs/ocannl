@@ -3589,12 +3589,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     siblings under the other families. It reads names, not the build graph: a helper module names no
     test (exit 1, pointing at `affected --files`).
   - The pre-push run is one command (gh-ocannl-1829): `tools/test-run.sh prepush --since BASE
-    [--cap N] [--test-cap N] [--expect-backend B]... [build -j 4]` asks `affected --since BASE`
+    [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build -j 4]` asks `affected --since BASE`
     for its default list (link-only aliases included), leaves off the `slow-` and `train-` members
-    and runs the rest as `run --targets-file` would: same digest, verdict and exit status. `train-`
-    members run in CI's `@train` shards on every PR; no CI job runs `@slow`, so each `slow-` member
-    left off is named on a `prepush: slow:` stderr line, for the caller to run those the change
-    exercises and name them in the PR body. Before it, five workers filtered by a hand grep or a
+    and runs the rest as `run --targets-file` would: same digest, verdict and exit status.
+    `--start` uses `start` instead (same cap selection and fleet slot); follow a successful
+    launch with `wait last` or `wait DIR`. An empty kept list exits 2: nothing started, so there
+    is no run to wait for. It cannot be combined with `--list`. `train-` members run in CI's
+    `@train` shards on every PR; no CI job runs `@slow`, so each `slow-` member left off is
+    named on a `prepush: slow:` stderr line, for the caller to run those the change exercises
+    and name them in the PR body. Before it, five workers filtered by a hand grep or a
     targets file computed inside `bash -c`, which a fleet leg's backend-pin check refuses. A leg on
     another box takes the list computed here: `prepush --since BASE --list >F` (it runs nothing;
     one alias per line), then `fleet-worker.sh execution leg ... --file F -- env OCANNL_BACKEND=B
@@ -3606,8 +3609,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     exit status (exit 2), or when it says `incomplete` (exit 3: a changed path is UNMAPPED,
     such as `cuda_backend.ml` on a Mac; `--list` still prints what it found, exit 3, to extend
     with the OFF-BUILD aliases on a box that builds them). A list with no `runtest-` member runs
-    nothing, exit 0, and `--list` then prints nothing, which `run --targets-file` refuses: check
-    the list before shipping it. Harness: leg 98 of `tools/test-test-run.sh`.
+    nothing, exit 0 (`--start` refuses it, exit 2), and `--list` then prints nothing, which
+    `run --targets-file` refuses: check the list before shipping it.
+    Harness: leg 98 of `tools/test-test-run-options.sh`.
   - `prepush` names the harness commands the change reaches, and the one command that runs them,
     and runs none (gh-ocannl-1929): a
     change to `scripts/harness-support.sh` listed 18 aliases and no word of the shell tier, and

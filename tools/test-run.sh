@@ -67,7 +67,7 @@
 #                                                      # (tools/affected-tests.sh)
 #   tools/test-run.sh aliases PATH...                 # a test's per-test aliases, by family;
 #                                                      # runs none
-#   tools/test-run.sh prepush --since BASE [--cap N] [--test-cap N] [--expect-backend B]...
+#   tools/test-run.sh prepush --since BASE [--start] [--cap N] [--test-cap N] [--expect-backend B]...
 #                             [build [DUNE OPTIONS...]] # the pre-push run: affected's default
 #                                                      # list without slow-/train-, as `run`
 #   tools/test-run.sh prepush --since BASE --list      # that list, one alias per line; runs none
@@ -76,11 +76,14 @@
 # `affected --since BASE`'s default list (link-only aliases included, never
 # `--referenced-only`'s) without its `slow-` and `train-` members, run exactly
 # as `run [OPTIONS] --targets-file LIST [build DUNE OPTIONS...]` would run it
-# (the same verdict, digest and exit status). `train-` members run in CI's
-# `@train` shards on every PR; no CI job runs `@slow`, so the `slow-` members
-# left off are named on stderr, each on a `prepush: slow:` line, for the caller
-# to run those the change exercises. `--list` prints the list instead (a valid
-# --targets-file, empty when nothing is left) and runs nothing: the form for a
+# (the same verdict, digest and exit status). `--start` uses `start` instead;
+# follow a successful launch with `wait last` or `wait DIR`. An empty kept
+# list exits 2: nothing started, so there is no run to wait for. It cannot be
+# combined with `--list`. `train-` members run in CI's `@train` shards on
+# every PR; no CI job runs `@slow`, so the `slow-` members left off are named
+# on stderr, each on a `prepush: slow:` line, for the caller to run those the
+# change exercises. `--list` prints the list instead (a valid --targets-file,
+# empty when nothing is left) and runs nothing: the form for a
 # fleet leg, whose runner is one plain command line, `... execution leg ...
 # --file LIST -- env OCANNL_BACKEND=B tools/test-run.sh run --expect-backend B
 # --targets-file '{file}'`. Every line `affected` prints must be one `@`
@@ -502,6 +505,10 @@ reject_misplaced_options() {
     case $arg in
       --) return 0 ;;
       --cpu | --cpu=* | --gpu | --gpu=*) refuse_slot_option "$arg" ;;
+      --start | --start=*)
+        [ "$sub" != prepush ] || die "$arg belongs before the dune arguments, not after them:
+  tools/test-run.sh $pp_usage
+  dune has no such option, so this would have exited 1 having run nothing." ;;
       --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=* | --direct | --direct=* | \
         --expect-backend | --expect-backend=* | --targets-file | --targets-file=*)
         case $sub in
@@ -4053,7 +4060,7 @@ shift
 # --since BASE`'s default list without its slow- and train- members, run as
 # `run --targets-file`. It asks `affected` in a child (which takes and releases
 # the worktree lock as a query does), sorts each line it prints into a family
-# by an allowlist, and then BECOMES that run: `sub` is `run` from here on and
+# by an allowlist, and then BECOMES that launch: `sub` is `run` or `start` and
 # the list reaches the run's own intake as a targets file in a scratch
 # directory this launcher removes as it exits (the run records the argv it
 # read; no launch path sets an EXIT trap of its own), naming the harness
@@ -4063,12 +4070,13 @@ shift
 # what this build cannot place), nor without a verdict (exit 2), so no green
 # verdict ever stands for a list that was not the pre-push one.
 if [ "$sub" = prepush ]; then
-  pp_usage='prepush --since BASE [--list | [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
-  pp_base= pp_print=0 pp_run_opts=()
+  pp_usage='prepush --since BASE [--list | [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build [DUNE OPTIONS...]]]'
+  pp_base= pp_print=0 pp_mode=run pp_run_opts=()
   while [ $# -gt 0 ]; do
     case $1 in
       --since | --since=*) opt_value "a base revision" "$@"; pp_base=$opt_value; shift "$opt_shift" ;;
       --list | --list=*) opt_flag "$1"; pp_print=1; shift ;;
+      --start | --start=*) opt_flag "$1"; pp_mode=start; shift ;;
       --cap | --cap=* | --test-cap | --test-cap=* | --expect-backend | --expect-backend=*)
         opt_value "a value" "$@"
         pp_run_opts+=("${1%%=*}" "$opt_value")
@@ -4083,7 +4091,7 @@ if [ "$sub" = prepush ]; then
   done
   [ -n "$pp_base" ] || die "prepush: --since BASE is required (the base branch, e.g. the staging remote's master)
   usage: tools/test-run.sh $pp_usage"
-  if [ "$pp_print" = 1 ] && { [ $# -gt 0 ] || [ ${#pp_run_opts[@]} -gt 0 ]; }; then
+  if [ "$pp_print" = 1 ] && { [ $# -gt 0 ] || [ ${#pp_run_opts[@]} -gt 0 ] || [ "$pp_mode" = start ]; }; then
     die "prepush: --list prints the list and runs nothing, so it takes no run option or dune argument
   usage: tools/test-run.sh $pp_usage"
   fi
@@ -4189,11 +4197,13 @@ if [ "$sub" = prepush ]; then
     exit 3
   fi
   if [ ${#pp_keep[@]} -eq 0 ]; then
+    [ "$pp_mode" != start ] ||
+      die "prepush: nothing started: no runtest- alias; no run to wait for (wait last would answer an earlier run)"
     echo "test-run: prepush: no runtest- alias to run; nothing run" >&2
     exit 0
   fi
   printf '%s\n' "${pp_keep[@]}" >"$pp_dir/list" || die "cannot write the list in $pp_dir"
-  sub=run
+  sub=$pp_mode
   set -- ${pp_run_opts[@]+"${pp_run_opts[@]}"} --targets-file "$pp_dir/list" "$@"
 fi
 
