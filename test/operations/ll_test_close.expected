@@ -3,6 +3,7 @@ two empty readback lists still match: true
 the tolerance boundary is inclusive: true
 a differing readback fails: true
 the shared check names both differing cells and the worst cell's values: true
+diagnostics identify the failing readback: true
 a length mismatch fails with its lengths: true
 a mismatched readback list remains a test error: true
 legacy subtraction semantics also hold for infinities and negative tolerances: true

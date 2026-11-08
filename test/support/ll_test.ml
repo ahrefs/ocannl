@@ -788,13 +788,17 @@ let sentinel = -1.
 let blank n = Array.create ~len:n sentinel
 
 (** Whether two value arrays match elementwise within [tol] (and have the same length). *)
-let close ?(tol = 1e-5) values expected =
+let close ?(tol = 1e-5) ?what_ran values expected =
   (Array.is_empty values && Array.is_empty expected)
-  || Verdict.within ~difference_only:true "Ll_test.close" values expected ~tol:(fun _ -> tol)
+  || Verdict.within ~difference_only:true ?what_ran "Ll_test.close" values expected ~tol:(fun _ ->
+      tol)
 
 (** [same got expected] is {!close} over the list {!execute} returns. Raises if the lists differ in
-    length — a mismatched [~read] is a test bug, not a failed assertion. *)
-let same ?tol got expected = List.for_all2_exn got expected ~f:(close ?tol)
+    length — a mismatched [~read] is a test bug, not a failed assertion. Failures name the
+    zero-based readback index. *)
+let same ?tol got expected =
+  List.for_alli (List.zip_exn got expected) ~f:(fun i (got, expected) ->
+      close ?tol ~what_ran:(Printf.sprintf "readback %d" i) got expected)
 
 (** {1 Interpreting}
 

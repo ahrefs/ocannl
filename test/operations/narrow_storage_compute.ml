@@ -135,10 +135,7 @@ let () =
   Stdio.eprintf "wide-compute error %g; per-operator error %g (not part of the golden)\n%!" err_wide
     err_per_op;
   gated ~when_:on_cpu ~on:backend_name "f32 compute over bf16 storage beats per-operator rounding"
-    (Float.(err_per_op > 0.)
-    && Verdict.within ~difference_only:true
-         "f32 compute over bf16 storage beats per-operator rounding" wide reference ~tol:(fun _ ->
-           Stdlib.Float.pred err_per_op));
+    Float.(err_wide < err_per_op);
   (* The wide leg's only rounding is the final store, so its relative error is bounded by bf16's
      half-ulp (2^-9); the per-operator leg compounds five of them. *)
   let magnitude = Array.fold reference ~init:0. ~f:(fun m v -> Float.max m (Float.abs v)) in
@@ -148,8 +145,9 @@ let () =
   let relative_residuals arr = Array.mapi arr ~f:(fun i v -> (v -. reference.(i)) /. magnitude) in
   let zeros = Array.create ~len:(Array.length reference) 0. in
   gated ~when_:on_cpu ~on:backend_name "wide-compute relative error within one bf16 ulp"
-    (Verdict.within ~difference_only:true "wide-compute relative error within one bf16 ulp"
-       (relative_residuals wide) zeros ~tol:(fun _ -> Stdlib.Float.pred 0.004));
+    (on_cpu
+    && Verdict.within ~difference_only:true "wide-compute relative error within one bf16 ulp"
+         (relative_residuals wide) zeros ~tol:(fun _ -> Stdlib.Float.pred 0.004));
   p "per-operator relative error exceeds it" Float.(rel per_op > 0.004);
 
   (* --- 2. Bitwise parity of the vectorized rendering against the serial twin. --- *)

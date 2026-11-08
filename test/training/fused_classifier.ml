@@ -72,14 +72,13 @@ let () =
   Verdict.p "fused loss matches log-sum-exp oracle (rel err < 1e-4)" Float.(rel_err < 1e-4);
 
   (* 2. dlogits = softmax(logits) - targets, sampled on the extreme rows and a few others. *)
-  let max_abs_err = ref 0. in
-  List.iter [ 0; 1; 2; 3; 17; 1000 ] ~f:(fun b ->
-      for v = 0 to vocab - 1 do
-        let expected = prob b v -. if v = target_idx b then 1. else 0. in
-        let actual = (ctx, logits).@%{[| b; v |]} in
-        max_abs_err := Float.max !max_abs_err (Float.abs (actual -. expected))
-      done);
-  Verdict.p "dlogits = softmax - targets (max abs err < 1e-4)" Float.(!max_abs_err < 1e-4);
+  let sample f =
+    Array.concat_map [| 0; 1; 2; 3; 17; 1000 |] ~f:(fun b -> Array.init vocab ~f:(f b))
+  in
+  let actual = sample (fun b v -> (ctx, logits).@%{[| b; v |]}) in
+  let expected = sample (fun b v -> prob b v -. if v = target_idx b then 1. else 0.) in
+  Verdict.p_close ~difference_only:true "dlogits = softmax - targets (max abs err < 1e-4)" actual
+    expected ~tol:(fun _ -> Stdlib.Float.pred 1e-4);
 
   (* 3. Virtualness census over the whole forward+backprop routine: every [batch, vocab]-sized node
      except the logits value, the logits gradient, and the targets must stay Virtual. *)

@@ -704,9 +704,9 @@ let floor_census content =
     [p_all "x" runs ~f:(fun (got, want) -> approx got want)] are both read. Only a BOUND difference
     counts here. An unbounded abs-of-difference helper, or a fold containing one, is tracked through
     name bindings and arithmetic until an upper comparison bounds it (gh-ocannl-1837). Merely
-    printing a maximum or requiring it to EXCEED a margin does not count; an upper bound does,
-    including another computed error used as that bound. The fold reader recognizes calls ending in
-    [fold], [foldi], [fold2] and [fold2_exn]; it does not prove which reducer the callback
+    printing a maximum or requiring it to EXCEED a margin does not count. Ordering two error metrics
+    is also a scalar comparison, not parity under a tolerance. The fold reader recognizes calls
+    ending in [fold], [foldi], [fold2] and [fold2_exn]; it does not prove which reducer the callback
     implements.
 
     What it does not read, by design: a scalar comparison written in the claim itself or in a value
@@ -716,8 +716,10 @@ let floor_census content =
     written; and the [p_close] family, whose [~tol] answers a bound rather than hand-rolling one.
     What it cannot see: a predicate reaching the call as a function PARAMETER, a tolerance written
     without [abs] ([a -. b < t && b -. a < t]), a lambda parameter shadowing a tolerance name inside
-    the claim's argument, and a comparison routed through a helper of another module. Those are
-    spellings nobody in the tree uses; the remedy for each is the same [p_close] or [within]. *)
+    the claim's argument, and a comparison routed through a helper of another module. It does not
+    track writes to [ref] accumulators in loops, piped or [max_elt] reductions, or Stdlib's
+    [fold_left]/[fold_right]. These are reader boundaries, not evidence that the tree contains no
+    such comparisons; the remedy for a tolerance claim using one is [p_close] or [within]. *)
 
 let parity_callees = [ "p_all2"; "pf_all2"; "pass_fail_all2" ]
 
@@ -786,7 +788,7 @@ let applies_abs_to_difference expr =
 
 (* Whether [expr] holds a comparison bounding an abs-of-difference from above: the difference on the
    small side of [<]/[<=], or the large side of [>]/[>=]. *)
-let bounds_abs_difference_with applies expr =
+let bounds_abs_difference_with ?(bound = fun _ -> true) applies expr =
   let found = ref false in
   let iterator =
     object
@@ -797,8 +799,8 @@ let bounds_abs_difference_with applies expr =
         | Pexp_apply (op, [ (Ppxlib.Asttypes.Nolabel, left); (Ppxlib.Asttypes.Nolabel, right) ])
           -> (
             match Option.map (Read.longident_of op) ~f:List.last_exn with
-            | Some ("<" | "<=" | "<." | "<=.") when applies left -> found := true
-            | Some (">" | ">=" | ">." | ">=.") when applies right -> found := true
+            | Some ("<" | "<=" | "<." | "<=.") when applies left && bound right -> found := true
+            | Some (">" | ">=" | ">." | ">=.") when applies right && bound left -> found := true
             | _ -> ())
         | _ -> ());
         super#expression e
@@ -877,7 +879,11 @@ let tolerance_census content =
 
         method! expression e =
           if Option.is_none !found then (
-            if bounds_abs_difference_with (fun side -> Option.is_some (predicate_name env side)) e
+            if
+              bounds_abs_difference_with
+                ~bound:(fun side -> Option.is_none (predicate_name env side))
+                (fun side -> Option.is_some (predicate_name env side))
+                e
             then found := predicate_name env e;
             (match e.pexp_desc with
             | Pexp_function _ when bounds_abs_difference e -> found := Some "an inline function"

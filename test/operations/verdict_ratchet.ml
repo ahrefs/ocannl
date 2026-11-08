@@ -5502,7 +5502,7 @@ let () =
   Verdict.p "improvement" Float.(error < renamed);
   let renamed = 0. in
   Verdict.p "shadowed" Float.(renamed < 0.01)|ocaml},
-      [ "6:ok"; "7:renamed"; "9:error" ] );
+      [ "6:ok"; "7:renamed" ] );
     ( "does not read the closure of a leg or a case, whose claims are read where written",
       {ocaml|let () =
   Verdict.in_leg ~leg "x" (fun () -> ignore (List.for_all xs ~f:(fun a -> Float.(abs (a - b) < 1e-3))));

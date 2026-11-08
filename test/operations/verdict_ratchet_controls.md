@@ -937,7 +937,7 @@ The floor reader's cases are `verdict_scan_cases`' floor rows, run under the
 
 The control `refuses bound folds and derived metrics, but accepts lower margins and shadowing`
 tracks a direct fold through a renaming, division and Boolean binding, reads a reversed upper
-bound, refuses an error-to-error upper bound too, and accepts a lower discrimination bound
+bound, and accepts an ordering between two error metrics, a lower discrimination bound
 and a shadowed name. The planted-tolerance refusal control now exercises this fold fixture through the shipping
 refusal path. The earlier maximum-error near miss now refuses its upper-bounded claim.
 
@@ -945,3 +945,8 @@ The preceding maximum-error mutation rows record the pre-gh-1837 boundary. Disab
 recognition and restoring the old Ll_test.close in `20261108T164803Z-17874` (mac-studio) exited 1:
 the two bounded-metric controls, the planted-tolerance refusal control, and the helper's worst-cell
 and length diagnostics failed, with no early stop. Restoring the mechanisms passes those controls.
+
+The review control run `20261108T172343Z-30681` (mac-studio, exit 1) removed the scalar-ordering
+filter and the readback index: the derived-metric control detected the spurious ordering refusal,
+the corpus named both affected scalar claims, and the helper's readback-identification claim
+failed. Restoring both mechanisms passed the targeted Metal batch `20261108T172435Z-58975`.

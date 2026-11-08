@@ -14,7 +14,6 @@
 
 open Base
 open Ocannl
-open Stdio
 module IDX = Train.IDX
 open Nn_blocks.DSL_modules
 
@@ -51,18 +50,17 @@ let expected_dw c d =
 
 let check_grads ~label ctx w b_p =
   let open Operation.At in
-  let max_err = ref 0. in
-  for c = 0 to classes - 1 do
-    let actual = (ctx, b_p).@%{[| c |]} in
-    max_err := Float.max !max_err (Float.abs (actual -. expected_db c));
-    for d = 0 to din - 1 do
-      let actual = (ctx, w).@%{[| c; d |]} in
-      max_err := Float.max !max_err (Float.abs (actual -. expected_dw c d))
-    done
-  done;
-  Verdict.pf "%s gradients match softmax-CE oracle (max abs err < 1e-6)" label
-    Float.(!max_err < 1e-6);
-  if Float.(!max_err >= 1e-6) then eprintf "  max abs err: %.8f\n" !max_err
+  let gradients bias weight =
+    Array.init
+      (classes * (din + 1))
+      ~f:(fun i ->
+        let c = i / (din + 1) and d = i % (din + 1) in
+        if d = 0 then bias c else weight c (d - 1))
+  in
+  let actual = gradients (fun c -> (ctx, b_p).@%{[| c |]}) (fun c d -> (ctx, w).@%{[| c; d |]}) in
+  let expected = gradients expected_db expected_dw in
+  Verdict.pf_close ~difference_only:true "%s gradients match softmax-CE oracle (max abs err < 1e-6)"
+    label actual expected ~tol:(fun _ -> Stdlib.Float.pred 1e-6)
 
 let run_case ~label make_loss =
   Tensor.unsafe_reinitialize ();
