@@ -2,6 +2,8 @@
 # One literal mutation, one focused test-run, byte-identical restoration.
 # Usage: tools/mutation-run.sh <module> <patch-file> <@alias>
 #        tools/mutation-run.sh --batch <module> <patch-dir> <@alias>
+# Private --perl <module> <expression> <@alias> mode is mutant.sh's entrypoint;
+# it shares the baseline, evidence statuses and restoration of literal patches.
 # Patch bytes are OLD@@@NEW (exactly one delimiter; no newline is stripped).
 # OLD must occur exactly once, including overlapping occurrences. NEW may be empty.
 # Where OLD occurs nowhere byte for byte, it may match MODULO WHITESPACE (gh-ocannl-1429), so a
@@ -76,9 +78,11 @@ use Time::HiRes ();
 my $script = shift;
 $SIG{__DIE__} = sub { if (!$^S) { print STDERR @_; exit 2; } };
 sub refuse { die "mutation-run: $_[0]\n" }
+my $perl_edit = @ARGV && $ARGV[0] eq '--perl' ? shift @ARGV : '';
 my $batch = @ARGV && $ARGV[0] eq '--batch' ? shift @ARGV : '';
 @ARGV == 3 or refuse('usage: tools/mutation-run.sh <module> <patch-file> <@alias>, '
-    . 'or tools/mutation-run.sh --batch <module> <patch-dir> <@alias>');
+    . 'or tools/mutation-run.sh --batch <module> <patch-dir> <@alias> '
+    . '(private --perl mode is used by tools/mutant.sh)');
 my ($module, $patch, $alias) = @ARGV;
 my $root = abs_path(dirname($script) . '/..');
 $alias =~ /^\@[^\s]+$/ or refuse('expected one @alias');
@@ -154,7 +158,20 @@ sub anchored {
 # The mutants: one patch, or every `*.patch` of a batch directory, each checked before anything
 # runs.
 my @mutants;
-if ($batch) {
+if ($perl_edit) {
+    # Evaluate against a private copy: syntax errors and no-op edits never touch the source.
+    my ($fh, $input) = tempfile('ocannl-perl-edit-XXXXXXXX', TMPDIR => 1, UNLINK => 1);
+    binmode $fh;
+    print {$fh} $original or refuse("write edit input: $!");
+    close $fh or refuse("close edit input: $!");
+    open my $edit, '-|', $^X, '-Mopen=IO,:raw,:std', '-0777', '-pe', $patch, '--', $input or refuse("perl edit: $!");
+    binmode $edit;
+    local $/;
+    my $mutated = <$edit> // '';
+    close $edit or refuse('perl edit failed; nothing mutated');
+    $mutated ne $original or refuse('perl edit made no byte change; nothing mutated');
+    @mutants = (['perl edit', $mutated, 0]);
+} elsif ($batch) {
     -d $patch or refuse("--batch needs a directory of *.patch files: $patch");
     opendir my $d, $patch or refuse("read $patch: $!");
     my @names = sort grep { /\.patch\z/ && -f "$patch/$_" } readdir $d;
@@ -427,10 +444,23 @@ if ($baseline_stop || $baseline_status) {
     unlink "$scratch/baseline";
     rmdir $scratch;
     exit $baseline_stop if $baseline_stop;
+    my $remedy = 'promote the golden';
+    if (defined $baseline_log) {
+        my $baseline_dir = dirname($baseline_log);
+        my $paths = "$baseline_dir/promotion-files/paths";
+        if (-f $paths) {
+            my @paths = split /\r?\n/, bytes($paths);
+            if (grep { $_ eq $golden } @paths) {
+                # Shell-safe even when the caller's run root contains spaces or quotes.
+                my @args = map { my $s = $_; $s =~ s/'/'\\''/g; "'$s'" } ($baseline_dir, $golden);
+                $remedy = 'promote it with tools/promote.sh --from-run ' . join(' ', @args);
+            }
+        }
+    }
     refuse("BASELINE RED: the unmutated test exited $baseline_status"
         . (defined $baseline_log ? ' (run ' . basename(dirname($baseline_log)) . ')' : '')
-        . ", so $golden is not what it prints, or its claims fail without a mutation (promote the "
-        . 'golden, or fix the test): no mutant can be counted against it; nothing was mutated');
+        . ", so $golden is not what it prints, or its claims fail without a mutation ($remedy, "
+        . 'or fix the test): no mutant can be counted against it; nothing was mutated');
 }
 unlink "$scratch/baseline";
 # One mutant: written over the module, its test run, the module restored byte for byte, then
