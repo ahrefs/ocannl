@@ -92,6 +92,10 @@ type minted_hold = { release_ancestor : unit -> unit; depth : int; holders : int
 (* A release unit's holds, and whether its release gave them back yet (once per unit). *)
 type minted_entry = { holds : minted_hold list; mutable given_back : bool }
 
+(* A released writer's values can remain in an ancestor-owned buffer. Keep readiness without
+   retaining the dead routine id, until another write or the buffer's retirement replaces it. *)
+type buffer_writer = Routine_writer of int | Released_writer
+
 type execution_ledger = {
   mutable next_id : int;
   mutable next_context_id : int;
@@ -101,24 +105,27 @@ type execution_ledger = {
           compile context -- reaches them through the id. An upload fork takes holds of its own
           ([derive]); a lifecycle child none, since it is released before its ancestors. An entry
           goes once its unit's release has released what it no longer holds. *)
+  routine_units : Set.M(Int).t Hashtbl.M(Int).t;
+      (** Routine ancestry held by each live release unit. Descendants and upload forks each hold
+          their ancestry; record copies sharing the release flag share this entry. *)
+  routine_holders : int Hashtbl.M(Int).t;
+      (** Number of live release units whose ancestry contains this routine. The last release
+          retires its per-routine records without undoing writes to surviving buffers. *)
   routine_names : string Hashtbl.M(Int).t;
-      (** Every routine id of this root's lineages, named for refusal messages: one entry per
-          compile, not retired by {!release}. Intended: an entry is a string, a refusal may name any
-          routine of the root, and the table goes with the root -- the ledger is held only by the
-          root's context values -- so it grows with one root's compiles, not with the process
-          (gh-ocannl-1762). A retired merge-buffer transfer is the one id it forgets
-          (gh-ocannl-1654). *)
+      (** Names of routines held by live release units, plus the current synthetic merge fill.
+          Released routines disappear once no descendant or upload fork holds their ancestry. *)
   mutable executed : Set.M(Int).t;
-  mutable current_writers : int Map.M(Buffer_key).t;
-      (** The routine whose execution most recently wrote each concrete ordinary buffer. Unlike the
-          immutable compile frontier, this follows re-execution order without conflating sibling
-          contexts that allocate distinct buffers for the same tnode. External writes remove their
-          buffer. A {!release} retires the entries of the locations it gives up, as it does
+  mutable current_writers : buffer_writer Map.M(Buffer_key).t;
+      (** The routine whose execution most recently wrote each concrete ordinary buffer, or
+          [Released_writer] once its last release unit gives it up: readiness without a routine id.
+          Unlike the immutable compile frontier, this follows re-execution order without conflating
+          sibling contexts that allocate distinct buffers for the same tnode. External writes remove
+          their buffer. A {!release} retires the entries of the locations it gives up, as it does
           [written_buffers]'s ([retire_written], gh-ocannl-1762), so the table does not grow by one
           entry per freed buffer for the life of the root. Nothing depended on the entry before
           that: only [upload_slot] re-issues a location (a released upload leaf's arena tail, to a
           survivor, gh-ocannl-1328), and both of its callers ([from_host], [copy]) record an
-          external write over it, and every writer here is executed ([run] adds both,
+          external write over it, and every routine writer here is executed ([run] adds both,
           [rollback_execution] removes both), so it could only ever report "ready". *)
   merge_buffer_readers : (int * int) list Hashtbl.M(Int).t;
       (** [(consumer routine id, owning context id)] by synthetic merge-transfer id, one entry per
@@ -158,15 +165,15 @@ type execution_ledger = {
       (** Per routine id, the tokens the routine's latest {!run} minted — what [rollback_execution]
           restores for a run known not to have written. *)
   mutable fragment_registry : (int * string) list Map.M(Fragment_key).t;
-      (** Every routine (id, name) of this root that owns each fragment, sibling lineages included
-          (gh-ocannl-1724). Diagnostic only: it lets a requirement refusal name an owner compiled in
-          a sibling lineage. Ownership itself is the frontier's [owners] -- a sibling never
-          satisfies a requirement. *)
+      (** Routines (id, name) of this root owning each fragment, sibling lineages included
+          (gh-ocannl-1724), retired with the last release unit holding each routine. Diagnostic
+          only: it lets a requirement refusal name an owner compiled in a sibling lineage. Ownership
+          itself is the frontier's [owners] -- a sibling never satisfies a requirement. *)
   mutable zeroing_registry : (int * string) list Map.M(Int).t;
       (** Every routine (id, name) of this root whose computation zeroes each gradient, by the
           gradient's node uid ({!Asgns.field-zeroes}), sibling lineages included (gh-ocannl-1797).
-          Diagnostic only, like [fragment_registry], and bounded the same way, by the root's
-          compiles: it lets the missing-reset hint of [lacks_node_error] name a zeroing compiled
+          Diagnostic only, like [fragment_registry], and retired with the last release unit holding
+          each routine: it lets the missing-reset hint of [lacks_node_error] name a zeroing compiled
           outside the lineage. Whether a lineage resets a gradient is its frontier's [grad_roles].
       *)
   grad_buffers : grad_buffers Hashtbl.M(Int).t;
@@ -274,6 +281,8 @@ let create_ledger () =
     next_id = 0;
     next_context_id = 1;
     minted_holds = Hashtbl.create (module Int);
+    routine_units = Hashtbl.create (module Int);
+    routine_holders = Hashtbl.create (module Int);
     routine_names = Hashtbl.create (module Int);
     executed = Set.empty (module Int);
     current_writers = Map.empty (module Buffer_key);
@@ -399,6 +408,11 @@ let derive ?frontier ctx wrapped =
   else
     let context_id = ctx.ledger.next_context_id in
     ctx.ledger.next_context_id <- context_id + 1;
+    if not (Set.is_empty frontier.lineage_routines) then (
+      Hashtbl.set ctx.ledger.routine_units ~key:context_id ~data:frontier.lineage_routines;
+      Set.iter frontier.lineage_routines ~f:(fun id ->
+          Hashtbl.update ctx.ledger.routine_holders id ~f:(fun count ->
+              1 + Option.value count ~default:0)));
     let fork = phys_equal (upload_lineage wrapped) (upload_lineage ctx.wrapped) in
     (if fork then
        let readers = ctx.ledger.merge_buffer_readers in
@@ -1263,7 +1277,9 @@ let check_not_poisoned ctx = Option.iter (poisoned_failure ctx) ~f:raise
 let rollback_execution ctx routine_id =
   ctx.ledger.executed <- Set.remove ctx.ledger.executed routine_id;
   ctx.ledger.current_writers <-
-    Map.filter ctx.ledger.current_writers ~f:(fun writer_id -> writer_id <> routine_id);
+    Map.filter ctx.ledger.current_writers ~f:(function
+      | Routine_writer id -> id <> routine_id
+      | Released_writer -> true);
   (* Only the write claims this run introduced: a buffer an earlier writer had filled keeps its
      value, so it stays written. *)
   Option.iter (Hashtbl.find_and_remove ctx.ledger.fresh_writes routine_id) ~f:(fun keys ->
@@ -1388,7 +1404,8 @@ let check_lineage_runnable ctx routine =
           match Hashtbl.find ctx.ledger.routine_names dep_id with
           | Some n -> Printf.sprintf "%s (id=%d)" n dep_id
           | None ->
-              (* gh-ocannl-1654: only a retired merge-buffer transfer loses its name. *)
+              (* gh-ocannl-1654: among a live routine's dependencies, only a retired merge-buffer
+                 transfer loses its name: the live routine's ancestry holds its routine deps. *)
               Printf.sprintf
                 "a merge-buffer fill (id=%d) that a later fill superseded (refill the merge buffer \
                  and compile the consumer against the new fill)"
@@ -1469,7 +1486,14 @@ let check_accumulation_resets ctx routine gb =
 let save_accumulation_history ctx =
   let ledger = ctx.ledger in
   let saved = ledger.accumulated in
-  fun () -> ledger.accumulated <- saved
+  fun () ->
+    (* A caller may have released a writer since saving. Restoring its values cannot resurrect that
+       routine, nor a freed buffer's accounting. Live writers keep their exact counts. *)
+    ledger.accumulated <-
+      Map.filter_mapi saved ~f:(fun ~key ~data ->
+          Option.some_if
+            (Set.mem ledger.written_buffers key)
+            (Map.filter_keys data ~f:(Hashtbl.mem ledger.routine_holders)))
 
 (* [run]'s record of a routine's resets and accumulations, with the undo [rollback_execution]
    applies. *)
@@ -1574,7 +1598,7 @@ let run ?(timing = false) ctx routine =
         | None -> fresh
         | Some key ->
             ctx.ledger.current_writers <-
-              Map.set ctx.ledger.current_writers ~key ~data:routine.routine_id;
+              Map.set ctx.ledger.current_writers ~key ~data:(Routine_writer routine.routine_id);
             if Set.mem ctx.ledger.written_buffers key then fresh
             else (
               ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key;
@@ -1695,6 +1719,28 @@ let ledger_entries ctx =
   Hashtbl.length l.routine_names + Set.length l.executed
   + Hashtbl.length l.merge_buffer_readers
   + Hashtbl.length l.fresh_writes + Hashtbl.length l.token_undo
+
+let ledger_census ctx =
+  let l = ctx.ledger in
+  let entry name count value = (name, count, Stdlib.Obj.reachable_words (Stdlib.Obj.repr value)) in
+  [
+    entry "minted_holds" (Hashtbl.length l.minted_holds) l.minted_holds;
+    entry "routine_units" (Hashtbl.length l.routine_units) l.routine_units;
+    entry "routine_holders" (Hashtbl.length l.routine_holders) l.routine_holders;
+    entry "routine_names" (Hashtbl.length l.routine_names) l.routine_names;
+    entry "executed" (Set.length l.executed) l.executed;
+    entry "current_writers" (Map.length l.current_writers) l.current_writers;
+    entry "merge_buffer_readers" (Hashtbl.length l.merge_buffer_readers) l.merge_buffer_readers;
+    entry "written_buffers" (Set.length l.written_buffers) l.written_buffers;
+    entry "fresh_writes" (Hashtbl.length l.fresh_writes) l.fresh_writes;
+    entry "observed_tokens" (Map.length l.observed_tokens) l.observed_tokens;
+    entry "token_undo" (Hashtbl.length l.token_undo) l.token_undo;
+    entry "fragment_registry" (Map.length l.fragment_registry) l.fragment_registry;
+    entry "zeroing_registry" (Map.length l.zeroing_registry) l.zeroing_registry;
+    entry "grad_buffers" (Hashtbl.length l.grad_buffers) l.grad_buffers;
+    entry "accumulated" (Map.length l.accumulated) l.accumulated;
+    entry "accumulation_undo" (Hashtbl.length l.accumulation_undo) l.accumulation_undo;
+  ]
 
 let stored_component_total ctx =
   Backends.query ctx.wrapped
@@ -2069,6 +2115,47 @@ let release_minted ctx =
       | Some (exn, backtrace) -> Stdlib.Printexc.raise_with_backtrace exn backtrace)
   | Some _ | None -> ()
 
+(* Retirement is not rollback: a released routine may have written a surviving ancestor's buffer.
+   Its values and write tokens remain valid; only records no live routine can use go. *)
+let retire_routine_unit ctx =
+  let l = ctx.ledger in
+  Option.iter (Hashtbl.find_and_remove l.routine_units ctx.context_id) ~f:(fun ids ->
+      Set.iter ids ~f:(fun id ->
+          match Hashtbl.find l.routine_holders id with
+          | Some n when n > 1 -> Hashtbl.set l.routine_holders ~key:id ~data:(n - 1)
+          | Some _ ->
+              Hashtbl.remove l.routine_holders id;
+              Hashtbl.remove l.routine_names id;
+              Hashtbl.remove l.fresh_writes id;
+              Hashtbl.remove l.token_undo id;
+              Hashtbl.remove l.grad_buffers id;
+              Hashtbl.remove l.accumulation_undo id;
+              (* Other live routines may roll back a reset of these buffers. Scrub both snapshots as
+                 well as the current counts, preserving the equality check that prevents a rollback
+                 from undoing a later write. *)
+              let without_count counts = Map.remove counts id in
+              l.accumulated <- Map.map l.accumulated ~f:without_count;
+              Hashtbl.map_inplace l.accumulation_undo
+                ~f:
+                  (List.map ~f:(fun undo ->
+                       {
+                         undo with
+                         au_before = Option.map undo.au_before ~f:without_count;
+                         au_after = Option.map undo.au_after ~f:without_count;
+                       }));
+              l.executed <- Set.remove l.executed id;
+              l.current_writers <-
+                Map.map l.current_writers ~f:(function
+                  | Routine_writer writer when writer = id -> Released_writer
+                  | writer -> writer);
+              let without_id records =
+                let remaining = List.filter records ~f:(fun (owner, _) -> owner <> id) in
+                Option.some_if (not (List.is_empty remaining)) remaining
+              in
+              l.fragment_registry <- Map.filter_map l.fragment_registry ~f:without_id;
+              l.zeroing_registry <- Map.filter_map l.zeroing_registry ~f:without_id
+          | None -> ()))
+
 let release ctx =
   let retire_readers () =
     Hashtbl.to_alist ctx.ledger.merge_buffer_readers
@@ -2092,6 +2179,7 @@ let release ctx =
   | () ->
       retire_written ctx.ledger ~device_id !retired;
       retire_readers ();
+      retire_routine_unit ctx;
       release_minted ctx
   | exception exn ->
       (* gh-ocannl-1445: a release hook (graph execs) that fails runs after the pools were freed and
@@ -2101,6 +2189,7 @@ let release ctx =
       retire_written ctx.ledger ~device_id !retired;
       if Backends.query ctx.wrapped { q = (fun _ c -> Atomic.get c.BI.finalized) } then (
         retire_readers ();
+        retire_routine_unit ctx;
         try release_minted ctx with _ -> ());
       Stdlib.Printexc.raise_with_backtrace exn backtrace
 
@@ -2533,8 +2622,9 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
     let current_writer = Option.bind (buffer_key src tn) ~f:(Map.find src.ledger.current_writers) in
     let pending_writer =
       match current_writer with
-      | Some writer_id when Set.mem src.ledger.executed writer_id -> None
-      | Some writer_id -> Some writer_id
+      | Some Released_writer -> None
+      | Some (Routine_writer writer_id) when Set.mem src.ledger.executed writer_id -> None
+      | Some (Routine_writer writer_id) -> Some writer_id
       | None when Set.mem src.initialized_nodes tn -> None
       | None -> (
           match Map.find src.frontier.last_writer tn with

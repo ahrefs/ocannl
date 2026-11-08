@@ -275,6 +275,31 @@ files.
   Host arrays have their own counted reading, `Ndarray.get_used_memory`, a gauge a finalizer gives
   back: it covers `Host_inits` data, so "the literal's host array is reclaimed" is a byte claim
   after a settle, with a memory-mapped array outside it (gh-ocannl-1859).
+- **Per-routine ledger history ends at its last live release unit** (gh-ocannl-2063).
+  `Context.ledger_census` separates table entry counts and reachable words; the latter overlap
+  where values are shared and must not be summed as heap usage. `root_ledger` measures the
+  whole heap with `Gc.stat` separately, after settling and clearing the bounded analysis cache.
+  `routine_units` records each release unit's immutable routine ancestry, and `routine_holders`
+  counts its holders. A compile descendant or upload fork takes its own hold; record copies in
+  one release unit share it. Final release retires names, executed ids, per-run rollback records,
+  gradient-buffer records, and diagnostic fragment/zeroing owners. Accumulation counts forget
+  retired ids in both current state and surviving rollback snapshots. This is NOT rollback:
+  values written into surviving ancestor buffers and their write tokens remain valid. Their
+  runtime writer becomes `Released_writer`, a buffer-lifetime readiness marker without a routine
+  id: deleting it would make a merge copy fall back to an unexecuted sibling's compile frontier
+  even though the buffer holds the released writer's values (`root_ledger` pins that case).
+  A partial release keeps its holds for retry; a committed release (including a later hook failure) retires
+  them once. Live ancestry, buffers and the current merge fill still retain their own records.
+  Hash-table backing capacity may retain its high-water mark; the bound is on repeated
+  compile/release at fixed live ancestry. A third loop accumulates into a surviving ancestor's
+  gradient, verifying that its values survive retirement; disabling just accumulation-count
+  retirement makes that table's bounded-growth claim fail. Restoring a saved accumulation
+  history filters retired routine ids and freed buffers as well, so a later restore cannot
+  resurrect the records: the third loop restores a saved history after each release, while
+  `never_zeroed_grad` pins restoration of a live routine's counts.
+  Guards: `root_ledger`'s three 256-cycle loops, per-routine table counts after a fork/failed
+  release, a dependent consumer of the fork's already-executed producer, and cleanup retry;
+  `context_handle_refusals`, `test_execution_deps`, `resource_fault_injection`.
 - **A context a wrapper mints and does not return is adopted by the one it returns**
   (gh-ocannl-1762). `Train.run_once`'s initialization context (the parameters' pools) and a memory
   budget's decision context (rooted constant holds) are lifecycle ancestors of the returned context

@@ -428,7 +428,8 @@ val save_accumulation_history : t -> unit -> unit
 (** [save_accumulation_history ctx] captures the gradient-accumulation history {!run} keeps for
     [ctx]'s lineage (gh-ocannl-1781), and returns the function setting it back. For a caller that
     restores buffers it saved itself -- the autotuner's timing-state restore (gh-ocannl-1621) -- so
-    that the restoring uploads, and the runs they undo, are not taken for a reset. *)
+    that the restoring uploads, and the runs they undo, are not taken for a reset. Records of
+    routines or buffers released since the snapshot are not restored. *)
 
 val check_runnable : t -> routine -> unit
 (** {!run}'s pre-dispatch validation on its own — poisoned lineage, uninitialized inputs,
@@ -598,7 +599,15 @@ val ledger_entries : t -> int
 (** How many per-id records the context's execution ledger (shared by its root) holds: routine
     names, executed ids, merge-buffer reader registrations and per-run write records. Each compile
     adds its routine's; a merge-buffer fill retires its predecessor's entirely, so repeated fills
-    keep the count constant (gh-ocannl-1654). A diagnostic. *)
+    keep the count constant (gh-ocannl-1654). A routine's records retire with its last live release
+    unit (gh-ocannl-2063). A diagnostic. *)
+
+val ledger_census : t -> (string * int * int) list
+(** Diagnostic snapshot of each root-ledger table: name, entry count and reachable OCaml words.
+    Reachable sizes overlap where tables share values; their sum is not a live-heap measurement.
+    Tables containing closures (notably minted ancestor holds) include all captured state in their
+    reachable size, not just ledger bookkeeping. The snapshot contains only numbers and names, so it
+    does not retain table contents. *)
 
 val lifecycle_depth : t -> int
 (** How many lifecycle ancestors the context has: the [parent] links {!release}'s refusal of a
