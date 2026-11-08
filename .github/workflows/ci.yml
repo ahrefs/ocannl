@@ -378,6 +378,18 @@ jobs:
         OCAML_COMPILER: ${{ inputs.ocaml_compiler }}
         GH_TOKEN: ${{ github.token }}
       run: |
+        # Read the workflow revision GitHub is executing, not expected_sha's
+        # older copy. This covers local actions in every job, before setup.
+        workflow=$(gh api "repos/$GITHUB_REPOSITORY/contents/.github/workflows/ci.yml?ref=$GITHUB_WORKFLOW_SHA" \
+          -H 'Accept: application/vnd.github.raw+json')
+        local_actions=$(printf '%s\n' "$workflow" | sed -nE 's@^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+(\./[^[:space:]#]+).*@\2@p' | sort -u)
+        while IFS= read -r action; do
+          [ -n "$action" ] || continue
+          if [ ! -f "$action/action.yml" ] && [ ! -f "$action/action.yaml" ]; then
+            echo "::error::Dispatch checkout lacks local action $action. See docs/agent-notes/build-and-test.md#how-far-back-a-dispatch-reaches; use the branch-dispatch route: push the intended commit to its own branch and dispatch ci.yml on that branch without expected_sha."
+            exit 1
+          fi
+        done <<< "$local_actions"
         if [ "$WINDOWS_ONLY" = true ] && [ -z "$EXPECTED_SHA" ]; then
           echo "::error::Windows-only dispatch requires expected_sha"
           exit 1

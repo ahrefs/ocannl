@@ -4689,6 +4689,12 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   the red-span bisection under [What CI actually covers](#what-ci-actually-covers). A job-level
   `uses:` of a reusable workflow is loaded from the dispatched ref, not the checkout, and bounds
   nothing.
+- `Verify dispatch commit` fetches `ci.yml` at `GITHUB_WORKFLOW_SHA`, derives its local
+  `uses: ./...` paths, and refuses a checkout missing either `action.yml` or `action.yaml`
+  for any of them, naming the branch-dispatch route below (gh-ocannl-1936). This tests manifest
+  presence, not interface compatibility or the later `run:` steps' script/flag bounds.
+  `ci_matrix.sh` executes the guard against each absent action and new actions in another job;
+  a mutant dropping one action from the derivation must fail that same check.
 - The record below lists each local action the dispatched workflows' steps use, oldest first, as
   `` - `<action path>`: YYYY-MM-DD, lukstafi/ocannl-staging#N. `` -- the master merge that first
   carried the action with the interface the workflows use, and that merge's date -- and then

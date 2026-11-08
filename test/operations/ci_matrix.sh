@@ -497,14 +497,14 @@ print('PASS workflow_script preserves list dashes and run keys inside script bod
 
 
 # Step-order checks (gh-ocannl-1919). Read the same small YAML dialect as
-# workflow_step/script: four-space step lists, inline commands or literal blocks.
+# workflow_step/script: four- or six-space step lists, inline commands or literal blocks.
 # Inspect direct dune commands, not commands hidden inside scripts/actions; the
 # main check conservatively covers every preceding step in the matrix run job.
 def workflow_steps(text, job):
     block = re.search(r'^  ' + re.escape(job) + r':\n(.*?)(?=^  [A-Za-z_][A-Za-z0-9_-]*:|\Z)',
                       text, re.M | re.S)
     assert block, 'job missing: ' + job
-    starts = list(re.finditer(r'^    - ', block[1], re.M))
+    starts = list(re.finditer(r'^    (?:  )?- ', block[1], re.M))
     assert starts, 'steps missing: ' + job
     return [block[1][start.start():end] for start, end in
             zip(starts, [m.start() for m in starts[1:]] + [len(block[1])])]
@@ -937,24 +937,48 @@ git.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$CHECKOUT_SHA"\n')
 git.chmod(0o755)
 gh = Path(scratch) / 'gh'
 gh.write_text('#!/usr/bin/env bash\n'
+              'if [ "$1 $2" = "api repos/$GITHUB_REPOSITORY/contents/.github/workflows/ci.yml?ref=$GITHUB_WORKFLOW_SHA" ]; then\n'
+              '  cat "$WORKFLOW_FIXTURE"; exit\n'
+              'fi\n'
               '[ "$1 $2" = "api repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SHA...$GITHUB_SHA" ] || exit 1\n'
               '[ -n "$RELATION" ] || exit 1\n'
               'printf "%s\\n" "$RELATION"\n')
 gh.chmod(0o755)
+
+workflow_fixture = Path(scratch) / 'workflow.yml'
+workflow_fixture.write_text(source)
+checkout_root = Path(scratch) / 'checkout'
+checkout_root.mkdir()
+# Read uses keys only at step-key indentation, excluding run-block payloads.
+def local_action_uses(text):
+    actions = []
+    for job in job_keys(text):
+        for entry in workflow_steps(text, job):
+            match = re.search(r'^    (?:  )?(?:- |  )uses: (\./\S+)\s*$', entry, re.M)
+            if match:
+                actions.append(match[1])
+    assert actions, 'workflow has no local actions'
+    return set(actions)
+
+for action in local_action_uses(source):
+    manifest = checkout_root / action / 'action.yml'
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.touch()
 
 compilers, ordinary = compiler_input(source)
 floor = [compiler for compiler in compilers if compiler != ordinary][0]
 # The guard's literal for the ordinary compiler is the schema's default.
 assert '[ "$OCAML_COMPILER" != %s ]' % ordinary in script, 'guard names another ordinary compiler'
 
-def guard(code, expected, run, checkout, only=True, ref=master, relation='ahead', compiler=ordinary):
+def guard(code, expected, run, checkout, only=True, ref=master, relation='ahead', compiler=ordinary, output=False):
     env = dict(os.environ, PATH=scratch + os.pathsep + os.environ['PATH'],
                EXPECTED_SHA=expected, GITHUB_SHA=run, CHECKOUT_SHA=checkout,
                WINDOWS_ONLY=str(only).lower(), GITHUB_REF=ref,
+               GITHUB_WORKFLOW_SHA=other, WORKFLOW_FIXTURE=str(workflow_fixture),
                GITHUB_REPOSITORY='owner/repo', RELATION=relation, OCAML_COMPILER=compiler)
     result = subprocess.run(['bash', '-eo', 'pipefail', '-c', code], env=env,
-                            capture_output=True, text=True)
-    return result.returncode
+                            capture_output=True, text=True, cwd=checkout_root)
+    return result if output else result.returncode
 
 assert guard(script, sha, sha, sha) == 0
 assert guard(script, sha, sha, sha, ref=branch) == 0  # a branch's own head
@@ -996,6 +1020,54 @@ check = '[ "$(git rev-parse HEAD)" = "$EXPECTED_SHA" ]'
 assert check in script
 assert guard(script.replace(check, 'true'), sha, sha, other) == 0, 'checkout identity'
 print('PASS negative control exposes removed checkout identity')
+
+# Execute the derivation against the dispatched workflow fixture, with each
+# distinct local action absent in turn. The checkout has no workflow file:
+# consulting expected_sha's tree instead of the executing revision cannot pass.
+def action_coverage(code, text):
+    workflow_fixture.write_text(text)
+    for action in sorted(local_action_uses(text)):
+        manifest = checkout_root / action / 'action.yml'
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.touch()
+        alternate = manifest.with_suffix('.yaml')
+        manifest.rename(alternate)
+        assert guard(code, sha, sha, sha) == 0, 'action.yaml refused: ' + action
+        alternate.unlink()
+        try:
+            result = guard(code, sha, sha, sha, output=True)
+            assert result.returncode == 1, 'missing local action accepted: ' + action
+            for needle in ('::error::', action,
+                           'build-and-test.md#how-far-back-a-dispatch-reaches',
+                           'branch-dispatch', 'without expected_sha'):
+                assert needle in result.stdout, 'missing dispatch guidance: ' + needle
+        finally:
+            manifest.touch()
+    workflow_fixture.write_text(source)
+
+# New actions in both step-key spellings must join the runtime derivation,
+# including actions owned by a job other than the guarded matrix job.
+expanded = extra_job('new-action-job').replace(
+    '    - run: true\n', '    - uses: ./.github/actions/new-list-action\n'
+    '    - name: Another local action\n      uses: ./.github/actions/new-named-action\n', 1)
+for text in (source, expanded):
+    for action in local_action_uses(text):
+        manifest = checkout_root / action / 'action.yml'
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.touch()
+    action_coverage(script, text)
+print('PASS dispatch derivation checks every local action, including new steps in another job')
+# The very same checker must reject a derivation silently dropping one action.
+mutant = script.replace('| sort -u)', "| sed '/pin-revisions/d' | sort -u)", 1)
+assert mutant != script
+try:
+    action_coverage(mutant, source)
+except AssertionError as error:
+    assert 'missing local action accepted' in str(error), error
+    print('PASS rejected mutant: dispatch derivation omits a local action')
+else:
+    raise AssertionError('accepted mutant: incomplete local-action derivation')
+workflow_fixture.write_text(source)
 
 # A bisection probe judges the commit it names only if EVERY job builds that
 # commit: a job checking out the event's commit would test master's head and
