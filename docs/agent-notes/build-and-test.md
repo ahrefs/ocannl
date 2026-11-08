@@ -5598,6 +5598,18 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   was refused, so no fingerprint could have shown it — only rerunning the 27 red stanzas at
   `-j 1` on the box did, 4 of them staying red. The harness pins the call shape, all three
   verdict channels, and that a red without a signature gets no second run.
+- Capped single-test diagnostics keep live stderr: `tools/test-run.sh run` (also `start`
+  and `plan`) adds `--no-buffer` to a simple `build @DIR/runtest-NAME` (also `slow-` or
+  `train-`, recursive or not), with optional `-j N`, `-jN`, `--force` or `-f`, when either
+  cap is positive. The default 3600 s run cap makes this the normal single-test behavior;
+  `--cap 0 --test-cap 0` disables it. The effective command is recorded. Dune otherwise holds
+  action stderr until completion, losing evidence if the cap kills it (the first
+  gh-ocannl-2082 Metal window). Broader batches keep each action's output contiguous for the
+  person reading the log. Unfamiliar options receive no automatic flag; even `--auto-promote`
+  and `--stop-on-first-error` disable injection. Pass `--no-buffer` explicitly for those
+  diagnostics. A single alias may still build parallel dependencies, so use `-j 1` when output
+  order matters. This changes no cap or timeout verdict. Real-Dune leg 107 of
+  `tools/test-test-run-options.sh` pins both run-cap and per-test-cap stderr retention.
 - **A faulted GPU does not fail the tests after it, it hangs them, so `tools/test-run.sh` caps
   each test and probes the device before a GPU batch** (gh-ocannl-1211). On 2026-10-04 tuf's
   gfx1102 took a gfxhub/CPC page fault in `bandwidth_calibration` (the test reported

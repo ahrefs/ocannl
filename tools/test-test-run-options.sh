@@ -17,9 +17,10 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 103, 94, 95, 96, 98), #hermetic (70).
+# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 107, 103, 94, 95, 96, 98), #hermetic (70).
 #
 # Legs:
+# 107. capped single-test builds retain stderr before timeout, with plan boundaries.
 #   1. extraction -- the functions came out of the shipping script.
 #  1b. each Perl program the script embeds (every NAME_perl='...' in it and in
 #      the files it sources) holds no single quote and compiles under
@@ -1736,7 +1737,9 @@ for probe in "@al/runtest-yes" "@@al/runtest-yes" "@al/deep" "@deep" "@al/sub/de
   [ -z "$alias_detail" ] || break
   # shellcheck disable=SC2086 # the probe's operands, split on purpose
   alias_probe alias-known run build $probe
-  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build $probe" ] &&
+  alias_cmd="build $probe"
+  case $probe in @al/runtest-yes | @@al/runtest-yes | @_build/default/al/runtest-no_such) alias_cmd="build --no-buffer $probe" ;; esac
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "$alias_cmd" ] &&
     [ "$(grep -c '' <<<"$slot_calls")" = 1 ]; } ||
     alias_detail="$probe: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; slot calls: ${slot_calls:-<none>}; digest: $argv_out"
 done
@@ -1768,7 +1771,7 @@ for probe in "unread|(rule (alias odd)" "block|(rule (action (run echo #|x)))" \
   mkdir -p "$repeat_root/al/odd"
   printf '%s\n' "${probe#*|}" >"$repeat_root/al/odd/dune"
   alias_probe "alias-${probe%%|*}" run build @al/runtest-no_such
-  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @al/runtest-no_such" ]; } ||
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build --no-buffer @al/runtest-no_such" ]; } ||
     alias_detail="${probe%%|*} below: exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
   if [ -z "$alias_detail" ]; then
     alias_want=0
@@ -1784,7 +1787,7 @@ if [ -z "$alias_detail" ]; then report 0 "$alias_label"; else report 1 "$alias_l
 # The fixture dune with no table prints nothing for the listing: not dune's
 # answer, so the check decides nothing and dune runs the batch.
 slot_probe alias-open hold cuda cc run build @al/runtest-no_such
-if [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build @al/runtest-no_such" ]; then
+if [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build --no-buffer @al/runtest-no_such" ]; then
   report 0 "$alias_open_label"
 else
   report 1 "$alias_open_label" "exit $argv_rc (want 0); dune calls: ${argv_calls:-<none>}; digest: $argv_out"
@@ -1841,6 +1844,87 @@ fi
 }
 harness_leg_run '89: an alias dune does not know is refused before the slot #options' leg_89
 
+# Real-Dune cap diagnostics are independent of the alias-refusal leg.
+leg_107() {
+shared_through renamed_dune
+stderr_real_label="capped stderr: real-Dune plans and cap kills keep the diagnostic line"
+if ! harness_real_dune; then
+  skip "$stderr_real_label" "$harness_dune_absent"
+  return
+fi
+stderr_real=$harness_dune stderr_root=$TMP/stderr-real
+stderr_failures=$failures stderr_skipped=$skipped
+mkdir -p "$stderr_root/tools" "$stderr_root/scripts" "$stderr_root/al" "$stderr_root/t"
+cp "$SRC" "$stderr_root/tools/test-run.sh"
+if ! stage_sourced "$stderr_root"; then
+  harness_abandon "cannot stage what test-run.sh sources: $stage_error"
+  return
+fi
+printf '(lang dune 3.20)\n' >"$stderr_root/dune-project"
+printf '(rule (alias runtest-yes) (action (progn)))\n(rule (alias deep) (action (progn)))\n' >"$stderr_root/al/dune"
+# The default run cap streams a simple per-test build. Broader or
+# unfamiliar commands, explicit buffering policy, and lifted caps do not
+# get an injected flag. These expected commands are independent cases.
+for probe in \
+  '30|build @al/runtest-yes -j 4 --force|build --no-buffer @al/runtest-yes -j 4 --force' \
+  '30|build @@al/runtest-yes -j2|build --no-buffer @@al/runtest-yes -j2' \
+  '30|build @al/runtest-yes @al/deep|build @al/runtest-yes @al/deep' \
+  '30|build @al/deep|build @al/deep' \
+  '30|build --profile release @al/runtest-yes|build --profile release @al/runtest-yes' \
+  '30|build @al/runtest-yes --auto-promote|build @al/runtest-yes --auto-promote' \
+  '30|build @al/runtest-yes --stop-on-first-error|build @al/runtest-yes --stop-on-first-error' \
+  '30|build --no-buffer @al/runtest-yes|build --no-buffer @al/runtest-yes' \
+  '0|build @al/runtest-yes|build @al/runtest-yes'; do
+  IFS='|' read -r stderr_cap stderr_argv stderr_want <<<"$probe"
+  stderr_rc=0
+  # shellcheck disable=SC2086 # the case's Dune argv, split deliberately
+  (cd "$stderr_root" && PATH=$(dirname "$stderr_real"):$PATH \
+    OCANNL_TOOL_TEST_RUNS=$TMP/stderr-plan-runs tools/test-run.sh plan \
+    --cap "$stderr_cap" --test-cap 0 $stderr_argv) >"$TMP/stderr-plan.out" 2>&1 || stderr_rc=$?
+  if [ "$stderr_rc" = 0 ] && grep -qxF "command: dune $stderr_want" "$TMP/stderr-plan.out"; then
+    report 0 "capped stderr plan: cap=$stderr_cap $stderr_argv"
+  else
+    report 1 "capped stderr plan: cap=$stderr_cap $stderr_argv" "exit $stderr_rc: $(cat "$TMP/stderr-plan.out")"
+  fi
+done
+# Real Dune buffers a live action's stderr by default. Both cap paths
+# must retain evidence written before the action is killed, not just
+# report the timeout. Use a per-test alias, as diagnostic runs do.
+printf '(rule (alias runtest-stderr) (action (run perl -e "print STDERR qq(CAPPED_STDERR_EVIDENCE\\n); open my $f, q(>), $ENV{STDERR_READY} or die $!; close $f; sleep 60")))\n' >"$stderr_root/t/dune"
+for stderr_cap in run test; do
+  stderr_label="capped stderr: $stderr_cap cap retains the killed action's evidence and timeout verdict"
+  # The watcher itself switches off where ps lacks these columns (Git
+  # Bash). Do not leave its cap-disabled fixture sleeping for a minute.
+  if [ "$stderr_cap" = test ] && ! ps -A -o pid= -o ppid= -o etime= -o comm= 2>/dev/null |
+      awk -v pid="$$" '$1 == pid && NF >= 4 { found=1 } END { exit !found }'; then
+    skip "$stderr_label" "ps cannot list this host's processes for the per-test watcher"
+    continue
+  fi
+  stderr_rc=0
+  stderr_caps=(--cap 8 --test-cap 0)
+  [ "$stderr_cap" != test ] || stderr_caps=(--cap 0 --test-cap 2)
+  (cd "$stderr_root" && PATH=$(dirname "$stderr_real"):$PATH \
+    OCANNL_TOOL_TEST_RUNS=$TMP/stderr-$stderr_cap-runs STDERR_READY=$TMP/stderr-$stderr_cap.ready \
+    tools/test-run.sh run "${stderr_caps[@]}" build @t/runtest-stderr -j 1) \
+    >"$TMP/stderr-$stderr_cap.out" 2>&1 || stderr_rc=$?
+  stderr_dir=$(OCANNL_TOOL_TEST_RUNS=$TMP/stderr-$stderr_cap-runs \
+    "$stderr_root/tools/test-run.sh" paths run last 2>/dev/null)
+  # -x is load-bearing: the watcher's command echo also contains the marker.
+  if [ ! -f "$TMP/stderr-$stderr_cap.ready" ]; then
+    report 1 "$stderr_label" "action never started before the cap (exit $stderr_rc; run $stderr_dir)"
+  elif [ "$stderr_rc" = 142 ] && grep -qxF CAPPED_STDERR_EVIDENCE "$stderr_dir/log" &&
+     grep -qF TIMEOUT "$TMP/stderr-$stderr_cap.out"; then
+    report 0 "$stderr_label"
+  else
+    report 1 "$stderr_label" "exit $stderr_rc; run $stderr_dir; $(tail -n 12 "$stderr_dir/log")"
+  fi
+done
+if [ "$failures" = "$stderr_failures" ] && [ "$skipped" = "$stderr_skipped" ]; then
+  report 0 "$stderr_real_label"
+fi
+}
+harness_leg_run '107: capped single-test builds retain stderr before timeout #options' leg_107
+
 # ---------------------------------------------------------------------------
 # Leg 103: a named test's sibling goldens are named, and never added to the batch
 # ---------------------------------------------------------------------------
@@ -1851,7 +1935,7 @@ harness_leg_run '89: an alias dune does not know is refused before the slot #opt
 # with a golden-less variant only; `s` under slow; `sb/deep` a test only a
 # recursive operand finds.
 leg_103() {
-sib_label="plan, the launch and the digest name a test's sibling goldens, and dune gets the batch as given"
+sib_label="plan, the launch and the digest name a test's sibling goldens, and dune gets the same targets"
 sib_quiet_label="a variant with no golden, one the batch names, and a listing not read say nothing"
 sib_control_label="negative controls: the golden test, its stem's dot and the batch's own names decide the note"
 sib_note=$(sed -n "s/^alias_siblings_label='\(.*\)'$/\1/p" "$SRC")
@@ -1872,7 +1956,9 @@ for probe in "@@sb/runtest-t|@sb/runtest-t: @sb/runtest-t-ll @sb/runtest-t-own" 
   IFS='|' read -r args want <<<"$probe"
   # shellcheck disable=SC2086 # the probe's operands, split on purpose
   sib_probe sib-run run build $args
-  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "build $args" ]; } ||
+  sib_cmd="build --no-buffer $args"
+  case $args in *" "*) sib_cmd="build $args" ;; esac
+  { [ "$argv_rc" = 0 ] && [ "$argv_calls" = "$sib_cmd" ]; } ||
     { sib_detail="run $args: exit $argv_rc; dune calls: ${argv_calls:-<none>}"; break; }
   grep -qxF -- "$sib_note: $want" <<<"$argv_out" ||
     { sib_detail="run $args: the digest does not carry '$want': $argv_out"; break; }
@@ -1948,7 +2034,7 @@ for probe in "with-opts|run --targets-file $tf_dir/list.txt build -j 2|build -j 
              "default|run --targets-file $tf_dir/list.txt|build @x/runtest-a @x/slow-b" \
              "two|start --targets-file $tf_dir/list.txt --targets-file $tf_dir/sub/more.txt build|build @x/runtest-a @x/slow-b @y/train-c" \
              "sep|run --targets-file $tf_dir/sub/more.txt build @w -- @after|build @w @y/train-c -- @after" \
-             "relative|run --targets-file more.txt build|build @y/train-c"; do
+             "relative|run --targets-file more.txt build|build --no-buffer @y/train-c"; do
   IFS='|' read -r tag args want <<<"$probe"
   tf_old=$PWD
   [ "$tag" != relative ] || cd "$tf_dir/sub" || { harness_abandon "cannot enter $tf_dir/sub"; return; }

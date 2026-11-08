@@ -420,6 +420,9 @@ set -u
 
 die() { echo "test-run: $*" >&2; exit 2; }
 
+# One grammar for diagnostic builds, fresh operands and stale-output records.
+per_test_alias_re='^@@?[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$'
+
 normalize_cap() { # [VARIABLE OPTION]: `cap` and `--cap` by default
   local var=${1:-cap} opt=${2:---cap} v
   v=${!var}
@@ -1172,6 +1175,29 @@ alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `
   sort -u "$run_dir/aliases.dirs"
   rm -f "$run_dir/aliases.dirs"
 }
+# Only a simple, single per-test build is a diagnostic run. Broader batches
+# keep each action's output contiguous for the person reading the log. Unknown
+# options fail closed here, without refusing the caller's command. Explicit
+# --no-buffer remains Dune's.
+capped_stderr() { # dune argv; 0 iff we should inject --no-buffer
+  [ "$cap" -gt 0 ] || [ "$test_cap" -gt 0 ] || return 1
+  [ "${1:-}" = build ] || return 1
+  shift
+  local arg target= jobs=
+  for arg do
+    if [ -n "$jobs" ]; then jobs=; continue; fi
+    case $arg in
+      -j) jobs=1 ;;
+      -j[0-9]* | --force | -f) ;;
+      *)
+        [ -z "$target" ] || return 1
+        [[ $arg =~ $per_test_alias_re ]] || return 1
+        target=$arg ;;
+    esac
+  done
+  [ -n "$target" ] && [ -z "$jobs" ]
+}
+
 plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal, alias_siblings
   local arg spec rec d name i n all=
   local specs=() recs=() spec_dirs=() names=() first=() rest=()
@@ -2480,7 +2506,7 @@ fresh_argv() { # operands
         shift ;;
       -j*) jobs=${arg#-j} ;;
       @*)
-        if ! [[ $arg =~ ^@@?([A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*)/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
+        if ! [[ $arg =~ $per_test_alias_re ]]; then
           die "$verb: not a per-test alias: $arg
   name each test as @DIR/runtest-NAME, @DIR/slow-NAME or @DIR/train-NAME (@@ for DIR alone);
   an aggregate (@runtest, @DIR/slow, @DIR/scans) or a directory-less alias is not one -- $other"
@@ -5137,6 +5163,15 @@ case $sub in
       fi
       exit 0
     fi
+    # Stream evidence before the cap can kill an action whose stderr Dune
+    # would otherwise keep until completion. Record the effective command.
+    stderr_stream=
+    if capped_stderr "$@"; then
+      stderr_sub=$1
+      shift
+      set -- "$stderr_sub" --no-buffer "$@"
+      stderr_stream=1
+    fi
     # A fresh run's own build directory (see the header), recorded in its
     # command: the digest's `command:` line names where the run built.
     if [ "$mode" = fresh ]; then
@@ -5211,7 +5246,7 @@ case $sub in
       } >"$run_dir/plan" || { echo "test-run: cannot write the plan in $run_dir"; exit 126; }
       exit 0
     fi
-    if [ -n "$width_cap" ] || [ "$mode" = fresh ]; then
+    if [ -n "$width_cap" ] || [ "$mode" = fresh ] || [ -n "$stderr_stream" ]; then
       { { printf '%q ' "$@"; echo; } >"$run_dir/cmd.tmp" &&
         mv -f "$run_dir/cmd.tmp" "$run_dir/cmd"; } ||
         { echo "test-run: cannot record the capped command in $run_dir"; exit 126; }
@@ -5236,7 +5271,7 @@ case $sub in
     named_tests=()
     for arg do
       [ "$arg" != -- ] || break
-      [[ ! $arg =~ ^@@?[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] ||
+      [[ ! $arg =~ $per_test_alias_re ]] ||
         named_tests+=("$arg")
     done
     # The batch's dune writes its trace into the run directory, for the run's
