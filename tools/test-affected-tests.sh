@@ -2052,6 +2052,7 @@ if harness_leg 'GPU-gated reach'; then
 (test (name gpu) (modules gpu) (libraries gpu_core))
 (test (name shared) (modules shared) (libraries gpu_core))
 (test (name cuda_leg) (modules cuda_leg) (libraries gpu_core))
+(test (name skipped_gpu) (modules skipped_gpu) (libraries gpu_core))
 (test (name cpu_leg) (modules cpu_leg) (libraries gpu_core))
 (test (name leg) (modules leg) (libraries gpu_core))
 (test (name marked) (modules marked)
@@ -2078,9 +2079,10 @@ let () = if has_shared then ignore Gpu_core.used
 ML
   printf 'module Verdict = struct let leg ~when_:_ ~on:_ () = () end\nlet on_cuda = true\nlet () = Verdict.leg ~when_:on_cuda ~on:"runtime" (); ignore Gpu_core.used\n' >"$repo/tests/cuda_leg.ml"
   printf 'module Verdict = struct let leg ~when_:_ ~on:_ () = () end\nlet on_cpu = true\nlet () = Verdict.leg ~when_:on_cpu ~on:"runtime" (); ignore Gpu_core.used\n' >"$repo/tests/cpu_leg.ml"
+  printf 'module Verdict = struct let skipped ~backend:_ _ = () end\nlet backend = "cc"\nlet () = if backend <> "cuda" then Verdict.skipped ~backend "GPU claim" else ignore Gpu_core.used\n' >"$repo/tests/skipped_gpu.ml"
   printf 'let () = ignore Gpu_core.used\n' >"$repo/tests/marked.ml"
   cp "$repo/tests/marked.ml" "$repo/tests/runner.ml"
-  printf '(* on_gpu; binds_hardware_grid; leg "cuda" *)\nlet text = "on_gpu binds_hardware_grid leg cuda"\nlet () = ignore Gpu_core.used\n' >"$repo/tests/plain.ml"
+  printf '(* on_gpu; binds_hardware_grid; leg in_leg skipped "cuda" *)\nlet text = "on_gpu binds_hardware_grid leg in_leg skipped cuda"\nlet () = ignore Gpu_core.used\n' >"$repo/tests/plain.ml"
   printf 'let on_gpu = false\nlet () = if on_gpu then ignore Gpu_core.other\n' >"$repo/tests/unrelated.ml"
   git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
   printf 'let used = 3\nlet other = 2\n' >"$repo/lib/gpu_core.ml"
@@ -2094,15 +2096,15 @@ ML
   affected --gpu-gated --referenced-only HEAD
   gpu_evidence
   expect 'a changed function lists its GPU-gated callers, not CPU or unrelated callers' 0 \
-    @tests/runtest-cuda_leg @tests/runtest-gpu @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule @tests/runtest-shared
+    @tests/runtest-cuda_leg @tests/runtest-gpu @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule @tests/runtest-shared @tests/runtest-skipped_gpu
   affected HEAD --gpu-gated
   expect 'default GPU reach retains the link-only GPU consumer' 0 \
-    @tests/runtest-cuda_leg @tests/runtest-gpu @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule @tests/runtest-shared @tests/runtest-unrelated
+    @tests/runtest-cuda_leg @tests/runtest-gpu @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule @tests/runtest-shared @tests/runtest-skipped_gpu @tests/runtest-unrelated
   # Remove the call, keeping the gate: reach must come from the changed function.
   printf 'let on_gpu = false\nlet () = if on_gpu then ignore Gpu_core.other\n' >"$repo/tests/gpu.ml"
   affected --gpu-gated --referenced-only HEAD -- lib/gpu_core.ml
   expect 'removing the changed function call removes that gated test from the first tier' 0 \
-    @tests/runtest-cuda_leg @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule @tests/runtest-shared
+    @tests/runtest-cuda_leg @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule @tests/runtest-shared @tests/runtest-skipped_gpu
   # Undo only the classification mechanism: the positive oracle must now fail.
   cp "$repo/tools/affected-tests.sh" "$TMP/gpu-reader"
   sed 's/if ($gpu_gated) {/if (0) {/' "$TMP/gpu-reader" >"$repo/tools/affected-tests.sh"

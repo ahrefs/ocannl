@@ -16,7 +16,8 @@
 # `--` (after `--since BASE`, a revision, or the `--files` paths too).
 #
 # `--gpu-gated` filters the ranked reach to aliases whose owner sources name
-# binds_hardware_grid or on_gpu, or name leg alongside on_cuda/on_hip/on_metal
+# binds_hardware_grid or on_gpu, or name leg/in_leg/skipped alongside
+# on_cuda/on_hip/on_metal
 # or a literal GPU backend, or whose owner/rule has a stanza-local GPU
 # ocannl-backend marker.
 # Comments are ignored; this reads whole files, not scopes or gate expressions.
@@ -2882,8 +2883,8 @@ sub gpu_source {
   return $gpu_source_cache{$f} =
     $ids =~ /\bbinds_hardware_grid\b/ ? "$f names binds_hardware_grid"
     : $ids =~ /\bon_gpu\b/ ? "$f names on_gpu"
-    : $ids =~ /\bleg\b/ && ($ids =~ /\bon_(?:cuda|hip|metal)\b/ || $s =~ /"(?:cuda|hip|metal)"/)
-      ? "$f declares a leg beside a GPU backend" : "";
+    : $ids =~ /\b(?:leg|in_leg|skipped)\b/ && ($ids =~ /\bon_(?:cuda|hip|metal)\b/ || $s =~ /"(?:cuda|hip|metal)"/)
+      ? "$f declares a gated claim beside a GPU backend" : "";
 }
 if ($gpu_gated) {
   for my $a (grep { !$hidden{$_->{name}} && $tier{$_->{name}} } @al) {
