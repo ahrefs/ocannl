@@ -17,3 +17,4 @@ tools/test-test-run-digest.sh	repeat --direct: one build, then each test's own r
 tools/test-test-run-digest.sh	negative control: with the replay cut out, dune's --force alone runs no target-producing test again (real dune)
 tools/test-test-run-digest.sh	negative control: with the replay's inherited descriptors closed, a session-escaped descendant goes unseen (real dune)
 tools/test-test-run-digest.sh	a real type error is BUILD FAILED naming the stale output; a red test alone stays FAIL (real dune)
+tools/test-test-run-options.sh	capped stderr: real-Dune plans and cap kills keep the diagnostic line

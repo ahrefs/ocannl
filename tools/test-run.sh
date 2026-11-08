@@ -420,6 +420,9 @@ set -u
 
 die() { echo "test-run: $*" >&2; exit 2; }
 
+# One grammar for diagnostic builds, fresh operands and stale-output records.
+per_test_alias_re='^@@?[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$'
+
 normalize_cap() { # [VARIABLE OPTION]: `cap` and `--cap` by default
   local var=${1:-cap} opt=${2:---cap} v
   v=${!var}
@@ -1173,9 +1176,9 @@ alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `
   rm -f "$run_dir/aliases.dirs"
 }
 # Only a simple, single per-test build is a diagnostic run. Broader batches
-# keep Dune's action-grouped output: concurrent stderr can interleave (including
-# the location/diff lines the digest reads). Unknown options fail closed here,
-# without refusing the caller's command. Explicit --no-buffer remains Dune's.
+# keep each action's output contiguous for the person reading the log. Unknown
+# options fail closed here, without refusing the caller's command. Explicit
+# --no-buffer remains Dune's.
 capped_stderr() { # dune argv; 0 iff we should inject --no-buffer
   [ "$cap" -gt 0 ] || [ "$test_cap" -gt 0 ] || return 1
   [ "${1:-}" = build ] || return 1
@@ -1188,7 +1191,7 @@ capped_stderr() { # dune argv; 0 iff we should inject --no-buffer
       -j[0-9]* | --force | -f) ;;
       *)
         [ -z "$target" ] || return 1
-        [[ $arg =~ ^@@?[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || return 1
+        [[ $arg =~ $per_test_alias_re ]] || return 1
         target=$arg ;;
     esac
   done
@@ -2503,7 +2506,7 @@ fresh_argv() { # operands
         shift ;;
       -j*) jobs=${arg#-j} ;;
       @*)
-        if ! [[ $arg =~ ^@@?([A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*)/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]; then
+        if ! [[ $arg =~ $per_test_alias_re ]]; then
           die "$verb: not a per-test alias: $arg
   name each test as @DIR/runtest-NAME, @DIR/slow-NAME or @DIR/train-NAME (@@ for DIR alone);
   an aggregate (@runtest, @DIR/slow, @DIR/scans) or a directory-less alias is not one -- $other"
@@ -5268,7 +5271,7 @@ case $sub in
     named_tests=()
     for arg do
       [ "$arg" != -- ] || break
-      [[ ! $arg =~ ^@@?[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] ||
+      [[ ! $arg =~ $per_test_alias_re ]] ||
         named_tests+=("$arg")
     done
     # The batch's dune writes its trace into the run directory, for the run's
