@@ -2,7 +2,8 @@
 # Evaluate ci.yml's actual matrix expressions and execute its commit guard, and
 # read both workflows' triggers: the full matrix per PR and never on a master
 # push, ci-env.yml on both (gh-ocannl-1816).
-# Requires only python3 and bash; run on the Ubuntu main leg before opam setup.
+# Also run the three depext-listing steps against hermetic opam/dpkg stubs.
+# Requires only python3 and bash; run in CI's shell harness tier before opam setup.
 # ocannl-harness: standalone
 # Usage: test/operations/ci_matrix.sh [--keep|--help]
 set -eu
@@ -449,6 +450,160 @@ for event in ('pull_request', 'schedule'):
     # The oracle discriminates: a lost shard, a member it does not carry.
     assert not partitions(shards[:-1], tier) and not partitions(shards, tier | {'@@x/train-ghost'})
 print('PASS the train shards partition the tier the train aggregates define, every shard nonempty')
+
+# Read named steps and literal run blocks from the workflows' current YAML
+# dialect. This is deliberately not a YAML parser: fail on a missing/repeated
+# name, unsupported scalar or indentation rather than execute a partial body.
+def workflow_step(text, name):
+    matches = list(re.finditer(r'^( +)- name: ' + re.escape(name) + r'\n', text, re.M))
+    assert len(matches) == 1, 'step missing or repeated: ' + name
+    match = matches[0]
+    indent = len(match[1])
+    lines = list(itertools.takewhile(
+        lambda line: not line.strip() or len(line) - len(line.lstrip()) > indent,
+        text[match.end():].splitlines()))
+    return '\n'.join(lines) + '\n'
+
+
+def workflow_script(step):
+    matches = list(re.finditer(r'^( +)run: \|\n', step, re.M))
+    assert len(matches) == 1, 'step needs one literal run: | block'
+    match = matches[0]
+    indent = len(match[1]) + 2
+    lines = list(itertools.takewhile(
+        lambda line: not line.strip() or line.startswith(' ' * indent),
+        step[match.end():].splitlines()))
+    assert any(line.strip() for line in lines), 'empty run block'
+    return '\n'.join(line[indent:] for line in lines).rstrip('\n') + '\n'
+
+
+# Hermetic depext listing (gh-ocannl-1917): run all three actual scripts, with
+# only their external commands in PATH, no opam switch or Debian host required.
+import shutil
+
+workflows = root / '.github/workflows'
+depext_steps = {
+    name: workflow_step((workflows / name).read_text(),
+                        "List opam's missing system dependencies" + suffix)
+    for name, suffix in (('ci.yml', ' (Linux)'), ('gh-pages-api.yml', ''), ('ci-env.yml', ''))
+}
+depext_scripts = {name: workflow_script(step) for name, step in depext_steps.items()}
+
+
+def identical_depexts(scripts):
+    # Only the resolver's flags may differ; don't erase a flag elsewhere in
+    # the script (or any other text) and accidentally hide semantic drift.
+    normalized = []
+    for name, script in scripts.items():
+        flags = ' --with-test --with-doc' if name == 'ci.yml' else ' --with-test'
+        pattern = r'^(    --resolve="\$request")' + re.escape(flags) + r'(\); then)$'
+        body, count = re.subn(pattern, r'\1\2', script, flags=re.M)
+        assert count == 1, name + ': resolver flags moved or changed'
+        normalized.append(body)
+    assert len(set(normalized)) == 1, 'depext step copies drifted apart'
+
+
+identical_depexts(depext_scripts)
+mutant = dict(depext_scripts)
+mutant['ci-env.yml'] += 'echo drift\n'
+try:
+    identical_depexts(mutant)
+except AssertionError as error:
+    assert 'drifted apart' in str(error), error
+    print('PASS rejected mutant: one depext copy drifts')
+else:
+    raise AssertionError('accepted depext copy drift')
+
+
+depext_root = Path(sys.argv[2]) / 'depexts'
+depext_bin = depext_root / 'bin'
+depext_bin.mkdir(parents=True)
+for command in ('sed', 'paste', 'awk'):
+    executable = shutil.which(command)
+    assert executable, command + ' missing'
+    (depext_bin / command).symlink_to(executable)
+for command in ('opam', 'dpkg-query'):
+    stub = depext_bin / command
+    stub.write_text('#!' + sys.executable + '\n' + '''import json, os, sys
+from pathlib import Path
+name = Path(sys.argv[0]).name
+with open(os.environ['CALLS'], 'a') as log:
+    log.write(json.dumps([name] + sys.argv[1:]) + '\\n')
+sys.stdout.write(os.environ['LISTED' if name == 'opam' else 'PRESENT'])
+sys.exit(int(os.environ['OPAM_RC' if name == 'opam' else 'DPKG_RC']))
+''')
+    stub.chmod(0o755)
+for package in ('alpha', 'beta'):
+    (depext_root / (package + '.opam')).write_text('')
+
+
+def depext_case(name, script, case, listed, present, expected, opam_rc=0, dpkg_rc=0):
+    output = depext_root / 'output'
+    calls = depext_root / 'calls'
+    output.write_text('')
+    calls.write_text('')
+    # GitHub's implicit bash uses -e; explicit shell: bash adds pipefail.
+    step = depext_steps[name]
+    shells = re.findall(r'^ +shell: (.+)$', step, re.M)
+    assert shells in ([], ['bash']), name + ': unsupported step shell'
+    options = ['-eo', 'pipefail'] if shells else ['-e']
+    env = dict(PATH=str(depext_bin), HOME=str(depext_root), LANG='C',
+               GITHUB_OUTPUT=str(output), CALLS=str(calls), LISTED=listed,
+               PRESENT=present, OPAM_RC=str(opam_rc), DPKG_RC=str(dpkg_rc))
+    run = subprocess.run(['/bin/bash'] + options + ['-u', '-c', script], cwd=depext_root,
+                         env=env, capture_output=True, text=True, timeout=10)
+    context = '%s %s: %s %s' % (name, case, run.stdout, run.stderr)
+    assert run.returncode == 0, context
+    assert output.read_text() == expected, context + ' output=' + repr(output.read_text())
+    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+    flags = ['--with-test', '--with-doc'] if name == 'ci.yml' else ['--with-test']
+    want = [['opam', '--cli=2.1', 'list', '--safe', '--color=never', '--external',
+             '--resolve=alpha,beta'] + flags]
+    if not opam_rc:
+        want.append(['dpkg-query', '-W', '-f=${db:Status-Abbrev}|${Package}|${Provides}\\n'])
+    assert invocations == want, context + ' calls=' + repr(invocations)
+    warning = ('could not list opam\'s system dependencies' if opam_rc else
+               'could not list the installed packages' if dpkg_rc else '')
+    if warning:
+        assert '::warning::' + warning in run.stdout, context
+    else:
+        assert '::warning::' not in run.stdout, context
+
+
+def depext_cases(name, script):
+    for case, listed, present, expected, opam_rc, dpkg_rc in (
+        ('installed', 'libfoo\nlibbar\n', 'ii |libfoo|\nii |libbar|\n', 'packages=\n', 0, 0),
+        ('held', 'libheld', 'hi |libheld|\n', 'packages=\n', 0, 0),
+        ('provided', 'pkg-config alias other',
+         'ii |pkgconf|pkg-config (= 1.8), alias (>= 2), other\n', 'packages=\n', 0, 0),
+        ('removed', 'gone virtual-gone unpacked absent',
+         'rc |gone|virtual-gone\niU |unpacked|\n',
+         'packages=gone virtual-gone unpacked absent\n', 0, 0),
+        ('exact names and order', 'foo foobar bar', 'ii |foobar|\n', 'packages=foo bar\n', 0, 0),
+        ('empty lists', '', '', 'packages=\n', 0, 0),
+        ('empty installed set', 'missing', '', 'packages=missing\n', 0, 0),
+        ('opam failure with partial output', 'partial', '', '', 17, 0),
+        ('dpkg failure with partial output', 'libfoo absent', 'ii |libfoo|\n', '', 0, 23),
+    ):
+        depext_case(name, script, case, listed, present, expected, opam_rc, dpkg_rc)
+
+
+for name, script in depext_scripts.items():
+    depext_cases(name, script)
+    print('PASS %s depexts: installed, held, provided, removed, exact names, empty sets, failures' % name)
+    # Undo the old provides fix in every copy. The same behavioral oracle must
+    # reject it even if all copies drift together, defeating the identity check.
+    marker = 'for (i = 1; i <= n; i++)'
+    assert script.count(marker) == 1, name + ': provides loop moved'
+    broken = script.replace(marker, 'for (i = 1; i <= 0; i++)')
+    try:
+        depext_cases(name, broken)
+    except AssertionError as error:
+        assert name + ' provided:' in str(error), error
+        print('PASS rejected mutant: %s ignores provided package names' % name)
+    else:
+        raise AssertionError('accepted broken provides case: ' + name)
+print('PASS the three depext scripts are identical apart from their resolver flags')
 
 # The main shards' weigh step prints what `tools/ci-shard.sh merge-weights` reads back from a run's
 # log (gh-ocannl-1464): run the step's own script for each shard over a fixture trace, beside the
