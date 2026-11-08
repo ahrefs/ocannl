@@ -143,13 +143,13 @@ def interrupt_once_published(case, published, within=120):
     case.addCleanup(stop.set)
 
 
-def ungated_evidence_fixtures(source, filename="<source>"):
-    """Find published-pid tests with short caps/alarms and subsequent evidence checks.
+def evidence_fixture_sites(source, filename="<source>"):
+    """Return (in-scope sites, ungated sites) for capped published-pid evidence tests.
 
     This is a structural guard, not a control-flow proof: assertions (including checkpoint/log
     checks) and file reads after a cap site count as evidence reads. Literal numeric timeout=
-    arguments and mock.patch.object(..., "*_TIMEOUT_S", number) supply caps; setitimer supplies
-    alarms. Embedded driver text also exposes literal timeout= caps and setitimer calls.
+    arguments and mock.patch.object(..., "*_TIMEOUT_S", number) supply caps; setitimer/alarm supply
+    alarms. Embedded driver text also exposes literal timeout= caps and setitimer/alarm calls.
     Helpers may be direct, in embedded child source, or reached through a same-class
     wrapper. A wrapper forwarding a parameter to cap_counted_from requires that argument at the
     call site. Arbitrary aliases, computed caps and ordering/dominance are outside this dialect.
@@ -173,8 +173,17 @@ def ungated_evidence_fixtures(source, filename="<source>"):
         return [c for c in calls(node)
                 if name(c) in ("cap_counted_from", "interrupt_once_published")]
 
+    def published_argument(helper):
+        position = 1 if name(helper) == "interrupt_once_published" else 0
+        if len(helper.args) > position:
+            return helper.args[position]
+        return next((kw.value for kw in helper.keywords if kw.arg == "published"), None)
+
+    def present(argument):
+        return argument is not None and not (isinstance(argument, ast.Constant) and argument.value is None)
+
     def guarded(node, methods):
-        if helper_calls(node):
+        if any(present(published_argument(helper)) for helper in helper_calls(node)):
             return True
         for call in calls(node):
             if not (isinstance(call.func, ast.Attribute)
@@ -186,13 +195,13 @@ def ungated_evidence_fixtures(source, filename="<source>"):
                 continue
             parameters = {a.arg for a in (*wrapper.args.args, *wrapper.args.kwonlyargs)}
             for helper in helper_calls(wrapper):
-                argument = helper.args[-1] if name(helper) == "interrupt_once_published" else helper.args[0]
+                argument = published_argument(helper)
                 if isinstance(argument, ast.Name) and argument.id in parameters:
                     supplied = {kw.arg: kw.value for kw in call.keywords}
                     positional = [a.arg for a in wrapper.args.args][1:]
                     supplied.update(zip(positional, call.args))
                     value = supplied.get(argument.id)
-                    if value is not None and not (isinstance(value, ast.Constant) and value.value is None):
+                    if present(value):
                         return True
             if re.search(r"\b(?:cap_counted_from|interrupt_once_published)\s*\(", embedded(wrapper)):
                 return True
@@ -203,7 +212,7 @@ def ungated_evidence_fixtures(source, filename="<source>"):
                 and 0 < value.value < 10)
 
     def cap_site(call):
-        if name(call) in ("setitimer", "interrupt_once_published"):
+        if name(call) in ("setitimer", "alarm", "interrupt_once_published"):
             return True
         if any(kw.arg == "timeout" and short(kw.value) for kw in call.keywords):
             return True
@@ -212,7 +221,7 @@ def ungated_evidence_fixtures(source, filename="<source>"):
                 and isinstance(call.args[1].value, str)
                 and call.args[1].value.endswith("_TIMEOUT_S") and short(call.args[2]))
 
-    offenders = []
+    in_scope, offenders = [], []
     for case in ast.walk(tree):
         if not isinstance(case, (ast.ClassDef, ast.Module)):
             continue
@@ -227,7 +236,7 @@ def ungated_evidence_fixtures(source, filename="<source>"):
             for literal in ast.walk(method):
                 if not (isinstance(literal, ast.Constant) and isinstance(literal.value, str)):
                     continue
-                if (re.search(r"\bsetitimer\s*\(", literal.value)
+                if (re.search(r"\b(?:setitimer|alarm)\s*\(", literal.value)
                         or any(0 < float(n) < 10 for n in re.findall(
                             r"\btimeout\s*=\s*(\d+(?:\.\d*)?)", literal.value))):
                     caps.append(literal.lineno)
@@ -235,10 +244,17 @@ def ungated_evidence_fixtures(source, filename="<source>"):
                 continue
             reads = [c for c in sites if c.lineno > min(caps)
                      and (name(c).startswith("assert") or name(c) in ("read_text", "read_bytes"))]
-            if reads and not guarded(method, methods):
+            if reads:
                 owner = case.name if isinstance(case, ast.ClassDef) else "<module>"
-                offenders.append(f"{owner}.{method.name}:{method.lineno}")
-    return offenders
+                site = f"{owner}.{method.name}:{method.lineno}"
+                in_scope.append(site)
+                if not guarded(method, methods):
+                    offenders.append(site)
+    return in_scope, offenders
+
+
+def ungated_evidence_fixtures(source, filename="<source>"):
+    return evidence_fixture_sites(source, filename)[1]
 
 
 # Short read-only probes a driver may run directly: they finish in moments and fork no workers of
@@ -860,6 +876,11 @@ class CellGroupTest(unittest.TestCase):
             self.assertEqual(ungated_evidence_fixtures(fixture.replace("timeout=0.5", cap)), [])
         fixed = fixture.replace("        result =", "        with cap_counted_from(pidfile):\n            result =")
         self.assertEqual(ungated_evidence_fixtures(fixed), [])
+        self.assertTrue(ungated_evidence_fixtures(fixed.replace("(pidfile)", "(None)")))
+        self.assertEqual(ungated_evidence_fixtures(fixed.replace(
+            "(pidfile)", "(published=pidfile)")), [])
+        self.assertTrue(ungated_evidence_fixtures(fixed.replace(
+            "(pidfile)", "(published=None)")))
         self.assertTrue(ungated_evidence_fixtures("\n".join(
             line[4:] for line in fixture.splitlines()[1:])))
         embedded = fixture.replace("result = self.run_cell(cell, timeout=0.5)",
@@ -871,6 +892,10 @@ class CellGroupTest(unittest.TestCase):
         alarm = fixture.replace("result = self.run_cell(cell, timeout=0.5)",
                                 "signal.setitimer(signal.ITIMER_REAL, 0.5)\n        result = run(cell)")
         self.assertTrue(ungated_evidence_fixtures(alarm))
+        self.assertTrue(ungated_evidence_fixtures(alarm.replace(
+            "setitimer(signal.ITIMER_REAL, 0.5)", "alarm(1)")))
+        self.assertTrue(ungated_evidence_fixtures(embedded.replace(
+            "run(cell, timeout=0.5)", "signal.alarm(1); run(cell)")))
         self.assertEqual(ungated_evidence_fixtures(alarm.replace(
             "        signal.setitimer(signal.ITIMER_REAL, 0.5)",
             "        interrupt_once_published(self, pidfile)")), [])
@@ -883,6 +908,13 @@ class CellGroupTest(unittest.TestCase):
             return run(cell, timeout=timeout)
 """
         self.assertTrue(ungated_evidence_fixtures(fixture + wrapper))
+        for helper in ("cap_counted_from(published=started)",
+                       "interrupt_once_published(case=self, published=started)"):
+            keyword_wrapper = wrapper.replace("cap_counted_from(started)", helper)
+            self.assertEqual(ungated_evidence_fixtures(fixture.replace(
+                "timeout=0.5", "timeout=0.5, started=pidfile") + keyword_wrapper), [])
+            self.assertTrue(ungated_evidence_fixtures(fixture.replace(
+                "timeout=0.5", "timeout=0.5, started=None") + keyword_wrapper))
         self.assertEqual(ungated_evidence_fixtures(fixture.replace(
             "timeout=0.5", "timeout=0.5, started=pidfile") + wrapper), [])
         self.assertEqual(ungated_evidence_fixtures(fixture.replace(
@@ -894,12 +926,18 @@ class CellGroupTest(unittest.TestCase):
         self.assertIn(HERE / "test" / "test_cell_group.py", sources)
         # Removing the gates from the actual corpus must expose fixtures too, so this census
         # cannot pass because its predicates stopped reaching the current fixture dialect.
-        mutant_hits = [site for path in sources for site in ungated_evidence_fixtures(
-            path.read_text().replace("cap_counted_from", "ungated_cap")
-            .replace("interrupt_once_published", "setitimer"), str(path))]
-        self.assertTrue(mutant_hits, "removing publication gates must expose real fixtures")
-        offenders = [f"{path.relative_to(HERE)}:{site}" for path in sources
-                     for site in ungated_evidence_fixtures(path.read_text(), str(path))]
+        in_scope, mutant_hits, offenders = set(), set(), []
+        for path in sources:
+            text = path.read_text()
+            sites, ungated = evidence_fixture_sites(text, str(path))
+            in_scope.update((str(path.relative_to(HERE)), site) for site in sites)
+            mutant = text.replace("cap_counted_from", "ungated_cap").replace(
+                "interrupt_once_published", "setitimer")
+            mutant_hits.update((str(path.relative_to(HERE)), site)
+                               for site in ungated_evidence_fixtures(mutant, str(path)))
+            offenders.extend(f"{path.relative_to(HERE)}:{site}" for site in ungated)
+        self.assertTrue(in_scope, "the corpus must contain capped evidence fixtures")
+        self.assertEqual(mutant_hits, in_scope, "removing gates must expose every in-scope fixture")
         self.assertEqual(offenders, [], "capped evidence fixtures need cap_counted_from / "
                          "interrupt_once_published (or a forwarding wrapper)")
 
