@@ -851,6 +851,15 @@ files.
   a path some visit runs. Pins: `virtual_chain_fanin` phases 1c, 1d (the arm chosen after
   expansion) and 2b/2c (two-sided on the running backend), `access_fold`, `backend_facts`, and
   `op_table_compile` against the emitted kernels.
+- **Equal per-setter fan-in maxima union their contributors** (gh-ocannl-2047). Keeping one tied
+  set made a consumer's charge depend on which independent setter was written last: `{x,y}` and
+  `{y,z}`, followed by a consumer also loading `x` and `w`, charged either 3 or 4. Union the tied
+  maxima conservatively, tracking the maximum individual cardinality separately from the union's
+  size: otherwise a third tied setter can be dropped or a genuinely wider setter mistaken for a
+  tie. Narrower setters remain excluded, so this is still a heuristic rather than a bound on every
+  downstream union. `virtual_chain_fanin` phase 8 commutes disjoint slice setters (two ties, three
+  ties, and unequal widths), pins the producer and consumer charges and cap decisions, and executes
+  each order against both a cell-varying reference and a materialized reading.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
   reads activations that read the parameter), and the cycle guard memoizes whatever it computed under

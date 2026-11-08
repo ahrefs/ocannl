@@ -1916,6 +1916,75 @@ let phase7 () =
   p "cycle with an exempt member: executes the reference"
     (runs ~name:"vcf_cycle_exempt" o (seed, read, expected))
 
+(* === Phase 8: tied setter maxima commute (gh-ocannl-2047) === *)
+
+let phase8 () =
+  let saved_cap = LL.virtualize_settings.max_inline_fanin in
+  let check label groups ~cap ~expected_fanin =
+    LL.virtualize_settings.max_inline_fanin <- cap;
+    let cells = dim * List.length groups in
+    let mk = node_factory ~first_id:8500 ~dims:[| cells |] () in
+    let ws = Array.init 5 ~f:(fun k -> mk (Printf.sprintf "tw%d" k)) in
+    Array.iter ws ~f:materialize;
+    let a = mk "ta" and d = mk "td" and out = mk "tout" in
+    materialize out;
+    let sum idx ks =
+      List.fold ks ~init:(Ll_test.c 0.) ~f:(fun acc k -> add acc (get ws.(k) [| idx |]))
+    in
+    (* Disjoint slices: commuting the setters changes neither cell values nor the dependency graph.
+       The consumer overlaps the first maximum and adds a fresh input. *)
+    let setters =
+      List.mapi groups ~f:(fun part ks ->
+          let i = sym () in
+          let idx = aff [ (1, i) ] (part * dim) in
+          loop_n i dim (set a [| idx |] (sum idx ks)))
+    in
+    let j = sym () and k = sym () in
+    let consumer =
+      loop_n j cells (set d [| iter j |] (add (get a [| iter j |]) (sum (iter j) [ 0; 4 ])))
+    in
+    let output = loop_n k cells (set out [| iter k |] (get d [| iter k |])) in
+    let vals w = Array.init cells ~f:(fun i -> Float.of_int ((100 * (w + 1)) + i + 1)) in
+    let seed = Array.to_list (Array.mapi ws ~f:(fun w tn -> (tn, vals w))) in
+    let expected =
+      [
+        Array.init cells ~f:(fun i ->
+            List.fold
+              (List.nth_exn groups (i / dim) @ [ 0; 4 ])
+              ~init:0.
+              ~f:(fun acc w -> acc +. (vals w).(i)));
+      ]
+    in
+    List.iter
+      [ ("forward", setters); ("reverse", List.rev setters) ]
+      ~f:(fun (order, setters) ->
+        let name = "vcf_ties_" ^ label ^ "_" ^ order in
+        let llc = List.reduce_exn ~f:seq (setters @ [ consumer; output ]) in
+        let o = optimize ~name llc in
+        let fanin tn = (Hashtbl.find_exn o.traced_store tn).LL.inline_fanin in
+        let prefix = "setter maxima, " ^ label ^ " " ^ order ^ ": " in
+        p
+          (prefix ^ "producer has the union of the widest sets")
+          (fanin a = expected_fanin && known_virtual o a);
+        p
+          (prefix ^ "consumer crosses the fan-in cap")
+          (fanin d = cap + 1
+          && Option.equal Tn.equal_provenance (rejection_code o d) (Some Tn.Inline_fanin_cap));
+        let got = execute ~name o ~seed ~read:[ out ] in
+        let mat_name = name ^ "_mat" in
+        let mat = optimize ~materialized:[ a; d ] ~name:mat_name llc in
+        let got_mat = execute ~name:mat_name mat ~seed ~read:[ out ] in
+        p
+          (prefix ^ "execution matches the reference and materialized reading")
+          (same got expected && same got got_mat))
+  in
+  check "two" [ [ 0; 1 ]; [ 1; 2 ] ] ~cap:3 ~expected_fanin:3;
+  (* After two ties the union is larger than either charge: compare the next charge with the maximum
+     SIZE, not that union's size. A later wider charge must replace all narrower ties. *)
+  check "three" [ [ 0; 1 ]; [ 1; 2 ]; [ 2; 3 ] ] ~cap:4 ~expected_fanin:4;
+  check "unequal" [ [ 0 ]; [ 1 ]; [ 2; 3 ] ] ~cap:3 ~expected_fanin:2;
+  LL.virtualize_settings.max_inline_fanin <- saved_cap
+
 let () =
   phase1 ();
   phase1b ();
@@ -1928,4 +1997,5 @@ let () =
   phase4 ();
   phase5 ();
   phase6 ();
-  phase7 ()
+  phase7 ();
+  phase8 ()
