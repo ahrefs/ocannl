@@ -528,12 +528,13 @@
 # switch, on across the test suite: off by default, no effect on behavior beyond the check.
 #debug_check_forward_root_owners=false
 
-# gh-ocannl-2062: force a full major GC at each differentiable Tensor.op backprop-root gate,
-# before testing operand rootness and restoring reclaimed consumers' leaves. Debug stress only:
+# gh-ocannl-2062: force a full major GC when a differentiable Tensor.op can restore a reclaimed
+# consumer's leaves, immediately before the hand-back scan. Debug stress only:
 # exposes accidental dependence on a dropped consumer staying uncollected. Hold a consumer past
 # construction to retain its zeroing ownership. Expensive, off by default; changes are captured
 # by the lowered code digest.
-# Run the focused CPU checks with dune build @test/operations/gc-stress-backprop; any test alias
+# The cc-gc-backprop sweep unit stresses all of @runtest. The focused CPU regression is
+# dune build @test/operations/gc-stress-backprop; any test alias
 # can also be stressed with OCANNL_DEBUG_GC_BACKPROP_ROOTS=true.
 #debug_gc_backprop_roots=false
 

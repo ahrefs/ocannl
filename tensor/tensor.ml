@@ -1212,12 +1212,12 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
        consumer gives a leaf back moves with the GC, and with the nested ops [grad_asn] builds, so a
        second read of the map could embed a gradient whose zeroing the first read skipped. The scan
        runs only for an operand it can change. *)
-    (* Settle dead consumers before even testing rootness: reading an ephemeron first can keep
-       its contents alive through the collection. The snapshot below then pins the chosen
-       entries across subsequent collections (gh-ocannl-2062). *)
-    if Lazy.force debug_gc_backprop_roots then Stdlib.Gc.full_major ();
-    if List.exists ordered_ts ~f:(fun ti -> Weak_root.is_leaf ti && not (in_bprop_roots ti)) then
-      hand_back_reclaimed ();
+    if List.exists ordered_ts ~f:(fun ti -> Weak_root.is_leaf ti && not (in_bprop_roots ti)) then (
+      (* The hand-back is the read that moves with the GC (gh-ocannl-2062). Stress only this branch:
+         the operand entries checked above are live, and only pruning dead consumers can restore a
+         missing leaf. *)
+      if Lazy.force debug_gc_backprop_roots then Stdlib.Gc.full_major ();
+      hand_back_reclaimed ());
     let bck_roots =
       List.filter_map ordered_ts ~f:(fun ti ->
           Option.map (Weak_root.find session_state.backprop_roots ti.value.id) ~f:(fun e ->

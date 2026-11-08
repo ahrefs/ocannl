@@ -340,7 +340,12 @@ let config_key_classification : (config_key_class * string * string list) list =
       [ "fp_contract"; "fp_reassociate"; "fp_finite_math" ] );
     ( Code_borne,
       "it changes the assignments the front end builds, hence the code they lower to",
-      [ "default_prec"; "default_prng_variant"; "limit_constant_fill_size" ] );
+      [
+        "default_prec";
+        "default_prng_variant";
+        "limit_constant_fill_size";
+        "debug_gc_backprop_roots";
+      ] );
     ( Code_borne,
       "it decides a tensor node's placement class, which the canonical digest carries: identical \
        code over [Local] scratch and over an [On_device] buffer generates different kernels",
@@ -356,10 +361,6 @@ let config_key_classification : (config_key_class * string * string list) list =
       "it decides the worker pool timings execute on, and CPU crowns do not transfer across pools \
        (gh-ocannl-530)",
       [ "cc_pool_core_class" ] );
-    ( Code_borne,
-      "a frontend GC stress switch (gh-ocannl-2062): reclaimed leaves change the zeroing embedded \
-       at construction, fully captured by the lowered code digest",
-      [ "debug_gc_backprop_roots" ] );
     ( Keyed "codegen",
       "a cc-backend codegen knob: rendering or compiling a kernel reads it, after the lowered code \
        the digest names",

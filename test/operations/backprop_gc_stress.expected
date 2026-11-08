@@ -1,0 +1,3 @@
+the GC stress mode is enabled: true
+the next consumer owns the reclaimed leaf's gradient reset: true
+the gradient is 2 w: true

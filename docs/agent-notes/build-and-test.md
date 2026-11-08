@@ -4694,13 +4694,16 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   each GPU lane addressed.
 - A unit whose backend field is not a backend is a configuration VARIANT (gh-ocannl-1778), keyed by
   its own name in logs, history, unit state, `--only` and the run record, and mapped back to its
-  backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). Two so
-  far, both after cc and metal in the local lane. `cc-outlined` runs `@runtest` on cc with
+  backend wherever the backend decides (`unit_backend`, `unit_dune_env`, `unit_suite`). Three so
+  far, all after cc and metal in the local lane. `cc-outlined` runs `@runtest` on cc with
   `OCANNL_CC_KERNEL_PART_WEIGHT=1 OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0`: every kernel large enough
   outlined, so a kernel-text reader added after the per-test `-outlined` reruns is still checked
   against outlined text. A VALUE golden that moves there is a finding (outlining runs the same
   statements in order); a golden holding kernel text moves by design. The two keys are in
   the ambient record, so the local cc unit and this one each rebuild the other's test runs.
+  `cc-gc-backprop` (gh-ocannl-2062) runs all of `@runtest` on cc with
+  `OCANNL_DEBUG_GC_BACKPROP_ROOTS=true`, exposing accidental dependence on a dropped consumer
+  remaining uncollected at the backprop hand-back gate.
   `cc-oracle-widen` (gh-ocannl-1964) builds one alias on cc,
   `@test/operations/slow-virtual_inliner_oracle-widen`: the inliner oracle's full cross of every
   write with every read on every shape (9 million programs, 10 to 16 minutes on one core), which
@@ -4710,8 +4713,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   change reaching the inliner, and on Sunday the cc unit's `@slow` builds it first (the variant then
   finds it built: same worktree, same environment). A variant takes no `@train` or `@slow` and is
   left out of the skip aggregation, which covers backends. The sweep harness pins each variant's
-  one dune call (`sweep_harness.sh`, the `gh-ocannl-1778` and `gh-ocannl-1964` cases) and the run
-  record's backend map.
+  one dune call (`sweep_harness.sh`, the `gh-ocannl-1778`, `gh-ocannl-2062` and `gh-ocannl-1964`
+  cases) and the run record's backend map.
   Each machine's units form a lane — sequential within the box, which shares one worktree, lock and
   device, concurrent with the other boxes' lanes (gh-ocannl-976) — so wall-clock is the longest lane
   (the local one, metal's suite), and the remote units start while the routine's freshly woken WSL

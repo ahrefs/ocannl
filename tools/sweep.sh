@@ -39,13 +39,14 @@
 # boxes do not wait for each other.
 #
 # Usage:
-#   tools/sweep.sh                     # cc + metal + cc-outlined + cc-oracle-widen locally; cuda on
-#                                      # rog-nv, hip + multidev_cc on minix, and hip again on tuf
+#   tools/sweep.sh                     # cc + metal and their variants locally; cuda on rog-nv,
+#                                      # hip + multidev_cc on minix, and hip again on tuf
 #                                      # (discrete memory), if up
 #   tools/sweep.sh --slow             # also `dune build @slow`
 #   tools/sweep.sh --force             # cold rebuild and re-execute every test alias
 #   tools/sweep.sh --only metal        # one backend (repeatable)
 #   tools/sweep.sh --only cc-outlined  # the cc suite with outlining forced (unit_backend)
+#   tools/sweep.sh --only cc-gc-backprop  # the cc suite with backprop-root GC stress
 #   tools/sweep.sh --only cc-oracle-widen  # virtual_inliner_oracle --widen on cc (unit_suite)
 #   tools/sweep.sh --target test/einsum  # narrower dune target, for smoke-testing
 #   tools/sweep.sh --ref origin/master   # what to test (default: origin/master)
@@ -462,14 +463,15 @@ UNITS=(
   "minix:multidev_cc:@minix"
   "tuf:hip:@tuf"
   "$LOCAL_BOX:cc-outlined:"
+  "$LOCAL_BOX:cc-gc-backprop:"
   "$LOCAL_BOX:cc-oracle-widen:"
 )
 
 # A unit whose backend field is not a backend is a backend run under extra configuration, or of a
 # single alias, keyed by its own name everywhere a unit is (logs, history, unit state, --only, the
 # run record) and mapped back to its backend wherever the backend itself decides something
-# (OCANNL_BACKEND, the CPU/GPU gates). Two so far, both after cc and metal in the local lane, and
-# neither takes @train or @slow (unit_suite, unit_takes_slow).
+# (OCANNL_BACKEND, the CPU/GPU gates). Three so far, all after cc and metal in the local lane, and
+# none takes @train or @slow (unit_suite, unit_takes_slow).
 #
 # cc-outlined (gh-ocannl-1778): the cc suite with every kernel large enough forced outlined -- each
 # top-level statement its own part, every part batch its own translation unit
@@ -478,6 +480,10 @@ UNITS=(
 # is checked against outlined text only here. Outlining runs the same statements in the same order,
 # so a VALUE golden that moves under it is a finding; a golden holding the kernel's text moves by
 # design. @runtest only: it is a check of the renderer, not of training.
+#
+# cc-gc-backprop (gh-ocannl-2062): the entire cc @runtest suite with
+# OCANNL_DEBUG_GC_BACKPROP_ROOTS=true, settling dropped consumers at the hand-back gate.
+# Finds accidental GC dependencies outside the dedicated regression case; no @train or @slow.
 #
 # cc-oracle-widen (gh-ocannl-1964): `virtual_inliner_oracle --widen` on cc, through its
 # `@test/operations/slow-virtual_inliner_oracle-widen` alias alone -- the inliner oracle's full cross
@@ -488,7 +494,7 @@ UNITS=(
 # the local lane is the sweep's wall-clock, and this unit is single-threaded.
 unit_backend() { # unit-backend
   case $1 in
-    cc-outlined | cc-oracle-widen) printf cc ;;
+    cc-outlined | cc-gc-backprop | cc-oracle-widen) printf cc ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -496,13 +502,14 @@ unit_backend() { # unit-backend
 unit_dune_env() { # unit-backend
   case $1 in
     cc-outlined) printf 'OCANNL_CC_KERNEL_PART_WEIGHT=1 OCANNL_CC_COMPILE_UNIT_MIN_BYTES=0 ' ;;
+    cc-gc-backprop) printf 'OCANNL_DEBUG_GC_BACKPROP_ROOTS=true ' ;;
   esac
   printf 'OCANNL_BACKEND=%s' "$(unit_backend "$1")"
 }
 # The aliases a full-suite run of the unit builds, and whether --slow adds @slow to it.
 unit_suite() { # unit-backend
   case $1 in
-    cc-outlined) printf '@runtest' ;;
+    cc-outlined | cc-gc-backprop) printf '@runtest' ;;
     cc-oracle-widen) printf '@test/operations/slow-virtual_inliner_oracle-widen' ;;
     *) printf '@runtest @train' ;;
   esac
