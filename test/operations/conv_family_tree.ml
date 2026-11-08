@@ -744,7 +744,6 @@ let () =
    rule here: [no_codegen_capabilities] gives no leaf an operand-load key, so a tie keeps the
    earlier leaf. *)
 let real_site_pins name ~is_gpu ~limits ~target =
-  Tensor.set_random_seed ();
   let limits = envelope limits ~peak_flops:1e15 ~bandwidth:1e9 in
   let x0 =
     NTDSL.init ~l:"rsx" ~prec:Ir.Ops.single ~b:[ 64 ] ~o:[ 32; 32; 16 ]

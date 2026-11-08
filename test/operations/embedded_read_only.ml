@@ -26,8 +26,13 @@ let draw ~seed ~initialize =
         ~finally:(fun () -> Context.release ctx)
         ~f:(fun () ->
           let values = Context.get_values ctx w.Tensor.value in
-          ignore (Stdlib.Sys.opaque_identity unused : Tensor.t);
-          values))
+          let repeated = Train.init_params ~reinit_all:true ctx Train.IDX.empty w in
+          Exn.protect
+            ~finally:(fun () -> Context.release repeated)
+            ~f:(fun () ->
+              let again = Context.get_values repeated w.Tensor.value in
+              ignore (Stdlib.Sys.opaque_identity unused : Tensor.t);
+              (values, again))))
 
 let refused ~node f =
   match f () with
@@ -37,11 +42,15 @@ let refused ~node f =
       && String.is_substring msg ~substring:node
 
 let () =
-  Verdict.p "an initializer whose seed owner did not run is refused"
-    (refused ~node:"random_seed_42" (fun () -> draw ~seed:42 ~initialize:false));
-  let seeded = draw ~seed:42 ~initialize:true in
-  let zero = draw ~seed:0 ~initialize:true in
-  Verdict.p "explicitly initialized seeds produce distinct draws" (not (Poly.equal seeded zero))
+  Verdict.case "a stolen library seed is initialized" (fun () ->
+      let automatic, repeated = draw ~seed:42 ~initialize:false in
+      let seeded, _ = draw ~seed:42 ~initialize:true in
+      let zero, _ = draw ~seed:0 ~initialize:true in
+      Verdict.p "a stolen seed draws exactly the explicitly seeded reference"
+        (Poly.equal automatic seeded);
+      Verdict.p "a stolen seed does not draw from allocation zero" (not (Poly.equal automatic zero));
+      Verdict.p "reinitializing parameters replays the same seed literal"
+        (Poly.equal automatic repeated))
 
 let input_case ~zero_valid =
   Tensor.unsafe_reinitialize ();

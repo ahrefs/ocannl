@@ -646,20 +646,19 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
     List.fold params ~init:!more_embedded ~f:(fun acc p ->
         Set.add (Set.union acc p.forward.embedded_nodes) p.value)
   in
-  (* Keep a consumed singleton seed available for linking when another graph absorbed its forward
-     code. This metadata does not initialize the buffer: Context.run requires a prior write even for
-     embedded read-only nodes (gh-ocannl-2023). Independent graphs must create a fresh seed before
-     construction, or run the seed initializer in their shared ancestor. The current singleton is
-     not necessarily the seed captured by a graph built under a scoped seed, so injecting its
-     forward code here would not repair every missing initialization. *)
-  let embedded_nodes =
+  (* Another graph (including an unused branch) may have absorbed the singleton seed's initializer.
+     When adding that seed for linking, also initialize the library-owned literal before the
+     parameter draws (gh-ocannl-2023). This replays a Constant_bits fetch, not PRNG stream state:
+     random operations derive their counters from node ids, offsets and explicit counter inputs.
+     Other unwritten embedded reads still require a caller-provided write. *)
+  let embedded_nodes, asgns =
     match !random_seed with
-    | None -> embedded_nodes
+    | None -> (embedded_nodes, asgns)
     | Some rs ->
-        (* If random_seed was used (not a fwd_root) but not in embedded_nodes, include it *)
         if (not (is_fwd_root rs)) && not (Set.mem embedded_nodes rs.value) then
-          Set.add (Set.union embedded_nodes rs.forward.embedded_nodes) rs.value
-        else embedded_nodes
+          ( Set.add (Set.union embedded_nodes rs.forward.embedded_nodes) rs.value,
+            Asgns.Seq (rs.forward.asgns, asgns) )
+        else (embedded_nodes, asgns)
   in
   (* Initialization owns no fragment (gh-ocannl-1724): it is re-run on purpose ([reinit_all], and
      [Train.run_once] initializing missing parameters on every call), and the seed is a singleton --

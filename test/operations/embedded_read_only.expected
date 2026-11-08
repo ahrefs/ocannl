@@ -1,5 +1,6 @@
-an initializer whose seed owner did not run is refused: true
-explicitly initialized seeds produce distinct draws: true
+a stolen seed draws exactly the explicitly seeded reference: true
+a stolen seed does not draw from allocation zero: true
+reinitializing parameters replays the same seed literal: true
 unmarked input is embedded and read-only: true
 unwritten embedded read-only input is refused: true
 uploading the embedded input permits the correct result: true

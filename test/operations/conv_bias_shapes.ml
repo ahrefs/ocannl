@@ -31,7 +31,6 @@ let () =
 
   (* Depthwise separable conv: pin the output channels to a single axis of dim 5 via a spec'd add of
      a fixed-shape tensor (a plain [+] would broadcast instead of pinning). *)
-  Tensor.set_random_seed ();
   let input2 =
     TDSL.range_of_shape ~label:[ "input2" ] ~batch_dims:[ 2 ] ~output_dims:[ 8; 8; 3 ] ()
   in

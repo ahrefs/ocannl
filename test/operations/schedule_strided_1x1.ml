@@ -144,7 +144,6 @@ let make s tag =
       let k = NTDSL.init ~l:(tag ^ "k") ~prec:s.prec ~i:[ 1; 1; s.ic ] ~o:[ s.oc ] ~f:fk () in
       (x, NTDSL.O.einsum ~label:[ tag ] spec x k)
   | `Resnet_block ->
-      Tensor.set_random_seed ();
       let block =
         Nn_blocks.resnet_block ~label:[ tag ^ "rb" ] ~stride:s.stride ~out_channels:s.oc ()
       in

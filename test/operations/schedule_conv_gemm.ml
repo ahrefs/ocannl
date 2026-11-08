@@ -173,7 +173,6 @@ let () =
   (* === detect_conv across stride/padding variants (via the conv2d block: random params are fine,
      only the lowered structure is inspected) === *)
   let detect_leg tag ~stride ~use_padding ~want_stride ~want_offset ~want_row ~want_seeds =
-    Tensor.set_random_seed ();
     (* The padded leg's input goes through the padding-aware constructor: its layout commits at
        first compilation WITH the conv's halo, and the lowered access is then offset-free in buffer
        space — a valid conv over the physically padded buffer. *)

@@ -56,8 +56,6 @@ let f16_representable x =
    the gradient update, initialize params, optionally overwrite w1/w2 with given values, run, and
    return what the comparisons need. *)
 let run_leg ?(build = make_model) base_ctx ~input_l ~prepare ~w_vals =
-  (* Each model is compiled from the base, not from the previous seed owner. *)
-  Tensor.set_random_seed ();
   let f = build () in
   let x =
     NTDSL.init ~l:input_l ~prec:Ir.Ops.single

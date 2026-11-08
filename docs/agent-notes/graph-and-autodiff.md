@@ -195,16 +195,13 @@ files.
   they now reach the `Specified` no-op before the forced-read check, pinned by the read-first
   `wrap` rows in `data_leaf_top_down_prec`. The algorithm is in `docs/precision_inference.md`.
 
-- A seed singleton's embedding does not initialize it (gh-ocannl-2023). Independent models
-  compiled as siblings need `Tensor.set_random_seed` before each model is built, or an explicit
-  seed initialization in their shared ancestor. `embedded_read_only` reproduces an initializer
-  whose seed's forward code another graph absorbed: before the refusal its draws matched an
-  explicitly initialized zero seed bit for bit, not the requested 42. `Tensor.init_params` adding
-  the seed to `embedded_nodes` supplies no write and no exemption from the read-only input check.
-  An unused branch can absorb that initializer even within one model: the transformer demo's
-  lifted positional parameters and an eagerly built, unused branch of `scheme_strided_residual`
-  exposed this in CI. Remove needless test constructions; when the model deliberately builds
-  unused parameters, run `Train.forward_once ctx (Tensor.get_random_seed ())` before constructing
-  it and use the returned context as the ancestor of its execution. This writes the requested seed
-  explicitly instead of accepting allocation zero. The transformer fixture's projection IDs shift
-  by one because this first closure allocates a projection; its shape dimensions are unchanged.
+- Embedding a seed singleton does not initialize it (gh-ocannl-2023). When `Tensor.init_params`
+  adds the singleton whose code another graph absorbed, it also prepends that seed's own
+  `Constant_bits` fetch. This covers independent models and unused branches without requiring
+  callers to initialize a library-owned node. Replaying the literal does not reset a stream:
+  `uniform` derives its counter from node ids and offsets, and `uniform_at` adds an explicit
+  counter input. `embedded_read_only` pins draws against explicit seed 42, distinguishes seed 0,
+  and repeats parameter initialization. Other unwritten embedded read-only nodes are still
+  refused by `Context.run`; the seed is accepted because its initializer now writes it, not by
+  an exemption. This repairs the existing singleton special case, not arbitrary captured seeds
+  from an earlier `with_saved_random_seed` scope after the singleton has changed.

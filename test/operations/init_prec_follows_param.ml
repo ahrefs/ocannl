@@ -64,13 +64,11 @@ let () =
 
   (* A precision the parameter infers top-down from a consumer. *)
   let x = NTDSL.init ~l:"x" ~prec:wide ~o:[ n ] ~f:(fun _ -> 1.) () in
-  Tensor.set_random_seed ();
   let w = TDSL.param "w_inferred" () in
   let%op root = (w *. x) ++ "i=>0" in
   claims "inferred from a consumer" base_ctx ~root ~param:w;
 
   (* A double master weight behind a single cast twin: the model reads the twin. *)
-  Tensor.set_random_seed ();
   let twin =
     MP.with_master_weights ~master_prec:wide ~prec:Ir.Ops.single (fun () ->
         TDSL.param "w_master" ~output_dims:[ n ] ())

@@ -17,7 +17,6 @@ let fail msg =
    stays. *)
 let run name ~expect f =
   Tensor.rewind_to_last_closure ();
-  Tensor.set_random_seed ();
   Stdio.printf "=== %s ===\n" name;
   match
     try

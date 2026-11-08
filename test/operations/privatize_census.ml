@@ -244,7 +244,6 @@ let () =
       (List.map
          [ ("mlp", mlp_loss); ("resnet_block", resnet_loss); ("decoder_block", decoder_loss) ]
          ~f:(fun (what, loss) ->
-           Tensor.set_random_seed ();
            let ctx, opt = lowered_step ~name:("pc_" ^ what) (loss ()) in
            census ~what ctx opt))
   in

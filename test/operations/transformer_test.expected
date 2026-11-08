@@ -8,7 +8,7 @@ Loss shape:
    (prov (((sh_id 551) (kind Input))))))
  (output
   ((beg_dims ())
-   (dims ((Dim ((d 1) (basis default) (proj_id ((Proj_id 2)))))))
+   (dims ((Dim ((d 1) (basis default) (proj_id ((Proj_id 1)))))))
    (bcast Broadcastable) (prov (((sh_id 551) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
  (id 551) (debug_name cross_entropy))
@@ -16,15 +16,15 @@ Logits shape:
 ((batch
   ((beg_dims ())
    (dims
-    ((Dim ((d 2) (basis default) (proj_id ((Proj_id 69)))))
-     (Dim ((d 7) (basis default) (proj_id ((Proj_id 70)))))))
+    ((Dim ((d 2) (basis default) (proj_id ((Proj_id 68)))))
+     (Dim ((d 7) (basis default) (proj_id ((Proj_id 69)))))))
    (bcast Broadcastable) (prov (((sh_id 531) (kind Batch))))))
  (input
   ((beg_dims ()) (dims ()) (bcast Broadcastable)
    (prov (((sh_id 531) (kind Input))))))
  (output
   ((beg_dims ())
-   (dims ((Dim ((d 100) (basis default) (proj_id ((Proj_id 71)))))))
+   (dims ((Dim ((d 100) (basis default) (proj_id ((Proj_id 70)))))))
    (bcast Broadcastable) (prov (((sh_id 531) (kind Output))))))
  (batch_padding ()) (input_padding ()) (output_padding ()) (padding_elem ())
  (id 531) (debug_name transformer))
