@@ -15,7 +15,7 @@ cleanup_fixture() {
   if [ -n "$race_driver" ]; then
     # The driver may have ended just before the wait returned. Signal only
     # while this shell still owns a running/stopped job with that pid.
-    live_jobs=$(jobs -pr; jobs -ps)
+    live_jobs=$(trap '' INT TERM HUP; jobs -pr; jobs -ps)
     case $'\n'"$live_jobs"$'\n' in
       *$'\n'"$race_driver"$'\n'*) kill -TERM "$race_driver" 2>/dev/null || : ;;
     esac
@@ -47,20 +47,64 @@ driver_run() { # LOG ARGS...; status in driver_rc
 }
 
 status_leg() {
-  /bin/bash -c '
-    . "$1"
-    (exit 37) & child=$!
-    wait_child "$child"; rc=$?
-    [ "$rc" = 37 ] || exit 1
-    # A trap returning normally must not replace the eventual child status.
-    trap : TERM
-    (sleep .2; exit 43) & child=$!
-    perl -e "select undef,undef,undef,.05; kill 15, \$ARGV[0]" "$$" & sender=$!
-    wait_child "$child"; rc=$?
-    wait "$sender"
-    [ "$rc" = 43 ]
-  ' wait-status "$HERE/process-group.sh" >"$TMP/status" 2>&1
-  report "$?" 'child status survives normal exit and a returning signal trap' "$(cat "$TMP/status")"
+  cat >"$TMP/status-probe.sh" <<'PROBE'
+set -u
+. "$1"
+if [ "$2" = bare ]; then wait_child() { wait "$1"; }; fi
+child= blocked=0
+cleanup() {
+  local live
+  if [ -n "$child" ]; then
+    live=$(trap '' INT TERM HUP; builtin jobs -pr; builtin jobs -ps)
+    case $'\n'"$live"$'\n' in
+      *$'\n'"$child"$'\n'*) kill -KILL "$child" 2>/dev/null || : ;;
+    esac
+    builtin wait "$child" 2>/dev/null || :
+  fi
+}
+trap cleanup EXIT
+wait() {
+  local live
+  live=$(trap '' INT TERM HUP; jobs -pr; jobs -ps)
+  case $'\n'"$live"$'\n' in
+    *$'\n'"$1"$'\n'*)
+      blocked=1
+      echo 'refused blocking wait on a live job' >&2
+      return 99 ;;
+  esac
+  builtin wait "$@"
+}
+check_child() {
+  local expected=$1 rc
+  wait_child "$child"; rc=$?
+  [ "$blocked" = 0 ] && [ "$rc" = "$expected" ] || exit 1
+  child=
+}
+(exit 37) & child=$!
+check_child 37
+# Long enough that the shadowed wait deterministically sees a live job if
+# wait_child regresses to a bare wait; timing never decides this verdict.
+(sleep .3; exit 41) & child=$!
+check_child 41
+trap : TERM
+(sleep .2; exit 43) & child=$!
+perl -e 'select undef,undef,undef,.05; kill 15, $ARGV[0]' "$$" & sender=$!
+check_child 43
+builtin wait "$sender"
+perl -e '$SIG{TERM}="DEFAULT"; kill 15, $$; exit 99' & child=$!
+check_child 143
+wait_child "$$" 2>/dev/null; rc=$?
+[ "$rc" = 127 ] && [ "$blocked" = 0 ]
+PROBE
+  /bin/bash "$TMP/status-probe.sh" "$HERE/process-group.sh" shared >"$TMP/status" 2>&1
+  report "$?" 'only completed jobs reach wait; child status is 37/41/43/143, non-child is 127' "$(cat "$TMP/status")"
+  local rc=0
+  /bin/bash "$TMP/status-probe.sh" "$HERE/process-group.sh" bare >"$TMP/status-bare" 2>&1 || rc=$?
+  if [ "$rc" = 1 ] && grep -qF 'refused blocking wait on a live job' "$TMP/status-bare"; then
+    report 0 'structural negative control: a bare wait on a live child is refused'
+  else
+    report 1 'structural negative control: a bare wait on a live child is refused' "exit $rc; $(cat "$TMP/status-bare")"
+  fi
 }
 harness_leg_run '1: child status survives a returning trap' status_leg
 

@@ -24,7 +24,8 @@ harness_args "$@"
 harness_require python3 git
 harness_scratch test-box-gate
 
-mkdir -p "$TMP/tree/benchmarks/fixtures" "$TMP/bin" "$TMP/runs"
+mkdir -p "$TMP/tree/benchmarks/fixtures" "$TMP/tree/scripts" "$TMP/bin" "$TMP/runs"
+cp "$here/../scripts/process-group.sh" "$TMP/tree/scripts/" || exit 2
 tree=$(cd "$TMP/tree" && pwd -P) || exit 2
 fx=$tree/benchmarks/fixtures
 mkdir -p "$tree/benchmarks/runners"
@@ -55,7 +56,7 @@ runner=$tree/_build/default/benchmarks/runners/ocannl/bench_gpt.exe
 mkdir -p "$(dirname "$runner")"
 printf '#!/bin/sh\necho "bench_gpt BENCH_FIXTURE=$BENCH_FIXTURE" >>"%s/started"\nexit 1\n' "$TMP" >"$runner"
 chmod +x "$TMP/bin/"* "$runner"
-git -C "$tree" init -q && git -C "$tree" add -A benchmarks &&
+git -C "$tree" init -q && git -C "$tree" add -A benchmarks scripts &&
   git -C "$tree" -c user.name=harness -c user.email=harness@localhost commit -qm scratch || exit 2
 export PATH="$TMP/bin:$PATH"
 gate=$tree/benchmarks/box-gate.sh

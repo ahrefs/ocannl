@@ -4558,10 +4558,9 @@ case $sub in
     { printf '%s\n' "$repeat_sup" >"$resolve_dir/pid" &&
       ps_token "$repeat_sup" >"$resolve_dir/ptoken"; } ||
       kill -TERM "$repeat_sup" 2>/dev/null
-    # A second at a time, so a held trap still reaches it (wait_tick); its
-    # status once it is gone.
-    while proc_alive "$resolve_dir/pid" "$resolve_dir/ptoken"; do wait_tick "$repeat_sup"; done
-    wait "$repeat_sup"
+    # This shell's direct child; token files remain the identity record used
+    # by the group cleanup after its status has been collected.
+    wait_child "$repeat_sup"
     resolve_rc=$?
     repeat_sup=
     # The resolution touches nothing repeat_build holds, so a group of only zombies it leaves behind
@@ -4709,11 +4708,10 @@ case $sub in
       { printf '%s\n' "$repeat_sup" >"$sdir/pid" &&
         ps_token "$repeat_sup" >"$sdir/ptoken"; } ||
         kill -TERM "$repeat_sup" 2>/dev/null
-      while proc_alive "$sdir/pid" "$sdir/ptoken"; do wait_tick "$repeat_sup"; done
-      wait "$repeat_sup"
+      wait_child "$repeat_sup"
       step_rc=$?
-      # The numeric pid is no longer ours once wait/proc_alive prove the
-      # supervisor gone. Clear it before the slower orphan-group reap so a
+      # The numeric pid is no longer ours once wait_child has reaped the
+      # supervisor. Clear it before the slower orphan-group reap so a
       # cancellation cannot signal a recycled, unrelated process.
       repeat_sup=
       # SIGKILL can remove the supervisor without reaching the Dune process

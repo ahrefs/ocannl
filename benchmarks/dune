@@ -37,6 +37,7 @@
   (glob_files test/*.py)
   (glob_files_rec runners/*.py)
   (glob_files *.sh)
+  ../scripts/process-group.sh
   (glob_files_rec runners/*.sh)
   fixtures/DIGESTS.txt
   ../ocannl_config.reference

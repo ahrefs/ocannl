@@ -1,7 +1,7 @@
 """Exercise Bash's wait-entry race under eight lanes of fork/exit load.
 
 A deterministic unbounded foreground wait must fail the response oracle.
-Also diagnose up to 20,000 TERM deliveries against the bare wait, stopping each
+Also diagnose up to 4,000 TERM deliveries against the bare wait, stopping each
 lane at its first failure. Require all 20,000 deliveries through the shared wait
 to be handled within 2.5 seconds. Child and relay startup are acknowledged
 before that deadline starts. Each trial owns a fresh process group.
@@ -21,18 +21,32 @@ import threading
 import time
 
 
+class DiagnosticBudgetExpired(Exception):
+    pass
+
+
+def replace_once(text, before, after):
+    if text.count(before) != 1:
+        raise RuntimeError("ambiguous control replacement: " + before)
+    return text.replace(before, after)
+
+
 class Lines:
-    def __init__(self, stream, cancelled):
+    def __init__(self, stream, cancelled, diagnostic_deadline=None):
         self.fd = stream.fileno()
         self.buffer = b""
         self.cancelled = cancelled
+        self.diagnostic_deadline = diagnostic_deadline
 
     def read(self, seconds):
         deadline = time.monotonic() + seconds
         while b"\n" not in self.buffer:
             if self.cancelled.is_set():
                 raise InterruptedError("stress driver cancelled")
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            if self.diagnostic_deadline is not None and now >= self.diagnostic_deadline:
+                raise DiagnosticBudgetExpired()
+            remaining = deadline - now
             if remaining <= 0:
                 raise TimeoutError("relay did not acknowledge the trial")
             if not select.select([self.fd], [], [], min(remaining, .1))[0]:
@@ -59,14 +73,14 @@ exit 99 # Reaching here without the TERM trap is a fixture failure.
 '''
 
 
-def trial(helper, fifo, mode, cancelled, ready_path=None):
+def trial(helper, fifo, mode, cancelled, ready_path=None, diagnostic_deadline=None):
     old = mode == "old"
-    script = SCRIPT.replace('wait_child "$child"', 'wait "$child"') if old else SCRIPT
+    script = replace_once(SCRIPT, 'wait_child "$child"', 'wait "$child"') if old else SCRIPT
     if mode == "forced":
         # Publishing from the foreground child puts Bash inside an unbounded
         # command before TERM arrives. This deterministically holds its trap;
         # the ordinary bare-wait search below remains a race diagnostic.
-        script = script.replace('echo "$child"\nwait_child "$child" 2>/dev/null',
+        script = replace_once(script, 'echo "$child"\nwait_child "$child" 2>/dev/null',
                                 "perl -e '$|=1; print qq{$ARGV[0]\\n}; sleep 30' \"$child\"")
     with tempfile.TemporaryFile() as errors:
         process = subprocess.Popen(
@@ -78,7 +92,7 @@ def trial(helper, fifo, mode, cancelled, ready_path=None):
         held = False
         failure = None
         try:
-            lines = Lines(process.stdout, cancelled)
+            lines = Lines(process.stdout, cancelled, diagnostic_deadline)
             child = int(lines.read(30))
             if ready_path is not None:
                 temporary = ready_path.with_suffix(".tmp")
@@ -120,7 +134,7 @@ def trial(helper, fifo, mode, cancelled, ready_path=None):
             process.wait()
             process.stdout.close()
             process.stdin.close()
-        if isinstance(failure, InterruptedError):
+        if isinstance(failure, (InterruptedError, DiagnosticBudgetExpired)):
             raise failure
         # Bash 3.2 can also segfault in the old wait-entry window. Report
         # those trials separately and keep searching for an actual held TERM;
@@ -134,17 +148,24 @@ def trial(helper, fifo, mode, cancelled, ready_path=None):
         return "held" if held else "prompt"
 
 
-def lane(helper, mode, deadline, cancelled):
-    held = crashes = 0
+def lane(helper, mode, deadline, cancelled, limit=2500):
+    held = crashes = count = 0
     with tempfile.TemporaryDirectory(prefix="wait-race-") as scratch:
         fifo = Path(scratch) / "ready"
         os.mkfifo(fifo)
-        for count in range(1, 2501):
+        for _ in range(limit):
             if cancelled.is_set():
                 raise InterruptedError("stress driver cancelled")
             if time.monotonic() > deadline:
-                raise TimeoutError("stress run exceeded its 10-minute budget")
-            outcome = trial(helper, fifo, mode, cancelled)
+                if mode == "old":
+                    break
+                raise TimeoutError("shared wait exceeded its 10-minute budget")
+            try:
+                outcome = trial(helper, fifo, mode, cancelled,
+                                diagnostic_deadline=deadline if mode == "old" else None)
+            except DiagnosticBudgetExpired:
+                break
+            count += 1
             crashes += outcome == "crashed"
             held += outcome == "held"
             if held:
@@ -242,24 +263,30 @@ def main():
         cancelled.set()
     for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, stop)
-    deadline = time.monotonic() + 600
     with tempfile.TemporaryDirectory(prefix="wait-control-") as scratch:
         fifo = Path(scratch) / "ready"
         os.mkfifo(fifo)
         if trial(helper, fifo, "forced", cancelled, ready_path) != "held":
             raise RuntimeError("response oracle accepted an unbounded foreground wait")
         print("deterministic unbounded-wait control: response oracle rejected it", flush=True)
+    # The verdict gets its own complete budget before any diagnostic work.
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        old = list(pool.map(lambda _: lane(helper, "old", deadline, cancelled), range(8)))
-        print(f"old bare wait: {sum(h for h, n, c in old)} held TERM(s) / "
-              f"{sum(n for h, n, c in old)} trials (limit 20000), "
-              f"{sum(c for h, n, c in old)} SIGSEGV(s) reported separately", flush=True)
+        deadline = time.monotonic() + 600
         shared = list(pool.map(lambda _: lane(helper, "shared", deadline, cancelled), range(8)))
         print(f"shared wait: {sum(h for h, n, c in shared)} held TERM(s) / "
               f"{sum(n for h, n, c in shared)} trials", flush=True)
+        passed = all(h == 0 and n == 2500 and c == 0 for h, n, c in shared)
+        deadline = time.monotonic() + 60
+        old = list(pool.map(lambda _: lane(helper, "old", deadline, cancelled, limit=500), range(8)))
+        print(f"old bare wait: {sum(h for h, n, c in old)} held TERM(s) / "
+              f"{sum(n for h, n, c in old)} diagnostic trials (limit 4000, budget 60s), "
+              f"{sum(c for h, n, c in old)} SIGSEGV(s) reported separately", flush=True)
+    if time.monotonic() >= deadline:
+        print("note: diagnostic budget exhausted; shared-wait verdict unchanged", flush=True)
     if not any(h for h, n, c in old):
         print("note: bare-wait race not observed in this diagnostic sample", flush=True)
-    return 0 if all(h == 0 and n == 2500 and c == 0 for h, n, c in shared) else 1
+    return 0 if passed else 1
+
 
 
 if __name__ == "__main__":

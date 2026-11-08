@@ -75,6 +75,8 @@ pid_alive() { # <pid>; exits 0 iff the process exists and is not a zombie
 # leave a tick behind in the caller's process group. A background tick plus
 # `wait $!` bounded the trap too, but leaked that tick on cancellation
 # (gh-ocannl-1914's sweep cancellation leg).
+# A PID-directed cancellation waits for the current tick (up to one second);
+# a group signal ends the tick immediately.
 # Close the run's descriptors: lock fd 9 and repeat's witness fds 6 and 8.
 wait_tick() { # PID
   # Apply redirections only in the exec child, so a trap keeps the caller's
@@ -83,7 +85,8 @@ wait_tick() { # PID
     </dev/null >/dev/null 2>&1 6>&- 8>&- 9>&-)
 }
 
-# Wait for an unreaped direct child, preserving its exit status. The job table
+# Wait for an unreaped direct child, preserving its exit status. PID must be
+# `$!` of a simple background command, not the last process of a pipeline. The job table
 # belongs to this shell, so an exited child's recycled pid cannot extend the
 # wait. Select running and stopped jobs: Bash 3.2 can retain completed jobs
 # in `jobs -p`, and a stopped job's eventual wait would still block.
@@ -92,7 +95,7 @@ wait_tick() { # PID
 wait_child() { # PID
   local wait_jobs
   while :; do
-    wait_jobs=$(jobs -pr; jobs -ps)
+    wait_jobs=$(trap '' INT TERM HUP; jobs -pr; jobs -ps)
     case $'\n'"$wait_jobs"$'\n' in
       *$'\n'"$1"$'\n'*) wait_tick "$1" || : ;;
       *) break ;;
