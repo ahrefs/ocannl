@@ -1094,7 +1094,8 @@ module SharedEvent : sig
   val wait_until_signaled_value :
     t -> value:Unsigned.ULLong.t -> timeout_ms:Unsigned.ULLong.t -> bool
   (** Synchronously waits until the signaled value reaches or exceeds the target value, or the
-      timeout elapses. Returns [true] if the value was reached, [false] on timeout. See
+      timeout elapses. Releases the OCaml runtime lock while waiting. Returns [true] if the value
+      was reached, [false] on timeout. See
       {{:https://developer.apple.com/documentation/metal/mtlsharedevent/wait(untilsignaledvalue:timeoutms:)?language=objc}
        waitUntilSignaledValue:timeoutMS:}. *)
 end
