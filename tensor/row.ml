@@ -3382,7 +3382,9 @@ let rank_edge_refuted v w k =
 (* Closing [v] to a GLB is a choice, the widest reading of its use sites, so it yields to what is
    known: a GLB over [..w..] with axes around it is out of reach of a [v] already bounded by [w],
    however true the bound (a statistic [..c..] used by a tensor over [h, w, ..c..], gh-ocannl-1955).
-   Such a GLB says nothing about [v]'s axes. *)
+   Such a GLB says nothing about [v]'s rank, so closing [v] to it is no reading of it. Its trailing
+   flank still bounds [v]'s last axes, which a closing that must give [v] axes reads
+   ([eliminate_row_constraint], gh-ocannl-2035). *)
 let rank_refutes_glb v ({ beg_dims; dims; bcast; prov = _ } : t) =
   match bcast with
   | Row_var w -> rank_edge_refuted v w (List.length beg_dims + List.length dims)
@@ -5157,30 +5159,60 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
          proper constraint resolution. *)
       let flanks_known (glb : row) = known_dims_product (glb.beg_dims @ glb.dims) in
       let unless_tail_open (glb : row) = Option.some_if (not (is_broadcastable glb.bcast)) glb in
+      (* gh-ocannl-2035: a GLB the rank facts refute says nothing about [v]'s rank, but its trailing
+         flank still bounds [v]'s last axes, as [v]'s alignment against it does at any rank. A row
+         that must take axes reads that flank, or the axes it takes can contradict it: a draw fills
+         it, and a fixed total takes it when it holds the total. A row free to close empty has no
+         use for it. *)
+      let refuted_flank (glb : row) =
+        let flank : row =
+          { beg_dims = []; dims = glb.dims; bcast = Broadcastable; prov = glb.prov }
+        in
+        match
+          ( glb.dims,
+            try Some (reduce_row_constraint constr ~beg_dims ~dims) with Shape_error _ -> None )
+        with
+        | [], _ -> None
+        | ( _,
+            Some
+              (Total_elems { numerator = Strided_var { round_up = true; _ }; divided_by = []; _ }) )
+          ->
+            Some flank
+        | _, Some (Total_elems { numerator = Num_elems n; divided_by = []; _ }) -> (
+            match collect_factors glb.dims with Some (d, []) when d = n -> Some flank | _ -> None)
+        | _ -> None
+      in
       (* [pending_glb]: the bound the round-up arms must wait for. An open tail is as unresolved as
-         a variable in a flank: axes may still arrive there (gh-ocannl-1961). *)
-      let glb, pending_glb =
+         a variable in a flank: axes may still arrive there (gh-ocannl-1961). [from_refuted]: [glb]
+         is a refuted GLB's flank. *)
+      let glb, pending_glb, from_refuted =
         match glb with
         | Some ctx_glb ->
             (* gh-ocannl-1868: a GLB handed down by the caller can be as unresolved as one read from
                the environment below. It stays available to the arms that only inspect its shape,
                but the round-up arms must not take it for settled. *)
             let ctx_glb = subst_row env ctx_glb in
-            (Some ctx_glb, if flanks_known ctx_glb then unless_tail_open ctx_glb else Some ctx_glb)
+            ( Some ctx_glb,
+              (if flanks_known ctx_glb then unless_tail_open ctx_glb else Some ctx_glb),
+              false )
         | None -> (
             match find_row env.row_env v with
             | Some (Bounds_row { glb = Some env_glb; _ }) ->
                 (* We need to substitute environment dimensions into the GLB to see if it's
                    resolved *)
                 let env_glb = subst_row env env_glb in
-                if rank_refutes_glb v env_glb then (None, None)
-                else if flanks_known env_glb then (Some env_glb, unless_tail_open env_glb)
+                if rank_refutes_glb v env_glb then
+                  match refuted_flank env_glb with
+                  | Some flank when flanks_known flank -> (Some flank, None, true)
+                  | Some flank -> (None, Some flank, false)
+                  | None -> (None, None, false)
+                else if flanks_known env_glb then (Some env_glb, unless_tail_open env_glb, false)
                 else
                   (* GLB has unresolved dimension variables or collect_factors failed: bounds exist
                      but are still pending (gh-509 task 5) -- round-up guesses below must wait for
                      them to resolve rather than committing prematurely. *)
-                  (None, Some env_glb)
-            | _ -> (None, None))
+                  (None, Some env_glb, false)
+            | _ -> (None, None, false))
       in
       let glb_pending = Option.is_some pending_glb in
       let glb_has_axes =
@@ -5260,6 +5292,9 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                     };
                 ],
                 env )
+          | Num_elems _, [], Some flank when from_refuted && is_stage3_up stage ->
+              (* gh-ocannl-2035: the flank of a refuted GLB holding exactly the total. *)
+              ([ Row_eq { r1; r2 = flank; origin } ], env)
           | Num_elems _, [], Some glb ->
               let ineqs, env =
                 apply_row_constraint ~depth:(depth + 1) stage origin
@@ -5398,8 +5433,10 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
           ([ Row_eq { r1; r2 = { beg_dims = []; dims; bcast = Broadcastable; prov }; origin } ], env)
       | Unconstrained -> ([], env))
 
-(* A row's entry as closing it may read it: {!rank_refutes_glb} is a question about the variable's
-   axes, which a GLB out of its reach says nothing about (gh-ocannl-1955). *)
+(* A row's entry as closing it may read it: a GLB {!rank_refutes_glb} puts out of the variable's
+   reach is no target to close it to (gh-ocannl-1955). Its flank still bounds the variable's last
+   axes, which [eliminate_row_constraint] reads from the environment where it must give the row axes
+   (gh-ocannl-2035). *)
 let entry_for_closing env v =
   match find_row env.row_env v with
   | Some (Bounds_row ({ glb = Some glb; _ } as bounds)) when rank_refutes_glb v (subst_row env glb)
