@@ -740,7 +740,10 @@ let finish_link ctx comp wrapped
      context-scoped memory-modes split removed the pre-lowering [context_nodes] settlement). Nodes
      with registered host initialization data (ndarray-backed literals, loaded tensors)
      self-initialize at link time from [Host_inits] (gh-ocannl-333), so they are excluded. *)
-  let read_inputs = Set.diff backend_inputs comp.Asgns.embedded_nodes in
+  (* Embedding only excuses nodes the routine writes: a read-only embedded node has no
+     initialization in this routine (gh-ocannl-2023). It owes the same written-buffer or
+     zero-valid evidence as any other input. *)
+  let read_inputs = Set.diff backend_inputs (Set.inter comp.Asgns.embedded_nodes backend_outputs) in
   let inputs = Set.filter read_inputs ~f:(fun tn -> not (Ir.Host_inits.mem tn)) in
   (* gh-ocannl-1623: the reads whose buffers are device-wide host literals, which another root may
      overwrite -- [run] refuses a stale one ([shared_write_tokens]). *)

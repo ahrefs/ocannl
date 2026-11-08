@@ -646,18 +646,19 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
     List.fold params ~init:!more_embedded ~f:(fun acc p ->
         Set.add (Set.union acc p.forward.embedded_nodes) p.value)
   in
-  (* Handle random_seed specially: it's a global singleton whose forward code might have been
-     "stolen" by a tensor that isn't part of params (e.g., from an untaken conditional branch). If
-     random_seed exists and was used (no longer a fwd_root) but not in embedded_nodes, we need to
-     include random_seed's own embedded_nodes. *)
-  let embedded_nodes =
+  (* Another graph (including an unused branch) may have absorbed the singleton seed's initializer.
+     When adding that seed for linking, also initialize the library-owned literal before the
+     parameter draws (gh-ocannl-2023). This replays a Constant_bits fetch, not PRNG stream state:
+     random operations derive their counters from node ids, offsets and explicit counter inputs.
+     Other unwritten embedded reads still require a caller-provided write. *)
+  let embedded_nodes, asgns =
     match !random_seed with
-    | None -> embedded_nodes
+    | None -> (embedded_nodes, asgns)
     | Some rs ->
-        (* If random_seed was used (not a fwd_root) but not in embedded_nodes, include it *)
         if (not (is_fwd_root rs)) && not (Set.mem embedded_nodes rs.value) then
-          Set.add (Set.union embedded_nodes rs.forward.embedded_nodes) rs.value
-        else embedded_nodes
+          ( Set.add (Set.union embedded_nodes rs.forward.embedded_nodes) rs.value,
+            Asgns.Seq (rs.forward.asgns, asgns) )
+        else (embedded_nodes, asgns)
   in
   (* Initialization owns no fragment (gh-ocannl-1724): it is re-run on purpose ([reinit_all], and
      [Train.run_once] initializing missing parameters on every call), and the seed is a singleton --

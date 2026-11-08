@@ -71,6 +71,7 @@ test/operations/n3_fwd_with_prec-unoptimized.ll.expected [ll] extension .ll.expe
 test/operations/online_softmax_block_mma.expected [derived] beside test/operations/online_softmax_block_mma.ml; re-run by @test/operations/runtest-online_softmax_block_mma
 test/operations/reduction_forms.expected [derived] beside test/operations/reduction_forms.ml; re-run by @test/operations/runtest-reduction_forms
 test/operations/scan_loop.expected [ll] markers ll-assign; re-run by @test/operations/runtest-scan_loop
+test/operations/test_ident_blacklist.expected [derived] beside test/operations/test_ident_blacklist.ml; re-run by @test/operations/runtest-test_ident_blacklist
 test/operations/test_log_stmt_format.c.expected [c] extension .c.expected; markers c-decl-banner c-logic-banner c-prec-cast c-restrict ll-assign routine-log; re-run by @test/operations/runtest-test_log_stmt_format
 test/operations/test_uniform_virtual_lane.expected [derived] beside test/operations/test_uniform_virtual_lane.ml; re-run by @test/operations/runtest-test_uniform_virtual_lane, @test/operations/runtest-test_uniform_virtual_lane-lane_checked, @test/operations/runtest-test_uniform_virtual_lane-outlined
 test/operations/test_where_precision-unoptimized.ll.expected [ll] extension .ll.expected; markers ll-assign ll-end; re-run by @test/operations/runtest-test_where_precision-unoptimized
@@ -504,6 +505,7 @@ test/operations/source_tokens_joined.ml [renders generated text in memory; run b
 test/operations/test_bounds_folded_gather.ml [run by @test/operations/runtest-test_bounds_folded_gather]
     "!= 0 ?"
     "!= 0.0 ?"
+test/operations/test_ident_blacklist.ml [run by @test/operations/runtest-test_ident_blacklist; also pins text this scan cannot name: computed fragment]
 test/operations/test_metal_guarded_gather_codegen.real.ml [run by @test/operations/runtest-test_metal_guarded_gather_codegen]
     "(float)(" ^ ... ^ "["
     ": (float)(0.0))"
@@ -724,6 +726,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-scope_collapse_rounding
 @test/operations/runtest-source_tokens_joined
 @test/operations/runtest-test_bounds_folded_gather
+@test/operations/runtest-test_ident_blacklist
 @test/operations/runtest-test_log_stmt_format
 @test/operations/runtest-test_metal_guarded_gather_codegen
 @test/operations/runtest-test_metal_pool_slot_width

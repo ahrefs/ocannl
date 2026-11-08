@@ -1965,6 +1965,17 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name embedded_read_only)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules embedded_read_only)
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name precision_policy_parity)
  (package neural_nets_lib)
  (deps
@@ -3542,7 +3553,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_ident_blacklist)
- (libraries base ocannl stdio arrayjit.verdict)
+ (libraries base ocannl stdio arrayjit.verdict arrayjit.utils test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
