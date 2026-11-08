@@ -101,19 +101,36 @@ jobs:
     - name: Install dependencies from the opam files
       run: opam install . -y --deps-only --with-test
     - name: Release build, as opam builds the packages
-      run: opam exec -- dune build -p arrayjit,neural_nets_lib
-    # The two steps below stay in the release profile `-p` built in: `--release`
+      shell: bash
+      run: opam exec -- dune build -p arrayjit,neural_nets_lib 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
+    # The dune steps below stay in the release profile `-p` built in: `--release`
     # is `-p` without the package filter, so the packages' objects are reused
     # and only what lies outside them (tests, bin/, benchmarks, tools) compiles
     # here. The dev profile would recompile every module under its own flags
     # (gh-ocannl-1907). What dev adds -- warnings as errors -- the PR head's
     # ci.yml run gates, in dev.
+    # Match ci.yml's probe and failure listing, but reuse the release objects.
+    - name: Print the host's capabilities
+      continue-on-error: true
+      shell: bash
+      run: |
+        opam exec -- dune build --release ./tools/host_caps.exe 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
+        cd test/config && opam exec -- ../../_build/default/tools/host_caps.exe "--save=${{ runner.temp }}/host-caps.txt"
     - name: Type-check everything
-      run: opam exec -- dune build --release @check
+      shell: bash
+      run: opam exec -- dune build --release @check 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
     # One tensor graph compiled through the default cc backend, run, and
     # printed against its golden.
     - name: Smoke test
-      run: opam exec -- dune build --release @test/operations/runtest-hello_world_dim1x1
+      shell: bash
+      run: opam exec -- dune build --release @test/operations/runtest-hello_world_dim1x1 2>&1 | tee -a "$RUNNER_TEMP/dune-build.log"
+
+    - name: List the failed dune rules
+      if: ${{ failure() }}
+      shell: bash
+      run: |
+        tools/ci-failed-rules.sh --github --host "$RUNNER_TEMP/host-caps.txt" "$RUNNER_TEMP/dune-build.log"
+        exit 1
 
   # A merge's red here is a master red: fire the CI-red triage routine as
   # ci.yml's `notify-triage-routine` does (it says why, and why the fire is
