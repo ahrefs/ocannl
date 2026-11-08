@@ -311,6 +311,18 @@ files.
   split. Pinned by the `constexpr_*` rows of `test/operations/virtual_rejection_boundary.ml` (a
   guarded setter refused as 142, a flattened read served since gh-ocannl-1898 — a one-cell node
   leaves no consumption-time refusal to pin — and the cap exemption), with executed parity.
+- **A virtual store refusal names its legality reason and virtual decision** (gh-ocannl-2048).
+  `check_and_store_virtual` checks the placement before recording `Never_virtual`: there is no
+  buffer to fall back to from `Virtual`, so it raises `virtual_unstorable_rejection` with the
+  original `Non_virtual` code and the virtual decision's provenance instead of the placement
+  collision. The decision may be declared intent or an earlier routine's commitment. This is a
+  store-time refusal, so it advises materialization rather than the read-site remedy of filling
+  cells; `declared_uninlinable_rejection` retains that advice for consumption-time refusals. A symbol-free reduction into `x[0]` whose value embeds the reduced iterator refuses
+  as `10:escaping-index-symbol` (`virtual_store_refusal` in
+  `virtual_rejection_boundary.ml`). The oracle recognizes the diagnostic's `rejection <code>:`
+  phrase, not a bare code (the raw collision contains that too); its store-time census needs both
+  `10:escaping-index-symbol` and `51:affine-not-injective`. Restoring the raw placement update makes
+  the narrowed oracle fail with unrecognized refusals.
 - **A fixed-index producer position is guarded only over a proved fallback** (gh-ocannl-1735,
   gh-ocannl-1795). On an extent-1 coordinate a producer `Fixed_idx 0` read at a symbolic index is
   the same cell (`same_unit_cell`, no guard). On a wider one `instantiate_computations` guards

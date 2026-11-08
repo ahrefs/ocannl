@@ -1717,6 +1717,39 @@ let row_scan_recurrence () =
     ~expected:[| 1.; 3.; 6.; 10. |]
     ~verdict:(Rejected (Store, Ir.Tnode.Site "148:scan-recurrence"))
 
+(* A symbol-free reduction captures the setter without its enclosing loop. Its value still names
+   that loop, so storage must refuse before a read site is considered. *)
+let virtual_store_refusal () =
+  let check ~committed =
+    let label = if committed then "committed" else "declared" in
+    let x = mk ~dims:[| 1 |] (label ^ "_store_x") in
+    let ctx = Ir.Low_level.empty_optimize_ctx () in
+    if committed then
+      (* Seed a lineage decision without declaring the node itself virtual. *)
+      Ir.Tnode.Placements.update ctx.placements x Virtual (Site "40:scalar-constexpr")
+    else virtualize x;
+    let decided_by = if committed then "40:scalar-constexpr" else "99:test-setup" in
+    let k = sym () in
+    let llc =
+      seq (zero x) (loop_n k 2 (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (tick k))))
+    in
+    match optimize_in ctx ~name:(label ^ "_store_refusal") llc with
+    | _ -> p (label ^ " store: refuses an escaping reduction") false
+    | exception Utils.User_error msg ->
+        Stdio.printf "%s\n" msg;
+        p
+          (label ^ " store: names the virtual decision and store-time reason")
+          (String.is_substring msg ~substring:("decision " ^ decided_by)
+          && String.is_substring msg ~substring:"could not be stored for inlining"
+          && String.is_substring msg ~substring:"rejection 10:escaping-index-symbol:"
+          && String.is_substring msg ~substring:"Train.set_materialized"
+          && (not (String.is_substring msg ~substring:"Initialize every cell"))
+          && (not (String.is_substring msg ~substring:"is declared virtual"))
+          && not (String.is_substring msg ~substring:"is already virtual"))
+  in
+  check ~committed:false;
+  check ~committed:true
+
 (* Each row runs through [case], so a row that raises is a failed claim naming it, and the rows
    after it still run (gh-ocannl-1084). [--raise-every-row] puts that to the test: every row raises
    before it compiles anything, and [virtual_rejection_boundary_raise.expected] pins that each one
@@ -1800,6 +1833,7 @@ let () =
       row_constexpr_guarded_setter ~flag_value:0.);
   case "row_constexpr_guarded_setter ~flag_value:1." (fun () ->
       row_constexpr_guarded_setter ~flag_value:1.);
+  case "virtual_store_refusal" virtual_store_refusal;
   p_all "every phase-table entry is exercised by a row" phase_table ~f:(fun (site, _) ->
       Hash_set.mem exercised site);
   Stdio.printf "%!"
