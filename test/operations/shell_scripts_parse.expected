@@ -651,6 +651,7 @@ tools/lab-map.sh parses: true
 tools/machine-verify-far.sh parses: true
 tools/machine-verify.sh parses: true
 tools/merge-build-check.sh parses: true
+tools/mutant.sh parses: true
 tools/mutation-run.sh parses: true
 tools/opam-env.sh parses: true
 tools/per-test-cap.sh parses: true

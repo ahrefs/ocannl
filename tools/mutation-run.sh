@@ -76,6 +76,7 @@ use Time::HiRes ();
 my $script = shift;
 $SIG{__DIE__} = sub { if (!$^S) { print STDERR @_; exit 2; } };
 sub refuse { die "mutation-run: $_[0]\n" }
+my $perl_edit = @ARGV && $ARGV[0] eq '--perl' ? shift @ARGV : '';
 my $batch = @ARGV && $ARGV[0] eq '--batch' ? shift @ARGV : '';
 @ARGV == 3 or refuse('usage: tools/mutation-run.sh <module> <patch-file> <@alias>, '
     . 'or tools/mutation-run.sh --batch <module> <patch-dir> <@alias>');
@@ -154,7 +155,20 @@ sub anchored {
 # The mutants: one patch, or every `*.patch` of a batch directory, each checked before anything
 # runs.
 my @mutants;
-if ($batch) {
+if ($perl_edit) {
+    # Evaluate against a private copy: syntax errors and no-op edits never touch the source.
+    my ($fh, $input) = tempfile('ocannl-perl-edit-XXXXXXXX', TMPDIR => 1, UNLINK => 1);
+    binmode $fh;
+    print {$fh} $original or refuse("write edit input: $!");
+    close $fh or refuse("close edit input: $!");
+    open my $edit, '-|', $^X, '-Mopen=IO,:raw,:std', '-0777', '-pe', $patch, '--', $input or refuse("perl edit: $!");
+    binmode $edit;
+    local $/;
+    my $mutated = <$edit> // '';
+    close $edit or refuse('perl edit failed; nothing mutated');
+    $mutated ne $original or refuse('perl edit made no byte change; nothing mutated');
+    @mutants = (['perl edit', $mutated, 0]);
+} elsif ($batch) {
     -d $patch or refuse("--batch needs a directory of *.patch files: $patch");
     opendir my $d, $patch or refuse("read $patch: $!");
     my @names = sort grep { /\.patch\z/ && -f "$patch/$_" } readdir $d;
@@ -386,7 +400,7 @@ sub run_log {
 # every mutant as caught (gh-ocannl-1364). A red baseline refuses with nothing mutated. Nothing is
 # printed until the module is restored, so that the first line stays the recovery copy's.
 my ($baseline_status, $baseline_stop) = (0, 0);
-{
+unless ($perl_edit) {
     my $pid = 0;
     for my $pair ([INT => 2], [TERM => 15], [HUP => 1]) {
         my ($name, $number) = @$pair;
@@ -427,6 +441,8 @@ if ($baseline_stop || $baseline_status) {
     unlink "$scratch/baseline";
     rmdir $scratch;
     exit $baseline_stop if $baseline_stop;
+    print STDERR 'mutation-run: if the manifest check failed because a new control has no golden row, run: ',
+        'tools/promote.sh --from-run ', dirname($baseline_log), "\n" if defined $baseline_log;
     refuse("BASELINE RED: the unmutated test exited $baseline_status"
         . (defined $baseline_log ? ' (run ' . basename(dirname($baseline_log)) . ')' : '')
         . ", so $golden is not what it prints, or its claims fail without a mutation (promote the "
@@ -669,11 +685,11 @@ sub mutate {
                 print "$verdict\n",
                     "(not evidence: the mutant was neither caught nor survived)\n";
                 # 65: test-run's BUILD FAILED (gh-ocannl-1547), a mutant that did not compile.
-                $code = 4 if $code == 0 || $code == 1 || $code == 65;
+                $code = 4 if !$perl_edit && ($code == 0 || $code == 1 || $code == 65);
             }
         } else {
             print "run: unavailable (test-run produced no digest)\n";
-            $code = 2 unless $code;
+            $code = 2 unless $code || $perl_edit;
         }
         1;
     };
