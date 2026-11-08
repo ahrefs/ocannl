@@ -3063,7 +3063,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   frontier. A test reaches it by a qualifier, an alias of one, or an `open`. The reading errs toward
   listing: a staged callback counts even in a test that only renders it, since its text is opaque by
   design and the scan does not guess whether a compiler sees it. The section closes on its own alias
-  list, the one to hand to `tools/test-run.sh run build` on each GPU backend. A member with no alias
+  list, the one to hand to `tools/test-run.sh run build` on each GPU backend. This is only the
+  kernel-execution set: the applicable golden routes in the earlier alias sections remain required
+  on each GPU backend too. For example, `@test/operations/runtest-micrograd_demo_logging` appears
+  in those earlier sections but not in the kernel-execution list. A member with no alias
   fails the run, as a text member does. `codegen_text_scan_cases` pins each route beside its near
   miss, including the negative control: a fixture whose staged callback writes a node by its bare
   label.
