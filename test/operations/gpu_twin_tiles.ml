@@ -78,8 +78,8 @@ let () =
           };
     }
   in
-  let seeds limits =
-    Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits opt
+  let seeds ?capabilities limits =
+    Autotune.sketch_seed_params ?capabilities ~is_gpu:true ~is_cpu:false ~limits opt
     |> List.filter ~f:(fun q -> q.Autotune.sk_mma)
   in
   p_exists "two virtual f16 twins seed a GPU tile using their read formats" (seeds synthetic)
@@ -104,8 +104,8 @@ let () =
       ~when_:(Ir.Backend_intf.binds_hardware_grid facts && Option.is_some limits.mma)
       ~on:backend ()
   in
-  let actual = lazy (seeds limits) in
-  in_leg ~leg:gpu_leg "the GPU advertises and seeds tiles at the twin site" (fun label ->
+  let actual = lazy (seeds ~capabilities limits) in
+  in_leg ~leg:gpu_leg "the advertised tile capability seeds tiles at the twin site" (fun label ->
       p_exists label (Lazy.force actual) ~f:(fun _ -> true));
   let executions =
     lazy
