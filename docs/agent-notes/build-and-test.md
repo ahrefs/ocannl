@@ -40,6 +40,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   itself through the probe `test-run.sh` and `fmt-check.sh` share (gh-ocannl-1576), foreground or
   detached (gh-ocannl-1236; The harness, shells and processes).
 
+- `markdown_links` (gh-ocannl-2006) joins `@scans`; its closed dialect is documented in
+  `Test_utils.Markdown_link_scan`. Fragments and images are unchecked; single-slash root-relative
+  destinations are refused. A new symlinked document must join `aliases` in `markdown_links.ml`,
+  since Dune materializes symlinks and its links otherwise resolve from the alias directory.
+  Published-site exemptions are exact `(file, target)` pairs, not a blanket `.html` exemption.
+
 - A repository-wide scanning check (`config_dep_completeness`, `env_var_deps`, `cache_dir_ignores`)
   is only as good as the distance between what it asserts and what it claims, and a proxy that
   coincides with the property today reads exactly like the property. The working test is: name a

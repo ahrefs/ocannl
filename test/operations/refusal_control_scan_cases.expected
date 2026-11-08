@@ -85,6 +85,10 @@ agent_notes_structure.ml: [scanner-refusal:ed552c5b3e09a3046aa9cce5257cc148] eve
 agent_notes_structure.ml: [scanner-refusal:348bb1f1fa0be73fb4796a31a76abaad] each flagged bullet (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:ec62d0a7d728c7ab15a2c9b8608c6404] every exemption still (claim) is catalogued beside agent_notes_structure.expected: true
 agent_notes_structure.ml: [scanner-refusal:91d29d400185d4fe574f5deb83d48157] every pointer-fixture exemption (claim) is catalogued beside agent_notes_structure.expected: true
+markdown_links.ml has exactly the explicitly assigned refusal controls: true
+markdown_links.ml: [scanner-refusal:2f2dfef90107c2fbc43b20d212add0ef] Markdown corpus includes (claim) is catalogued beside markdown_links.expected: true
+markdown_links.ml: [scanner-refusal:63555f8686b2d8399a5909d32c43838b] documented symlink alias (claim) is catalogued beside markdown_links.expected: true
+markdown_links.ml: [scanner-refusal:497f7864b862de90bf699cb29ebc7395] recognised relative Markdown (claim) is catalogued beside markdown_links.expected: true
 backend_golden_family_scan.ml has exactly the explicitly assigned refusal controls: true
 backend_golden_family_scan.ml: [scanner-refusal:2fcd4d491da746e829dc7cec63905091] self-certifying and provenance (claim) is catalogued beside backend_golden_family_scan.expected: true
 bin_smoke_membership_scan.ml has exactly the explicitly assigned refusal controls: true

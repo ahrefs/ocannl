@@ -1,0 +1,12 @@
+a deliberately broken relative link is rejected: true
+relative paths, angle destinations, titles and fragments share resolution: true
+URLs, reference links, images, code spans, comments and fences are outside the corpus: true
+root-relative destinations fail closed: true
+a colon in a fragment cannot hide a broken relative target: true
+relative links to the repository root resolve as directories: true
+a path escaping the repository is rejected: true
+unsupported relative destination syntax fails closed: true
+only the exact published-site route is exempt: true
+another HTML destination is checked rather than exempted: true
+every declared document scope is selected: true
+archive is outside the document corpus: true
