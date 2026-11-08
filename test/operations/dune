@@ -14521,3 +14521,16 @@
  (libraries base ocannl stderr_capture scripted_search arrayjit.verdict)
  (preprocess
   (pps ppx_ocannl)))
+
+(test
+ ; cc-vector-width: independent -- dyadic value parity holds at every width; no claim depends on which seed wins.
+ ; ocannl-backend: cc -- a CPU-only inference probe; contexts are explicit Context.cpu ().
+ (name frozen_master_pack)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var BENCH_FROZEN_SIZE))
+ (modules frozen_master_pack)
+ (libraries base ocannl stdio bench_retime arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

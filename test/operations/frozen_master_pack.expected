@@ -1,0 +1,10 @@
+the frozen master has host-init-backed constant data: true
+the virtual half twin lowers to a rounded master read: true
+frozen rounded inference executes with nonzero output: true
+runtime packing computes the rounded host oracle: true
+tuned frozen inference matches the packed reference: true
+tuned frozen inference matches the packed reference: true
+retimed inference still computes the rounded reference: true
+retimed inference still computes the rounded reference: true
+both arms admit enough timing calls to state a spread: true
+base refuses rounded hoisting: true
