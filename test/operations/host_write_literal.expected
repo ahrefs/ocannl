@@ -1,0 +1,30 @@
+2 false: literal write before compilation is refused: true
+2 false: set_values refuses the literal with a remedy: true
+2 false: set_value refuses the literal with a remedy: true
+2 false: from_host refuses the literal with a remedy: true
+2 false: refused writes leave the literal intact: true
+2 true: literal write before compilation is refused: true
+2 true: set_values refuses the literal with a remedy: true
+2 true: set_value refuses the literal with a remedy: true
+2 true: from_host refuses the literal with a remedy: true
+2 true: refused writes leave the literal intact: true
+2: materialized reference retains every literal value: true
+2: hoisted result matches the materialized reference: true
+32 false: literal write before compilation is refused: true
+32 false: set_values refuses the literal with a remedy: true
+32 false: set_value refuses the literal with a remedy: true
+32 false: from_host refuses the literal with a remedy: true
+32 false: refused writes leave the literal intact: true
+32 true: literal write before compilation is refused: true
+32 true: set_values refuses the literal with a remedy: true
+32 true: set_value refuses the literal with a remedy: true
+32 true: from_host refuses the literal with a remedy: true
+32 true: refused writes leave the literal intact: true
+32: materialized reference retains every literal value: true
+32: hoisted result matches the materialized reference: true
+2: ndarray-initialized parameter cannot be hoisted: true
+2: parameter accepts a single-cell host write: true
+2: ndarray-initialized parameter reads the host writes: true
+32: ndarray-initialized parameter cannot be hoisted: true
+32: parameter accepts a single-cell host write: true
+32: ndarray-initialized parameter reads the host writes: true

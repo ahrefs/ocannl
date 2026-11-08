@@ -742,11 +742,14 @@ val from_host : t -> Ir.Tnode.t -> Ir.Ndarray.t -> t
     fetches the node again, silently undoing the write, as in {!compile}'s refusal. That covers a
     literal at most [limit_constant_fill_size] values long even where lowering moved its fetch to
     link time: its values are declared constant, so an inlined or hoisted read never sees a write.
-    The remedy is the same: a node the host writes is built data-backed, with [Operation.init] or
-    [Train.host_scalar], or is a parameter. Only a write after the forward is compiled is refused:
-    one from a context that does not descend from the forward's routine is a sibling's, or a seed,
-    which a routine reading the node runs on until the forward first runs. {!copy} is not refused:
-    it moves a node's value between contexts, not a value of the host's. *)
+    Marked ndarray literals are also refused before compilation and above that limit
+    (gh-ocannl-2021): hoisted packing reads their registered values, independent of a fetch. The
+    remedy is the same: a node the host writes is built data-backed, with [Operation.init] or
+    [Train.host_scalar], with [TDSL.wrap] or [TDSL.rebatch] for ndarray data, or is a parameter. For
+    other fetch-defined nodes, only a write after the forward is compiled is refused: one from a
+    context that does not descend from the forward's routine is a sibling's, or a seed, which a
+    routine reading the node runs on until the forward first runs. {!copy} is not refused: it moves
+    a node's value between contexts, not a value of the host's. *)
 
 val get_values : t -> Ir.Tnode.t -> float array
 (** Retrieves all (unpadded) values of the node via an on-demand device-to-host transfer. The host

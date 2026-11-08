@@ -402,11 +402,11 @@ type t = {
   mutable host_constant : bool;
       (** Declared value-constancy: the node's values are fixed at construction and always equal its
           registered host-init data (an ndarray-backed literal). Set by [Tensor.ndarray] (and
-          eligible loaders), never cleared. This carries the constancy that [Effectively_constant]
-          intent cannot: ndarray-backed nodes are minted [On_device] (provenance
-          [Site "49:ndarray-backed"]), so the memory-mode lattice has no room left for the constant
-          marking. Consumed by [Schedule.Stage]'s hoisted packing (gh-ocannl-470) to justify
-          materializing a repacked copy once per device. *)
+          eligible loaders); parameterization clears it when the value becomes mutable. This carries
+          the constancy that [Effectively_constant] intent cannot: ndarray-backed nodes are minted
+          [On_device] (provenance [Site "49:ndarray-backed"]), so the memory-mode lattice has no
+          room left for the constant marking. Consumed by [Schedule.Stage]'s hoisted packing
+          (gh-ocannl-470) to justify materializing a repacked copy once per device. *)
   mutable zero_valid : (bool[@sexp_drop_if not]);
       (** Declared accumulator semantics: allocation-time zero is a correct value for this node, so
           [Context.run] may bind it as a READ-ONLY input that nothing has written (gh-ocannl-1462),
@@ -634,9 +634,12 @@ let known_host_constant tn = tn.host_constant || known_constant tn
     cleared. *)
 let set_context_owned tn = tn.context_owned <- true
 
-(** Declares that [tn]'s values are fixed at construction (host-init-backed literal). Monotone: set,
-    never cleared. *)
+(** Declares that [tn]'s values are fixed at construction (host-init-backed literal).
+    Parameterization clears this declaration when the value becomes mutable. *)
 let set_host_constant tn = tn.host_constant <- true
+
+(** Withdraws literal constancy when parameterization makes the value mutable. *)
+let clear_host_constant tn = tn.host_constant <- false
 
 (** Declares that allocation-time zero is a correct value of [tn] (see {!field-zero_valid}): a
     routine may then read it, read-only, before anything writes it, and embedded state the routine

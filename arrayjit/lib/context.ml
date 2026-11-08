@@ -2407,7 +2407,9 @@ let to_host_all ctx (tns : Tn.t list) : Nd.t list =
    ([Schedule.hoistable_constant]), so the write is refused all the same. {!copy} does not come
    here: it moves a node's value between contexts, the fetch's own unless the source was seeded. A
    view is left to {!upload}'s refusal, which names the parent to write. Runs before anything of the
-   write happens, so a refused [set_values] leaves the node's host buffer as it was. *)
+   write happens, so a refused [set_values] leaves the node's host buffer as it was. gh-ocannl-2021:
+   a marked host literal is immutable even without a fetch or a compiled forward: above the fill
+   limit it is Reshape-backed, but hoisting still reads its registered values. *)
 
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
@@ -2426,6 +2428,16 @@ let check_host_write_lasts ~fn ctx (tn : Tn.t) =
                or make it a parameter. A seed for a routine that reads the node before the forward \
                runs goes in before the forward's routine is compiled."
               fn (Tn.debug_name tn) name id)
+  | None, None when tn.Tn.host_constant ->
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Context.%s: node %s is a literal with constant host values (gh-ocannl-2021). A \
+               hoisted schedule reads its registered values, so a host write would be silently \
+               ignored, regardless of limit_constant_fill_size or whether a routine is compiled. \
+               Build mutable data with Operation.init or Train.host_scalar, use TDSL.wrap or \
+               TDSL.rebatch for ndarray data, or make it a parameter."
+              fn (Tn.debug_name tn))
   | _ -> ()
 
 let upload ctx (tn : Tn.t) (nd : Nd.t) : t =
