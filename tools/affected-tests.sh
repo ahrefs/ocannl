@@ -16,14 +16,17 @@
 # `--` (after `--since BASE`, a revision, or the `--files` paths too).
 #
 # `--gpu-gated` filters the ranked reach to aliases whose owner sources name
-# on_gpu, or name leg alongside on_cuda/on_hip/on_metal or a literal GPU
-# backend, or whose owner/rule has a stanza-local GPU ocannl-backend marker.
+# binds_hardware_grid or on_gpu, or name leg alongside on_cuda/on_hip/on_metal
+# or a literal GPU backend, or whose owner/rule has a stanza-local GPU
+# ocannl-backend marker.
 # Comments are ignored; this reads whole files, not scopes or gate expressions.
 # It may overselect (an unused name, a CPU leg beside a GPU literal) and miss
 # computed gates, generated sources or gates hidden in helpers. It does not
 # prove backend coverage, and keeps the unfiltered verdict and diagnostics.
 # Combine with --referenced-only for the first tier; omit it to retain indirect
-# library consumers. No backend-specific subdivision is inferred.
+# library consumers. This is the GPU-specific minimum: ungated every-backend
+# tests in the unfiltered list also exercise GPUs and are excluded here.
+# No backend-specific subdivision is inferred.
 #
 # `--why ALIAS` (gh-ocannl-1711; repeatable, the leading `@` optional) explains
 # that alias on stderr, in `affected: why @ALIAS: ...` lines, whether it is
@@ -2877,7 +2880,8 @@ sub gpu_source {
   my $s = code_of(slurp($f));
   my $ids = code_of($s, 1);  # comments and literal contents cannot declare on_gpu
   return $gpu_source_cache{$f} =
-    $ids =~ /\bon_gpu\b/ ? "$f names on_gpu"
+    $ids =~ /\bbinds_hardware_grid\b/ ? "$f names binds_hardware_grid"
+    : $ids =~ /\bon_gpu\b/ ? "$f names on_gpu"
     : $ids =~ /\bleg\b/ && ($ids =~ /\bon_(?:cuda|hip|metal)\b/ || $s =~ /"(?:cuda|hip|metal)"/)
       ? "$f declares a leg beside a GPU backend" : "";
 }
@@ -2907,8 +2911,6 @@ if ($gpu_gated) {
   # Keep the unfiltered verdict below: narrowing a cross-cutting list does not
   # turn this query into evidence that prepush can safely run a smaller suite.
   print STDERR "affected: --gpu-gated: file-level declarations only; no gate dataflow or runtime coverage; unknown sources can be missed\n";
-  print STDERR "affected: gpu-gated: $_: $gpu_reason{$_}\n"
-    for sort grep { $tier{$_} && $gpu_reason{$_} } keys %gpu_reason;
 }
 
 # An UNMAPPED module of a library this build does not compile (an optional
@@ -2965,7 +2967,10 @@ if (%unmapped_mod) {
 my @selected = grep { !$gpu_gated || $gpu_reason{$_} }
   (sort(keys %out), $referenced_only ? () : @link_only);
 print "$_\n" for @selected;
-printf STDERR "affected: --gpu-gated: %d selected alias(es); counts and verdict below describe unfiltered reach\n", scalar @selected if $gpu_gated;
+if ($gpu_gated) {
+  print STDERR "affected: gpu-gated: $_: $gpu_reason{$_}\n" for @selected;
+  printf STDERR "affected: --gpu-gated: %d selected alias(es); counts and verdict below describe unfiltered reach\n", scalar @selected;
+}
 my $n_by_alias = grep { $out{$_} } keys %by_alias;
 printf STDERR "affected: %d alias(es) listed because their rules need a listed alias\n", $n_by_alias if $n_by_alias;
 printf STDERR "affected: %s: %d of its %d per-test aliases%s\n", $_, $listed{$_} // 0, $total{$_},

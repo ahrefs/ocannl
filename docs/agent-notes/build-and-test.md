@@ -3552,11 +3552,14 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     re-exporter such as `Context` or `Tensor`, but each also names `Tnode`, so the stricter
     re-export reading keeps them), 4 of them through a `test/support` helper definition.
   - `affected --gpu-gated` (gh-ocannl-2074) filters that same ranked reach by declarations
-    in an alias's owner sources (`on_gpu`, or `leg` beside `on_cuda`, `on_hip`, `on_metal`
-    or a literal GPU backend) or a GPU `ocannl-backend` marker inside its owner or own rule.
+    in an alias's owner sources (`binds_hardware_grid`, `on_gpu`, or `leg` beside `on_cuda`,
+    `on_hip`, `on_metal` or a literal GPU backend) or a GPU `ocannl-backend` marker inside its
+    owner or own rule.
     Use `--referenced-only` with it for direct mentions; omit that option to retain GPU-gated
     link-only consumers too. Stdout is aliases ready for a backend run; stderr names the gate
-    evidence. The unfiltered verdict remains, so a narrow GPU list does not waive CROSS-CUTTING.
+    evidence for exactly those aliases. This is the GPU-specific minimum: ungated every-backend
+    tests in the unfiltered list also exercise GPUs and are excluded here. The unfiltered verdict
+    remains, so a narrow GPU list does not waive CROSS-CUTTING.
     This is by-reading, at file granularity: comments are ignored, but unused names or a CPU leg
     beside a GPU literal can overselect; computed gates, generated sources and gates hidden in
     helpers can be missed. It neither proves runtime coverage nor infers which GPU can run a leg.
