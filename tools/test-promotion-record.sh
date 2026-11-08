@@ -206,4 +206,40 @@ if record "$repo"; then
   report "$rc" 'saved promotion during a real merge reaches the index with LF bytes'
 else report 1 'merge replay records both corrections'; fi
 export PATH=$ORIGINAL_PATH
+# The digest is the default path, including when another checkout reads a run.
+family_digest_case() { # NAME shipping|cut
+  local name=$1 control=$2 repo out
+  repo=$(project "$name" "$HERE/test-run.sh" "$HERE/promote.sh") || return 1
+  cat >>"$repo/dune" <<'DUNE'
+(rule (alias runtest) (deps gen.txt)
+ (action (progn
+  (with-stdout-to kernel.actual (run cat gen.txt))
+  (diff "kernel.%{read:extension.txt}.expected" kernel.actual))))
+DUNE
+  printf c >"$repo/extension.txt"
+  printf original >"$repo/kernel.c.expected"
+  printf original >"$repo/kernel.cu.expected"
+  if [ "$control" = cut ]; then
+    perl -i -ne 'print unless /golden_family_report .*pending </' "$repo/tools/test-run.sh"
+    cmp -s "$HERE/test-run.sh" "$repo/tools/test-run.sh" && return 1
+  fi
+  export OCANNL_TOOL_TEST_RUNS=$TMP/$name-runs TEST_PROMOTION_DUNE=$REAL_DUNE TEST_PROMOTION_VERSION=current
+  export PATH=$repo/.shim:$ORIGINAL_PATH
+  record "$repo" || return 1
+  grep -Fx '  pending promotion: kernel.c.expected' "$repo/record.log" >/dev/null || return 1
+  grep -Fx '  NOT pending promotion: kernel.cu.expected' "$repo/record.log" >/dev/null || return 1
+  # This runner belongs to the source checkout, not the fixture under test.
+  out=$("$HERE/test-run.sh" status "$recorded") || return 1
+  printf '%s\n' "$out" | grep -Fx '  NOT pending promotion: kernel.cu.expected' >/dev/null
+}
+family_digest_case family-digest shipping
+report $? 'the default digest reports extension siblings from the recorded worktree'
+if family_digest_case family-digest-cut cut; then
+  report 1 'negative control: cutting the digest report loses the sibling oracle'
+elif [ -s "$TMP/family-digest-cut/record.log" ] && grep -q '^verdict: FAIL' "$TMP/family-digest-cut/record.log"; then
+  report 0 'negative control: cutting the digest report loses the sibling oracle'
+else
+  report 1 'negative control: cutting the digest report loses the sibling oracle' 'run did not reach a Dune failure'
+fi
+
 finish

@@ -48,6 +48,10 @@ if [ "${1:-}" = --from-run ]; then
 else
   command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
 fi
+# The family report and alias resolution share the same Dune reader.
+[ -r tools/dune-golden-families.sh ] || die "cannot read tools/dune-golden-families.sh"
+# shellcheck source=dune-golden-families.sh
+. tools/dune-golden-families.sh
 # Credentials never reach dune, which records every spawned process's environment in
 # `_build/trace.csexp` (gh-ocannl-1280): the deny-list tools/test-run.sh applies, after the opam
 # environment above, whose updates could set one.
@@ -126,56 +130,11 @@ else
   dune promotion apply --root . "$@"
 fi
 
-# Backend family report (gh-ocannl-2073). Read the literal first argument of
-# (diff ...) / (diff? ...) in the local dune file; the backend read is the
-# wildcard, everything else is literal. Enumerate existing files, not a second
-# list of backend names. This is an advisory report, not proof they need edits
-# or that an untouched backend was tested. Saved-run replay uses the same list.
+# Backend family report (shared with test-run.sh digest).
 if [ "$listed" -eq 1 ]; then
-  printf '%s\n' "$promoted" | perl -e '
-    use strict; use warnings;
-    my %touched;
-    while (<STDIN>) {
-      chomp;
-      next if m{^(?:/|\\|[A-Za-z]:|\.\./)} || m{/\.\./};
-      $touched{$_} = 1 if -f $_;
-    }
-    my %reported;
-    for my $file (sort keys %touched) {
-      my ($dir) = $file =~ m{^(.*)/};
-      $dir = "." unless defined $dir;
-      open my $dune, "<", "$dir/dune" or next;
-      local $/; my $text = <$dune>;
-      # Tokenize so commented selectors and quoted parentheses are not rules.
-      my @tokens = $text =~ /;[^\n]*|"(?:\\.|[^"\\])*"|[()]|[^\s();"]+/g;
-      @tokens = grep { !/^;/ } @tokens;
-      for (my $i = 0; $i + 2 < @tokens; ++$i) {
-        next unless $tokens[$i] eq "(" && $tokens[$i+1] =~ /^diff\??$/;
-        my $name = $tokens[$i+2];
-        $name =~ s/^"(.*)"$/$1/s;
-        next unless $name =~ /^(.*?)%\{read:[^}]*\bocannl_backend\.txt\}(.*\.expected)$/;
-        my ($prefix, $suffix) = ($1, $2);
-        # Local filename selectors are the repository convention. Do not
-        # guess at includes, other interpolations or escaped Dune strings.
-        next if "$prefix$suffix" =~ m{[/\\%]};
-        my $pattern = qr/^\Q$prefix\E[^\/]+\Q$suffix\E$/;
-        (my $base = $file) =~ s{.*/}{};
-        next unless $base =~ $pattern;
-        my $family = "$dir/$name";
-        next if $reported{$family}++;
-        opendir my $dh, $dir or die "cannot list $dir: $!\n";
-        my @siblings = sort grep { /$pattern/ && -f "$dir/$_" } readdir $dh;
-        print STDERR "promote.sh: backend golden family $family\n";
-        for my $sibling (@siblings) {
-          my $path = $dir eq "." ? $sibling : "$dir/$sibling";
-          my $state = $touched{$path} ? "promoted" : "NOT promoted";
-          print STDERR "  $state: $path\n";
-        }
-      }
-    }
-  ' || printf 'promote.sh: WARNING -- backend golden family report failed\n' >&2
+  printf '%s\n' "$promoted" | golden_family_report . applied >&2
 else
-  printf 'promote.sh: WARNING -- promotion list failed; backend golden families could not be reported\n' >&2
+  printf 'promote.sh: WARNING -- promotion list failed; golden families could not be reported\n' >&2
 fi
 
 # Strip trailing CRs from a promoted golden. perl -i, not sed -i: BSD sed

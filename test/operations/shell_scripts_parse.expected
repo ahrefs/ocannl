@@ -639,6 +639,7 @@ tools/credential-env.sh parses: true
 tools/cuda-native-ptx-rerun.sh parses: true
 tools/cuda-tf32-parity.sh parses: true
 tools/device-probe.sh parses: true
+tools/dune-golden-families.sh parses: true
 tools/dune-quiet.sh parses: true
 tools/fleet-registry.sh parses: true
 tools/fleet-worker-candidates.sh parses: true

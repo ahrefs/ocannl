@@ -529,15 +529,22 @@ backend_family_case() { # NAME MODE CONTROL
     mkdir -p test/config test/logs
     printf '(lang dune 3.20)\n' >dune-project
     printf cc >test/config/ocannl_backend.txt
+    printf c >test/config/extension.txt
     cat >test/logs/dune <<'DUNE'
 (rule (target actual) (action (with-stdout-to actual (echo fresh))))
 (rule (alias probe)
  (action (diff "demo-%{read:../config/ocannl_backend.txt}-0.log.expected" actual)))
 (rule (alias probe) (action (diff demo-metal-0.log.expected actual)))
+(rule (alias probe) (action (diff other-cc.expected actual)))
+(rule (alias probe)
+ (action (diff "kernel.%{read:../config/extension.txt}.expected" actual)))
 ; (diff "other-%{read:../config/ocannl_backend.txt}.expected" actual)
 DUNE
     for backend in cc metal future_backend; do
       printf stale >"test/logs/demo-$backend-0.log.expected"
+    done
+    for backend in c cu future_extension; do
+      printf stale >"test/logs/kernel.$backend.expected"
     done
     printf unrelated >test/logs/other-cc.expected
     printf unrelated >test/logs/other-metal.expected
@@ -551,17 +558,17 @@ DUNE
       pwd -P >saved/wt
       printf 1 >saved/exit
       n=0
-      for backend in cc metal; do
+      for backend in demo-cc-0.log.expected demo-metal-0.log.expected kernel.c.expected; do
         n=$((n + 1))
-        printf 'test/logs/demo-%s-0.log.expected\n' "$backend" >>saved/promotion-files/paths
+        printf 'test/logs/%s\n' "$backend" >>saved/promotion-files/paths
         printf stale >"saved/promotion-files/$n.original"
         printf fresh >"saved/promotion-files/$n.corrected"
       done
-      tools/promote.sh --from-run saved test/logs/demo-cc-0.log.expected
+      tools/promote.sh --from-run saved test/logs/demo-cc-0.log.expected test/logs/kernel.c.expected
     elif [ "$mode" = all ]; then
       harness_dune_colour tools/promote.sh
     else
-      harness_dune_colour tools/promote.sh test/logs/demo-cc-0.log.expected
+      harness_dune_colour tools/promote.sh test/logs/demo-cc-0.log.expected test/logs/kernel.c.expected
     fi
   ) >"$TMP/$1.out" 2>&1
   rc=$?
@@ -575,7 +582,13 @@ DUNE
     [ "$(cat "$repo/test/logs/demo-metal-0.log.expected")" = stale ] || return 1
   fi
   printf '%s\n' "$out" | grep -Fx '  NOT promoted: test/logs/demo-future_backend-0.log.expected' >/dev/null || return 1
-  case "$out" in *'family test/logs/other-'* | *'promoted: test/logs/other-'*) return 1 ;; esac
+  printf '%s\n' "$out" | grep -Fx '  promoted: test/logs/kernel.c.expected' >/dev/null || return 1
+  printf '%s\n' "$out" | grep -Fx '  NOT promoted: test/logs/kernel.cu.expected' >/dev/null || return 1
+  printf '%s\n' "$out" | grep -Fx '  NOT promoted: test/logs/kernel.future_extension.expected' >/dev/null || return 1
+  case "$out" in *'golden families: test/logs/other-'* | *'promoted: test/logs/other-'*) return 1 ;; esac
+  if [ "$mode" = all ]; then
+    [ "$(cat "$repo/test/logs/other-cc.expected")" = fresh ] || return 1
+  fi
   [ "$(cat "$repo/test/logs/demo-cc-0.log.expected")" = fresh ] || return 1
   [ "$(cd "$repo" && g show :test/logs/demo-cc-0.log.expected)" = stale ] || return 1
 }
@@ -597,5 +610,21 @@ leg_10() {
   fi
 }
 harness_leg_run '10: per-backend golden families at promotion time, with a cut-report control' leg_10
+
+leg_11() {
+  local syntax out repo="$TMP/reader"
+  stage_promote "$repo" || { harness_abandon "cannot stage reader fixture"; return; }
+  printf stale >"$repo/probe.c.expected"
+  printf stale >"$repo/probe.cu.expected"
+  for syntax in '#; (rule)' '#| comment |#' '(include extra)' '(dynamic_include extra)' '(rule'; do
+    printf '%s\n' "$syntax" >"$repo/dune"
+    out=$(cd "$repo" && . tools/dune-golden-families.sh && printf 'probe.c.expected\n' | golden_family_report . applied)
+    case "$out" in
+      *'family report unavailable for .'*) report 0 "reader refuses unsupported form: $syntax" ;;
+      *) report 1 "reader refuses unsupported form: $syntax" "$out" ;;
+    esac
+  done
+}
+harness_leg_run '11: family report names unsupported Dune syntax as unavailable' leg_11
 
 finish
