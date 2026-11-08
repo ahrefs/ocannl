@@ -646,10 +646,12 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
     List.fold params ~init:!more_embedded ~f:(fun acc p ->
         Set.add (Set.union acc p.forward.embedded_nodes) p.value)
   in
-  (* Handle random_seed specially: it's a global singleton whose forward code might have been
-     "stolen" by a tensor that isn't part of params (e.g., from an untaken conditional branch). If
-     random_seed exists and was used (no longer a fwd_root) but not in embedded_nodes, we need to
-     include random_seed's own embedded_nodes. *)
+  (* Keep a consumed singleton seed available for linking when another graph absorbed its forward
+     code. This metadata does not initialize the buffer: Context.run requires a prior write even for
+     embedded read-only nodes (gh-ocannl-2023). Independent graphs must create a fresh seed before
+     construction, or run the seed initializer in their shared ancestor. The current singleton is
+     not necessarily the seed captured by a graph built under a scoped seed, so injecting its
+     forward code here would not repair every missing initialization. *)
   let embedded_nodes =
     match !random_seed with
     | None -> embedded_nodes

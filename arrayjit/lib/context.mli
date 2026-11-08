@@ -73,11 +73,11 @@ type routine = private {
           (gh-ocannl-333). Not the backend's raw read set: the execution-dependency frontier is
           built from the unfiltered backend inputs before these exclusions. *)
   shared_reads : Set.M(Ir.Tnode).t;
-      (** The required reads (including embedded read-only nodes) whose buffers are their device's
-          cached host literals ({!Ir.Backend_intf.Constant_key}), the one kind of buffer
-          independently created contexts on the device share: {!run} refuses one another root wrote
-          since this lineage last wrote or copied it (gh-ocannl-1623). Any other constant is cached
-          per root (gh-ocannl-1654), so no other root's write can reach it. *)
+      (** The reads (including embedded read-only nodes) whose buffers are their device's cached
+          host literals ({!Ir.Backend_intf.Constant_key}), the one kind of buffer independently
+          created contexts on the device share: {!run} refuses one another root wrote since this
+          lineage last wrote or copied it (gh-ocannl-1623). Any other constant is cached per root
+          (gh-ocannl-1654), so no other root's write can reach it. *)
   outputs : Set.M(Ir.Tnode).t;
       (** The materialized nodes the routine writes — what {!run} marks initialized. *)
   written_first : Set.M(Ir.Tnode).t;

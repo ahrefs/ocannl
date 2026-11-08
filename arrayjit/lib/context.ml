@@ -1352,7 +1352,9 @@ let check_lineage_runnable ctx routine =
              "Context.run: routine %s: required input nodes not initialized: %s. Seed them (e.g. \
               Context.set_values, or a routine writing them run first) before running; a read-only \
               input whose allocation-time zeros are its correct value can instead be declared so \
-              with Ir.Tnode.mark_zero_valid."
+              with Ir.Tnode.mark_zero_valid. For independent random-initializer graphs, call \
+              Tensor.set_random_seed before constructing each graph, or run the seed initializer \
+              in their shared ancestor."
              routine.name missing_names));
   (* gh-ocannl-1623: a host literal this lineage did write or reads as its host init, but whose
      device-wide buffer another root has written since: the bytes are that root's, not this

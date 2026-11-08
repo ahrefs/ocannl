@@ -5,6 +5,8 @@ exp -> n0_exp
 log -> n1_log
 floorf -> n2_floorf
 fabsf -> n3_fabsf
+backend builtin call is emitted: true
+the tanh call is in the kernel statements: true
 tanh -> compiled
 bfloat16_to_single -> compiled
 single_to_bfloat16 -> compiled

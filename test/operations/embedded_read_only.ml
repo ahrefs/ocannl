@@ -11,17 +11,23 @@ let draw ~seed ~initialize =
   let unused = NTDSL.uniform () () in
   let w = TDSL.param "probe_w" ~output_dims:[ 8 ] () in
   let base = Context.auto () in
-  let base =
-    if initialize then
-      let c, r = Context.compile ~name:"probe_seed" base rs.Tensor.forward Train.IDX.empty in
-      Context.run c r
-    else base
-  in
-  let ctx = Train.init_params base Train.IDX.empty w in
-  let values = Context.get_values ctx w.Tensor.value in
-  ignore (Stdlib.Sys.opaque_identity unused : Tensor.t);
-  Context.release ctx;
-  values
+  let seed_ctx = ref base in
+  Exn.protect
+    ~finally:(fun () ->
+      Context.release !seed_ctx;
+      Context.release base)
+    ~f:(fun () ->
+      if initialize then (
+        let c, r = Context.compile ~name:"probe_seed" base rs.Tensor.forward Train.IDX.empty in
+        seed_ctx := c;
+        seed_ctx := Context.run c r);
+      let ctx = Train.init_params !seed_ctx Train.IDX.empty w in
+      Exn.protect
+        ~finally:(fun () -> Context.release ctx)
+        ~f:(fun () ->
+          let values = Context.get_values ctx w.Tensor.value in
+          ignore (Stdlib.Sys.opaque_identity unused : Tensor.t);
+          values))
 
 let refused ~node f =
   match f () with
@@ -50,7 +56,8 @@ let input_case ~zero_valid =
   let ctx, routine =
     Context.compile ~name:"embedded_input" (Context.auto ()) comp Train.IDX.empty
   in
-  Verdict.p "the input is embedded and read-only"
+  Verdict.p
+    ((if zero_valid then "zero-valid" else "unmarked") ^ " input is embedded and read-only")
     (Set.mem comp.embedded_nodes x.value && not (Set.mem routine.outputs x.value));
   if zero_valid then (
     let ctx = Context.run ctx routine in
@@ -84,3 +91,39 @@ let () =
   Verdict.p "embedded host literal initializes at link and runs"
     (Poly.equal (Context.get_values ctx y.value) (Array.map values ~f:(fun x -> 2. *. x)));
   Context.release ctx
+
+let () =
+  Tensor.unsafe_reinitialize ();
+  (* Register host data directly so this fixture can write the shared buffer through the public API.
+     High-level term_init literals are immutable to host writes (gh-ocannl-2021); this is the same
+     mutable host-initialized fixture as context_handle_refusals. *)
+  let x =
+    Tensor.term ~label:[ "embedded_shared" ] ~grad_spec:Tensor.Prohibit_grad ~output_dims:[ 32 ] ()
+  in
+  let nd =
+    Ir.Ndarray.create_array ~debug:"embedded_shared" Ir.Ops.single ~dims:[| 32 |] ~padding:None
+  in
+  Ir.Ndarray.fill_from_float nd 3.;
+  Ir.Host_inits.register x.value (lazy nd);
+  let y = NTDSL.pointmul x (NTDSL.number 2.) () in
+  Train.set_materialized x.value;
+  Train.set_materialized y.value;
+  let comp = Tensor.consume_forward_code y in
+  let ca, ra = Context.compile ~name:"embedded_shared_a" (Context.auto ()) comp Train.IDX.empty in
+  let cb, rb = Context.compile ~name:"embedded_shared_b" (Context.auto ()) comp Train.IDX.empty in
+  Verdict.p "embedded host data is a shared read, not a required input"
+    (Set.mem comp.embedded_nodes x.value
+    && Set.mem ra.shared_reads x.value && Set.mem rb.shared_reads x.value
+    && not (Set.mem rb.inputs x.value));
+  let cb = Context.run cb rb in
+  Verdict.p "the shared reader first sees the host initialization"
+    (Poly.equal (Context.get_values cb y.value) (Array.create ~len:32 6.));
+  let ca = Context.set_values ca x.value (Array.init 32 ~f:(fun i -> Float.of_int (i + 10))) in
+  Verdict.p "another root writing the embedded shared buffer makes the reader stale"
+    (match Context.run cb rb with
+    | _ -> false
+    | exception Utils.User_error msg ->
+        String.is_substring msg ~substring:"embedded_shared"
+        && String.is_substring msg ~substring:"are host-initialized literals");
+  Context.release cb;
+  Context.release ca

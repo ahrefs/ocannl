@@ -2,6 +2,11 @@ open Base
 module Train = Ocannl.Train
 open Ocannl.Nn_blocks.DSL_modules
 module Tn = Ir.Tnode
+module Generated = Test_utils.Generated
+
+let () =
+  Utils.settings.output_debug_files_in_build_directory <- true;
+  Generated.init ~backend_name:(Context.backend_name (Context.auto ()))
 
 (* Falsifier: tensors whose labels match C keywords or C math function names must get disambiguated
    code names (n<id>_<label>) rather than the bare name. A bare keyword would produce ill-formed C
@@ -95,7 +100,11 @@ let () =
       let ctx3 = Context.auto () in
       (* The operand is unlabelled so the destination node's label is exactly ["tanh"] -- with a
          labelled operand it would be "tanh_<operand>" and never collide. *)
-      let t_tanh = NTDSL.tanh (NTDSL.add (mk "a") (mk "b") ()) () in
+      let a = mk "a" and b = mk "b" in
+      (* Keep the call opaque to constant folding: the identifier collision needs an actual call in
+         the kernel, not just a node with the right label. *)
+      List.iter [ a; b ] ~f:(fun t -> Train.set_materialized t.Tensor.value);
+      let t_tanh = NTDSL.tanh (NTDSL.add a b ()) () in
       let bf_a = mk "bfloat16_to_single" in
       let bf_b = mk "single_to_bfloat16" in
       let bf_sum = NTDSL.add bf_a bf_b () in
@@ -103,7 +112,13 @@ let () =
       let result3 = NTDSL.add t_tanh bf_sum () in
       List.iter [ t_tanh; bf_a; bf_b; bf_sum; result3 ] ~f:(fun t ->
           Train.set_materialized t.Tensor.value);
-      let _ctx3 = Train.forward_once ctx3 result3 in
+      let ctx3, routine = Train.to_routine ctx3 Train.IDX.empty (Train.forward result3) in
+      let _ctx3 = Context.run ctx3 routine in
+      let call = if String.equal (Context.backend_name ctx3) "metal" then "tanh(" else "tanhf(" in
+      Generated.assert_emits ~routine:routine.name ~contains:call "backend builtin call is emitted";
+      let logic = Generated.main_logic (Generated.read routine.name) in
+      Verdict.p "the tanh call is in the kernel statements"
+        (String.is_substring logic ~substring:call);
       if Option.is_some t_tanh.value.Tn.code_name then Stdio.printf "tanh -> compiled\n"
       else
         Verdict.fail

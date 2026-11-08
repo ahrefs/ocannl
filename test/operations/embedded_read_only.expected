@@ -1,9 +1,12 @@
 an initializer whose seed owner did not run is refused: true
 explicitly initialized seeds produce distinct draws: true
-the input is embedded and read-only: true
+unmarked input is embedded and read-only: true
 unwritten embedded read-only input is refused: true
 uploading the embedded input permits the correct result: true
-the input is embedded and read-only: true
+zero-valid input is embedded and read-only: true
 declared zero-valid embedded input runs from zero: true
 the literal is embedded and host-initialized: true
 embedded host literal initializes at link and runs: true
+embedded host data is a shared read, not a required input: true
+the shared reader first sees the host initialization: true
+another root writing the embedded shared buffer makes the reader stale: true
