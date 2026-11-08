@@ -910,6 +910,11 @@ test/operations/zero_out_local_decl.ml [through Ll_test.execute; run by @test/op
 test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations/runtest-zero_run_reorder]
 
 == the aliases a codegen change runs on every GPU backend ==
+# This section lists the kernel-execution routes only, not the whole acceptance set. On each
+# GPU backend, also run the applicable golden routes from the earlier sections "the aliases a
+# codegen change runs" and "of those, the aliases re-running a golden only on one backend".
+# For example, @test/operations/runtest-micrograd_demo_logging is required by those earlier
+# sections but is absent from this kernel-execution list.
 @arrayjit/test/runtest-test_cross_cse
 @arrayjit/test/runtest-test_vectorized_codegen
 @test/operations/runtest-accum_max_one_extent
