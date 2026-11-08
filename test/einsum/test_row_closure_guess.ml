@@ -405,3 +405,56 @@ let () =
       in
       pf "control, fixed total, %s: no bound, the output takes it all" order
         (has_axes env ro [ 12 ] && has_axes env rb []))
+
+(* (c) gh-ocannl-2035: what a refuted GLB still says. Its trailing flank bounds [v]'s last axes at
+   any rank, so a row that must take axes takes them from it: a draw fills the flank, a fixed total
+   takes it when it holds the total. One block of 4 against [..w.., 2, 2] was refused. *)
+let refuted_by_flank flank extra =
+  let v, rv, rw, bounded = refuted_pair () in
+  Row.add_resolve_at_use v;
+  let constrs, counter = extra rv in
+  let _left, env =
+    solve_all
+      (bounded
+      @ (ineq ~res:{ rw with dims = List.map flank ~f:dim } ~opnd:rv :: constrs)
+      @ [ shape_row rv; shape_row rw ])
+  in
+  (env, rv, rw, counter)
+
+let fixed n rv =
+  ( [
+      Row.Rows_constr
+        {
+          r = [ rv ];
+          constr = Total_elems { numerator = Num_elems n; divided_by = []; keep_axis = false };
+          origin;
+        };
+    ],
+    None )
+
+let () =
+  List.iter
+    [ [ 2; 2 ]; [ 3 ]; [ 2; 3 ] ]
+    ~f:(fun flank ->
+      let name = String.concat ~sep:"," (List.map flank ~f:Int.to_string) in
+      Verdict.case ("refuted, a draw, flank " ^ name) @@ fun () ->
+      let env, rv, rw, counter =
+        refuted_by_flank flank (fun rv ->
+            let counter, total = draw [ rv ] in
+            ([ total ], Some counter))
+      in
+      pf "refuted GLB, a draw, flank %s: fills the flank" name
+        (holds_total env rv ~counter:(Option.value_exn counter) ~elems:flank
+        && has_axes env rw flank))
+
+let () =
+  Verdict.case "refuted, a fixed total its flank holds" @@ fun () ->
+  let env, rv, _rw, _ = refuted_by_flank [ 2; 2 ] (fixed 4) in
+  p "refuted GLB, a fixed total its flank holds: takes the flank" (has_axes env rv [ 2; 2 ])
+
+(* No row whose last axes broadcast into [2, 2] and the rest into [w] holds 6: this refusal is
+   right. *)
+let () =
+  Verdict.case "refuted, a fixed total no flank-bounded row holds" @@ fun () ->
+  p "refuted GLB, a fixed total no row within the flank holds: refused"
+    (refused (fun () -> refuted_by_flank [ 2; 2 ] (fixed 6)))

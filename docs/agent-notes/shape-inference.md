@@ -517,7 +517,9 @@ files.
   read-only query of the rank graph: `entry_for_closing` for the terminal close and
   `process_shape_row`, `eliminate_row_constraint` when it re-reads the GLB from the environment
   (`collect_factors` looks at flanks only, so `4,4,..w..` counts as settled). A refuted GLB is
-  absent, not an error (gh-ocannl-1961). The bound itself was true: `pointdiv`'s `grad_asn` builds `-1 *. t1 /. (t2 **. 2)` on the primal, a pointwise result
+  absent, not an error (gh-ocannl-1961), except its trailing flank: it bounds the row's last axes
+  at any rank, so a row that must take axes reads it (gh-ocannl-2035, `refuted_flank`), a draw
+  filling it and a fixed total taking it when it holds the total. The bound itself was true: `pointdiv`'s `grad_asn` builds `-1 *. t1 /. (t2 **. 2)` on the primal, a pointwise result
   over both operands, so dividing `h, w, ..c..` by `..c..` bounds the statistic by a spatial row.
   A fresh evaluation never meets that GLB: its bound stays between variables, and stage 2 discharges
   `Total_elems` with no GLB. A compile before training hides both, as the rows arrive solved.

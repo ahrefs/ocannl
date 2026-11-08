@@ -40,3 +40,8 @@ control, fixed total, rows first: a bound holding the total, the sibling closes 
 control, fixed total, bound first: a bound holding the total, the sibling closes empty: true
 control, fixed total, rows first: no bound, the output takes it all: true
 control, fixed total, bound first: no bound, the output takes it all: true
+refuted GLB, a draw, flank 2,2: fills the flank: true
+refuted GLB, a draw, flank 3: fills the flank: true
+refuted GLB, a draw, flank 2,3: fills the flank: true
+refuted GLB, a fixed total its flank holds: takes the flank: true
+refuted GLB, a fixed total no row within the flank holds: refused: true
