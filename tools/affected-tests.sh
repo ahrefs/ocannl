@@ -5,15 +5,29 @@
 # and then runs this script. It prints aliases and runs none of them.
 #
 # Usage:
-#   tools/test-run.sh affected [--referenced-only] --since BASE [-- PATHSPEC...]
-#   tools/test-run.sh affected [--referenced-only] REV | REV..REV | REV...REV [-- PATHSPEC...]
-#   tools/test-run.sh affected [--referenced-only] --files PATH...
+#   tools/test-run.sh affected [--referenced-only] [--gpu-gated] --since BASE [-- PATHSPEC...]
+#   tools/test-run.sh affected [--referenced-only] [--gpu-gated] REV | REV..REV | REV...REV [-- PATHSPEC...]
+#   tools/test-run.sh affected [--referenced-only] [--gpu-gated] --files PATH...
 #   ... [--why ALIAS|all]... (with any of the forms above)
-#   ... --harnesses (with any of the forms above, instead of the two options
-#   before it: the harness commands, below, without asking dune)
+#   ... --harnesses (with any of the forms above, without alias selection or
+#   explanation options: the harness commands, below, without asking dune)
 #
-# `--referenced-only`, `--why` and `--harnesses` may stand anywhere before a
+# `--referenced-only`, `--gpu-gated`, `--why` and `--harnesses` may stand before a
 # `--` (after `--since BASE`, a revision, or the `--files` paths too).
+#
+# `--gpu-gated` filters the ranked reach to aliases whose owner sources name
+# binds_hardware_grid or on_gpu, or name leg/in_leg/skipped alongside
+# on_cuda/on_hip/on_metal
+# or a literal GPU backend, or whose owner/rule has a stanza-local GPU
+# ocannl-backend marker.
+# Comments are ignored; this reads whole files, not scopes or gate expressions.
+# It may overselect (an unused name, a CPU leg beside a GPU literal) and miss
+# computed gates, generated sources or gates hidden in helpers. It does not
+# prove backend coverage, and keeps the unfiltered verdict and diagnostics.
+# Combine with --referenced-only for the first tier; omit it to retain indirect
+# library consumers. This is the GPU-specific minimum: ungated every-backend
+# tests in the unfiltered list also exercise GPUs and are excluded here.
+# No backend-specific subdivision is inferred.
 #
 # `--why ALIAS` (gh-ocannl-1711; repeatable, the leading `@` optional) explains
 # that alias on stderr, in `affected: why @ALIAS: ...` lines, whether it is
@@ -297,10 +311,11 @@ tmp=$(cd "$tmp" && pwd -P) || die "cannot resolve $tmp"
 trap 'rm -rf "${tmp:?}"' EXIT
 trap "exit 130" INT TERM
 
-usage="usage: affected [--referenced-only] [--why ALIAS|all]... [--harnesses] --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] [--why ALIAS|all]... [--harnesses] --files PATH..."
+usage="usage: affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [--harnesses] --since BASE | REV | REV..REV | REV...REV [-- PATHSPEC...] | affected [--referenced-only] [--gpu-gated] [--why ALIAS|all]... [--harnesses] --files PATH..."
 # Link-only aliases (see the Perl below) are printed last, and named on stderr;
 # --referenced-only leaves them off stdout.
 referenced_only=0
+gpu_gated=0
 harnesses=0
 : >"$tmp/why"
 mode=git
@@ -316,6 +331,8 @@ args=()
 while [ $# -gt 0 ]; do
   case $1 in
     --referenced-only) referenced_only=1; shift ;;
+    --gpu-gated) gpu_gated=1; shift ;;
+    --gpu-gated=*) die "--gpu-gated is a flag and takes no value: $1 ($usage)" ;;
     --harnesses) harnesses=1; shift ;;
     --harnesses=*) die "--harnesses is a flag and takes no value: $1 ($usage)" ;;
     # A flag: with a value it is refused by name, never read as a path.
@@ -332,6 +349,7 @@ done
 set -- ${args[@]+"${args[@]}"}
 # Both rank and explain aliases, which --harnesses does not print.
 if [ "$harnesses" = 1 ]; then
+  [ "$gpu_gated" = 0 ] || die "--harnesses and --gpu-gated print different lists ($usage)"
   [ "$referenced_only" = 0 ] || die "--harnesses prints no alias, so --referenced-only has nothing to leave off ($usage)"
   [ ! -s "$tmp/why" ] || die "--harnesses prints no alias, so --why has none to explain ($usage)"
 fi
@@ -947,7 +965,7 @@ listings
 
 cat >"$tmp/main.pl" <<'PERL'
 use strict; use warnings;
-my ($tmp, $referenced_only, $probe_ok, $qroot, $old_root) = @ARGV;
+my ($tmp, $referenced_only, $probe_ok, $qroot, $old_root, $gpu_gated) = @ARGV;
 # While a dune answer is being read, a refusal keeps a copy of it (see keep_raw).
 our ($raw_text, $raw_what);
 sub fail {
@@ -1324,12 +1342,26 @@ sub keep_raw {
 # back OPAQUE (\x01-prefixed: its escapes and its leading space are not
 # decoded), which every reader of a stanza's needs takes as unknown.
 sub parse_dune {
-  my ($s, $what) = @_;
+  my ($s, $what, $markers) = @_;
   my @stack = ([]);
   my $put = sub { push @{$stack[-1]}, $_[0] };
   pos($s) = 0;
   while (pos($s) < length $s) {
-    next if $s =~ /\G\s+/gc || $s =~ /\G;[^\n]*/gc;
+    next if $s =~ /\G\s+/gc;
+    if ($s =~ /\G;([^\n]*)/gc) {
+      # A second reading retains only stanza-local GPU backend declarations.
+      if ($markers && $1 =~ /^\s*ocannl-backend:\s*([a-z_]+(?:[ \t]*,[ \t]*[a-z_]+)*)/
+          && grep { /^(?:cuda|hip|metal)$/ } split /[ \t]*,[ \t]*/, $1) {
+        # Containment, not adjacency: a marker inside a field still belongs
+        # to its enclosing stanza, including within a (subdir ...) wrapper.
+        for my $x (reverse @stack) {
+          next unless @$x && !ref $x->[0] && $x->[0] =~ /^(?:library|executables?|tests?|rule)$/;
+          push @$x, ["affected_gpu_backend"];
+          last;
+        }
+      }
+      next;
+    }
     if ($s =~ /\G\(/gc) { push @stack, []; next }
     if ($s =~ /\G\)/gc) {
       @stack > 1 or die "unbalanced parentheses in $what at byte " . (pos($s) - 1) . "\n";
@@ -1387,6 +1419,7 @@ sub rpath {   # BASE/P normalized, repository-relative; undef when it leaves the
   }
   return @parts ? join("/", @parts) : ".";
 }
+my @gpu_stanzas; # stanza-local backend markers, kept out of the build reading
 my @dstanzas;   # every stanza of every dune file, as read from the worktree
 my %dune_text;  # dune file -> its text
 for my $f (grep { $_ ne "" } split /\n/, slurp("$tmp/dune-files")) {
@@ -1394,6 +1427,8 @@ for my $f (grep { $_ ne "" } split /\n/, slurp("$tmp/dune-files")) {
   $dune_text{$f} = slurp($f);
   my $items = eval { parse_dune($dune_text{$f}, $f) } or fail($@ =~ s/\n$//r);
   push @dstanzas, dune_stanzas((dir_of($f))[0], $items);
+  push @gpu_stanzas, grep { defined dfield($_->{x}, "affected_gpu_backend") }
+    dune_stanzas((dir_of($f))[0], parse_dune($dune_text{$f}, $f, 1)) if $gpu_gated;
 }
 # An edit to a fragment a dune file `(include ...)`s (or `dynamic_include`s)
 # reaches like an edit to that dune file.
@@ -2837,6 +2872,50 @@ my @why_lines;
   }
 }
 
+# GPU selection is independent of reach/ranking: inspect only the alias's
+# owners, never every library they link (Verdict itself declares GPU names).
+# This is a file-level declaration heuristic, not OCaml scope/dataflow analysis.
+my (%gpu_reason, %gpu_source_cache);
+sub gpu_source {
+  my ($f) = @_;
+  return $gpu_source_cache{$f} if exists $gpu_source_cache{$f};
+  return $gpu_source_cache{$f} = "" unless -f $f;
+  my $s = code_of(slurp($f));
+  my $ids = code_of($s, 1);  # comments and literal contents cannot declare on_gpu
+  return $gpu_source_cache{$f} =
+    $ids =~ /\bbinds_hardware_grid\b/ ? "$f names binds_hardware_grid"
+    : $ids =~ /\bon_gpu\b/ ? "$f names on_gpu"
+    : $ids =~ /\b(?:leg|in_leg|skipped)\b/ && ($ids =~ /\bon_(?:cuda|hip|metal)\b/ || $s =~ /"(?:cuda|hip|metal)"/)
+      ? "$f declares a gated claim beside a GPU backend" : "";
+}
+if ($gpu_gated) {
+  for my $a (grep { !$hidden{$_->{name}} && $tier{$_->{name}} } @al) {
+    my $n = $a->{name};
+    for my $o (sort keys %{$a->{all_owners}}) {
+      for my $f (sort @{stanza_sources($o) // []}) {
+        my $why = gpu_source($f);
+        $gpu_reason{$n} //= $why if $why;
+      }
+      my %names = map { $_ => 1 } @{$st[$o]{names}};
+      for my $ds (@gpu_stanzas) {
+        next unless $ds->{dir} eq $st[$o]{dir} && $ds->{kind} =~ /^(?:library|executables?|tests?)$/;
+        $gpu_reason{$n} //= "a GPU ocannl-backend marker on its owner" if grep { $names{$_} } dnames($ds);
+      }
+    }
+    for my $ds (grep { $_->{dir} eq $a->{dir} && $_->{kind} eq "rule" } @gpu_stanzas) {
+      my @aliases = map { @{dfield($ds->{x}, $_) // []} } qw(alias aliases);
+      my @targets = map { @{dfield($ds->{x}, $_) // []} } qw(target targets);
+      my %own = map { $_ => 1 } @{$a->{own}};
+      $gpu_reason{$n} //= "a GPU ocannl-backend marker on its rule"
+        if (grep { !ref && $_ eq $a->{alias} } @aliases)
+          || (grep { !ref && $own{rpath($ds->{dir}, $_) // ""} } @targets);
+    }
+  }
+  # Keep the unfiltered verdict below: narrowing a cross-cutting list does not
+  # turn this query into evidence that prepush can safely run a smaller suite.
+  print STDERR "affected: --gpu-gated: file-level declarations only; no gate dataflow or runtime coverage; unknown sources can be missed\n";
+}
+
 # An UNMAPPED module of a library this build does not compile (an optional
 # backend: cuda_backend.ml on a Mac; gh-ocannl-1651): what a build that does
 # compile it would reach, named on stderr for a box that builds it. Read from
@@ -2888,8 +2967,13 @@ if (%unmapped_mod) {
   }
 }
 
-print "$_\n" for sort keys %out;
-print "$_\n" for $referenced_only ? () : @link_only;
+my @selected = grep { !$gpu_gated || $gpu_reason{$_} }
+  (sort(keys %out), $referenced_only ? () : @link_only);
+print "$_\n" for @selected;
+if ($gpu_gated) {
+  print STDERR "affected: gpu-gated: $_: $gpu_reason{$_}\n" for @selected;
+  printf STDERR "affected: --gpu-gated: %d selected alias(es); counts and verdict below describe unfiltered reach\n", scalar @selected;
+}
 my $n_by_alias = grep { $out{$_} } keys %by_alias;
 printf STDERR "affected: %d alias(es) listed because their rules need a listed alias\n", $n_by_alias if $n_by_alias;
 printf STDERR "affected: %s: %d of its %d per-test aliases%s\n", $_, $listed{$_} // 0, $total{$_},
@@ -3001,7 +3085,7 @@ printf STDERR "affected: verdict=%s\n", join(",", grep { $verdict{$_} } qw(cross
 exit($verdict{incomplete} ? 3 : 0);
 PERL
 rc=0
-perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" || rc=$?
+perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" "$gpu_gated" || rc=$?
 # 4: the probe loaded, but dune could not print a rule there (an input the copy
 # lacks, say): the whole reading again, without the probe.
 if [ "$rc" = 4 ] && [ "$probe_ok" = 1 ]; then
@@ -3014,6 +3098,6 @@ if [ "$rc" = 4 ] && [ "$probe_ok" = 1 ]; then
   fi
   listings
   rc=0
-  perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" || rc=$?
+  perl "$tmp/main.pl" "$tmp" "$referenced_only" "$probe_ok" "$qroot" "$tmp/probe-old" "$gpu_gated" || rc=$?
 fi
 exit "$rc"

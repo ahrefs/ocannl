@@ -57,7 +57,7 @@
 #   tools/test-run.sh lock-status [RUN|last]          # idle/held; exits 0/3 (2 error)
 #   tools/test-run.sh idle                             # 0 idle, 3 locked, 2 unreadable
 #                                                     # snapshot, not a reservation
-#   tools/test-run.sh affected [--referenced-only] [--why ALIAS|all] [--harnesses] --since BASE|REV|REV..REV|--files PATH...
+#   tools/test-run.sh affected [--referenced-only] [--gpu-gated] [--why ALIAS|all] [--harnesses] --since BASE|REV|REV..REV|--files PATH...
 #                                                      # the per-test aliases a change reaches,
 #                                                      # link-only ones last; runs none;
 #                                                      # --why explains one on stderr;

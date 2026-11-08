@@ -3551,6 +3551,20 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     gh-ocannl-1765), 6 named a changed definition with the module (4 listed with `Tn` beside a
     re-exporter such as `Context` or `Tensor`, but each also names `Tnode`, so the stricter
     re-export reading keeps them), 4 of them through a `test/support` helper definition.
+  - `affected --gpu-gated` (gh-ocannl-2074) filters that same ranked reach by declarations
+    in an alias's owner sources (`binds_hardware_grid`, `on_gpu`, or `leg`/`in_leg`/`skipped`
+    beside `on_cuda`, `on_hip`, `on_metal` or a literal GPU backend) or a GPU `ocannl-backend` marker inside its
+    owner or own rule.
+    Use `--referenced-only` with it for direct mentions; omit that option to retain GPU-gated
+    link-only consumers too. Stdout is aliases ready for a backend run; stderr names the gate
+    evidence for exactly those aliases. This is the GPU-specific minimum: ungated every-backend
+    tests in the unfiltered list also exercise GPUs and are excluded here. The unfiltered verdict
+    remains, so a narrow GPU list does not waive CROSS-CUTTING.
+    This is by-reading, at file granularity: comments are ignored, but unused names or a CPU leg
+    beside a GPU literal can overselect; computed gates, generated sources and gates hidden in
+    helpers can be missed. It neither proves runtime coverage nor infers which GPU can run a leg.
+    `tools/test-affected-tests.sh`'s GPU-gated reach leg pins a changed function's callers,
+    CPU and unrelated controls, stanza-local markers and a disabled-discovery negative control.
   - The shell harnesses are no dune aliases, so `affected` reads them from their own text
     (gh-ocannl-1900; the boundary is `tools/affected-tests.sh`'s header, The harness legs): each
     member `tools/test-harnesses.sh --list` names reaches what its program (it and the scripts it
