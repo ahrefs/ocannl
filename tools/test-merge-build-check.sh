@@ -190,21 +190,26 @@ shell --shell --jobs 4" ] && has 'merge-build-check: passed'; then
 fi
 
 # Use the same tree twice, but force each tier across a different whole-second duration.
-# Compare the actual lines without normalizing digits: shared-failure detection does the same.
-if harness_leg 'tier lines are identical across run durations #run'; then
-  FAKE_TIER_DELAY=0 R=$BOTH_SCRIPT run "$TMP/dunebin"
-  first_rc=$rc
-  grep ' tier ' "$TMP/out" >"$TMP/tiers-first"
-  FAKE_TIER_DELAY=2 R=$BOTH_SCRIPT run "$TMP/dunebin"
-  grep ' tier ' "$TMP/out" >"$TMP/tiers-second"
-  if [ "$first_rc" = 0 ] && [ "$rc" = 0 ] &&
-     has 'merge-build-check: compile tier passed' && has 'merge-build-check: shell tier passed' &&
-     cmp -s "$TMP/tiers-first" "$TMP/tiers-second"; then
-    report 0 'the same tree prints identical tier lines despite different durations'
-  else
-    report 1 'the same tree prints identical tier lines despite different durations' \
-      "exits $first_rc, $rc; first: $(cat "$TMP/tiers-first"); second: $(cat "$TMP/tiers-second")"
-  fi
+# Compare complete logs without normalizing digits, including the shared shell-red scenario.
+if harness_leg 'whole logs are identical across run durations #run'; then
+  for shell_rc in 0 1; do
+    case $shell_rc in
+      0) shell_line='merge-build-check: shell tier passed' ;;
+      1) shell_line='merge-build-check: shell tier FAILED (tools/test-harnesses.sh exit 1)' ;;
+    esac
+    FAKE_SHELL_RC=$shell_rc FAKE_TIER_DELAY=0 R=$BOTH_SCRIPT run "$TMP/dunebin"
+    first_rc=$rc
+    cp "$TMP/out" "$TMP/out-first"
+    FAKE_SHELL_RC=$shell_rc FAKE_TIER_DELAY=2 R=$BOTH_SCRIPT run "$TMP/dunebin"
+    if [ "$first_rc" = "$shell_rc" ] && [ "$rc" = "$shell_rc" ] &&
+       has 'merge-build-check: compile tier passed' && has "$shell_line" &&
+       cmp -s "$TMP/out-first" "$TMP/out"; then
+      report 0 "the same tree prints identical whole logs with shell exit $shell_rc despite different durations"
+    else
+      report 1 "the same tree prints identical whole logs with shell exit $shell_rc despite different durations" \
+        "exits $first_rc, $rc; first: $(cat "$TMP/out-first"); second: $(cat "$TMP/out")"
+    fi
+  done
 fi
 
 # The scope. FAKE_REACH stands for the mapping; the fixtures above reach nothing without it, which
