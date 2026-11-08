@@ -8856,13 +8856,14 @@ module C_syntax (B : C_syntax_config) = struct
      that is not pure-index, a sibling statement, or any other inner loop stops the peel at that
      level (the recognizer then fails or the localization shrinks to that sub-nest). Two more
      declines, both unchanged by gh-ocannl-693: under [debug_log_from_routines] the per-step [Set]
-     form is kept — a [Local_scope] body renders with [log_set_locals:false], so the rewrite would
-     silence the per-iteration trace; the SIMD renderings bail there for the same reason, and logged
-     narrow runs already differ numerically from plain runs (every tensorized rendering declines
-     under logging). And an update mentioning an RNG conversion is never localized: the conversion
-     picks its result type AND which random bits it consumes from the precision it renders at
-     (gh-ocannl-517's carve-out, [renders_at_store_prec]), so rendering it inside a scope's
-     precision would change the draw, not just move it.
+     form is kept — a [Local_scope] in a [Set]'s value renders its body quietly (only [Set_local]
+     values carry the trace, gh-ocannl-2065), so the rewrite would silence the per-iteration trace;
+     the SIMD renderings bail there for the same reason, and logged narrow runs already differ
+     numerically from plain runs (every tensorized rendering declines under logging). And an update
+     mentioning an RNG conversion is never localized: the conversion picks its result type AND which
+     random bits it consumes from the precision it renders at (gh-ocannl-517's carve-out,
+     [renders_at_store_prec]), so rendering it inside a scope's precision would change the draw, not
+     just move it.
 
      Interaction with [volatile_serial_accumulation] (Metal) has two forms. Localization lifts the
      node [Set] out of exactly the invariant-address loops, so the device-memory RMW predicate is
