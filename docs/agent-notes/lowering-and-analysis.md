@@ -747,3 +747,10 @@ files.
   This does not check declaration order or definite initialization. `local_binder_gate` pins
   refusals and executed in-scope accesses; `local_scope_sibling_reads` protects the
   hoisted-definition ordering boundary.
+
+- A kept scope's assignment logging extends into `Local_scope` definitions in its RHS
+  (gh-ocannl-2065): `C_syntax.pp_scalar` carries `log_set_locals` through operands and dynamic
+  indices from `Set_local`. Such definitions need zero initialization in logged runs because
+  the trace reads the old local before the assignment. `micrograd_demo_logging` pins the nested
+  gradient assignments on each backend; scalar definitions outside a logged scope keep their
+  existing quiet rendering.
