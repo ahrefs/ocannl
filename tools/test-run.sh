@@ -351,7 +351,8 @@
 # Prefer `run`. In an agent harness, launch `run` through the harness's own
 # background mode and let the harness notify on exit -- that already removes
 # every reason to write a waiter. `start`/`wait` exist only for a run that must
-# outlive the launching session. The cap defaults to $OCANNL_TOOL_TEST_CAP or 3600s;
+# outlive the launching session. The cap defaults to $OCANNL_TOOL_TEST_CAP,
+# or 14400s for targets reaching @slow and 3600s otherwise;
 # `--cap 0` disables it (then supply your own bound). `--expect-backend B`
 # (repeatable) refuses a batch that does not hold backend B, before dune starts
 # (BACKEND REFUSED, exit 2): pass the GPU backend a GPU-box leg is for, since a
@@ -417,6 +418,18 @@ normalize_cap() { # [VARIABLE OPTION]: `cap` and `--cap` by default
   [ ${#v} -le 9 ] || die "$opt too large (max 9 digits)"
   # Leading zeroes are accepted as decimal rather than reaching bash as octal.
   printf -v "$var" '%s' "$(( 10#$v ))"
+}
+
+# Select only after the complete target intake, before the supervisor starts.
+select_run_cap() { # dune argv; cap_default is nonempty for an explicit cap
+  cap_why="asked for"
+  if [ -z "$cap_default" ]; then
+    cap_why="the default"
+    if test_cap_reaches_slow "$@" >/dev/null; then
+      cap=$SLOW_RUN_CAP_DEFAULT
+      cap_why="the slow default; see docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals"
+    fi
+  fi
 }
 
 # A value option's operand, written `--opt V` or `--opt=V` (gh-ocannl-1740:
@@ -934,7 +947,7 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
     return 0
   fi
   if arg=$(test_cap_reaches_slow "$@"); then
-    test_cap_why="no default: the targets reach the slow tests ($arg)"
+    test_cap_why="no default: the targets reach the slow tests ($arg); a wedged device can hold this run until its run cap; use --test-cap N for a tighter bound"
     return 0
   fi
   test_cap=$TEST_CAP_DEFAULT test_cap_why="the default for a GPU batch"
@@ -2707,6 +2720,7 @@ new_run() {
   # wait and the supervisor all operate on a run that cannot be tracked.
   { { printf '%q ' "$@"; echo; } >"$run_dir/cmd" &&
     printf '%s\n' "$cap" >"$run_dir/cap" &&
+    printf '%s\n' "${cap_why:-asked for}" >"$run_dir/cap-source" &&
     printf '%s\n' "$PWD" >"$run_dir/wt" &&
     printf '%s\n' "$RUNS" >"$run_dir/runs" &&
     { perl -e "$proc_table_perl" chain 2>/dev/null || :; } >"$run_dir/launchers" &&
@@ -4338,6 +4352,7 @@ case $sub in
     ;;
   repeat)
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
+    cap_default=${OCANNL_TOOL_TEST_CAP:+explicit}
     # As for `run`: empty is the default, which the resolution phase decides.
     test_cap=${OCANNL_TOOL_PER_TEST_CAP:-}
     alone=0
@@ -4345,7 +4360,7 @@ case $sub in
     targets_files=()
     while [ $# -gt 0 ]; do
       case $1 in
-        --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; shift "$opt_shift" ;;
+        --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; cap_default=explicit; shift "$opt_shift" ;;
         --test-cap | --test-cap=*) opt_value "a value" "$@"; test_cap=$opt_value; shift "$opt_shift" ;;
         --alone | --alone=*) opt_flag "$1"; alone=1; shift ;;
         --direct | --direct=*) opt_flag "$1"; direct=1; shift ;;
@@ -4394,6 +4409,7 @@ case $sub in
         die "repeat --direct needs python3 (the trace reader and tools/replay-rules.sh)"
     fi
     [ $# -gt 0 ] || set -- runtest
+    select_run_cap "$@"
     select_dune
     new_run "$@"
     take_lock
@@ -5113,6 +5129,7 @@ case $sub in
       {
         echo "command: dune $*"
         echo "backends: $(batch_summary)"
+        echo "run cap: ${cap}s ($(cat "$run_dir/cap-source"); 0 disables)"
         sed -n 's/^test-run: batch: /  /p' "$run_dir/log"
         if [ -n "$unmerged" ]; then
           echo "unmerged: run would refuse this checkout (UNMERGED REFUSED, exit 2)"
@@ -5333,6 +5350,7 @@ case $sub in
     # a run directory that is never published and is removed at the end, and
     # its --cap bounds the build as a run's would.
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
+    cap_default=${OCANNL_TOOL_TEST_CAP:+explicit}
     # Empty is the default, which `_resolve` decides once it knows the batch
     # (plan_test_cap); a value here is explicit and applies to any batch.
     test_cap=${OCANNL_TOOL_PER_TEST_CAP:-}
@@ -5340,7 +5358,7 @@ case $sub in
     targets_files=()
     while [ $# -gt 0 ]; do
       case $1 in
-        --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; shift "$opt_shift" ;;
+        --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; cap_default=explicit; shift "$opt_shift" ;;
         --test-cap | --test-cap=*) opt_value "a value" "$@"; test_cap=$opt_value; shift "$opt_shift" ;;
         --expect-backend | --expect-backend=*)
           opt_value "a backend" "$@"
@@ -5397,6 +5415,7 @@ case $sub in
       set -- "${fresh_args[@]}"
     fi
     [ $# -gt 0 ] || set -- runtest
+    select_run_cap "$@"
     # Toolchain checks gate only launches: status/wait/stop/list remain usable
     # from a shell whose opam environment is no longer active.
     select_dune

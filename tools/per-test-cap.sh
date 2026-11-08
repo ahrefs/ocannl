@@ -12,12 +12,21 @@
 # tools/test-run.sh (plan_test_cap) and in each GPU unit of tools/sweep.sh,
 # whose `@slow` leg it leaves to the unit's cap. 1500s
 # clears every runtest/train action in the fleet's dune traces (the longest,
-# 1021s, under correctness-slot load), but `slow-cifar_conv` runs ~300s solo
-# and loads of 5-15x were measured, plus its dataset download -- so `@slow`
+# 1021s, under correctness-slot load), but `slow-cifar_conv` took 1573s on tuf
+# HIP (2026-11-08), even before its dataset download -- so `@slow`
 # and CPU batches keep only the run's cap unless asked. Re-derive it from a
 # box's traces with tools/action-durations.sh, or from the `slowest` record
 # every test-run.sh run directory keeps (see its explicit_trace_file).
 TEST_CAP_DEFAULT=1500
+
+# A portable slow-suite/run-unit budget (gh-ocannl-2091), shared by test-run
+# and sweep --slow. The cold Metal unit already took about 10.4ks before the
+# widen oracle added 612s of action work. Four hours leaves about an hour
+# over that former unit for growth, cold builds and downloads. It also covers
+# the deliberately destructive slow-metal_gpu_hang_failure probe's 300s alarm;
+# that alarm is not a completed-training timing. Parallel action times are not
+# summed into a wall-time prediction; the per-box evidence stays in the PR.
+SLOW_RUN_CAP_DEFAULT=$((4 * 60 * 60))
 
 # Whether dune arguments reach the slow tests, which the default leaves to the
 # run's own cap; prints the first argument that does. Arguments after dune's

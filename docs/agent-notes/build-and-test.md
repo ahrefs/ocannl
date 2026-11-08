@@ -4961,13 +4961,27 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `execution=forced`. The clean is necessary because alias forcing does not reliably rerun inline
   expectations. A unit that cannot rebuild and finish inside the cap records an honest `timeout`.
   The weekly full check is therefore
-  `tools/sweep.sh --slow --force` (raise `OCANNL_TOOL_SWEEP_CAP` where a backend cannot fit the
-  default 90 minutes).
+  `tools/sweep.sh --slow --force`: its default unit cap is four hours, versus 90 minutes without
+  `--slow`. `OCANNL_TOOL_SWEEP_CAP` overrides either; remove a scheduled Sunday override to
+  inherit the shared slow budget.
   When the execution column was introduced, existing `pass` rows became `legacy-pass` with
   `execution=unknown`; old incremental evidence is retained, but cannot masquerade as a forced run.
 
 ### GPU boxes: job caps and runtime refusals
 
+- Slow-suite budgets (gh-ocannl-2091): `SLOW_RUN_CAP_DEFAULT` in `tools/per-test-cap.sh`
+  owns the four-hour budget shared by test-run batches naming slow aliases and sweep units
+  launched with `--slow`. Test-run otherwise defaults to one hour, sweep to 90 minutes.
+  Explicit caps win, including 0; `plan` names the cap's source. Selection precedes the
+  supervisor and includes building and resolution. This portable budget also covers individual
+  slow aliases; it is not a duration prediction. The former cold Metal sweep unit took about
+  10.4 ks before the widen oracle joined at 612 s of action work, leaving roughly an hour
+  of headroom at four hours. Parallel action times need not add to wall time. The separate
+  `slow-metal_gpu_hang_failure` probe has a 300 s alarm; that cost fits the budget but is not
+  evidence of completed training. The per-box timing evidence is in staging#1819.
+  Slow GPU batches deliberately keep no default per-test cap: a wedged device may therefore
+  hold the box for the whole run cap. Set `--test-cap N` for a tighter bound; `plan` names this
+  trade-off. Sweep keeps the per-test watcher on its regular leg even with `--slow`.
 - **On a WSL boot, the hip unit runs its tests under `dune -j 2`, and a red minix/hip whose
   failures are all `HIP_ERROR_INVALID_DEVICE` at `hip_init`, `HIP_ERROR_NO_BINARY_FOR_GPU` at
   module load, or failed stream creation is the WSL2 dxg bridge overflowing, not the backend.**
@@ -5359,8 +5373,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   above every runtest/train action in the four boxes' dune traces (the longest 1021 s
   `fsm_transformer` on minix, 810 s `autotune_smoke` on mac-studio, 757 s `circles_conv` on tuf,
   all under correctness-slot load, where load stretched tests 5-15x), but no trace holds an `@slow`
-  member: `slow-cifar_conv` runs ~300 s solo plus its dataset download, so at those load ratios it
-  could pass 1500 s legitimately, and CPU batches are not the failure class. So `@slow` and CPU
+  member when that bound was chosen: `slow-cifar_conv` is box/backend dependent (2026-11-08
+  sweep traces: minix HIP 155 s, rog CUDA 578 s, tuf HIP 1573 s, downloads excluded), so it
+  can pass 1500 s legitimately, and CPU batches are not the failure class. So `@slow` and CPU
   batches keep only the run's cap unless asked; `plan` says which applies and why. The default and
   the watcher live in `tools/per-test-cap.sh`, which `tools/sweep.sh` sources as well: a sweep unit
   on a non-CPU backend runs the same watcher beside its `@runtest @train` leg (not its `@slow`
