@@ -40,11 +40,11 @@ open Verdict.Claims
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 module SC = Ir.Schedule_cache
-module Config_key_scan = Test_utils.Config_key_scan
+module Config_key_scan = Test_scan.Config_key_scan
 
 (* Modules that run AFTER lowering: rendering a kernel, compiling it, dispatching it, and building
    the cache identity itself. A key whose only reads are here is invisible to the canonical digest
@@ -224,7 +224,7 @@ let () =
      reads are the exception, with their reason ([reached_unread_exemptions]). *)
   let library_modules =
     List.filter_map source_files ~f:(fun path ->
-        if String.equal (Test_utils.Scan_floors.directory_of path) library_root then
+        if String.equal (Test_scan.Scan_floors.directory_of path) library_root then
           Some
             ( String.capitalize (Stdlib.Filename.remove_extension (Stdlib.Filename.basename path)),
               path )
@@ -302,4 +302,4 @@ let () =
     (Set.to_list (Set.union_list (module String) [ duplicates; unclassified; unknown ]));
   p_none ~min:codegen_read_floor "no config key read at codegen is classified code-borne"
     (Set.to_list codegen_read) ~f:(Set.mem miscl);
-  Test_utils.Refusal_control_manifest.print "digest_completeness.ml"
+  Test_scan.Refusal_control_manifest.print "digest_completeness.ml"

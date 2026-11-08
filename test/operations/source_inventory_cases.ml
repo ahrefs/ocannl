@@ -6,7 +6,7 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Inventory = Test_utils.Source_inventory
+module Inventory = Test_scan.Source_inventory
 
 let rec mkdirs path =
   if not (String.equal path Stdlib.Filename.current_dir_name || Stdlib.Sys.file_exists path) then (

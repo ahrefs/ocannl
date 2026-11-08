@@ -15,8 +15,8 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Scan = Test_utils.Debug_name_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Debug_name_scan
+module Inventory = Test_scan.Source_inventory
 
 let corpus_roots = [ "test/"; "arrayjit/test/"; "lib/"; "tensor/" ]
 
@@ -28,7 +28,7 @@ let in_corpus path =
    source's to fix, and any other exception is the reader's own defect. [read] is a thunk so the
    refusal control can plant the defect. *)
 let reading_or_refusal ~fail ~what read =
-  match Test_utils.Scan_attempt.run read with
+  match Test_scan.Scan_attempt.run read with
   | Scanned result -> Some result
   | Unparsed why ->
       fail
@@ -83,7 +83,7 @@ let refusal_control () =
     let routed =
       match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
     in
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     p label routed
   in
   routed_case "an invalid OCaml source reaches the parse refusal"
@@ -104,7 +104,7 @@ let refusal_control () =
       "no source under the scanned roots is among the sources read -- the rule's source tree \
        matches nothing" ~fragment:"no source under the scanned roots is among the sources read"
     (fun fail -> ignore (run ~fail [ ("bin/moons_benchmark.ml", "let x = 1") ] : _ list));
-  Test_utils.Refusal_control_manifest.print source
+  Test_scan.Refusal_control_manifest.print source
 
 let () =
   match Array.to_list Stdlib.Sys.argv with
@@ -147,5 +147,5 @@ let () =
         (accepts "lib/train.ml" Scan.message_only);
       p "the scan reads the library: Tensor's debug_name alias"
         (accepts "tensor/tensor.ml" Scan.alias);
-      Test_utils.Refusal_control_manifest.print "debug_name_scan.ml"
+      Test_scan.Refusal_control_manifest.print "debug_name_scan.ml"
   | _ -> Stdlib.exit 2

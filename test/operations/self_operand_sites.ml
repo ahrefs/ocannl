@@ -48,8 +48,8 @@ open Verdict.Claims
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 module IDX = Train.IDX
 

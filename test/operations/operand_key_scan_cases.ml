@@ -3,7 +3,7 @@
    synthetic tree holding a blind fixture it must refuse. *)
 open Base
 open Stdio
-module Scan = Test_utils.Operand_key_scan
+module Scan = Test_scan.Operand_key_scan
 open Verdict.Claims
 
 let count source = List.length (Scan.sites source)

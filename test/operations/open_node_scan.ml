@@ -12,8 +12,8 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Scan = Test_utils.Open_node_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Open_node_scan
+module Inventory = Test_scan.Source_inventory
 
 let tnode_path = "arrayjit/lib/tnode.ml"
 let in_corpus path = String.is_prefix path ~prefix:"tensor/" && String.is_suffix path ~suffix:".ml"
@@ -22,7 +22,7 @@ let in_corpus path = String.is_prefix path ~prefix:"tensor/" && String.is_suffix
    source's to fix, and any other exception is the reader's own defect. [read] is a thunk so the
    refusal control can plant the defect. *)
 let reading_or_refusal ~fail ~what read =
-  match Test_utils.Scan_attempt.run read with
+  match Test_scan.Scan_attempt.run read with
   | Scanned result -> Some result
   | Unparsed why ->
       fail
@@ -87,7 +87,7 @@ let refusal_control () =
     let routed =
       match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
     in
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     p label routed
   in
   let tnode = "let fresh_uid () = 0\nlet create () = fresh_uid ()\n" in
@@ -112,7 +112,7 @@ let refusal_control () =
     ~format:"no tensor/ source is among the sources read -- the rule's source tree matches nothing"
     ~fragment:"no tensor/ source is among the sources read" (fun fail ->
       ignore (run ~fail [ (tnode_path, tnode) ] : _ option));
-  Test_utils.Refusal_control_manifest.print source
+  Test_scan.Refusal_control_manifest.print source
 
 let () =
   match Array.to_list Stdlib.Sys.argv with
@@ -141,5 +141,5 @@ let () =
             followed ~f:(fun line ->
               String.is_prefix line
                 ~prefix:"tensor/tensor.ml: in op, Tnode.create_from_padded -> tn, init: noted"));
-      Test_utils.Refusal_control_manifest.print "open_node_scan.ml"
+      Test_scan.Refusal_control_manifest.print "open_node_scan.ml"
   | _ -> Stdlib.exit 2

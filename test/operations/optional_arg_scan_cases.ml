@@ -5,7 +5,7 @@
     honest counterparts through the same parsed-source classifier the repository scan uses. *)
 
 open Base
-module Scan = Test_utils.Optional_arg_scan
+module Scan = Test_scan.Optional_arg_scan
 
 let one ?argument ?interface source =
   let args = Scan.args_in_source ?interface ~source:"fixture.ml" source in

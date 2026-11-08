@@ -1,10 +1,10 @@
-(** What {!Test_utils.Slot_kind} says a dune argv reaches, on a fixture tree built to separate the
+(** What {!Test_scan.Slot_kind} says a dune argv reaches, on a fixture tree built to separate the
     cases (gh-ocannl-1004, gh-ocannl-1066, gh-ocannl-1227): a stanza that NAMES a backend holds it
     whatever the configuration says, so tools/batch-backends.sh counts every backend a reachable
     marker names among the batch's -- for the fleet slot ([--cpu] only when none is a GPU) and for
     the width (the tightest any of them meets) -- and counts the configurations' backends unless
     every target is on the configuration-free alias list or a plain compilation product. Then the
-    checks that keep that list honest ({!Test_utils.Slot_kind.refusals}), each on a tree that passes
+    checks that keep that list honest ({!Test_scan.Slot_kind.refusals}), each on a tree that passes
     and one that it refuses. Every verdict below is phrased so that [true] is the passing reading,
     and the golden records the backends each argv was judged to reach, so a change of answer shows
     as a diff as well as a failed claim. Every tree here is a fixture; what the repository's own
@@ -13,7 +13,7 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Slot_kind = Test_utils.Slot_kind
+module Slot_kind = Test_scan.Slot_kind
 
 (* A tree with a GPU stanza, a configuration-reading stanza and a CPU-named one side by side in [a];
    a hip stanza one level down; a metal rule in [b]; [c] with nothing but a configuration-reading

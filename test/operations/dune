@@ -1,6 +1,21 @@
 (copy_files
  (files ../config/ambient/ocannl_config))
 
+; The compiler-unit census is derived from the archive supplied as data, never linked here.
+
+(test
+ ; ocannl-backend: none -- inventories native OCaml units; links no backend.
+ (name test_utils_linkage)
+ (package neural_nets_lib)
+ (modules test_utils_linkage)
+ (libraries base stdio unix dynlink test_utils arrayjit.verdict)
+ (deps ocannl_config)
+ (action
+  (run
+   %{test}
+   %{bin:ocamlobjinfo}
+   %{lib:compiler-libs.common:ocamlcommon.cmxa})))
+
 ; The ambient-environment gate (gh-ocannl-652). `(universe)` makes dune rerun it on every
 ; invocation, which is the only way a rejected environment spelling reaches a check at all:
 ; every other rule here is cached against declarations that no longer name those spellings,
@@ -458,7 +473,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules source_inventory_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-859: `@check` proves that a non-default ppx_minidebug gate compiles, but not that a
 ; trace expression resolved the intended binding. The ordinary level-0 suite records an explicit
@@ -2879,7 +2894,7 @@
    sketch_schedule
    refuse))
  (modules schedule_refusal_scan)
- (libraries base stdio ppxlib test_utils arrayjit.verdict))
+ (libraries base stdio ppxlib test_scan arrayjit.verdict))
 
 ; gh-ocannl-1351: every render-time typed decline (a `Cause_at` at `Backend_codegen`) has an entry in
 ; the agent note's inventory, classified paired-with-the-oracle or render-only by how its site
@@ -2889,7 +2904,7 @@
 (executable
  (name render_decline_inventory)
  (modules render_decline_inventory)
- (libraries base stdio ppxlib test_utils arrayjit.verdict))
+ (libraries base stdio ppxlib test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses the arrayjit sources and one agent note as text; links no backend.
@@ -4183,7 +4198,7 @@
 (executable
  (name test_config_consistency)
  (modules test_config_consistency)
- (libraries base arrayjit.utils stdio test_utils arrayjit.verdict))
+ (libraries base arrayjit.utils stdio test_scan arrayjit.verdict))
 
 ; The sources are globbed, not enumerated (gh-ocannl-592): a hand-written list cannot report the
 ; file that falls off it, and three did -- each staying green because the same keys were read from
@@ -4229,7 +4244,7 @@
 (executable
  (name doc_examples_extract)
  (modules doc_examples_extract)
- (libraries base stdio test_utils))
+ (libraries base stdio test_scan))
 
 ; Its corpus is the extractor's own selection -- every `.md` under docs/ (a leading `*` skips dot
 ; files, hence the second glob), AGENTS.md and README.md --
@@ -4283,7 +4298,7 @@
  (package neural_nets_lib)
  (deps ocannl_config ../../lib/nn_blocks.ml)
  (modules doc_examples_scan_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (test
  ; ocannl-backend: none -- invokes ocamlc on extracted API examples; it executes no backend.
@@ -4291,7 +4306,7 @@
  (package neural_nets_lib)
  (deps ocannl_config %{lib:arrayjit.context:context.cmi})
  (modules doc_examples_compile_control)
- (libraries base stdio unix test_utils arrayjit.verdict)
+ (libraries base stdio unix test_scan arrayjit.verdict)
  (action
   (run %{test} %{ocamlc} %{lib:arrayjit.context:context.cmi})))
 
@@ -4349,7 +4364,7 @@
    %{test}
    %{dep:digest_completeness.exe}
    %{dep:test_config_consistency.exe}))
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan test_utils arrayjit.verdict))
 
 (test
  ; ocannl-backend: none -- links no backend: it parses embedded OCaml snippets.
@@ -4357,9 +4372,9 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules optional_arg_scan_cases)
- (libraries base test_utils arrayjit.verdict))
+ (libraries base test_scan arrayjit.verdict))
 
-; gh-ocannl-1004: what Test_utils.Slot_kind says a dune argv reaches -- the half of the fleet slot's
+; gh-ocannl-1004: what Test_scan.Slot_kind says a dune argv reaches -- the half of the fleet slot's
 ; --cpu/--gpu decision that reads the backend markers -- on fixture trees built to separate the
 ; cases: per-test and aggregate aliases, @ and @@, runtest directories, compilation products, the
 ; configuration-free alias list, and each refusal of the checks that keep that list honest
@@ -4371,7 +4386,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules slot_kind_cases)
- (libraries base stdio unix test_utils arrayjit.verdict))
+ (libraries base stdio unix test_scan arrayjit.verdict))
 
 ; The same reader on the repository's own tree (gh-ocannl-1227): the checks that keep the
 ; configuration-free alias list and the plain-compilation answer true -- no listed alias reaches a
@@ -4404,7 +4419,7 @@
      (echo "%{deps}"))
     (run %{test} %{workspace_root} @slot_kind_live.filelist))))
  (modules slot_kind_live)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 ; How the dune-file scan behind config_dep_completeness reads a stanza, on input built to break
 ; it rather than on whatever the repository's dune files happen to say today.
@@ -4418,7 +4433,7 @@
  (modules dune_scan_cases)
  (action
   (run %{test} %{dep:config_dep_completeness.exe}))
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-1005: resolve deliberately refused Verdict runs from their Dune owners, then
 ; require both child streams to be captured or dropped on the same action branch.
@@ -4426,7 +4441,7 @@
 (executable
  (name refused_action_streams)
  (modules refused_action_streams)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- a source-only Dune action scanner, with no backend linked.
@@ -4461,7 +4476,7 @@
  (action
   (run %{test} %{dep:refused_action_streams.exe}))
  (modules refused_action_scan_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-800: static scanner refusal formats are related to permanent control goldens. These
 ; cases pin extraction, Printf-hole normalization, the orphan arm, and the covered near miss on
@@ -4664,7 +4679,7 @@
    workflow_job_timeouts.ml
    workflow_job_timeouts.expected))
  (modules refusal_control_scan_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-689: the marker grammar's closed backend vocabulary, held equal to the backends OCANNL
 ; has. Its own stanza because linking the backend closure is exactly the cost the scanning tests
@@ -4689,6 +4704,7 @@
   ppxlib
   arrayjit.ir
   arrayjit.context
+  test_scan
   test_utils
   config_reads
   arrayjit.verdict))
@@ -4709,13 +4725,7 @@
 (executable
  (name digest_completeness)
  (modules digest_completeness)
- (libraries
-  base
-  arrayjit.utils
-  arrayjit.ir
-  stdio
-  test_utils
-  arrayjit.verdict))
+ (libraries base arrayjit.utils arrayjit.ir stdio test_scan arrayjit.verdict))
 
 ; Same globs as test_config_consistency above, for the same reason: the second scanner inherited
 ; the first one's list, so it inherited the blind spot too.
@@ -4761,7 +4771,14 @@
 (executable
  (name env_var_deps)
  (modules env_var_deps)
- (libraries base stdio unix arrayjit.utils test_utils arrayjit.verdict))
+ (libraries
+  base
+  stdio
+  unix
+  arrayjit.utils
+  test_scan
+  test_utils
+  arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads dune files and OCaml sources as text.
@@ -4854,7 +4871,7 @@
 (executable
  (name cache_dir_ignores)
  (modules cache_dir_ignores)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads `.gitignore` and every OCaml source in the repository as text.
@@ -4919,7 +4936,7 @@
 (executable
  (name generated_lock_scan)
  (modules generated_lock_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan test_utils arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads dune files and OCaml sources as text.
@@ -4979,7 +4996,7 @@
 (executable
  (name vendor_stub_arms_scan)
  (modules vendor_stub_arms_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads dune files as text.
@@ -5038,7 +5055,7 @@
 (executable
  (name gc_witness_scan)
  (modules gc_witness_scan)
- (libraries base stdio ppxlib test_utils arrayjit.verdict))
+ (libraries base stdio ppxlib test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses test sources without running a backend.
@@ -5095,7 +5112,7 @@
 (executable
  (name atomic_file_rename_scan)
  (modules atomic_file_rename_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it parses every repository OCaml source.
@@ -5198,13 +5215,13 @@
   ppx_sexp_conv
   ppx_sexp_conv.expander
   ppx_variants_conv
-  test_utils
+  test_scan
   arrayjit.verdict))
 
 (executable
  (name dead_export_scan)
  (modules dead_export_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses repository OCaml sources and opens no backend.
@@ -5266,7 +5283,7 @@
 (executable
  (name backend_golden_family_scan)
  (modules backend_golden_family_scan)
- (libraries base stdio arrayjit.context test_utils arrayjit.verdict))
+ (libraries base stdio arrayjit.context test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links the backend closure only to enumerate its derived constant; it
@@ -5308,7 +5325,7 @@
 (executable
  (name bin_smoke_membership_scan)
  (modules bin_smoke_membership_scan)
- (libraries base stdio test_utils arrayjit.verdict fresh_process))
+ (libraries base stdio test_scan arrayjit.verdict fresh_process))
 
 (rule
  ; ocannl-backend: none -- links no backend and parses repository dune files as text.
@@ -5364,7 +5381,7 @@
 (executable
  (name config_dep_completeness)
  (modules config_dep_completeness)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 ; gh-ocannl-811: every optional argument accepted by a lib/ entry point either affects the body or
 ; exposes its not-yet-implemented status in the caller-visible label (`?_feature`). The recursive
@@ -5374,7 +5391,7 @@
 (executable
  (name optional_arg_inventory)
  (modules optional_arg_inventory)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it parses lib/ sources handed over by the glob.
@@ -5461,7 +5478,7 @@
 (executable
  (name verdict_ratchet)
  (modules verdict_ratchet)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads test sources through Verdict_scan as text.
@@ -5503,7 +5520,7 @@
 (executable
  (name exact_partials_ratchet)
  (modules exact_partials_ratchet)
- (libraries base stdio prose_lexemes test_utils arrayjit.verdict))
+ (libraries base stdio prose_lexemes test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads test sources as text and as parse trees.
@@ -5538,7 +5555,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules exact_partials_scan_cases)
- (libraries base prose_lexemes test_utils arrayjit.verdict))
+ (libraries base prose_lexemes test_scan arrayjit.verdict))
 
 ; gh-ocannl-1696: a test source claiming bitwise equality of executed values pins
 ; cc_backend_fp_contract=off or carries an in-place marker saying why contraction cannot move a bit;
@@ -5548,7 +5565,7 @@
 (executable
  (name fp_contract_pin_scan)
  (modules fp_contract_pin_scan)
- (libraries base stdio prose_lexemes test_utils arrayjit.verdict))
+ (libraries base stdio prose_lexemes test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads test sources as text.
@@ -5597,6 +5614,7 @@
  (libraries
   base
   stdio
+  test_scan
   test_utils
   fresh_process
   emitter_frontier
@@ -5728,7 +5746,7 @@
  (package neural_nets_lib)
  (deps ocannl_config codegen_text_inventory.ml)
  (modules codegen_text_scan_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan test_utils arrayjit.verdict))
 
 ; How the claim-shape reader behind verdict_ratchet reads a format and a source, on input built to
 ; break it rather than on whatever the test directories happen to contain today. Also where the
@@ -5785,7 +5803,7 @@
  (package neural_nets_lib)
  (deps ocannl_config cache_dir_ignores.ml)
  (modules cache_dir_scan_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (test
  ; ocannl-backend: none -- links no backend: it reads embedded format strings through Verdict_scan as
@@ -5796,7 +5814,7 @@
  (modules verdict_scan_cases)
  (action
   (run %{test} %{dep:verdict_ratchet.exe}))
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (test
  ; ocannl-backend: metal -- `Context.metal ()` and Train.forward_once, then reads the emitted MSL
@@ -6973,7 +6991,15 @@
  (modules cache_key_agreement)
  (action
   (run %{test} %{dep:../../arrayjit/lib/utils.ml}))
- (libraries base ocannl stdio unix fresh_process test_utils arrayjit.verdict)
+ (libraries
+  base
+  ocannl
+  stdio
+  unix
+  fresh_process
+  test_scan
+  test_utils
+  arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
@@ -10013,7 +10039,7 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules verdict_teardown)
- (libraries base stdio unix arrayjit.verdict fresh_process test_utils))
+ (libraries base stdio unix arrayjit.verdict fresh_process test_scan))
 
 ; The uint4x32 FFI stubs read four lanes out of an [int array], a type that carries no length, so
 ; the C helper has to check the arity rather than assume it (gh-ocannl-688). Links arrayjit.ir
@@ -10046,12 +10072,12 @@
  (package neural_nets_lib)
  (deps ocannl_config)
  (modules agent_notes_scan_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (executable
  (name agent_notes_structure)
  (modules agent_notes_structure)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- reads text only: it opens the agent notes, AGENTS.md, the tools scripts and the test sources as text and links no backend.
@@ -10094,7 +10120,7 @@
 (executable
  (name markdown_links)
  (modules markdown_links)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- reads source Markdown without linking a backend.
@@ -10127,12 +10153,12 @@
  (package neural_nets_lib)
  (modules markdown_link_scan_cases)
  (deps ocannl_config)
- (libraries base test_utils arrayjit.verdict))
+ (libraries base test_scan arrayjit.verdict))
 
 (executable
  (name ocamlformat_ignore_scan)
  (modules ocamlformat_ignore_scan)
- (libraries base stdio unix test_utils arrayjit.verdict fresh_process))
+ (libraries base stdio unix test_scan arrayjit.verdict fresh_process))
 
 (rule
  ; ocannl-backend: none -- reads path lists and file existence only, and links no backend.
@@ -10178,7 +10204,7 @@
 (executable
  (name command_line_length_scan)
  (modules command_line_length_scan)
- (libraries base stdio unix test_utils arrayjit.verdict fresh_process))
+ (libraries base stdio unix test_scan arrayjit.verdict fresh_process))
 
 (rule
  ; ocannl-backend: none -- reads dune files as text and links no backend.
@@ -10730,7 +10756,7 @@
 (executable
  (name shell_scripts_parse)
  (modules shell_scripts_parse)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it hands shell scripts to `bash -n`/`sh -n` and runs no kernels.
@@ -10780,7 +10806,7 @@
 ; prose are consumers of the key registry too. The OCaml-source scanners cannot see either, so a
 ; rename otherwise leaves them behind until a reviewer remembers the site.
 ;
-; Source membership comes from `Test_utils.Source_inventory`. Every checked-in `*.sh` and `*.py`
+; Source membership comes from `Test_scan.Source_inventory`. Every checked-in `*.sh` and `*.py`
 ; is in scope independent of which root contains it; the existing user-help and implementation
 ; `*.ml`/`*.mli` scope is selected from that inventory, with generated `*.pp.ml`/`*.pp.mli`
 ; renderings excluded. File-kind non-vacuity claims keep a missing class loud without duplicating
@@ -10822,7 +10848,7 @@
   stdio
   arrayjit.utils
   arrayjit.builtins_cc
-  test_utils
+  test_scan
   arrayjit.verdict))
 
 (rule
@@ -10982,7 +11008,7 @@
 (executable
  (name workflow_job_timeouts)
  (modules workflow_job_timeouts)
- (libraries base stdio test_utils arrayjit.verdict fresh_process))
+ (libraries base stdio test_scan arrayjit.verdict fresh_process))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads .github/workflows and .github/actions YAML,
@@ -11146,7 +11172,7 @@
   mtime
   mtime.clock.os
   arrayjit.utils
-  test_utils
+  test_scan
   arrayjit.verdict))
 
 ; The exactness of [diff.zero_grads.embedded_nodes] (gh-ocannl-771), at both ends of the
@@ -11200,7 +11226,7 @@
 (executable
  (name changelog_unreleased_scan)
  (modules changelog_unreleased_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it reads CHANGES.md as text.
@@ -11228,7 +11254,7 @@
 (executable
  (name agents_md_size)
  (modules agents_md_size)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- links no backend: it measures AGENTS.md as bytes.
@@ -11279,7 +11305,7 @@
 (executable
  (name ll_test_ratchet)
  (modules ll_test_ratchet)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses source and dune stanzas without running a backend.
@@ -11312,7 +11338,7 @@
 (executable
  (name operand_key_ratchet)
  (modules operand_key_ratchet)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses test sources without running a backend.
@@ -11349,7 +11375,7 @@
 (executable
  (name mutation_serial_scan)
  (modules mutation_serial_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses three library sources without running a backend.
@@ -11411,7 +11437,7 @@
  (name mutation_serial_scan_cases)
  (package neural_nets_lib)
  (modules mutation_serial_scan_cases)
- (libraries base stdio test_utils arrayjit.verdict)
+ (libraries base stdio test_scan arrayjit.verdict)
  (deps ocannl_config))
 
 ; gh-ocannl-1579: every tensor node a module of tensor/ creates reaches Tensor.note_open_node, the
@@ -11422,7 +11448,7 @@
 (executable
  (name open_node_scan)
  (modules open_node_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses library sources without running a backend.
@@ -11505,7 +11531,7 @@
  (name open_node_scan_cases)
  (package neural_nets_lib)
  (modules open_node_scan_cases)
- (libraries base stdio test_utils arrayjit.verdict)
+ (libraries base stdio test_scan arrayjit.verdict)
  (deps ocannl_config))
 
 ; gh-ocannl-1606: a test reads a node's debug name only to show it, never to find the node -- the
@@ -11517,7 +11543,7 @@
 (executable
  (name debug_name_scan)
  (modules debug_name_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses test sources without running a backend.
@@ -11603,7 +11629,7 @@
 (executable
  (name label_dispatch_scan)
  (modules label_dispatch_scan)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses compiler sources without running a backend.
@@ -11692,7 +11718,7 @@
 (executable
  (name tensorized_census_ratchet)
  (modules tensorized_census_ratchet)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- parses test sources without running a backend.
@@ -11724,7 +11750,14 @@
  (name tensorized_census_scan_cases)
  (package neural_nets_lib)
  (modules tensorized_census_scan_cases)
- (libraries base stdio unix fresh_process test_utils arrayjit.verdict)
+ (libraries
+  base
+  stdio
+  unix
+  fresh_process
+  test_scan
+  test_utils
+  arrayjit.verdict)
  (deps ocannl_config tensorized_census_ratchet.exe)
  (action
   (run %{test} %{dep:tensorized_census_ratchet.exe})))
@@ -11737,7 +11770,7 @@
 (executable
  (name census_total_ratchet)
  (modules census_total_ratchet)
- (libraries base stdio str test_utils arrayjit.verdict))
+ (libraries base stdio str test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- reads dune files and golden text without running a backend.
@@ -11769,7 +11802,7 @@
  (name operand_key_scan_cases)
  (package neural_nets_lib)
  (modules operand_key_scan_cases)
- (libraries base stdio unix test_utils arrayjit.verdict fresh_process)
+ (libraries base stdio unix test_scan arrayjit.verdict fresh_process)
  (deps ocannl_config operand_key_ratchet.exe)
  (action
   (run %{test} %{dep:operand_key_ratchet.exe})))
@@ -11783,7 +11816,7 @@
 (executable
  (name provenance_tag_inventory)
  (modules provenance_tag_inventory)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (rule
  ; ocannl-backend: none -- reads library sources, docs and tests without running a backend.
@@ -11815,7 +11848,7 @@
  (name provenance_tag_scan_cases)
  (package neural_nets_lib)
  (modules provenance_tag_scan_cases)
- (libraries base stdio unix ppxlib test_utils arrayjit.verdict)
+ (libraries base stdio unix ppxlib test_scan test_utils arrayjit.verdict)
  (deps ocannl_config provenance_tag_inventory.exe)
  (action
   (run %{test} %{dep:provenance_tag_inventory.exe})))
@@ -11825,7 +11858,7 @@
  (name ll_test_scan_cases)
  (package neural_nets_lib)
  (modules ll_test_scan_cases)
- (libraries base stdio unix fresh_process test_utils arrayjit.verdict)
+ (libraries base stdio unix fresh_process test_scan arrayjit.verdict)
  (deps ocannl_config ll_test_ratchet.exe)
  (action
   (run %{test} %{dep:ll_test_ratchet.exe})))
@@ -13103,7 +13136,7 @@
  (package neural_nets_lib)
  (modules api_drift_cases)
  (deps ocannl_config)
- (libraries base test_utils arrayjit.verdict))
+ (libraries base test_scan arrayjit.verdict))
 
 (executable
  (name api_drift_history)
@@ -13500,7 +13533,7 @@
   ppxlib
   arrayjit.ir
   arrayjit.utils
-  test_utils
+  test_scan
   arrayjit.verdict))
 
 (rule
@@ -13719,7 +13752,7 @@
  (libraries
   base
   stdio
-  test_utils
+  test_scan
   ppxlib
   ocannl
   neural_nets_lib.einsum_parser
@@ -13982,7 +14015,7 @@
  (package neural_nets_lib)
  (deps ocannl_config ../support/refusal_control_manifest.ml)
  (modules refusal_manifest_sync_cases)
- (libraries base stdio test_utils arrayjit.verdict))
+ (libraries base stdio test_scan arrayjit.verdict))
 
 (test
  ; gh-ocannl-1496: a padded window's transpose restores its gradient's margins, which a

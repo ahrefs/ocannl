@@ -43,7 +43,7 @@
    reader follows a Verdict boolean back to [for_all], [for_all2_exn], [is_empty], or a negated
    [exists] -- written directly in the claim's argument (gh-ocannl-908), or reached through any
    binding, helper, wrapper, match, open or module between the two (gh-ocannl-887) -- and requires a
-   witness that the population is there. That reader is [Test_utils.Verdict_provenance]
+   witness that the population is there. That reader is [Test_scan.Verdict_provenance]
    (gh-ocannl-931): one model of scope and polarity for every syntax form, which this file only
    consumes, through [quantified_claims]. What stays here is the policy -- the exemption lists,
    their one-key/one-definition contract, the diagnostics, the controls and the syntax coverage
@@ -61,7 +61,7 @@
    what the population is built from, by lexical identity, and refuses a shared binding; a gate may
    still read what the population is COMPUTED from, which is how a capability judgment reads.
 
-   gh-ocannl-1361 gives the readers one answer to whose a claim is. [Test_utils.Verdict_callee]
+   gh-ocannl-1361 gives the readers one answer to whose a claim is. [Test_scan.Verdict_callee]
    resolves every claim name once, and the provenance layer, the line-break and dialect readers and
    the gate reader look its answer up rather than each deciding for themselves; a name that is
    [Verdict]'s only past another module's [open] -- qualified or not -- is ambiguous, still read,
@@ -85,10 +85,10 @@
 
 open Base
 open Stdio
-module Scan = Test_utils.Verdict_scan
-module Dune = Test_utils.Dune_stanza_scan
-module Sources = Test_utils.Config_key_scan
-module Provenance = Test_utils.Verdict_provenance
+module Scan = Test_scan.Verdict_scan
+module Dune = Test_scan.Dune_stanza_scan
+module Sources = Test_scan.Config_key_scan
+module Provenance = Test_scan.Verdict_provenance
 
 type quantifier_kind = Provenance.quantifier_kind = For_all | For_all2 | Is_empty | Not_exists
 
@@ -2882,7 +2882,7 @@ let matrix_expected family = function
    the reader, a parameter so the control below can plant the defect. *)
 let matrix_cell_helpers ?(claims = quantified_claims) source =
   match
-    Test_utils.Scan_attempt.run (fun () ->
+    Test_scan.Scan_attempt.run (fun () ->
         claims (Sources.structure_of source)
         |> List.map ~f:(fun claim -> claim.helper)
         |> List.dedup_and_sort ~compare:String.compare)
@@ -3247,7 +3247,7 @@ let run_shadowed_quantified_control ?(helper = "close") ?(site_kind = "definitio
   let refused = ref false in
   let fail _message =
     refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+    Test_scan.Refusal_control_manifest.observe_failure ~source ~format
   in
   refuse_colliding_quantified ~fail colliding;
   [
@@ -3272,7 +3272,7 @@ let run_stale_quantified_control () =
   let refused = ref false in
   let fail _message =
     refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+    Test_scan.Refusal_control_manifest.observe_failure ~source ~format
   in
   refuse_stale_quantified ~fail (Set.singleton (module String) "fixture:stale");
   ("refuses a stale quantified-helper exemption", !refused)
@@ -3329,7 +3329,7 @@ let run_colliding_site_control label kind expected_key fixture =
   let refused = ref false in
   let fail _message =
     refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+    Test_scan.Refusal_control_manifest.observe_failure ~source ~format
   in
   refuse_colliding_sites ~fail colliding;
   [
@@ -3435,7 +3435,7 @@ let run_dialect_refusal_control () =
   let refused = ref false in
   let fail _message =
     refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+    Test_scan.Refusal_control_manifest.observe_failure ~source ~format
   in
   let _, fixture, _ = List.hd_exn dialect_pairing_controls in
   List.iter (Scan.dialect_census fixture).Scan.pairings
@@ -3557,7 +3557,7 @@ let run_line_break_refusal_control () =
   let refused = ref false in
   let fail _message =
     refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+    Test_scan.Refusal_control_manifest.observe_failure ~source ~format
   in
   let _, fixture, _ = List.hd_exn line_break_controls in
   List.iter (Scan.line_break_census fixture).Scan.broken
@@ -4796,8 +4796,8 @@ let refuse_gate_reading ~fail ~source (reading : Scan.gate_reading) =
    source that parses is the gate reader's own defect, named as such rather than as a syntax
    error. *)
 let read_gates ~fail ~source ~census content =
-  match Test_utils.Scan_attempt.run (fun () -> census content) with
-  | Test_utils.Scan_attempt.Scanned gates -> gates
+  match Test_scan.Scan_attempt.run (fun () -> census content) with
+  | Test_scan.Scan_attempt.Scanned gates -> gates
   | Unparsed _ -> Scan.empty_gate_census
   | Raised exn ->
       fail
@@ -4896,8 +4896,8 @@ let refuse_skip_list ~fail ~source (site : Scan.skip_list) =
    reader's. *)
 let read_skip_lists ~fail ~source ~census content =
   let nothing = { Scan.skip_lists = []; skips_read = 0 } in
-  match Test_utils.Scan_attempt.run (fun () -> census content) with
-  | Test_utils.Scan_attempt.Scanned census -> census
+  match Test_scan.Scan_attempt.run (fun () -> census content) with
+  | Test_scan.Scan_attempt.Scanned census -> census
   | Unparsed _ -> nothing
   | Raised exn ->
       fail
@@ -4924,7 +4924,7 @@ let read_claims ?(readers = all_readers) ~fail ~source content =
       { Scan.pairings = []; skipped_sites = 0; pass_fail_sites = 0 },
       { Scan.broken = []; label_sites = 0 } )
   in
-  match Test_utils.Scan_attempt.run (fun () -> readers content) with
+  match Test_scan.Scan_attempt.run (fun () -> readers content) with
   | Scanned readings -> readings
   | Unparsed where ->
       fail
@@ -4957,7 +4957,7 @@ let run_claim_reader_refusal_control () =
     | [ m ] -> String.is_substring m ~substring:"raised Invalid_argument(\"planted\") on fixture.ml"
     | _ -> false
   in
-  if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+  if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
   ( "a claim reader's exception on a source that parses reaches the scanner-defect refusal, not \
      the parse one",
     routed )
@@ -5019,7 +5019,7 @@ let run_gate_refusal_control () =
     ~f:
       (refuse_gate_reading ~source:"fixture.ml" ~fail:(fun _ ->
            refused_reading := true;
-           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:reading_format));
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:reading_format));
   let census =
     Scan.gate_census (fixture "names a gated claim it cannot complete instead of counting it clean")
   in
@@ -5027,7 +5027,7 @@ let run_gate_refusal_control () =
     ~f:
       (refuse_unread_gate ~source:"fixture.ml" ~fail:(fun _ ->
            refused_unread := true;
-           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unread_format));
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:unread_format));
   let census =
     Scan.gate_census
       (fixture "names a collection-module function the table does not list instead of guessing")
@@ -5036,7 +5036,7 @@ let run_gate_refusal_control () =
     ~f:
       (refuse_unlisted_gate ~source:"fixture.ml" ~fail:(fun _ ->
            refused_unlisted := true;
-           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unlisted_format));
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:unlisted_format));
   let raised_format =
     "the gate reader raised %s on %s, which parses -- a defect of Verdict_scan.gate_census, not of \
      the source, and the source's gated claims went uncompared"
@@ -5046,7 +5046,7 @@ let run_gate_refusal_control () =
     (read_gates ~source:"fixture.ml"
        ~fail:(fun _ ->
          refused_raise := true;
-         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+         Test_scan.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
        ~census:(fun _ -> raise Stdlib.Exit)
        "let () = ()"
       : Scan.gate_census);
@@ -5084,7 +5084,7 @@ let run_leg_and_skip_list_refusal_control () =
     ~f:
       (refuse_unread_leg ~source:"fixture.ml" ~fail:(fun _ ->
            refused_leg := true;
-           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:unread_leg_format));
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:unread_leg_format));
   List.iter
     (Scan.skip_list_census
        {ocaml|let () = if on_gpu then (p "a" x; p "b" y) else (skipped "a"; skipped "b")|ocaml})
@@ -5092,12 +5092,12 @@ let run_leg_and_skip_list_refusal_control () =
     ~f:
       (refuse_skip_list ~source:"fixture.ml" ~fail:(fun _ ->
            refused_list := true;
-           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:skip_list_format));
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:skip_list_format));
   ignore
     (read_skip_lists ~source:"fixture.ml"
        ~fail:(fun _ ->
          refused_raise := true;
-         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+         Test_scan.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
        ~census:(fun _ -> raise Stdlib.Exit)
        "let () = ()"
       : Scan.skip_list_census);
@@ -5379,8 +5379,8 @@ let refuse_folded_gate ~fail ~source (fold : Scan.folded_gate) =
 (* The folded-gate reader over one source, its failures told apart as {!read_gates} tells the gate
    reader's apart. *)
 let read_folded_gates ~fail ~source ~census content =
-  match Test_utils.Scan_attempt.run (fun () -> census content) with
-  | Test_utils.Scan_attempt.Scanned folds -> folds
+  match Test_scan.Scan_attempt.run (fun () -> census content) with
+  | Test_scan.Scan_attempt.Scanned folds -> folds
   | Unparsed _ -> { Scan.folded = []; folded_claim_sites = 0 }
   | Raised exn ->
       fail
@@ -5415,12 +5415,12 @@ let run_folded_gate_refusal_control () =
     ~f:
       (refuse_folded_gate ~source:"fixture.ml" ~fail:(fun _ ->
            refused_fold := true;
-           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:fold_format));
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:fold_format));
   ignore
     (read_folded_gates ~source:"fixture.ml"
        ~fail:(fun _ ->
          refused_raise := true;
-         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+         Test_scan.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
        ~census:(fun _ -> raise Stdlib.Exit)
        "let () = ()"
       : Scan.folded_census);
@@ -5532,8 +5532,8 @@ let refuse_hand_rolled_tolerance ~fail ~source (site : Scan.tolerance_site) =
 (* The tolerance reader over one source, its failures told apart as {!read_gates} tells the gate
    reader's apart. *)
 let read_tolerances ~fail ~source ~census content =
-  match Test_utils.Scan_attempt.run (fun () -> census content) with
-  | Test_utils.Scan_attempt.Scanned census -> census
+  match Test_scan.Scan_attempt.run (fun () -> census content) with
+  | Test_scan.Scan_attempt.Scanned census -> census
   | Unparsed _ -> { Scan.hand_rolled = []; parity_sites = 0 }
   | Raised exn ->
       fail
@@ -5565,12 +5565,12 @@ let run_tolerance_refusal_control () =
     ~f:
       (refuse_hand_rolled_tolerance ~source:"fixture.ml" ~fail:(fun _ ->
            refused_site := true;
-           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:site_format));
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:site_format));
   ignore
     (read_tolerances ~source:"fixture.ml"
        ~fail:(fun _ ->
          refused_raise := true;
-         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+         Test_scan.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
        ~census:(fun _ -> raise Stdlib.Exit)
        "let () = ()"
       : Scan.tolerance_census);
@@ -5631,8 +5631,8 @@ let refuse_stale_floors ~fail stale_floors =
 (* The floor reader over one source, its failures told apart as {!read_gates} tells the gate
    reader's apart. *)
 let read_floors ~fail ~source ~census content =
-  match Test_utils.Scan_attempt.run (fun () -> census content) with
-  | Test_utils.Scan_attempt.Scanned census -> census
+  match Test_scan.Scan_attempt.run (fun () -> census content) with
+  | Test_scan.Scan_attempt.Scanned census -> census
   | Unparsed _ -> { Scan.below_one = []; literal_floors = 0 }
   | Raised exn ->
       fail
@@ -5666,15 +5666,15 @@ let run_floor_refusal_control () =
     ~f:
       (refuse_floor ~source:"fixture.ml" ~fail:(fun _ ->
            refused_site := true;
-           Test_utils.Refusal_control_manifest.observe_failure ~source ~format:site_format));
+           Test_scan.Refusal_control_manifest.observe_failure ~source ~format:site_format));
   refuse_stale_floors [ "fixture.ml:Verdict.p_all:gone (found 0)" ] ~fail:(fun _ ->
       refused_stale := true;
-      Test_utils.Refusal_control_manifest.observe_failure ~source ~format:stale_format);
+      Test_scan.Refusal_control_manifest.observe_failure ~source ~format:stale_format);
   ignore
     (read_floors ~source:"fixture.ml"
        ~fail:(fun _ ->
          refused_raise := true;
-         Test_utils.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
+         Test_scan.Refusal_control_manifest.observe_failure ~source ~format:raised_format)
        ~census:(fun _ -> raise Stdlib.Exit)
        "let () = ()"
       : Scan.floor_census);
@@ -5684,7 +5684,7 @@ let run_floor_refusal_control () =
 
 (* {1 One resolver: every reader agrees whose a claim is (gh-ocannl-1361)}
 
-   Whether a callee is [Verdict]'s is decided once, by [Test_utils.Verdict_callee], and every reader
+   Whether a callee is [Verdict]'s is decided once, by [Test_scan.Verdict_callee], and every reader
    looks the answer up. These controls hold the readers to that: one claim that each of the three
    would refuse -- a [gated] claim with a line break in its label, a population gate, and an
    unguarded quantifier -- spelled through each form the resolver distinguishes, and every reader
@@ -5842,8 +5842,8 @@ let base_dir = Dune.base_dir
 let repo_relative = Dune.repo_relative
 
 (* The sources arrive as a `@<path>` response file: the list outgrew a Windows command line
-   (gh-ocannl-1720); see [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   (gh-ocannl-1720); see [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 let () =
   (match Option.bind (List.nth (Array.to_list argv) 1) ~f:refusal_fixture with
@@ -6207,12 +6207,12 @@ let () =
      never checks. *)
   let claims_members =
     Option.bind (Map.find on_disk "test/support/verdict.ml") ~f:(fun path ->
-        Test_utils.Refusal_control_scan.claims_members (In_channel.read_all path))
+        Test_scan.Refusal_control_scan.claims_members (In_channel.read_all path))
     |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
   in
   (* The names whose ownership the one resolver decides, held equal to [Verdict.Claims] itself: a
      member it did not know would be a claim every reader passes over (gh-ocannl-1361). *)
-  let resolved_members = List.sort Test_utils.Verdict_callee.members ~compare:String.compare in
+  let resolved_members = List.sort Test_scan.Verdict_callee.members ~compare:String.compare in
   let resolves_every_member =
     List.equal String.equal (List.sort claims_members ~compare:String.compare) resolved_members
   in
@@ -6266,7 +6266,7 @@ let () =
   in
   let exported_gated_forms =
     Option.bind (Map.find on_disk "test/support/verdict.ml") ~f:(fun path ->
-        Test_utils.Refusal_control_scan.claims_members (In_channel.read_all path))
+        Test_scan.Refusal_control_scan.claims_members (In_channel.read_all path))
     |> Option.value ~default:[ "<no Claims module in test/support/verdict.ml>" ]
     |> List.filter ~f:(fun member ->
         String.equal member "gated"
@@ -6311,7 +6311,7 @@ let () =
     |> List.sort ~compare:String.compare
   in
   let resolved_leg_constructors =
-    List.sort Test_utils.Verdict_callee.leg_constructors ~compare:String.compare
+    List.sort Test_scan.Verdict_callee.leg_constructors ~compare:String.compare
   in
   let resolves_every_leg_constructor =
     (not (List.is_empty declared_leg_constructors))
@@ -6363,4 +6363,4 @@ let () =
   Verdict.p "over more than one test directory" (List.length directories > 1);
   Verdict.success_trailer ~blank_line:true
     [ "test claims route through `Verdict`, and quantified bindings cannot pass on nothing." ];
-  Test_utils.Refusal_control_manifest.print "verdict_ratchet.ml"
+  Test_scan.Refusal_control_manifest.print "verdict_ratchet.ml"

@@ -30,7 +30,7 @@
 
 open Base
 module AF = Utils.Atomic_file
-module Ignore = Test_utils.Cache_dir_scan
+module Ignore = Test_scan.Cache_dir_scan
 
 let dir = "atomic_file_race_dir"
 let target = Stdlib.Filename.concat dir "published.bin"

@@ -17,8 +17,8 @@
     can. *)
 
 open Base
-module Scan = Test_utils.Cache_dir_scan
-module Attempt = Test_utils.Scan_attempt
+module Scan = Test_scan.Cache_dir_scan
+module Attempt = Test_scan.Scan_attempt
 
 let printf = Stdio.printf
 
@@ -534,4 +534,4 @@ let () =
       else
         fail "built-in default -- %s: expected [%s], found [%s]" name (render expected)
           (render found));
-  Test_utils.Refusal_control_manifest.print "cache_dir_ignores.ml"
+  Test_scan.Refusal_control_manifest.print "cache_dir_ignores.ml"

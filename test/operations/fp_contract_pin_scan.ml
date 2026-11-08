@@ -32,8 +32,8 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Dune = Test_utils.Dune_stanza_scan
-module Sources = Test_utils.Config_key_scan
+module Dune = Test_scan.Dune_stanza_scan
+module Sources = Test_scan.Config_key_scan
 
 (* cc-fp-contract: not-executed -- its bitwise text is fixture sources and claim names, no
    kernels *)
@@ -179,8 +179,8 @@ let cases () =
     (Option.is_none (judge_text "(* the two agree bitwise *)\nlet () = p \"tiled matches\" true\n"))
 
 (* The sources arrive as a `@<path>` response file, as verdict_ratchet's do; see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
 let () =
   if Array.length argv < 2 then (
@@ -194,7 +194,7 @@ let () =
   let on_disk = Map.of_alist_reduce (module String) arguments ~f:(fun first _ -> first) in
   let sources =
     Sources.sources_among (List.map arguments ~f:fst)
-    |> List.filter ~f:Test_utils.Ll_test_scan.test_source
+    |> List.filter ~f:Test_scan.Ll_test_scan.test_source
   in
   let read_sources, unlexed =
     List.partition_map sources ~f:(fun source ->
@@ -234,4 +234,4 @@ let () =
       match d with
       | Pinned -> printf "%s -- pinned off\n" source
       | Marked (kind, reason) -> printf "%s -- %s: %s\n" source kind reason);
-  Test_utils.Refusal_control_manifest.print "fp_contract_pin_scan.ml"
+  Test_scan.Refusal_control_manifest.print "fp_contract_pin_scan.ml"

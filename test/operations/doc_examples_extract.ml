@@ -1,7 +1,7 @@
 open Base
 open Stdio
-module Inventory = Test_utils.Source_inventory
-module Examples = Test_utils.Doc_examples_scan
+module Inventory = Test_scan.Source_inventory
+module Examples = Test_scan.Doc_examples_scan
 
 let () =
   let root = Stdlib.Sys.argv.(1) in

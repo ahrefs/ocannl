@@ -480,7 +480,7 @@ let () =
   let settings_borne =
     match Stdlib.Sys.argv with
     | [| _; utils_ml |] | [| _; utils_ml; _ |] ->
-        Test_utils.Config_key_scan.settings_field_initializers (In_channel.read_all utils_ml)
+        Test_scan.Config_key_scan.settings_field_initializers (In_channel.read_all utils_ml)
         |> List.concat_map ~f:snd
         |> Set.of_list (module String)
     | _ ->

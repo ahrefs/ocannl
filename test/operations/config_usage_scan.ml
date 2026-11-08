@@ -15,13 +15,13 @@
 open Base
 open Stdio
 
-(* The live corpus comes from [Test_utils.Source_inventory]: a clean Dune sandbox keeps source paths
+(* The live corpus comes from [Test_scan.Source_inventory]: a clean Dune sandbox keeps source paths
    off the command line and lets this scanner select by file kind rather than by root. *)
 let argv = Stdlib.Sys.argv
 
-module Markdown = Test_utils.Agent_notes_scan
-module Refusal_manifest = Test_utils.Refusal_control_manifest
-module Inventory = Test_utils.Source_inventory
+module Markdown = Test_scan.Agent_notes_scan
+module Refusal_manifest = Test_scan.Refusal_control_manifest
+module Inventory = Test_scan.Source_inventory
 
 type kind =
   | Cli_flag
@@ -834,12 +834,11 @@ let check ?(fail = Verdict.fail) ?(known_keys = Utils.known_config_keys)
    manifest itself uses, so the control and the raising site cannot hold two copies of one message.
    The control's rule runs in this directory with the source among its dependencies. *)
 let direct_refusal_formats source =
-  Test_utils.Refusal_control_scan.diagnostics
-    (In_channel.read_all (Stdlib.Filename.basename source))
+  Test_scan.Refusal_control_scan.diagnostics (In_channel.read_all (Stdlib.Filename.basename source))
   |> List.filter_map ~f:(fun diagnostic ->
-      match diagnostic.Test_utils.Refusal_control_scan.kind with
-      | Test_utils.Refusal_control_scan.Fail -> Some diagnostic.format
-      | Test_utils.Refusal_control_scan.Claim -> None)
+      match diagnostic.Test_scan.Refusal_control_scan.kind with
+      | Test_scan.Refusal_control_scan.Fail -> Some diagnostic.format
+      | Test_scan.Refusal_control_scan.Claim -> None)
 
 (* The format a refusal [message] is credited to: the one that matches it and that no matching
    format fixing strictly more static text outranks -- the manifest's own [owns_line] rule. The

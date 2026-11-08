@@ -1,7 +1,7 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Scan = Test_utils.Refused_action_scan
+module Scan = Test_scan.Refused_action_scan
 
 let declaration ?(libraries = "arrayjit.verdict") ?(name = "probe") () =
   Printf.sprintf "(executable (name %s) (libraries %s))" name libraries

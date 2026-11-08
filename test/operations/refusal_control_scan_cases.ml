@@ -3,8 +3,8 @@
 
 open Base
 open Stdio
-module Scan = Test_utils.Refusal_control_scan
-module Manifest = Test_utils.Refusal_control_manifest
+module Scan = Test_scan.Refusal_control_scan
+module Manifest = Test_scan.Refusal_control_manifest
 
 let minus = Manifest.minus
 
@@ -508,7 +508,7 @@ let () =
    wraps, an escape, or a second binding of a name refuses here, not only at the runner's
    startup. *)
 let () =
-  let module Heads = Test_utils.Refusal_section_heads in
+  let module Heads = Test_scan.Refusal_section_heads in
   let source = In_channel.read_all "../support/refusal_section_heads.ml" in
   let values =
     [

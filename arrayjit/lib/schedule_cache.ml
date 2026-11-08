@@ -636,7 +636,7 @@ let codegen_tag ~(facts : Backend_intf.backend_facts) ~(limits : Backend_intf.ha
     ~(capabilities : Backend_intf.codegen_capabilities) () =
   (* Every key is spelled out at its call site, as an explicit [arg_name] string literal, rather
      than passed through a helper: that literal IS how the consistency tests find a configuration
-     read ([Test_utils.Config_key_scan]), so a wrapper taking the name as an argument would hide
+     read ([Test_scan.Config_key_scan]), so a wrapper taking the name as an argument would hide
      these keys from both the registration check and the classification check -- which a negative
      control on this very function confirmed while addressing Codex's scan-list finding on PR #337.
      (For the same reason, prose here avoids spelling the marker the scanner looks for.) *)

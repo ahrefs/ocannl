@@ -3,12 +3,12 @@
    negative control is mutation_serial_scan_control, over a committed fixture tree. *)
 open Base
 open Verdict.Claims
-module Scan = Test_utils.Mutation_serial_scan
+module Scan = Test_scan.Mutation_serial_scan
 
 (* Most cases stand in for row.ml, the serial's own module, whose bare [note_mutation] is the real
    one; [~serial_owner:false] stands in for any other. *)
 let findings ?(serial_owner = true) ?interface source =
-  Test_utils.Scan_attempt.attempted ~what:"mutation-serial cases" ~name:(String.prefix source 60)
+  Test_scan.Scan_attempt.attempted ~what:"mutation-serial cases" ~name:(String.prefix source 60)
     ~default:[ "<the scan failed>" ] (fun () ->
       (Scan.scan ~file:"x.ml" ~serial_owner ?interface ("open Base\n" ^ source)).findings)
 
@@ -460,7 +460,7 @@ let () =
        "limit is exported by the interface");
   (* Failure routing. *)
   p "a source that does not parse is the input's fault, not the scanner's"
-    (match Test_utils.Scan_attempt.run (fun () -> Scan.scan ~file:"x.ml" "let = (") with
+    (match Test_scan.Scan_attempt.run (fun () -> Scan.scan ~file:"x.ml" "let = (") with
     | Unparsed _ -> true
     | Scanned _ | Raised _ -> false)
 
@@ -468,7 +468,7 @@ let () =
    that is neither exempt nor kept is captured, as a pointer, by the file's top-level
    [capture_globals]. *)
 let captured_findings source =
-  Test_utils.Scan_attempt.attempted ~what:"mutation-serial capture cases"
+  Test_scan.Scan_attempt.attempted ~what:"mutation-serial capture cases"
     ~name:(String.prefix source 60) ~default:[ "<the scan failed>" ] (fun () ->
       (Scan.scan ~file:"x.ml" ~serial_owner:true ~require_capture:true ("open Base\n" ^ source))
         .findings)

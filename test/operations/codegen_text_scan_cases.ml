@@ -23,10 +23,10 @@
    classifies *)
 
 open Base
-module Scan = Test_utils.Codegen_text_scan
-module Attempt = Test_utils.Scan_attempt
-module Rerun = Test_utils.Rerun_aliases
-module Exec = Test_utils.Kernel_exec_scan
+module Scan = Test_scan.Codegen_text_scan
+module Attempt = Test_scan.Scan_attempt
+module Rerun = Test_scan.Rerun_aliases
+module Exec = Test_scan.Kernel_exec_scan
 
 let printf = Stdio.printf
 let fail fmt = Printf.ksprintf Verdict.fail fmt
@@ -2001,4 +2001,4 @@ let () =
       in
       if expected = found then printf "ok: rejection -- %s\n" name
       else fail "rejection -- %s: expected %d refusals, found %d" name expected found);
-  Test_utils.Refusal_control_manifest.print "codegen_text_inventory.ml"
+  Test_scan.Refusal_control_manifest.print "codegen_text_inventory.ml"

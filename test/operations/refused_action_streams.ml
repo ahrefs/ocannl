@@ -1,8 +1,8 @@
 (* gh-ocannl-1005: a deliberately refused Verdict run must inherit neither build-log stream. *)
 open Base
 open Stdio
-module Scan = Test_utils.Refused_action_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Refused_action_scan
+module Inventory = Test_scan.Source_inventory
 
 let report dune_files =
   let result = Scan.scan dune_files in
@@ -26,5 +26,5 @@ let () =
       if List.length dune_files < 3 then
         Verdict.fail (root ^ ": Dune source inventory below floor (3 files)");
       report dune_files;
-      Test_utils.Refusal_control_manifest.print "refused_action_streams.ml"
+      Test_scan.Refusal_control_manifest.print "refused_action_streams.ml"
   | _ -> Stdlib.exit 2

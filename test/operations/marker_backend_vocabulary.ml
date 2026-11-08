@@ -25,7 +25,7 @@
 
 open Base
 module Backends = Context.Backends
-module Scan = Test_utils.Dune_stanza_scan
+module Scan = Test_scan.Dune_stanza_scan
 
 let () =
   let sorted l = List.sort l ~compare:String.compare in

@@ -1,4 +1,4 @@
-(** What {!Test_utils.Agent_notes_scan} calls a defect, on input built to break it.
+(** What {!Test_scan.Agent_notes_scan} calls a defect, on input built to break it.
 
     The live-tree scan next door ([agent_notes_structure]) is green whenever the notes are intact,
     which is most days — and a check that is green because it sees nothing looks exactly like a
@@ -13,7 +13,7 @@
 
 open Base
 open Stdio
-module Notes = Test_utils.Agent_notes_scan
+module Notes = Test_scan.Agent_notes_scan
 
 (* Failures go through [Verdict], so that a regression exits nonzero instead of being `dune
    promote`d into the golden as the expected output (gh-ocannl-601). *)

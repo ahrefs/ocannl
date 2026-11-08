@@ -8,7 +8,7 @@
    that a fixture reads as a fixture. *)
 open Base
 open Stdio
-module Scan = Test_utils.Provenance_tag_scan
+module Scan = Test_scan.Provenance_tag_scan
 open Verdict.Claims
 
 let nv = "Non" ^ "_virtual"

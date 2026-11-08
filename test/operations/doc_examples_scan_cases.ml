@@ -1,6 +1,6 @@
 open Base
 open Verdict.Claims
-module E = Test_utils.Doc_examples_scan
+module E = Test_scan.Doc_examples_scan
 
 let parse = E.parse ~path:"fixture.md"
 

@@ -9,7 +9,7 @@
     below it out of the index. Each was caught by a human reading carefully. A note that corrupts
     silently is worse than one that is missing, because every later session inherits it as fact.
 
-    The seven rules, and what each is for, are stated in {!Test_utils.Agent_notes_scan}, which is
+    The seven rules, and what each is for, are stated in {!Test_scan.Agent_notes_scan}, which is
     where they are decided — pure functions over strings, so the negative controls in
     [agent_notes_scan_cases.ml] exercise the same code this runs over the repository. This file is
     the live-tree half: it opens what dune hands it and reports one verdict per rule.
@@ -26,7 +26,7 @@
 
 open Base
 open Stdio
-module Notes = Test_utils.Agent_notes_scan
+module Notes = Test_scan.Agent_notes_scan
 
 (** Bullets that legitimately end without sentence-terminating punctuation, keyed by
     [Agent_notes_scan.subject_key] form — ["<file>: <the bullet's opening, whitespace-normalized>"],
@@ -75,7 +75,7 @@ let () =
   (* The test sources take the argument list past Windows' command-line cap, so the rule hands it
      over as a response file (`test/support/scan_argv.ml`). *)
   let workspace_root, args =
-    match Test_utils.Scan_argv.expand Stdlib.Sys.argv |> Array.to_list with
+    match Test_scan.Scan_argv.expand Stdlib.Sys.argv |> Array.to_list with
     | _ :: workspace_root :: args -> (workspace_root, args)
     | _ ->
         eprintf
@@ -85,7 +85,7 @@ let () =
   (* A test source under the rule's own directory arrives as a bare name, so a source's path is
      resolved from where the rule runs rather than by stripping a prefix. *)
   let source_name =
-    let module Dune_scan = Test_utils.Dune_stanza_scan in
+    let module Dune_scan = Test_scan.Dune_stanza_scan in
     Dune_scan.repo_relative (Dune_scan.base_dir workspace_root)
   in
   let md = List.filter args ~f:(String.is_suffix ~suffix:".md") in
@@ -101,7 +101,7 @@ let () =
      gh-ocannl-1358): the scanners there print agent-note pointers in their refusals. The set is the
      rule's recursive glob, less dune's preprocessed twin of a source already in it. *)
   let sources =
-    Test_utils.Config_key_scan.sources_among args
+    Test_scan.Config_key_scan.sources_among args
     |> List.map ~f:(fun p -> (source_name p, read p))
     |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
   in
@@ -282,4 +282,4 @@ let () =
         name);
   Verdict.p_empty "every pointer-fixture exemption names a source the rule would flag"
     ~over:pointer_fixture_sources stale_fixtures;
-  Test_utils.Refusal_control_manifest.print "agent_notes_structure.ml"
+  Test_scan.Refusal_control_manifest.print "agent_notes_structure.ml"

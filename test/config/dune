@@ -33,12 +33,12 @@
 ; The reachability half of a batch's backends (gh-ocannl-1004, gh-ocannl-1066): which backends the
 ; stanzas a dune argv can run NAME, which no configuration value shows. tools/batch-backends.sh
 ; builds it beside `ocannl_read_config` and runs it from the repository root; the reasoning is
-; Test_utils.Slot_kind's, which reads the same backend markers `env_var_deps` enforces.
+; Test_scan.Slot_kind's, which reads the same backend markers `env_var_deps` enforces.
 
 (executable
  (name ocannl_slot_kind)
  (modules ocannl_slot_kind)
- (libraries base stdio test_utils))
+ (libraries base stdio test_scan))
 
 ; The resolved backend name and the extension its backend emits code under, as files any directory
 ; can read: `"<name>-%{read:../config/ocannl_backend.txt}.expected"` names a per-backend golden and

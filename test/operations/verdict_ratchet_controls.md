@@ -793,7 +793,7 @@ run `20261019T200705Z-70844` exited 0.
 ## gh-ocannl-1292 mutation runs
 
 The claim readers over one source and the syntax matrix's per-cell reader classify a failure
-through `Test_utils.Scan_attempt`: a source that does not parse is reported by name, an exception
+through `Test_scan.Scan_attempt`: a source that does not parse is reported by name, an exception
 from one that parses is the reader's own defect, named as such. Each run used tools/mutation-run.sh
 on `verdict_ratchet.ml` and the focused verdict_ratchet alias, exited 1 on exactly the listed false
 claims, and restored the source byte-for-byte.

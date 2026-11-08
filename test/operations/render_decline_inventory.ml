@@ -51,14 +51,14 @@
    rebinding [Cause_at] under another name ([exception D = Cause_at], at top level or as a [let
    exception]) would raise sites under a name this list does not read, so it is refused.
 
-   The corpus is every checked-in [arrayjit/lib/**.ml], selected from [Test_utils.Source_inventory]
+   The corpus is every checked-in [arrayjit/lib/**.ml], selected from [Test_scan.Source_inventory]
    over the rule's clean sandbox (so no build output joins it), each parse classified through
-   [Test_utils.Scan_attempt]; the note is read from the same inventory. *)
+   [Test_scan.Scan_attempt]; the note is read from the same inventory. *)
 
 open Base
 open Stdio
 open Verdict.Claims
-module Read = Test_utils.Config_key_scan
+module Read = Test_scan.Config_key_scan
 module Ast_traverse = Ppxlib.Ast_traverse
 
 let render_phase = "Backend_codegen"
@@ -291,14 +291,13 @@ let section_bullets note =
         not
           (String.is_prefix (String.lstrip l) ~prefix:"## "
           && Option.equal String.equal
-               (Test_utils.Agent_notes_scan.atx_heading l)
+               (Test_scan.Agent_notes_scan.atx_heading l)
                (Some section_title)))
   with
   | [] -> None
   | _ :: rest ->
       let body =
-        List.take_while rest ~f:(fun l ->
-            Option.is_none (Test_utils.Agent_notes_scan.atx_heading l))
+        List.take_while rest ~f:(fun l -> Option.is_none (Test_scan.Agent_notes_scan.atx_heading l))
       in
       let bullets, current =
         List.fold body ~init:([], None) ~f:(fun (done_, current) line ->
@@ -402,7 +401,7 @@ let agrees site entry =
 let audit ~sources ~note : site list * entry list * problem list =
   let scanned =
     List.map sources ~f:(fun (file, content) ->
-        match Test_utils.Scan_attempt.run (fun () -> scan_source ~file content) with
+        match Test_scan.Scan_attempt.run (fun () -> scan_source ~file content) with
         | Scanned found -> found
         | Unparsed _ -> ([], [ Unparsed file ])
         | Raised exn -> ([], [ Scanner_raised (file, exn) ]))
@@ -411,9 +410,7 @@ let audit ~sources ~note : site list * entry list * problem list =
   let reasons = Hash_set.create (module String) and oracle_raised = ref [] in
   List.iter sources ~f:(fun (file, content) ->
       if String.equal (Stdlib.Filename.basename file) oracle_file then
-        match
-          Test_utils.Scan_attempt.run (fun () -> oracle_reasons (Read.structure_of content))
-        with
+        match Test_scan.Scan_attempt.run (fun () -> oracle_reasons (Read.structure_of content)) with
         | Scanned found -> Hash_set.iter found ~f:(Hash_set.add reasons)
         | Unparsed _ -> (* reported by the site scan above *) ()
         | Raised exn -> oracle_raised := Scanner_raised (file, exn) :: !oracle_raised);
@@ -687,7 +684,7 @@ let () =
   let inventory =
     match Array.to_list Stdlib.Sys.argv with
     | _ :: workspace_root :: generated ->
-        Test_utils.Source_inventory.of_dune_sandbox ~workspace_root ~generated
+        Test_scan.Source_inventory.of_dune_sandbox ~workspace_root ~generated
     | _ ->
         eprintf "usage: render_decline_inventory <workspace root> <generated files...>\n";
         Stdlib.exit 2
@@ -698,14 +695,14 @@ let () =
       pf "control: %s finds [%s]" label
         (String.concat ~sep:"; " expected)
         (List.equal String.equal found expected));
-  let read (file : Test_utils.Source_inventory.file) = In_channel.read_all file.on_disk in
+  let read (file : Test_scan.Source_inventory.file) = In_channel.read_all file.on_disk in
   let sources =
-    Test_utils.Source_inventory.select inventory ~f:(fun path ->
+    Test_scan.Source_inventory.select inventory ~f:(fun path ->
         String.is_prefix path ~prefix:source_dir && String.is_suffix path ~suffix:".ml")
-    |> List.map ~f:(fun (file : Test_utils.Source_inventory.file) -> (file.path, read file))
+    |> List.map ~f:(fun (file : Test_scan.Source_inventory.file) -> (file.path, read file))
   in
   let note_file =
-    List.find (Test_utils.Source_inventory.files inventory) ~f:(fun file ->
+    List.find (Test_scan.Source_inventory.files inventory) ~f:(fun file ->
         String.equal file.path note_path)
   in
   let sites, entries, problems =
@@ -750,4 +747,4 @@ let () =
       not (List.exists problems ~f:(function Unconsulted u -> phys_equal u s | _ -> false)));
   p_exists "some decline is paired with an oracle constructor" sites ~f:(fun s ->
       match s.origin with Oracle _ -> true | Literal -> false);
-  Test_utils.Refusal_control_manifest.print "render_decline_inventory.ml"
+  Test_scan.Refusal_control_manifest.print "render_decline_inventory.ml"

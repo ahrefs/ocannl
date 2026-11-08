@@ -85,4 +85,4 @@ let () =
   p "a synthesized guide one byte below the warning band is not warned about"
     (not (warns ~bytes:31_743));
   p "a synthesized guide of exactly 32 KiB is refused, not warned about" (not (warns ~bytes:32_768));
-  Test_utils.Refusal_control_manifest.print "agents_md_size.ml"
+  Test_scan.Refusal_control_manifest.print "agents_md_size.ml"

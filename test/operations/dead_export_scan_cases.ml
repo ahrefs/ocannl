@@ -1,6 +1,6 @@
 open Base
 open Ppxlib
-module Scan = Test_utils.Dead_export_scan
+module Scan = Test_scan.Dead_export_scan
 
 let export_keys exports = List.map exports ~f:Scan.export_key |> List.sort ~compare:String.compare
 
@@ -40,7 +40,7 @@ let referenced refs value =
   List.exists refs ~f:(fun (reference : Scan.reference) -> String.equal reference.value value)
 
 let single_type_declaration source =
-  match Test_utils.Config_key_scan.structure_of source with
+  match Test_scan.Config_key_scan.structure_of source with
   | [ { pstr_desc = Pstr_type (rec_flag, [ declaration ]); _ } ] -> (rec_flag, declaration)
   | _ -> failwith "expected exactly one type declaration"
 
@@ -531,7 +531,7 @@ let () =
                 String.uncapitalize constructor.pcd_name.txt)
         | Ptype_abstract | Ptype_open -> []
       in
-      let structure = Test_utils.Config_key_scan.structure_of source in
+      let structure = Test_scan.Config_key_scan.structure_of source in
       let expanded =
         generated_names (Ppxlib.Driver.map_structure structure)
         |> List.filter ~f:(fun name ->
@@ -578,7 +578,7 @@ let () =
       let _, declaration = single_type_declaration source in
       let expanded =
         generated_names
-          (Ppxlib.Driver.map_structure (Test_utils.Config_key_scan.structure_of source))
+          (Ppxlib.Driver.map_structure (Test_scan.Config_key_scan.structure_of source))
         |> List.filter ~f:(fun name -> not (Scan.is_sexp_of_converter name))
       in
       let derivers = Scan.derivers_of_type_declaration declaration in
@@ -793,7 +793,7 @@ let () =
       in
       let external_truth =
         sample_spellings
-          (Ppxlib.Driver.map_structure (Test_utils.Config_key_scan.structure_of consumer))
+          (Ppxlib.Driver.map_structure (Test_scan.Config_key_scan.structure_of consumer))
         |> List.filter ~f:(Set.mem names)
         |> List.dedup_and_sort ~compare:String.compare
       in
@@ -804,7 +804,7 @@ let () =
       in
       let support_truth =
         generated_calls
-          (Ppxlib.Driver.map_structure (Test_utils.Config_key_scan.structure_of sample))
+          (Ppxlib.Driver.map_structure (Test_scan.Config_key_scan.structure_of sample))
         |> List.filter ~f:(fun (caller, callee) ->
             Set.mem names caller && Set.mem names callee && not (String.equal caller callee))
         |> sorted_pairs

@@ -1,4 +1,4 @@
-(** What {!Test_utils.Slot_kind} says of the repository's own tree (gh-ocannl-1227): the checks that
+(** What {!Test_scan.Slot_kind} says of the repository's own tree (gh-ocannl-1227): the checks that
     keep its two configuration-free answers true hold -- no alias on the configuration-free list
     reaches a configuration reader, a plain compilation reaches no backend, every reader reads a
     configuration the runner resolves (gh-ocannl-1249), and the inventory is complete -- and the
@@ -18,11 +18,11 @@ open Verdict.Claims
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Scan = Test_utils.Dune_stanza_scan
-module Slot_kind = Test_utils.Slot_kind
+module Scan = Test_scan.Dune_stanza_scan
+module Slot_kind = Test_scan.Slot_kind
 
 let () =
   if Array.length argv < 2 then (

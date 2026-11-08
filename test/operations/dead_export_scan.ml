@@ -40,12 +40,12 @@ open Base
 open Stdio
 
 (* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
-   a Windows command line may be; see [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   a Windows command line may be; see [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Read = Test_utils.Config_key_scan
-module Scan = Test_utils.Dead_export_scan
-module Dune = Test_utils.Dune_stanza_scan
+module Read = Test_scan.Config_key_scan
+module Scan = Test_scan.Dead_export_scan
+module Dune = Test_scan.Dune_stanza_scan
 
 (* Filled from the first live census. Every unannotated entry names one exact implicit export and
    shares the reason stated above: it predates the ratchet and needs an explicit interface or a
@@ -228,7 +228,7 @@ let read_implementation ~source contents =
 
 let exports_or_refusal ~census ~fail ~source contents =
   match
-    Test_utils.Scan_attempt.run (fun () ->
+    Test_scan.Scan_attempt.run (fun () ->
         match census ~source contents with
         | exports -> Ok exports
         | exception Scan.Unmodelled_deriving_arguments { deriver; line } -> Error (deriver, line))
@@ -257,7 +257,7 @@ let exports_or_refusal ~census ~fail ~source contents =
 
 let type_counts_or_refusal ~census ~fail ~type_exports ~implementations ~interfaces =
   match
-    Test_utils.Scan_attempt.run (fun () -> census ~type_exports ~implementations ~interfaces)
+    Test_scan.Scan_attempt.run (fun () -> census ~type_exports ~implementations ~interfaces)
   with
   | Scanned counts -> counts
   | Unparsed where ->
@@ -274,7 +274,7 @@ let type_counts_or_refusal ~census ~fail ~type_exports ~implementations ~interfa
       Hashtbl.create (module String)
 
 let references_or_refusal ~census ~fail ~exports ~sources =
-  match Test_utils.Scan_attempt.run (fun () -> census ~exports ~sources) with
+  match Test_scan.Scan_attempt.run (fun () -> census ~exports ~sources) with
   | Scanned references -> references
   | Unparsed where ->
       fail
@@ -294,7 +294,7 @@ let refusal_control () =
     let refused = ref false in
     let fail _message =
       refused := true;
-      Test_utils.Refusal_control_manifest.observe_failure ~source ~format
+      Test_scan.Refusal_control_manifest.observe_failure ~source ~format
     in
     run fail;
     Verdict.p label !refused
@@ -310,7 +310,7 @@ let refusal_control () =
     let routed =
       match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
     in
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     Verdict.p label routed
   in
   let planted ~fragment =
@@ -381,7 +381,7 @@ let refusal_control () =
            ~fail ~type_exports ~implementations:[]
            ~interfaces:[ ("consumer.mli", "val x : int") ]
           : (string, int) Hashtbl.t));
-  Test_utils.Refusal_control_manifest.print source
+  Test_scan.Refusal_control_manifest.print source
 
 let () =
   if Array.length argv = 2 && String.equal argv.(1) "--refusal-control" then (
@@ -480,4 +480,4 @@ let () =
     (Set.length type_exemptions = List.length exempt_unmentioned_types);
   Verdict.p_empty "every named unmentioned-type exemption remains necessary"
     ~over:exempt_unmentioned_types type_stale;
-  Test_utils.Refusal_control_manifest.print "dead_export_scan.ml"
+  Test_scan.Refusal_control_manifest.print "dead_export_scan.ml"

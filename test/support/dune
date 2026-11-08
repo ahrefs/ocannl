@@ -1,7 +1,8 @@
-; Support libraries, deliberately split by dependency (gh-ocannl-600). [test_utils] stays
-; below [ocannl] -- [arrayjit.utils], [arrayjit.ir] and [arrayjit.verdict], no backends and no
-; tensor layer -- because tests like config_scan_lexing and test_ndarray link nothing more;
-; [ll_test] links [ocannl], for the hand-built-Low_level harness.
+; Support libraries, deliberately split by dependency (gh-ocannl-600, gh-ocannl-2010).
+; [test_utils] provides printers and runtime artifact helpers, with no parser, backend or tensor
+; layer. [test_scan] adds source readers and ppxlib: its compiler-libs dependency forces the
+; compiler into each executable, even one that only calls a printer. [ll_test] links [ocannl],
+; for the hand-built-Low_level harness. [test_utils_linkage] checks the actual linked unit census.
 ;
 ; [arrayjit.utils] and [arrayjit.verdict] arrived with the generated-artifact reader (gh-ocannl-655),
 ; which resolves [build_files/] paths and reports a missing or overwritten artifact as a verdict.
@@ -58,8 +59,23 @@
 (library
  (name test_utils)
  (package neural_nets_lib)
+ (modules test_utils generated asm_census cache_plant)
+ (libraries
+  base
+  stdio
+  unix
+  config_reads
+  arrayjit.utils
+  arrayjit.ir
+  arrayjit.verdict))
+
+; Source scanners pay for ppxlib and compiler-libs; runtime tests do not.
+
+(library
+ (name test_scan)
+ (package neural_nets_lib)
  (modules
-  test_utils
+  test_scan
   agent_notes_scan
   markdown_link_scan
   doc_examples_scan
@@ -96,10 +112,7 @@
   slot_kind
   verdict_callee
   verdict_scan
-  verdict_provenance
-  generated
-  asm_census
-  cache_plant)
+  verdict_provenance)
  (libraries
   base
   stdio
@@ -124,7 +137,7 @@
 ; The comments and string literals of an OCaml source, read by the compiler's own lexer
 ; (gh-ocannl-1729): the parse tree holds no plain comment. Through `compiler-libs`, so in a library
 ; of its own for the reason the emitter frontier's note below gives; its interface is plain data, so
-; [test_utils]' prose readers consume it without seeing either library's `Location`.
+; [test_scan]'s prose readers consume it without seeing either library's `Location`.
 
 (library
  (name prose_lexemes)
@@ -133,11 +146,11 @@
  (libraries base compiler-libs.common))
 
 ; The emitter frontier is derived from the compiler libraries' COMPILED interfaces (gh-ocannl-748),
-; so this one reads `.cmi` files through `compiler-libs`. It stays out of [test_utils] because
+; so this one reads `.cmi` files through `compiler-libs`. It stays out of [test_scan] because
 ; that library reads OCaml SOURCES through ppxlib, and the two put different modules under the same
 ; top-level names (`Parsetree`, `Longident`, `Asttypes`, `Location`): keeping them in separate
 ; compilation units is what makes each file's spelling unambiguous. Nothing but `base` besides, so
-; every consumer of [test_utils] can link it.
+; every consumer of [test_scan] can link it.
 
 (library
  (name emitter_frontier)

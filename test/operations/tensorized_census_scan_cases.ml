@@ -6,7 +6,7 @@
 
 open Base
 open Stdio
-module Scan = Test_utils.Tensorized_census_scan
+module Scan = Test_scan.Tensorized_census_scan
 open Verdict.Claims
 
 let read source = List.length (Scan.tensorized_executed source)

@@ -23,10 +23,10 @@ open Verdict.Claims
 
 (* The dependency set arrives as a `@<path>` response file, because a list that grows with the
    repository does not belong on a Windows command line (gh-ocannl-1748); see
-   [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Dune_scan = Test_utils.Dune_stanza_scan
+module Dune_scan = Test_scan.Dune_stanza_scan
 
 type declaration = { local : string; public : string }
 type smoke_target = Local of string | Public of string
@@ -2264,7 +2264,7 @@ let () =
       in
       if not ok then Fresh_process.report ~label:"omitted executable refusal" child;
       p "synthetic public executable omitted from @bin-smoke is refused" ok;
-      Test_utils.Refusal_control_manifest.print "bin_smoke_membership_scan.ml"
+      Test_scan.Refusal_control_manifest.print "bin_smoke_membership_scan.ml"
   | [ _; "--negative-control" ] -> report (scan_bin_content missing_fixture)
   | _ :: workspace_root :: dune_paths ->
       let base = Dune_scan.base_dir workspace_root in
@@ -2282,7 +2282,7 @@ let () =
         else { result with errors = "synthetic membership controls failed" :: result.errors }
       in
       report result;
-      Test_utils.Refusal_control_manifest.print "bin_smoke_membership_scan.ml"
+      Test_scan.Refusal_control_manifest.print "bin_smoke_membership_scan.ml"
   | argv ->
       eprintf "Usage: %s <workspace-root> <dune-file...>|--negative-control\n" (List.hd_exn argv);
       Stdlib.exit 2

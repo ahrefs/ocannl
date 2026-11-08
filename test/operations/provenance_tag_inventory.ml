@@ -11,9 +11,9 @@
     other families share the rest of that story: their numbers are allocated across nine modules by
     folklore, and a retired [N:reason] in prose read exactly like a live one.
 
-    The tags are DERIVED, never listed here: {!Test_utils.Provenance_tag_scan} reads the families
-    off [Tnode.provenance] and the tags off the sources -- its header states what a family, a tag
-    and a citation are, and what is not read. The golden holds the families, the tags by family and
+    The tags are DERIVED, never listed here: {!Test_scan.Provenance_tag_scan} reads the families off
+    [Tnode.provenance] and the tags off the sources -- its header states what a family, a tag and a
+    citation are, and what is not read. The golden holds the families, the tags by family and
     minting function, the pinned number collisions, the tests' own tags, and every file citing a
     library tag with the numbers it cites. A new tag, a new file citing one, or a file that stops
     citing one each moves a line.
@@ -28,8 +28,8 @@
 
 open Base
 open Stdio
-module Scan = Test_utils.Provenance_tag_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Provenance_tag_scan
+module Inventory = Test_scan.Source_inventory
 
 (* The owner of the families: the provenance type and the function rendering its constructors. *)
 let type_source = "arrayjit/lib/tnode.ml"

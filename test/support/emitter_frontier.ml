@@ -1,7 +1,7 @@
 (** The values that hand a caller the TEXT of generated code, read off the compiler libraries'
     interfaces (gh-ocannl-748).
 
-    {!Test_utils.Codegen_text_scan} recognises a test as reaching generated text in memory when it
+    {!Test_scan.Codegen_text_scan} recognises a test as reaching generated text in memory when it
     calls one of these. That set used to be written down in the scan -- five names -- and it was the
     one hand-maintained frontier left in the codegen-text inventory: a way of getting emitted text
     into a test that the list does not name does not shrink the inventory {e visibly}, it just

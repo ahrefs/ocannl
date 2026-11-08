@@ -3,7 +3,7 @@
    control is open_node_scan_control, over a committed fixture tree. *)
 open Base
 open Verdict.Claims
-module Scan = Test_utils.Open_node_scan
+module Scan = Test_scan.Open_node_scan
 
 (* A stand-in tnode.ml: [create] mints a uid, [create_pair] returns a node with its host buffer
    through [create], [find] mints none. *)
@@ -18,7 +18,7 @@ let tnode =
    let find () = { uid = -1 }\n"
 
 let derive source =
-  Test_utils.Scan_attempt.attempted ~what:"open-node cases" ~name:(String.prefix source 60)
+  Test_scan.Scan_attempt.attempted ~what:"open-node cases" ~name:(String.prefix source 60)
     ~default:{ Scan.names = []; tops = []; derivation_findings = [ "<the scan failed>" ] }
     (fun () -> Scan.derive_creators ~file:"arrayjit/lib/tnode.ml" source)
 
@@ -26,7 +26,7 @@ let creators = derive tnode
 
 (* Most cases stand in for tensor.ml, whose top-level note_open_node is the real one. *)
 let findings ?(file = Scan.owner_file) source =
-  Test_utils.Scan_attempt.attempted ~what:"open-node cases" ~name:(String.prefix source 60)
+  Test_scan.Scan_attempt.attempted ~what:"open-node cases" ~name:(String.prefix source 60)
     ~default:[ "<the scan failed>" ] (fun () ->
       (Scan.scan ~file ~creators ("module Tn = Ir.Tnode\n" ^ source)).findings)
 
@@ -164,6 +164,6 @@ let () =
     = 0);
   (* Failure routing. *)
   p "a source that does not parse is the input's fault, not the scanner's"
-    (match Test_utils.Scan_attempt.run (fun () -> Scan.scan ~file:"x.ml" ~creators "let = (") with
+    (match Test_scan.Scan_attempt.run (fun () -> Scan.scan ~file:"x.ml" ~creators "let = (") with
     | Unparsed _ -> true
     | Scanned _ | Raised _ -> false)

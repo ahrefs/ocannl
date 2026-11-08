@@ -13,7 +13,7 @@
     line; a codegen change reads the list and knows what it must re-run, before pushing rather than
     after a GPU box reports red days later.
 
-    The rules are decided in {!Test_utils.Codegen_text_scan} as pure functions over a path and its
+    The rules are decided in {!Test_scan.Codegen_text_scan} as pure functions over a path and its
     contents, so [codegen_text_scan_cases] exercises the same code on input built to break it.
 
     {1 What the golden holds}
@@ -52,7 +52,7 @@
     [runtest-top_down_prec-extension], not by the test's own alias, and which of them it diffs
     depends on the backend the build resolves (gh-ocannl-1533). So each member is printed with the
     aliases that re-run it -- read from the dune files of the same roots by
-    {!Test_utils.Rerun_aliases}, with the pform substitution a golden's rule makes -- and the golden
+    {!Test_scan.Rerun_aliases}, with the pform substitution a golden's rule makes -- and the golden
     closes on their union, ready to hand to [tools/test-run.sh run build]. A member no alias can be
     found for fails the run: the list is only worth reading if it is the whole of what to run.
 
@@ -63,7 +63,7 @@
     verbatim text, a hand-built lowering through the [?prelowered] seam, a shipped kernel compiled
     alone. gh-ocannl-1338 ran every text pin on CUDA and HIP and master still went red on one of
     these (gh-ocannl-1685). They are listed in a section of their own, with the support values that
-    reach such text DERIVED from the sources ({!Test_utils.Kernel_exec_scan}) and their own closing
+    reach such text DERIVED from the sources ({!Test_scan.Kernel_exec_scan}) and their own closing
     list of aliases, which a codegen change runs on every GPU backend.
 
     {1 The tests calling a backend's compiler themselves}
@@ -73,7 +73,7 @@
     [Builtins_cc.source] and a probe of its own with [Cc_backend.compiler_command] (gh-ocannl-1772).
     They are listed by the backend whose compiler they call, through the same harness derivation,
     with a closing list per backend. The entries they are recognised by are spellings
-    ({!Test_utils.Kernel_exec_scan.compiler_entries}); a spelling no source handed over still uses
+    ({!Test_scan.Kernel_exec_scan.compiler_entries}); a spelling no source handed over still uses
     fails the run, since an entry renamed away would leave the population empty and the list
     cheerful.
 
@@ -83,7 +83,7 @@
     gh-ocannl-1736 moved the residency markers into [Ll_test], and after that
     [masked_persistent_fragment] -- pinning them through [Ll_test.residency_holds] -- read here as a
     member pinning nothing, complete. The helpers are derived from the support modules
-    ({!Test_utils.Codegen_text_scan.helper_predicates}), each call is judged by its caller's
+    ({!Test_scan.Codegen_text_scan.helper_predicates}), each call is judged by its caller's
     provenance, and every helper some test hands text to is listed with the fragments it spells and
     the tests calling it, whose aliases are the ones above. *)
 
@@ -91,17 +91,17 @@ open Base
 open Stdio
 
 (* Every file this scan reads arrives as a `@<path>` response file, because the list is longer than
-   a Windows command line may be; see [Test_utils.Scan_argv]. *)
-let argv = Test_utils.Scan_argv.expand Stdlib.Sys.argv
+   a Windows command line may be; see [Test_scan.Scan_argv]. *)
+let argv = Test_scan.Scan_argv.expand Stdlib.Sys.argv
 
-module Scan = Test_utils.Codegen_text_scan
-module Floors = Test_utils.Scan_floors
-module Attempt = Test_utils.Scan_attempt
-module Rerun = Test_utils.Rerun_aliases
-module Exec = Test_utils.Kernel_exec_scan
+module Scan = Test_scan.Codegen_text_scan
+module Floors = Test_scan.Scan_floors
+module Attempt = Test_scan.Scan_attempt
+module Rerun = Test_scan.Rerun_aliases
+module Exec = Test_scan.Kernel_exec_scan
 
 (** Lower bounds per scanned root, well below the census of the day they were written. See
-    {!Test_utils.Scan_floors}: a glob that breaks goes to zero, a member added moves nothing. *)
+    {!Test_scan.Scan_floors}: a glob that breaks goes to zero, a member added moves nothing. *)
 let golden_floors = [ ("test", 12); ("arrayjit/test", 2) ]
 
 (** [arrayjit/test] has its own floor, and the reason it once looked as though it could not have
@@ -162,7 +162,7 @@ let after_marker_exempt =
 
 let read path = Stdlib.In_channel.with_open_bin path Stdlib.In_channel.input_all
 
-module Dune = Test_utils.Dune_stanza_scan
+module Dune = Test_scan.Dune_stanza_scan
 
 let stale_exclusions ~excluded ~handed_over =
   List.filter excluded ~f:(fun (path, _) -> not (List.mem handed_over path ~equal:String.equal))
@@ -279,7 +279,7 @@ let refusal_control ~wrapper =
   let refused = ref false in
   let fail _message =
     refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "the exclusion for %s (%s) names a file the globs no longer hand over -- drop it, or fix \
          the path it was meant to name"
@@ -293,7 +293,7 @@ let refusal_control ~wrapper =
   let entry_refused = ref false in
   let fail _message =
     entry_refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "the compiler entry %s (%s) is spelled by no source handed over, so the tests calling that \
          compiler are found by nothing -- rename it to the spelling the tree uses now, or drop it \
@@ -323,7 +323,7 @@ let refusal_control ~wrapper =
   let raised = ref false in
   let fail _message =
     raised := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "the scan raised %s on %s -- a defect in the scanner rather than in the file, which \
          parses, so the census is short by whatever the file pins"
@@ -344,11 +344,11 @@ let refusal_control ~wrapper =
     | Attempt.Scanned _ | Attempt.Unparsed _ -> false);
   (* gh-ocannl-1207: the parse refusal, executed: this scan as a child, handed a source that does
      not parse. *)
-  Test_utils.Refusal_control_manifest.with_tree
+  Test_scan.Refusal_control_manifest.with_tree
     [ ("test/unparsable.ml", "let =\n") ]
     (fun root ->
       Verdict.p "a scan handed a source that does not parse refuses it, exiting 1"
-        (Test_utils.Refusal_control_manifest.refuses ~source
+        (Test_scan.Refusal_control_manifest.refuses ~source
            ~claim:"a scan handed a source that does not parse refuses it, exiting 1"
            ~exe:(Fresh_process.executable ())
            [ root; Stdlib.Filename.concat root "test/unparsable.ml" ]));
@@ -356,12 +356,12 @@ let refusal_control ~wrapper =
      library's wrapper interface alone -- the [emitter_fixture] library's, copied into a tree of its
      own, so that neither the hand-over nor the wrapper's directory holds the members it
      declares. *)
-  Test_utils.Refusal_control_manifest.with_tree
+  Test_scan.Refusal_control_manifest.with_tree
     [ ("lib/emitter_fixture.cmi", read wrapper) ]
     (fun root ->
       Verdict.p
         "a scan handed a wrapper interface without its members' interfaces refuses it, exiting 1"
-        (Test_utils.Refusal_control_manifest.refuses ~source
+        (Test_scan.Refusal_control_manifest.refuses ~source
            ~claim:
              "a scan handed a wrapper interface without its members' interfaces refuses it, \
               exiting 1"
@@ -382,7 +382,7 @@ let refusal_control ~wrapper =
   let direct_refused = ref false in
   let fail _message =
     direct_refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "%s reads build_files/ itself (Utils.build_files_dir or Utils.build_file), so nothing ties \
          what it reads to this run's compile: a stale artifact, another routine's of the same \
@@ -414,7 +414,7 @@ let refusal_control ~wrapper =
   let after_refused = ref false in
   let fail _message =
     after_refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "%s reads a kernel's statements as the text after its Main logic banner (a substr_index on \
          it), which under outlining holds only calls to the kernel's parts: a positive claim over \
@@ -433,7 +433,7 @@ let refusal_control ~wrapper =
   let stale_refused = ref false in
   let fail _message =
     stale_refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "the after-marker exemption for %s (%s) names a file that no longer reads after the Main \
          logic banner -- drop it"
@@ -455,7 +455,7 @@ let refusal_control ~wrapper =
   let unplaced_refused = ref false in
   let fail _message =
     unplaced_refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "%s pins generated text or builds kernel text of its own, and no stanza of the dune files \
          handed over re-runs it by an alias -- no rule diffs it and no rule or test runs its \
@@ -480,7 +480,7 @@ let refusal_control ~wrapper =
   let unselected_refused = ref false in
   let fail _message =
     unselected_refused := true;
-    Test_utils.Refusal_control_manifest.observe_failure ~source
+    Test_scan.Refusal_control_manifest.observe_failure ~source
       ~format:
         "%s is re-run by %s, a condition no backend's build is named by: either the configuration \
          reader (test/config/config_reads.ml) writes that value for no backend, so no run compares \
@@ -503,7 +503,7 @@ let refusal_control ~wrapper =
     "a snapshot under an extension no backend emits reaches the unselected-route refusal, through \
      the route that diffs it"
     (!unselected_refused && not (List.is_empty routes));
-  Test_utils.Refusal_control_manifest.print source
+  Test_scan.Refusal_control_manifest.print source
 
 let () =
   if Array.length argv = 3 && String.equal argv.(1) "--refusal-control" then (
@@ -1063,4 +1063,4 @@ let () =
   Verdict.p_empty "every after-marker exemption still names a file reading after the banner"
     ~over:(List.map after_marker_exempt ~f:fst)
     (List.map stale_after_marker ~f:fst);
-  Test_utils.Refusal_control_manifest.print "codegen_text_inventory.ml"
+  Test_scan.Refusal_control_manifest.print "codegen_text_inventory.ml"

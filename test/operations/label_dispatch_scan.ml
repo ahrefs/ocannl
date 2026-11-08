@@ -15,8 +15,8 @@
 open Base
 open Stdio
 open Verdict.Claims
-module Scan = Test_utils.Label_dispatch_scan
-module Inventory = Test_utils.Source_inventory
+module Scan = Test_scan.Label_dispatch_scan
+module Inventory = Test_scan.Source_inventory
 
 let corpus_root = "arrayjit/lib/"
 
@@ -27,7 +27,7 @@ let in_corpus path =
    source's to fix, and any other exception is the reader's own defect. [read] is a thunk so the
    refusal control can plant the defect. *)
 let reading_or_refusal ~fail ~what read =
-  match Test_utils.Scan_attempt.run read with
+  match Test_scan.Scan_attempt.run read with
   | Scanned result -> Some result
   | Unparsed why ->
       fail
@@ -55,7 +55,7 @@ let run ~fail sources =
           (reading_or_refusal ~fail ~what:file (fun () -> Scan.scan ~file source))
           ~f:(fun report -> (file, report)))
   in
-  List.iter reports ~f:(fun (_, (report : Test_utils.Debug_name_scan.report)) ->
+  List.iter reports ~f:(fun (_, (report : Test_scan.Debug_name_scan.report)) ->
       List.iter report.findings ~f:fail);
   reports
 
@@ -83,7 +83,7 @@ let refusal_control () =
     let routed =
       match !messages with [ m ] -> String.is_substring m ~substring:fragment | _ -> false
     in
-    if routed then Test_utils.Refusal_control_manifest.observe_failure ~source ~format;
+    if routed then Test_scan.Refusal_control_manifest.observe_failure ~source ~format;
     p label routed
   in
   routed_case "an invalid OCaml source reaches the parse refusal"
@@ -104,7 +104,7 @@ let refusal_control () =
       "no source under arrayjit/lib/ is among the sources read -- the rule's source tree matches \
        nothing" ~fragment:"no source under arrayjit/lib/ is among the sources read" (fun fail ->
       ignore (run ~fail [ ("lib/train.ml", "let x = 1") ] : _ list));
-  Test_utils.Refusal_control_manifest.print source
+  Test_scan.Refusal_control_manifest.print source
 
 let () =
   match Array.to_list Stdlib.Sys.argv with
@@ -121,7 +121,7 @@ let () =
       in
       let reports = run ~fail:Verdict.fail sources in
       let accepted =
-        List.concat_map reports ~f:(fun (file, (report : Test_utils.Debug_name_scan.report)) ->
+        List.concat_map reports ~f:(fun (file, (report : Test_scan.Debug_name_scan.report)) ->
             List.map report.accepted ~f:(fun (_, form) -> (file, form)))
       in
       (* The accepted positions the corpus uses: each must be read somewhere, so a reader gone blind
@@ -134,7 +134,7 @@ let () =
       let accepts file form =
         List.exists accepted ~f:(fun (f, g) -> String.equal f file && String.equal g form)
       in
-      let module D = Test_utils.Debug_name_scan in
+      let module D = Test_scan.Debug_name_scan in
       p "the scan reads online_softmax's tile labels copied onto new nodes"
         (accepts "arrayjit/lib/online_softmax.ml" D.copied);
       p "the scan reads backends' [%log] payloads" (accepts "arrayjit/lib/backends.ml" D.logged);
@@ -146,5 +146,5 @@ let () =
         (accepts "arrayjit/lib/memory_budget.ml" D.message_only);
       p "the scan reads low_level's composed refusal messages"
         (accepts "arrayjit/lib/low_level.ml" D.composed);
-      Test_utils.Refusal_control_manifest.print "label_dispatch_scan.ml"
+      Test_scan.Refusal_control_manifest.print "label_dispatch_scan.ml"
   | _ -> Stdlib.exit 2

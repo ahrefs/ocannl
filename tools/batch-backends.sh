@@ -20,7 +20,7 @@
 #   - The stanzas the argv reaches that NAME a backend (`; ocannl-backend: cuda
 #     -- …`, which env_var_deps enforces on every stanza that does not read the
 #     configuration): they hold it whatever the configuration says.
-#     `ocannl_slot_kind` (test/config, over Test_utils.Slot_kind) lists each
+#     `ocannl_slot_kind` (test/config, over Test_scan.Slot_kind) lists each
 #     named backend with the first stanza naming it, says whether the
 #     configuration counts (`reads config`), or answers unknown for an argv it
 #     does not model.

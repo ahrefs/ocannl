@@ -12,8 +12,8 @@
     what says so. *)
 
 open Base
-module Scan = Test_utils.Config_key_scan
-module Attempt = Test_utils.Scan_attempt
+module Scan = Test_scan.Config_key_scan
+module Attempt = Test_scan.Scan_attempt
 
 let printf = Stdio.printf
 
@@ -661,7 +661,7 @@ let handed_on = Utils.settings|ocaml}
   ]
 
 let scanner_refusal_controls ~digest_exe ~consistency_exe =
-  let module Manifest = Test_utils.Refusal_control_manifest in
+  let module Manifest = Test_scan.Refusal_control_manifest in
   Manifest.with_tree malformed_tree (fun root ->
       let in_tree = Stdlib.Filename.concat root in
       let sources =
@@ -792,4 +792,4 @@ let () =
       Verdict.fail
         "usage: config_scan_lexing <digest_completeness.exe> <test_config_consistency.exe>");
   List.iter [ "digest_completeness.ml"; "test_config_consistency.ml" ] ~f:(fun source ->
-      Test_utils.Refusal_control_manifest.print source)
+      Test_scan.Refusal_control_manifest.print source)
