@@ -285,8 +285,9 @@ type optop =
           consumers read a plain [Get] of the tile, the one form [Tensorize] takes, since a
           [Tile_mma]'s operands are a node and indices. The tile holds the rounded value, so
           [tile_prec = None] mints it at the rounding's precision, a narrower one than the source's,
-          and [Some p] may widen that. Staged reads must agree on the rounding, and [hoisted]
-          refuses it: a host-side pack has no load nest to round in. *)
+          and [Some p] may widen that. Staged reads must agree on the rounding. A [hoisted] panel
+          performs verified NaN-free f32-to-half rounding on the host, before widening into the
+          panel; other rounded reads remain refused. See {!hoisted_read_rounding}. *)
   | Privatize of { target : Tn.t; over : Indexing.symbol; acc_prec : Ops.prec }
       (** Accumulator privatization: contract the read-modify-write accumulation of the materialized
           [target] across the (Serial) [over] loop's whole subtree into a per-thread [Local]
@@ -650,6 +651,10 @@ val fuse_epilogue_witness : target:Tn.t -> Low_level.optimized -> string option
 
 val can_fuse_epilogue : target:Tn.t -> Low_level.optimized -> bool
 (** [Option.is_none (fuse_epilogue_witness ~target opt)]: whether the fusion applies. *)
+
+val hoisted_read_rounding : source:Tn.t -> round_prec:Ops.prec -> (float -> float) option
+(** Host conversion for a rounded hoisted read, before exact panel widening. Only NaN-free f32 to
+    half is admitted; other conversions retain their in-kernel pack. *)
 
 val hoistable_constant : Tn.t -> bool
 (** Whether the node is eligible as a [hoisted] {!constructor-Stage} source: declared value-constant

@@ -119,6 +119,34 @@ let placement_class plc tn =
    node carries beside its dims and precision; [companions] renders the consumer's sections after
    the code, given the node emitter so they share the numbering. *)
 let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical =
+  (* Only rounded reads need the data-dependent admission bit. In particular, digesting a post-Stage
+     packed panel must not force its host-init lazy just to classify an unused rounding. *)
+  let half_reads =
+    let open LL.Access_fold in
+    let hooks =
+      {
+        (hooks ()) with
+        scalar =
+          (fun _ nodes -> function
+            | LL.Unop (Ops.Round_prec, (LL.Get (tn, _), Ops.Half_prec _)) ->
+                Continue (Set.add nodes tn)
+            | _ -> Continue nodes);
+      }
+    in
+    fold
+      ~policy:
+        {
+          discarded_operands = Visit;
+          gated_operands = Visit;
+          dead_loops = Visit;
+          local_scopes = Visit;
+          guards = Ignore;
+          scan_implicit = Skip;
+        }
+      ~hooks
+      ~init:(Set.empty (module Tn))
+      llc
+  in
   let buf = Buffer.create 4096 in
   let add = Buffer.add_string buf in
   let complete = ref true in
@@ -147,7 +175,14 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
            PR #123): a hoisted-[Stage] winner is only valid against constant operands, and a
            non-hoisted winner cached for a same-shape non-constant program must not mask a constant
            program's hoisted candidates — so such programs must not share cache keys. *)
-        let hc = if Schedule.hoistable_constant tn then ";const" else "" in
+        let hc =
+          if not (Schedule.hoistable_constant tn) then ""
+          else if
+            Set.mem half_reads tn
+            && Option.is_some (Schedule.hoisted_read_rounding ~source:tn ~round_prec:Ops.half)
+          then ";const;host-half"
+          else ";const"
+        in
         add
           (Printf.sprintf "t%d=[%s;%s%s%s]" i
              (String.concat_array ~sep:"," (Array.map dims ~f:Int.to_string))
@@ -836,8 +871,9 @@ type entry = {
    21: gh-ocannl-1664 -- per-segment singles timed inside the seeded plan, where one is seeded
    22: gh-ocannl-1725 -- the storing search's beam finals record, so every replay explains its times
    23: gh-ocannl-1697 -- split singles re-derived inside the seeded plan, unsplit and new sites too
+   24: gh-ocannl-2079 -- NaN-free frozen f32 masters under half twins gain hoisted packing seeds
 *)
-let entry_version = 23
+let entry_version = 24
 
 let sanitize name =
   String.map name ~f:(fun c ->

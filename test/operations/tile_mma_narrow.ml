@@ -419,7 +419,7 @@ let () =
          (matmul (fun idcs -> 1.25 *. scale idcs) (fun idcs -> b_base idcs +. eps))
          ~f:Float.equal));
 
-  (* One tile holds one value per cell, and a hoisted panel has no load nest to round in. *)
+  (* One tile holds one value per cell; host rounding needs a verified conversion. *)
   let refused name ~because schedule_of (out : Tensor.t) =
     let refusal = ref None in
     let transform opt =
@@ -475,10 +475,11 @@ let () =
        | _ -> assert false)
      c);
   let ma = master "ma_hoist" a_base and mb = master "mb_hoist" b_base in
-  let b = twin_at Ir.Ops.half mb in
+  let b = twin_at Ir.Ops.bfloat16 mb in
   let%op c = ma * b in
   Tn.update_prec c.Tensor.value Ir.Ops.single;
-  refused "a hoisted panel cannot round a read" ~because:"no load nest"
+  refused "a hoisted panel refuses an unverified host conversion"
+    ~because:"no verified host rounding"
     (composed_schedule ~hoist_b:true ~tile_prec:(Some Ir.Ops.single) ~a:ma.Tensor.value
        ~b:mb.Tensor.value)
     c

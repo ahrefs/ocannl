@@ -1,0 +1,16 @@
+the conversion oracle reads the materialized f32 master on device: true
+frozen_half_panel: no per-invocation master access remains: true
+frozen_half_panel: host packing matches the device conversion bitwise: true
+frozen_wide_panel: no per-invocation master access remains: true
+frozen_wide_panel: host packing matches the device conversion bitwise: true
+inference products have f32-exact partial sums: true
+the frozen twin's serial inference matches the rounded oracle: true
+frozen twins seed hoisted matmul packing: true
+frozen twins seed hoisted grid packing: true
+NaN-free frozen masters admit host rounding: true
+a NaN-bearing master refuses host rounding: true
+ordinary finite values share a cache identity, NaN eligibility separates it: true
+replacement after Stage admission re-checks NaN eligibility before packing: true
+replacement host data refreshes cached NaN eligibility: true
+an unrounded constant digest leaves host data lazy: true
+a half-rounded constant digest checks host data: true
