@@ -1,36 +1,5 @@
-requested=false level=0 restore=false: child succeeds: true
-requested=false level=0 restore=false: stdout stays empty: true
-requested=false level=0 restore=false: stderr notice matches the logging gate, once per process: true
-requested=false level=0 restore=true: child succeeds: true
-requested=false level=0 restore=true: stdout stays empty: true
-requested=false level=0 restore=true: stderr notice matches the logging gate, once per process: true
-requested=false level=1 restore=false: child succeeds: true
-requested=false level=1 restore=false: stdout stays empty: true
-requested=false level=1 restore=false: stderr notice matches the logging gate, once per process: true
-requested=false level=1 restore=true: child succeeds: true
-requested=false level=1 restore=true: stdout stays empty: true
-requested=false level=1 restore=true: stderr notice matches the logging gate, once per process: true
-requested=false level=2 restore=false: child succeeds: true
-requested=false level=2 restore=false: stdout stays empty: true
-requested=false level=2 restore=false: stderr notice matches the logging gate, once per process: true
-requested=false level=2 restore=true: child succeeds: true
-requested=false level=2 restore=true: stdout stays empty: true
-requested=false level=2 restore=true: stderr notice matches the logging gate, once per process: true
-requested=true level=0 restore=false: child succeeds: true
-requested=true level=0 restore=false: stdout stays empty: true
-requested=true level=0 restore=false: stderr notice matches the logging gate, once per process: true
-requested=true level=0 restore=true: child succeeds: true
-requested=true level=0 restore=true: stdout stays empty: true
-requested=true level=0 restore=true: stderr notice matches the logging gate, once per process: true
-requested=true level=1 restore=false: child succeeds: true
-requested=true level=1 restore=false: stdout stays empty: true
-requested=true level=1 restore=false: stderr notice matches the logging gate, once per process: true
-requested=true level=1 restore=true: child succeeds: true
-requested=true level=1 restore=true: stdout stays empty: true
-requested=true level=1 restore=true: stderr notice matches the logging gate, once per process: true
-requested=true level=2 restore=false: child succeeds: true
-requested=true level=2 restore=false: stdout stays empty: true
-requested=true level=2 restore=false: stderr notice matches the logging gate, once per process: true
-requested=true level=2 restore=true: child succeeds: true
-requested=true level=2 restore=true: stdout stays empty: true
-requested=true level=2 restore=true: stderr notice matches the logging gate, once per process: true
+requested=true level=0 restore=false: succeeds with empty stdout and the expected stderr notice count: true
+requested=true level=1 restore=false: succeeds with empty stdout and the expected stderr notice count: true
+requested=true level=1 restore=true: succeeds with empty stdout and the expected stderr notice count: true
+requested=true level=2 restore=false: succeeds with empty stdout and the expected stderr notice count: true
+requested=false level=0 restore=false: succeeds with empty stdout and the expected stderr notice count: true

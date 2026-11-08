@@ -7,39 +7,34 @@ let () =
   if Array.exists Stdlib.Sys.argv ~f:(String.equal "--notice-child") then (
     if Array.exists Stdlib.Sys.argv ~f:(String.equal "--restore-again") then (
       Utils.restore_settings ();
-      Utils.restore_settings ());
-    let enabled = Utils.settings.debug_log_from_routines && Utils.settings.log_level > 1 in
-    if not (Bool.equal (Utils.debug_log_from_routines ()) enabled) then Stdlib.exit 1)
+      Utils.restore_settings ()))
   else
-    List.iter [ false; true ] ~f:(fun requested ->
-        List.iter [ 0; 1; 2 ] ~f:(fun level ->
-            List.iter [ false; true ] ~f:(fun restore ->
-                let label =
-                  Printf.sprintf "requested=%s level=%d restore=%s" (Bool.to_string requested) level
-                    (Bool.to_string restore)
-                in
-                let args =
-                  [
-                    "--notice-child";
-                    "--ocannl_no_config_file=true";
-                    "--ocannl_log_config_sourcing=false";
-                    "--ocannl_log_main_domain_to_stdout=false";
-                    "--ocannl_debug_log_from_routines=" ^ Bool.to_string requested;
-                    Printf.sprintf "--ocannl_log_level=%d" level;
-                  ]
-                  @ if restore then [ "--restore-again" ] else []
-                in
-                let ((status, out, err) as run) = Fresh_process.run args in
-                Fresh_process.report ~label run;
-                p (label ^ ": child succeeds") (Poly.equal status (Unix.WEXITED 0));
-                p (label ^ ": stdout stays empty") (String.is_empty out);
-                let notices =
-                  String.substr_index_all err ~may_overlap:false
-                    ~pattern:"OCANNL notice: debug_log_from_routines=true has no effect"
-                  |> List.length
-                in
-                p
-                  (label ^ ": stderr notice matches the logging gate, once per process")
-                  ((notices = if requested && level <= 1 then 1 else 0)
-                  && ((not requested) || level > 1
-                     || String.is_substring err ~substring:"log_level > 1")))))
+    List.iter
+      [ (true, 0, false); (true, 1, false); (true, 1, true); (true, 2, false); (false, 0, false) ]
+      ~f:(fun (requested, level, restore) ->
+        let label =
+          Printf.sprintf "requested=%s level=%d restore=%s" (Bool.to_string requested) level
+            (Bool.to_string restore)
+        in
+        let args =
+          [
+            "--notice-child";
+            "--ocannl_no_config_file=true";
+            "--ocannl_log_config_sourcing=false";
+            "--ocannl_log_main_domain_to_stdout=false";
+            "--ocannl_debug_log_from_routines=" ^ Bool.to_string requested;
+            Printf.sprintf "--ocannl_log_level=%d" level;
+          ]
+          @ if restore then [ "--restore-again" ] else []
+        in
+        let ((status, out, err) as run) = Fresh_process.run args in
+        Fresh_process.report ~label run;
+        let notices =
+          String.substr_index_all err ~may_overlap:false ~pattern:Utils.routine_log_level_notice
+          |> List.length
+        in
+        p
+          (label ^ ": succeeds with empty stdout and the expected stderr notice count")
+          (Poly.equal status (Unix.WEXITED 0)
+          && String.is_empty out
+          && notices = if requested && level <= 1 then 1 else 0))

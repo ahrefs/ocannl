@@ -422,6 +422,10 @@ val get_local_debug_runtime : unit -> (module Minidebug_runtime.Debug_runtime)
 val set_log_level : int -> unit
 (** Sets [settings.log_level] and the debug runtime's log level. *)
 
+val routine_log_level_notice : string
+(** The one-time stderr notice when settings restore finds routine logging requested at a log level
+    too low to enable it. *)
+
 val restore_settings : unit -> unit
 (** Resets {!settings} to the values the configuration gives. *)
 
