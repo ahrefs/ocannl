@@ -12,11 +12,13 @@ let () =
   p_empty "URLs, reference links, images, code spans, comments and fences are outside the corpus"
     ~over:[ "excluded forms" ]
     (check
-       "[a](https://example.org) [b][ref] ![image](missing.png) ` [c](missing.md) `\n\
+       "[a](https://example.org) [network](//example.org/x) [b][ref] ![image](missing.png) ` \
+        [c](missing.md) `\n\
         <!-- [d](missing.md) -->\n\
         ```md\n\
         [e](missing.md)\n\
         ```");
+  p "root-relative destinations fail closed" (not (List.is_empty (check "[root](/docs/target.md)")));
   p "a colon in a fragment cannot hide a broken relative target"
     (not (List.is_empty (check "[broken](./missing.md#topic:detail)")));
   let root_links = [ ("README.md", "[repository](.)"); ("docs/from.md", "[repository](../)") ] in

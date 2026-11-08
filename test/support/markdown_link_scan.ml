@@ -1,8 +1,12 @@
-open Base
-(** Closed dialect: the agent-notes inline link reader, with literal relative paths. Fragments are
-    stripped by the shared resolver; general-document anchors are not checked. Unsupported relative
-    destination syntax is refused rather than partially resolved. *)
+(** Closed dialect: single-line inline links with unnested labels and literal relative file or
+    directory destinations, including angle destinations and optional titles, read by
+    [Agent_notes_scan.links_of] unchanged. Reference links, images, HTML links, code spans, fences
+    and HTML comments are outside it. Schemed and protocol-relative URLs are ignored. Single-slash
+    root-relative destinations and relative paths containing escapes, percent encoding, queries,
+    entities, colons or parentheses are refused. Fragments are ignored; general-document anchors are
+    not checked. *)
 
+open Base
 module Notes = Agent_notes_scan
 
 let in_corpus path =
@@ -18,8 +22,7 @@ let path_exists ~files path =
   || List.exists files ~f:(fun file ->
       String.equal file path || String.is_prefix file ~prefix:(path ^ "/"))
 
-let relative target =
-  let path = List.hd_exn (String.split target ~on:'#') in
+let relative path =
   let scheme =
     match String.lsplit2 path ~on:':' with
     | Some (prefix, _) ->
@@ -29,7 +32,7 @@ let relative target =
             Char.is_alphanum c || List.mem [ '+'; '-'; '.' ] c ~equal:Char.equal)
     | None -> false
   in
-  not (String.is_empty path || String.is_prefix path ~prefix:"/" || scheme)
+  not (String.is_empty path || String.is_prefix path ~prefix:"//" || scheme)
 
 (* Published odoc/site routes, not source files. Exact pairs keep the exception narrow. *)
 let published =
@@ -43,19 +46,20 @@ let published =
 let check ~exists ~from_file contents =
   Notes.links_of contents
   |> List.filter_map ~f:(fun (_, target) ->
+      let path = List.hd_exn (String.split target ~on:'#') in
       if
-        (not (relative target))
+        (not (relative path))
         || List.mem published (from_file, target) ~equal:(fun (a, b) (c, d) ->
             String.equal a c && String.equal b d)
       then None
       else
         let unsupported =
-          String.exists
-            (List.hd_exn (String.split target ~on:'#'))
-            ~f:(fun c -> List.mem [ '('; ')'; '\\'; '%'; '?'; '&'; ':' ] c ~equal:Char.equal)
+          String.is_prefix path ~prefix:"/"
+          || String.exists path ~f:(fun c ->
+              List.mem [ '('; ')'; '\\'; '%'; '?'; '&'; ':' ] c ~equal:Char.equal)
         in
         if unsupported then Some (target, "unsupported relative destination syntax")
         else
-          match Notes.resolve_link ~from_file target with
+          match Notes.resolve_link ~from_file path with
           | Some path when exists path -> None
           | _ -> Some (target, "relative target does not exist"))
