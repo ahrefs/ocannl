@@ -253,8 +253,8 @@ files.
   `test/operations/vendor_node_names.ml`, executed per backend (on base its macro labels fail on
   every backend, `uint4` on Metal).
 - Routine names are the *other* identifier class reaching the emitted source, and they do not go
-  through the node-name machinery at all — a node's colliding label is forced into `n<id>_<label>`
-  and every local carries a `v<scope>_` / `wred_` / `__rmw_` prefix, but a routine name was emitted
+  through the node-name machinery at all — nodes pass through the blacklist and reserved-name
+  rules below, with known collisions taking `n<id>_<label>`, but a routine name was emitted
   verbatim, so `Block_comment ("asm", ...)` produced `void asm(` and the compiler's rejection
   surfaced as "this is a bug in OCANNL … file an issue with the generated .c file", naming
   everything except the name that caused it (gh-ocannl-686). `C_syntax.kernel_ident` is the fix and
@@ -268,15 +268,22 @@ files.
   spelling; only the C-family artifacts carry the mangled one. Guard:
   `test/operations/reserved_routine_names.ml` (executes each colliding routine, not just parses it).
 - Node labels also avoid the emitter's `tmma_` register-tile namespace and `v<digits>_`
-  scope-local namespace (gh-ocannl-2012), taking the `n<id>_` form on every dialect. On cc,
+  scope-local namespace (gh-ocannl-2012), taking the `n<id>_` form on every dialect. Trailing `__`
+  is also reserved for emitter temporaries: vector-loop counter names (`vget1__`, `vset1__`, ...),
+  and the derived `_mem__` / `_heap__` names. On cc,
   `const float *tmma_b__ = &tmma_b__[0]` compiled but read its own uninitialized pointer:
   the 6x19 tail fixture in `tile_mma_geometry.ml` differed from its serial twin in 111/114 cells.
   `fixed_name_temporaries.ml`'s logged-local leg labels an input after another node's actual
   scope id; before the reservation, that local shadowed the input and compilation failed with
-  "subscripted value is not an array". The numeric shape alone is reserved, so ordinary `v...`
-  labels retain their names. `wred_` locals only render on GPU dialects, whose node pointers
+  "subscripted value is not an array". Outside the reserved prefix/suffix families above, ordinary
+  `v...` labels retain their names. `wred_` locals only render on GPU dialects, whose node pointers
   carry `t_`; `__rmw_` has no current emitter and is already implementation-reserved. Their
-  prefixes need no additional reservation.
+  prefixes need no additional reservation. The vector-loop leg of `fixed_name_temporaries.ml`
+  labels an input `vget1__`; without the suffix reservation, clang rejects its buffer read after
+  a vector load with "address of vector element requested". Both legs check executed values.
+  This is not an exhaustive collision guarantee: loop indices (`i<digits>` and their Grid chunk
+  names), fixed logging temporaries, and literal `n<digits>_...` labels matching another node's
+  disambiguated name remain loud compilation-error gaps.
 - A third identifier class is the renderers' own fixed-name temporaries (`vec_result`,
   `new_set_v`, `new_set_local_v`, the register tile's `tmma_*`, the GPU arms' `__mma_*`, the
   vectorized loops' counter-named `vset1__`...). Two statements that declare one, rendered side by
