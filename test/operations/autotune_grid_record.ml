@@ -76,7 +76,10 @@ let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name
 (* The census exists only where the pool does: gated on the backend's own predicate, never on the
    report under test. *)
 let leg =
-  Verdict.leg ~when_:(on_cpu && Context.Cc_backend.pool_parallel_grid ()) ~on:backend_name ()
+  let backend_leg = Verdict.leg ~when_:on_cpu ~on:backend_name () in
+  Verdict.sub_leg backend_leg ~aggregation:`Environment
+    ~when_:(lazy (Context.Cc_backend.pool_parallel_grid ()))
+    ~on:"cc without a native pool"
 
 let () =
   p "the renderer resolved the forced per-chunk privatization cap"

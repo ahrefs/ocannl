@@ -14518,12 +14518,6 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules tune_grid_arm_line)
- (libraries
-  base
-  ocannl
-  stdio
-  stderr_capture
-  scripted_search
-  arrayjit.verdict)
+ (libraries base ocannl stderr_capture scripted_search arrayjit.verdict)
  (preprocess
   (pps ppx_ocannl)))

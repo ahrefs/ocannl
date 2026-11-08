@@ -1,5 +1,7 @@
 (* gh-ocannl-1902: pin the Grid census suffix from a real placement arm, without copying its
-   formatter or putting measured timings in the golden. *)
+   formatter or putting measured timings in the golden. The exact label pins [i3], from the
+   process-wide symbol counter: a symbol-renumbering change needs a source-label edit as well as a
+   golden update, since a failed Verdict claim cannot be promoted. *)
 open Base
 open Ocannl
 open Ocannl.Operation.DSL_modules
@@ -16,7 +18,7 @@ let capture_suffix () =
         Scripted_search.scripted
         (* Equal scripted windows keep the initial Grid preset crowned. The tiny pointwise loop is
            below the pinned fork/join floor. *)
-          ~settings:[ ("cc_parallel_chunks", "2"); ("cc_grid_min_updates", "16384") ]
+          ~settings:[ ("cc_grid_min_updates", "16384") ]
           ~measure:(fun _ -> 1.)
           (fun () ->
             let ctx, _ =
@@ -38,11 +40,13 @@ let capture_suffix () =
 let () =
   Scripted_search.with_settings [ ("cc_parallel_chunks", "2") ] @@ fun () ->
   let backend = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"") in
-  let on_pool =
-    Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend)
-    && Context.Cc_backend.pool_parallel_grid ()
+  let on_cpu = Ir.Backend_intf.renders_on_host_pool (Context.backend_facts_of_name backend) in
+  let backend_leg = Verdict.leg ~when_:on_cpu ~on:backend () in
+  let leg =
+    Verdict.sub_leg backend_leg ~aggregation:`Environment
+      ~when_:(lazy (Context.Cc_backend.pool_parallel_grid ()))
+      ~on:"cc without a native pool"
   in
-  let leg = Verdict.leg ~when_:on_pool ~on:backend () in
   in_leg ~leg
     "[grid: 0 of 1 on the pool; i3 serial: native fork/join has only 32 estimated scalar updates \
      per launch, below cc_grid_min_updates = 16384]" (fun expected ->
