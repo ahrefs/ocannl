@@ -108,7 +108,7 @@ golden_families_perl='
 '
 golden_family_report() { # ROOT pending|applied; selected paths on stdin
   (
-    cd -- "$1" || { echo "golden families: family report unavailable (worktree missing)"; exit 0; }
+    [ -n "$1" ] && cd -- "$1" || { echo "golden families: family report unavailable (worktree missing)"; exit 0; }
     perl -e "$dune_reader_perl $golden_families_perl" "$2" ||
       echo "golden families: WARNING -- family report failed"
   )
