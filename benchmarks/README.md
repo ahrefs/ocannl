@@ -885,6 +885,12 @@ single-threaded segments that sum to the serial step
   `python3 benchmarks/bin_cells.py --bench narrow_gebp_bench --backend cc --out ~/cells-rn
   --rounds 12 --arm rn4=--rn=4 --arm rn6=--rn=6 -- f16 512 20`. Its control is
   `test/operations/bin_cells.py`, against a stand-in bench that prints the library's own trace.
+  For non-`bin/` targets passed through `--exe` or `--arm-exe`, the cell argv is the executable,
+  the driver's `--ocannl_*` pins, the common arguments after `--`, then the arm's arguments.
+  The target's parser must accept configuration flags before its positional arguments;
+  `bin/` targets use `Bench_args` to filter those flags. Put any additional `--ocannl_*` pins
+  before positional arguments too when the target's parser stops reading options at the first
+  positional argument.
 - `cells.py` — the shared cell runner under `bin_cells.py` and `ab.py` (gh-ocannl-1565): the
   hermetic environment, the resolved-configuration check, `cell_group` supervision, `Bench_design`'s
   visiting order, the cell loop and the paired sign test, so a new driver imports them rather than

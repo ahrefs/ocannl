@@ -1906,7 +1906,9 @@ let walk_virtual ctx (root : Tn.t) : walk_verdict =
     | Some (Tn.Effectively_constant, _) when Hashtbl.mem comps r -> prefix v (walk r)
     | Some (Tn.On_device, _) -> W_missing (Set.singleton (module Tn) r)
     | Some ((Tn.Effectively_constant | Tn.Never_virtual), _) | None ->
-        observability_internal_error r "is read by a stored computation but has no placement"
+        observability_internal_error r
+          "is read by a stored computation but has neither an available buffer nor a replayable \
+           computation"
   in
   walk root
 
