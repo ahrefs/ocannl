@@ -32,3 +32,11 @@ control, an unmarked operation result closes down: true
 control, a genuine rank cycle is still refused: true
 a symbolic bound refuses the total, naming why: true
 mutually bounded draws are left unsolved, not closed: true
+fixed total, rows first: the output takes its bound, the sibling the rest: true
+fixed total, bound first: the output takes its bound, the sibling the rest: true
+fixed total, rows first: an output bounded empty leaves the sibling everything: true
+fixed total, bound first: an output bounded empty leaves the sibling everything: true
+control, fixed total, rows first: a bound holding the total, the sibling closes empty: true
+control, fixed total, bound first: a bound holding the total, the sibling closes empty: true
+control, fixed total, rows first: no bound, the output takes it all: true
+control, fixed total, bound first: no bound, the output takes it all: true

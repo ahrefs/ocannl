@@ -353,3 +353,55 @@ let () =
       ]
   in
   p "mutually bounded draws are left unsolved, not closed" (not (List.is_empty left))
+
+(* gh-ocannl-2025: a fixed total (a reshape's [Num_elems]) closes its non-output rows empty from
+   stage 3, on the reading that the output row takes the axes. A kept row bounded by a closed use
+   site cannot take more than that site holds, so a smaller bound leaves the rest to the one
+   sibling; closing it empty refused the store. Draws keep their own gate, above. *)
+let fixed_total n rows =
+  Row.Rows_constr
+    {
+      r = rows;
+      constr = Total_elems { numerator = Num_elems n; divided_by = []; keep_axis = true };
+      origin;
+    }
+
+let fixed_pair ~n ~bound =
+  let _b, rb = open_row ~kind:`Batch () in
+  let o, ro = open_row () in
+  Row.add_resolve_at_use o;
+  ( rb,
+    ro,
+    [ ineq ~res:(closed (List.map bound ~f:dim)) ~opnd:ro; fixed_total n [ rb; ro ] ]
+    @ [ shape_row rb; shape_row ro ] )
+
+let () =
+  in_both_orders "fixed total, bounded output" (fun ~order ~arrange ->
+      let rb, ro, ineqs = fixed_pair ~n:12 ~bound:[ 4 ] in
+      let _left, env = solve_all (arrange ineqs) in
+      pf "fixed total, %s: the output takes its bound, the sibling the rest" order
+        (has_axes env ro [ 4 ] && has_axes env rb [ 3 ]))
+
+let () =
+  in_both_orders "fixed total, empty bound" (fun ~order ~arrange ->
+      let rb, ro, ineqs = fixed_pair ~n:12 ~bound:[] in
+      let _left, env = solve_all (arrange ineqs) in
+      pf "fixed total, %s: an output bounded empty leaves the sibling everything" order
+        (has_axes env ro [] && has_axes env rb [ 12 ]))
+
+(* What is not short stays as it was: the output takes the total, the sibling closes empty. *)
+let () =
+  in_both_orders "fixed total, bound covering it" (fun ~order ~arrange ->
+      let rb, ro, ineqs = fixed_pair ~n:12 ~bound:[ 12 ] in
+      let _left, env = solve_all (arrange ineqs) in
+      pf "control, fixed total, %s: a bound holding the total, the sibling closes empty" order
+        (has_axes env ro [ 12 ] && has_axes env rb []));
+  in_both_orders "fixed total, unbounded" (fun ~order ~arrange ->
+      let _b, rb = open_row ~kind:`Batch () in
+      let o, ro = open_row () in
+      Row.add_resolve_at_use o;
+      let _left, env =
+        solve_all (arrange [ fixed_total 12 [ rb; ro ]; shape_row rb; shape_row ro ])
+      in
+      pf "control, fixed total, %s: no bound, the output takes it all" order
+        (has_axes env ro [ 12 ] && has_axes env rb []))
