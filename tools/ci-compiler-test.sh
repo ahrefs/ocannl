@@ -394,7 +394,7 @@ else
   [ -r "$gcc_keyring" ] || die "the Ubuntu archive keyring is absent: $gcc_keyring"
   gcc_apt="$scratch/gcc-apt"
   mkdir -p "$gcc_apt/lists/partial" "$gcc_apt/archives/partial" "$gcc_apt/sourceparts" \
-    "$gcc_apt/trustedparts" "$gcc_deb_dir" "$gcc_prefix" ||
+    "$gcc_apt/trustedparts" "$gcc_apt/cache" "$gcc_deb_dir" "$gcc_prefix" ||
     die "cannot stage the isolated $gcc_suite index"
   : >"$gcc_apt/sources.list" || die "cannot write the isolated $gcc_suite source"
   # An empty dpkg status too: the host's would offer its own installed gcc-13
@@ -412,6 +412,7 @@ else
     -o "Dir::Etc::trustedparts=$gcc_apt/trustedparts"
     -o "Dir::State::lists=$gcc_apt/lists"
     -o "Dir::State::status=$gcc_apt/status"
+    -o "Dir::Cache=$gcc_apt/cache"
     -o "Dir::Cache::archives=$gcc_apt/archives"
     -o APT::Architecture=amd64
     -o APT::Architectures=amd64
@@ -449,7 +450,7 @@ if [ "$aarch64_clang" -eq 1 ]; then
   llvm_source="$llvm_apt/llvm.list"
   llvm_key="$llvm_trustedparts/apt.llvm.org.asc"
   mkdir -p "$llvm_lists/partial" "$llvm_archives/partial" "$llvm_sourceparts" \
-    "$llvm_trustedparts" || die "cannot stage the isolated apt.llvm.org index"
+    "$llvm_trustedparts" "$llvm_apt/cache" || die "cannot stage the isolated apt.llvm.org index"
   llvm_url="https://apt.llvm.org/$llvm_codename/"
   llvm_suite="llvm-toolchain-$llvm_codename-21"
   printf 'deb %s %s main\n' "$llvm_url" "$llvm_suite" >"$llvm_source" ||
@@ -474,6 +475,7 @@ if [ "$aarch64_clang" -eq 1 ]; then
     -o "Dir::Etc::trustedparts=$llvm_trustedparts"
     -o "Dir::State::lists=$llvm_lists"
     -o "Dir::State::status=$llvm_apt/status"
+    -o "Dir::Cache=$llvm_apt/cache"
     -o "Dir::Cache::archives=$llvm_archives"
     -o APT::Get::List-Cleanup=0
   )
