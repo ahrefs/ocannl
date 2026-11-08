@@ -1011,12 +1011,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   in
   note_open_node v;
   let update_infer_prec ti tn prec =
-    (* Instead of just checking prec, we cross-check with dims (needed for code generation), to
-       catch prec forcing bugs. A closed operand takes no new links either (gh-ocannl-1301): its
-       committed state does not change after its closure, and a link from a consumer a rewind
-       discards would outlive it. A link that changes the precision counts itself, through
-       [Tn.prec_write_hook]. *)
-    if not (Lazy.is_val tn.Tn.dims || ti.shape.Shape.closed) then Tn.update_infer_prec tn prec
+    (* A closed operand takes no new links (gh-ocannl-1301): its committed state must not depend on
+       a consumer a rewind can discard. Layout readiness alone says nothing about precision
+       (gh-ocannl-2026); the precision cell itself refuses changing a forced, non-Specified
+       precision and counts writes via prec_write_hook. *)
+    if not ti.shape.Shape.closed then Tn.update_infer_prec tn prec
   in
   let transpose_op =
     match transpose_op with

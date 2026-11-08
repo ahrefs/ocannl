@@ -123,7 +123,6 @@ let exempt_zero_reference_exports =
     "Operation.outer_sum";
     "Operation.pointdiv";
     "Operation.pointpow";
-    "Operation.range_of_shape";
     "Operation.rebatch";
     "Operation.recip";
     "Operation.recip_sqrt";

@@ -1,0 +1,13 @@
+the operand shape is open: true
+layout readiness matches the case: true
+value and gradient precision are unsettled: true
+the value takes the consumer precision: true
+the gradient takes the consumer precision: true
+the operand shape is open: true
+layout readiness matches the case: true
+value and gradient precision are unsettled: true
+the value takes the consumer precision: true
+the gradient takes the consumer precision: true
+forcing frontend dimensions closes the shape: true
+a closed operand keeps its committed precision: true
+known layout does not hide a forbidden precision update: true
