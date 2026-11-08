@@ -14507,3 +14507,22 @@
  (name gc-stress-backprop)
  (deps
   (alias runtest-backprop_gc_stress)))
+
+; gh-ocannl-1902: the placement arm's Grid suffix, captured on the CPU pool.
+
+(test
+ (name tune_grid_arm_line)
+ ; ocannl-backend: cc -- Context.cpu (); pins a serial pool rendering's diagnostic
+ ; cc-vector-width: independent -- pointwise sum, no sketch family; rounds:0 keeps the Grid preset
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules tune_grid_arm_line)
+ (libraries
+  base
+  ocannl
+  stdio
+  stderr_capture
+  scripted_search
+  arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
