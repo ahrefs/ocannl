@@ -43,7 +43,10 @@
    members share the union of what all their charges load from outside the cycle, across setters and
    select arms, decided at the cap and one above it, with a consumer charged the shared set or reset
    by the landing. Each leg executes against the reference. The creation-order claims are
-   [flip_order_minting]'s. *)
+   [flip_order_minting]'s.
+
+   Phase 8 commutes tied setters: the producer keeps its maximum per-read charge, while consumers
+   see the conservative union of tied contributors, with executed materialized parity. *)
 
 open Base
 open Ll_test
@@ -1920,10 +1923,10 @@ let phase7 () =
 
 let phase8 () =
   let saved_cap = LL.virtualize_settings.max_inline_fanin in
-  let check label groups ~cap ~expected_fanin =
+  let check label groups ~first_id ~cap =
     LL.virtualize_settings.max_inline_fanin <- cap;
     let cells = dim * List.length groups in
-    let mk = node_factory ~first_id:8500 ~dims:[| cells |] () in
+    let mk = node_factory ~first_id ~dims:[| cells |] () in
     let ws = Array.init 5 ~f:(fun k -> mk (Printf.sprintf "tw%d" k)) in
     Array.iter ws ~f:materialize;
     let a = mk "ta" and d = mk "td" and out = mk "tout" in
@@ -1963,9 +1966,7 @@ let phase8 () =
         let o = optimize ~name llc in
         let fanin tn = (Hashtbl.find_exn o.traced_store tn).LL.inline_fanin in
         let prefix = "setter maxima, " ^ label ^ " " ^ order ^ ": " in
-        p
-          (prefix ^ "producer has the union of the widest sets")
-          (fanin a = expected_fanin && known_virtual o a);
+        p (prefix ^ "producer keeps the maximum per-read charge") (fanin a = 2 && known_virtual o a);
         p
           (prefix ^ "consumer crosses the fan-in cap")
           (fanin d = cap + 1
@@ -1976,13 +1977,19 @@ let phase8 () =
         let got_mat = execute ~name:mat_name mat ~seed ~read:[ out ] in
         p
           (prefix ^ "execution matches the reference and materialized reading")
-          (same got expected && same got got_mat))
+          (same got expected && same got got_mat);
+        LL.virtualize_settings.max_inline_fanin <- 2;
+        let own_cap = optimize ~name:(name ^ "_own_cap") llc in
+        LL.virtualize_settings.max_inline_fanin <- cap;
+        p
+          (prefix ^ "producer stays virtual at its own per-read cap")
+          (known_virtual own_cap a && (Hashtbl.find_exn own_cap.traced_store a).LL.inline_fanin = 2))
   in
-  check "two" [ [ 0; 1 ]; [ 1; 2 ] ] ~cap:3 ~expected_fanin:3;
+  check "two" [ [ 0; 1 ]; [ 1; 2 ] ] ~first_id:8500 ~cap:3;
   (* After two ties the union is larger than either charge: compare the next charge with the maximum
      SIZE, not that union's size. A later wider charge must replace all narrower ties. *)
-  check "three" [ [ 0; 1 ]; [ 1; 2 ]; [ 2; 3 ] ] ~cap:4 ~expected_fanin:4;
-  check "unequal" [ [ 0 ]; [ 1 ]; [ 2; 3 ] ] ~cap:3 ~expected_fanin:2;
+  check "three" [ [ 0; 1 ]; [ 1; 2 ]; [ 2; 3 ] ] ~first_id:8520 ~cap:4;
+  check "unequal" [ [ 0 ]; [ 1 ]; [ 2; 3 ] ] ~first_id:8540 ~cap:3;
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
 let () =

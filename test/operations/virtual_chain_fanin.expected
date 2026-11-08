@@ -160,21 +160,27 @@ cycle with a materialized member: executes the reference: true
 cycle with an exempt member: it is charged the set and does not land: true
 cycle with an exempt member: the other member lands: true
 cycle with an exempt member: executes the reference: true
-setter maxima, two forward: producer has the union of the widest sets: true
+setter maxima, two forward: producer keeps the maximum per-read charge: true
 setter maxima, two forward: consumer crosses the fan-in cap: true
 setter maxima, two forward: execution matches the reference and materialized reading: true
-setter maxima, two reverse: producer has the union of the widest sets: true
+setter maxima, two forward: producer stays virtual at its own per-read cap: true
+setter maxima, two reverse: producer keeps the maximum per-read charge: true
 setter maxima, two reverse: consumer crosses the fan-in cap: true
 setter maxima, two reverse: execution matches the reference and materialized reading: true
-setter maxima, three forward: producer has the union of the widest sets: true
+setter maxima, two reverse: producer stays virtual at its own per-read cap: true
+setter maxima, three forward: producer keeps the maximum per-read charge: true
 setter maxima, three forward: consumer crosses the fan-in cap: true
 setter maxima, three forward: execution matches the reference and materialized reading: true
-setter maxima, three reverse: producer has the union of the widest sets: true
+setter maxima, three forward: producer stays virtual at its own per-read cap: true
+setter maxima, three reverse: producer keeps the maximum per-read charge: true
 setter maxima, three reverse: consumer crosses the fan-in cap: true
 setter maxima, three reverse: execution matches the reference and materialized reading: true
-setter maxima, unequal forward: producer has the union of the widest sets: true
+setter maxima, three reverse: producer stays virtual at its own per-read cap: true
+setter maxima, unequal forward: producer keeps the maximum per-read charge: true
 setter maxima, unequal forward: consumer crosses the fan-in cap: true
 setter maxima, unequal forward: execution matches the reference and materialized reading: true
-setter maxima, unequal reverse: producer has the union of the widest sets: true
+setter maxima, unequal forward: producer stays virtual at its own per-read cap: true
+setter maxima, unequal reverse: producer keeps the maximum per-read charge: true
 setter maxima, unequal reverse: consumer crosses the fan-in cap: true
 setter maxima, unequal reverse: execution matches the reference and materialized reading: true
+setter maxima, unequal reverse: producer stays virtual at its own per-read cap: true
