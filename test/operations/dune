@@ -14512,10 +14512,11 @@
 
 (test
  (name tune_grid_arm_line)
- ; ocannl-backend: cc -- Context.cpu (); pins a serial pool rendering's diagnostic
  ; cc-vector-width: independent -- pointwise sum, no sketch family; rounds:0 keeps the Grid preset
  (package neural_nets_lib)
- (deps ocannl_config)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules tune_grid_arm_line)
  (libraries
   base
