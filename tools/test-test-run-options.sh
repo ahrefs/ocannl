@@ -2542,13 +2542,13 @@ pp_start_check() {
       slow) extra=(@test/training/slow-w) ;;
       explicit) opts=(--cap 0); extra=(@test/training/slow-w) ;;
     esac
-    pp_probe "pp-fg-$profile" 0 "${opts[@]}" --since base build "${extra[@]}"
+    pp_probe "pp-fg-$profile" 0 ${opts[@]+"${opts[@]}"} --since base build ${extra[@]+"${extra[@]}"}
     fg_cap=$(cat "$argv_dir/cap" 2>/dev/null)
     fg_source=$(cat "$argv_dir/cap-source" 2>/dev/null)
     [ "$argv_rc" = 0 ] && [ -n "$fg_cap" ] && [ -n "$fg_source" ] || {
       pp_start_detail="foreground $profile: exit $argv_rc; $argv_err"; return;
     }
-    argv_mode=fail pp_probe "pp-start-$profile" 0 --start "${opts[@]}" --since base build "${extra[@]}"
+    argv_mode=fail pp_probe "pp-start-$profile" 0 --start ${opts[@]+"${opts[@]}"} --since base build ${extra[@]+"${extra[@]}"}
     run_dir=$argv_dir
     if [ "$argv_rc" != 0 ] || [ ! -d "$run_dir" ]; then
       pp_start_detail="launch $profile: exit $argv_rc; $argv_err"; return
@@ -2584,6 +2584,33 @@ else
   else report 1 "prepush --start: foreground mutant loses the detached oracle" "mutant survived"; fi
 fi
 cp "$SRC" "$repeat_root/tools/test-run.sh"
+
+# An empty detached batch must not report success and invite `&& wait last`
+# to answer an older run. Seed that older run and check no replacement exists.
+argv_runs=$TMP/pp-empty-runs argv_probe pp-empty-prior run build @cheap
+pp_prior=$argv_dir
+pp_empty_detail=
+if [ "$argv_rc" != 0 ] || [ ! -d "$pp_prior" ]; then
+  pp_empty_detail="the older run was not made: exit $argv_rc; $argv_err"
+else
+  printf '%s\n' '@x/slow-a' '@y/train-b' >"$TMP/pp-empty.out"
+  PP_AFFECTED_CALLS=$TMP/pp-empty.affected PP_AFFECTED_OUT=$TMP/pp-empty.out \
+    PP_AFFECTED_ERR=$pp_err PP_AFFECTED_RC=0 TMPDIR=$pp_tmp \
+    argv_runs=$TMP/pp-empty-runs argv_probe pp-empty-start prepush --since base --start
+  { [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] && [ "$argv_dir" = "$pp_prior" ] &&
+    grep -qF 'nothing started: no runtest- alias; no run to wait for' <<<"$argv_err" &&
+    [ -z "$(pp_left)" ]; } ||
+    pp_empty_detail="empty --start: exit $argv_rc; last=$argv_dir (want $pp_prior); calls=$argv_calls; $argv_err"
+fi
+if [ -z "$pp_empty_detail" ]; then report 0 "prepush --start: an empty batch refuses before wait last could answer an older run";
+else report 1 "prepush --start: an empty batch refuses before wait last could answer an older run" "$pp_empty_detail"; fi
+# Only prepush owns --start; another launch leaves it in dune's argv.
+argv_probe pp-start-other run build @cheap --start
+if [ "$argv_rc" = 0 ] && [ "$argv_calls" = 'build @cheap --start' ]; then
+  report 0 "--start: the misplaced-option guard belongs to prepush alone"
+else
+  report 1 "--start: the misplaced-option guard belongs to prepush alone" "exit $argv_rc; calls=$argv_calls; $argv_err"
+fi
 
 # --list prints the same list and runs nothing.
 if [ -z "$pp_detail" ]; then

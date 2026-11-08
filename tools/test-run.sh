@@ -77,11 +77,13 @@
 # `--referenced-only`'s) without its `slow-` and `train-` members, run exactly
 # as `run [OPTIONS] --targets-file LIST [build DUNE OPTIONS...]` would run it
 # (the same verdict, digest and exit status). `--start` uses `start` instead;
-# follow it with `wait last` or `wait DIR`. It cannot be combined with `--list`.
-# `train-` members run in CI's `@train` shards on every PR; no CI job runs `@slow`, so the `slow-` members
-# left off are named on stderr, each on a `prepush: slow:` line, for the caller
-# to run those the change exercises. `--list` prints the list instead (a valid
-# --targets-file, empty when nothing is left) and runs nothing: the form for a
+# follow a successful launch with `wait last` or `wait DIR`. An empty kept
+# list exits 2: nothing started, so there is no run to wait for. It cannot be
+# combined with `--list`. `train-` members run in CI's `@train` shards on
+# every PR; no CI job runs `@slow`, so the `slow-` members left off are named
+# on stderr, each on a `prepush: slow:` line, for the caller to run those the
+# change exercises. `--list` prints the list instead (a valid --targets-file,
+# empty when nothing is left) and runs nothing: the form for a
 # fleet leg, whose runner is one plain command line, `... execution leg ...
 # --file LIST -- env OCANNL_BACKEND=B tools/test-run.sh run --expect-backend B
 # --targets-file '{file}'`. Every line `affected` prints must be one `@`
@@ -503,8 +505,12 @@ reject_misplaced_options() {
     case $arg in
       --) return 0 ;;
       --cpu | --cpu=* | --gpu | --gpu=*) refuse_slot_option "$arg" ;;
+      --start | --start=*)
+        [ "$sub" != prepush ] || die "$arg belongs before the dune arguments, not after them:
+  tools/test-run.sh $pp_usage
+  dune has no such option, so this would have exited 1 having run nothing." ;;
       --cap | --cap=* | --alone | --alone=* | --test-cap | --test-cap=* | --direct | --direct=* | \
-        --expect-backend | --expect-backend=* | --targets-file | --targets-file=* | --start | --start=*)
+        --expect-backend | --expect-backend=* | --targets-file | --targets-file=*)
         case $sub in
           repeat) form='repeat [--cap N] [--test-cap N] [--alone] [--direct] [--targets-file FILE]... N [DUNE ARGS...]' ;;
           fresh) form='fresh [--cap N] [--test-cap N] [--expect-backend B]... [--targets-file FILE]... @DIR/KIND-NAME... [-j N]' ;;
@@ -4054,7 +4060,7 @@ shift
 # --since BASE`'s default list without its slow- and train- members, run as
 # `run --targets-file`. It asks `affected` in a child (which takes and releases
 # the worktree lock as a query does), sorts each line it prints into a family
-# by an allowlist, and then BECOMES that run: `sub` is `run` from here on and
+# by an allowlist, and then BECOMES that launch: `sub` is `run` or `start` and
 # the list reaches the run's own intake as a targets file in a scratch
 # directory this launcher removes as it exits (the run records the argv it
 # read; no launch path sets an EXIT trap of its own), naming the harness
@@ -4191,6 +4197,8 @@ if [ "$sub" = prepush ]; then
     exit 3
   fi
   if [ ${#pp_keep[@]} -eq 0 ]; then
+    [ "$pp_mode" != start ] ||
+      die "prepush: nothing started: no runtest- alias; no run to wait for (wait last would answer an earlier run)"
     echo "test-run: prepush: no runtest- alias to run; nothing run" >&2
     exit 0
   fi
