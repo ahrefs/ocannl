@@ -65,6 +65,7 @@ spilling tail without body leaves four cells                 query Unknown      
 spilling body and short tail leave last cell                 query Unknown      oracle uncovered
 spilling body and late tail leave an interior hole           query Unknown      oracle uncovered
 spilling runs with stride five leave gaps                    query Unknown      oracle uncovered
+spilling stride-five runs leave an interior hole             query Unknown      oracle uncovered
 one-lane tail shares body's trailing-unit frame              query Covered      oracle covered
 gather [?;e] after a full write [h;e] (3x4)                  query Covered      oracle covered
 gather [?;0] after a column-0 write [h;0]                    query Covered      oracle covered
