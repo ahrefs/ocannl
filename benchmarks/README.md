@@ -1056,6 +1056,26 @@ than the driver (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` at module load), run it wi
 (`.venv/lib/python*/site-packages/nvidia/cu*/lib`) and wipe `~/.cache/tinygrad` once
 (compiled PTX is cached by source hash, so a stale-toolkit artifact survives the switch).
 
+### Isolated virtual-twin GPU matmul
+
+`dune exec bin/twin_tile_bench.exe -- 256 --dry-run --ocannl_backend=metal` compiles and checks
+all whole-site sketch seeds and the four default GPU presets for a matmul whose two
+f16 operands are virtual casts of f32 masters (gh-ocannl-2080). It also exercises
+the recipe's `Train.tune_placements` search; its dry-run readings are diagnostics. The fixture is generated
+in memory; no external fixture is loaded. Sizes must be multiples of 32. Run the dry
+leg before requesting an exclusive measurement window.
+
+Inside that window, first run `benchmarks/check-box.sh --box <box> --box-only`,
+then run the same binary without `--dry-run`, selecting `metal`, `cuda` or `hip`.
+It reports the actual zero-beam-round autotuner crown separately from a whole-site
+seed comparison: the fastest emitted tensor seed versus the fastest non-tensor seed
+or default preset. Seven fresh queued timing pairs alternate their visiting order.
+This comparison does not claim that the non-tensor seed is the best possible fissioned
+schedule. The census comes from the compiled routines, and every candidate and both
+finalists must pass an analytical value check before timing is accepted. Do not use
+correctness-slot dry runs as performance evidence; identify the hardware and memory
+architecture alongside measurements.
+
 ## Measurement boxes
 
 **Start every measurement session with `benchmarks/check-box.sh`** (gh-ocannl-1062), from the

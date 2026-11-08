@@ -14531,3 +14531,14 @@
  (libraries base ocannl stdio arrayjit.verdict gc_witness)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name gpu_twin_tiles)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules gpu_twin_tiles)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
