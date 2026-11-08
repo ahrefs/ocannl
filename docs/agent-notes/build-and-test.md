@@ -4232,8 +4232,8 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   host; `--dry-run` validates and prints the complete staging plan on macOS and other hosts. The
   isolated sources use `signed-by` (LLVM names the digest-checked key), with empty
   `Dir::Etc::trusted` and scratch `trustedparts`; `ci-aarch64-cross.sh` uses the same trust
-  isolation. Do not use `/dev/null` for the global keyring: apt 3.2 warns when LLVM's former
-  global-trust path loads it; GCC's existing `signed-by` bypassed that warning. This is
+  isolation. `Dir::Etc::trusted=/dev/null` draws apt 3.2's deprecation warning whenever a
+  source has no `signed-by`; leave it empty. This is
   compiler/codegen evidence, not an OS emulator: the GCC 13 packages come from an isolated scratch index over Ubuntu 24.04 (noble), the series
   `ubuntu-latest` runs, so a newer host's own `gcc-13` (resolute's 13.4 on minix) cannot stand in
   for CI's 13.3 (gh-ocannl-1696; the exact version and target are printed and major 13 is
