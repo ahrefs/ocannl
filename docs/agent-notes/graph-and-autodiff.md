@@ -85,6 +85,12 @@ files.
   is refused once the first takes the zeroing back. So a test of "this loss does not zero" must HOLD
   its consumer past the loss's construction (native code keeps no dead local alive), and a test of
   the hand-back must observe the reclamation with `Gc_witness` first (`reclaimed_consumer_zeroing.ml`).
+- `debug_gc_backprop_roots=true` forces a full major collection immediately before `Tensor.op`
+  tests operand backprop rootness (gh-ocannl-2062). The default-off stress switch takes the
+  reclaimed-consumer branch without changing ownership rules. The CPU alias
+  `@test/operations/gc-stress-backprop` reruns `never_zeroed_grad` and
+  `reclaimed_consumer_zeroing` against their ordinary goldens; set the key externally to stress
+  other aliases or backends. Its boundary is this construction gate, not every weak-root read.
 - Past the link, a gradient a routine accumulates into without zeroing is a RUN-history question
   (gh-ocannl-1781): the ledger's `accumulated` counts, per gradient buffer and per routine, the runs
   since the buffer's last reset (a run of a routine whose `zeroes` holds it, or

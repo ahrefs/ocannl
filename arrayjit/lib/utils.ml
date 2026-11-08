@@ -177,6 +177,7 @@ let known_config_keys =
       "debug_check_upload_arenas";
       "debug_check_lane_bounds";
       "debug_check_forward_root_owners";
+      "debug_gc_backprop_roots";
       "debug_check_retired_solver_vars";
       "debug_fill_fresh_outputs";
       "cc_parallel_grid";
@@ -355,6 +356,10 @@ let config_key_classification : (config_key_class * string * string list) list =
       "it decides the worker pool timings execute on, and CPU crowns do not transfer across pools \
        (gh-ocannl-530)",
       [ "cc_pool_core_class" ] );
+    ( Code_borne,
+      "a frontend GC stress switch (gh-ocannl-2062): reclaimed leaves change the zeroing embedded \
+       at construction, fully captured by the lowered code digest",
+      [ "debug_gc_backprop_roots" ] );
     ( Keyed "codegen",
       "a cc-backend codegen knob: rendering or compiling a kernel reads it, after the lowered code \
        the digest names",

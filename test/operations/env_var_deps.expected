@@ -159,6 +159,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/atomic_file_rename_scan_fixture/dune @runtest
   test/operations/atomic_file_rename_scan_fixture/dune @runtest-env_spelling_gate
   test/operations/atomic_file_rename_scan_fixture/dune @scans
+  test/operations/dune                     @gc-stress-backprop
   test/operations/dune                     @lifecycle
   test/operations/dune                     @metal-codegen
   test/operations/dune                     @runtest
@@ -293,6 +294,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-mutation_serial_scan_control
   test/operations/dune                     @runtest-n3_fwd_with_prec-unoptimized
   test/operations/dune                     @runtest-narrow_gebp_bench_padded
+  test/operations/dune                     @runtest-never_zeroed_grad-gc-stress
   test/operations/dune                     @runtest-ocamlformat_ignore_scan
   test/operations/dune                     @runtest-online_softmax_block_fast_math
   test/operations/dune                     @runtest-online_softmax_fast_math
@@ -309,6 +311,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-primitive_ops
   test/operations/dune                     @runtest-provenance_tag_inventory
   test/operations/dune                     @runtest-qkv_zero_init-approximate
+  test/operations/dune                     @runtest-reclaimed_consumer_zeroing-gc-stress
   test/operations/dune                     @runtest-refused_action_streams
   test/operations/dune                     @runtest-render_decline_inventory
   test/operations/dune                     @runtest-resnet_block-origins_cap_0

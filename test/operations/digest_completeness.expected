@@ -50,6 +50,9 @@ keyed: numerics -- the numerics policy is consulted at codegen and by the autotu
 keyed: pool -- it decides the worker pool timings execute on, and CPU crowns do not transfer across pools (gh-ocannl-530)
   cc_pool_core_class [read at codegen]
 
+code-borne (digest) -- a frontend GC stress switch (gh-ocannl-2062): reclaimed leaves change the zeroing embedded at construction, fully captured by the lowered code digest
+  debug_gc_backprop_roots
+
 keyed: codegen -- a cc-backend codegen knob: rendering or compiling a kernel reads it, after the lowered code the digest names
   cc_backend_arch_flags [read at codegen]
   cc_backend_compiler_command [read at codegen]

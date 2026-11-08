@@ -849,6 +849,9 @@ let register_constant_host_init tn values =
        | _ -> Nd.set_flat_values ?padding:pads ~cycle:true nd values);
        nd))
 
+let debug_gc_backprop_roots =
+  lazy (Utils.get_global_flag ~default:false ~arg_name:"debug_gc_backprop_roots")
+
 (* [terminal_backprop] (gh-ocannl-1724): the tensor's backprop is terminal by construction -- set by
    {!term}, whose [grad_asn] is the constant [empty_comp] -- so it owns no backprop fragment, and a
    later consumer finding it no longer a backprop root generates no requirement for it. Parameters
@@ -1209,6 +1212,10 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
        consumer gives a leaf back moves with the GC, and with the nested ops [grad_asn] builds, so a
        second read of the map could embed a gradient whose zeroing the first read skipped. The scan
        runs only for an operand it can change. *)
+    (* Settle dead consumers before even testing rootness: reading an ephemeron first can keep
+       its contents alive through the collection. The snapshot below then pins the chosen
+       entries across subsequent collections (gh-ocannl-2062). *)
+    if Lazy.force debug_gc_backprop_roots then Stdlib.Gc.full_major ();
     if List.exists ordered_ts ~f:(fun ti -> Weak_root.is_leaf ti && not (in_bprop_roots ti)) then
       hand_back_reclaimed ();
     let bck_roots =

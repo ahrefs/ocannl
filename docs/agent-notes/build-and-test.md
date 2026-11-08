@@ -6182,6 +6182,6 @@ box.
   `cc_backend_probe_cache`, `cc_backend_simd_flags`, `cc_parallel_grid`, `cc_pool_core_class`,
   `multidev_num_devices`.
 - `sketch_families.ml`: `cc_parallel_chunks`, `cc_parallel_grid`.
-- `tensor.ml`: `debug_check_forward_root_owners`, `op_shape_schemes`.
+- `tensor.ml`: `debug_check_forward_root_owners`, `debug_gc_backprop_roots`, `op_shape_schemes`.
 - `tnode.ml`: `default_prec`, read eagerly and wrapped by a lazy.
 - `utils.ml`: `collapse_foreign_stderr_noise`.
