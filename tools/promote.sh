@@ -14,7 +14,10 @@
 # content. Nothing local complains -- every `dune runtest` reads the working
 # tree and passes -- while CI builds the committed tree and fails on the golden
 # diff. After promoting, this script stages what it promoted (and says so), or
-# names the files it would not stage. Outside a merge it is a no-op.
+# names the files it would not stage. Outside a merge it leaves the index alone.
+#
+# Every promotion reports existing siblings of per-backend golden selectors in
+# the destination directory's dune file, marking which this invocation applied.
 #
 # Usage: tools/promote.sh [FILES...]
 #        tools/promote.sh --from-run RUN [FILES...]
@@ -63,10 +66,11 @@ if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
 fi
 
 # The promotion list has to be taken BEFORE applying -- afterwards there is
-# nothing pending left to name. It is only needed for the guard, so outside a
-# merge the extra dune invocation is skipped entirely. `list` filters its
-# arguments exactly as `apply` does, prints one root-relative path per line on
-# stdout since 3.22, stderr before, and sends missing-file warnings to stderr.
+# nothing pending left to name. The list also identifies which backend siblings
+# this invocation touched, independently of earlier edits in the working tree.
+# `list` filters its arguments exactly as `apply` does, prints one root-relative
+# path per line on stdout since 3.22, stderr before, and sends missing-file
+# warnings to stderr.
 #
 # A `list` that FAILS is kept apart from one that finds nothing: both leave
 # `promoted` empty, but the first means the guard is about to do nothing while
@@ -116,12 +120,62 @@ if [ -n "$from_run" ]; then
     done
   done <"$saved/paths"
 else
-  if [ "$merging" -eq 1 ]; then
-    # Capture both streams: 3.20/3.21 put paths on stderr. Retain only paths
-    # Dune actually promoted; missing-path warnings must never reach git add.
-    promoted="$(dune promotion list --root . "$@" --diff-command=diff 2>&1)" || listed=0
-  fi
+  # Capture both streams: 3.20/3.21 put paths on stderr. Retain only paths
+  # Dune actually promoted; missing-path warnings must never reach git add.
+  promoted="$(dune promotion list --root . "$@" --diff-command=diff 2>&1)" || listed=0
   dune promotion apply --root . "$@"
+fi
+
+# Backend family report (gh-ocannl-2073). Read the literal first argument of
+# (diff ...) / (diff? ...) in the local dune file; the backend read is the
+# wildcard, everything else is literal. Enumerate existing files, not a second
+# list of backend names. This is an advisory report, not proof they need edits
+# or that an untouched backend was tested. Saved-run replay uses the same list.
+if [ "$listed" -eq 1 ]; then
+  printf '%s\n' "$promoted" | perl -e '
+    use strict; use warnings;
+    my %touched;
+    while (<STDIN>) {
+      chomp;
+      next if m{^(?:/|\\|[A-Za-z]:|\.\./)} || m{/\.\./};
+      $touched{$_} = 1 if -f $_;
+    }
+    my %reported;
+    for my $file (sort keys %touched) {
+      my ($dir) = $file =~ m{^(.*)/};
+      $dir = "." unless defined $dir;
+      open my $dune, "<", "$dir/dune" or next;
+      local $/; my $text = <$dune>;
+      # Tokenize so commented selectors and quoted parentheses are not rules.
+      my @tokens = $text =~ /;[^\n]*|"(?:\\.|[^"\\])*"|[()]|[^\s();"]+/g;
+      @tokens = grep { !/^;/ } @tokens;
+      for (my $i = 0; $i + 2 < @tokens; ++$i) {
+        next unless $tokens[$i] eq "(" && $tokens[$i+1] =~ /^diff\??$/;
+        my $name = $tokens[$i+2];
+        $name =~ s/^"(.*)"$/$1/s;
+        next unless $name =~ /^(.*?)%\{read:[^}]*\bocannl_backend\.txt\}(.*\.expected)$/;
+        my ($prefix, $suffix) = ($1, $2);
+        # Local filename selectors are the repository convention. Do not
+        # guess at includes, other interpolations or escaped Dune strings.
+        next if "$prefix$suffix" =~ m{[/\\%]};
+        my $pattern = qr/^\Q$prefix\E[^\/]+\Q$suffix\E$/;
+        (my $base = $file) =~ s{.*/}{};
+        next unless $base =~ $pattern;
+        my $family = "$dir/$name";
+        next if $reported{$family}++;
+        opendir my $dh, $dir or die "cannot list $dir: $!\n";
+        my @siblings = sort grep { /$pattern/ && -f "$dir/$_" } readdir $dh;
+        print STDERR "promote.sh: backend golden family $family\n";
+        for my $sibling (@siblings) {
+          my $path = $dir eq "." ? $sibling : "$dir/$sibling";
+          my $state = $touched{$path} ? "promoted" : "NOT promoted";
+          print STDERR "  $state: $path\n";
+        }
+      }
+    }
+  ' || printf 'promote.sh: WARNING -- backend golden family report failed\n' >&2
+else
+  printf 'promote.sh: WARNING -- promotion list failed; backend golden families could not be reported\n' >&2
 fi
 
 # Strip trailing CRs from a promoted golden. perl -i, not sed -i: BSD sed

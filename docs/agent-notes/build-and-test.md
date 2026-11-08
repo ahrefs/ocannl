@@ -1760,7 +1760,17 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   applying (afterwards nothing pending is left to name), reading both streams for the pre-3.22 floor,
   then stages exactly what it promoted and says so. A promoted golden still UNMERGED is deliberately NOT staged and is warned about with the
   `git add` that would accept it — staging one records a conflict resolution, which is the caller's
-  call and not the script's. Outside a merge nothing runs, not even the extra `dune` invocation.
+  call and not the script's. Outside a merge the index stays untouched.
+  Every invocation lists pending promotions before applying them, and reports existing backend
+  golden siblings selected by a literal `(diff ...)` / `(diff? ...)` first argument in the
+  destination directory's `dune` file (`%{read:.../ocannl_backend.txt}`, gh-ocannl-2073).
+  Each sibling is marked `promoted` or `NOT promoted` for this invocation, including when replaying
+  selected saved-run corrections. This is an advisory reminder to check other backends, not a
+  claim they need edits or ran successfully. The report enumerates existing local files matching
+  the selector's literal prefix and suffix; includes, escaped filenames, other interpolations
+  and nonlocal selectors are outside its boundary. No backend list is duplicated.
+  `test-promote.sh` leg 10 exercises selected, whole-list and saved-run promotion, an arbitrary
+  backend, an earlier unrelated edit, and a cut-report negative control.
   The merge is detected with `git rev-parse --verify MERGE_HEAD`, never by testing `.git/MERGE_HEAD`
   as a path: in a linked worktree `.git` is a FILE and `MERGE_HEAD` lives in the per-worktree gitdir.
   `tools/test-promote.sh` is the hand-run harness — on no dune alias, since every leg runs `dune` on
