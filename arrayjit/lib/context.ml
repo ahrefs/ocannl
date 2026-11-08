@@ -116,10 +116,11 @@ type execution_ledger = {
           Released routines disappear once no descendant or upload fork holds their ancestry. *)
   mutable executed : Set.M(Int).t;
   mutable current_writers : buffer_writer Map.M(Buffer_key).t;
-      (** The routine whose execution most recently wrote each concrete ordinary buffer. Unlike the
-          immutable compile frontier, this follows re-execution order without conflating sibling
-          contexts that allocate distinct buffers for the same tnode. External writes remove their
-          buffer. A {!release} retires the entries of the locations it gives up, as it does
+      (** The routine whose execution most recently wrote each concrete ordinary buffer, or
+          [Released_writer] once its last release unit gives it up: readiness without a routine id.
+          Unlike the immutable compile frontier, this follows re-execution order without conflating
+          sibling contexts that allocate distinct buffers for the same tnode. External writes remove
+          their buffer. A {!release} retires the entries of the locations it gives up, as it does
           [written_buffers]'s ([retire_written], gh-ocannl-1762), so the table does not grow by one
           entry per freed buffer for the life of the root. Nothing depended on the entry before
           that: only [upload_slot] re-issues a location (a released upload leaf's arena tail, to a
@@ -164,10 +165,10 @@ type execution_ledger = {
       (** Per routine id, the tokens the routine's latest {!run} minted — what [rollback_execution]
           restores for a run known not to have written. *)
   mutable fragment_registry : (int * string) list Map.M(Fragment_key).t;
-      (** Every routine (id, name) of this root that owns each fragment, sibling lineages included
-          (gh-ocannl-1724). Diagnostic only: it lets a requirement refusal name an owner compiled in
-          a sibling lineage. Ownership itself is the frontier's [owners] -- a sibling never
-          satisfies a requirement. *)
+      (** Routines (id, name) of this root owning each fragment, sibling lineages included
+          (gh-ocannl-1724), retired with the last release unit holding each routine. Diagnostic
+          only: it lets a requirement refusal name an owner compiled in a sibling lineage. Ownership
+          itself is the frontier's [owners] -- a sibling never satisfies a requirement. *)
   mutable zeroing_registry : (int * string) list Map.M(Int).t;
       (** Every routine (id, name) of this root whose computation zeroes each gradient, by the
           gradient's node uid ({!Asgns.field-zeroes}), sibling lineages included (gh-ocannl-1797).
@@ -1403,7 +1404,8 @@ let check_lineage_runnable ctx routine =
           match Hashtbl.find ctx.ledger.routine_names dep_id with
           | Some n -> Printf.sprintf "%s (id=%d)" n dep_id
           | None ->
-              (* gh-ocannl-1654: only a retired merge-buffer transfer loses its name. *)
+              (* gh-ocannl-1654: among a live routine's dependencies, only a retired merge-buffer
+                 transfer loses its name: the live routine's ancestry holds its routine deps. *)
               Printf.sprintf
                 "a merge-buffer fill (id=%d) that a later fill superseded (refill the merge buffer \
                  and compile the consumer against the new fill)"

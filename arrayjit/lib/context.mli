@@ -604,8 +604,10 @@ val ledger_entries : t -> int
 
 val ledger_census : t -> (string * int * int) list
 (** Diagnostic snapshot of each root-ledger table: name, entry count and reachable OCaml words.
-    Reachable sizes overlap where tables share values; their sum is not a live-heap measurement. The
-    snapshot contains only numbers and names, so it does not retain table contents. *)
+    Reachable sizes overlap where tables share values; their sum is not a live-heap measurement.
+    Tables containing closures (notably minted ancestor holds) include all captured state in their
+    reachable size, not just ledger bookkeeping. The snapshot contains only numbers and names, so it
+    does not retain table contents. *)
 
 val lifecycle_depth : t -> int
 (** How many lifecycle ancestors the context has: the [parent] links {!release}'s refusal of a

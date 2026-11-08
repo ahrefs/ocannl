@@ -19,8 +19,12 @@ let named name (comp : Ir.Assignments.comp) =
 let claim_empty label root =
   p_all label (Context.ledger_census root) ~f:(fun (_, count, _) -> count = 0)
 
-let claim_nonempty label root =
-  p_exists label (Context.ledger_census root) ~f:(fun (_, count, _) -> count > 0)
+let claim_one_routine label root =
+  let tables = Context.ledger_census root in
+  p_all label [ "routine_holders"; "routine_names"; "executed" ] ~f:(fun wanted ->
+      List.find_map tables ~f:(fun (name, count, _) ->
+          Option.some_if (String.equal name wanted) count)
+      |> Option.equal Int.equal (Some 1))
 
 let loop ?(restore_history = false) root comp =
   let cycle () =
@@ -99,6 +103,7 @@ let () =
       Context.release b;
       Context.release a);
   let child, routine = compile root comp in
+  ignore (Context.run child routine);
   let y =
     Operation.init ~l:"ledger_fork" ~prec:Ir.Ops.single ~o:[ 3 ]
       ~f:(fun _ -> 0.)
@@ -108,15 +113,24 @@ let () =
   let chain = Context.set_values child y.value [| 1.; 2.; 3. |] in
   let fork = Context.set_values child y.value [| 4.; 5.; 6. |] in
   Context.release chain;
-  claim_nonempty "an upload fork retains the routine records" root;
-  let fork = Context.run fork routine in
-  p "the surviving fork still executes the routine"
-    (Poly.equal (Context.get_values fork output.value) [| 5.; 7.; 9. |]);
+  claim_one_routine "an upload fork retains exactly one routine in each routine table" root;
+  let consumer, dependent = compile fork (named "rl_fork_consumer" [%cd y =: output]) in
+  p "the fork consumer depends on the original routine"
+    (Set.mem dependent.execution_deps routine.routine_id);
+  (* Do not rerun the producer: doing so would recreate its executed entry and mask early
+     retirement. The consumer must use the execution recorded before the chain was released. *)
+  case "the surviving fork's dependent routine executes" (fun () ->
+      let consumer = Context.run consumer dependent in
+      p "the dependent routine reads the surviving producer's values"
+        (Poly.equal (Context.get_values consumer y.value) [| 5.; 7.; 9. |]));
+  Context.release consumer;
+  claim_one_routine "releasing the descendant preserves its live ancestor's routine records" root;
   Context.release fork;
   claim_empty "the last fork release retires the routine records" root;
   Context.release fork;
   claim_empty "repeated release is idempotent" root;
-  let child, _ = compile root comp in
+  let child, routine = compile root comp in
+  ignore (Context.run child routine);
   let raised =
     try
       Ir.Resource_fault_injection.with_callback
@@ -130,7 +144,7 @@ let () =
     with Failure message -> String.equal message "ledger release fault"
   in
   p "the release fault was injected" raised;
-  claim_nonempty "failed release retains its routine records for retry" root;
+  claim_one_routine "failed release retains exactly one routine in each routine table" root;
   Context.release child;
   claim_empty "successful retry retires the records" root;
   Context.release root
