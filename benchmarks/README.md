@@ -1065,8 +1065,12 @@ the recipe's `Train.tune_placements` search; its dry-run readings are diagnostic
 in memory; no external fixture is loaded. Sizes must be multiples of 32. Run the dry
 leg before requesting an exclusive measurement window.
 
-Inside that window, first run `benchmarks/check-box.sh --box <box> --box-only`,
-then run the same binary without `--dry-run`, selecting `metal`, `cuda` or `hip`.
+Inside that window, first run
+`benchmarks/check-box.sh --box <box> --box-only --fixture-dir <recorded-store>`.
+Use the box's recorded fixture store in the main checkout (for example,
+`/Users/lukstafi/ocannl-staging/benchmarks/fixtures` on mac-studio), even though
+this probe loads no external fixture: `--box-only` still checks the recorded bytes.
+Then run the same binary without `--dry-run`, selecting `metal`, `cuda` or `hip`.
 It reports the actual zero-beam-round autotuner crown separately from a whole-site
 seed comparison: the fastest emitted tensor seed versus the fastest non-tensor seed
 or default preset. Seven fresh queued timing pairs alternate their visiting order.
