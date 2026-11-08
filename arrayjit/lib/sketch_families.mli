@@ -263,6 +263,8 @@ type conv_site = {
   c_d_syms : Ir.Indexing.symbol list;
   c_a : Ir.Tnode.t;
   c_b : Ir.Tnode.t;
+  c_a_round : Ir.Ops.prec option;  (** Precision of a rounded input read, if any. *)
+  c_b_round : Ir.Ops.prec option;  (** Precision of a rounded kernel read, if any. *)
   c_zeroed : bool;
   c_fma : bool;
 }

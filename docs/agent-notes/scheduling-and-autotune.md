@@ -627,6 +627,15 @@ files.
   cap — that device cannot exercise the per-dimension cliff; CUDA's `.z` of 64 is the one that
   can.
 ## Contraction detection and strided axes
+- **Conv packs use the precision of the read, including a narrowing twin** (gh-ocannl-2078).
+  `detect_conv` records `c_a_round` / `c_b_round` after the matcher crosscheck, like matmul.
+  `conv_operand_prec` feeds CPU pack selection and normalization, GPU capability judgments and
+  the traffic floor. An f32 master rounded to f16 still needs an explicit f32 CPU `tile_prec`:
+  without it `Stage` defaults to the rounded f16 read, reintroducing a bridge in the micro-kernel.
+  Every current conv flavor stages both operands, on CPU and GPU; there is no in-place conv
+  flavor to refute (the issue's proposed refusal copied a matmul-only shape). Keep that
+  distinction if adding a new flavor. `conv_twin_packing` checks the CPU seeds, actual Stage
+  overrides, executed parity with materialized twins, and synthetic GPU formats/staging.
 - `detect_conv`'s boundary is SINGLETON axes, not rank (gh-ocannl-912). 3-D, 1-D, batchless and
   multi-batch convs are detected and seeded on both legs; what it refuses is any extent-1 axis,
   because lowering drops the loop and indexes the axis at `Fixed_idx 0` while the matcher wants

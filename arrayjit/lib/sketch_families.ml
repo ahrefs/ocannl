@@ -870,6 +870,8 @@ type conv_site = {
           ({!Sched.expand_zero}) maps onto the site's chain through it (gh-ocannl-503). *)
   c_a : Ir.Tnode.t;
   c_b : Ir.Tnode.t;
+  c_a_round : Ir.Ops.prec option;
+  c_b_round : Ir.Ops.prec option;
   c_zeroed : bool;
   c_fma : bool;
 }
@@ -1070,6 +1072,8 @@ let detect_conv_procedural (llc : LL.t) : conv_site option =
                                     c_d_syms = d_syms;
                                     c_a = a;
                                     c_b = b;
+                                    c_a_round = None;
+                                    c_b_round = None;
                                     c_zeroed = List.exists zeroed ~f:(phys_equal d);
                                     c_fma = m_fma;
                                   })
@@ -1211,6 +1215,8 @@ let detect_conv_affine (llc : LL.t) : conv_site option =
                                 c_d_syms = d_syms;
                                 c_a = a;
                                 c_b = b;
+                                c_a_round = None;
+                                c_b_round = None;
                                 c_zeroed = List.exists zeroed ~f:(fun z -> phys_equal z.A.a_tn d);
                                 c_fma = fma_form llc ~stmt_path:w.A.a_path ~d ~di;
                               })
@@ -1250,7 +1256,16 @@ let detect_conv (llc : LL.t) : conv_site option =
          invalid_arg
            "Autotune.detect_conv crosscheck: the relation-based and procedural matchers diverge — \
             detection must be behavior-preserving");
-  site
+  Option.map site ~f:(fun site ->
+      {
+        site with
+        c_a_round = LL.rounded_read_prec llc site.c_a;
+        c_b_round = LL.rounded_read_prec llc site.c_b;
+      })
+
+let conv_operand_prec (site : conv_site) tn =
+  let round = if phys_equal tn site.c_a then site.c_a_round else site.c_b_round in
+  Option.value round ~default:(Lazy.force tn.Ir.Tnode.storage_prec)
 
 (** {2 The enabling interchange (gh-ocannl-1183)}
 
@@ -2928,11 +2943,11 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
 let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; sk_tile = tile; _ } : Sched.schedule =
   let stage source tile_loops =
-    (* Mint the im2col/panel tiles at the site's compute precision where the source stores narrower
+    (* Mint the im2col/panel tiles at the site's compute precision where the source reads narrower
        (gh-ocannl-575); see [cpu_mma_pack_sketch_schedule]. *)
     let tile_prec =
       Option.bind sk_pack_prec ~f:(fun p ->
-          if Ir.Ops.equal_prec p (Lazy.force source.Ir.Tnode.storage_prec) then None else Some p)
+          if Ir.Ops.equal_prec p (conv_operand_prec site source) then None else Some p)
     in
     Sched.Stage
       {
@@ -4756,26 +4771,20 @@ let conv_offset_witness =
 
 (* The CPU conv leg's packing precision (gh-ocannl-575): the site's compute precision, resolved
    through the same [Numerics.cpu_compute_prec] the emission asks, carried as [sk_pack_prec] when
-   either operand stores narrower — [cpu_conv_sketch_schedule]'s [Stage]s then mint that operand's
+   either operand reads narrower — [cpu_conv_sketch_schedule]'s [Stage]s then mint that operand's
    tiles at it. Shared by the tree (which seeds it) and the traffic floor (which prices the tiles at
    it, gh-ocannl-1489), so the two cannot disagree on a staged tile's width. *)
 let cpu_conv_pack_prec ~(limits : Ir.Backend_intf.hardware_limits) (site : conv_site) =
   let native_fp16 = limits.Ir.Backend_intf.native_fp16_arithmetic in
   let comp_prec p = Ir.Numerics.cpu_compute_prec ~native_fp16_arithmetic:native_fp16 p in
   let cprec = comp_prec (Lazy.force site.c_d.Ir.Tnode.storage_prec) in
-  let a_prec = Lazy.force site.c_a.Ir.Tnode.storage_prec
-  and b_prec = Lazy.force site.c_b.Ir.Tnode.storage_prec in
+  let a_prec = conv_operand_prec site site.c_a and b_prec = conv_operand_prec site site.c_b in
   if Ir.Ops.equal_prec cprec a_prec && Ir.Ops.equal_prec cprec b_prec then None else Some cprec
 
-(* The bytes a staged tile of [source] holds per cell under [pack_prec] (the CPU leg's
-   [sk_pack_prec]; [None] on the GPU leg, whose [Stage] declares no [tile_prec]): [Stage] mints the
-   tile at [pack_prec] exactly where the source stores at another precision, else at the
-   source's. *)
-let staged_tile_elt_bytes ~pack_prec (source : Ir.Tnode.t) =
-  let source_prec = Lazy.force source.Ir.Tnode.storage_prec in
-  match pack_prec with
-  | Some p when not (Ir.Ops.equal_prec p source_prec) -> Ir.Ops.prec_in_bytes p
-  | _ -> Ir.Ops.prec_in_bytes source_prec
+(* [Stage] defaults to the read's precision, including a rounding; an explicit CPU [pack_prec]
+   widens it. Price the same cells the builder mints. *)
+let staged_tile_elt_bytes ~pack_prec read_prec =
+  Ir.Ops.prec_in_bytes (Option.value pack_prec ~default:read_prec)
 
 (* The conv family's verdicts on one site, decided once and shared by both fusion flavors: every
    gate below is flavor-independent, so each flavor's subtree reads the same judgments (forced on
@@ -4784,8 +4793,7 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
     ~(limits : Ir.Backend_intf.hardware_limits) ~(opt : LL.optimized) (site : conv_site) :
     family_tree =
   let prec = Lazy.force site.c_d.Ir.Tnode.storage_prec in
-  let a_prec = Lazy.force site.c_a.Ir.Tnode.storage_prec
-  and b_prec = Lazy.force site.c_b.Ir.Tnode.storage_prec in
+  let a_prec = conv_operand_prec site site.c_a and b_prec = conv_operand_prec site site.c_b in
   (* Strided rows are seeded (gh-ocannl-502): the row's tile part in the input access is the single
      term [stride*row] — the kernel-window symbol lands in the outer part, at the staging anchor —
      so the compacting [Stage] packs the window densely, which satisfies [Tensorize]'s
@@ -5052,7 +5060,7 @@ let conv_family_tree ?(capabilities = Ir.Backend_intf.no_codegen_capabilities) ~
                        of [copies] rotating copies, rounded to the backend's allocation granule,
                        plus the per-kernel tile-MMA scratch of the site's triple, which every
                        completion's [Tile_mma] carries (gh-ocannl-1330, gh-ocannl-1255). Each tile
-                       at its own operand's storage precision, the precision
+                       at its own operand's read precision, the precision
                        [gpu_conv_sketch_schedule]'s [Stage] (no [tile_prec]) declares it at: a
                        mixed-precision site's narrow operand tiles are not priced at its wide
                        accumulator (gh-ocannl-1452). A geometry whose accumulator is masked
@@ -5682,8 +5690,8 @@ let conv_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (site : 
     else fun ~m:_ ~n:_ -> 0
   in
   let tiles ~pack_prec ~m ~k ~n =
-    let wa = staged_tile_elt_bytes ~pack_prec site.c_a
-    and wb = staged_tile_elt_bytes ~pack_prec site.c_b in
+    let wa = staged_tile_elt_bytes ~pack_prec (conv_operand_prec site site.c_a)
+    and wb = staged_tile_elt_bytes ~pack_prec (conv_operand_prec site site.c_b) in
     (2 * ((m * k * wa) + (k * n * wb))) + fragment ~m ~n
   in
   let cpu =
@@ -5695,8 +5703,8 @@ let conv_path_traffic_floor ~(limits : Ir.Backend_intf.hardware_limits) (site : 
     lazy
       (Option.bind limits.Ir.Backend_intf.mma ~f:(fun mma ->
            let d_prec = Lazy.force site.c_d.Ir.Tnode.storage_prec in
-           let a_prec = Lazy.force site.c_a.Ir.Tnode.storage_prec
-           and b_prec = Lazy.force site.c_b.Ir.Tnode.storage_prec in
+           let a_prec = conv_operand_prec site site.c_a
+           and b_prec = conv_operand_prec site site.c_b in
            mma_tile_for_precisions_in_scope mma ~scope:(conv_mma_scope site) ~a_prec ~b_prec ~d_prec)
       |> Option.map ~f:(fun (tm_t, tn_t, tk_t) ->
           let pad n t = blocks_of n t * t in
