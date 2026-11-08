@@ -11,8 +11,8 @@
    expression, but not inside scope bodies, so a body kept reading a local nothing declares.
 
    Each row runs the same program twice, with its intermediates virtual and materialized, and
-   compares both against a closed form. A structural claim pins that the row reaches the shape, so
-   no row can go vacuous if a pass stops producing it. *)
+   compares both against a closed form. Reversed operand rows pin the sibling-read shape; original
+   operand rows pin the copies left by one-directional CSE instead of claiming absent reads. *)
 
 open Base
 open Ll_test
@@ -77,6 +77,19 @@ let outward_reads (llc : LL.t) =
     | _ -> ());
   !pairs
 
+(* CSE shares an outer copy into a later body, but forgets copies found inside a body on exit. [r *
+   x] therefore keeps separate [x] computations; [x * r] shares one and exercises the printer. Count
+   both expression scopes and the declared locals a hoist may turn them into. *)
+let sharing_shape name ~reverse ~copies x llc =
+  let bindings = ref 0 in
+  let count (id : LL.scope_id) = if Ir.Tnode.equal id.tn x then Int.incr bindings in
+  walk llc ~on_scope:count ~on_stmt:(function LL.Declare_local { id; _ } -> count id | _ -> ());
+  Stdio.printf "%s: surviving x bindings: %d\n" name !bindings;
+  p (name ^ ": CSE copy count matches operand order") (!bindings = if reverse then 1 else copies);
+  if reverse then
+    p_exists (name ^ ": a body reads a sibling's local of a higher id") (outward_reads llc)
+      ~f:(fun (body, read) -> body < read)
+
 (* Claims that every [Get_local] of [llc] names a binder of [llc], whatever depth either sits at:
    the compile gate's own predicate (gh-ocannl-1973), asked of code that does read a local. *)
 let every_read_bound name (llc : LL.t) =
@@ -108,7 +121,7 @@ let squared_rows ~x_at =
       x *. x *. (weights.(i) +. 1.))
 
 (* The issue's row: a virtual literal, read in a sibling's body and beside it. *)
-let row name ~make_x =
+let row ?(reverse = false) name ~make_x =
   let w = mk (name ^ "_w") and x = mk (name ^ "_x") in
   let d = mk (name ^ "_d") and r = mk (name ^ "_r") and out = mk (name ^ "_out") in
   let t = sym () in
@@ -118,13 +131,14 @@ let row name ~make_x =
         make_x x w;
         reader d ~x ~w;
         relay r d;
-        loop_n t n (set_at out (iter t) (mul (get r [| iter t |]) (get x [| iter t |])));
+        loop_n t n
+          (set_at out (iter t)
+             (if reverse then mul (get x [| iter t |]) (get r [| iter t |])
+              else mul (get r [| iter t |]) (get x [| iter t |])));
       ]
   in
   let o, got, want = both_arms ~name ~virtuals:[ x; d; r ] ~w ~outs:[ out ] llc in
-  p
-    (name ^ ": a body reads a sibling's local of a higher id")
-    (List.exists (outward_reads o.LL.llc) ~f:(fun (body, read) -> body < read));
+  sharing_shape name ~reverse ~copies:3 x o.LL.llc;
   (o, got, want)
 
 let row_literal () =
@@ -134,17 +148,26 @@ let row_literal () =
   p (name ^ ": the virtual run gives the closed form") (same got [ closed ]);
   p (name ^ ": it matches the materialized run") (same got want)
 
-let row_computed () =
-  let name = "lsr_computed" in
-  let _, got, want = row name ~make_x:computed in
+(* The literal is walked first and gets a fresh id, but the relay retains the reader's older id.
+   Left-to-right CSE therefore still creates a forward sibling dependency. *)
+let row_reversed () =
+  let name = "lsr_reversed" in
+  let _, got, want = row ~reverse:true name ~make_x:(fun x _ -> literal x) in
+  let closed = squared_rows ~x_at:(fun i -> table.(i)) in
+  p (name ^ ": the virtual run gives the closed form") (same got [ closed ]);
+  p (name ^ ": it matches the materialized run") (same got want)
+
+let row_computed ?(reverse = false) () =
+  let name = if reverse then "lsr_computed_reversed" else "lsr_computed" in
+  let _, got, want = row ~reverse name ~make_x:computed in
   let closed = squared_rows ~x_at:(fun i -> weights.(i) +. 1.) in
   p (name ^ ": the virtual run gives the closed form") (same got [ closed ]);
   p (name ^ ": it matches the materialized run") (same got want)
 
 (* One level further: [d]'s body reads [e], whose body reads [x], which sits beside [d]. The read is
    two bodies down from the definition it depends on. *)
-let row_nested () =
-  let name = "lsr_nested" in
+let row_nested ?(reverse = false) () =
+  let name = if reverse then "lsr_nested_reversed" else "lsr_nested" in
   let w = mk (name ^ "_w") and x = mk (name ^ "_x") and e = mk (name ^ "_e") in
   let d = mk (name ^ "_d") and r = mk (name ^ "_r") and out = mk (name ^ "_out") in
   let t = sym () in
@@ -155,13 +178,14 @@ let row_nested () =
         reader e ~x ~w;
         reader d ~x:e ~w;
         relay r d;
-        loop_n t n (set_at out (iter t) (mul (get r [| iter t |]) (get x [| iter t |])));
+        loop_n t n
+          (set_at out (iter t)
+             (if reverse then mul (get x [| iter t |]) (get r [| iter t |])
+              else mul (get r [| iter t |]) (get x [| iter t |])));
       ]
   in
   let o, got, want = both_arms ~name ~virtuals:[ x; e; d; r ] ~w ~outs:[ out ] llc in
-  p
-    (name ^ ": a body reads a sibling's local of a higher id")
-    (List.exists (outward_reads o.LL.llc) ~f:(fun (body, read) -> body < read));
+  sharing_shape name ~reverse ~copies:5 x o.LL.llc;
   let closed =
     Array.init n ~f:(fun i ->
         let x = table.(i) and w = weights.(i) in
@@ -265,8 +289,11 @@ let row_discarded () =
 
 let () =
   case "literal" row_literal;
-  case "computed" row_computed;
-  case "nested" row_nested;
+  case "computed" (row_computed ~reverse:false);
+  case "computed reversed" (row_computed ~reverse:true);
+  case "reversed" row_reversed;
+  case "nested" (row_nested ~reverse:false);
+  case "nested reversed" (row_nested ~reverse:true);
   case "hoisted" row_hoisted;
   case "unrolled" row_unrolled;
   case "discarded" row_discarded;

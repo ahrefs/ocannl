@@ -1,16 +1,26 @@
 owo_binop: every producer virtualizes: true
-owo_binop: operands def:a def:b; minted b a
+owo_binop: operands def:a def:b; minted a b
 owo_binop: the run gives the closed form: true
-owo_binop: two scopes, the second operand's minted first: true
+owo_binop: two scopes, the first operand's minted first: true
 owo_ternop: every producer virtualizes: true
-owo_ternop: operands def:a def:b def:c; minted c b a
+owo_ternop: operands def:a def:b def:c; minted a b c
 owo_ternop: the run gives the closed form: true
-owo_ternop: three scopes, minted last operand first: true
+owo_ternop: three scopes, minted left to right: true
+owo_where: every producer virtualizes: true
+owo_where: operands def:cond def:a def:b; minted cond a b
+owo_where: the run gives the closed form: true
+owo_where: three scopes, condition then arms left to right: true
+owo_if: every producer virtualizes: true
+owo_if: operands def:a def:b; minted a b
+owo_if: the run gives the closed form: true
+owo_if: two scopes, condition before body: true
 owo_cse: every producer virtualizes: true
-owo_cse: operands read:a def:a; minted a
+owo_cse: operands def:a read:a; minted a
 owo_cse: the run gives the closed form: true
-owo_cse: the first operand reads the scope the second defines: true
+owo_cse: the second operand reads the scope the first defines: true
 owo_cse_between: every producer virtualizes: true
-owo_cse_between: operands read:a def:b def:a; minted a b
+owo_cse_between: operands def:a def:b read:a; minted a b
 owo_cse_between: the run gives the closed form: true
-owo_cse_between: the last copy survives, read by the first; the middle operand is minted after it: true
+owo_cse_between: the first copy survives, read by the last; the middle operand is minted after it: true
+owo_instantiate_binop: nested loop bindings are freshened left to right: true
+owo_instantiate_ternop: nested loop bindings are freshened left to right: true
