@@ -35,7 +35,8 @@
 # carries the merge's two parents on the base's tree, so it reads the same two sides here and
 # narrows to the same paths, the reach read from the base's text. A reach the two trees answer
 # differently prints lines the base's log lacks, which ship-pr reads as the merge's own failure:
-# a refusal, never a red waved through as shared.
+# a refusal, never a red waved through as shared. Tier pass lines omit elapsed time so
+# different run durations do not create a difference in that comparison (gh-ocannl-1950).
 # --all runs every tier whatever HEAD is. --plan prints the selection, asking what it reaches
 # (no slot, no dune), and runs nothing.
 #
@@ -197,15 +198,13 @@ if ! command -v dune >/dev/null 2>&1; then
   command -v dune >/dev/null 2>&1 || { echo "$me: no dune on PATH even after opam env" >&2; exit 1; }
 fi
 cd "$root" || exit 1
-started=$SECONDS
 dune build --root . @check @test/operations/scans || {
   rc=$?
   echo "$me: compile tier FAILED (dune exit $rc)" >&2
   exit 1
 }
-echo "$me: compile tier passed in $((SECONDS - started))s"
+echo "$me: compile tier passed"
 if [ "$shell" = 1 ]; then
-  started=$SECONDS
   rc=0
   if [ "$scoped" = 1 ]; then
     tools/test-harnesses.sh --shell --jobs "$SHELL_JOBS" --affected --files "${asked[@]}" </dev/null || rc=$?
@@ -220,6 +219,6 @@ if [ "$shell" = 1 ]; then
     echo "$me: shell tier FAILED (tools/test-harnesses.sh exit $rc)" >&2
     exit 1
   fi
-  echo "$me: shell tier passed in $((SECONDS - started))s"
+  echo "$me: shell tier passed"
 fi
 echo "$me: passed"

@@ -3,8 +3,9 @@
 # both sides changed, by either name of a rename; a one-parent HEAD, --all and a quoted path run
 # every tier), what the shell tier narrows to (the overlap's reach, the whole tier on a failed ask,
 # an unrecognized line or an unmapped script), the toolchain fallback through opam env, the exit
-# statuses, that the build of the base alone narrows as the merge does, that this repository's
-# mapping gives shared support the whole tier and a manifest edit less, and that
+# statuses, stable tier lines across different run durations, that the build of the base alone
+# narrows as the merge does, that this repository's mapping gives shared support the whole tier
+# and a manifest edit less, and that
 # .github/ship-pr-merge-build runs the script with every tracked path an input. Fake dune, opam
 # and harness tier: no build runs.
 # Usage: tools/test-merge-build-check.sh [--keep] [--only REGEX]
@@ -27,6 +28,7 @@ mkdir -p "$TMP/dunebin" "$TMP/opambin" "$TMP/emptyopam"
 cat >"$TMP/dunebin/dune" <<'FAKE'
 #!/bin/sh
 printf '%s\n' "$*" >>"$FAKE_RECORD"
+sleep "${FAKE_TIER_DELAY:-0}"
 exit "${FAKE_DUNE_RC:-0}"
 FAKE
 # `opam env --shell=sh` puts the fake dune on PATH, as a switch's does.
@@ -65,6 +67,7 @@ case " $* " in
     exit 0 ;;
 esac
 printf 'shell %s\n' "$*" >>"$FAKE_RECORD"
+sleep "${FAKE_TIER_DELAY:-0}"
 case " $* " in *' --affected '*) exit "${FAKE_SCOPED_RC:-0}" ;; esac
 exit "${FAKE_SHELL_RC:-0}"
 FAKE
@@ -184,6 +187,24 @@ shell --shell --jobs 4" ] && has 'merge-build-check: passed'; then
   if [ "$rc" = 1 ] && has 'shell tier FAILED (tools/test-harnesses.sh exit 1)' && ! has 'merge-build-check: passed'; then
     report 0 'a failing shell tier exits 1'
   else report 1 'a failing shell tier exits 1' "exit $rc; $(cat "$TMP/out")"; fi
+fi
+
+# Use the same tree twice, but force each tier across a different whole-second duration.
+# Compare the actual lines without normalizing digits: shared-failure detection does the same.
+if harness_leg 'tier lines are identical across run durations #run'; then
+  FAKE_TIER_DELAY=0 R=$BOTH_SCRIPT run "$TMP/dunebin"
+  first_rc=$rc
+  grep ' tier ' "$TMP/out" >"$TMP/tiers-first"
+  FAKE_TIER_DELAY=2 R=$BOTH_SCRIPT run "$TMP/dunebin"
+  grep ' tier ' "$TMP/out" >"$TMP/tiers-second"
+  if [ "$first_rc" = 0 ] && [ "$rc" = 0 ] &&
+     has 'merge-build-check: compile tier passed' && has 'merge-build-check: shell tier passed' &&
+     cmp -s "$TMP/tiers-first" "$TMP/tiers-second"; then
+    report 0 'the same tree prints identical tier lines despite different durations'
+  else
+    report 1 'the same tree prints identical tier lines despite different durations' \
+      "exits $first_rc, $rc; first: $(cat "$TMP/tiers-first"); second: $(cat "$TMP/tiers-second")"
+  fi
 fi
 
 # The scope. FAKE_REACH stands for the mapping; the fixtures above reach nothing without it, which
