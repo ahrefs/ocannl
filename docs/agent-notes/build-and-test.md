@@ -289,7 +289,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   overrun refusal calls four fifths tight. The width is what buys the room: one member at a time
   the same tier took 1071 s and 1056 s, a whole run 1167 s and 1154 s at load 3, and one at load 3.6
   overran the 1200 s of that day, a bound barely over a measured pass. Re-measure before trusting a figure older than the manifest:
-  the tier's cost has tripled since one read 470 s. When the trigger holds, the tier is
+  the tier's cost has tripled since one read 470 s. Tier pass lines omit elapsed times so shared
+  failures compare without timing noise (gh-ocannl-1950); to recover the per-tier split, time
+  `dune build --root . @check @test/operations/scans` and
+  `tools/test-harnesses.sh --shell --jobs 4` separately under the same reservation.
+  When the trigger holds, the tier is
   `tools/test-harnesses.sh --shell --affected --files PATH...` over every path changed on both sides,
   both names of a rename, non-scripts too, so `affected --harnesses`'s mapping is asked and not
   copied. `--shell` keeps only that group's members: a member of another group would need a
