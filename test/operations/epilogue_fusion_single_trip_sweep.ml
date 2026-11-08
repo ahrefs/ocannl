@@ -14,10 +14,10 @@
    writer) is descended and its store-back judged, so those twins are admitted where they used to be
    refused, and their values are held to the same bitwise check. This sweep pins the class, not the
    instance: on each site below, the fused twin of EVERY whole-routine seed the search would propose
-   ([Autotune.search_seeding]'s [ss_whole], sketch and coalesced, each seed's flag-flipped twin,
-   which is how the family tree mints its fused flavor) is compiled and run, and every twin that is
-   admitted must equal the untuned two-kernel run; every other one must be refused typed (a crash is
-   not a quiet exclusion from the population).
+   ([Autotune.search_seeding]'s [ss_whole], sketch and coalesced, each seed's flag-flipped twin) is
+   compiled and run. These twins probe fusion independently of the family tree's fused-flavor
+   preconditions. Every admitted twin must equal the untuned two-kernel run; every other one must be
+   refused typed (a crash is not a quiet exclusion from the population).
 
    The sites are chosen for their single-trip producers: one full k block and an edge (the k-split,
    batched as in transformer_names and not), four full blocks and an edge, k exactly one block (a

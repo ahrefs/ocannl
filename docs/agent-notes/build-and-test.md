@@ -3047,11 +3047,13 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   compiler libraries' COMPILED interfaces — the `.cmi` files the inventory's rule depends on — and
   calls a value an emitter when its result is a `PPrint.document` (through tuples and options
   alike), or it takes a `Buffer.t` to write into, AND it is given something of the libraries to
-  render. Types rather than sources, because `C_syntax.compile_proc` has neither an `.mli` nor a
-  return annotation: its document exists only as an inferred type, and a source scan would have to
-  be told about it — which is the hand-maintained frontier again, the one three of the four review
-  rounds on gh-ocannl-712 found a member of. Add a renderer to a library and it is on the frontier
-  the day it is exported; nothing to update.
+  render. Types rather than sources: a renderer without a return annotation or an `.mli` exposes
+  its document only through an inferred type, and a source scan would have to be told about it —
+  which is the hand-maintained frontier again. Add a renderer to a library and it is on the frontier
+  the day it is exported; nothing to update. The frontier follows the compiled interface:
+  an `.mli` hides implementation helpers, while a module without one exports its inferred
+  signature, including internal renderers. `C_syntax`'s public surface is bounded by
+  `arrayjit/lib/c_syntax.mli`.
   - Both types are followed through the library's own abbreviations for them (`type rendered =
     PPrint.document`), since an interface records the path a declaration spells rather than what it
     abbreviates. Those are keyed by the module path they are declared in, never by the bare name:
@@ -5258,7 +5260,11 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   harmless list; any other word -- `.`, `--`, a rule's output, `--root`, an alias-naming or
   unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
   `@test/operations/runtest-<cpu test>` is not; a Metal marker counts even on Linux, where its
-  stanza compiles the stub. Second, the configuration, which counts for every batch but two shapes
+  stanza compiles the stub. A rule target whose suffix is absent from
+  `Slot_kind.data_suffixes` (for example `.err`) counts as a source-like producer, so plain builds
+  reach its action and `slot_kind_live` refuses a backend marker there. Give diagnostic outputs a
+  data suffix such as `.log` or `.out` when compilation does not need them.
+  Second, the configuration, which counts for every batch but two shapes
   (gh-ocannl-1227, the maintainer's decision replacing gh-ocannl-1095's proof that a batch read
   none, which needed an exact model of every dune construct and grew one per review round): every
   target on `Slot_kind.config_free_aliases` (`@test/operations/scans`, `@metal-codegen`), which
