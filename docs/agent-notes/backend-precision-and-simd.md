@@ -1222,10 +1222,15 @@ files.
   also round in the host pack (gh-ocannl-2079), before widening into the panel, even when source
   and panel are both f32. `Schedule.hoisted_read_rounding` is the shared admission rule: only
   NaN-free f32-to-half is verified; f64 and bf16/fp8 retain their in-kernel packs because the
-  conversions have backend-specific boundaries. Metal's f32-to-half-to-f32 round trip canonicalizes NaN payloads differently
-  from the host: a pure conversion/copy exposes that mismatch, while multiplication hides it. NaN-bearing masters stay in-kernel; their cache identity differs from NaN-free ones.
+  conversions have backend-specific boundaries. Metal's f32-to-half-to-f32 round trip canonicalizes
+  NaN payloads differently from the host: a pure conversion/copy exposes that mismatch, while
+  multiplication hides it. NaN-bearing masters stay in-kernel; their cache identity differs from
+  NaN-free ones only where a half-rounded read needs that admission bit. Digesting an unrounded
+  constant or a Stage-minted panel does not force its host-init buffer for this classification.
   `Host_inits.single_nan_free` memoizes the classification per registered buffer, invalidated on
-  replacement without retaining its weak key. The whole-triple still reads in place and is refuted;
+  replacement without retaining its weak key. The link-time lazy re-checks eligibility so a
+  replacement after Stage admission cannot bypass the NaN guard. The whole-triple still reads in
+  place and is refuted;
   hoisted-grid refuses only a rounded operand it cannot hoist. `operand_prec` is what the
   capability checks judge, `m_a` being
   the master. In lanes `vec_expr` narrows and widens through `vec_bridge`'s own storage bridges into

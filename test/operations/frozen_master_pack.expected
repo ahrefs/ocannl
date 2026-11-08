@@ -10,4 +10,7 @@ frozen twins seed hoisted grid packing: true
 NaN-free frozen masters admit host rounding: true
 a NaN-bearing master refuses host rounding: true
 ordinary finite values share a cache identity, NaN eligibility separates it: true
+replacement after Stage admission re-checks NaN eligibility before packing: true
 replacement host data refreshes cached NaN eligibility: true
+an unrounded constant digest leaves host data lazy: true
+a half-rounded constant digest checks host data: true

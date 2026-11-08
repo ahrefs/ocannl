@@ -119,6 +119,34 @@ let placement_class plc tn =
    node carries beside its dims and precision; [companions] renders the consumer's sections after
    the code, given the node emitter so they share the numbering. *)
 let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical =
+  (* Only rounded reads need the data-dependent admission bit. In particular, digesting a post-Stage
+     packed panel must not force its host-init lazy just to classify an unused rounding. *)
+  let half_reads =
+    let open LL.Access_fold in
+    let hooks =
+      {
+        (hooks ()) with
+        scalar =
+          (fun _ nodes -> function
+            | LL.Unop (Ops.Round_prec, (LL.Get (tn, _), Ops.Half_prec _)) ->
+                Continue (Set.add nodes tn)
+            | _ -> Continue nodes);
+      }
+    in
+    fold
+      ~policy:
+        {
+          discarded_operands = Visit;
+          gated_operands = Visit;
+          dead_loops = Visit;
+          local_scopes = Visit;
+          guards = Ignore;
+          scan_implicit = Skip;
+        }
+      ~hooks
+      ~init:(Set.empty (module Tn))
+      llc
+  in
   let buf = Buffer.create 4096 in
   let add = Buffer.add_string buf in
   let complete = ref true in
@@ -149,7 +177,9 @@ let canonical_of ~static_indices ~node_tag ~companions (llc : LL.t) : canonical 
            program's hoisted candidates — so such programs must not share cache keys. *)
         let hc =
           if not (Schedule.hoistable_constant tn) then ""
-          else if Option.is_some (Schedule.hoisted_read_rounding ~source:tn ~round_prec:Ops.half)
+          else if
+            Set.mem half_reads tn
+            && Option.is_some (Schedule.hoisted_read_rounding ~source:tn ~round_prec:Ops.half)
           then ";const;host-half"
           else ";const"
         in

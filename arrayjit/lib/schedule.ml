@@ -1999,6 +1999,13 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
                  ("Schedule.Stage: host-init data for " ^ Tn.debug_name source
                 ^ " disappeared before link")
          in
+         (* Admission happened at apply, but a replacement registration may arrive before link. *)
+         if Option.is_some round_value && not (Host_inits.single_nan_free source) then
+           (* invariant: this panel was admitted for NaN-free f32 data; replacing that registration
+              with incompatible data requires applying the schedule again before linking. *)
+           invalid_arg
+             ("Schedule.Stage: host-init data for " ^ Tn.debug_name source
+            ^ " lost NaN-free f32 rounding eligibility before link");
          pack_constant_tile ~round_value ~debug ~src_nd ~src_dims ~src_prec:source_prec ~prec
            ~packed_dims ~sym_extents ~src_prog ~packed_prog));
     let llc =

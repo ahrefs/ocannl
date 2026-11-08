@@ -205,38 +205,49 @@ let () =
 (* NaN payload conversion is backend-specific. Refuse those hoists and separate the cache identity,
    while ordinary finite data values still share one schedule identity. *)
 let () =
-  let compile name values =
+  let compile ?replacement name values =
     let m = constant ~label:"nan_guard_master" ~dims:[ 4 ] values in
     let t = half_twin m in
     let out = Operation.cast ~grad_spec:Tensor.Prohibit_grad t () in
     Tn.update_prec out.Tensor.value Ir.Ops.single;
     Train.set_materialized out.Tensor.value;
     let digest = ref "" and refusal = ref None in
-    let ctx, _ =
-      Context.compile
-        ~lowered_transform:(fun opt ->
-          digest := Ir.Schedule_cache.digest (Ir.Schedule_cache.canonicalize opt);
-          let axis =
-            match List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 1) with
-            | [ i ] -> i
-            | _ -> assert false
-          in
-          (match
-             S.apply
-               [
-                 stage ~source:m.Tensor.value ~tile_loops:[ axis ] ~hoisted:true
-                   ~tile_prec:(Some Ir.Ops.single);
-               ]
-               opt
-           with
-          | _ -> ()
-          | exception Invalid_argument why -> refusal := Some why);
-          [ opt ])
-        (Context.auto ())
-        (named name (Train.forward out))
-        Ir.Indexing.Empty
-    in
-    Context.release ctx;
+    let ctx = Context.auto () in
+    (try
+       let linked, _ =
+         Context.compile
+           ~lowered_transform:(fun opt ->
+             digest := Ir.Schedule_cache.digest (Ir.Schedule_cache.canonicalize opt);
+             let axis =
+               match
+                 List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 1)
+               with
+               | [ i ] -> i
+               | _ -> assert false
+             in
+             let staged =
+               S.apply
+                 [
+                   stage ~source:m.Tensor.value ~tile_loops:[ axis ] ~hoisted:true
+                     ~tile_prec:(Some Ir.Ops.single);
+                 ]
+                 opt
+             in
+             Option.iter replacement ~f:(fun values ->
+                 Ir.Host_inits.register m.Tensor.value
+                   (lazy
+                     (Ir.Ndarray.init_array ~debug:"late-replacement" Ir.Ops.single ~dims:[| 4 |]
+                        ~padding:None ~f:(fun idcs -> values.(idcs.(0))))));
+             (* The replacement case reaches the actual link-time panel force. *)
+             [ (if Option.is_some replacement then staged else opt) ])
+           ctx
+           (named name (Train.forward out))
+           Ir.Indexing.Empty
+       in
+       Context.release linked
+     with Invalid_argument why ->
+       refusal := Some why;
+       Context.release ctx);
     (!digest, !refusal)
   in
   let finite = [| 1.000244140625; 2.000244140625; 3.000244140625; 4.000244140625 |] in
@@ -252,6 +263,10 @@ let () =
          String.is_substring why ~substring:"no verified host rounding"));
   p "ordinary finite values share a cache identity, NaN eligibility separates it"
     ((not (String.is_empty a)) && String.equal a b && not (String.equal a c));
+  let _, late_refusal = compile ~replacement:nan "nan_guard_late_replacement" finite in
+  p "replacement after Stage admission re-checks NaN eligibility before packing"
+    (Option.value_map late_refusal ~default:false ~f:(fun why ->
+         String.is_substring why ~substring:"lost NaN-free f32 rounding eligibility before link"));
   let m = constant ~label:"replaced_host_init" ~dims:[ 4 ] finite in
   let admitted () =
     Option.is_some (S.hoisted_read_rounding ~source:m.Tensor.value ~round_prec:Ir.Ops.half)
@@ -269,3 +284,26 @@ let () =
   p_all "replacement host data refreshes cached NaN eligibility"
     [ first; rejected; admitted () ]
     ~f:Fn.id
+
+(* Identity construction does not force a constant merely because it could someday be rounded. This
+   includes the unrounded packed panels that post-schedule digests see. *)
+let () =
+  let m = constant ~label:"lazy_digest_master" ~dims:[ 1 ] [| 1.000244140625 |] in
+  let tn = m.Tensor.value in
+  let data = Option.value_exn (Ir.Host_inits.find tn) in
+  let forced = ref 0 in
+  Ir.Host_inits.register tn
+    (lazy
+      (Int.incr forced;
+       Lazy.force data));
+  let read = Ll_test.get tn [| Ll_test.fixed 0 |] in
+  let digest read =
+    ignore
+      (Ir.Schedule_cache.canonicalize_code
+         ~node_tag:(fun _ -> "")
+         (Ll_test.set tn [| Ll_test.fixed 0 |] read))
+  in
+  digest read;
+  p "an unrounded constant digest leaves host data lazy" (Int.equal !forced 0);
+  digest (LL.Unop (Ir.Ops.Round_prec, (read, Ir.Ops.half)));
+  p "a half-rounded constant digest checks host data" (Int.equal !forced 1)
