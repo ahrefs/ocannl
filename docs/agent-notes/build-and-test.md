@@ -3580,9 +3580,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     siblings under the other families. It reads names, not the build graph: a helper module names no
     test (exit 1, pointing at `affected --files`).
   - The pre-push run is one command (gh-ocannl-1829): `tools/test-run.sh prepush --since BASE
-    [--cap N] [--test-cap N] [--expect-backend B]... [build -j 4]` asks `affected --since BASE`
+    [--start] [--cap N] [--test-cap N] [--expect-backend B]... [build -j 4]` asks `affected --since BASE`
     for its default list (link-only aliases included), leaves off the `slow-` and `train-` members
-    and runs the rest as `run --targets-file` would: same digest, verdict and exit status. `train-`
+    and runs the rest as `run --targets-file` would: same digest, verdict and exit status.
+    `--start` uses `start` instead (same cap selection and fleet slot); follow it with `wait last`
+    or `wait DIR`. It cannot be combined with `--list`. `train-`
     members run in CI's `@train` shards on every PR; no CI job runs `@slow`, so each `slow-` member
     left off is named on a `prepush: slow:` stderr line, for the caller to run those the change
     exercises and name them in the PR body. Before it, five workers filtered by a hand grep or a

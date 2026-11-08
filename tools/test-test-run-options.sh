@@ -105,7 +105,9 @@
 #      `affected`: its list's runtest- members reach dune as run's batch, in
 #      order (a root alias, a NAME holding `slow-`, a `train-` directory kept),
 #      its slow- and train- members left off and the slow- ones named; run
-#      options pass through; --list prints the list and runs nothing (and exits
+#      options pass through; --start detaches, both wait forms preserve failure
+#      and cap/source match run (including slow and explicit caps); a foreground
+#      mutant loses that oracle. --list prints the list and runs nothing (and exits
 #      3, still printing, on an incomplete list); usage errors run nothing and
 #      ask no affected; an affected failure, a cross-cutting verdict (either
 #      form), an incomplete one, and a line of no known family run nothing; a
@@ -2527,6 +2529,62 @@ if [ -z "$pp_detail" ]; then
     grep -qF '@train-dir/runtest-q' "$argv_dir/cmd"; } ||
     pp_detail="options: exit $argv_rc; dune calls: ${argv_calls:-<none>} (want $pp_want); cap: $(cat "$argv_dir/cap" 2>/dev/null); stderr: $argv_err"
 fi
+# Detached prepush shares the foreground cap intake, including a slow alias
+# explicitly appended after build (#2091); its launch succeeds even when the
+# action fails, and both wait forms deliver that failure. An accidental
+# foreground launch returns the failure at launch and loses this oracle.
+pp_start_check() {
+  local profile wait_rc run_dir fg_cap fg_source ref OCANNL_TOOL_TEST_CAP=
+  pp_start_detail=
+  for profile in default slow explicit; do
+    local opts=() extra=()
+    case $profile in
+      slow) extra=(@test/training/slow-w) ;;
+      explicit) opts=(--cap 0); extra=(@test/training/slow-w) ;;
+    esac
+    pp_probe "pp-fg-$profile" 0 "${opts[@]}" --since base build "${extra[@]}"
+    fg_cap=$(cat "$argv_dir/cap" 2>/dev/null)
+    fg_source=$(cat "$argv_dir/cap-source" 2>/dev/null)
+    [ "$argv_rc" = 0 ] && [ -n "$fg_cap" ] && [ -n "$fg_source" ] || {
+      pp_start_detail="foreground $profile: exit $argv_rc; $argv_err"; return;
+    }
+    argv_mode=fail pp_probe "pp-start-$profile" 0 --start "${opts[@]}" --since base build "${extra[@]}"
+    run_dir=$argv_dir
+    if [ "$argv_rc" != 0 ] || [ ! -d "$run_dir" ]; then
+      pp_start_detail="launch $profile: exit $argv_rc; $argv_err"; return
+    fi
+    for ref in last "$run_dir"; do
+      wait_rc=0
+      OCANNL_TOOL_TEST_RUNS="$TMP/argv-runs-pp-start-$profile" \
+        "$repeat_root/tools/test-run.sh" wait --timeout 60 "$ref" >"$TMP/pp-start-wait.out" 2>&1 || wait_rc=$?
+      [ "$wait_rc" = 7 ] || {
+        pp_start_detail="wait $profile $ref: exit $wait_rc; $(cat "$TMP/pp-start-wait.out")"; return;
+      }
+    done
+    # The command has no extra slow operand in the default case.
+    local want="build${extra[*]:+ ${extra[*]}} $pp_start_kept"
+    { [ "$(cat "$run_dir/cap")" = "$fg_cap" ] &&
+      [ "$(cat "$run_dir/cap-source")" = "$fg_source" ] &&
+      [ "$(cat "$TMP/pp-start-$profile.calls")" = "$want" ] && [ -z "$(pp_left)" ]; } || {
+        pp_start_detail="$profile: cap/source/argv/scratch differ from foreground"; return;
+      }
+  done
+}
+pp_start_kept='@a/runtest-x @@runtest-root @a/runtest-slow-ish @train-dir/runtest-q'
+pp_start_check
+if [ -z "$pp_start_detail" ]; then report 0 "prepush --start: wait last and DIR preserve failure, argv and foreground cap/source";
+else report 1 "prepush --start: wait last and DIR preserve failure, argv and foreground cap/source" "$pp_start_detail"; fi
+# Negative control: accepting --start but routing it through run must lose.
+perl -pe 's/^  sub=\$pp_mode$/  sub=run/' "$SRC" >"$repeat_root/tools/test-run.sh"
+if cmp -s "$SRC" "$repeat_root/tools/test-run.sh"; then
+  report 1 "prepush --start: foreground mutant loses the detached oracle" "mutant was not made"
+else
+  pp_start_check
+  if [ -n "$pp_start_detail" ]; then report 0 "prepush --start: foreground mutant loses the detached oracle";
+  else report 1 "prepush --start: foreground mutant loses the detached oracle" "mutant survived"; fi
+fi
+cp "$SRC" "$repeat_root/tools/test-run.sh"
+
 # --list prints the same list and runs nothing.
 if [ -z "$pp_detail" ]; then
   pp_probe pp-list 0 --list --since base
@@ -2547,6 +2605,9 @@ if [ -z "$pp_detail" ]; then report 0 "$pp_label"; else report 1 "$pp_label" "$p
 pp_detail=
 for probe in "usage|0|build -j 2|--since BASE is required" \
              "usage|0|--since base --list build|--list prints the list and runs nothing" \
+             "usage|0|--since base --list --start|--list prints the list and runs nothing" \
+             "usage|0|--since base --start=1|is a flag and takes no value" \
+             "usage|0|--since base build @w --start|--start belongs before the dune arguments" \
              "usage|0|--since base --list --cap 9|--list prints the list and runs nothing" \
              "usage|0|--since base --targets-file f|the list is affected's" \
              "usage|0|--since base --referenced-only|unknown option --referenced-only" \
