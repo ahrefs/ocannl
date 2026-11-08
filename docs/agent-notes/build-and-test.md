@@ -3654,8 +3654,6 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
 - Build/install without opam in a subshell:
   `(cd "$scratch/dependency" && dune build @install -j 4 && dune install --prefix "$prefix")`.
   Use a fresh prefix for each candidate so old installed files cannot survive an API removal.
-  Do not use `-p` or a release profile for the OCANNL compatibility checks: its dev-profile
-  deprecation alerts are fatal, and suppressing them hides a pin that breaks master.
 - Fetch and create a detached master checkout:
   `git -C "$consumer" fetch origin` followed by
   `git -C "$consumer" worktree add --detach "$scratch/master" origin/master`.
@@ -3670,26 +3668,47 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   `(cd "$scratch/master" && OCAMLPATH="$prefix/lib${OCAMLPATH:+:${OCAMLPATH}}" dune rules _build/default/arrayjit/lib/.metal_backend.objs/byte/metal_backend.cmi)`.
   Its dependency and `-I` paths must point into the prefix, so an absent backend cannot silently
   stand in for the candidate. Adapt this target for another dependency.
-- Compile master in the default dev profile:
-  `(cd "$scratch/master" && OCAMLPATH="$prefix/lib${OCAMLPATH:+:${OCAMLPATH}}" tools/test-run.sh run build @check -j 4)`.
-  Require exit 0 and inspect the full log for new deprecation alerts; do not pipe the build to
-  `tail` or disable alerts. `@check` type-checks but does not link executables. When the dependency
-  change affects linking or runtime behavior, also build the relevant executable/test alias and
-  run the affected backend tests against the same prefix.
-- Repeat the resolution check and dev-profile build in `"$consumer"`, with the same command-scoped
-  `OCAMLPATH` prefix. The consumer PR must build too; master alone misses use of a newly added API.
-  Keep the prefix on every affected test invocation. Do not export it globally or persist it in
-  shell startup files: other worktrees should continue using the switch unchanged.
+- Compile master and check its dependency stand-in in the default dev profile:
+  `(cd "$scratch/master" && OCAMLPATH="$prefix/lib${OCAMLPATH:+:${OCAMLPATH}}" tools/test-run.sh run build --build-dir "$scratch/master-build" --display verbose --cache=disabled @check @arrayjit/vendor_stubs/metal/runtest -j 4)`.
+  The stand-in aggregate runs `runtest-metal` (the verbatim interface diff) and `runtest-runtime`
+  (the runtime signature check). For another package, use its
+  `@arrayjit/vendor_stubs/<package>/runtest` alias; a dependency with no stand-in has no such alias.
+  A missing-package SKIPPED message is no evidence of agreement with the candidate.
+  Do not use `-p` or a release profile for these OCANNL checks: OCANNL's dev-profile deprecation
+  alerts are fatal, and suppressing them hides a pin that breaks master.
+- Read the build's own runner log (the `log:` path in its verdict), not just the pre-check:
+  `rg -F -- "$prefix/lib/metal" /absolute/path/to/run/log` must show compiler `-I` arguments
+  pointing into the prefix. Verbose display, disabled artifact caching and fresh scratch build
+  directories ensure compilation commands are available even if the consumer's usual `_build`
+  was already up to date.
+  Require exit 0 and no new deprecation alerts; do not pipe the build to `tail` or disable alerts.
+  A red verbatim-interface diff means the pin must land together with the promoted stand-in copy,
+  rather than proving the candidate API is incompatible. In the consumer checkout, with the SAME
+  prefix still set, use
+  `OCAMLPATH="$prefix/lib${OCAMLPATH:+:${OCAMLPATH}}" tools/promote.sh --build-dir "$scratch/consumer-build" arrayjit/vendor_stubs/metal/metal.mli`,
+  inspect and commit the copy with the pin, then rerun the checks. A runtime signature error
+  needs reconciliation of the hand-written stand-in with the candidate API, not promotion.
+- Repeat the resolution check and both the dev-profile build and stand-in agreement in the
+  consumer checkout:
+  `(cd "$consumer" && OCAMLPATH="$prefix/lib${OCAMLPATH:+:${OCAMLPATH}}" tools/test-run.sh run build --build-dir "$scratch/consumer-build" --display verbose --cache=disabled @check @arrayjit/vendor_stubs/metal/runtest -j 4)`.
+  Inspect this build's own compiler paths too. The consumer PR must build and its stand-in must
+  agree; master alone misses use of a newly added API. Keep the prefix on every affected test
+  invocation. Do not export it globally or persist it in shell startup files: other worktrees
+  should continue using the switch unchanged.
+- `@check` type-checks but does not link executables. When the dependency change affects linking
+  or runtime behavior, also build the relevant executable/test alias and run the affected backend
+  tests against the same prefix. Native executables need no extra loader override; for bytecode
+  or a toplevel, also prefix the command with
+  `CAML_LD_LIBRARY_PATH="$prefix/lib/stublibs${CAML_LD_LIBRARY_PATH:+:${CAML_LD_LIBRARY_PATH}}"`
+  so it loads the candidate's C stubs instead of the switch's.
 - Before any separately authorized shared-switch update, record both dependency and OCANNL SHAs,
-  commands, exit statuses and log/run paths in the PR. Require both master and consumer builds
-  with no new deprecation alerts, plus the change's affected tests. A successful scratch build
-  does not authorize changing the switch. Leave scratch artifacts for review until the experiment
-  is recorded; remove its detached worktree with `git worktree remove "$scratch/master"` only
+  commands, exit statuses, the resolved package path and decisive compiler `-I` output inline in
+  the PR, with log/run paths as supplementary evidence. Require both master and consumer builds
+  with no new deprecation alerts, agreement checks (or an explained master diff plus the consumer's
+  committed matching copy), and the change's affected tests. A successful scratch build does not
+  authorize changing the switch. Leave scratch artifacts for review until the experiment is
+  recorded; remove its detached worktree with `git worktree remove "$scratch/master"` only
   when it has no changes or artifacts worth preserving.
-
-This reproduces the scratch-install approach used by [lukstafi/ocaml-metal#10](https://github.com/lukstafi/ocaml-metal/pull/10)
-and OCANNL branch `codex/w1108-2090`. The procedure was also executed for this note against
-ocaml-metal main; the documentation PR records the exact revisions and build evidence.
 
 ## OCaml and dune traps
 
