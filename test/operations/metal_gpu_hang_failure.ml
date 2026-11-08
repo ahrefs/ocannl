@@ -63,8 +63,8 @@ let raised f =
   | exception e -> Some (Exn.to_string e)
 
 let scenario () =
-  (* A regressed wait must end the run, and no OCaml can be relied on to run during one: the binding
-     of the event wait keeps the runtime lock. *)
+  (* A regressed wait never returns; the default SIGALRM action ends the process without needing
+     OCaml code to run. *)
   ignore (Unix.alarm 300 : int);
   let before = plain ~first_id:9_000 ~name:"before" ctx in
   let x, o = stalling ~first_id:9_100 ~name:"stalling" in
