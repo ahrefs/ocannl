@@ -14,7 +14,10 @@
 # content. Nothing local complains -- every `dune runtest` reads the working
 # tree and passes -- while CI builds the committed tree and fails on the golden
 # diff. After promoting, this script stages what it promoted (and says so), or
-# names the files it would not stage. Outside a merge it is a no-op.
+# names the files it would not stage. Outside a merge it leaves the index alone.
+#
+# Every promotion reports existing siblings of per-backend golden selectors in
+# the destination directory's dune file, marking which this invocation applied.
 #
 # Usage: tools/promote.sh [FILES...]
 #        tools/promote.sh --from-run RUN [FILES...]
@@ -45,6 +48,10 @@ if [ "${1:-}" = --from-run ]; then
 else
   command -v dune >/dev/null 2>&1 || . tools/opam-env.sh
 fi
+# The family report and alias resolution share the same Dune reader.
+[ -r tools/dune-golden-families.sh ] || die "cannot read tools/dune-golden-families.sh"
+# shellcheck source=dune-golden-families.sh
+. tools/dune-golden-families.sh
 # Credentials never reach dune, which records every spawned process's environment in
 # `_build/trace.csexp` (gh-ocannl-1280): the deny-list tools/test-run.sh applies, after the opam
 # environment above, whose updates could set one.
@@ -63,10 +70,11 @@ if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
 fi
 
 # The promotion list has to be taken BEFORE applying -- afterwards there is
-# nothing pending left to name. It is only needed for the guard, so outside a
-# merge the extra dune invocation is skipped entirely. `list` filters its
-# arguments exactly as `apply` does, prints one root-relative path per line on
-# stdout since 3.22, stderr before, and sends missing-file warnings to stderr.
+# nothing pending left to name. The list also identifies which backend siblings
+# this invocation touched, independently of earlier edits in the working tree.
+# `list` filters its arguments exactly as `apply` does, prints one root-relative
+# path per line on stdout since 3.22, stderr before, and sends missing-file
+# warnings to stderr.
 #
 # A `list` that FAILS is kept apart from one that finds nothing: both leave
 # `promoted` empty, but the first means the guard is about to do nothing while
@@ -116,12 +124,17 @@ if [ -n "$from_run" ]; then
     done
   done <"$saved/paths"
 else
-  if [ "$merging" -eq 1 ]; then
-    # Capture both streams: 3.20/3.21 put paths on stderr. Retain only paths
-    # Dune actually promoted; missing-path warnings must never reach git add.
-    promoted="$(dune promotion list --root . "$@" --diff-command=diff 2>&1)" || listed=0
-  fi
+  # Capture both streams: 3.20/3.21 put paths on stderr. Retain only paths
+  # Dune actually promoted; missing-path warnings must never reach git add.
+  promoted="$(dune promotion list --root . "$@" --diff-command=diff 2>&1)" || listed=0
   dune promotion apply --root . "$@"
+fi
+
+# Backend family report (shared with test-run.sh digest).
+if [ "$listed" -eq 1 ]; then
+  printf '%s\n' "$promoted" | golden_family_report . applied >&2
+else
+  printf 'promote.sh: WARNING -- promotion list failed; golden families could not be reported\n' >&2
 fi
 
 # Strip trailing CRs from a promoted golden. perl -i, not sed -i: BSD sed

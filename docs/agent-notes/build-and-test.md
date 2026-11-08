@@ -1769,7 +1769,25 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   applying (afterwards nothing pending is left to name), reading both streams for the pre-3.22 floor,
   then stages exactly what it promoted and says so. A promoted golden still UNMERGED is deliberately NOT staged and is warned about with the
   `git add` that would accept it — staging one records a conflict resolution, which is the caller's
-  call and not the script's. Outside a merge nothing runs, not even the extra `dune` invocation.
+  call and not the script's. Outside a merge the index stays untouched.
+  Every invocation lists pending promotions before applying them, and reports existing backend
+  golden siblings selected by a literal `(diff ...)` / `(diff? ...)` first argument in the
+  destination directory's `dune` or `dune-file` (`%{read:...}`, gh-ocannl-2073). This covers
+  backend names and emitted-code extensions without naming either selector file.
+  Each sibling is marked `promoted` or `NOT promoted` for this invocation, including when replaying
+  selected saved-run corrections. The test-run digest prints the same report below its recorded
+  promotion list, using `pending promotion` / `NOT pending promotion` and the recorded worktree.
+  Both paths share `tools/dune-golden-families.sh`, including the fail-closed Dune reader also
+  used by test-run's logical alias-directory resolution. Unreadable or unsupported Dune forms
+  (`#;`, `#|`, includes, unbalanced lists) produce an explicit unavailable notice. This is an advisory reminder to check other backends, not a
+  claim they need edits or ran successfully. The report enumerates existing local files matching
+  the selector's literal prefix and suffix; includes, escaped filenames, other interpolations
+  and nonlocal selectors are outside its boundary. No backend list is duplicated.
+  `test-promote.sh` leg 10 exercises selected, whole-list and saved-run promotion, an arbitrary
+  backend, an extension selector, an earlier unrelated edit, a genuinely pending non-family
+  golden behind a commented selector, and a cut-report negative control. Leg 11 covers unsupported
+  Dune forms; `test-promotion-record.sh` checks the default digest from another checkout and a
+  cut-digest negative control.
   The merge is detected with `git rev-parse --verify MERGE_HEAD`, never by testing `.git/MERGE_HEAD`
   as a path: in a linked worktree `.git` is a FILE and `MERGE_HEAD` lives in the per-worktree gitdir.
   `tools/test-promote.sh` is the hand-run harness — on no dune alias, since every leg runs `dune` on

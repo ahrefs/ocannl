@@ -53,6 +53,8 @@
 #      reads it there, and a stdout-only twin loses the promotion.
 #   9. promote.sh's dune runs without the caller's credentials, and a copy
 #      with the scrub cut out hands dune both (gh-ocannl-1280).
+#  10. backend families name every sibling and the current selection, including
+#      saved replay; removing the report loses the same oracle (gh-ocannl-2073).
 
 set -u
 
@@ -512,5 +514,117 @@ else
 fi
 }
 harness_leg_run '9: promote.sh'\''s dune runs without the caller'\''s credentials' leg_9
+
+# A real backend selector, an arbitrary future backend and an unrelated golden.
+# Both pending siblings are built; selecting one must not call the other touched.
+backend_family_case() { # NAME MODE CONTROL
+  local repo="$TMP/$1" mode=$2 control=$3 out rc backend n
+  stage_promote "$repo" || return 1
+  if [ "$control" = cut ]; then
+    perl -0777 -i -pe 's/# Backend family report .*?(?=# Strip trailing CRs)//s' "$repo/tools/promote.sh"
+    cmp -s "$SRC" "$repo/tools/promote.sh" && return 1
+  fi
+  (
+    cd "$repo" || exit 1
+    mkdir -p test/config test/logs
+    printf '(lang dune 3.20)\n' >dune-project
+    printf cc >test/config/ocannl_backend.txt
+    printf c >test/config/extension.txt
+    cat >test/logs/dune <<'DUNE'
+(rule (target actual) (action (with-stdout-to actual (echo fresh))))
+(rule (alias probe)
+ (action (diff "demo-%{read:../config/ocannl_backend.txt}-0.log.expected" actual)))
+(rule (alias probe) (action (diff demo-metal-0.log.expected actual)))
+(rule (alias probe) (action (diff other-cc.expected actual)))
+(rule (alias probe)
+ (action (diff "kernel.%{read:../config/extension.txt}.expected" actual)))
+; (diff "other-%{read:../config/ocannl_backend.txt}.expected" actual)
+DUNE
+    for backend in cc metal future_backend; do
+      printf stale >"test/logs/demo-$backend-0.log.expected"
+    done
+    for backend in c cu future_extension; do
+      printf stale >"test/logs/kernel.$backend.expected"
+    done
+    printf unrelated >test/logs/other-cc.expected
+    printf unrelated >test/logs/other-metal.expected
+    g init -q -b main . && g add -A && g commit -qm base || exit 1
+    harness_dune_colour dune build @test/logs/probe >"$TMP/$1.build" 2>&1
+    [ $? -ne 0 ] || exit 1
+    # An earlier edit is NOT part of this promotion.
+    printf earlier-edit >test/logs/demo-future_backend-0.log.expected
+    if [ "$mode" = saved ]; then
+      mkdir -p saved/promotion-files
+      pwd -P >saved/wt
+      printf 1 >saved/exit
+      n=0
+      for backend in demo-cc-0.log.expected demo-metal-0.log.expected kernel.c.expected; do
+        n=$((n + 1))
+        printf 'test/logs/%s\n' "$backend" >>saved/promotion-files/paths
+        printf stale >"saved/promotion-files/$n.original"
+        printf fresh >"saved/promotion-files/$n.corrected"
+      done
+      tools/promote.sh --from-run saved test/logs/demo-cc-0.log.expected test/logs/kernel.c.expected
+    elif [ "$mode" = all ]; then
+      harness_dune_colour tools/promote.sh
+    else
+      harness_dune_colour tools/promote.sh test/logs/demo-cc-0.log.expected test/logs/kernel.c.expected
+    fi
+  ) >"$TMP/$1.out" 2>&1
+  rc=$?
+  [ "$rc" = 0 ] || return 1
+  out=$(cat "$TMP/$1.out")
+  printf '%s\n' "$out" | grep -Fx '  promoted: test/logs/demo-cc-0.log.expected' >/dev/null || return 1
+  if [ "$mode" = all ]; then
+    printf '%s\n' "$out" | grep -Fx '  promoted: test/logs/demo-metal-0.log.expected' >/dev/null || return 1
+  else
+    printf '%s\n' "$out" | grep -Fx '  NOT promoted: test/logs/demo-metal-0.log.expected' >/dev/null || return 1
+    [ "$(cat "$repo/test/logs/demo-metal-0.log.expected")" = stale ] || return 1
+  fi
+  printf '%s\n' "$out" | grep -Fx '  NOT promoted: test/logs/demo-future_backend-0.log.expected' >/dev/null || return 1
+  printf '%s\n' "$out" | grep -Fx '  promoted: test/logs/kernel.c.expected' >/dev/null || return 1
+  printf '%s\n' "$out" | grep -Fx '  NOT promoted: test/logs/kernel.cu.expected' >/dev/null || return 1
+  printf '%s\n' "$out" | grep -Fx '  NOT promoted: test/logs/kernel.future_extension.expected' >/dev/null || return 1
+  case "$out" in *'golden families: test/logs/other-'* | *'promoted: test/logs/other-'*) return 1 ;; esac
+  if [ "$mode" = all ]; then
+    [ "$(cat "$repo/test/logs/other-cc.expected")" = fresh ] || return 1
+  fi
+  [ "$(cat "$repo/test/logs/demo-cc-0.log.expected")" = fresh ] || return 1
+  [ "$(cd "$repo" && g show :test/logs/demo-cc-0.log.expected)" = stale ] || return 1
+}
+leg_10() {
+  local mode
+  for mode in selected all saved; do
+    if backend_family_case "family-$mode" "$mode" shipping; then
+      report 0 "backend family: $mode names every sibling and this invocation's selection"
+    else
+      report 1 "backend family: $mode names every sibling and this invocation's selection" "see $TMP/family-$mode.out"
+    fi
+  done
+  if backend_family_case family-cut selected cut; then
+    report 1 "negative control: removing the family report loses the sibling oracle"
+  elif [ "$(cat "$TMP/family-cut/test/logs/demo-cc-0.log.expected")" = fresh ]; then
+    report 0 "negative control: removing the family report loses the sibling oracle"
+  else
+    report 1 "negative control: removing the family report loses the sibling oracle" "promotion did not run; see $TMP/family-cut.out"
+  fi
+}
+harness_leg_run '10: per-backend golden families at promotion time, with a cut-report control' leg_10
+
+leg_11() {
+  local syntax out repo="$TMP/reader"
+  stage_promote "$repo" || { harness_abandon "cannot stage reader fixture"; return; }
+  printf stale >"$repo/probe.c.expected"
+  printf stale >"$repo/probe.cu.expected"
+  for syntax in '#; (rule)' '#| comment |#' '(include extra)' '(dynamic_include extra)' '(rule'; do
+    printf '%s\n' "$syntax" >"$repo/dune"
+    out=$(cd "$repo" && . tools/dune-golden-families.sh && printf 'probe.c.expected\n' | golden_family_report . applied)
+    case "$out" in
+      *'family report unavailable for .'*) report 0 "reader refuses unsupported form: $syntax" ;;
+      *) report 1 "reader refuses unsupported form: $syntax" "$out" ;;
+    esac
+  done
+}
+harness_leg_run '11: family report names unsupported Dune syntax as unavailable' leg_11
 
 finish

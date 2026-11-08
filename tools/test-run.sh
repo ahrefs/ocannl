@@ -1125,43 +1125,12 @@ alias_dirs_perl='
   for my $f (@ARGV) {
     my $dir = $f =~ m{^dune(?:-file)?$} ? "." : ($f =~ m{^(.*)/dune(?:-file)?$} ? $1 : next);
     print "$dir\n";
-    open my $fh, "<", $f or do { $bad = 1; next };
-    local $/;
-    my $t = <$fh>;
-    close $fh;
-    my (@tok, $ok);
-    $ok = eval {
-      pos($t) = 0;
-      while (pos($t) < length $t) {
-        if ($t =~ /\G\s+/gc || $t =~ /\G;[^\n]*/gc) { next }
-        # `#|` and `#;` are where dune readings differ (comments in some
-        # versions, atom text in others): a file holding one is not read.
-        die if $t =~ /\G#[|;]/gc;
-        if ($t =~ /\G([()])/gc) { push @tok, [$1]; next }
-        if ($t =~ /\G"((?:[^"\\]|\\.)*)"/gcs) { push @tok, ["a", $1]; next }
-        if ($t =~ /\G([^\s();"]+)/gc) { push @tok, ["a", $1]; next }
-        die;
-      }
-      1;
-    };
-    unless ($ok) { $bad = 1; next }
-    # Into nested lists.
-    my @stack = ([]);
-    for my $k (@tok) {
-      if ($k->[0] eq "(") { push @stack, []; next }
-      my $x;
-      if ($k->[0] eq ")") { @stack > 1 or do { $bad = 1; last }; $x = pop @stack }
-      else { $x = $k->[1] }
-      push @{ $stack[-1] }, $x;
-    }
-    if (@stack != 1) { $bad = 1; next }
+    my $forms = eval { read_dune($f) };
+    unless ($forms) { $bad = 1; next }
     my $walk;
     $walk = sub {
       my ($at, $forms) = @_;
       for my $s (@$forms) {
-        # Stanzas read from another file -- `(include FILE)`, a generated
-        # `(dynamic_include ...)` -- may hold subdirs this reader never sees.
-        if (ref $s && @$s && !ref $s->[0] && $s->[0] =~ /^(?:include|dynamic_include)$/) { $bad = 1; next }
         next unless ref $s && @$s >= 2 && !ref $s->[0] && $s->[0] eq "subdir";
         my $name = $s->[1];
         if (ref $name || $name !~ m{^[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*$} || $name =~ m{(?:^|/)\.\.?(?:/|$)}) {
@@ -1173,7 +1142,7 @@ alias_dirs_perl='
         $walk->($sub, [ @$s[2 .. $#$s] ]);
       }
     };
-    $walk->($dir, $stack[0]);
+    $walk->($dir, $forms);
   }
   exit($bad ? 3 : 0);
 '
@@ -1199,7 +1168,7 @@ alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `
   done < <(alias_dune_files)
   [ ${#list[@]} -gt 0 ] || return 1
   list=("${list[@]#./}")
-  perl -e "$alias_dirs_perl" "${list[@]}" >"$run_dir/aliases.dirs" || return 1
+  perl -e "$dune_reader_perl $alias_dirs_perl" "${list[@]}" >"$run_dir/aliases.dirs" || return 1
   sort -u "$run_dir/aliases.dirs"
   rm -f "$run_dir/aliases.dirs"
 }
@@ -1403,6 +1372,10 @@ runner_root=$PWD
 [ -r tools/bisect-steps.sh ] || die "cannot read tools/bisect-steps.sh"
 # shellcheck source=bisect-steps.sh
 . tools/bisect-steps.sh
+# The family report and alias resolution share the same Dune reader.
+[ -r tools/dune-golden-families.sh ] || die "cannot read tools/dune-golden-families.sh"
+# shellcheck source=dune-golden-families.sh
+. tools/dune-golden-families.sh
 # Credentials never reach dune, which records every spawned process's environment in the
 # worktree's `_build/trace.csexp` (gh-ocannl-1280). Removed from this script's own environment,
 # before any subcommand, so dune -- launched by the supervisor, by `_resolve`, `_probe`, `repeat`
@@ -3979,6 +3952,8 @@ digest() {
          "file(s); inspect the log, accept with \`dune promote\` (tools/promote.sh on Windows):"
     sed -n '1,20p' "$dir/promotions" | sed 's/^/  /'
     [ "$promo_n" -le 20 ] || echo "  ... and $((promo_n - 20)) more, in $dir/promotions"
+    # Use the recorded worktree, even when digesting from another checkout.
+    golden_family_report "$(cat "$dir/wt" 2>/dev/null)" pending <"$dir/promotions"
     if [ -d "$dir/promotion-files" ]; then
       printf '  saved corrected outputs: tools/promote.sh --from-run %q\n' "$dir"
     else
