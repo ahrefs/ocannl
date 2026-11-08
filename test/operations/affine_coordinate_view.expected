@@ -63,6 +63,8 @@ spilling packed body and tail cover 3x1x1x2                  query Covered      
 spilling body without tail leaves two cells                  query Unknown      oracle uncovered
 spilling tail without body leaves four cells                 query Unknown      oracle uncovered
 spilling body and short tail leave last cell                 query Unknown      oracle uncovered
+spilling body and late tail leave an interior hole           query Unknown      oracle uncovered
+spilling runs with stride five leave gaps                    query Unknown      oracle uncovered
 gather [?;e] after a full write [h;e] (3x4)                  query Covered      oracle covered
 gather [?;0] after a column-0 write [h;0]                    query Covered      oracle covered
 gather [h;?] (dynamic column) after a full write             query Covered      oracle covered

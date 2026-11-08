@@ -2783,9 +2783,7 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   meant is therefore not this check's to find. Gradients are declared at creation, so a gradient that lost its zero
   before the analysis stays unfilled. That class is filled rather than refused because the raw read
   set is conservative: a read of a padded margin (`test_padding_reset`) can land there, correct,
-  and any write covering a read lands over the fill first. Packed initializer stores crossing the
-  minor axis used to land there too (`resnet_block`'s `n42`); gh-ocannl-2049 teaches the coverage
-  proof their flat-cell carry, so that case no longer needs the permissive fill. A liveness-aliased buffer is filled by
+  and any write covering a read lands over the fill first. A liveness-aliased buffer is filled by
   location, but only a range's first occupant reads the fill: a later one that lost a zero reads what
   its predecessor left, which only a closed form or a planner-off twin shows. Nor can the key reach
   what has no host-reachable buffer of its own: a `Local` node, a schedule-minted partial.
