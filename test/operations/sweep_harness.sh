@@ -3019,6 +3019,7 @@ lane_stopped_record=$(sed -n 's/^run:  *//p' <<<"$lane_stopped")
 # failed, on a base that had grown one.
 lonely_tools=$(cd "$(dirname "$sweep")" && pwd)
 mkdir -p "$tmp/lonely/tools" "$tmp/lonely/benchmarks"
+ln -s "$lonely_tools/../scripts" "$tmp/lonely/scripts"
 for lonely_sibling in "$lonely_tools"/*; do
   if [ "$(basename "$lonely_sibling")" = aggregate-skips.sh ]; then continue; fi
   ln -s "$lonely_sibling" "$tmp/lonely/tools/$(basename "$lonely_sibling")"

@@ -1495,9 +1495,30 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `tools/test-mutation-run.sh` leg 10 it was the 45-second timeout about once in 1400 runs on the
   hosted runner (once in 70 on mac-studio beside `tools/test-harnesses.sh`), which a kernel signal
   trace pinned to the launcher: TERM delivered to its handler, nothing relayed for 45 seconds. Those waits go through `wait_tick`, a
-  `wait` on a one-second perl tick that ends early when the child does, so a held trap runs
-  within a second. A signal relayed this way needs no deadline sized for load; a leg timing out on
-  one is a lost relay first.
+  one-second foreground Perl tick that ends early when the child does, so a held trap runs
+  within a second. A foreground tick is reaped before an exiting trap runs; the previous
+  background tick could outlive a cancelled sweep, caught by its group-liveness oracle.
+  `scripts/process-group.sh` owns the shared `wait_tick`; callers that
+  need the child's exit status use `wait_child`, which polls this shell's running and stopped
+  jobs before the final, nonblocking `wait` (`jobs -p` alone can retain completed jobs on
+  Bash 3.2, caught by the sweep integration). A recycled numeric pid cannot extend that
+  wait. Besides `test-run.sh`, the relays in `sweep.sh` (unit and lane), `bisect-steps.sh`,
+  `ci-compiler-test.sh` and `harness-legs-alone.sh` use it (gh-ocannl-1914).
+  `machine-verify-far.sh`'s watcher wait follows its kill and has no signal relay;
+  `harness-support.sh`'s child wait follows a bounded liveness check/kill, and its traps exit.
+  `test-harnesses.sh` polls completed jobs before waiting; its cancellation waits follow the
+  relay. Cleanup waits after delivery of the cancellation are not the wait-entry relay race.
+  `scripts/test-process-group.sh` drives 20,000 TERM deliveries to `/bin/bash` under fork/exit
+  load with the shared wait. An unbounded foreground wait deterministically loses its response
+  oracle; a separate diagnostic searches up to 20,000 deliveries with the bare-wait control,
+  stopping each lane once it observes a held signal. No race observed is diagnostic, not a CI
+  failure. Bash 3.2 crashes in that control are counted apart and never satisfy the held-signal
+  observation; a crash in the shared-wait leg fails. The harness tracks and relays TERM to its
+  Python driver through the same shared wait; a foreground-launch twin loses the cancellation
+  deadline while every trial group is reaped.
+  Each child acknowledges startup before the relay publishes readiness;
+  the 2.5 s response bound starts there, not at spawn. A signal relayed this way needs no
+  deadline sized for load; a leg timing out on one is a lost relay first.
 - **A short bound that kills a stand-in cannot also be the time it gets to start** (gh-ocannl-1366).
   The device-probe hang legs (`tools/test-test-run.sh` 76 and 83) ran their never-answering
   stand-in under a 1 s bound and then read the call and pid it records first thing; on a loaded

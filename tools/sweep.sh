@@ -87,6 +87,8 @@ LOGS=$STATE/logs
 UNIT_STATES=$STATE/unit-state
 MAIN=${OCANNL_TOOL_SWEEP_REPO:-$HOME/ocannl-staging}
 SWEEP_TOOLS=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=../scripts/process-group.sh
+. "$SWEEP_TOOLS/../scripts/process-group.sh"
 AGGREGATE_SKIPS=$SWEEP_TOOLS/aggregate-skips.sh
 # The per-box width cap, shared with tools/test-run.sh so the two cannot drift.
 [ -r "$SWEEP_TOOLS/box-jobs.sh" ] || {
@@ -914,7 +916,7 @@ run_capped() {
   shift
   capped_bg "$budget" "$@" &
   UNIT_PID=$!
-  wait "$UNIT_PID"
+  wait_child "$UNIT_PID"
   rc=$?
   UNIT_PID=
   return "$rc"
@@ -3092,7 +3094,7 @@ trap 'relay 143' TERM
 # either way its rows are incomplete, so no skip-coverage verdict is claimed.
 failed_lanes=
 for ((i = 0; i < ${#LANES[@]}; i++)); do
-  wait "${LANE_PID_LIST[$i]}"
+  wait_child "${LANE_PID_LIST[$i]}"
   lane_rc=$?
   if [ "$lane_rc" -ne 0 ]; then
     failed_lanes="$failed_lanes ${LANES[$i]} (exit $lane_rc)"

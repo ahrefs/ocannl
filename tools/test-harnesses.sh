@@ -183,6 +183,7 @@ fi
 manifest() {
   cat <<'HARNESS_LIST'
 shell scripts/test-harness-support.sh
+shell scripts/test-process-group.sh
 shell tools/test-test-harnesses.sh
 shell tools/test-harness-legs-alone.sh
 shell tools/test-pin-revisions.sh

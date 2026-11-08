@@ -16,7 +16,7 @@ harness_scratch test-harness-legs-alone
 fixture="$TMP/repository with spaces"
 mkdir -p "$fixture/tools" "$fixture/scripts" "$fixture/fixtures"
 cp "$here/harness-legs-alone.sh" "$fixture/tools/" &&
-  cp "$here/../scripts/harness-support.sh" "$fixture/scripts/" || exit 2
+  cp "$here/../scripts/harness-support.sh" "$here/../scripts/process-group.sh" "$fixture/scripts/" || exit 2
 cat >"$fixture/tools/test-harnesses.sh" <<'STUB'
 #!/usr/bin/env bash
 [ "$*" = --list ] || exit 2
