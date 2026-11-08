@@ -124,10 +124,6 @@ let () =
 
   (* Executed parity: bf16 has ~2-3 significant decimal digits; the tolerances are loose bounds on
      accumulated rounding over two matmuls, not tight envelopes. *)
-  let max_err =
-    Array.foldi y_vals_a ~init:0. ~f:(fun i acc va ->
-        Float.max acc (Float.abs (va -. y_vals_b.(i))))
-  in
   (* The parity tolerances cannot reject an input-independent forward: if both legs collapsed to one
      constant (or to zeros) every check below would read [true]. The reference's own spread must
      exceed the tolerance it gates. *)
@@ -135,7 +131,8 @@ let () =
     Array.fold y_vals_a ~init:0. ~f:(fun acc v -> Float.max acc (Float.abs (v -. y_vals_a.(0))))
   in
   Verdict.p "reference forward varies past the parity tolerance" Float.(ref_spread > 0.05);
-  Verdict.p "forward parity within 0.05" Float.(max_err < 0.05);
+  Verdict.p_close ~difference_only:true "forward parity within 0.05" y_vals_b y_vals_a
+    ~tol:(fun _ -> Stdlib.Float.pred 0.05);
   Verdict.p "loss parity within 0.05" Float.(Float.abs (loss_a_v -. loss_b_v) < 0.05);
 
   (* Mixed-precision legs: f32 masters behind half twins, with the params left alone and with a

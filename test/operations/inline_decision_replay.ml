@@ -121,13 +121,8 @@ let phase2 () =
   p "phase2 inline-forced: intermediate is virtual"
     (Tn.Placements.known_virtual plc_inline t_inline);
   p "phase2 parity: same result length" (Array.length yv_default = Array.length yv_inline);
-  let max_diff =
-    Array.foldi yv_default ~init:0.0 ~f:(fun i acc v ->
-        Float.max acc (Float.abs (v -. yv_inline.(i))))
-  in
-  Verdict.pass_fail "phase2 parity"
-    Float.(max_diff <= 1e-6)
-    ~detail:(fun () -> Printf.sprintf "max diff %.8f" max_diff)
+  Verdict.pass_fail_close ~difference_only:true "phase2 parity" yv_inline yv_default ~tol:(fun _ ->
+      1e-6)
 
 let () =
   phase1 ();

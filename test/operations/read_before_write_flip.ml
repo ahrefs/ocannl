@@ -80,9 +80,4 @@ let () =
   p "materialized: intermediate stays non-virtual"
     (not (Tn.Placements.known_virtual opt_mat.LL.optimize_ctx.LL.placements h_mat.Tensor.value));
   p "parity: same result length" (Array.length yv_default = Array.length yv_mat);
-  let max_diff =
-    Array.foldi yv_default ~init:0.0 ~f:(fun i acc v -> Float.max acc (Float.abs (v -. yv_mat.(i))))
-  in
-  Verdict.pass_fail "parity"
-    Float.(max_diff <= 1e-5)
-    ~detail:(fun () -> Printf.sprintf "max diff %.8f" max_diff)
+  Verdict.pass_fail_close ~difference_only:true "parity" yv_mat yv_default ~tol:(fun _ -> 1e-5)

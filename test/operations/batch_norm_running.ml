@@ -8,11 +8,7 @@ let epsilon = 0.125
 let channels = 2
 
 let check label actual expected =
-  let error =
-    Array.foldi actual ~init:0. ~f:(fun i e v -> Float.max e (Float.abs (v -. expected.(i))))
-  in
-  Stdio.eprintf "%s (not part of the golden): max error %.3e\n%!" label error;
-  p label Float.(error < 2e-5)
+  p_close ~difference_only:true label actual expected ~tol:(fun _ -> Stdlib.Float.pred 2e-5)
 
 let values observations shift =
   Array.init (observations * channels) ~f:(fun i ->

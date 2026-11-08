@@ -789,8 +789,8 @@ let blank n = Array.create ~len:n sentinel
 
 (** Whether two value arrays match elementwise within [tol] (and have the same length). *)
 let close ?(tol = 1e-5) values expected =
-  Array.length values = Array.length expected
-  && Array.for_alli values ~f:(fun i v -> Float.(abs (v -. expected.(i)) <= tol))
+  (Array.is_empty values && Array.is_empty expected)
+  || Verdict.within ~difference_only:true "Ll_test.close" values expected ~tol:(fun _ -> tol)
 
 (** [same got expected] is {!close} over the list {!execute} returns. Raises if the lists differ in
     length — a mismatched [~read] is a test bug, not a failed assertion. *)

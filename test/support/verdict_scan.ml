@@ -702,8 +702,12 @@ let floor_census content =
     ([let ok = Array.for_all2_exn got want ~f:approx]), through any chain of such bindings. So
     [p "x" (Array.for_all2_exn a b ~f:(fun x y -> Float.(abs (x - y) < 1e-5)))] and
     [p_all "x" runs ~f:(fun (got, want) -> approx got want)] are both read. Only a BOUND difference
-    counts here: an abs-of-difference that only feeds a maximum, or must EXCEED a margin (a
-    discrimination check, [abs (a - b) > 1e-6]), is not a parity comparison.
+    counts here. An unbounded abs-of-difference helper, or a fold containing one, is tracked through
+    name bindings and arithmetic until an upper comparison bounds it (gh-ocannl-1837). Merely
+    printing a maximum or requiring it to EXCEED a margin does not count; an upper bound does,
+    including another computed error used as that bound. The fold reader recognizes calls ending in
+    [fold], [foldi], [fold2] and [fold2_exn]; it does not prove which reducer the callback
+    implements.
 
     What it does not read, by design: a scalar comparison written in the claim itself or in a value
     binding outside any function ([p "x" Float.(abs (got - 2.) < 1e-6)]) -- one value against one
@@ -782,7 +786,7 @@ let applies_abs_to_difference expr =
 
 (* Whether [expr] holds a comparison bounding an abs-of-difference from above: the difference on the
    small side of [<]/[<=], or the large side of [>]/[>=]. *)
-let bounds_abs_difference expr =
+let bounds_abs_difference_with applies expr =
   let found = ref false in
   let iterator =
     object
@@ -793,8 +797,8 @@ let bounds_abs_difference expr =
         | Pexp_apply (op, [ (Ppxlib.Asttypes.Nolabel, left); (Ppxlib.Asttypes.Nolabel, right) ])
           -> (
             match Option.map (Read.longident_of op) ~f:List.last_exn with
-            | Some ("<" | "<=" | "<." | "<=.") when applies_abs_to_difference left -> found := true
-            | Some (">" | ">=" | ">." | ">=.") when applies_abs_to_difference right -> found := true
+            | Some ("<" | "<=" | "<." | "<=.") when applies left -> found := true
+            | Some (">" | ">=" | ">." | ">=.") when applies right -> found := true
             | _ -> ())
         | _ -> ());
         super#expression e
@@ -803,11 +807,37 @@ let bounds_abs_difference expr =
   iterator#expression expr;
   !found
 
+let folds_abs_difference expr =
+  let found = ref false in
+  let iterator =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_apply (callee, _) -> (
+            match Read.longident_of callee with
+            | Some path
+              when List.mem
+                     [ "fold"; "foldi"; "fold2_exn"; "fold2" ]
+                     (List.last_exn path) ~equal:String.equal
+                   && applies_abs_to_difference e ->
+                found := true
+            | _ -> ())
+        | _ -> ());
+        super#expression e
+    end
+  in
+  iterator#expression expr;
+  !found
+
+let bounds_abs_difference = bounds_abs_difference_with applies_abs_to_difference
+
 (* What a name denotes to this reader: a [Bearing] binding holds a function bounding an
    abs-of-difference, or reaches one through another [Bearing] name (a helper, or a value computed
    through one); a [Predicate] one is only a function applying an abs to a difference, which is a
-   hand-rolled tolerance where it is a parity predicate and nowhere else (a maximum-error
-   helper). *)
+   hand-rolled tolerance as a parity predicate, or when an upper comparison bounds it (a
+   maximum-error helper). Derived error metrics retain [Predicate] through name references. *)
 type denotes = Bearing | Predicate | Neither
 
 let tolerance_census content =
@@ -817,6 +847,24 @@ let tolerance_census content =
     match expr.pexp_desc with
     | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
     | _ -> expr
+  in
+  let predicate_name env e =
+    let found = ref None in
+    let iterator =
+      object
+        inherit Ast_traverse.iter as super
+
+        method! expression e =
+          (match e.pexp_desc with
+          | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }
+            when Poly.equal (Lexical_scope.lookup env name) (Some Predicate) ->
+              if Option.is_none !found then found := Some name
+          | _ -> ());
+          super#expression e
+      end
+    in
+    iterator#expression e;
+    !found
   in
   (* Whether an expression, in [env], holds a hand-rolled tolerance a claim's value can reach --
      [None] when it does not -- and how a diagnostic names it: the first inline function bounding a
@@ -829,6 +877,8 @@ let tolerance_census content =
 
         method! expression e =
           if Option.is_none !found then (
+            if bounds_abs_difference_with (fun side -> Option.is_some (predicate_name env side)) e
+            then found := predicate_name env e;
             (match e.pexp_desc with
             | Pexp_function _ when bounds_abs_difference e -> found := Some "an inline function"
             | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
@@ -870,7 +920,11 @@ let tolerance_census content =
         match Read.pattern_name binding.pvb_pat with
         | Some _ ->
             if Option.is_some (bearing env binding.pvb_expr) then Bearing
-            else if Option.is_some (tolerance env binding.pvb_expr) then Predicate
+            else if
+              Option.is_some (tolerance env binding.pvb_expr)
+              || Option.is_some (predicate_name env binding.pvb_expr)
+              || folds_abs_difference binding.pvb_expr
+            then Predicate
             else Neither
         | None -> self#local
 

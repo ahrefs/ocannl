@@ -197,7 +197,7 @@
  (name ll_test)
  (package neural_nets_lib)
  (modules ll_test)
- (libraries base stdio ocannl arrayjit.ll_builders))
+ (libraries base stdio ocannl arrayjit.ll_builders arrayjit.verdict))
 
 ; The two-matmul fissioned chain of the scripted-ranking autotune tests and its small seeding menu
 ; (the roofline pre-filter's settings, and the claim that guards the claims built on them).

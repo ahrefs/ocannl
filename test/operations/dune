@@ -621,6 +621,14 @@
  (libraries base arrayjit.ir arrayjit.verdict ll_test))
 
 (test
+ ; ocannl-backend: none -- compares host arrays without compiling or running a kernel.
+ (name ll_test_close)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules ll_test_close)
+ (libraries base arrayjit.verdict ll_test stderr_capture))
+
+(test
  ; ocannl-backend: none -- scans the builtin tables' and literal texts' tokens; it creates no
  ; context and renders no kernel, so no configured backend can change what it reads.
  (name source_tokens_joined)

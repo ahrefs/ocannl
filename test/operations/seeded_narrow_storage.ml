@@ -282,9 +282,17 @@ let () =
     "where accum_prec widens bf16, the admission changes the bias gradient in some cell"
     (List.zip_exn (Array.to_list b_on) (Array.to_list b_default))
     ~f:(fun (a, b) -> not (bitwise a b));
+  let default_error = error b_default bgrad_ref in
   Verdict.gated ~when_:narrow_here ~on:backend_name
     "where accum_prec widens bf16, the admitted bias gradient is closer to the f64 reference"
-    Float.(error b_on bgrad_ref < error b_default bgrad_ref);
+    (* This claim bounds the L1 error, not each cell independently; keep the sum and its strict
+       ordering. A zero baseline cannot be improved on. *)
+    (Float.(default_error > 0.)
+    && Verdict.within ~difference_only:true
+         "admitted bias-gradient L1 error improves on the default"
+         [| error b_on bgrad_ref |]
+         [| 0. |]
+         ~tol:(fun _ -> Stdlib.Float.pred default_error));
   Verdict.gated_all ~when_:narrow_here ~on:backend_name
     "where accum_prec widens bf16, every admitted bias-gradient cell is one bf16 rounding of the \
      reference"

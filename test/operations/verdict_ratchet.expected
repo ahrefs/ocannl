@@ -770,7 +770,8 @@ does not read a predicate name a later binding takes over: true
 does not read a p_all2 the source binds itself: true
 refuses a plain claim over an array helper bounding a difference inline: true
 refuses a tolerance helper reaching p, p_all and p_exists, and a value computed through one: true
-accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and within: true
+accepts a scalar bound and a discrimination margin, but refuses a bounded maximum-error helper: true
+refuses bound folds and derived metrics, but accepts lower margins and shadowing: true
 does not read the closure of a leg or a case, whose claims are read where written: true
 does not read a p the source binds itself: true
 refuses a planted hand-rolled tolerance, and names a tolerance reader that raised: true

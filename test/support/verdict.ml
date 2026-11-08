@@ -325,9 +325,13 @@ let pf_all2 ?min fmt = Printf.ksprintf (fun label got want ~f -> p_all2 ?min lab
     candidate that produced [got] (a seed, a schedule, a preset) when the label is shared across a
     loop of them.
 
-    A cell where the two values are EQUAL holds whatever [tol] says, so matching infinities match,
-    and a NaN on either side never does. The bound is inclusive, so [fun _ -> 0.] is exact equality.
-*)
+    [~difference_only:true] preserves a legacy abs-of-difference comparison exactly, without the
+    equality shortcut or finite-difference requirement. This lets migrated error-fold claims retain
+    their treatment of infinities and unusual tolerances while sharing the same diagnostics.
+
+    By default, a cell where the two values are EQUAL holds whatever [tol] says, so matching
+    infinities match, and a NaN on either side never does. The bound is inclusive, so [fun _ -> 0.]
+    is exact equality. *)
 type close_outcome =
   | Close_short of string
   | Close_holds of {
@@ -338,7 +342,7 @@ type close_outcome =
       worst_tol : float;
     }
 
-let close_outcome ?(min = 1) name ~tol got want =
+let close_outcome ?(min = 1) ?(difference_only = false) name ~tol got want =
   check_floor name min;
   let n_got = Array.length got and n_want = Array.length want in
   if n_got <> n_want then Close_short (Printf.sprintf "length %d vs %d" n_got n_want)
@@ -362,7 +366,11 @@ let close_outcome ?(min = 1) name ~tol got want =
            reference, or opposite infinities, differ by an infinite amount, which no tolerance -- an
            infinite relative one included -- admits. *)
         let d = Float.abs (g -. w) in
-        if not (Float.equal g w || (Float.is_finite d && Float.(d <= tol w))) then (
+        if
+          not
+            (((not difference_only) && Float.equal g w)
+            || ((difference_only || Float.is_finite d) && Float.(d <= tol w)))
+        then (
           if !differing = 0 then first := i;
           Int.incr differing;
           (* Strictly further: among equals the earliest stands, and an earlier NaN is not displaced
@@ -392,8 +400,8 @@ let report_close_failure ?what_ran name got want ~differing ~first ~worst ~magni
     (Float.abs (got.(worst) -. want.(worst)))
     worst_tol magnitude
 
-let p_close ?min ?what_ran name got want ~tol =
-  match close_outcome ?min name ~tol got want with
+let p_close ?min ?what_ran ?difference_only name got want ~tol =
+  match close_outcome ?min ?difference_only name ~tol got want with
   | Close_short detail -> short_fail name detail
   | Close_holds { differing = 0; _ } -> p name true
   | Close_holds { differing; first; worst; magnitude; worst_tol } ->
@@ -402,8 +410,10 @@ let p_close ?min ?what_ran name got want ~tol =
 
 (** [pf_close fmt … got want ~tol] is {!p_close} with a COMPUTED label, as {!pf_all2} is to
     {!p_all2}: [pf_close "%s: the tuned routine matches the plain compile" leg got want ~tol]. *)
-let pf_close ?min ?what_ran fmt =
-  Printf.ksprintf (fun label got want ~tol -> p_close ?min ?what_ran label got want ~tol) fmt
+let pf_close ?min ?what_ran ?difference_only fmt =
+  Printf.ksprintf
+    (fun label got want ~tol -> p_close ?min ?what_ran ?difference_only label got want ~tol)
+    fmt
 
 (** [within name got want ~tol] answers whether {!p_close} would pass, WITHOUT making a claim: on a
     [false] it prints {!p_close}'s stderr line (or the structural reason,
@@ -411,10 +421,11 @@ let pf_close ?min ?what_ran fmt =
     aggregate claim over candidates whose number is not the golden's to pin --
     [p_all "every seed matches" runs ~f:(fun (seed, got) -> Verdict.within ~what_ran:seed "the
      block" got want ~tol)] -- so that the claim stays one row while the candidate that failed it
-    still names its worst cell. A single readback goes through {!p_close}. Not a [Claims] member,
-    being no claim. *)
-let within ?min ?what_ran name got want ~tol =
-  match close_outcome ?min name ~tol got want with
+    still names its worst cell. [~difference_only:true] is {!p_close}'s compatibility mode, also
+    used by [Ll_test.close]. A single readback goes through {!p_close}. Not a [Claims] member, being
+    no claim. *)
+let within ?min ?what_ran ?difference_only name got want ~tol =
+  match close_outcome ?min ?difference_only name ~tol got want with
   | Close_holds { differing = 0; _ } -> true
   | Close_holds { differing; first; worst; magnitude; worst_tol } ->
       report_close_failure ?what_ran name got want ~differing ~first ~worst ~magnitude ~worst_tol;
@@ -778,8 +789,8 @@ let pass_fail_all2 ?min ?detail label got want ~f =
 (** [pass_fail_close label got want ~tol] is {!p_close} in {!pass_fail}'s output dialect: a
     structural refusal is the [<label>: FAIL (<reason>)] row {!pass_fail_all2} prints, and a value
     failure the bare [<label>: FAIL] row, with {!p_close}'s worst-cell line beside it on stderr. *)
-let pass_fail_close ?min ?what_ran label got want ~tol =
-  match close_outcome ?min label ~tol got want with
+let pass_fail_close ?min ?what_ran ?difference_only label got want ~tol =
+  match close_outcome ?min ?difference_only label ~tol got want with
   | Close_short reason -> pass_fail ~detail:(fun () -> reason) label false
   | Close_holds { differing = 0; _ } -> pass_fail label true
   | Close_holds { differing; first; worst; magnitude; worst_tol } ->

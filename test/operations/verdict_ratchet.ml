@@ -5481,15 +5481,28 @@ let () =
   Verdict.p_all "y" runs ~f:(fun (g, w) -> approx g w);
   Verdict.p_exists "z" runs ~f:(fun (g, w) -> approx g w)|ocaml},
       [ "4:ok"; "5:approx"; "6:approx" ] );
-    ( "accepts a scalar bound in the claim, a discrimination margin, a maximum-error helper and \
-       within",
+    ( "accepts a scalar bound and a discrimination margin, but refuses a bounded maximum-error \
+       helper",
       {ocaml|let max_err a b = Array.fold2_exn a b ~init:0. ~f:(fun m x y -> Float.max m (Float.abs (x -. y)))
 let () =
   Verdict.p "scalar" Float.(abs (got - 2.) < 1e-6);
   Verdict.p_all "moved" pairs ~f:(fun (a, b) -> Float.(abs (a - b) > 1e-4));
   Verdict.p "bounded max" Float.(max_err a b < 1e-3);
   Verdict.p_all "seeds" runs ~f:(fun (g, w) -> Verdict.within "x" g w ~tol:(fun _ -> 1e-3))|ocaml},
-      [] );
+      [ "5:max_err" ] );
+    ( "refuses bound folds and derived metrics, but accepts lower margins and shadowing",
+      {ocaml|let () =
+  let error = Array.foldi got ~init:0. ~f:(fun i acc v -> Float.max acc (Float.abs (v -. want.(i)))) in
+  let renamed = error in
+  let relative = renamed /. magnitude in
+  let ok = Float.(relative < 0.01) in
+  Verdict.p "derived" ok;
+  Verdict.p "reversed" Float.(0.01 >= renamed);
+  Verdict.p "margin" Float.(renamed > 0.01);
+  Verdict.p "improvement" Float.(error < renamed);
+  let renamed = 0. in
+  Verdict.p "shadowed" Float.(renamed < 0.01)|ocaml},
+      [ "6:ok"; "7:renamed"; "9:error" ] );
     ( "does not read the closure of a leg or a case, whose claims are read where written",
       {ocaml|let () =
   Verdict.in_leg ~leg "x" (fun () -> ignore (List.for_all xs ~f:(fun a -> Float.(abs (a - b) < 1e-3))));
@@ -5559,7 +5572,10 @@ let run_tolerance_refusal_control () =
      Verdict_scan.tolerance_census, not of the source, and the source's parity predicates went \
      unread"
   in
-  let _, fixture, _ = List.hd_exn tolerance_controls in
+  let _, fixture, _ =
+    List.find_exn tolerance_controls ~f:(fun (label, _, _) ->
+        String.is_prefix label ~prefix:"refuses bound folds")
+  in
   let refused_site = ref false and refused_raise = ref false in
   List.iter (Scan.tolerance_census fixture).Scan.hand_rolled
     ~f:

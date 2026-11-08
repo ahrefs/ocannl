@@ -132,15 +132,24 @@ let () =
      nothing to compare. That is the same reason the structural checks at the end are CPU-only —
      gated, so a GPU run reports them skipped rather than passed (gh-ocannl-1310). The parity checks
      in section 2 do hold on every backend and stay ungated. *)
+  Stdio.eprintf "wide-compute error %g; per-operator error %g (not part of the golden)\n%!" err_wide
+    err_per_op;
   gated ~when_:on_cpu ~on:backend_name "f32 compute over bf16 storage beats per-operator rounding"
-    Float.(err_wide < err_per_op);
+    (Float.(err_per_op > 0.)
+    && Verdict.within ~difference_only:true
+         "f32 compute over bf16 storage beats per-operator rounding" wide reference ~tol:(fun _ ->
+           Stdlib.Float.pred err_per_op));
   (* The wide leg's only rounding is the final store, so its relative error is bounded by bf16's
      half-ulp (2^-9); the per-operator leg compounds five of them. *)
-  let rel arr =
-    max_err reference arr /. Array.fold reference ~init:0. ~f:(fun m v -> Float.max m (Float.abs v))
-  in
+  let magnitude = Array.fold reference ~init:0. ~f:(fun m v -> Float.max m (Float.abs v)) in
+  let rel arr = max_err reference arr /. magnitude in
+  (* Keep the original division, rather than multiplying the tolerance by [magnitude]: the rounding
+     at a strict boundary must stay the same. The diagnostic cell is a relative residual. *)
+  let relative_residuals arr = Array.mapi arr ~f:(fun i v -> (v -. reference.(i)) /. magnitude) in
+  let zeros = Array.create ~len:(Array.length reference) 0. in
   gated ~when_:on_cpu ~on:backend_name "wide-compute relative error within one bf16 ulp"
-    Float.(rel wide < 0.004);
+    (Verdict.within ~difference_only:true "wide-compute relative error within one bf16 ulp"
+       (relative_residuals wide) zeros ~tol:(fun _ -> Stdlib.Float.pred 0.004));
   p "per-operator relative error exceeds it" Float.(rel per_op > 0.004);
 
   (* --- 2. Bitwise parity of the vectorized rendering against the serial twin. --- *)
@@ -359,11 +368,8 @@ let () =
   (* Half's range and mantissa are wider than the chain needs, so computing in half must still land
      within a couple of half ulps of the f32 reference -- a wrong lane geometry or a mismatched FMA
      would not. *)
-  p "native-fp16 relative error stays within a few half ulps"
-    Float.(
-      max_err reference vec
-      /. Array.fold reference ~init:0. ~f:(fun m v -> Float.max m (Float.abs v))
-      < 0.01);
+  p_close ~difference_only:true "native-fp16 relative error stays within a few half ulps"
+    (relative_residuals vec) zeros ~tol:(fun _ -> Stdlib.Float.pred 0.01);
   let native_source = read_on_cpu "nsc_vec_nat" in
 
   (* Computing *in* fp16 means fp16's 65504 ceiling applies to the intermediates, not just to the
