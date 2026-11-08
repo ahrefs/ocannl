@@ -96,6 +96,8 @@ case "$(cat module.ml)" in
         if [ "$PROBE_BASELINE" = red_promote ]; then printf '%s\n' "$name.expected";
         else printf '%s\n' other.expected; fi > "$saved/paths"
         printf 'golden differs\n'; exit 1 ;;
+      69) printf 'DEVICE UNHEALTHY\n'; exit 69 ;;
+      75) printf 'SLOT REFUSED\n'; exit 75 ;;
       red) printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
       sleep) touch "$PROBE_HOME/ready"; exec perl -e 'sleep 60' ;;
       *) exit 99 ;;
@@ -775,6 +777,43 @@ flagged 'NEVER RAN: this run wrote no stdout of probe (a build failure, or an ex
 printf 'PASS a red baseline refuses before mutating; the baseline'"'"'s own stdout never counts as the mutant'"'"'s\n'
 }
 harness_leg_run_errexit '6b: a red baseline refuses before mutating' leg_6b
+
+leg_6c() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
+export PROBE_MODE=fail
+local status runner rc count
+for status in 69 75; do
+  for runner in literal perl; do
+    count=$(wc -l < "$fixture/invocations")
+    rc=0
+    if [ "$runner" = literal ]; then
+      PROBE_BASELINE=$status tools/mutation-run.sh module.ml patch @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+    else
+      PROBE_BASELINE=$status tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+    fi
+    [ "$rc" = "$status" ]
+    [ "$(wc -l < "$fixture/invocations")" -eq "$((count + 1))" ]
+    cmp module.ml "$fixture/pristine"
+    case $status in
+      69) grep -q 'DEVICE UNHEALTHY' "$fixture/result" ;;
+      75) grep -q 'SLOT REFUSED' "$fixture/result" ;;
+    esac
+    if grep -Eq 'BASELINE RED|promote the golden|^recovery: ' "$fixture/result"; then
+      cat "$fixture/result"; echo 'infrastructure refusal was treated as a red test'; exit 1
+    fi
+  done
+done
+# Without passthrough, the same refusal is misreported as a red baseline (2).
+cp tools/mutation-run.sh "$fixture/with-baseline-passthrough"
+perl -0777 -i -pe 's/^    exit \$baseline_status if \$baseline_status == 69 \|\| \$baseline_status == 75;/    # passthrough removed by negative control/m or die "passthrough seam missing\n";' tools/mutation-run.sh
+for status in 69 75; do
+  PROBE_BASELINE=$status run_case 2
+  grep -q "BASELINE RED: the unmutated test exited $status" "$fixture/result"
+done
+cp "$fixture/with-baseline-passthrough" tools/mutation-run.sh
+printf 'PASS baseline infrastructure refusals preserve 69/75 without mutation or promotion advice; removing passthrough misreports them as red tests\n'
+}
+harness_leg_run_errexit '6c: baseline infrastructure status passthrough and negative control' leg_6c
 leg_7() {
 # A launch this leg must not make would pass under a refusing mode.
 export PROBE_MODE=pass
@@ -1446,7 +1485,7 @@ reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 for mode in fail pass short; do
   export PROBE_MODE=$mode
   rc=0
-  CDPATH=$fixture tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+  tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
   case $mode in pass) [ "$rc" = 0 ] ;; short) [ "$rc" = 4 ] ;; *) [ "$rc" = 1 ] ;; esac
   cmp module.ml "$fixture/pristine"
   grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
@@ -1492,5 +1531,53 @@ cp "$fixture/with-byte-guard" tools/mutation-run.sh
 printf 'PASS one-shot perl edits report claims, require a green baseline and distinguish incomplete runs, restore bytes and refuse no-ops or syntax errors before launch\n'
 }
 harness_leg_run_errexit '24: one-shot perl edits and no-op negative controls' leg_24
+
+leg_24a() {
+reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
+export PROBE_MODE=fail
+local rc count repo
+repo=$(unset CDPATH; cd "$fixture/repo" && pwd)
+# Unlike $fixture, $fixture/repo has a tools directory: CDPATH resolves tools/..
+# there and cd prints that path. The old root capture then contains TWO lines.
+rc=0
+CDPATH=$fixture/repo tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+[ "$rc" = 1 ]
+grep -q '^FAIL: first: false$' "$fixture/result"
+grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
+cmp module.ml "$fixture/pristine"
+# Recreate only the old dispatch from PR #1838, c5a8b217: keep the shipping
+# runner and its evidence guards, so this twin isolates the CDPATH lookup.
+perl - tools/mutant.sh > tools/mutant-old-root.sh <<'PERL'
+use strict; use warnings;
+local $/;
+my $s = <>;
+my $dispatch = 'exec bash "$(dirname -- "$0")/mutation-run.sh" --perl "$@"';
+my $old = 'root=$(cd "$(dirname "$0")/.." && pwd)' . "\n" .
+          'exec bash "$root/tools/mutation-run.sh" --perl "$@"';
+$s =~ s/\Q$dispatch\E/$old/ or die "wrapper dispatch seam missing\n";
+print $s;
+PERL
+# The twin works without CDPATH: its failure below must come from path lookup.
+rc=0
+(unset CDPATH; bash tools/mutant-old-root.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe) > "$fixture/result" 2>&1 || rc=$?
+[ "$rc" = 1 ]
+grep -q '^FAIL: first: false$' "$fixture/result"
+grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
+cmp module.ml "$fixture/pristine"
+count=$(wc -l < "$fixture/invocations")
+rc=0
+CDPATH=$fixture/repo bash tools/mutant-old-root.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+[ "$rc" = 127 ]
+[ "$(wc -l < "$fixture/invocations")" = "$count" ]
+# Require the adjacent doubled-root lines, not an arbitrary missing script.
+perl -0777 -e 'my ($path) = @ARGV; local $/; my $s = <STDIN>;
+  exit(index($s, "$path\n$path/tools/mutation-run.sh: No such file or directory\n") < 0)' "$repo" < "$fixture/result" || { cat "$fixture/result"; exit 1; }
+if grep -Eq '^(FAIL: first: false|restored: byte-identical \(cmp\))$' "$fixture/result"; then
+  cat "$fixture/result"; echo 'old CDPATH dispatch retained the oracle'; exit 1
+fi
+cmp module.ml "$fixture/pristine"
+printf 'PASS inherited CDPATH preserves the one-shot oracle; the old root-capturing wrapper loses it before launch\n'
+}
+harness_leg_run_errexit '24a: one-shot dispatch under CDPATH and old-wrapper negative control' leg_24a
 
 finish
