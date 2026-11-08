@@ -34,6 +34,10 @@ a sibling shared with a reshape, its size arriving at stage 3: all distinct: tru
 a sibling shared with a reshape, its size arriving at stage 5: the same shape as the explicit twin: true
 a sibling shared with a reshape, its size arriving at stage 5: a value for every cell: true
 a sibling shared with a reshape, its size arriving at stage 5: all distinct: true
+a reshape whose output is bounded short of its total: the same shapes as the explicit twin: true
+a reshape whose output is bounded short of its total: the same values: true
+two reshapes multiplied, both rows inferred: the same shapes as the explicit twin: true
+two reshapes multiplied, both rows inferred: the same values: true
 parameter bounded through chains, packed: [5; 12]: true
 parameter bounded through chains, packed: all distinct: true
 parameter bounded through chains, uniform1: [5; 12]: true

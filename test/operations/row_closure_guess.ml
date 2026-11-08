@@ -129,6 +129,45 @@ let () =
     ~inferred:(fun () -> matmul (late 12))
     ~explicit:(fun () -> matmul (sized 12))
 
+(* gh-ocannl-2025: a reshape's fixed total, which keeps its stage-3 closing. The claim is the
+   explicit twin's, with the same split: shapes, and every value of the result. *)
+let same_result name ~inferred ~explicit =
+  Verdict.case name @@ fun () ->
+  let run build =
+    Tensor.unsafe_reinitialize ();
+    let a, y = build () in
+    let ctx = Train.forward_once (context ()) y in
+    (dims a, dims y, Context.get_values ctx y.Tensor.value)
+  in
+  let a_i, y_i, v_i = run inferred and a_e, y_e, v_e = run explicit in
+  pf "%s: the same shapes as the explicit twin" name
+    (List.equal Int.equal a_i a_e && List.equal Int.equal y_i y_e);
+  pf "%s: the same values" name (Array.equal Float.equal v_i v_e)
+
+let () =
+  let weights () = NTDSL.reshape ~l:"c" ~b:[] ~i:[ 4 ] ~o:[ 3 ] (values 12) () in
+  (* Refused before: [a]'s batch closed empty at stage 3, though its output can hold only 4. *)
+  same_result "a reshape whose output is bounded short of its total"
+    ~inferred:(fun () ->
+      let a = late 12 and c = weights () in
+      let%cd y = c * a in
+      (a, y))
+    ~explicit:(fun () ->
+      let a = NTDSL.reshape ~l:"t" ~b:[ 3 ] ~o:[ 4 ] (values 12) () and c = weights () in
+      let%cd y = c * a in
+      (a, y));
+  (* The issue's case: [b]'s output is bounded empty by [a]'s input, so its batch holds the 12. Its
+     twin with that split agrees; the one with both outputs [12] is a different program. *)
+  same_result "two reshapes multiplied, both rows inferred"
+    ~inferred:(fun () ->
+      let a = late 12 and b = late 12 in
+      let%cd y = a * b in
+      (b, y))
+    ~explicit:(fun () ->
+      let a = sized 12 and b = NTDSL.reshape ~l:"t" ~b:[ 12 ] ~o:[] (values 12) () in
+      let%cd y = a * b in
+      (b, y))
+
 (* The issue's own probe: both rows of a packed parameter bounded through pointwise chains. Rows in
    a parameter never were closeable; it stays correct. *)
 let () =

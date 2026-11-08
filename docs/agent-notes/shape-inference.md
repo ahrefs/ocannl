@@ -249,7 +249,11 @@ files.
   quiescence at stages 5 and 6. A parameter never had this: its rows carry `is_in_param`.
   Non-parameter draws do, since `operation.ml` marks them resolve-at-use; `row_closure_guess.ml`
   compares them to explicit twins, with shape and count claimed too, since a smaller draw is distinct
-  as well. Non-round-up totals keep the stage-3 closing.
+  as well. Non-round-up totals keep the stage-3 closing: gating them at stage 5 with quiescence, as
+  draws are, refused 8 claims in 3 tests (gh-ocannl-2025), since a reshape sized at stage 3 is what
+  bounds a draw or parameter beside it. A fixed total closing a sibling cannot fail silently, only
+  refuse or pick another valid split; the one false refusal found, an output row bounded by a closed
+  use site short of the total, takes that bound and leaves the rest to its one sibling.
 - A `Row_ineq` that reaches stage 6 unsolved closes its row variable to empty
   (`solve_row_ineq`'s first arm): the operand broadcasts in. So a size that arrives at stage 6
   through a chain does not widen a draw; only one arriving by stage 5 does.

@@ -5023,7 +5023,7 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~glb (rows : r
     | Either.First single_row ->
         eliminate_row_constraint ~depth:(depth + 1) stage origin ~terminal:false ~glb single_row
           constr env
-    | Either.Second (_all_dims, row_vars) -> (
+    | Either.Second (all_dims, row_vars) -> (
         let rev_row_vars = List.rev row_vars in
         match
           ( constr,
@@ -5031,7 +5031,7 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~glb (rows : r
                 List.exists prov ~f:(fun (origin : provenance_origin) ->
                     equal_kind origin.kind `Output)) )
         with
-        | Total_elems _, Some (idx, (v, _id)) when is_stage3_up stage ->
+        | Total_elems _, Some (idx, (v, v_prov)) when is_stage3_up stage -> (
             (* TODO: in stage 3, consider restricting to a strided dimension variable case. *)
             (* gh-509 task 5: a round-up total (packed uniform) whose result shape is inferred
                gets its rows' bounds only once the surrounding shapes settle. Closing sibling rows
@@ -5062,37 +5062,75 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~glb (rows : r
               | Some (Bounds_row { is_in_param = false; glb = None; _ }) -> true
               | _ -> false
             in
-            let may_close_early = (not round_up_numerator) || is_stage5_up stage in
-            let other_eqs : constraint_ list =
-              List.concat_map other_vars ~f:(fun ((v, prov) as vp) ->
-                  if unconditional_close || (may_close_early && closeable vp) then
-                    let r1 = row_of_var v prov in
-                    [
-                      Row_eq
-                        {
-                          r1;
-                          r2 = { beg_dims = []; dims = []; bcast = Broadcastable; prov };
-                          origin;
-                        };
-                    ]
-                  else [])
+            (* gh-ocannl-2025: a fixed total whose kept row is bounded by a closed use site holding
+               fewer elements than the total cannot close its one sibling empty: the kept row's
+               product divides its bound's, so that would refuse a satisfiable store ([c * a] with
+               [c : 3 <- 4] and [a] a 12-element reshape). The kept row takes the bound, the widest
+               reading of its use sites, which its own [Shape_row] would read at stage 6, and the
+               sibling the rest. *)
+            let kept_bounded_short =
+              match (constr, other_vars) with
+              | Total_elems { numerator = Num_elems n; divided_by = []; _ }, [ _ ]
+                when is_resolve_at_use v || row_var_is_in_param v env -> (
+                  match (collect_factors all_dims, find_row env.row_env v) with
+                  | Some (closed, []), Some (Bounds_row { glb = Some glb; _ })
+                    when closed > 0 && n % closed = 0 -> (
+                      let rest = n / closed in
+                      match subst_row env glb with
+                      | { bcast = Broadcastable; beg_dims; dims; _ } as glb -> (
+                          match collect_factors (beg_dims @ dims) with
+                          | Some (bound, []) when bound > 0 && bound < rest && rest % bound = 0 ->
+                              Some glb
+                          | _ -> None)
+                      | _ -> None)
+                  | _ -> None)
+              | _ -> None
             in
-            let flatten_now =
-              if round_up_numerator then
-                is_stage7 stage || (is_stage5_up stage && List.for_all other_vars ~f:closeable)
-              else is_stage5_up stage
-            in
-            if flatten_now then
-              let rows =
-                List.map rows ~f:(function
-                  | { bcast = Row_var v'; _ } as r when equal_row_var v' v -> r
-                  | r -> { r with beg_dims = []; dims = r.beg_dims @ r.dims; bcast = Broadcastable })
-              in
-              let ineqs, env =
-                eliminate_rows_constraint ~depth:(depth + 1) stage origin ~glb rows constr env
-              in
-              (other_eqs @ ineqs, env)
-            else (other_eqs @ [ Rows_constr { r = rows; constr; origin } ], env)
+            match kept_bounded_short with
+            | Some glb ->
+                ( [
+                    Row_eq { r1 = row_of_var v v_prov; r2 = glb; origin };
+                    Rows_constr { r = rows; constr; origin };
+                  ],
+                  env )
+            | None ->
+                let may_close_early = (not round_up_numerator) || is_stage5_up stage in
+                let other_eqs : constraint_ list =
+                  List.concat_map other_vars ~f:(fun ((v, prov) as vp) ->
+                      if unconditional_close || (may_close_early && closeable vp) then
+                        let r1 = row_of_var v prov in
+                        [
+                          Row_eq
+                            {
+                              r1;
+                              r2 = { beg_dims = []; dims = []; bcast = Broadcastable; prov };
+                              origin;
+                            };
+                        ]
+                      else [])
+                in
+                let flatten_now =
+                  if round_up_numerator then
+                    is_stage7 stage || (is_stage5_up stage && List.for_all other_vars ~f:closeable)
+                  else is_stage5_up stage
+                in
+                if flatten_now then
+                  let rows =
+                    List.map rows ~f:(function
+                      | { bcast = Row_var v'; _ } as r when equal_row_var v' v -> r
+                      | r ->
+                          {
+                            r with
+                            beg_dims = [];
+                            dims = r.beg_dims @ r.dims;
+                            bcast = Broadcastable;
+                          })
+                  in
+                  let ineqs, env =
+                    eliminate_rows_constraint ~depth:(depth + 1) stage origin ~glb rows constr env
+                  in
+                  (other_eqs @ ineqs, env)
+                else (other_eqs @ [ Rows_constr { r = rows; constr; origin } ], env))
         | _ -> ([ Rows_constr { r = rows; constr; origin } ], env))
 
 and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (r : row)
