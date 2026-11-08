@@ -81,10 +81,16 @@ files.
   produces. The guarantee lives in `pp_local_defs` instead, which HAS the emission order in hand and
   so cannot diverge from it (gh-ocannl-1895): definitions run by ascending `scope_id`, except that
   one follows the siblings its body reads (`Low_level.local_reads`), so a kernel whose ids already
-  respect the reads keeps its text. CSE produces the other order whenever a collapsed relay leaves
-  an older scope beside a fresh one: a read's id is minted when it is walked, so a gradient chain's
-  `v25_d.grad` reads `v27_rw_x`. The hoist has the same obligation one level up: its stale
-  `Get_local` remap has to reach scope bodies, or a body reads a local nothing declares. A local read
+  respect the reads keeps its text. Left-to-right CSE does not make this exception unreachable
+  (gh-ocannl-2052): `local_scope_sibling_reads`'s reversed row walks the literal first, then a
+  collapsed relay retaining an older reader scope; CSE makes that older body read the fresh
+  literal's higher id. Reversed computed and nested rows reach the same dependency. In the
+  original operand order CSE instead keeps separate copies of the literal/computed value: it shares
+  an outer copy into a later body, but forgets copies found inside a body on exit. Left-to-right
+  walks change which operand orders share; the original rows pin three bindings (five nested),
+  counting both accumulation-loop bodies and the outer operand, rather than an empty sibling-read
+  set. The hoist has the same obligation one level up: its stale `Get_local` remap has to reach
+  scope bodies, or a body reads a local nothing declares. A local read
   by its own single assignment is a different failure (`simplify_llc` collapses it out from under
   its declaration); that one is refused earlier, as `158`. `local_scope_sibling_reads` pins all of
   this but the last.
@@ -918,21 +924,18 @@ files.
   mid-range `Bytes` budget's plan. A dependence planted downstream of the surface (kernel
   parameters in table order) fails the source claims alone; one planted in `decide_placements`
   fails the placement claims too.
-- **A pass that mints or dedups walks a statement's operands in a spelled order, last operand
-  first** (gh-ocannl-1974). `virtual_llc` mints a scope (and a footprint prologue, a placement, a
-  capture hit) at each inlined read, `instantiate_computations` freshens a nested scope's loops, the
-  scalar CSE keeps one of a statement's alpha-equal scopes, `Schedule.rewrite_loop` calls its
-  rewrite once per copy of a loop; and `pp_local_defs` emits definitions by ascending id, so the
-  walk order is the order of the emitted text. These used to be sibling calls inside one
-  constructor (`Binop (op, (loop a, _), (loop b, _))`), a record or a `let ... and`, whose
-  evaluation order OCaml leaves unspecified. In practice it ran right to left (label order for a
-  record: an `If`'s body before its condition), and that is the order now written with `let`
-  bindings, so no kernel moved: within a statement the LAST operand gets the lowest scope id and
-  the last alpha-equal copy survives the CSE, while statements still go first to last. Write a new
-  effectful arm the same way; `Base.List.init` promises no calling order either
-  (`Schedule.init_last_first`). Pin: `test/operations/operand_walk_order.ml`, whose rows turn red
-  when one spelled order is reversed. Left unspelled on purpose: walks whose siblings can only raise
-  (`Schedule`'s Coalesce/Tensorize remaps), where the order picks among refusals that are all true.
+- **Scope-minting operand walks follow program order, left to right** (gh-ocannl-2052).
+  `virtual_llc` mints scopes and footprint prologues, `instantiate_computations` freshens nested
+  loops, and `eliminate_common_subexpressions` keeps the first alpha-equal scope. Spell sibling
+  calls with sequential `let` bindings: OCaml leaves constructor-argument evaluation unspecified.
+  `If` conditions precede their bodies; `Where` conditions precede the live arms. Pins:
+  `test/operations/operand_walk_order.ml` (relative ids, freshened loops, def-before-use and
+  executed values) and
+  `local_scope_sibling_reads` (retained older ids through collapsed relays). Other effectful walks
+  retain the order spelled by gh-ocannl-1974: `Schedule.rewrite_loop` and
+  `Schedule.init_last_first`, cleanup's placement/retraction walk, and `C_syntax.vec_expr`'s
+  second-operand-first binary load emission. This change does not give
+  sibling scope bodies an execution-order contract (`Affine.path_before` still refuses it).
 - **Compiled programs are checked under a uid shift and under reversed creation order**
   (gh-ocannl-1974): `test/operations/build_order_programs.ml` builds a padded two-conv step and a
   two-block transformer step with their layers and data created first-to-last or last-to-first

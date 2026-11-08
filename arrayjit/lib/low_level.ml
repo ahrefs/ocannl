@@ -3692,15 +3692,14 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       | Get_merge_buffer (tn, indices) -> Get_merge_buffer (tn, Array.map ~f:(subst env) indices)
       | Embed_index idx -> Embed_index (subst env idx)
       | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
-          (* gh-ocannl-1974: last operand first, spelled -- a nested scope's loops are freshened
-             here, so the order numbers their symbols and decides which rejection is raised. *)
-          let v3 = loop_scalar env llv3 in
-          let v2 = loop_scalar env llv2 in
+          (* gh-ocannl-2052: freshen nested scopes left to right, in program order. *)
           let v1 = loop_scalar env llv1 in
+          let v2 = loop_scalar env llv2 in
+          let v3 = loop_scalar env llv3 in
           Ternop (op, (v1, prec1), (v2, prec2), (v3, prec3))
       | Binop (op, (llv1, prec1), (llv2, prec2)) ->
-          let v2 = loop_scalar env llv2 in
           let v1 = loop_scalar env llv1 in
+          let v2 = loop_scalar env llv2 in
           Binop (op, (v1, prec1), (v2, prec2))
       | Unop (op, (llsc, prec)) -> Unop (op, (loop_scalar env llsc, prec))
     in
@@ -4568,14 +4567,14 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
        (prepending the guard to the stored computation) is adjacent to the Block virtualizer's
        range-guard machinery. *)
     | If { cond = c, prec; body } ->
-        (* gh-ocannl-1974: the body before its condition, spelled (see the operand arms below). *)
-        let body =
-          loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded:true ~in_scan ~enclosing
-            body
-        in
+        (* gh-ocannl-2052: the condition precedes the guarded body in program order. *)
         let c =
           loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
             ~footprint_ok:false c
+        in
+        let body =
+          loop_proc ~opaque ~process_for ~owned ~in_storage_pass ~guarded:true ~in_scan ~enclosing
+            body
         in
         If { cond = (c, prec); body }
   and loop_scalar ~opaque ~process_for ~owned ~in_storage_pass ~guarded ~in_scan ~enclosing
@@ -4681,17 +4680,15 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
         | Some true -> Ternop (Ops.Where, cond, (loop llv2, prec2), elided_operand)
         | Some false -> Ternop (Ops.Where, cond, elided_operand, (loop llv3, prec3))
         | None ->
-            (* gh-ocannl-1974: operands are walked last to first, spelled. [loop] mints scopes and
-               prologues, commits placements and records capture hits, so the order decides the
-               emitted text; it is the order OCaml's unspecified constructor-argument evaluation
-               gave in practice, kept so that no kernel moves. Pin: [operand_walk_order]. *)
-            let v3 = loop llv3 in
+            (* gh-ocannl-2052: the condition was walked first; mint arm scopes and prologues left to
+               right too. Pin: [operand_walk_order]. *)
             let v2 = loop llv2 in
+            let v3 = loop llv3 in
             Ternop (Ops.Where, cond, (v2, prec2), (v3, prec3)))
     | Ternop (op, (llv1, prec1), (llv2, prec2), (llv3, prec3)) ->
-        let v3 = loop llv3 in
-        let v2 = loop llv2 in
         let v1 = loop llv1 in
+        let v2 = loop llv2 in
+        let v3 = loop llv3 in
         Ternop (op, (v1, prec1), (v2, prec2), (v3, prec3))
     (* Review round 9: a projection's discarded operand is never evaluated — do not descend into it
        (attempting to inline a merge-tainted inherited virtual there would raise for code that never
@@ -4700,8 +4697,8 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
     | Binop (Arg1, (llv1, _), _) -> loop llv1
     | Binop (Arg2, _, (llv2, _)) -> loop llv2
     | Binop (op, (llv1, prec1), (llv2, prec2)) ->
-        let v2 = loop llv2 in
         let v1 = loop llv1 in
+        let v2 = loop llv2 in
         Binop (op, (v1, prec1), (v2, prec2))
     | Unop (op, (llsc, prec)) -> Unop (op, (loop llsc, prec))
   in
@@ -4724,8 +4721,7 @@ let virtual_llc ?(fresh_symbol = Indexing.get_symbol) ?(fresh_scope = get_scope)
           ~in_storage_pass:false ~guarded:false ~in_scan:false ~enclosing:[] stmt)
   in
   let before = Array.map stmts ~f:(fun _ -> []) and after = Array.map stmts ~f:(fun _ -> []) in
-  (* Consed in minting order -- statements in program order, one statement's operands last to first:
-     reversed per slot below. *)
+  (* Consed in program order, statements and operands left to right; reversed per slot below. *)
   List.iter !prologues ~f:(fun (placement, nest) ->
       match placement with
       | `Before j -> before.(j) <- nest :: before.(j)
@@ -6753,16 +6749,15 @@ let eliminate_common_subexpressions llc =
       | Get_local _ | Get _ | Get_merge_buffer _ | Constant _ | Constant_bits _ | Embed_index _ ->
           llsc
       | Ternop (op, (s1, p1), (s2, p2), (s3, p3)) ->
-          (* gh-ocannl-1974: last operand first, spelled -- [seen] makes the LAST alpha-equal scope
-             of a statement the one that survives, the earlier ones reading it (the order
-             [C_syntax.pp_local_defs] sorts out). Pin: [operand_walk_order]. *)
-          let s3 = loop_scalar s3 in
-          let s2 = loop_scalar s2 in
+          (* gh-ocannl-2052: keep the first alpha-equal scope in program order, so later operands
+             read the definition on their left. Pin: [operand_walk_order]. *)
           let s1 = loop_scalar s1 in
+          let s2 = loop_scalar s2 in
+          let s3 = loop_scalar s3 in
           Ternop (op, (s1, p1), (s2, p2), (s3, p3))
       | Binop (op, (s1, p1), (s2, p2)) ->
-          let s2 = loop_scalar s2 in
           let s1 = loop_scalar s1 in
+          let s2 = loop_scalar s2 in
           Binop (op, (s1, p1), (s2, p2))
       | Unop (op, (s1, p1)) -> Unop (op, (loop_scalar s1, p1))
     and loop_proc (llc : t) : t =
