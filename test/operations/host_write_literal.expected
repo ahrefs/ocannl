@@ -22,3 +22,9 @@
 32 true: refused writes leave the literal intact: true
 32: materialized reference retains every literal value: true
 32: hoisted result matches the materialized reference: true
+2: ndarray-initialized parameter cannot be hoisted: true
+2: parameter accepts a single-cell host write: true
+2: ndarray-initialized parameter reads the host writes: true
+32: ndarray-initialized parameter cannot be hoisted: true
+32: parameter accepts a single-cell host write: true
+32: ndarray-initialized parameter reads the host writes: true

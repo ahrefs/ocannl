@@ -1646,6 +1646,9 @@ let%debug7_sexp param ?(require_grad = true) ~t (name : string) ?(more_label = [
      the context (gh-ocannl-333). *)
   Tn.update_memory_mode v On_device (Site "241:param-value");
   Tn.set_context_owned v;
+  (* An ndarray initializer becomes mutable with the parameter: its registered initial values no
+     longer justify literal host-write refusal or hoisted packing (gh-ocannl-2021). *)
+  v.Tn.host_constant <- false;
   (* Never_virtual audit resolution (context-scoped memory modes): parameter gradients carry
      observation intent, not a materialization requirement -- users print and inspect them, and the
      optimizer step's read is an ordinary cross-routine use the lineage can serve (a fused

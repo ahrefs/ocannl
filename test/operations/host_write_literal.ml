@@ -80,3 +80,35 @@ let () =
       p_all2
         (Printf.sprintf "%d: hoisted result matches the materialized reference" n)
         hoisted materialized ~f:Float.equal)
+
+(* Parameterization changes the initializer's value node from a literal into mutable data. *)
+let () =
+  List.iter [ 2; 32 ] ~f:(fun n ->
+      let initial = Array.init n ~f:(fun i -> Float.of_int (i + 1)) in
+      let changed = Array.map initial ~f:(fun v -> v +. 100.) in
+      let x =
+        TDSL.param ~param_init:(TDSL.ndarray initial) "ndarray_parameter" ~output_dims:[ n ] ()
+      in
+      let%op y = x *. 2 in
+      p
+        (Printf.sprintf "%d: ndarray-initialized parameter cannot be hoisted" n)
+        (not (Ir.Schedule.hoistable_constant x.Tensor.value));
+      let ctx, routine =
+        Context.compile
+          ~name:(Printf.sprintf "ndarray_parameter_%d" n)
+          (Context.auto ()) (Train.forward y) Ir.Indexing.Empty
+      in
+      let ctx = Context.set_values ctx x.Tensor.value changed in
+      let ctx = Context.set_value ctx x.Tensor.value [| 0 |] 999. in
+      let host = Context.to_host ctx x.Tensor.value in
+      p
+        (Printf.sprintf "%d: parameter accepts a single-cell host write" n)
+        (Float.equal (Ir.Ndarray.retrieve_flat_values host).(0) 999.);
+      Ir.Ndarray.set_flat_values host changed;
+      let ctx = Context.from_host ctx x.Tensor.value host in
+      let ctx = Context.run ctx routine in
+      p_all2
+        (Printf.sprintf "%d: ndarray-initialized parameter reads the host writes" n)
+        (Context.get_values ctx y.Tensor.value)
+        (Array.map changed ~f:(fun v -> 2. *. v))
+        ~f:Float.equal)
