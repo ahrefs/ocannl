@@ -78,10 +78,8 @@ type schedule = optop list [@@deriving sexp_of]
    [Base.List.init] promises none; this is the order it has in practice, kept so that no kernel
    moves. *)
 let init_last_first n ~f =
-  (* invariant: a count is a list length, a rank or a loop's trip count, and [Base.List.init] raised
-     on a negative one too. Without the check the recursion below would not end. *)
-  if n < 0 then invalid_arg (Printf.sprintf "Schedule.init_last_first %d" n);
-  let rec loop i acc = if i = 0 then acc else loop (i - 1) (f (i - 1) :: acc) in
+  (* Nonpositive counts produce no copies, as for a dead loop's trip count. *)
+  let rec loop i acc = if i <= 0 then acc else loop (i - 1) (f (i - 1) :: acc) in
   loop n []
 
 let split ~axis ~factor ~outer ~inner =
@@ -1040,70 +1038,77 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
           for_loop { fc with axis = Unrolled })
   | Unroll { axis; materialize = true } ->
       rewrite_loop ~what:"Schedule.Unroll" ~sym:axis llc ~f:(fun fc ->
-          let copy k body =
-            refresh_scopes
-            @@ map_code
-                 ~fidx:(subst_axis_index ~sym:axis ~by:{ terms = []; offset = fc.from_ + k })
-                 body
-          in
-          (* gh-ocannl-639: when the unrolled loop is (a nest ending in) a single accumulation
-             statement, unroll into the scope-local form virtualization gives virtual accumulators —
-             one [Local_scope] holding the running value, one copy of the update per iteration, one
-             store — instead of one read-modify-write [Set] per copy. This is where the provenance
-             lives: only genuine unrolled copies of ONE source assignment may share an accumulator
-             residency (a codegen pass looking at adjacent same-cell [Set]s cannot tell them apart
-             from two user-authored assignments, whose separate stores are their semantics). The
-             rewrite is numerics-neutral relative to the not-unrolled loop under every
-             compute-precision policy: the scope renders at the same precision the policy gives a
-             serial reduction's accumulator ([C_syntax.scope_prec_of], including the rng-census and
-             storage=compute cases where that is the storage precision), so the unrolled candidate
-             computes exactly what the serial baseline computes — which is the invariant autotune's
-             menu depends on (candidates compete on speed, never numerics). *)
-          let mint =
-            (* Under routine logging the per-iteration [Set] copies ARE the trace: a [Local_scope]
-               body renders with [log_set_locals:false], so minting the scope would silence every
-               update. The serial baseline's widening declines under logging for the same reason
-               (C_syntax.try_localize_serial_reduce), so within a logged regime the unrolled and
-               serial candidates still agree — both per-step. *)
-            if Utils.debug_log_from_routines () then None
-            else
-              Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]
-                fc.body
-          in
-          match mint with
-          | Some (tn, idcs, base, debug, rebuild) ->
-              let id, update_code =
-                match base with
-                | `Update llsc ->
-                    let id = Low_level.get_scope tn in
-                    (id, Low_level.Set_local (id, Low_level.subst_accum_read ~tn ~idcs ~id llsc))
-                | `Scope (id, rest) ->
-                    (* A previous materializing unroll (of a deeper reduction axis) already minted
-                       the scope form: reuse its accumulator across this axis's copies too, or the
-                       whole-nest residency is lost — the enclosing loop is about to disappear, so
-                       codegen's scope-base hoist could not recover it. *)
-                    (id, unflat_lines rest)
-              in
-              let copies =
-                init_last_first (fc.to_ - fc.from_ + 1) ~f:(fun k -> copy k (rebuild update_code))
-              in
-              Set
-                {
-                  tn;
-                  idcs;
-                  llsc =
-                    Local_scope
-                      {
-                        id;
-                        body =
-                          unflat_lines (Low_level.Set_local (id, Low_level.Get (tn, idcs)) :: copies);
-                        orig_indices = idcs;
-                        mint = Low_level.Schedule_minted;
-                      };
-                  debug;
-                }
-          | None ->
-              unflat_lines (init_last_first (fc.to_ - fc.from_ + 1) ~f:(fun k -> copy k fc.body)))
+          (* A dead loop has no effects: do not mint an accumulator load/store for it. Compare
+             bounds before subtracting, so even extreme dead ranges stay empty. *)
+          if fc.to_ < fc.from_ then Noop
+          else
+            let span = fc.to_ - fc.from_ in
+            if span < 0 || span = Int.max_value then
+              refuse "Schedule.Unroll: trip count exceeds the integer range";
+            let count = span + 1 in
+            let copy k body =
+              refresh_scopes
+              @@ map_code
+                   ~fidx:(subst_axis_index ~sym:axis ~by:{ terms = []; offset = fc.from_ + k })
+                   body
+            in
+            (* gh-ocannl-639: when the unrolled loop is (a nest ending in) a single accumulation
+               statement, unroll into the scope-local form virtualization gives virtual accumulators
+               — one [Local_scope] holding the running value, one copy of the update per iteration,
+               one store — instead of one read-modify-write [Set] per copy. This is where the
+               provenance lives: only genuine unrolled copies of ONE source assignment may share an
+               accumulator residency (a codegen pass looking at adjacent same-cell [Set]s cannot
+               tell them apart from two user-authored assignments, whose separate stores are their
+               semantics). The rewrite is numerics-neutral relative to the not-unrolled loop under
+               every compute-precision policy: the scope renders at the same precision the policy
+               gives a serial reduction's accumulator ([C_syntax.scope_prec_of], including the
+               rng-census and storage=compute cases where that is the storage precision), so the
+               unrolled candidate computes exactly what the serial baseline computes — which is the
+               invariant autotune's menu depends on (candidates compete on speed, never
+               numerics). *)
+            let mint =
+              (* Under routine logging the per-iteration [Set] copies ARE the trace: a [Local_scope]
+                 body renders with [log_set_locals:false], so minting the scope would silence every
+                 update. The serial baseline's widening declines under logging for the same reason
+                 (C_syntax.try_localize_serial_reduce), so within a logged regime the unrolled and
+                 serial candidates still agree — both per-step. *)
+              if Utils.debug_log_from_routines () then None
+              else
+                Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]
+                  fc.body
+            in
+            match mint with
+            | Some (tn, idcs, base, debug, rebuild) ->
+                let id, update_code =
+                  match base with
+                  | `Update llsc ->
+                      let id = Low_level.get_scope tn in
+                      (id, Low_level.Set_local (id, Low_level.subst_accum_read ~tn ~idcs ~id llsc))
+                  | `Scope (id, rest) ->
+                      (* A previous materializing unroll (of a deeper reduction axis) already minted
+                         the scope form: reuse its accumulator across this axis's copies too, or the
+                         whole-nest residency is lost — the enclosing loop is about to disappear, so
+                         codegen's scope-base hoist could not recover it. *)
+                      (id, unflat_lines rest)
+                in
+                let copies = init_last_first count ~f:(fun k -> copy k (rebuild update_code)) in
+                Set
+                  {
+                    tn;
+                    idcs;
+                    llsc =
+                      Local_scope
+                        {
+                          id;
+                          body =
+                            unflat_lines
+                              (Low_level.Set_local (id, Low_level.Get (tn, idcs)) :: copies);
+                          orig_indices = idcs;
+                          mint = Low_level.Schedule_minted;
+                        };
+                    debug;
+                  }
+            | None -> unflat_lines (init_last_first count ~f:(fun k -> copy k fc.body)))
   | Pad { axis; to_multiple_of } ->
       (* gh-ocannl-485 (PADTO): extend the loop extent to the next multiple of [to_multiple_of] and
          guard each effectful leaf statement of the body with [If (axis < N)] — the pad iterations
