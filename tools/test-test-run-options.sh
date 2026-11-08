@@ -17,7 +17,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 107, 103, 94, 95, 96, 98), #hermetic (70).
+# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 107, 103, 94, 119, 95, 96, 98), #hermetic (70).
 #
 # Legs:
 # 107. capped single-test builds retain stderr before timeout, with plan boundaries.
@@ -82,6 +82,8 @@
 #      qualified golden by its longest test prefix, a directory, a dune file; a helper and an unknown directory exit 1 with
 #      the rest listed; outside the worktree exit 2), and its output read
 #      back as a targets file is the batch it lists.
+# 119. the inventory GPU alias section is a targets file: comments stay, the next
+#      heading stops extraction, EOF works, and uncommented prose is refused.
 #  95. value options take `--opt V` and `--opt=V` alike in every parser (run's
 #      cap, targets file and backend check, plan's test cap, repeat's two caps,
 #      wait's timeout, bisect's caps and builds), an empty value is refused,
@@ -2203,6 +2205,60 @@ if [ -z "$tf_detail" ]; then report 0 "$tf_aliases_label"; else report 1 "$tf_al
 rm -rf "$repeat_root/fam" "$repeat_root/famless"
 }
 harness_leg_run '94: targeted batches from a file, and aliases by family #options' leg_94
+
+# The inventory's hand-off to --targets-file uses the shipping parser through
+# plan, with the existing fake-dune fixture (no kernel is run). Keep every
+# section line: filtering for @aliases here would hide uncommented prose.
+leg_119() {
+  local heading='== the aliases a codegen change runs on every GPU backend =='
+  local dir=$TMP/inventory-targets
+  mkdir -p "$dir"
+  inventory_section() {
+    awk -v heading="$heading" '
+      found && /^== / { exit }
+      $0 == heading { found = 1; next }
+      found { print }
+      END { if (!found) exit 1 }
+    ' "$1"
+  }
+  inventory_section "$HERE/../test/operations/codegen_text_inventory.expected" >"$dir/targets" ||
+    { harness_abandon 'inventory GPU alias heading is missing'; return; }
+  # A bounded fixture made from the real section must extract identically
+  # both at EOF and before a heading followed by invalid targets-file text.
+  { printf '%s\n' "$heading"; cat "$dir/targets"; } >"$dir/eof"
+  { cat "$dir/eof"; printf '== following section ==\nnot an alias\n@must-not-leak\n'; } >"$dir/bounded"
+  { cat "$dir/eof"; printf '%s\nnot an alias\n' "$heading"; } >"$dir/repeated-heading"
+  local input
+  for input in eof bounded repeated-heading; do
+    if inventory_section "$dir/$input" >"$dir/extracted" && cmp -s "$dir/targets" "$dir/extracted"; then
+      report 0 "inventory targets: extraction stops at $input"
+    else
+      report 1 "inventory targets: extraction stops at $input"
+    fi
+  done
+  argv_probe inventory-targets plan --targets-file "$dir/targets" build -j 4
+  if [ "$argv_rc" = 0 ] && [ -z "$argv_calls" ]; then
+    report 0 'inventory targets: plan accepts the live golden section without executing a batch'
+  else
+    report 1 'inventory targets: plan accepts the live golden section without executing a batch' \
+      "exit $argv_rc; calls: $argv_calls; stderr: $argv_err"
+  fi
+  # Remove exactly one comment prefix; require a real mutation before asking
+  # the same parser to refuse it, with its targets-file diagnostic.
+  awk '!changed && /^# / { sub(/^# /, ""); changed = 1 } { print }
+       END { if (!changed) exit 1 }' "$dir/targets" >"$dir/mutant" ||
+    { harness_abandon 'inventory section has no prose comment to uncomment'; return; }
+  argv_probe inventory-targets-mutant plan --targets-file "$dir/mutant" build -j 4
+  if [ "$argv_rc" = 2 ] && [ -z "$argv_calls" ] &&
+      grep -qF -- '--targets-file' <<<"$argv_err" &&
+      grep -qF -- 'one alias per line' <<<"$argv_err"; then
+    report 0 'inventory targets: uncommented prose is refused before dune'
+  else
+    report 1 'inventory targets: uncommented prose is refused before dune' \
+      "exit $argv_rc; calls: $argv_calls; stderr: $argv_err"
+  fi
+}
+harness_leg_run '119: inventory GPU aliases are a targets file #options' leg_119
 
 # ---------------------------------------------------------------------------
 # Leg 95: value options in both spellings; the slot's kinds refused by every
