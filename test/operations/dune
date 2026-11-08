@@ -14371,3 +14371,13 @@
  (modules routine_log_level_notice)
  (libraries base stdio unix arrayjit.utils arrayjit.verdict fresh_process)
  (deps ocannl_config))
+
+(test
+ ; ocannl-backend: none -- Executes frontend precision inference only; no backend is loaded.
+ (name dims_top_down_prec)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules dims_top_down_prec)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
