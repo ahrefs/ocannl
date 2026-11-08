@@ -266,6 +266,8 @@ constexpr_guarded_setter_flag1: the candidate is a scalar constexpr: true
 constexpr_guarded_setter_flag1: rejected at store time as 142:guarded-computation: true
 constexpr_guarded_setter_flag1: executed values are the reference: true
 constexpr_guarded_setter_flag1: the two placements agree: true
-declared_store_x is declared virtual, but its computation could not be inlined in this routine (rejection 10:escaping-index-symbol: unsupported indexing or vector form for inlining, a guard of the computation that would fall back, at a cell no write of it reaches, on a value no write put there, or a first write that reads the cell's previous value, which only a buffer holds), and a node declared virtual has no buffer to read instead. Initialize every cell the routine reads (e.g. with an =: assignment covering the node), or mark declared_store_x as materialized (e.g. via Train.set_materialized).
-declared store: names the declaration and store-time reason: true
+declared_store_x is virtual in this compilation lineage (decision 99:test-setup), but its computation could not be stored for inlining (rejection 10:escaping-index-symbol: store-time inlining check failed). Mark declared_store_x as materialized (e.g. via Train.set_materialized) before compiling the routine that computes it.
+declared store: names the virtual decision and store-time reason: true
+committed_store_x is virtual in this compilation lineage (decision 40:scalar-constexpr), but its computation could not be stored for inlining (rejection 10:escaping-index-symbol: store-time inlining check failed). Mark committed_store_x as materialized (e.g. via Train.set_materialized) before compiling the routine that computes it.
+committed store: names the virtual decision and store-time reason: true
 every phase-table entry is exercised by a row: true

@@ -65,5 +65,5 @@ row_constexpr_cap_exempt: the case ran to completion (raised Failure("injected b
 row_constexpr_flattened_read: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_constexpr_guarded_setter ~flag_value:0.: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_constexpr_guarded_setter ~flag_value:1.: the case ran to completion (raised Failure("injected by --raise-every-row")): false
-declared_virtual_store_refusal: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+virtual_store_refusal: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 every phase-table entry is exercised by a row: false

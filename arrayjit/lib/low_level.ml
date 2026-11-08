@@ -1879,10 +1879,22 @@ let inherited_uninlinable_rejection (tn : Tn.t) ~(code : string) : string =
    decline to either -- before, it surfaced as the placement table's "already virtual" collision. *)
 let declared_uninlinable_rejection (tn : Tn.t) ~(code : string) : string =
   [%string
-    "%{Tn.debug_name tn} is declared virtual, but its computation could not be inlined in this \
-     routine (rejection %{code}: %{uninlinable_causes}), and a node declared virtual has no buffer \
-     to read instead. Initialize every cell the routine reads (e.g. with an =: assignment covering \
-     the node), or mark %{Tn.debug_name tn} as materialized (e.g. via Train.set_materialized)."]
+    "%{Tn.debug_name tn} is declared virtual, but its computation could not be inlined at a read \
+     site of this routine (rejection %{code}: %{uninlinable_causes}), and a node declared virtual \
+     has no buffer to read instead. Initialize every cell the routine reads (e.g. with an =: \
+     assignment covering the node), or mark %{Tn.debug_name tn} as materialized (e.g. via \
+     Train.set_materialized)."]
+
+(* Storage refuses before any read site is considered. A virtual decision may be declared intent or
+   an earlier routine's commitment; retain its provenance and give only the materialization remedy,
+   since initializing cells cannot repair a store-time legality refusal (gh-ocannl-2048). *)
+let virtual_unstorable_rejection (tn : Tn.t) ~(decided_by : Tn.provenance) ~(code : string) : string
+    =
+  [%string
+    "%{Tn.debug_name tn} is virtual in this compilation lineage (decision \
+     %{Tn.provenance_to_string decided_by}), but its computation could not be stored for inlining \
+     (rejection %{code}: store-time inlining check failed). Mark %{Tn.debug_name tn} as \
+     materialized (e.g. via Train.set_materialized) before compiling the routine that computes it."]
 
 (* gh-ocannl-1514, gh-ocannl-1551: an inherited read a capture walk (see [virtual_llc]'s [capture])
    met and left un-inlined, because the read would refuse the routine where it executes -- a
@@ -2383,10 +2395,11 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
     in
     Hashtbl.set optim_ctx.computations ~key:traced.tn
       ~data:(supersede ~self:traced.tn (!at_idcs, stored) current_computations)
-  with Non_virtual i ->
-    if Tn.Placements.known_virtual optim_ctx.placements traced.tn then
-      raise (Utils.User_error (declared_uninlinable_rejection traced.tn ~code:i))
-    else Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i)
+  with Non_virtual i -> (
+    match Tn.Placements.get optim_ctx.placements traced.tn with
+    | Some (Virtual, decided_by) ->
+        raise (Utils.User_error (virtual_unstorable_rejection traced.tn ~decided_by ~code:i))
+    | _ -> Tn.Placements.update optim_ctx.placements traced.tn Never_virtual (Site i))
 
 (* Loop symbols a scalar expression's value depends on, syntactically, resolving scalar scope-locals
    through [locals] — accumulated per-scope-id assignment symbols (see {!scope_value_syms}). *)

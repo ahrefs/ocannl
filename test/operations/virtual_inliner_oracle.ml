@@ -429,17 +429,17 @@ let outcome_of b (os : LL.optimized list) =
     "materialized:"
     ^ Option.value_map (rejection_code o b.x) ~default:"undecided" ~f:Ir.Tnode.provenance_to_string
 
-(* The ways a node with no materialization to decline to says so. The first three are the
-   consumption-time refusals [declared_uninlinable_rejection] words; the fourth is a dead write,
-   which stored no computation, and the last two are store-time legality refusals. *)
+(* The known refusals for a node with no materialization fallback: a census label paired with its
+   diagnostic fragment. A raw placement collision also names the code, so require the diagnostic's
+   rejection phrase for the consumption- and store-time legality refusals. *)
 let recognized_refusals =
   [
-    "13:call-site-index-mismatch";
-    "157:guard-fallback-unproven";
-    "158:accumulation-without-init";
-    "stored a computation to inline";
-    "10:escaping-index-symbol";
-    "51:affine-not-injective";
+    ("13:call-site-index-mismatch", "rejection 13:call-site-index-mismatch:");
+    ("157:guard-fallback-unproven", "rejection 157:guard-fallback-unproven:");
+    ("158:accumulation-without-init", "rejection 158:accumulation-without-init:");
+    ("stored a computation to inline", "stored a computation to inline");
+    ("10:escaping-index-symbol", "rejection 10:escaping-index-symbol:");
+    ("51:affine-not-injective", "rejection 51:affine-not-injective:");
   ]
 
 let census = Hashtbl.create (module String)
@@ -518,16 +518,10 @@ let check_program prog =
       match optimize_routines b with
       | exception Utils.User_error msg -> (
           match
-            List.find recognized_refusals ~f:(fun code ->
-                (* The placement collision also names the code: require the diagnostic's rejection
-                   phrase so regressing to that collision is a finding. *)
-                let substring =
-                  if String.equal code "stored a computation to inline" then code
-                  else "rejection " ^ code ^ ":"
-                in
+            List.find recognized_refusals ~f:(fun (_, substring) ->
                 String.is_substring msg ~substring)
           with
-          | Some code -> tally ("refused:" ^ code)
+          | Some (label, _) -> tally ("refused:" ^ label)
           | None ->
               tally "raised";
               finding prog ("an unrecognized refusal: " ^ msg))
