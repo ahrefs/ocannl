@@ -2039,4 +2039,58 @@ if harness_leg 'probe controls'; then
   probe_restore
 fi
 
+
+if harness_leg 'GPU-gated reach'; then
+  saved_repo=$repo
+  repo=$TMP/gpu-project
+  mkdir -p "$repo/tools" "$repo/lib" "$repo/tests"
+  cp "$HERE/affected-tests.sh" "$repo/tools/"
+  printf '(lang dune 3.20)\n' >"$repo/dune-project"
+  printf '(library (name gpu_core) (modules gpu_core))\n' >"$repo/lib/dune"
+  printf 'let used = 1\nlet other = 2\n' >"$repo/lib/gpu_core.ml"
+  cat >"$repo/tests/dune" <<'DUNE'
+(test (name gpu) (modules gpu) (libraries gpu_core))
+(test (name leg) (modules leg) (libraries gpu_core))
+(test (name marked) (modules marked)
+ (libraries gpu_core
+  ; ocannl-backend: cc, cuda, hip -- nested field and spaced backend list
+ ))
+(test (name plain) (modules plain) (libraries gpu_core)
+ ; ocannl-backend: cc -- CPU marker is a negative control
+)
+(test (name unrelated) (modules unrelated) (libraries gpu_core))
+(executable (name runner) (modules runner) (libraries gpu_core))
+(rule (alias runtest-rule) (action (run %{exe:runner.exe}))
+ ; ocannl-backend: metal -- marker on the alias's own rule
+)
+DUNE
+  printf 'let on_gpu = false\nlet () = if on_gpu then ignore Gpu_core.used\n' >"$repo/tests/gpu.ml"
+  printf 'let leg ~when_:_ ~on:_ () = ()\nlet backend = "cc"\nlet () = leg ~when_:(backend = "cuda") ~on:backend (); ignore Gpu_core.used\n' >"$repo/tests/leg.ml"
+  printf 'let () = ignore Gpu_core.used\n' >"$repo/tests/marked.ml"
+  cp "$repo/tests/marked.ml" "$repo/tests/runner.ml"
+  printf '(* on_gpu; leg "cuda" *)\nlet text = "on_gpu leg cuda"\nlet () = ignore Gpu_core.used\n' >"$repo/tests/plain.ml"
+  printf 'let on_gpu = false\nlet () = if on_gpu then ignore Gpu_core.other\n' >"$repo/tests/unrelated.ml"
+  git_q init -q && git_q add -A && git_q commit -qm fixture || exit 2
+  printf 'let used = 3\nlet other = 2\n' >"$repo/lib/gpu_core.ml"
+  affected --gpu-gated --referenced-only HEAD
+  expect 'a changed function lists its GPU-gated callers, not CPU or unrelated callers' 0 \
+    @tests/runtest-gpu @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule
+  affected HEAD --gpu-gated
+  expect 'default GPU reach retains the link-only GPU consumer' 0 \
+    @tests/runtest-gpu @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule @tests/runtest-unrelated
+  # Remove the call, keeping the gate: reach must come from the changed function.
+  printf 'let on_gpu = false\nlet () = if on_gpu then ignore Gpu_core.other\n' >"$repo/tests/gpu.ml"
+  affected --gpu-gated --referenced-only HEAD -- lib/gpu_core.ml
+  expect 'removing the changed function call removes that gated test from the first tier' 0 \
+    @tests/runtest-leg @tests/runtest-marked @tests/runtest-rule
+  # Undo only the classification mechanism: the positive oracle must now fail.
+  cp "$repo/tools/affected-tests.sh" "$TMP/gpu-reader"
+  sed 's/if ($gpu_gated) {/if (0) {/' "$TMP/gpu-reader" >"$repo/tools/affected-tests.sh"
+  affected --gpu-gated --referenced-only HEAD -- lib/gpu_core.ml
+  if [ "$rc" = 0 ] && [ ! -s "$out" ]; then
+    report 0 'negative control: disabling gate discovery loses the expected GPU aliases'
+  else report 1 'negative control: disabling gate discovery loses the expected GPU aliases' "exit $rc; $(cat "$out"); $(cat "$err")"; fi
+  repo=$saved_repo
+fi
+
 finish
