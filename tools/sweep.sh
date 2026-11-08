@@ -352,7 +352,9 @@ ONLY=()
 # Per-unit wall-clock cap, enforced by the perl supervisor below on both the
 # local and the remote side: macOS has no timeout(1) at all, and where timeout(1)
 # does exist it is not necessarily one whose -k reaches the process group.
-CAP=${OCANNL_TOOL_SWEEP_CAP:-5400}
+# The Sunday Metal unit was already at 10351s before oracle-widen (gh-ocannl-2091).
+# Keep headroom for rebuilding and downloads; an explicit routine cap still wins.
+CAP=${OCANNL_TOOL_SWEEP_CAP:-14400}
 # Per-test cap for a GPU unit's dune legs (gh-ocannl-1211; test_cap_start_cmd says where it
 # applies), the default tools/test-run.sh gives a GPU batch; 0 lifts it.
 TEST_CAP=${OCANNL_TOOL_SWEEP_TEST_CAP:-$TEST_CAP_DEFAULT}

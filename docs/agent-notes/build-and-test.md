@@ -3186,6 +3186,30 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ## Aliases and goldens
 
+- Slow-suite budgets (gh-ocannl-2091): `tools/test-run.sh` defaults to 14400 s for a
+  batch reaching a slow alias, including targets files and individual members, and 3600 s
+  otherwise. An explicit `--cap` or `OCANNL_TOOL_TEST_CAP` wins, including 0. The decision
+  happens before the supervisor starts, using the same target predicate as the per-test cap,
+  so it covers resolution and building too. This is a conservative portable budget rather
+  than a prediction for each member; `plan` states the cap and the full-suite duration guidance.
+  On tuf HIP the old 3600 s cap cut the last slow action; Metal `mnist_conv` alone is projected
+  at about 5280 s from gh-ocannl-2082's short controls. The 2026-11-01 m4-max Metal sweep unit
+  took 10351 s before the widen oracle joined it at 612 s of additional action work. Those
+  action times need not add to wall time at parallel width, but 449 s of remaining headroom
+  is too little for growth and run-to-run variation. `tools/sweep.sh` therefore also
+  defaults to 14400 s per unit. Scheduled launch commands setting `OCANNL_TOOL_SWEEP_CAP`
+  override that default and must be synced separately (the Sunday command needs 14400).
+- The forced slow sweep `20261108T061832Z` at `4acc4ccce` completed its whole units in
+  3597 s on rog CUDA, 4918 s on minix HIP, and 6621 s on tuf HIP, including build, runtest
+  and train; these are not slow-only measurements. The widen oracle actions took 633 s,
+  611 s and 1065 s respectively, read from each sweep worktree's Dune trace (tuf's
+  `trace.csexp.old` after its diagnostic leg). These native Linux runs do not measure WSL.
+  Metal timed out at 10800 s; gh-ocannl-2082 isolates a separate deliberate hang probe,
+  while short production-backend controls show the convolutions advancing. That run supplies no
+  completed-suite duration. The later m4-max cc-oracle-widen unit took 699 s; it does not
+  measure Metal. Collected unit logs and wall seconds live under the sweep state directory's
+  `logs/` and `history.tsv`; action times come from `tools/action-durations.sh` over the trace.
+
 - Every rule that diffs a golden — the repo-wide scans, the codegen snapshots, the config-precedence
   rules, the ppx-output diffs — carries its own `runtest-<name>` alias (gh-ocannl-726), so
   `dune build @test/operations/runtest-verdict_ratchet` runs that one test, applies its diff and is
@@ -5353,8 +5377,9 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   above every runtest/train action in the four boxes' dune traces (the longest 1021 s
   `fsm_transformer` on minix, 810 s `autotune_smoke` on mac-studio, 757 s `circles_conv` on tuf,
   all under correctness-slot load, where load stretched tests 5-15x), but no trace holds an `@slow`
-  member: `slow-cifar_conv` runs ~300 s solo plus its dataset download, so at those load ratios it
-  could pass 1500 s legitimately, and CPU batches are not the failure class. So `@slow` and CPU
+  member when that bound was chosen: `slow-cifar_conv` is box/backend dependent (2026-11-08
+  sweep traces: minix HIP 155 s, rog CUDA 578 s, tuf HIP 1573 s, downloads excluded), so it
+  can pass 1500 s legitimately, and CPU batches are not the failure class. So `@slow` and CPU
   batches keep only the run's cap unless asked; `plan` says which applies and why. The default and
   the watcher live in `tools/per-test-cap.sh`, which `tools/sweep.sh` sources as well: a sweep unit
   on a non-CPU backend runs the same watcher beside its `@runtest @train` leg (not its `@slow`

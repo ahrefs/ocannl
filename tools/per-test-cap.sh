@@ -12,8 +12,8 @@
 # tools/test-run.sh (plan_test_cap) and in each GPU unit of tools/sweep.sh,
 # whose `@slow` leg it leaves to the unit's cap. 1500s
 # clears every runtest/train action in the fleet's dune traces (the longest,
-# 1021s, under correctness-slot load), but `slow-cifar_conv` runs ~300s solo
-# and loads of 5-15x were measured, plus its dataset download -- so `@slow`
+# 1021s, under correctness-slot load), but `slow-cifar_conv` took 1573s on tuf
+# HIP (2026-11-08), even before its dataset download -- so `@slow`
 # and CPU batches keep only the run's cap unless asked. Re-derive it from a
 # box's traces with tools/action-durations.sh, or from the `slowest` record
 # every test-run.sh run directory keeps (see its explicit_trace_file).

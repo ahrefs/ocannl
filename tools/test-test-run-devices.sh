@@ -15,7 +15,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #width (29-34, 48, 49, 50, 51, 64, 52), #slot (53, 54, 55, 56, 57, 58, 93, 78, 88), #device (75, 76, 77, 91), #hermetic (70).
+# Groups: #width (29-34, 48, 49, 50, 51, 64, 52), #slot (53, 54, 55, 56, 57, 58, 93, 78, 88), #device (75, 76, 77, 91, 106), #hermetic (70).
 #
 # Legs:
 #  29. the dxg width cap is injected, announced on stderr, written into the run
@@ -70,6 +70,9 @@
 #      an answer or a fast failure starts dune once; an unread batch asks every
 #      GPU backend, a CPU batch none; the real probe is bin/device_props, built
 #      inside the slot from DUNE_BUILD_DIR's tree.
+# 106. slow aliases receive a four-hour run cap before launch, including files,
+#      fresh and repeat; plan states box/backend guidance, explicit caps win,
+#      and an operand after dune's separator does not raise the default.
 #  77. `plan` reports the probe and the per-test cap as `run` would apply them
 #      (GPU batches only, not @slow, not where run resolves nothing), and asks
 #      no device.
@@ -1533,6 +1536,66 @@ else
 fi
 }
 harness_leg_run '77: plan reports the probe and the per-test cap #device' leg_77
+# The cap must be selected before launching the supervisor: checking only the
+# plan text would miss a run still cut at the old bound. Fixture actions return
+# immediately; their recorded cap proves the budget without waiting four hours.
+leg_106() {
+  local OCANNL_TOOL_TEST_CAP= d= probe tag argv want
+  for probe in "ordinary|plan build @cheap|3600" \
+               "slow|plan build @slow|14400" \
+               "member|plan build @@test/training/slow-cifar_conv|14400" \
+               "short|plan --cap 9 build @slow|9" \
+               "lifted|plan --cap 0 build @slow|0" \
+               "separator|plan exec prog -- @slow|3600"; do
+    IFS='|' read -r tag argv want <<<"$probe"
+    # shellcheck disable=SC2086  # fixture argv deliberately split
+    probe_run "slow-cap-$tag" hip cc "" "" $argv
+    { [ "$argv_rc" = 0 ] && grep -qF "run cap: ${want}s (0 disables)" <<<"$argv_out"; } ||
+      d="$tag: exit $argv_rc; plan: $argv_out"
+    [ -z "$d" ] || break
+    if [ "$tag" = slow ]; then
+      grep -qF 'slow duration guidance: tuf HIP @slow exceeds 3600s; Metal mnist_conv alone ~5280s' <<<"$argv_out" ||
+        d="the slow plan lacks box/backend duration guidance: $argv_out"
+    fi
+  done
+  printf '%s\n' '@test/training/slow-cifar_conv' >"$TMP/slow-cap-targets"
+  for probe in "run|run build @slow|14400" \
+               "file|run --targets-file $TMP/slow-cap-targets build|14400" \
+               "fresh|fresh @test/training/slow-cifar_conv|14400" \
+               "repeat|repeat 2 build @slow|14400" \
+               "override|run --cap 0 build @slow|0"; do
+    [ -z "$d" ] || break
+    IFS='|' read -r tag argv want <<<"$probe"
+    # shellcheck disable=SC2086  # fixture argv deliberately split
+    if [ "$tag" = fresh ]; then
+      if ! command -v python3 >/dev/null 2>&1; then
+        skip "fresh slow cap" "no python3 for the fixture action trace"
+        continue
+      fi
+      cp "$HERE/action-durations.sh" "$repeat_root/tools/action-durations.sh"
+      synthetic_trace "$TMP/slow-cap.trace" /fake/build 'cifar_conv.exe|0|test/training/cifar_conv.exe.output'
+      # shellcheck disable=SC2086  # fixture argv deliberately split
+      REPEAT_TEST_TRACE=$TMP/slow-cap.trace REPEAT_TEST_MKBUILD=1 probe_run "slow-cap-$tag" hip cc "" "" $argv
+    else
+      # shellcheck disable=SC2086  # fixture argv deliberately split
+      probe_run "slow-cap-$tag" hip cc "" "" $argv
+    fi
+    { [ "$argv_rc" = 0 ] && [ -n "$argv_calls" ] &&
+      [ "$(cat "$argv_dir/cap" 2>/dev/null)" = "$want" ]; } ||
+      d="$tag: exit $argv_rc; calls: $argv_calls; recorded cap: $(cat "$argv_dir/cap" 2>/dev/null)"
+  done
+  if [ -z "$d" ]; then
+    OCANNL_TOOL_TEST_CAP=17 probe_run slow-cap-env hip cc "" "" run build @slow
+    { [ "$argv_rc" = 0 ] && [ "$(cat "$argv_dir/cap" 2>/dev/null)" = 17 ]; } ||
+      d="the environment cap was not kept: exit $argv_rc; cap: $(cat "$argv_dir/cap" 2>/dev/null)"
+  fi
+  if [ -z "$d" ]; then
+    report 0 "slow targets get four hours before launch; plan states duration guidance; explicit caps win"
+  else
+    report 1 "slow targets get four hours before launch; plan states duration guidance; explicit caps win" "$d"
+  fi
+}
+harness_leg_run '106: slow run caps and duration guidance #device' leg_106
 shared_through renamed_dune
 
 # ---------------------------------------------------------------------------

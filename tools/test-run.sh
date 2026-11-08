@@ -351,7 +351,8 @@
 # Prefer `run`. In an agent harness, launch `run` through the harness's own
 # background mode and let the harness notify on exit -- that already removes
 # every reason to write a waiter. `start`/`wait` exist only for a run that must
-# outlive the launching session. The cap defaults to $OCANNL_TOOL_TEST_CAP or 3600s;
+# outlive the launching session. The cap defaults to $OCANNL_TOOL_TEST_CAP,
+# or 14400s for targets reaching @slow and 3600s otherwise;
 # `--cap 0` disables it (then supply your own bound). `--expect-backend B`
 # (repeatable) refuses a batch that does not hold backend B, before dune starts
 # (BACKEND REFUSED, exit 2): pass the GPU backend a GPU-box leg is for, since a
@@ -4338,6 +4339,7 @@ case $sub in
     ;;
   repeat)
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
+    cap_default=${OCANNL_TOOL_TEST_CAP:+explicit}
     # As for `run`: empty is the default, which the resolution phase decides.
     test_cap=${OCANNL_TOOL_PER_TEST_CAP:-}
     alone=0
@@ -4345,7 +4347,7 @@ case $sub in
     targets_files=()
     while [ $# -gt 0 ]; do
       case $1 in
-        --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; shift "$opt_shift" ;;
+        --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; cap_default=explicit; shift "$opt_shift" ;;
         --test-cap | --test-cap=*) opt_value "a value" "$@"; test_cap=$opt_value; shift "$opt_shift" ;;
         --alone | --alone=*) opt_flag "$1"; alone=1; shift ;;
         --direct | --direct=*) opt_flag "$1"; direct=1; shift ;;
@@ -4394,6 +4396,7 @@ case $sub in
         die "repeat --direct needs python3 (the trace reader and tools/replay-rules.sh)"
     fi
     [ $# -gt 0 ] || set -- runtest
+    if [ -z "$cap_default" ] && test_cap_reaches_slow "$@" >/dev/null; then cap=14400; fi
     select_dune
     new_run "$@"
     take_lock
@@ -5113,6 +5116,11 @@ case $sub in
       {
         echo "command: dune $*"
         echo "backends: $(batch_summary)"
+        echo "run cap: ${cap}s (0 disables)"
+        if test_cap_reaches_slow "$@" >/dev/null; then
+          echo "slow duration guidance: tuf HIP @slow exceeds 3600s; Metal mnist_conv alone ~5280s; Sunday Metal unit previously 10351s before oracle-widen (gh-ocannl-2091)"
+          echo "  Other boxes/backends vary; see docs/agent-notes/build-and-test.md#aliases-and-goldens. Explicit caps are kept even below this guidance."
+        fi
         sed -n 's/^test-run: batch: /  /p' "$run_dir/log"
         if [ -n "$unmerged" ]; then
           echo "unmerged: run would refuse this checkout (UNMERGED REFUSED, exit 2)"
@@ -5333,6 +5341,7 @@ case $sub in
     # a run directory that is never published and is removed at the end, and
     # its --cap bounds the build as a run's would.
     cap=${OCANNL_TOOL_TEST_CAP:-3600}
+    cap_default=${OCANNL_TOOL_TEST_CAP:+explicit}
     # Empty is the default, which `_resolve` decides once it knows the batch
     # (plan_test_cap); a value here is explicit and applies to any batch.
     test_cap=${OCANNL_TOOL_PER_TEST_CAP:-}
@@ -5340,7 +5349,7 @@ case $sub in
     targets_files=()
     while [ $# -gt 0 ]; do
       case $1 in
-        --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; shift "$opt_shift" ;;
+        --cap | --cap=*) opt_value "a value" "$@"; cap=$opt_value; cap_default=explicit; shift "$opt_shift" ;;
         --test-cap | --test-cap=*) opt_value "a value" "$@"; test_cap=$opt_value; shift "$opt_shift" ;;
         --expect-backend | --expect-backend=*)
           opt_value "a backend" "$@"
@@ -5397,6 +5406,7 @@ case $sub in
       set -- "${fresh_args[@]}"
     fi
     [ $# -gt 0 ] || set -- runtest
+    if [ -z "$cap_default" ] && test_cap_reaches_slow "$@" >/dev/null; then cap=14400; fi
     # Toolchain checks gate only launches: status/wait/stop/list remain usable
     # from a shell whose opam environment is no longer active.
     select_dune
