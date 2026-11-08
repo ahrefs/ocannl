@@ -1314,6 +1314,12 @@ files.
   gh-ocannl-1342, above); and `C_syntax`'s untyped `invalid_arg`s, which are not declines but
   fatal under `strict_failure_classification`.
 ## Search evidence and tensorization
+- Rounded virtual matmul operands can seed GPU tensor tiles only in a staged geometry
+  (`sk_bk > 0`, gh-ocannl-2080). The capability test uses `operand_prec`, the read's format,
+  but an unstaged tile still presents rounding scopes to `Tensorize`, which accepts plain reads
+  only. Staging performs that rounding in the cooperative load nest. `gpu_twin_tiles` pins both
+  the format judgment and this geometry restriction, then compiles every admitted tile on the
+  active GPU and checks its emission census and values against materialized twins.
 - "Seeded" is not "timed". An autotune family can be enumerated in bulk and rejected in bulk at
   candidate compile, and a count of proposals then reads as coverage it does not have — assert on
   the *timed* counter (`report.mma_timed`, `fiss_sketch_timed`, `split_reduce_timed`), and follow it

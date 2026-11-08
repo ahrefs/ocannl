@@ -262,3 +262,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl))
  (modes exe))
+
+(executable
+ ; cc-vector-width: independent -- refuses CPU execution; enumerates GPU geometries only.
+ (name twin_tile_bench)
+ (modules twin_tile_bench)
+ (libraries ocannl base stdio bench_args bench_out)
+ (preprocess
+  (pps ppx_here ppx_ocannl))
+ (modes exe))
+
+(rule
+ (alias twin-tile-dry)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND)
+  (alias bin-smoke-env_spelling_gate)
+  (universe))
+ (action
+  (run %{exe:twin_tile_bench.exe} 256 --dry-run)))

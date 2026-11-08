@@ -4106,6 +4106,9 @@ let matmul_flavor_tree ?(coalesced : coalesce_layout option)
                               @
                               if bk = 0 then
                                 [
+                                  ( not (reads_rounded site),
+                                    "an operand is read rounded: an unstaged GPU tile reads both \
+                                     operands in place, without a load nest to round them" );
                                   ( site.m_row_stride = 1,
                                     strided_row_in_place_witness site
                                       ~what:"an unstaged full-K block" );

@@ -1,0 +1,7 @@
+omitting either operand's rounding changes the answer beyond tolerance: true
+two virtual f16 twins seed a GPU tile using their read formats: true
+rounded GPU operands seed only staged tiles: true
+the backing masters' formats cannot admit a rounded tile: true
+the advertised tile capability seeds tiles at the twin site: true
+the seeded twin-site pipelines compile to tensor code: true
+tiled twin reads agree with materialized twins: true

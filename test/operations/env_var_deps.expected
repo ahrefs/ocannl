@@ -59,6 +59,7 @@ Programs starting a search with a run that can select cc, each pinning the cc ve
   (the blessed support values pinning the file: Fissioned_chain.small_menu, Fissioned_chain.small_menu_envelope)
   benchmarks/runners/ocannl/dune, executables bench_rank_site (Autotune.tune): pinned: every run that can select cc pins `OCANNL_CC_VECTOR_BYTES`; every run that can select cc pins `OCANNL_CC_VECTOR_REGISTERS`
   bin/dune, executable projection_shape_bench (Autotune.tune): independent, by its marker
+  bin/dune, executable twin_tile_bench (Train.tune_placements): independent, by its marker
   test/operations/dune, executable autotune_arm_containment (Train.tune_placements): independent, by its marker
   test/operations/dune, executable autotune_batched_companion (Autotune.tune): independent, by its marker
   test/operations/dune, executable autotune_bound_pruning (Autotune.tune): independent, by its marker
@@ -146,6 +147,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   benchmarks/runners/ocannl/dune           @mma-register-scope-probe
   bin/dune                                 @bin-smoke
   bin/dune                                 @bin-smoke-env_spelling_gate
+  bin/dune                                 @twin-tile-dry
   test/einsum/dune                         @runtest
   test/einsum/dune                         @runtest-concat_extraction-origins_cap_0
   test/einsum/dune                         @runtest-einsum_trivia
@@ -433,7 +435,7 @@ will copy them from, and the tallies go to stderr (gh-ocannl-659, gh-ocannl-665)
   arrayjit/vendor_stubs/metal/typecheck/dune: nothing that runs a test executable
   benchmarks/dune: markers: none
   benchmarks/runners/ocannl/dune: markers: cuda, metal, none
-  bin/dune: markers: cc, none
+  bin/dune: declares OCANNL_BACKEND; markers: cc, none
   dune: nothing that runs a test executable
   lib/dune: nothing that runs a test executable
   tensor/dune: nothing that runs a test executable
