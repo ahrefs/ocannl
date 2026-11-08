@@ -1941,13 +1941,13 @@ struct
      around an arm's load, as it must for a short-circuiting [?:]. The locals take each arm's own C
      type and the final selection, [OCANNL_SELECT] ([Builtins_cc]), applies the usual arithmetic
      conversions to them, so the blend has EXACTLY the type and value of the [?:] spelling it
-     replaces -- a gate's double [0.0] literal included, which an f32 helper function would round
-     away (review round 1). [OCANNL_SELECT] is that [?:] over the locals, except under gcc, which
-     still branches on it at x86 (a float equality test, an arm converted to the result type) and
-     gets a select of the bit patterns instead (gh-ocannl-1660). It is a true select, not a multiply
-     by a mask: NaN, infinities and signed zeros pass unchanged. Inner blends shadow the names in
-     their own block, and no arm can mention them. Only at the two compute precisions whose [?:]
-     spellings above are the plain [Ops] ones; the bridged narrow precisions keep [?:]. *)
+     replaces. A gate's zero literal has the arithmetic precision's type too. [OCANNL_SELECT] is
+     that [?:] over the locals, except under gcc, which still branches on it at x86 (a float
+     equality test, an arm converted to the result type) and gets a select of the bit patterns
+     instead (gh-ocannl-1660). It is a true select, not a multiply by a mask: NaN, infinities and
+     signed zeros pass unchanged. Inner blends shadow the names in their own block, and no arm can
+     mention them. Only at the two compute precisions whose [?:] spellings above are the plain [Ops]
+     ones; the bridged narrow precisions keep [?:]. *)
   let builtin_param_guards = Some C_syntax.C_guards
 
   let select_blend_syntax prec =

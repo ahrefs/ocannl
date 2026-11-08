@@ -627,14 +627,13 @@ val typed_at : prec:Ops.prec -> scalar_t -> bool
     the one owner of the question (gh-ocannl-1958). Rendered at a precision is not typed at it, and
     a local's declaration is a conversion the expression alone does not make, so a scope over a
     value rendered wider is not collapsed, by {!simplify_llc} (whatever the numerics) or by the
-    renderer. At single, cc's [Recip] is [1.0 / x], a double the local rounds and a collapse would
-    hand to the arithmetic around it, a gate is [c ? y : 0.0], a double by its literal, and [Not] is
-    [x == 0.0 ? 1.0 : 0.0]; [tanhf] is a float at double. A narrow precision answers for the wide
-    compute it may render at, where [Recip], [Not] and the gates are single's; a library call there
-    is typed either way, since compute at storage width rounds the call's result in its own text. A
-    truth is C [int] at every precision: the renderer, which sees no slot, leaves it, and
-    {!simplify_llc} keeps it only under a [Div], where two would divide integers, since it converts
-    exactly. The operators are a list, not a default. *)
+    renderer. [Recip], [Recip_sqrt], [Not] and the gates use their arithmetic precision's numeric
+    type on every dialect. Narrow arithmetic is typed either way: at storage width its text rounds
+    the result; under wide compute the local and expression agree on single. [Tanh_approx] uses
+    [tanhf], which is a float at double, and the Threefry operators return packed integers rather
+    than a float. A truth is C [int] (Metal [bool]) at every precision: the renderer, which sees no
+    slot, leaves it, and {!simplify_llc} keeps it only under a [Div], where two would divide
+    integers, since its conversion to float is exact. The operators are a list, not a default. *)
 
 val narrowing_read : scope_prec:Ops.prec -> scalar_t -> bool
 (** Whether a scope of precision [scope_prec] holding this value is a cast that rounds: a narrow

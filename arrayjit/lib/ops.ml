@@ -898,8 +898,13 @@ let binop_cd_fallback_syntax = function
   | Threefry4x32_crypto -> "threefry4x32_crypto"
   | Threefry4x32_light -> "threefry4x32_light"
   | Uint4x32_to_prec_uniform_lane -> "uint4x32_to_prec_uniform_lane"
+
 (* | Shl -> "shlf" *)
 (* | Shr -> "shrf" *)
+
+(* cc bridges narrow arithmetic through [single] before narrowing the result. Keep the literal in
+   that arithmetic type too, including in the value-select blend. *)
+let c_float_literal prec literal = match prec with Single_prec _ -> literal ^ "f" | _ -> literal
 
 let binop_c_syntax prec v =
   match (v, prec) with
@@ -920,14 +925,16 @@ let binop_c_syntax prec v =
       ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
       | Fp8_prec _ ) ) ->
       ("(", " > 0 ?", " : 0)")
-  | Relu_gate, _ -> ("(", " > 0.0 ?", " : 0.0)")
+  | Relu_gate, _ ->
+      let zero = c_float_literal prec "0.0" in
+      ("(", " > " ^ zero ^ " ?", " : " ^ zero ^ ")")
   | ( Satur01_gate,
       ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
       | Fp8_prec _ ) ) ->
       ("(abs(", " ) > 0 ? 0 : (", "))")
   | Satur01_gate, Single_prec _ ->
       (* This disagrees at 0 with the semantics. *)
-      ("(fabsf(floorf(", ")) > 0.0 ? 0.0 : (", "))")
+      ("(fabsf(floorf(", ")) > 0.0f ? 0.0f : (", "))")
   | Satur01_gate, _ -> ("(fabs(floor(", ")) > 0.0 ? 0.0 : (", "))")
   (* An integer [Max]/[Min] compares in the operands' common type and is typed that ([Builtins_cc]'s
      [OCANNL_MAX]/[OCANNL_MIN], gh-ocannl-1883): [fmax] returned a [double], which [%] does not take
@@ -1095,13 +1102,13 @@ let unop_c_syntax prec op =
       ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
       | Fp8_prec _ ) ) ->
       invalid_arg "Ops.unop_c_syntax: Recip not supported for integer precisions"
-  | Recip, _ -> ("(1.0 / (", "))")
+  | Recip, _ -> ("(" ^ c_float_literal prec "1.0" ^ " / (", "))")
   | ( Recip_sqrt,
       ( Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _
       | Fp8_prec _ ) ) ->
       invalid_arg "Ops.unop_c_syntax: Recip_sqrt not supported for integer precisions"
   | Recip_sqrt, Double_prec _ -> ("(1.0 / sqrt(", "))")
-  | Recip_sqrt, _ -> ("(1.0 / sqrtf(", "))")
+  | Recip_sqrt, _ -> ("(" ^ c_float_literal prec "1.0" ^ " / sqrtf(", "))")
   | Neg, _ -> ("(-(", "))")
   | Trunc, Double_prec _ -> ("trunc(", ")")
   (* An integer operand is its own truncation: [truncf] returned a [float], which [%] does not take
@@ -1122,7 +1129,9 @@ let unop_c_syntax prec op =
   | Not, (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _)
     ->
       ("(", " == 0)")
-  | Not, _ -> ("(", " == 0.0 ? 1.0 : 0.0)")
+  | Not, _ ->
+      let zero = c_float_literal prec "0.0" and one = c_float_literal prec "1.0" in
+      ("(", " == " ^ zero ^ " ? " ^ one ^ " : " ^ zero ^ ")")
   | Uint4x32_to_prec_uniform1, Uint4x32_prec _ ->
       invalid_arg "Ops.vec_unop_c_syntax: Uint4x32_to_prec_uniform1 not supported for Uint4x32"
   | Uint4x32_to_prec_uniform1, _ -> ("uint4x32_to_" ^ prec_string prec ^ "_uniform(", ")")
