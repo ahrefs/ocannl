@@ -212,7 +212,9 @@ type matmul_site = {
   m_a : Ir.Tnode.t;
   m_b : Ir.Tnode.t;
   m_a_round : Ir.Ops.prec option;
-  m_b_round : Ir.Ops.prec option;
+      (** Precision of a rounded read of a wider source. Such an operand only tiles through an
+          in-kernel [Stage], whose load nest performs the rounding. *)
+  m_b_round : Ir.Ops.prec option;  (** {!field-m_a_round}, for [m_b]. *)
   m_zeroed : bool;
   m_tb : bool option;
   m_fma : bool;
@@ -263,8 +265,8 @@ type conv_site = {
   c_d_syms : Ir.Indexing.symbol list;
   c_a : Ir.Tnode.t;
   c_b : Ir.Tnode.t;
-  c_a_round : Ir.Ops.prec option;  (** Precision of a rounded input read, if any. *)
-  c_b_round : Ir.Ops.prec option;  (** Precision of a rounded kernel read, if any. *)
+  c_a_round : Ir.Ops.prec option;  (** {!field-m_a_round}, for the conv input. *)
+  c_b_round : Ir.Ops.prec option;  (** {!field-m_a_round}, for the conv kernel. *)
   c_zeroed : bool;
   c_fma : bool;
 }

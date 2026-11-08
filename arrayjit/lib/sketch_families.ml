@@ -677,10 +677,13 @@ let detect_matmul (llc : LL.t) : matmul_site option =
         m_b_round = LL.rounded_read_prec llc site.m_b;
       })
 
-(* The precision an operand's values reach the site at. *)
-let operand_prec (site : matmul_site) tn =
-  let round = if phys_equal tn site.m_a then site.m_a_round else site.m_b_round in
+(* The precision an operand's values reach a contraction site at. *)
+let read_prec ~a ~a_round ~b_round tn =
+  let round = if phys_equal tn a then a_round else b_round in
   Option.value round ~default:(Lazy.force tn.Ir.Tnode.storage_prec)
+
+let operand_prec (site : matmul_site) tn =
+  read_prec ~a:site.m_a ~a_round:site.m_a_round ~b_round:site.m_b_round tn
 
 let reads_rounded (site : matmul_site) =
   Option.is_some site.m_a_round || Option.is_some site.m_b_round
@@ -870,8 +873,8 @@ type conv_site = {
           ({!Sched.expand_zero}) maps onto the site's chain through it (gh-ocannl-503). *)
   c_a : Ir.Tnode.t;
   c_b : Ir.Tnode.t;
-  c_a_round : Ir.Ops.prec option;
-  c_b_round : Ir.Ops.prec option;
+  c_a_round : Ir.Ops.prec option;  (** {!field-m_a_round}, for the conv input. *)
+  c_b_round : Ir.Ops.prec option;  (** {!field-m_a_round}, for the conv kernel. *)
   c_zeroed : bool;
   c_fma : bool;
 }
@@ -1264,8 +1267,7 @@ let detect_conv (llc : LL.t) : conv_site option =
       })
 
 let conv_operand_prec (site : conv_site) tn =
-  let round = if phys_equal tn site.c_a then site.c_a_round else site.c_b_round in
-  Option.value round ~default:(Lazy.force tn.Ir.Tnode.storage_prec)
+  read_prec ~a:site.c_a ~a_round:site.c_a_round ~b_round:site.c_b_round tn
 
 (** {2 The enabling interchange (gh-ocannl-1183)}
 
@@ -2942,6 +2944,8 @@ let conv_split_row_current (site : conv_site) ~row_o ~row_i : Idx.symbol list =
    zero companion follows the segment's aligned Grid geometry. *)
 let cpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     { sk_grid; sk_bm; sk_epilogue; sk_pack_prec; sk_tile = tile; _ } : Sched.schedule =
+  (* Both operands use an in-kernel Stage. A new in-place or hoisted flavor must refute [c_*_round]
+     sites at seeding, as matmul's [reads_rounded] gates do. *)
   let stage source tile_loops =
     (* Mint the im2col/panel tiles at the site's compute precision where the source reads narrower
        (gh-ocannl-575); see [cpu_mma_pack_sketch_schedule]. *)
@@ -3086,6 +3090,8 @@ let conv_zero_geometry ?folded (site : conv_site) ~(site_syms : (Idx.symbol * in
    tensorization lane through [companion_geometry]. *)
 let gpu_conv_sketch_schedule ~(opt : LL.optimized) (site : conv_site)
     ({ sk_simd = w; sk_bm; sk_bn; sk_bk; sk_tm; sk_depth; sk_epilogue; _ } as p) : Sched.schedule =
+  (* Both operands use an in-kernel Stage. A new in-place or hoisted flavor must refute [c_*_round]
+     sites at seeding, as matmul's [reads_rounded] gates do. *)
   let stage source tile_loops =
     Sched.Stage
       {
