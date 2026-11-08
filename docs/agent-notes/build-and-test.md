@@ -2542,9 +2542,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   argument's lexical population key alongside the walked value; only an exact whole-argument parameter inherits that key. Curried functors retain
   each residual module expression with its captured environment, binding one argument at a time.
 - One-shot negative controls use `tools/mutant.sh <module> <perl-expression> <@alias>`
-  (gh-ocannl-1880), after establishing a green baseline. It refuses a byte-identical edit,
-  runs one test through `tools/test-run.sh`, reports false claims and preserves its exit status
-  even for incomplete runs. It shares the restoration and cancellation machinery below.
+  (gh-ocannl-1880). It refuses a byte-identical edit, requires a green unmutated baseline,
+  runs one test through `tools/test-run.sh` and reports false claims. Exit 1 means caught;
+  incomplete or never-executed runs exit 4, and a red baseline refuses with 2. It shares the
+  restoration and cancellation machinery below.
   For manifest evidence and reusable literal patches, mutation manifest rows use `tools/mutation-run.sh <module> <patch-file> <@alias>`
   (gh-ocannl-969), in an otherwise idle, isolated worktree. The patch is literal bytes
   `OLD@@@NEW`, with exactly one delimiter, a nonempty OLD occurring exactly once (overlapping

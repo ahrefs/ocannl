@@ -88,6 +88,14 @@ case "$(cat module.ml)" in
     case "${PROBE_BASELINE:-green}" in
       green) exit 0 ;;
       rewrote) mkdir -p "$out"; rm -f "$out/$name.exe.output"; cp "$name.expected" "$out/$name.exe.output"; exit 0 ;;
+      red_promote|red_other)
+        # The hint reads the baseline's saved list, not diagnostics or a later run.
+        [ -n "$trace_to" ]
+        saved=${trace_to%/trace.csexp}/promotion-files
+        mkdir -p "$saved"
+        if [ "$PROBE_BASELINE" = red_promote ]; then printf '%s\n' "$name.expected";
+        else printf '%s\n' other.expected; fi > "$saved/paths"
+        printf 'golden differs\n'; exit 1 ;;
       red) printf 'FAIL: first: false\nFAILED: 1 check did not hold: "first".\n'; exit 1 ;;
       sleep) touch "$PROBE_HOME/ready"; exec perl -e 'sleep 60' ;;
       *) exit 99 ;;
@@ -714,11 +722,26 @@ grep -q '^  FAIL: first: false$' "$fixture/result" || { cat "$fixture/result"; e
 [ $(($(wc -l < "$fixture/invocations"))) = $((count + 1)) ] && [ ! -e "$fixture/observed" ] ||
   { echo 'red baseline: the mutated module was run'; exit 1; }
 if grep -q '^recovery: ' "$fixture/result"; then echo 'red baseline: a recovery copy was announced'; exit 1; fi
-grep -Eq '^mutation-run: .*tools/promote.sh --from-run /.*/runs/[0-9TZ-]+$' "$fixture/result" || { cat "$fixture/result"; exit 1; }
+# No saved correction (claim failure), or a correction for another golden: no hint.
+if grep -q 'tools/promote.sh --from-run' "$fixture/result"; then cat "$fixture/result"; exit 1; fi
+PROBE_BASELINE=red_other run_case 2
+if grep -q 'tools/promote.sh --from-run' "$fixture/result"; then cat "$fixture/result"; exit 1; fi
+PROBE_BASELINE=red_promote run_case 2
+hint_matches() {
+  baseline_log=$(sed -n 's/^log: *//p' "$fixture/result")
+  grep '^mutation-run: BASELINE RED:' "$fixture/result" | grep -Fq "promote it with tools/promote.sh --from-run '${baseline_log%/log}' 'probe.expected'"
+}
+hint_matches || { cat "$fixture/result"; exit 1; }
+# Negative twins: losing the command loses the positive oracle; ignoring membership
+# gives the unrelated golden the command and loses the negative oracle.
 cp tools/mutation-run.sh "$fixture/with-hint"
-perl -0777 -i -pe 's/    print STDERR \x27mutation-run: if the manifest check.*?if defined \$baseline_log;\n//s' tools/mutation-run.sh
-PROBE_BASELINE=red run_case 2
-if grep -q 'tools/promote.sh --from-run' "$fixture/result"; then echo 'hint negative control survived'; exit 1; fi
+perl -i -pe 's/promote it with tools\/promote.sh/promote the golden/' tools/mutation-run.sh
+PROBE_BASELINE=red_promote run_case 2
+if hint_matches; then echo 'hint negative control survived'; exit 1; fi
+cp "$fixture/with-hint" tools/mutation-run.sh
+perl -i -pe 's/if \(grep \{ \$_ eq \$golden \} \@paths\)/if (1)/' tools/mutation-run.sh
+PROBE_BASELINE=red_other run_case 2
+grep -q 'promote it with tools/promote.sh --from-run' "$fixture/result" || { cat "$fixture/result"; exit 1; }
 cp "$fixture/with-hint" tools/mutation-run.sh
 export PROBE_MODE=reused
 PROBE_BASELINE=rewrote run_case 4
@@ -1397,12 +1420,31 @@ reset_module 'prefix\r\nANCHOR\r\nsuffix without newline' 'ANCHOR@@@MUTATED'
 for mode in fail pass short; do
   export PROBE_MODE=$mode
   rc=0
-  tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
-  case $mode in pass) [ "$rc" = 0 ] ;; *) [ "$rc" = 1 ] ;; esac
+  CDPATH=$fixture tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+  case $mode in pass) [ "$rc" = 0 ] ;; short) [ "$rc" = 4 ] ;; *) [ "$rc" = 1 ] ;; esac
   cmp module.ml "$fixture/pristine"
   grep -q '^restored: byte-identical (cmp)$' "$fixture/result"
+  if [ "$mode" = short ]; then flagged "STOPPED EARLY: the mutated run printed 2 of the golden's 3 rows"; fi
   if [ "$mode" = fail ]; then grep -q '^FAIL: first: false$' "$fixture/result"; fi
 done
+# A test red on its own is never counted as caught, even for the Perl entrypoint.
+rc=0
+PROBE_BASELINE=red tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+[ "$rc" = 2 ]
+grep -q 'BASELINE RED:' "$fixture/result"
+if grep -q '^recovery: ' "$fixture/result"; then cat "$fixture/result"; exit 1; fi
+cmp module.ml "$fixture/pristine"
+# Undo the baseline and status guards: the former Perl mode would count both
+# an independently red test and an incomplete run as caught (1).
+cp tools/mutation-run.sh "$fixture/with-evidence-guards"
+perl -0777 -i -pe 's/(my \(\$baseline_status, \$baseline_stop\) = \(0, 0\);\n)\{/${1}unless (\$perl_edit) {/ or die "baseline seam missing\n"; s/(\$code = 4 if )([^;]+);/${1}!\$perl_edit \&\& ($2);/ or die "status seam missing\n"' tools/mutation-run.sh
+for mode in fail short; do
+  rc=0
+  PROBE_MODE=$mode PROBE_BASELINE=red tools/mutant.sh module.ml 's/ANCHOR/MUTATED/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
+  [ "$rc" = 1 ]
+  cmp module.ml "$fixture/pristine"
+done
+cp "$fixture/with-evidence-guards" tools/mutation-run.sh
 # Negative control: dropping the byte-change guard would launch this no-op.
 count=$(wc -l < "$fixture/invocations")
 for expr in 's/ABSENT/MUTATED/' 's/ANCHOR/ANCHOR/' 's/[/broken/'; do
@@ -1417,11 +1459,11 @@ perl -i -pe 's/    \$mutated ne \$original or refuse\(\x27perl edit made no byte
 export PROBE_MODE=pass
 rc=0
 tools/mutant.sh module.ml 's/ANCHOR/ANCHOR/' @runtest-probe > "$fixture/result" 2>&1 || rc=$?
-[ "$rc" = 0 ]
+[ "$rc" = 4 ]
 [ "$(wc -l < "$fixture/invocations")" != "$count" ]
 cmp module.ml "$fixture/pristine"
 cp "$fixture/with-byte-guard" tools/mutation-run.sh
-printf 'PASS one-shot perl edits report claims, preserve pass/fail/incomplete status, restore bytes and refuse no-ops or syntax errors before launch\n'
+printf 'PASS one-shot perl edits report claims, require a green baseline and distinguish incomplete runs, restore bytes and refuse no-ops or syntax errors before launch\n'
 }
 harness_leg_run_errexit '24: one-shot perl edits and no-op negative controls' leg_24
 
