@@ -112,11 +112,7 @@ let quote value =
   Buffer.add_char buffer '"';
   Buffer.contents buffer
 
-(** The identity a marker carries: the digest after its [scanner-refusal:] prefix, up to the closing
-    bracket. *)
-let marker_identity marker =
-  Option.bind (String.chop_prefix marker ~prefix:"[scanner-refusal:") ~f:(fun rest ->
-      Option.map (String.lsplit2 rest ~on:']') ~f:fst)
+let marker_identity = Refusal_section_heads.marker_identity
 
 (** [align ~before ~after]: which elements of [before] the elements of [after] replaced. The two
     lists are compared through their longest common subsequence under [equal]; between two kept
@@ -546,7 +542,7 @@ let rewrite_golden ?sources plan text =
   if List.is_empty plan.markers && List.is_empty claims then text
   else
     let swap_markers line =
-      if not (String.is_substring line ~substring:"[scanner-refusal:") then line
+      if not (String.is_substring line ~substring:Refusal_section_heads.marker_prefix) then line
       else
         List.fold plan.markers ~init:line ~f:(fun line (old, renamed) ->
             String.substr_replace_all line ~pattern:old ~with_:renamed)

@@ -43,6 +43,7 @@ while two identical claims' markers both name a failure when both claims failed:
 a direct failure's marker leaves its control claim's failure for the next refusal: true
 entries under one key naming different claims repeat no pair: true
 an exact pair written twice is named, once, however often it repeats: true
+catalogue-only entries with different reasons still repeat their key once: true
 a manifest source missing from the argument list is named as uncatalogued: true
 an argument-list source outside the manifest is named as extra: true
 a source catalogued twice is a mismatch, not a match: true
@@ -858,6 +859,7 @@ workflow_job_timeouts.ml: [scanner-refusal:6b6eff6eb802894930d7281d3548beb2] com
 every `raw_direct_evidence` and `raw_catalogue_only` key names a current direct failure of a catalogued scanner source: true
 no direct failure is both answered by a control and catalogued as answered by none: true
 no `raw_direct_evidence` entry repeats another's key and claim: true
+no `raw_catalogue_only` entry repeats another's key: true
 every Verdict.Claims member is judged refusing or not, once, and every judged name is a member: true
 the paired, formatted-paired and pairwise-distinct claims refuse through their label: true
 a combinator Verdict.Claims gains that neither list judges is named as unjudged: true

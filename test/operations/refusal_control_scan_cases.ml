@@ -331,6 +331,8 @@ let dynamic reason = Verdict.fail reason
     (Poly.equal
        (Manifest.repeated_pairs [ (key, own); (key, sibling); (key, own); (key, own) ])
        [ (key, own) ]);
+  Verdict.p "catalogue-only entries with different reasons still repeat their key once"
+    (Poly.equal (Manifest.repeated_catalogue_keys [ (key, own); (key, sibling) ]) [ key ]);
   let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
   Verdict.p "a manifest source missing from the argument list is named as uncatalogued"
     (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], [], []));
@@ -439,7 +441,15 @@ let dynamic reason = Verdict.fail reason
         (Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key)
         claim);
   Verdict.p_empty "no `raw_direct_evidence` entry repeats another's key and claim"
-    ~over:Manifest.direct_evidence Manifest.repeated_evidence
+    ~over:Manifest.direct_evidence Manifest.repeated_evidence;
+  let repeated = Manifest.repeated_catalogue_keys Manifest.catalogue_only in
+  List.iter repeated ~f:(fun key ->
+      eprintf
+        "%s: its `raw_catalogue_only` key is written more than once; drop the copy (not part of \
+         the golden)\n"
+        key);
+  Verdict.p_empty "no `raw_catalogue_only` entry repeats another's key"
+    ~over:Manifest.catalogue_only repeated
 
 (* Which callees refuse is judged against the claim forms [Verdict.Claims] declares, read from its
    source, so the judgment cannot lag the module. The mutations below edit that same source: a
@@ -512,6 +522,11 @@ let () =
   let source = In_channel.read_all "../support/refusal_section_heads.ml" in
   let values =
     [
+      ("marker_indent", Heads.marker_indent);
+      ("marker_prefix", Heads.marker_prefix);
+      ("marker_hex_chars", Heads.marker_hex_chars);
+      ("marker_hex_length", Heads.marker_hex_length);
+      ("marker_separator", Heads.marker_separator);
       ("closing_row", Heads.closing_row);
       ("not_printed_head", Heads.not_printed_head);
       ("offer_head", Heads.offer_head);
@@ -529,7 +544,7 @@ let () =
     "each section head is bound once, on one line holding its compiled value verbatim, with no \
      quote or backslash in it"
     values ~f:(one_line source);
-  let closing = List.hd_exn values in
+  let closing = ("closing_row", Heads.closing_row) in
   let line = Printf.sprintf "let closing_row = \"%s\"" Heads.closing_row in
   Verdict.p_none ~min:3 "a head wrapped onto two lines, bound twice, or holding an escape is not"
     [

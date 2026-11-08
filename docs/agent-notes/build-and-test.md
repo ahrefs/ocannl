@@ -541,7 +541,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   entries, one per claim whose run prints it, and every entry is consulted -- any one answering is
   enough, and a marker that did not print names each of its claims that failed (gh-ocannl-1572:
   a first-match lookup once left a key's later entries dead); the same key and claim twice is a
-  copy-paste slip the audit refuses (`Refusal_control_manifest.repeated_pairs`, gh-ocannl-1840). A
+  copy-paste slip the audit refuses (`Refusal_control_manifest.repeated_pairs`, gh-ocannl-1840).
+  A repeated `raw_catalogue_only` key is refused regardless of its reasons (gh-ocannl-1931). A
   refusal no control can reach -- a library constant, a walk defect the raw-text floor exists for
   -- goes in `raw_catalogue_only` with its reason and prints under its own `Catalogue-only:`
   heading, so it stays catalogued without claiming execution; a key in both tables is refused by
@@ -552,9 +553,11 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `control_context` through `run_checker`). Every section ends on the unconditional closing row
   `End of synthetic controls.` (`Refusal_section_heads.closing_row`; gh-ocannl-1251,
   gh-ocannl-1318), which is how `tools/mutation-run.sh` tells a complete run from a cut one;
-  that row and the stderr heads below have one owner, `test/support/refusal_section_heads.ml`,
+  that row, the marker grammar and the stderr heads below have one owner,
+  `test/support/refusal_section_heads.ml`,
   whose source the Perl runner reads at startup by a one-line grammar its header states, failing
-  closed (gh-ocannl-1840: they were once held as copies);
+  closed (gh-ocannl-1840: they were once held as copies). The marker printer and sync engine
+  use that same owner; the runner derives its regex from the verbatim grammar fields (gh-ocannl-1931);
   a marker of the row a run leaves out because a claim behind it failed gets a stderr line naming
   that claim, which the runner lists beside it, and one with none did not run (gh-ocannl-1499).
   Claim markers are consumed as a multiset, so two

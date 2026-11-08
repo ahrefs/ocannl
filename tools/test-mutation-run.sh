@@ -662,6 +662,20 @@ marker=$(omitted_marker)
 grep -qxF -- "$marker -- no failed check of this run is behind it: its claim or refusal did not run" "$fixture/result" ||
   { cat "$fixture/result"; echo 'manifest_silenced: the omitted marker is not listed as a refusal that did not run'; exit 1; }
 reached
+# Change the owner's prefix and the replayed printer output together: every reader must move.
+# Restoring only the reader's former prefix is the negative control: the omitted row is missed.
+perl -pi -e 's/scanner-refusal:/changed-refusal:/g' "$heads" replay.expected "$fixture/replay.stdout" "$fixture/replay.stderr"
+PROBE_ALIAS=@runtest-replay run_case 1
+grep -q '^refusal markers omitted: 1 ' "$fixture/result"
+cp tools/mutation-run.sh "$fixture/derived-marker-reader"
+perl -pi -e 's/^my \$marker_row =/\$head{marker_prefix} = "[scanner-refusal:"; my \$marker_row =/' tools/mutation-run.sh
+PROBE_ALIAS=@runtest-replay run_case 1
+if grep -q '^refusal markers omitted: 1 ' "$fixture/result"; then
+  echo 'stale marker reader still recognized the changed prefix'; exit 1
+fi
+cp "$fixture/derived-marker-reader" tools/mutation-run.sh
+stage_heads .
+printf 'PASS changing the marker owner moves the runner; a stale reader misses the omitted marker\n'
 printf 'PASS real Verdict runs, from verdict_teardown'"'"'s golden: a raising case is caught, an exit inside a case exits 4, a trailer-short run with a multi-line failure is caught, failed pass_fail claims are listed, a scan ending short by a failed claim'"'"'s marker and its trailer is caught, and so is one short only by a silenced refusal'"'"'s marker\n'
 }
 harness_leg_run_errexit '5: real Verdict runs, from verdict_teardown'\''s golden' leg_5

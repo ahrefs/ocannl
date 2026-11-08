@@ -1512,6 +1512,9 @@ let repeated_pairs entries =
 (** The [raw_direct_evidence] pairs written more than once ({!repeated_pairs}). *)
 let repeated_evidence = repeated_pairs direct_evidence
 
+(** A catalogue-only key cannot name several claims: every entry says none answers for it. *)
+let repeated_catalogue_keys entries = repeated_pairs (List.map entries ~f:fst)
+
 type offer = { key : string; claim : string }
 (** A run's offer for a direct failure its row lists with no [raw_direct_evidence] or
     [raw_catalogue_only] entry, that ran unanswered (gh-ocannl-1571): its [key] (without the
@@ -1599,7 +1602,7 @@ let print_section ~source ~expected diagnostics =
             | None -> why marker diagnostic
             | Some remaining ->
                 passed_labels := remaining;
-                printf "  %s\n" marker)
+                printf "%s%s\n" Refusal_section_heads.marker_indent marker)
         | Refusal_control_scan.Fail -> (
             let key = failure_key ~source ~identity:diagnostic.Refusal_control_scan.identity in
             match
@@ -1609,10 +1612,10 @@ let print_section ~source ~expected diagnostics =
                 ~claim_lines:(claim_lines ~source) ~rivals ~passed_labels:(Verdict.passed_labels ())
                 ~key diagnostic
             with
-            | Exercised -> printf "  %s\n" marker
+            | Exercised -> printf "%s%s\n" Refusal_section_heads.marker_indent marker
             | Catalogue_only -> catalogued := marker :: !catalogued
             | Executed_yet_catalogue_only ->
-                printf "  %s\n" marker;
+                printf "%s%s\n" Refusal_section_heads.marker_indent marker;
                 Verdict.fail
                   (Printf.sprintf
                      "%s is listed in `raw_catalogue_only`, yet this run executed it -- move its \
@@ -1640,7 +1643,7 @@ let print_section ~source ~expected diagnostics =
   if not (List.is_empty !catalogued) then (
     printf
       "Catalogue-only: direct failures no control executes (reasons in `raw_catalogue_only`):\n";
-    List.iter (List.rev !catalogued) ~f:(printf "  %s\n"));
+    List.iter (List.rev !catalogued) ~f:(printf "%s%s\n" Refusal_section_heads.marker_indent));
   printf "%s\n" Refusal_section_heads.closing_row
 
 let print source =
