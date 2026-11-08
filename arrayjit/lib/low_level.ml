@@ -937,11 +937,12 @@ type traced_array = {
           inline-fanin guard (gh-573): a read of a cell executes one setter's computation, so the
           guard takes the per-setter maximum, not the union — a Block/concat node written by one
           range-guarded setter per component costs one component per read. The per-setter maximum is
-          chosen before downstream unions, so a consumer overlapping one alternative but not another
-          can be undercounted — accepted: an exact treatment is combinatorial across multi-setter
-          dependencies, and both error directions of this heuristic prior are benign (a miss
-          reproduces the pre-guard placement, which stays a [`Materialize] flip candidate with a
-          fanin-charged cost). *)
+          kept as tied alternatives for this node's per-read charge and unioned only for downstream
+          expansion. It is chosen before downstream unions, so a consumer overlapping a narrower
+          alternative but not a maximum can be undercounted — accepted: an exact treatment is
+          combinatorial across multi-setter dependencies, and both error directions of this
+          heuristic prior are benign (a miss reproduces the pre-guard placement, which stays a
+          [`Materialize] flip candidate with a fanin-charged cost). *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in the guard computed for this node under the current
           placements: the number of distinct materialized nodes the node's fully-inlined computation
@@ -10717,12 +10718,12 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      41 — a heuristic policy decision, [`Inline]-flippable like the other caps), which resets the
      fan-in of everything downstream: the chain materializes once per ~cap contributors instead of
      once per consumer. Per-setter maximum, not union across setters — a read of one cell executes
-     one setter's computation (Block/concat range-guarded setters, each component under an
-     index-only guard no backend blends). Within a setter a value select is charged as the backend
-     renders it (gh-ocannl-1775, {!resolve_charge} in [max_expansion] below): the union of its arms
-     where it blends; where it short-circuits, the arm whose reads are the most AFTER transitive
-     expansion (gh-ocannl-1874) -- an arm loading one virtual node can replay more than an arm
-     loading three materialized ones.
+     one setter's computation; tied maxima are unioned only for downstream expansion (Block/concat
+     range-guarded setters, each component under an index-only guard no backend blends). Within a
+     setter a value select is charged as the backend renders it (gh-ocannl-1775, {!resolve_charge}
+     in [max_expansion] below): the union of its arms where it blends; where it short-circuits, the
+     arm whose reads are the most AFTER transitive expansion (gh-ocannl-1874) -- an arm loading one
+     virtual node can replay more than an arm loading three materialized ones.
 
      A cycle of nodes still headed for inlining (gh-ocannl-1962) has no bottom to start from: a node
      with several setters can read, in one of them, a node reading the cells another of its setters
@@ -10821,42 +10822,61 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
     in
     (* Per-setter maximum over the per-setter charges (see [setter_reads]), each resolved under the
        backend's reading of a select with every load expanded first, so a short-circuiting select is
-       charged by its arms' expansions (gh-ocannl-1874). *)
+       charged by its arms' expansions (gh-ocannl-1874). Keep all equal maxima so commuting
+       independent setters cannot change a downstream union (gh-ocannl-2047), while the node's own
+       charge stays per-read: the union of ties can be wider than any individual setter. *)
     let max_expansion charges =
+      (* An absent side contributes no loads to a local/inherited pair. *)
       List.fold charges
-        ~init:(Set.empty (module Tnode))
-        ~f:(fun best charge ->
+        ~init:(0, [ Set.empty (module Tnode) ])
+        ~f:(fun (width, best) charge ->
           let s =
             resolve_charge ~blends:blends_value_selects
               ~expand:(expand ~inside:(fun _ -> false))
               charge
           in
-          if Set.length s > Set.length best then s else best)
+          let n = Set.length s in
+          if n > width then (n, [ s ]) else if n = width then (width, s :: best) else (width, best))
+      |> snd
     in
     List.iter components ~f:(fun members ->
-        let s =
+        let s, fanin =
           match members with
           | [ tn ]
             when Option.is_none (Hashtbl.find traced_store tn) && List.is_empty (inherited_reads tn)
             ->
-              Set.singleton (module Tnode) tn
+              (Set.singleton (module Tnode) tn, 1)
           | [ tn ] ->
-              Set.union (max_expansion (setter_reads tn)) (max_expansion (inherited_reads tn))
+              let local = max_expansion (setter_reads tn) in
+              let inherited = max_expansion (inherited_reads tn) in
+              (* A read replays one local setter and one inherited component. Preserve their
+                 per-read maximum for this node's cap and price, but pass the union of all tied
+                 contributors downstream: choosing one pair would reintroduce order dependence. *)
+              let fanin =
+                List.fold local ~init:0 ~f:(fun widest a ->
+                    List.fold inherited ~init:widest ~f:(fun widest b ->
+                        max widest (Set.length (Set.union a b))))
+              in
+              let s = List.fold (local @ inherited) ~init:(Set.empty (module Tnode)) ~f:Set.union in
+              (s, fanin)
           | _ ->
               let members_set = Set.of_list (module Tnode) members in
-              List.fold members
-                ~init:(Set.empty (module Tnode))
-                ~f:(fun acc tn ->
-                  Set.fold (charge_loads tn) ~init:acc ~f:(expand ~inside:(Set.mem members_set)))
+              let s =
+                List.fold members
+                  ~init:(Set.empty (module Tnode))
+                  ~f:(fun acc tn ->
+                    Set.fold (charge_loads tn) ~init:acc ~f:(expand ~inside:(Set.mem members_set)))
+              in
+              (s, Set.length s)
         in
         List.iter members ~f:(fun tn -> Hashtbl.set memo ~key:tn ~data:s);
         List.iter members ~f:(fun tn ->
             match Hashtbl.find traced_store tn with
             | None -> ()
             | Some traced ->
-                traced.inline_fanin <- max 1 (Set.length s);
+                traced.inline_fanin <- max 1 fanin;
                 if
-                  Set.length s > virtualize_settings.max_inline_fanin
+                  fanin > virtualize_settings.max_inline_fanin
                   && traced.has_assignment && traced.read_by_other && undecided tn
                   && (not (cap_exempt traced))
                   && not (Hashtbl.mem footprint_scoped tn)
