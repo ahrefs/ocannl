@@ -1172,6 +1172,29 @@ alias_dune_dirs() { # the directories holding a dune file or a subdir's rules, `
   sort -u "$run_dir/aliases.dirs"
   rm -f "$run_dir/aliases.dirs"
 }
+# Only a simple, single per-test build is a diagnostic run. Broader batches
+# keep Dune's action-grouped output: concurrent stderr can interleave (including
+# the location/diff lines the digest reads). Unknown options fail closed here,
+# without refusing the caller's command. Explicit --no-buffer remains Dune's.
+capped_stderr() { # dune argv; 0 iff we should inject --no-buffer
+  [ "$cap" -gt 0 ] || [ "$test_cap" -gt 0 ] || return 1
+  [ "${1:-}" = build ] || return 1
+  shift
+  local arg target= jobs=
+  for arg do
+    if [ -n "$jobs" ]; then jobs=; continue; fi
+    case $arg in
+      -j) jobs=1 ;;
+      -j[0-9]* | --force | -f) ;;
+      *)
+        [ -z "$target" ] || return 1
+        [[ $arg =~ ^@@?[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/(runtest|slow|train)-[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || return 1
+        target=$arg ;;
+    esac
+  done
+  [ -n "$target" ] && [ -z "$jobs" ]
+}
+
 plan_aliases() { # dune argv; in `_resolve`, before the slot: sets alias_refusal, alias_siblings
   local arg spec rec d name i n all=
   local specs=() recs=() spec_dirs=() names=() first=() rest=()
@@ -5137,6 +5160,15 @@ case $sub in
       fi
       exit 0
     fi
+    # Stream evidence before the cap can kill an action whose stderr Dune
+    # would otherwise keep until completion. Record the effective command.
+    stderr_stream=
+    if capped_stderr "$@"; then
+      stderr_sub=$1
+      shift
+      set -- "$stderr_sub" --no-buffer "$@"
+      stderr_stream=1
+    fi
     # A fresh run's own build directory (see the header), recorded in its
     # command: the digest's `command:` line names where the run built.
     if [ "$mode" = fresh ]; then
@@ -5211,7 +5243,7 @@ case $sub in
       } >"$run_dir/plan" || { echo "test-run: cannot write the plan in $run_dir"; exit 126; }
       exit 0
     fi
-    if [ -n "$width_cap" ] || [ "$mode" = fresh ]; then
+    if [ -n "$width_cap" ] || [ "$mode" = fresh ] || [ -n "$stderr_stream" ]; then
       { { printf '%q ' "$@"; echo; } >"$run_dir/cmd.tmp" &&
         mv -f "$run_dir/cmd.tmp" "$run_dir/cmd"; } ||
         { echo "test-run: cannot record the capped command in $run_dir"; exit 126; }
