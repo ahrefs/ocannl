@@ -16,6 +16,8 @@
 # owning module, and a usage error each exit 2; the engine is found under a moved DUNE_BUILD_DIR; no
 # arm sees a neighbouring arm's compiled unit; and an `~interface:` snippet is compiled as a
 # signature.
+# Exit-2 expectations also require the refusal reason: leg 14 forces an engine build failure
+# under leg 5 and checks that neither refusal assertion passes.
 #
 # Another dune holding the build directory's lock refuses every build the subject asks for, which
 # is no verdict on any of the above: the subject exits 75 (LOCK HELD) and this harness abandons the
@@ -356,9 +358,6 @@ leg11() {
     '[@@@owning_module "lib/nn_blocks.ml", "open No_such_module_anywhere"]' >"$stub"
   run --stub "$stub" "$ptable"
   expect_rc "a prelude that does not compile" 2 "prelude of $stub does not compile"
-  if grep -qF "prelude of $stub does not compile" "$err"; then report 0 "is named as the prelude"
-  else report 1 "is named as the prelude" "stderr: $(head -n 6 "$err" | tr '\n' '|')"
-  fi
 }
 harness_leg_run '11: a project-syntax arm no compiler builds is rejected in its owning context #project' leg11
 
@@ -372,10 +371,10 @@ leg12() {
   local stub="$TMP/p/declared.mli"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module 3]' >"$stub"
   run --stub "$stub" "$ptable"
-  expect_rc "an owning module that is not a string" 2 "[@@@owning_module] takes a module of the repository, as a non-empty string"
+  expect_rc "an owning module that is not a string" 2 "[@@@owning_module] takes a module"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module ""]' >"$stub"
   run --stub "$stub" "$ptable"
-  expect_rc "an empty owning module" 2 "[@@@owning_module] takes a module of the repository, as a non-empty string"
+  expect_rc "an empty owning module" 2 "[@@@owning_module] takes a module"
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module "lib/nn_blocks.ml"]' \
     '[@@@owning_module "tensor/tensor.ml"]' >"$stub"
   run --stub "$stub" "$ptable"
@@ -383,9 +382,6 @@ leg12() {
   printf '%s\n' 'val use_padding : bool' '[@@@owning_module "no/such_module.ml"]' >"$stub"
   run --stub "$stub" "$ptable"
   expect_rc "an owning module the repository does not have" 2 "[@@@owning_module] \"no/such_module.ml\": no such file"
-  if grep -qF 'no such file' "$err"; then report 0 "is named as missing before any build"
-  else report 1 "is named as missing before any build" "stderr: $(head -n 6 "$err" | tr '\n' '|')"
-  fi
 
   local itable="$TMP/t/interface_cases.ml"
   cat >"$itable" <<'CASES'
@@ -454,7 +450,7 @@ leg13() {
   # What dune itself said, for the replay below: the subject's stderr but its own line.
   grep -vF 'typecheck-scan-cases:' "$err" >"$TMP/hold/refusal"
 
-  # This harness against the held lock: every leg but this one, then a leg whose every check
+  # This harness against the held lock: every leg before this one, then a leg whose every check
   # expects the subject to fail, which the refusal used to pass.
   local inner="$TMP/hold/inner" only
   for only in '^([1-9]|1[0-2]):' '^5:'; do

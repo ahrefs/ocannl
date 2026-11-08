@@ -1124,8 +1124,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   its harness's `expect_rc` therefore requires a matching stderr reason for every exit-2
   expectation. Leg 14 forces the engine build to fail and requires both leg-5 checks to FAIL,
   with no PASS; the former status-only helper passes both. The other `expect_rc` harness,
-  `tools/test-ppx-output-diff.sh`, also checks the reasons for its usage refusals, alongside
-  its existing reason checks for build failures, empty scopes and unresolved revisions.
+  `tools/test-ppx-output-diff.sh`, requires a reason in the helper too, including usage
+  refusals, build failures, empty scopes and unresolved revisions. The inline mutant controls
+  in `tools/test-affected-tests.sh` pair their status with the expected UNMAPPED path or
+  failed alias-listing diagnostic; the spelling of a helper is no boundary for this rule.
 - **A harness whose checks are bare commands under errexit runs each leg contained**
   (gh-ocannl-1539): `harness_leg_run_errexit 'NAME' leg_N` runs the body in a subshell of its own
   (`harness_errexit_subshell`, a function whose body is a `( )`, so its `set -eE` is its own and
