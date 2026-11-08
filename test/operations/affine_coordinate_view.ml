@@ -589,6 +589,13 @@ let () =
   covered ~control:true ~name:"spilling runs with stride five leave gaps" ~dims:[| 5; 1; 1; 2 |]
     ~read:(plain [| it h; fx 0; fx 0; it e |], [ (h, (0, 4)); (e, (0, 1)) ])
     ~writes:[ (vector ~length:4 [| sub; fx 0; fx 0; aff [ (5, c) ] 0 |], [ (c, (0, 1)) ]) ]
+    ();
+  (* Read only cells 0..7, inside the writes' 0..8 envelope: cell 4 is an interior hole, so
+     rejecting coverage requires the stride-versus-vector-length guard. *)
+  covered ~control:true ~name:"spilling stride-five runs leave an interior hole"
+    ~dims:[| 5; 1; 1; 2 |]
+    ~read:(plain [| it h; fx 0; fx 0; it e |], [ (h, (0, 3)); (e, (0, 1)) ])
+    ~writes:[ (vector ~length:4 [| sub; fx 0; fx 0; aff [ (5, c) ] 0 |], [ (c, (0, 1)) ]) ]
     ()
 
 let () =
