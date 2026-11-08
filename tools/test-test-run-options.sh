@@ -2562,6 +2562,15 @@ pp_tier_check() {
       }
     fi
   done
+  # Scope is presentation, not classification: a failing first-tier run must
+  # still read its saved promotion list even when its log contains no diff.
+  printf '%s\n' 'test/first-tier.expected' >"$TMP/pp-tier-promotions"
+  argv_mode=fail REPEAT_TEST_PROMOTIONS=$TMP/pp-tier-promotions \
+    pp_probe pp-tier-fail 0 --referenced-only --since base
+  { [ "$argv_rc" = 7 ] && grep -qF 'verdict: FAIL; FIRST TIER ONLY' <<<"$argv_out" &&
+    grep -qF "promotion diffs present -- dune's promotion list" <<<"$argv_out" &&
+    grep -qF 'test/first-tier.expected' <<<"$argv_out"; } ||
+    pp_tier_detail="failed batch: exit $argv_rc; $argv_out; $argv_err"
 }
 pp_tier_check
 if [ -z "$pp_tier_detail" ]; then report 0 "prepush --referenced-only: run/list/start filter the first tier and label its scope";

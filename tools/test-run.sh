@@ -3818,10 +3818,9 @@ digest() {
     fi
   fi
   echo "command: dune $(cat "$dir/cmd")"
-  if [ -s "$dir/prepush-scope" ]; then
-    verdict="$verdict; $(cat "$dir/prepush-scope")"
-  fi
-  echo "verdict: $verdict (exit $digest_rc)"
+  local scope=
+  [ ! -s "$dir/prepush-scope" ] || scope="; $(cat "$dir/prepush-scope")"
+  echo "verdict: $verdict$scope (exit $digest_rc)"
   echo "log:     $dir/log"
   # The source the run tested, from the launch-time record (record_checkout),
   # so a digest quoted as evidence carries its revision. Nothing is printed
