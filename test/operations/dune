@@ -351,6 +351,7 @@
   (alias runtest-virtual_rejection_boundary_raise)
   (alias runtest-config_var_fatal_spelling)
   (alias runtest-autotune_cache_dir_records)
+  (alias runtest-backprop_gc_stress)
   (alias runtest-test_config_consistency)
   (alias runtest-render_decline_inventory)
   (alias runtest-digest_completeness)
@@ -14381,3 +14382,38 @@
  (libraries base ocannl arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2062: this case's reclamation claim is defined only with the stress key on.
+; Keep it alias-only, so no invocation runs the executable with its default-off configuration.
+
+(executable
+ (name backprop_gc_stress)
+ (modules backprop_gc_stress)
+ (libraries base ocannl stdio arrayjit.verdict lineage_claims)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(rule
+ ; ocannl-backend: cc -- the test explicitly uses Context.cpu ().
+ (alias runtest-backprop_gc_stress)
+ (package neural_nets_lib)
+ (locks /ocannl_training_test)
+ (deps
+  ocannl_config
+  (alias runtest-env_spelling_gate)
+  backprop_gc_stress.exe
+  backprop_gc_stress.expected)
+ (action
+  (no-infer
+   (progn
+    (with-stdout-to
+     backprop_gc_stress.actual
+     (run
+      %{dep:backprop_gc_stress.exe}
+      --ocannl_debug_gc_backprop_roots=true))
+    (diff backprop_gc_stress.expected backprop_gc_stress.actual)))))
+
+(alias
+ (name gc-stress-backprop)
+ (deps
+  (alias runtest-backprop_gc_stress)))

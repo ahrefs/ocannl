@@ -159,6 +159,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/atomic_file_rename_scan_fixture/dune @runtest
   test/operations/atomic_file_rename_scan_fixture/dune @runtest-env_spelling_gate
   test/operations/atomic_file_rename_scan_fixture/dune @scans
+  test/operations/dune                     @gc-stress-backprop
   test/operations/dune                     @lifecycle
   test/operations/dune                     @metal-codegen
   test/operations/dune                     @runtest
@@ -171,6 +172,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-autotune_cache_dir_records
   test/operations/dune                     @runtest-autotune_routine_name
   test/operations/dune                     @runtest-backend_golden_family_scan
+  test/operations/dune                     @runtest-backprop_gc_stress
   test/operations/dune                     @runtest-bandwidth_calibration
   test/operations/dune                     @runtest-bench_line_readers
   test/operations/dune                     @runtest-bench_seed_parity_smoke-tf32

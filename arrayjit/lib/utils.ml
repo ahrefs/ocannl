@@ -177,6 +177,7 @@ let known_config_keys =
       "debug_check_upload_arenas";
       "debug_check_lane_bounds";
       "debug_check_forward_root_owners";
+      "debug_gc_backprop_roots";
       "debug_check_retired_solver_vars";
       "debug_fill_fresh_outputs";
       "cc_parallel_grid";
@@ -339,7 +340,12 @@ let config_key_classification : (config_key_class * string * string list) list =
       [ "fp_contract"; "fp_reassociate"; "fp_finite_math" ] );
     ( Code_borne,
       "it changes the assignments the front end builds, hence the code they lower to",
-      [ "default_prec"; "default_prng_variant"; "limit_constant_fill_size" ] );
+      [
+        "default_prec";
+        "default_prng_variant";
+        "limit_constant_fill_size";
+        "debug_gc_backprop_roots";
+      ] );
     ( Code_borne,
       "it decides a tensor node's placement class, which the canonical digest carries: identical \
        code over [Local] scratch and over an [On_device] buffer generates different kernels",

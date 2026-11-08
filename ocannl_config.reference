@@ -528,6 +528,16 @@
 # switch, on across the test suite: off by default, no effect on behavior beyond the check.
 #debug_check_forward_root_owners=false
 
+# gh-ocannl-2062: force a full major GC when a differentiable Tensor.op can restore a reclaimed
+# consumer's leaves, immediately before the hand-back scan. Debug stress only:
+# exposes accidental dependence on a dropped consumer staying uncollected. Hold a consumer past
+# construction to retain its zeroing ownership. Expensive, off by default; changes are captured
+# by the lowered code digest.
+# The cc-gc-backprop sweep unit stresses all of @runtest. The focused CPU regression is
+# dune build @test/operations/gc-stress-backprop; any test alias
+# can also be stressed with OCANNL_DEBUG_GC_BACKPROP_ROOTS=true.
+#debug_gc_backprop_roots=false
+
 # gh-ocannl-1859: a successful closure empties the shape solver's per-variable tables, since no
 # closed variable is read again; a read of one would silently answer "no". This refuses such a read,
 # naming the table. A debugging/soak switch, on across the test suite: off by default, no effect on

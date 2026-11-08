@@ -244,8 +244,8 @@ fi
 printf '%s\n' "$*" >>"$SWEEP_TEST_CALLS"
 # The configuration a call ran under (gh-ocannl-1778; the cc-outlined unit's case reads it).
 if [ -n "${SWEEP_TEST_ENV_CALLS:-}" ]; then
-  printf '%s|%s|%s\t%s\n' "${OCANNL_BACKEND-}" "${OCANNL_CC_KERNEL_PART_WEIGHT-}" \
-    "${OCANNL_CC_COMPILE_UNIT_MIN_BYTES-}" "$*" >>"$SWEEP_TEST_ENV_CALLS"
+  printf '%s|%s|%s|%s\t%s\n' "${OCANNL_BACKEND-}" "${OCANNL_CC_KERNEL_PART_WEIGHT-}" \
+    "${OCANNL_CC_COMPILE_UNIT_MIN_BYTES-}" "${OCANNL_DEBUG_GC_BACKPROP_ROOTS-}" "$*" >>"$SWEEP_TEST_ENV_CALLS"
 fi
 # Which credential fixtures reached this call (gh-ocannl-1280; credential_free reads it): names only.
 if [ -n "${SWEEP_TEST_CREDENTIALS:-}" ]; then
@@ -826,11 +826,11 @@ run_sweep_args() {
   # lock directory (gh-ocannl-1030): an ambient WAKE_LAB_HOSTS or OCANNL_TOOL_SWEEP_DEST_* -- both
   # supported knobs -- would otherwise decide which alias the fake remote lanes are asked for, and
   # the destination cases below assert exactly that.
-  # The two outlining keys are unset for the same reason as OCANNL_BACKEND: the sweep's own
+  # The outlining and GC-stress keys are unset for the same reason as OCANNL_BACKEND: the sweep's own
   # cc-outlined unit runs this harness with them exported (gh-ocannl-1778), and the plain cc unit's
   # case below asserts its calls carry neither.
   local environment=(-u OCANNL_BACKEND -u OCANNL_TOOL_SWEEP_CAP -u OCANNL_TOOL_SWEEP_CONTEXT_CAP \
-    -u OCANNL_CC_KERNEL_PART_WEIGHT -u OCANNL_CC_COMPILE_UNIT_MIN_BYTES \
+    -u OCANNL_CC_KERNEL_PART_WEIGHT -u OCANNL_CC_COMPILE_UNIT_MIN_BYTES -u OCANNL_DEBUG_GC_BACKPROP_ROOTS \
     -u OCANNL_TOOL_SWEEP_LOCAL_BOX -u OCANNL_TOOL_VERDICT_RECORDS \
     "OCANNL_TOOL_SWEEP_LAB_LOCK_WAIT=${SWEEP_TEST_LAB_LOCK_WAIT:-300}" \
     "OCANNL_TOOL_FLEET_WORKER=${SWEEP_TEST_FLEET_WORKER-$fake_bin/fleet-worker.sh}" \
@@ -952,8 +952,8 @@ plain_env=$tmp/opam.env-calls-plain
 outlined_run=$(SWEEP_TEST_ENV_CALLS=$outlined_env run_sweep_backend cc-outlined --slow)
 SWEEP_TEST_ENV_CALLS=$plain_env run_sweep >/dev/null
 grep -q 'm4-max/cc-outlined: incremental-pass ' <<<"$outlined_run"
-[ "$(cat "$outlined_env")" = "$(printf 'cc|1|0\texec -- dune build @runtest')" ]
-[ "$(cat "$plain_env")" = "$(printf 'cc||\texec -- dune build @runtest @train')" ]
+[ "$(cat "$outlined_env")" = "$(printf 'cc|1|0|\texec -- dune build @runtest')" ]
+[ "$(cat "$plain_env")" = "$(printf 'cc|||\texec -- dune build @runtest @train')" ]
 [ "$(awk -F '\t' 'END { print $2 ":" $3 ":" $5 }' "$state/history.tsv")" = 'm4-max:cc:incremental-pass' ]
 [ "$(awk -F '\t' '$3 == "cc-outlined" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
 
@@ -965,8 +965,16 @@ widen_env=$tmp/opam.env-calls-widen
 widen_run=$(SWEEP_TEST_ENV_CALLS=$widen_env run_sweep_backend cc-oracle-widen --slow)
 grep -q 'm4-max/cc-oracle-widen: incremental-pass ' <<<"$widen_run"
 [ "$(cat "$widen_env")" = \
-  "$(printf 'cc||\texec -- dune build @test/operations/slow-virtual_inliner_oracle-widen')" ]
+  "$(printf 'cc|||\texec -- dune build @test/operations/slow-virtual_inliner_oracle-widen')" ]
 [ "$(awk -F '\t' '$3 == "cc-oracle-widen" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
+
+# gh-ocannl-2062: GC stress covers the whole cc @runtest, even under --slow. It is its
+# own variant, with no outlining keys, and the plain unit above proves the key does not leak.
+gc_env=$tmp/opam.env-calls-gc
+gc_run=$(SWEEP_TEST_ENV_CALLS=$gc_env run_sweep_backend cc-gc-backprop --slow)
+grep -q 'm4-max/cc-gc-backprop: incremental-pass ' <<<"$gc_run"
+[ "$(cat "$gc_env")" = "$(printf 'cc|||true\texec -- dune build @runtest')" ]
+[ "$(awk -F '\t' '$3 == "cc-gc-backprop" { n++ } END { print n }' "$state/history.tsv")" = 1 ]
 
 # Per-unit state distinguishes a standing red from two transitions that need an
 # operator's attention: red after green, and red after the failing golden was
@@ -2947,7 +2955,7 @@ lanes_record=$(sed -n 's/^run:  *//p' <<<"$lanes")
     minix/hip:skip:0 minix/multidev_cc:skip:0 rog-nv/cuda:skip:0 tuf/hip:gate:0 | sort)" ]
 [ "$(awk -F '\t' '$1 == "backend" { print $2 ":" $3 }' "$lanes_record")" = \
   "$(printf '%s\n' cc:m4-max metal:m4-max cuda:rog-nv hip:minix multidev_cc:minix hip:tuf \
-  cc-outlined:m4-max cc-oracle-widen:m4-max)" ]
+  cc-outlined:m4-max cc-gc-backprop:m4-max cc-oracle-widen:m4-max)" ]
 # ...and the memory model each unit exercised: hip twice, once on each side of the unified/discrete
 # line, which is what the second hip unit is for.
 [ "$(awk -F '\t' '$1 == "unit" { print $2 "/" $3 ":" $11 }' "$lanes_record" | sort)" = \
