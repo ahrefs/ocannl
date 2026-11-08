@@ -734,6 +734,7 @@ struct
     (* [__half == 0.0] is ambiguous too: the built-in comparison and [__half]'s own [operator==]
        both match (gh-ocannl-1731). *)
     | Not, Half_prec _ -> f "__float2half(__half2float(" ") == 0.0f ? 1.0f : 0.0f)"
+    | Not, Single_prec _ -> f "(" " == 0.0f ? 1.0f : 0.0f)"
     | Not, _ -> f "(" " == 0.0 ? 1.0 : 0.0)"
 
   let vec_unop_syntax prec op v =
