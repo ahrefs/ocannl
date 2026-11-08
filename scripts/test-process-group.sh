@@ -46,7 +46,7 @@ driver_run() { # LOG ARGS...; status in driver_rc
   [ "$driver_cancelled" = 0 ] || exit "$driver_cancelled"
 }
 
-status_leg() {
+write_status_probe() {
   cat >"$TMP/status-probe.sh" <<'PROBE'
 set -u
 . "$1"
@@ -65,7 +65,7 @@ cleanup() {
 trap cleanup EXIT
 wait() {
   local live
-  live=$(trap '' INT TERM HUP; jobs -pr; jobs -ps)
+  live=$(trap '' INT TERM HUP; builtin jobs -pr; builtin jobs -ps)
   case $'\n'"$live"$'\n' in
     *$'\n'"$1"$'\n'*)
       blocked=1
@@ -80,6 +80,26 @@ check_child() {
   [ "$blocked" = 0 ] && [ "$rc" = "$expected" ] || exit 1
   child=
 }
+if [ "$2" = query ]; then
+  # Ignore TERM at fork, so the child is immune even before it runs its first
+  # command. The parent's returning trap relays TERM to that live child.
+  trap '' TERM
+  (sleep .3; exit 41) & child=$!
+  relayed=0
+  trap 'relayed=1; kill -TERM "$child" 2>/dev/null || :' TERM
+  # A file survives command substitution: inject once, at the query itself.
+  query_marker=$3
+  jobs() {
+    if [ ! -e "$query_marker" ]; then
+      : >"$query_marker"
+      kill -TERM 0
+    fi
+    builtin jobs "$@"
+  }
+  check_child 41
+  [ "$relayed" = 1 ] && [ -e "$query_marker" ]
+  exit $?
+fi
 (exit 37) & child=$!
 check_child 37
 # Long enough that the shadowed wait deterministically sees a live job if
@@ -96,6 +116,9 @@ check_child 143
 wait_child "$$" 2>/dev/null; rc=$?
 [ "$rc" = 127 ] && [ "$blocked" = 0 ]
 PROBE
+}
+status_leg() {
+  write_status_probe
   /bin/bash "$TMP/status-probe.sh" "$HERE/process-group.sh" shared >"$TMP/status" 2>&1
   report "$?" 'only completed jobs reach wait; child status is 37/41/43/143, non-child is 127' "$(cat "$TMP/status")"
   local rc=0
@@ -107,6 +130,46 @@ PROBE
   fi
 }
 harness_leg_run '1: child status survives a returning trap' status_leg
+
+query_leg() {
+  write_status_probe
+  python3 - "$HERE/process-group.sh" "$TMP/unmasked.sh" <<'MUTANT'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1]).read_text()
+old = "wait_jobs=$(trap '' INT TERM HUP; jobs -pr; jobs -ps)"
+if source.count(old) != 1:
+    raise SystemExit('expected exactly one masked wait_child query')
+Path(sys.argv[2]).write_text(source.replace(old, 'wait_jobs=$(jobs -pr; jobs -ps)'))
+MUTANT
+  [ "$?" = 0 ] || { harness_abandon 'cannot build unmasked-query mutant'; return; }
+  local mode helper rc
+  for mode in shared unmasked; do
+    helper=$HERE/process-group.sh
+    [ "$mode" != unmasked ] || helper=$TMP/unmasked.sh
+    # Own the group before injecting kill -TERM 0; never signal the harness.
+    # Use this harness's Bash, covering /bin/bash 3.2 and CI's PATH Bash.
+    python3 - "$BASH" "$TMP/status-probe.sh" "$helper" "$TMP/query-$mode.marker" >"$TMP/query-$mode" 2>&1 <<'DRIVER'
+import subprocess
+import sys
+try:
+    result = subprocess.run([sys.argv[1], sys.argv[2], sys.argv[3], 'query', sys.argv[4]],
+                            start_new_session=True, timeout=10)
+except subprocess.TimeoutExpired:
+    raise SystemExit('query probe exceeded its 10-second bound')
+raise SystemExit(result.returncode)
+DRIVER
+    rc=$?
+    if [ "$mode" = shared ]; then
+      report "$rc" 'masked job-table query survives group TERM and preserves child status' "$(cat "$TMP/query-$mode")"
+    elif [ "$rc" = 1 ] && grep -qF 'refused blocking wait on a live job' "$TMP/query-$mode"; then
+      report 0 'unmasked-query negative control: blocking wait on a live child is refused'
+    else
+      report 1 'unmasked-query negative control: blocking wait on a live child is refused' "exit $rc; $(cat "$TMP/query-$mode")"
+    fi
+  done
+}
+harness_leg_run '1b: group TERM inside the job-table query' query_leg
 
 driver_available() {
   local platform
