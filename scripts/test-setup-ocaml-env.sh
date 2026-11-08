@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for the "staleness against origin/master" section of
 # scripts/setup-ocaml-env.sh (the SessionStart hook), for the hand-off that
-# keeps a shell sourcing it alive, and for which checkout it acts on.
+# keeps a shell sourcing it alive, which checkout it acts on, and hook wiring.
 #
 #   scripts/test-setup-ocaml-env.sh          # run every leg
 #   scripts/test-setup-ocaml-env.sh --keep   # keep the temp dir for inspection
@@ -46,6 +46,8 @@
 #      with the project dir naming the outer checkout, the hook counts and
 #      roots the worktree; from the outer checkout, from outside any
 #      repository or from another repository it acts on the outer one.
+#   6. hook wiring — dispatch configured startup/resume, directory-change and
+#      worktree-tool hooks; the former startup-only settings miss the switches.
 
 set -u
 
@@ -1208,6 +1210,102 @@ else
 fi
 }
 harness_leg_run '5: which checkout, from a nested worktree' leg_5
+
+# ---------------------------------------------------------------------------
+# Leg 6: configured hook dispatch (not an interactive Claude Code probe)
+# ---------------------------------------------------------------------------
+leg_6() {
+harness_require python3 || return
+local outer="$TMP/hook project" wt
+# Configured commands execute the hook's /usr/bin/env bash shebang; unlike
+# run_hook, they do not pass its path directly to the interpreter.
+ln -s "$BASH_BIN" "$BIN/bash"
+mkdir -p "$outer/scripts"
+git_q -C "$outer" init -q
+printf '(lang dune 3.18)\n' >"$outer/dune-project"
+git_q -C "$outer" add dune-project
+git_q -C "$outer" commit -q -m fixture
+cp "$HOOK_SRC" "$outer/scripts/setup-ocaml-env.sh"
+stage_sourced "$HOOK_SRC" "$outer" || { harness_abandon "cannot stage hook"; return; }
+wt="$outer/.claude/worktrees/target"
+git_q -C "$outer" worktree add -q --detach "$wt" HEAD || return 1
+# Interpret the documented event/matcher contract, then execute the actual
+# configured shell commands. Leg 5 independently exercises checkout selection.
+if python3 - "$HERE/../.claude/settings.json" "$outer" "$wt" "$BIN" "$FAKEHOME" "$BASH_BIN" <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+settings, project, worktree, path, home, bash = sys.argv[1:]
+hooks = json.loads(Path(settings).read_text())["hooks"]
+env = dict(HOME=home, PATH=path, CLAUDE_PROJECT_DIR=project,
+           GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+           GIT_CONFIG_SYSTEM=os.devnull)
+
+def check(config, event, match, cwd):
+    workspace = Path(worktree) / "dune-workspace"
+    workspace.unlink(missing_ok=True)
+    payload = dict(hook_event_name=event, cwd=cwd)
+    if event == "SessionStart":
+        payload["source"] = match
+    elif event == "PostToolUse":
+        payload.update(tool_name=match, tool_input={}, tool_response={})
+    else:
+        payload.update(old_cwd=project, new_cwd=cwd)
+    outputs = []
+    for group in config.get(event, []):
+        if "matcher" in group and not re.search(group["matcher"], match):
+            continue
+        for hook in group["hooks"]:
+            assert hook["type"] == "command"
+            result = subprocess.run([bash, "-c", hook["command"]], cwd=cwd,
+                                    env=env, input=json.dumps(payload), text=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    timeout=20)
+            # The isolated PATH deliberately lacks opam; setup reports that
+            # after repairing the dune root, with exit 1 (as in run_hook).
+            assert result.returncode == 1, result.stdout
+            outputs.append(result.stdout)
+    assert len(outputs) == 1, (event, match, "expected one setup command", outputs)
+    assert "stopped: opam required" in outputs[0], outputs
+    if cwd == worktree:
+        assert workspace.is_file() and workspace.stat().st_size > 0, outputs
+        assert "fixed worktree dune root" in outputs[0], outputs
+    else:
+        assert not (Path(project) / "dune-workspace").exists(), outputs
+
+cases = [("SessionStart", "startup", worktree),
+         ("SessionStart", "resume", worktree),
+         ("CwdChanged", "", worktree),
+         ("PostToolUse", "EnterWorktree", worktree),
+         ("PostToolUse", "ExitWorktree", project)]
+for case in cases:
+    check(hooks, *case)
+    print("configured hook:", *case[:2], "passed")
+
+# Negative control: the old configuration still handles startup but misses
+# every added event. This checks execution/effects, not just a JSON spelling.
+old = {"SessionStart": [dict(group, matcher="startup")
+                        for group in hooks["SessionStart"]]}
+check(old, *cases[0])
+for case in cases[1:]:
+    try:
+        check(old, *case)
+    except AssertionError:
+        print("startup-only control rejected:", *case[:2])
+    else:
+        raise AssertionError(("startup-only control unexpectedly passed", case))
+PY
+then
+  report 0 "hook wiring: startup, resume, directory changes and worktree tools run setup; startup-only control fails"
+else
+  report 1 "hook wiring: startup, resume, directory changes and worktree tools run setup; startup-only control fails"
+fi
+}
+harness_leg_run '6: configured hook dispatch' leg_6
 
 # ---------------------------------------------------------------------------
 finish
