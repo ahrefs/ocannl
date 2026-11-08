@@ -8982,6 +8982,17 @@
       --ocannl_tune_placement_store=false))
     (diff autotune_arm_containment.expected autotune_arm_containment.actual)))))
 
+(test
+ (name vector_write_coverage)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules vector_write_coverage)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; Disabled on Metal: both tests have a double-precision case, and Metal has no f64 (Ops.fp8, the
 ; original blocker, works there since gh-ocannl-632). Enabling them needs the f64 case to become
 ; backend-conditional, and with it a Metal golden.

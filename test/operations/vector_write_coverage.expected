@@ -1,0 +1,25 @@
+2 channels: every uniform cell is written before its read: true
+2 channels: the uniform leaves device storage: true
+2 channels: the reference distinguishes every cell: true
+2 channels: reference cannot hide a zeroed producer or output: true
+2 channels: executed parity with materialized uniform: true
+3 channels: every uniform cell is written before its read: true
+3 channels: the uniform leaves device storage: true
+3 channels: the reference distinguishes every cell: true
+3 channels: reference cannot hide a zeroed producer or output: true
+3 channels: executed parity with materialized uniform: true
+4 channels: every uniform cell is written before its read: true
+4 channels: the uniform leaves device storage: true
+4 channels: the reference distinguishes every cell: true
+4 channels: reference cannot hide a zeroed producer or output: true
+4 channels: executed parity with materialized uniform: true
+5 channels: every uniform cell is written before its read: true
+5 channels: the uniform leaves device storage: true
+5 channels: the reference distinguishes every cell: true
+5 channels: reference cannot hide a zeroed producer or output: true
+5 channels: executed parity with materialized uniform: true
+7 channels: every uniform cell is written before its read: true
+7 channels: the uniform leaves device storage: true
+7 channels: the reference distinguishes every cell: true
+7 channels: reference cannot hide a zeroed producer or output: true
+7 channels: executed parity with materialized uniform: true

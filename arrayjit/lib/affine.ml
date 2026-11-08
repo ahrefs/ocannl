@@ -1557,13 +1557,23 @@ let read_covered_before ?(thread = fun _ -> false) ?(static_range = fun _ -> Non
           (string * ap array * [ `Full | `Chunk of int * int | `Nope ] array) option =
         let exception Skip in
         try
-          (* A vectorized write's run moves along its minor coordinate, which is then its view's
-             last one — the run's own opacity is modelled below, where the run extends the base. *)
+          (* Extend a vectorized write's base along its final coordinate below. Keep the
+             minor-coordinate frame only when the run cannot carry into the outer coordinates. *)
           let w_view =
             let v = view ?dyn_axis:w.a_dyn_axis ~dims w.a_map in
             if w.a_vec_last then
-              let outer, minor = split_minor v in
-              Array.append outer [| minor |]
+              let range s =
+                match List.Assoc.find w.a_loops s ~equal:Idx.equal_symbol with
+                | Some _ as bounds -> bounds
+                | None -> static_range s
+              in
+              match vec_run_frame ~range ~len:w.a_vec_len v with
+              | Some (frame, _) -> frame
+              | None ->
+                  (* A one-lane tail still shares the body's frame after trailing unit axes have
+                     been folded into the minor coordinate. *)
+                  let outer, minor = split_minor v in
+                  Array.append outer [| minor |]
             else v
           in
           let r_view, w_view =

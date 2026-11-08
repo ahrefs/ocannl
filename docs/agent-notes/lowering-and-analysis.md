@@ -340,9 +340,6 @@ files.
   which is why "mask the last component" missed the trailing unit `Sub_axis` of `Row`'s flat RNG
   store) and may spill into an outer coordinate unless proved not to. `test/operations/
   affine_coordinate_view.ml` checks every proven verdict against enumerated renderer addresses.
-  No lowering path was found that pairs a flattened store with an ordinary access in one
-  correctness query (the RNG store's `Affine` minor index gives the cross-nest analysis no chain,
-  and nothing shares a loop with it), so the hole was latent — keep it that way by construction.
   `Sched.Coalesce` (gh-ocannl-1165) is the first SCHEDULE producer of the composed form, and it
   reached two per-axis consumers that had read every component against its own axis's dim:
   `Stage`'s load edge guard and `Privatize`'s transfer guards and output-mask bound compared the
@@ -361,6 +358,15 @@ files.
   No scan guards the rename itself: a fresh tile's coordinates are legitimately built from those
   same decompositions (its tile parts), and only the node being addressed tells the two apart. A
   new transform that re-addresses an existing node renames.
+- **Packed-store coverage uses the flat run's coordinate frame** (gh-ocannl-2049).
+  In the ResNet downsample initializer, a `[3; 1; 1; 2]` uniform is stored at
+  `[Sub_axis; 0; 0; 4*c]` in a four-lane body and two-lane tail. These stores advance
+  across the size-two minor axis. `Affine.read_covered_before`, behind `reads_covered_query`,
+  uses `vec_run_frame` to compare a spilling run in flat space; the progression and box-union
+  proof combines body and tail. `vector_write_coverage` pins coverage and virtual placement,
+  and executes the centered/scaled initializer against a materialized twin with distinct,
+  nonzero values. `affine_coordinate_view` checks omitted, short and misplaced tails, and
+  strides larger than the vector length, against enumerated addresses.
 - **A dynamic access is viewed, not refused** (gh-ocannl-1174): `Affine.access` carries the
   dynamic axis itself (`a_dyn_axis`), so `may_touch_same_cell`, `read_covered_before` and
   `Cost_model.access_cells` read a gather or scatter through `view ~dyn_axis` — refuse one

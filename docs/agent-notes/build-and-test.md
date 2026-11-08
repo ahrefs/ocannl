@@ -2786,9 +2786,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   (`Asgns.accumulates_from_zero`, gh-ocannl-2013); a library op written with `=+` where `=:+` was
   meant is therefore not this check's to find. Gradients are declared at creation, so a gradient that lost its zero
   before the analysis stays unfilled. That class is filled rather than refused because the raw read
-  set is conservative: a vectorized write whose cell reads have unknown coverage (`init_params`' `n42`
-  in `resnet_block`) and a read of a padded margin (`test_padding_reset`) land there, correct, and
-  any write covering a read lands over the fill first. A liveness-aliased buffer is filled by
+  set is conservative: a read of a padded margin (`test_padding_reset`) can land there, correct,
+  and any write covering a read lands over the fill first. A liveness-aliased buffer is filled by
   location, but only a range's first occupant reads the fill: a later one that lost a zero reads what
   its predecessor left, which only a closed form or a planner-off twin shows. Nor can the key reach
   what has no host-reachable buffer of its own: a `Local` node, a schedule-minted partial.

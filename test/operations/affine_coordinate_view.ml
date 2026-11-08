@@ -568,6 +568,41 @@ let () =
     ()
 
 let () =
+  let c = sym () and h = sym () and e = sym () in
+  let dims = [| 3; 1; 1; 2 |] in
+  let read = (plain [| it h; fx 0; fx 0; it e |], [ (h, (0, 2)); (e, (0, 1)) ]) in
+  let body = (vector ~length:4 [| sub; fx 0; fx 0; aff [ (4, c) ] 0 |], [ (c, (0, 0)) ]) in
+  let tail = (vector ~length:2 [| sub; fx 0; fx 0; aff [ (4, c) ] 0 |], [ (c, (1, 1)) ]) in
+  covered ~name:"spilling packed body and tail cover 3x1x1x2" ~dims ~read ~writes:[ body; tail ] ();
+  covered ~control:true ~name:"spilling body without tail leaves two cells" ~dims ~read
+    ~writes:[ body ] ();
+  covered ~control:true ~name:"spilling tail without body leaves four cells" ~dims ~read
+    ~writes:[ tail ] ();
+  covered ~control:true ~name:"spilling body and short tail leave last cell" ~dims ~read
+    ~writes:[ body; (vector ~length:1 [| sub; fx 0; fx 0; fx 4 |], []) ]
+    ();
+  (* Spell the scalar tail in the body's flat frame, so both writes contribute to the same box union
+     and its interior hole must be detected. *)
+  covered ~control:true ~name:"spilling body and late tail leave an interior hole" ~dims ~read
+    ~writes:[ body; (vector ~length:1 [| sub; sub; sub; fx 5 |], []) ]
+    ();
+  covered ~control:true ~name:"spilling runs with stride five leave gaps" ~dims:[| 5; 1; 1; 2 |]
+    ~read:(plain [| it h; fx 0; fx 0; it e |], [ (h, (0, 4)); (e, (0, 1)) ])
+    ~writes:[ (vector ~length:4 [| sub; fx 0; fx 0; aff [ (5, c) ] 0 |], [ (c, (0, 1)) ]) ]
+    ()
+
+let () =
+  let c = sym () and h = sym () in
+  covered ~name:"one-lane tail shares body's trailing-unit frame" ~dims:[| 9; 1 |]
+    ~read:(plain [| it h; fx 0 |], [ (h, (0, 8)) ])
+    ~writes:
+      [
+        (vector ~length:4 [| aff [ (4, c) ] 0; fx 0 |], [ (c, (0, 1)) ]);
+        (vector ~length:1 [| aff [ (4, c) ] 0; fx 0 |], [ (c, (2, 2)) ]);
+      ]
+    ()
+
+let () =
   (* gh-ocannl-1174: a dynamic read's data-dependent axis is a universal coordinate over its extent
      (the enumeration reads every row), so a gather is covered exactly when the writes fill every
      row at the cells its known coordinates name. *)
