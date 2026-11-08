@@ -83,18 +83,25 @@ check_child() {
 if [ "$2" = query ]; then
   # Ignore TERM at fork, so the child is immune even before it runs its first
   # command. The parent's returning trap relays TERM to that live child.
+  query_marker=$3
+  mkfifo "$query_marker.fifo" || exit 1
   trap '' TERM
-  (sleep .3; exit 41) & child=$!
+  (read -r release <"$query_marker.fifo"; sleep .3; exit 41) & child=$!
   relayed=0
   trap 'relayed=1; kill -TERM "$child" 2>/dev/null || :' TERM
   # A file survives command substitution: inject once, at the query itself.
-  query_marker=$3
   jobs() {
     if [ ! -e "$query_marker" ]; then
       : >"$query_marker"
       kill -TERM 0
     fi
     builtin jobs "$@"
+    # Only a surviving query releases the child. The unmasked twin dies at
+    # kill above, so its wait oracle sees a live child regardless of delays.
+    if [ ! -e "$query_marker.released" ]; then
+      : >"$query_marker.released"
+      printf 'go\n' >"$query_marker.fifo"
+    fi
   }
   check_child 41
   [ "$relayed" = 1 ] && [ -e "$query_marker" ]
@@ -131,7 +138,16 @@ status_leg() {
 }
 harness_leg_run '1: child status survives a returning trap' status_leg
 
+driver_available() {
+  local platform
+  platform=$(python3 -c 'import os; print(os.name)') || { harness_abandon 'cannot inspect the stress driver platform'; return 1; }
+  if [ "$platform" != posix ]; then
+    skip "$1" 'Python has no POSIX FIFOs/process groups on this host'
+    return 1
+  fi
+}
 query_leg() {
+  driver_available 'job-table query group TERM' || return
   write_status_probe
   python3 - "$HERE/process-group.sh" "$TMP/unmasked.sh" <<'MUTANT'
 from pathlib import Path
@@ -171,14 +187,6 @@ DRIVER
 }
 harness_leg_run '1b: group TERM inside the job-table query' query_leg
 
-driver_available() {
-  local platform
-  platform=$(python3 -c 'import os; print(os.name)') || { harness_abandon 'cannot inspect the stress driver platform'; return 1; }
-  if [ "$platform" != posix ]; then
-    skip "$1" 'Python has no POSIX FIFOs/process groups on this host'
-    return 1
-  fi
-}
 race_leg() {
   driver_available 'wait-entry stress driver' || return
   driver_run "$TMP/race" "$HERE/process-group.sh" "${OCANNL_TOOL_SIGNAL_RACE_READY:-}"
