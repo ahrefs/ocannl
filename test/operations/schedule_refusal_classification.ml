@@ -191,7 +191,15 @@ let () =
   materialize acc;
   let idcs = [| fixed 0 |] in
   let store = set acc idcs (c 7.) in
-  let update = set acc idcs (add (get acc idcs) (get acc idcs)) in
+  let update = set acc idcs (add (get acc idcs) (c 1.)) in
+  let axis = sym () in
+  let live = loop_n axis 2 update in
+  let opt = optimize_scoped ~name:"mintable_unroll" ~raw:store live in
+  let result = Sched.apply_classified [ Sched.Unroll { axis; materialize = true } ] opt in
+  p "the live accumulation control mints a schedule accumulator scope"
+    (match result.LL.llc with
+    | LL.Set { llsc = LL.Local_scope { mint = LL.Schedule_minted; _ }; _ } -> true
+    | _ -> false);
   List.iter
     [ ("store", store); ("accumulation", update) ]
     ~f:(fun (kind, body) ->

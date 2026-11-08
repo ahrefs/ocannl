@@ -78,7 +78,7 @@ type schedule = optop list [@@deriving sexp_of]
    [Base.List.init] promises none; this is the order it has in practice, kept so that no kernel
    moves. *)
 let init_last_first n ~f =
-  (* Nonpositive counts produce no copies, as for a dead loop's trip count. *)
+  (* Total: a nonpositive count yields no elements. Unroll returns early on dead loops. *)
   let rec loop i acc = if i <= 0 then acc else loop (i - 1) (f (i - 1) :: acc) in
   loop n []
 
