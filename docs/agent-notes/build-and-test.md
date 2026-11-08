@@ -5261,9 +5261,10 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   unknown option -- is every backend) answers, so `runtest test/operations` is a GPU batch while
   `@test/operations/runtest-<cpu test>` is not; a Metal marker counts even on Linux, where its
   stanza compiles the stub. A rule target whose suffix is absent from
-  `Slot_kind.data_suffixes` (for example `.err`) counts as a source-like producer, so plain builds
-  reach its action and `slot_kind_live` refuses a backend marker there. Give diagnostic outputs a
-  data suffix such as `.log` or `.out` when compilation does not need them.
+  `Slot_kind.data_suffixes` (for example `.err`) counts as a source-like producer, so `Slot_kind`
+  takes a plain build to reach its action and `slot_kind_live` refuses a backend marker there.
+  Give diagnostic outputs a data suffix such as `.log` or `.out` when compilation does not need
+  them.
   Second, the configuration, which counts for every batch but two shapes
   (gh-ocannl-1227, the maintainer's decision replacing gh-ocannl-1095's proof that a batch read
   none, which needed an exact model of every dune construct and grew one per review round): every

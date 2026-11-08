@@ -32,8 +32,8 @@
       "has a context buffer" — a node written and read within one routine and never observed is
       placed [Local], routine-scoped scratch, and host access to it raises (gh-ocannl-599).
 
-    Keep internal helpers local to each test; the harness's IR surface is classified by
-    [ll_test_ratchet], and test-support helpers outside that surface do not count as IR adoption.
+    A test-support helper added here joins [ll_test_ratchet.expected]'s outside-the-IR-surface list
+    and adopts nothing, so keep internal helpers local to each test.
 
     This library links [ocannl], which is why it lives beside {!Test_utils} rather than inside it:
     [test_utils] deliberately depends on [arrayjit.ir] alone, for tests that link no more than that.
