@@ -1800,7 +1800,7 @@ if [ -z "$bfr_detail" ]; then
     *) bfr_detail="a type error: exit $bfr_rc (want 65 naming the step and bad's stale output): $bfr_out" ;;
   esac
   bfr_dir=$(OCANNL_TOOL_TEST_RUNS=$TMP/bfr-runs "$bfr_root/tools/test-run.sh" paths run last)
-  if ! LC_ALL=C grep -q "$(printf '\033')\[" "$bfr_dir/log"; then
+  if [ -z "$bfr_detail" ] && ! LC_ALL=C grep -q "$(printf '\033')\[" "$bfr_dir/log"; then
     bfr_detail="the real build failure log did not carry forced colour: $bfr_dir/log"
   fi
   bfr_stale=$(printf '%s\n' "$bfr_out" | awk '/^NOT this run.s output/ { f = 1; next } f && /^  / { print; next } f { exit }')

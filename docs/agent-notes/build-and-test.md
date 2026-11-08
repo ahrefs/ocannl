@@ -1049,9 +1049,10 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `harness_dune_colour` from `scripts/harness-support.sh` at the fixture command,
   so setup-ocaml's `CLICOLOR_FORCE=1` presentation is exercised locally too
   (gh-ocannl-2070). `harness_plain` strips ANSI at the matching boundary while
-  retaining the raw log. The formatter, promotion, digest and scan-case harnesses
-  pin coloured fixtures; affected-test queries and saved-promotion recovery also
-  run with colour forced. Alias validation already tests both colour settings.
+  retaining the raw log. The promotion, digest and scan-case harnesses pin
+  coloured fixtures; the formatter subject, ppx target-listing subject, promotion
+  subject, affected-test queries and saved-promotion recovery run with colour
+  forced. Alias validation already tests both colour settings.
 - A harness names its locale (gh-ocannl-2002): `harness_args` exports `LANG=C` where neither
   `LANG` nor `LC_ALL` is set (a headless ssh session). There a Homebrew bash asks CoreFoundation
   for the user's preferred languages whenever a script assigns a locale variable (`local

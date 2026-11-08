@@ -98,7 +98,7 @@ snapshot >"$TMP/before" 2>&1 || fixture_ok=0
 out="$TMP/out" err="$TMP/err"
 run() { # run the subject on the planted repository; status in $rc, stdout in $out, stderr in $err
   rc=0
-  TMPDIR="$TMP/subject-tmp" "$subject" -C "$R" "$@" >"$out" 2>"$err" || rc=$?
+  TMPDIR="$TMP/subject-tmp" harness_dune_colour "$subject" -C "$R" "$@" >"$out" 2>"$err" || rc=$?
 }
 expect_rc() { # LABEL WANT [STDERR-REASON]; exit 2 always needs its reason
   if [ "$rc" = "$2" ] &&

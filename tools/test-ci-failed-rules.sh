@@ -209,10 +209,6 @@ build() { # LOG TARGET...
   # read their log unstripped passed locally and failed in CI).
   (cd "$proj" && CI=true harness_dune_colour dune build --root . "$@") >"$log" 2>&1
 }
-# A log's lines as the reader sees them: build() forces dune's colour as CI's
-# environment does (CLICOLOR_FORCE), which these legs' own reads of a raw log
-# must look past.
-plain() { harness_plain "$1"; }
 first_two='Failed dune rules (1), in the order dune reported them:
   t/dune:6-17  (rule) target bad.actual'
 ran_re="^      ran: \(cd _build/default/t && [^ ]*sh -c 'echo noise from the failing test; exit 3'\) > _build/default/t/bad\.actual$"
@@ -234,12 +230,14 @@ build "$TMP/red.log" @runtest; red_brc=$?
 # Dune's locationless error, which two legs read: built here, outside both
 # gates, so each passes run alone (tools/harness-legs-alone.sh).
 build "$TMP/alias.log" @t/runtest-nonesuch; alias_brc=$?
+# Keep the coloured raw logs; match their text through harness_plain, the
+# same normalization boundary each later diagnostic check uses.
 if harness_leg 'the built logs carry CI'"'"'s forced colour #dune'; then
   # The raw logs hold what CI's hold: dune's escapes around the header, so
   # every leg reading one unstripped is tried here as it is there
   # (gh-ocannl-1928), whatever the ambient CLICOLOR_FORCE.
   if [ "$red_brc" = 1 ] && LC_ALL=C grep -q "$(printf '\033')\[[0-9;]*mFile \"t/dune\"" "$TMP/red.log" &&
-     plain "$TMP/red.log" | grep -q '^File "t/dune", lines 6-17'; then
+     harness_plain "$TMP/red.log" | grep -q '^File "t/dune", lines 6-17'; then
     report 0 'the built logs carry CI'"'"'s forced colour'
   else report 1 'the built logs carry CI'"'"'s forced colour' "build exit $red_brc; $(head -c 300 "$TMP/red.log")"; fi
 fi
@@ -525,8 +523,8 @@ if harness_leg 'a scan'"'"'s FAIL: line is quoted under its golden #dune'; then
   r/scan.expected:1  output differs from this golden
       | +FAIL: arrayjit/lib/backends.ml:120: a label read the scan cannot place'
   if [ "$scan_brc" = 1 ] && [ "$rc" = 0 ] && [ "$out" = "$want" ] &&
-     plain "$TMP/scan.log" | grep -q '^ accepted position in use: an Error: payload$' &&
-     plain "$TMP/scan.log" | grep -q '^-canary held: the scan reads FAIL: markers$'; then
+     harness_plain "$TMP/scan.log" | grep -q '^ accepted position in use: an Error: payload$' &&
+     harness_plain "$TMP/scan.log" | grep -q '^-canary held: the scan reads FAIL: markers$'; then
     report 0 'a scan'"'"'s FAIL: line is quoted under its golden'
   else report 1 'a scan'"'"'s FAIL: line is quoted under its golden' "build exit $scan_brc, exit $rc; $out"; fi
   # The negative control: reading the whole diff quotes its context line and the line it removes.
@@ -559,9 +557,9 @@ if harness_leg 'another rule'"'"'s output and dune'"'"'s own error are not quote
   }
   out=$(cd "$proj" && subject "$TMP/after-pass.log" 2>&1); rc=$?
   out2=$(cd "$proj" && subject "$TMP/after-dune.log" 2>&1); rc2=$?
-  if [ "$chatty_brc" = 0 ] && [ "$unb_brc" = 1 ] && plain "$TMP/chatty.log" | grep -q '^(cd .*printed by a rule that passes' &&
-     plain "$TMP/unbuildable.log" | grep -q '^-> required by alias r/runtest-unbuildable' &&
-     plain "$TMP/unbuildable.log" | grep -qx 'Error: No rule found for' &&
+  if [ "$chatty_brc" = 0 ] && [ "$unb_brc" = 1 ] && harness_plain "$TMP/chatty.log" | grep -q '^(cd .*printed by a rule that passes' &&
+     harness_plain "$TMP/unbuildable.log" | grep -q '^-> required by alias r/runtest-unbuildable' &&
+     harness_plain "$TMP/unbuildable.log" | grep -qx 'Error: No rule found for' &&
      pass_ok "$out" "$rc" && dune_ok "$out2" "$rc2"; then
     report 0 'another rule'"'"'s output and dune'"'"'s own error are not quoted'
   else report 1 'another rule'"'"'s output and dune'"'"'s own error are not quoted' \
@@ -640,7 +638,7 @@ missing_ok() { last_ok "$1" "$2" '  l/dune:1-4  (rule) alias runtest-missing' "[
 long_ok() { last_ok "$1" "$2" '  l/dune:6-10  (rule) alias runtest-long' "[^ ]*sh -c 'cat long\.out; exit 1'" 'unit\.exe: the arena ran out at step 2000'; }
 if harness_leg 'a rule with no matching line shows its last output line #dune'; then
   out=$(cd "$proj" && subject "$TMP/missing.log" 2>&1); rc=$?
-  if [ "$missing_brc" = 1 ] && plain "$TMP/missing.log" | grep -qx 'probe: starting' && missing_ok "$out" "$rc"; then
+  if [ "$missing_brc" = 1 ] && harness_plain "$TMP/missing.log" | grep -qx 'probe: starting' && missing_ok "$out" "$rc"; then
     report 0 'a shell error is shown as the last output line'
   else report 1 'a shell error is shown as the last output line' "build exit $missing_brc, exit $rc; $out"; fi
   out=$(cd "$proj" && subject --github "$TMP/missing.log" 2>&1); rc=$?
@@ -651,7 +649,7 @@ if harness_leg 'a rule with no matching line shows its last output line #dune'; 
   else report 1 '--github carries the last output line into the annotation' "exit $rc; $out"; fi
   # The end of an output longer than dune keeps, not its banner and not the blank lines after it.
   out=$(cd "$proj" && subject "$TMP/long.log" 2>&1); rc=$?
-  if [ "$long_brc" = 1 ] && plain "$TMP/long.log" | grep -qx 'unit.exe: banner, version 1' &&
+  if [ "$long_brc" = 1 ] && harness_plain "$TMP/long.log" | grep -qx 'unit.exe: banner, version 1' &&
      [ "$(grep -c '^step ' "$TMP/long.log")" -ge 1000 ] && long_ok "$out" "$rc"; then
     report 0 'a long output is quoted by its last non-blank line'
   else report 1 'a long output is quoted by its last non-blank line' "build exit $long_brc, exit $rc; $out"; fi

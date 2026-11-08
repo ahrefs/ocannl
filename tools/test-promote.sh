@@ -203,7 +203,7 @@ repo="$(scenario guard)"
 if [ -z "$repo" ] || ! resolve_and_test "$repo"; then
   report 1 "leg 2 setup: conflicted scenario with a pending promotion"
 else
-  out="$( (cd "$repo" && tools/promote.sh) 2>&1)"
+  out="$( (cd "$repo" && harness_dune_colour tools/promote.sh) 2>&1)"
   (cd "$repo" && g commit -q --no-edit) >/dev/null 2>&1
   built="$(cat "$repo/_build/default/foo.output" 2>/dev/null)"
   committed="$(blob "$repo" HEAD:foo.expected)"
@@ -244,7 +244,7 @@ else
   if [ "$ok" = 0 ]; then
     report 1 "leg 3 setup: golden left unmerged with a pending promotion"
   else
-    out="$( (cd "$repo" && tools/promote.sh) 2>&1)"
+    out="$( (cd "$repo" && harness_dune_colour tools/promote.sh) 2>&1)"
     still_unmerged=1
     [ -n "$( (cd "$repo" && g ls-files --unmerged -- foo.expected) )" ] || still_unmerged=0
     if [ "$still_unmerged" = 1 ]; then
@@ -303,7 +303,7 @@ DUNE
 if [ "$ok" = 0 ]; then
   report 1 "leg 4 setup: non-merge repository with a pending promotion"
 else
-  out="$( (cd "$repo" && tools/promote.sh) 2>&1)"
+  out="$( (cd "$repo" && harness_dune_colour tools/promote.sh) 2>&1)"
   staged_blob="$( (cd "$repo" && g show :foo.expected) 2>/dev/null)"
   worktree="$(cat "$repo/foo.expected" 2>/dev/null)"
   if [ "$staged_blob" = "stale" ] && [ "$worktree" = "fresh" ]; then
@@ -364,7 +364,7 @@ DUNE
   if [ "$ok" = 0 ]; then
     report 1 "leg 5 setup: an untracked golden with a pending CRLF promotion"
   else
-    out="$( (cd "$repo" && tools/promote.sh) 2>&1)"
+    out="$( (cd "$repo" && harness_dune_colour tools/promote.sh) 2>&1)"
     if [ -n "$( (cd "$repo" && g ls-files -- bar.expected) )" ]; then
       report 0 "leg 5  a golden created mid-merge is staged, not left untracked"
     else
@@ -408,7 +408,7 @@ fi
 exec "$(command -v dune)" "\$@"
 SHIM
   chmod +x "$repo/shim/dune"
-  out="$( (cd "$repo" && PATH="$repo/shim:$PATH" tools/promote.sh) 2>&1)"
+  out="$( (cd "$repo" && PATH="$repo/shim:$PATH" harness_dune_colour tools/promote.sh) 2>&1)"
   rc=$?
   worktree="$(cat "$repo/foo.expected" 2>/dev/null)"
   built="$(cat "$repo/_build/default/foo.output" 2>/dev/null)"
@@ -456,7 +456,7 @@ SHIM
     # Restrict the mutation to the guard's list capture.
     perl -i -pe 's/(promoted=.*dune promotion list.*)2>&1/$1 2>\/dev\/null/' "$repo/tools/promote.sh"
   fi
-  out="$( (cd "$repo" && PATH="$repo/shim:$PATH" tools/promote.sh) 2>&1)"
+  out="$( (cd "$repo" && PATH="$repo/shim:$PATH" harness_dune_colour tools/promote.sh) 2>&1)"
   (cd "$repo" && g commit -q --no-edit) >/dev/null 2>&1
   built="$(cat "$repo/_build/default/foo.output")"
   committed="$(blob "$repo" HEAD:foo.expected)"
@@ -486,7 +486,7 @@ exec "$(command -v dune)" "\$@"
 SHIM
   chmod +x "$repo/cred-shim/dune" || return 1
   (cd "$repo" && GH_TOKEN=fixture-not-a-token FOO_API_KEY=fixture-not-a-key PROMOTE_PLAIN=kept \
-    PATH="$repo/cred-shim:$PATH" tools/promote.sh) >"$TMP/$1.out" 2>&1 || return 1
+    PATH="$repo/cred-shim:$PATH" harness_dune_colour tools/promote.sh) >"$TMP/$1.out" 2>&1 || return 1
   [ -s "$TMP/$1.names" ]
 }
 names_have() { grep -qx "$1" "$2"; }
