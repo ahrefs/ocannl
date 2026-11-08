@@ -68,6 +68,9 @@ module Agent_notes_scan = Agent_notes_scan
 (** Reading [docs/agent-notes.md] and [docs/agent-notes/] as structure: bullet integrity, index-hook
     agreement, table shape, reachability from the index, and repetition across files. *)
 
+module Markdown_link_scan = Markdown_link_scan
+(** Checking the closed inline-link dialect against repository source paths. *)
+
 module Dead_export_scan = Dead_export_scan
 
 module Api_drift = Api_drift

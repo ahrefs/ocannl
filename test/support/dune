@@ -61,6 +61,7 @@
  (modules
   test_utils
   agent_notes_scan
+  markdown_link_scan
   doc_examples_scan
   dead_export_scan
   api_drift

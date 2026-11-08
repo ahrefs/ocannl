@@ -270,7 +270,7 @@ Individual tensor nodes can have their precision updated:
 Ir.Tnode.update_prec tensor.value Ir.Ops.double
 ```
 
-See [Precision Inference](docs/precision_inference.md) for details.
+See [Precision Inference](precision_inference.md) for details.
 
 ## Contexts
 

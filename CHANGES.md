@@ -2346,7 +2346,7 @@ and the floating-point algebra-policy split (gh-ocannl-998) remain follow-up wor
 - Finally proper support for mixed precision! Lazy precision defaults and delayed precision setting via `Tnode.update_prec`.
 - A placeholder `nn_blocks.ml` hinting at an intended design pattern for model components.
 - A memory model for the multiple virtual devices per physical device setup, implemented in the CUDA backend. It fixes the CUDA backend behavior in the data parallelism benchmark.
-- Slides for the Fun OCaml meetup: [docs/Fun OCaml](docs/OCANNL-slides-basics_backprop_training_loop_codegen.pdf).
+- Slides for the Fun OCaml meetup: [docs/Fun OCaml](docs/slides-basics_backprop_training_codegen.md).
 - New syntax: inline tensor declarations with a literal float as initial value.
 
 ### Changed

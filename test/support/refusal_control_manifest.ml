@@ -16,6 +16,12 @@ open Stdio
 
 let raw_entries =
   [
+    ( "markdown_links.ml",
+      [
+        "[scanner-refusal:2f2dfef90107c2fbc43b20d212add0ef] Markdown corpus includes";
+        "[scanner-refusal:63555f8686b2d8399a5909d32c43838b] documented symlink alias";
+        "[scanner-refusal:497f7864b862de90bf699cb29ebc7395] recognised relative Markdown";
+      ] );
     ("doc_examples_extract.ml", []);
     ("ll_test_ratchet.ml", []);
     ( "exact_partials_ratchet.ml",

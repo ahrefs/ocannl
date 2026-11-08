@@ -461,7 +461,7 @@ To maintain the familiar concise syntax, yet allow for configurability during in
 
 As we mentioned above, in the `%cd` syntax you can set up an arbitrary assignment with projections derived from a generalized einsum specification, by passing the specification as a string with the `~logic` label. However, both the `%cd` and `%op` syntaxes support built-in operators that take an einsum specification: `+*` binding to `NTDSL.einsum` resp. `TDSL.einsum`, and `++` binding to `NTDSL.einsum1` resp. `TDSL.einsum1`. `+*` is a "ternary" operator, binary wrt. tensor arguments, and `++` is a binary operator, unary postfix wrt. tensor arguments. There are even more einsum operators: binary `@^+` binding to `tropical` and `+++` binding to `outer_sum`; unary `@^^` binding to `einmax1` (the operator-to-function tables are `einsum_binary_ops`/`einsum_unary_ops` in `tensor/ppx_shared.ml`). When the einsum specification is a literal string, we support two syntax patterns: the string can either directly follow the operator (infix-style notation), or the string can follow the second argument (mixfix-style notation). When the spec string is an identifier, it must directly follow the operator.
 
-`+*`, `+++` and `++` use addition for the accumulation operation; `@^+` and `@^^` use maximum. The pairwise operation combined with the accumulation: `+*` multiplies (the classic einsum contraction), `+++` and `@^+` add (so `@^+` is max-reduce with add — the tropical semiring), and the unary `++`/`@^^` reduce their argument directly (add-reduce resp. max-reduce). You can verify that looking at the definitions of `Operation.einsum`, `Operation.einsum1`, etc. You can find examples of `+*` and `++` behavior in the test suite [einsum_trivia.ml](test/einsum_trivia.ml) and in [nn_blocks.ml](lib/nn_blocks.ml). A frequent use-case for `++` is to sum out all axes of a tensor:
+`+*`, `+++` and `++` use addition for the accumulation operation; `@^+` and `@^^` use maximum. The pairwise operation combined with the accumulation: `+*` multiplies (the classic einsum contraction), `+++` and `@^+` add (so `@^+` is max-reduce with add — the tropical semiring), and the unary `++`/`@^^` reduce their argument directly (add-reduce resp. max-reduce). You can verify that looking at the definitions of `Operation.einsum`, `Operation.einsum1`, etc. You can find examples of `+*` and `++` behavior in the test suite [einsum_trivia.ml](../test/einsum/einsum_trivia.ml) and in [nn_blocks.ml](../lib/nn_blocks.ml). A frequent use-case for `++` is to sum out all axes of a tensor:
 
 ```ocaml
   let%op scalar_loss = (margin_loss ++ "...|... => |->0") /. !..batch_size in
@@ -836,7 +836,7 @@ In the `%op` syntax, inline declarations use record syntax with additional field
   - `input_dims` or shorthand `i`: `{ w; i = [ 3 ]; o = [ 4 ] }`
   - `batch_dims` or shorthand `b`: for batch dimensions (rarely used in `%op`)
 
-A very simple example from [micrograd_demo: Micrograd README basic example](test/micrograd_demo.ml):
+A very simple example from [micrograd_demo: Micrograd README basic example](../test/operations/micrograd_demo_logging.ml):
 
 ```ocaml
   let%op c = { a = [ -4 ] } + { b = [ 2 ] } in

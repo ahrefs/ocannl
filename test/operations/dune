@@ -151,6 +151,8 @@
   (alias runtest-codegen_text_inventory)
   (alias runtest-codegen_text_inventory_control)
   (alias runtest-agent_notes_structure)
+  (alias runtest-markdown_links)
+  (alias runtest-markdown_link_scan_cases)
   (alias runtest-doc_examples)
   (alias runtest-doc_examples_scan_cases)
   (alias runtest-doc_examples_compile_control)
@@ -390,6 +392,7 @@
   (alias runtest-model_default_placements)
   (alias runtest-placement_search_parity)
   (alias runtest-agent_notes_structure)
+  (alias runtest-markdown_links)
   (alias runtest-doc_examples)
   (alias runtest-doc_examples_scan_cases)
   (alias runtest-changelog_unreleased_scan)
@@ -4473,6 +4476,8 @@
   agents_md_size.expected
   agent_notes_structure.ml
   agent_notes_structure.expected
+  markdown_links.ml
+  markdown_links.expected
   backend_golden_family_scan.ml
   backend_golden_family_scan.expected
   bin_smoke_membership_scan.ml
@@ -4578,6 +4583,8 @@
    agents_md_size.expected
    agent_notes_structure.ml
    agent_notes_structure.expected
+   markdown_links.ml
+   markdown_links.expected
    backend_golden_family_scan.ml
    backend_golden_family_scan.expected
    bin_smoke_membership_scan.ml
@@ -10039,6 +10046,44 @@
 ; an unterminated `.ocamlformat-ignore` line silently removed two exclusions at once. The scanner
 ; checks both directions plus the line/newline structure, and its own child-process controls stage
 ; every refusal so a green live tree cannot leave the diagnostic paths dead.
+
+(executable
+ (name markdown_links)
+ (modules markdown_links)
+ (libraries base stdio test_utils arrayjit.verdict))
+
+(rule
+ ; ocannl-backend: none -- reads source Markdown without linking a backend.
+ (target markdown_links.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (sandbox always)
+  (source_tree ../..))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:markdown_links.exe}
+    %{workspace_root}
+    %{target}
+    %{dep:markdown_links.exe}
+    %{dep:ocannl_config}))))
+
+(rule
+ (alias runtest-markdown_links)
+ (package neural_nets_lib)
+ (action
+  (diff markdown_links.expected markdown_links.actual)))
+
+(test
+ ; ocannl-backend: none -- pure Markdown link controls.
+ (name markdown_link_scan_cases)
+ (package neural_nets_lib)
+ (modules markdown_link_scan_cases)
+ (deps ocannl_config)
+ (libraries base test_utils arrayjit.verdict))
 
 (executable
  (name ocamlformat_ignore_scan)
