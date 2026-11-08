@@ -3,6 +3,7 @@ an element replaced between two kept ones pairs with its replacement: true
 two adjacent replacements pair in order: true
 a replacement beside an insertion pairs nothing: which replaced which is not determined: true
 a replacement at either end still pairs: true
+a paired or dropped malformed marker is reported as an unresolved hand edit: true
 a rewording the row pairs one for one leaves nothing unresolved: true
 the rewritten row is the new extraction, in order: true
 the reworded direct failure's evidence key follows it, its unchanged sibling's stays: true

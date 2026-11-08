@@ -75,6 +75,25 @@ let () =
     (Poly.equal (align [ "a"; "b"; "c" ] [ "a"; "B"; "x"; "c" ]) ([], [ "b" ], [ "B"; "x" ]));
   p "a replacement at either end still pairs"
     (Poly.equal (align [ "a"; "b"; "c" ] [ "A"; "b"; "C" ]) ([ ("a", "A"); ("c", "C") ], [], []));
+  (* An old marker outside the owner's grammar cannot provide a key or golden swap. Neither a
+     one-for-one replacement nor a deletion may quietly lose that identity. *)
+  let malformed = "a malformed old marker" in
+  let malformed_manifest =
+    manifest ~rows:[ ("synthetic_scan.ml", [ malformed ]) ] ~evidence:[] ~catalogue:[]
+  in
+  p_all ~min:2 "a paired or dropped malformed marker is reported as an unresolved hand edit"
+    [ {ocaml|Verdict.fail "a new refusal"|ocaml}; "" ] ~f:(fun source ->
+      let diagnostics = Scan.diagnostics source in
+      let plan =
+        Sync.plan ~text:malformed_manifest ~renamed_claims:[]
+          ~diagnostics_of:(fun _ -> Some diagnostics)
+          ()
+      in
+      (not (List.is_empty plan.edits))
+      && List.is_empty plan.markers
+      && List.exists plan.unresolved ~f:(fun message ->
+          String.is_substring message ~substring:malformed
+          && String.is_substring message ~substring:"not a marker of the current grammar"));
   (* [plan] over a synthetic manifest whose row is [before]'s extraction. *)
   let second_before = identity_of before "the second refusal reads the old way"
   and second_after = identity_of after "the second refusal reads a new way"

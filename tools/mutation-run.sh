@@ -201,12 +201,6 @@ my %before;
 # What a Verdict.case prints when its case raises (test/support/verdict.ml): the
 # case's own failed claim, standing in for rows the raise kept from printing.
 my $case_raise = qr/: the case ran to completion \(raised .*\): false$/;
-# A refusal-manifest marker row, as Test_scan.Refusal_control_manifest.print_section writes one: a
-# claim's marker prints only once Verdict recorded that claim passing, so a run in which the
-# claim failed is a marker row short of the golden while it still reached its last row
-# (gh-ocannl-1216). tools/test-mutation-run.sh replays a run that printer ended, so this shape is
-# pinned on its output, not its source.
-my $marker_row = qr/^  \[scanner-refusal:[0-9a-f]{32}\] /;
 # That printer's fixed text, read from its one owner, test/support/refusal_section_heads.ml
 # (gh-ocannl-1840), by the grammar that file's header states and refusal_control_scan_cases holds
 # its compiled values to: a value is exactly one line `let <name> = "<text>"`, the text free of `"`
@@ -218,7 +212,7 @@ my $heads_file = "$root/test/support/refusal_section_heads.ml";
 my %head;
 {
     my @lines = split /\r?\n/, bytes($heads_file);
-    for my $name (qw(closing_row not_printed_head)) {
+    for my $name (qw(closing_row not_printed_head marker_indent marker_prefix marker_hex_chars marker_hex_length marker_separator)) {
         my @bound = grep { /^\s*let\s+\Q$name\E\b/ } @lines;
         @bound == 1 && $bound[0] =~ /^let \Q$name\E = "([^"\\]*)"$/
             or refuse("$heads_file: `$name` is not bound on exactly one line "
@@ -226,6 +220,13 @@ my %head;
         $head{$name} = $1;
     }
 }
+$head{marker_hex_length} =~ /^[1-9][0-9]*$/ && length($head{marker_hex_chars})
+    or refuse("$heads_file: invalid marker digest grammar");
+# A refusal-manifest marker row, derived from the owner's fields above and pinned by leg 5's
+# replay of real print_section output in tools/test-mutation-run.sh. A claim's marker prints only
+# once Verdict records it passing, so its failure leaves a marker row short of the golden even
+# when the run reaches its last row (gh-ocannl-1216).
+my $marker_row = qr/^\Q$head{marker_indent}$head{marker_prefix}\E[\Q$head{marker_hex_chars}\E]{$head{marker_hex_length}}\Q$head{marker_separator}\E/;
 # The row that section ends on, printed unconditionally after its markers (gh-ocannl-1251,
 # gh-ocannl-1318).
 my $closing_row = qr/^\Q$head{closing_row}\E$/;

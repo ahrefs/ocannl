@@ -5,6 +5,7 @@ open Base
 open Stdio
 module Scan = Test_scan.Refusal_control_scan
 module Manifest = Test_scan.Refusal_control_manifest
+module Heads = Test_scan.Refusal_section_heads
 
 let minus = Manifest.minus
 
@@ -54,6 +55,9 @@ let dynamic reason = Verdict.fail reason
 |ocaml}
   in
   let diagnostics = Scan.diagnostics source in
+  Verdict.p_all ~min:9 "the marker grammar reads every real diagnostic identity" diagnostics
+    ~f:(fun d ->
+      Option.equal String.equal (Heads.marker_identity (Scan.marker d)) (Some d.Scan.identity));
   let fragments = List.map diagnostics ~f:(fun diagnostic -> diagnostic.Scan.fragment) in
   Verdict.p_all ~min:9
     "direct, `failwith`, formatted, `@@`, quantified, `p_all2`, `pf`, and short refusal formats \
@@ -88,7 +92,11 @@ let dynamic reason = Verdict.fail reason
      and the direct failures it asks evidence for, over a row the synthetic source has outgrown. *)
   let extracted = List.map diagnostics ~f:Scan.marker in
   let first = List.hd_exn extracted and second = List.nth_exn extracted 1 in
-  let reworded = "[scanner-refusal:00000000000000000000000000000000] reworded" in
+  let reworded =
+    Heads.marker
+      ~identity:(String.make (Int.of_string Heads.marker_hex_length) '0')
+      ~fragment:"reworded"
+  in
   Verdict.p "a row holding the extraction in order has no difference"
     (Option.is_none (Manifest.row_difference ~registered:extracted ~extracted));
   Verdict.p "a reworded format is one marker added and one removed, with no order to report"
@@ -331,6 +339,8 @@ let dynamic reason = Verdict.fail reason
     (Poly.equal
        (Manifest.repeated_pairs [ (key, own); (key, sibling); (key, own); (key, own) ])
        [ (key, own) ]);
+  Verdict.p "catalogue-only entries with different reasons still repeat their key once"
+    (Poly.equal (Manifest.repeated_catalogue_keys [ (key, own); (key, sibling) ]) [ key ]);
   let manifest = [ "b.ml"; "a.ml"; "c.ml" ] in
   Verdict.p "a manifest source missing from the argument list is named as uncatalogued"
     (Poly.equal (catalogue_mismatch ~manifest ~catalogued:[ "c.ml"; "a.ml" ]) ([ "b.ml" ], [], []));
@@ -439,7 +449,15 @@ let dynamic reason = Verdict.fail reason
         (Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key)
         claim);
   Verdict.p_empty "no `raw_direct_evidence` entry repeats another's key and claim"
-    ~over:Manifest.direct_evidence Manifest.repeated_evidence
+    ~over:Manifest.direct_evidence Manifest.repeated_evidence;
+  let repeated = Manifest.repeated_catalogue_keys Manifest.catalogue_only in
+  List.iter repeated ~f:(fun key ->
+      eprintf
+        "%s: its `raw_catalogue_only` key is written more than once; drop the copy (not part of \
+         the golden)\n"
+        (Option.value (String.chop_prefix key ~prefix:"test/operations/") ~default:key));
+  Verdict.p_empty "no `raw_catalogue_only` entry repeats another's key"
+    ~over:Manifest.catalogue_only repeated
 
 (* Which callees refuse is judged against the claim forms [Verdict.Claims] declares, read from its
    source, so the judgment cannot lag the module. The mutations below edit that same source: a
@@ -512,6 +530,11 @@ let () =
   let source = In_channel.read_all "../support/refusal_section_heads.ml" in
   let values =
     [
+      ("marker_indent", Heads.marker_indent);
+      ("marker_prefix", Heads.marker_prefix);
+      ("marker_hex_chars", Heads.marker_hex_chars);
+      ("marker_hex_length", Heads.marker_hex_length);
+      ("marker_separator", Heads.marker_separator);
       ("closing_row", Heads.closing_row);
       ("not_printed_head", Heads.not_printed_head);
       ("offer_head", Heads.offer_head);
@@ -529,7 +552,7 @@ let () =
     "each section head is bound once, on one line holding its compiled value verbatim, with no \
      quote or backslash in it"
     values ~f:(one_line source);
-  let closing = List.hd_exn values in
+  let closing = ("closing_row", Heads.closing_row) in
   let line = Printf.sprintf "let closing_row = \"%s\"" Heads.closing_row in
   Verdict.p_none ~min:3 "a head wrapped onto two lines, bound twice, or holding an escape is not"
     [

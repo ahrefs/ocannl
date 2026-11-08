@@ -276,7 +276,7 @@ let diagnostics content =
   List.rev !found
 
 let marker diagnostic =
-  Printf.sprintf "[scanner-refusal:%s] %s" diagnostic.identity diagnostic.fragment
+  Refusal_section_heads.marker ~identity:diagnostic.identity ~fragment:diagnostic.fragment
 
 let format_matches ~format label =
   let runs = static_runs format in

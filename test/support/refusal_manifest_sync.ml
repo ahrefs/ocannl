@@ -112,11 +112,7 @@ let quote value =
   Buffer.add_char buffer '"';
   Buffer.contents buffer
 
-(** The identity a marker carries: the digest after its [scanner-refusal:] prefix, up to the closing
-    bracket. *)
-let marker_identity marker =
-  Option.bind (String.chop_prefix marker ~prefix:"[scanner-refusal:") ~f:(fun rest ->
-      Option.map (String.lsplit2 rest ~on:']') ~f:fst)
+let marker_identity = Refusal_section_heads.marker_identity
 
 (** [align ~before ~after]: which elements of [before] the elements of [after] replaced. The two
     lists are compared through their longest common subsequence under [equal]; between two kept
@@ -247,9 +243,18 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
                 ~equal:(fun marker d -> String.equal marker (Scan.marker d))
                 ~before:row.markers ~after:diagnostics
             in
+            let old_identity marker =
+              let identity = marker_identity marker in
+              if Option.is_none identity then
+                unresolved_f
+                  "%s is not a marker of the current grammar in %s: its key and golden marker are \
+                   a hand edit"
+                  marker row.source;
+              identity
+            in
             (* A dropped marker whose format the source still has elsewhere is no lost claim. *)
             unpaired :=
-              List.filter_map dropped ~f:marker_identity
+              List.filter_map dropped ~f:old_identity
               |> List.filter ~f:(fun identity ->
                   not (List.exists diagnostics ~f:(fun d -> String.equal d.Scan.identity identity)))
               |> Fn.flip ( @ ) !unpaired;
@@ -259,7 +264,7 @@ let plan ?(unpaired_claims = []) ~text ~diagnostics_of ~renamed_claims () =
               List.exists diagnostics ~f:(fun d -> String.equal d.Scan.identity identity)
             in
             List.iter pairs ~f:(fun (marker, d) ->
-                Option.iter (marker_identity marker) ~f:(fun identity ->
+                Option.iter (old_identity marker) ~f:(fun identity ->
                     if String.equal marker (Scan.marker d) then ()
                     else if survives identity then
                       unresolved_f
@@ -546,7 +551,7 @@ let rewrite_golden ?sources plan text =
   if List.is_empty plan.markers && List.is_empty claims then text
   else
     let swap_markers line =
-      if not (String.is_substring line ~substring:"[scanner-refusal:") then line
+      if not (String.is_substring line ~substring:Refusal_section_heads.marker_prefix) then line
       else
         List.fold plan.markers ~init:line ~f:(fun line (old, renamed) ->
             String.substr_replace_all line ~pattern:old ~with_:renamed)

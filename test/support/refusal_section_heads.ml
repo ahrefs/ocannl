@@ -1,7 +1,7 @@
 (** The fixed text {!Refusal_control_manifest.print_section} writes for readers outside its process
     (gh-ocannl-1840): the row its stdout section ends on and the heads of the two kinds of stderr
-    line it writes. [tools/mutation-run.sh] reads {!closing_row} and {!not_printed_head};
-    [tools/refusal-manifest-sync.sh]'s engine reads the offer lines through
+    line it writes. [tools/mutation-run.sh] reads {!closing_row}, {!not_printed_head} and the marker
+    grammar; [tools/refusal-manifest-sync.sh]'s engine reads the offer lines through
     {!Refusal_control_manifest.parse_offer}. This module is their one owner: the printer and every
     reader take the text from here.
 
@@ -29,3 +29,25 @@ let not_printed_head = "Refusal marker not printed (not part of the golden): "
 let offer_head = "Refusal evidence offer (not part of the golden): "
 
 let offer_answered_by = " answered by: "
+
+(** Marker grammar: an indented row, this prefix, a lowercase hexadecimal digest, and the separator
+    before its diagnostic fragment. These strings also use the verbatim binding grammar above so the
+    Perl reader derives its regex from the same values. *)
+let marker_indent = "  "
+
+let marker_prefix = "[scanner-refusal:"
+let marker_hex_chars = "0123456789abcdef"
+let marker_hex_length = "32"
+let marker_separator = "] "
+let marker ~identity ~fragment = marker_prefix ^ identity ^ marker_separator ^ fragment
+
+let marker_identity marker =
+  let open Base in
+  Option.bind (String.chop_prefix marker ~prefix:marker_prefix) ~f:(fun rest ->
+      let length = Int.of_string marker_hex_length in
+      let identity = String.prefix rest length in
+      Option.some_if
+        (String.length identity = length
+        && String.for_all identity ~f:(String.mem marker_hex_chars)
+        && String.is_prefix (String.drop_prefix rest length) ~prefix:marker_separator)
+        identity)
