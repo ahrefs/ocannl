@@ -71,7 +71,7 @@
 #      GPU backend, a CPU batch none; the real probe is bin/device_props, built
 #      inside the slot from DUNE_BUILD_DIR's tree.
 # 106. slow aliases receive a four-hour run cap before launch, including files,
-#      fresh and repeat; plan states box/backend guidance, explicit caps win,
+#      fresh and repeat; plan states the cap source, explicit caps win,
 #      and an operand after dune's separator does not raise the default.
 #  77. `plan` reports the probe and the per-test cap as `run` would apply them
 #      (GPU batches only, not @slow, not where run resolves nothing), and asks
@@ -1511,7 +1511,7 @@ probe_run probe-plan hip cc "" "" plan build @cheap
 # The default's scope: no CPU batch, no @slow target; an explicit cap is kept
 # on either, and 0 lifts it.
 for probe in "cpu|cc|build @cheap|test cap: none (no default: a CPU batch)" \
-             "slow|hip|build @test/training/slow-cifar_conv|test cap: none (no default: the targets reach the slow tests (@test/training/slow-cifar_conv))" \
+             "slow|hip|build @test/training/slow-cifar_conv|test cap: none (no default: the targets reach the slow tests (@test/training/slow-cifar_conv); a wedged device" \
              "slow-asked|hip|--test-cap 9000 build @slow|test cap: 9000s for each process dune starts, asked for" \
              "cpu-lifted|cc|--test-cap 0 build @cheap|test cap: none (--test-cap 0)"; do
   [ -z "$plan_probe_detail" ] || break
@@ -1540,29 +1540,33 @@ harness_leg_run '77: plan reports the probe and the per-test cap #device' leg_77
 # plan text would miss a run still cut at the old bound. Fixture actions return
 # immediately; their recorded cap proves the budget without waiting four hours.
 leg_106() {
-  local OCANNL_TOOL_TEST_CAP= d= probe tag argv want
+  local OCANNL_TOOL_TEST_CAP= d= probe tag argv want source
+  . "$HERE/per-test-cap.sh"
   for probe in "ordinary|plan build @cheap|3600" \
-               "slow|plan build @slow|14400" \
-               "member|plan build @@test/training/slow-cifar_conv|14400" \
+               "slow|plan build @slow|$SLOW_RUN_CAP_DEFAULT" \
+               "member|plan build @@test/training/slow-cifar_conv|$SLOW_RUN_CAP_DEFAULT" \
                "short|plan --cap 9 build @slow|9" \
                "lifted|plan --cap 0 build @slow|0" \
                "separator|plan exec prog -- @slow|3600"; do
     IFS='|' read -r tag argv want <<<"$probe"
     # shellcheck disable=SC2086  # fixture argv deliberately split
     probe_run "slow-cap-$tag" hip cc "" "" $argv
-    { [ "$argv_rc" = 0 ] && grep -qF "run cap: ${want}s (0 disables)" <<<"$argv_out"; } ||
+    { [ "$argv_rc" = 0 ] && grep -qF "run cap: ${want}s (" <<<"$argv_out"; } ||
       d="$tag: exit $argv_rc; plan: $argv_out"
     [ -z "$d" ] || break
-    if [ "$tag" = slow ]; then
-      grep -qF 'slow duration guidance: tuf HIP @slow exceeds 3600s; Metal mnist_conv alone ~5280s' <<<"$argv_out" ||
-        d="the slow plan lacks box/backend duration guidance: $argv_out"
-    fi
+    case $tag in
+      slow | member) source="the slow default" ;;
+      short | lifted) source="asked for" ;;
+      *) source="the default" ;;
+    esac
+    grep -qF "run cap: ${want}s ($source" <<<"$argv_out" ||
+      d="the plan lacks its cap source: $argv_out"
   done
   printf '%s\n' '@test/training/slow-cifar_conv' >"$TMP/slow-cap-targets"
-  for probe in "run|run build @slow|14400" \
-               "file|run --targets-file $TMP/slow-cap-targets build|14400" \
-               "fresh|fresh @test/training/slow-cifar_conv|14400" \
-               "repeat|repeat 2 build @slow|14400" \
+  for probe in "run|run build @slow|$SLOW_RUN_CAP_DEFAULT" \
+               "file|run --targets-file $TMP/slow-cap-targets build|$SLOW_RUN_CAP_DEFAULT" \
+               "fresh|fresh @test/training/slow-cifar_conv|$SLOW_RUN_CAP_DEFAULT" \
+               "repeat|repeat 2 build @slow|$SLOW_RUN_CAP_DEFAULT" \
                "override|run --cap 0 build @slow|0"; do
     [ -z "$d" ] || break
     IFS='|' read -r tag argv want <<<"$probe"
@@ -1590,12 +1594,12 @@ leg_106() {
       d="the environment cap was not kept: exit $argv_rc; cap: $(cat "$argv_dir/cap" 2>/dev/null)"
   fi
   if [ -z "$d" ]; then
-    report 0 "slow targets get four hours before launch; plan states duration guidance; explicit caps win"
+    report 0 "slow targets get four hours before launch; plan states the cap source; explicit caps win"
   else
-    report 1 "slow targets get four hours before launch; plan states duration guidance; explicit caps win" "$d"
+    report 1 "slow targets get four hours before launch; plan states the cap source; explicit caps win" "$d"
   fi
 }
-harness_leg_run '106: slow run caps and duration guidance #device' leg_106
+harness_leg_run '106: slow run caps and their sources #device' leg_106
 shared_through renamed_dune
 
 # ---------------------------------------------------------------------------

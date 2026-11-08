@@ -352,9 +352,8 @@ ONLY=()
 # Per-unit wall-clock cap, enforced by the perl supervisor below on both the
 # local and the remote side: macOS has no timeout(1) at all, and where timeout(1)
 # does exist it is not necessarily one whose -k reaches the process group.
-# The Sunday Metal unit was already at 10351s before oracle-widen (gh-ocannl-2091).
-# Keep headroom for rebuilding and downloads; an explicit routine cap still wins.
-CAP=${OCANNL_TOOL_SWEEP_CAP:-14400}
+# Choose the default after parsing --slow; an explicit routine cap still wins.
+CAP=${OCANNL_TOOL_SWEEP_CAP:-}
 # Per-test cap for a GPU unit's dune legs (gh-ocannl-1211; test_cap_start_cmd says where it
 # applies), the default tools/test-run.sh gives a GPU batch; 0 lifts it.
 TEST_CAP=${OCANNL_TOOL_SWEEP_TEST_CAP:-$TEST_CAP_DEFAULT}
@@ -403,6 +402,15 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+if [ -z "$CAP" ]; then
+  if [ "$SLOW" = 1 ]; then CAP=$SLOW_RUN_CAP_DEFAULT; else CAP=5400; fi
+fi
+case $CAP in
+  *[!0-9]*) echo "sweep: OCANNL_TOOL_SWEEP_CAP must be a whole number of seconds, not '$CAP'" >&2; exit 2 ;;
+esac
+[ ${#CAP} -le 9 ] || { echo "sweep: OCANNL_TOOL_SWEEP_CAP too large (max 9 digits)" >&2; exit 2; }
+CAP=$((10#$CAP))
 
 # Errexit is off so that a FAILING TEST does not abort the remaining units --
 # that is the whole point. It must not extend to the harness: anything that
@@ -794,7 +802,7 @@ printf '' >>"$HISTORY" || die "cannot append to $HISTORY"
 # Signals aimed at THIS pid rather than at the process group -- `kill $pid` from a
 # supervisor, or the scheduler cancelling the task -- never reach the capped
 # supervisor on their own: bash defers a trap while it waits on a foreground
-# command, so the tests would run to completion (or to the 90-minute cap) holding
+# command, so the tests would run to completion (or to the selected unit cap) holding
 # the lock, and every sweep queued behind them would be refused. Group signals
 # reach the supervisor directly and it forwards them itself; this is the other
 # half. Each unit therefore runs asynchronously and the trap relays to it.
@@ -817,7 +825,7 @@ printf '' >>"$HISTORY" || die "cannot append to $HISTORY"
 # lists it as running (`jobs -rp`, which also answers inside the command
 # substitution). bash reaps an exited child in the background, so a finished
 # lane's pid is free for the system to reuse while the top level is still waiting
-# on a slower lane -- 90 minutes, on a hung unit -- and a relay that trusted the
+# on a slower lane -- up to the selected unit cap, on a hung unit -- and a relay that trusted the
 # bare pid could TERM an unrelated process. The job table is the parent's own
 # record of child completion, so it holds however the child ended, SIGKILL
 # included, where a marker the child removes on its way out would not.
@@ -3038,6 +3046,7 @@ for lane in "${LANES[@]}"; do
 done
 
 echo "sweep $stamp  ref=$REF ($run_sha)  slow=$SLOW  target=${TARGET:-<all>}  execution=$execution"
+echo "unit cap: ${CAP}s (0 disables)"
 echo "lanes:$lanes_summary"
 # Only when a remote unit is selected: which boot of each GPU box this run addresses.
 [ -z "$LAB_DESTS" ] || echo "destinations:$LAB_DESTS"

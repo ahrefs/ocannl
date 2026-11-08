@@ -47,7 +47,7 @@ on_error() {
   # learn what the sweep printed (gh-ocannl-893 was diagnosed that way). Named
   # indirectly rather than by a per-capture dump, so a capture added later is
   # covered by adding its name here and nothing else.
-  for name in incremental forced slow_forced coverage hostile complete_fail \
+  for name in incremental forced slow_forced explicit_unit_cap lifted_unit_cap coverage hostile complete_fail \
     environment_executed partial_matrix singleton_fail repeated_backend_fail \
     repeated_backend_pass mixed_scope_fail mixed_scope_cleared historical_matrix \
     undeclared_cleared undeclared_skipped undeclared_only rerun_cleared rerun_red completion_red \
@@ -154,7 +154,7 @@ unset SWEEP_TEST_CALLS SWEEP_TEST_ENV_CALLS SWEEP_TEST_WAIT_PREFIX SWEEP_TEST_OP
   SWEEP_TEST_REGISTRY_FROM SWEEP_TEST_REMOTE_DRIVER SWEEP_TEST_REMOTE_ROOT \
   SWEEP_TEST_REMOTE_CASE SWEEP_TEST_CREDENTIALS SWEEP_TEST_CREDENTIAL_PLAIN \
   SWEEP_TEST_SWITCH_CREDENTIALS SWEEP_TEST_OPAM_SELF SWEEP_TEST_SLOT_UNREACHABLE \
-  SWEEP_TEST_TOKEN_WAIT
+  SWEEP_TEST_TOKEN_WAIT SWEEP_TEST_UNIT_CAP
 # And the directory the launching sweep collects its own actions' verdict records in
 # (gh-ocannl-1114): the probe runs below are this harness's fixtures, and a skip they record
 # there would reach the OUTER sweep's aggregation as a claim the suite left unexecuted. Unset
@@ -881,6 +881,7 @@ run_sweep_args() {
     "SWEEP_TEST_WAIT_TICKS=$wait_ticks" \
     "OCANNL_TOOL_SWEEP_LOCAL_BOX=${SWEEP_TEST_LOCAL_BOX-m4-max}" \
     "OCANNL_TOOL_SWEEP_JOBS=${SWEEP_TEST_JOBS:-}" \
+    "OCANNL_TOOL_SWEEP_CAP=${SWEEP_TEST_UNIT_CAP:-}" \
     "OCANNL_TOOL_SWEEP_TEST_CAP=${SWEEP_TEST_TEST_CAP:-}" \
     "SWEEP_TEST_OPAM_HANG=${SWEEP_TEST_OPAM_HANG:-}" \
     "SWEEP_TEST_OPAM_HANG_PID=${SWEEP_TEST_OPAM_HANG_PID:-}" \
@@ -923,6 +924,11 @@ incremental=$(run_sweep)
 forced=$(run_sweep --force)
 slow_forced=$(run_sweep --slow --force)
 
+# Pin the shared budget at the actual sweep launch, preserving the weekday cap.
+. "$(dirname "$sweep")/per-test-cap.sh"
+grep -qF 'unit cap: 5400s (0 disables)' <<<"$incremental"
+grep -qF "unit cap: ${SLOW_RUN_CAP_DEFAULT}s (0 disables)" <<<"$slow_forced"
+
 grep -q 'm4-max/cc: incremental-pass .*execution=incremental' <<<"$incremental"
 grep -q 'm4-max/cc: pass .*execution=forced' <<<"$forced"
 
@@ -942,6 +948,11 @@ expected_header='when	machine	backend	ref	outcome	seconds	target	slow	log	execut
 [ "$(sed -n '4p' "$calls")" = 'exec -- dune clean' ]
 [ "$(sed -n '5p' "$calls")" = 'exec -- dune build --force @runtest @train' ]
 [ "$(sed -n '6p' "$calls")" = 'exec -- dune build --force @slow' ]
+
+explicit_unit_cap=$(SWEEP_TEST_UNIT_CAP=17 run_sweep --slow)
+lifted_unit_cap=$(SWEEP_TEST_UNIT_CAP=0 run_sweep)
+grep -qF 'unit cap: 17s (0 disables)' <<<"$explicit_unit_cap"
+grep -qF 'unit cap: 0s (0 disables)' <<<"$lifted_unit_cap"
 
 # gh-ocannl-1778: the cc-outlined unit is the cc suite with outlining forced -- backend cc, the two
 # outlining keys set, @runtest alone (no @train, and no @slow even under --slow) -- recorded under

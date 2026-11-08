@@ -3186,30 +3186,6 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
 
 ## Aliases and goldens
 
-- Slow-suite budgets (gh-ocannl-2091): `tools/test-run.sh` defaults to 14400 s for a
-  batch reaching a slow alias, including targets files and individual members, and 3600 s
-  otherwise. An explicit `--cap` or `OCANNL_TOOL_TEST_CAP` wins, including 0. The decision
-  happens before the supervisor starts, using the same target predicate as the per-test cap,
-  so it covers resolution and building too. This is a conservative portable budget rather
-  than a prediction for each member; `plan` states the cap and the full-suite duration guidance.
-  On tuf HIP the old 3600 s cap cut the last slow action; Metal `mnist_conv` alone is projected
-  at about 5280 s from gh-ocannl-2082's short controls. The 2026-11-01 m4-max Metal sweep unit
-  took 10351 s before the widen oracle joined it at 612 s of additional action work. Those
-  action times need not add to wall time at parallel width, but 449 s of remaining headroom
-  is too little for growth and run-to-run variation. `tools/sweep.sh` therefore also
-  defaults to 14400 s per unit. Scheduled launch commands setting `OCANNL_TOOL_SWEEP_CAP`
-  override that default and must be synced separately (the Sunday command needs 14400).
-- The forced slow sweep `20261108T061832Z` at `4acc4ccce` completed its whole units in
-  3597 s on rog CUDA, 4918 s on minix HIP, and 6621 s on tuf HIP, including build, runtest
-  and train; these are not slow-only measurements. The widen oracle actions took 633 s,
-  611 s and 1065 s respectively, read from each sweep worktree's Dune trace (tuf's
-  `trace.csexp.old` after its diagnostic leg). These native Linux runs do not measure WSL.
-  Metal timed out at 10800 s; gh-ocannl-2082 isolates a separate deliberate hang probe,
-  while short production-backend controls show the convolutions advancing. That run supplies no
-  completed-suite duration. The later m4-max cc-oracle-widen unit took 699 s; it does not
-  measure Metal. Collected unit logs and wall seconds live under the sweep state directory's
-  `logs/` and `history.tsv`; action times come from `tools/action-durations.sh` over the trace.
-
 - Every rule that diffs a golden — the repo-wide scans, the codegen snapshots, the config-precedence
   rules, the ppx-output diffs — carries its own `runtest-<name>` alias (gh-ocannl-726), so
   `dune build @test/operations/runtest-verdict_ratchet` runs that one test, applies its diff and is
@@ -4979,13 +4955,27 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   `execution=forced`. The clean is necessary because alias forcing does not reliably rerun inline
   expectations. A unit that cannot rebuild and finish inside the cap records an honest `timeout`.
   The weekly full check is therefore
-  `tools/sweep.sh --slow --force` (raise `OCANNL_TOOL_SWEEP_CAP` where a backend cannot fit the
-  default 90 minutes).
+  `tools/sweep.sh --slow --force`: its default unit cap is four hours, versus 90 minutes without
+  `--slow`. `OCANNL_TOOL_SWEEP_CAP` overrides either; remove a scheduled Sunday override to
+  inherit the shared slow budget.
   When the execution column was introduced, existing `pass` rows became `legacy-pass` with
   `execution=unknown`; old incremental evidence is retained, but cannot masquerade as a forced run.
 
 ### GPU boxes: job caps and runtime refusals
 
+- Slow-suite budgets (gh-ocannl-2091): `SLOW_RUN_CAP_DEFAULT` in `tools/per-test-cap.sh`
+  owns the four-hour budget shared by test-run batches naming slow aliases and sweep units
+  launched with `--slow`. Test-run otherwise defaults to one hour, sweep to 90 minutes.
+  Explicit caps win, including 0; `plan` names the cap's source. Selection precedes the
+  supervisor and includes building and resolution. This portable budget also covers individual
+  slow aliases; it is not a duration prediction. The former cold Metal sweep unit took about
+  10.4 ks before the widen oracle joined at 612 s of action work, leaving roughly an hour
+  of headroom at four hours. Parallel action times need not add to wall time. The separate
+  `slow-metal_gpu_hang_failure` probe has a 300 s alarm; that cost fits the budget but is not
+  evidence of completed training. The per-box timing evidence is in staging#1819.
+  Slow GPU batches deliberately keep no default per-test cap: a wedged device may therefore
+  hold the box for the whole run cap. Set `--test-cap N` for a tighter bound; `plan` names this
+  trade-off. Sweep keeps the per-test watcher on its regular leg even with `--slow`.
 - **On a WSL boot, the hip unit runs its tests under `dune -j 2`, and a red minix/hip whose
   failures are all `HIP_ERROR_INVALID_DEVICE` at `hip_init`, `HIP_ERROR_NO_BINARY_FOR_GPU` at
   module load, or failed stream creation is the WSL2 dxg bridge overflowing, not the backend.**

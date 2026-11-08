@@ -19,6 +19,15 @@
 # every test-run.sh run directory keeps (see its explicit_trace_file).
 TEST_CAP_DEFAULT=1500
 
+# A portable slow-suite/run-unit budget (gh-ocannl-2091), shared by test-run
+# and sweep --slow. The cold Metal unit already took about 10.4ks before the
+# widen oracle added 612s of action work. Four hours leaves about an hour
+# over that former unit for growth, cold builds and downloads. It also covers
+# the deliberately destructive slow-metal_gpu_hang_failure probe's 300s alarm;
+# that alarm is not a completed-training timing. Parallel action times are not
+# summed into a wall-time prediction; the per-box evidence stays in the PR.
+SLOW_RUN_CAP_DEFAULT=$((4 * 60 * 60))
+
 # Whether dune arguments reach the slow tests, which the default leaves to the
 # run's own cap; prints the first argument that does. Arguments after dune's
 # own `--` are the program's, not targets.

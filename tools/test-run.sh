@@ -420,6 +420,18 @@ normalize_cap() { # [VARIABLE OPTION]: `cap` and `--cap` by default
   printf -v "$var" '%s' "$(( 10#$v ))"
 }
 
+# Select only after the complete target intake, before the supervisor starts.
+select_run_cap() { # dune argv; cap_default is nonempty for an explicit cap
+  cap_why="asked for"
+  if [ -z "$cap_default" ]; then
+    cap_why="the default"
+    if test_cap_reaches_slow "$@" >/dev/null; then
+      cap=$SLOW_RUN_CAP_DEFAULT
+      cap_why="the slow default; see docs/agent-notes/build-and-test.md#gpu-boxes-job-caps-and-runtime-refusals"
+    fi
+  fi
+}
+
 # A value option's operand, written `--opt V` or `--opt=V` (gh-ocannl-1740:
 # `run --cap=900 @x` was let through to dune and refused there as misplaced).
 # Sets opt_value, and opt_shift to the words the caller shifts. An empty value
@@ -935,7 +947,7 @@ plan_test_cap() { # <requested, empty for the default> dune-argv
     return 0
   fi
   if arg=$(test_cap_reaches_slow "$@"); then
-    test_cap_why="no default: the targets reach the slow tests ($arg)"
+    test_cap_why="no default: the targets reach the slow tests ($arg); a wedged device can hold this run until its run cap; use --test-cap N for a tighter bound"
     return 0
   fi
   test_cap=$TEST_CAP_DEFAULT test_cap_why="the default for a GPU batch"
@@ -2708,6 +2720,7 @@ new_run() {
   # wait and the supervisor all operate on a run that cannot be tracked.
   { { printf '%q ' "$@"; echo; } >"$run_dir/cmd" &&
     printf '%s\n' "$cap" >"$run_dir/cap" &&
+    printf '%s\n' "${cap_why:-asked for}" >"$run_dir/cap-source" &&
     printf '%s\n' "$PWD" >"$run_dir/wt" &&
     printf '%s\n' "$RUNS" >"$run_dir/runs" &&
     { perl -e "$proc_table_perl" chain 2>/dev/null || :; } >"$run_dir/launchers" &&
@@ -4396,7 +4409,7 @@ case $sub in
         die "repeat --direct needs python3 (the trace reader and tools/replay-rules.sh)"
     fi
     [ $# -gt 0 ] || set -- runtest
-    if [ -z "$cap_default" ] && test_cap_reaches_slow "$@" >/dev/null; then cap=14400; fi
+    select_run_cap "$@"
     select_dune
     new_run "$@"
     take_lock
@@ -5116,11 +5129,7 @@ case $sub in
       {
         echo "command: dune $*"
         echo "backends: $(batch_summary)"
-        echo "run cap: ${cap}s (0 disables)"
-        if test_cap_reaches_slow "$@" >/dev/null; then
-          echo "slow duration guidance: tuf HIP @slow exceeds 3600s; Metal mnist_conv alone ~5280s; Sunday Metal unit previously 10351s before oracle-widen (gh-ocannl-2091)"
-          echo "  Other boxes/backends vary; see docs/agent-notes/build-and-test.md#aliases-and-goldens. Explicit caps are kept even below this guidance."
-        fi
+        echo "run cap: ${cap}s ($(cat "$run_dir/cap-source"); 0 disables)"
         sed -n 's/^test-run: batch: /  /p' "$run_dir/log"
         if [ -n "$unmerged" ]; then
           echo "unmerged: run would refuse this checkout (UNMERGED REFUSED, exit 2)"
@@ -5406,7 +5415,7 @@ case $sub in
       set -- "${fresh_args[@]}"
     fi
     [ $# -gt 0 ] || set -- runtest
-    if [ -z "$cap_default" ] && test_cap_reaches_slow "$@" >/dev/null; then cap=14400; fi
+    select_run_cap "$@"
     # Toolchain checks gate only launches: status/wait/stop/list remain usable
     # from a shell whose opam environment is no longer active.
     select_dune
