@@ -713,6 +713,9 @@ let () =
         each label (fun r -> r.parity))
   in
   host_leg ~tag:"f32" ~prec:Ir.Ops.single ~partial:f32_partial ();
+  (* A user label must not shadow the register tile's own operand pointer. The same axis-varying
+     fixture and serial twin exercise the read (gh-ocannl-2012). *)
+  host_leg ~b_label:(fun _ -> "tmma_b__") ~tag:"f32_ns" ~prec:Ir.Ops.single ~partial:f32_partial ();
   (* The narrow legs request the f32 leg's geometry at the same lanes: the lane count follows the
      COMPUTE precision, f32 for bf16 and — under the default policy — for half too, so a width the
      narrow storage's element size picked would be declined. They used to leave the geometry to the

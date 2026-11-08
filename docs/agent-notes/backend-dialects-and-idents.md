@@ -267,6 +267,16 @@ files.
   the routine record, the `.cd`/`.ll` sources, calibration rows — deliberately keeps the caller's
   spelling; only the C-family artifacts carry the mangled one. Guard:
   `test/operations/reserved_routine_names.ml` (executes each colliding routine, not just parses it).
+- Node labels also avoid the emitter's `tmma_` register-tile namespace and `v<digits>_`
+  scope-local namespace (gh-ocannl-2012), taking the `n<id>_` form on every dialect. On cc,
+  `const float *tmma_b__ = &tmma_b__[0]` compiled but read its own uninitialized pointer:
+  the 6x19 tail fixture in `tile_mma_geometry.ml` differed from its serial twin in 111/114 cells.
+  `fixed_name_temporaries.ml`'s logged-local leg labels an input after another node's actual
+  scope id; before the reservation, that local shadowed the input and compilation failed with
+  "subscripted value is not an array". The numeric shape alone is reserved, so ordinary `v...`
+  labels retain their names. `wred_` locals only render on GPU dialects, whose node pointers
+  carry `t_`; `__rmw_` has no current emitter and is already implementation-reserved. Their
+  prefixes need no additional reservation.
 - A third identifier class is the renderers' own fixed-name temporaries (`vec_result`,
   `new_set_v`, `new_set_local_v`, the register tile's `tmma_*`, the GPU arms' `__mma_*`, the
   vectorized loops' counter-named `vset1__`...). Two statements that declare one, rendered side by

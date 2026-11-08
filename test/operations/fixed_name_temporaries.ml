@@ -174,11 +174,13 @@ let check_logged_dynamic ~first_id =
    [Ll_test.optimize_scoped] and reaches the backend as written. *)
 let check_logged_locals ~first_id =
   let mk = Ll_test.node_factory ~first_id ~dims:[| n |] () in
-  let a = mk "loc_a" and x = mk "loc_x" in
   let one = mk "loc_one" and two = mk "loc_two" in
+  let id1 = LL.get_scope one and id2 = LL.get_scope two in
+  (* A node can spell another node's scope local on cc (gh-ocannl-2012). Its executed reads must
+     survive the local declaration, including under logging. *)
+  let a = mk (Printf.sprintf "v%d_loc_one" id1.scope_id) and x = mk "loc_x" in
   List.iter [ a; x ] ~f:Ll_test.materialize;
   List.iter [ one; two ] ~f:Ll_test.virtualize;
-  let id1 = LL.get_scope one and id2 = LL.get_scope two in
   let i = Ll_test.sym () in
   let at = Ll_test.iter i in
   let v1 = Ll_test.add (get a [| at |]) (Ll_test.c 1.) in

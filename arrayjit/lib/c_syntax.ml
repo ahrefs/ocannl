@@ -3303,13 +3303,27 @@ module C_syntax (B : C_syntax_config) = struct
      and scope locals ([v<scope>_<name>]) are spelled after. [ocannl_] is the emitter's own
      namespace: typedefs minted per lane count ([ocannl_vec<lanes><suffix>]), the partial-column
      staging names (gh-ocannl-1102), loop counters. A node label there takes the [n<id>_] form, so
-     no emitted declaration can shadow a kernel parameter. So does a label in the implementation's
-     reserved namespace ([__LINE__], [_Bool], a vendor's [__half]), where every compiler's
-     predefined macros live: a declaration does not shadow a macro, so a node named after one never
-     compiled (gh-ocannl-1525, gh-ocannl-1338). *)
+     no emitted declaration can shadow a kernel parameter. [tmma_] likewise belongs to the register
+     tile's fixed locals (gh-ocannl-2012). So does a label in the implementation's reserved
+     namespace ([__LINE__], [_Bool], a vendor's [__half]), where every compiler's predefined macros
+     live: a declaration does not shadow a macro, so a node named after one never compiled
+     (gh-ocannl-1525, gh-ocannl-1338). *)
   let get_code_ident =
+    (* Scope locals spell [v<scope>_<node>]. A different node can carry precisely that label, so
+       reserve the numeric prefix as well, without reserving ordinary labels starting [v]. *)
+    let reserved name =
+      implementation_reserved name
+      ||
+      match String.chop_prefix name ~prefix:"v" with
+      | None -> false
+      | Some rest -> (
+          match String.lsplit2 rest ~on:'_' with
+          | Some (digits, _) ->
+              (not (String.is_empty digits)) && String.for_all digits ~f:Char.is_digit
+          | None -> false)
+    in
     Low_level.get_ident_within_code ~no_dots:true ~blacklist:ident_blacklist
-      ~reserved_prefixes:[ "ocannl_" ] ~reserved:implementation_reserved
+      ~reserved_prefixes:[ "ocannl_"; "tmma_" ] ~reserved
     @@ B.procs
 
   (* The identifier a node takes in the emitted kernel: its code name behind the dialect's
@@ -3334,9 +3348,10 @@ module C_syntax (B : C_syntax_config) = struct
 
       Tensor nodes and scope locals need no equivalent: a node's code name is minted by
       {!Low_level.get_ident_within_code} with [ident_blacklist] pre-seeded, so a colliding label is
-      forced into the disambiguated [n<id>_<label>] form, and every local is minted with a
-      [v<scope>_] / [wred_] / [__rmw_] prefix. Routine names were the one identifier class entering
-      the emitted source verbatim.
+      forced into the disambiguated [n<id>_<label>] form. Scope locals use the reserved [v<scope>_]
+      prefix, and register-tile locals the reserved [tmma_] / [ocannl_] prefixes; GPU reduction
+      locals are separated from node pointers by the dialect's [t_] prefix. Routine names were the
+      one identifier class entering the emitted source verbatim.
 
       The scheme is deterministic and, on a name that is already a safe C identifier, the identity
       -- so nothing about a non-colliding routine changes: not its emitted symbol, not its
