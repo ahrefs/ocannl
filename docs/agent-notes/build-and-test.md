@@ -3532,8 +3532,8 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     on the counts above.
     The contract: LINK-ONLY is a heuristic ranking,
     and `--referenced-only` a deliberate trade (faster, with a possible miss) for iterating
-    mid-change, never for the pre-push run, which is `prepush`, below: the default list without
-    its `slow-`/`train-` members, unless the verdict is `cross-cutting`, when `prepush` refuses
+    mid-change, except the explicit CROSS-CUTTING first-tier local run below. The pre-push run
+    is `prepush`: the default list without its `slow-`/`train-` members, unless the verdict is `cross-cutting`, when `prepush` refuses
     and the PR's CI run owns the list.
   - `--why ALIAS` (repeatable; `--why all` for every listed alias) explains a rank on stderr, in
     `affected: why @ALIAS:` lines, stdout untouched (gh-ocannl-1711): a verdict (REFERENCED,
@@ -3613,12 +3613,18 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
     stays one plain command line with its pin a word of it. It reads `affected`'s lines by an
     allowlist (one `@` operand, a `runtest-`/`slow-`/`train-` alias), and runs nothing when a line
     is anything else (exit 2), when `affected` fails (exit 2) or its verdict trailer says
-    `cross-cutting` (exit 2: the run is then CI's, above), is missing, unknown or at odds with its
+    `cross-cutting` (exit 2: the full run is then CI's, above), is missing, unknown or at odds with its
     exit status (exit 2), or when it says `incomplete` (exit 3: a changed path is UNMAPPED,
     such as `cuda_backend.ml` on a Mac; `--list` still prints what it found, exit 3, to extend
     with the OFF-BUILD aliases on a box that builds them). A list with no `runtest-` member runs
     nothing, exit 0 (`--start` refuses it, exit 2), and `--list` then prints nothing, which
     `run --targets-file` refuses: check the list before shipping it.
+    For a complete default CROSS-CUTTING list, the local command is
+    `prepush --referenced-only --since BASE [--start] [build -j 4]`, beside tests exercising
+    the change and applicable slow aliases, named in the PR body. It launches only the first
+    tier (if narrow), labels saved verdicts FIRST TIER ONLY, and names slow aliases from the
+    full default list, link-only ones included. It refuses a non-cross-cutting default verdict:
+    otherwise `--referenced-only` is only for mid-change iteration (gh-ocannl-2072).
     Harness: leg 98 of `tools/test-test-run-options.sh`.
   - `prepush` names the harness commands the change reaches, and the one command that runs them,
     and runs none (gh-ocannl-1929): a
