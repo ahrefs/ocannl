@@ -468,15 +468,172 @@ def workflow_step(text, name):
 
 
 def workflow_script(step):
-    matches = list(re.finditer(r'^( +)run: \|\n', step, re.M))
-    assert len(matches) == 1, 'step needs one literal run: | block'
+    # A full list entry starts two columns before its keys; workflow_step
+    # returns only the key/body lines. Never normalize text inside the script.
+    first = re.search(r'^( *)(\S.*)$', step, re.M)
+    assert first, 'empty step'
+    key_indent = len(first[1]) + (2 if first[2].startswith('- ') else 0)
+    prefix = r'(?: {%d}| {%d}- )' % (key_indent, key_indent - 2)
+    matches = list(re.finditer(r'^' + prefix + r'run: (.*)\n', step, re.M))
+    assert len(matches) == 1, 'step needs one run command at key indentation'
     match = matches[0]
-    indent = len(match[1]) + 2
+    if match[1] != '|':
+        assert match[1] and not match[1].startswith(('>', '|')), 'unsupported run scalar'
+        return match[1] + '\n'
+    indent = key_indent + 2
     lines = list(itertools.takewhile(
         lambda line: not line.strip() or line.startswith(' ' * indent),
         step[match.end():].splitlines()))
     assert any(line.strip() for line in lines), 'empty run block'
     return '\n'.join(line[indent:] for line in lines).rstrip('\n') + '\n'
+
+
+# Reader regression: script payload can itself contain YAML-like keys and lists.
+payload = "cat <<'EOF'\n- keep this dash\nrun: keep this text\nEOF\n"
+for header in ('    - run: |\n', '      run: |\n'):
+    assert workflow_script(header + ''.join('        ' + line + '\n'
+                                           for line in payload.splitlines())) == payload
+print('PASS workflow_script preserves list dashes and run keys inside script bodies')
+
+
+# Step-order checks (gh-ocannl-1919). Read the same small YAML dialect as
+# workflow_step/script: four-space step lists, inline commands or literal blocks.
+# Inspect direct dune commands, not commands hidden inside scripts/actions; the
+# main check conservatively covers every preceding step in the matrix run job.
+def workflow_steps(text, job):
+    block = re.search(r'^  ' + re.escape(job) + r':\n(.*?)(?=^  [A-Za-z_][A-Za-z0-9_-]*:|\Z)',
+                      text, re.M | re.S)
+    assert block, 'job missing: ' + job
+    starts = list(re.finditer(r'^    - ', block[1], re.M))
+    assert starts, 'steps missing: ' + job
+    return [block[1][start.start():end] for start, end in
+            zip(starts, [m.start() for m in starts[1:]] + [len(block[1])])]
+
+
+def dune_commands(step):
+    if not re.search(r'^ +(?:- )?run:', step, re.M):
+        return []
+    commands = []
+    # Direct one-line shell commands only: recognize dune at a command start,
+    # after assignments/env, shell separators, or a wrapper's -- (opam exec).
+    # This is not shell evaluation: continuations, dynamic commands, heredocs
+    # and PowerShell assignment syntax need deliberate support if used here.
+    for line in workflow_script(step).splitlines():
+        if not re.search(r'\bdune\b', line) or line.lstrip().startswith('#'):
+            continue
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=';&|()')
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+        start = 0
+        for i, token in enumerate(tokens):
+            if token in (';', '&&', '||', '|', '(', ')'):
+                start = i + 1
+            elif token == 'dune':
+                prefix = tokens[start:i]
+                if (not prefix or prefix[-1] == '--' or
+                    all(word == 'env' or re.match(r'[A-Za-z_][A-Za-z0-9_]*=', word)
+                        for word in prefix)):
+                    end = next((j for j in range(i + 1, len(tokens))
+                                if tokens[j] in (';', '&&', '||', '|', ')')), len(tokens))
+                    commands.append(tokens[i:end])
+    return commands
+
+
+def configured(step):
+    # OCANNL_TOOL_* controls tooling, not the ambient OCANNL configuration.
+    return bool(re.search(r'^ +OCANNL_(?!TOOL_)[A-Z0-9_]+:', step, re.M) or
+                re.search(r'\bOCANNL_(?!TOOL_)[A-Z0-9_]+=', workflow_script(step)))
+
+
+def unique_build(steps, predicate, label):
+    matches = [i for i, step in enumerate(steps) if predicate(step)]
+    assert len(matches) == 1, label + ' build missing or repeated'
+    return matches[0]
+
+
+def shard_build(steps):
+    return unique_build(steps, lambda step: any(cmd[:2] == ['dune', 'build']
+                        for cmd in dune_commands(step)) and
+                        'tools/ci-shard.sh targets' in workflow_script(step), 'shard')
+
+
+def package_build(steps):
+    return unique_build(steps, lambda step: any(cmd[:2] == ['dune', 'build'] and '-p' in cmd
+                        for cmd in dune_commands(step)), 'package')
+
+
+def main_config_order(text):
+    steps = workflow_steps(text, 'run')
+    for step in steps[:shard_build(steps)]:
+        if dune_commands(step):
+            assert not configured(step), 'OCANNL configuration dune step precedes shard build'
+
+
+def env_release_order(text):
+    steps = workflow_steps(text, 'clean-room')
+    for step in steps[package_build(steps) + 1:]:
+        for command in dune_commands(step):
+            assert '--release' in command, 'dune after package build lacks --release'
+
+
+def rejects_order(check, text, label, reason):
+    try:
+        check(text)
+    except AssertionError as error:
+        assert reason in str(error), error
+        print('PASS rejected mutant:', label)
+    else:
+        raise AssertionError('accepted mutant: ' + label)
+
+
+main_config_order(source)
+env_release_order(env_source)
+print('PASS OCANNL configuration dune steps follow the shard build')
+print('PASS ci-env dune steps after the package build use --release')
+steps = workflow_steps(source, 'run')
+shard = steps[shard_build(steps)]
+configured_steps = [step for step in steps[shard_build(steps) + 1:]
+                    if dune_commands(step) and configured(step)]
+assert configured_steps, 'no configured dune step to exercise the order check'
+for step in configured_steps:
+    mutant = source.replace(step, '', 1).replace(shard, step + shard, 1)
+    rejects_order(main_config_order, mutant, 'configured step moved before shard build',
+                  'configuration dune step precedes shard build')
+# Also exercise run-line configuration through both supported scalar forms.
+for label, early in (
+    ('inline configured dune before shard build',
+     '    - run: OCANNL_LOG_LEVEL_CC_BACKEND=3 opam exec -- dune build @check\n'),
+    ('block configured dune before shard build',
+     '    - run: |\n        export OCANNL_LOG_LEVEL_CC_BACKEND=3\n        opam exec -- dune build @check\n'),
+):
+    mutant = source.replace(shard, early + shard, 1)
+    rejects_order(main_config_order, mutant, label, 'configuration dune step precedes shard build')
+# Non-dune steps may follow -p; an unconfigured dune may precede the shard.
+main_config_order(source.replace(shard, '    - run: opam exec -- dune build @check\n' + shard, 1))
+env_steps = workflow_steps(env_source, 'clean-room')
+package = env_steps[package_build(env_steps)]
+for label, later in (
+    ('ci-env dev check moved after package build', '    - run: opam exec -- dune build @check\n'),
+    ('ci-env dev check in a block after package build',
+     '    - run: |\n        opam exec -- dune build @check\n'),
+):
+    # The same command before -p is allowed; moving it past -p must fail.
+    env_release_order(env_source.replace(package, later + package, 1))
+    rejects_order(env_release_order, env_source.replace(package, package + later, 1),
+                  label, 'dune after package build lacks --release')
+for harmless in (
+    '    - run: echo "dune build is done"\n',
+    '    - run: echo dune build is done\n',
+):
+    env_release_order(env_source.replace(package, package + harmless, 1))
+main_config_order(source.replace(shard,
+    '    - run: OCANNL_TOOL_HARNESS_STRICT=1 opam exec -- dune build @check\n' + shard, 1))
+main_config_order(source.replace(shard,
+    '    - env:\n        OCANNL_TOOL_HARNESS_STRICT: 1\n'
+    '      run: opam exec -- dune build @check\n' + shard, 1))
+rejects_order(env_release_order, env_source.replace(package, package +
+    '    - run: dune build --release @check && dune build @check\n', 1),
+    'a second dev command after a release command', 'dune after package build lacks --release')
 
 
 # Hermetic depext listing (gh-ocannl-1917): run all three actual scripts, with
