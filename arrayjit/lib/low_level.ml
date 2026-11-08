@@ -7308,13 +7308,26 @@ let unbound_local_violation (llc : t) : string option =
     | Workgroup_barrier ->
         false
   in
-  (* Body declarations cannot be seen by a scan's inits or a guard's condition. The fold's body
-     depth distinguishes those positions; block ancestry distinguishes sibling constructs.
-     Scan-carried declarations are outside its loop body, and therefore visible to that body. *)
-  let position ctx = (!blocks, List.length ctx.loops + List.length ctx.guards) in
-  let bind ctx id =
+  (* Body declarations cannot be seen by a scan's inits or a guard's condition, even when those
+     headers contain loops/guards of their own. Keep the enclosing binders, not their depths. Guard
+     lists share their tails in Access_fold: physical ancestry distinguishes separate guards even
+     when they test the very same scalar. *)
+  let position ctx = (!blocks, ctx.loops, ctx.guards) in
+  let rec has_guard_tail guards ~tail =
+    phys_equal guards tail
+    || match guards with [] -> false | _ :: rest -> has_guard_tail rest ~tail
+  in
+  let bind ctx ~by id =
     Hash_set.add bound id;
-    Hashtbl.add_multi lexical ~key:id ~data:(position ctx)
+    let where =
+      match (ctx.loops, ctx.guards) with
+      | { axis = None; _ } :: _, _ -> "in a scan body"
+      | _ :: _, _ -> "in a loop body"
+      | [], _ :: _ -> "in a guard body"
+      | [], [] when ctx.scope_depth > 0 -> "in a Local_scope body"
+      | [], [] -> "at statement level"
+    in
+    Hashtbl.add_multi lexical ~key:id ~data:(position ctx, by ^ " " ^ where)
   in
   (* Innermost first: the scopes whose bodies enclose the walk's position. *)
   let enclosing = ref [] in
@@ -7326,12 +7339,12 @@ let unbound_local_violation (llc : t) : string option =
       blocks := !next_block :: !blocks);
     match stmt with
     | Declare_local { id; _ } ->
-        bind ctx id;
+        bind ctx ~by:"Declare_local" id;
         Continue ()
     | Scan_loop { carried; _ } ->
         List.iter carried ~f:(fun c ->
-            bind ctx c.prev;
-            bind ctx c.next);
+            bind ctx ~by:"Scan_loop carried pair" c.prev;
+            bind ctx ~by:"Scan_loop carried pair" c.next);
         Continue ()
     | Set_local (id, _) ->
         access ctx "Set_local" id;
@@ -7359,13 +7372,16 @@ let unbound_local_violation (llc : t) : string option =
     ~init:() llc;
   let local id = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
   (* In program order, so the message names the first stranded access. *)
-  List.find_map (List.rev !accesses) ~f:(fun (what, id, scope, (access_blocks, access_depth)) ->
+  List.find_map (List.rev !accesses)
+    ~f:(fun (what, id, scope, (access_blocks, access_loops, access_guards)) ->
       let visible =
         Hash_set.mem hoisted id
         || List.exists (Hashtbl.find_multi lexical id)
-             ~f:(fun (declaration_blocks, declaration_depth) ->
-               declaration_depth <= access_depth
-               && List.is_suffix access_blocks ~suffix:declaration_blocks ~equal:Int.equal)
+             ~f:(fun ((declaration_blocks, declaration_loops, declaration_guards), _) ->
+               List.is_suffix access_blocks ~suffix:declaration_blocks ~equal:Int.equal
+               && List.is_suffix access_loops ~suffix:declaration_loops ~equal:(fun a b ->
+                   Indexing.equal_symbol a.index b.index)
+               && has_guard_tail access_guards ~tail:declaration_guards)
       in
       if visible then None
       else
@@ -7385,8 +7401,9 @@ let unbound_local_violation (llc : t) : string option =
         if Hash_set.mem bound id then
           Some
             ("a " ^ what ^ " of " ^ local id ^ " " ^ where
-           ^ " accesses a Declare_local or Scan_loop carried local outside its lexical scope \
-              (gh-ocannl-2050)")
+           ^ " accesses a local outside its lexical scope; found binder: "
+            ^ String.concat ~sep:"; " (List.map (Hashtbl.find_multi lexical id) ~f:snd)
+            ^ " (gh-ocannl-2050)")
         else
           Some
             ("a " ^ what ^ " of " ^ local id ^ " " ^ where
