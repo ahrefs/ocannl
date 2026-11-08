@@ -1185,7 +1185,7 @@ max-reduce with add — the tropical semiring), and the unary
 (add-reduce resp. max-reduce). You can verify that looking at the
 definitions of <code>Operation.einsum</code>,
 <code>Operation.einsum1</code>, etc. You can find examples of
-<code>+*</code> and <code>++</code> behavior in the test suite <a href="test/einsum_trivia.ml">einsum_trivia.ml</a> and in <a href="lib/nn_blocks.ml">nn_blocks.ml</a>. A frequent use-case for
+<code>+*</code> and <code>++</code> behavior in the test suite <a href="../test/einsum/einsum_trivia.ml">einsum_trivia.ml</a> and in <a href="../lib/nn_blocks.ml">nn_blocks.ml</a>. A frequent use-case for
 <code>++</code> is to sum out all axes of a tensor:</p>
 <div class="sourceCode" id="cb15"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op scalar_loss = (margin_loss ++ <span class="st">&quot;...|... =&gt; |-&gt;0&quot;</span>) /. !..batch_size <span class="kw">in</span></span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
@@ -2097,8 +2097,8 @@ specify tensor dimensions:
 dimensions (rarely used in <code>%op</code>)</li>
 </ul></li>
 </ul>
-<p>A very simple example from <a href="test/micrograd_demo.ml">micrograd_demo: Micrograd README basic
-example</a>:</p>
+<p>A very simple example from <a href="../test/operations/micrograd_demo_logging.ml">micrograd_demo:
+Micrograd README basic example</a>:</p>
 <div class="sourceCode" id="cb20"><pre class="sourceCode ocaml"><code class="sourceCode ocaml"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span>%op c = { a = [ <span class="dv">-4</span> ] } + { b = [ <span class="dv">2</span> ] } <span class="kw">in</span></span>
 <span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>  ...</span></code></pre></div>
 <p>How does it relate to
