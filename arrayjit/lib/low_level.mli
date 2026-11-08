@@ -629,10 +629,10 @@ val typed_at : prec:Ops.prec -> scalar_t -> bool
     value rendered wider is not collapsed, by {!simplify_llc} (whatever the numerics) or by the
     renderer. [Recip], [Recip_sqrt], [Not] and the gates use their arithmetic precision's numeric
     type on every dialect. Narrow arithmetic is typed either way: at storage width its text rounds
-    the result; under wide compute the local and expression agree on single. [Tanh_approx] uses
-    [tanhf], which is a float at double, and the Threefry operators return packed integers rather
-    than a float. A truth is C [int] (Metal [bool]) at every precision: the renderer, which sees no
-    slot, leaves it, and {!simplify_llc} keeps it only under a [Div], where two would divide
+    the result; under wide compute the local and expression agree on single. On cc, [Tanh_approx]
+    uses [tanhf], which is a float at double, and the Threefry operators return packed integers
+    rather than a float. A truth is C [int] (Metal [bool]) at every precision: the renderer, which
+    sees no slot, leaves it, and {!simplify_llc} keeps it only under a [Div], where two would divide
     integers, since its conversion to float is exact. The operators are a list, not a default. *)
 
 val narrowing_read : scope_prec:Ops.prec -> scalar_t -> bool

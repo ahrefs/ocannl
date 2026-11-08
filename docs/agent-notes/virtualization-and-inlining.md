@@ -131,7 +131,7 @@ files.
   the schedule's recognizers then see; the renderer can still drop it, next entry.
 - **Agreeing precisions are not a typed value** (gh-ocannl-1958, gh-ocannl-2045). A scope of the
   slot's own precision still converts where its value renders as another C type.
-  `Low_level.typed_at` owns that list, and both collapses ask it: `Tanh_approx` uses `tanhf`, a
+  `Low_level.typed_at` owns that list, and both collapses ask it: cc's `Tanh_approx` uses `tanhf`, a
   float at double, and the Threefry operators return packed integers rather than a float.
   `Recip`, `Recip_sqrt`, `Not` and the gates render in their arithmetic precision's numeric
   type on every dialect; cc's literal spelling and gate blend share `Ops.c_float_literal`.
