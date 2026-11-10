@@ -1163,7 +1163,7 @@ files.
   domain holds it raises `Autotune.Concurrent_search` before resolving a setting, calling a seam or
   emitting a report. The holder is a domain with a per-domain depth, so nesting in the holding
   domain proceeds. Refused rather than made safe because the compile path's process-wide state
-  (`Tnode.next_uid`, `Low_level.analysis_cache`, `Context`'s print proxies, a device's
+  (`Tnode.fresh_uid`'s counter, `Low_level.analysis_cache`, `Context`'s print proxies, a device's
   `constant_buffer_cache`, Base hash tables throughout) was never audited for two domains at once;
   the per-domain seams, streams and observers serve turn-taking searches. A test that overlaps two
   searches on purpose blocks one inside its own `on_candidate_attempt` until the other has tried

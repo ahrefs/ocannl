@@ -2052,9 +2052,10 @@ module Scheme = struct
      tensors' ids from a reserved range above every session id, with a counter of its own that is
      never reused either, and restores the session counter on exit. Ids the session hands out are
      then the same whether or not the window ran: printed ids, generated identifiers, cache identity
-     and [Embed_self_id]-seeded random draws do not move. Both id invariants hold: a checkpoint's
-     [id_mark] orders pre-existing shapes before later ones within either range, and [op]'s [id >=
-     next_id] check catches a handle that outlived its window. *)
+     and [Embed_self_id]-seeded random draws do not move. Node uids need no such range: they are
+     identity only, and the compiler's choices do not depend on their gaps (gh-ocannl-2053). Both id
+     invariants hold: a checkpoint's [id_mark] orders pre-existing shapes before later ones within
+     either range, and [op]'s [id >= next_id] check catches a handle that outlived its window. *)
   let reserved_next_id = ref reserved_id_base
   [@@mutation_serial.exempt
     "a fresh-id counter of the id-neutral windows: never reused, so never restored"]
@@ -2073,7 +2074,7 @@ module Scheme = struct
       session_state.next_id <- first;
       Int.incr id_neutral_depth;
       Exn.protect
-        ~f:(fun () -> Tn.with_reserved_uids (fun () -> Row.with_reserved_vars f))
+        ~f:(fun () -> Row.with_reserved_vars f)
         ~finally:(fun () ->
           Int.decr id_neutral_depth;
           let last = session_state.next_id in

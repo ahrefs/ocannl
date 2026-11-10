@@ -162,13 +162,6 @@ let exempt_zero_reference_exports =
     "Tnode.is_alphanum_";
     "Tnode.known_not_materialized";
     "Tnode.log_accessible_headers";
-    (* gh-ocannl-1751: the node-uid counters behind [Tnode.fresh_uid] and
-       [Tnode.with_reserved_uids]. Tnode has no .mli to hide them in; the pair of functions sharing
-       them cannot be a closure pair, since [with_reserved_uids] is polymorphic. *)
-    "Tnode.next_reserved_uid";
-    "Tnode.next_uid";
-    "Tnode.reserved_uid_base";
-    "Tnode.reserved_uid_depth";
     "Tnode.scan_host_bounds";
     "Tnode.transition_memory_mode";
     "Tnode.validate_padded_numel_contract";

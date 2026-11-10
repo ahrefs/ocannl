@@ -2216,8 +2216,9 @@
 #   long on block stacks and five times on a decoder, whose scheme traces the whole stack
 #   (gh-ocannl-1752).
 # `off`: every function builds as before, unchecked.
-# Either way the graph, its tensor ids and node uids, the generated code and the values are the
-# same. Read once per process. See docs/syntax_extensions.md.
+# Either way the graph, its tensor ids, the generated code (up to identifiers spelled with node
+# uids, which a trace's discarded nodes shift: gh-ocannl-2053) and the values are the same. Read
+# once per process. See docs/syntax_extensions.md.
 #op_shape_schemes=check
 
 # Whether Persistence.load / Persistence.restore wrap a checkpoint's payloads as private
