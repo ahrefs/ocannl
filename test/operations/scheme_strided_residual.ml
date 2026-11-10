@@ -1280,8 +1280,22 @@ let () =
           (staged
              [ eq (w 2 3 (w 2 3 (Var x))) (w 2 3 (w 1 2 (Var y))); Row.Shape_row (row, origin) ])
       in
-      p "a nested pair closes together too: x = 1, y = 2"
-        (match result with
+      let closes_1_2 x y = function
         | Ok env -> (
             match (tag_of env x, tag_of env y) with Some (1, _), Some (2, _) -> true | _ -> false)
-        | Error _ -> false))
+        | Error _ -> false
+      in
+      p "a nested pair closes together too: x = 1, y = 2" (closes_1_2 x y result);
+      (* And through the rewrites between: two stride-2 padded windows reduce to the identity over
+         the inner pair. *)
+      let x = Row.get_var () and y = Row.get_var () in
+      let row : Row.t = { row with dims = [ Var x; Var y ] } in
+      let pad v = padded_window ~stride:2 ~kernel:(dim 1) v in
+      p "a nested pair under padded windows closes together: x = 1, y = 2"
+        (closes_1_2 x y
+           (finished
+              (staged
+                 [
+                   eq (w 2 3 (pad (w 2 3 (Var x)))) (w 2 3 (pad (w 1 2 (Var y))));
+                   Row.Shape_row (row, origin);
+                 ]))))

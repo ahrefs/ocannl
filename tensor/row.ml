@@ -2780,11 +2780,13 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
         @@ Shape_error
              ("solved dimensions for axis: different bases", [ Dim_mismatch [ dim1; dim2 ] ])
   | Var v1, Var v2 when equal_dim_var v1 v2 -> ([], env)
-  (* Two arms, not an or-pattern: a guard failing on the first alternative would skip the second. *)
+  (* Two arms, not an or-pattern: a guard failing on the first alternative would skip the second. An
+     arm that rewrites the equation into an equivalent one passes [settling] on, so a window or a
+     window pair inside it settles as this equation would (gh-ocannl-2038). *)
   | Affine { stride; over; conv; stride_offset = _ }, dim when is_identity_window ~stride ~conv ->
-      unify_dim ~stage origin (over, dim) env
+      unify_dim ?settling ~stage origin (over, dim) env
   | dim, Affine { stride; over; conv; stride_offset = _ } when is_identity_window ~stride ~conv ->
-      unify_dim ~stage origin (over, dim) env
+      unify_dim ?settling ~stage origin (over, dim) env
   | ( Affine
         {
           stride = stride1;
@@ -2801,7 +2803,7 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
         } )
     when stride1 % stride2 = 0 || stride2 % stride1 = 0 ->
       (* Both have use_padding=true, we can simplify by dividing strides *)
-      unify_dim ~stage origin
+      unify_dim ?settling ~stage origin
         ( Affine
             {
               stride = (if stride1 > stride2 then stride1 / stride2 else stride2 / stride1);
@@ -2814,12 +2816,12 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
   | Affine { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; _ }, dim
   | dim, Affine { stride; over = Dim s; conv = None | Some { use_padding = true; _ }; _ } ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
-      unify_dim ~stage origin (get_dim ~d:(stride * s.d) ~basis:s.basis (), dim) env
+      unify_dim ?settling ~stage origin (get_dim ~d:(stride * s.d) ~basis:s.basis (), dim) env
   | Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ } ->
       (* stride_offset doesn't contribute to shapes when conv = None or use_padding = true *)
       if s.d >= 0 && s.d % stride = 0 then
-        unify_dim ~stage origin (get_dim ~d:(s.d / stride) ~basis:s.basis (), over) env
+        unify_dim ?settling ~stage origin (get_dim ~d:(s.d / stride) ~basis:s.basis (), over) env
       else
         raise
         @@ Shape_error
@@ -2834,7 +2836,9 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
       (* input_size = stride * (output_size - 1) + effective_kernel_span *)
       let span = effective_kernel_span ~dilation ~kernel_size:k.d in
       let basis = derived_window_basis s k in
-      unify_dim ~stage origin (get_dim ~d:((stride * (s.d - 1)) + span) ~basis (), dim) env
+      unify_dim ?settling ~stage origin
+        (get_dim ~d:((stride * (s.d - 1)) + span) ~basis (), dim)
+        env
   | Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }, Dim s
   | Dim s, Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ }
     ->
@@ -3006,10 +3010,10 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
       List.fold ~init:(ineqs, env) dim_eqs ~f
   | Concat [], d | d, Concat [] ->
       (* An empty concat is the size-0 axis. *)
-      unify_dim ~stage origin (get_default_dim ~d:0 (), d) env
+      unify_dim ?settling ~stage origin (get_default_dim ~d:0 (), d) env
   | Concat [ x ], d | d, Concat [ x ] ->
       (* Single-component concat erases to its component. *)
-      unify_dim ~stage origin (x, d) env
+      unify_dim ?settling ~stage origin (x, d) env
   | Concat xs, Concat ys -> (
       (* Arithmetic equality of two concatenated axes. Cancel structurally-equal components, then
          reconcile the residual sums: a fully-solved side reduces to a [Dim] comparison; mixed
