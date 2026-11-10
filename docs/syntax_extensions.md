@@ -607,6 +607,9 @@ The syntax `a^b` (or `a^b^c` etc.) creates a single axis of iteration that first
 | `b => a^b` | Replace suffix: assign to last part, leaving prefix unchanged |
 | `a^b^c => b` | Extract middle: requires knowing sizes of `a` and `c` |
 | `b => a^b^c` | Replace middle: requires knowing sizes of `a` and `c` |
+| `a^b^c => a^c` | Drop a segment: the result is `a` then `c` |
+| `a^c => a^b^c` | Write around a segment: `b` is left unwritten (zero in a fresh result) |
+| `a^b^c => c^b^a`, `a^b^c => c^a` | Reorder segments, dropping or not |
 
 **Integer constants in concatenation**: an integer component specifies the size of that segment, rather than indexing into a fixed dimension. For example:
 - `3^a => a`: skip 3 elements at the beginning of the input
@@ -621,11 +624,14 @@ No other slot names an integer component, so it is skipped: an extraction does n
 
 **Extraction and replacement**: a concatenated axis exactly one of whose components the other side names is a slice: its index is the named component's index shifted by the sizes of the components before it, and the other components are iterated by nothing. `++` and `++^` results are zero-initialized, so a replacement into a fresh result zero-pads it (`a => 2^a^1`); a `%cd` assignment `target =: source ~logic:"a => a^b"` writes the segment and leaves the rest of `target` unchanged. The gradient of an extraction flows into the selected segment only. These forms are executed against oracles in `test/einsum/concat_extraction.ml`.
 
-**What a concatenated axis cannot say**: a concatenated axis is one axis of alternatives, so a position lies in one segment. Three forms therefore have no meaning, and are refused with a shape error when the operation is built, whatever the sizes (gh-ocannl-2017):
+**Segments correspond by name**: when two slots both concatenate components of one axis, each component is matched by its label, and each slot places it at its own offset. A segment one slot does not list is one that slot takes no part in, so the two sides may differ in order and in what they list: `a^b^c => c^b^a` reverses the segments, `a^b^c => a^c` drops `b`, `a^b^c => c^a` does both, and `a^c => a^b^c` writes `a` and `c` around a `b` no operand fills -- zero under `++`, its prior contents under `%cd` `=:`. An integer component is matched by nothing, as everywhere: `a^2^c => a^c` drops two cells, `a^c => a^2^c` leaves two unwritten. Gradients follow the segments back, and a dropped segment gets none. These forms, binary ones (`a^b^c; a^c => a^c`) among them, are executed in `test/einsum/concat_segment_correspondence.ml` (gh-ocannl-2087).
+
+**What a concatenated axis cannot say**: a concatenated axis is one axis of alternatives, so a position lies in one segment. Four forms therefore have no meaning, and are refused with a shape error when the operation is built, whatever the sizes (gh-ocannl-2017):
 
 - One tensor's axes needing two components of the same concatenation: `p^q => p, q`, `a, b => a^b`, `a, b; c => a^b^c`. No position has both. Name one component per tensor.
 - A result concatenation no component of which an operand names: `a => 2^3`, `c => a^b`, `p^q => r^s`, `2^3 => 2^3`. Nothing says what the segments hold, and integers are segments the spec skips. Name the segment to write part of the axis (`a => 2^a^3`); to repeat the reduced operand in every cell, use a plain axis and size it (`x ++ "a => b" ["b"]`, then `Shape.set_dim b 5`).
 - A `++^` concatenation with its operands out of the order of the segments they fill: `(x, y) ++^ "b; a => a^b"`. Write `(y, x) ++^ "a; b => a^b"`.
+- A concatenation listing one component twice: `a => a^a`, `a^b => a^b^a`, `a^b^a => a^b`, `a; a => a^a`. A segment is one range of positions with one index, so only one copy would be read or written (it was, silently, gh-ocannl-2087). To repeat a tensor along an axis, pass it once per copy under distinct components: `(x, x) ++^ "a; b => a^b"`. Integer components may repeat (`2^a^2 => a`): each is its own skipped segment.
 
 The same forms on an operand are defined where every cell has a reading: an operand concatenation no component of which the result names is a reduction over all its cells (`2^3 =>`, `p^q => c`), and every other access to that operand sees a plain axis of the summed size. When compiling, an operand that no segment reaches is refused too: in `a; b => a^b, b` the result's plain `b` rules out the segment `a` that the first operand fills, and in `a^b, b => a` the result and the operand need different segments. The forms are executed in `test/einsum/concat_axis_consumers.ml`.
 

@@ -58,7 +58,10 @@ type accum_rhs =
           the [rhses] (note: none is allowed). Note: it is also allowed that there is no LHS (i.e.
           no valid LHS projection) for some choices of the [Concat] components. Every operand must
           be used by some choice, though: one no choice reaches is refused at lowering
-          (gh-ocannl-2017). *)
+          (gh-ocannl-2017). Each [Concat] index resolves by its own segments, so the two sides may
+          list a component's segments in different orders and different subsets: [a^b^c => c^a]
+          writes nothing for the choice of [b], and [a^c => a^b^c] reads no operand there
+          (gh-ocannl-2087). *)
   | Rev_sides of { op : Ops.unop; lhses : buffer array }
       (** Causes the [Accum_op] to completely reverse its semantics: left-hand side and right-hand
           side are swapped. [lhs] becomes the read-from tensor and [rhs], i.e. [lhses] above, become
@@ -797,7 +800,9 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
      substituting an index that needs a product iterator the current block did not descend into --
      the index belongs to a different concat segment, so this block contributes no statement for it.
      That is what a partial block is, and it cannot define an access that needs two segments at
-     once: [loop_accum] refuses an operand no block reached (gh-ocannl-2017). *)
+     once: [loop_accum] refuses an operand no block reached (gh-ocannl-2017). A [Concat] index that
+     does not list the block's segment is the same case (gh-ocannl-2087): [a^b^c => a^c] writes
+     nothing from the [b] block, [a^c => a^b^c] has no operand there. *)
   let exception Empty_block in
   (* The per-block substitution from product iterators to this block's fresh loop symbols, plus the
      loop widths of those fresh symbols (the gh-504 clamp bounds). Fresh loop symbols are needed
@@ -808,7 +813,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
 
      [on_concat] is the one policy the three walkers below legitimately disagree on: the two
      accumulation walkers RESOLVE a [Concat] index to its active segment plus that segment's offset
-     (this is what eliminates [Concat] during lowering), while [Set_vec_unop] REJECTS one. *)
+     (this is what eliminates [Concat] during lowering), while [Set_vec_unop] REJECTS one. Each
+     index resolves by its own symbols, so two sides of an assignment may list the segments of one
+     product component in different orders ([a^b^c => c^b^a]) or list different subsets of them
+     ([a^b^c => c^a]): a segment an index does not list is a block that index takes no part in. *)
   let block_subst ~(iter_sizes : int Map.M(Indexing.Symbol).t) ~all_prod_iters ~on_concat
       ~(block_iters : Indexing.symbol array) ~(rev_iters : Indexing.symbol list) =
     let subst_map =
@@ -863,7 +871,21 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
       | Indexing.Concat syms -> (
           match on_concat with
           | `Reject who -> raise @@ Utils.User_error ("Concat indexing not supported in " ^ who)
-          | `Resolve role -> (
+          | `Resolve (role, (components : Indexing.component array)) -> (
+              let owner s =
+                Array.find_mapi components ~f:(fun i comp ->
+                    Option.some_if
+                      (List.exists comp ~f:(fun (_, s') -> Indexing.equal_symbol s s'))
+                      i)
+              in
+              (* A segment has one loop symbol, so a concatenation listing it twice would read or
+                 write one of its copies only, at the last copy's offset. Shape refuses the spec;
+                 this refuses any other route to such an index. *)
+              if List.contains_dup syms ~compare:Indexing.compare_symbol then
+                raise
+                @@ Utils.User_error
+                     ("Concat index lists a segment twice during " ^ role
+                    ^ " lowering: a segment has one loop symbol, so only one copy would be used");
               (* Find the active segment (the one this block descended into) and resolve to its loop
                  symbol, shifted by the segment's offset within the concatenated axis. *)
               let active =
@@ -877,11 +899,22 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
               match active with
               | Some (s', 0) -> Indexing.Iterator s'
               | Some (s', offset) -> Indexing.affine ~symbols:[ (1, s') ] ~offset
-              | None ->
-                  raise
-                  @@ Utils.User_error
-                       ("Concat index could not be resolved to an active component during " ^ role
-                      ^ " lowering")))
+              | None -> (
+                  (* The index's segments are those of one product component, and the block
+                     descended into another of its segments, which the index does not list: the
+                     index takes no part in this block (gh-ocannl-2087). Any other unresolved
+                     [Concat] -- symbols of several components, or of none -- is a projection
+                     inference got wrong, and turning it into a skipped write would hide that. *)
+                  match List.map syms ~f:owner with
+                  | Some i :: rest when List.for_all rest ~f:(Option.equal Int.equal (Some i)) ->
+                      raise Empty_block
+                  | _ ->
+                      raise
+                      @@ Utils.User_error
+                           ("Concat index could not be resolved to an active component during "
+                          ^ role
+                          ^ " lowering: its segments are not the segments of one product component"
+                           ))))
     in
     let fresh_sizes =
       Map.fold subst_map
@@ -967,7 +1000,9 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     let basecase block_iters rev_iters =
       let block_iters = Array.of_list_rev block_iters in
       let subst_index, fresh_sizes =
-        block_subst ~iter_sizes ~all_prod_iters ~on_concat:(`Resolve role) ~block_iters ~rev_iters
+        block_subst ~iter_sizes ~all_prod_iters
+          ~on_concat:(`Resolve (role, projections.components))
+          ~block_iters ~rev_iters
       in
       let is_allowed i =
         match selector with

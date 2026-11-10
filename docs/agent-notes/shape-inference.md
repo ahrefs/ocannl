@@ -213,6 +213,15 @@ files.
   per operand selects operands by position, and only if each operand names its own segment (or none,
   at width 1): `block_selector` otherwise lets substitution decide, so two viable operands are
   refused as ambiguous rather than filling a segment from the wrong one.
+- Each `Concat` index resolves by its own symbols (`Assignments.block_subst`), so slots may list a
+  component's segments in different orders and subsets: a segment an index does not list raises
+  `Empty_block` for that index (`a^b^c => c^a`, `a^c => a^b^c`), but only when the index's symbols
+  are one product component's -- any other unresolved `Concat` is a misclassification and stays a
+  hard error (gh-ocannl-2087). A label listed twice in one concatenation has one iterator, and
+  `concat_offset_for` took the LAST copy's offset: `a => a^a` silently gave `[0 0 1 2]`. Refused
+  from the spec and, by any other route, in lowering. A multiplicative einsum whose operand lacks a
+  segment the result lists (`a^c; a^b^c => a^b^c` under `+*`) is an operand-arity shortfall,
+  refused as "Ambiguous indices" (gh-ocannl-2088 owns that message).
 - An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
   at or past the stride, or on an unpadded window, indexes past the extent. On the result side
   those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an

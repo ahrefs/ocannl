@@ -4585,6 +4585,11 @@ let refuse_unsized_kernels (update_step : update_step) =
       hold. It was iterated like a plain axis, every cell taking the reduced operand, against what
       the components say everywhere else ([2^b => 2^b] skips the [2]). An operand concatenation no
       component of which the result names is a reduction over every cell, and stays.
+    - A concatenation listing one component twice ([a => a^a], [a^b^a => a^b]): a segment is one
+      range of positions with one index, so lowering would read or write one copy only, at the last
+      copy's offset -- it did, silently (gh-ocannl-2087). A tensor repeated along an axis is that
+      tensor passed once per copy, under distinct components. Integer components are distinct
+      skipped segments, and may repeat.
     - Block operands out of the order of the segments they fill: an operand of a width-1 segment
       indexes at [Fixed_idx 0] and names no segment, so the lowering of a block selects its operand
       by position (in [Assignments]), and two swapped width-1 operands would swap silently. Other
@@ -4622,6 +4627,16 @@ let refuse_meaningless_concats (update_step : update_step) =
         String.concat ~sep:"^" (List.map components ~f:concat_component_text)
       in
       let slots = List.map (ls_lhs :: ls_rhs_list) ~f:axes_of in
+      List.iter (List.concat_map slots ~f:concats) ~f:(fun components ->
+          Option.iter
+            (List.find_a_dup (in_concats [ Concat_spec components ]) ~compare:String.compare)
+            ~f:(fun label ->
+              refuse
+                [%string
+                  "the component %{label} appears twice in the concatenated axis %{concat_text \
+                   components}, but a segment is one range of positions with one index, so only \
+                   one of its copies would be read or written. To repeat a tensor along an axis, \
+                   pass it once per copy under distinct components: (x, x) ++^ \"a; b => a^b\""]));
       let result_axes = axes_of ls_lhs in
       let operands = List.map ls_rhs_list ~f:axes_of in
       List.iter (List.concat_map slots ~f:concats) ~f:(fun components ->
