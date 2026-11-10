@@ -718,6 +718,9 @@ struct
     | Recip_sqrt, _ -> f "(1 / sqrtf(" "))"
     | Neg, _ -> f "(-(" "))"
     | Trunc, Double_prec _ -> func "trunc"
+    (* [truncf] of a [__half] is a [float]: the value is a half's own, so the bridge is exact, and
+       it keeps the result typed at half (gh-ocannl-2117). *)
+    | Trunc, Half_prec _ -> f "__float2half(truncf(__half2float(" ")))"
     | Trunc, Bfloat16_prec _ -> bf16_func "truncf"
     | Trunc, _ -> func "truncf"
     (* Every integer precision: [tanh] has float and double overloads only, so an integer operand
