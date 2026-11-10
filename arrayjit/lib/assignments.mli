@@ -109,6 +109,15 @@ type comp = {
           times since the buffer was last reset -- by a run of a routine zeroing it, or by a write
           from outside a run. [Train.grad_update ~accum_steps:k] states [k]: the explicit opt-in for
           gradient accumulation over micro-steps. *)
+  persists : Set.M(Tnode).t;
+      (** The nodes whose written value this computation means to last across runs -- an optimizer
+          step ([Train.sgd_one] marks its parameter; {!persisting} marks a hand-written one),
+          gh-ocannl-2027. [Context.compile] refuses a computation that itself re-establishes such a
+          node ({!persists_undone}). [Context.run] refuses a run of a routine re-establishing such a
+          node's buffer from its forward code without reading it ({!forward_recomputed}, over a node
+          whose [Fwd] fragment the routine owns) while the buffer still holds a persisting write's
+          value, which that run would silently undo; only a write from outside a run replaces the
+          value deliberately. *)
 }
 [@@deriving sexp_of]
 (** Computations based on assignments. [Tensor] construction fills in all five sets; zeroing owns
@@ -121,11 +130,16 @@ val comp :
   ?zeroes:Set.M(Tnode).t ->
   ?accumulates:Set.M(Tnode).t ->
   ?accumulation_runs:int Map.M(Tnode).t ->
+  ?persists:Set.M(Tnode).t ->
   embedded:Set.M(Tnode).t ->
   t ->
   comp
-(** The computation constructor; [owned], [requires], [zeroes], [accumulates] and
-    [accumulation_runs] default to empty. *)
+(** The computation constructor; [owned], [requires], [zeroes], [accumulates], [accumulation_runs]
+    and [persists] default to empty. *)
+
+val persisting : Tnode.t list -> comp -> comp
+(** [persisting nodes c] adds [nodes] to [c]'s {!field-persists}: the writes [c] makes to them are
+    meant to last, as a hand-written [%cd] optimizer step's are. *)
 
 val no_fragments : Set.M(Fragment).t
 val to_comp : t -> comp
@@ -181,11 +195,10 @@ val forward_recomputed : comp -> Set.M(Tnode).t
     A [Slice] counts exactly when its parent does, the view being taken as an alias of it; whether
     it is one is {!forward_fetched}'s question, for a caller with settled shapes.
 
-    For code known to be forward code: nothing here asks who owns a write, so a gradient's zeroing
-    or a parameter's initializer in [comp] would count. [Train.sgd_update] asks it of a loss's
-    forward, where a step on such a node is the only write meant to persist; [Context.compile] does
-    not, as a routine cannot tell a step from post-processing, or a forward it re-runs from one that
-    ran once. *)
+    Nothing here asks who owns a write, so a gradient's zeroing or a parameter's initializer in
+    [comp] counts. [Context] asks it of each compiled routine, keeping the nodes whose [Fwd]
+    fragment the routine owns -- the ones its forward code recomputes -- for {!field-persists}' run
+    check (gh-ocannl-2027); {!persists_undone} asks it of a computation persisting a node. *)
 
 val sequence : comp list -> comp
 (** Runs the computations in order, uniting their nodes, fragments and gradient sets; a gradient two
@@ -193,6 +206,12 @@ val sequence : comp list -> comp
     without zeroing it and stating nothing counting as one. Raises [Utils.User_error], naming the
     fragment, when two members own the same fragment (gh-ocannl-1746): [owned] is a set, so the copy
     would otherwise run twice unseen -- for a backprop fragment, a double-counted gradient. *)
+
+val persists_undone : comp -> Set.M(Tnode).t
+(** The nodes in [comp]'s {!field-persists} that [comp] itself re-establishes without reading them
+    ({!forward_recomputed}, a view counting as its parent): every run of [comp] undoes the previous
+    run's persisting write, or this run's own, whichever order its code takes. [Context.compile]
+    refuses a computation with any (gh-ocannl-2027). *)
 
 val collect_neutral_elem : t -> float option
 val to_low_level : ?static_indices:Indexing.static_symbol list -> t -> Low_level.t

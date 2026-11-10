@@ -1,12 +1,20 @@
-(* gh-ocannl-1998: [Train.sgd_update] refuses a stepped node the loss's forward recomputes, or a
-   view of one, since the next forward undoes the step; [Assignments.forward_recomputed] tells that
-   from a read-modify-write, whose step lasts.
+(* gh-ocannl-1998: a step on a node the loss's forward recomputes, or on a view of one, is undone by
+   the next forward; [Assignments.forward_recomputed] tells that from a read-modify-write, whose
+   step lasts.
 
-   1. The classification, over hand-built leaves. 2. What is refused, and with which tensor. 3. Why:
-   the same step through bare [sgd_one], which nothing refuses, does not accumulate. 4. What is
-   accepted, each against an independent recurrence over several runs: a value the forward builds
-   on, directly, through a temporary or through a view; a parameter with a computed initializer; a
-   value computed once, outside the loss's forward. *)
+   gh-ocannl-2027 moved the refusal from [sgd_update] to the step's mark ([Asgns.field-persists]):
+   [Context.compile] refuses a routine recomputing a node it steps, and [Context.run] the run of a
+   separate forward that would undo a step.
+
+   1. The classification, over hand-built leaves. 2. What is refused at compile: a routine carrying
+   the forward and the step, in either order. 3. Why: bare [sgd_one] and a marked hand-written step,
+   which nothing refused before, each run losing the previous step. 4. What is accepted, each
+   against an independent recurrence over several runs: a value the forward builds on, directly,
+   through a temporary or through a view; a parameter with a computed initializer; a value computed
+   once, outside the loss's forward. 5. Across routines: a forward re-run after the steps, refused
+   through each way of marking them (an unmarked step is not), after a replacing run and after a
+   partial replacement through a view; accepted after a host write and on re-initialization; a step
+   carried through a temporary, however grouped. *)
 
 open Base
 open Stdio
@@ -178,43 +186,68 @@ let accumulating x ~label =
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
   Tensor.unop ~op_label:"accum" ~op_asn ~grad_asn x ~label:[ label ] ()
 
-(* ----- 2. Refused ----- *)
+(* ----- 2. Refused: a routine carrying the forward and the step ----- *)
 
-let refused name ?params ~node ~stepped loss =
-  match Train.sgd_update ~learning_rate:(learning_rate ()) ?params loss with
-  | _ -> Verdict.p (name ^ ": refused") false
-  | exception Tensor.Session_error (msg, culprit) ->
-      eprintf "%s: %s (not part of the golden)\n" name msg;
+(* A refusal's stage and message, from building [step l] and compiling it with [grad_update l] into
+   one routine, as a training loop does (by default after it), through two runs of it. A routine
+   recomputing the node it steps undoes the step on its every run: [Context.compile] refuses it
+   (gh-ocannl-2027). *)
+let fused_runs ?(bindings = IDX.empty) ?(symbols = []) ?(step_first = false) ~step l =
+  let stage = ref "construction" in
+  match
+    let step = step l in
+    stage := "compile";
+    let ctx = Train.init_params (Context.auto ()) bindings l in
+    let update = Train.grad_update l in
+    let ctx, routine =
+      Train.to_routine ctx bindings
+        (Asgns.sequence (if step_first then [ step; update ] else [ update; step ]))
+    in
+    List.iter symbols ~f:(fun s -> IDX.find_exn routine.Context.bindings s := 0);
+    stage := "run 1";
+    let ctx = Context.run ctx routine in
+    stage := "run 2";
+    ignore (Context.run ctx routine : Context.t)
+  with
+  | () -> None
+  | exception (Utils.User_error msg | Tensor.Session_error (msg, _)) -> Some (!stage, msg)
+
+let refused_with name ~at ~names outcome =
+  match outcome with
+  | None -> Verdict.p (name ^ ": refused") false
+  | Some (stage, msg) ->
+      eprintf "%s: refused at %s: %s (not part of the golden)\n" name stage msg;
       Verdict.p (name ^ ": refused") true;
-      Verdict.p
-        (name ^ ": the refusal carries the stepped tensor")
-        (Option.exists culprit ~f:(fun t -> Tn.equal t.Tensor.value stepped.Tensor.value));
-      List.iter [ node; "recomputes"; "Operation.init" ] ~f:(fun substring ->
+      Verdict.p (name ^ ": refused at " ^ at) (String.equal stage at);
+      List.iter names ~f:(fun substring ->
           Verdict.p (name ^ ": the refusal names " ^ substring) (String.is_substring msg ~substring))
+
+let sgd ?params l = Train.sgd_update ~learning_rate:(learning_rate ()) ?params l
+
+let refused name ?bindings ?symbols ?step_first ?(step = fun params l -> sgd ?params l) ?params
+    ~node loss =
+  refused_with name ~at:"compile"
+    ~names:[ node; "gh-ocannl-2027"; "Operation.init" ]
+    (fused_runs ?bindings ?symbols ?step_first ~step:(step params) loss)
 
 let computed_refused () =
   let x = leaf ~l:"xc" [| 1.; 2. |] in
   let%op hc = x *. 2 in
   let%op l = hc *. hc in
-  refused "a computed node" ~params:(one hc) ~node:"hc" ~stepped:hc l;
-  (* After the forward was consumed too: the refusal reads the code, not the consumption. *)
-  let x = leaf ~l:"xd" [| 1.; 2. |] in
-  let%op hd = x *. 2 in
-  let%op l = hd *. hd in
-  let (_ : Asgns.comp) = Train.grad_update l in
-  refused "a computed node, after grad_update" ~params:(one hd) ~node:"hd" ~stepped:hd l
+  Train.set_materialized hc.Tensor.value;
+  refused "a computed node" ~params:(one hc) ~node:"hc" l
 
 let views_refused () =
-  let batch_n, _ = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
   let p = rows ~l:"pv" in
   let%op hv = p *. 2 in
   let%op aliased_view = hv @| batch_n in
   let%op l = aliased_view *. aliased_view in
-  refused "a view of a computed node" ~params:(one aliased_view) ~node:"aliased_view"
-    ~stepped:aliased_view l;
+  refused "a view of a computed node" ~bindings ~symbols:[ batch_n ] ~params:(one aliased_view)
+    ~node:"aliased_view" l;
   (* A view of a view. *)
-  let outer, _ = IDX.get_static_symbol ~static_range:2 IDX.empty in
-  let inner, _ = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let outer, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let inner, bindings = IDX.get_static_symbol ~static_range:2 bindings in
   let p =
     Operation.init ~l:"pn" ~prec:Ir.Ops.single ~b:[ 2; 2 ] ~o:[ 2 ]
       ~f:(fun _ -> 1.)
@@ -224,9 +257,10 @@ let views_refused () =
   let%op row = hn @| outer in
   let%op nested_view = row @| inner in
   let%op l = nested_view *. nested_view in
-  refused "a view of a view of a computed node" ~params:(one nested_view) ~node:"nested_view"
-    ~stepped:nested_view l;
-  (* A padded view is a copy: refused here all the same, with no need of its shapes. *)
+  refused "a view of a view of a computed node" ~bindings ~symbols:[ outer; inner ]
+    ~params:(one nested_view) ~node:"nested_view" l;
+  (* A padded view is a copy, and a copy is a fetch its forward re-establishes: [Context.compile]
+     refuses the step on it (gh-ocannl-1876), before any run. *)
   let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
   let images =
     Operation.init ~l:"imgs" ~prec:Ir.Ops.single ~b:[ 2; 1 ] ~o:[ 3; 3; 1 ]
@@ -238,9 +272,9 @@ let views_refused () =
   let processed =
     Nn_blocks.conv2d ~label:[ "processed" ] ~use_padding:true ~out_channels:1 () copied_view
   in
-  refused "a copying view of a computed node" ~params:(one copied_view) ~node:"copied_view"
-    ~stepped:copied_view processed;
-  let (_ : Context.t) = Train.init_params (Context.auto ()) bindings processed in
+  refused_with "a copying view of a computed node" ~at:"compile"
+    ~names:[ "copied_view"; "gh-ocannl-1876" ]
+    (fused_runs ~bindings ~symbols:[ batch_n ] ~step:(sgd ~params:(one copied_view)) processed);
   Verdict.p "that view cannot alias its parent"
     (not (Asgns.slice_alias_eligible ~array:copied_view.Tensor.value ~sliced:hp.Tensor.value))
 
@@ -253,23 +287,39 @@ let plain_forward_write_refused () =
   let%op l = overwritten *. overwritten in
   let reset = [%cd overwritten =: x] in
   let l = { l with Tensor.forward = Asgns.sequence [ reset; l.Tensor.forward ] } in
-  refused "a parameter its forward overwrites" ~node:"overwritten" ~stepped:overwritten l
+  refused "a parameter its forward overwrites" ~node:"overwritten" l
+
+let step_before_forward_refused () =
+  (* The step sequenced before the forward recomputing its node is undone within the same run. *)
+  let x = leaf ~l:"xf" [| 1.; 2. |] in
+  let%op hf = x *. 2 in
+  let%op l = hf *. hf in
+  Train.set_materialized hf.Tensor.value;
+  refused "a step sequenced before its node's forward" ~step_first:true ~params:(one hf) ~node:"hf"
+    l
 
 (* ----- 3. Why ----- *)
 
-let bare_step_does_not_accumulate () =
+let bare_step_refused () =
+  (* Bare [sgd_one] sees no loss: before gh-ocannl-2027 nothing refused it, and each run recomputed
+     (2, 4) and took the one step d = 2 h: h - h / 4, losing the previous one. *)
   let x = leaf ~l:"xb" [| 1.; 2. |] in
   let%op hb = x *. 2 in
   let%op l = hb *. hb in
   Train.set_materialized hb.Tensor.value;
-  let step = Train.sgd_one ~learning_rate:(learning_rate ()) hb in
-  let ctx = Train.init_params (Context.auto ()) IDX.empty l in
-  let ctx, routine = Context.compile ctx (Asgns.sequence [ Train.grad_update l; step ]) IDX.empty in
-  (* Every run recomputes (2, 4) and takes the one step d = 2 h: h - h / 4. *)
-  tracks "bare sgd_one on a computed node is undone"
-    ~run:(fun ctx -> Context.run ctx routine)
-    ~ctx ~watched:hb ~start:[||]
-    ~oracle:(fun _ -> [| 1.5; 3. |])
+  refused "bare sgd_one on a computed node"
+    ~step:(fun _ _ -> Train.sgd_one ~learning_rate:(learning_rate ()) hb)
+    ~node:"hb" l;
+  (* And a hand-written step, marked. *)
+  let x = leaf ~l:"xm" [| 1.; 2. |] in
+  let%op hm = x *. 2 in
+  let%op l = hm *. hm in
+  Train.set_materialized hm.Tensor.value;
+  refused "a marked hand-written step on a computed node"
+    ~step:(fun _ _ ->
+      let learning_rate = learning_rate () in
+      Asgns.persisting [ hm.Tensor.value ] [%cd hm =- learning_rate * hm.grad ~logic:"."])
+    ~node:"hm" l
 
 (* ----- 4. Accepted ----- *)
 
@@ -407,14 +457,196 @@ let computed_once () =
     ~watched:hq ~start:[| 2.; 4.; 6.; 8. |]
     ~oracle:(Array.mapi ~f:(fun i v -> if i < 2 then v -. (lr *. 2. *. v) else v))
 
+(* ----- 5. Across routines (gh-ocannl-2027) ----- *)
+
+(* [ho = x *. 2] computed by a forward routine of its own and run once, then stepped by [step] three
+   times, each step the one [sgd_one] takes on [ho *. ho]: [ho - lr * 2 ho]. Returns the context,
+   the forward routine and the steps' value. *)
+let stepped_after_forward ~tag ~step =
+  let x = leaf ~l:("xs" ^ tag) [| 1.; 2. |] in
+  let%op hs = x *. 2 in
+  Train.set_materialized hs.Tensor.value;
+  let ctx, fwd = Train.to_routine (Context.auto ()) IDX.empty (Train.forward hs) in
+  let ctx = Context.run ctx fwd in
+  let%op l = hs *. hs in
+  let ctx, routine =
+    Context.compile ctx (Asgns.sequence [ Train.grad_update l; step hs l ]) IDX.empty
+  in
+  let ctx = List.fold [ 1; 2; 3 ] ~init:ctx ~f:(fun ctx _ -> Context.run ctx routine) in
+  let stepped =
+    Array.fold [| 1; 2; 3 |] ~init:[| 2.; 4. |] ~f:(fun v _ ->
+        Array.map v ~f:(fun v -> v -. (lr *. 2. *. v)))
+  in
+  (ctx, fwd, hs, stepped)
+
+let rerun_refused name ~ctx ~fwd ~node ~stepped ~watched =
+  matches (name ^ ": the value before the re-run") (values ctx watched) stepped;
+  (match Context.run ctx fwd with
+  | _ -> Verdict.p (name ^ ": re-running the forward refused") false
+  | exception Utils.User_error msg ->
+      eprintf "%s: %s (not part of the golden)\n" name msg;
+      Verdict.p (name ^ ": re-running the forward refused") true;
+      List.iter [ node; "gh-ocannl-2027" ] ~f:(fun substring ->
+          Verdict.p (name ^ ": the refusal names " ^ substring) (String.is_substring msg ~substring)));
+  matches (name ^ ": the refused run left the steps") (values ctx watched) stepped
+
+let separate_forward_rerun () =
+  (* The forward run once before the steps is legal ([computed_once]); running it again after them
+     would undo them, and is refused, through [sgd_update], bare [sgd_one] and a hand-written step
+     marked [Asgns.persisting]. *)
+  let marked_by name step =
+    let ctx, fwd, hs, stepped = stepped_after_forward ~tag:name ~step in
+    rerun_refused ("a forward re-run after " ^ name) ~ctx ~fwd ~node:"hs" ~stepped ~watched:hs
+  in
+  marked_by "sgd_update" (fun hs l -> sgd ~params:(one hs) l);
+  marked_by "sgd_one" (fun hs _ -> Train.sgd_one ~learning_rate:(learning_rate ()) hs);
+  let hand_written hs =
+    let learning_rate = learning_rate () in
+    [%cd hs =- learning_rate * hs.grad ~logic:"."]
+  in
+  marked_by "a marked hand-written step" (fun hs _ ->
+      Asgns.persisting [ hs.Tensor.value ] (hand_written hs));
+  (* Unmarked, the same step states no intent: the re-run is not refused, and undoes the steps. *)
+  let ctx, fwd, hs, stepped =
+    stepped_after_forward ~tag:"unmarked" ~step:(fun hs _ -> hand_written hs)
+  in
+  matches "an unmarked hand-written step: the steps accumulate" (values ctx hs) stepped;
+  let ctx = Context.run ctx fwd in
+  matches "an unmarked hand-written step: a re-run forward undoes them" (values ctx hs) [| 2.; 4. |];
+  (* Through a view built after its parent's forward routine ran: the step reaches the parent's
+     buffer, which the parent's forward re-establishes. *)
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let p = rows ~l:"pr" in
+  let%op hr = p *. 2 in
+  Train.set_materialized hr.Tensor.value;
+  let ctx, fwd = Train.to_routine (Context.auto ()) IDX.empty (Train.forward hr) in
+  let ctx = Context.run ctx fwd in
+  let%op late_view = hr @| batch_n in
+  let%op l = late_view *. late_view in
+  let ctx, routine =
+    Train.to_routine ctx bindings
+      (Asgns.sequence [ Train.grad_update l; sgd ~params:(one late_view) l ])
+  in
+  Verdict.p "a late view of a re-run forward's node is an alias"
+    (Tn.is_alias late_view.Tensor.value);
+  IDX.find_exn routine.Context.bindings batch_n := 0;
+  let ctx = List.fold [ 1; 2; 3 ] ~init:ctx ~f:(fun ctx _ -> Context.run ctx routine) in
+  let row0 =
+    Array.fold [| 1; 2; 3 |] ~init:[| 2.; 4. |] ~f:(fun v _ ->
+        Array.map v ~f:(fun v -> v -. (lr *. 2. *. v)))
+  in
+  rerun_refused "a forward re-run after a step through a late view" ~ctx ~fwd ~node:"hr"
+    ~stepped:(Array.append row0 [| 6.; 8. |])
+    ~watched:hr
+
+let replaced_values () =
+  (* A host write replaces the steps deliberately: the forward then runs again, and recomputes. A
+     routine's write is not taken for one -- it may cover only a part of the buffer -- so after a
+     replacing run the re-run is still refused. *)
+  let ctx, fwd, hs, _ =
+    stepped_after_forward ~tag:"host" ~step:(fun hs l -> sgd ~params:(one hs) l)
+  in
+  let ctx = Context.set_values ctx hs.Tensor.value [| 5.; 7. |] in
+  (match Context.run ctx fwd with
+  | ctx ->
+      Verdict.p "after a host write, the forward re-runs: accepted" true;
+      matches "after a host write, the forward recomputes" (values ctx hs) [| 2.; 4. |]
+  | exception Utils.User_error msg ->
+      Verdict.p ("after a host write, the forward re-runs: accepted (refused: " ^ msg ^ ")") false);
+  let ctx, fwd, hs, _ =
+    stepped_after_forward ~tag:"replaced" ~step:(fun hs l -> sgd ~params:(one hs) l)
+  in
+  let y = leaf ~l:"yr" ~grad_spec:Tensor.Prohibit_grad [| 3.; 5. |] in
+  let ctx, replace = Context.compile ~name:"replace_hs" ctx [%cd hs =: y] IDX.empty in
+  let ctx = Context.run ctx replace in
+  rerun_refused "a forward re-run after a replacing run" ~ctx ~fwd ~node:"hs" ~stepped:[| 3.; 5. |]
+    ~watched:hs;
+  (* Re-initializing stepped parameters replaces them deliberately too. *)
+  let xs = [| 1.; 2. |] in
+  let xi = leaf ~l:"xri" ~grad_spec:Tensor.Prohibit_grad xs in
+  let w = TDSL.param ~value:1. "wri" ~output_dims:[ 2 ] () in
+  let%op l = w *. xi in
+  let step = sgd l in
+  let ctx = Train.init_params (Context.auto ()) IDX.empty l in
+  let ctx, routine = Context.compile ctx (Asgns.sequence [ Train.grad_update l; step ]) IDX.empty in
+  let ctx = Context.run (Context.run ctx routine) routine in
+  matches "a stepped parameter" (values ctx w) (Array.map xs ~f:(fun x -> 1. -. (2. *. lr *. x)));
+  match Train.init_params ~reinit_all:true ctx IDX.empty l with
+  | ctx ->
+      Verdict.p "re-initializing stepped parameters: accepted" true;
+      matches "re-initializing stepped parameters restores them" (values ctx w) [| 1.; 1. |];
+      let ctx = Context.run ctx routine in
+      matches "a step after re-initializing" (values ctx w)
+        (Array.map xs ~f:(fun x -> 1. -. (lr *. x)))
+  | exception Utils.User_error msg ->
+      Verdict.p ("re-initializing stepped parameters: accepted (refused: " ^ msg ^ ")") false
+
+let kept_through_members () =
+  (* A step followed by a copy out to a temporary and back: the code after the step carries its
+     value, so it lasts, however the members are grouped -- flat, or the copy-out grouped with the
+     step. *)
+  let leg name ~tag ~group =
+    let xs = [| 1.; 2. |] in
+    let x = leaf ~l:("xk" ^ tag) ~grad_spec:Tensor.Prohibit_grad xs in
+    let w = TDSL.param ~value:1. ("wk" ^ tag) ~output_dims:[ 2 ] () in
+    let%op l = w *. x in
+    let step = sgd l in
+    let keep = NTDSL.term ~label:[ "keep" ^ tag ] () in
+    let out = [%cd keep =: w] and back = [%cd w =: keep] in
+    let ctx = Train.init_params (Context.auto ()) IDX.empty l in
+    match
+      Context.compile ctx (Asgns.sequence [ Train.grad_update l; group step out back ]) IDX.empty
+    with
+    | exception Utils.User_error msg -> Verdict.p (name ^ ": accepted (refused: " ^ msg ^ ")") false
+    | ctx, routine ->
+        Verdict.p (name ^ ": accepted") true;
+        tracks name
+          ~run:(fun ctx -> Context.run ctx routine)
+          ~ctx ~watched:w ~start:[| 1.; 1. |]
+          ~oracle:(Array.mapi ~f:(fun i v -> v -. (lr *. xs.(i))))
+  in
+  leg "a step kept through a temporary across members" ~tag:"f" ~group:(fun step out back ->
+      Asgns.sequence [ step; out; back ]);
+  leg "a step kept through a temporary, the copy-out grouped with the step" ~tag:"g"
+    ~group:(fun step out back -> Asgns.sequence [ Asgns.sequence [ step; out ]; back ])
+
+let partial_replacement () =
+  (* Replacing one row of a stepped computed node, through a view, leaves the steps in the other
+     row: re-running the node's forward is still refused. *)
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let p = rows ~l:"pz" in
+  let%op hz = p *. 2 in
+  Train.set_materialized hz.Tensor.value;
+  let ctx, fwd = Train.to_routine (Context.auto ()) IDX.empty (Train.forward hz) in
+  let ctx = Context.run ctx fwd in
+  let%op l = hz *. hz in
+  let ctx, routine =
+    Context.compile ctx (Asgns.sequence [ Train.grad_update l; sgd ~params:(one hz) l ]) IDX.empty
+  in
+  let ctx = List.fold [ 1; 2; 3 ] ~init:ctx ~f:(fun ctx _ -> Context.run ctx routine) in
+  let%op part = hz @| batch_n in
+  let y = leaf ~l:"yz" ~grad_spec:Tensor.Prohibit_grad [| 5.; 7. |] in
+  let ctx, replace = Context.compile ~name:"replace_part" ctx [%cd part =: y] bindings in
+  Verdict.p "the replaced part is an alias" (Tn.is_alias part.Tensor.value);
+  IDX.find_exn replace.Context.bindings batch_n := 0;
+  let ctx = Context.run ctx replace in
+  (* Three steps of 1 - 2 lr on the second row, (6, 8): 0.75^3 = 0.421875. *)
+  rerun_refused "a forward re-run after a part of the stepped node was replaced" ~ctx ~fwd
+    ~node:"hz" ~stepped:[| 5.; 7.; 2.53125; 3.375 |] ~watched:hz
+
 let () =
   classification ();
   computed_refused ();
   views_refused ();
   plain_forward_write_refused ();
-  bare_step_does_not_accumulate ();
+  step_before_forward_refused ();
+  bare_step_refused ();
   accumulating_node ();
   statistics ();
   view_of_persistent_parent ();
   computed_initializer ();
-  computed_once ()
+  computed_once ();
+  separate_forward_rerun ();
+  replaced_values ();
+  kept_through_members ();
+  partial_replacement ()

@@ -78,7 +78,10 @@ files.
   referencing plain `x` from the other arms typechecks — but declaring the same name in two arms
   is a ppx-level "name clash" error. Gradients (`p.grad`) are readable only as DIRECT operands of
   an assignment: nested `(p.grad * s) + t` expands to `Option.map p.diff ... * s`, which does not
-  typecheck — give the scaled read its own statement into an intermediate.
+  typecheck — give the scaled read its own statement into an intermediate. A hand-written step
+  meant to last wraps its `%cd` comp in `Asgns.persisting [ p.value ]` (gh-ocannl-2027; no syntax
+  of its own); `Context.compile` refuses a routine re-establishing a node it marks
+  (`Asgns.persists_undone`).
 
 - Automatic shape schemes (gh-ocannl-1751, `Tensor.Scheme.For_ppx`): `Ppx_op` marks the function a
   `()` stage returns (or a unit body's tail `fun`) with an internal `ocannl.scheme` attribute

@@ -124,6 +124,9 @@ type comp = {
   accumulation_runs : int Map.M(Tn).t;
       (** The runs one reset spans, for a gradient accumulated into without zeroing it
           (gh-ocannl-1781); absent means one. *)
+  persists : Set.M(Tn).t;
+      (** The nodes whose written value this computation means to last across runs: an optimizer
+          step (gh-ocannl-2027). *)
 }
 [@@deriving sexp_of]
 (** Computations based on assignments. Note: the [arrayjit] library makes use of, but does not
@@ -136,9 +139,20 @@ let no_fragments = Set.empty (module Fragment)
 let no_nodes = Set.empty (module Tn)
 
 let comp ?(owned = no_fragments) ?(requires = no_fragments) ?(zeroes = no_nodes)
-    ?(accumulates = no_nodes) ?(accumulation_runs = Map.empty (module Tn)) ~embedded asgns =
-  { asgns; embedded_nodes = embedded; owned; requires; zeroes; accumulates; accumulation_runs }
+    ?(accumulates = no_nodes) ?(accumulation_runs = Map.empty (module Tn)) ?(persists = no_nodes)
+    ~embedded asgns =
+  {
+    asgns;
+    embedded_nodes = embedded;
+    owned;
+    requires;
+    zeroes;
+    accumulates;
+    accumulation_runs;
+    persists;
+  }
 
+let persisting nodes c = { c with persists = Set.union c.persists (Set.of_list (module Tn) nodes) }
 let to_comp asgns = comp ~embedded:(Set.empty (module Tnode)) asgns
 let empty_comp = to_comp Noop
 
@@ -421,6 +435,19 @@ let refuse_shared_fragments l shared =
            move it first."
           listed)
 
+(* A view's storage as construction records it ([Tn.slice_of], set eagerly): the parent a write
+   through it reaches, taken on trust as [forward_recomputed] takes a view of its own comp. *)
+let rec construction_storage tn =
+  match Tn.slice_of tn with Some (parent, _) -> construction_storage parent | None -> tn
+
+(* Documented in the interface. Over the whole computation, so how its members are grouped does not
+   matter. *)
+let persists_undone (comp : comp) =
+  if Set.is_empty comp.persists then no_nodes
+  else
+    let recomputed = Set.map (module Tn) (forward_recomputed comp) ~f:construction_storage in
+    Set.filter comp.persists ~f:(fun tn -> Set.mem recomputed (construction_storage tn))
+
 let sequence l =
   let owned, shared =
     List.fold l ~init:(no_fragments, no_fragments) ~f:(fun (owned, shared) c ->
@@ -449,6 +476,7 @@ let sequence l =
                 && not (Map.mem c.accumulation_runs g))
           then 1
           else runs);
+    persists = Set.union_list (module Tn) (List.map l ~f:(fun c -> c.persists));
   }
 
 let collect_neutral_elem (asgns : t) : float option =

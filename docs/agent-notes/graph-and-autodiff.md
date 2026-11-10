@@ -30,7 +30,8 @@ files.
   so a tensor built by `Tensor.term` (leaves and parameters: constant-empty `grad_asn`,
   `~terminal_backprop:true`) owns no backprop fragment and is never required — the maintainer's
   "exempt all terms". Zeroing, `init_params`, hand-written `%cd` assignments and the host-read
-  recompute proxy own nothing; `embedded_nodes` stays an INITIALIZATION claim and is not ownership.
+  recompute proxy own nothing -- which is also what tells a deliberate replacement from a forward
+  recomputing a stepped node (`Asgns.persists`, gh-ocannl-2027, training-and-performance.md); `embedded_nodes` stays an INITIALIZATION claim and is not ownership.
   `Context.compile` refuses a comp owning a fragment its frontier's `owners` already holds (keyed
   by node uid: a context must not keep every compiled node alive, which `moons_demo_variant`'s
   accessible-headers golden caught);
