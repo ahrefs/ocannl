@@ -383,14 +383,21 @@ type emitter = {
     of the four review rounds on gh-ocannl-712 found a member of exactly that shape, because a route
     the list does not name does not shrink the inventory visibly -- it just leaves files off it.
 
-    Matched by NAME behind any qualifier, rather than against a resolved module. That is deliberate,
-    and it is the one place this scan errs toward including: the qualifier here is routinely a local
-    module bound by a FUNCTOR APPLICATION -- [let module Syntax = Ir.C_syntax.C_syntax (...) in] --
-    which no alias table can resolve to a target, so demanding one would reinstate exactly the blind
-    spot this family exists to close. A qualifier is still required, so a test's own [to_doc] is not
-    swept in; and if some unrelated [X.to_doc] appears one day it costs an inventory line, whereas a
-    miss here costs a silent omission. What a qualifier cannot survive is an [open], which is why
-    {!rejections} refuses that spelling outright instead of guessing. *)
+    Matched by name AND module: a qualified call is an emitter's when its value name is the
+    emitter's and its qualifier, resolved where it is spelled ({!scope_of}), names a module one of
+    the emitter's origins defines it in. Matching the name behind any qualifier made [TDSL.wrap] a
+    call of [C_syntax.Result_type_probes.wrap] once that module exported one, and so put a model
+    file on the inventory (gh-ocannl-2117's hand-back). The resolution is the scan's own: an alias
+    reaches the module it names ([module CR = Ir.Low_level.Canonical_render]), a FUNCTOR APPLICATION
+    its functor ([let module Syntax = Ir.C_syntax.C_syntax (...) in] is [C_syntax], which is where
+    the interfaces record [compile_proc]), and a qualifier the file does not bind is the library
+    module of that name. A qualifier the scan cannot see into -- a functor parameter, a [struct], an
+    unpack -- keeps the name-only match, since a miss here costs a silent omission and a name too
+    many an inventory line. The boundary: a module alias another file defines and this one [open]s
+    is read as a module of that name, as for every attribution here ([Generated], [Utils]). A
+    qualifier is required either way, so a test's own [to_doc] is not swept in; and what a qualifier
+    cannot survive is an [open], which is why {!rejections} refuses that spelling outright instead
+    of guessing. *)
 
 (* -------------------------------------------------------------- lexical scope *)
 
@@ -430,6 +437,14 @@ type scope = {
 
 let span (loc : Ppxlib.Location.t) = (loc.loc_start.pos_cnum, loc.loc_end.pos_cnum)
 
+(** Whether one of [emitter]'s origins defines it in a module named [target]: the component before
+    the value, so [Ir.Low_level.Canonical_render.emit] is defined in [Canonical_render]. *)
+let defined_in emitter target =
+  List.exists emitter.origins ~f:(fun origin ->
+      match List.rev (String.split origin ~on:'.') with
+      | _value :: enclosing :: _ -> String.equal enclosing target
+      | _ -> false)
+
 (** The names an [open] or [include] of the module named [target] makes unqualified, among those
     this scan attributes by their qualifier: the artifact readers by their module, the emitters by
     the module whose interface defines them. *)
@@ -437,12 +452,7 @@ let hidden_names ~emitters target =
   (if String.equal target "Generated" then [ "read"; "assert_emits"; "assert_omits" ] else [])
   @ (if String.equal target direct_artifact_module then direct_artifact_names else [])
   @ List.filter_map emitters ~f:(fun emitter ->
-      let defined_in origin =
-        match List.rev (String.split origin ~on:'.') with
-        | _value :: enclosing :: _ -> String.equal enclosing target
-        | _ -> false
-      in
-      Option.some_if (List.exists emitter.origins ~f:defined_in) emitter.emitter_name)
+      Option.some_if (defined_in emitter target) emitter.emitter_name)
 
 (** Resolves every identifier of [structure] over {!Lexical_scope}'s model (gh-ocannl-1079).
 
@@ -565,31 +575,21 @@ let mentions_generated_read scope expr =
   iterator#expression expr;
   !found
 
-(** The emitter a path names, if any: an emitter's name behind a qualifier, or -- for [aliases] -- a
-    local name this file bound to one. *)
-let emitter_of_path ~emitters ~aliases path =
-  match path with
-  | [ name ] -> List.Assoc.find aliases name ~equal:String.equal
-  | _ ->
-      if Option.is_some (qualifier_of path) then
-        List.find emitters ~f:(fun e -> path_ends path ~name:e.emitter_name)
-      else None
-
-let renders_generated_text ~emitters ~aliases expr =
-  let found = ref false in
-  let iterator =
-    object
-      inherit Ast_traverse.iter as super
-
-      method! expression e =
-        (match longident_of e with
-        | Some path when Option.is_some (emitter_of_path ~emitters ~aliases path) -> found := true
-        | _ -> ());
-        super#expression e
-    end
-  in
-  iterator#expression expr;
-  !found
+(** The emitter the identifier [e] names, if any: a local name this file bound to one ([aliases]),
+    or an emitter's name behind a qualifier that resolves, where it is spelled, to a module the
+    emitter is defined in -- or that the scan cannot see into (see {!emitter}). *)
+let emitter_at scope ~emitters ~aliases e =
+  match longident_of e with
+  | Some [ name ] -> List.Assoc.find aliases name ~equal:String.equal
+  | Some path when Option.is_some (qualifier_of path) ->
+      let named =
+        match Hashtbl.find scope.qualifiers (span e.pexp_loc) with
+        | Some (Named target) -> Some target
+        | Some Opaque | None -> None
+      in
+      List.find emitters ~f:(fun emitter ->
+          path_ends path ~name:emitter.emitter_name && Option.for_all named ~f:(defined_in emitter))
+  | Some _ | None -> None
 
 type parameter_destination = {
   destination : destination;
@@ -680,7 +680,7 @@ let dynamic_optional parameter args =
     destination. Nothing in the tree has that shape; over-taint costs an inventory line, and the
     alternative -- matching by argument position -- would need the position to survive optional
     arguments the call site omits. *)
-let buffer_destinations ~emitters ~aliases structure =
+let buffer_destinations scope ~emitters ~aliases structure =
   let names = ref [] in
   let iterator =
     object
@@ -689,7 +689,7 @@ let buffer_destinations ~emitters ~aliases structure =
       method! expression e =
         (match e.pexp_desc with
         | Pexp_apply (callee, args) -> (
-            match Option.bind (longident_of callee) ~f:(emitter_of_path ~emitters ~aliases) with
+            match emitter_at scope ~emitters ~aliases callee with
             | Some emitter ->
                 List.iter emitter.destinations ~f:(fun destination ->
                     Option.iter (argument_at ~destination args) ~f:(fun argument ->
@@ -884,10 +884,10 @@ let emitter_bindings structure =
     through a local binding inside the wrapper is not followed, and does not pass silently: the
     caller's buffer is then read untainted, which {!classify_source} reports as an itemisation this
     scan cannot complete. *)
-let emitter_aliases ~emitters structure =
+let emitter_aliases scope ~emitters structure =
   let candidates = emitter_bindings structure in
   let aliases = ref [] in
-  let known path = emitter_of_path ~emitters ~aliases:!aliases path in
+  let known e = emitter_at scope ~emitters ~aliases:!aliases e in
   let wrapper_destinations ~params body =
     let found = ref [] in
     let iterator =
@@ -897,7 +897,7 @@ let emitter_aliases ~emitters structure =
         method! expression e =
           (match e.pexp_desc with
           | Pexp_apply (callee, args) -> (
-              match Option.bind (longident_of callee) ~f:known with
+              match known callee with
               | Some emitter ->
                   List.iter emitter.destinations ~f:(fun destination ->
                       Option.iter (argument_at ~destination args) ~f:(fun argument ->
@@ -921,9 +921,7 @@ let emitter_aliases ~emitters structure =
         if not (List.Assoc.mem !aliases name ~equal:String.equal) then
           let found =
             match params with
-            | [] ->
-                Option.bind (longident_of body) ~f:(fun path ->
-                    Option.map (known path) ~f:(fun emitter -> { emitter with emitter_name = name }))
+            | [] -> Option.map (known body) ~f:(fun emitter -> { emitter with emitter_name = name })
             | _ -> (
                 match wrapper_destinations ~params body with
                 | [] -> None
@@ -1227,8 +1225,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
             if
               calls scope e ~target:"Generated" ~name:"read"
               || reads_artifact scope e
-              || Option.is_some
-                   (Option.bind (longident_of e) ~f:(emitter_of_path ~emitters ~aliases))
+              || Option.is_some (emitter_at scope ~emitters ~aliases e)
             then found := join_provenance !found { no_provenance with generated = true };
             if calls scope e ~target:"Buffer" ~name:"contents" then
               found := { !found with buffer = true };
@@ -1311,8 +1308,7 @@ let scoped_provenance scope ~emitters ~aliases ~seeds ?(parameters = [])
         let direct_source =
           calls scope callee ~target:"Generated" ~name:"read"
           || reads_artifact scope callee
-          || Option.is_some
-               (Option.bind (longident_of callee) ~f:(emitter_of_path ~emitters ~aliases))
+          || Option.is_some (emitter_at scope ~emitters ~aliases callee)
         in
         let found =
           if direct_source then
@@ -2234,7 +2230,7 @@ let classify_source ~emitters ~helpers ~path ~contents =
      destinations, the pin walk -- has to recognise the same set of calls. Rules that know different
      routes are how a file stayed listed while the fragment it pins went missing. *)
   let bindings = bindings_in_structure structure in
-  let aliases = emitter_aliases ~emitters structure in
+  let aliases = emitter_aliases scope ~emitters structure in
   let reads_generated = ref false in
   let reads_direct = ref false in
   let reads_after = ref false in
@@ -2245,15 +2241,12 @@ let classify_source ~emitters ~helpers ~path ~contents =
 
       method! expression e =
         if reads_after_marker scope e then reads_after := true;
-        (if
-           List.exists [ "read"; "assert_emits"; "assert_omits" ] ~f:(fun name ->
-               calls scope e ~target:"Generated" ~name)
-         then reads_generated := true
-         else if reads_artifact scope e then reads_direct := true
-         else
-           match longident_of e with
-           | Some p when Option.is_some (emitter_of_path ~emitters ~aliases p) -> renders := true
-           | _ -> ());
+        if
+          List.exists [ "read"; "assert_emits"; "assert_omits" ] ~f:(fun name ->
+              calls scope e ~target:"Generated" ~name)
+        then reads_generated := true
+        else if reads_artifact scope e then reads_direct := true
+        else if Option.is_some (emitter_at scope ~emitters ~aliases e) then renders := true;
         super#expression e
     end
   in
@@ -2262,7 +2255,7 @@ let classify_source ~emitters ~helpers ~path ~contents =
      whichever route brought it. *)
   if not (!reads_generated || !reads_direct || !reads_after || !renders) then None
   else
-    let seeds = buffer_destinations ~emitters ~aliases structure in
+    let seeds = buffer_destinations scope ~emitters ~aliases structure in
     let functions = function_parameters_of structure in
     let source_parameters = Hashtbl.Poly.create () in
     let source_provenance () =
