@@ -6526,7 +6526,7 @@ module C_syntax (B : C_syntax_config) = struct
             let prec, narrowing = store_precs ~store_prec llsc in
             let (local_defs, val_doc), volatile_read_emitted =
               (with_volatile_accumulation_reads ctx) rmw_volatile_reads (fun () ->
-                  (pp_scalar ctx) prec llsc)
+                  (pp_scalar ctx) ~log_set_locals prec llsc)
             in
             let val_doc = wrap_conversion narrowing val_doc in
             let local_defs = pp_local_defs local_defs in
@@ -6608,11 +6608,11 @@ module C_syntax (B : C_syntax_config) = struct
         let dims = Lazy.force tn.dims in
         let store_prec = Lazy.force tn.storage_prec in
         let prec, narrowing = store_precs ~store_prec llsc in
-        let dyn_defs, dyn_expr = (pp_scalar ctx) iprec iv in
+        let dyn_defs, dyn_expr = (pp_scalar ctx) ~log_set_locals iprec iv in
         let idx_typ = B.typ_of_prec (Ops.index_prec ()) in
         let dyn_idx_doc = string ("((" ^ idx_typ ^ ")(") ^^ dyn_expr ^^ string "))" in
         let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
-        let val_defs, val_doc = (pp_scalar ctx) prec llsc in
+        let val_defs, val_doc = (pp_scalar ctx) ~log_set_locals prec llsc in
         let val_doc = wrap_conversion narrowing val_doc in
         let local_defs = pp_local_defs (dyn_defs @ val_defs) in
         let assignment =
@@ -6690,7 +6690,7 @@ module C_syntax (B : C_syntax_config) = struct
             (* Homogeneous: argument uses result precision *)
           else arg_prec
         in
-        let local_defs, arg_doc = (pp_scalar ctx) arg_prec arg in
+        let local_defs, arg_doc = (pp_scalar ctx) ~log_set_locals arg_prec arg in
         let local_defs = pp_local_defs local_defs in
         (* Generate the function call *)
         let result_doc = B.vec_unop_syntax prec vec_unop arg_doc in
@@ -7474,7 +7474,7 @@ module C_syntax (B : C_syntax_config) = struct
           (with_volatile_accumulation_reads ctx)
             ~scope_ids:controlled_scopes
             (not (List.is_empty controlled_scopes))
-            (fun () -> (pp_scalar ctx) (comp_prec cprec) c)
+            (fun () -> (pp_scalar ctx) ~log_set_locals (comp_prec cprec) c)
         in
         let local_defs = pp_local_defs local_defs in
         let body_doc =
@@ -8958,9 +8958,16 @@ module C_syntax (B : C_syntax_config) = struct
      that is not pure-index, a sibling statement, or any other inner loop stops the peel at that
      level (the recognizer then fails or the localization shrinks to that sub-nest). Two more
      declines, both unchanged by gh-ocannl-693: under [debug_log_from_routines] the per-step [Set]
-     form is kept — a [Local_scope] in a [Set]'s value renders its body quietly (only [Set_local]
-     values carry the trace, gh-ocannl-2065), so the rewrite would silence the per-iteration trace;
-     the SIMD renderings bail there for the same reason, and logged narrow runs already differ
+     form is kept. Since gh-ocannl-2111 a [Local_scope] in a [Set]'s value logs its body like any
+     other kept scope, so the rewrite would no longer silence the per-iteration trace; what it would
+     change is what the trace says. Per step, the [Set] form logs the source assignment's [debug]
+     text and the node's cell at its offset, old value read from memory ([tn[off]{=old} = new]); the
+     localized form logs the rendered C expression against a codegen-minted scope local, and names
+     the node's cell once, at the closing store. Logging is the tool for reading what the program
+     wrote where, so the trace stays node-addressed. The decision is
+     [Low_level.decide_accum_width]'s, shared with [Schedule.Privatize] and the SIMD renderings,
+     which bail under logging regardless (no per-lane trace), and the unroll mint declines with it,
+     so logged unrolled and serial candidates both stay per-step; logged narrow runs already differ
      numerically from plain runs (every tensorized rendering declines under logging). And an update
      mentioning an RNG conversion is never localized: the conversion picks its result type AND which
      random bits it consumes from the precision it renders at (gh-ocannl-517's carve-out,
@@ -9101,8 +9108,10 @@ module C_syntax (B : C_syntax_config) = struct
            body so a [Zero_out] reached through it is never mistaken for the function-scope
            first-touch that the declaration's [= {0}] covers. *)
         (* A kept scope logs its assignments, including definitions nested in an assignment
-           value (gh-ocannl-2065). Carry that choice through scalar operands; initializing
-           above also makes the trace's old-value read well-defined. *)
+           value (gh-ocannl-2065) or in any statement's operand: a [Set], [Set_dynamic] or
+           [Set_from_vec] value, a dynamic index, an [If] condition (gh-ocannl-2111). Carry that
+           choice through scalar operands; initializing above also makes the trace's old-value
+           read well-defined. *)
         let body_doc = (pp_ll ctx) ~log_set_locals ~in_loop:true body in
         let def_doc = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in

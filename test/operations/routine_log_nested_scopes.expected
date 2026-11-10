@@ -1,0 +1,15 @@
+Set: the store writes the nested definition's value: true
+Set_dynamic: the scatter writes the nested definition's value at the nested row: true
+Set_from_vec: the scoped draw equals the plain one bit for bit: true
+Set_from_vec: the draws lie in [0, 1): true
+If: the guard reads the nested definition's value: true
+Set value: the log traces every assignment the nested definition executes (16): true
+Set value: the nested definition's trace precedes the enclosing store's: true
+Set_dynamic value: the log traces every assignment the nested definition executes (8): true
+Set_dynamic value: the nested definition's trace precedes the enclosing store's: true
+Set_dynamic row: the log traces every assignment the nested definition executes (8): true
+Set_dynamic row: the nested definition's trace precedes the enclosing store's: true
+Set_from_vec argument: the log traces every assignment the nested definition executes (1): true
+Set_from_vec argument: the nested definition's trace precedes the enclosing store's: true
+If condition: the log traces every assignment the nested definition executes (8): true
+If condition: the nested definition's trace precedes the enclosing store's: true
