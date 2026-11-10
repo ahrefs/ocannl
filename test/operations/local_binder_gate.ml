@@ -6,9 +6,10 @@
    so the refusal is [C_syntax.compile_proc]'s own; beside it runs the same routine with its binder,
    executed, since the gate is only worth having if it leaves valid code alone.
 
-   The gate checks lexical visibility for explicit declarations and scan state, but does not order
-   hoisted Local_scope definitions: the rows of [local_scope_sibling_reads] are the routines an
-   ordering rule would refuse, and they compile under it. *)
+   The gate checks lexical visibility for explicit declarations and scan state, and that an explicit
+   declaration precedes its accesses (gh-ocannl-2100), but does not order hoisted Local_scope
+   definitions: the rows of [local_scope_sibling_reads] are the routines an ordering rule would
+   refuse, and they compile under it. *)
 
 open Base
 open Ll_test
@@ -208,7 +209,57 @@ let row_nested_header name ~scan_header nest =
   refused name ~raw scoped
     ~naming:[ "Get_local of " ^ local ib (name ^ "_b"); "outside its lexical scope" ]
 
+(* gh-ocannl-2100: a declaration in scope of an access but after it, in the same block. C declares a
+   [Declare_local] where it stands, so the access names an identifier not yet declared. The controls
+   are a declaration ahead of a read the walk meets first: it sits in a hoisted definition's body,
+   which renders ahead of the statement's own operands. *)
+let row_order name ~binder_context block =
+  let a, b, out, raw = program name in
+  let ia = LL.get_scope a in
+  let declare = declare_local ia and write = LL.Set_local (ia, c 5.) in
+  let read = set out cell (LL.Get_local ia) in
+  let naming what =
+    [ what ^ " of " ^ local ia (name ^ "_a"); "ahead of its declaration"; binder_context ]
+  in
+  refused name ~raw (block (LL.unflat_lines [ read; declare; write ])) ~naming:(naming "Get_local");
+  refused (name ^ "_write") ~raw
+    (block (LL.unflat_lines [ write; declare; read ]))
+    ~naming:(naming "Set_local");
+  refused (name ^ "_outer") ~raw
+    (block (seq (loop ~upto:1 (sym ()) read) (LL.unflat_lines [ declare; write ])))
+    ~naming:(naming "Get_local");
+  accepted (name ^ "_declared") ~raw ~out ~want:5.
+    (block (LL.unflat_lines [ declare; write; read ]));
+  let ib = LL.get_scope b in
+  let definition = LL.unflat_lines [ declare; write; LL.Set_local (ib, LL.Get_local ia) ] in
+  accepted (name ^ "_hoisted") ~raw ~out ~want:10.
+    (block (set out cell (add (LL.Get_local ia) (scope_of ~orig_indices:cell ib definition))))
+
+(* gh-ocannl-2100: the binder's diagnostic names every enclosure, innermost first. *)
+let row_nested_binder name ~binder_context nest =
+  let a, _, out, raw = program name in
+  let ia = LL.get_scope a in
+  refused name ~raw
+    (seq
+       (nest (LL.unflat_lines [ declare_local ia; LL.Set_local (ia, c 5.) ]))
+       (set out cell (LL.Get_local ia)))
+    ~naming:
+      [ "Get_local of " ^ local ia (name ^ "_a"); "outside its lexical scope"; binder_context ]
+
 let () =
+  case "order" (fun () ->
+      row_order "lbg_order" ~binder_context:"Declare_local at statement level" Fn.id);
+  case "order_loop" (fun () ->
+      row_order "lbg_order_loop" ~binder_context:"Declare_local in a loop body"
+        (loop ~upto:1 (sym ())));
+  case "guard_in_loop" (fun () ->
+      row_nested_binder "lbg_guard_in_loop"
+        ~binder_context:"Declare_local in a guard body inside a loop body" (fun body ->
+          loop ~upto:1 (sym ()) (if_ (c 1.) body)));
+  case "loop_in_guard" (fun () ->
+      row_nested_binder "lbg_loop_in_guard"
+        ~binder_context:"Declare_local in a loop body inside a guard body" (fun body ->
+          if_ (c 1.) (loop ~upto:1 (sym ()) body)));
   case "loop_escape" (fun () ->
       row_lexical "lbg_loop_escape" ~binder_context:"Declare_local in a loop body"
         (loop ~upto:1 (sym ())));
