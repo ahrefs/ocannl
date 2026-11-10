@@ -803,7 +803,9 @@ let rec dim_to_int_exn = function
 let sum_solved_components (solved_dims : solved_dim list) =
   let total_d = List.sum (module Int) solved_dims ~f:(fun s -> s.d) in
   (* Reserved (claim-free) tags don't constrain the concat basis; all named tags must agree, and the
-     concatenated axis takes that common named tag (else [default]). *)
+     concatenated axis takes that common named tag (else [default], which a named size then refuses:
+     the short-term rule of gh-ocannl-2093, explained at [unify_dim]'s fully solved [Concat]/[Dim]
+     arm). *)
   let named_bases =
     List.filter_map solved_dims ~f:(fun s ->
         if is_reserved_basis s.basis then None else Some s.basis)
@@ -3137,7 +3139,17 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
             @@ Shape_error ("concat: conflicting dimension bases", [ Dim_mismatch [ dim1; dim2 ] ]))
       in
       match rest with
-      | [] -> unify_dim ~stage origin (get_dim ~d:sum ~basis:solved_basis (), d) env
+      | [] ->
+          (* Fully solved: the sum meets [d] under [solved_basis], not [residual_basis]. A residual
+             component is a variable, and binding it records the merged tag, so a named size claims
+             it once and for all. A solved sum records nothing: were its [default] claim-free here,
+             an all-integer [2^3] would take [rgb 5] and later [hsv 5] alike, merging the two named
+             bases silently. So [2^3] keeps [default] and is refused against a named size, while
+             [2^a] is accepted with [a] taking the claim (gh-ocannl-2093). [subst_dim] usually sums
+             such an axis before it gets here, by the same rule ([sum_solved_components]). The
+             principled answer, an integer component taking a slice of its partner's basis, is
+             gh-ocannl-2095. *)
+          unify_dim ~stage origin (get_dim ~d:sum ~basis:solved_basis (), d) env
       | [ c ] -> unify_dim ~stage origin (c, get_dim ~d:residual ~basis:residual_basis ()) env
       | _ ->
           (* Multiple unsolved components remain: defer the NORMALIZED residual (solved components

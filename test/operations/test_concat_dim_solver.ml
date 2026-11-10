@@ -292,7 +292,12 @@ let test_concrete_concat () =
   solves "a named component names the sum"
     [ eq (Row.Concat [ dim ~basis:"rgb" 2; dim 3 ]) (dim ~basis:"rgb" 5) ]
     ~check:(fun _ -> true);
-  (* As a [Dim] of 5 is, and as this was before the sum: all-integer components claim [default]. *)
+  (* As a [Dim] of 5 is, and as this was before the sum: all-integer components claim [default], a
+     short-term rule (gh-ocannl-2093). The named component above names the sum, and a variable one
+     takes the named size's claim as its binding records it; a solved sum records no basis when it
+     meets a solved size, so a claim-free [2^3] taking [rgb 5] could later take [hsv 5] too, merging
+     the two silently. gh-ocannl-2095 is the sound alternative (integer components as slices of the
+     partner's basis). *)
   refuses "a plain 2^3 against a named 5" [ eq c23 (dim ~basis:"rgb" 5) ] ~needle:"different bases"
 
 let () =

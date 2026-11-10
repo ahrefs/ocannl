@@ -32,3 +32,6 @@ a row's total of another size: refused: Cannot set dimension for variable refere
 a row's total of another size: refused with a shape error: true
 a named basis on the operand: refused: solved dimensions for axis: different bases
 a named basis on the operand: refused with a shape error: true
+a named segment takes the operand's basis: true
+the named segment's claim, against another basis: refused: solved dimensions for axis: different bases
+the named segment's claim, against another basis: refused with a shape error: true
