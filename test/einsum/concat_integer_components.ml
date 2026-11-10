@@ -189,9 +189,27 @@ let refusals () =
       let%op s = c ++ "a, b => " in
       let%op total = s + r in
       values total);
-  (* All-integer components claim the [default] basis, as a plain 5 does. *)
+  (* All-integer components claim the [default] basis, as a plain 5 does: a short-term rule
+     (gh-ocannl-2093). Their sum is a solved size, and a solved size meeting another records no
+     basis, so a claim-free sum that took [rgb 5] could take [hsv 5] as well, merging the two
+     silently. A named segment is a variable, which records the claim it takes, once: the two cases
+     after this one. A sound claim-free integer component is gh-ocannl-2095's algebra of
+     concatenation bases. *)
   refused "a named basis on the operand" ~needle:"different bases" (fun () ->
-      values (reduced (Operation.range ~axis_basis:"rgb" 5)))
+      values (reduced (Operation.range ~axis_basis:"rgb" 5)));
+  (* Added to an [rgb 3], which a [default] segment would refuse. *)
+  computes "a named segment takes the operand's basis"
+    (fun () ->
+      let c = TDSL.einsum1 "2^a => a" (Operation.range ~axis_basis:"rgb" 5) () in
+      let n = Operation.range ~axis_basis:"rgb" 3 in
+      let%op s = c + n in
+      values s)
+    ~want:[| 2.; 4.; 6. |];
+  refused "the named segment's claim, against another basis" ~needle:"different bases" (fun () ->
+      let c = TDSL.einsum1 "2^a => a" (Operation.range ~axis_basis:"rgb" 5) () in
+      let h = Operation.range ~axis_basis:"hsv" 3 in
+      let%op s = c + h in
+      values s)
 
 let () =
   reductions ();
