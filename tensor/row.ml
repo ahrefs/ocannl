@@ -2458,6 +2458,77 @@ let window_pair_equation ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 =
     | Sym _, Sym _ -> `Refuse "solved dimensions for axis: unresolvable strides"
     | _ -> `Defer
 
+(* A window of [unify_dim]'s pair arms, as [(stride, span, output)]: a padded window or a plain
+   affine spans its stride, a valid window its effective kernel span. *)
+let pair_window = function
+  | Affine { stride; over; conv = None | Some { use_padding = true; _ }; _ } ->
+      Some (stride, stride, over)
+  | Affine { stride; over; conv = Some { dilation; kernel = Dim k; use_padding = false }; _ } ->
+      Some (stride, effective_kernel_span ~dilation ~kernel_size:k.d, over)
+  | _ -> None
+
+(* gh-ocannl-2040: a pair [window_pair_equation] defers, with both outputs open, that fails once the
+   closing stages run. Nothing sized the extent or either output, so closing sized the outputs on
+   their own, and the plain arms' [mismatch] or [incompatible stride] names neither window nor the
+   fix. Name both, and the widths that fit them: [w = s1 * (o1 - 1) + span1 = s2 * (o2 - 1) + span2]
+   with both outputs at least 1, the smallest such [w] and every [lcm s1 s2] after it (the deferral
+   means [gcd s1 s2] divides [span1 - span2], so one exists below [max span + lcm]). Only a failure
+   of sizes: an output closing sized whose read width the other window cannot fit. [None] for
+   anything else, whose own message stands. *)
+let unsized_window_pair_message env (d1, d2) =
+  match (pair_window d1, pair_window d2) with
+  | Some (s1, span1, o1), Some (s2, span2, o2)
+    when s1 % s2 <> 0
+         && s2 % s1 <> 0
+         && (not (Set.is_empty (vars_of_dim o1)))
+         && not (Set.is_empty (vars_of_dim o2)) -> (
+      let var_to_string (v : Dim_var.t) = Option.value v.name ~default:(Dim_var.to_string v) in
+      let show d = dim_to_string ~var_to_string Axis_size d in
+      let fits ~s ~span w = w >= span && (w - span) % s = 0 in
+      let closed o ~s ~span =
+        match subst_dim env o with
+        | Dim { d; _ } -> Some ([%string "%{show o} at %{d#Int}"], (s * (d - 1)) + span)
+        | _ -> None
+      in
+      let sized =
+        match (closed o1 ~s:s1 ~span:span1, closed o2 ~s:s2 ~span:span2) with
+        | Some (c1, w1), Some (c2, w2) when w1 <> w2 ->
+            Some [%string "%{c1} and %{c2}, which read %{w1#Int} and %{w2#Int} cells"]
+        | Some (c, w), None when not (fits ~s:s2 ~span:span2 w) ->
+            Some [%string "%{c}, which reads %{w#Int} cells, a width %{show d2} cannot read"]
+        | None, Some (c, w) when not (fits ~s:s1 ~span:span1 w) ->
+            Some [%string "%{c}, which reads %{w#Int} cells, a width %{show d1} cannot read"]
+        | _ -> None
+      in
+      match sized with
+      | None -> None
+      | Some sized ->
+          let g = Utils.gcd s1 s2 in
+          let lcm = s1 / g * s2 in
+          (* The widths the first window reads from [max span] on, [s1] apart: [s2 / g] of them
+             cover every residue modulo [s2] the first can reach, so no list of [lcm] widths. *)
+          let lowest = Int.max span1 span2 in
+          let first = lowest + ((span1 - lowest) % s1) in
+          let rec search k =
+            if k >= s2 / g then None
+            else
+              let w = first + (k * s1) in
+              if fits ~s:s2 ~span:span2 w then Some w else search (k + 1)
+          in
+          let fit =
+            Option.value_map (search 0) ~default:"" ~f:(fun w ->
+                [%string " The widths both fit are %{w#Int} and every %{lcm#Int} after it."])
+          in
+          Some
+            [%string
+              "the windows %{show d1} and %{show d2} read one input extent with strides %{s1#Int} \
+               and %{s2#Int}, which divide neither way, so neither output determines the other, \
+               and nothing sized the extent or either output before shape inference closed. \
+               Closing sized the outputs on their own: %{sized}. Give the input a width both \
+               windows fit, or size one output (capture it with the spec's trailing label list and \
+               Shape.set_dim it) for the other to follow.%{fit}"])
+  | _ -> None
+
 (* Substituting a solution (gh-ocannl-1904). A solution [v := value] visits the entries it can
    change -- those mentioning [v], and the pending ones (see {!environment}) for a dimension
    solution -- rather than mapping over the whole environment, which made inference quadratic in the
@@ -5882,6 +5953,12 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
              (Sexp.to_string_hum @@ [%sexp_of: environment] env);
            Out_channel.close f_out; *)
         (* Add the failing constraint to the error trace *)
+        let s =
+          match ineq with
+          | Dim_eq { d1; d2; _ } when is_stage5_up stage ->
+              Option.value (unsized_window_pair_message env (d1, d2)) ~default:s
+          | _ -> s
+        in
         raise @@ Shape_error (s, Constraint_failed ineq :: trace)
     in
     (* At a fixpoint, from Stage2 on, nothing more will solve what an open window left open, and the
