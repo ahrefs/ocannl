@@ -50,7 +50,15 @@
 #   --worktree-root PATH     Temporary-worktree parent on BOX (default:
 #                            $HOME/ocannl-staging-worktrees there).
 #   --cap SECONDS            Per-build/test/probe wall-clock cap; 0 disables
-#                            it (default: 5400).
+#                            it. An explicit --cap bounds every command.
+#                            Default: 5400, except for a --test or
+#                            --record-golden alias reaching the slow tests
+#                            (as tools/test-run.sh classifies it), whose
+#                            commands get the four-hour slow budget
+#                            SLOW_RUN_CAP_DEFAULT of tools/per-test-cap.sh
+#                            (gh-ocannl-2106); a --run probe keeps 5400.
+#                            The whole-trip cap still bounds the sum: a trip
+#                            of two slow aliases needs a larger --trip-cap.
 #   --trip-cap SECONDS       Whole-trip cap, including setup and cleanup;
 #                            0 disables it (default: 21600). --ssh-cap is the
 #                            same option under its former name.
@@ -182,6 +190,7 @@ remote_repo=
 staging_remote=
 worktree_root=
 cap=5400
+cap_explicit=
 trip_cap=21600
 test_cap=
 probe_cap=60
@@ -232,6 +241,7 @@ while [ $# -gt 0 ]; do
     --cap)
       [ $# -ge 2 ] || die "--cap needs a value"
       cap=$2
+      cap_explicit=1
       shift 2
       ;;
     --trip-cap | --ssh-cap)
@@ -483,7 +493,7 @@ remote_command="/bin/sh -c 'exec 3<&0; exec </dev/null; exec /bin/sh /dev/fd/3 \
 for arg in "$box" "$branch" "$backend" "$expect_lib" "$remote_repo" "$staging_remote" \
   "$worktree_root" "$cap" "$trip_cap" "$jobs" "$transport_story" "$capped_perl" \
   "$box_jobs_source" "$batch_backends_source" "$credential_scrub" "$per_test_cap_source" \
-  "$device_probe_source" "$test_cap" "$probe_cap"; do
+  "$device_probe_source" "$test_cap" "$probe_cap" "$cap_explicit"; do
   remote_command="$remote_command $(sq "$arg")"
 done
 if [ "$operation_count" -gt 0 ]; then
