@@ -29,6 +29,19 @@ end
 
 let symbol_ident (Symbol s) = "i" ^ Int.to_string s
 
+(* [digits_then_end_or_underscore s ~pos] is whether [s] has one or more digits from [pos], followed
+   by the end of [s] or a [_]. *)
+let digits_then_end_or_underscore s ~pos =
+  let len = String.length s in
+  let stop = ref pos in
+  while !stop < len && Char.is_digit s.[!stop] do
+    Int.incr stop
+  done;
+  !stop > pos && (!stop = len || Char.equal s.[!stop] '_')
+
+let in_symbol_ident_namespace name =
+  String.is_prefix name ~prefix:"i" && digits_then_end_or_underscore name ~pos:1
+
 type 'a environment = 'a Map.M(Symbol).t [@@deriving sexp]
 
 type static_symbol = {

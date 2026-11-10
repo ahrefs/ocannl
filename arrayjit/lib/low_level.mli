@@ -2075,7 +2075,12 @@ val get_ident_within_code :
     the disambiguated [n<id>_<label>] form rather than the bare label, so it cannot equal a name the
     emitter declares. A prefix reserves a namespace whose members are minted on the fly -- the
     C-family emitters' [ocannl_vec<lanes><suffix>] typedefs, one per lane count (gh-ocannl-1102) --
-    which no finite blacklist can list. *)
+    which no finite blacklist can list.
+
+    The minter also keeps out of its own namespace whatever the caller passes (gh-ocannl-2103): a
+    label spelled like a name minted from a node id ({!Tnode.in_id_ident_namespace}: [n5_x], [n5])
+    is a repeat, and so, under the [_grad] gradient separator, is a non-gradient label [x_grad] when
+    the code holds a gradient of ident [x], so no two nodes mint the same identifier. *)
 
 val to_doc_cstyle :
   ?name:string -> ?static_indices:Indexing.static_symbol list -> unit -> t -> PPrint.document

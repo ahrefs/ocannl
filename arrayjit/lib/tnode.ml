@@ -493,6 +493,27 @@ let id tn =
   ident_prefix (tn.namespace [@label_read "the namespace prefixes the node's display identifier"])
   ^ Int.to_string tn.id
 
+(** Whether [name] is spelled like an identifier minted from a node id ({!id}, {!styled_ident}):
+    ["n"] and one or more digits, then the end or ["_"] and anything, at the start of [name] or
+    right after a [__] (a namespace's [<namespace>__n<id>]). The code-name minter reserves this
+    namespace, so a node labelled [n5_x] cannot take the name node 5 takes when its label [x]
+    repeats, nor [n5] the name of a node 5 with no label (gh-ocannl-2103). *)
+let in_id_ident_namespace name =
+  let numbered pos =
+    let len = String.length name in
+    pos < len
+    && Char.equal name.[pos] 'n'
+    &&
+    let stop = ref (pos + 1) in
+    while !stop < len && Char.is_digit name.[!stop] do
+      Int.incr stop
+    done;
+    !stop > pos + 1 && (!stop = len || Char.equal name.[!stop] '_')
+  in
+  numbered 0
+  || List.exists (String.substr_index_all name ~may_overlap:true ~pattern:"__") ~f:(fun i ->
+      numbered (i + 2))
+
 let label a = String.concat ~sep:"_" a.label
 
 let is_alphanum_ s =

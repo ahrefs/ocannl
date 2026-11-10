@@ -781,16 +781,19 @@ let declared_arrays source =
     - a signature parameter: [<specifiers> <declarator>], no initializer;
     - a statement-level call of a macro the source defines, [<macro>(<args>);]: what each of its
       definitions declares (read by these same rules, the macro's parameters admitted as type
-      names), the arguments its declared parameters receive among them, each a bare identifier.
+      names), the arguments its declared parameters receive among them, each a bare identifier;
+    - a block literal inside an expression statement, [^(<params>) { ... }] or [^{ ... }] (the
+      [dispatch_apply] rendering of a pool-parallel [Grid] loop passes its chunk body as one): each
+      parameter in the signature-parameter form, the body read as statements.
 
     Also unrecognized, as a declaration this reading cannot classify: a second declarator; a
-    function declaration; [struct] / [union] / [enum]; a label, [goto], [case] or [default]; a call
-    of a declaring macro anywhere but as a whole statement, a declared argument that is not a bare
-    identifier, and a macro whose body pastes or stringifies ([#], [##]) or holds a statement these
-    rules refuse; any other preprocessor directive in a kernel ([#define] there declares a macro).
-    Everything else -- an expression statement, a call, [if] / [else] / [while] / [do] / [switch]
-    heads (their bodies read as statements), [return] / [break] / [continue], braces -- declares
-    nothing. *)
+    function declaration; [struct] / [union] / [enum]; a GNU statement expression [({ ... })]; a
+    label, [goto], [case] or [default]; a call of a declaring macro anywhere but as a whole
+    statement, a declared argument that is not a bare identifier, and a macro whose body pastes or
+    stringifies ([#], [##]) or holds a statement these rules refuse; any other preprocessor
+    directive in a kernel ([#define] there declares a macro). Everything else -- an expression
+    statement, a call, [if] / [else] / [while] / [do] / [switch] heads (their bodies read as
+    statements), [return] / [break] / [continue], braces -- declares nothing. *)
 
 type declaration_site =
   | Parameter  (** A kernel signature's parameter. *)
@@ -971,6 +974,17 @@ let split_paren toks =
     | ((_, Punct ')') as t) :: rest ->
         if depth = 0 then (List.rev acc, rest) else go (depth - 1) (t :: acc) rest
     | ((_, Punct '(') as t) :: rest -> go (depth + 1) (t :: acc) rest
+    | t :: rest -> go depth (t :: acc) rest
+  in
+  go 0 [] toks
+
+(* [toks] after an opening brace: the tokens up to its matching [}], and those after it. *)
+let split_brace toks =
+  let rec go depth acc = function
+    | [] -> (List.rev acc, [])
+    | ((_, Punct '}') as t) :: rest ->
+        if depth = 0 then (List.rev acc, rest) else go (depth - 1) (t :: acc) rest
+    | ((_, Punct '{') as t) :: rest -> go (depth + 1) (t :: acc) rest
     | t :: rest -> go depth (t :: acc) rest
   in
   go 0 [] toks
@@ -1212,7 +1226,39 @@ let declarations source =
       | (_, Ident _) :: (_, Punct ':') :: _ -> refuse toks
       | (_, Ident _) :: rest when unknown_type_declaration rest ->
           if nested_declaring_call toks then refuse toks else declaration ~with_init:true toks
-      | _ -> if nested_declaring_call toks then refuse toks
+      | _ ->
+          let outside = block_literals toks in
+          if nested_declaring_call outside then refuse toks
+    (* An expression statement's block literals ([^(<params>) { ... }], what a pool-parallel [Grid]
+       loop's [dispatch_apply] rendering passes its chunk body as): their parameters read as
+       variables, their bodies as statements. Returns the tokens outside them. A [^] followed by
+       anything else is an exclusive or. A GNU statement expression [({ ... })] is refused: its body
+       would otherwise read as one expression. *)
+    and block_literals toks =
+      let outside = ref [] in
+      let rec go = function
+        | [] -> ()
+        | (_, Punct '^') :: (_, Punct '(') :: rest
+          when match snd (split_paren rest) with (_, Punct '{') :: _ -> true | _ -> false ->
+            let params, after = split_paren rest in
+            (match params with
+            | [] | [ (_, Ident "void") ] -> ()
+            | _ ->
+                List.iter (split_commas params) ~f:(fun param ->
+                    declaration ~with_init:false (param @ [ (line_of param, Punct ';') ])));
+            block_body (List.tl_exn after)
+        | (_, Punct '^') :: (_, Punct '{') :: body -> block_body body
+        | (_, Punct '(') :: (_, Punct '{') :: _ -> refuse toks
+        | t :: rest ->
+            outside := t :: !outside;
+            go rest
+      and block_body body =
+        let body, after = split_brace body in
+        List.iter (statements body) ~f:statement;
+        go after
+      in
+      go toks;
+      List.rev !outside
     in
     List.iter (statements toks) ~f:statement
   in

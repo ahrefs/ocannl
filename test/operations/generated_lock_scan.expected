@@ -5,6 +5,7 @@ Programs calling Generated.init that several stanzas run:
   test/operations/cache_key_agreement.exe: every runner holds test/operations/cache_key_agreement
   test/operations/cc_kept_library.exe: every runner holds test/operations/cc_kept_library
   test/operations/cc_march_census.exe: exempt by its `generated-lock:` marker
+  test/operations/declared_temporaries.exe: every runner holds test/operations/declared_temporaries
   test/operations/fixed_name_temporaries.exe: every runner holds test/operations/fixed_name_temporaries
   test/operations/half_unary_math.exe: every runner holds test/operations/half_unary_math
   test/operations/heap_local_arrays.exe: every runner holds test/operations/heap_local_arrays

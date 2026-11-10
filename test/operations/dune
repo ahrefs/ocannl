@@ -7767,18 +7767,133 @@
   (alias runtest-fixed_name_temporaries-plain)
   (alias runtest-fixed_name_temporaries-logged)))
 
+; gh-ocannl-2103: a node labelled like a name the compiler mints -- another node's minted name, a
+; loop index, a pool-chunked Grid loop's chunk names, a renderer's fixed temporary -- compiles and
+; computes what an ordinarily labelled twin computes.
+
+(executable
+ (name minted_name_labels)
+ (modules minted_name_labels)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test))
+
+(rule
+ (target minted_name_labels-plain.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:minted_name_labels.exe}))))
+
+(rule
+ (alias runtest-minted_name_labels-plain)
+ (package neural_nets_lib)
+ (action
+  (diff minted_name_labels-plain.expected minted_name_labels-plain.actual)))
+
+(rule
+ ; The logged run keeps its routine logs in stream files, off stdout.
+ (target minted_name_labels-logged.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:minted_name_labels.exe}
+    "--ocannl_debug_log_from_routines=true"
+    "--ocannl_log_level=2"
+    "--ocannl_debug_log_to_stream_files=true"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_log_file_stem=minted_name_labels_logged"
+    "--ocannl_build_files_prefix=minted_name_labels_logged"))))
+
+(rule
+ (alias runtest-minted_name_labels-logged)
+ (package neural_nets_lib)
+ (action
+  (diff minted_name_labels-logged.expected minted_name_labels-logged.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-minted_name_labels-plain)
+  (alias runtest-minted_name_labels-logged)))
+
 ; gh-ocannl-2102: the identifiers cc declares in register-tiled, vectorized and scope-local
 ; kernels, read off their sources, are node parameters, loop indices, scope locals or names the
 ; node-name rules reserve, as the code-name minter itself answers.
 
-(test
- ; ocannl-backend: cc -- every context is an explicit Context.cpu (); the declarations audited are
- ; cc's.
+(executable
  (name declared_temporaries)
- (package neural_nets_lib)
- (deps ocannl_config)
  (modules declared_temporaries)
  (libraries base ocannl stdio unix arrayjit.verdict ll_test test_utils))
+
+(rule
+ ; ocannl-backend: cc -- every context is an explicit Context.cpu (); the declarations audited are
+ ; cc's.
+ (target declared_temporaries-plain.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ ; Both runs read their kernels from build_files/declared_temporaries/, which Generated.init
+ ; empties.
+ (locks declared_temporaries)
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:declared_temporaries.exe}))))
+
+(rule
+ (alias runtest-declared_temporaries-plain)
+ (package neural_nets_lib)
+ (action
+  (diff
+   declared_temporaries-plain.expected
+   declared_temporaries-plain.actual)))
+
+(rule
+ ; ocannl-backend: cc -- every context is an explicit Context.cpu (); the declarations audited are
+ ; cc's.
+ ; The logged run keeps its routine logs in stream files, off stdout.
+ (target declared_temporaries-logged.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config)
+ ; The plain run's lock.
+ (locks declared_temporaries)
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:declared_temporaries.exe}
+    "--ocannl_debug_log_from_routines=true"
+    "--ocannl_log_level=2"
+    "--ocannl_debug_log_to_stream_files=true"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_log_file_stem=declared_temporaries_logged"))))
+
+(rule
+ (alias runtest-declared_temporaries-logged)
+ (package neural_nets_lib)
+ (action
+  (diff
+   declared_temporaries-logged.expected
+   declared_temporaries-logged.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-declared_temporaries-plain)
+  (alias runtest-declared_temporaries-logged)))
 
 ; gh-ocannl-1636: under debug_log_to_stream_files a logged routine's lines reach its stream file and
 ; nothing reaches stdout, with no capture window opened by the caller.

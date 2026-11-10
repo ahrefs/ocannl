@@ -17,22 +17,29 @@
    [Generated.declarations], whose allowlist of declaration forms fails closed: a statement it
    cannot classify is a failure here, not a skipped line.
 
-   2. It sorts them: a parameter must be one of the routine's nodes (counted apart, never probed); a
-   variable spelled like a loop index of the routine's code is a loop index (counted apart: the
-   rules do not cover loop indices, gh-ocannl-2103); a variable spelled [Low_level.scope_local_name]
-   of a scope of the code is a scope local; everything else, typedef names included, is a fixed
-   temporary.
+   2. It sorts them: a parameter that is one of the routine's nodes is counted apart, never probed,
+   and any other parameter is the emitter's own (the logged run's log parameter); a variable spelled
+   like a loop index of the routine's code is a loop index; a variable spelled
+   [Low_level.scope_local_name] of a scope of the code is a scope local; everything else, typedef
+   names and a pool-chunked [Grid] loop's chunk index and bounds included, is a fixed temporary.
 
-   3. It asks the minter itself whether the rules cover each scope local and fixed temporary: one
-   probe routine holds a node labelled after each of them, and a covered name is one whose node took
+   3. It asks the minter itself whether the rules cover each name but the node parameters: one probe
+   routine holds a node labelled after each of them, and a covered name is one whose node took
    another code name. A plainly labelled probe node keeping its label is the control that the probe
-   can answer "uncovered".
+   can answer "uncovered". Loop indices, the [Grid] chunk names and the logging temporaries are
+   covered since gh-ocannl-2103.
 
-   The negative controls run every time, on the vectorized kernel's source with lines added: three
-   unreserved temporaries -- declared plainly, with a type name the reader does not know, and by a
-   call of a macro the source defines -- must come back as exactly the uncovered names; and a second
-   declarator, a function declaration, a [#define] in a kernel, a call of a token-pasting macro and
-   a declaring macro inside an expression must each come back unrecognized.
+   The executable runs twice. The plain run renders those kernels and a [Grid] loop on the native
+   pool. The logged run ([--ocannl_debug_log_from_routines=true --ocannl_log_level=2], under which
+   the register tile and vectorized loops decline and no [Grid] loop takes the pool) renders logged
+   [Set], [Set_from_vec] and scope-local stores, whose arms declare temporaries of their own.
+
+   The negative controls run in the plain run, on the vectorized kernel's source with lines added:
+   three unreserved temporaries -- declared plainly, with a type name the reader does not know, and
+   by a call of a macro the source defines -- must come back as exactly the uncovered names, and so
+   must a block literal's parameter and body temporary; and a second declarator, a function
+   declaration, a [#define] in a kernel, a call of a token-pasting macro, a declaring macro inside
+   an expression and a GNU statement expression must each come back unrecognized.
 
    cc only: the GPU dialects prefix every node identifier ([t_]), so a temporary there cannot meet a
    node pointer, and the register tile and vectorized renderings are the C backends'. The vector
@@ -49,6 +56,10 @@ module Generated = Test_utils.Generated
 open Verdict.Claims
 
 let () = Unix.putenv "OCANNL_CC_VECTOR_BYTES" "16"
+
+(* The Grid kernel's loop is small: admit it to the pool, past the launch-cost floor. *)
+let () = Unix.putenv "OCANNL_CC_GRID_MIN_UPDATES" "0"
+let logged = Utils.debug_log_from_routines ()
 let ctx = lazy (Context.cpu ())
 let facts = Context.backend_facts_of_name "cc"
 let get = Ll_test.get
@@ -164,6 +175,53 @@ let scope_local ~first_id =
   let o = Ll_test.optimize_scoped ~materialized:[ a; x ] ~name ~raw scoped in
   { name; o; nodes = [ a; x ] }
 
+(* A [Grid] loop rendered on the native pool, whose chunk body declares the chunk index and bounds
+   (gh-ocannl-2103). *)
+let grid ~first_id =
+  let n = 64 in
+  let name = "dt_grid" in
+  let mk = Ll_test.node_factory ~first_id ~dims:[| n |] () in
+  let a = mk "dt_grid_a" and x = mk "dt_grid_x" in
+  List.iter [ a; x ] ~f:Ll_test.materialize;
+  let i = Ll_test.sym () in
+  let o =
+    Ll_test.optimize ~materialized:[ a; x ] ~name
+      (Ll_test.loop_n ~axis:LL.Grid i n
+         (Ll_test.set_at x (it i) (Ll_test.add (get a [| it i |]) (Ll_test.c 1.))))
+  in
+  { name; o; nodes = [ a; x ] }
+
+(* Under routine logging (the logged run only): a [Set] loop, whose logging arm declares a copy of
+   each stored value, and a [Set_from_vec], whose arm declares its vector result. *)
+let logged_stores ~first_id =
+  let n = 8 in
+  let name = "dt_logged_stores" in
+  let mk = Ll_test.node_factory ~first_id ~dims:[| n |] () in
+  let a = mk "dt_log_a" and x = mk "dt_log_x" in
+  let r = Ll_test.node_factory ~first_id:(first_id + 50) ~dims:[| 4 |] () "dt_log_draw" in
+  List.iter [ a; x; r ] ~f:Ll_test.materialize;
+  let i = Ll_test.sym () in
+  let u4 = Ops.uint4x32 in
+  let threefry a b = LL.Binop (Ops.Threefry4x32_light, a, b) in
+  let draw =
+    Ll_test.set_from_vec ~length:4 ~vec_unop:Ops.Uint4x32_to_prec_uniform r
+      [| Ll_test.fixed 0 |]
+      ( threefry
+          (threefry (LL.Constant_bits 7L, u4) (LL.Constant_bits 42L, u4), u4)
+          (LL.Embed_index (Ll_test.fixed 0), Ops.index_prec ()),
+        u4 )
+  in
+  let o =
+    Ll_test.optimize ~materialized:[ a; x; r ] ~name
+      (LL.unflat_lines
+         [
+           Ll_test.loop_n i n
+             (Ll_test.set_at x (it i) (Ll_test.add (get a [| it i |]) (Ll_test.c 1.)));
+           draw;
+         ])
+  in
+  { name; o; nodes = [ a; x; r ] }
+
 (* {1 Sorting the declarations} *)
 
 let loop_idents (llc : LL.t) =
@@ -237,7 +295,14 @@ let covered_by_rules names =
   in
   let name = "dt_probe" in
   let o = Ll_test.optimize ~materialized:(List.map probes ~f:snd) ~name llc in
-  ignore (Ll_test.link ~ctx:(Lazy.force ctx) ~name o : Context.t * Context.routine);
+  (* The names are minted while the kernel renders, before it compiles: a probe that fails to
+     compile has answered too -- some probed name is unreserved and collided with what the probe
+     routine itself declares (a logging temporary, under logging) -- and the answers say which. *)
+  (match Ll_test.link ~ctx:(Lazy.force ctx) ~name o with
+  | (_ : Context.t * Context.routine) -> ()
+  | exception e ->
+      Stdio.eprintf "the probe routine did not compile (not part of the golden): %s\n"
+        (String.prefix (Exn.to_string e) 200));
   List.map probes ~f:(fun (label, tn) -> (label, not (String.equal (code_name tn) label)))
 
 (* {1 The negative controls} *)
@@ -268,17 +333,26 @@ let unreserved_controls =
 let () =
   Utils.settings.output_debug_files_in_build_directory <- true;
   Generated.init ~backend_name:"cc";
+  (* The register tile and vectorized loops decline under routine logging, and logging keeps a
+     [Grid] loop off the pool, so each run renders the kernels whose temporaries it can show. *)
   let kernels =
-    [
-      ( "register tile, f32 full blocks",
-        tile ~name:"dt_tile_full" ~first_id:2102000 ~m:8 ~n:8 ~k:8 ~ab_prec:Ops.single );
-      ( "register tile, f32 row and column tails",
-        tile ~name:"dt_tile_tails" ~first_id:2102100 ~m:6 ~n:19 ~k:5 ~ab_prec:Ops.single );
-      ( "register tile, bf16 operands",
-        tile ~name:"dt_tile_bf16" ~first_id:2102200 ~m:7 ~n:8 ~k:2 ~ab_prec:Ops.bfloat16 );
-      ("vectorized loops", vectorized ~first_id:2102300);
-      ("scope locals", scope_local ~first_id:2102400);
-    ]
+    if logged then
+      [
+        ("logged stores", logged_stores ~first_id:2102500);
+        ("logged scope locals", scope_local ~first_id:2102600);
+      ]
+    else
+      [
+        ( "register tile, f32 full blocks",
+          tile ~name:"dt_tile_full" ~first_id:2102000 ~m:8 ~n:8 ~k:8 ~ab_prec:Ops.single );
+        ( "register tile, f32 row and column tails",
+          tile ~name:"dt_tile_tails" ~first_id:2102100 ~m:6 ~n:19 ~k:5 ~ab_prec:Ops.single );
+        ( "register tile, bf16 operands",
+          tile ~name:"dt_tile_bf16" ~first_id:2102200 ~m:7 ~n:8 ~k:2 ~ab_prec:Ops.bfloat16 );
+        ("vectorized loops", vectorized ~first_id:2102300);
+        ("scope locals", scope_local ~first_id:2102400);
+        ("pool-chunked Grid loop", grid ~first_id:2102700);
+      ]
   in
   let rendered =
     List.map kernels ~f:(fun (what, k) ->
@@ -294,23 +368,35 @@ let () =
           (what ^ ": all four loops render the vector form")
           (List.length
              (String.substr_index_all source ~may_overlap:false ~pattern:"{ /* Vectorized ")
-          = 4));
+          = 4)
+      else if String.equal k.name "dt_grid" then
+        p
+          (what ^ ": the loop renders on the pool")
+          (routine.Context.grid.Ir.C_syntax.pool_rendered = 1)
+      else if logged then
+        (* The logging arm of the kernel's stores renders: the [Set]s', or the [Set_local]s'. *)
+        let temporary =
+          if String.is_suffix k.name ~suffix:"scope_local" then Ir.C_syntax.log_set_local_temporary
+          else Ir.C_syntax.log_set_temporary
+        in
+        p (what ^ ": the stores render logged") (String.is_substring source ~substring:temporary));
   let sorted = List.map rendered ~f:(fun (what, k, _, source) -> (what, k, sort ~k ~source)) in
-  let control_source =
-    let _, k, _, source =
-      List.find_exn rendered ~f:(fun (_, k, _, _) -> String.equal k.name "dt_vectorized")
-    in
-    (k, source)
-  in
   let control =
-    let k, source = control_source in
-    sort ~k
-      ~source:
-        (with_statements ~defines:control_defines source (List.map unreserved_controls ~f:snd))
+    Option.map
+      (List.find rendered ~f:(fun (_, k, _, _) -> String.equal k.name "dt_vectorized"))
+      ~f:(fun (_, k, _, source) ->
+        ( k,
+          source,
+          sort ~k
+            ~source:
+              (with_statements ~defines:control_defines source
+                 (List.map unreserved_controls ~f:snd)) ))
   in
   let to_probe =
-    List.concat_map sorted ~f:(fun (_, _, s) -> s.scope_locals @ s.temporaries)
-    @ control.temporaries
+    List.concat_map sorted ~f:(fun (_, _, s) ->
+        s.loop_indices @ s.scope_locals @ s.temporaries @ s.stray_params)
+    @ Option.value_map control ~default:[] ~f:(fun (_, _, c) -> c.temporaries)
+    @ [ "dt_block_param"; "dt_block_tmp" ]
     |> List.dedup_and_sort ~compare:String.compare
   in
   let answers = covered_by_rules to_probe in
@@ -319,49 +405,84 @@ let () =
     (not (covered plain_label));
   List.iter sorted ~f:(fun (what, k, s) ->
       Stdio.eprintf
-        "%s (%s; not part of the golden): %d node parameters, loop indices [%s], scope locals \
-         [%s], fixed temporaries [%s]\n"
+        "%s (%s; not part of the golden): %d node parameters, other parameters [%s], loop indices \
+         [%s], scope locals [%s], fixed temporaries [%s]\n"
         what k.name (List.length s.params)
+        (String.concat ~sep:" " s.stray_params)
         (String.concat ~sep:" " s.loop_indices)
         (String.concat ~sep:" " s.scope_locals)
         (String.concat ~sep:" " s.temporaries);
       List.iter s.unrecognized ~f:(fun (line, text) ->
           Stdio.eprintf "  unrecognized at line %d: %s\n" line text);
       p_empty (what ^ ": every statement takes an allowlisted form") ~over:s.all s.unrecognized;
-      List.iter s.stray_params ~f:(Stdio.eprintf "  stray parameter: %s\n");
-      p_empty (what ^ ": every parameter is a node of the routine") ~over:s.all s.stray_params;
+      List.iter (s.stray_params @ s.temporaries) ~f:(fun x ->
+          if not (covered x) then Stdio.eprintf "  unreserved name: %s\n" x);
       p (what ^ ": declares node parameters") (not (List.is_empty s.params));
-      List.iter s.temporaries ~f:(fun x ->
-          if not (covered x) then Stdio.eprintf "  unreserved temporary: %s\n" x);
-      if String.equal k.name "dt_scope_local" then
+      if String.is_suffix k.name ~suffix:"scope_local" then
         p_all
           (what ^ ": declares both scope locals, each reserved")
           s.scope_locals ~min:2 ~f:covered);
   List.iter sorted ~f:(fun (what, k, s) ->
-      if not (String.equal k.name "dt_scope_local") then
+      if not (String.is_suffix k.name ~suffix:"scope_local") then
         p (what ^ ": declares fixed temporaries") (not (List.is_empty s.temporaries)));
+  (* A parameter that is no node of the routine is the emitter's own name, the logged run's log
+     parameter, and is reserved like a temporary; the plain run declares none. *)
+  let stray_params =
+    List.concat_map sorted ~f:(fun (_, _, s) -> s.stray_params)
+    |> List.dedup_and_sort ~compare:String.compare
+  in
+  if logged then
+    p_all "every parameter that is no node of the routine (the log parameter) is reserved"
+      stray_params ~f:covered
+  else
+    p_empty "every parameter is a node of the routine"
+      ~over:(List.concat_map sorted ~f:(fun (_, _, s) -> s.all))
+      stray_params;
+  p_all "every loop index the kernels declare is reserved"
+    (List.concat_map sorted ~f:(fun (_, _, s) -> s.loop_indices)
+    |> List.dedup_and_sort ~compare:String.compare)
+    ~f:covered;
   p_all "every fixed temporary the kernels declare is reserved"
     (List.concat_map sorted ~f:(fun (_, _, s) -> s.temporaries)
     |> List.dedup_and_sort ~compare:String.compare)
     ~f:covered;
-  (* Negative controls. *)
-  p_empty "control: the added temporaries read as allowlisted declarations" ~over:control.all
-    control.unrecognized;
-  p
-    "control: the added unreserved temporaries -- plain, of an unknown type, declared by a macro \
-     call -- are exactly what comes back uncovered"
-    (List.equal String.equal
-       (List.filter control.temporaries ~f:(Fn.non covered))
-       (List.map unreserved_controls ~f:fst));
-  let k, source = control_source in
-  let refused stmt =
-    not
-      (List.is_empty
-         (sort ~k ~source:(with_statements ~defines:control_defines source [ stmt ])).unrecognized)
-  in
-  p "control: a second declarator is unrecognized" (refused "    float dt_y = 0, dt_z = 1;");
-  p "control: a function declaration is unrecognized" (refused "    float dt_f(int dt_p);");
-  p "control: a macro definition in a kernel is unrecognized" (refused "#define dt_macro 1");
-  p "control: a call of a macro that pastes is unrecognized" (refused "    DT_PASTE(pasted);");
-  p "control: a declaring macro inside an expression is unrecognized"
-    (refused "    dt_s = DT_DECLARE(float, dt_q);")
+  (* Negative controls, over the vectorized kernel the plain run renders. *)
+  Option.iter control ~f:(fun (k, source, control) ->
+      p_empty "control: the added temporaries read as allowlisted declarations" ~over:control.all
+        control.unrecognized;
+      p
+        "control: the added unreserved temporaries -- plain, of an unknown type, declared by a \
+         macro call -- are exactly what comes back uncovered"
+        (List.equal String.equal
+           (List.filter control.temporaries ~f:(Fn.non covered))
+           (List.map unreserved_controls ~f:fst));
+      let refused stmt =
+        not
+          (List.is_empty
+             (sort ~k ~source:(with_statements ~defines:control_defines source [ stmt ]))
+               .unrecognized)
+      in
+      p "control: a second declarator is unrecognized" (refused "    float dt_y = 0, dt_z = 1;");
+      p "control: a function declaration is unrecognized" (refused "    float dt_f(int dt_p);");
+      p "control: a macro definition in a kernel is unrecognized" (refused "#define dt_macro 1");
+      p "control: a call of a macro that pastes is unrecognized" (refused "    DT_PASTE(pasted);");
+      p "control: a declaring macro inside an expression is unrecognized"
+        (refused "    dt_s = DT_DECLARE(float, dt_q);");
+      p "control: a GNU statement expression is unrecognized"
+        (refused "    dt_s = ({ float dt_q = 0; dt_q; });");
+      (* A block literal's parameter and body are read: the pool-parallel Grid loop's chunk body on
+         Apple platforms is one. *)
+      let block =
+        sort ~k
+          ~source:
+            (with_statements source
+               [ "    dt_call(^(size_t dt_block_param) { float dt_block_tmp = dt_s ^ (1); });" ])
+      in
+      p_empty
+        "control: a block literal, its caret operator an exclusive or inside it, reads as \
+         allowlisted declarations"
+        ~over:block.all block.unrecognized;
+      p "control: a block literal's parameter and body temporary come back uncovered"
+        (List.equal String.equal
+           (List.filter block.temporaries ~f:(Fn.non covered))
+           [ "dt_block_param"; "dt_block_tmp" ]))

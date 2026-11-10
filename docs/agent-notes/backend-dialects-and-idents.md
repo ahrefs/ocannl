@@ -288,18 +288,32 @@ files.
   prefixes need no additional reservation. The vector-loop leg of `fixed_name_temporaries.ml`
   labels an input `vget1__`; without the suffix reservation, clang rejects its buffer read after
   a vector load with "address of vector element requested". Both legs check executed values.
-  This is not an exhaustive collision guarantee: loop indices (`i<digits>` and their Grid chunk
-  names), fixed logging temporaries, and literal `n<digits>_...` labels matching another node's
-  disambiguated name remain loud compilation-error gaps.
+- The remaining classes the emitter or the minter mints are reserved since gh-ocannl-2103, each by
+  the grammar or the constant that spells it: loop indices and the names derived from them
+  (`Indexing.in_symbol_ident_namespace`: `i<digits>` alone or behind `_`, so a pool-chunked Grid
+  loop's `i<n>_chunk` / `_lo` / `_hi` too) and the renderers' `C_syntax.fixed_temporaries`
+  (`new_set_v`, `new_set_local_v`, `vec_result`) in `get_code_ident`; the minter's own `n<id>`
+  namespace (`Tnode.in_id_ident_namespace`, also after a namespace's `__`) and, under the `_grad`
+  separator, a non-gradient `x_grad` beside a gradient of `x`, in `Low_level.get_ident_within_code`
+  itself, so `.ll` dumps cannot show two nodes one name either. Before, each failed to compile:
+  "redefinition of parameter" for the node names, "subscripted value is not an array" for the
+  rest. Guard: `test/operations/minted_name_labels.ml`, plain and logged, derives each hostile
+  label from the real id, symbol or constant and executes it beside an ordinarily labelled twin.
 - The rules are pinned to what cc DECLARES, not to a list of spellings (gh-ocannl-2102):
   `test/operations/declared_temporaries.ml` renders register-tiled (f32 full and tail blocks, bf16
-  operands), vectorized and scope-local kernels, reads every declared identifier off their sources
-  with `Generated.declarations`, sets node parameters and loop indices apart, and asks the minter
-  itself (a probe routine with a node labelled after each name) whether each scope local and fixed
-  temporary is reserved. A renderer adding a temporary outside the reserved namespaces fails it;
+  operands), vectorized, scope-local and pool-chunked Grid kernels, and in a second, logged run
+  logged `Set`, `Set_from_vec` and scope-local stores (gh-ocannl-2103); it reads every declared
+  identifier off their sources with `Generated.declarations`, sets node parameters apart, and asks
+  the minter itself (a probe routine with a node labelled after each name) whether each loop index,
+  scope local, fixed temporary and non-node parameter (the logged run's `log_file_name`) is
+  reserved. A renderer adding a temporary outside the reserved namespaces fails it;
   so did the reservation with its `__` suffix and `v<digits>_` rules removed. The reader is a
   fail-closed allowlist of declaration forms (its boundary heads its section in
-  `test/support/generated.ml`); it also expands statement-level calls of the source's own macros,
+  `test/support/generated.ml`); it reads a block literal's parameters and body (macOS renders a
+  pool Grid loop's chunk body as `dispatch_apply(..., ^(size_t i<n>_chunk) { ... })`, which the
+  reader first swallowed as one expression statement declaring nothing, so the Grid leg read no
+  chunk names there while Linux's OpenMP form read them), refuses a GNU statement expression, and
+  also expands statement-level calls of the source's own macros,
   since the bf16 row widening declares `tmma_ap_<n>__` and `ocannl_rh__` inside
   `OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4`. A scope local is spelled only through
   `Low_level.scope_local_name` / `scope_local_prefix` -- emitters, `.ll` printers, refusal

@@ -944,6 +944,19 @@ val vec_narrow_macro : store_prec:Ops.prec -> prec:Ops.prec -> lanes:int -> Stri
 val partial_staging_idents : string * string
 (** The [(bits, conv)] locals a register tile's partial bf16/fp16 column is staged through. *)
 
+val log_set_temporary : string
+(** The temporary a routine-logging [Set] / [Set_dynamic] copies its stored value into. *)
+
+val log_set_local_temporary : string
+(** The temporary a routine-logging [Set_local] copies its assigned value into. *)
+
+val vec_result_temporary : string
+(** The vector temporary a [Set_from_vec] computes its lanes into. *)
+
+val fixed_temporaries : string list
+(** The three above: the fixed-name temporaries outside every reserved namespace, which the
+    node-name minter reserves by name (gh-ocannl-2103). *)
+
 val derived_name : String.t * String.t -> String.t -> String.t
 (** The identifier [prefix ^ base ^ suffix] a derivation template spells from [base]. *)
 

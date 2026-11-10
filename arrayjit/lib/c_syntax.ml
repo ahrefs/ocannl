@@ -2266,6 +2266,15 @@ let vec_narrow_macro ~store_prec ~prec ~lanes =
     elements, which is how [test/operations/cc_march_census] finds the block's instructions. *)
 let partial_staging_idents = ("ocannl_pv__", "ocannl_pc__")
 
+(** The fixed-name temporaries the statement renderers declare outside every reserved namespace
+    (gh-ocannl-2103): a routine-logging [Set] / [Set_dynamic]'s copy of the stored value, a
+    routine-logging [Set_local]'s, and a [Set_from_vec]'s vector result. *)
+let log_set_temporary = "new_set_v"
+
+let log_set_local_temporary = "new_set_local_v"
+let vec_result_temporary = "vec_result"
+let fixed_temporaries = [ log_set_temporary; log_set_local_temporary; vec_result_temporary ]
+
 (** {2 Identifiers the emitter derives from a base name (gh-ocannl-1525)}
 
     Each template [(prefix, suffix)] spells a local the emitter declares, [prefix ^ base ^ suffix],
@@ -3414,7 +3423,10 @@ module C_syntax (B : C_syntax_config) = struct
      vectorized loops' counter names ([vget1__], [vset1__], ...; gh-ocannl-2012). So does a label in
      the implementation's reserved namespace ([__LINE__], [_Bool], a vendor's [__half]), where every
      compiler's predefined macros live: a declaration does not shadow a macro, so a node named after
-     one never compiled (gh-ocannl-1525, gh-ocannl-1338). *)
+     one never compiled (gh-ocannl-1525, gh-ocannl-1338). Loop indices and the names derived from
+     them ([i<n>], [i<n>_chunk], ...) and the renderers' {!fixed_temporaries} are reserved too: a
+     node labelled like one was shadowed by it, or read through it, and the kernel failed to compile
+     (gh-ocannl-2103); the minter itself keeps its own [n<id>] namespace. *)
   let get_code_ident =
     (* Scope locals spell [v<scope>_<node>]. A different node can carry precisely that label, so
        reserve the numeric prefix as well, without reserving ordinary labels starting [v]. *)
@@ -3422,6 +3434,8 @@ module C_syntax (B : C_syntax_config) = struct
       implementation_reserved name
       || String.is_suffix name ~suffix:"__"
       || Low_level.in_scope_local_namespace name
+      || Indexing.in_symbol_ident_namespace name
+      || List.mem fixed_temporaries name ~equal:String.equal
     in
     Low_level.get_ident_within_code ~no_dots:true ~blacklist:ident_blacklist
       ~reserved_prefixes:[ "ocannl_"; "tmma_" ] ~reserved
@@ -3452,9 +3466,9 @@ module C_syntax (B : C_syntax_config) = struct
       forced into the disambiguated [n<id>_<label>] form. Scope locals use the reserved [v<scope>_]
       prefix. The [tmma_] / [ocannl_] prefixes and trailing [__] protect register-tile and
       vector-loop temporaries; GPU reduction locals are separated from node pointers by the
-      dialect's [t_] prefix. Other collisions, such as loop-index and disambiguated-node names, can
-      still fail compilation (see the identifier agent note). Routine names were the one identifier
-      class entering the emitted source verbatim.
+      dialect's [t_] prefix. Loop indices and the names derived from them, the renderers'
+      {!fixed_temporaries} and the minter's own [n<id>] names are reserved too (gh-ocannl-2103).
+      Routine names were the one identifier class entering the emitted source verbatim.
 
       The scheme is deterministic and, on a name that is already a safe C identifier, the identity
       -- so nothing about a non-colliding routine changes: not its emitted symbol, not its
@@ -6543,7 +6557,7 @@ module C_syntax (B : C_syntax_config) = struct
               (* [val_doc] is already narrowed to the storage precision, so the temporary carrying
                  it into the log statement takes the storage type. *)
               let num_typ = string (B.typ_of_prec store_prec) in
-              let new_var = string "new_set_v" in
+              let new_var = string log_set_temporary in
               let decl = num_typ ^^ space ^^ new_var ^^ string " = " ^^ val_doc ^^ semi in
               let debug_val_doc, pp_args_docs = (debug_float ctx) prec llsc in
               let debug_val_str = log_format_of_debug debug_val_doc in
@@ -6618,7 +6632,7 @@ module C_syntax (B : C_syntax_config) = struct
           (* [val_doc] is already narrowed to the storage precision, so the temporary carrying it
              into the log statement takes the storage type. *)
           let num_typ = string (B.typ_of_prec store_prec) in
-          let new_var = string "new_set_v" in
+          let new_var = string log_set_temporary in
           let decl = num_typ ^^ space ^^ new_var ^^ string " = " ^^ val_doc ^^ semi in
           let debug_val_doc, pp_args_docs = (debug_float ctx) prec llsc in
           let debug_val_str = log_format_of_debug debug_val_doc in
@@ -6692,7 +6706,7 @@ module C_syntax (B : C_syntax_config) = struct
         let block_lanes = Ops.vec_unop_lanes prec in
         (* Generate assignments for each output element *)
         let open PPrint in
-        let vec_var = string "vec_result" in
+        let vec_var = string vec_result_temporary in
         let vec_typ = string (B.vec_typ_of_prec ~length:block_lanes prec) in
         let vec_decl = vec_typ ^^ space ^^ vec_var ^^ string " = " ^^ result_doc ^^ semi in
         let assignments =
@@ -6743,12 +6757,13 @@ module C_syntax (B : C_syntax_config) = struct
                 in
                 let offset_spec, offset_arg_doc = B.log_index_arg offset_doc in
                 let value_base_msg =
-                  Printf.sprintf "%s[%s]{=%s} = vec_result.v[%d] = %s\n" (get_code_ident tn)
-                    offset_spec (log_value_spec prec) i (log_value_spec prec)
+                  Printf.sprintf "%s[%s]{=%s} = %s.v[%d] = %s\n" (get_code_ident tn) offset_spec
+                    (log_value_spec prec) vec_result_temporary i (log_value_spec prec)
                 in
                 let log_args =
                   (offset_arg_doc :: log_value_args prec (ident_doc ^^ brackets offset_doc))
-                  @ log_value_args prec (string ("vec_result.v[" ^ Int.to_string i ^ "]"))
+                  @ log_value_args prec
+                      (string (vec_result_temporary ^ ".v[" ^ Int.to_string i ^ "]"))
                 in
                 B.pp_log_statement ~log_param_c_expr_doc:log_param_doc
                   ~base_message_literal:value_base_msg ~args_docs:log_args)
@@ -6818,7 +6833,7 @@ module C_syntax (B : C_syntax_config) = struct
         let local_defs = pp_local_defs local_defs in
         let assignment = pp_scope_id id ^^ string " = " ^^ value_doc ^^ semi in
         if Utils.debug_log_from_routines () && log_set_locals then
-          let new_var = string "new_set_local_v" in
+          let new_var = string log_set_local_temporary in
           let num_typ = string (B.typ_of_prec prec) in
           let decl = num_typ ^^ space ^^ new_var ^^ string " = " ^^ value_doc ^^ semi in
           let debug_val_doc, pp_args_docs = (debug_float ctx) value_prec value in
