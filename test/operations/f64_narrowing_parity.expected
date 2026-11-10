@@ -1,0 +1,20 @@
+half: 253966 f64 inputs
+half: inputs where rounding through f32 gives another code: 63488
+half: the corpus holds inputs that rounding through f32 gets wrong: true
+half: the oracle narrows 0x1.0020000001p+0 to 0x1.004p+0
+half: the host's per-cell writer narrows every input to the oracle's code: true
+half: the host's bulk writer narrows every input to the oracle's code: true
+half: the device narrows every input to the oracle's code: true
+half: the device's narrowing reaches every finite code of both signs and both infinities: true
+half: the kernel narrows the f64 source with the backend's one-step conversion: true
+half: a NaN narrows to a NaN: true
+bfloat16: 261134 f64 inputs
+bfloat16: inputs where rounding through f32 gives another code: 65280
+bfloat16: the corpus holds inputs that rounding through f32 gets wrong: true
+bfloat16: the oracle narrows 0x1.0100000001p+0 to 0x1.02p+0
+bfloat16: the host's per-cell writer narrows every input to the oracle's code: true
+bfloat16: the host's bulk writer narrows every input to the oracle's code: true
+bfloat16: the device narrows every input to the oracle's code: true
+bfloat16: the device's narrowing reaches every finite code of both signs and both infinities: true
+bfloat16: the kernel narrows the f64 source with the backend's one-step conversion: true
+bfloat16: a NaN narrows to a NaN: true

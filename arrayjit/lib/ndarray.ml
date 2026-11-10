@@ -168,8 +168,8 @@ let create_bigarray (type ocaml elt_t) (prec : (ocaml, elt_t) Ops.precision) ~di
       | Ops.Int64 -> A.fill arr (Int64.of_float pad_value)
       | Ops.Uint64 -> A.fill arr (Int64.of_float pad_value)
       | Ops.Uint4x32 -> A.fill arr Stdlib.Complex.{ re = pad_value; im = 0.0 }
-      | Ops.Half -> A.fill arr pad_value
-      | Ops.Bfloat16 -> A.fill arr (Ops.single_to_bfloat16 pad_value)
+      | Ops.Half -> A.fill arr (Ops.round_to_half pad_value)
+      | Ops.Bfloat16 -> A.fill arr (Ops.double_to_bfloat16 pad_value)
       | Ops.Fp8 -> A.fill arr (Char.of_int_exn @@ Ops.double_to_fp8 pad_value)
       | Ops.Single -> A.fill arr pad_value
       | Ops.Double -> A.fill arr pad_value));
@@ -283,8 +283,8 @@ let set_from_float ?padding arr idx v =
   | Int64_nd arr -> A.set arr adjusted_idx @@ Int64.of_float v
   | Uint64_nd arr -> A.set arr adjusted_idx @@ float_to_uint64 v
   | Uint4x32_nd arr -> A.set arr adjusted_idx @@ Stdlib.Complex.{ re = v; im = 0.0 }
-  | Half_nd arr -> A.set arr adjusted_idx v
-  | Bfloat16_nd arr -> A.set arr adjusted_idx @@ Ops.single_to_bfloat16 v
+  | Half_nd arr -> A.set arr adjusted_idx @@ Ops.round_to_half v
+  | Bfloat16_nd arr -> A.set arr adjusted_idx @@ Ops.double_to_bfloat16 v
   | Fp8_nd arr -> A.set arr adjusted_idx @@ Char.of_int_exn @@ Ops.double_to_fp8 v
   | Single_nd arr -> A.set arr adjusted_idx v
   | Double_nd arr -> A.set arr adjusted_idx v
@@ -347,8 +347,8 @@ let fill_from_float ?padding arr v =
   | Int64_nd arr -> fill arr @@ Int64.of_float v
   | Uint64_nd arr -> fill arr @@ float_to_uint64 v
   | Uint4x32_nd arr -> fill arr @@ Stdlib.Complex.{ re = v; im = 0.0 }
-  | Half_nd arr -> fill arr v
-  | Bfloat16_nd arr -> fill arr @@ Ops.single_to_bfloat16 v
+  | Half_nd arr -> fill arr @@ Ops.round_to_half v
+  | Bfloat16_nd arr -> fill arr @@ Ops.double_to_bfloat16 v
   | Fp8_nd arr -> fill arr @@ Char.of_int_exn @@ Ops.double_to_fp8 v
   | Single_nd arr -> fill arr v
   | Double_nd arr -> fill arr v
@@ -647,13 +647,13 @@ let flat_writer arr (buf : float array) : int -> int -> int -> unit =
       let flat = Bigarray.reshape_1 arr numel in
       fun dst src len ->
         for i = 0 to len - 1 do
-          A1.set flat (dst + i) buf.(src + i)
+          A1.set flat (dst + i) @@ Ops.round_to_half buf.(src + i)
         done
   | Bfloat16_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in
       fun dst src len ->
         for i = 0 to len - 1 do
-          A1.set flat (dst + i) @@ Ops.single_to_bfloat16 buf.(src + i)
+          A1.set flat (dst + i) @@ Ops.double_to_bfloat16 buf.(src + i)
         done
   | Fp8_nd arr ->
       let flat = Bigarray.reshape_1 arr numel in

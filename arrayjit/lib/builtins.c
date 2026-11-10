@@ -340,6 +340,34 @@ CAMLprim intnat arrayjit_double_to_fp8_unboxed(double f)
   return double_to_fp8(f);
 }
 
+/* f64 to bfloat16 and to half in one rounding, for the same reason (gh-ocannl-2075). */
+CAMLprim value arrayjit_double_to_bfloat16(value v_float)
+{
+  CAMLparam1(v_float);
+  CAMLreturn(Val_int(double_to_bfloat16(Double_val(v_float))));
+}
+
+/* Native-code entry point, as for [arrayjit_single_to_bfloat16_unboxed]. */
+CAMLprim intnat arrayjit_double_to_bfloat16_unboxed(double f)
+{
+  return double_to_bfloat16(f);
+}
+
+/* The half nearest the double, as the double it is exactly. OCaml's own float16 store narrows
+   through f32, which double-rounds, but a value the format holds exactly survives any correct
+   narrowing unchanged: so a host writer stores this rather than the double itself. */
+CAMLprim value arrayjit_round_to_half(value v_float)
+{
+  CAMLparam1(v_float);
+  CAMLreturn(caml_copy_double((double)HALF_TO_FLOAT(double_to_half(Double_val(v_float)))));
+}
+
+/* Native-code entry point, as for [arrayjit_bfloat16_to_single_unboxed]. */
+CAMLprim double arrayjit_round_to_half_unboxed(double f)
+{
+  return (double)HALF_TO_FLOAT(double_to_half(f));
+}
+
 // TODO: a more efficient approach would involve computing strides once and using memcpy
 // for contiguous inner slices, but that adds complexity.
 CAMLprim value arrayjit_copy_with_padding(value v_source, value v_target, value v_padding)

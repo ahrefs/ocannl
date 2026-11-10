@@ -199,6 +199,85 @@ let cuda_like_power_builtins =
         ~fabs:"fabs" ~int_typ:"long long" ~int_limit:"9007199254740992.0";
     ]
 
+(* gh-ocannl-2075: f64 narrows to half and bfloat16 in ONE rounding, as gh-ocannl-648 made it for
+   fp8. Rounding through f32 first moves a double just off an f32 tie onto it, and the second
+   rounding then breaks that tie by a rule the first has already made wrong; CUDA's [__double2half]
+   and its bfloat16 conversion take the double in one step.
+
+   The one step is two, of which the first rounds to ODD: truncate to f32, then set the last bit
+   when anything was discarded. A round-to-odd into a format at least two bits wider than the
+   target, followed by round-to-nearest-even into the target, IS round-to-nearest-even from the
+   source (Boldo and Melquiond, "Emulation of FMA and correctly rounded sums: proved algorithms
+   using rounding to odd", IEEE TC 2008), so the existing f32 codecs -- each verified over all 2^32
+   floats -- finish the job: f32 has 24 significand bits to half's 11 and bfloat16's 8, and at every
+   magnitude either reaches, subnormals included, its grid is at least 4 times finer (2^-149 against
+   2^-133 and 2^-24). A double past the f32 range becomes the largest finite f32, odd, which lies
+   above both formats' overflow midpoints, so it narrows to infinity. CUDA's own software
+   [__double2bfloat16] (below sm_90) is this construction.
+
+   Written over the bits, not as a [(float)] cast with a fix-up: that would depend on the rounding
+   mode, and under the CUDA-like dialects' fast math a float comparison or NaN test is not reliable.
+   A NaN stays a quiet NaN with its sign and the top of its payload; an infinity stays infinite. One
+   template for both dialects, so the rounding exists once: the C table and [Builtins_hip] spell
+   only the bit casts. *)
+let double_to_single_round_odd_builtin ~dialect =
+  let prefix, to_bits, of_bits =
+    match dialect with
+    | `C ->
+        ( "ARRAYJIT_BUILTIN_LINKAGE",
+          "unsigned long long b; memcpy(&b, &x, sizeof b);",
+          "float r; memcpy(&r, &out, sizeof r); return r;" )
+    | `Cuda_like ->
+        ( "__device__ __forceinline__",
+          "unsigned long long b = (unsigned long long)__double_as_longlong(x);",
+          "return __uint_as_float(out);" )
+  in
+  ( "double_to_single_round_odd",
+    Printf.sprintf
+      {|%s float double_to_single_round_odd(double x)
+{
+  %s
+  unsigned long long mag = b & 0x7FFFFFFFFFFFFFFFull;
+  unsigned int sign = (unsigned int)((b >> 32) & 0x80000000u);
+  unsigned int out;
+  if (mag >= 0x7FF0000000000000ull)
+  {
+    /* Infinity, or a quiet NaN keeping the top of its payload. */
+    out = mag == 0x7FF0000000000000ull ? 0x7F800000u
+                                       : 0x7FC00000u | (unsigned int)((mag >> 29) & 0x003FFFFFu);
+  }
+  else
+  {
+    int e = (int)(mag >> 52); /* the biased f64 exponent; 0 for zero and the subnormals */
+    unsigned long long m = mag & 0x000FFFFFFFFFFFFFull;
+    if (e != 0) m |= 0x0010000000000000ull; /* x = m * 2^(e - 1075), m below 2^53 */
+    else e = 1;
+    int f32_e = e - 896; /* the biased f32 exponent x would take as a normal */
+    if (f32_e >= 255)
+    {
+      out = 0x7F7FFFFFu; /* past the largest finite f32: truncated to it, already odd */
+    }
+    else if (f32_e >= 1)
+    {
+      unsigned int kept = (unsigned int)(m >> 29) & 0x007FFFFFu;
+      out = ((unsigned int)f32_e << 23) | kept | ((m & 0x1FFFFFFFull) != 0ull ? 1u : 0u);
+    }
+    else
+    {
+      /* An f32 subnormal q * 2^-149, the shift at least 30. */
+      int shift = 926 - e;
+      unsigned long long q = shift < 64 ? m >> shift : 0ull;
+      unsigned long long rest = shift < 64 ? m & ((1ull << shift) - 1ull) : m;
+      out = (unsigned int)q | (rest != 0ull ? 1u : 0u);
+    }
+  }
+  out |= sign;
+  %s
+}
+|}
+      prefix to_bits of_bits,
+    [] )
+
 let builtins =
   [
     (* Float16 feature detection and type definitions *)
@@ -776,6 +855,26 @@ ARRAYJIT_BUILTIN_LINKAGE uint16_t single_to_bfloat16(float f)
 }
 |},
       [] );
+    double_to_single_round_odd_builtin ~dialect:`C;
+    ( "double_to_bfloat16",
+      {|
+/* Double to BFloat16, rounded once (gh-ocannl-2075): see [double_to_single_round_odd]. */
+ARRAYJIT_BUILTIN_LINKAGE uint16_t double_to_bfloat16(double f)
+{
+  return single_to_bfloat16(double_to_single_round_odd(f));
+}
+|},
+      [ "single_to_bfloat16"; "double_to_single_round_odd" ] );
+    ( "double_to_half",
+      {|
+/* Double to half, rounded once (gh-ocannl-2075): see [double_to_single_round_odd]. The half
+   STORAGE type, like [uint32_to_half_uniform]: [_Float16] where the compiler has it. */
+ARRAYJIT_BUILTIN_LINKAGE HALF_T double_to_half(double f)
+{
+  return FLOAT_TO_HALF(double_to_single_round_odd(f));
+}
+|},
+      [ "HALF_T"; "FLOAT_TO_HALF"; "double_to_single_round_odd" ] );
     (* Whole-vector conversion between 16-bit storage and f32 compute registers (gh-ocannl-517). The
        vector typedefs are minted by the codegen (their lane count follows cc_vector_bytes), so they
        are macro parameters; [LANES] is only used by the fallback arms. Each fallback goes through

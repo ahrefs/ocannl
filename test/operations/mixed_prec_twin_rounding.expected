@@ -12,18 +12,20 @@ half twin read in a slot of its own precision, virtual: placed as asked: true
 half twin read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 half twin read in a slot of its own precision, auto: placed as asked: true
 half twin read in a slot of its own precision, auto: the twin's rounding reaches the value: true
+half twin of an f64 master read in an f32 slot: every placement gives 0x1.004p+0
 half twin of an f64 master read in an f32 slot, materialized: placed as asked: true
-half twin of an f64 master read in an f32 slot, materialized: reads what the materialized twin reads: true
+half twin of an f64 master read in an f32 slot, materialized: the twin's rounding reaches the value: true
 half twin of an f64 master read in an f32 slot, virtual: placed as asked: true
-half twin of an f64 master read in an f32 slot, virtual: reads what the materialized twin reads: true
+half twin of an f64 master read in an f32 slot, virtual: the twin's rounding reaches the value: true
 half twin of an f64 master read in an f32 slot, auto: placed as asked: true
-half twin of an f64 master read in an f32 slot, auto: reads what the materialized twin reads: true
+half twin of an f64 master read in an f32 slot, auto: the twin's rounding reaches the value: true
+half twin of an f64 master read in a slot of its own precision: every placement gives 0x1.808p+1
 half twin of an f64 master read in a slot of its own precision, materialized: placed as asked: true
-half twin of an f64 master read in a slot of its own precision, materialized: reads what the materialized twin reads: true
+half twin of an f64 master read in a slot of its own precision, materialized: the twin's rounding reaches the value: true
 half twin of an f64 master read in a slot of its own precision, virtual: placed as asked: true
-half twin of an f64 master read in a slot of its own precision, virtual: reads what the materialized twin reads: true
+half twin of an f64 master read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 half twin of an f64 master read in a slot of its own precision, auto: placed as asked: true
-half twin of an f64 master read in a slot of its own precision, auto: reads what the materialized twin reads: true
+half twin of an f64 master read in a slot of its own precision, auto: the twin's rounding reaches the value: true
 bfloat16 twin read in an f32 slot: every placement gives 0x1p+0
 bfloat16 twin read in an f32 slot, materialized: placed as asked: true
 bfloat16 twin read in an f32 slot, materialized: the twin's rounding reaches the value: true
@@ -38,18 +40,20 @@ bfloat16 twin read in a slot of its own precision, virtual: placed as asked: tru
 bfloat16 twin read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 bfloat16 twin read in a slot of its own precision, auto: placed as asked: true
 bfloat16 twin read in a slot of its own precision, auto: the twin's rounding reaches the value: true
+bfloat16 twin of an f64 master read in an f32 slot: every placement gives 0x1.02p+0
 bfloat16 twin of an f64 master read in an f32 slot, materialized: placed as asked: true
-bfloat16 twin of an f64 master read in an f32 slot, materialized: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in an f32 slot, materialized: the twin's rounding reaches the value: true
 bfloat16 twin of an f64 master read in an f32 slot, virtual: placed as asked: true
-bfloat16 twin of an f64 master read in an f32 slot, virtual: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in an f32 slot, virtual: the twin's rounding reaches the value: true
 bfloat16 twin of an f64 master read in an f32 slot, auto: placed as asked: true
-bfloat16 twin of an f64 master read in an f32 slot, auto: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in an f32 slot, auto: the twin's rounding reaches the value: true
+bfloat16 twin of an f64 master read in a slot of its own precision: every placement gives 0x1.84p+1
 bfloat16 twin of an f64 master read in a slot of its own precision, materialized: placed as asked: true
-bfloat16 twin of an f64 master read in a slot of its own precision, materialized: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in a slot of its own precision, materialized: the twin's rounding reaches the value: true
 bfloat16 twin of an f64 master read in a slot of its own precision, virtual: placed as asked: true
-bfloat16 twin of an f64 master read in a slot of its own precision, virtual: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 bfloat16 twin of an f64 master read in a slot of its own precision, auto: placed as asked: true
-bfloat16 twin of an f64 master read in a slot of its own precision, auto: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in a slot of its own precision, auto: the twin's rounding reaches the value: true
 fp8 twin read in an f32 slot: every placement gives 0x1p+0
 fp8 twin read in an f32 slot, materialized: placed as asked: true
 fp8 twin read in an f32 slot, materialized: the twin's rounding reaches the value: true
@@ -92,18 +96,20 @@ half twin read in a slot of its own precision, virtual: placed as asked: true
 half twin read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 half twin read in a slot of its own precision, auto: placed as asked: true
 half twin read in a slot of its own precision, auto: the twin's rounding reaches the value: true
+half twin of an f64 master read in an f32 slot: every placement gives 0x1.004p+0
 half twin of an f64 master read in an f32 slot, materialized: placed as asked: true
-half twin of an f64 master read in an f32 slot, materialized: reads what the materialized twin reads: true
+half twin of an f64 master read in an f32 slot, materialized: the twin's rounding reaches the value: true
 half twin of an f64 master read in an f32 slot, virtual: placed as asked: true
-half twin of an f64 master read in an f32 slot, virtual: reads what the materialized twin reads: true
+half twin of an f64 master read in an f32 slot, virtual: the twin's rounding reaches the value: true
 half twin of an f64 master read in an f32 slot, auto: placed as asked: true
-half twin of an f64 master read in an f32 slot, auto: reads what the materialized twin reads: true
+half twin of an f64 master read in an f32 slot, auto: the twin's rounding reaches the value: true
+half twin of an f64 master read in a slot of its own precision: every placement gives 0x1.808p+1
 half twin of an f64 master read in a slot of its own precision, materialized: placed as asked: true
-half twin of an f64 master read in a slot of its own precision, materialized: reads what the materialized twin reads: true
+half twin of an f64 master read in a slot of its own precision, materialized: the twin's rounding reaches the value: true
 half twin of an f64 master read in a slot of its own precision, virtual: placed as asked: true
-half twin of an f64 master read in a slot of its own precision, virtual: reads what the materialized twin reads: true
+half twin of an f64 master read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 half twin of an f64 master read in a slot of its own precision, auto: placed as asked: true
-half twin of an f64 master read in a slot of its own precision, auto: reads what the materialized twin reads: true
+half twin of an f64 master read in a slot of its own precision, auto: the twin's rounding reaches the value: true
 bfloat16 twin read in an f32 slot: every placement gives 0x1p+0
 bfloat16 twin read in an f32 slot, materialized: placed as asked: true
 bfloat16 twin read in an f32 slot, materialized: the twin's rounding reaches the value: true
@@ -118,18 +124,20 @@ bfloat16 twin read in a slot of its own precision, virtual: placed as asked: tru
 bfloat16 twin read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 bfloat16 twin read in a slot of its own precision, auto: placed as asked: true
 bfloat16 twin read in a slot of its own precision, auto: the twin's rounding reaches the value: true
+bfloat16 twin of an f64 master read in an f32 slot: every placement gives 0x1.02p+0
 bfloat16 twin of an f64 master read in an f32 slot, materialized: placed as asked: true
-bfloat16 twin of an f64 master read in an f32 slot, materialized: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in an f32 slot, materialized: the twin's rounding reaches the value: true
 bfloat16 twin of an f64 master read in an f32 slot, virtual: placed as asked: true
-bfloat16 twin of an f64 master read in an f32 slot, virtual: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in an f32 slot, virtual: the twin's rounding reaches the value: true
 bfloat16 twin of an f64 master read in an f32 slot, auto: placed as asked: true
-bfloat16 twin of an f64 master read in an f32 slot, auto: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in an f32 slot, auto: the twin's rounding reaches the value: true
+bfloat16 twin of an f64 master read in a slot of its own precision: every placement gives 0x1.84p+1
 bfloat16 twin of an f64 master read in a slot of its own precision, materialized: placed as asked: true
-bfloat16 twin of an f64 master read in a slot of its own precision, materialized: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in a slot of its own precision, materialized: the twin's rounding reaches the value: true
 bfloat16 twin of an f64 master read in a slot of its own precision, virtual: placed as asked: true
-bfloat16 twin of an f64 master read in a slot of its own precision, virtual: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in a slot of its own precision, virtual: the twin's rounding reaches the value: true
 bfloat16 twin of an f64 master read in a slot of its own precision, auto: placed as asked: true
-bfloat16 twin of an f64 master read in a slot of its own precision, auto: reads what the materialized twin reads: true
+bfloat16 twin of an f64 master read in a slot of its own precision, auto: the twin's rounding reaches the value: true
 fp8 twin read in an f32 slot: every placement gives 0x1p+0
 fp8 twin read in an f32 slot, materialized: placed as asked: true
 fp8 twin read in an f32 slot, materialized: the twin's rounding reaches the value: true
