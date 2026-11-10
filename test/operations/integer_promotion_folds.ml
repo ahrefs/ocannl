@@ -54,6 +54,9 @@ type expectation =
   | Keeps_operator  (** [simplify_llc] leaves an operator *)
   | Folds_to_leaf  (** [simplify_llc] leaves none *)
   | Value_only  (** nothing to claim of the form it takes *)
+  | Executed_only
+      (** the values alone: a fractional literal whose truncation fits converts validly, which the
+          strays oracle's closed endpoints would count against it (gh-ocannl-2085) *)
 
 type case = {
   label : string;
@@ -161,7 +164,7 @@ let check case =
   | Folds -> p (case.label ^ ": the interval analysis decides it") (literal.comparisons = 0)
   | Keeps_operator -> p (case.label ^ ": the operator stays") (literal.operators > 0)
   | Folds_to_leaf -> p (case.label ^ ": it folds to a leaf") (literal.operators = 0)
-  | Value_only -> ()
+  | Value_only | Executed_only -> ()
 
 let bin op a b ~p = (LL.Binop (op, a, b), p)
 let un op a ~p = (LL.Unop (op, a), p)
@@ -178,6 +181,8 @@ let b = [| 100.; 100.; 150.; 205. |]
 let case ?(slot = byte) ?(inputs = [ (byte, a); (byte, b) ]) ?(bounded = false) ?(guard = false)
     ?(expect = Survives) label value want =
   { label; slot; inputs; bounded; guard; value; expect; want }
+
+let ramp = [| 0.; 1.; 2.; 3. |]
 
 (* An operator's result past the byte range, through each rule. *)
 let over_byte = [| 1.; 0.; 0.; 1. |]
@@ -572,6 +577,23 @@ let () =
         (flat 7.);
       (* A non-integral operand converts first, and truncates. *)
       case "byte 2.5 + 3.5" ~inputs:[] ~expect:Keeps_operator (lits Ops.Add 2.5 3.5) (flat 5.);
+      (* gh-ocannl-2085: a fraction past an endpoint whose truncation lands on it converts validly,
+         so lowering accepts it and it computes the truncated value. *)
+      case "byte 255.75 - a"
+        ~inputs:[ (byte, ramp) ]
+        ~expect:Executed_only
+        (fun e -> LL.Binop (Ops.Sub, e.lit e.p 255.75, e.arg 0))
+        [| 255.; 254.; 253.; 252. |];
+      case "byte -0.75 + a"
+        ~inputs:[ (byte, ramp) ]
+        ~expect:Executed_only
+        (fun e -> LL.Binop (Ops.Add, e.lit e.p (-0.75), e.arg 0))
+        ramp;
+      case "uint32 -0.75 + a" ~slot:uint32
+        ~inputs:[ (uint32, ramp) ]
+        ~expect:Executed_only
+        (fun e -> LL.Binop (Ops.Add, e.lit e.p (-0.75), e.arg 0))
+        ramp;
     ]
 
 (* The routes from [%op]. [0. - a] needs no update of a precision: the literal follows [a]'s. *)

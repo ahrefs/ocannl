@@ -6271,6 +6271,42 @@ let integer_scope_exact ~ienv ~(scope_prec : Ops.prec) ~(eval : Ops.prec) (v : s
   (Ops.equal_prec eval scope_prec && (not (Ops.promoted_to_int scope_prec)) && not (holds_a_truth v))
   || (fits scope_prec && fits eval)
 
+exception
+  Unrepresentable_integer_constant of {
+    tn : Tn.t option;
+    scope : Tn.t option;
+    prec : Ops.prec;
+    value : float;
+  }
+
+let () =
+  Stdlib.Printexc.register_printer (function
+    | Unrepresentable_integer_constant { tn; scope; prec; value } ->
+        let p = Ops.prec_string prec in
+        let range =
+          match Ops.integer_range prec with
+          | Some (lo, hi) -> Printf.sprintf "[%.0f, %.0f]" lo hi
+          | None -> "(none)"
+        in
+        Some
+          (Printf.sprintf
+             "Low_level.Unrepresentable_integer_constant: the constant %s renders at %s %s%s, but \
+              %s; C's conversion is then undefined and the backends drop the store or produce \
+              garbage (gh-ocannl-2085). Use a value whose truncation toward zero lies in %s's \
+              range %s, or give %s a precision that holds it"
+             (Float.to_string value) p
+             (match tn with
+             | Some tn -> "in the value stored to tensor node " ^ Tn.debug_name tn
+             | None -> "in a guard condition")
+             (match scope with
+             | Some scope -> " (in the inlined computation of " ^ Tn.debug_name scope ^ ")"
+             | None -> "")
+             (if Float.is_finite value then "its truncation toward zero is outside the range"
+              else "it is not finite")
+             p range
+             (match tn with Some tn -> "tensor node " ^ Tn.debug_name tn | None -> "the operand"))
+    | _ -> None)
+
 let simplify_llc static_indices llc =
   let licence = Fp_licence.exact in
   let positive_zero c = Float.(c = 0.) && not (Stdlib.Float.sign_bit c) in
@@ -6671,25 +6707,39 @@ let simplify_llc static_indices llc =
      [Where (idx < extent, load, 0)], a launch or fringe guard -- is evaluated at index precision,
      so however far past the cutoff its extent lies it is no fp16 constant. The node's storage
      precision must be narrow as well: the refusal's remedy is to widen that node, which does
-     nothing for a narrow slot inside a wide node's statement. *)
-  let check_constant tn ~eval c =
-    (* Prevent triggering over-eager guard against forcing precision. *)
-    ignore (Lazy.force tn.Tn.dims);
-    if
-      Ops.exceeds_fp16_cutoff c && Ops.is_up_to_fp16 eval
-      && Ops.is_up_to_fp16 (Lazy.force tn.Tn.storage_prec)
-    then
-      raise
-      @@ Utils.User_error
-           ("Constant " ^ Float.to_string c
-          ^ " is too big for FP16 aka. half precision, risk of overflow; increase precision of \
-             tensor node " ^ Tn.debug_name tn)
+     nothing for a narrow slot inside a wide node's statement. [fp16_tn] is the node that check
+     names: the statement's, or the inlined computation's within it; [None] in a guard. *)
+  let check_fp16 fp16_tn ~eval c =
+    match fp16_tn with
+    | None -> ()
+    | Some tn ->
+        (* Prevent triggering over-eager guard against forcing precision. *)
+        ignore (Lazy.force tn.Tn.dims);
+        if
+          Ops.exceeds_fp16_cutoff c && Ops.is_up_to_fp16 eval
+          && Ops.is_up_to_fp16 (Lazy.force tn.Tn.storage_prec)
+        then
+          raise
+          @@ Utils.User_error
+               ("Constant " ^ Float.to_string c
+              ^ " is too big for FP16 aka. half precision, risk of overflow; increase precision of \
+                 tensor node " ^ Tn.debug_name tn)
   in
-  let rec check_proc llc =
-    let loop = check_proc in
+  (* gh-ocannl-2085: at the same slot precision, and whatever the fp16 cutoff says, a constant whose
+     conversion to a scalar integer [eval] is undefined is refused. [tn] is the statement's
+     destination, the node a user acts on, and [scope] the innermost inlined computation. *)
+  let check_constant ~tn ~scope ~eval c =
+    if Option.is_some (Ops.integer_range eval) && not (Ops.integer_constant_converts eval c) then
+      raise (Unrepresentable_integer_constant { tn; scope; prec = eval; value = c });
+    check_fp16 (match scope with Some _ -> scope | None -> tn) ~eval c
+  in
+  (* [within] is [Some dest] inside an inlined computation: the refusal still names the statement's
+     destination [dest]. *)
+  let rec check_proc ~within llc =
+    let loop = check_proc ~within in
     let at_storage tn llsc =
       ignore (Lazy.force tn.Tn.dims);
-      check_float tn ~eval:(Lazy.force tn.Tn.storage_prec) llsc
+      check_float ~tn:(Some tn) ~scope:None ~eval:(Lazy.force tn.Tn.storage_prec) llsc
     in
     match llc with
     | Seq (c1, c2) ->
@@ -6702,22 +6752,30 @@ let simplify_llc static_indices llc =
     | Zero_out _ -> ()
     | Set { tn; llsc; _ } -> at_storage tn llsc
     | Set_dynamic { tn; dyn_value = v, p; llsc; _ } ->
-        check_float tn ~eval:p v;
+        check_float ~tn:(Some tn) ~scope:None ~eval:p v;
         at_storage tn llsc
     | Set_from_vec { tn; vec_unop; arg = arg_scalar, p; _ } ->
         if Ops.is_homogeneous_prec_vec_unop vec_unop then at_storage tn arg_scalar
-        else check_float tn ~eval:p arg_scalar
-    | Set_local (id, llsc) -> at_storage id.tn llsc
-    | If { body; _ } -> loop body
+        else check_float ~tn:(Some tn) ~scope:None ~eval:p arg_scalar
+    | Set_local (id, llsc) -> (
+        match within with
+        | Some dest ->
+            ignore (Lazy.force id.tn.Tn.dims);
+            check_float ~tn:dest ~scope:(Some id.tn) ~eval:(Lazy.force id.tn.Tn.storage_prec) llsc
+        | None -> at_storage id.tn llsc)
+    | If { cond = v, p; body } ->
+        (* A guard feeds no node: only the integer check judges it. *)
+        check_float ~tn:None ~scope:None ~eval:p v;
+        loop body
     | Tile_mma { fallback; _ } -> loop fallback
     | Declare_local _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier -> ()
-  and check_float tn ~eval llsc =
-    let loop = check_float tn ~eval in
-    let own (v, p) = check_float tn ~eval:p v in
+  and check_float ~tn ~scope ~eval llsc =
+    let loop = check_float ~tn ~scope ~eval in
+    let own (v, p) = check_float ~tn ~scope ~eval:p v in
     match llsc with
-    | Constant c -> check_constant tn ~eval c
-    | Constant_bits _ -> () (* No check needed for bit constants *)
-    | Local_scope { body; _ } -> check_proc body
+    | Constant c -> check_constant ~tn ~scope ~eval c
+    | Constant_bits _ -> () (* An int64 literal: its integer conversions are defined. *)
+    | Local_scope { body; _ } -> check_proc ~within:(Some tn) body
     | Ternop (op, v1, (v2, _), (v3, _)) ->
         if Ops.is_homogeneous_prec_ternop op then loop (fst v1) else own v1;
         loop v2;
@@ -6730,12 +6788,14 @@ let simplify_llc static_indices llc =
           own v1;
           own v2)
     | Unop (op, v) -> if Ops.is_homogeneous_prec_unop op then loop (fst v) else own v
-    | Embed_index (Indexing.Fixed_idx i) -> check_constant tn ~eval (Float.of_int i)
+    (* An index converts from an integer, which is defined: only the fp16 check judges it. *)
+    | Embed_index (Indexing.Fixed_idx i) ->
+        check_fp16 (match scope with Some _ -> scope | None -> tn) ~eval (Float.of_int i)
     | Get_dynamic { dyn_value; _ } -> own dyn_value
     | Embed_index _ | Get_local _ | Get_merge_buffer (_, _) | Get (_, _) -> ()
   in
   let result = loop_proc ~ienv:(ienv_of_static_indices static_indices) llc in
-  if Option.is_some Utils.settings.check_half_prec_constants_cutoff then check_proc result;
+  check_proc ~within:None result;
   result
 
 (** Alpha-equivalence comparison for CSE: compare two [scalar_t] trees ignoring concrete [scope_id]

@@ -1,0 +1,84 @@
+byte a + c, c NaN: refused, naming the node, the precision and the value: true
+byte a + c, c +inf: refused, naming the node, the precision and the value: true
+byte a + c, c -inf: refused, naming the node, the precision and the value: true
+byte a + c, c just below the range: refused, naming the node, the precision and the value: true
+byte a + c, c just above the range: refused, naming the node, the precision and the value: true
+byte a + c, c a fraction truncating below the range: refused, naming the node, the precision and the value: true
+byte a + c, c a fraction truncating above the range: refused, naming the node, the precision and the value: true
+uint16 a + c, c NaN: refused, naming the node, the precision and the value: true
+uint16 a + c, c +inf: refused, naming the node, the precision and the value: true
+uint16 a + c, c -inf: refused, naming the node, the precision and the value: true
+uint16 a + c, c just below the range: refused, naming the node, the precision and the value: true
+uint16 a + c, c just above the range: refused, naming the node, the precision and the value: true
+uint16 a + c, c a fraction truncating below the range: refused, naming the node, the precision and the value: true
+uint16 a + c, c a fraction truncating above the range: refused, naming the node, the precision and the value: true
+int32 a + c, c NaN: refused, naming the node, the precision and the value: true
+int32 a + c, c +inf: refused, naming the node, the precision and the value: true
+int32 a + c, c -inf: refused, naming the node, the precision and the value: true
+int32 a + c, c just below the range: refused, naming the node, the precision and the value: true
+int32 a + c, c just above the range: refused, naming the node, the precision and the value: true
+int32 a + c, c a fraction truncating below the range: refused, naming the node, the precision and the value: true
+int32 a + c, c a fraction truncating above the range: refused, naming the node, the precision and the value: true
+uint32 a + c, c NaN: refused, naming the node, the precision and the value: true
+uint32 a + c, c +inf: refused, naming the node, the precision and the value: true
+uint32 a + c, c -inf: refused, naming the node, the precision and the value: true
+uint32 a + c, c just below the range: refused, naming the node, the precision and the value: true
+uint32 a + c, c just above the range: refused, naming the node, the precision and the value: true
+uint32 a + c, c a fraction truncating below the range: refused, naming the node, the precision and the value: true
+uint32 a + c, c a fraction truncating above the range: refused, naming the node, the precision and the value: true
+int64 a + c, c NaN: refused, naming the node, the precision and the value: true
+int64 a + c, c +inf: refused, naming the node, the precision and the value: true
+int64 a + c, c -inf: refused, naming the node, the precision and the value: true
+int64 a + c, c just below the range: refused, naming the node, the precision and the value: true
+int64 a + c, c just above the range: refused, naming the node, the precision and the value: true
+uint64 a + c, c NaN: refused, naming the node, the precision and the value: true
+uint64 a + c, c +inf: refused, naming the node, the precision and the value: true
+uint64 a + c, c -inf: refused, naming the node, the precision and the value: true
+uint64 a + c, c just below the range: refused, naming the node, the precision and the value: true
+uint64 a + c, c just above the range: refused, naming the node, the precision and the value: true
+the refusal's message names the stored node and the precision: true
+byte a + c above the range, with the fp16 cutoff off: refused, naming the node, the precision and the value: true
+uint16 a + c above the range, with the fp16 cutoff off: refused, naming the node, the precision and the value: true
+int32 a + c above the range, with the fp16 cutoff off: refused, naming the node, the precision and the value: true
+uint32 a + c above the range, with the fp16 cutoff off: refused, naming the node, the precision and the value: true
+int64 a + c above the range, with the fp16 cutoff off: refused, naming the node, the precision and the value: true
+uint64 a + c above the range, with the fp16 cutoff off: refused, naming the node, the precision and the value: true
+byte where with the default mask fill: refused, naming the node, the precision and the value: true
+byte ~- over an unsigned tensor: refused, naming the node, the precision and the value: true
+uint16 where with the default mask fill: refused, naming the node, the precision and the value: true
+uint16 ~- over an unsigned tensor: refused, naming the node, the precision and the value: true
+int32 where with the default mask fill: refused, naming the node, the precision and the value: true
+uint32 where with the default mask fill: refused, naming the node, the precision and the value: true
+uint32 ~- over an unsigned tensor: refused, naming the node, the precision and the value: true
+int64 where with the default mask fill: refused, naming the node, the precision and the value: true
+uint64 where with the default mask fill: refused, naming the node, the precision and the value: true
+uint64 ~- over an unsigned tensor: refused, naming the node, the precision and the value: true
+single where with the default mask fill keeps its infinity: true
+byte the top endpoint minus a gives the truncated value per cell: true
+byte the bottom endpoint plus a gives the truncated value per cell: true
+byte a fraction above the top endpoint, minus a gives the truncated value per cell: true
+byte a fraction below the bottom endpoint, plus a gives the truncated value per cell: true
+uint16 the top endpoint minus a gives the truncated value per cell: true
+uint16 the bottom endpoint plus a gives the truncated value per cell: true
+uint16 a fraction above the top endpoint, minus a gives the truncated value per cell: true
+uint16 a fraction below the bottom endpoint, plus a gives the truncated value per cell: true
+int32 the top endpoint minus a gives the truncated value per cell: true
+int32 the bottom endpoint plus a gives the truncated value per cell: true
+int32 a fraction above the top endpoint, minus a gives the truncated value per cell: true
+int32 a fraction below the bottom endpoint, plus a gives the truncated value per cell: true
+uint32 the top endpoint minus a gives the truncated value per cell: true
+uint32 the bottom endpoint plus a gives the truncated value per cell: true
+uint32 a fraction above the top endpoint, minus a gives the truncated value per cell: true
+uint32 a fraction below the bottom endpoint, plus a gives the truncated value per cell: true
+int64 the top endpoint minus a gives the truncated value per cell: true
+int64 the bottom endpoint plus a gives the truncated value per cell: true
+uint64 the top endpoint minus a gives the truncated value per cell: true
+uint64 the bottom endpoint plus a gives the truncated value per cell: true
+a float condition's 300 in a byte store: accepted: true
+a float condition's +inf in a byte store: accepted: true
+a byte condition's 300 in a float store: refused, naming the node, the precision and the value: true
+a float-annotated 300 in a homogeneous byte Add: refused, naming the node, the precision and the value: true
+a byte guard's 300: refused, naming the node, the precision and the value: true
+a byte scope's 300 read into a float slot: refused, naming the node, the precision and the value: true
+a byte scan's initial 300: refused, naming the node, the precision and the value: true
+a half store of 20000 is still refused by the fp16 cutoff: true

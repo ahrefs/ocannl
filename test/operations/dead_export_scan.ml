@@ -147,6 +147,9 @@ let exempt_zero_reference_exports =
     "Ops.hum_typ_of_prec";
     "Ops.is_assign_op";
     "Ops.is_binop_infix";
+    (* gh-ocannl-2085: the range test [integer_leaf_holds] and [integer_constant_converts] share,
+       whose own doc says what it decides; Metal's literal hook now calls the latter. *)
+    "Ops.integer_value_fits";
     "Ops.precision_to_string";
     "Ops.ptr_to_string_hum";
     "Schedulers.cpu_mma_limits";
