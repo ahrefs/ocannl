@@ -152,6 +152,11 @@ files.
   fetch into it. The price of the lazy is that reading the node's `dims` or `padding` closes the
   session, as for any other leaf, so `init` sits on the `Reshape` route only because it owns its
   array; `test/operations/padded_conv_init_leaf` holds the executed values and both refusals.
+  The refusal ("exceeds resolved padding") names the operand and gives only the remedy for how
+  its layout committed (gh-ocannl-2041): `Row` cannot see that, so `fresh_proj_ids` registers each
+  locked axis as a `Row.committed_padding` carrying the node's label and
+  `Tnode.layout_at_creation` (set only by `create_from_padded`), and the check keeps every entry
+  of a class rather than their elementwise minimum, so it can name the one the demand exceeds.
 - Padded (`=`-mode) windows: max/tropical-family accumulations lower with clamped window bounds
   and demand NO margins (gh-504: `Row.proj_env.clamp_padded`; interval-based range guards in
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity

@@ -352,6 +352,12 @@ type t = {
           margins permanently hold the neutral value, and later conflicting demands — more padding,
           or margin-touching operations expecting a different neutral — are rejected at
           shape-inference time. *)
+  layout_at_creation : (bool[@sexp_drop_if fun _ -> true]);
+      (** The node keeps an array it was given ({!create_from_padded}: [wrap], [wrap_padded],
+          [wrap_param], a loaded checkpoint), so {!field-padding} committed at creation rather than
+          at the node's first compilation or host access. Read by shape inference to say, when a
+          padded consumer demands more margins than the committed layout has, which remedy applies
+          (gh-ocannl-2041). *)
   size_in_bytes : int Lazy.t;
   id : int;
       (** The within-session id ("s_id" of gh-ocannl-372): consecutive number for nodes created in
@@ -753,6 +759,7 @@ let snapshot_open
        storage_prec = _;
        dims = _;
        padding = _;
+       layout_at_creation = _;
        size_in_bytes = _;
        id = _;
        namespace = _;
@@ -1357,6 +1364,7 @@ let create ?namespace delayed_prec ~id ~label ~unpadded_dims ~padding () =
       storage_prec = Prec_cell.storage prec_cell;
       dims;
       padding;
+      layout_at_creation = false;
       size_in_bytes;
       id;
       namespace;
@@ -1404,6 +1412,7 @@ let create_from_padded ?namespace ~id ~label ~ndarray ~padding () =
       storage_prec = Prec_cell.storage prec_cell;
       dims = lazy dims_val;
       padding = lazy padding;
+      layout_at_creation = true;
       size_in_bytes;
       id;
       namespace;
@@ -1490,6 +1499,7 @@ let create_with_reshape ~id ~label ~base_ndarray ~unpadded_dims ~padding ~from_p
       storage_prec = Prec_cell.storage prec_cell;
       dims;
       padding;
+      layout_at_creation = false;
       size_in_bytes;
       id;
       namespace;
@@ -1521,6 +1531,7 @@ let find_namespaced =
       bounds = Bounds_unknown;
       dims = lazy [||];
       padding = lazy None;
+      layout_at_creation = false;
       size_in_bytes = lazy 0;
       id = -1;
       namespace = default_namespace;

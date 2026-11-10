@@ -75,22 +75,24 @@ let () =
       pf_all2 "the leaf's gradient is the transposed convolution of w" (Context.get_values ctx gx)
         (conv_input_grad w_vals) ~f:Float.equal;
       Context.release ctx);
+  (* The refusals are printed whole (gh-ocannl-2041): each names the operand it refuses and gives
+     only the remedies for how that operand's layout was committed. *)
   Verdict.case "a [wrap] leaf keeps the array it was given, so the same convolution is refused"
     (fun () ->
       Tensor.unsafe_reinitialize ();
-      let data =
-        Ir.Ndarray.init_array ~debug:"x" Ir.Ops.single ~dims:[| 1; n |] ~padding:None
-          ~f:(flat (at x_vals))
+      let wrapped ~l ~o vals =
+        let data =
+          Ir.Ndarray.init_array ~debug:l Ir.Ops.single ~dims:(Array.of_list o) ~padding:None
+            ~f:(flat (at vals))
+        in
+        TDSL.wrap ~l ~b:[] ~o data ()
       in
-      let x = TDSL.wrap ~l:"x" ~b:[] ~o:[ 1; n ] data () in
-      let kernel = init_leaf ~l:"kernel" ~o:[ 3 ] kernel_vals in
+      (* Both operands keep their arrays; only [x] is read through the padded window. *)
+      let x = wrapped ~l:"x" ~o:[ 1; n ] x_vals in
+      let kernel = wrapped ~l:"kernel" ~o:[ 3 ] kernel_vals in
       let%op y = x +* "s, o=+k; k => s, o" kernel in
       match Train.forward_once (Context.auto ()) y with
-      | exception Row.Shape_error (msg, _) ->
-          let says part = String.is_substring msg ~substring:part in
-          p "the refusal says where the layout was committed" (says "at creation");
-          p "the refusal names the constructors that take margins"
-            (says "reshape" && says "init" && says "wrap_padded")
+      | exception Row.Shape_error (msg, _) -> Stdio.printf "refusal: %s\n" msg
       | (_ : Context.t) -> p "the convolution was refused" false);
   Verdict.case "an init leaf an earlier routine compiled unpadded refuses the convolution"
     (fun () ->
@@ -101,7 +103,5 @@ let () =
       let ctx = Train.forward_once (Context.auto ()) doubled in
       let%op y = x +* "s, o=+k; k => s, o" kernel in
       match Train.forward_once ctx y with
-      | exception Row.Shape_error (msg, _) ->
-          p "the refusal says the layout may be committed by a compilation"
-            (String.is_substring msg ~substring:"first compilation")
+      | exception Row.Shape_error (msg, _) -> Stdio.printf "refusal: %s\n" msg
       | (_ : Context.t) -> p "the convolution was refused" false)
