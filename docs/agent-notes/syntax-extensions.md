@@ -12,6 +12,15 @@ files.
   `concat_operator_with_generated_specs` own the unqualified operator spellings whose literal specs
   undergo runtime coefficient substitution. The PPX dispatch tables and source-policy inventory
   consume those same values; extend the shared set rather than copying a spelling into one side.
+  They are derived from `Einsum_parser.{binary,unary}_operator_functions`/`concat_operator_function`,
+  each operator paired with the named function it applies, and `named_spec_functions` (those
+  functions plus `concat_sum`) is where the named forms' spellings live (gh-ocannl-2060): a named
+  form's literal first argument is substituted by `Ppx_shared.substitute_named_form_spec`, which
+  both PPXs apply to the applications they rebuild or pass through, only when the spec reads a
+  runtime value (an identifier, or a plain `+` window's `use_padding`) -- otherwise the call is
+  left as written. Its other arguments get the ordinary `%op` translation: a list or array literal
+  there (`~capture_dims:[ d ]`, `concat`'s `[| x; y |]`) becomes a block tensor, so write it
+  under `[%oc ...]`.
 - `%op` inline-record init expressions (`{ w = kaiming normal1 () }`) are bound under the
   generated `open TDSL.O`, including when there is no unit parameter (gh-511). The no-unit-param
   form is not generative: `let%op f x = ...` closes over ONE shared param created at definition
@@ -50,8 +59,10 @@ files.
   that function non-toplevel. Constructs `translate` does not descend into (`try`, `lazy`, a
   constructor's argument, `let*`) leave their declarations unexpanded, so bind nothing. And an
   unlabelled, unannotated parameter with `non_tensor_evidence` (a stride/dilation identifier of
-  a literal spec through `Ppx_shared.einsum_spec_identifiers`, the operand of `!.`/`!..`, the
-  exponent of `**.`; never when the body rebinds the name) replaces the whole function with an
+  a literal spec through `Ppx_shared.einsum_spec_identifiers` -- an operator's, or a named
+  form's first positional argument (`Ppx_shared.named_form_spec`, gh-ocannl-2060) -- the operand
+  of `!.`/`!..`, the exponent of `**.`, the argument of `Float.of_int`/`float_of_int`/
+  `Int.to_float` spelled exactly; never when the body rebinds the name) replaces the whole function with an
   error: without `()` always, after `()` only where the function gets a scheme, since an
   unschemed one (`[@@ocannl.no_scheme]`) takes an unlabelled int fine. Refusing rather than
   reclassifying keeps "unlabelled = tensor" a rule one can read code by, and can be relaxed

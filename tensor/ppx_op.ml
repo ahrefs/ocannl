@@ -327,13 +327,21 @@ let tensor_operand_evidence name body =
   visitor#expression body;
   !found
 
+(* The integer-to-float conversions, spelled exactly: their argument is an integer. *)
+let int_to_float_conversions = [ "Float.of_int"; "float_of_int"; "Int.to_float" ]
+
 (* Why [name] cannot be a tensor, when [body] uses it directly as an integer or a float (outside
-   [%oc]): a stride or dilation of a literal einsum spec, or the operand of a number embedding or
-   the exponent of the pointwise power (gh-ocannl-1987). *)
+   [%oc]): a stride or dilation of a literal einsum spec, of an operator (gh-ocannl-1987) or of a
+   named form (gh-ocannl-2060), the operand of a number embedding or the exponent of the pointwise
+   power (gh-ocannl-1987), or the argument of an integer-to-float conversion (gh-ocannl-2060). *)
 let non_tensor_evidence name body =
   let found = ref None in
   let note why = if Option.is_none !found then found := Some why in
   let positional args = List.filter_map args ~f:(function Nolabel, a -> Some a | _ -> None) in
+  let check_spec spec =
+    if List.mem (einsum_spec_identifiers spec) name ~equal:String.equal then
+      note (Printf.sprintf "the einsum spec %S reads it as an integer" spec)
+  in
   let visitor =
     object
       inherit Ast_traverse.iter as super
@@ -341,25 +349,29 @@ let non_tensor_evidence name body =
       method! expression e =
         match e.pexp_desc with
         | Pexp_extension ({ txt = "oc"; _ }, _) -> ()
-        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident op; _ }; _ }, args) ->
-            (match (op, positional args) with
-            | "!.", a :: _ when is_ident name a -> note "it is the float that !. embeds"
-            | "!..", a :: _ when is_ident name a -> note "it is the integer that !.. embeds"
-            | "**.", [ _; a ] when is_ident name a -> note "it is the float exponent of **."
-            | _ when List.mem Einsum_parser.operators_with_generated_specs op ~equal:String.equal ->
-                List.iter (positional args) ~f:(fun a ->
-                    let spec =
-                      match a.pexp_desc with
-                      | Pexp_constant (Pconst_string (spec, _, _))
-                      | Pexp_apply ({ pexp_desc = Pexp_constant (Pconst_string (spec, _, _)); _ }, _)
-                        ->
-                          Some spec
-                      | _ -> None
-                    in
-                    Option.iter spec ~f:(fun spec ->
-                        if List.mem (einsum_spec_identifiers spec) name ~equal:String.equal then
-                          note (Printf.sprintf "the einsum spec %S reads it as an integer" spec)))
-            | _ -> ());
+        | Pexp_apply ({ pexp_desc = Pexp_ident { txt = fn; _ }; _ }, args) ->
+            (match (fn, positional args) with
+            | Lident "!.", a :: _ when is_ident name a -> note "it is the float that !. embeds"
+            | Lident "!..", a :: _ when is_ident name a -> note "it is the integer that !.. embeds"
+            | Lident "**.", [ _; a ] when is_ident name a -> note "it is the float exponent of **."
+            | Lident op, operands
+              when List.mem Einsum_parser.operators_with_generated_specs op ~equal:String.equal ->
+                List.iter operands ~f:(fun a ->
+                    match a.pexp_desc with
+                    | Pexp_constant (Pconst_string (spec, _, _))
+                    | Pexp_apply ({ pexp_desc = Pexp_constant (Pconst_string (spec, _, _)); _ }, _)
+                      ->
+                        check_spec spec
+                    | _ -> ())
+            | _, a :: _
+              when is_ident name a
+                   && List.mem int_to_float_conversions (Longident.name fn) ~equal:String.equal ->
+                note (Printf.sprintf "it is the integer that %s converts" (Longident.name fn))
+            | _ -> (
+                match named_form_spec e with
+                | Some { pexp_desc = Pexp_constant (Pconst_string (spec, _, _)); _ } ->
+                    check_spec spec
+                | _ -> ()));
             super#expression e
         | _ -> super#expression e
     end
@@ -559,6 +571,8 @@ let default_scheme_name ~loc ?name () =
       Ast_builder.Default.estring ~loc
         (Printf.sprintf "%%op function at %s:%d" loc.loc_start.pos_fname loc.loc_start.pos_lnum)
 
+let concat_fn ~loc = Ast_builder.Default.evar ~loc (snd Einsum_parser.concat_operator_function)
+
 let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?scheme_name ~opt_label
     ~late ?label expr =
   let loc = expr.pexp_loc in
@@ -699,7 +713,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       ( vbs1,
         in_source_order ~loc ~prefix:component_prefix rhses ~f:(fun rhses ->
             [%expr
-              concat ?label:[%e opt_expr ~loc label] [%e spec]
+              [%e concat_fn ~loc] ?label:[%e opt_expr ~loc label] [%e spec]
                 [%e Ast_builder.Default.pexp_array ~loc rhses]]) )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
@@ -723,7 +737,8 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       ( combined_vbs,
         in_source_order ~loc ~prefix:component_prefix rhses ~f:(fun rhses ->
             [%expr
-              concat ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec]
+              [%e concat_fn ~loc] ?label:[%e opt_expr ~loc label]
+                ~capture_dims:[%e capture_dims_expr] [%e spec]
                 [%e Ast_builder.Default.pexp_array ~loc rhses]]) )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
@@ -962,7 +977,11 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
                     (vbs, (arg_label, e))))
       in
       let all_vbs = reduce_vbss (vbs_fn :: vbs_args) in
-      let app = Ast_builder.Default.pexp_apply ~loc e_fn processed_args in
+      (* A named einsum form's literal spec, which the translation leaves as written, reads
+         identifiers as an operator's does (gh-ocannl-2060). *)
+      let app =
+        substitute_named_form_spec (Ast_builder.Default.pexp_apply ~loc e_fn processed_args)
+      in
       let operator =
         match fn_expr.pexp_desc with
         | Pexp_ident { txt = Lident op_ident; _ } ->

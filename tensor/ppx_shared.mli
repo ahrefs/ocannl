@@ -70,6 +70,17 @@ val einsum_binary_ops : (string, location -> expression) Hashtbl.t
 val einsum_unary_ops : (string, location -> expression) Hashtbl.t
 (** Unary einsum operators ([++], [@^^]) to the DSL function they apply. *)
 
+val named_form_spec : expression -> expression option
+(** The spec of an application of a named einsum form ([Einsum_parser.named_spec_functions],
+    unqualified): its first positional argument. *)
+
+val substitute_named_form_spec : expression -> expression
+(** The application of a named einsum form with its literal spec substituted as an operator's is
+    ({!substitute_identifiers_in_einsum_spec}), when the spec reads a runtime value: a stride or
+    dilation identifier, or a plain [+] window reading [use_padding] (gh-ocannl-2060). Anything
+    else, a spec reading no runtime value or one that does not parse included, is returned as it is.
+*)
+
 val is_primitive_op : string -> bool
 (** Whether a name is in {!binary_ops}, {!unary_ops} or {!ternary_ops}. *)
 

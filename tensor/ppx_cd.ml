@@ -1771,7 +1771,7 @@ let translate ?ident_label (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs; res3.vbs ];
           typ = res1.typ;
           slot;
-          expr = [%expr [%e res1.expr] [%e res2.expr] [%e res3.expr]];
+          expr = substitute_named_form_spec [%expr [%e res1.expr] [%e res2.expr] [%e res3.expr]];
           array_opt_of_code = None;
         }
     | [%expr [%e? expr1] [%e? expr2]] ->
@@ -1782,7 +1782,7 @@ let translate ?ident_label (expr : expression) : result =
           vbs = reduce_vbss [ res1.vbs; res2.vbs ];
           typ = res1.typ;
           slot;
-          expr = [%expr [%e res1.expr] [%e res2.expr]];
+          expr = substitute_named_form_spec [%expr [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | { pexp_desc = Pexp_function (args, constr, body); _ } as expr ->
@@ -1930,7 +1930,10 @@ let translate ?ident_label (expr : expression) : result =
     | { pexp_desc = Pexp_letmodule (name, module_expr, expr1); _ } ->
         let res1 = loop ~proj_in_scope expr1 in
         { res1 with expr = { expr with pexp_desc = Pexp_letmodule (name, module_expr, res1.expr) } }
-    | _ -> { default_result with typ = Unknown }
+    | _ ->
+        (* A named einsum form's literal spec reads identifiers as an operator's does, here and in
+           the application arms above (gh-ocannl-2060). *)
+        { default_result with typ = Unknown; expr = substitute_named_form_spec expr }
   in
   let res = transl ~proj_in_scope:false ~bad_pun_hints:(Set.empty (module String)) expr in
   match (res.typ, ident_label) with
