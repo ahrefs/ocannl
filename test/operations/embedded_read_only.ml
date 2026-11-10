@@ -136,3 +136,140 @@ let () =
         && String.is_substring msg ~substring:"are host-initialized literals");
   Context.release cb;
   Context.release ca
+
+(* gh-ocannl-2119: a seed captured by a graph built under a scoped (or replaced) singleton, whose
+   forward code a discarded draw absorbed, is initialized by the parameters' initialization
+   whichever singleton is current when it runs. Each construction below is rebuilt from a fresh
+   session, so the node ids -- and with them the draws -- of one variant agree across the ways it is
+   initialized. *)
+type init_mode =
+  | Outside  (** After the scope restored another singleton. *)
+  | Caller_seeded
+      (** Outside too, with the caller writing the captured seed first: the reference. *)
+  | Inside  (** While the captured seed is still the singleton (gh-ocannl-2023's repair). *)
+
+type scope =
+  | Scoped  (** [with_saved_random_seed] returning normally. *)
+  | Unwound  (** [with_saved_random_seed] left by an exception. *)
+  | Replaced  (** No scope: [set_random_seed] replaces the singleton afterwards. *)
+
+type drawn = {
+  values : float array;
+  unchanged : float array;  (** After an initialization that skips the initialized parameter. *)
+  again : float array;  (** After [~reinit_all:true]. *)
+}
+
+let captured ?outer ?(scope = Scoped) ?(nested = false) ?(owner = true) ~inner mode =
+  Tensor.unsafe_reinitialize ();
+  (* The outer singleton's own code is absorbed elsewhere too, so gh-ocannl-2023's repair of the
+     current singleton is live when the parameters are initialized outside the scope. *)
+  let outer_draw =
+    Option.map outer ~f:(fun seed ->
+        Tensor.set_random_seed ~seed ();
+        NTDSL.uniform () ())
+  in
+  let base = Context.auto () in
+  let contexts = ref [ base ] in
+  let track ctx =
+    contexts := ctx :: !contexts;
+    ctx
+  in
+  Exn.protect
+    ~finally:(fun () -> List.iter !contexts ~f:Context.release)
+    ~f:(fun () ->
+      let inside_ctx = ref None in
+      let build () =
+        Tensor.set_random_seed ~seed:inner ();
+        let rs = Tensor.get_random_seed () in
+        (* The discarded seed-owning draw: it absorbs the captured seed's forward code. *)
+        let draw = if owner then Some (NTDSL.uniform () ()) else None in
+        let w = TDSL.param "probe_w" ~output_dims:[ 8 ] () in
+        (match mode with
+        | Inside -> inside_ctx := Some (track (Train.init_params base Train.IDX.empty w))
+        | Outside | Caller_seeded -> ());
+        (rs, draw, w)
+      in
+      let rs, draw, w =
+        match scope with
+        | Scoped -> Tensor.with_saved_random_seed build
+        | Unwound -> (
+            let cell = ref None in
+            match
+              Tensor.with_saved_random_seed (fun () ->
+                  cell := Some (build ());
+                  failwith "unwind the seed scope")
+            with
+            | () -> assert false
+            | exception Failure _ -> Option.value_exn !cell)
+        | Replaced ->
+            let built = build () in
+            Tensor.set_random_seed ~seed:43 ();
+            built
+      in
+      if nested then
+        Tensor.with_saved_random_seed (fun () ->
+            Tensor.set_random_seed ~seed:9 ();
+            ignore (Stdlib.Sys.opaque_identity (NTDSL.uniform () ()) : Tensor.t));
+      let ctx =
+        match (mode, !inside_ctx) with
+        | Inside, Some ctx -> ctx
+        | Outside, _ -> track (Train.init_params base Train.IDX.empty w)
+        | Caller_seeded, _ ->
+            let c, r =
+              Context.compile ~name:"captured_seed" base rs.Tensor.forward Train.IDX.empty
+            in
+            let c = track (Context.run (track c) r) in
+            track (Train.init_params c Train.IDX.empty w)
+        | Inside, None -> assert false
+      in
+      let values = Context.get_values ctx w.Tensor.value in
+      (* Already initialized: skipped, whichever singleton is current. *)
+      let skipped = track (Train.init_params ctx Train.IDX.empty w) in
+      let unchanged = Context.get_values skipped w.Tensor.value in
+      let repeated = track (Train.init_params ~reinit_all:true skipped Train.IDX.empty w) in
+      let again = Context.get_values repeated w.Tensor.value in
+      ignore (Stdlib.Sys.opaque_identity (draw, outer_draw) : Tensor.t option * Tensor.t option);
+      { values; unchanged; again })
+
+let () =
+  Verdict.case "a seed captured by a discarded draw, initialized after the scope" (fun () ->
+      let reference = captured ~outer:42 ~inner:7 Caller_seeded in
+      let inside = captured ~outer:42 ~inner:7 Inside in
+      let outside = captured ~outer:42 ~inner:7 Outside in
+      let other = captured ~outer:42 ~inner:8 Caller_seeded in
+      Verdict.p "the reference initialized inside the scope draws as the caller-seeded one"
+        (Poly.equal inside.values reference.values);
+      Verdict.p "the captured seed draws exactly the seed-owning reference after the scope"
+        (Poly.equal outside.values reference.values);
+      Verdict.p "another captured seed draws differently"
+        (not (Poly.equal reference.values other.values));
+      Verdict.p_all "an initialized parameter is skipped unchanged after the scope"
+        [ reference; inside; outside ] ~f:(fun d -> Poly.equal d.unchanged d.values);
+      Verdict.p "reinitializing outside the scope replays the captured seed"
+        (Poly.equal outside.again reference.values && Poly.equal inside.again reference.values))
+
+let () =
+  Verdict.case "the captured seed's restore paths" (fun () ->
+      let draws ?outer ?scope ?nested () =
+        let reference = captured ?outer ?scope ?nested ~inner:7 Caller_seeded in
+        let outside = captured ?outer ?scope ?nested ~inner:7 Outside in
+        Poly.equal outside.values reference.values
+      in
+      Verdict.p "with no singleton to restore" (draws ());
+      Verdict.p "with an outer singleton of the same integer" (draws ~outer:7 ());
+      Verdict.p "after a nested scope restored another singleton" (draws ~outer:42 ~nested:true ());
+      Verdict.p "after the scope was left by an exception" (draws ~outer:42 ~scope:Unwound ());
+      Verdict.p "after a direct replacement of the singleton" (draws ~scope:Replaced ()))
+
+let () =
+  Verdict.case "a parameter graph owning its scoped seed" (fun () ->
+      let reference = captured ~outer:42 ~owner:false ~inner:7 Caller_seeded in
+      let inside = captured ~outer:42 ~owner:false ~inner:7 Inside in
+      let outside = captured ~outer:42 ~owner:false ~inner:7 Outside in
+      let other = captured ~outer:42 ~owner:false ~inner:8 Outside in
+      Verdict.p "an owned scoped seed draws the same inside and outside the scope"
+        (Poly.equal inside.values outside.values && Poly.equal outside.values reference.values);
+      Verdict.p "an owned scoped seed of another value draws differently"
+        (not (Poly.equal outside.values other.values));
+      Verdict.p "reinitializing an owned scoped seed replays it"
+        (Poly.equal outside.again outside.values))

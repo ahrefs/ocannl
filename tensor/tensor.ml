@@ -562,6 +562,16 @@ let discarded_nodes () =
 [@@mutation_serial.boundary
   "the weak registry's creation on first use: an empty registry, which no rewind restores"]
 
+(* The seed literals [set_random_seed] created, each with its forward code -- the [Constant_bits]
+   fetch writing it -- held weakly by the node (gh-ocannl-2119). A graph built under a scoped or
+   replaced singleton keeps reading its own seed, which may no longer be the singleton; this is how
+   [init_params] recognizes such a seed among the nodes its program reads, and replays its literal.
+   Holding the entries weakly keeps no dropped graph's seed alive (gh-ocannl-1859). *)
+let seed_literals : Asgns.comp Weak_discards.t = Weak_discards.create 16
+[@@mutation_serial.kept
+  "a weak registry of seed literals and their constant fetches: [set_random_seed] extends it, and \
+   no rewind restores it -- a discarded seed is refused by the validity check, not by its absence"]
+
 (* Id-neutral windows (gh-ocannl-1751), see [Scheme.with_id_neutral]: a window that is always
    rewound -- a shape-scheme trace, a definition check -- allocates its tensors' ids from a reserved
    range above every session id. Every node such a window allocated is discarded when it ends, and
@@ -622,7 +632,7 @@ let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
 
-let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
+let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
   let more_embedded = ref @@ Set.empty (module Tn) in
   let params : t list =
     Set.to_list t.params
@@ -638,7 +648,7 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
         List.fold_right params ~init:Asgns.Noop ~f:(fun param acc ->
             if Set.is_empty param.params then Asgns.Seq (param.forward.asgns, acc)
             else
-              let comp = init_params ?skip param in
+              let comp = init_params_body ?skip param in
               more_embedded := Set.union !more_embedded comp.Asgns.embedded_nodes;
               Seq (Seq (comp.Asgns.asgns, param.forward.asgns), acc)) )
   in
@@ -650,7 +660,9 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
      When adding that seed for linking, also initialize the library-owned literal before the
      parameter draws (gh-ocannl-2023). This replays a Constant_bits fetch, not PRNG stream state:
      random operations derive their counters from node ids, offsets and explicit counter inputs.
-     Other unwritten embedded reads still require a caller-provided write. *)
+     Other unwritten embedded reads still require a caller-provided write. This clause also writes
+     the singleton for a forward graph reading it; a seed the initializers read that is no longer
+     the singleton is [init_params]'s, below (gh-ocannl-2119). *)
   let embedded_nodes, asgns =
     match !random_seed with
     | None -> (embedded_nodes, asgns)
@@ -664,6 +676,31 @@ let%debug7_sexp rec init_params ?skip (t : t) : Asgns.comp =
      [Train.run_once] initializing missing parameters on every call), and the seed is a singleton --
      so the parameters' forward fragments are not carried here. *)
   Asgns.comp ~embedded:embedded_nodes asgns
+
+(* A seed the selected initializers read is a literal whose code may live elsewhere: absorbed by a
+   discarded draw, while the singleton has since moved on -- a [with_saved_random_seed] scope
+   restored another one, or [set_random_seed] replaced it (gh-ocannl-2119). Every registered seed
+   the program reads and does not write gets its [Constant_bits] fetch prepended, so the draws are
+   those of a program owning the seed, whichever singleton is current. Checked once, on the whole
+   program: a seed one included parameter's initializer writes is not missing for another's. *)
+let init_params ?skip (t : t) : Asgns.comp =
+  let comp = init_params_body ?skip t in
+  let read, _ = Asgns.collect_nodes_guess_output comp.Asgns.asgns in
+  let missing =
+    Set.filter
+      (Set.diff read (Asgns.collect_written comp.Asgns.asgns))
+      ~f:(Weak_discards.mem seed_literals)
+  in
+  if Set.is_empty missing then comp
+  else
+    let embedded_nodes, asgns =
+      Set.fold_right missing ~init:(comp.Asgns.embedded_nodes, comp.Asgns.asgns)
+        ~f:(fun tn (embedded, asgns) ->
+          let seed = Weak_discards.find seed_literals tn in
+          ( Set.add (Set.union embedded seed.Asgns.embedded_nodes) tn,
+            Asgns.Seq (seed.Asgns.asgns, asgns) ))
+    in
+    Asgns.comp ~embedded:embedded_nodes asgns
 
 let initial_default_prec =
   Ir.Ops.prec_of_string (Utils.get_global_arg ~default:"single" ~arg_name:"default_prec")
@@ -1823,6 +1860,7 @@ let set_random_seed ?seed () =
   Row.note_mutation ();
   if not (List.mem !random_seeds_created seed ~equal:Int.equal) then
     random_seeds_created := seed :: !random_seeds_created;
+  Weak_discards.replace seed_literals res.value res.forward;
   random_seed := Some res
 
 let rec get_random_seed () =
