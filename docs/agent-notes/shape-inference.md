@@ -118,7 +118,7 @@ files.
   registrations: an operand of fixed size solves it at that step's Stage1 and exercises only the
   solved arm.
 - A capture reference publishes a bare size (`Ir.Indexing.variable_ref.solved_dim`), and projection
-  derivation re-solves each step with it (`projection_sizing_operation`), re-emitted as
+  derivation re-solves each step with it (`get_inequalities ~projection_sizing`), re-emitted as
   `get_default_dim`: that refused every capture whose dimension solved to another tag, a free one
   (closed to `1_(bcast_if_1)`) or a named one (gh-ocannl-2033). `solve_with_sizing` adds those
   sizes only after a first Stage1 solve, dropping the ones the closed axes already fix at that
@@ -562,13 +562,14 @@ files.
   focus; ranking at a rethrow handler instead would come too late, after the cap has trimmed.
 - Origins are diagnostics, and `max_shape_error_origins` must stay execution-neutral
   (gh-ocannl-2000): never decide anything from an origin list a solve has touched, since
-  `merge_origins` may have trimmed it. Two places read origins outside error text. The solver's
-  fixpoint used to compare them (now it does not; on 49 shape-heavy tests, 269k continuations, no
-  pass had continued for an origin alone, at cap 0 or 20). `Shape.is_projection_sizing` finds a
-  capture's sizing constraint by its origin tag, soundly because `derive_projections` filters
-  `get_inequalities`' own list, before any solve; drop that filter and every concatenation case
-  raises `to_proj: Dim without proj_id`. A filter over a solver's OUTPUT needs a constructor field
-  instead. The `-origins_cap_0` aliases (`concat_extraction`, `transformer_test`, `resnet_block`)
+  `merge_origins` may have trimmed it. Nothing reads them outside error text (the solver's fixpoint
+  does not compare them: on 49 shape-heavy tests, 269k continuations, no pass had continued for an
+  origin alone, at cap 0 or 20). Where inference must tell constraints apart, it keeps them in
+  separate lists or constructors: a capture's projection-local size goes to `get_inequalities
+  ~projection_sizing` (`Shape.capture_constraints`), never into the list `derive_projections`
+  hands `Row.get_proj_equations`, where it raises `to_proj: Dim without proj_id`
+  (`concat_extraction`'s unary, block, binary and ternary cases each fail if their branch loses or
+  misroutes the sizes, gh-ocannl-2043). The `-origins_cap_0` aliases (`concat_extraction`, `transformer_test`, `resnet_block`)
   rerun at cap 0 against the default run's golden; what cap 0 may move is error text
   (`test_param_shape_error` loses its spec, by design) and allocation (`scheme_payoff`'s ratio).
 - Scheme cost (gh-ocannl-1752, `test/operations/scheme_payoff.ml`, `Shape.registration_times`):

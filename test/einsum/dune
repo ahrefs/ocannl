@@ -523,10 +523,10 @@
   (pps ppx_here ppx_ocannl)))
 
 ; gh-ocannl-2000: the same executable with the origin cap at 0, against the SAME golden --
-; max_shape_error_origins is a diagnostics cap, and these cases are where inference reads an origin
-; as data: derive_projections keeps a capture's sizing constraint out of the projection equations
-; by its origin tag (Shape.is_projection_sizing). The setting is pinned on the command line, over
-; an ambient one.
+; max_shape_error_origins is a diagnostics cap, and these cases put capture sizes through
+; projection derivation, which keeps them in a list of their own (get_inequalities
+; ~projection_sizing), never in an origin. The setting is pinned on the command line, over an
+; ambient one.
 
 (rule
  (target concat_extraction-origins_cap_0.actual)

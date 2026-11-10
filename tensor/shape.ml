@@ -1138,21 +1138,6 @@ let refuse_unsolved ~where (unsolved : Row.constraint_ list) =
                ^ Sexp.to_string_hum ([%sexp_of: Row.constraint_ list] unsolved),
                [] )
 
-(** The origin operation of the size-only constraints [bind_delayed_vars_to_envs] emits for
-    projection derivation; see there. *)
-let projection_sizing_operation = "set_dim (projection-local sizing)"
-
-(* Read off origins, which [Row.merge_origins] caps ([max_shape_error_origins]) -- sound only on
-   constraints no solve has touched: [derive_projections] applies it to [get_inequalities]' own
-   list, where the tagged constraint still carries the one origin [binding_constraints] built. A
-   caller filtering a solver's output needs a marker of its own instead (gh-ocannl-2000). *)
-let is_projection_sizing (c : Row.constraint_) =
-  match c with
-  | Dim_eq { origin; _ } ->
-      List.exists origin ~f:(fun (o : Row.constraint_origin) ->
-          Option.equal String.equal o.operation (Some projection_sizing_operation))
-  | _ -> false
-
 (* The refusals ahead of binding [delayed_ref] (gh-ocannl-1655): binding touches the reference,
    which would make one bound before the closure read as open work. *)
 let check_before_binding ~where ~error_shapes ~is_row (delayed_ref : delayed_var_ref) =
@@ -1233,7 +1218,7 @@ let binding_constraints ~for_projections ~as_input ~error_shapes ~previous_bindi
   match binding with
   | `Dim var ->
       let solved_origin =
-        origin (if for_projections then projection_sizing_operation else "set_dim")
+        origin (if for_projections then "set_dim (projection-local sizing)" else "set_dim")
       in
       let solved =
         match (solved_sym, solved_dim) with
@@ -1385,11 +1370,11 @@ let split_capture_label_hint ~spec ~dim_var_env label =
     and a row binding is [Row_eq]-tied to the carried row instead.
 
     Projection derivation emits no tie and no row constraint, but it does emit a dim binding's
-    solved value, tagged {!projection_sizing_operation}: the closed shapes carry every axis's extent
-    except the split of a concatenated axis into components, so a middle extraction ([p^o^q => o])
-    could not re-solve without it (gh-ocannl-1656). [derive_projections] gives these constraints to
-    its projection-local solve only, never to [Row.get_proj_equations] -- a size equates no index
-    (and a dimension-1 value there would pin the axis to [Fixed_idx 0]). *)
+    solved value, a size ({!capture_constraints} keeps it apart): the closed shapes carry every
+    axis's extent except the split of a concatenated axis into components, so a middle extraction
+    ([p^o^q => o]) could not re-solve without it (gh-ocannl-1656). [derive_projections] gives these
+    constraints to its projection-local solve only, never to [Row.get_proj_equations] -- a size
+    equates no index (and a dimension-1 value there would pin the axis to [Fixed_idx 0]). *)
 let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
     dim_refs =
   (* Every refusal before any binding (gh-ocannl-1655). Projection derivation binds nothing and
@@ -1414,6 +1399,23 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
                    ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec
                      ^ split_capture_label_hint ~spec ~dim_var_env label,
                      [ Shape_mismatch error_shapes ] )))
+
+(* The constraints binding an operation's capture references ({!bind_delayed_vars_to_envs}).
+   Projection derivation passes [projection_sizing], and its bindings -- sizes for its local solve
+   only, which must never reach [Row.get_proj_equations] -- go there instead of into the step's
+   constraint list: the separation is the list a constraint is in, not an origin tag a solve could
+   trim (gh-ocannl-2043). *)
+let capture_constraints ?projection_sizing ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs =
+  let for_projections = Option.is_some projection_sizing in
+  let bound =
+    bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
+      dim_refs
+  in
+  match projection_sizing with
+  | None -> bound
+  | Some sizing ->
+      sizing := !sizing @ bound;
+      []
 
 (** Refuses a padded ([=+]) window in the result slot of an einsum spec (gh-ocannl-1550). A padded
     window on the result would be a padded transposed convolution: the result's index is the affine
@@ -1506,7 +1508,7 @@ let einsum_of_logic = function
     Returns [(proj_env, bio_lhs, bio_rhs_list, inequalities)] where [bio_lhs] and [bio_rhs_list] are
     the batch/input/output row triples for the LHS and each RHS — needed by [Block] to compute
     discardable vars. *)
-let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_labels * t) list)
+let einsum_n_constraints ?projection_sizing ~spec ~(rhs_slots : (parsed_axis_labels * t) list)
     ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label ~arg_label_prefix ~(error_shapes : t list)
     ?(lhs_constraints_first = false) () =
   let row_var_env = Hashtbl.create (module String) in
@@ -1526,8 +1528,7 @@ let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_label
   check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch error_shapes ] dim_var_env
     row_var_env;
   let extras_dim_refs =
-    bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~error_shapes
-      dim_refs
+    capture_constraints ?projection_sizing ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs
   in
   let proj_env =
     let combine ~key:_ _ _ = assert false in
@@ -1699,9 +1700,13 @@ let mark_unused id =
     Row.note_mutation ();
     unused_shapes := Set.add !unused_shapes id)
 
-let%debug4_sexp get_inequalities ?(for_projections = false)
+(* [projection_sizing]: given by {!derive_projections} only, the one way to ask for its constraints;
+   the step's capture sizes are added there and are absent from the result
+   ({!capture_constraints}). *)
+let%debug4_sexp get_inequalities ?projection_sizing
     ({ shape = cur_sh; logic; _ } as _upd : update_step) :
     proj_axis_env * Row.dim_var_set * Row.constraint_ list =
+  let for_projections = Option.is_some projection_sizing in
   unmark_unused cur_sh.id;
   let _debug_cur_sh : t = cur_sh in
   let _debug_logic : logic = logic in
@@ -2236,7 +2241,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
         ~error_trace:[ Shape_mismatch [ cur_sh; sh ] ]
         dim_var_env row_var_env;
       let extras_dim_refs =
-        bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env
+        capture_constraints ?projection_sizing ~spec ~dim_var_env ~row_var_env
           ~error_shapes:[ cur_sh; sh ] dim_refs
       in
       let proj_env =
@@ -2413,7 +2418,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
       let proj_env, _, _, inequalities =
-        einsum_n_constraints ~for_projections ~spec
+        einsum_n_constraints ?projection_sizing ~spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2) ]
           ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2 ]
@@ -2435,8 +2440,8 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                    [ Shape_mismatch (cur_sh :: rhses) ] )
       in
       let proj_env, (b_lhs, i_lhs, o_lhs), bio_rhs_list, inequalities =
-        einsum_n_constraints ~for_projections ~spec ~rhs_slots:(List.zip_exn ls_rhses rhses) ~cur_sh
-          ~ls_lhs ~dim_refs:delayed_vars ~result_label:"Block RESULT"
+        einsum_n_constraints ?projection_sizing ~spec ~rhs_slots:(List.zip_exn ls_rhses rhses)
+          ~cur_sh ~ls_lhs ~dim_refs:delayed_vars ~result_label:"Block RESULT"
           ~arg_label_prefix:"Block ARGUMENT" ~error_shapes:(cur_sh :: rhses) ()
       in
       (* Compute discardable_vars for concat semantics: variables allowed to be 0. *)
@@ -2471,7 +2476,7 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                    [ Shape_mismatch [ cur_sh; sh1; sh2; sh3 ] ] )
       in
       let proj_env, _, _, inequalities =
-        einsum_n_constraints ~for_projections ~spec
+        einsum_n_constraints ?projection_sizing ~spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2); (ls_rhs3, sh3) ]
           ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2; sh3 ] ()
@@ -3937,15 +3942,14 @@ let projected_operands = function
   | Broadcast_tern (_, sh1, sh2, sh3) -> ([ sh1; sh2; sh3 ], false)
   | Block { rhses; _ } -> (rhses, false)
 
-(* The Stage1 solve of projection derivation, its capture sizes last (gh-ocannl-2033). A size
-   ({!is_projection_sizing}) stands in for what the operation's closed axes leave open, the split of
-   a concatenated axis or a padded window's kernel, and makes no basis claim: where the axes already
-   fix the variable at that size it is dropped, so the tag they carry stands -- the broadcast top a
-   free capture closed to, a named tag an operand gave it. A different size still meets them, and is
-   refused there. *)
-let solve_with_sizing ~discardable_vars ineqs =
-  let sizing, rest = List.partition_tf ineqs ~f:is_projection_sizing in
-  let unsolved, env = Row.solve_inequalities ~stage:Stage1 ~discardable_vars rest Row.empty_env in
+(* The Stage1 solve of projection derivation, its capture sizes [sizing] last (gh-ocannl-2033). A
+   size ({!capture_constraints}) stands in for what the operation's closed axes leave open, the
+   split of a concatenated axis or a padded window's kernel, and makes no basis claim: where the
+   axes already fix the variable at that size it is dropped, so the tag they carry stands -- the
+   broadcast top a free capture closed to, a named tag an operand gave it. A different size still
+   meets them, and is refused there. *)
+let solve_with_sizing ~discardable_vars ~sizing ineqs =
+  let unsolved, env = Row.solve_inequalities ~stage:Stage1 ~discardable_vars ineqs Row.empty_env in
   let open_sizing =
     List.filter sizing ~f:(function
       | Row.Dim_eq { d1 = Var v; d2 = Dim { d; _ }; _ } -> (
@@ -3967,15 +3971,16 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   (* We will not use the old inferred padding so that we can derive precisely the padding
      contributed by this step. *)
   let _debug_update_step : update_step = update_step in
+  let sizing = ref [] in
   let (proj_axis_env, discardable_vars, ineqs) :
       proj_axis_env * Row.dim_var_set * Row.constraint_ list =
-    get_inequalities ~for_projections:true update_step
+    get_inequalities ~projection_sizing:sizing update_step
   in
   (* We need to solve the equations/inequalities one last time because of fresh row variables
      potentially generated by [get_inequalities]. Since the variables in the shapes must be
      substituted-out at this point, the global state is already an empty env, but in principle we
      want to only find a local solution to not contaminate projections across operations. *)
-  let unsolved, local_env = solve_with_sizing ~discardable_vars ineqs in
+  let unsolved, local_env = solve_with_sizing ~discardable_vars ~sizing:!sizing ineqs in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage2 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 unsolved local_env in
@@ -3998,7 +4003,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let proj_eqs : Row.proj_equation list =
     Row.get_proj_equations
       ?spec:(Option.map (einsum_of_logic update_step.logic) ~f:fst)
-      (terminal_rows_for_inputs @ List.filter ineqs ~f:(fun c -> not (is_projection_sizing c)))
+      (terminal_rows_for_inputs @ ineqs)
       proj_axis_env local_env
   in
   (* resolved_padding is passed for verification only - to check that operation padding doesn't
