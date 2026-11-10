@@ -432,15 +432,15 @@ val run : ?timing:bool -> t -> routine -> t
     count.
 
     And a write meant to last (gh-ocannl-2027, {!Ir.Assignments.field-persists}: an optimizer step).
-    A routine whose computation re-establishes a node's buffer without reading it
-    ({!Ir.Assignments.forward_recomputed}) -- from the node's forward code, which it carries, or
-    over a write it itself means to last -- is refused, with {!Ir.Utils.User_error} naming the node
-    and the stepping routine, while that buffer still holds the value a run wrote meaning it to
-    last: the run would silently undo the step. A forward run before the steps is legal, so this is
-    decided by the runs, not at {!compile}. A write from outside a run ({!from_host}, {!set_values},
-    {!copy}), or a run re-establishing the value without carrying the node's forward code (an
-    initializer, a hand-written assignment), replaces the value deliberately. Keyed by concrete
-    buffer, a slice alias by its parent's. [~timing:true] waives this refusal too. *)
+    A routine whose forward code re-establishes a node's buffer without reading it
+    ({!Ir.Assignments.forward_recomputed}, over a node whose forward fragment it carries) is
+    refused, with {!Ir.Utils.User_error} naming the node and the stepping routine, while that buffer
+    still holds the value a run wrote meaning it to last: the run would silently undo the step. A
+    forward run before the steps is legal, so this is decided by the runs; {!compile} refuses the
+    one case the runs need not decide, a routine re-establishing a node it itself persists. Only a
+    write from outside a run ({!from_host}, {!set_values}, {!copy}) replaces the value deliberately:
+    whether another routine's write covers the whole buffer is not asked. Keyed by concrete buffer,
+    a slice alias by its parent's. [~timing:true] waives this refusal too. *)
 
 val save_accumulation_history : t -> unit -> unit
 (** [save_accumulation_history ctx] captures the gradient-accumulation history {!run} keeps for

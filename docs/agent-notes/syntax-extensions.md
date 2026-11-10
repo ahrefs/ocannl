@@ -80,8 +80,8 @@ files.
   an assignment: nested `(p.grad * s) + t` expands to `Option.map p.diff ... * s`, which does not
   typecheck — give the scaled read its own statement into an intermediate. A hand-written step
   meant to last wraps its `%cd` comp in `Asgns.persisting [ p.value ]` (gh-ocannl-2027; no syntax
-  of its own): `%cd` statements compose through `Asgns.sequence`, which refuses a marked step
-  followed by a statement re-establishing its node.
+  of its own); `Context.compile` refuses a routine re-establishing a node it marks
+  (`Asgns.persists_undone`).
 
 - Automatic shape schemes (gh-ocannl-1751, `Tensor.Scheme.For_ppx`): `Ppx_op` marks the function a
   `()` stage returns (or a unit body's tail `fun`) with an internal `ocannl.scheme` attribute

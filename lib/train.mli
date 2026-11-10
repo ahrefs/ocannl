@@ -183,12 +183,12 @@ val sgd_one :
     skipped steps are the ones whose gradients hold [inf]/[nan], and [0 * inf] is [nan].
 
     The step on [p] is marked as meant to last ({!Ir.Assignments.field-persists}, gh-ocannl-2027):
-    [Context.run] refuses a later run of a routine whose forward code recomputes [p] without reading
-    it -- a computed node, or a view of one -- while [p]'s buffer holds a step, since that run would
-    silently undo it, and {!Ir.Assignments.sequence} refuses such a forward sequenced after the
-    step. A forward run once before the steps stays legal, and so does one building on the value (a
-    running statistic). A hand-written [%cd] step states the same with {!Ir.Assignments.persisting}.
-*)
+    [Context.compile] refuses a routine that both steps [p] and recomputes it without reading it --
+    a computed node, or a view of one -- since each of its runs undoes the last step, and
+    [Context.run] refuses a run of a separate routine whose forward code recomputes [p] while [p]'s
+    buffer holds a step, since that run would silently undo it. A forward run once before the steps
+    stays legal, and so does one building on the value (a running statistic). A hand-written [%cd]
+    step states the same with {!Ir.Assignments.persisting}. *)
 
 val sgd_update :
   learning_rate:Tensor.t ->
@@ -213,8 +213,8 @@ val sgd_update :
     [Context.compile] (gh-ocannl-1876).
 
     A stepped tensor that [loss]'s forward code recomputes without reading it, a computed node or a
-    view of one (gh-ocannl-1998), is refused by [Context.run], as for {!sgd_one}: from the second
-    run of a routine carrying both the forward and the step, or at the run of a separate forward
+    view of one (gh-ocannl-1998), is refused as for {!sgd_one}: by [Context.compile] in a routine
+    carrying both the forward and the step, or by [Context.run] at the run of a separate forward
     after a step (gh-ocannl-2027). One computed by a forward run once, before the steps, keeps them.
 *)
 

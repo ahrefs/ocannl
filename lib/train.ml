@@ -337,9 +337,10 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
    to a copy, whose step the next copy undoes, is refused by [Context.compile].
 
    A computed node, or a view of one, is the same trap by recomputation (gh-ocannl-1998), and is not
-   refused here: [sgd_one] marks its step as meant to last ({!Asgns.persisting}), and [Context.run]
-   refuses the forward's run that would undo it (gh-ocannl-2027), across routines too, while a
-   forward run once before the steps stays legal. *)
+   refused here: [sgd_one] marks its step as meant to last ({!Asgns.persisting}), and [Context]
+   refuses what would undo it (gh-ocannl-2027): [compile] a routine carrying the recomputing forward
+   with the step, [run] a separate forward's run after the steps, while a forward run once before
+   the steps stays legal. *)
 let refuse_reestablished ~fn_name loss stepped =
   let fetched = Asgns.forward_fetched loss.Tensor.forward in
   Set.iter stepped ~f:(fun p ->

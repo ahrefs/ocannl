@@ -192,15 +192,15 @@ type execution_ledger = {
           [rollback_execution] restores, unless something changed them since. *)
   persist_roles : persist_roles Hashtbl.M(Int).t;
       (** Per routine id, the buffers its computation writes meaning the value to last
-          ({!Asgns.field-persists}), the ones its forward code re-establishes without reading them,
-          and the ones it replaces otherwise (gh-ocannl-2027), resolved at link. Absent for a
-          routine with none. *)
+          ({!Asgns.field-persists}) and the ones its forward code re-establishes without reading
+          them (gh-ocannl-2027), resolved at link. Absent for a routine with none. *)
   mutable persisted : persist_mark Map.M(Buffer_key).t;
       (** For each buffer whose value a run wrote meaning it to last, that write (gh-ocannl-2027),
-          until something replaces the value deliberately: a write from outside a run
-          ([record_external_writes]) or a run replacing it without carrying its node's forward code.
-          A run of a routine whose forward code re-establishes it is refused instead. Keeps the
-          stepping routine's name: its value outlives the routine's release. *)
+          until a write from outside a run ([record_external_writes]) replaces the value
+          deliberately. A run of a routine whose forward code re-establishes it is refused instead,
+          and a run of any other routine does not supersede it: whether a write covers the whole
+          buffer is not known here. Keeps the stepping routine's name: its value outlives the
+          routine's release. *)
   persist_undo : persist_undo list Hashtbl.M(Int).t;
       (** Per routine id, the [persisted] entries the routine's latest {!run} changed, for
           [rollback_execution]. *)
@@ -222,13 +222,7 @@ and accumulation_undo = {
 
 (* gh-ocannl-2027: a buffer and its node's name, as [persist_roles] records it. *)
 and persist_buffer = { pb_key : Buffer_key.t; pb_name : string }
-
-and persist_roles = {
-  pr_persists : persist_buffer list;
-  pr_recomputes : persist_buffer list;
-  pr_replaces : Buffer_key.t list;
-}
-
+and persist_roles = { pr_persists : persist_buffer list; pr_recomputes : persist_buffer list }
 and persist_mark = { pm_routine_id : int; pm_routine : string }
 
 and persist_undo = {
@@ -646,15 +640,10 @@ let overwritten (comp : Asgns.comp) =
 let rec persist_storage tn =
   match Tn.alias_of tn with Some (parent, _) -> persist_storage parent | None -> tn
 
-(* gh-ocannl-2027: the buffers [comp] writes meaning the value to last, and the ones it
-   re-establishes without reading them ({!Asgns.forward_recomputed}). Such a re-establishment is the
-   recomputation [run] refuses over a persisting write's value where [comp] carries the node's
-   forward code (owns its [Fwd] fragment) or itself persists the node -- its own next run would undo
-   its own step, as a forward with a write sequenced into it does. Otherwise it is a deliberate
-   replacement (an initializer, a hand-written assignment), which supersedes the value -- only where
-   [comp] writes the node itself: a write through a view replaces a part of its parent, and the rest
-   keeps the steps. A node with no buffer in [ctx] -- virtual, [Local] -- holds nothing across
-   runs. *)
+(* gh-ocannl-2027: the buffers [comp] writes meaning the value to last, and the ones its forward
+   code re-establishes without reading them ({!Asgns.forward_recomputed} over a node whose [Fwd]
+   fragment [comp] owns), the recomputation [run] refuses over a persisting write's value. A node
+   with no buffer in [ctx] -- virtual, [Local] -- holds nothing across runs. *)
 let record_persist_roles ctx id (comp : Asgns.comp) =
   let buffers nodes =
     Set.to_list (Set.map (module Tn) nodes ~f:persist_storage)
@@ -666,20 +655,14 @@ let record_persist_roles ctx id (comp : Asgns.comp) =
             }))
   in
   let pr_persists = buffers comp.Asgns.persists in
-  let persisted = Set.map (module Tn) comp.Asgns.persists ~f:persist_storage in
-  let recomputed = Set.map (module Tn) (Asgns.forward_recomputed comp) ~f:persist_storage in
-  let by_forward, replaced =
-    Set.partition_tf recomputed ~f:(fun tn ->
-        Set.mem comp.Asgns.owned (tn, Asgns.Fwd) || Set.mem persisted tn)
+  let pr_recomputes =
+    buffers
+      (Set.filter
+         (Set.map (module Tn) (Asgns.forward_recomputed comp) ~f:persist_storage)
+         ~f:(fun tn -> Set.mem comp.Asgns.owned (tn, Asgns.Fwd)))
   in
-  let pr_recomputes = buffers by_forward in
-  let written_directly = Asgns.collect_written comp.Asgns.asgns in
-  let pr_replaces =
-    List.map (buffers (Set.inter replaced written_directly)) ~f:(fun pb -> pb.pb_key)
-  in
-  if not (List.is_empty pr_persists && List.is_empty pr_recomputes && List.is_empty pr_replaces)
-  then
-    Hashtbl.set ctx.ledger.persist_roles ~key:id ~data:{ pr_persists; pr_recomputes; pr_replaces }
+  if not (List.is_empty pr_persists && List.is_empty pr_recomputes) then
+    Hashtbl.set ctx.ledger.persist_roles ~key:id ~data:{ pr_persists; pr_recomputes }
 
 (* The ledger, frontier and routine record of a link, shared by a compile and a relink. *)
 let finish_link ctx comp wrapped
@@ -920,6 +903,28 @@ let frontend_gate ?prelowered comp =
       (* A prelowered program replaces the comp's lowering: its nodes are the ones that run. *)
       Option.iter prelowered ~f:(fun (p : Ir.Low_level.optimized) ->
           Hashtbl.iter_keys p.traced_store ~f:check))
+
+(* gh-ocannl-2027: a computation that re-establishes, without reading it, a node it means a write to
+   last ({!Asgns.persists_undone}) undoes that write on every run -- its own forward recomputing the
+   node it steps, a write sequenced into a forward, a step sequenced before the forward. Unlike a
+   separate forward ([run]'s refusal), this one cannot have run once before the steps: it carries
+   them. Decided over the whole computation, before lowering. *)
+let check_persists_kept ?name (comp : Asgns.comp) =
+  let undone = Asgns.persists_undone comp in
+  if not (Set.is_empty undone) then
+    raise
+    @@ Utils.User_error
+         (Printf.sprintf
+            "Context.compile%s: this computation writes nodes meaning the write to last (an \
+             optimizer step, gh-ocannl-2027) and also re-establishes them without reading them, so \
+             each run undoes the step: %s. A computed node -- its forward code in this computation \
+             recomputes it -- does not hold a step; materializing it changes nothing. Step what it \
+             is computed from instead, or optimize a data-backed input (Operation.init \
+             ~grad_spec:Require_grad) or a parameter."
+            (match name with None -> "" | Some n -> " (" ^ n ^ ")")
+            (String.concat ~sep:", "
+               (List.map (Set.to_list undone) ~f:(fun tn ->
+                    (Tn.debug_name tn [@message_only "the refusal names the node by it"])))))
 
 (* The stale-node check alone, for the entry points over one node (host transfers, copies): run
    before anything of [tn] is forced, for the same reason (gh-ocannl-1505). *)
@@ -1265,6 +1270,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?can
   check_shared_gradient_reset ?name ctx comp;
   check_no_literal_write ?name comp;
   check_no_fetch_overwrite ?name ctx comp;
+  check_persists_kept ?name comp;
   (* Compile and link on the backend context; only backend-independent routine components (and the
      rewrapped context) escape the dispatch. Unwrapped rather than through [Backends.with_backend]
      so that a [retain]ed link (gh-ocannl-1440) can rewrap the context it links later. *)
@@ -1628,8 +1634,7 @@ let check_persisted_writes ctx routine roles =
                     Printf.sprintf "%s (written to last by routine %s (id=%d))" pb.pb_name
                       mark.pm_routine mark.pm_routine_id))))
 
-(* [run]'s record of a routine's persisting writes and deliberate replacements, with the undo
-   [rollback_execution] applies. A replacement goes first, so a persisting one leaves its mark. *)
+(* [run]'s record of a routine's persisting writes, with the undo [rollback_execution] applies. *)
 let record_persisted ledger routine roles =
   let undo = ref [] in
   let set pu_key pu_after =
@@ -1637,7 +1642,6 @@ let record_persisted ledger routine roles =
     undo := { pu_key; pu_before; pu_after } :: !undo;
     ledger.persisted <- Map.change ledger.persisted pu_key ~f:(fun _ -> pu_after)
   in
-  List.iter roles.pr_replaces ~f:(fun key -> if Map.mem ledger.persisted key then set key None);
   List.iter roles.pr_persists ~f:(fun pb ->
       set pb.pb_key (Some { pm_routine_id = routine.routine_id; pm_routine = routine.name }));
   Hashtbl.set ledger.persist_undo ~key:routine.routine_id ~data:!undo
