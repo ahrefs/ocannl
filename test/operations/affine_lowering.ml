@@ -245,12 +245,11 @@ let ac6 () =
 
 (* --- task-9658aac9: reuse the Stage B unit-solve scatter->copy under debug value-logging. The
    unit-solve [Where (range_cond, Get (src, solved_idx), Get_local id)] is emitted inside the
-   virtualized producer's [Local_scope] body, which is rendered with [log_set_locals:false], so it is
-   never passed to [debug_float] -- only the runtime [pp_scalar] ternary (which short-circuits)
-   appears. We assert the kernel still virtualizes (Stage B path) and computes correct results with
-   debug value-logging enabled (the config that would surface the OOB read), confirming no fault.
-   This is a no-fault/parity sanity, NOT the branch-read invariant (that flow's [Where] is not
-   debug-logged). The non-vacuous coverage of the [debug_float] [Where] guard at the exact Stage B
+   virtualized producer's [Local_scope] body, which logged runs trace through [debug_float] like any
+   kept scope (gh-ocannl-2065, gh-ocannl-2111). We assert the kernel still virtualizes (Stage B
+   path) and computes correct results with debug value-logging enabled (the config that would
+   surface the OOB read), confirming no fault. This is a no-fault/parity sanity, NOT a check of the
+   branch-read invariant (nothing here inspects the emitted reads). The non-vacuous coverage of the [debug_float] [Where] guard at the exact Stage B
    shape is [arrayjit/test/test_stage_b_where_debug.ml] (the same
    [Where (range_cond, Get producer, Get_local id)] in a logged position, plus symmetric-else and
    nested-condition cases). --- *)
