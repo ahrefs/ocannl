@@ -853,8 +853,9 @@ files.
   `backend_facts.blends_value_selects` holds (cc, HIP), a `Where` that `speculable_select` admits is
   a blend evaluating both arms, so a setter is charged the UNION of the arms' loads (distinct nodes,
   never the sum of sizes); elsewhere (CUDA, Metal) one arm -- the one whose loads are the most
-  AFTER transitive expansion (gh-ocannl-1874): an arm loading one virtual node can replay more than
-  an arm loading three materialized ones, so a choice on direct loads under-counts. Hence
+  AFTER transitive expansion (gh-ocannl-1874), every tied one kept (gh-ocannl-2098, below): an arm
+  loading one virtual node can replay more than an arm loading three materialized ones, so a choice
+  on direct loads under-counts. Hence
   `setter_reads` keeps each setter's `read_charge` -- unconditional loads plus every select's arms
   and its `speculable` admission, unresolved -- and `decide_placements` resolves it
   (`resolve_charge`) with its transitive `expand` under the backend's flag; the cached analysis
@@ -885,6 +886,23 @@ files.
   phase 8 commutes disjoint slice setters (two ties, three ties, and unequal widths), pins the
   producer's per-read charge and its virtual placement at that cap, pins the consumer's charge and
   landing, and executes each order against a cell-varying reference and a materialized reading.
+- **A short-circuiting select's tied arms are kept, never the first** (gh-ocannl-2098), the same
+  move one level down. Keeping the first tied arm let a select's spelling decide downstream:
+  `where m (x+y) (y+z)` and `where (not m) (y+z) (x+y)` kept `{m,x,y}` or `{m,y,z}`, so a
+  consumer also loading `x` and `w` cost 4 or 5 -- across cap 4 on CUDA/Metal -- where a cell with
+  `m = 0` really runs 5. `resolve_charge` returns every tied widest alternative (deduplicated, in
+  `Set.compare_direct` order): a beam in which each alternative takes a level's loads, a
+  short-circuiting select continues every alternative through every arm, and only the widest
+  survive each step. So a later select's charge cannot depend on which tie an earlier one took
+  either (`where m x y + where n (x+w) v` costs 5 in both spellings; first-tie charged 4 or 5).
+  `max_expansion` treats the alternatives as setter ties: the node's own charge stays one path
+  (per-read), the union goes downstream. The beam is unbounded: k successive tied value selects at
+  one level hold up to 2^k sets, which needs value selects -- not concat's statement guards -- to
+  tie. A greedy beam pruned after each level's loads can, on contrived overlaps, end narrower than
+  the old single greedy path, so "never materializes less" is not a property of it.
+  `virtual_chain_fanin` phase 10 pins both spellings on both readings (producer 3 or 4, consumer 5),
+  the producer's own cap, a cross-routine replay and successive selects, each executed against a
+  reference and a materialized reading; `access_fold` pins the alternatives themselves.
 - **The fan-in traversal must not enter a node already materialized** (gh-ocannl-1777). A whole
   step's setter-reads graph is cyclic through its parameters (a parameter reads its gradient, which
   reads activations that read the parameter), and the cycle guard memoizes whatever it computed under
