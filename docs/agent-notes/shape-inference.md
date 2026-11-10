@@ -633,8 +633,15 @@ files.
   in a corner, where an alias before a solution reached a third hop (an accident of equation order,
   pinned), and the stage-2 singleton arm fires about 3% more often, since it needs a recorded pair
   and a short list. `Row.with_transitive_row_emissions` is the old walk; compare against it on
-  random stores before touching this. Row GLBs reach two hops, dims all the way: closing that gap
-  would change what ordinary programs close to.
+  random stores before touching this. Row GLBs reach two hops, dims all the way, and that is
+  policy (gh-ocannl-2024, pinned by `test_row_glb_reach` and `row_glb_reach_executed`). Both ways
+  of closing the gap, forwarding a GLB along every variable-to-variable bound or only into
+  resolve-at-use rows and parameters, were built and compared (the first commit of
+  staging#1804, removed by its second) and changed no executed program: executed repeats come from
+  gh-544's close-down of operation results. Before reopening it: forwarding must count a change
+  of axes modulo variables and projection ids. The GLB join keeps the incoming side's variable and
+  mints a fresh broadcast top, so with `equal_row` as the change test, resnet_block's diamonds
+  traded two renamed GLBs forever.
 - Substitution is indexed (gh-ocannl-1904): a solution visits the entries mentioning its variable
   and, for a dimension solution, the pending ones (`environment`'s doc comment), not the whole
   environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on

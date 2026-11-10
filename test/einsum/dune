@@ -386,6 +386,14 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ (name test_row_glb_reach)
+ (package neural_nets_lib)
+ ; ocannl-backend: none -- row solver only, no tensor reaches a backend
+ (deps ocannl_config)
+ (modules test_row_glb_reach)
+ (libraries base ocannl stdio arrayjit.verdict arrayjit.utils))
+
+(test
  (name test_row_closure_guess)
  (package neural_nets_lib)
  ; ocannl-backend: none -- row solver only, no tensor reaches a backend

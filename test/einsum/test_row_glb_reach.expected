@@ -1,0 +1,9 @@
+u <= e <= o <= leaf, u := [3]  (rows u e o leaf)
+  [3] [] [] []
+a leaf three hops away closes empty: true
+[5] <= w <= a, draw over [a; o]  (rows a o w; counter)
+  [] [4] [5] 1
+the sibling closes empty, so the draw of one block repeats along w's 5: true
+u1 <= e1 <= o <= leaf, u2 <= e2 <= o, u1 := [3], u2 := [4]  (rows u1 u2 o leaf)
+  [3] [4] [1] [1]
+incompatible bounds join to the broadcast top: true
