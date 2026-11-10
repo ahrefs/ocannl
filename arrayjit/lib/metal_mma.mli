@@ -8,6 +8,13 @@
     still gates the descriptor at the device level (Apple7 and later), which is why no arm names a
     floor. *)
 
+val bf16_accum_wide : unit -> bool
+(** Whether bf16 reduction accumulators reside in f32 on this backend: under [Numerics.Bf16_wide],
+    and since gh-ocannl-2029 under [Bf16_auto] too -- only [Bf16_narrow] keeps the
+    [simdgroup_bfloat8x8] accumulator (whose intrinsic narrows once per 8-deep k block, unlike the
+    per-step serial loop) and storage-width serial accumulators. The one predicate behind the
+    backend's [accum_prec] and {!mma_accumulator}, so emission and residency cannot disagree. *)
+
 val mma_accumulator : d_prec:Ops.prec -> a_prec:Ops.prec -> b_prec:Ops.prec -> Ops.prec option
 (** The precision a storage triple's accumulator fragment resides at, under the current numerics
     policy; [None]: no [simdgroup_matrix] form, the scalar fallback renders. Every fragment type

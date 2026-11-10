@@ -1667,7 +1667,8 @@ fp16_arithmetic=true
 tf32_matmuls=true
 # The narrow side of the bf16 accumulator trade (gh-ocannl-838), symmetric with fp16_arithmetic
 # above: never the strict f32 residency `false` requests. It resolves as auto everywhere except
-# HIP, where auto went wide (gh-ocannl-1051) and this keeps gfx11's bf16-accumulate WMMA.
+# HIP and Metal, where auto went wide (gh-ocannl-1051, gh-ocannl-2029) and this keeps their
+# bf16-accumulate tensor-unit arms.
 bf16_arithmetic=true
 # The online-softmax attention rewrite (gh-ocannl-483): the softmax normalizer's summation is
 # reassociated into a per-row scan, and the probabilities are never materialized.

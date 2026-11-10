@@ -1,0 +1,347 @@
+(* gh-ocannl-2029: Metal's uniform-bf16 [simdgroup_matrix] tile and the serial loop narrow at
+   different points, so a [tune] that crowned the tile changed the values (mlp_small bf16: 23 of 24
+   losses off by 1.3e-4, where the f16 crown was bitwise equal on all 24).
+
+   The root cause, measured on an M4 Max and characterized here: [simdgroup_multiply_accumulate]
+   over a [simdgroup_bfloat8x8] accumulator sums each 8-deep k block in f32 and rounds to bf16 once
+   per block -- the intrinsic is a k-blocked schedule of its own -- while the serial bfloat loop
+   narrows at every k step. The f32-accumulator arm ([simdgroup_float8x8] over bfloat operand
+   fragments) is an f32 chain whose partials equal the serial f32 accumulation, so since
+   gh-ocannl-2029 Metal resolves [Bf16_auto] wide ([Metal_mma.bf16_accum_wide]), as HIP has since
+   gh-ocannl-1051, and only [Bf16_narrow] keeps the narrow pair. Three parts, Metal legs only (every
+   claim skips by name elsewhere).
+
+   (i) The discriminating fixture: one hand-scheduled [Tile_mma] statement against its serial twin,
+   over a single intrinsic block (k = 8) and four (k = 32). The inputs make the three narrowing
+   models -- per k step, per 8-deep block, once -- exact predictions computed here (the premise
+   claims below derive why, and that the models differ). Under the default policy and [Bf16_wide]
+   tile and serial must equal the once-narrowed prediction bitwise. Under [Bf16_narrow] the claims
+   characterize the M4-class hardware behaviour the documentation states (the tile narrows per
+   block, the serial loop per step, and they differ): they are evidence for the docs, not the
+   contract.
+
+   (ii) The issue's own claim: every tensorized seed the autotuner proposes for a bf16 matmul on
+   this device, built as the tuner builds it and executed over a prefilled destination, equals the
+   serial rendering bitwise under the default policy -- so [tune] crowning any of them changes no
+   value. Some seed must render the intrinsics, by the routine's census. The f16 twin is the
+   positive control, which needed no change (both of its legs are per-step half FMAs).
+
+   (iii) The cache identity: Metal's capabilities fingerprint under [Bf16_auto] equals [Bf16_wide]'s
+   and differs from [Bf16_narrow]'s.
+
+   Mismatch counts go to stderr; the golden holds the claims. *)
+
+(* cc-fp-contract: not-cc -- every bitwise claim is a Metal leg; on cc it skips and nothing
+   executes *)
+
+open Base
+open Ocannl
+open Ocannl.Operation.DSL_modules
+module Tn = Ir.Tnode
+module LL = Ir.Low_level
+module Sched = Ir.Schedule
+module Numerics = Ir.Numerics
+open Verdict.Claims
+
+let backend_name = String.lowercase (Utils.get_global_arg ~arg_name:"backend" ~default:"")
+let on_metal = String.is_substring backend_name ~substring:"metal"
+let leg = Verdict.leg ~when_:on_metal ~on:backend_name ()
+let n = 32
+let bm = 16
+let simd_width = 32
+
+(* The seed-parity reduction depth: deep enough that every seed's k blocking (whole-k, 32 and 16
+   deep on an M4 Max) contracts over several intrinsic blocks; the population is the seeder's,
+   printed to stderr. *)
+let k_seeds = 64
+
+(* bf16 round-to-nearest-even of a value exact in f32 (every value rounded here is one, by the
+   premise claims below). *)
+let round_bf16 x =
+  let bits = Int32.bits_of_float x in
+  let lsb = Int32.(bit_and (shift_right_logical bits 16) one) in
+  let rounded = Int32.(bit_and (bits + of_int_exn 0x7FFF + lsb) (of_int_exn (-65536))) in
+  Int32.float_of_bits rounded
+
+(* Multiples of 1/32 with |m| <= 127: at most 7 significant bits, exact in bf16 and f16 (the premise
+   claims below derive what follows for the sums). Both vary with both indices. *)
+let fa = Ll_test.weighted ~weights:[| 37; 11 |] ~modulus:255 ~offset:(-127.) ~stride:(1. /. 32.)
+let fb = Ll_test.weighted ~weights:[| 29; 53 |] ~modulus:251 ~offset:(-125.) ~stride:(1. /. 32.)
+
+(* The three narrowing models of cell (i, j) over a k-deep reduction, as bf16 values. *)
+let models ~k =
+  let cell f =
+    Array.init (n * n) ~f:(fun t ->
+        let i = t / n and j = t % n in
+        f (fun kk -> fa [| i; kk |] *. fb [| kk; j |]))
+  in
+  let per_step =
+    cell (fun prod ->
+        let acc = ref 0. in
+        for kk = 0 to k - 1 do
+          acc := round_bf16 (!acc +. prod kk)
+        done;
+        !acc)
+  in
+  let per_block =
+    cell (fun prod ->
+        let acc = ref 0. in
+        for b = 0 to (k / 8) - 1 do
+          let partial = ref !acc in
+          for kk = 8 * b to (8 * b) + 7 do
+            partial := !partial +. prod kk
+          done;
+          acc := round_bf16 !partial
+        done;
+        !acc)
+  in
+  let once =
+    cell (fun prod ->
+        let acc = ref 0. in
+        for kk = 0 to k - 1 do
+          acc := !acc +. prod kk
+        done;
+        round_bf16 !acc)
+  in
+  (per_step, per_block, once)
+
+let differ a b = not (Array.equal Float.equal a b)
+
+let count_mismatches a b =
+  Array.foldi a ~init:0 ~f:(fun c acc x -> if Float.equal x b.(c) then acc else acc + 1)
+
+let named name (comp : Ir.Assignments.comp) : Ir.Assignments.comp =
+  { comp with asgns = Ir.Assignments.Block_comment (name, comp.asgns) }
+
+(* Every tensorized run starts its destination at [1000 + c] per cell, off every value these sums
+   reach, so a parity claim needs every cell overwritten (gh-ocannl-1625). *)
+let run_prefilled ctx routine (t : Tensor.t) =
+  let tn = t.Tensor.value in
+  let numel = Array.fold (Tn.dims_without_padding tn) ~init:1 ~f:( * ) in
+  Context.run
+    (Context.set_values ctx tn (Array.init numel ~f:(fun c -> Float.of_int (1000 + c))))
+    routine
+
+let matmul ~prec ~k ~tag =
+  let a = NTDSL.init ~l:(tag ^ "_a") ~prec ~i:[ k ] ~o:[ n ] ~f:fa () in
+  let b = NTDSL.init ~l:(tag ^ "_b") ~prec ~i:[ n ] ~o:[ k ] ~f:fb () in
+  let%op c = a * b in
+  Tn.update_prec c.Tensor.value prec;
+  c
+
+(* The readback and the mma census of one compile; [transform] rewrites the lowering. *)
+let run ?(prefill = false) ?(transform = fun o -> o) ~name (t : Tensor.t) =
+  let ctx, routine =
+    Context.compile
+      ~lowered_transform:(fun o -> [ transform o ])
+      (Context.auto ())
+      (named name (Train.forward t))
+      Ir.Indexing.Empty
+  in
+  let ctx = if prefill then run_prefilled ctx routine t else Context.run ctx routine in
+  (Context.get_values ctx t.Tensor.value, Ll_test.renderings routine.Context.mma)
+
+(* schedule_mma_matmul's hand schedule: the zero expanded ahead of one [Tile_mma] statement per
+   16-row grid block, the whole k extent inside the statement. *)
+let mma_schedule ~out (opt : LL.optimized) : Sched.schedule =
+  let i, j, k =
+    match List.find_exn (Ll_test.nest_paths opt.LL.llc) ~f:(fun p -> List.length p = 3) with
+    | [ i; j; k ] -> (i, j, k)
+    | _ -> assert false
+  in
+  let ez, zsyms = Sched.expand_zero ~tn:out in
+  let zi, zj = match zsyms with [ zi; zj ] -> (zi, zj) | _ -> assert false in
+  let sp_zi, _, _ = Sched.split ~axis:zi ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
+  let rz = Sched.Retype { axis = zj; ty = LL.Workgroup } in
+  let sp_i, _, i_i = Sched.split ~axis:i ~factor:bm ~outer:LL.Grid ~inner:LL.Serial in
+  let tz, _lane = Sched.tensorize ~i:i_i ~j ~k ~simd_width () in
+  [ ez; sp_zi; rz; sp_i; tz ]
+
+let bf16_policy mode p = { p with Numerics.bf16_arithmetic = mode }
+
+let mode_name = function
+  | Numerics.Bf16_auto -> "Bf16_auto"
+  | Numerics.Bf16_wide -> "Bf16_wide"
+  | Numerics.Bf16_narrow -> "Bf16_narrow"
+
+(* One tile/serial pair over a k-deep bf16 reduction under [mode]. *)
+let fixture_pair ~mode ~k =
+  Test_utils.with_policy (bf16_policy mode) (fun () ->
+      let tag = Printf.sprintf "bsp_%s_k%d" (String.lowercase (mode_name mode)) k in
+      let serial, _ =
+        run ~name:(tag ^ "_serial") (matmul ~prec:Ir.Ops.bfloat16 ~k ~tag:(tag ^ "s"))
+      in
+      let t = matmul ~prec:Ir.Ops.bfloat16 ~k ~tag:(tag ^ "t") in
+      let tile, census =
+        run ~prefill:true ~name:(tag ^ "_tile")
+          ~transform:(fun opt -> Sched.apply (mma_schedule ~out:t.Tensor.value opt) opt)
+          t
+      in
+      (serial, tile, census))
+
+let () =
+  let per_step8, _, once8 = models ~k:8 in
+  let per_step32, per_block32, once32 = models ~k:32 in
+  (* The premises, from the inputs alone. Every product and every f32 partial sum of these operands
+     is exact (derived by [Ll_test.exact_partials] at f32's 24 bits, over every k this file
+     contracts), so the host's double arithmetic in [models] reproduces the device's f32 chains and
+     the three models are exact predictions. At k = 8 one block is the whole reduction, so per-block
+     and once coincide and only the per-step model differs; at k = 32 all three differ. *)
+  p_all "every partial sum of these operands is exact in f32, at every k this file contracts"
+    (List.concat_map [ 8; 32; k_seeds ] ~f:(fun k -> Ll_test.matmul_products ~m:n ~n ~k fa fb))
+    ~f:(Ll_test.exact_partials ~any_sign:true ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+  p "k = 8: the per-step model differs from the once-narrowed one on these inputs"
+    (differ per_step8 once8);
+  p "k = 32: the per-step, per-block and once-narrowed models pairwise differ on these inputs"
+    (differ per_step32 per_block32 && differ per_step32 once32 && differ per_block32 once32);
+  let pairs =
+    lazy
+      (List.map [ Numerics.Bf16_auto; Numerics.Bf16_wide; Numerics.Bf16_narrow ] ~f:(fun mode ->
+           (mode, [ (8, fixture_pair ~mode ~k:8); (32, fixture_pair ~mode ~k:32) ])))
+  in
+  let get mode k =
+    List.Assoc.find_exn ~equal:Int.equal
+      (List.Assoc.find_exn ~equal:Poly.equal (Lazy.force pairs) mode)
+      k
+  in
+  let report mode k =
+    let serial, tile, _ = get mode k in
+    let per_step, per_block, once = models ~k in
+    Stdio.eprintf
+      "mma_bf16_seed_parity: %s k=%d mismatches (of %d) -- tile vs serial %d; tile vs per-step %d, \
+       per-block %d, once %d; serial vs per-step %d, once %d (not part of the golden)\n\
+       %!"
+      (mode_name mode) k (n * n) (count_mismatches tile serial) (count_mismatches tile per_step)
+      (count_mismatches tile per_block) (count_mismatches tile once)
+      (count_mismatches serial per_step)
+      (count_mismatches serial once)
+  in
+  if on_metal then
+    List.iter [ Numerics.Bf16_auto; Numerics.Bf16_wide; Numerics.Bf16_narrow ] ~f:(fun mode ->
+        List.iter [ 8; 32 ] ~f:(fun k -> report mode k));
+  List.iter [ Numerics.Bf16_auto; Numerics.Bf16_wide ] ~f:(fun mode ->
+      List.iter
+        [ (8, once8); (32, once32) ]
+        ~f:(fun (k, once) ->
+          in_legf ~leg "%s k=%d: every tile statement renders the simdgroup intrinsics"
+            (mode_name mode) k (fun label ->
+              let _, _, census = get mode k in
+              p label (Ll_test.all_rendered ~what:label Ir.C_syntax.Mma_intrinsics census));
+          in_legf ~leg "%s k=%d: the tile equals the serial twin bitwise" (mode_name mode) k
+            (fun label ->
+              let serial, tile, _ = get mode k in
+              p_all2 label tile serial ~f:Float.equal);
+          in_legf ~leg "%s k=%d: the serial twin equals the once-narrowed model bitwise"
+            (mode_name mode) k (fun label ->
+              let serial, _, _ = get mode k in
+              p_all2 label serial once ~f:Float.equal)));
+  (* The characterization of the narrow pair (M4-class hardware; see the header). *)
+  in_leg ~leg "Bf16_narrow k=32: the tile narrows once per 8-deep block (the per-block model)"
+    (fun label ->
+      let _, tile, _ = get Numerics.Bf16_narrow 32 in
+      p_all2 label tile per_block32 ~f:Float.equal);
+  in_leg ~leg "Bf16_narrow k=32: the serial loop narrows at every k step (the per-step model)"
+    (fun label ->
+      let serial, _, _ = get Numerics.Bf16_narrow 32 in
+      p_all2 label serial per_step32 ~f:Float.equal);
+  in_leg ~leg
+    "Bf16_narrow k=8: one block -- the tile narrows once where the serial loop narrows per step"
+    (fun label ->
+      let serial, tile, _ = get Numerics.Bf16_narrow 8 in
+      p label (Array.equal Float.equal tile once8 && Array.equal Float.equal serial per_step8))
+
+(* === Every tensorized seed equals the serial rendering under the default policy === *)
+
+let seed_parity ~prec ~tag =
+  let limits = Context.hardware_limits (Context.auto ()) in
+  let accum_prec = (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.accum_prec in
+  let seeds_of opt =
+    List.filter (Autotune.sketch_seed_params ~is_gpu:true ~is_cpu:false ~limits opt) ~f:(fun p ->
+        p.Autotune.sk_mma)
+  in
+  let serial, _ = run ~name:(tag ^ "_serial") (matmul ~prec ~k:k_seeds ~tag:(tag ^ "s")) in
+  let labels = ref [] in
+  let _ =
+    run ~name:(tag ^ "_enum")
+      ~transform:(fun opt ->
+        labels := List.map (seeds_of opt) ~f:Autotune.sketch_params_label;
+        opt)
+      (matmul ~prec ~k:k_seeds ~tag:(tag ^ "e"))
+  in
+  let results =
+    List.filter_mapi !labels ~f:(fun idx label ->
+        let t = matmul ~prec ~k:k_seeds ~tag:(Printf.sprintf "%s%d" tag idx) in
+        let transform opt =
+          let p =
+            List.find_exn (seeds_of opt) ~f:(fun p ->
+                String.equal (Autotune.sketch_params_label p) label)
+          in
+          Sched.apply (Autotune.sketch_schedule ~accum_prec ~p opt) opt
+        in
+        match run ~prefill:true ~transform ~name:(Printf.sprintf "%s_seed%d" tag idx) t with
+        | got, census ->
+            let mism = count_mismatches got serial in
+            Stdio.eprintf
+              "mma_bf16_seed_parity: %s seed %d %s: %d of %d cells differ from serial, census %s \
+               (not part of the golden)\n\
+               %!"
+              tag idx label mism (n * n) (Ll_test.census_string census);
+            Some (label, got, census)
+        | exception e ->
+            Stdio.eprintf
+              "mma_bf16_seed_parity: %s seed %d %s did not run: %s (not part of the golden)\n%!" tag
+              idx label (Exn.to_string e);
+            None)
+  in
+  Stdio.eprintf
+    "mma_bf16_seed_parity: %s: %d tensorized seeds proposed, %d ran (not part of the golden)\n%!"
+    tag (List.length !labels) (List.length results);
+  (serial, results)
+
+let () =
+  let parity =
+    lazy
+      (Test_utils.with_policy
+         (fun p ->
+           {
+             p with
+             Numerics.bf16_arithmetic = Numerics.Bf16_auto;
+             fp16_arithmetic = Numerics.Fp16_auto;
+           })
+         (fun () ->
+           let bf16 = seed_parity ~prec:Ir.Ops.bfloat16 ~tag:"bsp_bf16" in
+           let f16 = seed_parity ~prec:Ir.Ops.half ~tag:"bsp_f16" in
+           (bf16, f16)))
+  in
+  List.iter
+    [ ("bf16", fst); ("f16", snd) ]
+    ~f:(fun (what, pick) ->
+      in_legf ~leg "default policy, %s: some seeded tile renders the simdgroup intrinsics" what
+        (fun label ->
+          let _, results = pick (Lazy.force parity) in
+          p_exists label results ~f:(fun (_, _, census) ->
+              List.exists census ~f:(Ir.C_syntax.equal_mma_rendering Ir.C_syntax.Mma_intrinsics)));
+      in_legf ~leg
+        "default policy, %s: every seeded tile that ran equals the serial rendering bitwise" what
+        (fun label ->
+          let serial, results = pick (Lazy.force parity) in
+          p_all label results ~f:(fun (_, got, _) -> Array.equal Float.equal got serial)))
+
+(* === Cache identity follows the resolution by derivation (gh-ocannl-1117/1153) === *)
+(* The schedule cache hashes [Backend_intf.codegen_capabilities_fingerprint], which tabulates the
+   backend's [accum_prec] and [mma_arm] under the current policy: Metal's [Bf16_auto] must now key
+   as [Bf16_wide] does, and apart from [Bf16_narrow], so a crown timed with the narrow arm cannot
+   replay under the default. *)
+let () =
+  in_leg ~leg
+    "Metal's capabilities fingerprint under Bf16_auto equals Bf16_wide's and differs from \
+     Bf16_narrow's" (fun label ->
+      let fingerprint mode =
+        Test_utils.with_policy (bf16_policy mode) (fun () ->
+            Ir.Backend_intf.codegen_capabilities_fingerprint
+              (Context.codegen_capabilities (Context.auto ())))
+      in
+      let auto = fingerprint Numerics.Bf16_auto in
+      p label
+        (String.equal auto (fingerprint Numerics.Bf16_wide)
+        && not (String.equal auto (fingerprint Numerics.Bf16_narrow))))

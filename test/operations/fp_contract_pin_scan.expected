@@ -52,6 +52,7 @@ test/operations/grid_launch_floor.ml -- exact-operands: Bench_gebp products are 
 test/operations/lineage_recompile_step.ml -- exact-operands: integer inputs, eighth-step weights and a dyadic rate stay exact for the three steps
 test/operations/masked_persistent_fragment.ml -- not-cc: executed claims need a GPU advertising an f16 tile; cc skips them
 test/operations/matmul_interchange.ml -- exact-operands: positive quarters and eighths with an explicit fma; every gradient sum is exact
+test/operations/mma_bf16_seed_parity.ml -- not-cc: every bitwise claim is a Metal leg; on cc it skips and nothing executes
 test/operations/model_seeded_anchor.ml -- not-cc: the bitwise claim is gated on CUDA or HIP model seeding; cc skips it
 test/operations/narrow_storage_compute.ml -- pinned off
 test/operations/nonoverlap_pool_grads.ml -- exact-operands: small integer inputs and a unit loss gradient; every max, product and sum exact

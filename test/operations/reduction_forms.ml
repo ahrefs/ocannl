@@ -267,7 +267,10 @@ let independent_residency prec =
   | "metal" -> (
       match prec with
       | Ops.Half_prec _ when wide_f16 -> Wider
-      | Ops.Bfloat16_prec _ when wide_bf16 -> Wider
+      (* gh-ocannl-2029: Metal's auto resolves bf16 wide too; only [Bf16_narrow] keeps storage. *)
+      | Ops.Bfloat16_prec _
+        when not (Numerics.equal_bf16_mode policy.Numerics.bf16_arithmetic Numerics.Bf16_narrow) ->
+          Wider
       | Ops.Fp8_prec _ -> Wider
       | _ -> At_storage)
   | "cuda" -> (
