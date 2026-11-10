@@ -542,10 +542,10 @@ let wrap_schemed ~loc ~at_unit ~name ~params (fn : expression) =
     [%e returned]]
 
 (* A function application in [%op] code, run with its source site recorded (gh-ocannl-2007): the
-   shape-scheme check of an application inside it names the line. The DSL's operators are not
-   wrapped; any other application may be (or reach) a schemed [%op] function, which the ppx cannot
-   tell without types. The site is [__POS__] at the application's location, which the compiler fills
-   in: the expansion itself spells no line. *)
+   shape-scheme check of an application inside it names the line. The DSL's operators, and the named
+   einsum forms that spell them, are not wrapped; any other application may be (or reach) a schemed
+   [%op] function, which the ppx cannot tell without types. The site is [__POS__] at the
+   application's location, which the compiler fills in: the expansion itself spells no line. *)
 let at_site ~loc app = [%expr Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> [%e app])]
 
 (* [at_site]'s inverse, everywhere in an expression whose applications are no scheme's: an
@@ -982,7 +982,12 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let app =
         substitute_named_form_spec (Ast_builder.Default.pexp_apply ~loc e_fn processed_args)
       in
+      (* A named einsum form is the DSL's operation spelled by name ([einsum1 "ab=>a" x] is [x ++
+         "ab=>a"]): no scheme's application, and its own body applies none, so it is not wrapped
+         either -- both spellings expand alike. *)
       let operator =
+        is_named_spec_function fn_expr
+        ||
         match fn_expr.pexp_desc with
         | Pexp_ident { txt = Lident op_ident; _ } ->
             is_primitive_op op_ident || is_operator op_ident

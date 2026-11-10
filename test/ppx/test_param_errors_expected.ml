@@ -454,20 +454,16 @@ let conversion_after_unit =
 let named_labelled =
   let open! TDSL.O in
     fun ~stride x ->
-      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
-        (fun () ->
-           einsum1
-             (String.concat ~sep:""
-                [Int.to_string stride; "*"; "o"; " => "; "o"]) x)
+      einsum1
+        (String.concat ~sep:"" [Int.to_string stride; "*"; "o"; " => "; "o"])
+        x
 let named_before_unit =
   let open! TDSL.O in
     fun stride () ->
       let __ocannl_body x =
-        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
-          (fun () ->
-             einsum1
-               (String.concat ~sep:""
-                  [Int.to_string stride; "*"; "o"; " => "; "o"]) x) in
+        einsum1
+          (String.concat ~sep:""
+             [Int.to_string stride; "*"; "o"; " => "; "o"]) x in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"named_before_unit" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -478,11 +474,9 @@ let named_unschemed =
   let open! TDSL.O in
     fun () ->
       fun stride x ->
-        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
-          (fun () ->
-             einsum1
-               (String.concat ~sep:""
-                  [Int.to_string stride; "*"; "o"; " => "; "o"]) x)
+        einsum1
+          (String.concat ~sep:""
+             [Int.to_string stride; "*"; "o"; " => "; "o"]) x
 let named_axis_label =
   let open! TDSL.O in
     let __ocannl_body o x =
@@ -491,9 +485,7 @@ let named_axis_label =
                        [["named_axis_label"];
                        (o.Tensor.value).Ir.Tnode.label;
                        (x.Tensor.value).Ir.Tnode.label]))
-        (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
-           (fun () -> einsum1 "2*o => o" x))
-        o in
+        (einsum1 "2*o => o" x) o in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"named_axis_label" ~arity:2
         (function | o::x::[] -> __ocannl_body o x | _ -> assert false) in
@@ -502,9 +494,7 @@ let named_axis_label =
         (fun () -> __ocannl_body o x)
 let named_no_identifier =
   let open! TDSL.O in
-    let __ocannl_body x =
-      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
-        (fun () -> einsum1 "o => o" x) in
+    let __ocannl_body x = einsum1 "o => o" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"named_no_identifier" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in

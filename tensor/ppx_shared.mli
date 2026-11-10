@@ -70,6 +70,10 @@ val einsum_binary_ops : (string, location -> expression) Hashtbl.t
 val einsum_unary_ops : (string, location -> expression) Hashtbl.t
 (** Unary einsum operators ([++], [@^^]) to the DSL function they apply. *)
 
+val is_named_spec_function : expression -> bool
+(** Whether the expression names a named einsum form ([Einsum_parser.named_spec_functions],
+    unqualified). *)
+
 val named_form_spec : expression -> expression option
 (** The spec of an application of a named einsum form ([Einsum_parser.named_spec_functions],
     unqualified): its first positional argument. *)

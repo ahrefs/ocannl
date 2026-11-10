@@ -25,12 +25,18 @@ a plain function's application names the %op application that called it: true
 pipe:
   applying the shape scheme residual_block to x in the %op application at test/operations/scheme_application_site.ml:81: dimension comparison for axis: mismatch
 a pipe names its line: true
+named form:
+  applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
+operator:
+  applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
+both spellings are refused: true
+the two spellings report the same site: true
 first application, 3 features: ok
 through:
   applying the shape scheme mlp_layer to x6 in the %op application at test/operations/scheme_application_site.ml:30: dimension comparison for axis: mismatch
 the body's application names its own line, not the caller's: true
 instantiate ~here:
-  applying the shape scheme needs3 to application #1 at test/operations/scheme_application_site.ml:95: dimension comparison for axis: mismatch
+  applying the shape scheme needs3 to application #1 at test/operations/scheme_application_site.ml:108: dimension comparison for axis: mismatch
 the instance names [here]'s file and line: true
 instantiate:
   applying the shape scheme needs3 to application #2: dimension comparison for axis: mismatch
