@@ -406,23 +406,27 @@ val resolve_charge :
   blends:bool ->
   expand:(Set.M(Tnode).t -> Tnode.t -> Set.M(Tnode).t) ->
   read_charge ->
-  Set.M(Tnode).t
+  Set.M(Tnode).t list
 (** gh-ocannl-1874: a charge's contributors, each load folded in by [expand] (the transitive guard
     expands a virtual dependency into its own fan-in; {!evaluation_reads} adds the node itself).
     With [blends] (the backend's [blends_value_selects] fact, gh-ocannl-1775) an admitted select is
     charged the union of its arms: the blend evaluates both. Any other select evaluates one arm per
     visit and is charged one: the arm whose EXPANDED reads, joined with what the evaluation was
-    already charged, are the most, the first on a tie -- choosing on direct loads under-counts an
-    arm whose few loads inline a large virtual computation. A level's loads are charged before its
-    selects. Exact for one select per path; across several, a greedy choice that still charges a
-    path some visit runs. *)
+    already charged, are the most -- choosing on direct loads under-counts an arm whose few loads
+    inline a large virtual computation. A level's loads are charged before its selects.
 
-val evaluation_reads : blends:bool -> self:Tnode.t -> scalar_t -> Set.M(Tnode).t
+    gh-ocannl-2098: the result is every tied widest alternative (non-empty, all of one cardinality,
+    deduplicated, in [Set.compare_direct] order), never the first arm on a tie, so a select's
+    spelling (its predicate inverted, its arms swapped) cannot change it. Each alternative is a path
+    some visit runs; exact for one select per path, across several a greedy beam that continues
+    every tied alternative. *)
+
+val evaluation_reads : blends:bool -> self:Tnode.t -> scalar_t -> Set.M(Tnode).t list
 (** {!resolve_charge} of {!read_charge}, each load charged as itself: a [Where] charges its
-    condition and its wider arm (the first on a tie), or with [blends] the union of its arms when
-    {!speculable_select} admits it. *)
+    condition and its wider arm (both alternatives on a tie), or with [blends] the union of its arms
+    when {!speculable_select} admits it. *)
 
-val evaluation_reads_of_proc : blends:bool -> self:Tnode.t -> t -> Set.M(Tnode).t
+val evaluation_reads_of_proc : blends:bool -> self:Tnode.t -> t -> Set.M(Tnode).t list
 (** {!evaluation_reads} of a statement: one replay of a stored computation of [self]. *)
 
 type replay_facts = {

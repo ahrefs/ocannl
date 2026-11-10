@@ -581,8 +581,8 @@ files.
   hook, not in a second recursion (gh-ocannl-1451). Merge taint, spliced reads, traced-store
   reconciliation, hosted-init classification, loop bounds, the statement-local symbol census and
   `trace_node_facts` use it. Two shared walks sit on it (gh-ocannl-1451): `evaluation_reads` is the
-  one fan-in read collector (wider arm, first on a tie, or under `~blends` the union of a select
-  `speculable_select` admits; scope bodies charge the statement), used by
+  one fan-in read collector (wider arm, every tied one as its own alternative, or under `~blends`
+  the union of a select `speculable_select` admits; scope bodies charge the statement), used by
   `trace_node_facts`' `setter_reads` and the guard's replay of inherited computations alike; and
   `write_demand`/`fold_statement_positions` is the one statement-position walk (loops, scans,
   guards, sequences; no expressions, no `Tile_mma` fallback), which the sketch demand walks,

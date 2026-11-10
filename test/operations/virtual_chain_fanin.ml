@@ -49,7 +49,10 @@
    see the conservative union of tied contributors, with executed materialized parity.
 
    Phase 9 crosses inherited and local setter ties in one lineage: each read costs the widest
-   inherited/local pair (4), while a downstream fresh input sees their full union (6). *)
+   inherited/local pair (4), while a downstream fresh input sees their full union (6).
+
+   Phase 10 commutes a select's tied arms (gh-ocannl-2098): a predicate-inverted, arm-swapped
+   spelling must not move a consumer across the cap; the producer keeps its per-read charge. *)
 
 open Base
 open Ll_test
@@ -2075,6 +2078,176 @@ let phase9 () =
             (same got expected && same got got_mat)));
   LL.virtualize_settings.max_inline_fanin <- saved_cap
 
+(* === Phase 10: a select's tied arms commute (gh-ocannl-2098) ===
+
+   [p := where m (x+y) (y+z)] and its predicate-inverted, arm-swapped spelling [p := where (not m)
+   (y+z) (x+y)] compute the same cells; [c := p + x + w] reads [p], and [out] copies [c].
+   Short-circuiting (CUDA, Metal), [p]'s arms tie at 3 ([{m,x,y}] and [{m,y,z}]): its own charge is
+   one arm, 3, but keeping the FIRST tied arm for downstream made [c] cost [{m,x,y,w}] = 4 under one
+   spelling and [{m,y,z,x,w}] = 5 under the other -- across cap 4. The tied arms are unioned
+   downstream, so [c] costs 5 under either spelling (a cell with [m = 0] replays [y+z] beside [x]
+   and [w]: 5 is a read some cell runs). Blended (cc, HIP) [p] is charged the union, 4, and [c] 5.
+   At cap 3 the short-circuiting [p] stays virtual: its own charge is still per-read. The
+   cross-routine leg replays [p] from routine A's stored computation. The successive-selects leg
+   pins the node's OWN charge: [q := where m x y + where n (x+w) v] keeps every tied alternative of
+   the first select, so the second is charged from both: 5 either way, where the first-tie choice
+   charged 4 or 5 by spelling. Every leg executes against the reference and a materialized reading,
+   and the spellings against each other. *)
+
+let phase10 () =
+  let saved_cap = LL.virtualize_settings.max_inline_fanin in
+  let mk = node_factory ~first_id:8700 ~dims:[| dim |] () in
+  let m = mk "sm" and n = mk "sn" in
+  let x = mk "sx" and y = mk "sy" and z = mk "sz" and w = mk "sw" and v = mk "sv" in
+  let leaves = [ x; y; z; w; v ] in
+  List.iter (m :: n :: leaves) ~f:materialize;
+  (* [m] alternates per cell and [n] per pair of cells, so [dim = 4] covers all four mask
+     combinations; every leaf varies with its identity and the cell, away from zero. *)
+  let m_vals = Array.init dim ~f:(fun i -> Float.of_int (i % 2)) in
+  let n_vals = Array.init dim ~f:(fun i -> Float.of_int (i / 2 % 2)) in
+  let vals k = Array.init dim ~f:(fun i -> Float.of_int ((100 * (k + 1)) + (10 * (i + 1)))) in
+  let seed out =
+    (out, blank dim) :: (m, m_vals) :: (n, n_vals) :: List.mapi leaves ~f:(fun k tn -> (tn, vals k))
+  in
+  let xv = vals 0 and yv = vals 1 and zv = vals 2 and wv = vals 3 and vv = vals 4 in
+  let is_fanin_cap o tn =
+    Option.equal Tn.equal_provenance (rejection_code o tn) (Some Tn.Inline_fanin_cap)
+  in
+  let fanin (o : LL.optimized) tn = (Hashtbl.find_exn o.traced_store tn).LL.inline_fanin in
+  let where_at cond then_ else_ =
+    LL.Ternop (Ir.Ops.Where, (cond, single), (then_, single), (else_, single))
+  in
+  let inverted_mask tn idx = LL.Unop (Ir.Ops.Not, (get tn idx, single)) in
+  let spelling inverted = if inverted then "inverted" else "plain" in
+  (* [where m (x+y) (y+z)], or [where (not m) (y+z) (x+y)]. *)
+  let select ~inverted idx =
+    let xy = add (get x idx) (get y idx) and yz = add (get y idx) (get z idx) in
+    if inverted then where_at (inverted_mask m idx) yz xy else where_at (get m idx) xy yz
+  in
+  let select_ref i = if i % 2 <> 0 then xv.(i) +. yv.(i) else yv.(i) +. zv.(i) in
+  let producer p_ ~inverted =
+    let i = sym () in
+    loop_n i dim (set p_ [| iter i |] (select ~inverted [| iter i |]))
+  in
+  let consumer c_ p_ =
+    let j = sym () in
+    loop_n j dim
+      (set c_
+         [| iter j |]
+         (add (get p_ [| iter j |]) (add (get x [| iter j |]) (get w [| iter j |]))))
+  in
+  let output out c_ =
+    let k = sym () in
+    loop_n k dim (set out [| iter k |] (get c_ [| iter k |]))
+  in
+  let expected = [ Array.init dim ~f:(fun i -> select_ref i +. xv.(i) +. wv.(i)) ] in
+  LL.virtualize_settings.max_inline_fanin <- 4;
+  (* One routine, both readings. *)
+  List.iter [ false; true ] ~f:(fun blends ->
+      let reading = if blends then "blended" else "short-circuiting" in
+      let gots =
+        List.map [ false; true ] ~f:(fun inverted ->
+            let label = (if blends then "blend_" else "branch_") ^ spelling inverted in
+            let p_ = mk ("sp_" ^ label) and c_ = mk ("sc_" ^ label) and out = mk ("so_" ^ label) in
+            materialize out;
+            let llc = seq (seq (producer p_ ~inverted) (consumer c_ p_)) (output out c_) in
+            let name = "vcf_arm_ties_" ^ label in
+            let o = optimize ~blends_value_selects:blends ~name llc in
+            let prefix = Printf.sprintf "select arm ties, %s, %s: " reading (spelling inverted) in
+            p
+              (prefix
+              ^
+              if blends then "the producer is charged the union of its arms (4), virtual at cap 4"
+              else "the producer is charged one arm (3), virtual at cap 4")
+              ((fanin o p_ = if blends then 4 else 3) && known_virtual o p_);
+            p
+              (prefix
+             ^ "the consumer is charged the tied arms' union with x and w (5), materialized by the \
+                fan-in cap")
+              (fanin o c_ = 5 && is_fanin_cap o c_);
+            let got = execute ~name o ~seed:(seed out) ~read:[ out ] in
+            let mat_name = name ^ "_mat" in
+            let mat =
+              optimize ~blends_value_selects:blends ~materialized:[ p_; c_ ] ~name:mat_name llc
+            in
+            let got_mat = execute ~name:mat_name mat ~seed:(seed out) ~read:[ out ] in
+            p
+              (prefix ^ "execution matches the reference and the materialized reading")
+              (same got expected && same got got_mat);
+            if not blends then (
+              LL.virtualize_settings.max_inline_fanin <- 3;
+              let own = optimize ~name:(name ^ "_own_cap") llc in
+              LL.virtualize_settings.max_inline_fanin <- 4;
+              p
+                (prefix ^ "the producer stays virtual at its own per-read cap (3)")
+                (known_virtual own p_ && fanin own p_ = 3));
+            got)
+      in
+      p
+        (Printf.sprintf "select arm ties, %s: the two spellings execute the same values" reading)
+        (match gots with [ a; b ] -> same a b | _ -> false));
+  (* Across routines: routine A commits the select's producer [Virtual] (nothing reads it there);
+     routine B's consumer replays its stored computation and is charged the same union. *)
+  List.iter [ false; true ] ~f:(fun inverted ->
+      let label = "x_" ^ spelling inverted in
+      let p_ = mk ("sp_" ^ label) and c_ = mk ("sc_" ^ label) and out = mk ("so_" ^ label) in
+      materialize out;
+      let ctx = LL.empty_optimize_ctx () in
+      let name = "vcf_arm_ties_" ^ label in
+      let o_a = optimize_in ctx ~name:(name ^ "_a") (producer p_ ~inverted) in
+      let o_b = optimize_in ctx ~name:(name ^ "_b") (seq (consumer c_ p_) (output out c_)) in
+      let prefix = Printf.sprintf "cross-routine select arm ties, %s: " (spelling inverted) in
+      p (prefix ^ "routine A commits the producer virtual") (known_virtual o_a p_);
+      p
+        (prefix
+       ^ "the consumer is charged the tied arms' union with x and w (5), materialized by the \
+          fan-in cap")
+        (fanin o_b c_ = 5 && is_fanin_cap o_b c_);
+      let got = execute ~name:(name ^ "_b") o_b ~seed:(seed out) ~read:[ out ] in
+      p (prefix ^ "execution matches the reference") (same got expected));
+  (* Successive selects: [q := where m x y + where n (x+w) v], the first select spelled either way.
+     Charged from [{m,n}]: the first select's tied alternatives are [{m,n,x}] and [{m,n,y}]; from
+     [{m,n,y}] the second select's [x+w] arm reaches 5 ([{m,n,x,y,w}], the cells with [m = 0] and [n
+     = 1]). *)
+  let q_expected =
+    [
+      Array.init dim ~f:(fun i ->
+          (if i % 2 <> 0 then xv.(i) else yv.(i))
+          +. if i / 2 % 2 <> 0 then xv.(i) +. wv.(i) else vv.(i));
+    ]
+  in
+  let q_gots =
+    List.map [ false; true ] ~f:(fun inverted ->
+        let label = "succ_" ^ spelling inverted in
+        let q = mk ("sq_" ^ label) and out = mk ("so_" ^ label) in
+        materialize out;
+        let i = sym () in
+        let idx = [| iter i |] in
+        let first =
+          if inverted then where_at (inverted_mask m idx) (get y idx) (get x idx)
+          else where_at (get m idx) (get x idx) (get y idx)
+        in
+        let second = where_at (get n idx) (add (get x idx) (get w idx)) (get v idx) in
+        let llc = seq (loop_n i dim (set q idx (add first second))) (output out q) in
+        let name = "vcf_arm_ties_" ^ label in
+        let o = optimize ~name llc in
+        let prefix = Printf.sprintf "successive select ties, %s: " (spelling inverted) in
+        p
+          (prefix ^ "the node's own charge is the widest path (5), materialized by the fan-in cap")
+          (fanin o q = 5 && is_fanin_cap o q);
+        let got = execute ~name o ~seed:(seed out) ~read:[ out ] in
+        let mat_name = name ^ "_mat" in
+        let mat = optimize ~materialized:[ q ] ~name:mat_name llc in
+        let got_mat = execute ~name:mat_name mat ~seed:(seed out) ~read:[ out ] in
+        p
+          (prefix ^ "execution matches the reference and the materialized reading")
+          (same got q_expected && same got got_mat);
+        got)
+  in
+  p "successive select ties: the two spellings execute the same values"
+    (match q_gots with [ a; b ] -> same a b | _ -> false);
+  LL.virtualize_settings.max_inline_fanin <- saved_cap
+
 let () =
   phase1 ();
   phase1b ();
@@ -2089,4 +2262,5 @@ let () =
   phase6 ();
   phase7 ();
   phase8 ();
-  phase9 ()
+  phase9 ();
+  phase10 ()

@@ -217,11 +217,36 @@ let () =
         same_loops (Some init_loops) [ (i, Some LL.Serial) ]
         && same_loops (Some rot_loops) [ (j, None); (i, Some LL.Serial) ]
     | _ -> false);
-  let set_eq got want = Set.equal got (Set.of_list (module Tn) want) in
+  (* A charge resolves to its tied widest alternatives (gh-ocannl-2098): [alts_eq] compares them as
+     a set of node sets, [set_eq] asks for exactly one. *)
+  let canonical sets = List.sort sets ~compare:Set.compare_direct in
+  let alts_eq got wants =
+    List.equal Set.equal (canonical got) (canonical (List.map wants ~f:(Set.of_list (module Tn))))
+  in
+  let set_eq got want = alts_eq got [ want ] in
+  let not_ sc = LL.Unop (Ops.Not, (sc, single)) in
   let ev sc = LL.evaluation_reads ~blends:false ~self:out sc in
   p "a Where charges its condition and its wider arm, not the union"
     (set_eq (ev (where_ (at a) (add (at b) (at c_)) (at d_))) [ a; b; c_ ]);
-  p "a Where whose arms tie charges the first" (set_eq (ev (where_ (at a) (at b) (at c_))) [ a; b ]);
+  (* gh-ocannl-2098: a tie keeps both arms' alternatives, so inverting the predicate and swapping
+     the arms charges the same; keeping the first arm made the two spellings differ. *)
+  p "a Where whose arms tie keeps both alternatives"
+    (alts_eq (ev (where_ (at a) (at b) (at c_))) [ [ a; b ]; [ a; c_ ] ]);
+  p "a predicate-inverted, arm-swapped tie keeps the same alternatives"
+    (alts_eq (ev (where_ (not_ (at a)) (at c_) (at b))) [ [ a; b ]; [ a; c_ ] ]);
+  p "a Where whose arms read the same nodes keeps one alternative"
+    (set_eq (ev (where_ (at a) (add (at b) (at c_)) (add (at c_) (at b)))) [ a; b; c_ ]);
+  p "a nested tie under the wider arm keeps both nested alternatives"
+    (alts_eq
+       (ev (where_ (at a) (where_ (at b) (at c_) (at d_)) (at e_)))
+       [ [ a; b; c_ ]; [ a; b; d_ ] ]);
+  (* gh-ocannl-2098: every tied alternative continues to the next select, so the first select's
+     spelling cannot decide the second's charge. From [{a,d}], the first select ties at [{a,d,b}]
+     and [{a,d,c}]; the second's [b+e] arm adds two nodes to [{a,d,c}] but one to [{a,d,b}]. *)
+  let successive first = add first (where_ (at d_) (add (at b) (at e_)) (c 0.)) in
+  p "successive selects charge the widest path whichever way a tie is spelled"
+    (set_eq (ev (successive (where_ (at a) (at b) (at c_)))) [ a; b; c_; d_; e_ ]
+    && set_eq (ev (successive (where_ (not_ (at a)) (at c_) (at b)))) [ a; b; c_; d_; e_ ]);
   (* gh-ocannl-1775: on a backend that blends value selects, a select [LL.speculable_select] admits
      evaluates both arms, so it is charged their union; one it does not admit still short-circuits
      there and keeps the wider arm. *)
@@ -232,22 +257,24 @@ let () =
     (set_eq (evb (where_ (at a) (add (at b) (at c_)) (add (at c_) (at b)))) [ a; b; c_ ]);
   p "a blended Where over an index condition (an inliner guard) keeps the wider arm"
     (set_eq (evb (where_ (lt (embed i) (ic 2)) (add (at b) (at c_)) (at d_))) [ b; c_ ]);
-  p "a blended Where with a gather arm keeps the wider arm"
-    (set_eq
+  (* The refused selects short-circuit: their arms tie at 2 (the gather charges its table and its
+     index), so each arm is its own alternative, never their union. *)
+  p "a blended Where with a gather arm short-circuits: one arm per alternative"
+    (alts_eq
        (evb
           (where_ (at a)
              (add (at b) (at c_))
              (gather ~tn:d_ ~idcs:[| fixed 0 |] ~dyn_axis:0 ~dyn_value:(at e_, single))))
-       [ a; b; c_ ]);
-  p "a blended Where with an integer-division arm keeps the wider arm"
-    (set_eq
+       [ [ a; b; c_ ]; [ a; d_; e_ ] ]);
+  p "a blended Where with an integer-division arm short-circuits: one arm per alternative"
+    (alts_eq
        (evb
           (LL.Ternop
              ( Ops.Where,
                (at a, single),
                (add (at b) (at c_), Ops.int32),
                (LL.Binop (Ops.Div, (at d_, Ops.int32), (at e_, Ops.int32)), Ops.int32) )))
-       [ a; b; c_ ]);
+       [ [ a; b; c_ ]; [ a; d_; e_ ] ]);
   p "nested blended selects charge every arm"
     (set_eq (evb (where_ (at a) (where_ (at b) (at c_) (at d_)) (at e_))) [ a; b; c_; d_; e_ ]);
   p "a scope body inside an arm charges the statement, not the arm"
@@ -276,6 +303,11 @@ let () =
     (set_eq (LL.resolve_charge ~blends:false ~expand charge) [ a; d_; e_ ]);
   p "a blended Where charges the union of its arms' expansions"
     (set_eq (LL.resolve_charge ~blends:true ~expand charge) [ a; b; d_; e_ ]);
+  (* gh-ocannl-2098: arms unequal on their direct loads (1 to 2) that tie once expanded keep
+     both. *)
+  let tie_after = LL.read_charge ~self:out (where_ (at a) (at d_) (add (at b) (at e_))) in
+  p "arms that tie only after expansion keep both alternatives"
+    (alts_eq (LL.resolve_charge ~blends:false ~expand tie_after) [ [ a; d_; e_ ]; [ a; b; e_ ] ]);
   p "the setter's own reads and merge-buffer reads are no contributors"
     (set_eq (ev (add (at out) (LL.Get_merge_buffer (a, [| fixed 0 |])))) []);
   p "a gather charges its index and its table"

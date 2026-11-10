@@ -200,3 +200,30 @@ inherited/local ties, reverse_reverse: routine A commits the inherited setters v
 inherited/local ties, reverse_reverse: own charge is 4, virtual at the cap: true
 inherited/local ties, reverse_reverse: downstream charge is 6, materialized by the cap: true
 inherited/local ties, reverse_reverse: execution matches the reference and materialized reading: true
+select arm ties, short-circuiting, plain: the producer is charged one arm (3), virtual at cap 4: true
+select arm ties, short-circuiting, plain: the consumer is charged the tied arms' union with x and w (5), materialized by the fan-in cap: true
+select arm ties, short-circuiting, plain: execution matches the reference and the materialized reading: true
+select arm ties, short-circuiting, plain: the producer stays virtual at its own per-read cap (3): true
+select arm ties, short-circuiting, inverted: the producer is charged one arm (3), virtual at cap 4: true
+select arm ties, short-circuiting, inverted: the consumer is charged the tied arms' union with x and w (5), materialized by the fan-in cap: true
+select arm ties, short-circuiting, inverted: execution matches the reference and the materialized reading: true
+select arm ties, short-circuiting, inverted: the producer stays virtual at its own per-read cap (3): true
+select arm ties, short-circuiting: the two spellings execute the same values: true
+select arm ties, blended, plain: the producer is charged the union of its arms (4), virtual at cap 4: true
+select arm ties, blended, plain: the consumer is charged the tied arms' union with x and w (5), materialized by the fan-in cap: true
+select arm ties, blended, plain: execution matches the reference and the materialized reading: true
+select arm ties, blended, inverted: the producer is charged the union of its arms (4), virtual at cap 4: true
+select arm ties, blended, inverted: the consumer is charged the tied arms' union with x and w (5), materialized by the fan-in cap: true
+select arm ties, blended, inverted: execution matches the reference and the materialized reading: true
+select arm ties, blended: the two spellings execute the same values: true
+cross-routine select arm ties, plain: routine A commits the producer virtual: true
+cross-routine select arm ties, plain: the consumer is charged the tied arms' union with x and w (5), materialized by the fan-in cap: true
+cross-routine select arm ties, plain: execution matches the reference: true
+cross-routine select arm ties, inverted: routine A commits the producer virtual: true
+cross-routine select arm ties, inverted: the consumer is charged the tied arms' union with x and w (5), materialized by the fan-in cap: true
+cross-routine select arm ties, inverted: execution matches the reference: true
+successive select ties, plain: the node's own charge is the widest path (5), materialized by the fan-in cap: true
+successive select ties, plain: execution matches the reference and the materialized reading: true
+successive select ties, inverted: the node's own charge is the widest path (5), materialized by the fan-in cap: true
+successive select ties, inverted: execution matches the reference and the materialized reading: true
+successive select ties: the two spellings execute the same values: true

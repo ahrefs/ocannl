@@ -1586,37 +1586,49 @@ let read_charge_of_proc ~(self : Tn.t) (code : t) : read_charge =
    -- one {!speculable_select} admits -- evaluates every arm and is charged their union. Any other
    select evaluates exactly one arm per visit, so one arm is charged, not the union -- two arms each
    within the cap must not jointly trip it: the arm whose EXPANDED reads, joined with what this
-   evaluation has already been charged, are the most, the first on a tie. Choosing after expansion
-   is the point: an arm loading fewer nodes directly can load more once a virtual dependency's
-   computation is inlined into it, and a choice made on direct loads under-counts there. The loads
-   of a level are charged before its selects, so an arm re-reading a node already loaded adds
-   nothing. Exact for a single select per path; across several, a greedy choice that still charges a
-   path some visit can run. The admission ([speculable]) is judged before inlining and at the arms'
-   own annotations, while the renderer judges it after virtualization at the select's compute
-   precision (and HIP keeps [?:] over a NaN literal): the difference errs only toward the union --
-   inlining can add an index to a condition or a gather to an arm, never remove one -- the
-   materializing direction the guard takes for undecided dependencies too. *)
-let resolve_charge ~blends ~expand (c : read_charge) : Set.M(Tn).t =
-  let rec go acc c =
-    let acc = Set.fold c.loads ~init:acc ~f:expand in
-    List.fold c.selects ~init:acc ~f:(fun acc s ->
-        if blends && s.speculable then List.fold s.arms ~init:acc ~f:go
-        else
-          List.fold s.arms ~init:None ~f:(fun best arm ->
-              let r = go acc arm in
-              match best with Some b when Set.length r <= Set.length b -> best | _ -> Some r)
-          |> Option.value ~default:acc)
+   evaluation has already been charged, are the most. Choosing after expansion is the point: an arm
+   loading fewer nodes directly can load more once a virtual dependency's computation is inlined
+   into it, and a choice made on direct loads under-counts there. The loads of a level are charged
+   before its selects, so an arm re-reading a node already loaded adds nothing.
+
+   gh-ocannl-2098: the result is EVERY tied widest alternative, not one of them. Keeping the first
+   arm on a tie let the spelling of a select decide its charge: [where m (x+y) (y+z)] and [where
+   (not m) (y+z) (x+y)] kept different contributors, so a consumer also loading [x] and [w] cost 4
+   or 5. The alternatives are a beam: each takes the level's loads, a short-circuiting select
+   continues every alternative through every arm, and only the widest survive each step,
+   deduplicated and in {!Set.compare_direct} order -- a function of the program's sets, never of arm
+   order. That also keeps a later select's charge from depending on which tie an earlier one took.
+   Each alternative is a path some visit runs, all of one cardinality (the per-read charge); exact
+   for a single select per path, across several a greedy beam. k successive tied selects can hold
+   2^k alternatives; no bound is applied (value selects, not statement guards, would have to tie).
+   The admission ([speculable]) is judged before inlining and at the arms' own annotations, while
+   the renderer judges it after virtualization at the select's compute precision (and HIP keeps [?:]
+   over a NaN literal): the difference errs only toward the union -- inlining can add an index to a
+   condition or a gather to an arm, never remove one -- the materializing direction the guard takes
+   for undecided dependencies too. *)
+let resolve_charge ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
+  let widest alts =
+    let width = List.fold alts ~init:0 ~f:(fun w s -> Int.max w (Set.length s)) in
+    List.filter alts ~f:(fun s -> Set.length s = width)
+    |> List.dedup_and_sort ~compare:Set.compare_direct
   in
-  go (Set.empty (module Tn)) c
+  let rec go alts c =
+    let alts = widest (List.map alts ~f:(fun acc -> Set.fold c.loads ~init:acc ~f:expand)) in
+    List.fold c.selects ~init:alts ~f:(fun alts s ->
+        if blends && s.speculable then List.fold s.arms ~init:alts ~f:go
+        else if List.is_empty s.arms then alts
+        else widest (List.concat_map s.arms ~f:(go alts)))
+  in
+  go [ Set.empty (module Tn) ] c
 
 (** The contributors of one evaluation of [llsc], each charged as itself: {!resolve_charge} of
-    {!read_charge}. *)
-let evaluation_reads ~blends ~(self : Tn.t) (llsc : scalar_t) : Set.M(Tn).t =
+    {!read_charge}, every tied widest alternative. *)
+let evaluation_reads ~blends ~(self : Tn.t) (llsc : scalar_t) : Set.M(Tn).t list =
   resolve_charge ~blends ~expand:Set.add (read_charge ~self llsc)
 
 (** {!evaluation_reads} of a statement: the contributors of one replay of [code], a stored
     computation of [self]. *)
-let evaluation_reads_of_proc ~blends ~(self : Tn.t) (code : t) : Set.M(Tn).t =
+let evaluation_reads_of_proc ~blends ~(self : Tn.t) (code : t) : Set.M(Tn).t list =
   resolve_charge ~blends ~expand:Set.add (read_charge_of_proc ~self code)
 
 (* Structural facts pass (gh-554): a single non-enumerating program-order traversal computing the
@@ -10790,7 +10802,8 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      setter a value select is charged as the backend renders it (gh-ocannl-1775, {!resolve_charge}
      in [max_expansion] below): the union of its arms where it blends; where it short-circuits, the
      arm whose reads are the most AFTER transitive expansion (gh-ocannl-1874) -- an arm loading one
-     virtual node can replay more than an arm loading three materialized ones.
+     virtual node can replay more than an arm loading three materialized ones; tied arms, like tied
+     setters, are each a per-read charge and unioned downstream (gh-ocannl-2098).
 
      A cycle of nodes still headed for inlining (gh-ocannl-1962) has no bottom to start from: a node
      with several setters can read, in one of them, a node reading the cells another of its setters
@@ -10889,21 +10902,24 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
     in
     (* Per-setter maximum over the per-setter charges (see [setter_reads]), each resolved under the
        backend's reading of a select with every load expanded first, so a short-circuiting select is
-       charged by its arms' expansions (gh-ocannl-1874). Keep all equal maxima so commuting
-       independent setters cannot change a downstream union (gh-ocannl-2047), while the node's own
-       charge stays per-read: the union of ties can be wider than any individual setter. *)
+       charged by its arms' expansions (gh-ocannl-1874). Keep all equal maxima -- across setters
+       (gh-ocannl-2047) and across a short-circuiting select's tied arms (gh-ocannl-2098) -- so
+       commuting independent setters or respelling a select cannot change a downstream union, while
+       the node's own charge stays per-read: the union of ties can be wider than any one of them. *)
     let max_expansion charges =
       (* An absent side contributes no loads to a local/inherited pair. *)
       List.fold charges
         ~init:(0, [ Set.empty (module Tnode) ])
         ~f:(fun (width, best) charge ->
-          let s =
+          (* Every tied widest arm alternative of the charge, all of one cardinality
+             (gh-ocannl-2098): they join the setter ties, unioned downstream like them. *)
+          let alts =
             resolve_charge ~blends:blends_value_selects
               ~expand:(expand ~inside:(fun _ -> false))
               charge
           in
-          let n = Set.length s in
-          if n > width then (n, [ s ]) else if n = width then (width, s :: best) else (width, best))
+          let n = Set.length (List.hd_exn alts) in
+          if n > width then (n, alts) else if n = width then (width, alts @ best) else (width, best))
       |> snd
     in
     List.iter components ~f:(fun members ->
