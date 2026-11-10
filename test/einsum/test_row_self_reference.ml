@@ -417,3 +417,58 @@ let () =
       Verdict.p "joint close, refused overlap rolled back: b stays unmarked"
         (not (Row.is_resolve_at_use_dim bv));
       env)
+
+(* gh-ocannl-2036: the occurs check around one row variable, by which side has the surplus. A
+   broadcast result may have more axes than its operand, so [<v>.[2] >= <v>] holds at [v = []]: it
+   defers like the shifted case, and the substituted check decides it once [v] is known. The
+   operand's surplus, [<v> >= <v>.[2]], and an equation with unequal totals, the issue's einsum [[h;
+   w].<c> = <c>] (one tensor in two slots of a spec), hold for no finite [v] and stay refused. *)
+let solved constraints =
+  match through_stages constraints Row.empty_env with
+  | _, env -> Ok env
+  | exception Row.Shape_error (msg, _) -> Error msg
+
+let self_reference = function
+  | Error msg -> String.is_prefix msg ~prefix:"Infinite number of axes by self-reference"
+  | Ok _ -> false
+
+let refused_by_dims = function
+  | Error msg -> String.is_prefix msg ~prefix:"dimension comparison for axis"
+  | Ok _ -> false
+
+let axes outcome (r : Row.t) =
+  match outcome with Ok env -> Some (show_axes env r) | Error _ -> None
+
+let () =
+  let rho = fresh_rows () in
+  let res = flanked rho ~beg:[] ~dims:[ dim 2 ] in
+  let o = solved [ ineq res rho ] in
+  Verdict.p "same variable, result trailing surplus: [2] >= [] at v = []"
+    (Option.equal String.equal (axes o res) (Some "2")
+    && Option.equal String.equal (axes o rho) (Some ""));
+  let rho = fresh_rows () in
+  let h = Row.Var (Row.get_var ()) and w = Row.Var (Row.get_var ()) in
+  let res = flanked rho ~beg:[ h; w ] ~dims:[] in
+  Verdict.p "same variable, result leading surplus (a pointwise result over [h; w].<c> >= <c>)"
+    (Result.is_ok (solved [ ineq res rho ]));
+  let rho = fresh_rows () in
+  let res = flanked rho ~beg:[] ~dims:[ dim 2 ] in
+  let o = solved [ eq rho (closed [ 2 ]); ineq res rho ] in
+  Verdict.p "same variable, result surplus, v = [2] first: [2; 2] >= [2]"
+    (Option.equal String.equal (axes o res) (Some "2,2"));
+  let rho = fresh_rows () in
+  let res = flanked rho ~beg:[] ~dims:[ dim 2 ] in
+  Verdict.p "same variable, result surplus, v = [3] later: [3; 2] >= [3] refused by its dims"
+    (refused_by_dims (solved [ ineq res rho; eq rho (closed [ 3 ]) ]));
+  let rho = fresh_rows () in
+  let res = flanked rho ~beg:[] ~dims:[ dim 2; dim 3 ]
+  and opnd = flanked rho ~beg:[] ~dims:[ dim 5 ] in
+  Verdict.p "same variable, result surplus, outer overlap 3 against 5 refused by its dims"
+    (refused_by_dims (solved [ ineq res opnd ]));
+  let rho = fresh_rows () in
+  Verdict.p "same variable, operand surplus refused by self-reference"
+    (self_reference (solved [ ineq rho (flanked rho ~beg:[] ~dims:[ dim 2 ]) ]));
+  let rho = fresh_rows () in
+  let h = Row.Var (Row.get_var ()) and w = Row.Var (Row.get_var ()) in
+  Verdict.p "same variable, equation [h; w].<c> = <c> refused by self-reference"
+    (self_reference (solved [ eq (flanked rho ~beg:[ h; w ] ~dims:[]) rho ]))
