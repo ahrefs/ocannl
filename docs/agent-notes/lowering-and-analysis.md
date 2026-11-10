@@ -752,13 +752,25 @@ files.
   that no `[n, n]` node is written after the rewrite.
 
 - The local-binder exit gate checks lexical visibility for `Declare_local` and scan-carried
-  locals (gh-ocannl-2050), using block ancestry in `Access_fold`, with whole scope-id identity.
-  A declaration inside a loop or guard cannot serve a read or write after it or in a sibling
-  block. Scalar definitions share their containing statement's block; `Local_scope` binders
-  themselves retain existence-only checking because `C_syntax.pp_local_defs` orders them.
-  This does not check declaration order or definite initialization. `local_binder_gate` pins
-  refusals and executed in-scope accesses; `local_scope_sibling_reads` protects the
-  hoisted-definition ordering boundary.
+  locals (gh-ocannl-2050), with whole scope-id identity. A binder serves an access when three
+  ancestry lists of the binder are suffixes of the access's: the gate's own block ids (pushed by
+  every statement that renders braces; scalar definitions share their containing statement's
+  block, so sibling definitions can read each other's locals), `Access_fold`'s loop binders
+  (compared by symbol), and its guard list, compared by PHYSICAL tail, since one `If` conses its
+  cond onto the shared tail and two guards testing the same scalar must still differ. Equal depth is
+  not ancestry: a scan's inits and a guard's cond sit outside the body their own loops or guards
+  resemble. A declaration inside a loop or guard therefore cannot serve a read or write after it
+  or in a sibling block. It must also come first in the walk (gh-ocannl-2100): C declares a
+  `Declare_local` where it stands, so an access ahead of it in the same block is an undeclared
+  identifier. The walk's order is the rendering's except at hoisted definitions, which render
+  ahead of their statement wherever the walk meets them, so a declaration inside a `Local_scope`
+  body that does not enclose the access is not ordered. `Local_scope` binders themselves retain
+  existence-only checking because `C_syntax.pp_local_defs` orders them. A binder's diagnostic
+  names every enclosing body, innermost first ("in a guard body inside a loop body"),
+  reconstructed from the gate's own stack of loop, scan and guard statements filtered to the ones
+  whose body `Access_fold`'s context says encloses it. This is still no definite-initialization
+  check. `local_binder_gate` pins refusals and executed in-scope accesses;
+  `local_scope_sibling_reads` protects the hoisted-definition ordering boundary.
 
 - A kept scope's assignment logging extends into `Local_scope` definitions in its RHS
   (gh-ocannl-2065): `C_syntax.pp_scalar` carries `log_set_locals` through operands and dynamic

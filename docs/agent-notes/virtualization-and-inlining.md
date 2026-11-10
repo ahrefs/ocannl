@@ -100,8 +100,10 @@ files.
   `Declare_local` or `Scan_loop` carried pair in the routine binds, naming the local, the access
   and the scope body it sits in — the hoist hole above, which used to surface as the backend
   compiler's undeclared identifier. It follows the rendering on both sides (a projection's
-  discarded operand neither reads nor binds) and says nothing about a binder in a block the access
-  cannot see, which stays the compiler's to report; `local_binder_gate` pins the refusals beside
+  discarded operand neither reads nor binds). For a `Declare_local` or scan state it also refuses
+  a binder the access cannot see or that renders after it (gh-ocannl-2050, gh-ocannl-2100; the
+  ancestry rule is in lowering-and-analysis.md); a `Local_scope` binder is held to existence only,
+  since `pp_local_defs` decides its order; `local_binder_gate` pins the refusals beside
   the same routines bound and executed.
   `Low_level.validate_scope_bodies` enforces it at BOTH ends of the pipeline: `optimize_proc` on the
   way in (ahead of the analysis cache, so a digest hit cannot skip it — and before the hoist can

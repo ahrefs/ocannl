@@ -1,3 +1,23 @@
+lbg_order: the compile gate refuses it: true
+lbg_order: the refusal names the access, the local and where it sits: true
+lbg_order_write: the compile gate refuses it: true
+lbg_order_write: the refusal names the access, the local and where it sits: true
+lbg_order_outer: the compile gate refuses it: true
+lbg_order_outer: the refusal names the access, the local and where it sits: true
+lbg_order_declared: the gate leaves it alone, and it runs: true
+lbg_order_hoisted: the gate leaves it alone, and it runs: true
+lbg_order_loop: the compile gate refuses it: true
+lbg_order_loop: the refusal names the access, the local and where it sits: true
+lbg_order_loop_write: the compile gate refuses it: true
+lbg_order_loop_write: the refusal names the access, the local and where it sits: true
+lbg_order_loop_outer: the compile gate refuses it: true
+lbg_order_loop_outer: the refusal names the access, the local and where it sits: true
+lbg_order_loop_declared: the gate leaves it alone, and it runs: true
+lbg_order_loop_hoisted: the gate leaves it alone, and it runs: true
+lbg_guard_in_loop: the compile gate refuses it: true
+lbg_guard_in_loop: the refusal names the access, the local and where it sits: true
+lbg_loop_in_guard: the compile gate refuses it: true
+lbg_loop_in_guard: the refusal names the access, the local and where it sits: true
 lbg_loop_escape: the compile gate refuses it: true
 lbg_loop_escape: the refusal names the access, the local and where it sits: true
 lbg_loop_escape_write: the compile gate refuses it: true

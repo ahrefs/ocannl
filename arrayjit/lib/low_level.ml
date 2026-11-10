@@ -7316,8 +7316,14 @@ let validate_scope_bodies (llc : t) : unit =
     [Declare_local] and scan-carried locals additionally require lexical visibility
     (gh-ocannl-2050). Their enclosing statement blocks must enclose the access too. [Local_scope]
     definitions retain the existence-only rule: [C_syntax.pp_local_defs] orders those definitions,
-    and replicating that order here caused false rejections (gh-ocannl-584). This is a visibility
-    check, not a definite-initialization or declaration-order check.
+    and replicating that order here caused false rejections (gh-ocannl-584).
+
+    A visible explicit declaration must also precede the access in rendering order (gh-ocannl-2100):
+    C declares a [Declare_local] where it stands, so a read or write ahead of it in the same block
+    names an identifier not yet declared. The walk's order is the rendering's except across hoisted
+    definitions: a declaration inside a [Local_scope] body that does not enclose the access renders
+    with that definition, ahead of the statement, wherever the walk met it, so it keeps the
+    visibility-only rule. This is still not a definite-initialization check.
 
     Both sides follow the rendering: a projection's discarded operand is skipped, since
     [C_syntax.pp_scalar] never renders it -- a read there strands nothing, and a binder there
@@ -7356,25 +7362,43 @@ let unbound_local_violation (llc : t) : string option =
      headers contain loops/guards of their own. Keep the enclosing binders, not their depths. Guard
      lists share their tails in Access_fold: physical ancestry distinguishes separate guards even
      when they test the very same scalar. *)
-  let position ctx = (!blocks, ctx.loops, ctx.guards) in
+  (* Innermost first: the scopes whose bodies enclose the walk's position. *)
+  let enclosing = ref [] in
+  (* The walk's order, shared by binders and accesses (gh-ocannl-2100). *)
+  let next_order = ref 0 in
+  let order () =
+    Int.incr next_order;
+    !next_order
+  in
+  let position ctx = (!blocks, ctx.loops, ctx.guards, List.map !enclosing ~f:fst, order ()) in
   let rec has_guard_tail guards ~tail =
     phys_equal guards tail
     || match guards with [] -> false | _ :: rest -> has_guard_tail rest ~tail
   in
+  (* Innermost first: every loop, scan and guard statement the walk is inside, whether at its body
+     or at its header. [bind] keeps the ones whose body encloses the binder -- its [ctx] lists those
+     -- which recovers the nesting order the separate [ctx.loops] and [ctx.guards] lists lose. *)
+  let nest = ref [] in
   let bind ctx ~by id =
     Hash_set.add bound id;
+    let in_body = function
+      | `Loop s | `Scan s ->
+          List.exists ctx.loops ~f:(fun (b : binder) -> Indexing.equal_symbol b.index s)
+      | `Guard cond -> List.exists ctx.guards ~f:(phys_equal cond)
+    in
+    let body = function
+      | `Loop _ -> "a loop body"
+      | `Scan _ -> "a scan body"
+      | `Guard _ -> "a guard body"
+    in
     let where =
-      match (ctx.loops, ctx.guards) with
-      | { axis = None; _ } :: _, _ -> "in a scan body"
-      | _ :: _, _ -> "in a loop body"
-      | [], _ :: _ -> "in a guard body"
-      | [], [] when ctx.scope_depth > 0 -> "in a Local_scope body"
-      | [], [] -> "at statement level"
+      match List.filter !nest ~f:in_body with
+      | [] when ctx.scope_depth > 0 -> "in a Local_scope body"
+      | [] -> "at statement level"
+      | bodies -> "in " ^ String.concat ~sep:" inside " (List.map bodies ~f:body)
     in
     Hashtbl.add_multi lexical ~key:id ~data:(position ctx, by ^ " " ^ where)
   in
-  (* Innermost first: the scopes whose bodies enclose the walk's position. *)
-  let enclosing = ref [] in
   let accesses = ref [] in
   let access ctx what id = accesses := (what, id, List.hd !enclosing, position ctx) :: !accesses in
   let statement ctx () stmt =
@@ -7385,17 +7409,27 @@ let unbound_local_violation (llc : t) : string option =
     | Declare_local { id; _ } ->
         bind ctx ~by:"Declare_local" id;
         Continue ()
-    | Scan_loop { carried; _ } ->
+    | Scan_loop { carried; index; _ } ->
         List.iter carried ~f:(fun c ->
             bind ctx ~by:"Scan_loop carried pair" c.prev;
             bind ctx ~by:"Scan_loop carried pair" c.next);
+        nest := `Scan index :: !nest;
+        Continue ()
+    | For_loop { index; _ } ->
+        nest := `Loop index :: !nest;
+        Continue ()
+    | If { cond; _ } ->
+        nest := `Guard cond :: !nest;
         Continue ()
     | Set_local (id, _) ->
         access ctx "Set_local" id;
         Continue ()
     | _ -> Continue ()
   in
-  let after_statement _ () stmt = if opens_block stmt then blocks := List.tl_exn !blocks in
+  let after_statement _ () stmt =
+    if opens_block stmt then blocks := List.tl_exn !blocks;
+    match stmt with For_loop _ | Scan_loop _ | If _ -> nest := List.tl_exn !nest | _ -> ()
+  in
   let scalar ctx () = function
     | Local_scope { id; mint; _ } ->
         Hash_set.add bound id;
@@ -7417,16 +7451,27 @@ let unbound_local_violation (llc : t) : string option =
   let local id = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
   (* In program order, so the message names the first stranded access. *)
   List.find_map (List.rev !accesses)
-    ~f:(fun (what, id, scope, (access_blocks, access_loops, access_guards)) ->
-      let visible =
-        Hash_set.mem hoisted id
-        || List.exists (Hashtbl.find_multi lexical id)
-             ~f:(fun ((declaration_blocks, declaration_loops, declaration_guards), _) ->
-               List.is_suffix access_blocks ~suffix:declaration_blocks ~equal:Int.equal
-               && List.is_suffix access_loops ~suffix:declaration_loops ~equal:(fun a b ->
-                   Indexing.equal_symbol a.index b.index)
-               && has_guard_tail access_guards ~tail:declaration_guards)
+    ~f:(fun
+        (what, id, scope, (access_blocks, access_loops, access_guards, access_scopes, access_order))
+      ->
+      let declarations = Hashtbl.find_multi lexical id in
+      let in_scope ((declaration_blocks, declaration_loops, declaration_guards, _, _), _) =
+        List.is_suffix access_blocks ~suffix:declaration_blocks ~equal:Int.equal
+        && List.is_suffix access_loops ~suffix:declaration_loops ~equal:(fun a b ->
+            Indexing.equal_symbol a.index b.index)
+        && has_guard_tail access_guards ~tail:declaration_guards
       in
+      (* gh-ocannl-2100: a declaration in a hoisted definition the access is outside of renders
+         ahead of the access's statement whatever the walk's order, so only the others are
+         ordered. *)
+      let precedes ((_, _, _, declaration_scopes, declaration_order), _) =
+        declaration_order < access_order
+        || not (List.is_suffix access_scopes ~suffix:declaration_scopes ~equal:equal_scope_id)
+      in
+      let visible =
+        Hash_set.mem hoisted id || List.exists declarations ~f:(fun d -> in_scope d && precedes d)
+      in
+      let found () = String.concat ~sep:"; " (List.map declarations ~f:snd) in
       if visible then None
       else
         let where =
@@ -7442,12 +7487,16 @@ let unbound_local_violation (llc : t) : string option =
           |> Option.value_map ~default:"" ~f:(fun b ->
               "; " ^ local b ^ " shares its integer but names another node, a different local")
         in
-        if Hash_set.mem bound id then
+        if List.exists declarations ~f:in_scope then
           Some
             ("a " ^ what ^ " of " ^ local id ^ " " ^ where
-           ^ " accesses a local outside its lexical scope; found binder: "
-            ^ String.concat ~sep:"; " (List.map (Hashtbl.find_multi lexical id) ~f:snd)
-            ^ " (gh-ocannl-2050)")
+           ^ " accesses a local ahead of its declaration: the binder in scope of it renders after \
+              it; found binder: " ^ found () ^ " (gh-ocannl-2100)")
+        else if Hash_set.mem bound id then
+          Some
+            ("a " ^ what ^ " of " ^ local id ^ " " ^ where
+           ^ " accesses a local outside its lexical scope; found binder: " ^ found ()
+           ^ " (gh-ocannl-2050)")
         else
           Some
             ("a " ^ what ^ " of " ^ local id ^ " " ^ where
