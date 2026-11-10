@@ -82,6 +82,11 @@ let run entry spec lexbuf =
   Lexer.buffered_token := None;
   entry (Lexer.token (is_multichar spec)) lexbuf
 
+let multichar_note ~what ~written =
+  Printf.sprintf
+    "; a multi-letter %s needs multichar mode: write `%s` and separate the other axes with commas"
+    what written
+
 let parse entry spec =
   let multichar = is_multichar spec in
   let lexbuf = Lexing.from_string spec in
@@ -99,11 +104,7 @@ let parse entry spec =
                also switch the spec to multichar mode: the comma in [..name,..] does. *)
             let multichar_note =
               if multichar || String.length name = 1 then ""
-              else
-                Printf.sprintf
-                  "; a multi-letter name needs multichar mode: write `..%s,..` and separate the \
-                   other axes with commas"
-                  name
+              else multichar_note ~what:"name" ~written:(".." ^ name ^ ",..")
             in
             Printf.sprintf
               "; hint: `...` is the unnamed context ellipsis; a named row variable is written \

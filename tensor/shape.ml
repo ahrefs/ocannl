@@ -1351,6 +1351,24 @@ let bind_ref ~for_projections ~error_shapes (delayed_ref : delayed_var_ref) (bin
   | None, None -> ());
   constraints
 
+(** The hint for a capture label a single-char spec split (gh-ocannl-2092): there every character is
+    an axis of its own -- a label, or a digit's fixed index -- so a multi-letter label is never one
+    of the spec's labels. The test is on the spec's labels, not on its mode: the ppx renders every
+    literal spec in comma-separated form, so the spec reaching here reads as multichar whatever the
+    user wrote. A label with a character the spec does not hold gets no hint. *)
+let split_capture_label_hint ~spec ~dim_var_env label =
+  let is_axis c =
+    if Char.is_digit c then String.mem spec c else Hashtbl.mem dim_var_env (String.of_char c)
+  in
+  if
+    String.length label > 1
+    && String.for_all label ~f:is_axis
+    && String.exists label ~f:(fun c -> not (Char.is_digit c))
+  then
+    "; hint: the spec has an axis for each character of `" ^ label ^ "`"
+    ^ Einsum_parser.multichar_note ~what:"capture label" ~written:(label ^ ",")
+  else ""
+
 (** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
     [dim_var_env]/[row_var_env]. Returns the constraints the binding implies
     ({!binding_constraints}). Used by the unary-permute, binary-einsum, block, and ternary-einsum
@@ -1393,7 +1411,8 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
           | None ->
               raise
               @@ Row.Shape_error
-                   ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec,
+                   ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec
+                     ^ split_capture_label_hint ~spec ~dim_var_env label,
                      [ Shape_mismatch error_shapes ] )))
 
 (** Refuses a padded ([=+]) window in the result slot of an einsum spec (gh-ocannl-1550). A padded
