@@ -440,10 +440,34 @@ files.
   the `Binop` and `Unop` folds, a fixed index (which converts from an integer, modularly, until it
   folds), and the constants `fp_algebra_step` mints, whose `Sub(0, x)` to `Mul(-1, x)` was the route
   from `%op`: `0. - a` over an unsigned node. An integer `Div` also needs exact divisibility: a
-  double quotient can round onto the next integer. An out-of-range literal as written is not
-  covered, and signed overflow stays C's. `integer_promotion_folds` runs each shape as written and
-  with its literals in nodes, and pins a structural claim on `simplify_llc`, since what a compiler
-  does with an undefined conversion is no oracle.
+  double quotient can round onto the next integer. An out-of-range literal as written is refused
+  (next bullet), and signed overflow stays C's. `integer_promotion_folds` runs each shape as written
+  and with its literals in nodes, and pins a structural claim on `simplify_llc`, since what a
+  compiler does with an undefined conversion is no oracle.
+- **A literal an integer slot cannot hold is refused at lowering, judged at the slot's precision**
+  (gh-ocannl-2085). `simplify_llc`'s tail walk raises `Low_level.Unrepresentable_integer_constant
+  { tn; scope; prec; value }` for a `Constant` whose rendering precision is a scalar integer one and
+  which is not `Ops.integer_constant_converts`: finite, with its truncation toward zero in range (so
+  byte `255.75` and unsigned `-0.75` pass; 2^63 and 2^64 do not). It runs on every call, whatever
+  `check_half_prec_constants_cutoff` says, and before `hosted_constant_inits_to_link_time`, which
+  would otherwise move a constant store to a host fill. The precision is the one `C_syntax`
+  renders the constant at, not the destination's: a statement's value at its destination's
+  storage, homogeneous operands and `Where` arms at the enclosing slot, a `Where` condition, a
+  heterogeneous or `Round_prec` operand, an `If` condition and a dynamic index at their own
+  annotation. So a float `300.` compared inside
+  a byte store passes, and a float-annotated `300.` in a byte `Add` does not. `tn` is the
+  statement's destination, through inlined scopes; `scope` is the innermost scope, which at byte
+  and uint16 is the inlined literal's own node (a promoted integer scope does not collapse). User
+  routes it closes: a literal in `%op`, `where … Nn_blocks.default_mask_fill` at an integer
+  precision (it read 0 in the masked cell on cc), and the library's `~-` over an unsigned tensor
+  (`number (-1.) *. t`). `Constant_bits` and fixed indices convert from integers, defined in C, so
+  are not judged. The slot-precision threading is the fp16 check's (gh-ocannl-2112), shared by the
+  one walk; the integer check runs first, so a byte constant past the fp16 cutoff gets the typed
+  refusal. A uint4x32 operand (Threefry, the uniform-lane conversions) is evaluated at its own
+  uint4x32 annotation, as `loop_scalar` does, and uint4x32 is no scalar integer precision, so it is
+  never judged. `test/operations/integer_constant_range` compiles the refused cases without running them
+  (an undefined conversion is no oracle, and on Metal one stalled a kernel) and runs the accepted
+  endpoints on every backend.
 - **An integer table arm is integer-TYPED, in its operands' common type** (gh-ocannl-1883). cc's
   integer `Max`/`Min`/`Relu`/`Satur01` were `fmax`/`fmin` calls, `Trunc` a `truncf` and `Not` a
   `? 1.0 : 0.0`; CUDA's and HIP's `Relu`/`Satur01`/`Trunc`/`Not`, and Metal's `Trunc`, `Satur01`

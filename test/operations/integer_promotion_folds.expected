@@ -471,6 +471,12 @@ byte 2.5 + 3.5: with each literal in a node it gives the worked value: true
 byte 2.5 + 3.5: no constant is left outside the slot's range: true
 byte 2.5 + 3.5: simplifying again changes nothing: true
 byte 2.5 + 3.5: the operator stays: true
+byte 255.75 - a: with its literals as written it gives the worked value: true
+byte 255.75 - a: with each literal in a node it gives the worked value: true
+byte -0.75 + a: with its literals as written it gives the worked value: true
+byte -0.75 + a: with each literal in a node it gives the worked value: true
+uint32 -0.75 + a: with its literals as written it gives the worked value: true
+uint32 -0.75 + a: with each literal in a node it gives the worked value: true
 byte %op 0. - a is a negation: true
 byte %op a + 3. - 5. is a shift: true
 byte %op 3. - 5. at the node's precision: true

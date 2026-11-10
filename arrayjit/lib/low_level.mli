@@ -1855,7 +1855,34 @@ val simplify_llc : Indexing.static_symbol list -> t -> t
     a [?prelowered] routine's request on a load still reaches {!validate_operand_precisions} at
     codegen. The licensed floating-point algebra runs once, on the raw lowering, in the rewrite tier
     member [Fp_algebra] (gh-ocannl-998), so neither this pass nor the schedule transforms that rerun
-    it can contract or reassociate across an inlining boundary. *)
+    it can contract or reassociate across an inlining boundary.
+
+    It also refuses, on every call and whatever [check_half_prec_constants_cutoff] says, a
+    [Constant] whose rendering precision is a scalar integer one but whose value converts there with
+    no defined meaning ({!Ops.integer_constant_converts}), raising
+    {!Unrepresentable_integer_constant}. The rendering precision is the slot's, as [C_syntax]
+    renders it: a statement's value at its destination's storage precision, a homogeneous operand
+    and a [Where] arm at the enclosing slot's, a [Where] condition, a heterogeneous operand, a
+    [Round_prec] operand, an [If] condition and a dynamic index at their own annotation -- the
+    discipline [simplify_llc] evaluates under, which the fp16 check shares (gh-ocannl-2112,
+    gh-ocannl-2085). *)
+
+exception
+  Unrepresentable_integer_constant of {
+    tn : Tnode.t option;
+        (** The node the constant's value feeds: the destination of the statement it sits in,
+            through any inlined computations, the node a user acts on; [None] in an [If] condition,
+            which feeds no node. *)
+    scope : Tnode.t option;
+        (** The innermost inlined computation ([Local_scope]) the constant sits in, if any: an
+            inlined literal is one at byte and uint16, whose scopes stay. *)
+    prec : Ops.prec;  (** The scalar integer precision the constant would render at. *)
+    value : float;
+  }
+(** A floating constant at an integer slot that is not finite, or whose truncation toward zero is
+    outside the precision's range: C's conversion is undefined there, and the backends drop the
+    store or produce garbage (gh-ocannl-2085). Raised by {!simplify_llc}, hence at lowering, before
+    any code is generated; a printer is registered. *)
 
 val without_node_bounds : (unit -> 'a) -> 'a
 (** Runs the thunk with interval folding ({!simplify_llc} and the transforms' trailing

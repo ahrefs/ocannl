@@ -307,6 +307,14 @@ let integer_value_fits prec c =
       Float.(lo <= c)
       && match prec with Int64_prec _ | Uint64_prec _ -> Float.(c < hi) | _ -> Float.(c <= hi))
 
+(** Whether C's conversion of the floating constant [c] to the scalar integer precision [prec] is
+    defined: [c] is finite and its truncation toward zero fits [prec]'s range, so byte [255.75]
+    converts to 255 and unsigned [-0.75] to 0, while [300.], [-1.] at an unsigned precision, either
+    infinity and NaN do not (C11 6.3.1.4: the behaviour is undefined, and clang drops the store,
+    gh-ocannl-2085). False at every precision that is not a scalar integer one. *)
+let integer_constant_converts prec c =
+  Float.is_finite c && integer_value_fits prec (Float.round_towards_zero c)
+
 (** Whether C's integer promotion evaluates an operator at this precision in [int], so that its
     result can leave the precision's range before anything converts it back (gh-ocannl-1884). Every
     backend's dialect promotes as C does, with a 32-bit [int]. *)

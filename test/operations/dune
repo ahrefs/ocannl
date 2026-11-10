@@ -14439,6 +14439,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-2085: a constant an integer slot cannot hold is refused at lowering.
+
+(test
+ (name integer_constant_range)
+ (package neural_nets_lib)
+ (modules integer_constant_range)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ;; gh-ocannl-2081: a Max/Min reduction's neutral element, at each integer precision.
 
 (test

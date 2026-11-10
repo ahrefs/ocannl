@@ -1634,7 +1634,7 @@ module Impl = struct
          their floating spelling; the shared 2^53 fold bound stays unchanged. *)
       let integer = Float.round_towards_zero c in
       if
-        Ops.integer_value_fits prec integer
+        Ops.integer_constant_converts prec c
         && ((not (Float.is_integer c)) || Float.(abs c > 16777216.))
       then
         if Float.(integer = -9223372036854775808.) then "(-9223372036854775807L - 1L)"
