@@ -31,7 +31,8 @@ let test_variable_capture =
     let __ocannl_body x =
       let a = Shape.get_variable_ref "a" in
       let b = Shape.get_variable_ref "b" in
-      Shape.set_equal a b;
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> Shape.set_equal a b);
       einsum1
         ?label:(Some
                   (List.concat
@@ -57,7 +58,8 @@ let test_mixed =
       let b =
         [%ocaml.error
           "ppx_ocannl: name clash for inline definition or variable capture 'b' - the name is already defined"] in
-      Shape.set_equal a b;
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> Shape.set_equal a b);
       einsum
         ?label:(Some
                   (List.concat

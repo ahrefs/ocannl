@@ -83,7 +83,8 @@ let field_in_nested =
           () in
       let __ocannl_body x =
         let g n y = (+) ?label:(Some ["g"]) y b in
-        g (TDSL.number (Float.of_int 3)) x in
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () -> g (TDSL.number (Float.of_int 3)) x) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"field_in_nested" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in

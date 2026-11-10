@@ -606,7 +606,7 @@ The mode-independent facts are claimed:
 - every mode accepts and refuses the same programs;
 - no error surfaces later under a scheme.
 
-Three kinds of error move earlier. An argument-independent contradiction moves to the definition, or to the first application for a function without a `()` stage. So does a window kernel nothing can size, which no contradiction shows: the spec and its captures decide it. An argument-dependent error is reported at the application before the body runs, naming the function and the argument. That includes a concatenation that Stage 1 alone leaves to the closure without schemes.
+Three kinds of error move earlier. An argument-independent contradiction moves to the definition, or to the first application for a function without a `()` stage. So does a window kernel nothing can size, which no contradiction shows: the spec and its captures decide it. An argument-dependent error is reported at the application before the body runs, naming the function and the argument, and, when the application is evaluated inside one written in `%op` code, the file and line of the innermost such (gh-ocannl-2007). That includes a concatenation that Stage 1 alone leaves to the closure without schemes.
 
 The classes that stay late all need what a trace deliberately does not run, namely the closing stages. The trace validates at Stage 1 only, because the closing stages would default the generic arguments.
 

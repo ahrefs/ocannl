@@ -28,10 +28,10 @@ Shape_error: applying the shape scheme residual_block to y: dimension comparison
     from residual_block (output) with n'1 (output): pointwise_binary
     from w (input) with n'1 (output): compose
 --- the same layer under an opted-out function: the layer is named
-Shape_error: applying the shape scheme mlp_layer to y: dimension comparison for axis: mismatch
+Shape_error: applying the shape scheme mlp_layer to y in the %op application at test/operations/scheme_error_rendering.ml:30: dimension comparison for axis: mismatch
   conflicting sizes: 4 vs 3
   failed constraint: 4 ⊑ 3
-    from mlp_layer (output) with y (output): the shape scheme mlp_layer applied to y
+    from mlp_layer (output) with y (output): the shape scheme mlp_layer applied to y in the %op application at test/operations/scheme_error_rendering.ml:30
     from w (input) with n'1 (output): compose
 --- an argument with too few axes for the spec
 Shape_error: applying the shape scheme two_axes to x: Mismatching number of axes
