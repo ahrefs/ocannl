@@ -88,7 +88,8 @@ files.
   expression. A new builder that splices several effectful expressions into one literal or
   argument list owes `in_source_order`.
 - Application sites (gh-ocannl-2007): the generic application arm of `translate` (and the `|>`
-  arm) wraps every application but a DSL operator's (`is_primitive_op`/`is_operator` heads) as
+  arm) wraps every application but a DSL operator's (`is_primitive_op`/`is_operator` heads, and
+  the named einsum forms of `Einsum_parser.named_spec_functions`, which spell them) as
   `Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> app)`, which a scheme check inside it
   reads to name `<file>:<line>`. `__POS__` is filled in by the compiler at the application's
   location, so the `test/ppx/*_expected.ml` goldens spell no line. An arm that reads the applied
