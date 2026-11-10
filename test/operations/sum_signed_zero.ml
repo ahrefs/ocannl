@@ -121,10 +121,11 @@ let () =
   p "the clearing matmul's other rows are not all zeros" (nonvacuous got);
   (* The control: the same products, accumulated into a target preloaded with [-0]. *)
   let ma, mb = operands "ssz_m1" in
+  (* Data-backed, not a literal: a routine writing a literal is refused (gh-ocannl-2104). *)
   let d =
-    TDSL.ndarray
-      (Array.create ~len:(m_ext * n_ext) (-0.))
-      ~label:[ "ssz_d" ] ~input_dims:[ n_ext ] ~output_dims:[ m_ext ] ()
+    NTDSL.init ~l:"ssz_d" ~prec:!Tensor.default_value_prec ~i:[ n_ext ] ~o:[ m_ext ]
+      ~f:(fun _ -> -0.)
+      ()
   in
   let ctx = run ~name:"ssz_accumulate" [%cd d =+ ma * mb ~logic:"@"] in
   in_leg ~leg:sign_leg

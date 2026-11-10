@@ -14524,6 +14524,22 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2104: Context.compile refuses a routine write to a host-constant literal, whose
+; hoisted or pooled readers would read its registered values.
+
+(test
+ (name routine_write_literal)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (run %{test} --ocannl_limit_constant_fill_size=16))
+ (modules routine_write_literal)
+ (libraries base ocannl stdio arrayjit.verdict ll_test)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1998: sgd_update refuses a stepped node the loss's forward recomputes, not one the
 ; forward builds on.
 

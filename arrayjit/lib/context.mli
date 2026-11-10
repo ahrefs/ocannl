@@ -276,7 +276,14 @@ val compile :
     initializer (which owns no fragment) and a gradient's zeroing do not count. A slice takes after
     its parent: a write through a view of data reaches the parent and stays, while over a
     fetch-defined parent it is undone like any other. Siblings never collide. A host write, once the
-    forward is compiled, is refused by the same rule at {!from_host}. *)
+    forward is compiled, is refused by the same rule at {!from_host}.
+
+    And refuses a [comp] writing a literal with constant host values ([Tnode.known_host_constant]: a
+    [Tensor.ndarray] literal or a number), directly or through a slice view of it, at any size and
+    in any lineage (gh-ocannl-2104): hoisted packing and link-time initialization read the literal's
+    registered values, so a routine reading it would silently ignore the write. The literal's own
+    forward fetch is not such a write. The host-side twin is {!from_host}'s gh-ocannl-2021 refusal.
+*)
 
 type retained
 (** Compiled code that a successful {!compile_outcome} handed to its [retain] callback: the

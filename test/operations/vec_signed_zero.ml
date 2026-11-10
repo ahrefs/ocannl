@@ -160,8 +160,11 @@ let () =
        let dv = Array.create ~len:(mi * mj) (-0.0) in
        let ma = TDSL.ndarray av ~label:[ "nz_a" ] ~input_dims:[ mk ] ~output_dims:[ mi ] () in
        let mb = TDSL.ndarray bv ~label:[ "nz_b" ] ~input_dims:[ mj ] ~output_dims:[ mk ] () in
+       (* Data-backed, not a literal: a routine writing a literal is refused (gh-ocannl-2104). *)
        let accumulator tag =
-         TDSL.ndarray dv ~label:[ tag ] ~input_dims:[ mj ] ~output_dims:[ mi ] ()
+         NTDSL.init ~l:tag ~prec:!Tensor.default_value_prec ~i:[ mj ] ~o:[ mi ]
+           ~f:(fun idcs -> dv.((idcs.(0) * mj) + idcs.(1)))
+           ()
        in
        let d_twin = accumulator "nz_d_twin" in
        let ctx_twin =

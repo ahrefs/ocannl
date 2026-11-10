@@ -904,6 +904,42 @@ let check_no_fetch_overwrite ?name ctx (comp : Asgns.comp) =
             (match name with None -> "" | Some n -> " (" ^ n ^ ")")
             (String.concat ~sep:"; " conflicts))
 
+(* gh-ocannl-2104: {!check_host_write_lasts}'s gh-ocannl-2021 rule for a routine write. A literal's
+   values are declared forever equal to its registered host-init data ([Tn.known_host_constant]),
+   and every consumer of that contract reads the registered values, not the buffer a routine wrote:
+   a hoisted [Stage] packs them at link time ([Schedule.hoistable_constant]), and a materialized
+   small literal self-initializes from them at link time
+   ([Low_level.hosted_constant_inits_to_link_time]). So a write other than the literal's own fetch
+   -- an [Accum_op], [Set_vec_unop] or [Rev_sides] target, directly or through a slice view of it --
+   is refused, at any size, in any lineage, before lowering. A small literal whose forward the same
+   computation carries was already refused as fetch-defined (gh-ocannl-1876); this check runs first,
+   so a literal is named as one at every size. *)
+let check_no_literal_write ?name (comp : Asgns.comp) =
+  let rec literal tn =
+    if Tn.known_host_constant tn then Some tn
+    else Option.bind (Tn.slice_of tn) ~f:(fun (parent, _) -> literal parent)
+  in
+  let conflicts =
+    Set.to_list (overwritten comp)
+    |> List.filter_map ~f:(fun tn ->
+        Option.map (literal tn) ~f:(fun lit ->
+            Printf.sprintf "%s%s" (Tn.debug_name tn)
+              (if Tn.equal lit tn then "" else Printf.sprintf " (a view of %s)" (Tn.debug_name lit))))
+  in
+  if not (List.is_empty conflicts) then
+    raise
+    @@ Utils.User_error
+         (Printf.sprintf
+            "Context.compile%s: this computation writes a literal with constant host values \
+             (gh-ocannl-2104): %s. A literal's values are declared fixed at construction: a \
+             hoisted schedule reads its registered values, so a routine reading it would silently \
+             ignore the write, regardless of limit_constant_fill_size. Build a node that is to be \
+             updated as mutable data, with Operation.init (~grad_spec:Require_grad for an \
+             optimized input) or Train.host_scalar, use TDSL.wrap or TDSL.rebatch for ndarray \
+             data, or make it a parameter (TDSL.param ~param_init:(TDSL.ndarray ...))."
+            (match name with None -> "" | Some n -> " (" ^ n ^ ")")
+            (String.concat ~sep:"; " conflicts))
+
 (* gh-ocannl-1724: every tensor-generated fragment is compiled into exactly one routine of a
    lineage. A backprop fragment is a [+=], so a second copy double-counts a gradient; a second
    forward copy is a reuse the caller meant as [Context.run] of the first routine. Siblings
@@ -1153,6 +1189,7 @@ let compile_outcome ?name ?lowered_transform ?prelowered ?reuse ~provenance ?can
   (* Likewise lineage-wide, and after the gate, so a discarded node is reported as such. *)
   check_no_duplicate_fragments ?name ctx comp;
   check_shared_gradient_reset ?name ctx comp;
+  check_no_literal_write ?name comp;
   check_no_fetch_overwrite ?name ctx comp;
   (* Compile and link on the backend context; only backend-independent routine components (and the
      rewrapped context) escape the dispatch. Unwrapped rather than through [Backends.with_backend]

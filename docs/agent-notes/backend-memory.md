@@ -198,9 +198,10 @@ files.
   their own: a `set_values`, a writer routine or a device copy in one root never reaches another,
   and a copy between roots is a real transfer. Before, every root bound one device-wide buffer for
   every constant while keeping its own ledger, so one root's write was a silent wrong value in the
-  other (then refused as stale). The literal class keeps that hazard, since literals are writable
-  through device copies and routines (host writes to marked ndarray literals are refused,
-  gh-ocannl-2021; parameterization clears the initializer's literal marker): every write into a `Shared` buffer mints a token (`Context.shared_write_tokens`,
+  other (then refused as stale). The literal class keeps that hazard, since `Host_inits` nodes stay
+  writable through device copies, and an unmarked one (a broadcast `term_init`) through routines
+  (host writes to marked ndarray literals are refused, gh-ocannl-2021, and routine writes to any
+  host-constant literal, gh-ocannl-2104; parameterization clears the initializer's literal marker): every write into a `Shared` buffer mints a token (`Context.shared_write_tokens`,
   plus the writer ledger's `observed_tokens`); `run` refuses a `routine.shared_reads` member whose
   current token its ledger did not leave or adopt, a no-op copy adopts only from a source that is
   current, and `rollback_execution` restores both tokens while nothing wrote since. Ordering needs
