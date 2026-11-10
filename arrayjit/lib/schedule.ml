@@ -82,6 +82,12 @@ let init_last_first n ~f =
   let rec loop i acc = if i <= 0 then acc else loop (i - 1) (f (i - 1) :: acc) in
   loop n []
 
+(* gh-ocannl-2099: the most body copies one materializing [Unroll] may build. A fixed constant, not
+   a configuration key: what it guards is a request that would exhaust memory or time (a huge but
+   representable range), not a tuning choice -- the autotune menu proposes materializing unrolls of
+   extent at most 8 and register tiles are a few elements wide. Refused before any copy is built. *)
+let max_unroll_copies = 4096
+
 let split ~axis ~factor ~outer ~inner =
   let outer_index = Indexing.get_symbol () in
   let inner_index = Indexing.get_symbol () in
@@ -1043,8 +1049,15 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
           if fc.to_ < fc.from_ then Noop
           else
             let span = fc.to_ - fc.from_ in
-            if span < 0 || span = Int.max_value then
-              refuse "Schedule.Unroll: trip count exceeds the integer range";
+            if span < 0 then refuse "Schedule.Unroll: trip count exceeds the integer range";
+            (* gh-ocannl-2099: bound the copies before building any of them. [span] is below
+               [max_int] here, so [span + 1] cannot wrap. *)
+            if span >= max_unroll_copies then
+              refuse
+                (Printf.sprintf
+                   "Schedule.Unroll: trip count %s exceeds the materialization budget of %d copies"
+                   (if span = Int.max_value then "beyond max_int" else Int.to_string (span + 1))
+                   max_unroll_copies);
             let count = span + 1 in
             let copy k body =
               refresh_scopes

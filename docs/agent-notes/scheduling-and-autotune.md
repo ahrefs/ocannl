@@ -1724,6 +1724,10 @@ files.
   zero-copy accumulation must not mint an accumulator load/store. The pure-IR cases in
   `schedule_refusal_classification` cover ordinary stores, mintable updates and extreme bounds.
   Live ranges whose trip count cannot fit an integer refuse typed rather than wrapping to empty.
+  A representable but huge trip count refuses too (gh-ocannl-2099): past
+  `Schedule.max_unroll_copies` (4096, a constant rather than a config key, since the menu unrolls
+  extents of at most eight) the op refuses typed before building a copy. The same test pins the
+  cap, cap + 1 and `max_int`, and that the refusal allocates less than materializing the cap.
 - **The same holds one level up, for the sketch builder and the advisory fallbacks** (gh-ocannl-1390).
   `sketch_schedule` no longer converts every `Invalid_argument` escaping the builder into
   `Illegal_schedule "Autotune.sketch"`: a builder precondition (no site of the family's kind, Grid
