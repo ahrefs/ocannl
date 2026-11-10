@@ -411,7 +411,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules test_row_self_reference)
- (libraries base ocannl stdio))
+ (libraries base ocannl stdio arrayjit.verdict))
 
 (test
  (name test_row_bound_emissions)

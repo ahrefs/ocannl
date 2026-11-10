@@ -20,3 +20,13 @@ balanced flanks, 3 against 1 (satisfiable at overlap 1): no error: [1] [3]
 balanced flanks, equal sizes of different bases (satisfiable at overlap 1): no error: [5] [5]
 balanced flanks, symbol against size (satisfiable at overlap 1): no error: [5] [?]
 balanced flanks, variable solved by the peeled flank (satisfiable at overlap 1): no error: [9] [3]
+joint close, [x; x] against [3; 5] (satisfiable at overlap 1): no error: [3,3,5] [5] [3]
+joint close, flipped, [x; x] against [3; 5] (satisfiable at overlap 1): no error: [3,3,5] [5] [3]
+joint close, [x; x] against [3; 3] (satisfiable at overlap 0): no error: [3,3] [] []
+joint close, 2*x against 3 (satisfiable at overlap 1): no error: [?,3] [3] [?]
+joint close, [2*x; 2*x] against [6; 10] (satisfiable at overlap 1): no error: [6,6,10] [10] [6]
+joint close, [x^1; x^1] against [3; 5] (satisfiable at overlap 1): no error: [3,3,5] [5] [3]
+joint close, deferred [a; b; a^b] against [2; 5; 4] (satisfiable at overlap 1): no error: [3,2,5,4] [4] [3]
+joint close, before stage 6: 1 constraint(s) waiting
+joint close, refused overlap rolled back: b stays unmarked: true
+joint close, refused overlap rolled back (satisfiable at overlap 1): no error: [3,?] [5] [3]

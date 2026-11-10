@@ -257,6 +257,14 @@ files.
 - A `Row_ineq` that reaches stage 6 unsolved closes its row variable to empty
   (`solve_row_ineq`'s first arm): the operand broadcasts in. So a size that arrives at stage 6
   through a chain does not widen a draw; only one arriving by stage 5 does.
+- A balanced mixed-flank equation (`begS.<v> = <v2>.dimsR`, `|begS| = |dimsR|`) waits until
+  stage 6, then commits the least overlap whose commit raises nothing, trying each in turn under
+  `capture_globals`/`restore_globals` (gh-ocannl-2037). Refuting overlaps pair by pair missed two
+  occurrences of one variable forced apart (`[x; x]` against `[3; 5]`), and `Affine`/`Concat`
+  pairs: a loud refusal of a store satisfiable at a larger overlap. A refused trial must restore
+  the module-level sets, not only drop its environment: `unify_dim` shares a use-site mark across a
+  `Var = Var` merge before a later pair conflicts. Every pair the old check refuted, `unify_dim`
+  refuses too, so a store accepted before keeps its overlap.
 - That spurious axis is also how a shape defect reaches the SCHEDULER, which is where it actually
   got noticed: `Tensorize`'s role check rejects an operand mentioning the third micro symbol, and
   `Stage`'s insertion point L\* is "the deepest loop carrying an outer-part symbol", so an operand

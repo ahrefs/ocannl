@@ -338,3 +338,82 @@ let () =
              eq (flanked rho1 ~beg:[ x ] ~dims:[ x ]) (flanked rho2 ~beg:[] ~dims:[ dim 9; dim 3 ]);
            ]
            Row.empty_env))
+
+(* gh-ocannl-2037: the closing commit refutes an overlap on its equations together, as the solver
+   does, not pair by pair. Each store below has its least solution at overlap 1, but no single pair
+   of its overlap 0 conflicts: two occurrences of one variable are forced apart. The rows shown are
+   the whole flanked row, then rho1, then rho2. *)
+let joint_close ?(flip = false) name ~beg ~dims:d =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  let lhs = flanked rho1 ~beg ~dims:[] and rhs = flanked rho2 ~beg:[] ~dims:d in
+  decide name ~shows:[ lhs; rho1; rho2 ] (fun () ->
+      snd (through_stages [ (if flip then eq rhs lhs else eq lhs rhs) ] Row.empty_env))
+
+let () =
+  let x = Row.Var (Row.get_var ()) in
+  joint_close "joint close, [x; x] against [3; 5] (satisfiable at overlap 1)" ~beg:[ x; x ]
+    ~dims:[ dim 3; dim 5 ];
+  let x = Row.Var (Row.get_var ()) in
+  joint_close ~flip:true "joint close, flipped, [x; x] against [3; 5] (satisfiable at overlap 1)"
+    ~beg:[ x; x ]
+    ~dims:[ dim 3; dim 5 ];
+  let x = Row.Var (Row.get_var ()) in
+  joint_close "joint close, [x; x] against [3; 3] (satisfiable at overlap 0)" ~beg:[ x; x ]
+    ~dims:[ dim 3; dim 3 ];
+  let twice () =
+    Row.Affine { stride = 2; over = Var (Row.get_var ()); conv = None; stride_offset = 0 }
+  in
+  joint_close "joint close, 2*x against 3 (satisfiable at overlap 1)"
+    ~beg:[ twice () ]
+    ~dims:[ dim 3 ];
+  let x2 = twice () in
+  joint_close "joint close, [2*x; 2*x] against [6; 10] (satisfiable at overlap 1)" ~beg:[ x2; x2 ]
+    ~dims:[ dim 6; dim 10 ];
+  let xc = Row.Concat [ Var (Row.get_var ()); dim 1 ] in
+  joint_close "joint close, [x^1; x^1] against [3; 5] (satisfiable at overlap 1)" ~beg:[ xc; xc ]
+    ~dims:[ dim 3; dim 5 ];
+  (* The concatenation's equation decides nothing until the other pairs size its components; then it
+     refutes overlap 0 (2 + 5 is not 4), and the commit of overlap 0 raises. *)
+  let a = Row.Var (Row.get_var ()) and b = Row.Var (Row.get_var ()) in
+  joint_close "joint close, deferred [a; b; a^b] against [2; 5; 4] (satisfiable at overlap 1)"
+    ~beg:[ a; b; Row.Concat [ a; b ] ]
+    ~dims:[ dim 2; dim 5; dim 4 ]
+
+(* Below stage 6 a balanced equation still waits, whatever its overlaps. *)
+let () =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  let x = Row.Var (Row.get_var ()) in
+  let leftover, _env =
+    List.fold
+      [ Row.Stage1; Stage2; Stage3; Stage4; Stage5 ]
+      ~init:
+        ( [ eq (flanked rho1 ~beg:[ x; x ] ~dims:[]) (flanked rho2 ~beg:[] ~dims:[ dim 3; dim 5 ]) ],
+          Row.empty_env )
+      ~f:(fun (constraints, env) stage -> Row.solve_inequalities ~stage constraints env)
+  in
+  Stdio.printf "joint close, before stage 6: %d constraint(s) waiting\n" (List.length leftover)
+
+(* A refused overlap leaves no inference effect behind. At overlap 0 of [a; b; a].<rho1> =
+   <rho2>.[b; 3; 5], a = b shares [a]'s use-site mark with [b] before a = 3 and a = 5 conflict; at
+   overlap 1 only a = 3 is required, so [b] stays open and unmarked. *)
+let () =
+  let rho1 = fresh_rows () and rho2 = fresh_rows () in
+  let av = Row.get_var () and bv = Row.get_var () in
+  let a = Row.Var av and b = Row.Var bv in
+  Row.add_resolve_at_use_dim av;
+  decide "joint close, refused overlap rolled back (satisfiable at overlap 1)"
+    ~shows:[ closed_row ~sh_id:40 ~beg_dims:[] ~dims:[ a; b ]; rho1; rho2 ]
+    (fun () ->
+      let env =
+        snd
+          (Row.solve_inequalities ~stage:Stage6
+             [
+               eq
+                 (flanked rho1 ~beg:[ a; b; a ] ~dims:[])
+                 (flanked rho2 ~beg:[] ~dims:[ b; dim 3; dim 5 ]);
+             ]
+             Row.empty_env)
+      in
+      Verdict.p "joint close, refused overlap rolled back: b stays unmarked"
+        (not (Row.is_resolve_at_use_dim bv));
+      env)
