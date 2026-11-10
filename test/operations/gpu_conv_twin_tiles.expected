@@ -1,0 +1,7 @@
+the rounded products have exact partial sums at f32: true
+omitting either operand's rounding moves every output cell: true
+the materialized-twin reference equals the host oracle bitwise: true
+the backend's capability seeds conv tiles at the twin site: true
+the twin site seeds exactly an f16-storage site's conv tiles: true
+every seeded twin-site conv compiles to tensor code, no scalar fallback: true
+every seeded twin-site conv equals the materialized twin bitwise: true

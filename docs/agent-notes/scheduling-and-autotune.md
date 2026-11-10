@@ -635,7 +635,12 @@ files.
   Every current conv flavor stages both operands, on CPU and GPU; there is no in-place conv
   flavor to refute. A new in-place or hoisted flavor must refute rounded operands at seeding.
   `conv_twin_packing` checks the CPU seeds, actual Stage overrides, executed parity with
-  materialized twins, and synthetic GPU formats/staging.
+  materialized twins, and synthetic GPU formats/staging. `gpu_conv_twin_tiles` (gh-ocannl-2105)
+  seeds from the active GPU's own capability and executes every conv tile: census tensorized,
+  values bitwise against materialized twins. Values alone cannot catch a storage-precision
+  judgment on Metal, which advertises an f32 tile and whose Stage rounds the read anyway; its
+  guard is the relation that the twin site seeds exactly what an f16-storage site seeds. On
+  CUDA and HIP, with no f32 tile outside tf32, such a judgment seeds no conv tile at all.
 - `detect_conv`'s boundary is SINGLETON axes, not rank (gh-ocannl-912). 3-D, 1-D, batchless and
   multi-batch convs are detected and seeded on both legs; what it refuses is any extent-1 axis,
   because lowering drops the loop and indexes the axis at `Fixed_idx 0` while the matcher wants
