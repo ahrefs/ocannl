@@ -11,6 +11,9 @@ the select blend renders at some precision exactly where the backend's facts say
 the sweep's kernels carried builtin parameter guards: true
 gh-ocannl-1704 reverted compiles without the guards: true
 gh-ocannl-1704 reverted fails the guards: true
+the sweep's kernels carried result-type probes: true
+a truth claimed typed compiles without the probes: true
+a truth claimed typed fails the result-type probe: true
 byte Min over an integer-promoted sum compares before narrowing: true
 byte math over an integer operand keeps its float result until the store: true
 byte Min compares float-valued operands as floats: true

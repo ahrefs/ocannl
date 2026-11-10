@@ -273,7 +273,7 @@ test/operations/narrow_storage_compute.ml [run by @test/operations/runtest-narro
     "vector_size"
 test/operations/online_softmax_block_mma.ml [run by @test/operations/runtest-online_softmax_block_mma]
     "simdgroup_multiply_accumulate"
-test/operations/op_table_compile.ml [run by @test/operations/runtest-op_table_compile; also pins text this scan cannot name: untraced callback]
+test/operations/op_table_compile.ml [run by @test/operations/runtest-op_table_compile; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write, rebound parameter]
 test/operations/reduction_accumulator_residency.ml [run by @test/operations/runtest-reduction_accumulator_residency; also pins text this scan cannot name: untraced callback]
     " " ^ ...
     "["

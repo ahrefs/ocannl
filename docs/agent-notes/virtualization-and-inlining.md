@@ -143,7 +143,14 @@ files.
   in the product, and the select census needs its test in the select.
   `scope_collapse_rounding`'s `same_precision_scopes` compares kept, collapsed and materialized
   forms bitwise, including a quotient of numeric `Not` expressions; `branchless_select` checks
-  that composed f32 gates round each arithmetic step at f32.
+  that composed f32 gates round each arithmetic step at f32. The claim itself is checked by each
+  backend's compiler (gh-ocannl-2117): under the test seam `C_syntax.Result_type_probes`,
+  `op_table_compile`'s sweep wraps every scalar node at a float precision that `typed_at` calls
+  typed in a compile-time assertion that its type is `typ_of_prec` of that precision, so a new
+  operator arm whose literal, overload or `!` gives another type fails the sweep naming it. Their
+  first run found the fp8 uniform lane returning a signed byte on cc and Metal. Not probed:
+  integer compute (an integer scope never collapses), the explicit-SIMD lanes, and excess
+  precision inside a correctly typed expression.
 - **A kept scope collapses at render time where compute precision makes it exact** (gh-ocannl-1887).
   Rendered, a kept scope is `T_R v = conv(V->R)(e@V); ... conv(R->S)(v)`, with `R` the local's
   precision (`scope_prec_of`), `V` the value's and `S` the slot's. `C_syntax.collapse_exact_scopes`

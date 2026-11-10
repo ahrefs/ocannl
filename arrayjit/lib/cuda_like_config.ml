@@ -185,6 +185,7 @@ struct
   let node_ident_prefix = Dialect.backend_facts.Backend_intf.node_ident_prefix
   let fp8_from_float doc = PPrint.(group (string Dialect.fp8_from_float_fn ^^ parens doc))
   let main_kernel_prefix = "extern \"C\" __global__"
+  let result_type_probes = C_syntax.Cxx_probes "__device__ __forceinline__"
 
   (* An all-Serial kernel launches 1x1x1, so no single-thread guard is needed; annotated kernels
      need every thread (axis-types proposal §4). *)

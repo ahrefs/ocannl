@@ -806,6 +806,7 @@ module Impl = struct
     let vector_file = { Vector_file.bytes = 16; registers = 0 }
     let vector_style = `Packed_struct
     let builtin_param_guards = Some C_syntax.Cxx_guards
+    let result_type_probes = C_syntax.Cxx_probes "inline"
 
     let ident_blacklist =
       ident_blacklist

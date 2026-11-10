@@ -804,6 +804,12 @@ type select_blend =
     C++ (and so MSL) rejects when it narrows. *)
 type param_guard_dialect = C_guards | Cxx_guards
 
+(** How a dialect spells a result-type probe ({!Result_type_probes}): [C_probes] a statement
+    expression asserting over its local's [__typeof__] (GNU C), [Cxx_probes qualifier] a function
+    template whose parameter type is deduced from its argument, declared with [qualifier] ([inline]
+    on Metal, [__device__ __forceinline__] on CUDA and HIP). *)
+type result_probe_dialect = C_probes | Cxx_probes of string
+
 (* The names a blend binds its arms to, in its own block, so an inner blend shadows an outer one's
    and no arm can mention them. *)
 let blend_local_a = "ocannl_sel_a__"
@@ -976,6 +982,11 @@ module type C_syntax_config = sig
   (** The dialect of the builtin parameter guards a kernel's prelude carries under the test seam
       {!Param_guards.with_guards} (gh-ocannl-1768); [None] (the {!Pure_C_config} default) guards
       nothing. *)
+
+  val result_type_probes : result_probe_dialect
+  (** The dialect of the result-type probes a kernel carries under the test seam
+      {!Result_type_probes.with_probes} (gh-ocannl-2117); {!Pure_C_config}'s default is [C_probes],
+      so a C++ dialect must say so. *)
 
   val select_blend_syntax : Ops.prec -> select_blend option
   (** A branchless rendering of a value select at this compute precision (gh-ocannl-1622), in one of
@@ -2129,6 +2140,89 @@ template <typename P, typename A> inline P ocannl_param_guard__(A x) { return P{
   let emitted () = Atomic.get count
 end
 
+(* gh-ocannl-2117: scope collapse assumes that where [Low_level.typed_at ~prec v] holds, the text
+   rendered for [v] at [prec] already has the type a local of [prec] is declared with, so the local
+   converts nothing and dropping it is exact. Nothing but a compiler can see a rendered type (an
+   overload, a literal's suffix, a [bool] from [!]), so under the seam every probed node asserts it
+   at compile time. A probe evaluates its operand once and never converts it: in C the statement
+   expression's local takes the initializer's own type, in C++ the template deduces it. *)
+module Result_type_probes : sig
+  type claim = prec:Ops.prec -> Low_level.scalar_t -> bool
+
+  val call : string
+  val marker : string
+  val prelude : result_probe_dialect -> string
+  val wrap : result_probe_dialect -> typ:string -> what:string -> PPrint.document -> PPrint.document
+  val describe : prec:Ops.prec -> Low_level.scalar_t -> string
+  val with_probes : ?claim:claim -> (unit -> 'a) -> 'a
+  val active : unit -> claim option
+  val note_emitted : unit -> unit
+  val emitted : unit -> int
+end = struct
+  type claim = prec:Ops.prec -> Low_level.scalar_t -> bool
+
+  let call = "ocannl_result_type__"
+  let marker = "gh-ocannl-2117 result type"
+
+  let prelude = function
+    | C_probes ->
+        Printf.sprintf
+          {|/* %s probes: evaluate x once; fail the compile unless its type is T. */
+#define %s(T, msg, x) ({ __auto_type ocannl_rt_v__ = (x); _Static_assert( \
+  __builtin_types_compatible_p(__typeof__(ocannl_rt_v__), T), msg); ocannl_rt_v__; })|}
+          marker call
+    | Cxx_probes qualifier ->
+        Printf.sprintf
+          {|/* %s probes: return x unconverted; fail the compile unless its type is T. */
+template <typename A, typename B> struct ocannl_rt_same__ { enum { value = 0 }; };
+template <typename A> struct ocannl_rt_same__<A, A> { enum { value = 1 }; };
+template <typename T, typename A> %s A %s(A x) {
+  static_assert(ocannl_rt_same__<T, A>::value, "%s: the value's type is not T");
+  return x;
+}|}
+          marker qualifier call marker
+
+  let wrap dialect ~typ ~what doc =
+    let open PPrint in
+    match dialect with
+    | C_probes ->
+        string
+          (Printf.sprintf "%s(%s, \"%s: %s is not %s\", " call typ marker
+             (String.substr_replace_all what ~pattern:"\"" ~with_:"'")
+             typ)
+        ^^ doc ^^ rparen
+    | Cxx_probes _ -> string (Printf.sprintf "%s<%s>(" call typ) ^^ doc ^^ rparen
+
+  let describe ~prec (v : Low_level.scalar_t) =
+    let node =
+      match v with
+      | Unop (op, _) -> "unop " ^ Sexp.to_string (Ops.sexp_of_unop op)
+      | Binop (op, _, _) -> "binop " ^ Sexp.to_string (Ops.sexp_of_binop op)
+      | Ternop (op, _, _, _) -> "ternop " ^ Sexp.to_string (Ops.sexp_of_ternop op)
+      | Local_scope _ -> "a scope"
+      | Get_local _ -> "a scope read"
+      | Get_merge_buffer _ -> "a merge-buffer read"
+      | Get _ -> "a read"
+      | Get_dynamic _ -> "a dynamic read"
+      | Constant _ -> "a constant"
+      | Constant_bits _ -> "a constant's bits"
+      | Embed_index _ -> "an embedded index"
+    in
+    node ^ " at " ^ Ops.prec_string prec
+
+  let state : claim option ref = ref None
+  let count = Atomic.make 0
+
+  let with_probes ?(claim = fun ~prec v -> Low_level.typed_at ~prec v) f =
+    let saved = !state in
+    state := Some claim;
+    Exn.protect ~f ~finally:(fun () -> state := saved)
+
+  let active () = !state
+  let note_emitted () = Atomic.incr count
+  let emitted () = Atomic.get count
+end
+
 (** The cc builtin a whole-vector widening bridge from 16-bit storage [store_prec] (bf16 or fp16) to
     [lanes] lanes of [prec] calls, [None] for any other storage precision. An f32 bridge at 4, 8 or
     16 lanes -- the widths an x86 register holds, the first also NEON's -- names its width's macro,
@@ -3039,6 +3133,7 @@ struct
   let binop_syntax = default_binop_syntax
   let select_blend_syntax _prec = None
   let builtin_param_guards = None
+  let result_type_probes = C_probes
 
   let unop_syntax prec op v =
     let op_prefix, op_suffix = Ops.unop_c_syntax prec op in
@@ -4528,6 +4623,12 @@ module C_syntax (B : C_syntax_config) = struct
               parts := Source_tokens.scan line :: !parts;
               Buffer.add_string result_buffer line;
               Buffer.add_string result_buffer "\n")));
+    (* gh-ocannl-2117: the result-type probes' helpers, under their test seam. *)
+    if Option.is_some (Result_type_probes.active ()) && mentions_token Result_type_probes.call then (
+      let line = Result_type_probes.prelude B.result_type_probes in
+      parts := Source_tokens.scan line :: !parts;
+      Buffer.add_string result_buffer line;
+      Buffer.add_string result_buffer "\n");
     Buffer.add_string result_buffer doc_string;
     let source = Buffer.contents result_buffer in
     let tokens =
@@ -8961,7 +9062,21 @@ module C_syntax (B : C_syntax_config) = struct
     | Some doc -> doc
     | None -> (serial_loop ctx loop) ()
 
+  (* gh-ocannl-2117: every scalar rendering goes through here, so under the test seam
+     {!Result_type_probes} each node the claim covers asserts its type, after its operator's bridge
+     and before any store's conversion. The explicit-SIMD lanes, which render [pp_scalar_op] over
+     lane operands, and integer compute precisions, whose scopes never collapse, are not probed. *)
   and pp_scalar ctx ?(log_set_locals = false) (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+      local_def list * PPrint.document =
+    let defs, doc = (pp_scalar_unprobed ctx) ~log_set_locals prec vcomp in
+    match Result_type_probes.active () with
+    | Some claim when Ops.is_float prec && claim ~prec vcomp ->
+        Result_type_probes.note_emitted ();
+        let what = Result_type_probes.describe ~prec vcomp in
+        (defs, Result_type_probes.wrap B.result_type_probes ~typ:(B.typ_of_prec prec) ~what doc)
+    | _ -> (defs, doc)
+
+  and pp_scalar_unprobed ctx ~log_set_locals (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       local_def list * PPrint.document =
     (* Returns (local definitions, value expression) *)
     let open PPrint in

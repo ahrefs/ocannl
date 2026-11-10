@@ -633,7 +633,9 @@ val typed_at : prec:Ops.prec -> scalar_t -> bool
     uses [tanhf], which is a float at double, and the Threefry operators return packed integers
     rather than a float. A truth is C [int] (Metal [bool]) at every precision: the renderer, which
     sees no slot, leaves it, and {!simplify_llc} keeps it only under a [Div], where two would divide
-    integers, since its conversion to float is exact. The operators are a list, not a default. *)
+    integers, since its conversion to float is exact. The operators are a list, not a default.
+    [op_table_compile] checks the claim against every backend's compiler, through
+    [C_syntax.Result_type_probes] (gh-ocannl-2117). *)
 
 val narrowing_read : scope_prec:Ops.prec -> scalar_t -> bool
 (** Whether a scope of precision [scope_prec] holding this value is a cast that rounds: a narrow
