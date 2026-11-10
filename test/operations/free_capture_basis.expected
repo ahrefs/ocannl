@@ -4,6 +4,16 @@ the free capture computes its operand: true
 named: 3
 a captured rgb dimension is the operand's: true
 the named capture computes its operand: true
+named, then again: 3 3
+the second capture of the rgb dimension holds it: true
+free, then again: 1 1
+the second capture of the closed free dimension holds it: true
 refusal: solved dimensions for axis: different bases
 a named and a default dimension are refused as the second registers: true
+refusal: solved dimensions for axis: different bases
+a default dimension captured after a named one closed is refused: true
+refusal: solved dimensions for axis: different bases
+a size met after a free dimension closed to 1 is refused: true
 a free and a plain 1 capture in one inference agree: true
+refusal: solved dimensions for axis: different bases
+a plain 1 captured after a free dimension closed is refused: true

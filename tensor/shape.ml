@@ -351,6 +351,13 @@ module Delayed_ref : sig
             whose variable belongs to the reset environment. [None] when the binding at the closure
             was a dimension (a dimension and a row share only the product), or the row held a
             concatenated or affine axis over a symbolic extent. *)
+    mutable solved_basis : string; [@sexp_drop_if String.equal Row.default_basis]
+        (** The basis tag of the size [var_ref.solved_dim] holds (gh-ocannl-2033): the tag of the
+            solution the reference's dimension variable reached when it was published, such as the
+            broadcast top [1_(bcast_if_1)] a free dimension closes to, or a named tag an operand
+            gave it. A dimension binding re-emits the size with it, so a capture after the closure
+            holds the dimension itself, as [carried_row] does a row. [default] for a value [set_dim]
+            gave and for a row's product. *)
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
         (** The reference's identity for the rewind's tracking; not part of its value. *)
     mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
@@ -374,7 +381,10 @@ module Delayed_ref : sig
   (** The live references a rewind discarded: a diagnostic. *)
 
   val set_var : t -> [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ] -> unit
-  val set_solved_dim : t -> int -> unit
+
+  val set_solved_dim : ?basis:string -> t -> int -> unit
+  (** Solves the reference to a size, of the basis tag [basis] (by default [default]). *)
+
   val set_solved_sym : t -> Ir.Indexing.static_symbol -> unit
 
   val set_carried_row : t -> Row.dim list option -> unit
@@ -401,6 +411,7 @@ end = struct
     var_ref : Ir.Indexing.variable_ref;
     mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
     mutable carried_row : Row.dim list option; [@sexp_drop_if Option.is_none]
+    mutable solved_basis : string; [@sexp_drop_if String.equal Row.default_basis]
     uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
     mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
   }
@@ -426,6 +437,7 @@ end = struct
         var_ref = Ir.Indexing.variable_ref ref_label;
         var = `Not_set_yet;
         carried_row = None;
+        solved_basis = Row.default_basis;
         uid = !ref_uid;
         discarded_by = None;
       }
@@ -463,10 +475,11 @@ end = struct
 
   (* A solution already held is no change, so it is not a mutation; a conflicting one raises before
      anything is written or counted. *)
-  let set_solved_dim r d =
+  let set_solved_dim ?(basis = Row.default_basis) r d =
     check_live r;
     if not ([%equal: int option] r.var_ref.solved_dim (Some d)) then (
       Ir.Indexing.set_solved_dim shape_writer r.var_ref d;
+      r.solved_basis <- basis;
       touch_ref r.uid)
 
   let set_solved_sym r sym =
@@ -485,28 +498,32 @@ end = struct
     snap_ref : t;
     snap_var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
     snap_carried_row : Row.dim list option;
+    snap_solved_basis : string;
     snap_var_ref : Ir.Indexing.variable_ref_snapshot;
   }
 
-  let snapshot ({ var_ref; var; carried_row; uid = _; discarded_by = _ } as r) =
+  let snapshot ({ var_ref; var; carried_row; solved_basis; uid = _; discarded_by = _ } as r) =
     {
       snap_ref = r;
       snap_var = var;
       snap_carried_row = carried_row;
+      snap_solved_basis = solved_basis;
       snap_var_ref = Ir.Indexing.snapshot_variable_ref var_ref;
     }
 
   let snapshot_live () = Live.fold (fun r acc -> snapshot r :: acc) live []
   let snapshot_uid s = s.snap_ref.uid
 
-  let restore { snap_ref; snap_var; snap_carried_row; snap_var_ref } =
+  let restore { snap_ref; snap_var; snap_carried_row; snap_solved_basis; snap_var_ref } =
     snap_ref.var <- snap_var;
     snap_ref.carried_row <- snap_carried_row;
+    snap_ref.solved_basis <- snap_solved_basis;
     Ir.Indexing.restore_variable_ref shape_writer snap_var_ref
 
-  let snapshot_changed { snap_ref; snap_var; snap_carried_row; snap_var_ref } =
+  let snapshot_changed { snap_ref; snap_var; snap_carried_row; snap_solved_basis; snap_var_ref } =
     (not (phys_equal snap_ref.var snap_var))
     || (not (phys_equal snap_ref.carried_row snap_carried_row))
+    || (not (String.equal snap_ref.solved_basis snap_solved_basis))
     || Ir.Indexing.variable_ref_snapshot_changed snap_var_ref
 end
 
@@ -514,6 +531,7 @@ type delayed_var_ref = Delayed_ref.t = private {
   var_ref : Ir.Indexing.variable_ref;
   mutable var : [ `Row of Row.row_var | `Dim of Row.dim_var | `Not_set_yet ];
   mutable carried_row : Row.dim list option; [@sexp_drop_if Option.is_none]
+  mutable solved_basis : string; [@sexp_drop_if String.equal Row.default_basis]
   uid : int; [@equal.ignore] [@sexp_drop_if fun _ -> true]
   mutable discarded_by : string option; [@equal.ignore] [@sexp_drop_if fun _ -> true]
 }
@@ -1226,7 +1244,7 @@ let binding_constraints ~for_projections ~as_input ~error_shapes ~previous_bindi
               Row.Dim_eq
                 {
                   d1 = Row.Var var;
-                  d2 = Row.get_default_dim ~d:solved_dim ();
+                  d2 = Row.get_dim ~d:solved_dim ~basis:delayed_ref.solved_basis ();
                   origin = solved_origin;
                 };
             ]
@@ -2964,7 +2982,14 @@ let capture_ties_for_proxy ~spec ~dim_var_env ~row_var_env (dim_refs : delayed_v
             match (delayed_ref.var_ref.solved_sym, delayed_ref.var_ref.solved_dim) with
             | Some sym, _ -> [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_sym_dim sym; origin } ]
             | None, Some d ->
-                [ Row.Dim_eq { d1 = Row.Var var; d2 = Row.get_default_dim ~d (); origin } ]
+                [
+                  Row.Dim_eq
+                    {
+                      d1 = Row.Var var;
+                      d2 = Row.get_dim ~d ~basis:delayed_ref.solved_basis ();
+                      origin;
+                    };
+                ]
             | None, None -> []
           in
           let tie =
@@ -4344,7 +4369,7 @@ let publish_ref_solutions ~closure env var_refs =
       | `Not_set_yet -> () (* Variable not bound yet, will be set later *)
       | `Dim dim_var -> (
           match Row.get_dim_from_env env dim_var with
-          | Some (Row.Dim { d; _ }) -> Delayed_ref.set_solved_dim delayed_ref d
+          | Some (Row.Dim { d; basis; _ }) -> Delayed_ref.set_solved_dim ~basis delayed_ref d
           | Some (Row.Sym { sym; _ }) -> Delayed_ref.set_solved_sym delayed_ref sym
           | Some (Row.Var _ | Row.Affine _ | Row.Concat _) | None -> () (* Not yet resolved *))
       | `Row row_var -> (
