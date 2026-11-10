@@ -422,6 +422,17 @@ val solve_inequalities :
 val row_to_bases : environment -> t -> string array
 
 type proj [@@deriving compare, equal, sexp]
+
+type committed_padding = {
+  padding : axis_padding;
+  operand : string;  (** The operand's id and name, for the refusal. *)
+  at_creation : bool;
+      (** The operand keeps an array it was given, so its layout committed at creation rather than
+          at its first compilation or host access ([Ir.Tnode.layout_at_creation]). *)
+}
+[@@deriving sexp_of]
+(** The padding of an operand axis whose buffer layout is already committed (gh-ocannl-2041). *)
+
 type proj_env [@@deriving sexp_of]
 
 val fresh_row_proj : t -> t
@@ -456,11 +467,12 @@ val get_proj_equations :
 val solve_proj_equations :
   ?clamp_padded:bool ->
   proj_equation list ->
-  resolved_padding:(proj_id, axis_padding) List.Assoc.t ->
+  resolved_padding:(proj_id, committed_padding) List.Assoc.t ->
   inferred_padding:(proj_id, axis_padding) List.Assoc.t ->
   proj_env
-(** [resolved_padding] is used for verification only. [inferred_padding] is updated in [proj_env]
-    even if [resolved_padding] is present.
+(** [resolved_padding] is used for verification only: a padded window demanding more margins than a
+    committed entry has is refused, naming that entry's operand. [inferred_padding] is updated in
+    [proj_env] even if [resolved_padding] is present.
 
     [clamp_padded] (default [false], gh-504): the operation's accumulation identity is non-finite
     (max/tropical family), so its padded ([=]-mode) window projections register no margin demand

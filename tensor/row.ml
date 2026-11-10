@@ -6176,10 +6176,14 @@ let sexp_of_error_trace = function
 type proj_to_index = Idx.axis_index Map.M(Proj_id).t [@@deriving sexp]
 type proj_classes = Proj_id.t Map.M(Proj_id).t [@@deriving sexp]
 
+type committed_padding = { padding : axis_padding; operand : string; at_creation : bool }
+[@@deriving sexp_of]
+
 type proj_env = {
   v_env : (dim_var, proj) Hashtbl.t;
   proj_to_index : proj_to_index;
-  resolved_padding : axis_padding Map.M(Proj_id).t;
+  resolved_padding : committed_padding list Map.M(Proj_id).t;
+      (** Every committed layout read through the class, one entry per locked operand axis. *)
   inferred_padding : axis_padding Hashtbl.M(Proj_id).t;
   proj_classes : proj_classes;
   product_dim : int Map.M(Proj_id).t;
@@ -6194,6 +6198,32 @@ type proj_env = {
 [@@deriving sexp_of]
 
 type proj_equation = Proj_eq of proj * proj | Iterated of proj [@@deriving compare, equal, sexp]
+
+(** The refusal of a padded window whose margins exceed a committed layout (gh-ocannl-2041): it
+    names the operand and gives only the remedies that apply to how its layout was committed. *)
+let exceeds_committed_padding_message ~(operation_padding : axis_padding)
+    { padding = resolved_pad; operand; at_creation } =
+  let need = [%string "left=%{operation_padding.left#Int}, right=%{operation_padding.right#Int}"] in
+  let head =
+    [%string
+      "Operation padding (%{need}) exceeds resolved padding (left=%{resolved_pad.left#Int}, \
+       right=%{resolved_pad.right#Int}) of the operand %{operand}: "]
+  in
+  let copy =
+    "read through a materialized copy of the operand (for a padded max-pool, \
+     Nn_blocks.max_pool2d_copy)"
+  in
+  if at_creation then
+    [%string
+      "%{head}its buffer layout was committed at creation, since it keeps the array it was given \
+       (wrap, wrap_padded, wrap_param, a loaded checkpoint). Create the data through reshape or \
+       init, which copy it into a padded buffer, or through wrap_padded with margins of at least \
+       (%{need}); or %{copy}"]
+  else
+    [%string
+      "%{head}its buffer layout was committed at its first compilation or host access, before this \
+       padded consumer was composed. Compose the padded consumer before that first compilation or \
+       host access, or %{copy}"]
 
 (** The refusal of a window kernel nothing sized (gh-ocannl-1691): no operand axis sizes it, and a
     padded window's extent equation omits it. Raised at construction when the spec and captures
@@ -6504,25 +6534,18 @@ let%track7_sexp get_proj_index (proj_env : proj_env) (proj : proj) : Idx.axis_in
                let repr, _ =
                  Utils.union_find ~equal:Proj_id.equal proj_env.proj_classes ~key:proj_id ~rank:0
                in
-               match Map.find proj_env.resolved_padding repr with
-               | Some resolved_pad
-                 when operation_padding.left > resolved_pad.left
-                      || operation_padding.right > resolved_pad.right ->
+               let exceeded =
+                 List.find
+                   (Option.value ~default:[] @@ Map.find proj_env.resolved_padding repr)
+                   ~f:(fun { padding = resolved_pad; _ } ->
+                     operation_padding.left > resolved_pad.left
+                     || operation_padding.right > resolved_pad.right)
+               in
+               match exceeded with
+               | Some committed ->
                    raise
                    @@ Shape_error
-                        ( [%string
-                            "Operation padding (left=%{operation_padding.left#Int}, \
-                             right=%{operation_padding.right#Int}) exceeds resolved padding \
-                             (left=%{resolved_pad.left#Int}, right=%{resolved_pad.right#Int}): the \
-                             operand's buffer layout is already committed with insufficient \
-                             margins, at creation for a tensor keeping the array it was given \
-                             (wrap, wrap_padded, wrap_param, a loaded checkpoint), and otherwise \
-                             at its first compilation or host access. Create the data through \
-                             reshape or init, which copy it into a padded buffer, or through \
-                             wrap_padded with margins of its own; compose the padded consumer \
-                             before that first compilation or host access; or read through a \
-                             materialized copy of the operand (for a padded max-pool, \
-                             Nn_blocks.max_pool2d_copy)"],
+                        ( exceeds_committed_padding_message ~operation_padding committed,
                           [ Projection_mismatch [ proj ] ] )
                | _ -> (
                    (* Update inferred padding to be sufficient for this operation, even if resolved
@@ -6684,7 +6707,7 @@ let get_dim_index proj_env =
   loop
 
 let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equation list)
-    ~(resolved_padding : (proj_id, axis_padding) List.Assoc.t)
+    ~(resolved_padding : (proj_id, committed_padding) List.Assoc.t)
     ~(inferred_padding : (proj_id, axis_padding) List.Assoc.t) : proj_env =
   let v_env = dim_hashtbl () in
   let p_solved = ref [] in
@@ -7000,13 +7023,11 @@ let%debug4_sexp solve_proj_equations ?(clamp_padded = false) (eqs : proj_equatio
   let resolved_padding =
     (* Since locked (layout-committed) tensors register resolved padding for every axis, several
        axes of a class can carry entries; a padding demand routed through the class must fit every
-       locked buffer read through it, so merge duplicates with the elementwise minimum (the
-       strictest lock). *)
-    Map.of_alist_reduce
-      (module Proj_id)
-      ~f:(fun p1 p2 -> Ir.Ops.{ left = Int.min p1.left p2.left; right = Int.min p1.right p2.right })
-    @@ List.map resolved_padding ~f:(fun (p, pad) ->
-        (fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0, pad))
+       locked buffer read through it, so every entry is kept, and the check names the first that the
+       demand exceeds (gh-ocannl-2041). *)
+    Map.of_alist_multi (module Proj_id)
+    @@ List.map resolved_padding ~f:(fun (p, committed) ->
+        (fst @@ Utils.union_find ~equal:Proj_id.equal !proj_classes ~key:p ~rank:0, committed))
   in
   let inferred_padding =
     Hashtbl.of_alist_exn (module Proj_id)

@@ -8530,7 +8530,8 @@
   (pps ppx_here ppx_ocannl)))
 
 ; gh-ocannl-1982: a padded convolution on an init leaf takes margins, in a fresh session and through
-; a training step; a wrap leaf is refused by a message saying where its layout was committed.
+; a training step; a wrap leaf, and an init leaf compiled unpadded, are refused by messages naming the
+; operand and the remedy for how its layout was committed (pinned whole, gh-ocannl-2041).
 
 (test
  (name padded_conv_init_leaf)

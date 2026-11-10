@@ -3726,13 +3726,14 @@ let fresh_proj_ids update =
   let inferred_padding = ref [] in
   let no_padding = Ir.Ops.{ left = 0; right = 0 } in
   (* [locked = None]: the tensor node's layout is not committed yet — register the shape's padding
-     (if any) as inferred. [locked = Some arr_opt]: the tnode's padding lazy is forced, so the
-     buffer layout is committed — register the TNODE's padding (zeros when unpadded) as resolved for
-     every axis, so that [Row.solve_proj_equations] rejects later demands exceeding it (a
+     (if any) as inferred. [locked = Some (arr_opt, _, _)]: the tnode's padding lazy is forced, so
+     the buffer layout is committed — register the TNODE's padding (zeros when unpadded) as resolved
+     for every axis, so that [Row.solve_proj_equations] rejects later demands exceeding it (a
      forced-at-[None] node used to register nothing, silently losing the halo; see
-     [check_and_update_padding]). [offset] is the axis position within the tnode's padding array
-     (axis order batch;output;input, cf. {!to_padding}). Returns the offset advanced past this
-     row. *)
+     [check_and_update_padding]), together with the node's name and whether it committed at
+     creation, so the refusal names the operand and the remedy that applies (gh-ocannl-2041).
+     [offset] is the axis position within the tnode's padding array (axis order batch;output;input,
+     cf. {!to_padding}). Returns the offset advanced past this row. *)
   let fetch_padding ~locked row row_padding ~offset =
     let dims = Array.of_list (row.Row.beg_dims @ row.Row.dims) in
     (match locked with
@@ -3744,7 +3745,7 @@ let fresh_proj_ids update =
                   ->
                     inferred_padding := (proj_id, p) :: !inferred_padding
                 | _ -> ()))
-    | Some locked_arr ->
+    | Some (locked_arr, operand, at_creation) ->
         Array.iteri dims ~f:(fun i d ->
             let p =
               match locked_arr with
@@ -3753,7 +3754,8 @@ let fresh_proj_ids update =
             in
             match d with
             | Row.Dim { proj_id = Some proj_id; _ } | Row.Sym { sym_proj_id = Some proj_id; _ } ->
-                resolved_padding := (proj_id, p) :: !resolved_padding
+                resolved_padding :=
+                  (proj_id, Row.{ padding = p; operand; at_creation }) :: !resolved_padding
             | _ -> ()));
     offset + Array.length dims
   in
@@ -3793,7 +3795,10 @@ let fresh_proj_ids update =
                               Nn_blocks.max_pool2d_copy)"],
                            [ Shape_mismatch [ sh ] ] ))
             | None -> ());
-            Some (Option.map ~f:fst p)
+            Some
+              ( Option.map ~f:fst p,
+                [%string "#%{tn.Ir.Tnode.id#Int} %{Ir.Tnode.label_name tn}"],
+                tn.Ir.Tnode.layout_at_creation )
           with Lazy.Undefined -> None)
       | _ -> None
     in
