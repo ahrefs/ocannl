@@ -522,10 +522,21 @@ let wrap_schemed ~loc ~at_unit ~name ~params (fn : expression) =
    in: the expansion itself spells no line. *)
 let at_site ~loc app = [%expr Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> [%e app])]
 
-(* [at_site]'s inverse, for a position the application is no scheme's. *)
-let strip_at_site = function
-  | [%expr Tensor.Scheme.For_ppx.at_site [%e? _] (fun () -> [%e? app])] -> app
-  | e -> e
+(* [at_site]'s inverse, everywhere in an expression whose applications are no scheme's: an
+   initializer, where [add_module_qualifier_to_applied_function] reads the applied functions -- of
+   the root, and of a conditional's branches, a [let]'s or a sequence's body, and so on. *)
+let strip_at_site =
+  let mapper =
+    object
+      inherit Ast_traverse.map as super
+
+      method! expression e =
+        match super#expression e with
+        | [%expr Tensor.Scheme.For_ppx.at_site [%e? _] (fun () -> [%e? app])] -> app
+        | e -> e
+    end
+  in
+  mapper#expression
 
 let default_scheme_name ~loc ?name () =
   match name with

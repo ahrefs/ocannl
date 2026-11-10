@@ -29,7 +29,23 @@ let initialized_expr =
     let f x = relu ({ expr_w = kaiming normal1 () } * x) in
     f]
 
+(* gh-ocannl-2007: an initializer's applications are not wrapped in [at_site], at its root nor in a
+   conditional's branches or a [let]'s body, where the expansion qualifies their heads with
+   NTDSL. *)
+let use_kaiming = true
+
+let%op initialized_compound x =
+  relu
+    ({ cond_w = (if use_kaiming then kaiming normal1 () else uniform ()) }
+    * ({
+         let_w =
+           (let base = normal1 in
+            kaiming base ());
+       }
+      * x))
+
 let () = ignore (y0, y1, y2, a, b, y)
+let () = ignore initialized_compound
 let () = ignore (z, z2, z3)
 let () = ignore (concat_single, concat_pair)
 let () = ignore (initialized_no_unit, initialized_expr)

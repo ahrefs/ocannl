@@ -190,7 +190,34 @@ let initialized_expr =
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x) in
   f
+let use_kaiming = true
+let initialized_compound =
+  let open! TDSL.O in
+    let cond_w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some
+                        (if use_kaiming
+                         then NTDSL.kaiming normal1 ()
+                         else NTDSL.uniform ())) "cond_w") () in
+    let let_w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (let base = normal1 in NTDSL.kaiming base ()))
+         "let_w") () in
+    let __ocannl_body x =
+      relu
+        ?label:(Some
+                  (List.concat
+                     [["initialized_compound"];
+                     (x.Tensor.value).Ir.Tnode.label]))
+        (( * ) ?label:None cond_w (( * ) ?label:None let_w x)) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"initialized_compound" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
 let () = ignore (y0, y1, y2, a, b, y)
+let () = ignore initialized_compound
 let () = ignore (z, z2, z3)
 let () = ignore (concat_single, concat_pair)
 let () = ignore (initialized_no_unit, initialized_expr)
