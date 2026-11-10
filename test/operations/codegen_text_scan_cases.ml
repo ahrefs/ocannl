@@ -154,6 +154,9 @@ let emitters =
     emitter "compile_main" "Ir.C_syntax.C_syntax.compile_main";
     emitter "to_doc" "Ir.Low_level.to_doc";
     emitter "to_doc_cstyle" "Ir.Low_level.to_doc_cstyle";
+    (* A name some unrelated module also exports ([TDSL.wrap]): what makes a call this emitter's is
+       its qualifier, resolved, as well as its name. *)
+    emitter "wrap" "Ir.C_syntax.Result_type_probes.wrap";
     emitter "emit" "Ir.Low_level.Canonical_render.emit" ~destinations:[ Scan.At_label "buf" ];
     (* An emitter whose buffer carries no label, so a call site addresses it by position. Nothing in
        the libraries has that shape today; the rule has to have it either way, since a position is
@@ -519,6 +522,33 @@ let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (LL.to_doc () llc)|ocaml},
       {ocaml|let to_doc row = PPrint.string (render_row row)
 let () = PPrint.ToChannel.pretty 0.9 100 Stdio.stdout (to_doc header)|ocaml},
       "none" );
+    (* An emitter is matched by its module as well as its name: [TDSL.wrap] built a model's tensor
+       and read as [Result_type_probes.wrap] once that module exported one (gh-ocannl-2117's
+       hand-back). The positive controls beside it: the emitter's own module, spelled out, under an
+       alias, and behind a functor parameter the scan cannot see into. *)
+    ( "an emitter's name under another library's module is not the emitter",
+      {ocaml|let () =
+  let t = TDSL.wrap ~l:"w" ~o:[ 2 ] values () in
+  p "label" (String.is_substring (Tensor.debug_name t) ~substring:"w")|ocaml},
+      "none" );
+    ( "an emitter's name under its own module is the emitter",
+      {ocaml|let () =
+  let src = render (Ir.C_syntax.Result_type_probes.wrap C_probes ~typ:"float" ~what:"x" body) in
+  p "probe" (String.is_substring src ~substring:"ocannl_result_type__")|ocaml},
+      {|"ocannl_result_type__" +rendered|} );
+    ( "an emitter's name under an alias of its module is the emitter",
+      {ocaml|module Probes = Ir.C_syntax.Result_type_probes
+let () =
+  let src = render (Probes.wrap C_probes ~typ:"float" ~what:"x" body) in
+  p "probe" (String.is_substring src ~substring:"ocannl_result_type__")|ocaml},
+      {|"ocannl_result_type__" +rendered|} );
+    ( "an emitter's name behind a functor parameter is still taken for the emitter",
+      {ocaml|module Check (P : PROBES) = struct
+  let () =
+    let src = render (P.wrap C_probes ~typ:"float" ~what:"x" body) in
+    p "probe" (String.is_substring src ~substring:"ocannl_result_type__")
+end|ocaml},
+      {|"ocannl_result_type__" +rendered|} );
     (* Round 3's genre: the membership rules learned the third route and the PIN rules had not, so a
        fragment could be dropped while the file stayed listed -- nothing looked wrong, and a grep of
        the inventory missed the assertion. *)
@@ -762,7 +792,8 @@ let () =
   p "marker" (String.is_substring (read buf) ~substring:"buffer marker")|ocaml},
       "+partial(mutation)" );
     ( "a buffer-returning helper preserves inputs used by earlier writes with explicit uncertainty",
-      {ocaml|let render doc =
+      {ocaml|module LL = Ir.Low_level
+let render doc =
   let buf = Buffer.create 100 in
   PPrint.ToBuffer.pretty 0.7 100 buf doc;
   Buffer.contents buf
