@@ -48,10 +48,12 @@ let () =
         let x = init idcs in
         if enabled then Ir.Ops.half_to_single (Ir.Ops.single_to_half x) else x
       in
+      (* [NTDSL.init] indexes batch, then output, then input axes: [cvtx] is [batch; h; ic], [cvtk]
+         is [oc; kh; ic]. *)
       let products =
         Ll_test.reduction_cells ~out:[| 2; 4; 8 |] ~over:[| 3; 4 |] (fun o r ->
             rounded round_a input_values [| o.(0); o.(1) + r.(0); r.(1) |]
-            *. rounded round_b kernel_values [| r.(0); r.(1); o.(2) |])
+            *. rounded round_b kernel_values [| o.(2); r.(0); r.(1) |])
       in
       p_all
         (label ^ ": rounded products have exact partial sums at f32")
@@ -66,6 +68,13 @@ let () =
             o)
           (product ~materialized:true ~raw:false)
       in
+      (* The premise above holds for the products the conv forms only if they are these: their exact
+         sums must be the executed reference's bits. *)
+      p_all2
+        (label ^ ": the materialized twin equals the premise's products summed on the host")
+        want
+        (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
+        ~f:Float.equal;
       let raw, _ = compile ("cvt_raw_" ^ label) (product ~materialized:false ~raw:true) in
       p
         (label ^ ": an unrounded read differs from the materialized twin")
