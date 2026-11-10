@@ -705,9 +705,26 @@ let floor_census content =
     counts here. An unbounded abs-of-difference helper, or a fold containing one, is tracked through
     name bindings and arithmetic until an upper comparison bounds it (gh-ocannl-1837). Merely
     printing a maximum or requiring it to EXCEED a margin does not count. Ordering two error metrics
-    is also a scalar comparison, not parity under a tolerance. The fold reader recognizes calls
-    ending in [fold], [foldi], [fold2] and [fold2_exn]; it does not prove which reducer the callback
-    implements.
+    is also a scalar comparison, not parity under a tolerance. The reduction reader recognizes calls
+    ending in [fold], [foldi], [fold2], [fold2_exn], [fold_left], [fold_right], [max_elt], [reduce]
+    and [reduce_exn], applied or piped ([x |> f], [f @@ x]), over an abs-of-difference written in
+    the call or a name holding one; it does not prove which reducer the callback implements. A name
+    holding an abs-of-difference that is neither a function nor a reduction -- one cell's error, or
+    the errors of a collection mapped cell by cell -- is no tolerance when a bound applies to it,
+    but a reduction over it is.
+
+    LOOP-CARRIED REFS (gh-ocannl-2122): what the source writes into a [let]-bound name with [x := e]
+    is read into that binding, by lexical identity (a shadowed name is another binding), through any
+    [let alias = x] renaming. A write inside a [for] or [while] body or a function body the binding
+    encloses (a callback of [iter]) runs once per cell: an error it carries makes the ref a
+    reduction over the cells ([max_err := Float.max !max_err (Float.abs (a -. b))], or
+    [worst := err] for an [err] holding one), and a bound it applies to an abs-of-difference makes
+    it a tolerance ([ok := !ok && Float.(abs (a - b) < tol)], or [Float.(err < tol)] for an [err]
+    holding one, where the other side holds no error). A write at the binding's own depth is one
+    value, read as a binding's right-hand side is. A write is read wherever it sits, before or after
+    the claim. The reader runs in passes, each reading what the previous ones found written: first
+    the metrics alone, until a pass finds no new one, then the bounds over those settled metrics, so
+    an ordering of two refs is never read as a bound while only one is known to hold a metric.
 
     What it does not read, by design: a scalar comparison written in the claim itself or in a value
     binding outside any function ([p "x" Float.(abs (got - 2.) < 1e-6)]) -- one value against one
@@ -716,10 +733,14 @@ let floor_census content =
     written; and the [p_close] family, whose [~tol] answers a bound rather than hand-rolling one.
     What it cannot see: a predicate reaching the call as a function PARAMETER, a tolerance written
     without [abs] ([a -. b < t && b -. a < t]), a lambda parameter shadowing a tolerance name inside
-    the claim's argument, and a comparison routed through a helper of another module. It does not
-    track writes to [ref] accumulators in loops, piped or [max_elt] reductions, or Stdlib's
-    [fold_left]/[fold_right]. These are reader boundaries, not evidence that the tree contains no
-    such comparisons; the remedy for a tolerance claim using one is [p_close] or [within]. *)
+    the claim's argument, and a comparison routed through a helper of another module. Of writes, it
+    reads [:=] into a name alone: not a ref a function parameter holds, a record field, an array
+    cell ([errs.(i) <- …]), a write a condition controls without carrying the error
+    ([if Float.(abs (a - b) > tol) then ok := false]), nor an abs of a name holding a difference
+    ([let d = a -. b in Float.abs d]); nor a cell-by-cell mapped error bounded element-wise
+    ([List.for_all diffs ~f:(fun d -> Float.(d < tol))]), a [sum] or [min_elt]. These are reader
+    boundaries, not evidence that the tree contains no such comparisons; the remedy for a tolerance
+    claim using one is [p_close] or [within]. *)
 
 let parity_callees = [ "p_all2"; "pf_all2"; "pass_fail_all2" ]
 
@@ -809,7 +830,31 @@ let bounds_abs_difference_with ?(bound = fun _ -> true) applies expr =
   iterator#expression expr;
   !found
 
-let folds_abs_difference expr =
+(* The reductions whose result is one value over a collection: a fold (Base's and Stdlib's), a
+   [reduce] and a [max_elt]. *)
+let reducers =
+  [
+    "fold";
+    "foldi";
+    "fold2";
+    "fold2_exn";
+    "fold_left";
+    "fold_right";
+    "max_elt";
+    "reduce";
+    "reduce_exn";
+  ]
+
+(* Whether [expr] holds a reduction over what [carries] (an application whose callee ends in one of
+   {!reducers}, the application and its arguments read whole), reading [x |> f] and [f @@ x] as [f
+   x]. *)
+let reduces_with carries expr =
+  let reducer callee =
+    match Read.longident_of callee with
+    | Some path -> List.mem reducers (List.last_exn path) ~equal:String.equal
+    | None -> false
+  in
+  let head f = match f.pexp_desc with Pexp_apply (callee, _) -> callee | _ -> f in
   let found = ref false in
   let iterator =
     object
@@ -817,15 +862,12 @@ let folds_abs_difference expr =
 
       method! expression e =
         (match e.pexp_desc with
-        | Pexp_apply (callee, _) -> (
-            match Read.longident_of callee with
-            | Some path
-              when List.mem
-                     [ "fold"; "foldi"; "fold2_exn"; "fold2" ]
-                     (List.last_exn path) ~equal:String.equal
-                   && applies_abs_to_difference e ->
-                found := true
-            | _ -> ())
+        | Pexp_apply (callee, arguments) -> (
+            match (Read.longident_of callee, arguments) with
+            | Some [ "|>" ], [ (Ppxlib.Asttypes.Nolabel, x); (Ppxlib.Asttypes.Nolabel, f) ]
+            | Some [ "@@" ], [ (Ppxlib.Asttypes.Nolabel, f); (Ppxlib.Asttypes.Nolabel, x) ] ->
+                if reducer (head f) && (carries x || carries f) then found := true
+            | _ -> if reducer callee && carries e then found := true)
         | _ -> ());
         super#expression e
     end
@@ -833,14 +875,27 @@ let folds_abs_difference expr =
   iterator#expression expr;
   !found
 
+let folds_abs_difference = reduces_with applies_abs_to_difference
 let bounds_abs_difference = bounds_abs_difference_with applies_abs_to_difference
 
 (* What a name denotes to this reader: a [Bearing] binding holds a function bounding an
    abs-of-difference, or reaches one through another [Bearing] name (a helper, or a value computed
    through one); a [Predicate] one is only a function applying an abs to a difference, which is a
    hand-rolled tolerance as a parity predicate, or when an upper comparison bounds it (a
-   maximum-error helper). Derived error metrics retain [Predicate] through name references. *)
-type denotes = Bearing | Predicate | Neither
+   maximum-error helper). Derived error metrics retain [Predicate] through name references. A
+   [Difference] one holds an abs-of-difference that is neither: one cell's error, or the errors of a
+   collection mapped cell by cell, which an upper comparison bounding it does not make a tolerance
+   (one value against one reference), but a reduction over it, or a loop carrying it into a [ref],
+   does (gh-ocannl-2122). *)
+type denotes = Bearing | Predicate | Difference | Neither
+
+let denotes_rank = function Bearing -> 3 | Predicate -> 2 | Difference -> 1 | Neither -> 0
+let join_denotes a b = if denotes_rank a >= denotes_rank b then a else b
+
+(* A name in the tolerance reader's scope: what it denotes, and for a [let]-bound name, the [let]
+   whose binding a write [x := e] reaches -- its identity and the loop depth it was made at; a
+   renaming ([let alias = x]) reaches the binding [x] reaches. *)
+type tolerance_name = { denotes : denotes; cell : (int * int) option }
 
 let tolerance_census content =
   let ast = Read.structure_of content in
@@ -850,7 +905,17 @@ let tolerance_census content =
     | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
     | _ -> expr
   in
-  let predicate_name env e =
+  let denotes_of env name =
+    Option.map (Lexical_scope.lookup env name) ~f:(fun (entry : tolerance_name) -> entry.denotes)
+  in
+  (* Which facts the current pass derives: first the METRICS ([Predicate], [Difference]) alone, to a
+     fixed point, then the BOUNDS ([Bearing]) over those metrics, frozen. A bound is read off the
+     metrics -- an ordering of two metrics is none -- so one derived while a metric was still
+     unknown could be wrong, and a ref's written facts only grow; with the metrics settled first,
+     both stages only grow. *)
+  let bounds_stage = ref false in
+  (* The first name [e] spells, in reading order, that denotes [wanted] in [env]. *)
+  let name_denoting wanted env e =
     let found = ref None in
     let iterator =
       object
@@ -859,7 +924,7 @@ let tolerance_census content =
         method! expression e =
           (match e.pexp_desc with
           | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ }
-            when Poly.equal (Lexical_scope.lookup env name) (Some Predicate) ->
+            when Poly.equal (denotes_of env name) (Some wanted) ->
               if Option.is_none !found then found := Some name
           | _ -> ());
           super#expression e
@@ -868,6 +933,7 @@ let tolerance_census content =
     iterator#expression e;
     !found
   in
+  let predicate_name = name_denoting Predicate in
   (* Whether an expression, in [env], holds a hand-rolled tolerance a claim's value can reach --
      [None] when it does not -- and how a diagnostic names it: the first inline function bounding a
      difference, or the first [Bearing] name, in reading order. *)
@@ -888,9 +954,9 @@ let tolerance_census content =
             (match e.pexp_desc with
             | Pexp_function _ when bounds_abs_difference e -> found := Some "an inline function"
             | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
-                match Lexical_scope.lookup env name with
+                match denotes_of env name with
                 | Some Bearing -> found := Some name
-                | Some (Predicate | Neither) | None -> ())
+                | Some (Predicate | Difference | Neither) | None -> ())
             | _ -> ());
             super#expression e)
       end
@@ -903,9 +969,9 @@ let tolerance_census content =
   let tolerance env expr =
     let expr = peel expr in
     let bound name =
-      match Lexical_scope.lookup env name with
+      match denotes_of env name with
       | Some (Bearing | Predicate) -> Some name
-      | Some Neither | None -> None
+      | Some (Difference | Neither) | None -> None
     in
     match expr.pexp_desc with
     | Pexp_function _ when applies_abs_to_difference expr -> Some "an inline function"
@@ -914,27 +980,105 @@ let tolerance_census content =
         bound name
     | _ -> None
   in
+  (* An abs-of-difference, written in [e] or through a [Difference] name. *)
+  let differs env e =
+    applies_abs_to_difference e || Option.is_some (name_denoting Difference env e)
+  in
+  (* What a value bound by [let], or written into a [ref] where it was bound, denotes. *)
+  let classify env expr =
+    if !bounds_stage && Option.is_some (bearing env expr) then Bearing
+    else if
+      Option.is_some (tolerance env expr)
+      || Option.is_some (predicate_name env expr)
+      || reduces_with (differs env) expr
+    then Predicate
+    else if differs env expr then Difference
+    else Neither
+  in
+  (* What a value written into a [ref] inside a loop or a function its binding encloses denotes: the
+     write runs once per iteration, so an error it carries is a reduction over the cells, and a
+     bound it applies to an abs-of-difference -- written in place or through a name holding one, the
+     other side holding no error -- is checked cell by cell. *)
+  let carried env expr =
+    let holds_error side = differs env side || Option.is_some (predicate_name env side) in
+    match classify env expr with
+    | Bearing -> Bearing
+    | _
+      when !bounds_stage
+           && bounds_abs_difference_with
+                ~bound:(fun side -> not (holds_error side))
+                (differs env) expr ->
+        Bearing
+    | Predicate | Difference -> Predicate
+    | Neither -> Neither
+  in
+  (* What the source writes into each [let]-bound [ref], by its binding's identity, read at the
+     binding on the next pass: the metric each write carries, joined, and whether one is a bound. *)
+  let metrics_written = Hashtbl.create (module Int) in
+  let bounds_written = Hash_set.create (module Int) in
+  let changed = ref false in
   let sites = ref [] and claims = ref 0 in
-  let iterator =
+  let make_iterator () =
     object (self)
-      inherit [denotes, bool] Lexical_scope.scoped as super
-      method local = Neither
+      inherit [tolerance_name, bool] Lexical_scope.scoped as super
+      method local = { denotes = Neither; cell = None }
       method module_path _ _ = None
       method! attribute _ attr = attr
+
+      (* The loops and function bodies the walk is inside. *)
+      val mutable loop_depth = 0
 
       method! binding_denotes env binding =
         match Read.pattern_name binding.pvb_pat with
         | Some _ ->
-            if Option.is_some (bearing env binding.pvb_expr) then Bearing
-            else if
-              Option.is_some (tolerance env binding.pvb_expr)
-              || Option.is_some (predicate_name env binding.pvb_expr)
-              || folds_abs_difference binding.pvb_expr
-            then Predicate
-            else Neither
+            let own = (binding.pvb_loc.loc_start.pos_cnum + 1, loop_depth) in
+            let cell =
+              match (peel binding.pvb_expr).pexp_desc with
+              | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+                  match Lexical_scope.lookup env name with
+                  | Some { cell = Some cell; _ } -> cell
+                  | Some { cell = None; _ } | None -> own)
+              | _ -> own
+            in
+            let from_writes =
+              if Hash_set.mem bounds_written (fst cell) then Bearing
+              else Option.value (Hashtbl.find metrics_written (fst cell)) ~default:Neither
+            in
+            { denotes = join_denotes (classify env binding.pvb_expr) from_writes; cell = Some cell }
         | None -> self#local
 
+      method write env target value =
+        match (peel target).pexp_desc with
+        | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
+            match Lexical_scope.lookup env name with
+            | Some { cell = Some (identity, depth); _ } ->
+                let value_denotes =
+                  if loop_depth > depth then carried env value else classify env value
+                in
+                if !bounds_stage then (
+                  if Poly.equal value_denotes Bearing && not (Hash_set.mem bounds_written identity)
+                  then (
+                    Hash_set.add bounds_written identity;
+                    changed := true))
+                else
+                  let before =
+                    Option.value (Hashtbl.find metrics_written identity) ~default:Neither
+                  in
+                  let after = join_denotes before value_denotes in
+                  if not (Poly.equal before after) then (
+                    Hashtbl.set metrics_written ~key:identity ~data:after;
+                    changed := true)
+            | Some { cell = None; _ } | None -> ())
+        | _ -> ()
+
       method! expression env expr =
+        (match expr.pexp_desc with
+        | Pexp_apply (op, [ (Ppxlib.Asttypes.Nolabel, target); (Ppxlib.Asttypes.Nolabel, value) ])
+          when Option.equal String.equal
+                 (Option.map (Read.longident_of op) ~f:List.last_exn)
+                 (Some ":=") ->
+            self#write env target value
+        | _ -> ());
         (match expr.pexp_desc with
         | Pexp_apply (callee, arguments) -> (
             let callee = peel callee in
@@ -978,12 +1122,34 @@ let tolerance_census content =
                       |> Option.iter ~f:record)
             | _ -> ())
         | _ -> ());
-        super#expression env expr
+        let loops =
+          match expr.pexp_desc with
+          | Pexp_for _ | Pexp_while _ | Pexp_function _ -> true
+          | _ -> false
+        in
+        if loops then loop_depth <- loop_depth + 1;
+        let result = super#expression env expr in
+        if loops then loop_depth <- loop_depth - 1;
+        result
     end
   in
-  ignore
-    (iterator#structure { Lexical_scope.frames = []; modules = Map.empty (module String) } ast
-      : structure);
+  (* Each pass reads the writes the previous ones found; each stage ends with a pass that finds
+     nothing new, the metrics' before the bounds' begins. *)
+  let rec pass () =
+    changed := false;
+    sites := [];
+    claims := 0;
+    ignore
+      ((make_iterator ())#structure
+         { Lexical_scope.frames = []; modules = Map.empty (module String) }
+         ast
+        : structure);
+    if !changed then pass ()
+    else if not !bounds_stage then (
+      bounds_stage := true;
+      pass ())
+  in
+  pass ();
   { hand_rolled = List.rev !sites; parity_sites = !claims }
 
 (** {1 A gate that reads the population it quantifies (gh-ocannl-1289)}

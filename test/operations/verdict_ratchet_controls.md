@@ -950,3 +950,35 @@ The review control run `20261108T172343Z-30681` (mac-studio, exit 1) removed the
 filter and the readback index: the derived-metric control detected the spurious ordering refusal,
 the corpus named both affected scalar claims, and the helper's readback-identification claim
 failed. Restoring both mechanisms passed the targeted Metal batch `20261108T172435Z-58975`.
+
+## Loop-carried and reduced error metrics (gh-ocannl-2122)
+
+The tolerance reader now follows what the source writes into a `let`-bound `ref` (an assignment to it, by the
+binding's lexical identity, through renamings of it): a write inside a loop or a function body its
+binding encloses carries an error into the ref as a reduction over cells, and a bound it applies to
+an abs-of-difference cell by cell; a write at the binding's own depth is a value like any binding's.
+It also reads a reduction whose callee ends in `fold`, `foldi`, `fold2`, `fold2_exn`, `fold_left`,
+`fold_right`, `max_elt`, `reduce` or `reduce_exn`, applied or piped (`|>`, `@@`), over an
+abs-of-difference or a name holding one (a one-cell error or a cell-by-cell mapped error collection,
+which a bound alone does not make a tolerance). The control
+`refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing`
+pins the first, and
+`refuses piped and applied max_elt and reduce metrics bounded from above, but accepts lower margins, orderings, mapped errors and shadowing`
+the second. Each run used tools/mutation-run.sh `--batch` on `test/support/verdict_scan.ml` and the
+focused verdict_ratchet alias (mac-studio); each mutant exited 1 and the source was restored
+byte-for-byte. The batch's baseline exited 0 (`20261110T173928Z-99425`).
+
+| Mechanism | Mutation | Controls | Run |
+|---|---|---|---|
+| A write into a ref is followed | `verdict_scan.ml`: no write recorded | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174013Z-37233` |
+| A write at the binding's own depth is one value, not a reduction | `verdict_scan.ml`: every write read as loop-carried | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174057Z-70428` |
+| A callback body is a loop | `verdict_scan.ml`: only `for` and `while` bodies counted | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174136Z-2894` |
+| A loop-carried bound on an abs-of-difference is a tolerance | `verdict_scan.ml`: no bound read in a carried write | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174215Z-32166` |
+| A write through a renaming reaches the renamed binding | `verdict_scan.ml`: a renaming gets a binding of its own | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174255Z-57747` |
+| A write reaches its binding, not its name | `verdict_scan.ml`: bindings keyed by name | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174337Z-78221` |
+| A name holding an abs-of-difference carries it into a reduction or a write | `verdict_scan.ml`: only an abs-of-difference written in place | Failed: both controls | `20261110T174412Z-96314` |
+| A one-cell or mapped error is no tolerance until reduced | `verdict_scan.ml`: an abs-of-difference value denotes a metric | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing, and the corpus's scalar relative-error claims in `data_parallel` and `fused_classifier` | `20261110T174449Z-31404` |
+| A pipeline is read as the reduction it spells | `verdict_scan.ml`: `\|>` and `@@` not read | Failed: refuses piped and applied max_elt and reduce metrics bounded from above, but accepts lower margins, orderings, mapped errors and shadowing | `20261110T174531Z-57421` |
+| `max_elt`, `reduce` and Stdlib's folds are reductions | `verdict_scan.ml`: only the four Base fold names | Failed: refuses piped and applied max_elt and reduce metrics bounded from above, but accepts lower margins, orderings, mapped errors and shadowing | `20261110T174613Z-81694` |
+| Bounds are read only over settled metrics | `verdict_scan.ml`: bounds derived in the metric stage | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174702Z-17772` |
+| A loop-carried bound on a name holding a difference is a tolerance | `verdict_scan.ml`: only an abs-of-difference written in the bound | Failed: refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing | `20261110T174747Z-71254` |
