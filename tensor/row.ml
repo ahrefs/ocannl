@@ -4539,11 +4539,15 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
           ( Row_eq { r1 = row_of_var opnd_v opnd.prov; r2 = row_of_var res_v res.prov; origin }
             :: ineqs,
             env )
-      | ( Some (Bounds_row { opnd = [ opnd1 ]; origin = origin1; _ }),
-          Some (Bounds_row { res = [ res2 ]; origin = origin2; _ }) )
+      | Some (Bounds_row { opnd = [ opnd1 ]; _ }), Some (Bounds_row { res = [ res2 ]; _ })
         when is_stage2_up stage && equal_row_var opnd1 opnd_v && equal_row_var res2 res_v ->
-          let origin = merge_origins origin (merge_origins origin1 origin2) in
-          ( Row_eq { r1 = row_of_var opnd_v opnd.prov; r2 = row_of_var res_v res.prov; origin }
+          (* Each row is the other's only bound: from Stage2 on, a guess equates them, which is how
+             a parameter whose row only its consumer bounds takes that consumer's row. The guess is
+             HELD, as the bare pair, until the call's fixpoint ({!release_sole_bound}), where
+             nothing the call still holds can tell the rows apart (gh-ocannl-2039). Made here,
+             mid-pass, it refused a store a solution existed for, depending on where the repeated
+             pair sat in the list. *)
+          ( Row_ineq { res = row_of_var res_v res.prov; opnd = row_of_var opnd_v opnd.prov; origin }
             :: ineqs,
             env )
       | Some (Bounds_row { opnd = opnd1; _ }), _ when List.mem ~equal:equal_row_var opnd1 opnd_v ->
@@ -5761,6 +5765,32 @@ let is_draw_total = function
       round_up
   | _ -> false
 
+(* The guess {!solve_row_ineq} holds (gh-ocannl-2039). At the call's fixpoint, a held bare pair [r ⊑
+   o] whose rows are still each the other's only bound is equated, unless one row's GLB is open in
+   the other ([<r>.[2] ⊑ o]): equating them would give that row an infinite number of axes, a guess
+   the store already rules out. Every qualifying pair at once: equating one leaves the other pairs'
+   entries as they were, since the merged row is bounded by nothing else. *)
+let release_sole_bound env = function
+  | Row_ineq { res; opnd; origin } -> (
+      let glb_mentions v = function
+        | Some { bcast = Row_var x; _ } -> equal_row_var x v
+        | _ -> false
+      in
+      match (subst_row env res, subst_row env opnd) with
+      | ( { beg_dims = []; dims = []; bcast = Row_var r; prov = res_prov },
+          { beg_dims = []; dims = []; bcast = Row_var o; prov = opnd_prov } )
+        when not (equal_row_var r o) -> (
+          match (find_row env.row_env r, find_row env.row_env o) with
+          | ( Some (Bounds_row { opnd = [ o' ]; glb = glb_r; _ }),
+              Some (Bounds_row { res = [ r' ]; glb = glb_o; _ }) )
+            when equal_row_var o o' && equal_row_var r r'
+                 && (not (glb_mentions o glb_r))
+                 && not (glb_mentions r glb_o) ->
+              Some (Row_eq { r1 = row_of_var o opnd_prov; r2 = row_of_var r res_prov; origin })
+          | _ -> None)
+      | _ -> None)
+  | _ -> None
+
 let%debug4_sexp solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
@@ -5876,16 +5906,30 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in
-    if List.is_empty ineqs' then (ineqs', env)
-    else if List.equal equal_constraint_up_to_origin ineqs' ineqs then
-      let settle () =
-        match settle_window ~merge_pairs:false [] ineqs' with
-        | Some _ as settled -> settled
-        | None -> settle_window ~merge_pairs:true [] ineqs'
-      in
+    let settle () =
+      match settle_window ~merge_pairs:false [] ineqs' with
+      | Some _ as settled -> settled
+      | None -> settle_window ~merge_pairs:true [] ineqs'
+    in
+    let at_fixpoint () =
       match if is_stage2_up stage then settle () else None with
       | Some (ineqs', env) -> solve ineqs' env
-      | None -> (ineqs', env)
+      | None ->
+          let released = ref false in
+          let ineqs'' =
+            if not (is_stage2_up stage) then ineqs'
+            else
+              List.map ineqs' ~f:(fun ineq ->
+                  match release_sole_bound env ineq with
+                  | Some eq ->
+                      released := true;
+                      eq
+                  | None -> ineq)
+          in
+          if !released then solve ineqs'' env else (ineqs', env)
+    in
+    if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
+      at_fixpoint ()
     else solve ineqs' env
   in
   (* gh-ocannl-1961: what closes a draw's rows reads the environment, which mid-pass lies: a solved

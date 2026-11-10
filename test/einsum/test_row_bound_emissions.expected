@@ -13,3 +13,16 @@ the old emission, the equations swapped: [3] [] [] []
 the sweep solves stores and refuses others: true
 every solution satisfies its store, on ground rows: true
 no store the old emission solved is refused: true
+e<=u, e<=v, a<=f, f<=w, w=u, f=[2], then in one stage-2 call v=u, e=[3,2], u=[2]: solved: true
+the same store under the transitive emission: solved: true
+the issue's store, one stage-2 call per equation: Shape_error: Too many axes in an operand; maybe using * instead of *.?
+r<=o recorded, then r=[3,2], o=[2]: solved: true
+the same with the bound repeated first: solved: true
+the same with the bound repeated last: solved: true
+r<=o repeated, r=[2], o=[3,2]: refused, the operand has more axes: true
+r<=o repeated, r=[3,2], o=[3]: refused, the aligned axes differ: true
+r<=o and o<=r, r=[3,2], o=[2]: refused, the bounds make them equal: true
+r<=o and o<=r, r=[3,2]: solved, o with it: true
+the dim twin: d1<=d2 recorded, then d1=3, d2=1 in one stage-2 call: 3 1
+the dim twin, the bound repeated first: Shape_error: solved dimensions for axis: different bases
+repeating a recorded bound in the stage-2 call refuses no store it solves: true
