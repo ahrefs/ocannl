@@ -60,10 +60,10 @@ let render_rivals { initial; increment; terms; narrow } =
 (* [Bf16_auto], the default bf16 mode, which the gated bf16 block below states its claims for (the
    universal legs at the end name [Bf16_wide]). The stanza declares OCANNL_BF16_ARITHMETIC, so the
    gate and the block both pin it rather than inheriting the ambient mode: under an ambient
-   [Bf16_wide] the gate opens on Metal and the narrow_compute_f32 negative controls stay wide
-   (gh-ocannl-1078). On HIP [Bf16_auto] itself opens the gate since gh-ocannl-1051; the controls
-   that execute there are the fp8 one, whose HIP residency [narrow_compute_f32] still governs, and
-   the cc-only bf16 ones skip. *)
+   [Bf16_narrow] the gate would close on HIP and Metal and the narrow_compute_f32 negative controls
+   would not execute there (gh-ocannl-1078). On HIP and Metal [Bf16_auto] itself opens the gate
+   since gh-ocannl-1051 and gh-ocannl-2029; the controls that execute there are the fp8 one, whose
+   residency [narrow_compute_f32] still governs, and the cc-only bf16 ones skip. *)
 let bf16_auto pol = { pol with Numerics.bf16_arithmetic = Numerics.Bf16_auto }
 
 (* Read the same per-backend policy code generation applies, rather than reconstructing it from the
@@ -395,10 +395,11 @@ let () =
     ((not (Array.is_empty got_auto16))
     && Bool.equal (Array.for_all2_exn got_auto16 want16 ~f:Float.equal) on_cpu)
 
-(* Where the backend's accumulator resolution keeps bf16 narrow (Metal under [Bf16_auto]) every
-   bf16-widening claim below is skipped by name, and off a CPU backend every cc-only one, in the
-   order this one sequence makes them (gh-ocannl-1703). The fp8 claim holds on HIP and Metal too, so
-   it executes on every backend rather than printing a green-by-skip line. *)
+(* Where the backend's accumulator resolution keeps bf16 narrow (none under [Bf16_auto] since
+   gh-ocannl-2029; HIP and Metal under [Bf16_narrow]) every bf16-widening claim below is skipped by
+   name, and off a CPU backend every cc-only one, in the order this one sequence makes them
+   (gh-ocannl-1703). The fp8 claim holds on HIP and Metal too, so it executes on every backend
+   rather than printing a green-by-skip line. *)
 let bf16_leg = Verdict.leg ~when_:widens_bf16 ~on:backend_name ()
 let bf16_cc_leg = Verdict.sub_leg bf16_leg ~when_:(lazy on_cpu) ~on:backend_name
 
@@ -1089,8 +1090,10 @@ let default_bf16_block () =
      residency is structural (its mma legs accumulate f32 in hardware, so a policy-narrowed serial
      leg would resurrect the schedule-dependent width — the serial legs stay wide there under either
      setting). The fp8 control runs on cc AND CUDA, where nothing tensorizes fp8 destinations and
-     the policy genuinely restores per-step semantics; on Metal it would stay wide (fp8 computes in
-     f32 structurally), which the bf16 gate already skips. *)
+     the policy genuinely restores per-step semantics; on Metal it stays wide (fp8 computes in f32
+     structurally). Its gate is that resolution itself, read under the policy-off setting: it used
+     to ride the bf16 gate, which stopped closing on Metal when Metal's [Bf16_auto] went wide
+     (gh-ocannl-2029). *)
   let saved_policy = Numerics.get () in
   Numerics.set_policy { saved_policy with narrow_compute_f32 = false };
   in_leg ~leg:cc_leg
@@ -1102,8 +1105,14 @@ let default_bf16_block () =
       Tn.update_prec mc2.Tensor.value Ir.Ops.bfloat16;
       let got_off = run ~name:"aw_bf16_naive_off" mc2 in
       p label (not (Array.for_all2_exn got_off (Lazy.force got) ~f:Float.equal)));
-  in_leg ~leg "narrow_compute_f32=false recovers per-step fp8 narrowing (16 + 8x0.5 stays 16)"
-    (fun label ->
+  let fp8_off_leg =
+    Verdict.leg
+      ~when_:
+        (Ir.Ops.equal_prec (codegen_capabilities.Ir.Backend_intf.accum_prec Ir.Ops.fp8) Ir.Ops.fp8)
+      ~on:backend_name ()
+  in
+  in_leg ~leg:fp8_off_leg
+    "narrow_compute_f32=false recovers per-step fp8 narrowing (16 + 8x0.5 stays 16)" (fun label ->
       p label (Float.equal (fp8_sum ~name:"aw_fp8_off" ~first_id:9720 ()) fp8_values.per_step));
   Numerics.set_policy saved_policy;
   in_leg ~leg:cc_leg "narrow_compute_f32=false brings back the per-k-step narrowing in the k-loop"

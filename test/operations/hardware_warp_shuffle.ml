@@ -20,9 +20,10 @@
    backend's accumulator RESIDENCY ([C_syntax_config.accum_prec], gh-ocannl-663) rather than at the
    node's storage precision, so a bf16 reduction on a backend that widens bf16 shuffles f32 and
    narrows once into the cell — the same width its serial rendering accumulates at (bf16 on CUDA,
-   and on HIP since its [Bf16_auto] resolves wide, gh-ocannl-1051). Where the residency stays narrow
-   (bf16 on Metal, and on HIP under [Bf16_narrow]; f16 under the default [fp16_arithmetic] policy)
-   there is nothing wider to shuffle and the rendering keeps refusing loudly.
+   and on HIP and Metal since their [Bf16_auto] resolves wide, gh-ocannl-1051 and gh-ocannl-2029).
+   Where the residency stays narrow (bf16 on HIP and Metal under [Bf16_narrow]; f16 under the
+   default [fp16_arithmetic] policy) there is nothing wider to shuffle and the rendering keeps
+   refusing loudly.
 
    f16's residency is a POLICY question (gh-ocannl-680), so it gets both legs: the refusal under the
    default policy, and — at the very end of this file, under [Numerics.Fp16_wide] — the twin of the
@@ -110,9 +111,9 @@ let render_rivals { n; term; narrow } =
   let storage_tree = reduce_storage_tree ~narrow partials in
   { once_narrowed; storage_tree; per_step }
 
-(* Query the C-syntax accumulator policy itself (gh-ocannl-822). Metal keeps bf16 residency (and HIP
-   does under [Bf16_narrow], not under the default since gh-ocannl-1051), which for the shuffle
-   means a loud refusal because no bf16 shuffle overload is advertised. *)
+(* Query the C-syntax accumulator policy itself (gh-ocannl-822). HIP and Metal keep bf16 residency
+   under [Bf16_narrow] (not under the default since gh-ocannl-1051 and gh-ocannl-2029), which for
+   the shuffle means a loud refusal because no bf16 shuffle overload is advertised. *)
 let widens_bf16 =
   not
     (Ir.Ops.equal_prec

@@ -762,12 +762,12 @@ let no_codegen_capabilities =
     flags, each precision-resolution function tabulated over every precision ({!Ops.all_precs}), and
     its mma arm table over every storage triple and emission scope (gh-ocannl-1153). It is what a
     numerics mode resolves to on this backend (gh-ocannl-1117) — the mode itself is fingerprinted by
-    [Schedule_cache.numerics_tag], but what [Bf16_auto] means on HIP changed in gh-ocannl-1051 with
-    the mode unchanged, and a winner tuned under the old resolution would have replayed. Tabulating
-    the function codegen calls, rather than naming the predicate behind it, makes the cache identity
-    move exactly when the resolution does, on every backend, with nothing to add by hand. The record
-    pattern names every field, so a field added to {!codegen_capabilities} is a compile error here
-    until it is rendered (warning 9).
+    [Schedule_cache.numerics_tag], but what [Bf16_auto] means on HIP changed in gh-ocannl-1051 (and
+    on Metal in gh-ocannl-2029) with the mode unchanged, and a winner tuned under the old resolution
+    would have replayed. Tabulating the function codegen calls, rather than naming the predicate
+    behind it, makes the cache identity move exactly when the resolution does, on every backend,
+    with nothing to add by hand. The record pattern names every field, so a field added to
+    {!codegen_capabilities} is a compile error here until it is rendered (warning 9).
 
     [mma_operand_loads], [mma_accepts] and [mma_operand_fragments] are not rendered either
     (gh-ocannl-1254): which operands load through [ldmatrix], and how often, is a fixed function of

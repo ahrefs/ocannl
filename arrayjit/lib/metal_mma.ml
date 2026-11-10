@@ -1,5 +1,27 @@
 open Base
 
+(* Whether bf16 reduction accumulators reside in f32 on this backend: under [Numerics.Bf16_wide],
+   and since gh-ocannl-2029 under [Bf16_auto] too -- only [Bf16_narrow] (the [approximate] profile's
+   pin) keeps the [simdgroup_bfloat8x8] accumulator and storage-width serial accumulators. Why
+   (measured on an M4 Max, mixed-sign bf16-exact inputs, K = 8..256): the uniform-bf16
+   [simdgroup_multiply_accumulate] is a k-blocked schedule of its own -- it sums each 8-deep k block
+   in f32 and rounds to bf16 once per block -- while the serial bfloat loop is a per-step FMA
+   rounded to bf16, so the two narrow legs disagree in most cells of any reduction whose partials
+   leave bf16's exact range (the 8-deep blocks are the more accurate). The wide arm
+   ([simdgroup_float8x8] over bfloat operand fragments) is an f32 FMA chain in k order whose
+   partials equal the serial f32 accumulation BITWISE, so under the wide resolution a seeded tile
+   and its serial twin narrow once, to the same value, and [tune] crowning a tile changes no value.
+   (f16 needs no counterpart: both its tile and its serial loop are per-step half FMAs, bitwise
+   equal.) The one predicate behind [Metal_backend]'s [accum_prec] and [mma_accumulator], so
+   emission and residency cannot disagree; read per call, never folded into the lazily cached device
+   descriptor. The cache key follows by derivation ([Backend_intf.codegen_capabilities_fingerprint]
+   tabulates [accum_prec] and [mma_arm], gh-ocannl-1117/1153). Pinned by
+   [test/operations/mma_bf16_seed_parity]. *)
+let bf16_accum_wide () =
+  match (Numerics.get ()).Numerics.bf16_arithmetic with
+  | Numerics.Bf16_auto | Numerics.Bf16_wide -> true
+  | Numerics.Bf16_narrow -> false
+
 (* The one combination resolver both MMA hooks consult: the precision a storage triple's accumulator
    fragment resides at, every fragment type then following from its precision ([Metal_backend]'s
    [mma_fragment_types]); its [mma_d_boundary_lines] converts at the destination boundary exactly
@@ -28,10 +50,11 @@ let mma_accumulator ~d_prec ~a_prec ~b_prec =
      operands into a float accumulator compile and execute on Apple silicon (schedule_mma_matmul's
      bf32 and [Bf16_wide] legs, M4 Max). The f32-storage arm needs no conversion; the wide arm
      converts at the bfloat destination through the coordinate table exactly as the wide-f16 one
-     does. *)
+     does. Since gh-ocannl-2029 the wide arm is [Bf16_auto]'s too ([bf16_accum_wide]); only
+     [Bf16_narrow] reaches the bfloat accumulator, whose 8-deep blocks narrow differently from the
+     per-step serial loop. *)
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Single_prec _ -> Some Ops.single
-  | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ when Numerics.bf16_accum_wide ()
-    ->
+  | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ when bf16_accum_wide () ->
       Some Ops.single
   | Ops.Bfloat16_prec _, Ops.Bfloat16_prec _, Ops.Bfloat16_prec _ -> Some Ops.bfloat16
   | _ -> None

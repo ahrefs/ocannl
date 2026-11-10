@@ -542,12 +542,12 @@ module type C_syntax_config = sig
       their native narrow arithmetic) but accumulate per their tensor-unit format triples, and this
       hook is where a backend mirrors those: CUDA's bf16 mma legs hold f32 per-lane registers across
       the whole [k] extent (the hardware has no bf16 accumulate), so its serial legs must widen bf16
-      the same way, while Metal's uniform-bf16 tile accumulates in bf16 fragments, so its serial
-      legs keep bf16 residency — as HIP's do only under [Numerics.Bf16_narrow]: under the default
-      [Bf16_auto] HIP swaps its uniform-bf16 arm to an f32 accumulator fragment and widens its
-      serial legs to match (gh-ocannl-1051). fp8 has an accumulator format on no backend and follows
-      the CPU policy (f32) everywhere; f16 accumulates natively at f16 in every seeded GPU triple
-      and stays put.
+      the same way. HIP and Metal keep bf16 residency only under [Numerics.Bf16_narrow]: under the
+      default [Bf16_auto] each swaps its uniform-bf16 arm to an f32 accumulator fragment and widens
+      its serial legs to match (gh-ocannl-1051, gh-ocannl-2029 — Metal's bf16 fragment narrows per
+      8-deep k block, never per step like a narrow serial loop). fp8 has an accumulator format on no
+      backend and follows the CPU policy (f32) everywhere; f16 accumulates natively at f16 in every
+      seeded GPU triple and stays put.
 
       The recognized accumulation update renders {e wholly} at this precision, contribution included
       — gh-ocannl-639's rendering shape, kept on GPU deliberately: operand widenings are exact, a

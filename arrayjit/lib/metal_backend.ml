@@ -1697,7 +1697,7 @@ module Impl = struct
        precision alone, as the signature requires. *)
     let compute_prec = function Ops.Fp8_prec _ -> Ops.single | prec -> prec
 
-    (* gh-ocannl-663: the ordinary seeded f16/bf16 tiles accumulate in fragments of the storage
+    (* gh-ocannl-663: the ordinary seeded f16 tiles accumulate in fragments of the storage
        precision, so serial and tensorized residency agree; fp8 has no accumulator format and
        computes in f32 above regardless of policy. Restated next to the [compute_prec] override
        because the pair binds at [include] time (signature coupling note).
@@ -1708,9 +1708,12 @@ module Impl = struct
     let accum_prec prec =
       match prec with
       | Ops.Half_prec _ when Numerics.fp16_accum_wide () -> Ops.single
-      (* gh-ocannl-838: likewise bf16 under [Numerics.Bf16_wide], where the uniform-bf16 MMA arm
-         swaps to a float accumulator over bfloat operands (gh-ocannl-923). *)
-      | Ops.Bfloat16_prec _ when Numerics.bf16_accum_wide () -> Ops.single
+      (* gh-ocannl-838: likewise bf16 where the uniform-bf16 MMA arm swaps to a float accumulator
+         over bfloat operands (gh-ocannl-923) -- under [Bf16_wide], and since gh-ocannl-2029 under
+         [Bf16_auto] too: the storage-width bfloat fragment narrows once per 8-deep k block, never
+         per step like a storage-width serial loop, so only the wide pair agrees
+         ([Metal_mma.bf16_accum_wide]). *)
+      | Ops.Bfloat16_prec _ when Metal_mma.bf16_accum_wide () -> Ops.single
       | _ -> compute_prec prec
 
     (* MSL has no [long long]: its 64-bit signed scalar is [long] (what [int64_t] names here), so

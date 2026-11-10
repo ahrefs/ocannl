@@ -1,0 +1,23 @@
+every partial sum of these operands is exact in f32, at every k this file contracts: true
+k = 8: the per-step model differs from the once-narrowed one on these inputs: true
+k = 32: the per-step, per-block and once-narrowed models pairwise differ on these inputs: true
+Bf16_auto k=8: every tile statement renders the simdgroup intrinsics: true
+Bf16_auto k=8: the tile equals the serial twin bitwise: true
+Bf16_auto k=8: the serial twin equals the once-narrowed model bitwise: true
+Bf16_auto k=32: every tile statement renders the simdgroup intrinsics: true
+Bf16_auto k=32: the tile equals the serial twin bitwise: true
+Bf16_auto k=32: the serial twin equals the once-narrowed model bitwise: true
+Bf16_wide k=8: every tile statement renders the simdgroup intrinsics: true
+Bf16_wide k=8: the tile equals the serial twin bitwise: true
+Bf16_wide k=8: the serial twin equals the once-narrowed model bitwise: true
+Bf16_wide k=32: every tile statement renders the simdgroup intrinsics: true
+Bf16_wide k=32: the tile equals the serial twin bitwise: true
+Bf16_wide k=32: the serial twin equals the once-narrowed model bitwise: true
+Bf16_narrow k=32: the tile narrows once per 8-deep block (the per-block model): true
+Bf16_narrow k=32: the serial loop narrows at every k step (the per-step model): true
+Bf16_narrow k=8: one block -- the tile narrows once where the serial loop narrows per step: true
+default policy, bf16: some seeded tile renders the simdgroup intrinsics: true
+default policy, bf16: every seeded tile that ran equals the serial rendering bitwise: true
+default policy, f16: some seeded tile renders the simdgroup intrinsics: true
+default policy, f16: every seeded tile that ran equals the serial rendering bitwise: true
+Metal's capabilities fingerprint under Bf16_auto equals Bf16_wide's and differs from Bf16_narrow's: true
