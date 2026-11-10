@@ -207,9 +207,9 @@ let () =
       TDSL.einsum ~capture_dims:[ capture "p" 1; capture "q" 3 ] "p^o^q; o => o" x (ones 3) ());
   run_case ~label:"ternary einsum, p^o^q; o; o => o" ~layout:Trailing ~rows:1 ~src:7 ~dst:3
     ~offset:1 ~mode:Extract (fun x ->
-      Operation.einsum3
+      TDSL.einsum3
         ~capture_dims:[ capture "p" 1; capture "q" 3 ]
-        "p^o^q; o; o => o" ~grad_spec:Tensor.If_needed x (ones 3) (ones 3) ())
+        "p^o^q; o; o => o" x (ones 3) (ones 3) ())
 
 (* A slice inside a concatenation: [1^a; b => a^b] drops the first operand's first cell and
    concatenates the rest with the second operand. [a] occurs only inside concatenated axes, so the

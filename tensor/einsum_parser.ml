@@ -21,7 +21,7 @@ let named_spec_functions =
   List.map
     (binary_operator_functions @ unary_operator_functions @ [ concat_operator_function ])
     ~f:snd
-  @ [ "concat_sum" ]
+  @ [ "concat_sum"; "einsum3" ]
 
 let operators_with_generated_specs =
   binary_operators_with_generated_specs @ unary_operators_with_generated_specs
