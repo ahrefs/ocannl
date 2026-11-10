@@ -210,14 +210,13 @@ let declared_inline () =
     (routine, ctr, Context.get_values (Context.run ctx routine) ctr)
   in
   let routine, ctr, got =
-    run_ctr ~name:"fof_ctr"
-      [%cd { fof_ctr; o = [ 2 ]; zero_valid = true } =: (!.1.0 *. fof_ctr) + 1]
+    run_ctr ~name:"fof_ctr" [%cd { fof_ctr; o = [ 2 ]; zero_valid = true } =: fof_ctr + 1]
   in
   p "{ x; zero_valid = true } marks the node" (Tn.is_zero_valid ctr);
   p "so it is no undeclared read" (not (Set.mem routine.read_first_undeclared ctr));
   p_all "and starts from zero" (Array.to_list got) ~f:(Float.equal 1.);
   let routine, ctr, got =
-    run_ctr ~name:"fof_plain" [%cd { fof_plain; o = [ 2 ] } =: (!.1.0 *. fof_plain) + 1]
+    run_ctr ~name:"fof_plain" [%cd { fof_plain; o = [ 2 ] } =: fof_plain + 1]
   in
   p "{ x } alone declares nothing" (Set.mem routine.read_first_undeclared ctr);
   p_all "so it reads the fill" (Array.to_list got) ~f:Float.is_nan;
