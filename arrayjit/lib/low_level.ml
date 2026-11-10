@@ -2240,6 +2240,11 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
                 (top_llc : t)];
               raise @@ Non_virtual code)))
   in
+  (* How many [Local_scope] bodies the walk is inside: there a statement assigns only the scope's
+     own locals (scope purity, gh-ocannl-584), so an [If] guards no write of a node -- the guard
+     [guard_hoisted] carries into a body over an initializer's out-of-range read
+     (gh-ocannl-2077). *)
+  let in_scope_body = ref 0 in
   (* Traverse the float code too, for completeness / future use-cases. *)
   let rec loop_proc ~env_dom ~loop_ranges llc =
     let loop = loop_proc ~env_dom ~loop_ranges in
@@ -2304,6 +2309,9 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
        [~guarded] (gh-651). Reachable pre-virtualization: [Assignments.to_low_level] emits interval
        guards for clamped-window pooling (gh-504) and extent guards for symbolic extents (gh-490),
        besides the launch-extent guards introduced at backend-compile time. *)
+    | If { cond = c, _; body } when !in_scope_body > 0 ->
+        loop_scalar ~env_dom ~loop_ranges c;
+        loop body
     | If _ -> raise @@ Non_virtual "142:guarded-computation"
   and loop_scalar ~env_dom ~loop_ranges llsc =
     match llsc with
@@ -2314,7 +2322,11 @@ let%diagn2_sexp check_and_store_virtual (optim_ctx : optimize_ctx)
     | Get_dynamic { dyn_value = v, _; _ } ->
         (* gh-343: defensive -- [Get_dynamic] is produced after virtualization analysis. *)
         loop_scalar ~env_dom ~loop_ranges v
-    | Local_scope { body; _ } -> loop_proc ~env_dom ~loop_ranges body
+    | Local_scope { body; _ } ->
+        Int.incr in_scope_body;
+        Exn.protect
+          ~f:(fun () -> loop_proc ~env_dom ~loop_ranges body)
+          ~finally:(fun () -> Int.decr in_scope_body)
     | Get_local _ -> ()
     | Get_merge_buffer (tn, idcs) ->
         if Tn.equal tn top_tn then check_idcs loop_ranges idcs
@@ -3848,9 +3860,15 @@ let instantiate_computations ~(fresh_symbol : unit -> Indexing.symbol)
       | Declare_local _ -> None
       | Comment _ -> Some llc
       | Staged_compilation _ -> Some llc
+      | If { cond = c, cprec; body } ->
+          (* Only inside a scope body ([check_and_store_virtual]'s [in_scope_body]): the guard
+             [guard_hoisted] put over an initializer, which assigns a local alone. *)
+          Option.map (loop env body) ~f:(fun body : t ->
+              If { cond = (loop_scalar env c, cprec); body })
       (* Unreachable: [check_and_store_virtual] rejects computations containing barriers,
-         cooperative tile statements, guarded statements, and (gh-466) dynamic scatters. *)
-      | Workgroup_barrier | Tile_mma _ | If _ | Set_dynamic _ -> assert false
+         cooperative tile statements, guarded statements outside a scope body, and (gh-466) dynamic
+         scatters. *)
+      | Workgroup_barrier | Tile_mma _ | Set_dynamic _ -> assert false
     and loop_scalar env llsc : scalar_t =
       match llsc with
       | Constant _ | Constant_bits _ -> llsc

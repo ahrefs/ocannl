@@ -1679,7 +1679,14 @@ let row_constexpr_cap_exempt () =
    value untouched, where the update takes a [Where]. *)
 let row_guarded_scope_read ~read () =
   let stride = 4 and extent = 8 in
-  let tag = match read with `Row -> "gsr_row" | `Constant -> "gsr_const" | `Init -> "gsr_init" in
+  let tag =
+    match read with
+    | `Row -> "gsr_row"
+    | `Constant -> "gsr_const"
+    | `Init -> "gsr_init"
+    | `Init_chain -> "gsr_chain"
+  in
+  let e = mk ~dims:[| extent |] (tag ^ "_e") in
   let x = mk ~dims:[| 3; 2; stride |] (tag ^ "_x") and cc = mk ~dims:[| 3 |] (tag ^ "_c") in
   let b = mk ~dims:[| extent |] (tag ^ "_b") and out = mk ~dims:[| extent |] (tag ^ "_out") in
   materialize x;
@@ -1703,7 +1710,7 @@ let row_guarded_scope_read ~read () =
                    (add
                       (get cc [| iter i |])
                       (add (get x [| fixed 0; iter k; fixed 0 |]) (mul (c 10.) (embed i)))))))
-    | `Init ->
+    | `Init | `Init_chain ->
         loop_n i 3
           (seq
              (set cc [| iter i |] (get x [| iter i; fixed 0; fixed 0 |]))
@@ -1711,28 +1718,42 @@ let row_guarded_scope_read ~read () =
                 [| iter i |]
                 (add (get cc [| iter i |]) (get x [| iter i; fixed 1; fixed 0 |]))))
   in
+  let consumers =
+    match read with
+    | `Init_chain ->
+        let j0 = sym () in
+        [
+          loop_n j0 extent (set e [| iter j0 |] (mul (c 2.) (get b [| iter j0 |])));
+          loop_n j extent
+            (set out [| iter j |] (add (get e [| iter j |]) (add (c 7.) (mul (c 300.) (embed j)))));
+        ]
+    | `Row | `Constant | `Init ->
+        [
+          loop_n j extent
+            (set out [| iter j |] (add (get b [| iter j |]) (add (c 7.) (mul (c 300.) (embed j)))));
+        ]
+  in
   let llc =
     List.reduce_exn ~f:seq
-      [
-        reduction;
-        zero b;
-        loop_n i2 3 (set b [| iter i2 |] (add (get cc [| iter i2 |]) (c 1.)));
-        loop_n j extent
-          (set out [| iter j |] (add (get b [| iter j |]) (add (c 7.) (mul (c 300.) (embed j)))));
-      ]
+      ([ reduction; zero b; loop_n i2 3 (set b [| iter i2 |] (add (get cc [| iter i2 |]) (c 1.))) ]
+      @ consumers)
   in
   let x_cells = Array.init (Tn.num_elems x) ~f:(fun n -> Float.of_int (1 + n)) in
   let at i k = x_cells.(((i * 2) + k) * stride) in
   let c_of i =
     match read with
-    | `Row | `Init -> at i 0 +. at i 1
+    | `Row | `Init | `Init_chain -> at i 0 +. at i 1
     | `Constant -> at 0 0 +. at 0 1 +. (20. *. Float.of_int i)
   in
   let expected =
     Array.init extent ~f:(fun j ->
-        (if j < 3 then c_of j +. 1. else 0.) +. 7. +. (300. *. Float.of_int j))
+        let b_j = if j < 3 then c_of j +. 1. else 0. in
+        (match read with `Init_chain -> 2. *. b_j | `Row | `Constant | `Init -> b_j)
+        +. 7.
+        +. (300. *. Float.of_int j))
   in
-  row ~label:tag ~llc ~cand:b ~out ~seed:[ (x, x_cells) ] ~expected ~verdict:Accepted;
+  let cand = match read with `Init_chain -> e | `Row | `Constant | `Init -> b in
+  row ~label:tag ~llc ~cand ~out ~seed:[ (x, x_cells) ] ~expected ~verdict:Accepted;
   let o = optimize ~name:(tag ^ "_strict") llc in
   let ifs, wheres, _ = census o.LL.llc in
   (match read with
@@ -1742,7 +1763,13 @@ let row_guarded_scope_read ~read () =
   | `Init ->
       (* The initializer goes under an [If], its value untouched, so it renders as its source store
          would: a [Where] around it would hide a narrowing read from the init's precision rule. *)
-      p (tag ^ ": the update takes a Where, the initializer an If") (wheres = 2 && ifs = 1));
+      p (tag ^ ": the update takes a Where, the initializer an If") (wheres = 2 && ifs = 1)
+  | `Init_chain ->
+      (* The guarded scope is captured in [e]'s template and replayed at [out]: an [If] inside a
+         scope body assigns a local alone, so the template keeps it (Codex review round 2). *)
+      p
+        (tag ^ ": b stays virtual inside e's template, its initializer under an If")
+        (known_virtual o b && ifs = 1));
   p
     (tag ^ ": the strict interpreter evaluates what the optimizer left without a fault")
     (match
@@ -1917,6 +1944,7 @@ let () =
   case "row_guarded_scope_read ~read:`Row" (row_guarded_scope_read ~read:`Row);
   case "row_guarded_scope_read ~read:`Constant" (row_guarded_scope_read ~read:`Constant);
   case "row_guarded_scope_read ~read:`Init" (row_guarded_scope_read ~read:`Init);
+  case "row_guarded_scope_read ~read:`Init_chain" (row_guarded_scope_read ~read:`Init_chain);
   case "row_hoisted_local" row_hoisted_local;
   case "row_scan_recurrence" row_scan_recurrence;
   case "row_constexpr_cap_exempt" row_constexpr_cap_exempt;

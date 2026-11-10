@@ -62,6 +62,7 @@ row_trailing_sub_axis_read: the case ran to completion (raised Failure("injected
 row_guarded_scope_read ~read:`Row: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_guarded_scope_read ~read:`Constant: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_guarded_scope_read ~read:`Init: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+row_guarded_scope_read ~read:`Init_chain: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_hoisted_local: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_scan_recurrence: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_constexpr_cap_exempt: the case ran to completion (raised Failure("injected by --raise-every-row")): false
