@@ -590,3 +590,14 @@
   (env_var OCANNL_BACKEND))
  (modules input_equals_output_deferral)
  (libraries base ocannl stdio arrayjit.verdict))
+
+(test
+ ; ocannl-backend: cc -- every execution context is an explicit Context.cpu (): the claims are about
+ ; shape closure of product ties.
+ (name product_tie_concat_affine)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules product_tie_concat_affine)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))

@@ -1806,6 +1806,16 @@ let subst_row_constraint_unprotected ~subst_in_dim ~get_dim_val stage constr =
                  "Total_elems constraint: shape cannot be strided, %{tot#Int} not divisible by \
                   %{denom#Int}"],
                [ Rows_constr_failed { constr } ] )
+  | Total_elems { numerator = Strided_var { var; _ } as numerator; divided_by; keep_axis }
+    when match subst_in_dim (Var var) with Affine _ | Concat _ -> true | _ -> false ->
+      (* The tie's variable is solved to a window or a concatenation whose extent the substitution
+         left open (a part unsolved, or [keep_affine] keeping the parts): one variable times a
+         coefficient cannot carry it. The numerator keeps the solved variable, as the stage-1 [Dim]
+         arm below does, and only the divisors are substituted: every later application substitutes
+         through the environment, which sums a concrete extent into a [Dim]; and a closed row's
+         total reaches the variable as an equation, which its solution carries to the parts
+         (gh-ocannl-2086). *)
+      subst_total_elems_divided_by numerator divided_by ~keep_axis
   | Total_elems { numerator = Strided_var { coeff; var; denom; round_up }; divided_by; keep_axis }
     when not (equal_dim (Var var) (subst_in_dim (Var var))) -> (
       reapply_rows_constr := true;
@@ -1838,12 +1848,7 @@ let subst_row_constraint_unprotected ~subst_in_dim ~get_dim_val stage constr =
           @@ Shape_error
                ( "Total_elems constraints are not supported with symbolic dimensions",
                  [ Dim_mismatch [ value ] ] )
-      | Affine _ ->
-          (* FIXME: NOT IMPLEMENTED YET *)
-          failwith "NOT IMPLEMENTED YET"
-      | Concat _ ->
-          (* FIXME: NOT IMPLEMENTED YET *)
-          failwith "NOT IMPLEMENTED YET")
+      | Affine _ | Concat _ -> (* The deferring arm above takes these. *) assert false)
   | Total_elems { numerator; divided_by; keep_axis } ->
       subst_total_elems_divided_by numerator divided_by ~keep_axis
   | Exact dims ->
