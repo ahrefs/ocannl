@@ -12850,9 +12850,10 @@ let get_ident_within_code ?no_dots ?(blacklist = []) ?(reserved_prefixes = [])
     let idents = if is_grad then grad_idents else nograd_idents in
     Option.iter ident ~f:(fun ident ->
         (* A reserved prefix, or a name [reserved] holds, is seen as a repeat, like a blacklisted
-           name. *)
+           name. So is a label spelled like a name minted from a node id: the minter's own namespace
+           (gh-ocannl-2103). *)
         let reserved =
-          reserved ident
+          reserved ident || Tn.in_id_ident_namespace ident
           || List.exists reserved_prefixes ~f:(fun prefix -> String.is_prefix ident ~prefix)
         in
         Hashtbl.update idents ident ~f:(fun old ->
@@ -12916,6 +12917,19 @@ let get_ident_within_code ?no_dots ?(blacklist = []) ?(reserved_prefixes = [])
     | Constant _ | Constant_bits _ | Embed_index _ -> ()
   in
   Array.iter ~f:loop llcs;
+  (* Under the [_grad] separator a gradient of ident [x] is minted [x_grad], which is also what a
+     non-gradient label [x_grad] keeps: such a label is a repeat whenever the code holds a gradient
+     of ident [x] (gh-ocannl-2103). *)
+  (match ident_style with
+  | `Heuristic_ocannl `Under_grad ->
+      Hashtbl.keys nograd_idents
+      |> List.iter ~f:(fun ident ->
+          match String.chop_suffix ident ~suffix:"_grad" with
+          | Some base when Hashtbl.mem grad_idents base ->
+              Hashtbl.update nograd_idents ident ~f:(fun old ->
+                  Set.add (Option.value ~default:Utils.no_ints old) (-1))
+          | _ -> ())
+  | `Heuristic_ocannl `Dot_grad | `Name_and_label | `Name_only -> ());
   let repeating_nograd_idents =
     Hashtbl.filter nograd_idents ~f:(fun ids -> List.length (Set.to_list ids) > 1)
   in

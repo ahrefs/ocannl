@@ -162,7 +162,7 @@ test/operations/cpu_vectorized.ml [run by @test/operations/runtest-cpu_vectorize
     "float4_t"
     "reinterpret_cast"
     "vector_size"
-test/operations/declared_temporaries.ml [run by @test/operations/runtest-declared_temporaries; also pins text this scan cannot name: untraced callback]
+test/operations/declared_temporaries.ml [run by @test/operations/runtest-declared_temporaries-logged, @test/operations/runtest-declared_temporaries-plain; also pins text this scan cannot name: untraced callback]
 test/operations/f64_narrowing_parity.ml [run by @test/operations/runtest-f64_narrowing_parity; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
 test/operations/fission_replay_segmentation.ml [run by @test/operations/runtest-fission_replay_segmentation]
 test/operations/fission_schedule.ml [run by @test/operations/runtest-fission_schedule]
@@ -672,7 +672,8 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-cpu_scratch_matmul_grid
 @test/operations/runtest-cpu_simd_reduction
 @test/operations/runtest-cpu_vectorized
-@test/operations/runtest-declared_temporaries
+@test/operations/runtest-declared_temporaries-logged
+@test/operations/runtest-declared_temporaries-plain
 @test/operations/runtest-f64_narrowing_parity
 @test/operations/runtest-fission_replay_segmentation
 @test/operations/runtest-fission_schedule
@@ -831,7 +832,7 @@ test/operations/context_handle_refusals.ml [through Ll_test.link; run by @test/o
 test/operations/cost_model_template.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-cost_model_template]
 test/operations/cpu_fork_join_chains.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-cpu_fork_join_chains]
 test/operations/cuda_launch_reservation.ml [through Ll_test.execute; through Ll_test.link; run by @test/operations/runtest-cuda_launch_reservation]
-test/operations/declared_temporaries.ml [through Ll_test.link; run by @test/operations/runtest-declared_temporaries]
+test/operations/declared_temporaries.ml [through Ll_test.link; run by @test/operations/runtest-declared_temporaries-logged, @test/operations/runtest-declared_temporaries-plain]
 test/operations/default_prefill.ml [through Ll_test.link; run by @test/operations/runtest-default_prefill]
 test/operations/division_special_values.ml [through Ll_test.execute; run by @test/operations/runtest-division_special_values, @test/operations/runtest-division_special_values-reproducible]
 test/operations/dynamic_axis_coverage.ml [through Ll_test.execute; run by @test/operations/runtest-dynamic_axis_coverage]
@@ -866,6 +867,7 @@ test/operations/matmul_interchange.ml [through Ll_test.execute_with_census; run 
 test/operations/metal_gpu_hang_failure.ml [through Ll_test.run_routine; run by @test/operations/slow-metal_gpu_hang_failure]
 test/operations/metal_hang_declines.ml [prelowered compile; run by @test/operations/runtest-metal_hang_declines]
 test/operations/metal_routine_log_delivery.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_routine_log_delivery]
+test/operations/minted_name_labels.ml [through Ll_test.run_routine; run by @test/operations/runtest-minted_name_labels-logged, @test/operations/runtest-minted_name_labels-plain]
 test/operations/narrow_constant_rounding.ml [through Ll_test.execute; run by @test/operations/runtest-narrow_constant_rounding]
 test/operations/narrow_storage_compute.ml [through Ll_test.link; run by @test/operations/runtest-narrow_storage_compute]
 test/operations/narrow_uniform_bound.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-narrow_uniform_bound]
@@ -962,7 +964,8 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-cost_model_template
 @test/operations/runtest-cpu_fork_join_chains
 @test/operations/runtest-cuda_launch_reservation
-@test/operations/runtest-declared_temporaries
+@test/operations/runtest-declared_temporaries-logged
+@test/operations/runtest-declared_temporaries-plain
 @test/operations/runtest-default_prefill
 @test/operations/runtest-division_special_values
 @test/operations/runtest-division_special_values-reproducible
@@ -1002,6 +1005,8 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-matmul_interchange-tf32
 @test/operations/runtest-metal_hang_declines
 @test/operations/runtest-metal_routine_log_delivery
+@test/operations/runtest-minted_name_labels-logged
+@test/operations/runtest-minted_name_labels-plain
 @test/operations/runtest-narrow_constant_rounding
 @test/operations/runtest-narrow_storage_compute
 @test/operations/runtest-narrow_uniform_bound

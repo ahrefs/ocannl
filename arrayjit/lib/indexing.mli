@@ -26,6 +26,13 @@ val discarding_symbols : (unit -> 'a) -> 'a
 
 val symbol_ident : symbol -> string
 
+val in_symbol_ident_namespace : string -> bool
+(** Whether a name is spelled like {!symbol_ident} of some symbol, alone or behind a [_] suffix:
+    ["i"], one or more digits, then the end or ["_"] and anything. The C-family emitters declare
+    loop indices and static-index parameters under {!symbol_ident} and derive names from it (a
+    pool-chunked [Grid] loop's [i<n>_chunk], [i<n>_lo], [i<n>_hi]), so their node-name minter
+    reserves this namespace (gh-ocannl-2103). *)
+
 type 'a environment = 'a Map.M(Symbol).t [@@deriving sexp]
 
 type static_symbol = private {

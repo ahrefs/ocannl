@@ -1,0 +1,12 @@
+logged stores: the stores render logged: true
+logged scope locals: the stores render logged: true
+the probe keeps an unreserved label's name, so it can answer uncovered: true
+logged stores: every statement takes an allowlisted form: true
+logged stores: declares node parameters: true
+logged scope locals: every statement takes an allowlisted form: true
+logged scope locals: declares node parameters: true
+logged scope locals: declares both scope locals, each reserved: true
+logged stores: declares fixed temporaries: true
+every parameter that is no node of the routine (the log parameter) is reserved: true
+every loop index the kernels declare is reserved: true
+every fixed temporary the kernels declare is reserved: true

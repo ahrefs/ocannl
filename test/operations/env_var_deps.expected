@@ -250,6 +250,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-debug_name_scan
   test/operations/dune                     @runtest-debug_name_scan_control
   test/operations/dune                     @runtest-debug_name_scan_refusal_control
+  test/operations/dune                     @runtest-declared_temporaries-logged
+  test/operations/dune                     @runtest-declared_temporaries-plain
   test/operations/dune                     @runtest-device_init_deadline
   test/operations/dune                     @runtest-digest_completeness
   test/operations/dune                     @runtest-division_special_values-reproducible
@@ -293,6 +295,8 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-matmul_interchange-tf32
   test/operations/dune                     @runtest-metal_routine_log_delivery
   test/operations/dune                     @runtest-micrograd_demo_logging
+  test/operations/dune                     @runtest-minted_name_labels-logged
+  test/operations/dune                     @runtest-minted_name_labels-plain
   test/operations/dune                     @runtest-model_default_fallback
   test/operations/dune                     @runtest-model_default_placements
   test/operations/dune                     @runtest-mutation_serial_scan
