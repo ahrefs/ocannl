@@ -1,0 +1,16 @@
+2: the data-backed twin's consumer reads the written values: true
+2_materialized: a writer of the literal is refused at compile, naming it and a remedy: true
+2_materialized: the writer compiled after the consumer is refused too: true
+2_materialized: the consumer reads the literal's own values: true
+2_hoisted: a writer of the literal is refused at compile, naming it and a remedy: true
+2_hoisted: the writer compiled after the consumer is refused too: true
+2_hoisted: the consumer reads the literal's own values: true
+32: the data-backed twin's consumer reads the written values: true
+32_materialized: a writer of the literal is refused at compile, naming it and a remedy: true
+32_materialized: the writer compiled after the consumer is refused too: true
+32_materialized: the consumer reads the literal's own values: true
+32_hoisted: a writer of the literal is refused at compile, naming it and a remedy: true
+32_hoisted: the writer compiled after the consumer is refused too: true
+32_hoisted: the consumer reads the literal's own values: true
+2: a write through a view of a literal is refused, naming both: true
+32: a write through a view of a literal is refused, naming both: true

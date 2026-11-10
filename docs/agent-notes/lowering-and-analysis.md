@@ -110,6 +110,18 @@ files.
   `Train.forward_once`-then-print pattern) is an explicit "compute this constant into the
   context"; converting it would empty the routine and push observation onto print-proxy fallbacks.
   Test: `test/operations/hosted_constant_fill`.
+- **A literal that is written is not a literal** (gh-ocannl-2104): every consumer of the
+  host-constant contract (`Tn.known_host_constant`) reads the registered `Host_inits` values, not
+  the buffer — a hoisted `Stage` packs them at link time (`Schedule.hoistable_constant`), the
+  conversion above re-initializes from them — so a routine write to a literal left a hoisted reader
+  on the old values beside a materialized one on the new (executed: `x *. 2` gave `2 (i + 1)`
+  against `2 (i + 101)` above the fill limit, where no fetch made the literal fetch-defined). The
+  policy is to refuse the write, not to exclude written nodes from hoisting: `Context.compile`
+  refuses a comp whose non-`Fetch` writes (`Context.overwritten`) reach a host-constant node,
+  directly or through a slice view, at any size and in any lineage (`check_no_literal_write`, run
+  before gh-ocannl-1876's fetch rule so a small literal is named as a literal too). It is the
+  routine-side twin of gh-ocannl-2021's host-write refusal; a preloaded accumulator is built
+  data-backed (`Operation.init`). Test: `test/operations/routine_write_literal`.
 - Both digests over lowered code — the analysis cache's key (`Low_level.analysis_digest`) and the
   schedule cache's canonical identity (`Schedule_cache.canonicalize`) — share ONE walk,
   `Low_level.Canonical_render.emit` (gh-ocannl-563). Render a newly added `Low_level.t` /
