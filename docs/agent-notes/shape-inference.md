@@ -629,12 +629,10 @@ files.
   of closing the gap, forwarding a GLB along every variable-to-variable bound or only into
   resolve-at-use rows and parameters, were built and compared (the first commit of
   staging#1804, removed by its second) and changed no executed program: executed repeats come from
-  gh-544's close-down of operation results. Before reopening it, two traps. `solve_row_ineq`'s
-  equal-variable arm refuses `<r>,2 ⊑ r` ("Infinite number of axes by self-reference") though
-  `r = []` satisfies it, and forwarding reaches that arm on satisfiable stores, so relax it first.
-  And forwarding must count a change of axes modulo variables and projection ids: the GLB join
-  keeps the incoming side's variable and mints a fresh broadcast top, so with `equal_row` as the
-  change test, resnet_block's diamonds traded two renamed GLBs forever.
+  gh-544's close-down of operation results. Before reopening it: forwarding must count a change
+  of axes modulo variables and projection ids. The GLB join keeps the incoming side's variable and
+  mints a fresh broadcast top, so with `equal_row` as the change test, resnet_block's diamonds
+  traded two renamed GLBs forever.
 - Substitution is indexed (gh-ocannl-1904): a solution visits the entries mentioning its variable
   and, for a dimension solution, the pending ones (`environment`'s doc comment), not the whole
   environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on

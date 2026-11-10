@@ -6,10 +6,9 @@
     Both ways of closing that gap, forwarding a GLB along every variable-to-variable bound and only
     into rows that resolve at their use sites, were built and compared under gh-ocannl-2024 and not
     adopted: neither changed an executed program in the suite
-    (test/operations/row_glb_reach_executed pins the executed side), both widen operation results
-    above a leaf that takes the bound, against gh-544, and both refuse satisfiable stores through
-    [solve_row_ineq]'s self-reference arm. Each store below prints its closed rows; the claims pin
-    them. *)
+    (test/operations/row_glb_reach_executed pins the executed side), and both widen operation
+    results above a leaf that takes the bound, against gh-544. Each store below prints its closed
+    rows; the claims pin them. *)
 
 open! Base
 open Ocannl
