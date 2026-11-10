@@ -719,12 +719,12 @@ let floor_census content =
     encloses (a callback of [iter]) runs once per cell: an error it carries makes the ref a
     reduction over the cells ([max_err := Float.max !max_err (Float.abs (a -. b))], or
     [worst := err] for an [err] holding one), and a bound it applies to an abs-of-difference makes
-    it a tolerance ([ok := !ok && Float.(abs (a - b) < tol)]). A write at the binding's own depth is
-    one value, read as a binding's right-hand side is. The ref read back in its own write ([!x] in
-    [x := f !x]) adds nothing to it. A write is read wherever it sits, before or after the claim.
-    Each pass reads what the previous one found was written and recomputes it, until two passes
-    agree, so an ordering of two refs read as a bound while only one was known to hold a metric is
-    revised once both are.
+    it a tolerance ([ok := !ok && Float.(abs (a - b) < tol)], or [Float.(err < tol)] for an [err]
+    holding one, where the other side holds no error). A write at the binding's own depth is one
+    value, read as a binding's right-hand side is. A write is read wherever it sits, before or after
+    the claim. The reader runs in passes, each reading what the previous ones found written: first
+    the metrics alone, until a pass finds no new one, then the bounds over those settled metrics, so
+    an ordering of two refs is never read as a bound while only one is known to hold a metric.
 
     What it does not read, by design: a scalar comparison written in the claim itself or in a value
     binding outside any function ([p "x" Float.(abs (got - 2.) < 1e-6)]) -- one value against one
@@ -905,16 +905,15 @@ let tolerance_census content =
     | Pexp_constraint (inner, _) | Pexp_coerce (inner, _, _) -> peel inner
     | _ -> expr
   in
-  (* The binding a write being classified goes into: its own value read back ([!x] in [x := f !x])
-     carries nothing the other parts of the value do not, and read as what the previous pass found,
-     it would keep a classification no other part supports. *)
-  let writing_into = ref None in
   let denotes_of env name =
-    Option.map (Lexical_scope.lookup env name) ~f:(fun (entry : tolerance_name) ->
-        match (entry.cell, !writing_into) with
-        | Some (identity, _), Some target when identity = target -> Neither
-        | _ -> entry.denotes)
+    Option.map (Lexical_scope.lookup env name) ~f:(fun (entry : tolerance_name) -> entry.denotes)
   in
+  (* Which facts the current pass derives: first the METRICS ([Predicate], [Difference]) alone, to a
+     fixed point, then the BOUNDS ([Bearing]) over those metrics, frozen. A bound is read off the
+     metrics -- an ordering of two metrics is none -- so one derived while a metric was still
+     unknown could be wrong, and a ref's written facts only grow; with the metrics settled first,
+     both stages only grow. *)
+  let bounds_stage = ref false in
   (* The first name [e] spells, in reading order, that denotes [wanted] in [env]. *)
   let name_denoting wanted env e =
     let found = ref None in
@@ -987,7 +986,7 @@ let tolerance_census content =
   in
   (* What a value bound by [let], or written into a [ref] where it was bound, denotes. *)
   let classify env expr =
-    if Option.is_some (bearing env expr) then Bearing
+    if !bounds_stage && Option.is_some (bearing env expr) then Bearing
     else if
       Option.is_some (tolerance env expr)
       || Option.is_some (predicate_name env expr)
@@ -998,18 +997,26 @@ let tolerance_census content =
   in
   (* What a value written into a [ref] inside a loop or a function its binding encloses denotes: the
      write runs once per iteration, so an error it carries is a reduction over the cells, and a
-     bound it applies to an abs-of-difference is checked cell by cell. *)
+     bound it applies to an abs-of-difference -- written in place or through a name holding one, the
+     other side holding no error -- is checked cell by cell. *)
   let carried env expr =
+    let holds_error side = differs env side || Option.is_some (predicate_name env side) in
     match classify env expr with
     | Bearing -> Bearing
-    | _ when bounds_abs_difference expr -> Bearing
+    | _
+      when !bounds_stage
+           && bounds_abs_difference_with
+                ~bound:(fun side -> not (holds_error side))
+                (differs env) expr ->
+        Bearing
     | Predicate | Difference -> Predicate
     | Neither -> Neither
   in
-  (* What the source writes into each [let]-bound [ref], by its binding's identity: [written] as the
-     previous pass found it, read at the binding, and [writing] as this pass finds it. *)
-  let written = ref (Map.empty (module Int)) in
-  let writing = Hashtbl.create (module Int) in
+  (* What the source writes into each [let]-bound [ref], by its binding's identity, read at the
+     binding on the next pass: the metric each write carries, joined, and whether one is a bound. *)
+  let metrics_written = Hashtbl.create (module Int) in
+  let bounds_written = Hash_set.create (module Int) in
+  let changed = ref false in
   let sites = ref [] and claims = ref 0 in
   let make_iterator () =
     object (self)
@@ -1033,7 +1040,10 @@ let tolerance_census content =
                   | Some { cell = None; _ } | None -> own)
               | _ -> own
             in
-            let from_writes = Option.value (Map.find !written (fst cell)) ~default:Neither in
+            let from_writes =
+              if Hash_set.mem bounds_written (fst cell) then Bearing
+              else Option.value (Hashtbl.find metrics_written (fst cell)) ~default:Neither
+            in
             { denotes = join_denotes (classify env binding.pvb_expr) from_writes; cell = Some cell }
         | None -> self#local
 
@@ -1042,13 +1052,22 @@ let tolerance_census content =
         | Pexp_ident { txt = Ppxlib.Longident.Lident name; _ } -> (
             match Lexical_scope.lookup env name with
             | Some { cell = Some (identity, depth); _ } ->
-                writing_into := Some identity;
                 let value_denotes =
                   if loop_depth > depth then carried env value else classify env value
                 in
-                writing_into := None;
-                Hashtbl.update writing identity ~f:(fun before ->
-                    join_denotes (Option.value before ~default:Neither) value_denotes)
+                if !bounds_stage then (
+                  if Poly.equal value_denotes Bearing && not (Hash_set.mem bounds_written identity)
+                  then (
+                    Hash_set.add bounds_written identity;
+                    changed := true))
+                else
+                  let before =
+                    Option.value (Hashtbl.find metrics_written identity) ~default:Neither
+                  in
+                  let after = join_denotes before value_denotes in
+                  if not (Poly.equal before after) then (
+                    Hashtbl.set metrics_written ~key:identity ~data:after;
+                    changed := true)
             | Some { cell = None; _ } | None -> ())
         | _ -> ()
 
@@ -1114,13 +1133,10 @@ let tolerance_census content =
         result
     end
   in
-  (* Each pass reads the writes the previous one found, and recomputes them, until a pass finds what
-     the one before it did. Recomputed rather than accumulated: a classification made while one
-     operand was still unknown -- an ordering of two metrics read as a bound before the second was
-     known to be one -- is revised once both are. A source whose writes never settle is a defect of
-     this reader, raised as one. *)
-  let rec pass remaining =
-    Hashtbl.clear writing;
+  (* Each pass reads the writes the previous ones found; each stage ends with a pass that finds
+     nothing new, the metrics' before the bounds' begins. *)
+  let rec pass () =
+    changed := false;
     sites := [];
     claims := 0;
     ignore
@@ -1128,14 +1144,12 @@ let tolerance_census content =
          { Lexical_scope.frames = []; modules = Map.empty (module String) }
          ast
         : structure);
-    let found = Map.of_alist_exn (module Int) (Hashtbl.to_alist writing) in
-    if not (Map.equal Poly.equal found !written) then
-      if remaining = 0 then failwith "Verdict_scan.tolerance_census: the ref writes never settled"
-      else (
-        written := found;
-        pass (remaining - 1))
+    if !changed then pass ()
+    else if not !bounds_stage then (
+      bounds_stage := true;
+      pass ())
   in
-  pass 64;
+  pass ();
   { hand_rolled = List.rev !sites; parity_sites = !claims }
 
 (** {1 A gate that reads the population it quantifies (gh-ocannl-1289)}

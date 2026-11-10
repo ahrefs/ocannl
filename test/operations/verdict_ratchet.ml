@@ -5544,13 +5544,22 @@ let () =
   let a = ref 0. in
   let b = ref 0. in
   let ordered = ref true in
+  let snapshot = ref true in
   for i = 0 to n - 1 do
     a := Float.max !a (Float.abs (got.(i) -. want.(i)));
     b := !a;
-    ordered := !ordered && Float.(!a <= !b)
+    ordered := !ordered && Float.(!a <= !b);
+    let previous = !snapshot in
+    snapshot := previous && Float.(!a <= !b)
   done;
-  Verdict.p "ordered refs" !ordered|ocaml},
-      [ "15:max_err"; "16:worst"; "17:ok"; "18:total" ] );
+  Verdict.p "ordered refs" !ordered;
+  Verdict.p "ordered snapshot" !snapshot;
+  let flag = ref true in
+  Array.iteri got ~f:(fun i v ->
+      let err = Float.abs (v -. want.(i)) in
+      flag := !flag && Float.(err < 1e-3));
+  Verdict.p "named bound" !flag|ocaml},
+      [ "15:max_err"; "16:worst"; "17:ok"; "18:total"; "49:flag" ] );
     ( "refuses piped and applied max_elt and reduce metrics bounded from above, but accepts lower \
        margins, orderings, mapped errors and shadowing",
       {ocaml|let () =
