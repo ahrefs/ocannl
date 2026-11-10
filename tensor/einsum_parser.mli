@@ -25,6 +25,12 @@ val is_multichar : string -> bool
     '+', '^', '&', '<', or a '=' that does not begin "=>". In multichar mode axes are separated by
     commas; whitespace does not separate them. *)
 
+val multichar_note : what:string -> written:string -> string
+(** The hint, to append to a refusal, that a multi-letter [what] (a row variable's name, a capture
+    label) needs multichar mode, spelled as [written]. A single-char spec lexes such a name as one
+    axis per character. Shared by the parser's row-variable hint and {!Shape}'s capture refusal
+    (gh-ocannl-2092), so the two read alike. *)
+
 val axis_labels_of_spec : string -> parsed_axis_labels
 (** Parse an axis labels specification.
 
