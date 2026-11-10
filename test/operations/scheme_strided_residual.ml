@@ -364,10 +364,30 @@ let () =
       in
       List.iter [ true; false ] ~f:(fun first ->
           let order = if first then "shortcut first" else "pool first" in
+          (* The outputs merge, and the pair still owes its tags: a padded window passes its
+             output's tag on, a valid one derives it, and they differ at [1_(bcast_if_1)]
+             (gh-ocannl-2038). *)
           p
-            (order ^ ": the residual equation o_p = o_sc holds on unsolved widths")
-            (is_solved
-               (pair_then ~first ~then_:(fun ~w:_ ~o_sc ~o_p -> [ eq (Var o_p) (Var o_sc) ])));
+            (order
+           ^ ": the residual equation o_p = o_sc holds on unsolved widths, holding only the pair")
+            (let w = Row.get_var () and o_sc = Row.get_var () and o_p = Row.get_var () in
+             let rel =
+               [
+                 eq (Var w) (padded ~stride:2 (Var o_sc));
+                 eq (Var w) (valid ~stride:2 ~kernel:2 (Var o_p));
+               ]
+             in
+             match
+               Row.solve_inequalities ~stage:Stage4
+                 ((if first then rel else List.rev rel) @ [ eq (Var o_p) (Var o_sc) ])
+                 Row.empty_env
+             with
+             | [ Dim_eq { d1 = Affine _; d2 = Affine _; _ } ], env ->
+                 let merged a b =
+                   Option.equal Row.equal_dim (Row.get_dim_from_env env a) (Some (Var b))
+                 in
+                 merged o_p o_sc || merged o_sc o_p
+             | _ | (exception Row.Shape_error _) -> false);
           p
             (order ^ ": then w = 12 gives both outputs 6, as solving concretely does")
             (match pair_then ~first ~then_:(fun ~w ~o_sc:_ ~o_p:_ -> [ eq (Var w) (dim 12) ]) with
@@ -1004,4 +1024,278 @@ let () =
                      (window ~kernel:(tagged 3 "h") (Var o1))
                      (window ~kernel:(tagged 3 "h") (Var o2));
                    eq (Var o1) (dim 4);
+                 ]))))
+
+(* {2 A window pair relates its outputs' sizes, not their tags (gh-ocannl-2038)}
+
+   Two windows over one extent say that their inputs coincide, in size and tag. Their outputs need
+   not: the basis rule is not injective, so [1 of bcast_if_1] and [1 of default] under [default]
+   kernels both derive a [default] input. The pair used to equate its outputs (or one output with a
+   helper window over the other) at once, which refused that pair-first and accepted it
+   solved-first, and the helper's [default] kernel carried a tag across sizes the windows do not: an
+   inert [2 of bcast_if_1] became the claim-free top at size 1, and a pair the windows refuse was
+   accepted pair-first. The oracle is the per-window rule, stated apart from the solver. *)
+
+type side = Valid of { stride : int; ksize : int } | Padded of { stride : int }
+
+let side_window side ~kernel over =
+  match side with
+  | Valid { stride; _ } -> window ~stride ~kernel over
+  | Padded { stride } -> padded_window ~stride ~kernel over
+
+let side_ksize = function Valid { ksize; _ } -> ksize | Padded _ -> 1
+
+(* The input a window derives from its solved output and kernel. *)
+let side_input side ~o:(od, ob) ~k:(kd, kb) =
+  match side with
+  | Padded { stride } -> Some (stride * od, ob)
+  | Valid { stride; _ } ->
+      let size = (stride * (od - 1)) + kd in
+      let identity =
+        stride = 1 && kd = 1 && (String.equal kb Row.default_basis || String.equal kb Row.bcast_if_1)
+      in
+      if identity then Some (size, ob)
+      else Option.map (rule ~o:(ob, od) ~k:(kb, kd)) ~f:(fun b -> (size, b))
+
+(* Each pair with the output sizes its arithmetic relates. *)
+let pair_shapes =
+  [
+    ( "equal valid windows",
+      Valid { stride = 2; ksize = 3 },
+      Valid { stride = 2; ksize = 3 },
+      [ (1, 1); (3, 3) ] );
+    ( "stride 2 against stride 1",
+      Valid { stride = 2; ksize = 3 },
+      Valid { stride = 1; ksize = 3 },
+      [ (1, 1); (2, 3) ] );
+    ( "padded against valid",
+      Padded { stride = 2 },
+      Valid { stride = 2; ksize = 2 },
+      [ (1, 1); (3, 3) ] );
+    ( "a helper of span 0",
+      Valid { stride = 2; ksize = 1 },
+      Valid { stride = 2; ksize = 3 },
+      [ (2, 1); (4, 3) ] );
+  ]
+
+let kernel_tags side =
+  match side with
+  | Padded _ -> [ Row.default_basis ]
+  | Valid { ksize = 1; _ } -> [ Row.default_basis; "h"; Row.bcast_if_1 ]
+  | Valid _ -> [ Row.default_basis; "h" ]
+
+let output_tags = [ Row.default_basis; Row.bcast_if_1; "h" ]
+
+let pair_cells ~sizes_of =
+  List.concat_map pair_shapes ~f:(fun (name, s1, s2, sizes) ->
+      List.concat_map (sizes_of sizes) ~f:(fun (d1, d2) ->
+          List.concat_map (kernel_tags s1) ~f:(fun k1 ->
+              List.concat_map (kernel_tags s2) ~f:(fun k2 ->
+                  List.concat_map output_tags ~f:(fun t1 ->
+                      List.map output_tags ~f:(fun t2 -> (name, s1, s2, (d1, t1), (d2, t2), k1, k2)))))))
+
+let consistent (_, s1, s2, o1, o2, k1, k2) =
+  match
+    (side_input s1 ~o:o1 ~k:(side_ksize s1, k1), side_input s2 ~o:o2 ~k:(side_ksize s2, k2))
+  with
+  | Some (n1, b1), Some (n2, b2) -> n1 = n2 && String.equal b1 b2
+  | _ -> false
+
+let describe (name, _, _, (d1, t1), (d2, t2), k1, k2) =
+  Printf.sprintf "%s, kernels of %s and %s, o1 = %d of %s, o2 = %d of %s" name k1 k2 d1 t1 d2 t2
+
+(* Every order of [cs], the pair written either way round. *)
+let pair_orders ~pair_left ~pair_right rest =
+  List.concat_map [ pair_left; pair_right ] ~f:(fun pair -> permutations (pair :: rest))
+
+let () =
+  Verdict.case "a window pair's verdict and tags do not depend on constraint order" (fun () ->
+      let agrees ~late_kernels ((_, s1, s2, (d1, t1), (d2, t2), k1, k2) as cell) =
+        let o1 = Row.get_var () and o2 = Row.get_var () in
+        let kv1 = Row.get_var () and kv2 = Row.get_var () in
+        let kernel1, kernel2 =
+          if late_kernels then (Row.Var kv1, Row.Var kv2)
+          else (tagged (side_ksize s1) k1, tagged (side_ksize s2) k2)
+        in
+        let w1 = side_window s1 ~kernel:kernel1 (Var o1)
+        and w2 = side_window s2 ~kernel:kernel2 (Var o2) in
+        let rest =
+          [ eq (Var o1) (tagged d1 t1); eq (Var o2) (tagged d2 t2) ]
+          @
+          if late_kernels then
+            [ eq (Var kv1) (tagged (side_ksize s1) k1); eq (Var kv2) (tagged (side_ksize s2) k2) ]
+          else []
+        in
+        let expected = consistent cell in
+        let orders = pair_orders ~pair_left:(eq w1 w2) ~pair_right:(eq w2 w1) rest in
+        (not (List.is_empty orders))
+        && List.for_all orders ~f:(fun order ->
+            let result = finished (staged order) in
+            let ok =
+              if expected then solves_tag (o1, d1, t1) result && solves_tag (o2, d2, t2) result
+              else is_refused result
+            in
+            if not ok then
+              Stdio.eprintf "%s%s: %s in some order (not part of the golden)\n" (describe cell)
+                (if late_kernels then ", kernels late" else "")
+                (if expected then "should solve, keeping both tags" else "should be refused");
+            ok)
+      in
+      let cells = pair_cells ~sizes_of:Fn.id in
+      p_all ~min:200 "solved kernels: both outputs keep their tags, or the pair is refused" cells
+        ~f:(agrees ~late_kernels:false);
+      p_exists "and the matrix holds pairs the windows accept with different output tags" cells
+        ~f:(fun ((_, _, _, (_, t1), (_, t2), _, _) as cell) ->
+          consistent cell && not (String.equal t1 t2));
+      p_all ~min:100 "kernels arriving after the pair: the same" ~f:(agrees ~late_kernels:true)
+        (pair_cells ~sizes_of:(fun sizes -> [ List.hd_exn sizes ])
+        |> List.filter ~f:(fun (_, s1, s2, _, _, k1, k2) ->
+            (match (s1, s2) with Valid _, Valid _ -> true | _ -> false)
+            && (not (String.equal k1 Row.bcast_if_1))
+            && not (String.equal k2 Row.bcast_if_1)));
+      (* By name: the issue's case, and the one the helper accepted in one order only. *)
+      let named = pair_cells ~sizes_of:Fn.id in
+      let find name' (d1', t1') (d2', t2') k =
+        List.find_exn named ~f:(fun (name, _, _, (d1, t1), (d2, t2), k1, k2) ->
+            String.equal name name' && d1 = d1' && d2 = d2' && String.equal t1 t1'
+            && String.equal t2 t2' && String.equal k1 k && String.equal k2 Row.default_basis)
+      in
+      p "the issue: o1 = 1 of bcast_if_1, o2 = 1 of default under default kernels solves"
+        (agrees ~late_kernels:false
+           (find "equal valid windows" (1, Row.bcast_if_1) (1, Row.default_basis) Row.default_basis));
+      p "a helper of span 0: o1 = 2 of bcast_if_1 (inert), o2 = 1 of bcast_if_1 is refused"
+        (let cell =
+           find "a helper of span 0" (2, Row.bcast_if_1) (1, Row.bcast_if_1) Row.default_basis
+         in
+         (not (consistent cell)) && agrees ~late_kernels:false cell);
+      p "control: 1 of default = 1 of bcast_if_1 as dims is still refused"
+        (is_refused (finished (staged [ eq (dim 1) (bcast 1) ]))));
+  Verdict.case "a pair over a solved input: the same answer in every order" (fun () ->
+      let cells =
+        List.concat_map pair_shapes ~f:(fun (name, s1, s2, sizes) ->
+            List.concat_map sizes ~f:(fun (d1, _) ->
+                List.concat_map (kernel_tags s1) ~f:(fun k1 ->
+                    List.concat_map (kernel_tags s2) ~f:(fun k2 ->
+                        List.map output_tags ~f:(fun ib ->
+                            let isize =
+                              fst
+                                (Option.value_exn
+                                   (side_input s1 ~o:(d1, Row.default_basis)
+                                      ~k:(side_ksize s1, Row.default_basis)))
+                            in
+                            (name, s1, s2, k1, k2, (isize, ib)))))))
+      in
+      p_all ~min:50 "one verdict, the same solved outputs, and they derive the input" cells
+        ~f:(fun (name, s1, s2, k1, k2, (isize, ib)) ->
+          let answers =
+            List.map
+              (permutations [ 0; 1; 2 ])
+              ~f:(fun order ->
+                let x = Row.get_var () and o1 = Row.get_var () and o2 = Row.get_var () in
+                let cs =
+                  [|
+                    eq (Var x) (side_window s1 ~kernel:(tagged (side_ksize s1) k1) (Var o1));
+                    eq (Var x) (side_window s2 ~kernel:(tagged (side_ksize s2) k2) (Var o2));
+                    eq (Var x) (tagged isize ib);
+                  |]
+                in
+                match finished (staged (List.map order ~f:(Array.get cs))) with
+                | Ok env -> Some (tag_of env o1, tag_of env o2)
+                | Error _ -> None)
+          in
+          let same = List.for_all answers ~f:(Poly.equal (List.hd_exn answers)) in
+          let derives =
+            match List.hd_exn answers with
+            | Some (Some o1, Some o2) ->
+                Poly.equal (side_input s1 ~o:o1 ~k:(side_ksize s1, k1)) (Some (isize, ib))
+                && Poly.equal (side_input s2 ~o:o2 ~k:(side_ksize s2, k2)) (Some (isize, ib))
+            | Some _ -> false
+            | None -> true
+          in
+          if not (same && derives) then
+            Stdio.eprintf "%s, kernels of %s and %s, input %d of %s: %s (not part of the golden)\n"
+              name k1 k2 isize ib
+              (if same then "outputs that do not derive the input"
+               else
+                 "orders disagree: "
+                 ^ String.concat ~sep:" | "
+                     (List.map answers ~f:(function
+                       | None -> "refused"
+                       | Some (a, b) ->
+                           let show = function
+                             | Some (d, b) -> Printf.sprintf "%d of %s" d b
+                             | None -> "open"
+                           in
+                           show a ^ ", " ^ show b)));
+          same && derives));
+  Verdict.case "a pair with neither output solved" (fun () ->
+      let pair o1 o2 =
+        eq (window ~stride:2 ~kernel:(dim 3) (Var o1)) (window ~stride:1 ~kernel:(dim 2) (Var o2))
+      in
+      let o1 = Row.get_var () and o2 = Row.get_var () in
+      (match staged ~closing:[] [ pair o1 o2 ] with
+      | Ok (held, env) ->
+          let again, env = Row.solve_inequalities ~stage:Stage1 held env in
+          let again, _ = Row.solve_inequalities ~stage:Stage1 again env in
+          p "retried at Stage1, the pair is one held equation, not a growing list"
+            (List.length held = 1 && List.length again = 1)
+      | Error _ -> p "retried at Stage1, the pair is one held equation, not a growing list" false);
+      (* Closure sizes each open output on its own; [2 * (o1 - 1) + 3 = (o2 - 1) + 2] closed at 1
+         and 1 is a mismatch, so the outputs are related before then. *)
+      let o1 = Row.get_var () and o2 = Row.get_var () in
+      let row : Row.t =
+        {
+          beg_dims = [];
+          dims = [ Var o1; Var o2 ];
+          bcast = Broadcastable;
+          prov = Row.provenance ~sh_id:2038 ~kind:`Output;
+        }
+      in
+      let result = finished (staged [ pair o1 o2; Row.Shape_row (row, origin) ]) in
+      let shown v =
+        match result with
+        | Ok env -> (
+            match tag_of env v with Some (d, b) -> Printf.sprintf "%d of %s" d b | None -> "open")
+        | Error `Left_deferred -> "left deferred"
+        | Error (`Refused msg) -> "refused: " ^ msg
+      in
+      let ok =
+        match result with
+        | Ok env -> (
+            match (tag_of env o1, tag_of env o2) with
+            | Some (1, _), Some (2, _) -> true
+            | _ -> false)
+        | Error _ -> false
+      in
+      if not ok then
+        Stdio.eprintf "closing: o1 %s, o2 %s (not part of the golden)\n" (shown o1) (shown o2);
+      p "closing sizes the outputs together: o1 = 1, o2 = 2" ok;
+      (* Outputs that are windows themselves: the size equation reduces to a nested pair, which
+         relates [y = 2 * x] at closing as well. *)
+      let x = Row.get_var () and y = Row.get_var () in
+      let row : Row.t = { row with dims = [ Var x; Var y ] } in
+      let w s k v = window ~stride:s ~kernel:(dim k) v in
+      let result =
+        finished
+          (staged
+             [ eq (w 2 3 (w 2 3 (Var x))) (w 2 3 (w 1 2 (Var y))); Row.Shape_row (row, origin) ])
+      in
+      let closes_1_2 x y = function
+        | Ok env -> (
+            match (tag_of env x, tag_of env y) with Some (1, _), Some (2, _) -> true | _ -> false)
+        | Error _ -> false
+      in
+      p "a nested pair closes together too: x = 1, y = 2" (closes_1_2 x y result);
+      (* And through the rewrites between: two stride-2 padded windows reduce to the identity over
+         the inner pair. *)
+      let x = Row.get_var () and y = Row.get_var () in
+      let row : Row.t = { row with dims = [ Var x; Var y ] } in
+      let pad v = padded_window ~stride:2 ~kernel:(dim 1) v in
+      p "a nested pair under padded windows closes together: x = 1, y = 2"
+        (closes_1_2 x y
+           (finished
+              (staged
+                 [
+                   eq (w 2 3 (pad (w 2 3 (Var x)))) (w 2 3 (pad (w 1 2 (Var y))));
+                   Row.Shape_row (row, origin);
                  ]))))

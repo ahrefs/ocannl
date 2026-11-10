@@ -605,8 +605,8 @@ files.
 - A trace solves symbolically what inline construction solves numerically (gh-ocannl-1820): a
   scheme's tracer widths are unsolved variables, so an `Affine` the `Dim` arms would collapse to a
   number stays a term, and each symbolic arm of `unify_dim` must agree with the concrete
-  arithmetic. Two windows over one extent reduce through `window_pair_equation` (`tensor/row.ml`),
-  which writes both as `stride * (o - 1) + span`: a padded window or plain affine of stride `s`
+  arithmetic. Two windows over one extent relate through `window_pair_equation` (`tensor/row.ml`;
+  applied only as a closing fallback since gh-ocannl-2038, below), which writes both as `stride * (o - 1) + span`: a padded window or plain affine of stride `s`
   has span `s`, not 1 (read as 1, a padded stride-4 shortcut against a stride-2 pool derived
   `2*o - 1` where concrete solving gives `2*o`, gh-ocannl-1823; equal strides hid it). A span
   difference `gcd s1 s2` does not divide has no solution and is refused, not truncated. Strides
@@ -649,10 +649,24 @@ files.
   output is unknown until closure if nothing else solves it. Padded windows take the extent's basis,
   whatever the kernel. A window pair with a kernel that claims a tag stays a `Dim_eq` after its size
   equation, since that equation carries no basis; once the reduction changes nothing, the pair alone
-  stays, or a deferred reduction would pile up a copy a pass. Two claim-free kernels still equate their
-  outputs, so `o1 = 1_(bcast_if_1)`, `o2 = 1_default` over equal windows is refused pair-first and
-  accepted solved-first: gh-ocannl-1820 needs those outputs merged. Pinned by
+  stays, or a deferred reduction would pile up a copy a pass. Pinned by
   `test/operations/scheme_strided_residual`'s matrix over tags, window shapes and orders.
+- A window pair's size equation is a whole-dim equation, so applied while an output is open it
+  equates the outputs' tags too (gh-ocannl-2038). The pair says only that the inputs coincide, and
+  the rule is not injective: `1_(bcast_if_1)` and `1_default` under `default` kernels, or `1_h` and
+  `1_default` under `h` kernels, derive one input, and were refused pair-first. The helper window's
+  `default` kernel also carried a tag across sizes: an inert `2_(bcast_if_1)` became the top at
+  size 1, accepted pair-first where the windows refuse it. So `unify_dim`'s `window_pair` holds an
+  open pair: once one output is solved, the solved arms decide the other's size and its tag
+  candidates exactly. The size equation applies only from `settle_window`, at a closing fixpoint
+  and in a second pass after no open tag settled (`merge_pairs`): closure sizes each open output on
+  its own, and `2*(o1-1)+3 = (o2-1)+2` closed at 1 and 1 is a mismatch. Merging first was itself
+  order-dependent, since a pair merged before a tag settled bound an output a solved input had left
+  free. The pair stays with its equation, to check the tags once closure solves the merged output;
+  rigid outputs are decided at once, as before. A traced scheme now carries the held pair and two
+  output variables (traces solve Stage1 only); an application replays it. Pinned by the same test's
+  "a window pair's verdict and tags do not depend on constraint order" (both orientations, solved
+  and late kernels, padded against valid), the solved-input case and the closing case.
 - Every benchmark model builds under `check` with `off`'s dims (gh-ocannl-1908):
   `test/operations/bench_model_schemes` builds each conv and gpt workload of `benchmarks/workloads`
   from a synthetic zero-valued fixture, through `Bench_conv_model`/`Bench_gpt_model` as the runners

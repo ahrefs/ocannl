@@ -58,10 +58,10 @@ control: v = conv(v + kernel 3) is still refused: true
 control: v = conv(v + dilation 2, kernel 2) is still refused: true
 a solved identity window keeps its extent's basis: bcast 4 = conv(bcast 4 + kernel 1): true
 control: default 4 = conv(bcast 4 + kernel 1) is refused: true
-shortcut first: the residual equation o_p = o_sc holds on unsolved widths: true
+shortcut first: the residual equation o_p = o_sc holds on unsolved widths, holding only the pair: true
 shortcut first: then w = 12 gives both outputs 6, as solving concretely does: true
 shortcut first: control: different concrete outputs are refused: true
-pool first: the residual equation o_p = o_sc holds on unsolved widths: true
+pool first: the residual equation o_p = o_sc holds on unsolved widths, holding only the pair: true
 pool first: then w = 12 gives both outputs 6, as solving concretely does: true
 pool first: control: different concrete outputs are refused: true
 o1's window first: o1 = 4 gives o2 = 8: true
@@ -222,3 +222,14 @@ kernels of h and default disagree over a default extent (outputs first): true
 a held pair over an unsolved inner kernel ends: neither solved nor refused: true
 and solves once its sizes arrive: true
 control: the same named kernel solves, and the held pair is discharged: true
+solved kernels: both outputs keep their tags, or the pair is refused: true
+and the matrix holds pairs the windows accept with different output tags: true
+kernels arriving after the pair: the same: true
+the issue: o1 = 1 of bcast_if_1, o2 = 1 of default under default kernels solves: true
+a helper of span 0: o1 = 2 of bcast_if_1 (inert), o2 = 1 of bcast_if_1 is refused: true
+control: 1 of default = 1 of bcast_if_1 as dims is still refused: true
+one verdict, the same solved outputs, and they derive the input: true
+retried at Stage1, the pair is one held equation, not a growing list: true
+closing sizes the outputs together: o1 = 1, o2 = 2: true
+a nested pair closes together too: x = 1, y = 2: true
+a nested pair under padded windows closes together: x = 1, y = 2: true
