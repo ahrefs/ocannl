@@ -21,6 +21,14 @@ the widening entry points refuse a code outside 16 bits: true
 the narrowing entry point refuses a pattern outside 32 bits: true
 the sweep refuses a counters buffer too short to hold its results: true
 the sweep refuses a negative base or count, or a range past 2^32: true
+  f64 inputs narrowed: 17179869184
+double_to_bfloat16 rounds every finite f64 input swept to the nearest bf16 code, ties to even, in one rounding: true
+double_to_bfloat16 carries the sign of every f64 input over, zeros and NaNs included: true
+double_to_bfloat16 narrows every infinite f64 input to 0x7F80 and every NaN to a NaN: true
+double_to_bfloat16 agrees with single_to_bfloat16 on every f32-exact double, NaNs up to payload: true
+double_to_bfloat16 agrees with its native __bf16 composition on every f64 input swept, NaNs up to payload: true
+narrowing through f32 first misrounds some f64 input the sweep reaches: true
+narrowing f64 reaches every finite and infinite bf16 code of both signs: true
   smallest subnormal (0x0001): 0x1p-133
   largest subnormal (0x007F): 0x1.fcp-127
   smallest normal (0x0080): 0x1p-126

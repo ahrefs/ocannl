@@ -82,6 +82,33 @@ files.
   was double-rounding. Verified against `__nv_fp8_e5m2` over 17.2 billion finite doubles (all 2^32
   top-halves crossed with four low-half patterns, ties included) and against the f32 codec over all
   2^32 f32-exact doubles. Metal needs none of it: its `double` is `float`.
+- **Narrowing f64 to half or bf16 rounds once too** (gh-ocannl-2075), on the host, cc and HIP as
+  CUDA's `__double2half` and `__nv_bfloat16` double constructor always did. cc and HIP used to cast
+  to `float` first, and so did the host: the bf16 stub took a `float`, and OCaml's own
+  `Bigarray.float16` store narrows through f32 (writing `1 + 2^-11 + 2^-40` reads back 1, not
+  `0x1.004p+0`), so a CUDA tensor read differently depending on whether the host or a kernel
+  wrote it. The codecs (`double_to_half`, `double_to_bfloat16`; HIP's `ocannl_double_to_half` /
+  `ocannl_double_to_bfloat16`) are round-to-ODD into f32 (`double_to_single_round_odd`: truncate,
+  then set the last bit if anything was dropped) followed by the existing f32 RNE codecs. That
+  composition is exact RNE whenever the intermediate keeps at least two more bits than the target
+  and a grid at least four times finer everywhere the target reaches, subnormals included (Boldo
+  and Melquiond); f32 does for both, and a double past FLT_MAX lands on FLT_MAX-odd, above both
+  overflow midpoints. CUDA's own software `__double2bfloat16` is the same construction, which is
+  what makes it the cheap choice over a second hand-written rounding per format. The round-to-odd
+  step is ONE template (`Builtins_cc.double_to_single_round_odd_builtin`) rendered in the C and
+  CUDA-like dialects, in integer form because HIP's fast math makes a float comparison or NaN test
+  unreliable. The host writes through `Ops.round_to_half` (the correctly rounded half as the exact
+  double it is, which OCaml's float16 store then keeps unchanged) and `Ops.double_to_bfloat16`.
+  Metal has no f64 at all (double storage is refused), so the question does not arise there.
+  Evidence: `f64_narrowing_parity` executes a cast of a materialized f64 source over every code
+  boundary (each midpoint, its f64 neighbours, the overflow threshold, both signs) on the selected
+  backend and the host's two writers, against a midpoint oracle written in the test; at the
+  pre-fix tree CUDA already passed its device claims and cc and HIP failed them, which is what
+  settled that CUDA is one step. The `half_codec_exhaustive` / `bf16_codec_exhaustive` sweeps add
+  17.2e9 doubles each (every top half, crossed with low halves that straddle the f32 rounding bit)
+  against the same oracle, ~15 s each on 8 domains. A NaN is held only to NaN-ness across
+  backends. Not covered: an integer source wider than 2^24 into bf16 still goes through `(float)`
+  on cc and HIP.
 - ROCm's fp8 narrowing is broken for tiny magnitudes and the HIP backend guards it
   UNCONDITIONALLY (gh-ocannl-647). `(__hip_fp8_e5m2)(float)` returns up to 2^-14 where the answer
   is a signed zero, for magnitudes around 4e-25 to 3.3e-24 — an out-of-range shift in
@@ -1198,8 +1225,8 @@ files.
   in fp8, the double rounding gh-ocannl-648 removed from `double_to_fp8`. Only an f64 source can
   show it, and only where `compute_prec` widens a cast's precision, which among the backends with
   an f64 is cc: CUDA and HIP compute at storage precision and agreed before the fix. The placements
-  agreeing is not the backends agreeing: f64 to half or bf16 goes through f32 on cc and HIP and is
-  one step on CUDA, so `f64_master` claims those as parity, and only fp8's value.
+  agreeing is not the backends agreeing; since gh-ocannl-2075 every f64 narrowing rounds once on
+  every backend with an f64, so `f64_master` claims the value at half, bf16 and fp8 alike.
   The rule is the read, not `Operation.cast`: `Precision_policy` stores a model's batch slice f16
   over f32 data, a virtual node of the same shape, so it rounds too. That is why a recipe run moves
   even with materialized twins, and why such a comparison needs the slice materialized as well:

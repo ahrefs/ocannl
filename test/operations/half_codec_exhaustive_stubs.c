@@ -35,6 +35,11 @@
 #include <caml/mlvalues.h>
 #include <caml/threads.h>
 
+/* The executable also links arrayjit's host stubs (through test_utils), which export the f64
+   entry points compiled from the same table: renamed, so the functions swept are this header's
+   text with the emulated converters under it. */
+#define double_to_single_round_odd sweep_double_to_single_round_odd
+#define double_to_half sweep_double_to_half
 #include "half_emulated.h"
 
 #if HAS_NATIVE_FLOAT16
@@ -200,6 +205,117 @@ static void sweep_narrow(uint64_t base, uint64_t count, int64_t *out)
   }
 }
 
+/* gh-ocannl-2075: [double_to_half], f64 narrowed in one rounding, over every f64 whose top 32 bits
+   are [base + i], crossed with four low halves: zero, the last bit alone, the f32 rounding bit alone
+   and all ones. A half midpoint sits in the top half (fraction bit 11, or deeper for a subnormal),
+   so the last two of those put an input one f64 ulp below a midpoint and one above it: exactly the
+   doubles f32 rounds ONTO the tie, where a narrowing through f32 then rounds the wrong way. The same
+   [base + i] read as an f32 pattern also checks the f64 entry point against the f32 one on every
+   f32-exact double. Its own buffer layout, below. */
+#define F64_ROUNDING 0  /* finite inputs narrowed to something other than the nearest code */
+#define F64_SIGN 1      /* inputs whose sign was not carried over */
+#define F64_SPECIAL 2   /* infinities not on 0x7C00, NaNs not on a NaN code */
+#define F64_F32_EXACT 3 /* f32-exact doubles narrowed differently from the f32 entry point */
+#define F64_TWO_STEP 4  /* finite inputs the old narrowing through f32 misrounds: the control */
+#define F64_NATIVE 5    /* inputs the native _Float16 composition narrows differently */
+#define F64_REPORTED 6
+#define F64_RECORDS 7
+#define F64_REACHED (F64_RECORDS + (3 * MAX_RECORDS))
+#define F64_LEN (F64_REACHED + REACHED_WORDS)
+
+static const uint32_t f64_low_halves[4] = {0x00000000u, 0x00000001u, 0x10000000u, 0xFFFFFFFFu};
+
+static void record_f64(int64_t *out, int64_t bits, unsigned int code, int64_t reason)
+{
+  if (out[F64_REPORTED] < MAX_RECORDS)
+  {
+    int64_t k = F64_RECORDS + (3 * out[F64_REPORTED]);
+    out[k] = bits;
+    out[k + 1] = (int64_t)code;
+    out[k + 2] = reason;
+    out[F64_REPORTED]++;
+  }
+}
+
+static void sweep_narrow_f64(uint64_t base, uint64_t count, int64_t *out)
+{
+  uint64_t i;
+  int l;
+  for (i = 0; i < count; i++)
+  {
+    uint32_t top = (uint32_t)(base + i);
+    float xf;
+    memcpy(&xf, &top, sizeof(xf));
+    {
+      unsigned int via_f64 = double_to_half((double)xf), via_f32 = float_to_half_emulated(xf);
+      int agree = isnan(xf) ? (is_nan_code(via_f64) && is_nan_code(via_f32)
+                               && (via_f64 & 0x8000u) == (via_f32 & 0x8000u))
+                            : via_f64 == via_f32;
+      if (!agree)
+      {
+        out[F64_F32_EXACT]++;
+        record_f64(out, (int64_t)top, (via_f64 << 16) | via_f32, REASON_NATIVE);
+      }
+    }
+    for (l = 0; l < 4; l++)
+    {
+      uint64_t b = ((uint64_t)top << 32) | f64_low_halves[l];
+      double d;
+      unsigned int h, m, sign;
+      memcpy(&d, &b, sizeof(d));
+      h = double_to_half(d);
+      m = h & 0x7FFFu;
+      sign = (unsigned int)(b >> 48) & 0x8000u;
+      out[F64_REACHED + (h >> 6)] |= (int64_t)((uint64_t)1 << (h & 63u));
+#if SWEEP_HAS_NATIVE
+      {
+        unsigned int n = native_narrow(double_to_single_round_odd(d));
+        int agree = isnan(d) ? (is_nan_code(n) && is_nan_code(h) && (n & 0x8000u) == (h & 0x8000u))
+                             : n == h;
+        if (!agree)
+        {
+          out[F64_NATIVE]++;
+          record_f64(out, (int64_t)b, (n << 16) | h, REASON_NATIVE);
+        }
+      }
+#endif
+      if ((h & 0x8000u) != sign)
+      {
+        out[F64_SIGN]++;
+        record_f64(out, (int64_t)b, h, REASON_SIGN);
+        continue;
+      }
+      if (isnan(d))
+      {
+        if (!is_nan_code(h))
+        {
+          out[F64_SPECIAL]++;
+          record_f64(out, (int64_t)b, h, REASON_SPECIAL);
+        }
+        continue;
+      }
+      if (isinf(d))
+      {
+        if (m != INF_CODE)
+        {
+          out[F64_SPECIAL]++;
+          record_f64(out, (int64_t)b, h, REASON_SPECIAL);
+        }
+        continue;
+      }
+      if (half_misrounded(fabs(d), m))
+      {
+        out[F64_ROUNDING]++;
+        record_f64(out, (int64_t)b, h, REASON_ROUNDING);
+      }
+      if (half_misrounded(fabs(d), float_to_half_emulated((float)d) & 0x7FFFu))
+      {
+        out[F64_TWO_STEP]++;
+      }
+    }
+  }
+}
+
 /* An [external] is a hole in the type system: every entry point checks what it relies on, before
    the blocking section is entered, while the runtime lock is still held. */
 static void require(int condition, const char *message)
@@ -232,6 +348,24 @@ CAMLprim value ocannl_half_sweep_narrow(value v_base, value v_count, value v_out
   count = (uint64_t)Int64_val(v_count);
   caml_enter_blocking_section();
   sweep_narrow(base, count, out);
+  caml_leave_blocking_section();
+  CAMLreturn(Val_unit);
+}
+
+CAMLprim value ocannl_half_sweep_narrow_f64(value v_base, value v_count, value v_out)
+{
+  CAMLparam3(v_base, v_count, v_out);
+  uint64_t base, count;
+  int64_t *out;
+  require(Int64_val(v_base) >= 0 && Int64_val(v_count) >= 0,
+          "ocannl_half_sweep_narrow_f64: base and count must be non-negative");
+  require(Caml_ba_array_val(v_out)->dim[0] >= F64_LEN,
+          "ocannl_half_sweep_narrow_f64: the counters buffer is too short");
+  out = (int64_t *)Caml_ba_data_val(v_out);
+  base = (uint64_t)Int64_val(v_base);
+  count = (uint64_t)Int64_val(v_count);
+  caml_enter_blocking_section();
+  sweep_narrow_f64(base, count, out);
   caml_leave_blocking_section();
   CAMLreturn(Val_unit);
 }
