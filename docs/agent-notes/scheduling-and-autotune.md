@@ -1651,6 +1651,22 @@ files.
   `Autotune.on_candidate_preflight` exists — though since the lineage-wide half now escapes the
   region, injecting one of *its* exceptions through that hook exercises the containment machinery
   with a realistic payload rather than mirroring where a real one is raised.
+- **A Metal GPU hang is a typed decline that still ends the search** (gh-ocannl-2089). Metal's
+  `classify_failure` (`Metal_failure.classify_command_buffer_failure`) makes the first report of a
+  kernel buffer whose error carries the observed driver code `kIOGPUCommandBufferCallbackErrorHang`
+  an `Expected` `gpu_hang` rejection with `Writes_may_have_occurred`, the class CUDA gives
+  `CUDA_ERROR_LAUNCH_TIMEOUT`. `try_spec` counts it as a decline and then escalates: it poisons the
+  timing lineage and ends in `Search_died` naming the candidate. It cannot go on, as the device
+  keeps the failure for the process, so every later candidate would fail on the re-report. Two
+  traps. `No_device_writes` would be false (the killed kernel wrote for seconds), and the search
+  would end one candidate later anyway, on an unattributed re-report. And recognition is the
+  driver's code token, never elapsed time: a 1.3-2 s buffer that is still progressing is not a hang
+  (gh-ocannl-2082). So a hang Metal never reports (a wait past 300 s with no status, seen on
+  macOS 27.2) reaches no classifier at all. Continuing past a hang needs device recovery, which is
+  not built. `test/operations/metal_hang_declines` injects the typed report at a seed's timing sync
+  through a wrapped `Autotune.Context_driver` (`Autotune.Make`), on any backend. Recombined
+  contenders that the finals re-time from saved forms pass no attempt hook, so aim an injection at a
+  seed.
 - A typed cause is not automatically a containable one. `Schedule_outcome.uncontainable` names the
   causes `protect` makes `Fatal` although typed, the fatal record keeping them in `cause`: today the
   cc backend's `dlopen`, `artifact_missing`, and `codesign` rejections at `Backend_link`

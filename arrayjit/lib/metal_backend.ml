@@ -40,7 +40,7 @@ module Device_config = struct
 
   (* A committed command buffer the host has not yet seen finish. [seq] is its commit order on the
      runner's queue; [what] names its work in a failure report. *)
-  type in_flight = { seq : int; what : string; buffer : Me.CommandBuffer.t }
+  type in_flight = { seq : int; what : string; runs_kernels : bool; buffer : Me.CommandBuffer.t }
 
   (* Represents a command queue + event for synchronization *)
   type runner = {
@@ -53,9 +53,9 @@ module Device_config = struct
            batch by [sequence_segments]. Only the task running on this queue touches it. *)
     mutable committed : int; (* The [seq] of the latest commit. *)
     mutable in_flight : (in_flight list[@sexp.opaque]); (* Newest first; see [reap]. *)
-    mutable failure : string option;
-        (* The first failed command buffer's report, kept for the rest of the process: see
-           [raise_on_failure]. *)
+    mutable failure : (Metal_failure.command_buffer_failure[@sexp.opaque]) option;
+        (* The first failed command buffer, kept for the rest of the process, with [first_report]
+           still [true] until it is first raised: see [raise_on_failure]. *)
   }
   [@@deriving sexp_of]
 
@@ -107,12 +107,19 @@ let track_allocation (buffer : Me.Buffer.t) =
    A failure stays with the device for the rest of the process, like the [Multidev] scheduler's
    [dev_error]. Buffers already queued may be waiting for a signal that will never come, and
    [commandBuffer] blocks once 64 are outstanding, so more work on that queue can wedge the host.
-   Reporting once would also let a best-effort [await] in cleanup swallow the only report. *)
-let commit_tracked runner ~what buffer =
+   Reporting once would also let a best-effort [await] in cleanup swallow the only report.
+
+   The report is a typed [Metal_failure.Command_buffer_failed] (gh-ocannl-2089), marked as the
+   failure's first raise or a later one, and naming whether the buffer ran kernels: a tuner
+   candidate whose kernel the watchdog killed is then a typed decline of that candidate
+   ([Impl.classify_failure]), not an unattributed [Fatal]. The search still ends: the decline may
+   have written buffers, and the device takes no more work. A later raise of the same failure is the
+   device's state, not the waited-for work's, and stays unclassified. *)
+let commit_tracked ?(runs_kernels = false) runner ~what buffer =
   Me.CommandBuffer.commit buffer;
   let seq = runner.committed + 1 in
   runner.committed <- seq;
-  runner.in_flight <- { seq; what; buffer } :: runner.in_flight;
+  runner.in_flight <- { seq; what; runs_kernels; buffer } :: runner.in_flight;
   seq
 
 (* How long the report of a failure waits for older buffers still reading as unfinished. *)
@@ -139,23 +146,21 @@ let rec reap ?deadline runner =
       let now = Unix.gettimeofday () in
       let deadline = Option.value deadline ~default:(now +. victim_grace_seconds) in
       if (List.last_exn runner.in_flight).seq = failed.seq || Float.(now >= deadline) then
-        let { what; buffer; _ } = failed in
-        let error =
-          Option.value (Me.CommandBuffer.get_error buffer) ~default:"Metal gave no error text"
-        in
-        runner.failure <-
-          Some
-            [%string
-              "Metal: the command buffer of %{what} failed: %{error}. The device takes no more \
-               work in this process."]
+        let { what; runs_kernels; buffer; _ } = failed in
+        let error = Me.CommandBuffer.get_error buffer in
+        runner.failure <- Some { Metal_failure.what; runs_kernels; error; first_report = true }
       else (
         Unix.sleepf 0.001;
         reap ~deadline runner)
   | _ -> ()
 
+(* Raised typed (gh-ocannl-2089), so [Impl.classify_failure] can read it: only the first raise is
+   marked [first_report], since every later one is the device's state, not the waited-for work's. *)
 let raise_on_failure runner =
   reap runner;
-  Option.iter runner.failure ~f:failwith
+  Option.iter runner.failure ~f:(fun failure ->
+      runner.failure <- Some { failure with first_report = false };
+      raise (Metal_failure.Command_buffer_failed failure))
 
 let is_done event =
   let current_value = Me.SharedEvent.get_signaled_value event.shared in
@@ -265,6 +270,10 @@ module Impl = struct
   include Backend_buffer
 
   let storage_mode_of_pool = Slab.storage_mode_of_pool
+
+  (* gh-ocannl-2089: replaces the [None] [Backend_impl.Device] gives every backend. Only a failed
+     command buffer's first report of a GPU hang is classified; see [Metal_failure]. *)
+  let classify_failure = Metal_failure.classify_command_buffer_failure ~backend:Device_config.name
 
   (* Global state for Metal devices. Device discovery is lazy: the singleton [Impl] module
      initializes at program startup (Backends instantiates it eagerly for nameable types), and
@@ -2333,7 +2342,10 @@ using namespace metal;|}
         | Some _ -> () (* [sequence_segments] ends the pass and commits once, after all segments. *)
         | None ->
             Me.ComputeCommandEncoder.end_encoding encoder;
-            ignore (commit_tracked dev.runner ~what:("kernel " ^ func_name) command_buffer : int)
+            ignore
+              (commit_tracked ~runs_kernels:true dev.runner ~what:("kernel " ^ func_name)
+                 command_buffer
+                : int)
         (* Make execution synchronous for debugging/simplicity, remove later *)
         (* Me.CommandBuffer.wait_until_completed command_buffer; *)
       with exn ->
@@ -2408,7 +2420,9 @@ using namespace metal;|}
                   ~finally:(fun () ->
                     dev.runner.fused <- None;
                     Me.ComputeCommandEncoder.end_encoding encoder;
-                    ignore (commit_tracked dev.runner ~what:segments command_buffer : int)));
+                    ignore
+                      (commit_tracked ~runs_kernels:true dev.runner ~what:segments command_buffer
+                        : int)));
           },
         fun () -> () )
 end

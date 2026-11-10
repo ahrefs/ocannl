@@ -1,0 +1,16 @@
+with no fault, the search returned a routine computing the untuned values: true
+with no fault, the search timed candidates past the baseline: true
+the hang was injected at a candidate's timing sync: true
+the hang was aimed at a candidate, not the baseline: true
+the baseline was timed before it: true
+the search raised the hang decline's rendering, naming the driver's hang code: true
+the hang is counted once, as a gpu_hang decline: true
+the report ends the search at the hung candidate's Sync: true
+the timing lineage was poisoned with the hang's rendering: true
+the hung candidate was never timed: true
+no candidate was attempted after the hung one: true
+untyped, the injection fired too: true
+untyped, the search raised the plain Failure itself: true
+untyped, nothing is counted as a gpu_hang decline: true
+untyped, the search still ends at that candidate's Sync: true
+the Metal backend's classifier types the hang as a gpu_hang decline: true
