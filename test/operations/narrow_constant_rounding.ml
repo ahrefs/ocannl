@@ -36,6 +36,13 @@ let fresh ~prec label =
 
 let at0 = [| Ll_test.fixed 0 |]
 
+(* Routine and node names are distinct across the cases (AGENTS.md: a same-named routine overwrites
+   the earlier one's build_files/ artifacts), so each carries its precision, spaces made
+   underscores. *)
+let ident ~prec role label =
+  String.concat ~sep:"_"
+    [ "ncr"; role; Ops.prec_string prec; String.tr ~target:' ' ~replacement:'_' label ]
+
 (* Bitwise, so a signed zero and a NaN of either sign are told apart from their neighbours. *)
 let same_value got expected =
   (Float.is_nan got && Float.is_nan expected)
@@ -52,24 +59,27 @@ let report label got expected =
 (* A virtual narrow node [v] holding [c], read into a materialized f32 node: the inlined scope
    evaluates [c] at [v]'s precision. *)
 let virtual_literal ~prec ~label c ~expected =
-  let v = fresh ~prec ("ncr_v_" ^ label) and dst = fresh ~prec:Ops.single ("ncr_d_" ^ label) in
+  let v = fresh ~prec (ident ~prec "v" label)
+  and dst = fresh ~prec:Ops.single (ident ~prec "d" label) in
   Ll_test.materialize dst;
   let llc =
     Ll_test.seq (Ll_test.set v at0 (LL.Constant c)) (Ll_test.set dst at0 (Ll_test.get v at0))
   in
-  let o, got = run ~name:("ncr_" ^ label) ~materialized:[ dst ] ~seed:[] ~read:dst llc in
+  let o, got = run ~name:(ident ~prec "r" label) ~materialized:[ dst ] ~seed:[] ~read:dst llc in
   let label = Ops.prec_string prec ^ " virtual literal " ^ label in
   pf "%s: the node is inlined" label (Ll_test.known_virtual o v);
   report label got expected
 
 (* [dst = src * llsc] at [prec], with [src] seeded to [3]. *)
 let times_three ~prec ~label llsc ~expected =
-  let src = fresh ~prec ("ncr_s_" ^ label) and dst = fresh ~prec ("ncr_d_" ^ label) in
+  let src = fresh ~prec (ident ~prec "s" label) and dst = fresh ~prec (ident ~prec "d" label) in
   Ll_test.materialize src;
   Ll_test.materialize dst;
   let llc = Ll_test.set dst at0 (LL.Binop (Ops.Mul, (Ll_test.get src at0, prec), (llsc, prec))) in
   let _, got =
-    run ~name:("ncr_" ^ label) ~materialized:[ src; dst ] ~seed:[ (src, [| 3. |]) ] ~read:dst llc
+    run ~name:(ident ~prec "r" label) ~materialized:[ src; dst ]
+      ~seed:[ (src, [| 3. |]) ]
+      ~read:dst llc
   in
   report (Ops.prec_string prec ^ " " ^ label) got expected
 
@@ -86,7 +96,7 @@ let folded_operand prec =
 
 let integer_exponent () =
   let prec = Ops.fp8 in
-  let src = fresh ~prec "ncr_s_pow" and dst = fresh ~prec "ncr_d_pow" in
+  let src = fresh ~prec (ident ~prec "s" "pow") and dst = fresh ~prec (ident ~prec "d" "pow") in
   Ll_test.materialize src;
   Ll_test.materialize dst;
   let llc =
@@ -94,7 +104,9 @@ let integer_exponent () =
       (LL.Binop (Ops.ToPowOf, (Ll_test.get src at0, prec), (LL.Constant 9., prec)))
   in
   let o, got =
-    run ~name:"ncr_pow" ~materialized:[ src; dst ] ~seed:[ (src, [| 2. |]) ] ~read:dst llc
+    run ~name:(ident ~prec "r" "pow") ~materialized:[ src; dst ]
+      ~seed:[ (src, [| 2. |]) ]
+      ~read:dst llc
   in
   pf "fp8 integer power: the exponent stays 9"
     (Ll_test.count_scalar o.LL.llc ~f:(function
