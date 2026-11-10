@@ -9354,8 +9354,8 @@
     (diff hip_scratch_budget.expected hip_scratch_budget.actual)))))
 
 ; gh-ocannl-2083: a command buffer the GPU fails raises, with Metal's text. Gated behind `slow`: the
-; kernel stalls the GPU until the OS kills it, seconds of stall and a GPU recovery on every run, which
-; a default test run should not put a Mac through.
+; kernel stalls the GPU until the OS kills it or a 20 s bound passes (gh-ocannl-2082), with a GPU
+; recovery where it kills, which a default test run should not put a Mac through.
 
 (executable
  (name metal_gpu_hang_failure)

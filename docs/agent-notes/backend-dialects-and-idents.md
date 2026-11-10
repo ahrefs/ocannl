@@ -402,12 +402,26 @@ files.
   first failure stays in `runner.failure` for the process, as a `dev_error` does under `Multidev`: a
   best-effort `await` in cleanup would otherwise swallow the only report, and more work can queue
   behind a signal that never fires. A hang did not fail a concurrent process's command buffers in
-  one try. No cheap fault exists (wild accesses and a purgeable-emptied pool all complete with no
-  error), so `slow-metal_gpu_hang_failure` stalls the GPU for real.
+  one try. No cheap fault exists (wild accesses, even 1 TiB past a buffer or under
+  `MTL_SHADER_VALIDATION=1`, and a purgeable-emptied pool all complete with no error), so
+  `slow-metal_gpu_hang_failure` stalls the GPU for real.
   The report is typed, `Metal_failure.Command_buffer_failed`, and only its FIRST raise, from a buffer
   that ran kernels, can classify as the candidate's hang (scheduling-and-autotune.md, *Failure phases
   and lineage containment*, gh-ocannl-2089): every later raise carries the same text but is the
   device's state, so a text match alone would charge the hang to every later candidate.
+- Whether macOS kills a kernel that never ends is not the backend's to decide, and it varies
+  (gh-ocannl-2082). On mac-studio (M4 Max, macOS 27.2) the watchdog killed the test's kernel about
+  3 s in on 2026-11-07. A day later, on both mac-studio and macbook-pro, the same test sat in
+  `sync` until its 300 s alarm. On macbook-pro (M4 Pro, 27.2) a raw-Metal probe found such a kernel
+  still `Scheduled` after 120 s, with 1 thread or 65536. The IORegistry `recoveryCount` stayed 0,
+  so nothing was killed and no status was lost. Another process's trivial kernels completed beside
+  it in under 0.1 s, and a second queue in the same process did not. Legitimate 10 s and 30 s
+  kernels completed. Exiting the process freed the GPU at once. So an elapsed-time bound cannot
+  classify a hang (gh-ocannl-2089), and the test gives the OS a bounded 20 s to kill its kernel.
+  It reads whether a kill happened off `recoveryCount` (`ioreg -r -c IOAccelerator -l`), never
+  off the backend under test: the report claims are a leg open only where the count rose. The
+  probe is kept on the branch `claude/w1110-2082-probe` of the staging repository
+  (`test/metal_probe/run_cells.sh`).
 
 ## Backend capability facts
 

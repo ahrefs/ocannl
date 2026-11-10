@@ -5254,8 +5254,8 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   slow aliases; it is not a duration prediction. The former cold Metal sweep unit took about
   10.4 ks before the widen oracle joined at 612 s of action work, leaving roughly an hour
   of headroom at four hours. Parallel action times need not add to wall time. The separate
-  `slow-metal_gpu_hang_failure` probe has a 300 s alarm; that cost fits the budget but is not
-  evidence of completed training. The per-box timing evidence is in staging#1819.
+  `slow-metal_gpu_hang_failure` probe gives the OS 20 s to kill its kernel; that cost fits the
+  budget but is not evidence of completed training. The per-box timing evidence is in staging#1819.
   Slow GPU batches deliberately keep no default per-test cap: a wedged device may therefore
   hold the box for the whole run cap. Set `--test-cap N` for a tighter bound; `plan` names this
   trade-off. Sweep keeps the per-test watcher on its regular leg even with `--slow`.
