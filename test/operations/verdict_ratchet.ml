@@ -407,6 +407,11 @@ let exempt_quantified_helpers =
       "the directory must end empty, and the tree the rerun published and removed is not \
        enumerated, so nothing in scope witnesses the final listing; the fixtures an interrupted \
        run leaves behind are witnessed by the clearing claims just above" );
+    ( "test/operations/metal_hang_declines.ml:untyped, nothing is counted as a gpu_hang decline",
+      "the attribution control: a plain Failure must leave no gpu_hang decline, so the empty \
+       filter is the passing reading; the typed run beside it claims exactly one such decline over \
+       the same report field, and the claims beside this one pin that the untyped injection fired \
+       and ended the search" );
     ( "test/operations/simd_lane_choice.ml:a backend that renders no vectors offers no rungs",
       "a zero vector width yields no ladder by construction; the rungs the widths that do render \
        offer are pinned by the claims beside it" );

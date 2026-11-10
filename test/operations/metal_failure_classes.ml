@@ -110,3 +110,99 @@ let () =
       p
         (Printf.sprintf "untyped at %s, the same text is Fatal (the control)" phase_name)
         (match untyped with Error (SO.Fatal _) -> true | Ok () | Error (SO.Classified _) -> false))
+
+(* gh-ocannl-2089: a failed command buffer's first report of a GPU hang is the candidate's typed
+   decline, one that may have written buffers; everything else a failed buffer reports stays
+   unclassified, as every Metal runtime failure was before. The hang text is the one
+   metal_gpu_hang_failure captured (five runs, M4 Max, macOS 27.2); the ignored and discarded
+   descriptions are constructed from the states its notes name, with the driver's codes for them,
+   which no run here has printed. Every case goes through strict classification with [Candidate]
+   provenance, the tuner's timing boundary. *)
+let hang_error = "Caused GPU Hang Error (00000003:kIOGPUCommandBufferCallbackErrorHang)"
+
+let hang =
+  {
+    MF.what = "kernel ocannl_gh2089_kernel";
+    runs_kernels = true;
+    error = Some hang_error;
+    first_report = true;
+  }
+
+let classify_metal = MF.classify_command_buffer_failure ~backend:"metal"
+
+let at phase exn =
+  SO.protect ~strict:true ~classify_backend:classify_metal ~provenance:SO.Candidate ~phase
+    (fun () -> raise exn)
+
+let () =
+  p "the captured hang text reports a GPU hang" (MF.reports_gpu_hang hang_error);
+  p "the report renders as the backend's text did before it was typed"
+    (String.equal
+       (Stdlib.Printexc.to_string (MF.Command_buffer_failed hang))
+       ("Metal: the command buffer of kernel ocannl_gh2089_kernel failed: " ^ hang_error
+      ^ ". The device takes no more work in this process."));
+  p "a report without error text says so"
+    (String.is_substring
+       (MF.command_buffer_report { hang with error = None })
+       ~substring:"Metal gave no error text");
+  List.iter [ SO.Sync; SO.Launch ] ~f:(fun phase ->
+      let phase_name = Sexp.to_string (SO.sexp_of_phase phase) in
+      let got = at phase (MF.Command_buffer_failed hang) in
+      Stdio.printf "the hang's first report at %s: %s\n" phase_name (describe got);
+      p
+        (Printf.sprintf
+           "at %s, the hang's first report is an Expected gpu_hang decline that may have written"
+           phase_name)
+        (match got with
+        | Error
+            (SO.Classified
+               {
+                 phase = got_phase;
+                 cause =
+                   SO.Backend_rejected { backend = "metal"; stage; severity = SO.Expected; detail };
+                 execution_effect = SO.Writes_may_have_occurred;
+               }) ->
+            SO.equal_phase got_phase phase
+            && String.equal stage MF.gpu_hang_stage
+            && String.is_substring detail ~substring:hang_error
+            && String.is_substring detail ~substring:"kernel ocannl_gh2089_kernel"
+        | Ok () | Error _ -> false));
+  let controls =
+    [
+      ( "a later report of the same hang",
+        MF.Command_buffer_failed { hang with first_report = false } );
+      ( "a hang reported for a buffer that ran no kernel",
+        MF.Command_buffer_failed { hang with what = "a zero fill"; runs_kernels = false } );
+      ( "an ignored submission (constructed)",
+        MF.Command_buffer_failed
+          {
+            hang with
+            error =
+              Some
+                "Ignored (for causing prior/excessive GPU errors) \
+                 (00000004:kIOGPUCommandBufferCallbackErrorSubmissionsIgnored)";
+          } );
+      ( "a discarded victim (constructed)",
+        MF.Command_buffer_failed
+          {
+            hang with
+            error =
+              Some
+                "Discarded (victim of GPU error/recovery) \
+                 (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)";
+          } );
+      ("a failure without error text", MF.Command_buffer_failed { hang with error = None });
+      ("the hang's report text in a plain Failure", Failure (MF.command_buffer_report hang));
+    ]
+  in
+  List.iter controls ~f:(fun (label, exn) ->
+      List.iter [ SO.Sync; SO.Launch ] ~f:(fun phase ->
+          let phase_name = Sexp.to_string (SO.sexp_of_phase phase) in
+          p
+            (Printf.sprintf "%s at %s stays unclassified, so Fatal" label phase_name)
+            (match at phase exn with
+            | Error (SO.Fatal _) -> true
+            | Ok () | Error (SO.Classified _) -> false)));
+  p_all "the hang's first report outside Launch and Sync is not the backend's to classify"
+    [ SO.Transform; SO.Backend_compile; SO.Backend_link; SO.Preflight ] ~f:(fun phase ->
+      Option.is_none (classify_metal phase (MF.Command_buffer_failed hang)))

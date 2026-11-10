@@ -22,3 +22,23 @@ the crash is containable at Backend_link: true
 typed at Backend_link: classified at Backend_link, (Backend_rejected_key metal compiler_crash Compiler_bug), No_device_writes
 typed at Backend_link, the crash is a decline that wrote nothing: true
 untyped at Backend_link, the same text is Fatal (the control): true
+the captured hang text reports a GPU hang: true
+the report renders as the backend's text did before it was typed: true
+a report without error text says so: true
+the hang's first report at Sync: classified at Sync, (Backend_rejected_key metal gpu_hang Expected), Writes_may_have_occurred
+at Sync, the hang's first report is an Expected gpu_hang decline that may have written: true
+the hang's first report at Launch: classified at Launch, (Backend_rejected_key metal gpu_hang Expected), Writes_may_have_occurred
+at Launch, the hang's first report is an Expected gpu_hang decline that may have written: true
+a later report of the same hang at Sync stays unclassified, so Fatal: true
+a later report of the same hang at Launch stays unclassified, so Fatal: true
+a hang reported for a buffer that ran no kernel at Sync stays unclassified, so Fatal: true
+a hang reported for a buffer that ran no kernel at Launch stays unclassified, so Fatal: true
+an ignored submission (constructed) at Sync stays unclassified, so Fatal: true
+an ignored submission (constructed) at Launch stays unclassified, so Fatal: true
+a discarded victim (constructed) at Sync stays unclassified, so Fatal: true
+a discarded victim (constructed) at Launch stays unclassified, so Fatal: true
+a failure without error text at Sync stays unclassified, so Fatal: true
+a failure without error text at Launch stays unclassified, so Fatal: true
+the hang's report text in a plain Failure at Sync stays unclassified, so Fatal: true
+the hang's report text in a plain Failure at Launch stays unclassified, so Fatal: true
+the hang's first report outside Launch and Sync is not the backend's to classify: true

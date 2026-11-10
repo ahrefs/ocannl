@@ -43,3 +43,48 @@ val compiler_service_crash_cause :
     a [Compiler_bug] rejection at {!compiler_crash_stage}, a decline of that candidate or kernel.
     Its detail says whose compiler crashed and where the crash report is, not the generated source:
     several declined candidates must not each print a whole kernel. *)
+
+(** {2 Failed command buffers (gh-ocannl-2083, gh-ocannl-2089)} *)
+
+type command_buffer_failure = {
+  what : string;  (** The buffer's work, as a report names it (["kernel k"], ["a zero fill"]). *)
+  runs_kernels : bool;
+      (** Whether the buffer dispatched kernels: a kernel's own buffer or a fused segment batch, not
+          a fill, copy, wait or signal. *)
+  error : string option;  (** Metal's error description of the buffer, when it gave one. *)
+  first_report : bool;
+      (** Whether this raise is the failure's first. A device keeps a failure for the rest of the
+          process and re-raises it on every later use; only the first raise comes from the wait
+          covering the failed buffer, so only it says anything about the work being waited for. *)
+}
+[@@deriving sexp_of, equal]
+
+exception Command_buffer_failed of command_buffer_failure
+(** What [Metal_backend] raises for a command buffer it read in status [Error]: on the first wait
+    that covers it, then again on every later use of the device. Printed as
+    {!command_buffer_report}. *)
+
+val command_buffer_report : command_buffer_failure -> string
+(** ["Metal: the command buffer of <what> failed: <error>. The device takes no more work in this
+     process."], the same for the first report and every later one. *)
+
+val gpu_hang_stage : string
+(** ["gpu_hang"]: the [Backend_rejected] stage of a kernel the GPU watchdog killed. *)
+
+val reports_gpu_hang : string -> bool
+(** Whether Metal's error description carries the driver's hang code
+    ([kIOGPUCommandBufferCallbackErrorHang], observed on macOS 27.2). The fail-closed allowlist has
+    that one token: the code, not the localized sentence; never elapsed time, which says nothing
+    about a buffer still making progress (gh-ocannl-2082). *)
+
+val classify_command_buffer_failure :
+  backend:string -> Schedule_outcome.phase -> exn -> Schedule_outcome.classified_cause option
+(** Metal's [classify_failure] (gh-ocannl-2089). A GPU hang is the candidate's decline: an
+    [Expected] [Backend_rejected] at {!gpu_hang_stage} that may have written device buffers, the
+    class CUDA gives [CUDA_ERROR_LAUNCH_TIMEOUT]. A search counts it and still ends: the effect
+    poisons the timing lineage, and the device takes no more work. Answered only for the FIRST
+    report of a buffer that ran kernels, raised at [Launch] or [Sync], whose error
+    {!reports_gpu_hang}. Every other failure answers [None], so it stays unclassified ([Fatal] under
+    the common policy) as before: a re-report (not the waited-for work's fault), a fill or copy, an
+    ignored submission, a discarded victim, a missing or unrecognized error text, and the same text
+    in a plain [Failure]. *)

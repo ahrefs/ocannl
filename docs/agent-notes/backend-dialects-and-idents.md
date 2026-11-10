@@ -404,6 +404,10 @@ files.
   behind a signal that never fires. A hang did not fail a concurrent process's command buffers in
   one try. No cheap fault exists (wild accesses and a purgeable-emptied pool all complete with no
   error), so `slow-metal_gpu_hang_failure` stalls the GPU for real.
+  The report is typed, `Metal_failure.Command_buffer_failed`, and only its FIRST raise, from a buffer
+  that ran kernels, can classify as the candidate's hang (scheduling-and-autotune.md, *Failure phases
+  and lineage containment*, gh-ocannl-2089): every later raise carries the same text but is the
+  device's state, so a text match alone would charge the hang to every later candidate.
 
 ## Backend capability facts
 
