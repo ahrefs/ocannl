@@ -64,14 +64,21 @@ files.
   exercises nothing. Two separate mechanisms make the conversion disappear, and both were hit
   writing `test_fp8_codec_parity`. Precision inference flows the destination's precision BACKWARDS
   into the source, so `dst:fp8 =: src` lowers to a byte copy between two fp8 buffers with the
-  narrowing having happened on the host when the source was filled — pass `~top_down_prec:false`
-  AND `Tnode.update_prec src single`. And a virtualized source inlines its cells as literals, at
-  which point the conversion is a constant expression the BACKEND COMPILER folds on the host, so
-  a device-side defect cannot show — `Train.set_materialized` the source. Both failure modes look
-  identical from the outside: the test passes on every backend, which is what one wants to see.
-  The only reliable checks are to read the emitted kernel (`dst[i] = single_to_fp8(src[i])`, source
-  declared `float *`) and to run the mutation — with HIP's guard forced off the leg must FAIL, and
-  it did not until both mechanisms were closed.
+  narrowing having happened on the host when the source was filled — pass `~top_down_prec:false` AND
+  `Tnode.update_prec src single`. That pair works only for a SMALL `TDSL.ndarray` source: above
+  `limit_constant_fill_size` (default 16 values) the source is data-backed, its array minted at
+  `Tensor.default_value_prec` (`default_prec`, single by default), so its precision is already
+  `Specified` and `update_prec src double` raises "already set to single". For a large source at any
+  precision other than that default, build it with `NTDSL.init ~l ~prec ~o ~f ()`: the data is
+  created at `prec`, the node is `Specified` at creation and top-down inference cannot override it,
+  with or without `~top_down_prec:false` (checked: a 64-cell `~prec:double` source emits `dst[i] =
+  double_to_fp8(src[i])` over a `double *` source). And a virtualized source inlines its cells as
+  literals, at which point the conversion is a constant expression the BACKEND COMPILER folds on the
+  host, so a device-side defect cannot show — `Train.set_materialized` the source. Both failure
+  modes look identical from the outside: the test passes on every backend, which is what one wants
+  to see. The only reliable checks are to read the emitted kernel (`dst[i] = single_to_fp8(src[i])`,
+  source declared `float *`) and to run the mutation — with HIP's guard forced off the leg must
+  FAIL, and it did not until both mechanisms were closed.
 - Narrowing f64 to fp8 must not go through f32 (gh-ocannl-648). Rounding twice moves a double
   that sits just off an f32 tie ONTO that tie, and the second rounding then breaks it by a rule the
   first has already made wrong — so `single_to_fp8((float)x)` disagreed with the GPU fp8 types,
