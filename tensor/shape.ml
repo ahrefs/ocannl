@@ -1400,12 +1400,13 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
     window on the result would be a padded transposed convolution: the result's index is the affine
     combination, so its projection is never iterated, and projection inference has no semantics for
     it. The check is structural over the parsed result slot (every kind and position of its [labels]
-    map) and runs before any elaboration. Operand-side padded windows, unpadded ([<+]) and
-    stride-only result axes are unaffected; the backward of an operand-side padded window reuses the
-    forward's projections and never comes here with a reversed spec. The message gives the two-step
-    recipe (gh-ocannl-1619): the full transposed convolution, then a crop by a slice of a
-    concatenated axis (gh-ocannl-1656), executed against PyTorch's [ConvTranspose1d] semantics in
-    [test/einsum/result_side_affine_forms.ml]. *)
+    map) and runs from [propagate_shapes] ({!refuse_result_side_padded_windows}), before shape
+    inference writes anything, so a refusal leaves the session untainted (gh-ocannl-2042).
+    Operand-side padded windows, unpadded ([<+]) and stride-only result axes are unaffected; the
+    backward of an operand-side padded window reuses the forward's projections and never comes here
+    with a reversed spec. The message gives the two-step recipe (gh-ocannl-1619): the full
+    transposed convolution, then a crop by a slice of a concatenated axis (gh-ocannl-1656), executed
+    against PyTorch's [ConvTranspose1d] semantics in [test/einsum/result_side_affine_forms.ml]. *)
 let refuse_result_side_padded_window ~spec ~(error_shapes : t list) (ls_lhs : parsed_axis_labels) =
   Map.iter ls_lhs.labels ~f:(function
     | Affine_spec { conv = Some { use_padding = `True; _ }; _ } as axis ->
@@ -1489,7 +1490,6 @@ let einsum_of_logic = function
 let einsum_n_constraints ~for_projections ~spec ~(rhs_slots : (parsed_axis_labels * t) list)
     ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label ~arg_label_prefix ~(error_shapes : t list)
     ?(lhs_constraints_first = false) () =
-  refuse_result_side_padded_window ~spec ~error_shapes ls_lhs;
   let row_var_env = Hashtbl.create (module String) in
   let dim_var_env = Hashtbl.create (module String) in
   let rhs_results =
@@ -2202,7 +2202,6 @@ let%debug4_sexp get_inequalities ?(for_projections = false)
                  ( "Invalid permutation spec (expected one argument): " ^ spec,
                    [ Shape_mismatch [ cur_sh; sh ] ] )
       in
-      refuse_result_side_padded_window ~spec ~error_shapes:[ cur_sh; sh ] ls_lhs;
       let row_var_env = Hashtbl.create (module String) in
       let dim_var_env = Hashtbl.create (module String) in
 
@@ -4524,11 +4523,23 @@ let propagate_inline (update_step : update_step) : unit =
       apply_env_step ~closure:false env update_step;
       state := env)
 
-(* Before anything is written too, so a refused construction taints nothing: [get_inequalities] has
-   already marked operands used by the time an einsum branch runs. This refuses what projection
-   derivation would at every closure (gh-ocannl-1803, gh-ocannl-1983). The step's spec and captures
-   decide it, not its shapes, so it needs no reasoning about what an application or a consumer of
-   the result can supply. A trace runs the body, so a shape scheme reports it at the definition. *)
+(* The structural refusals of an einsum-family step run from [propagate_shapes], before anything is
+   written, so a refused construction taints nothing: [get_inequalities] has already marked operands
+   used by the time an einsum branch runs (gh-ocannl-1983, gh-ocannl-2042). The step's spec and
+   captures decide them, not its shapes, so they need no reasoning about what an application or a
+   consumer of the result can supply. A trace runs the body, so a shape scheme reports them at the
+   definition. Every step is registered through [propagate_shapes] ([Tensor.register_update_step]),
+   so projection derivation never meets a step these refuse. *)
+
+(* {!refuse_result_side_padded_window} over the step's result slot. *)
+let refuse_result_side_padded_windows (update_step : update_step) =
+  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, _) ->
+      let _, ls_lhs = einsum_of_spec spec in
+      refuse_result_side_padded_window ~spec
+        ~error_shapes:(update_step.shape :: fst (projected_operands update_step.logic))
+        ls_lhs)
+
+(* What projection derivation would refuse at every closure (gh-ocannl-1803). *)
 let refuse_unsized_kernels (update_step : update_step) =
   Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, dim_refs) ->
       Option.iter
@@ -4651,6 +4662,7 @@ let refuse_meaningless_concats (update_step : update_step) =
 let%debug4_sexp propagate_shapes (update_step : update_step) : unit =
   check_untainted ();
   refuse_discarded_operands update_step;
+  refuse_result_side_padded_windows update_step;
   refuse_unsized_kernels update_step;
   refuse_meaningless_concats update_step;
   if tracing_in_progress () then propagate_inline update_step

@@ -89,9 +89,9 @@ type outcome = Refused_at_construction of string | Refused_later of string | Ran
 
 let exn_message = function Row.Shape_error (msg, _) -> msg | e -> Stdlib.Printexc.to_string e
 
-(* [build] constructs the operation and returns the thunk that compiles and runs it. A failed case
-   leaves the session tainted (gh-ocannl-1301); it is rewound, so the next case starts from the last
-   closure. *)
+(* [build] constructs the operation and returns the thunk that compiles and runs it. A case refused
+   after construction leaves the session tainted (gh-ocannl-1301); it is rewound, so the next case
+   starts from the last closure. A refusal at construction taints nothing ([run_untainted]). *)
 let attempt build =
   let outcome =
     match build () with
@@ -185,6 +185,52 @@ let run_refusals () =
         ignore (Context.run ctx routine : Context.t);
         ignore (sm : Tensor.t))
 
+(* gh-ocannl-2042: the refusal runs in [Shape.propagate_shapes], before shape inference writes
+   anything, so it leaves the session untainted: the next, unrelated operation builds and runs with
+   no rewind. One case per route the refusal used to be raised from inside [get_inequalities] -- the
+   [Permute] branch (unary) and [einsum_n_constraints] (binary, ternary, block). A case rewinds only
+   after its claims, so a taint cannot leak into the next. *)
+let refused_untainted label build =
+  case (label ^ ", then an unrelated operation") (fun () ->
+      Exn.protect
+        ~finally:(fun () ->
+          if Option.is_some (Shape.taint_provenance ()) then Tensor.rewind_to_last_closure ())
+        ~f:(fun () ->
+          let refused =
+            match build () with
+            | exception Row.Shape_error (msg, _) ->
+                String.is_substring msg ~substring:"result-side padded window `"
+            | (_ : Tensor.t) -> false
+          in
+          pf "%s: refused at construction" label refused;
+          pf "%s: the refusal left the session untainted" label
+            (Option.is_none (Shape.taint_provenance ()));
+          let a = operand () in
+          let%op total = a ++ "s, i => s" in
+          let ctx = Train.forward_once (Context.auto ()) total in
+          pf_all2 "%s: the next unrelated operation builds and runs without a rewind" label
+            (Context.get_values ctx total.Tensor.value)
+            [| Array.fold a_vals ~init:0. ~f:( +. ) |]
+            ~f:Float.equal))
+
+let run_untainted () =
+  Tensor.unsafe_reinitialize ();
+  refused_untainted "unary" (fun () ->
+      let a = operand () in
+      [%op a ++ "s, i => s, i=+k"]);
+  refused_untainted "binary" (fun () ->
+      let a = operand () in
+      let w = kernel () in
+      [%op a +* "s, i; k => s, i=+k" w]);
+  refused_untainted "ternary" (fun () ->
+      Operation.einsum3 "s, i; k; k => s, i=+k" ~grad_spec:Tensor.Prohibit_grad (operand ())
+        (kernel ()) (kernel ()) ());
+  refused_untainted "block" (fun () ->
+      let a = operand () in
+      let b = operand () in
+      [%op (a, b) ++^ "s, c; s, d => s=+k, c^d"])
+
 let () =
   run_positive_controls ();
-  run_refusals ()
+  run_refusals ();
+  run_untainted ()

@@ -13,3 +13,15 @@ input axis: refused at construction, naming the result-side padded window i=+k: 
 axis before a row variable: refused at construction, naming the result-side padded window i=+k: true
 legacy + with use_padding = true: refused at construction, naming the result-side padded window i=+k: true
 %cd ~logic: refused at construction, naming the result-side padded window i=+k: true
+unary: refused at construction: true
+unary: the refusal left the session untainted: true
+unary: the next unrelated operation builds and runs without a rewind: true
+binary: refused at construction: true
+binary: the refusal left the session untainted: true
+binary: the next unrelated operation builds and runs without a rewind: true
+ternary: refused at construction: true
+ternary: the refusal left the session untainted: true
+ternary: the next unrelated operation builds and runs without a rewind: true
+block: refused at construction: true
+block: the refusal left the session untainted: true
+block: the next unrelated operation builds and runs without a rewind: true
