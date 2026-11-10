@@ -2682,21 +2682,48 @@ let visit_rows_for_row_solution env v ~value =
 
 (* From [solve_inequalities], at a fixpoint: an equation that leaves a window's output or kernel
    open takes the first tag whose consequences [fits] accepts, and [settled] says one did
-   (gh-ocannl-1968). *)
-type settling = { mutable settled : bool; fits : constraint_ list -> environment -> bool }
+   (gh-ocannl-1968). With [merge_pairs], a window pair with both outputs open applies its size
+   equation instead (gh-ocannl-2038); that pass comes only after no open tag would settle, since a
+   tag settled first can solve one output and leave the pair to the solved arms, which are exact. *)
+type settling = {
+  mutable settled : bool;
+  merge_pairs : bool;
+  fits : constraint_ list -> environment -> bool;
+}
 
 let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : constraint_ list * _ =
   let dim1 : dim = subst_dim env @@ fst eq and dim2 : dim = subst_dim env @@ snd eq in
   let held = Dim_eq { d1 = dim1; d2 = dim2; origin } in
-  (* The size equation of two windows says nothing of a kernel's claim on their input, so a window
-     pair with such a kernel stays until the solved arms can decide it (gh-ocannl-1968). *)
+  (* Two windows over one extent say their inputs coincide, and their outputs need not: the basis
+     rule is not injective, so [1_(bcast_if_1)] and [1_default] under [default] kernels both derive
+     a [default] input. The size equation is a whole-dim equation, which would equate the outputs'
+     tags too, and its helper window's [default] kernel carries a tag the windows do not
+     (gh-ocannl-2038: refused pair-first and accepted solved-first, and an inert [2_(bcast_if_1)]
+     became the top at size 1, accepted pair-first and refused solved-first). So while an output is
+     open the pair waits: once a side is solved, the solved arms decide sizes and tags exactly, the
+     other output's tag through [window_bases]. Only at a closing fixpoint, where nothing else will
+     solve either output and closure would size each one on its own, does the size equation apply;
+     the pair stays with it, to check the tags once closure solves the outputs (gh-ocannl-1968's
+     reason as well). Rigid outputs are decided at once, since nothing would ever solve them: their
+     tags are fixed, so the equation is exact unless a kernel claims a tag, which keeps the pair. *)
   let window_pair ?(kernels = []) ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 () =
     match window_pair_equation ~s1 ~span1 ~o1 ~s2 ~span2 ~o2 with
-    | `Equate eq ->
-        let constrs, env' = unify_dim ~stage origin eq env in
-        if List.for_all kernels ~f:is_claim_free then (constrs, env')
-        else if phys_equal env' env then ([ held ], env)
-        else (held :: constrs, env')
+    | `Equate eq -> (
+        let is_open = not (Set.is_empty (Set.union (vars_of_dim o1) (vars_of_dim o2))) in
+        match settling with
+        | _ when not is_open ->
+            let constrs, env' = unify_dim ~stage origin eq env in
+            if List.for_all kernels ~f:is_claim_free then (constrs, env')
+            else if phys_equal env' env then ([ held ], env)
+            else (held :: constrs, env')
+        | None -> ([ held ], env)
+        | Some { merge_pairs = false; _ } -> ([ held ], env)
+        | Some settling ->
+            let constrs, env' = unify_dim ~stage origin eq env in
+            if phys_equal env' env then ([ held ], env)
+            else (
+              settling.settled <- true;
+              (held :: constrs, env')))
     | `Defer -> ([ held ], env)
     | `Refuse msg -> raise @@ Shape_error (msg, [ Dim_mismatch [ dim1; dim2 ] ])
   in
@@ -5817,28 +5844,34 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     in
     (* At a fixpoint, from Stage2 on, nothing more will solve what an open window left open, and the
        closing stages need its size. One at a time, in that a choice can solve another window
-       (gh-ocannl-1968). Stage1 waits: its constraints are still arriving. *)
-    let rec settle_window kept = function
+       (gh-ocannl-1968). Stage1 waits: its constraints are still arriving. A window pair with both
+       outputs open relates their sizes only once no open tag settles (gh-ocannl-2038). *)
+    let rec settle_window ~merge_pairs kept = function
       | [] -> None
       | (Dim_eq { d1; d2; origin } as held) :: rest ->
           let fits constrs env =
             match solve constrs env with _ -> true | exception Shape_error _ -> false
           in
-          let settling = { settled = false; fits } in
+          let settling = { settled = false; merge_pairs; fits } in
           let more, env =
             try unify_dim ~settling ~stage origin (d1, d2) env
             with Shape_error (s, trace) ->
               raise @@ Shape_error (s, Constraint_failed held :: trace)
           in
           if settling.settled then Some (List.rev_append kept (more @ rest), env)
-          else settle_window (held :: kept) rest
-      | held :: rest -> settle_window (held :: kept) rest
+          else settle_window ~merge_pairs (held :: kept) rest
+      | held :: rest -> settle_window ~merge_pairs (held :: kept) rest
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in
     let ineqs' = List.rev ineqs' in
     if List.is_empty ineqs' then (ineqs', env)
     else if List.equal equal_constraint_up_to_origin ineqs' ineqs then
-      match if is_stage2_up stage then settle_window [] ineqs' else None with
+      let settle () =
+        match settle_window ~merge_pairs:false [] ineqs' with
+        | Some _ as settled -> settled
+        | None -> settle_window ~merge_pairs:true [] ineqs'
+      in
+      match if is_stage2_up stage then settle () else None with
       | Some (ineqs', env) -> solve ineqs' env
       | None -> (ineqs', env)
     else solve ineqs' env
