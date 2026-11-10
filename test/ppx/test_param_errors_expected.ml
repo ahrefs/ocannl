@@ -127,6 +127,206 @@ let field_rebinds =
     fun hid_dim x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [hid_dim; x]
         (fun () -> __ocannl_body hid_dim x)
+let field_let_bound =
+  let open! TDSL.O in
+    fun ~dims () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        let n = List.length dims in (+) ?label:(Some ["field_let_bound"]) x b in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_let_bound" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let field_let_bound_no_unit =
+  let open! TDSL.O in
+    let b =
+      ((TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+          "b")
+         ~output_dims:([%ocaml.error
+                         "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+        () in
+    let __ocannl_body x =
+      let n = 3 in
+      (+) ?label:(Some
+                    (List.concat
+                       [["field_let_bound_no_unit"];
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x b in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"field_let_bound_no_unit" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let field_let_shadows =
+  let open! TDSL.O in
+    fun ~n () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        let n = n + 1 in (+) ?label:(Some ["field_let_shadows"]) x b in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_let_shadows" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let init_let_bound =
+  let open! TDSL.O in
+    fun () ->
+      let w =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:(Some
+                          ([%ocaml.error
+                             "ppx_ocannl %op: the inline declaration { w } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds scale. Bind scale before the unit parameter -- fun ~scale () ... -- or outside %op"]))
+           "w") () in
+      let __ocannl_body x =
+        let scale = 7 in ( * ) ?label:(Some ["init_let_bound"]) w x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"init_let_bound" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let field_let_tuple =
+  let open! TDSL.O in
+    fun () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        let (_, n) as _pair = (2, 3) in
+        (+) ?label:(Some ["field_let_tuple"]) x b in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_let_tuple" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let field_let_rec =
+  let open! TDSL.O in
+    fun () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        let rec n = 3
+        and f y = (+) ?label:(Some ["f"]) y b in f x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_let_rec" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let let_above_unit =
+  let open! TDSL.O in
+    let b =
+      ((TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
+          "b")
+         ~output_dims:([%ocaml.error
+                         "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+        () in
+    let n = 3 in fun () x -> (+) ?label:(Some ["let_above_unit"]) x b
+let field_match_case =
+  let open! TDSL.O in
+    fun ~dims () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the match case that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        match dims with
+        | n::_ -> (+) ?label:(Some ["field_match_case"]) x b
+        | [] -> x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_match_case" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let field_function_case =
+  let open! TDSL.O in
+    fun ~dims () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the function case that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        List.fold dims ~init:x
+          ~f:(fun x -> function | n -> (+) ?label:None x b) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_function_case" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let field_for_loop =
+  let open! TDSL.O in
+    fun () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the for loop that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        for n = 1 to 2 do ignore ((+) ?label:None x b) done; x in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_for_loop" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let let_unnamed =
+  let open! TDSL.O in
+    fun ~hid_dim () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b") ~output_dims:[hid_dim]) () in
+      let __ocannl_body x =
+        let n = 2 * hid_dim in
+        let y = (+) ?label:(Some ["y"]) x b in
+        (+) ?label:(Some ["let_unnamed"]) y (TDSL.O.(!..) n) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"let_unnamed" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let let_in_field =
+  let open! TDSL.O in
+    fun () ->
+      let b =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "b") ~output_dims:(let n = 3 in [n])) () in
+      let __ocannl_body x = (+) ?label:(Some ["let_in_field"]) x b in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"let_in_field" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
 let spec_stride =
   let open! TDSL.O in
     [%ocaml.error

@@ -31,9 +31,11 @@ let rebinds name body =
   visitor#expression body;
   !found
 
-(* Where a parameter that is bound too late for the inline declarations was written: by the function
-   directly under [%op] when it has no [()], or by a function below -- after the [()], or nested. *)
-type late_kind = No_unit | Under_function
+(* Where a name that is bound too late for the inline declarations was written: as a parameter of
+   the function directly under [%op] when it has no [()], or of a function below -- after the [()],
+   or nested; or by a binder of the body below the lift point, named by the construct ([let], a
+   [match] or [function] case, a [for] loop; gh-ocannl-2058). *)
+type late_kind = No_unit | Under_function | Body_binder of string
 
 let params_idents params =
   List.concat_map params ~f:(fun param ->
@@ -44,7 +46,8 @@ let params_idents params =
 (* An inline declaration is lifted: bound where the enclosing [()] is applied, or without one where
    the function is defined. A field of it that names a parameter bound later than that used to be
    OCaml's "Unbound value" at the parameter's use, or a silent capture of an outer value of the same
-   name (gh-ocannl-1987). [late]: those parameters, innermost first. *)
+   name (gh-ocannl-1987); and so did a name bound in the body (gh-ocannl-2058). [late]: those names,
+   innermost first. *)
 let guard_late ~late ~decl (e : expression) =
   let found = ref None in
   let visitor =
@@ -79,6 +82,17 @@ let guard_late ~late ~decl (e : expression) =
             applied (without a unit parameter: when the function is defined), where the parameter \
             %s is not bound yet. Bind %s before the unit parameter: fun ~%s () ..."
            decl n n n
+  | Some (n, Body_binder construct, loc) ->
+      Ast_builder.Default.pexp_extension ~loc
+      @@ Location.error_extensionf ~loc
+           "ppx_ocannl %%op: the inline declaration { %s } is created where the enclosing () is \
+            applied (without a unit parameter: when the function is defined), outside the %s that \
+            binds %s. Bind %s before the unit parameter -- fun ~%s () ... -- or outside %%op"
+           decl construct n n n
+
+(* [late] extended with the names [pat] binds, by the body's [construct]. *)
+let late_binder ~late construct pat =
+  List.map (Set.to_list (collect_pat_idents pat)) ~f:(fun n -> (n, Body_binder construct)) @ late
 
 let make_p ~dsl_name ~opt_label ~late ~loc ?value ?values ?param_init ~extra_args name =
   let guard = guard_late ~late ~decl:name.txt in
@@ -526,6 +540,11 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
     ~late ?label expr =
   let loc = expr.pexp_loc in
   let loop = translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late in
+  (* [loop] below a binder of the body: [construct] binds the names of [pat] there. *)
+  let loop_under construct pat =
+    translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label
+      ~late:(late_binder ~late construct pat)
+  in
   (* Block-element loop: like [loop] but flags that the immediate sub-expression sits in
      block-tensor element position, so a bare tuple there denotes an input-axis stack (not OCaml
      tuple grouping). Used only for the operands of a block-tensor stack. *)
@@ -1064,7 +1083,12 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
             | Pfunction_cases (cases, loc, attrs) ->
                 let vbs, cases =
                   List.unzip
-                  @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
+                  @@ List.map cases ~f:(fun ({ pc_lhs; pc_rhs; _ } as c) ->
+                      (* Not [loop_under]: [late] here holds the parameters too. *)
+                      let loop =
+                        translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label
+                          ~late:(late_binder ~late "function case" pc_lhs)
+                      in
                       let vbs, pc_rhs = loop ~label pc_rhs in
                       let vbs, pc_rhs = bind_captures ~loc vbs pc_rhs in
                       (vbs, { c with pc_rhs }))
@@ -1111,7 +1135,11 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         | Pfunction_cases (cases, loc, attrs) ->
             let vbs, cases =
               List.unzip
-              @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
+              @@ List.map cases ~f:(fun ({ pc_lhs; pc_rhs; _ } as c) ->
+                  let loop =
+                    translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label
+                      ~late:(late_binder ~late "function case" pc_lhs)
+                  in
                   let vbs, pc_rhs = loop ?label pc_rhs in
                   let vbs, pc_rhs = bind_captures ~loc vbs pc_rhs in
                   (vbs, { c with pc_rhs }))
@@ -1147,7 +1175,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       for [%p? pat] = [%e? init] to [%e? final] do
         [%e? body_expr]
       done] ->
-      let vbs, body = loop ?label body_expr in
+      let vbs, body = loop_under "for loop" pat ?label body_expr in
       ( vbs,
         [%expr
           for [%p pat] = [%e init] to [%e final] do
@@ -1157,7 +1185,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       for [%p? pat] = [%e? init] downto [%e? final] do
         [%e? body_expr]
       done] ->
-      let vbs, body = loop ?label body_expr in
+      let vbs, body = loop_under "for loop" pat ?label body_expr in
       ( vbs,
         [%expr
           for [%p pat] = [%e init] downto [%e final] do
@@ -1182,21 +1210,30 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
   | { pexp_desc = Pexp_match (expr1, cases); _ } ->
       let vbss, cases =
         List.unzip
-        @@ List.map cases ~f:(fun ({ pc_rhs; _ } as c) ->
-            let vbs, pc_rhs = loop ?label pc_rhs in
+        @@ List.map cases ~f:(fun ({ pc_lhs; pc_rhs; _ } as c) ->
+            let vbs, pc_rhs = loop_under "match case" pc_lhs ?label pc_rhs in
             (vbs, { c with pc_rhs }))
       in
       (reduce_vbss vbss, { expr with pexp_desc = Pexp_match (expr1, cases) })
   | { pexp_desc = Pexp_let (recflag, bindings, body); _ } ->
+      (* The names the bindings bind: in scope in the body, and in the right-hand sides of a [let
+         rec]. *)
+      let bound_late =
+        List.fold bindings ~init:late ~f:(fun late vb -> late_binder ~late "let" vb.pvb_pat)
+      in
+      let loop_bound =
+        translate ~dsl_name ~num_configs ~is_toplevel:false ~opt_label ~late:bound_late
+      in
+      let loop_rhs = match recflag with Recursive -> loop_bound | Nonrecursive -> loop in
       let vbss1, bindings =
         List.unzip
         @@ List.map bindings ~f:(fun binding ->
             let vbs, pvb_expr =
-              loop ~label:[%expr [ [%e pat2string binding.pvb_pat] ]] binding.pvb_expr
+              loop_rhs ~label:[%expr [ [%e pat2string binding.pvb_pat] ]] binding.pvb_expr
             in
             (vbs, { binding with pvb_expr }))
       in
-      let vbs2, body = loop ?label body in
+      let vbs2, body = loop_bound ?label body in
       (reduce_vbss (vbss1 @ [ vbs2 ]), { expr with pexp_desc = Pexp_let (recflag, bindings, body) })
   | { pexp_desc = Pexp_open (decl, body); _ } ->
       let vbs, body = loop ?label body in
