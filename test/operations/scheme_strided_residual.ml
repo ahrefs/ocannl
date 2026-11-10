@@ -745,11 +745,25 @@ let () =
    what was deferred stays pending, and the closing stages run last. A valid window derives its
    input's basis from its extent's and its kernel's. That rule is not injective, so an output or a
    kernel the equation leaves open waits for another constraint, and takes [default] once none will
-   come. *)
+   come. [~close] appends one output row over the given variables, the [Shape_row] a tensor's shape
+   contributes, so closure sizes them together. *)
 
 let stages_closing = [ Row.Stage2; Stage3; Stage4; Stage5; Stage6; Stage7 ]
 
-let staged ?(closing = stages_closing) cs =
+let staged ?(closing = stages_closing) ?(close = []) cs =
+  let cs =
+    if List.is_empty close then cs
+    else
+      let row : Row.t =
+        {
+          beg_dims = [];
+          dims = List.map close ~f:(fun v -> Row.Var v);
+          bcast = Broadcastable;
+          prov = Row.provenance ~sh_id:2038 ~kind:`Output;
+        }
+      in
+      cs @ [ Row.Shape_row (row, origin) ]
+  in
   let step stage acc cs =
     Result.bind acc ~f:(fun (deferred, env) ->
         match Row.solve_inequalities ~stage (deferred @ cs) env with
@@ -1253,15 +1267,7 @@ let () =
       (* Closure sizes each open output on its own; [2 * (o1 - 1) + 3 = (o2 - 1) + 2] closed at 1
          and 1 is a mismatch, so the outputs are related before then. *)
       let o1 = Row.get_var () and o2 = Row.get_var () in
-      let row : Row.t =
-        {
-          beg_dims = [];
-          dims = [ Var o1; Var o2 ];
-          bcast = Broadcastable;
-          prov = Row.provenance ~sh_id:2038 ~kind:`Output;
-        }
-      in
-      let result = finished (staged [ pair o1 o2; Row.Shape_row (row, origin) ]) in
+      let result = finished (staged ~close:[ o1; o2 ] [ pair o1 o2 ]) in
       let shown v =
         match result with
         | Ok env -> (
@@ -1283,12 +1289,9 @@ let () =
       (* Outputs that are windows themselves: the size equation reduces to a nested pair, which
          relates [y = 2 * x] at closing as well. *)
       let x = Row.get_var () and y = Row.get_var () in
-      let row : Row.t = { row with dims = [ Var x; Var y ] } in
       let w s k v = window ~stride:s ~kernel:(dim k) v in
       let result =
-        finished
-          (staged
-             [ eq (w 2 3 (w 2 3 (Var x))) (w 2 3 (w 1 2 (Var y))); Row.Shape_row (row, origin) ])
+        finished (staged ~close:[ x; y ] [ eq (w 2 3 (w 2 3 (Var x))) (w 2 3 (w 1 2 (Var y))) ])
       in
       let closes_1_2 x y = function
         | Ok env -> (
@@ -1299,13 +1302,9 @@ let () =
       (* And through the rewrites between: two stride-2 padded windows reduce to the identity over
          the inner pair. *)
       let x = Row.get_var () and y = Row.get_var () in
-      let row : Row.t = { row with dims = [ Var x; Var y ] } in
       let pad v = padded_window ~stride:2 ~kernel:(dim 1) v in
       p "a nested pair under padded windows closes together: x = 1, y = 2"
         (closes_1_2 x y
            (finished
-              (staged
-                 [
-                   eq (w 2 3 (pad (w 2 3 (Var x)))) (w 2 3 (pad (w 1 2 (Var y))));
-                   Row.Shape_row (row, origin);
-                 ]))))
+              (staged ~close:[ x; y ]
+                 [ eq (w 2 3 (pad (w 2 3 (Var x)))) (w 2 3 (pad (w 1 2 (Var y)))) ]))))
