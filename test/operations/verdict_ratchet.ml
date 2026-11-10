@@ -5508,6 +5508,77 @@ let () =
   let renamed = 0. in
   Verdict.p "shadowed" Float.(renamed < 0.01)|ocaml},
       [ "6:ok"; "7:renamed" ] );
+    ( "refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, \
+       one-cell errors and shadowing",
+      {ocaml|let () =
+  let max_err = ref 0. in
+  for i = 0 to n - 1 do
+    max_err := Float.max !max_err (Float.abs (got.(i) -. want.(i)))
+  done;
+  let worst = ref 0. in
+  Array.iteri got ~f:(fun i v ->
+      let err = Float.abs (v -. want.(i)) in
+      if Float.(err > !worst) then worst := err);
+  let ok = ref true in
+  List.iter pairs ~f:(fun (a, b) -> ok := !ok && Float.(abs (a - b) < 1e-3));
+  let total = ref 0. in
+  let acc = total in
+  Array.iter2_exn got want ~f:(fun a b -> acc := Float.max !acc (Float.abs (a -. b)));
+  Verdict.p "loop" Float.(!max_err < 1e-4);
+  Verdict.p "callback" Float.(1e-4 >= !worst);
+  Verdict.p "boolean" !ok;
+  Verdict.p "renamed write" Float.(!total <= 1e-4);
+  Verdict.p "margin" Float.(!max_err > 1e-4);
+  Verdict.p "ordering" Float.(!max_err < !worst);
+  let single = ref 0. in
+  single := Float.abs (got.(0) -. want.(0));
+  Verdict.p "one cell" Float.(!single < 1e-6);
+  let max_err = ref 0. in
+  Verdict.p "shadowed" Float.(!max_err < 1e-4);
+  let outer = ref 0. in
+  (let outer = ref 0. in
+   for i = 0 to n - 1 do
+     outer := Float.max !outer (Float.abs (got.(i) -. want.(i)))
+   done);
+  Verdict.p "shadowed write" Float.(!outer < 1e-4);
+  let a = ref 0. in
+  let b = ref 0. in
+  let ordered = ref true in
+  for i = 0 to n - 1 do
+    a := Float.max !a (Float.abs (got.(i) -. want.(i)));
+    b := !a;
+    ordered := !ordered && Float.(!a <= !b)
+  done;
+  Verdict.p "ordered refs" !ordered|ocaml},
+      [ "15:max_err"; "16:worst"; "17:ok"; "18:total" ] );
+    ( "refuses piped and applied max_elt and reduce metrics bounded from above, but accepts lower \
+       margins, orderings, mapped errors and shadowing",
+      {ocaml|let () =
+  let worst =
+    Array.map2_exn got want ~f:(fun a b -> Float.abs (a -. b))
+    |> Array.max_elt ~compare:Float.compare
+    |> Option.value ~default:0.
+  in
+  let diffs = List.map2_exn got want ~f:(fun a b -> Float.abs (a -. b)) in
+  let named = Option.value_exn (List.max_elt diffs ~compare:Float.compare) in
+  let reduced = diffs |> List.reduce_exn ~f:Float.max in
+  let applied =
+    Option.value_exn
+      (Array.max_elt ~compare:Float.compare
+      @@ Array.map2_exn got want ~f:(fun a b -> Float.abs (a -. b)))
+  in
+  let folded = diffs |> List.fold_left ~init:0. ~f:Float.max in
+  Verdict.p "piped" Float.(worst <= 1e-3);
+  Verdict.p "named" Float.(named < 1e-3);
+  Verdict.p "reduced" Float.(reduced < 1e-3);
+  Verdict.p "applied" Float.(1e-3 > applied);
+  Verdict.p "folded" Float.(folded < 1e-3);
+  Verdict.p "margin" Float.(worst > 1e-3);
+  Verdict.p "ordering" Float.(worst < named);
+  Verdict.p "mapped" (List.length diffs = 4);
+  let worst = Array.max_elt got ~compare:Float.compare |> Option.value_exn in
+  Verdict.p "shadowed" Float.(worst < 1e-3)|ocaml},
+      [ "16:worst"; "17:named"; "18:reduced"; "19:applied"; "20:folded" ] );
     ( "does not read the closure of a leg or a case, whose claims are read where written",
       {ocaml|let () =
   Verdict.in_leg ~leg "x" (fun () -> ignore (List.for_all xs ~f:(fun a -> Float.(abs (a - b) < 1e-3))));

@@ -773,6 +773,8 @@ refuses a plain claim over an array helper bounding a difference inline: true
 refuses a tolerance helper reaching p, p_all and p_exists, and a value computed through one: true
 accepts a scalar bound and a discrimination margin, but refuses a bounded maximum-error helper: true
 refuses bound folds and derived metrics, but accepts lower margins and shadowing: true
+refuses loop-carried ref metrics bounded from above, but accepts lower margins, orderings, one-cell errors and shadowing: true
+refuses piped and applied max_elt and reduce metrics bounded from above, but accepts lower margins, orderings, mapped errors and shadowing: true
 does not read the closure of a leg or a case, whose claims are read where written: true
 does not read a p the source binds itself: true
 refuses a planted hand-rolled tolerance, and names a tolerance reader that raised: true

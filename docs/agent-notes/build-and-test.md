@@ -2745,11 +2745,15 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   partial applications included; and, in any other claim's arguments, a function BOUNDING an
   abs-of-difference (`<`/`<=`) or a name bound to anything holding one -- a helper, or a value
   computed through it (`let ok = Array.for_all2_exn got want ~f:approx in p "x" ok`; gh-ocannl-1470).
-  An unbounded error helper or abs-of-difference fold is tracked through names and arithmetic
-  until an upper comparison bounds it (gh-ocannl-1837). A scalar bound written in the claim itself
-  and a lower discrimination margin (`abs (a - b) > m`) stay unread by design. Ordering two
-  error metrics is a scalar claim too. Ref accumulators, piped max_elt reductions, Stdlib
-  fold_left/fold_right and a shared helper of another module are beyond the reader.
+  An unbounded error helper or abs-of-difference reduction (a fold, `fold_left`/`fold_right`,
+  `max_elt` or `reduce`, applied or piped) is tracked through names and arithmetic until an upper
+  comparison bounds it (gh-ocannl-1837), and so is a `ref` a loop or callback writes an error into
+  (`max_err := Float.max !max_err (Float.abs (a -. b))`, by lexical binding, renamings included;
+  gh-ocannl-2122). A scalar bound written in the claim itself or on one cell's error, and a lower
+  discrimination margin (`abs (a - b) > m`) stay unread by design. Ordering two error metrics is a
+  scalar claim too. Array-cell, field and parameter writes, a mapped error array bounded
+  element-wise, and a shared helper of another module are beyond the reader (its header in
+  `test/support/verdict_scan.ml` lists them).
   `Ll_test.close` and `Ll_test.same` use `Verdict.within` directly,
   retaining their empty-array and subtraction-only semantics. Migrations of legacy error folds use
   `~difference_only:true` as compatibility with the original subtraction-based predicate,
