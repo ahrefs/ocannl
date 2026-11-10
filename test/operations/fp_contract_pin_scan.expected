@@ -46,6 +46,7 @@ test/operations/fp_licence_values.ml -- pinned off
 test/operations/fragment_scope_move_legality.ml -- not-cc: executed parity needs a GPU advertising a half tile; C backends compile nothing
 test/operations/frozen_master_pack.ml -- exact-operands: conversion legs only copy; every dyadic matmul partial sum is f32-exact.
 test/operations/gebp_padded_parity.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
+test/operations/gpu_conv_twin_tiles.ml -- exact-operands: Ll_test.exact_partials derives the f32 reduction premise from the initialized operands after their required rounding.
 test/operations/gpu_packed_prec.ml -- no-contraction: each lane does one operation, an explicit fma among them; no product meets an add
 test/operations/grid_launch_floor.ml -- exact-operands: Bench_gebp products are multiples of an eighth and every sum stays exact in f32
 test/operations/lineage_recompile_step.ml -- exact-operands: integer inputs, eighth-step weights and a dyadic rate stay exact for the three steps
