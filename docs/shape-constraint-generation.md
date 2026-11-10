@@ -425,7 +425,11 @@ and optionally applies the `Input_equals_output` deduction.
 `Input_equals_output` immediately calls `Row.unify_row` on the input and output
 rows. This is an online constraint, not a separate `Row_eq` stored for later.
 Semantically it is the same row equality; operationally it gives earlier
-feedback and simplification.
+feedback and simplification. What `unify_row` cannot decide yet -- an unpadded
+window over a still-variable kernel, a window pair held for the Stage2+
+fixpoint -- it returns, and those residual constraints join the active
+constraints, so the closure solves them or refuses them naming the deduction
+(gh-ocannl-2030).
 
 ## 6. Loose Ends Closed by Generation
 

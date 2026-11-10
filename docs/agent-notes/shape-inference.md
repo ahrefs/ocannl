@@ -19,7 +19,10 @@ files.
   whose kernel dim is still a variable. Deferrals are idempotent: re-solving one in place
   livelocks; hand it to the driver's next pass, where substitution can make it actionable
   (`solve_inequalities` is the pattern). Executable probe for output-only windowed specs:
-  `test/einsum/test_conv_output_only.ml`.
+  `test/einsum/test_conv_output_only.ml`. A `Shape` call site of `unify_row` outside the driver
+  pushes what it returns onto `active_constraints`, never asserts it empty: `deduce_within`
+  (`~deduced:Input_equals_output`) defers an unpadded window over an open kernel and a held window
+  pair (gh-ocannl-2030, `test/einsum/input_equals_output_deferral.ml`).
 - `Row.Concat` dimensions (block tensors, `^` in specs) are solved as ARITHMETIC SUMS, not
   structural lists: equality lives in `unify_dim` (single-component unwrap, `Concat=Dim`
   subtraction, cancel-common residuals, nested-`Concat` flattening), and the equal-arity
