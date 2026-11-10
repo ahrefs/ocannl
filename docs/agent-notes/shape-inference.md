@@ -221,7 +221,8 @@ files.
   `concat_offset_for` took the LAST copy's offset: `a => a^a` silently gave `[0 0 1 2]`. Refused
   from the spec and, by any other route, in lowering. A multiplicative einsum whose operand lacks a
   segment the result lists (`a^c; a^b^c => a^b^c` under `+*`) is an operand-arity shortfall,
-  refused as "Ambiguous indices" (gh-ocannl-2088 owns that message).
+  refused in lowering with a message of its own naming the block and the missing operand
+  (gh-ocannl-2088).
 - An affine axis's constant offset is sized for by nothing: the dim formulas omit it, so an offset
   at or past the stride, or on an unpadded window, indexes past the extent. On the result side
   those writes were silently dropped (stride 1 died in `projection_of_solved_dims`); on an

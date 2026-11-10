@@ -952,13 +952,52 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
         Option.some_if (Array.for_alli projections.project_rhs ~f:selects) syms
     | _ -> None
   in
+  (* The block a refusal names, for a user who knows the spec rather than the product space: the
+     segment it descended into of each concatenated component, counted within the first slot whose
+     index lists that component's segments -- the result's, else an operand's -- so that the count
+     points at a label of that slot in the spec. *)
+  let describe_block ~(projections : Indexing.projections) block_iters =
+    let slots =
+      ("the result", projections.project_lhs)
+      :: Array.to_list
+           (Array.mapi projections.project_rhs ~f:(fun i idcs ->
+                ("operand " ^ Int.to_string (i + 1), idcs)))
+    in
+    let segment active =
+      List.find_map slots ~f:(fun (slot, idcs) ->
+          Array.find_map idcs ~f:(function
+            | Indexing.Concat syms ->
+                Option.map
+                  (List.findi syms ~f:(fun _ s -> Indexing.equal_symbol s active))
+                  ~f:(fun (k, _) ->
+                    [%string
+                      "segment %{k + 1#Int} of %{List.length syms#Int} of %{slot}'s concatenated \
+                       axis"])
+            | _ -> None))
+    in
+    Array.to_list projections.components
+    |> List.filter_map ~f:(fun comp ->
+        if List.length comp < 2 then None
+        else
+          List.find_mapi comp ~f:(fun k (_, s) ->
+              if Array.mem ~equal:Indexing.equal_symbol block_iters s then
+                Some
+                  (Option.value (segment s)
+                     ~default:
+                       [%string
+                         "segment %{k + 1#Int} of %{List.length comp#Int} of a concatenated \
+                          product component"])
+              else None))
+    |> String.concat ~sep:" and "
+  in
   (* The product-space loop nest of one assignment: one loop per SEGMENT of each component (a fresh
      symbol each, gh-ocannl-765), extent-guarded, calling [f] at the innermost level of every block
      -- i.e. once per choice of concat segments. [f] receives the block's substitution, the fresh
      symbols' loop widths, and [is_allowed i], which says whether block buffer [i] is the one this
      block selects: a single LHS [Concat] whose segment count matches [arity] selects among the
-     buffers, otherwise every buffer participates. [f] raising [Empty_block] -- directly, or from
-     [subst_index] -- means this block contributes nothing. *)
+     buffers, otherwise every buffer participates, and [describe_block] names the block in a
+     refusal. [f] raising [Empty_block] -- directly, or from [subst_index] -- means this block
+     contributes nothing. *)
   let with_product_loops ~(projections : Indexing.projections) ~lhs ~arity ~role ~f : Low_level.t =
     let all_prod_iters =
       Set.of_list (module Indexing.Symbol) (Indexing.all_iterators projections)
@@ -1009,7 +1048,10 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
         | None -> true
         | Some syms -> Array.mem ~equal:Indexing.equal_symbol block_iters syms.(i)
       in
-      try f ~subst_index ~fresh_sizes ~is_allowed with Empty_block -> Low_level.Noop
+      try
+        f ~subst_index ~fresh_sizes ~is_allowed ~describe_block:(fun () ->
+            describe_block ~projections block_iters)
+      with Empty_block -> Low_level.Noop
     in
     let rec for_loop block_iters rev_iters = function
       | [] -> basecase block_iters rev_iters
@@ -1043,13 +1085,14 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     let reached = Array.create ~len:(Array.length rhses) false in
     let for_loops =
       with_product_loops ~projections ~lhs ~arity:(Array.length rhses) ~role:"Block"
-        ~f:(fun ~subst_index ~fresh_sizes ~is_allowed ->
+        ~f:(fun ~subst_index ~fresh_sizes ~is_allowed ~describe_block ->
           let lhs_idcs : Indexing.axis_index array =
             Array.map projections.project_lhs ~f:subst_index
           in
           let open Low_level in
           let lhs_conds = ref [] and rhs_conds = ref [] in
           let lhs_ll = get (Node lhs) lhs_idcs in
+          let present = Array.create ~len:(Array.length rhses) false in
           let rhses_ll =
             Array.filter_mapi projections.project_rhs ~f:(fun i rhs_idcs ->
                 try
@@ -1057,16 +1100,42 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                   else
                     let rhs_idcs = Array.map ~f:subst_index rhs_idcs in
                     reached.(i) <- true;
+                    present.(i) <- true;
                     Some (get ~clamp:(accum, fresh_sizes, rhs_conds) rhses.(i) rhs_idcs)
                 with Empty_block -> None)
           in
           if Array.is_empty rhses_ll then raise Empty_block;
+          (* The operands present in a block are the ones that use its segment, so their count can
+             miss the operation's arity both ways. More than it takes is a concatenation whose
+             operands can fill one segment alike. Fewer is an operation combining operands that
+             concatenation keeps apart (gh-ocannl-2088): a position of the axis lies in one segment,
+             and an absent operand has nothing there to combine. It stays a refusal: dropping the
+             block as empty would leave the result at its initialization, a silent wrong value. *)
+          let arity = match op with Ops.Ternop _ -> 3 | Binop _ -> 2 | Unop _ -> 1 in
           let rhs2 =
-            try apply_op op rhses_ll
-            with Invalid_argument _ ->
-              raise
-              @@ Utils.User_error
-                   "Ambiguous indices in concatenation: multiple blocks viable for same position"
+            try apply_op op rhses_ll with
+            | Invalid_argument _ when Array.length rhses_ll < arity ->
+                let missing =
+                  Array.filter_mapi present ~f:(fun i present ->
+                      Option.some_if (not present) (Int.to_string (i + 1)))
+                  |> String.concat_array ~sep:", "
+                in
+                raise
+                @@ Utils.User_error
+                     [%string
+                       "Concatenation in einsum spec \"%{projections.debug_info.spec}\" of \
+                        %{Tn.debug_name lhs}: operand(s) %{missing} (counted from 1) take no part \
+                        in the block of %{describe_block ()}, but the operation combines \
+                        %{arity#Int} operands at every position it writes. A position of a \
+                        concatenated axis lies in one segment, and an operand that does not use \
+                        that segment has nothing there to combine. To place tensors side by side \
+                        along the axis, concatenate them: (x, y) ++^ \"a; b => a^b\"; to combine \
+                        them, have every operand use each segment the result writes: x +* \"a^b; \
+                        a^b => a^b\" y"]
+            | Invalid_argument _ ->
+                raise
+                @@ Utils.User_error
+                     "Ambiguous indices in concatenation: multiple blocks viable for same position"
           in
           (* Out-of-range reads contribute the accumulation identity: exactly the semantics of a
              padded window spec, so clamping is semantically exact (gh-504). *)
@@ -1273,7 +1342,7 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
     let margin_writes = ref [] in
     let for_loops =
       with_product_loops ~projections ~lhs ~arity:(Array.length lhses) ~role:"Rev_sides"
-        ~f:(fun ~subst_index ~fresh_sizes ~is_allowed ->
+        ~f:(fun ~subst_index ~fresh_sizes ~is_allowed ~describe_block:_ ->
           let rhs_idcs : Indexing.axis_index array =
             Array.map projections.project_lhs ~f:subst_index
           in
