@@ -229,3 +229,59 @@ let () =
         (match Sched.apply_classified [ Sched.Unroll { axis; materialize = true } ] opt with
         | _ -> false
         | exception Outcome.Cause_at (Outcome.Transform, Outcome.Illegal_schedule _) -> true))
+
+(* gh-ocannl-2099: a live range the integer type CAN represent may still ask for more copies than a
+   process can build. Materializing Unroll refuses past [Sched.max_unroll_copies], typed and before
+   building any copy. At the cap it materializes every copy (each stores a distinct constant, so
+   simplification cannot merge them); one past the cap, and at a trip count of [max_int] itself, it
+   refuses. "Before building" is checked as allocation: a refusal that came after the copies would
+   allocate at least what materializing the cap does. The [max_int] case runs last: on a tree
+   without the budget it does not refuse, it builds copies until the process dies. *)
+let () =
+  let open Ll_test in
+  let cap = Sched.max_unroll_copies in
+  let acc = node "budget_unroll_acc" in
+  materialize acc;
+  let idcs = [| fixed 0 |] in
+  let store = set acc idcs (c 7.) in
+  let unroll ~from_ ~upto =
+    let axis = sym () in
+    let live = loop ~from_ ~upto axis (set acc idcs (tick axis)) in
+    let opt = optimize_scoped ~name:"budget_unroll" ~raw:store live in
+    let before = Stdlib.Gc.minor_words () in
+    let result =
+      match Sched.apply_classified [ Sched.Unroll { axis; materialize = true } ] opt with
+      | result -> Ok result.LL.llc
+      | exception Outcome.Cause_at (Outcome.Transform, Outcome.Illegal_schedule { detail; _ }) ->
+          Error detail
+    in
+    (result, Stdlib.Gc.minor_words () -. before)
+  in
+  let sets llc =
+    let n = ref 0 in
+    walk ~on_set:(fun _ -> Int.incr n) llc;
+    !n
+  in
+  let budget_refusal = function
+    | Ok _ -> false
+    | Error detail -> String.is_substring detail ~substring:"materialization budget"
+  in
+  let at_cap, at_cap_words = unroll ~from_:0 ~upto:(cap - 1) in
+  pf "[0..%d]: at the budget, materializing Unroll builds all %d copies" (cap - 1) cap
+    (match at_cap with Ok llc -> sets llc = cap | Error _ -> false);
+  let shifted, _ = unroll ~from_:(Int.max_value - cap + 1) ~upto:Int.max_value in
+  p "[max_int-cap+1..max_int]: a budget-sized range ending at max_int materializes too"
+    (match shifted with Ok llc -> sets llc = cap | Error _ -> false);
+  List.iter
+    [ ("cap + 1", 0, cap); ("cap + 1, offset", -7, cap - 7) ]
+    ~f:(fun (what, from_, upto) ->
+      let over, over_words = unroll ~from_ ~upto in
+      pf "%s [%d..%d]: refused typed as over the materialization budget" what from_ upto
+        (budget_refusal over);
+      pf "%s: the refusal allocates less than materializing the cap does" what
+        Float.(over_words < at_cap_words));
+  let huge, huge_words = unroll ~from_:0 ~upto:(Int.max_value - 1) in
+  p "[0..max_int-1]: a trip count of max_int is refused typed as over the budget"
+    (budget_refusal huge);
+  p "[0..max_int-1]: the refusal allocates less than materializing the cap does"
+    Float.(huge_words < at_cap_words)

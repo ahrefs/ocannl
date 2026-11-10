@@ -27,3 +27,11 @@ accumulation [4611686018427387903..-4611686018427387904]: materializing Unroll r
 materializing Unroll retains a singleton loop's store: true
 live [0..4611686018427387903]: an unrepresentable trip count refuses typed: true
 live [-4611686018427387904..0]: an unrepresentable trip count refuses typed: true
+[0..4095]: at the budget, materializing Unroll builds all 4096 copies: true
+[max_int-cap+1..max_int]: a budget-sized range ending at max_int materializes too: true
+cap + 1 [0..4096]: refused typed as over the materialization budget: true
+cap + 1: the refusal allocates less than materializing the cap does: true
+cap + 1, offset [-7..4089]: refused typed as over the materialization budget: true
+cap + 1, offset: the refusal allocates less than materializing the cap does: true
+[0..max_int-1]: a trip count of max_int is refused typed as over the budget: true
+[0..max_int-1]: the refusal allocates less than materializing the cap does: true

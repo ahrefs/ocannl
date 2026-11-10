@@ -45,7 +45,9 @@ type optop =
           to the optimizer). [materialize = true]: unroll in the IR by substituting index constants,
           so that {!apply}'s trailing simplify + CSE see the copies — constant-folding [Affine]
           indices and deduplicating repeated loads. Register blocktiling is [Split] + materializing
-          [Unroll] + the existing CSE (schedule-ir-optops §4). *)
+          [Unroll] + the existing CSE (schedule-ir-optops §4). A materializing unroll of a loop with
+          more than {!max_unroll_copies} iterations is refused (gh-ocannl-2099); a dead loop becomes
+          [Noop]. *)
   | Partition of {
       axis : Indexing.symbol;  (** The loop to partition, identified by its index symbol. *)
       breakpoints : int list;
@@ -514,6 +516,10 @@ val tile_namespace : string
 (** The namespace of the nodes a schedule mints (staged tiles, moved accumulators): their ids come
     from a process-wide counter of the schedule's own, apart from the session's, and their
     identifiers in emitted code spell it ([tile__n24_...], {!Tnode.ident_prefix}). *)
+
+val max_unroll_copies : int
+(** The most body copies one materializing {!constructor-Unroll} builds (gh-ocannl-2099). A live
+    loop with more iterations is refused as a typed [Illegal_schedule] before any copy is built. *)
 
 val split :
   axis:Indexing.symbol ->
