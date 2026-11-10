@@ -639,7 +639,11 @@ files.
   that do not divide each other (2 and 3) have solutions but no functional relation, so the pair
   stays a `Dim_eq` until a side is solved, then the solved arms decide it (gh-ocannl-1972); a
   rigid `Sym` on both sides is refused, since nothing would ever solve one. No width at all still
-  fails: closure sizes each output at 1 on its own, and `2 = 3` reads as a plain mismatch. The
+  fails: closure sizes each output at 1 on its own, and `2 = 3` fails in the plain arms; from
+  Stage5 `solve_inequalities`' handler rewords a size failure of a pair stored with both outputs
+  open (`unsized_window_pair_message`) to name both windows, the sizes closing chose, and the
+  widths that fit both (gh-ocannl-2040). It rewords only what closing's sizes broke, so a width
+  that arrives and does not fit keeps its own `incompatible stride`. The
   helper's span can be below 1 (`o2 = o1 - 2`), and `s_dim_one` refuses a helper output below 1,
   which is the window not fitting; without that, a width arriving after the pair gave `o2 = 0`
   or a negative extent where solving concretely refuses. Reorienting the helper would not do:

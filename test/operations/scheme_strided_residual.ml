@@ -241,10 +241,20 @@ let () =
           let got = report "width 12" (late_sized ~mode ~width:(Some 12)) in
           p "width 12 gives outputs 6 and 4, over the input and y's 66"
             (Result.equal (List.equal Float.equal) String.equal got (Ok [ 76. ]));
-          p "control: width 10 is no multiple of 3"
-            (Result.is_error (report "width 10" (late_sized ~mode ~width:(Some 10))));
-          p "with no width anywhere, closing refuses"
-            (Result.is_error (report "no width" (late_sized ~mode ~width:None)))))
+          let says r part =
+            match r with Error msg -> String.is_substring msg ~substring:part | Ok _ -> false
+          in
+          let width_10 = report "width 10" (late_sized ~mode ~width:(Some 10)) in
+          p "control: width 10 is no multiple of 3" (Result.is_error width_10);
+          p "control: and its refusal is not the unsized pair's" (not (says width_10 "the windows"));
+          let no_width = report "no width" (late_sized ~mode ~width:None) in
+          p "with no width anywhere, closing refuses" (Result.is_error no_width);
+          (* gh-ocannl-2040: by the windows and the widths that fit, not as a bare [mismatch]. *)
+          p "the refusal names both windows" (says no_width "the windows 2*o1 and 3*o2");
+          p "and the sizes closing gave them"
+            (says no_width "o1 at 1 and o2 at 1, which read 2 and 3 cells");
+          p "and asks for a width, naming those both windows fit"
+            (says no_width "The widths both fit are 6 and every 6 after it")))
 
 (* The width reaching the pair through one window's output instead, as a broadcast's bound, which
    the closing stages must spend before they close the other output at 1. *)

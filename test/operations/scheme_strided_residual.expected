@@ -46,10 +46,18 @@ check and off give the same output, loss, parameters and gradients, bitwise: tru
 the scheme or the body raises a shape error: true
 width 12 gives outputs 6 and 4, over the input and y's 66: true
 control: width 10 is no multiple of 3: true
+control: and its refusal is not the unsized pair's: true
 with no width anywhere, closing refuses: true
+the refusal names both windows: true
+and the sizes closing gave them: true
+and asks for a width, naming those both windows fit: true
 width 12 gives outputs 6 and 4, over the input and y's 66: true
 control: width 10 is no multiple of 3: true
+control: and its refusal is not the unsized pair's: true
 with no width anywhere, closing refuses: true
+the refusal names both windows: true
+and the sizes closing gave them: true
+and asks for a width, naming those both windows fit: true
 y's 4 gives o2 = 4, so o1 = 6: 6 cells of ones and 0 + 1 + 2 + 3: true
 v = conv(v + kernel 1): true
 conv(v + kernel 1) = v: true
