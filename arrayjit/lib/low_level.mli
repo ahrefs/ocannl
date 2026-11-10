@@ -1723,6 +1723,23 @@ type footprint = {
 (** gh-ocannl-498: the backend-agnostic byte footprint implied by an {!optimized} routine's
     placement vector. The allocator-side scorer lives in [Backends.score_footprint]. *)
 
+val first_access_positions : t -> (Tnode.t, int) Base.Hashtbl.t
+(** gh-ocannl-1777: each node's first buffer access in the code, in [iter_buffer_accesses]' walk
+    order (a statement's write before its reads), numbered from 0 -- a key the program fixes, where
+    a node's uid is fixed by when it was built. Blind to [Staged_compilation] callbacks. *)
+
+val layout_order : optimized -> Tnode.t -> Tnode.t -> int
+(** gh-ocannl-2051: the order the memory layout planners receive a routine's nodes in
+    ([Backends.partition_layout_groups]): by {!first_access_positions} over the routine's raw code
+    {!field-source}, which every schedule-transform copy inherits unchanged -- so the footprint
+    scorer (over the whole routine and its segments' stores) and the allocator (over one segment, or
+    the whole routine with the segments' stores folded back, minus what a context holds) derive one
+    order, and the same program built with its nodes created in another order lays out the same.
+    Nodes the raw code never touches -- the schedule's own minted nodes (a hoisted packed-constant
+    tile), entries reached only inside a [Staged_compilation] -- come after, in uid order: the
+    compile mints the former in its own walk; nothing in the program orders the latter. Partially
+    apply it once per sort: the positions are computed at the first argument. *)
+
 val optimize :
   ?blends_value_selects:bool ->
   optimize_ctx ->

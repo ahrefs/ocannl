@@ -3091,7 +3091,7 @@
   ocannl_config
   (env_var OCANNL_BACKEND))
  (modules build_order_programs)
- (libraries base ocannl stdio arrayjit.verdict ll_test test_utils)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test test_utils)
  (preprocess
   (pps ppx_here ppx_ocannl)))
 

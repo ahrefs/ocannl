@@ -11,9 +11,11 @@
    iterates differently). The layers are applied in one order either way, so it is one program.
 
    Compared across the builds: the emitted source up to minted identifiers, every node's placement,
-   the schedule cache's digest of each lowered segment, and the loss the step computes. The default
-   parameter init draws from a stream keyed by the parameter's session id, which the reversed build
-   changes, so every parameter is given values by its label instead.
+   the schedule cache's digest of each lowered segment, the loss the step computes, and the memory
+   layout (gh-ocannl-2051): the pool rank and offset of every node the step's link lays out, the
+   scorer's footprint and the allocator's link delta. The default parameter init draws from a stream
+   keyed by the parameter's session id, which the reversed build changes, so every parameter is
+   given values by its label instead.
 
    Last, hand-built: the schedule cache's digest lists a program's companion nodes (workgroup-shared
    tiles, simdgroup fragments, swizzled and pipelined tiles) by their position in the code, not in
@@ -94,11 +96,37 @@ type outcome = {
   order : int list;  (** The program's parameters' creation ranks, in label order. *)
   hash_order : string list;
   param_labels : string list;
+  layout : string list;
+      (** ["<label> <pool rank> <offset>"] of every node the step's own link laid out, sorted. The
+          parameters are not among them: [Train.init_params] laid them out, in the initialization
+          routine's code order, which [Tensor.init_params] spells in creation order. *)
+  fresh : int;  (** How many store nodes the step's own link laid out. *)
+  unpositioned : string list;
+      (** The step's newly laid out nodes its raw code never accesses: their layout order falls back
+          to creation order. *)
+  scored : string;  (** The scorer's footprint, [Memory_budget.footprint] before the compile. *)
+  linked : string;  (** The allocator's delta, [Context.link_delta] of the compiled segments. *)
+  liveness_planned : bool;
 }
 
 let label tn = String.concat ~sep:"." tn.Tn.label
 
-let observe ~name ~mint ~rev make =
+(* ["<label> <pool rank> <offset>"] for each node of [nodes] [ctx] holds a buffer for, sorted: pool
+   ids count per device across contexts, so a pool is named by its rank among the pools these nodes
+   occupy. *)
+let layout_of ctx nodes =
+  let located =
+    List.filter_map nodes ~f:(fun tn ->
+        Option.map (Context.buffer_location ctx tn) ~f:(fun loc -> (label tn, loc)))
+  in
+  let pools =
+    List.map located ~f:(fun (_, (pool, _)) -> pool) |> List.dedup_and_sort ~compare:Int.compare
+  in
+  let rank pool = fst (List.findi_exn pools ~f:(fun _ p -> p = pool)) in
+  List.map located ~f:(fun (l, (pool, offset)) -> Printf.sprintf "%s %d %d" l (rank pool) offset)
+  |> List.sort ~compare:String.compare
+
+let observe ?(scheduled = false) ~name ~mint ~rev make =
   for _ = 1 to mint do
     ignore (NTDSL.O.(!.1.0) : Tensor.t)
   done;
@@ -118,6 +146,8 @@ let observe ~name ~mint ~rev make =
           (Array.init (Tn.num_elems tn) ~f:(fun i ->
                0.25 *. Float.sin (Float.of_int ((17 * (k + 1)) + (3 * i))))))
   in
+  let scored = Memory_budget.footprint ctx step IDX.empty in
+  let pre_compile = ctx in
   let captured = ref [] in
   Generated.arm name;
   Generated.arm (name ^ "__seg");
@@ -125,14 +155,21 @@ let observe ~name ~mint ~rev make =
     Context.compile ~name
       ~lowered_transform:(fun opt ->
         captured := [ opt ];
-        [ opt ])
+        if scheduled then
+          Ir.Schedule.maybe_default_schedules ~facts:(Context.backend_facts ctx)
+            ~limits:(Context.hardware_limits ctx) ~static_indices:[] opt
+        else [ opt ])
       ctx step IDX.empty
   in
   let lowered = List.hd_exn !captured in
+  let linked = Context.link_delta pre_compile lowered routine.segments in
   let ctx = Context.run ctx routine in
   let loss_value = (Context.get_values ctx loss.Tensor.value).(0) in
   let source = if List.length routine.segments > 1 then name ^ "__seg" else name in
   let nodes = Hashtbl.keys lowered.LL.traced_store in
+  let fresh =
+    List.filter nodes ~f:(fun tn -> Context.mem ctx tn && not (Context.mem pre_compile tn))
+  in
   let rank tn = List.count (params @ List.map roles ~f:snd) ~f:(fun o -> Tn.compare o tn < 0) in
   let outcome =
     {
@@ -147,18 +184,54 @@ let observe ~name ~mint ~rev make =
       order = List.map (params @ List.map roles ~f:snd) ~f:rank;
       hash_order = List.map nodes ~f:label;
       param_labels = List.map params ~f:label;
+      layout = layout_of ctx fresh;
+      fresh = List.length fresh;
+      unpositioned =
+        (let positions = LL.first_access_positions lowered.LL.source in
+         List.filter fresh ~f:(fun tn -> not (Hashtbl.mem positions tn)) |> List.map ~f:label);
+      scored = Sexp.to_string (LL.sexp_of_footprint scored);
+      linked = Sexp.to_string (Context.sexp_of_link_delta linked);
+      liveness_planned = linked.Context.ld_liveness_planned;
     }
   in
   eprintf
     "%s mint %d rev %b (not part of the golden): %d segment(s), %d store nodes, %d params, loss \
-     %.9g, creation ranks %s\n\
+     %.9g, creation ranks %s, scored %s, linked %s\n\
      %!"
     name mint rev (List.length routine.segments) (List.length nodes) (List.length params) loss_value
-    (String.concat ~sep:" " (List.map outcome.order ~f:Int.to_string));
+    (String.concat ~sep:" " (List.map outcome.order ~f:Int.to_string))
+    outcome.scored outcome.linked;
   Context.release ctx;
   outcome
 
 let tol want = 1e-5 *. Float.abs want
+
+(* gh-ocannl-2051: the layout planners receive a routine's nodes in its raw code's access order, not
+   in creation order -- so every held node sits at the same pool rank and offset, and the scorer and
+   the allocator report the same footprint, whichever order the program's nodes were created in. *)
+let layout_claims name ~base ~rest =
+  List.iter rest ~f:(fun (what, o) ->
+      if not (List.equal String.equal o.layout base.layout) then
+        eprintf "%s: the %s build's layout differs:\n%s\n----\n%s\n" name what
+          (String.concat ~sep:"\n" base.layout)
+          (String.concat ~sep:"\n" o.layout));
+  p
+    (name ^ ": control: the step lays out nodes of its own")
+    (base.fresh > 0 && List.length base.layout = base.fresh);
+  p_all (name ^ ": every build lays the step's nodes out at the same pool rank and offset") rest
+    ~f:(fun (_, o) -> List.equal String.equal o.layout base.layout);
+  p_all (name ^ ": every build scores the same footprint") rest ~f:(fun (_, o) ->
+      String.equal o.scored base.scored);
+  p_all (name ^ ": every build's link delta is the same") rest ~f:(fun (_, o) ->
+      String.equal o.linked base.linked);
+  List.iter (("base", base) :: rest) ~f:(fun (what, o) ->
+      if not (List.is_empty o.unpositioned) then
+        eprintf "%s: the %s build lays out nodes its raw code never accesses: %s\n" name what
+          (String.concat ~sep:" " o.unpositioned));
+  (* Emptiness is the passing case: a node the raw code accesses never falls back to creation order.
+     The control above keeps the step's own nodes nonempty. *)
+  p_all (name ^ ": every node the step lays out is ordered by the step's raw code")
+    (("base", base) :: rest) ~f:(fun (_, o) -> List.is_empty o.unpositioned)
 
 let check name make ~changed =
   let build ?(make = make) ~mint ~rev tag =
@@ -198,6 +271,7 @@ let check name make ~changed =
       List.equal String.equal o.placements base.placements);
   p_all (name ^ ": every build's segments digest the same") rest ~f:(fun (_, o) ->
       List.equal String.equal o.digests base.digests);
+  layout_claims name ~base ~rest;
   p_all (name ^ ": every build computes the same loss") rest ~f:(fun (what, o) ->
       Verdict.within ~what_ran:what (name ^ ": the loss") [| o.loss_value |] [| base.loss_value |]
         ~tol);
@@ -205,7 +279,12 @@ let check name make ~changed =
   p
     (name ^ ": control: a changed program emits another source, and digests apart")
     ((not (String.equal other.source base.source))
-    && not (List.equal String.equal other.digests base.digests))
+    && not (List.equal String.equal other.digests base.digests));
+  (* Laid out alone, the two conv steps coincide: every size pads to the same 32-byte slots. *)
+  p
+    (name ^ ": control: a changed program lays out or links differently")
+    ((not (List.equal String.equal other.layout base.layout))
+    || not (String.equal other.linked base.linked))
 
 let () =
   check "conv" (conv ~channels:(3, 2)) ~changed:(conv ~channels:(2, 3));
@@ -262,3 +341,110 @@ let () =
     (not (String.equal digest (snd (companion_digest ~rev:false ~depth:3 ()))));
   p "companions: control: another swizzle kind digests apart"
     (not (String.equal digest (snd (companion_digest ~rev:false ~swizzle:LL.Swizzle_b128 ()))))
+
+(* === A decisive bump-packing pair (gh-ocannl-2051) ===
+
+   [small =: y + y; big =: x + x], with [small] 4 bytes and [big] 64, the two outputs created in
+   either order and written in one. Bump packing pads each offset to [Ops.buffer_alignment] and the
+   pool ends at the last item, so the order the planner receives the pair in shows in the offsets
+   AND in the pool's size: small first ends at alignment + 64, big first at 64 + 4. Laid out in the
+   code's order, both builds put [small] first. *)
+let make_tensor label vals =
+  let open Bigarray in
+  let ga = Genarray.create Float32 c_layout [| Array.length vals |] in
+  Array.iteri vals ~f:(fun i v -> Genarray.set ga [| i |] v);
+  Tensor.term
+    ~init_data:(Reshape (Ir.Ndarray.as_array Ir.Ops.Single ga))
+    ~grad_spec:Tensor.Prohibit_grad ~label:[ label ] ~batch_dims:[] ~input_dims:[]
+    ~output_dims:[ Array.length vals ]
+    ()
+
+let bump_pair ~rev =
+  Tensor.unsafe_reinitialize ();
+  let x = make_tensor "x" (Array.init 16 ~f:(fun i -> Float.of_int ((7 * i % 11) - 5))) in
+  let y = make_tensor "y" [| 2.5 |] in
+  let make_small () = make_tensor "small" [| 0. |] in
+  let make_big () = make_tensor "big" (Array.create ~len:16 0.) in
+  let small, big =
+    if rev then
+      let big = make_big () in
+      (make_small (), big)
+    else
+      let small = make_small () in
+      (small, make_big ())
+  in
+  let%cd comp =
+    small =: y + y;
+    big =: x + x
+  in
+  let ctx = Context.auto () in
+  let scored = Memory_budget.footprint ctx comp IDX.empty in
+  let pre_compile = ctx in
+  let captured = ref [] in
+  let ctx, routine =
+    Context.compile ~name:"bop_bump"
+      ~lowered_transform:(fun opt ->
+        captured := [ opt ];
+        [ opt ])
+      ctx comp IDX.empty
+  in
+  let linked = Context.link_delta pre_compile (List.hd_exn !captured) routine.segments in
+  let ctx = Context.run ctx routine in
+  let loc t = Option.value_exn (Context.buffer_location ctx t.Tensor.value) in
+  let values = (Context.get_values ctx small.value, Context.get_values ctx big.value) in
+  let result =
+    ( Tn.compare small.value big.value < 0,
+      loc small,
+      loc big,
+      scored.LL.fp_working,
+      linked.Context.ld_working_bytes,
+      values,
+      Array.map (Context.get_values ctx x.value) ~f:(fun v -> v +. v) )
+  in
+  Context.release ctx;
+  result
+
+let () =
+  let small_older, (sp, so), (bp, bo), scored, linked, (sv, bv), want_big = bump_pair ~rev:false in
+  let small_older', (sp', so'), (bp', bo'), scored', linked', (sv', bv'), _ = bump_pair ~rev:true in
+  let align = Ir.Ops.buffer_alignment in
+  p "bump: control: the two builds create the outputs in opposite orders"
+    (small_older && not small_older');
+  p "bump: control: the outputs share one working pool" (sp = bp && sp' = bp');
+  p "bump: the output written first sits at offset 0 in either build" (so = 0 && so' = 0);
+  p "bump: the other output follows at the alignment in either build" (bo = align && bo' = align);
+  p "bump: the scored working pool is the same in either build, alignment + 64 bytes"
+    (scored = align + 64 && scored' = scored);
+  p "bump: the linked working pool is the same in either build, alignment + 64 bytes"
+    (linked = align + 64 && linked' = linked);
+  p "bump: both builds compute small = y + y" (Float.equal sv.(0) 5. && Float.equal sv'.(0) 5.);
+  p "bump: both builds compute big = x + x"
+    (Array.equal Float.equal bv want_big
+    && Array.equal Float.equal bv' want_big
+    && Array.exists want_big ~f:(fun v -> Float.(v <> 0.)))
+
+(* === The liveness arena (gh-ocannl-2051) ===
+
+   Under [buffer_aliasing] the working pool is laid out by the greedy arena, which breaks equal-size
+   ties by input order. The transformer step's first-to-last and last-to-first builds again, under
+   the default schedules (the liveness fold over the unscheduled step plans nothing), last in this
+   executable: the gate is read per call, and flipped through the environment. The conv step has no
+   arena candidate: its delta is the gradients, which it exports. *)
+let () =
+  Unix.putenv "OCANNL_BUFFER_ALIASING" "true";
+  let leg name make =
+    let build ~rev tag =
+      eprintf "%s, %s build under buffer_aliasing:\n%!" name tag;
+      observe ~scheduled:true ~name:("bop_arena_" ^ name) ~mint:0 ~rev make
+    in
+    let base = build ~rev:false "m0" in
+    let reversed = build ~rev:true "m0r" in
+    let name = name ^ " under buffer_aliasing" in
+    p (name ^ ": control: the step's delta is liveness-planned") base.liveness_planned;
+    layout_claims name ~base ~rest:[ ("reversed", reversed) ];
+    p
+      (name ^ ": the reversed build computes the same loss")
+      (Verdict.within ~what_ran:"reversed" (name ^ ": the loss") [| reversed.loss_value |]
+         [| base.loss_value |] ~tol)
+  in
+  leg "transformer" transformer

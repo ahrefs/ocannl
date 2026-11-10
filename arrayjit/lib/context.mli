@@ -826,6 +826,12 @@ val ordinal : t -> int
     This is NOT {!Ir.Backend_intf.device.device_id}, which counts device instances process-globally
     across all backends; two contexts on different backends share ordinal 0. *)
 
+val buffer_location : t -> Ir.Tnode.t -> (int * int) option
+(** The [(pool_id, byte offset)] of the node's buffer in the context, or [None] when the context
+    holds no buffer for it. Pool ids count per device across contexts, so compare two contexts'
+    layouts by each pool's rank among the pools a context uses, not by the raw id (gh-ocannl-2051).
+*)
+
 val get_used_memory : t -> int
 (** (An upper bound of) the memory used for arrays on the context's device, in bytes. Device-wide:
     covers all contexts sharing the device. Useful for asserting the footprint effect of the

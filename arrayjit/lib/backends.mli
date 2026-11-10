@@ -43,8 +43,10 @@ val score_footprint :
     the number depends only on the code and the placements — the precondition for a deterministic
     selector ([Memory_budget.fit]). It is therefore a {e model} of the peak, not a prediction of
     {!Context.get_used_memory}: the real allocator skips nodes a prior context already holds, and
-    the driver page-rounds pool bases. Enumeration is canonical (by {!Ir.Tnode.uid}) so the greedy
-    coloring is reproducible across processes. *)
+    the driver page-rounds pool bases. Enumeration is in program order
+    ({!Ir.Low_level.layout_order}, the allocator's order too), so the greedy coloring and the bump
+    padding are reproducible across processes and across builds that create the same program's nodes
+    in another order (gh-ocannl-2051). *)
 
 exception Prior_context_lacks of Ir.Tnode.t
 (** Raised by a backend's [link] for a node the code needs from a prior context that the linked

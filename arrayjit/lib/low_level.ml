@@ -10720,6 +10720,13 @@ let compare_program_order positions a b =
   | None, Some _ -> 1
   | None, None -> Tn.compare a b
 
+(* gh-ocannl-2051: the layout planners' input order -- program order over the routine's RAW code,
+   which every schedule-transform copy inherits, so every record the scorer or the allocator lays
+   out derives the same order (see the interface). *)
+let layout_order (o : optimized) =
+  let positions = first_access_positions o.source in
+  compare_program_order positions
+
 let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_store ~max_visits
     ~reads_covered ~read_multiplicity ~footprint
     ~(footprint_scoped : (Tn.t, Tn.provenance option) Hashtbl.t)
