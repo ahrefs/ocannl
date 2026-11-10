@@ -1664,6 +1664,67 @@ let row_constexpr_cap_exempt () =
         ~expected:(Array.init n ~f:(fun i -> 8. +. Float.of_int i))
         ~verdict:Accepted)
 
+(* gh-ocannl-2077: a guard over a scope's read -- an acceptance row, both sides of where the guard
+   is carried into a scope. [b] is zeroed, then written as [b[i] = c[i] + 1] for [i < 3] only,
+   though it spans [extent]; [c[i] = sum_k x[i, k, 0]] is a virtual reduction, so [b]'s template
+   holds [c]'s scope, which cannot collapse. Inlining [b] at [out[j] = b[j] + 7 + 300 j] guards the
+   replay with [j < 3], and the replay reads [x] at row [j] inside that scope. Codegen emits a
+   scope's body ahead of the statement, outside the [?:], so before the fix the body read [x] past
+   its end where the guard fails -- megabytes past at a wide [x], a SIGBUS on cc at [-O0], volatile
+   reads on Metal, the values right throughout. The replay now carries the guard into the body
+   ([Low_level.guard_hoisted]): [b] stays inlined, and the strict interpreter, which probes a
+   discarded arm's scopes, holds what the optimizer left to [x]'s bounds. [~replayed_row:false]
+   reads row 0 and adds [10 i], so no read can leave [x] and the body keeps no guard of its own. *)
+let row_guarded_scope_read ~replayed_row () =
+  let stride = 4 and extent = 8 in
+  let tag = if replayed_row then "gsr_row" else "gsr_const" in
+  let x = mk ~dims:[| 3; 2; stride |] (tag ^ "_x") and cc = mk ~dims:[| 3 |] (tag ^ "_c") in
+  let b = mk ~dims:[| extent |] (tag ^ "_b") and out = mk ~dims:[| extent |] (tag ^ "_out") in
+  materialize x;
+  materialize out;
+  let i = sym () and k = sym () and i2 = sym () and j = sym () in
+  let addend =
+    if replayed_row then get x [| iter i; iter k; fixed 0 |]
+    else add (get x [| fixed 0; iter k; fixed 0 |]) (mul (c 10.) (embed i))
+  in
+  let llc =
+    List.reduce_exn ~f:seq
+      [
+        zero cc;
+        loop_n i 3 (loop_n k 2 (set cc [| iter i |] (add (get cc [| iter i |]) addend)));
+        zero b;
+        loop_n i2 3 (set b [| iter i2 |] (add (get cc [| iter i2 |]) (c 1.)));
+        loop_n j extent
+          (set out [| iter j |] (add (get b [| iter j |]) (add (c 7.) (mul (c 300.) (embed j)))));
+      ]
+  in
+  let x_cells = Array.init (Tn.num_elems x) ~f:(fun n -> Float.of_int (1 + n)) in
+  let at i k = x_cells.(((i * 2) + k) * stride) in
+  let c_of i =
+    if replayed_row then at i 0 +. at i 1 else at 0 0 +. at 0 1 +. (20. *. Float.of_int i)
+  in
+  let expected =
+    Array.init extent ~f:(fun j ->
+        (if j < 3 then c_of j +. 1. else 0.) +. 7. +. (300. *. Float.of_int j))
+  in
+  row ~label:tag ~llc ~cand:b ~out ~seed:[ (x, x_cells) ] ~expected ~verdict:Accepted;
+  let o = optimize ~name:(tag ^ "_strict") llc in
+  p
+    (tag
+    ^
+    if replayed_row then ": the guard reaches the scope's body, two Wheres"
+    else ": the replay alone is guarded, one Where")
+    (count_where o = if replayed_row then 2 else 1);
+  p
+    (tag ^ ": the strict interpreter evaluates what the optimizer left without a fault")
+    (match
+       interpret ~strict:true (interp_memory [ (x, x_cells); (out, blank extent) ]) o.LL.llc
+     with
+    | () -> true
+    | exception Interp_fault msg ->
+        Stdio.eprintf "%s: strict fault: %s (not part of the golden)\n%!" tag msg;
+        false)
+
 (* gh-ocannl-483 made this arm live: the algebraic rewrite tier runs on the raw lowered code BEFORE
    [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
    [Declare_local] beside the statement that consumes it. What the walk refuses is the CONSTRUCTOR,
@@ -1825,6 +1886,8 @@ let () =
   case "row_trailing_sub_axis_write" row_trailing_sub_axis_write;
   case "row_partial_frame" row_partial_frame;
   case "row_trailing_sub_axis_read" row_trailing_sub_axis_read;
+  case "row_guarded_scope_read ~replayed_row:true" (row_guarded_scope_read ~replayed_row:true);
+  case "row_guarded_scope_read ~replayed_row:false" (row_guarded_scope_read ~replayed_row:false);
   case "row_hoisted_local" row_hoisted_local;
   case "row_scan_recurrence" row_scan_recurrence;
   case "row_constexpr_cap_exempt" row_constexpr_cap_exempt;

@@ -244,6 +244,16 @@ partial_frame: the two placements agree: true
 trailing_sub_axis_read: inlined: true
 trailing_sub_axis_read: executed values are the reference: true
 trailing_sub_axis_read: the two placements agree: true
+gsr_row: inlined: true
+gsr_row: executed values are the reference: true
+gsr_row: the two placements agree: true
+gsr_row: the guard reaches the scope's body, two Wheres: true
+gsr_row: the strict interpreter evaluates what the optimizer left without a fault: true
+gsr_const: inlined: true
+gsr_const: executed values are the reference: true
+gsr_const: the two placements agree: true
+gsr_const: the replay alone is guarded, one Where: true
+gsr_const: the strict interpreter evaluates what the optimizer left without a fault: true
 hoisted_local: rejected at store time as 19:declare-local: true
 hoisted_local: executed values are the reference: true
 hoisted_local: the two placements agree: true
