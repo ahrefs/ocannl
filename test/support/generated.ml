@@ -390,7 +390,7 @@ let rec is_minted_ident ~(facts : Ir.Backend_intf.backend_facts) ident =
         Option.is_some (numbered ~prefix:(facts.node_ident_prefix ^ "n"))
         || Option.is_some (numbered ~prefix:(facts.node_ident_prefix ^ tile_ident_prefix))
     | None -> false)
-  || match numbered ~prefix:"v" with Some rest -> String.mem rest '_' | None -> false
+  || Ir.Low_level.in_scope_local_namespace ident
 
 (** [normalize_minted ~facts text] is a generated source with every identifier a compile spells with
     a freshly minted number -- loop symbols [i<digits>], node identifiers [n<digits>[_<label>]]
@@ -749,3 +749,534 @@ let declared_arrays source =
         in_scope ~scope:(Block_scope { part }) (List.map group ~f:fst))
   in
   function_scope @ block_scope
+
+(** {1 Declared identifiers (gh-ocannl-2102)}
+
+    Every identifier a generated source's kernels DECLARE, read off the text, so a test can hold the
+    names the renderer mints against the rules that keep a node label from shadowing them.
+
+    What is read: each kernel's signature (its parameters), its body ahead of its
+    {!Ir.C_syntax.main_logic_marker} (function scope) and its statements ({!main_logic_lines}, an
+    outlined kernel's parts spliced in at their calls), and the body of every function-like macro
+    the source [#define]s that a kernel statement calls (a macro body can declare: the register
+    tile's bf16 row widening declares its [dst] argument). What is deliberately not read: the
+    prepended builtins outside every kernel -- their functions' locals are another function's --
+    whose typedef names are read only as TYPE names; an outlined part's own signature (it re-binds
+    names its kernel declares); comments, string and character literals; the preprocessor
+    conditionals [#if] / [#ifdef] / [#ifndef] / [#elif] / [#else] / [#endif] and [#pragma], whose
+    lines are skipped, so BOTH arms of a conditional are read and every macro definition under them
+    counts.
+
+    The reading is a fail-closed allowlist. A statement that starts with a declaration specifier (a
+    C type or qualifier, [__attribute__((...))], [__typeof__(...)], [typedef], or a name the source
+    typedefs), or with an identifier followed by a declarator (an unknown type name: in C nothing
+    else starts a statement so), must take one of these forms, or it is
+    {!declarations.unrecognized}:
+
+    - [<specifiers> <declarator>;] and [<specifiers> <declarator> = <initializer>;], one declarator,
+      where a declarator is [*]s (each optionally followed by [const] / [restrict] / [volatile] /
+      [__restrict]), the identifier, [[<digits>]] subscripts and trailing [__attribute__((...))]s;
+    - [typedef <specifiers> <declarator>;];
+    - a [for] header's first clause in either variable form, the loop's body read as a statement;
+    - a signature parameter: [<specifiers> <declarator>], no initializer;
+    - a statement-level call of a macro the source defines, [<macro>(<args>);]: what each of its
+      definitions declares (read by these same rules, the macro's parameters admitted as type
+      names), the arguments its declared parameters receive among them, each a bare identifier.
+
+    Also unrecognized, as a declaration this reading cannot classify: a second declarator; a
+    function declaration; [struct] / [union] / [enum]; a label, [goto], [case] or [default]; a call
+    of a declaring macro anywhere but as a whole statement, a declared argument that is not a bare
+    identifier, and a macro whose body pastes or stringifies ([#], [##]) or holds a statement these
+    rules refuse; any other preprocessor directive in a kernel ([#define] there declares a macro).
+    Everything else -- an expression statement, a call, [if] / [else] / [while] / [do] / [switch]
+    heads (their bodies read as statements), [return] / [break] / [continue], braces -- declares
+    nothing. *)
+
+type declaration_site =
+  | Parameter  (** A kernel signature's parameter. *)
+  | Typedef  (** A [typedef] in a kernel's body, or in a macro body a statement expands. *)
+  | Variable
+      (** A variable declared in a kernel's body -- a [for] header's included, and one a macro call
+          declares. *)
+
+type declaration = { decl_line : int;  (** 1-based. *) ident : string; site : declaration_site }
+
+type declarations = {
+  declared : declaration list;  (** Each kernel's parameters, then the bodies, in source order. *)
+  unrecognized : (int * string) list;
+      (** A 1-based line and the statement's tokens: a statement outside the allowlisted forms. *)
+}
+
+type token = Ident of string | Punct of char | Literal
+
+let tokenize (lines : (int * string) list) =
+  let toks = ref [] and in_comment = ref false and directives = ref [] in
+  (* A directive's line ending in a backslash continues it: a multi-line macro body is the
+     directive's text, not code. *)
+  let continued = ref false in
+  List.iter lines ~f:(fun (line_no, line) ->
+      let n = String.length line in
+      let emit t = toks := (line_no, t) :: !toks in
+      let stripped = String.lstrip line in
+      let ends_continued = String.is_suffix (String.rstrip line) ~suffix:"\\" in
+      let body () = String.strip (String.chop_suffix_if_exists (String.rstrip line) ~suffix:"\\") in
+      if !continued then (
+        (match !directives with
+        | (l, text) :: rest -> directives := (l, text ^ " " ^ body ()) :: rest
+        | [] -> ());
+        continued := ends_continued)
+      else if (not !in_comment) && String.is_prefix stripped ~prefix:"#" then (
+        directives := (line_no, body ()) :: !directives;
+        continued := ends_continued)
+      else
+        let rec scan i =
+          if i >= n then ()
+          else if !in_comment then
+            if i + 1 < n && Char.equal line.[i] '*' && Char.equal line.[i + 1] '/' then (
+              in_comment := false;
+              scan (i + 2))
+            else scan (i + 1)
+          else
+            let c = line.[i] in
+            if i + 1 < n && Char.equal c '/' && Char.equal line.[i + 1] '*' then (
+              in_comment := true;
+              scan (i + 2))
+            else if i + 1 < n && Char.equal c '/' && Char.equal line.[i + 1] '/' then ()
+            else if Char.is_whitespace c then scan (i + 1)
+            else if Char.is_alpha c || Char.equal c '_' then (
+              let j = ref i in
+              while !j < n && (Char.is_alphanum line.[!j] || Char.equal line.[!j] '_') do
+                Int.incr j
+              done;
+              emit (Ident (String.sub line ~pos:i ~len:(!j - i)));
+              scan !j)
+            else if Char.is_digit c || (Char.equal c '.' && i + 1 < n && Char.is_digit line.[i + 1])
+            then (
+              let j = ref (i + 1) in
+              while
+                !j < n
+                && (Char.is_alphanum line.[!j]
+                   || Char.equal line.[!j] '_'
+                   || Char.equal line.[!j] '.'
+                   || Char.(line.[!j] = '+' || line.[!j] = '-')
+                      && Char.(
+                           line.[!j - 1] = 'e'
+                           || line.[!j - 1] = 'E'
+                           || line.[!j - 1] = 'p'
+                           || line.[!j - 1] = 'P'))
+              do
+                Int.incr j
+              done;
+              emit Literal;
+              scan !j)
+            else if Char.equal c '"' || Char.equal c '\'' then (
+              let j = ref (i + 1) in
+              while !j < n && not (Char.equal line.[!j] c) do
+                if Char.equal line.[!j] '\\' then j := !j + 2 else Int.incr j
+              done;
+              emit Literal;
+              scan (!j + 1))
+            else (
+              emit (Punct c);
+              scan (i + 1))
+        in
+        scan 0);
+  (List.rev !toks, List.rev !directives)
+
+(* Statements at bracket depth 0: a [;] ends one, and so does a brace that opens or closes a block.
+   A [{] opens a block when the statement so far is empty, a control head or a function definition's
+   head; anywhere else it opens an initializer or compound literal, which the statement runs through
+   to its matching [}]. *)
+let statements toks =
+  let control = [ "for"; "if"; "else"; "while"; "do"; "switch" ] in
+  let out = ref [] and cur = ref [] and depth = ref 0 and init_braces = ref 0 in
+  let flush () =
+    if not (List.is_empty !cur) then out := List.rev !cur :: !out;
+    cur := []
+  in
+  List.iter toks ~f:(fun ((_, t) as tok) ->
+      match t with
+      | Punct ('(' | '[') ->
+          Int.incr depth;
+          cur := tok :: !cur
+      | Punct (')' | ']') ->
+          Int.decr depth;
+          cur := tok :: !cur
+      | Punct ';' when !depth = 0 && !init_braces = 0 ->
+          cur := tok :: !cur;
+          flush ()
+      | Punct '{' when !depth = 0 && !init_braces = 0 -> (
+          match List.last !cur with
+          | None -> ()
+          | Some (_, Ident kw) when List.mem control kw ~equal:String.equal -> flush ()
+          (* A function definition's head: [... name(...) {], no [=] in it. *)
+          | Some _
+            when (match !cur with (_, Punct ')') :: _ -> true | _ -> false)
+                 && not (List.exists !cur ~f:(function _, Punct '=' -> true | _ -> false)) ->
+              flush ()
+          | Some _ ->
+              Int.incr init_braces;
+              cur := tok :: !cur)
+      | Punct '{' ->
+          Int.incr init_braces;
+          cur := tok :: !cur
+      | Punct '}' when !init_braces > 0 ->
+          Int.decr init_braces;
+          cur := tok :: !cur
+      | Punct '}' when !depth = 0 -> flush ()
+      | _ -> cur := tok :: !cur);
+  flush ();
+  List.rev !out
+
+let base_type_words =
+  [
+    "void";
+    "char";
+    "short";
+    "int";
+    "long";
+    "float";
+    "double";
+    "signed";
+    "unsigned";
+    "_Bool";
+    "bool";
+    "size_t";
+    "ptrdiff_t";
+    "intptr_t";
+    "uintptr_t";
+    "int8_t";
+    "int16_t";
+    "int32_t";
+    "int64_t";
+    "uint8_t";
+    "uint16_t";
+    "uint32_t";
+    "uint64_t";
+    "_Float16";
+    "__fp16";
+    "__bf16";
+  ]
+
+let qualifier_words =
+  [ "const"; "volatile"; "restrict"; "__restrict"; "static"; "register"; "inline"; "__volatile__" ]
+
+let token_text = function Ident s -> s | Punct c -> String.of_char c | Literal -> "<literal>"
+let render_tokens toks = String.concat ~sep:" " (List.map toks ~f:(fun (_, t) -> token_text t))
+
+(* [toks] after an opening parenthesis: the tokens up to its matching [)], and those after it. *)
+let split_paren toks =
+  let rec go depth acc = function
+    | [] -> (List.rev acc, [])
+    | ((_, Punct ')') as t) :: rest ->
+        if depth = 0 then (List.rev acc, rest) else go (depth - 1) (t :: acc) rest
+    | ((_, Punct '(') as t) :: rest -> go (depth + 1) (t :: acc) rest
+    | t :: rest -> go depth (t :: acc) rest
+  in
+  go 0 [] toks
+
+let split_commas toks =
+  let rec go depth cur acc = function
+    | [] -> List.rev (List.rev cur :: acc)
+    | (_, Punct ',') :: rest when depth = 0 -> go depth [] (List.rev cur :: acc) rest
+    | ((_, Punct ('(' | '[' | '{')) as t) :: rest -> go (depth + 1) (t :: cur) acc rest
+    | ((_, Punct (')' | ']' | '}')) as t) :: rest -> go (depth - 1) (t :: cur) acc rest
+    | t :: rest -> go depth (t :: cur) acc rest
+  in
+  go 0 [] [] toks
+
+(* Drop the balanced [__attribute__((...))] / [__typeof__(...)] groups at the head of [toks]. *)
+let rec drop_groups = function
+  | (_, Ident ("__attribute__" | "__typeof__" | "typeof")) :: (_, Punct '(') :: rest ->
+      drop_groups (snd (split_paren rest))
+  | toks -> toks
+
+(* The single declarator of a declaration whose specifiers are already dropped: its identifier, or
+   [None] when the rest is not an allowlisted form. [~with_init] admits [= ...]. *)
+let declarator ~with_init toks =
+  let rec stars = function
+    | (_, Punct '*') :: rest -> stars rest
+    | (_, Ident ("const" | "restrict" | "volatile" | "__restrict")) :: rest -> stars rest
+    | toks -> toks
+  in
+  match stars toks with
+  | (_, Ident name) :: rest -> (
+      let rec suffixes = function
+        | (_, Punct '[') :: (_, Literal) :: (_, Punct ']') :: rest -> suffixes rest
+        | (_, Ident "__attribute__") :: _ as toks -> suffixes (drop_groups toks)
+        | toks -> toks
+      in
+      let rest =
+        match List.rev (suffixes rest) with (_, Punct ';') :: r -> List.rev r | r -> List.rev r
+      in
+      match rest with
+      | [] -> Some name
+      | (_, Punct '=') :: (_ :: _ as init) when with_init && List.length (split_commas init) = 1 ->
+          Some name
+      | _ -> None)
+  | _ -> None
+
+(* A macro definition read off a [#define] directive's text: function-like with its parameters, or
+   object-like ([params = None]). *)
+type macro = { params : string list option; body : (int * token) list }
+
+let macro_of_directive (line, text) =
+  let rest = String.lstrip (String.drop_prefix text 1) in
+  match String.chop_prefix rest ~prefix:"define" with
+  | None -> None
+  | Some rest -> (
+      let rest = String.lstrip rest in
+      let name_len =
+        Option.value ~default:(String.length rest)
+          (String.lfindi rest ~f:(fun _ c -> not (Char.is_alphanum c || Char.equal c '_')))
+      in
+      let name = String.prefix rest name_len and after = String.drop_prefix rest name_len in
+      let body_toks text = fst (tokenize [ (line, text) ]) in
+      if String.is_empty name then None
+      else
+        match String.chop_prefix after ~prefix:"(" with
+        | Some after -> (
+            match String.lsplit2 after ~on:')' with
+            | None -> None
+            | Some (params, body) ->
+                let params =
+                  String.split params ~on:',' |> List.map ~f:String.strip
+                  |> List.filter ~f:(Fn.non String.is_empty)
+                in
+                Some (name, { params = Some params; body = body_toks body }))
+        | None -> Some (name, { params = None; body = body_toks after }))
+
+(** [declarations source] is every identifier the kernels of a generated source declare, and every
+    statement of theirs outside the allowlisted declaration forms (the boundary and the forms: the
+    section head above). The sources {!main_logic_lines} refuses fail the run through {!Verdict}
+    here too. *)
+let declarations source =
+  let lines = Array.of_list (String.split_lines source) in
+  let numbered ks = List.map ks ~f:(fun k -> (k + 1, lines.(k))) in
+  let all_toks, all_directives = tokenize (numbered (List.range 0 (Array.length lines))) in
+  (* Every name the source typedefs, prelude included: read as type names only. *)
+  let typedef_names =
+    statements all_toks
+    |> List.filter_map ~f:(function
+      | (_, Ident "typedef") :: rest -> (
+          let rec strip acc = function
+            | [] -> List.rev acc
+            | (_, Ident "__attribute__") :: _ as toks -> strip acc (drop_groups toks)
+            | t :: rest -> strip (t :: acc) rest
+          in
+          match List.rev (strip [] rest) with
+          | (_, Punct ';') :: (_, Ident name) :: _ | (_, Ident name) :: _ -> Some name
+          | _ -> None)
+      | _ -> None)
+    |> Hash_set.of_list (module String)
+  in
+  let macros = Hashtbl.create (module String) in
+  List.iter all_directives ~f:(fun d ->
+      Option.iter (macro_of_directive d) ~f:(fun (name, m) ->
+          Hashtbl.add_multi macros ~key:name ~data:m));
+  let is_spec_word w =
+    List.mem base_type_words w ~equal:String.equal
+    || List.mem qualifier_words w ~equal:String.equal
+    || Hash_set.mem typedef_names w
+  in
+  let line_of = function (l, _) :: _ -> l | [] -> 0 in
+  (* What a macro's expansion declares: the index of a parameter it declares ([`Param]) or a name of
+     its own ([`Fixed]), each with whether it is a typedef; [None] where the reading refuses one of
+     its definitions. *)
+  let effects_memo = Hashtbl.create (module String) in
+  let rec effects ~depth name =
+    match Hashtbl.find effects_memo name with
+    | Some e -> e
+    | None ->
+        let e =
+          if depth > 16 then None
+          else
+            Hashtbl.find_multi macros name
+            |> List.fold ~init:(Some []) ~f:(fun acc m ->
+                match (acc, m) with
+                | None, _ -> None
+                | Some acc, { params = None; body = [ (_, Ident target) ] }
+                  when Hashtbl.mem macros target ->
+                    Option.map (effects ~depth:(depth + 1) target) ~f:(( @ ) acc)
+                | Some acc, { params; body } ->
+                    if List.exists body ~f:(function _, Punct '#' -> true | _ -> false) then None
+                    else
+                      let params = Option.value params ~default:[] in
+                      let found = ref [] and refused = ref false in
+                      let decl ~site:_ ~typedef (_, ident) =
+                        found :=
+                          (match List.findi params ~f:(fun _ p -> String.equal p ident) with
+                          | Some (i, _) -> (`Param i, typedef)
+                          | None -> (`Fixed ident, typedef))
+                          :: !found
+                      in
+                      scan ~depth:(depth + 1) ~params ~decl ~refuse:(fun _ -> refused := true) body;
+                      if !refused then None else Some (acc @ List.rev !found))
+        in
+        Hashtbl.set effects_memo ~key:name ~data:e;
+        e
+  (* Read [toks], a run of statements. [decl] receives each declared identifier (with the line it is
+     declared on), [refuse] each statement outside the allowlist; [params] are a macro body's
+     parameters, admitted as type names. *)
+  and scan ~depth ~params ~decl ~refuse toks =
+    let is_spec w = is_spec_word w || List.mem params w ~equal:String.equal in
+    let declaring_macro m =
+      Hashtbl.mem macros m && match effects ~depth m with Some [] -> false | Some _ | None -> true
+    in
+    let declaration ~with_init toks =
+      let is_typedef, body =
+        match drop_groups toks with
+        | (_, Ident "typedef") :: rest -> (true, rest)
+        | rest -> (false, rest)
+      in
+      let rec specs acc = function
+        | ((_, Ident w) as t) :: rest when is_spec w -> specs (t :: acc) rest
+        | (_, Ident "__attribute__") :: _ as rest -> specs acc (drop_groups rest)
+        | (_, Ident ("__typeof__" | "typeof")) :: _ as rest ->
+            specs ((0, Literal) :: acc) (drop_groups rest)
+        | rest -> (acc, rest)
+      in
+      let with_init = with_init && not is_typedef in
+      let acc, rest = specs [] body in
+      let found =
+        match ((if List.is_empty acc then None else declarator ~with_init rest), rest, acc) with
+        | (Some _ as found), _, _ -> found
+        (* An unknown type name: the first identifier past the specifiers, its declarator after. *)
+        | None, (_, Ident _) :: (_ :: _ as rest'), _
+          when Option.is_some (declarator ~with_init rest') ->
+            declarator ~with_init rest'
+        (* The declarator spelled like a type name: a typedef's own name. *)
+        | None, _, last :: _ :: _ -> declarator ~with_init (last :: rest)
+        | None, _, _ -> None
+      in
+      match found with
+      | Some ident -> decl ~site:Variable ~typedef:is_typedef (line_of toks, ident)
+      | None -> refuse toks
+    in
+    let macro_call toks m args =
+      match effects ~depth m with
+      | None -> refuse toks
+      | Some effs ->
+          let args = if List.is_empty args then [] else split_commas args in
+          List.iter effs ~f:(fun (eff, typedef) ->
+              match eff with
+              | `Fixed ident -> decl ~site:Variable ~typedef (line_of toks, ident)
+              | `Param i -> (
+                  match List.nth args i with
+                  | Some [ (_, Ident a) ] -> decl ~site:Variable ~typedef (line_of toks, a)
+                  | _ -> refuse toks))
+    in
+    let nested_declaring_call toks =
+      List.exists toks ~f:(function _, Ident m -> declaring_macro m | _ -> false)
+    in
+    (* [<ident> <ident>] or [<ident> *... <ident>], then the end, [;], [=], [[], [,] or [(]: what
+       only a declaration starts with, its type a name the reading does not know. *)
+    let unknown_type_declaration rest =
+      match
+        List.drop_while rest ~f:(function
+          | _, Punct '*' | _, Ident ("const" | "restrict" | "volatile" | "__restrict") -> true
+          | _ -> false)
+      with
+      | (_, Ident _) :: ([] | (_, Punct (';' | '=' | '[' | ',' | '(')) :: _) -> true
+      | _ -> false
+    in
+    let rec statement toks =
+      match toks with
+      | [] | [ (_, Punct ';') ] -> ()
+      | (_, Ident "for") :: (_, Punct '(') :: rest ->
+          let header, after = split_paren rest in
+          statement (List.take_while header ~f:(function _, Punct ';' -> false | _ -> true));
+          statement after
+      | (_, Ident ("if" | "while" | "switch")) :: (_, Punct '(') :: rest ->
+          let cond, after = split_paren rest in
+          if nested_declaring_call cond then refuse toks;
+          statement after
+      | (_, Ident ("else" | "do")) :: rest -> statement rest
+      (* Inline assembly declares nothing. *)
+      | (_, Ident ("__asm__" | "asm" | "__asm")) :: _ -> ()
+      | (_, Ident ("return" | "break" | "continue")) :: rest ->
+          if nested_declaring_call rest then refuse toks
+      | (_, Ident ("goto" | "case" | "default" | "struct" | "union" | "enum")) :: _ -> refuse toks
+      | (_, Ident m) :: (_, Punct '(') :: rest when Hashtbl.mem macros m -> (
+          let args, after = split_paren rest in
+          match after with
+          | [] | [ (_, Punct ';') ] ->
+              if nested_declaring_call args then refuse toks else macro_call toks m args
+          | _ -> if declaring_macro m || nested_declaring_call after then refuse toks)
+      | (_, Ident w) :: _
+        when is_spec w
+             || List.mem
+                  [ "typedef"; "__attribute__"; "__typeof__"; "typeof" ]
+                  w ~equal:String.equal ->
+          if nested_declaring_call toks then refuse toks else declaration ~with_init:true toks
+      | (_, Ident _) :: (_, Punct ':') :: _ -> refuse toks
+      | (_, Ident _) :: rest when unknown_type_declaration rest ->
+          if nested_declaring_call toks then refuse toks else declaration ~with_init:true toks
+      | _ -> if nested_declaring_call toks then refuse toks
+    in
+    List.iter (statements toks) ~f:statement
+  in
+  let declared = ref [] and unrecognized = ref [] in
+  let refuse toks = unrecognized := (line_of toks, render_tokens toks) :: !unrecognized in
+  let record ~site ~typedef (line, ident) =
+    declared := { decl_line = line; ident; site = (if typedef then Typedef else site) } :: !declared
+  in
+  let directive (line, text) =
+    let word =
+      String.drop_prefix text 1 |> String.lstrip |> fun s ->
+      match String.lfindi s ~f:(fun _ c -> not (Char.is_alpha c)) with
+      | Some i -> String.prefix s i
+      | None -> s
+    in
+    if
+      not
+        (List.mem
+           [ "if"; "ifdef"; "ifndef"; "elif"; "else"; "endif"; "pragma" ]
+           word ~equal:String.equal)
+    then unrecognized := (line, text) :: !unrecognized
+  in
+  let read_body ks =
+    let toks, directives = tokenize (numbered ks) in
+    List.iter directives ~f:directive;
+    scan ~depth:0 ~params:[] ~decl:record ~refuse toks
+  in
+  let intervals = brace_intervals lines in
+  let markers =
+    Array.to_list lines
+    |> List.filter_mapi ~f:(fun i line ->
+        Option.some_if (String.is_substring line ~substring:Ir.C_syntax.main_logic_marker) i)
+  in
+  let bodies =
+    List.filter_map markers ~f:(fun marker ->
+        List.filter intervals ~f:(fun (opening, closing) -> opening < marker && marker < closing)
+        |> List.min_elt ~compare:(fun (o1, c1) (o2, c2) -> Int.compare (c1 - o1) (c2 - o2))
+        (* None: [statement_lines]' failure, reported there. *)
+        |> Option.map ~f:(fun (opening, _) -> (opening, marker)))
+  in
+  List.iter bodies ~f:(fun (opening, _) ->
+      (* The signature: the lines from the one opening its parameter list to the brace. *)
+      let rec start k =
+        if k <= 0 then 0
+        else
+          let prev = String.strip lines.(k - 1) in
+          if
+            String.is_empty prev || String.is_prefix prev ~prefix:"#"
+            || String.is_suffix prev ~suffix:";" || String.is_suffix prev ~suffix:"}"
+            || String.is_suffix prev ~suffix:"*/"
+          then k
+          else start (k - 1)
+      in
+      let sig_toks, _ = tokenize (numbered (List.range (start opening) (opening + 1))) in
+      match List.drop_while sig_toks ~f:(function _, Punct '(' -> false | _ -> true) with
+      | _ :: after_paren -> (
+          match fst (split_paren after_paren) with
+          | [] | [ (_, Ident "void") ] -> ()
+          | params ->
+              List.iter (split_commas params) ~f:(fun param ->
+                  scan ~depth:0 ~params:[] ~refuse
+                    ~decl:(fun ~site:_ ~typedef:_ d -> record ~site:Parameter ~typedef:false d)
+                    (param @ [ (line_of param, Punct ';') ])))
+      | [] -> refuse sig_toks);
+  List.iter bodies ~f:(fun (opening, marker) -> read_body (List.range (opening + 1) marker));
+  read_body (List.map (statement_lines source) ~f:fst);
+  { declared = List.rev !declared; unrecognized = List.rev !unrecognized }
