@@ -490,6 +490,15 @@ files.
   maximum-one symbolic axis without an iterator, so runtime zero cannot escape the refusal through
   `Fixed_idx 0`. An unbound extent retains the standing maximum-shape semantics; padded-window
   clamping remains unreachable by construction.
+- **`block_subst` resolves a `Concat` index by its own symbols** (gh-ocannl-2087): the active
+  segment plus that segment's offset within THIS index's list, so two slots may order and subset
+  one component's segments differently. A segment the index does not list raises `Empty_block`
+  (the block writes nothing, or the operand sits out) only when every symbol of the index belongs
+  to one `projections.components` entry; otherwise the old "could not be resolved" error stays, so a
+  misclassified projection never becomes a silent no-op write. A partial write's unwritten
+  segment relies on `Affine.is_surjective`'s per-block producer check to keep the neutral init; a
+  reordered or subset LHS `Concat` makes `coordinate` give up, so a redundant init can run -- time,
+  never values.
 - **Output loops outside reduction loops is a FORWARD-lowering property only** (gh-ocannl-1151).
   A forward contraction's product space lists the result's axes first, so its lowered nest opens
   every loop the written cell mentions before any loop it does not: matmul, a transposed output, a

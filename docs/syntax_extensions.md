@@ -607,6 +607,9 @@ The syntax `a^b` (or `a^b^c` etc.) creates a single axis of iteration that first
 | `b => a^b` | Replace suffix: assign to last part, leaving prefix unchanged |
 | `a^b^c => b` | Extract middle: requires knowing sizes of `a` and `c` |
 | `b => a^b^c` | Replace middle: requires knowing sizes of `a` and `c` |
+| `a^b^c => a^c` | Drop a segment: the result is `a` then `c` |
+| `a^c => a^b^c` | Write around a segment: `b` is left unwritten (zero in a fresh result) |
+| `a^b^c => c^b^a`, `a^b^c => c^a` | Reorder segments, dropping or not |
 
 **Integer constants in concatenation**: an integer component specifies the size of that segment, rather than indexing into a fixed dimension. For example:
 - `3^a => a`: skip 3 elements at the beginning of the input
@@ -620,6 +623,8 @@ No other slot names an integer component, so it is skipped: an extraction does n
 **Sizing the components**: every component must have a size. A component another slot names gets it from that tensor; the others take an integer, or a captured variable set with `Shape.set_dim` (`x ++ "p^o^q => o" ["p"; "q"]`, then `Shape.set_dim p 2` and `Shape.set_dim q 1`). An extraction's result closes down to its operand, so it cannot size `o` from a use site: in `p^o => o` either `p` or the result is sized explicitly, and a middle form needs two of its three components. Shape inference never guesses an unsized component to 1, as it would close an unconstrained axis: it refuses with a message naming the component. (A block spec's component no operand supplies may still be inferred empty.)
 
 **Extraction and replacement**: a concatenated axis exactly one of whose components the other side names is a slice: its index is the named component's index shifted by the sizes of the components before it, and the other components are iterated by nothing. `++` and `++^` results are zero-initialized, so a replacement into a fresh result zero-pads it (`a => 2^a^1`); a `%cd` assignment `target =: source ~logic:"a => a^b"` writes the segment and leaves the rest of `target` unchanged. The gradient of an extraction flows into the selected segment only. These forms are executed against oracles in `test/einsum/concat_extraction.ml`.
+
+**Segments correspond by name**: when two slots both concatenate components of one axis, each component is matched by its label, and each slot places it at its own offset. A segment one slot does not list is one that slot takes no part in, so the two sides may differ in order and in what they list: `a^b^c => c^b^a` reverses the segments, `a^b^c => a^c` drops `b`, `a^b^c => c^a` does both, and `a^c => a^b^c` writes `a` and `c` around a `b` no operand fills -- zero under `++`, its prior contents under `%cd` `=:`. An integer component is matched by nothing, as everywhere: `a^2^c => a^c` drops two cells, `a^c => a^2^c` leaves two unwritten. Gradients follow the segments back, and a dropped segment gets none. These forms, binary ones (`a^b^c; a^c => a^c`) among them, are executed in `test/einsum/concat_segment_correspondence.ml` (gh-ocannl-2087).
 
 **What a concatenated axis cannot say**: a concatenated axis is one axis of alternatives, so a position lies in one segment. Three forms therefore have no meaning, and are refused with a shape error when the operation is built, whatever the sizes (gh-ocannl-2017):
 
