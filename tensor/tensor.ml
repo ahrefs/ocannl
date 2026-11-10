@@ -1529,9 +1529,10 @@ let%track7_sexp number ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) c 
     | Some axis_basis -> t ~output_axes:[ (axis_basis, 1) ] ()
   in
   Tn.update_memory_mode t.value Effectively_constant (Site "24:literal-constant");
-  (* FIXME: make this always pick a matching precision. *)
-  Ir.Ops.(
-    if exceeds_fp16_cutoff c then Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
+  (* A literal is top-down: it takes its consumer's precision, as every term with no data of its own
+     does (gh-ocannl-2028). Lowering refuses one past [check_half_prec_constants_cutoff] at a <=
+     fp16 slot ([Low_level]'s [check_fp16]), under every session default: the bump to single that
+     stood here fired only under a <= fp16 default, and there it switched that guard off. *)
   t
 
 let%track7_sexp bits ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) i : t =
@@ -1596,10 +1597,7 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?ba
   (match fetch_op with
   | Some (Asgns.Constant _ | Asgns.Constant_fill _) -> register_constant_host_init t.value values
   | _ -> ());
-  let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
-  Ir.Ops.(
-    if exceeds_fp16_cutoff max_abs then
-      Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
+  (* Like [number]'s literal, a dataless one takes its consumer's precision (gh-ocannl-2028). *)
   t
 
 let term_init ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims

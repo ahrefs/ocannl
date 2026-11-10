@@ -186,6 +186,41 @@ let () =
         "literal values: (1 + 2^-30) - 1 is exactly 2^-30 beneath a double consumer" (fun label ->
           p_all label (Lazy.force got) ~f:(fun v -> Float.(v = eps))));
 
+  (* A literal takes its consumer's precision under every session default, so one past the fp16
+     cutoff beneath a half consumer is refused the same way under the single and the half default;
+     before, a bump to single fired only under the half default and switched the lowering guard off
+     (a silent [-inf] for 70000). Beneath a single consumer it computes. *)
+  Verdict.case "large literal" (fun () ->
+      let run ~default ~consumer c =
+        fresh_session ();
+        Tensor.default_value_prec := default;
+        Exn.protect
+          ~finally:(fun () -> Tensor.default_value_prec := Ops.single)
+          ~f:(fun () ->
+            let x = NTDSL.init ~l:"x" ~prec:consumer ~o:[ 4 ] ~f:(fun _ -> 1.) () in
+            let k = NTDSL.number c in
+            let%cd y = x - k in
+            match values y with
+            | vs -> Ok vs
+            | exception e ->
+                let msg = Exn.to_string e in
+                Stdio.eprintf "(not part of the golden) refused: %s\n%!" msg;
+                Error msg)
+      in
+      let refused = function
+        | Error msg -> String.is_substring msg ~substring:"too big for FP16"
+        | Ok _ -> false
+      in
+      p_all "large literal: 20000 and 70000 beneath a half consumer are refused under both defaults"
+        (List.concat_map [ Ops.single; Ops.half ] ~f:(fun default ->
+             List.map [ 20000.; 70000. ] ~f:(fun c -> (default, c))))
+        ~f:(fun (default, c) -> refused (run ~default ~consumer:Ops.half c));
+      let computed =
+        match run ~default:Ops.half ~consumer:Ops.single 20000. with Ok vs -> vs | Error _ -> []
+      in
+      p_all "large literal: beneath a single consumer under the half default it computes" computed
+        ~f:(fun v -> Float.(v = -19999.)));
+
   (* Executed on every backend: under a half session default, noise beneath a single consumer is a
      single draw, which some value shows by not being f16-representable. *)
   Verdict.case "half default" (fun () ->
