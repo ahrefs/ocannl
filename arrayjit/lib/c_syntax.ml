@@ -6223,15 +6223,13 @@ module C_syntax (B : C_syntax_config) = struct
     to_ : int;
     body : Low_level.t;
     axis : Low_level.axis_type;
-    log_set_locals : bool;
     in_loop : bool;
     censusing : bool;
   }
 
   exception Vectorization_declined
 
-  let rec pp_ll ctx ?(log_set_locals = true) ?(in_loop = false) (c : Low_level.t) : PPrint.document
-      =
+  let rec pp_ll ctx ?(in_loop = false) (c : Low_level.t) : PPrint.document =
     let open PPrint in
     match c with
     | Low_level.Noop -> empty
@@ -6242,18 +6240,14 @@ module C_syntax (B : C_syntax_config) = struct
            codegen-side run collapse here was tried and rejected: it could not tell unrolled copies
            of one source assignment from two user-authored adjacent accumulations, whose separate
            stores (and separate narrowings) are their semantics. *)
-        match
-          (try_mma_fragment_scope ctx)
-            ~render:(fun body -> (pp_ll ctx) ~log_set_locals ~in_loop body)
-            c
-        with
+        match (try_mma_fragment_scope ctx) ~render:(fun body -> (pp_ll ctx) ~in_loop body) c with
         | Some doc -> doc
         | None ->
             let render_in_order left right =
               (* Rendering mutates occurrence-level state such as [zero_out_seen]; tuple component
                  evaluation order is unspecified, so spell the program order explicitly. *)
-              let left_doc = (pp_ll ctx) ~log_set_locals ~in_loop left in
-              let right_doc = (pp_ll ctx) ~log_set_locals ~in_loop right in
+              let left_doc = (pp_ll ctx) ~in_loop left in
+              let right_doc = (pp_ll ctx) ~in_loop right in
               (left_doc, right_doc)
             in
             let d1, d2 =
@@ -6267,7 +6261,7 @@ module C_syntax (B : C_syntax_config) = struct
                       ctx.current_localized_zero_seed := Some seed;
                       let next_doc =
                         Exn.protect
-                          ~f:(fun () -> (pp_ll ctx) ~log_set_locals ~in_loop next)
+                          ~f:(fun () -> (pp_ll ctx) ~in_loop next)
                           ~finally:(fun () -> ctx.current_localized_zero_seed := saved)
                       in
                       let zero_doc =
@@ -6277,11 +6271,10 @@ module C_syntax (B : C_syntax_config) = struct
                           Hash_set.add ctx.zero_out_seen tn.Tn.uid;
                           empty
                         end
-                        else (pp_ll ctx) ~log_set_locals ~in_loop c1
+                        else (pp_ll ctx) ~in_loop c1
                       in
                       let rest_doc =
-                        Option.value_map rest ~default:empty
-                          ~f:((pp_ll ctx) ~log_set_locals ~in_loop)
+                        Option.value_map rest ~default:empty ~f:((pp_ll ctx) ~in_loop)
                       in
                       let tail =
                         if PPrint.is_empty next_doc then rest_doc
@@ -6310,7 +6303,6 @@ module C_syntax (B : C_syntax_config) = struct
             to_;
             body;
             axis;
-            log_set_locals;
             in_loop;
             censusing = !(ctx.peel_census_enabled) && Low_level.has_accumulating_cell body;
           }
@@ -6396,11 +6388,9 @@ module C_syntax (B : C_syntax_config) = struct
         let decls =
           List.concat_map carried ~f:(fun { Low_level.prev; next; init } ->
               [
-                (pp_ll ctx) ~log_set_locals ~in_loop
-                  (Declare_local { id = prev; needs_init = false });
-                (pp_ll ctx) ~log_set_locals ~in_loop
-                  (Declare_local { id = next; needs_init = false });
-                (pp_ll ctx) ~log_set_locals ~in_loop (Set_local (prev, init));
+                (pp_ll ctx) ~in_loop (Declare_local { id = prev; needs_init = false });
+                (pp_ll ctx) ~in_loop (Declare_local { id = next; needs_init = false });
+                (pp_ll ctx) ~in_loop (Set_local (prev, init));
               ])
         in
         let header =
@@ -6419,10 +6409,10 @@ module C_syntax (B : C_syntax_config) = struct
         let body_doc =
           Exn.protect
             ~f:(fun () ->
-              let doc = (pp_ll ctx) ~log_set_locals ~in_loop:true body in
+              let doc = (pp_ll ctx) ~in_loop:true body in
               let rotation =
                 List.map carried ~f:(fun { Low_level.prev; next; _ } ->
-                    (pp_ll ctx) ~log_set_locals ~in_loop:true (Set_local (prev, Get_local next)))
+                    (pp_ll ctx) ~in_loop:true (Set_local (prev, Get_local next)))
               in
               let doc = separate hardline (doc :: rotation) in
               if Utils.debug_log_from_routines () then
@@ -6454,7 +6444,7 @@ module C_syntax (B : C_syntax_config) = struct
              through to emit the zeroing loop below. *)
           empty
         else
-          (pp_ll ctx) ~log_set_locals ~in_loop
+          (pp_ll ctx) ~in_loop
             (Low_level.loop_over_dims (Lazy.force tn.dims) ~body:(fun idcs ->
                  Set { tn; idcs; llsc = Constant 0.0; debug = get_code_ident tn ^ " := 0" }))
     | Set { tn; idcs; llsc; debug } -> (
@@ -6533,7 +6523,7 @@ module C_syntax (B : C_syntax_config) = struct
             let prec, narrowing = store_precs ~store_prec llsc in
             let (local_defs, val_doc), volatile_read_emitted =
               (with_volatile_accumulation_reads ctx) rmw_volatile_reads (fun () ->
-                  (pp_scalar ctx) ~log_set_locals prec llsc)
+                  (pp_scalar ctx) prec llsc)
             in
             let val_doc = wrap_conversion narrowing val_doc in
             let local_defs = pp_local_defs local_defs in
@@ -6615,11 +6605,11 @@ module C_syntax (B : C_syntax_config) = struct
         let dims = Lazy.force tn.dims in
         let store_prec = Lazy.force tn.storage_prec in
         let prec, narrowing = store_precs ~store_prec llsc in
-        let dyn_defs, dyn_expr = (pp_scalar ctx) ~log_set_locals iprec iv in
+        let dyn_defs, dyn_expr = (pp_scalar ctx) iprec iv in
         let idx_typ = B.typ_of_prec (Ops.index_prec ()) in
         let dyn_idx_doc = string ("((" ^ idx_typ ^ ")(") ^^ dyn_expr ^^ string "))" in
         let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
-        let val_defs, val_doc = (pp_scalar ctx) ~log_set_locals prec llsc in
+        let val_defs, val_doc = (pp_scalar ctx) prec llsc in
         let val_doc = wrap_conversion narrowing val_doc in
         let local_defs = pp_local_defs (dyn_defs @ val_defs) in
         let assignment =
@@ -6697,7 +6687,7 @@ module C_syntax (B : C_syntax_config) = struct
             (* Homogeneous: argument uses result precision *)
           else arg_prec
         in
-        let local_defs, arg_doc = (pp_scalar ctx) ~log_set_locals arg_prec arg in
+        let local_defs, arg_doc = (pp_scalar ctx) arg_prec arg in
         let local_defs = pp_local_defs local_defs in
         (* Generate the function call *)
         let result_doc = B.vec_unop_syntax prec vec_unop arg_doc in
@@ -6825,14 +6815,14 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let (local_defs, value_doc), _ =
           (with_volatile_accumulation_reads ctx) ~scope_ids:[ id.Low_level.scope_id ] volatile_reads
-            (fun () -> (pp_scalar ctx) ~log_set_locals value_prec value)
+            (fun () -> (pp_scalar ctx) value_prec value)
         in
         let value_doc =
           wrap_conversion (B.convert_precision ~from:value_prec ~to_:prec) value_doc
         in
         let local_defs = pp_local_defs local_defs in
         let assignment = pp_scope_id id ^^ string " = " ^^ value_doc ^^ semi in
-        if Utils.debug_log_from_routines () && log_set_locals then
+        if Utils.debug_log_from_routines () then
           let new_var = string log_set_local_temporary in
           let num_typ = string (B.typ_of_prec prec) in
           let decl = num_typ ^^ space ^^ new_var ^^ string " = " ^^ value_doc ^^ semi in
@@ -6999,7 +6989,7 @@ module C_syntax (B : C_syntax_config) = struct
         in
         let fallback_doc () =
           record Mma_scalar_fallback;
-          lane0_guarded ((pp_ll ctx) ~log_set_locals ~in_loop:true fallback)
+          lane0_guarded ((pp_ll ctx) ~in_loop:true fallback)
         in
         (* Register-tiled CPU rendering (gh-ocannl-469; tinyBLAS/llamafile's [mnpack] and the S4
            micro-kernel shape): the C-tile lives in an RM×RN grid of vector-extension registers
@@ -7485,7 +7475,7 @@ module C_syntax (B : C_syntax_config) = struct
           (with_volatile_accumulation_reads ctx)
             ~scope_ids:controlled_scopes
             (not (List.is_empty controlled_scopes))
-            (fun () -> (pp_scalar ctx) ~log_set_locals (comp_prec cprec) c)
+            (fun () -> (pp_scalar ctx) (comp_prec cprec) c)
         in
         let local_defs = pp_local_defs local_defs in
         let body_doc =
@@ -7497,9 +7487,9 @@ module C_syntax (B : C_syntax_config) = struct
               let saved = !(ctx.current_localized_zero_seed) in
               ctx.current_localized_zero_seed := None;
               Exn.protect
-                ~f:(fun () -> (pp_ll ctx) ~log_set_locals ~in_loop:true body)
+                ~f:(fun () -> (pp_ll ctx) ~in_loop:true body)
                 ~finally:(fun () -> ctx.current_localized_zero_seed := saved)
-          | None | Some _ -> (pp_ll ctx) ~log_set_locals ~in_loop:true body
+          | None | Some _ -> (pp_ll ctx) ~in_loop:true body
         in
         let if_doc =
           group
@@ -7510,9 +7500,9 @@ module C_syntax (B : C_syntax_config) = struct
         if PPrint.is_empty local_defs then if_doc
         else lbrace ^^ nest 2 (hardline ^^ local_defs ^^ hardline ^^ if_doc) ^^ hardline ^^ rbrace
 
-  and body_doc ctx ({ i; body; log_set_locals; _ } : loop_ctx) ?(body = body) () =
+  and body_doc ctx ({ i; body; _ } : loop_ctx) ?(body = body) () =
     let open PPrint in
-    let doc = ref ((pp_ll ctx) ~log_set_locals ~in_loop:true body) in
+    let doc = ref ((pp_ll ctx) ~in_loop:true body) in
     (if Utils.debug_log_from_routines () then
        let log_doc =
          let spec, arg_doc = B.log_index_arg (pp_symbol i) in
@@ -8993,8 +8983,8 @@ module C_syntax (B : C_syntax_config) = struct
      pointer casts. Where the peel is blocked at an outer level, the device-memory RMW remains and
      its reads receive the same expression-level cast. *)
 
-  and try_localize_serial_reduce ctx ({ i; from_; to_; axis; log_set_locals; in_loop; _ } as loop)
-      () : PPrint.document option =
+  and try_localize_serial_reduce ctx ({ i; from_; to_; axis; in_loop; _ } as loop) () :
+      PPrint.document option =
     (* The decision is the shared one above (gh-ocannl-754); this arm only renders what it says and
        records it. *)
     match (decide_accum_width ctx loop) () with
@@ -9061,7 +9051,7 @@ module C_syntax (B : C_syntax_config) = struct
             Low_level.Seq (Low_level.Set_local (id, opening), rebuild_hook (rebuild update_code))
           in
           (without_census ctx) (fun () ->
-              (pp_ll ctx) ~log_set_locals ~in_loop
+              (pp_ll ctx) ~in_loop
                 (Low_level.Set
                    {
                      tn;
@@ -9084,9 +9074,9 @@ module C_syntax (B : C_syntax_config) = struct
      {!Result_type_probes} each node the claim covers asserts its type, after its operator's bridge
      and before any store's conversion. The explicit-SIMD lanes, which render [pp_scalar_op] over
      lane operands, and integer compute precisions, whose scopes never collapse, are not probed. *)
-  and pp_scalar ctx ?(log_set_locals = false) (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+  and pp_scalar ctx (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       local_def list * PPrint.document =
-    let defs, doc = (pp_scalar_unprobed ctx) ~log_set_locals prec vcomp in
+    let defs, doc = (pp_scalar_unprobed ctx) prec vcomp in
     match Result_type_probes.active () with
     | Some claim when Ops.is_float prec && claim ~prec vcomp ->
         Result_type_probes.note_emitted ();
@@ -9094,7 +9084,7 @@ module C_syntax (B : C_syntax_config) = struct
         (defs, Result_type_probes.wrap B.result_type_probes ~typ:(B.typ_of_prec prec) ~what doc)
     | _ -> (defs, doc)
 
-  and pp_scalar_unprobed ctx ~log_set_locals (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
+  and pp_scalar_unprobed ctx (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       local_def list * PPrint.document =
     (* Returns (local definitions, value expression) *)
     let open PPrint in
@@ -9106,10 +9096,7 @@ module C_syntax (B : C_syntax_config) = struct
         let scope_prec = (scope_prec_of ctx) id in
         let num_typ = string ((scope_decl_type ctx) id) in
         let init_zero =
-          if
-            Low_level.reads_scope_before_set id body
-            || (log_set_locals && Utils.debug_log_from_routines ())
-          then
+          if Low_level.reads_scope_before_set id body || Utils.debug_log_from_routines () then
             let prefix, postfix = B.convert_precision ~from:Ops.int32 ~to_:scope_prec in
             string " = " ^^ string prefix ^^ string "0" ^^ string postfix
           else empty
@@ -9120,10 +9107,12 @@ module C_syntax (B : C_syntax_config) = struct
            first-touch that the declaration's [= {0}] covers. *)
         (* A kept scope logs its assignments, including definitions nested in an assignment
            value (gh-ocannl-2065) or in any statement's operand: a [Set], [Set_dynamic] or
-           [Set_from_vec] value, a dynamic index, an [If] condition (gh-ocannl-2111). Carry that
-           choice through scalar operands; initializing above also makes the trace's old-value
-           read well-defined. *)
-        let body_doc = (pp_ll ctx) ~log_set_locals ~in_loop:true body in
+           [Set_from_vec] value, a dynamic index, an [If] condition (gh-ocannl-2111). Logging
+           depends on [Utils.debug_log_from_routines] alone, so no call site can render a scope
+           quietly; initializing above also makes the trace's old-value read well-defined.
+           Renderings that drop the definitions ([debug_float]'s display) or refuse them
+           ([uniform_scalar]) are unaffected, and the SIMD and warp paths decline under logging. *)
+        let body_doc = (pp_ll ctx) ~in_loop:true body in
         let def_doc = decl ^^ hardline ^^ body_doc in
         let prefix, postfix = B.convert_precision ~from:scope_prec ~to_:prec in
         let expr = string prefix ^^ pp_scope_id id ^^ string postfix in
@@ -9179,7 +9168,7 @@ module C_syntax (B : C_syntax_config) = struct
         let dims = Lazy.force tn.dims in
         let from_prec = Lazy.force tn.storage_prec in
         let prefix, postfix = B.convert_precision ~from:from_prec ~to_:prec in
-        let dyn_defs, dyn_expr = (pp_scalar ctx) ~log_set_locals iprec iv in
+        let dyn_defs, dyn_expr = (pp_scalar ctx) iprec iv in
         let idx_typ = B.typ_of_prec (Ops.index_prec ()) in
         let dyn_idx_doc = string ("((" ^ idx_typ ^ ")(") ^^ dyn_expr ^^ string "))" in
         let offset_doc = pp_array_offset_dyn (idcs, dims) ~dyn_axis ~dyn_idx_doc in
@@ -9217,8 +9206,7 @@ module C_syntax (B : C_syntax_config) = struct
         let idx_doc = if affine_needs_parens idx then parens idx_doc else idx_doc in
         let expr = string prefix ^^ idx_doc ^^ string postfix in
         ([], expr)
-    | Ternop _ | Binop _ | Unop _ ->
-        pp_scalar_op ~operand:((pp_scalar ctx) ~log_set_locals) prec vcomp
+    | Ternop _ | Binop _ | Unop _ -> pp_scalar_op ~operand:(pp_scalar ctx) prec vcomp
 
   and debug_float ctx ?guard (prec : Ops.prec) (value : Low_level.scalar_t) :
       PPrint.document * PPrint.document list =

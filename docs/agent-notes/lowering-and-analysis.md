@@ -789,10 +789,11 @@ files.
 
 - Routine logging traces every `Local_scope` definition a statement renders, wherever the scope
   is nested: a `Set_local`'s value (gh-ocannl-2065), a `Set`, `Set_dynamic` or `Set_from_vec`
-  value, a dynamic index, an `If` condition (gh-ocannl-2111). `C_syntax.pp_scalar` carries
-  `log_set_locals` through operands from each of those arms; its quiet default is left only to
-  renderings that drop or refuse local definitions (`debug_float`'s display re-render, the
-  vector paths' uniform operands) and to the SIMD/warp paths that decline under logging. Such
+  value, a dynamic index, an `If` condition (gh-ocannl-2111). `C_syntax` gates scope logging on
+  `Utils.debug_log_from_routines ()` alone, with no per-call-site switch, so a new
+  `pp_scalar` call site logs its scopes too. Renderings that drop or refuse local definitions
+  (`debug_float`'s display re-render, the vector paths' uniform operands) discard the logged
+  text, and the SIMD/warp paths decline under logging. Such
   definitions need zero initialization in logged runs because the trace reads the old local
   before the assignment. `routine_log_nested_scopes` executes one nested definition under each
   arm and claims its trace on every backend; `micrograd_demo_logging` pins the nested gradient

@@ -5,12 +5,12 @@
    [Low_level.inline_computation]). For a non-matching kept-loop iteration [solved_idx] can be out
    of bounds; the runtime C ternary short-circuits, but debug value-logging ([C_syntax.debug_float])
    used to emit all three branch reads as unconditional printf arguments, dereferencing the producer
-   out of bounds. In the real virtualized flow that [Where] sits inside a non-logged [Local_scope]
-   ([log_set_locals:false]), so it never reaches [debug_float]; here we build the identical shapes
-   in a *logged top-level [Set]* and run them through the actual backend codegen
-   ([C_syntax.compile_proc]) -- a pure C-syntax path that emits the same C on every backend, so the
-   test is backend-independent -- with debug value-logging enabled, then assert each
-   conditionally-evaluated array read is gated by its (negated) condition. Reverting the
+   out of bounds. In the real virtualized flow that [Where] sits inside a [Local_scope] body, which
+   logged runs trace too (gh-ocannl-2065, gh-ocannl-2111); here we build the identical shapes in a
+   *logged top-level [Set]*, independent of virtualization's choices, and run them through the
+   actual backend codegen ([C_syntax.compile_proc]) -- a pure C-syntax path that emits the same C on
+   every backend, so the test is backend-independent -- with debug value-logging enabled, then
+   assert each conditionally-evaluated array read is gated by its (negated) condition. Reverting the
    [debug_float] guard makes the assertions fail.
 
    The guard wrapper emits each gated read as [(<cond> ? ident[..] : 0)]; the runtime [pp_scalar]
