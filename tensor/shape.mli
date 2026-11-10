@@ -127,6 +127,13 @@ type delayed_var_ref = private {
           closure it stands in for that row. A concatenated axis of concrete components is its sum
           (gh-ocannl-1969). [None] when the binding at the closure was a dimension, or the row held
           a concatenated or affine axis over a symbolic extent. Omitted from sexps when [None]. *)
+  mutable solved_basis : string;
+      (** The basis tag of the size [var_ref.solved_dim] holds (gh-ocannl-2033): the tag of the
+          solution the reference's dimension variable reached, such as the broadcast top
+          [1_(bcast_if_1)] a free dimension closes to, or a named tag an operand gave it. A later
+          dimension capture, across a closure too, takes the size with this tag: it names that
+          dimension, as [carried_row] does a row. [default] for a value {!set_dim} gave and for a
+          row's product. Omitted from sexps when [default]. *)
   uid : int;  (** The reference's identity for rewind tracking; ignored by [equal] and sexps. *)
   mutable discarded_by : string option;
       (** The provenance of the rewind that discarded the reference, which every setter then refuses

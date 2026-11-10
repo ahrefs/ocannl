@@ -695,7 +695,9 @@ the operations) the reference carries its solved value: a dimension's size, and 
 axes (gh-ocannl-1689) together with their product. A row captured again after the closure is the
 same row -- after `2, 3`, an operand of `3, 2` or `6` is refused -- and a dimension captured again
 has the row's product. A reference whose last binding before the closure was a dimension carries
-only the number, so a row captured from it later is tied by product, as within one inference.
+only the number, so a row captured from it later is tied by product, as within one inference. The
+number keeps its basis (gh-ocannl-2033): a dimension of an `rgb` axis is captured again as `rgb`,
+and a free one, closed to the broadcast top `1_(bcast_if_1)`, as that top.
 That tie is not transitive (gh-ocannl-1969): row, dimension, row leaves two rows of one product, not
 one row, and identifying them takes an explicit `set_equal` of two row references.
 
