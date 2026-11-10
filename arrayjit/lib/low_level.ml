@@ -6651,10 +6651,22 @@ let simplify_llc static_indices llc =
         let result = (Unop (op, v), prec) in
         if equal_scalar_arg llsc v then result else loop_scalar result
   in
-  let check_constant tn c =
+  (* gh-ocannl-2112: a constant is checked at the precision its slot evaluates it at, by the same
+     discipline [loop_scalar] simplifies under (gh-ocannl-1788): a store's value at its node's
+     storage precision, kept by every homogeneous operator, while a heterogeneous slot (a [Where]
+     condition, a dynamic index, a vector argument, a [Round_prec] or uint4x32 conversion operand)
+     evaluates its operand at the operand's own annotation. An index bound -- [Stage]'s edge guard
+     [Where (idx < extent, load, 0)], a launch or fringe guard -- is evaluated at index precision,
+     so however far past the cutoff its extent lies it is no fp16 constant. The node's storage
+     precision must be narrow as well: the refusal's remedy is to widen that node, which does
+     nothing for a narrow slot inside a wide node's statement. *)
+  let check_constant tn ~eval c =
     (* Prevent triggering over-eager guard against forcing precision. *)
     ignore (Lazy.force tn.Tn.dims);
-    if Ops.exceeds_fp16_cutoff c && Ops.is_up_to_fp16 (Lazy.force tn.Tn.storage_prec) then
+    if
+      Ops.exceeds_fp16_cutoff c && Ops.is_up_to_fp16 eval
+      && Ops.is_up_to_fp16 (Lazy.force tn.Tn.storage_prec)
+    then
       raise
       @@ Utils.User_error
            ("Constant " ^ Float.to_string c
@@ -6663,40 +6675,51 @@ let simplify_llc static_indices llc =
   in
   let rec check_proc llc =
     let loop = check_proc in
+    let at_storage tn llsc =
+      ignore (Lazy.force tn.Tn.dims);
+      check_float tn ~eval:(Lazy.force tn.Tn.storage_prec) llsc
+    in
     match llc with
     | Seq (c1, c2) ->
         loop c1;
         loop c2
     | For_loop { body; _ } -> loop body
     | Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun c -> check_float c.prev.tn c.init);
+        List.iter carried ~f:(fun c -> at_storage c.prev.tn c.init);
         loop body
     | Zero_out _ -> ()
-    | Set { tn; llsc; _ } -> check_float tn llsc
-    | Set_dynamic { tn; dyn_value = v, _; llsc; _ } ->
-        check_float tn v;
-        check_float tn llsc
-    | Set_from_vec { tn; arg = arg_scalar, _; _ } -> check_float tn arg_scalar
-    | Set_local (id, llsc) -> check_float id.tn llsc
+    | Set { tn; llsc; _ } -> at_storage tn llsc
+    | Set_dynamic { tn; dyn_value = v, p; llsc; _ } ->
+        check_float tn ~eval:p v;
+        at_storage tn llsc
+    | Set_from_vec { tn; vec_unop; arg = arg_scalar, p; _ } ->
+        if Ops.is_homogeneous_prec_vec_unop vec_unop then at_storage tn arg_scalar
+        else check_float tn ~eval:p arg_scalar
+    | Set_local (id, llsc) -> at_storage id.tn llsc
     | If { body; _ } -> loop body
     | Tile_mma { fallback; _ } -> loop fallback
     | Declare_local _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier -> ()
-  and check_float tn llsc =
-    let loop = check_float tn in
+  and check_float tn ~eval llsc =
+    let loop = check_float tn ~eval in
+    let own (v, p) = check_float tn ~eval:p v in
     match llsc with
-    | Constant c -> check_constant tn c
+    | Constant c -> check_constant tn ~eval c
     | Constant_bits _ -> () (* No check needed for bit constants *)
     | Local_scope { body; _ } -> check_proc body
-    | Ternop (_, (v1, _), (v2, _), (v3, _)) ->
-        loop v1;
+    | Ternop (op, v1, (v2, _), (v3, _)) ->
+        if Ops.is_homogeneous_prec_ternop op then loop (fst v1) else own v1;
         loop v2;
         loop v3
-    | Binop (_, (v1, _), (v2, _)) ->
-        loop v1;
-        loop v2
-    | Unop (_, (v, _)) -> loop v
-    | Embed_index (Indexing.Fixed_idx i) -> check_constant tn (Float.of_int i)
-    | Get_dynamic { dyn_value = v, _; _ } -> loop v
+    | Binop (op, v1, v2) ->
+        if Ops.is_homogeneous_prec_binop op then (
+          loop (fst v1);
+          loop (fst v2))
+        else (
+          own v1;
+          own v2)
+    | Unop (op, v) -> if Ops.is_homogeneous_prec_unop op then loop (fst v) else own v
+    | Embed_index (Indexing.Fixed_idx i) -> check_constant tn ~eval (Float.of_int i)
+    | Get_dynamic { dyn_value; _ } -> own dyn_value
     | Embed_index _ | Get_local _ | Get_merge_buffer (_, _) | Get (_, _) -> ()
   in
   let result = loop_proc ~ienv:(ienv_of_static_indices static_indices) llc in

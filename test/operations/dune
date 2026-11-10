@@ -7584,6 +7584,18 @@
  (modules simplify_fma_precision)
  (libraries base ocannl arrayjit.verdict ll_test))
 
+; gh-ocannl-2112: an index bound past the fp16 cutoff, in a half node's Stage-shaped edge guard,
+; is not refused as an FP16 constant; the same bound stored as a half value still is.
+
+(test
+ (name half_index_bound_constant)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules half_index_bound_constant)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 (test
  (name simplify_const_left_sub)
  (package neural_nets_lib)
