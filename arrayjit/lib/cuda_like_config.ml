@@ -185,6 +185,7 @@ struct
   let node_ident_prefix = Dialect.backend_facts.Backend_intf.node_ident_prefix
   let fp8_from_float doc = PPrint.(group (string Dialect.fp8_from_float_fn ^^ parens doc))
   let main_kernel_prefix = "extern \"C\" __global__"
+  let result_type_probes = C_syntax.Cxx_probes "__device__ __forceinline__"
 
   (* An all-Serial kernel launches 1x1x1, so no single-thread guard is needed; annotated kernels
      need every thread (axis-types proposal §4). *)
@@ -717,6 +718,9 @@ struct
     | Recip_sqrt, _ -> f "(1 / sqrtf(" "))"
     | Neg, _ -> f "(-(" "))"
     | Trunc, Double_prec _ -> func "trunc"
+    (* [truncf] of a [__half] is a [float]: the value is a half's own, so the bridge is exact, and
+       it keeps the result typed at half (gh-ocannl-2117). *)
+    | Trunc, Half_prec _ -> f "__float2half(truncf(__half2float(" ")))"
     | Trunc, Bfloat16_prec _ -> bf16_func "truncf"
     | Trunc, _ -> func "truncf"
     (* Every integer precision: [tanh] has float and double overloads only, so an integer operand

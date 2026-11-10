@@ -475,6 +475,24 @@ let same_precision_scopes ~policy =
     ~keeps_scopes:false
     ~inputs:[ x; Array.map x ~f:(fun v -> -.half_of (1. /. v)) ]
     ~values:(unary Ops.Recip) ~read:sum;
+  (* gh-ocannl-2117: CUDA/HIP once rendered half [Trunc] as a bare [truncf], a float, which a kept
+     half local converted; collapsed, [truncf(x) + b] met [__half]'s overloads ambiguously and the
+     kernel failed to compile on CUDA. A float sum would differ too: [3 + 3*2^-11] is exact in float
+     and rounds to [3 + 2^-9] in half, so each sum discriminates. Two additions, not a product and a
+     sum, which a contracting compile could fuse into one rounding either way. *)
+  let t = [| 3.; 5.; 7.; 2. |] in
+  same_precision_scope "half_trunc" ~policy ~prec:half ~keeps_scopes:false
+    ~inputs:
+      [
+        Array.map t ~f:(fun v -> v +. 0.5);
+        Array.create ~len:n (3. /. 2048.);
+        Array.map t ~f:Float.neg;
+      ]
+    ~values:(function [ x; _; _ ] -> [ LL.Unop (Ops.Trunc, x) ] | _ -> assert false)
+    ~read:(fun reads operands ->
+      match (reads, operands) with
+      | [ v ], [ _; b; c ] -> LL.Binop (Ops.Add, (LL.Binop (Ops.Add, v, b), half), c)
+      | _ -> assert false);
   let values, read = gated ~prec:bf Ops.Relu_gate in
   same_precision_scope "bf16_relu_gate" ~policy ~prec:bf ~keeps_scopes:false ~inputs:[ x; y; tiny ]
     ~values ~read;

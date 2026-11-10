@@ -454,8 +454,10 @@ using namespace metal;|}, []);
 }|},
       [ "uint4x32_to_half_uniform_vec" ] );
     ( "uint4x32_to_fp8_uniform_lane",
-      {|int8_t uint4x32_to_fp8_uniform_lane(uint4 x, int32_t lane) {
-    return uint4x32_to_fp8_uniform_vec(x).v[lane];
+      (* gh-ocannl-2117: fp8's storage type, which the vector's int8 lane converts to bit for
+         bit. *)
+      {|uint8_t uint4x32_to_fp8_uniform_lane(uint4 x, int32_t lane) {
+    return uint8_t(uint4x32_to_fp8_uniform_vec(x).v[lane]);
 }|},
       [ "uint4x32_to_fp8_uniform_vec" ] );
     ( "single_to_uint4x32",

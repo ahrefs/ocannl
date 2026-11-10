@@ -358,6 +358,13 @@ type param_guard_dialect =
       (** How a dialect spells a builtin's parameter guard: GNU C static assertion, or C++ braced
           init. *)
 
+type result_probe_dialect =
+  | C_probes
+  | Cxx_probes of string
+      (** How a dialect spells a result-type probe ({!Result_type_probes}): a GNU C statement
+          expression asserting over its local's [__typeof__], or a C++ function template, declared
+          with the given qualifier, whose parameter type is deduced from its argument. *)
+
 val blend_local_a : string
 (** The local a [Blend_over_locals] blend binds its first arm to; tests find blends by it. *)
 
@@ -476,6 +483,11 @@ module type C_syntax_config = sig
   (** The dialect of the builtin parameter guards a kernel's prelude carries under the test seam
       {!Param_guards.with_guards} (gh-ocannl-1768); [None] (the {!Pure_C_config} default) guards
       nothing. *)
+
+  val result_type_probes : result_probe_dialect
+  (** The dialect of the result-type probes a kernel carries under the test seam
+      {!Result_type_probes.with_probes} (gh-ocannl-2117); {!Pure_C_config}'s default is [C_probes],
+      so a C++ dialect must say so. *)
 
   val select_blend_syntax : Ops.prec -> select_blend option
   (** A branchless rendering of a value select at this compute precision (gh-ocannl-1622), in one of
@@ -1104,6 +1116,31 @@ module Param_guards : sig
   val emitted : unit -> int
   (** How many guards the preludes assembled in this process carried: zero where no backend declares
       a dialect, which is how a test sees that its guards were never emitted. *)
+end
+
+(** Result-type probes (gh-ocannl-2117): a test seam asserting, at compile time, the type of each
+    scalar a kernel renders at a float precision. Scope collapse assumes that where
+    {!Low_level.typed_at} holds, the rendered text already has the type a local of its precision is
+    declared with ([typ_of_prec]); under {!with_probes} every such node of every kernel, leaves
+    included, fails the backend's compile unless it does. Not probed: the explicit-SIMD lanes,
+    integer compute precisions (whose scopes never collapse), and MMA fragments. *)
+module Result_type_probes : sig
+  type claim = prec:Ops.prec -> Low_level.scalar_t -> bool
+  (** Which nodes a probe asserts on: those rendered at [prec] it holds for. *)
+
+  val marker : string
+  (** A string every probe's failure message carries, so a test can tell a result-type failure from
+      another compile failure. *)
+
+  val with_probes : ?claim:claim -> (unit -> 'a) -> 'a
+  (** [with_probes ?claim f] runs [f] with every kernel rendered in it probed wherever [claim]
+      (default {!Low_level.typed_at}) holds. A test seam: kernels are never probed outside it. A
+      test passes another [claim] to show that a probe fails on a type it does not hold. *)
+
+  val active : unit -> claim option
+
+  val emitted : unit -> int
+  (** How many probes the kernels rendered in this process carried. *)
 end
 
 (** C source tokens for builtin and header selection: comments and literals are not uses. *)

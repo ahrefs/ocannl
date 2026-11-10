@@ -106,6 +106,13 @@ half_recip: optimize inlines the virtual nodes: true
 half_recip: optimize keeps a scope exactly where the collapse would not be exact: true
 half_recip: the inlined form computes the oracle's values bitwise: true
 half_recip: the unscoped form computes the oracle's values bitwise: true
+half_trunc: the oracle holds its local in the kernel: true
+half_trunc: the schedule's simplify keeps the oracle's values bitwise: true
+half_trunc: optimize inlines the virtual nodes: true
+half_trunc: optimize keeps a scope exactly where the collapse would not be exact: true
+half_trunc: the inlined form computes the oracle's values bitwise: true
+half_trunc: every placement computes the materialized node's values bitwise: true
+half_trunc: the unscoped form computes the oracle's values bitwise: true
 bf16_relu_gate: the oracle holds its local in the kernel: true
 bf16_relu_gate: the schedule's simplify keeps the oracle's values bitwise: true
 bf16_relu_gate: optimize inlines the virtual nodes: true
@@ -259,6 +266,13 @@ half_recip: optimize inlines the virtual nodes: true
 half_recip: optimize keeps a scope exactly where the collapse would not be exact: true
 half_recip: the inlined form computes the oracle's values bitwise: true
 half_recip: the unscoped form computes the oracle's values bitwise: true
+half_trunc: the oracle holds its local in the kernel: true
+half_trunc: the schedule's simplify keeps the oracle's values bitwise: true
+half_trunc: optimize inlines the virtual nodes: true
+half_trunc: optimize keeps a scope exactly where the collapse would not be exact: true
+half_trunc: the inlined form computes the oracle's values bitwise: true
+half_trunc: every placement computes the materialized node's values bitwise: true
+half_trunc: the unscoped form computes the oracle's values bitwise: true
 bf16_relu_gate: the oracle holds its local in the kernel: true
 bf16_relu_gate: the schedule's simplify keeps the oracle's values bitwise: true
 bf16_relu_gate: optimize inlines the virtual nodes: true

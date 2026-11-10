@@ -55,7 +55,18 @@
    claim covers what gh-ocannl-1704 was (a [half] passed by value to a [uint16_t]). Its negative
    control plants gh-ocannl-1704 back in the backend's own table, and must compile without the
    guards and fail with them. Which functions the guards read is checked over both tables: an
-   unreadable function is named, with why. *)
+   unreadable function is named, with why.
+
+   gh-ocannl-2117 adds result-type probes ({!Ir.C_syntax.Result_type_probes}): the whole sweep also
+   compiles with every scalar node at a float precision that {!Ir.Low_level.typed_at} calls typed --
+   operators after their narrow bridges, blends, conversions, reads and constants -- asserting at
+   compile time that its type is the one a scope local of that precision is declared with. That is
+   what both scope collapses assume, and Metal's floating [Not] (a [bool]) and the CUDA/HIP f32
+   [Not] (a [double]) once broke it while compiling. A projection renders its selected operand
+   alone, so it is probed through that operand. The exceptions are the nodes [typed_at] declines,
+   listed and reasoned where it is defined: truths, cc's [tanhf] at double, the packed Threefry
+   operators. Integer compute precisions are not probed (an integer scope never collapses), nor the
+   explicit-SIMD lanes. A probe failure names itself, so a [FAILED] line says when it is one. *)
 
 open Base
 module LL = Ir.Low_level
@@ -64,6 +75,7 @@ module Idx = Ir.Indexing
 module Tn = Ir.Tnode
 module Outcome = Ir.Schedule_outcome
 module Guards = Ir.C_syntax.Param_guards
+module Probes = Ir.C_syntax.Result_type_probes
 module Generated = Test_utils.Generated
 open Verdict.Claims
 
@@ -525,6 +537,7 @@ let () =
     |> List.stable_sort ~compare:(fun (s1, _, _) (s2, _, _) -> Ops.compare_prec s1 s2)
   in
   let cases =
+    Probes.with_probes @@ fun () ->
     Guards.with_guards (fun () ->
         List.map pairs ~f:(fun (store, compute, policy) ->
             (* The vector arms compile apart from the scalar ones, so a routine's source witnesses
@@ -569,7 +582,10 @@ let () =
       match verdict with
       | Compiled -> ()
       | Refused why -> Stdio.eprintf "  refused: %s, %s -- %s\n" (label case) (arm_name arm) why
-      | Failed why -> Stdio.eprintf "  FAILED: %s, %s -- %s\n" (label case) (arm_name arm) why);
+      | Failed why ->
+          Stdio.eprintf "  FAILED%s: %s, %s -- %s\n"
+            (if String.is_substring why ~substring:Probes.marker then " (result type)" else "")
+            (label case) (arm_name arm) why);
   List.iter !unexplained ~f:(fun (what, verdict) ->
       Stdio.eprintf "  UNEXPLAINED: %s -- %s\n" what
         (match verdict with Compiled -> "" | Refused why | Failed why -> why));
@@ -706,6 +722,34 @@ let () =
           Stdio.eprintf "  the reverted gh-ocannl-1704 was refused: %s\n" why;
           p label false
       | None | Some Compiled -> p label false)
+
+(* gh-ocannl-2117: the result-type probes were in force over the whole sweep too, so the claim that
+   no arm fails to compile includes that every node {!Ir.Low_level.typed_at} calls typed renders
+   with the type a local of its precision is declared with -- what both scope collapses assume. The
+   negative control is the defect's own shape on real text: a truth, which renders as C [int] or a
+   C++ and Metal [bool], claimed typed, as Metal's floating [Not] once rendered a [bool] the claim
+   called a float (gh-ocannl-2045). It compiles unprobed and fails the probe, on every backend. *)
+let () =
+  p "the sweep's kernels carried result-type probes" (Probes.emitted () > 0);
+  let claim ~prec (v : LL.scalar_t) =
+    match v with LL.Binop (Ops.Cmplt, _, _) -> true | _ -> LL.typed_at ~prec v
+  in
+  let control ~probed =
+    let o = operands ~precs:[ Ops.single ] ~n_arms:1 Ops.single in
+    let policy = List.hd_exn Ir.Numerics.all in
+    let compile () = try_compile ~policy ~name:"optbl_truth_claimed" o [ (0, Binary Ops.Cmplt) ] in
+    if probed then Probes.with_probes ~claim compile else compile ()
+  in
+  p "a truth claimed typed compiles without the probes" (Option.is_none (control ~probed:false));
+  p "a truth claimed typed fails the result-type probe"
+    (match control ~probed:true with
+    | Some (Failed why) ->
+        Stdio.eprintf "  the truth claimed typed under the probes: %s\n" why;
+        String.is_substring why ~substring:Probes.marker
+    | Some (Refused why) ->
+        Stdio.eprintf "  the truth claimed typed was refused: %s\n" why;
+        false
+    | None | Some Compiled -> false)
 
 (* The executed legs. Compiling an arm says nothing about its value, and the integer-precision table
    fixes here had values to get right. Each case is one the wrong fix gets wrong, with every operand

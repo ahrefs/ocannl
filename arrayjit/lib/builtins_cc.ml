@@ -1826,9 +1826,10 @@ ARRAYJIT_BUILTIN_LINKAGE HALF_T uint4x32_to_half_uniform_lane(uint4x32_t x, int3
       [ "uint4x32_t"; "HALF_T"; "uint4x32_to_half_uniform_vec" ] );
     ( "uint4x32_to_fp8_uniform_lane",
       {|
-/* Lane of the packed fp8 uniform conversion (its e5m2 bit pattern as int8). */
-ARRAYJIT_BUILTIN_LINKAGE int8_t uint4x32_to_fp8_uniform_lane(uint4x32_t x, int32_t lane) {
-    return uint4x32_to_fp8_uniform_vec(x).v[lane];
+/* Lane of the packed fp8 uniform conversion: its e5m2 bit pattern as fp8's storage type, which the
+   vector's int8 lane converts to bit for bit (gh-ocannl-2117). */
+ARRAYJIT_BUILTIN_LINKAGE uint8_t uint4x32_to_fp8_uniform_lane(uint4x32_t x, int32_t lane) {
+    return (uint8_t)uint4x32_to_fp8_uniform_vec(x).v[lane];
 }
 |},
       [ "uint4x32_t"; "uint4x32_to_fp8_uniform_vec" ] );

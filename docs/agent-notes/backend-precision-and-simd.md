@@ -2552,6 +2552,11 @@ files.
   literal) to `float` parameters; the C and Metal conversions now cast to `float` first, which is
   value-neutral. A guarded argument loses a literal's constant exemption, so a guarded kernel
   calling `ocannl_shfl_xor(v, 16)` would fail: extend the seam to warp kernels with that in mind.
+  Its sibling seam `C_syntax.Result_type_probes` (gh-ocannl-2117) checks the other side of a call,
+  what an expression's type IS: `pp_scalar` wraps each node `Low_level.typed_at` calls typed in a
+  GNU C statement expression or a C++ template deducing its argument's type, so the probe never
+  converts what it checks. A backend's dialect is its config's `result_type_probes`; a C++ dialect
+  must declare it, or its probes render in GNU C's spelling.
 
 - Known integral `ToPowOf` constants render through `ocannl_powi_f32` or `ocannl_powi_f64`
   independently of the optional power simplifier (gh-ocannl-1185): CUDA fast-math `powf` loses
