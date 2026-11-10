@@ -242,7 +242,14 @@ val row_shapes : t -> int list
 
 type environment [@@deriving sexp_of]
 
-type dim_constraint = Unconstrained_dim | At_least_dim of int
+type fixed_index_site = { spec : string; kind : kind } [@@deriving sexp_of, compare]
+(** A fixed-index axis of an einsum spec, the only source of an [At_least_dim] bound. *)
+
+type dim_constraint =
+  | Unconstrained_dim
+  | At_least_dim of { d_min : int; sites : fixed_index_site list }
+      (** [sites]: the fixed-index axes the bound came from, carried on the bound (uncapped) for
+          diagnostics; equality, comparison, hashing and the sexp ignore them (gh-ocannl-2044). *)
 [@@deriving equal, hash, compare, sexp_of, variants]
 
 type total_elems =

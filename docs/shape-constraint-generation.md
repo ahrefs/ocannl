@@ -122,7 +122,8 @@ For each axis specification:
 
 - A label such as `h` maps to `Var alpha_h`, allocating `alpha_h` if needed.
 - A fixed index creates a fresh dimension variable `alpha`, records
-  `P(alpha) = Fixed_idx i`, and emits `Dim_constr(alpha, At_least_dim (i + 1))`.
+  `P(alpha) = Fixed_idx i`, and emits `Dim_constr(alpha, At_least_dim (i + 1))`,
+  the bound carrying the spec and axis kind it came from (its `sites`).
 - An affine spec creates
   `Affine { stride; over; conv; stride_offset }`, with `over` and optional
   `kernel` labels resolved through `dim_var_env`.

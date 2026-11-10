@@ -118,7 +118,7 @@ let () =
           let counter, total = draw [ drawn ] in
           let ineqs, env =
             run stages_to_6
-              ( Row.Dim_constr { d = Var d; constr = At_least_dim 3; origin }
+              ( Row.Dim_constr { d = Var d; constr = At_least_dim { d_min = 3; sites = [] }; origin }
                 :: ineq ~res:bound ~opnd:drawn
                 :: arrange [ total; shape_row drawn; shape_row bound ],
                 Row.empty_env )
