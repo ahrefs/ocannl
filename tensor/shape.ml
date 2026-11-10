@@ -1071,7 +1071,7 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
           Row.Dim_constr
             {
               d;
-              constr = At_least_dim (i + 1);
+              constr = At_least_dim { d_min = i + 1; sites = [ { spec = original_spec; kind } ] };
               origin =
                 [
                   {
@@ -4989,7 +4989,7 @@ let error_to_string_hum msg trace =
         let constr =
           match constr with
           | Unconstrained_dim -> "unconstrained"
-          | At_least_dim n -> [%string ">= %{n#Int}"]
+          | At_least_dim { d_min = n; _ } -> [%string ">= %{n#Int}"]
         in
         (dim d ^ " " ^ constr, origin)
     | Rows_constr { r; constr; origin } ->

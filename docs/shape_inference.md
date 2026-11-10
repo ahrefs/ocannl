@@ -303,7 +303,13 @@ The above mechanisms (excluding `dim_constraint` and `row_constraint`) are suffi
 TODO: the above comment is a bit outdated, as we now support convolutions.
 
 ```ocaml
-type dim_constraint = Unconstrained_dim | At_least_dim of int
+type fixed_index_site = { spec : string; kind : kind }
+
+type dim_constraint =
+  | Unconstrained_dim
+  | At_least_dim of { d_min : int; sites : fixed_index_site list }
+      (* [sites]: the fixed-index spec axes the bound came from, for diagnostics only --
+         equality, comparison, hashing and the sexp ignore them. *)
 
 type total_elems =
   | Num_elems of int

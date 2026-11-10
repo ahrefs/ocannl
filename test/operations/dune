@@ -334,6 +334,7 @@
   (alias runtest-scheme_error_rendering-full_sexp)
   (alias runtest-transformer_test-origins_cap_0)
   (alias runtest-resnet_block-origins_cap_0)
+  (alias runtest-test_param_shape_error-origins_cap_0)
   (alias runtest-heap_local_arrays-outlined)
   (alias runtest-epilogue_fusion_mma_seeds-tf32)
   (alias runtest-fast_math_libmvec)
@@ -739,6 +740,31 @@
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; gh-ocannl-2044: the same executable with the origin cap at 0, against the SAME golden -- the
+; "Unresolved parameter dimension" message names its einsum spec from the [At_least_dim] bound
+; itself, not from the variable's capped origins, so it must not degrade when every merge of two
+; constraints' origins keeps none. The setting is pinned on the command line, over an ambient one.
+
+(rule
+ (target test_param_shape_error-origins_cap_0.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run %{dep:test_param_shape_error.exe} --ocannl_max_shape_error_origins=0))))
+
+(rule
+ (alias runtest-test_param_shape_error-origins_cap_0)
+ (package neural_nets_lib)
+ (action
+  (diff
+   test_param_shape_error.expected
+   test_param_shape_error-origins_cap_0.actual)))
 
 (test
  (name test_composite_param_init)

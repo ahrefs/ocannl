@@ -454,7 +454,26 @@ let dims_basis_assoc dims =
   let f = function Var { name = Some n; _ } as d -> Some (n, d) | _ -> None in
   List.filter_map (dims.beg_dims @ dims.dims) ~f
 
-type dim_constraint = Unconstrained_dim | At_least_dim of int
+type fixed_index_site = { spec : string; kind : kind } [@@deriving sexp, compare]
+(** A fixed-index axis of an einsum spec, the only source of an [At_least_dim] bound
+    ([Shape.einsum_slot_spec_to_dims_bio]). *)
+
+type dim_constraint =
+  | Unconstrained_dim
+  | At_least_dim of {
+      d_min : int;
+      sites : fixed_index_site list;
+          [@equal.ignore]
+          [@compare.ignore]
+          [@hash.ignore]
+          [@sexp_drop_if fun _ -> true]
+          [@default []]
+          (** The fixed-index axes the bound came from, sorted and deduplicated. Carried on the
+              bound itself, uncapped, so a diagnostic naming them does not depend on the capped
+              origins (gh-ocannl-2044). They explain the bound and are no part of what it says, so
+              equality, comparison, hashing and the sexp ignore them: the sexp too, since a
+              [Dim_ineq]'s [from_] sexp takes part in the solver's fixpoint comparison. *)
+    }
 [@@deriving equal, hash, compare, sexp, variants]
 
 type total_elems =
@@ -985,7 +1004,15 @@ let dim_conjunction constr1 constr2 =
   match (constr1, constr2) with
   | Unconstrained_dim, _ -> Some ([], constr2)
   | _, Unconstrained_dim -> Some ([], constr1)
-  | At_least_dim d1, At_least_dim d2 -> Some ([], At_least_dim (Int.max d1 d2))
+  | At_least_dim { d_min = d1; sites = s1 }, At_least_dim { d_min = d2; sites = s2 } ->
+      (* Every site bounds the axis from below, so all of them stay named. *)
+      Some
+        ( [],
+          At_least_dim
+            {
+              d_min = Int.max d1 d2;
+              sites = List.dedup_and_sort ~compare:compare_fixed_index_site (s1 @ s2);
+            } )
 
 let rec collect_dim_factors (known, vars) = function
   | Dim { d; _ } -> Some (d * known, vars)
@@ -1431,14 +1458,14 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
     (constr : dim_constraint) env : constraint_ list * dim_constraint =
   let extras, constr =
     match (dim, constr) with
-    | Dim { d; _ }, At_least_dim d_min ->
+    | Dim { d; _ }, At_least_dim { d_min; _ } ->
         if d < d_min then
           raise
           @@ Shape_error
                ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
-    | Affine { stride; over; conv; stride_offset = _ }, At_least_dim d_min -> (
+    | Affine { stride; over; conv; stride_offset = _ }, At_least_dim { d_min; sites } -> (
         if d_min <= 0 then ([], Unconstrained_dim)
         else
           let quotient = if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1 in
@@ -1450,8 +1477,13 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
                 let quotient =
                   if d_min % stride = 0 then d_min / stride else (d_min / stride) + 1
                 in
-                apply_dim_constraint ~source ~stage over (At_least_dim quotient) env
-          | _ -> apply_dim_constraint ~source ~stage over (At_least_dim quotient) env)
+                apply_dim_constraint ~source ~stage over
+                  (At_least_dim { d_min = quotient; sites })
+                  env
+          | _ ->
+              apply_dim_constraint ~source ~stage over
+                (At_least_dim { d_min = quotient; sites })
+                env)
     | Var v, _ -> (
         match find_dim env.dim_env v with
         | None -> ([], constr)
@@ -1459,9 +1491,9 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
         | Some (Bounds_dim bounds) -> (
             match (source, constr) with
             (* If source is [Res], then [constr] (target) is [Opnd]. *)
-            | Res, (Unconstrained_dim | At_least_dim 1) -> ([], constr)
+            | Res, (Unconstrained_dim | At_least_dim { d_min = 1; _ }) -> ([], constr)
             | _ -> Option.value ~default:([], constr) @@ dim_conjunction constr bounds.constr))
-    | Sym s, At_least_dim d_min ->
+    | Sym s, At_least_dim { d_min; _ } ->
         (* The materialized extent of a symbolic dimension is its declared range. *)
         if sym_dim_extent_exn s < d_min then
           raise
@@ -1469,7 +1501,7 @@ let%track5_sexp rec apply_dim_constraint ~(source : source) ~(stage : stage) (di
                ( "At_least_dim constraint failed, expected " ^ Int.to_string d_min,
                  [ Dim_mismatch [ dim ] ] )
         else ([], constr)
-    | Concat _dims, At_least_dim _d_min ->
+    | Concat _dims, At_least_dim _ ->
         (* FIXME: reconsider if we can make progress *)
         (* For concatenation, the constraint applies to the sum of component dimensions. We don't
            propagate constraints to components here; they'll be resolved during unification. *)
@@ -5656,12 +5688,12 @@ let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
     else get_bcast_dim ~d:1 ~proj_id:59 ()
   in
   match (glb, constr) with
-  | Some (Dim { d; _ } as glb), At_least_dim d2 when d2 > d ->
+  | Some (Dim { d; _ } as glb), At_least_dim { d_min = d2; _ } when d2 > d ->
       raise
       @@ Shape_error
            ( [%string "dereferenced at dimension %{d2#Int}, higher than use site"],
              [ Dim_mismatch [ glb; Var v ] ] )
-  | Some _, At_least_dim 1 ->
+  | Some _, At_least_dim { d_min = 1; _ } ->
       (* Direct access at 0 is a strong heuristic for dimension 1 axis (e.g. result of a
          reduction). *)
       if is_stage7 stage then
@@ -5681,7 +5713,7 @@ let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
          stage (box_muller's interior axes). *)
       Some (Dim_eq { d1 = Var v; d2 = guess_dim (); origin })
   | Some _, Unconstrained_dim when is_stage6_up stage -> None
-  | None, At_least_dim d when is_stage7 stage ->
+  | None, At_least_dim { d_min = d; _ } when is_stage7 stage ->
       Some (Dim_eq { d1 = Var v; d2 = get_default_dim ~d ~proj_id:58 (); origin })
   | None, _ when is_stage7 stage -> Some (Dim_eq { d1 = Var v; d2 = guess_dim (); origin })
   | _ -> None
@@ -5689,20 +5721,16 @@ let%debug5_sexp eliminate_dim_entry stage origin env v ~glb constr =
 (* gh-ocannl-1508: a parameter dimension still open at the final stage. When what kept it open is a
    fixed-index lower bound -- [At_least_dim] is minted only for the fixed-index axes of einsum specs
    ([Shape.einsum_slot_spec_to_dims_bio]) -- the generic "hidden dimension" message points nowhere
-   near the cause, so name the spec(s) the bound came from. The spec is found among the variable's
-   retained origins, which [merge_origins] caps; past the cap the message names no spec. *)
+   near the cause, so name the spec(s) the bound came from. They travel on the bound itself
+   ([At_least_dim]'s [sites]), not among the capped origins, so the message holds at any
+   [max_shape_error_origins] and graph depth (gh-ocannl-2044). *)
 let unresolved_param_dim_error env v trace =
   match find_dim env.dim_env v with
-  | Some (Bounds_dim { constr = At_least_dim d_min; origin; _ }) ->
+  | Some (Bounds_dim { constr = At_least_dim { d_min; sites }; _ }) ->
       let kind_name = function `Batch -> "batch" | `Input -> "input" | `Output -> "output" in
       let specs =
-        List.filter_map origin ~f:(fun o ->
-            match o.operation with
-            | Some "At_least_dim" ->
-                Some
-                  [%string
-                    "a fixed-index %{kind_name o.lhs_kind} axis of einsum spec \"%{o.lhs_name}\""]
-            | _ -> None)
+        List.map sites ~f:(fun { spec; kind } ->
+            [%string "a fixed-index %{kind_name kind} axis of einsum spec \"%{spec}\""])
         |> List.dedup_and_sort ~compare:String.compare
       in
       let where =

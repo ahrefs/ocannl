@@ -369,7 +369,12 @@ files.
   cause is told apart (gh-ocannl-1508): a param dim held open only by a fixed-index lower bound
   (`At_least_dim`, minted solely for fixed-index spec axes) reports "Unresolved parameter dimension"
   naming the spec, via `unresolved_param_dim_error` (`tensor/row.ml`) at the stage-7
-  `process_shape_row` arm; a new raise site for an open param dim should go through it.
+  `process_shape_row` arm; a new raise site for an open param dim should go through it. The spec
+  rides on the bound itself (`At_least_dim`'s `sites`, unioned by `dim_conjunction`, carried
+  through `apply_dim_constraint`'s affine step), never recovered from origins: origins are capped
+  (`max_shape_error_origins`), and the message used to degrade to "an einsum spec" at cap 0 or in
+  a deep graph (gh-ocannl-2044; `runtest-test_param_shape_error-origins_cap_0` pins it). A
+  diagnostic a user needs on a large model belongs on the solver's data, not its origins.
 - `unify_dim` and `solve_dim_ineq` end in CATCH-ALL arms, so adding a `Row.dim` constructor does not
   break the build. The equal-constructor arm in `unify_dim`, the inequality's final mismatch arm, and
   `join_dim` in `solve_row_ineq`'s GLB merge (whose wildcards keep a side instead of demoting to the
