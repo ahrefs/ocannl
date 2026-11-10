@@ -1256,6 +1256,16 @@ files.
   INTEGER draw into a float reader (`uint16 draw into single`) still rests on `rng_collapsible`
   alone: with it disabled that row reads lanes 4..7 unchecked (parity false) and aborts checked,
   while the float-draw rows stay green, kept by gh-ocannl-1788's exact-collapse rule as well.
+- **A free bottom-up node follows its consumers** (gh-ocannl-2028; `docs/precision_inference.md`,
+  *Free nodes follow their consumers*). A node nothing in whose bottom-up dependencies states a
+  precision (`Tn.stated_prec` is `None`: `Prec_cell`'s `stated` lazy, built by `Tensor.op` over the
+  operands' nodes) gets `Tn.follow_prec_if_free` from every consumer, decided when it settles: the
+  same promote-only `follow` the init cone uses, so `x_double + (uniform () - 0.5)` draws at double
+  and `x_half + noise` keeps single. Every bottom-up operand with a consumer now carries a link (a
+  constrained one resolves it to its own value), so its cell holds the consumer's cell: anything
+  such a lazy captures must be nodes, never `Tensor.t` -- capturing the operand tensors in `stated`
+  kept dropped consumers' children alive (`reclaimed_consumer_zeroing`'s `deep`, `session_growth`'s
+  scoped seed). `free_op_prec_follows_consumer` pins the matrix and the executed values.
 - **A cast rounds at its own precision, whatever its placement** (gh-ocannl-1866). A narrow scope
   over a read it does not widen exactly (`Low_level.narrowing_read`) is what a virtual `Operation.cast`
   twin lowers to. `simplify_llc` keeps it even in a slot of its own precision, and `C_syntax` pins it

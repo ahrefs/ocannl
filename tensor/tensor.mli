@@ -63,7 +63,11 @@ type t = {
   value : tn;
       (** The session id and namespace of the tensor are [value.id] / [value.namespace]; tensor
           identity (comparison) follows [value.uid]. *)
-  top_down_prec : bool;  (** Whether to propagate precision bottom-up (the default) or top-down. *)
+  top_down_prec : bool;
+      (** Whether to propagate precision bottom-up (the default) or top-down. A bottom-up tensor
+          promotes over its operands; one none of whose operands, transitively, states a precision
+          also follows its consumers, promoting and never narrowing (gh-ocannl-2028,
+          [docs/precision_inference.md]). *)
   shape : Shape.t;
       (** The eventual shape of [t.value] and [t.diff.grad], incorporating the current state of
           shape inference. *)

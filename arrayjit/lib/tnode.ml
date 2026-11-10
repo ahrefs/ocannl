@@ -117,8 +117,17 @@ let prec_write_hook : (unit -> unit) ref = ref (fun () -> ())
 module Prec_cell : sig
   type t [@@deriving sexp_of]
 
-  val make : delayed_prec -> t
+  val make : ?stated:Ops.prec option Lazy.t -> delayed_prec -> t
+  (** [stated] is, for a node inferred bottom-up, the promotion of what its operands state
+      (gh-ocannl-2028): [None] inside the lazy when no operand states a precision. *)
+
   val get : t -> delayed_prec
+
+  val stated : t -> Ops.prec option
+  (** The precision something states for this cell: its specified precision, else what its operands
+      state ([make]'s [stated]). [None] for a free cell: a top-down cell nothing specified, or a
+      bottom-up cell none of whose operands, transitively, states a precision. *)
+
   val storage : t -> Ops.prec Lazy.t
   val update_prec : ?only_if:(Ops.prec -> bool) -> name:(unit -> string) -> t -> Ops.prec -> unit
 
@@ -130,6 +139,12 @@ module Prec_cell : sig
       (gh-ocannl-1967: an initializer's node following its parameter). The cell keeps the precision
       it would have settled into without the link, which is what {!bottom_up} then answers, so the
       link closes no cycle through a bottom-up reader. *)
+
+  val follow_if_free : name:(unit -> string) -> t -> Ops.prec Lazy.t -> unit
+  (** [follow] of a float cell by a consumer's precision, which the cell takes only if it is free
+      ({!stated} is [None]) and the consumer's precision is a float, both decided when the cell
+      settles (gh-ocannl-2028); otherwise the link promotes by the cell's own value, changing
+      nothing. *)
 
   val bottom_up : t -> Ops.prec
   (** The precision a consumer promoting from its operands reads: the storage precision, except for
@@ -160,11 +175,15 @@ end = struct
     mutable settling : bool;
     mutable unlinked : Ops.prec Lazy.t option;
         (** Set by [follow]: the precision the cell held before its first such link. *)
+    stated_by_operands : Ops.prec option Lazy.t option;
+        (** [make]'s [stated]: memoized when first forced, which happens only as a node in its cone
+            settles. *)
   }
 
-  let sexp_of_t { value; storage = _; settling = _; unlinked = _ } = sexp_of_delayed_prec value
+  let sexp_of_t { value; storage = _; settling = _; unlinked = _; stated_by_operands = _ } =
+    sexp_of_delayed_prec value
 
-  let make value =
+  let make ?stated value =
     let rec cell =
       {
         value;
@@ -174,12 +193,18 @@ end = struct
              match cell.value with Default prec | Specified prec | Inferred (lazy prec) -> prec);
         settling = false;
         unlinked = None;
+        stated_by_operands = stated;
       }
     in
     cell
 
-  let get { value; storage = _; settling = _; unlinked = _ } = value
-  let storage { value = _; storage; settling = _; unlinked = _ } = storage
+  let get { value; storage = _; settling = _; unlinked = _; stated_by_operands = _ } = value
+  let storage { value = _; storage; settling = _; unlinked = _; stated_by_operands = _ } = storage
+
+  let stated cell =
+    match cell.value with
+    | Specified prec -> Some prec
+    | Default _ | Inferred _ -> Option.bind cell.stated_by_operands ~f:Lazy.force
 
   let set cell value =
     !prec_write_hook ();
@@ -271,6 +296,15 @@ end = struct
         Some
           (match before with Default prec | Specified prec -> lazy prec | Inferred prec -> prec)
 
+  let follow_if_free ~name cell link =
+    let own =
+      match cell.value with Default prec | Specified prec -> lazy prec | Inferred prec -> prec
+    in
+    follow ~only_if:Ops.is_float ~name cell
+      (lazy
+        (let target = Lazy.force link in
+         if Ops.is_float target && Option.is_none (stated cell) then target else Lazy.force own))
+
   let bottom_up cell =
     match (cell.value, cell.unlinked) with
     | (Default _ | Inferred _), Some unlinked ->
@@ -286,7 +320,7 @@ end = struct
     snap_unlinked : Ops.prec Lazy.t option;
   }
 
-  let snapshot ({ value; storage = _; settling; unlinked } as cell) =
+  let snapshot ({ value; storage = _; settling; unlinked; stated_by_operands = _ } as cell) =
     { snap_cell = cell; snap_value = value; snap_settling = settling; snap_unlinked = unlinked }
 
   let restore { snap_cell; snap_value; snap_settling = _; snap_unlinked } =
@@ -717,7 +751,13 @@ let follow_prec ?only_if tn delayed_prec =
     ~name:(fun () -> (debug_name tn [@message_only "names the node in a precision conflict"]))
     tn.delayed_prec_unsafe delayed_prec
 
+let follow_prec_if_free tn delayed_prec =
+  Prec_cell.follow_if_free
+    ~name:(fun () -> (debug_name tn [@message_only "names the node in a precision conflict"]))
+    tn.delayed_prec_unsafe delayed_prec
+
 let bottom_up_prec tn = Prec_cell.bottom_up tn.delayed_prec_unsafe
+let stated_prec tn = Prec_cell.stated tn.delayed_prec_unsafe
 
 let get_specified_prec tn =
   match Prec_cell.get tn.delayed_prec_unsafe with Specified prec -> Some prec | _ -> None
@@ -1323,7 +1363,7 @@ let validate_padded_numel_contract ~id ~label (dims : int array) =
              "Tensor node %{get_debug_name ~id ~label ()}: padded element count %{n#Int} exceeds \
               the int32 index range; set large_models=true to use 64-bit indices"]
 
-let create ?namespace delayed_prec ~id ~label ~unpadded_dims ~padding () =
+let create ?namespace ?stated delayed_prec ~id ~label ~unpadded_dims ~padding () =
   let namespace =
     match namespace with
     | Some ns ->
@@ -1344,7 +1384,7 @@ let create ?namespace delayed_prec ~id ~label ~unpadded_dims ~padding () =
        validate_padded_numel_contract ~id ~label padded;
        padded)
   in
-  let prec_cell = Prec_cell.make delayed_prec in
+  let prec_cell = Prec_cell.make ?stated delayed_prec in
   let rec size_in_bytes =
     lazy
       (let n = num_elems tn in
