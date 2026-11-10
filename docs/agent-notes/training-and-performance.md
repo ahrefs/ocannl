@@ -46,8 +46,14 @@ files.
   construct the forward's consumer first if a reader is to go without it. A materialized literal
   the routine reads has lost the fetch (lowering-and-analysis.md) and a write would stay in its
   buffer, yet it is refused, hoisting reading the registered values; a test exercising host writes
-  needs a data-backed leaf at any size (`recompute_on_read`). `copy` is not refused, and the
-  autotuner's timing restore reaches no such node: a hosted constant has no written code and a view
+  needs a data-backed leaf at any size (`recompute_on_read`). A `copy` into the node is refused
+  unless it brings the fetch's own value (gh-ocannl-2022, `Context.check_copy_lasts`), decided by
+  provenance, not lineage ancestry: the source holds no buffer of it (the round trip reads the
+  literal or recomputes it), or the source ledger's `current_writers` names, for that buffer, the
+  routine of the source's own lineage carrying the fetch. A source compiled with the forward but not
+  yet run still holds its seed. A copy that moves nothing (one buffer), a `host_constant` literal
+  (its link-time upload is no run) and a merge fill are let through. The autotuner's timing restore
+  reaches no such node: a hosted constant has no written code and a view
   of a fetched parent no assignment (`timing_state_nodes`).
 - A computed node is the same trap by another route (gh-ocannl-1998): `sgd_update` refuses a stepped
   node, or a view of one, that the loss's forward recomputes (`Assignments.forward_recomputed`). It

@@ -578,6 +578,15 @@ val copy : ?into_merge_buffer:Ir.Backend_intf.merge_buffer_use -> src:t -> dst:t
     device buffers fall back to the host round-trip as well, serving host-init literals and
     recomputable virtual nodes ({!to_host}).
 
+    A copy into a node that a routine of [dst]'s lineage fetch-defines (a [Tensor.term_init] or
+    literal with at most [limit_constant_fill_size] values, a range, an embedded symbol: every run
+    of that routine fetches it again) raises [Utils.User_error] before anything of the copy happens,
+    naming the node and the routine, unless it brings the fetch's own value (gh-ocannl-2022): [src]
+    holds no buffer of the node (the round trip reads its literal or recomputes it), or [src]'s
+    buffer was last written by a run of the routine of [src]'s own lineage carrying the fetch -- not
+    a seed, a host write or another copy. A copy between contexts binding the same buffer, a copy of
+    a [host_constant] literal and a merge-buffer fill are never refused this way.
+
     A copy into a buffer [dst] already holds, and a merge-buffer fill, allocate nothing in [dst], so
     the result is the same release unit as [dst] (as for an upload into an existing buffer):
     releasing either releases both, and repeated copies do not deepen the lifecycle chain
