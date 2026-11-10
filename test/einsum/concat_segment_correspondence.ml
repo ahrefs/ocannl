@@ -11,6 +11,11 @@
    Block lowering". Full reorders ([a^b^c => c^b^a]) computed already, and still do; the
    equal-length ones pin that the components are matched by label, never by position.
 
+   Listing one component twice in a concatenation, [a => a^a], has no such reading: a segment is one
+   range of positions with one loop index, so lowering read or wrote one copy only, at the last
+   copy's offset -- silently: [a => a^a] gave [0 0 1 2]. It is refused from the spec, by every entry
+   point, while a tensor passed twice under distinct components still concatenates.
+
    Every value is a small integer copied, multiplied or left at zero, so equality is exact. These
    are claims about projection derivation and lowering, so every context is [Context.cpu ()]. *)
 
@@ -26,6 +31,7 @@ let leaf ?(grad_spec = Tensor.Prohibit_grad) ~o ~base () =
     ~batch_dims:[] ~input_dims:[] ~output_dims:o ()
 
 let vec ?(base = 1) n = leaf ~o:[ n ] ~base ()
+let open_leaf () = NTDSL.term ~fetch_op:(Constant 2.) ()
 
 let values t =
   Train.set_materialized t.Tensor.value;
@@ -156,6 +162,70 @@ let gradients () =
     ~make:(einsum1 "a^b^c => c^a") ~want_forward:[| 4.; 5.; 6.; 1.; 2. |]
     ~want_grad:[| 400.; 500.; 0.; 100.; 200.; 300. |]
 
+(* A refusal at construction, a [Row.Shape_error] with [needle] in its message: a value, or any
+   other exception (the lowering errors above among them), fails the claim. *)
+let refused label make =
+  case label (fun () ->
+      Tensor.unsafe_reinitialize ();
+      match make () with
+      | (_ : float array) -> pf "%s: refused" label false
+      | exception Row.Shape_error (msg, _) ->
+          Stdio.printf "%s: %s\n" label msg;
+          pf "%s: the refusal says why" label
+            (String.is_substring msg ~substring:"appears twice in the concatenated axis")
+      | exception e ->
+          Stdio.printf "%s: raised %s\n" label (Exn.to_string e);
+          pf "%s: refused by the spec check" label false)
+
+let doubling () =
+  refused "a component doubled in the result, a => a^a" (fun () ->
+      values (NTDSL.einsum1 "a => a^a" (vec 2) ()));
+  refused "a component doubled around another, a^b => a^b^a" (fun () ->
+      values (NTDSL.einsum1 ~capture_dims:[ capture "a" 2 ] "a^b => a^b^a" (vec 5) ()));
+  refused "a component doubled in the operand, a^b^a => a^b" (fun () ->
+      values (NTDSL.einsum1 ~capture_dims:[ capture "a" 2 ] "a^b^a => a^b" (vec 6) ()));
+  refused "a doubled component over an open operand" (fun () ->
+      values (NTDSL.einsum1 "a => a^a" (open_leaf ()) ()));
+  refused "a concatenation filling one component twice, a; a => a^a" (fun () ->
+      values (NTDSL.concat "a; a => a^a" [| vec 2; vec ~base:10 2 |] ()));
+  refused "a concatenation repeating its first segment, a; b => a^b^a" (fun () ->
+      values (NTDSL.concat "a; b => a^b^a" [| vec 2; vec ~base:10 3 |] ()));
+  refused "through %op" (fun () ->
+      let x = vec 2 in
+      let%op t = x ++ "a => a^a" in
+      values t);
+  refused "through %cd" (fun () ->
+      let x = vec 2 and tgt = vec ~base:50 4 in
+      let comp = [%cd tgt =: id x ~logic:"a => a^a"] in
+      ignore (comp : Ir.Assignments.comp);
+      [||])
+
+let doubling_neighbours () =
+  computes "a tensor passed twice under distinct components, (x, x) ++^ \"a; b => a^b\""
+    (fun () ->
+      let x = vec 2 in
+      values (NTDSL.concat "a; b => a^b" [| x; x |] ()))
+    ~want:[| 1.; 2.; 1.; 2. |];
+  computes "a repeated integer component, 2^a^2 => a"
+    (fun () -> values (NTDSL.einsum1 "2^a^2 => a" (vec 5) ()))
+    ~want:[| 3. |];
+  (* No reinitialization between the refusal and the computation, which uses an operand that
+     predates it. *)
+  case "a refused doubling leaves inference usable" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let x = vec 2 in
+      p "the doubling is refused"
+        (match NTDSL.einsum1 "a => a^a" x () with
+        | (_ : Tensor.t) -> false
+        | exception Row.Shape_error _ -> true);
+      let label = "the same operand, a valid operation" in
+      pf_close "%s" label
+        (values (NTDSL.einsum1 ~capture_dims:[ capture "b" 1 ] "a => a^b" x ()))
+        [| 1.; 2.; 0. |]
+        ~tol:(fun _ -> 0.))
+
 let () =
   forward ();
-  gradients ()
+  gradients ();
+  doubling ();
+  doubling_neighbours ()

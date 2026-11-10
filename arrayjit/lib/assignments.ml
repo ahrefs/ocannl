@@ -878,6 +878,14 @@ let%track4_sexp to_low_level ?(static_indices = []) code =
                       (List.exists comp ~f:(fun (_, s') -> Indexing.equal_symbol s s'))
                       i)
               in
+              (* A segment has one loop symbol, so a concatenation listing it twice would read or
+                 write one of its copies only, at the last copy's offset. Shape refuses the spec;
+                 this refuses any other route to such an index. *)
+              if List.contains_dup syms ~compare:Indexing.compare_symbol then
+                raise
+                @@ Utils.User_error
+                     ("Concat index lists a segment twice during " ^ role
+                    ^ " lowering: a segment has one loop symbol, so only one copy would be used");
               (* Find the active segment (the one this block descended into) and resolve to its loop
                  symbol, shifted by the segment's offset within the concatenated axis. *)
               let active =

@@ -19,3 +19,23 @@ the gradient of a partial write, a^c => a^b^c: the forward: true
 the gradient of a partial write, a^c => a^b^c: the operand's gradient: true
 the gradient of a drop and a reorder, a^b^c => c^a: the forward: true
 the gradient of a drop and a reorder, a^b^c => c^a: the operand's gradient: true
+a component doubled in the result, a => a^a: einsum spec "a => a^a": the component a appears twice in the concatenated axis a^a, but a segment is one range of positions with one index, so only one of its copies would be read or written. To repeat a tensor along an axis, pass it once per copy under distinct components: (x, x) ++^ "a; b => a^b"
+a component doubled in the result, a => a^a: the refusal says why: true
+a component doubled around another, a^b => a^b^a: einsum spec "a^b => a^b^a": the component a appears twice in the concatenated axis a^b^a, but a segment is one range of positions with one index, so only one of its copies would be read or written. To repeat a tensor along an axis, pass it once per copy under distinct components: (x, x) ++^ "a; b => a^b"
+a component doubled around another, a^b => a^b^a: the refusal says why: true
+a component doubled in the operand, a^b^a => a^b: einsum spec "a^b^a => a^b": the component a appears twice in the concatenated axis a^b^a, but a segment is one range of positions with one index, so only one of its copies would be read or written. To repeat a tensor along an axis, pass it once per copy under distinct components: (x, x) ++^ "a; b => a^b"
+a component doubled in the operand, a^b^a => a^b: the refusal says why: true
+a doubled component over an open operand: einsum spec "a => a^a": the component a appears twice in the concatenated axis a^a, but a segment is one range of positions with one index, so only one of its copies would be read or written. To repeat a tensor along an axis, pass it once per copy under distinct components: (x, x) ++^ "a; b => a^b"
+a doubled component over an open operand: the refusal says why: true
+a concatenation filling one component twice, a; a => a^a: einsum spec "a; a => a^a": the component a appears twice in the concatenated axis a^a, but a segment is one range of positions with one index, so only one of its copies would be read or written. To repeat a tensor along an axis, pass it once per copy under distinct components: (x, x) ++^ "a; b => a^b"
+a concatenation filling one component twice, a; a => a^a: the refusal says why: true
+a concatenation repeating its first segment, a; b => a^b^a: einsum spec "a; b => a^b^a": the component a appears twice in the concatenated axis a^b^a, but a segment is one range of positions with one index, so only one of its copies would be read or written. To repeat a tensor along an axis, pass it once per copy under distinct components: (x, x) ++^ "a; b => a^b"
+a concatenation repeating its first segment, a; b => a^b^a: the refusal says why: true
+through %op: einsum spec "a => a ^ a": the component a appears twice in the concatenated axis a^a, but a segment is one range of positions with one index, so only one of its copies would be read or written. To repeat a tensor along an axis, pass it once per copy under distinct components: (x, x) ++^ "a; b => a^b"
+through %op: the refusal says why: true
+through %cd: einsum spec "a => a^a": the component a appears twice in the concatenated axis a^a, but a segment is one range of positions with one index, so only one of its copies would be read or written. To repeat a tensor along an axis, pass it once per copy under distinct components: (x, x) ++^ "a; b => a^b"
+through %cd: the refusal says why: true
+a tensor passed twice under distinct components, (x, x) ++^ "a; b => a^b": true
+a repeated integer component, 2^a^2 => a: true
+the doubling is refused: true
+the same operand, a valid operation: true
