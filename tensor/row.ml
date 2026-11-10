@@ -3386,6 +3386,68 @@ let rank_refutes_glb v ({ beg_dims; dims; bcast; prov = _ } : t) =
   | Row_var w -> rank_edge_refuted v w (List.length beg_dims + List.length dims)
   | Broadcastable -> false
 
+let global_template_cache : (row_var * int * int, row_var) Map.Poly.t ref = ref Map.Poly.empty
+
+(* {2 Checkpoint capture (gh-ocannl-903)}
+
+   Every module-level binding above whose writes count as session mutations is a persistent value,
+   so a checkpoint captures it as a pointer and a rewind puts the pointer back. [capture_globals]
+   must capture each such binding (test/operations/mutation_serial_scan holds it to that, unless the
+   binding is [exempt] or [kept]); [restore_globals] destructures the record exhaustively, so a
+   captured field it forgets to restore is an unused-variable error. *)
+type globals = {
+  g_pending_roles : (Ir.Indexing.static_symbol * [ `Extent | `Slice ]) list;
+  g_resolve_at_use_dim : Set.M(Dim_var).t;
+  g_safe_to_guess : Set.M(Row_var).t;
+  g_used_in_spec_or_compose : Set.M(Row_var).t;
+  g_used_in_pointwise : Set.M(Row_var).t;
+  g_concat_component_vars : Set.M(Dim_var).t;
+  g_resolve_at_use : Set.M(Row_var).t;
+  g_rank_edges : (row_var * int) list Map.M(Row_var).t;
+  g_rank_potentials : int Map.M(Row_var).t;
+  g_template_cache : (row_var * int * int, row_var) Map.Poly.t;
+}
+
+let capture_globals () =
+  {
+    g_pending_roles = !pending_roles;
+    g_resolve_at_use_dim = !resolve_at_use_dim;
+    g_safe_to_guess = !safe_to_guess;
+    g_used_in_spec_or_compose = !used_in_spec_or_compose;
+    g_used_in_pointwise = !used_in_pointwise;
+    g_concat_component_vars = !concat_component_vars;
+    g_resolve_at_use = !resolve_at_use;
+    g_rank_edges = !global_rank_edges;
+    g_rank_potentials = !global_rank_potentials;
+    g_template_cache = !global_template_cache;
+  }
+
+let restore_globals
+    {
+      g_pending_roles;
+      g_resolve_at_use_dim;
+      g_safe_to_guess;
+      g_used_in_spec_or_compose;
+      g_used_in_pointwise;
+      g_concat_component_vars;
+      g_resolve_at_use;
+      g_rank_edges;
+      g_rank_potentials;
+      g_template_cache;
+    } =
+  pending_roles := g_pending_roles;
+  resolve_at_use_dim := g_resolve_at_use_dim;
+  safe_to_guess := g_safe_to_guess;
+  used_in_spec_or_compose := g_used_in_spec_or_compose;
+  used_in_pointwise := g_used_in_pointwise;
+  concat_component_vars := g_concat_component_vars;
+  resolve_at_use := g_resolve_at_use;
+  global_rank_edges := g_rank_edges;
+  global_rank_potentials := g_rank_potentials;
+  global_template_cache := g_template_cache
+[@@mutation_serial.boundary
+  "part of a rewind: puts back the solver's inference sets as a checkpoint captured them"]
+
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
   let solve (ineqs, env) : constraint_ -> constraint_ list * _ = function
@@ -3646,43 +3708,41 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                    residual reproduces itself verbatim). A solution exists at every overlap k in
                    0..s whose overlap equations begS[k+i] = dimsR[i] (i < s - k) hold: k = 0 is the
                    empty close (rank s), k = s the always-satisfiable principal family v2 =
-                   begS.<m>, v = <m>.dimsR. Stage 6 commits the least-material disjunct not
-                   definitely refuted: the smallest k whose overlap pairs no two rigid unequal dims
-                   (an unconditional empty close would reject satisfiable stores like [3].<v> =
-                   <v2>.[5], whose least solution is v2 = [3], v = [5]). Binding [v2] and re-solving
-                   the residual eagerly derives the overlap equations and [v]'s value through the
-                   closed-row arm in the same pass. *)
+                   begS.<m>, v = <m>.dimsR. Stage 6 commits the least-material disjunct the solver
+                   does not refute: the smallest k whose commit raises nothing (an unconditional
+                   empty close would reject satisfiable stores like [3].<v> = <v2>.[5], whose least
+                   solution is v2 = [3], v = [5]). Binding [v2] and re-solving the residual derives
+                   the overlap equations and [v]'s value through the closed-row arm in the same
+                   pass, so the commit itself is the test: the overlap equations hold or fail
+                   together, as [unify_dim] decides them, with [v]'s and [v2]'s bounds -- not pair
+                   by pair, which missed two occurrences of one variable forced apart, as in [x;
+                   x].<v> = <v2>.[3; 5] at k = 0 (gh-ocannl-2037). A refused trial leaves nothing
+                   behind: its environment is dropped and the module-level inference state is put
+                   back ([restore_globals]; fresh ids and the mutation serial only move forward).
+                   "Not refused" is not "satisfiable": a constraint the commit defers can still
+                   fail. *)
                 let v2 = match r2.bcast with Row_var v2 -> v2 | Broadcastable -> assert false in
                 let begS = List.drop beg_dims1 beg_dims_l in
-                let definitely_conflicting d1 d2 =
-                  (* Equation-level, so as strict as [unify_dim]: a 1 is an ordinary size here, a
-                     different basis refuses, and flank peeling may have solved a variable since
-                     [r1] and [r2] were substituted. *)
-                  match (subst_dim env d1, subst_dim env d2) with
-                  | Dim { d = a; basis = b1; _ }, Dim { d = b; basis = b2; _ } ->
-                      a <> b || not (String.equal b1 b2)
-                  | Sym { sym = s1; sym_basis = b1; _ }, Sym { sym = s2; sym_basis = b2; _ } ->
-                      not (Ir.Indexing.equal_static_symbol s1 s2 && String.equal b1 b2)
-                  | Dim _, Sym _ | Sym _, Dim _ -> true
-                  | _ -> false
+                let commit k =
+                  let value : row =
+                    if k = s then
+                      { beg_dims = begS; dims = []; bcast = Row_var (get_row_var ()); prov }
+                    else { beg_dims = []; dims = List.take begS k; bcast = Broadcastable; prov }
+                  in
+                  let binding = Row_eq { r1 = row_of_var v2 prov; r2 = value; origin } in
+                  solve (solve ([], env) binding) residual
                 in
-                let rec least_k k =
-                  if k >= s then s
-                  else if
-                    List.exists2_exn (List.drop begS k)
-                      (List.take r2.dims (s - k))
-                      ~f:definitely_conflicting
-                  then least_k (k + 1)
-                  else k
+                let rec first_fit k =
+                  if k >= s then commit s
+                  else
+                    let saved = capture_globals () in
+                    match commit k with
+                    | result -> result
+                    | exception Shape_error _ ->
+                        restore_globals saved;
+                        first_fit (k + 1)
                 in
-                let k = least_k 0 in
-                let value : row =
-                  if k = s then
-                    { beg_dims = begS; dims = []; bcast = Row_var (get_row_var ()); prov }
-                  else { beg_dims = []; dims = List.take begS k; bcast = Broadcastable; prov }
-                in
-                let binding = Row_eq { r1 = row_of_var v2 prov; r2 = value; origin } in
-                solve (solve ([], env) binding) residual
+                first_fit 0
               else ([ residual ], env)
           in
           List.fold ~init:(unsolved, env) ~f:solve !ineqs
@@ -4133,8 +4193,6 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
       raise
       @@ Shape_error ("dimension comparison for axis: mismatch", [ Dim_mismatch [ res; opnd ] ])
 
-let global_template_cache : (row_var * int * int, row_var) Map.Poly.t ref = ref Map.Poly.empty
-
 let retire_closed_variables () =
   if !uid >= reserved_uid_base then retired_reserved_floor := !uid
   else (
@@ -4165,66 +4223,6 @@ let solver_census () =
     ("global_rank_potentials", Map.length !global_rank_potentials);
     ("global_template_cache", Map.length !global_template_cache);
   ]
-
-(* {2 Checkpoint capture (gh-ocannl-903)}
-
-   Every module-level binding above whose writes count as session mutations is a persistent value,
-   so a checkpoint captures it as a pointer and a rewind puts the pointer back. [capture_globals]
-   must capture each such binding (test/operations/mutation_serial_scan holds it to that, unless the
-   binding is [exempt] or [kept]); [restore_globals] destructures the record exhaustively, so a
-   captured field it forgets to restore is an unused-variable error. *)
-type globals = {
-  g_pending_roles : (Ir.Indexing.static_symbol * [ `Extent | `Slice ]) list;
-  g_resolve_at_use_dim : Set.M(Dim_var).t;
-  g_safe_to_guess : Set.M(Row_var).t;
-  g_used_in_spec_or_compose : Set.M(Row_var).t;
-  g_used_in_pointwise : Set.M(Row_var).t;
-  g_concat_component_vars : Set.M(Dim_var).t;
-  g_resolve_at_use : Set.M(Row_var).t;
-  g_rank_edges : (row_var * int) list Map.M(Row_var).t;
-  g_rank_potentials : int Map.M(Row_var).t;
-  g_template_cache : (row_var * int * int, row_var) Map.Poly.t;
-}
-
-let capture_globals () =
-  {
-    g_pending_roles = !pending_roles;
-    g_resolve_at_use_dim = !resolve_at_use_dim;
-    g_safe_to_guess = !safe_to_guess;
-    g_used_in_spec_or_compose = !used_in_spec_or_compose;
-    g_used_in_pointwise = !used_in_pointwise;
-    g_concat_component_vars = !concat_component_vars;
-    g_resolve_at_use = !resolve_at_use;
-    g_rank_edges = !global_rank_edges;
-    g_rank_potentials = !global_rank_potentials;
-    g_template_cache = !global_template_cache;
-  }
-
-let restore_globals
-    {
-      g_pending_roles;
-      g_resolve_at_use_dim;
-      g_safe_to_guess;
-      g_used_in_spec_or_compose;
-      g_used_in_pointwise;
-      g_concat_component_vars;
-      g_resolve_at_use;
-      g_rank_edges;
-      g_rank_potentials;
-      g_template_cache;
-    } =
-  pending_roles := g_pending_roles;
-  resolve_at_use_dim := g_resolve_at_use_dim;
-  safe_to_guess := g_safe_to_guess;
-  used_in_spec_or_compose := g_used_in_spec_or_compose;
-  used_in_pointwise := g_used_in_pointwise;
-  concat_component_vars := g_concat_component_vars;
-  resolve_at_use := g_resolve_at_use;
-  global_rank_edges := g_rank_edges;
-  global_rank_potentials := g_rank_potentials;
-  global_template_cache := g_template_cache
-[@@mutation_serial.boundary
-  "part of a rewind: puts back the solver's inference sets as a checkpoint captured them"]
 
 (* The components of two captures that differ (physically: each is a persistent value). *)
 let globals_differences
