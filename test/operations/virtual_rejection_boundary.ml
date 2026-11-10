@@ -1664,6 +1664,122 @@ let row_constexpr_cap_exempt () =
         ~expected:(Array.init n ~f:(fun i -> 8. +. Float.of_int i))
         ~verdict:Accepted)
 
+(* gh-ocannl-2077: a guard over a scope's read -- an acceptance row, both sides of where the guard
+   is carried into a scope. [b] is zeroed, then written as [b[i] = c[i] + 1] for [i < 3] only,
+   though it spans [extent]; [c[i] = sum_k x[i, k, 0]] is a virtual reduction, so [b]'s template
+   holds [c]'s scope, which cannot collapse. Inlining [b] at [out[j] = b[j] + 7 + 300 j] guards the
+   replay with [j < 3], and the replay reads [x] at row [j] inside that scope. Codegen emits a
+   scope's body ahead of the statement, outside the [?:], so before the fix the body read [x] past
+   its end where the guard fails -- megabytes past at a wide [x], a SIGBUS on cc at [-O0], volatile
+   reads on Metal, the values right throughout. The replay now carries the guard into the body
+   ([Low_level.guard_hoisted]): [b] stays inlined, and the strict interpreter, which probes a
+   discarded arm's scopes, holds what the optimizer left to [x]'s bounds. [`Constant] reads row 0
+   and adds [10 i], so no read can leave [x] and the body keeps no guard of its own. [`Init] starts
+   the reduction from a read of [x] rather than a zero: that initializer goes under an [If], its
+   value untouched, where the update takes a [Where]. *)
+let row_guarded_scope_read ~read () =
+  let stride = 4 and extent = 8 in
+  let tag =
+    match read with
+    | `Row -> "gsr_row"
+    | `Constant -> "gsr_const"
+    | `Init -> "gsr_init"
+    | `Init_chain -> "gsr_chain"
+  in
+  let e = mk ~dims:[| extent |] (tag ^ "_e") in
+  let x = mk ~dims:[| 3; 2; stride |] (tag ^ "_x") and cc = mk ~dims:[| 3 |] (tag ^ "_c") in
+  let b = mk ~dims:[| extent |] (tag ^ "_b") and out = mk ~dims:[| extent |] (tag ^ "_out") in
+  materialize x;
+  materialize out;
+  let i = sym () and k = sym () and i2 = sym () and j = sym () in
+  let reduction =
+    match read with
+    | `Row ->
+        seq (zero cc)
+          (loop_n i 3
+             (loop_n k 2
+                (set cc
+                   [| iter i |]
+                   (add (get cc [| iter i |]) (get x [| iter i; iter k; fixed 0 |])))))
+    | `Constant ->
+        seq (zero cc)
+          (loop_n i 3
+             (loop_n k 2
+                (set cc
+                   [| iter i |]
+                   (add
+                      (get cc [| iter i |])
+                      (add (get x [| fixed 0; iter k; fixed 0 |]) (mul (c 10.) (embed i)))))))
+    | `Init | `Init_chain ->
+        loop_n i 3
+          (seq
+             (set cc [| iter i |] (get x [| iter i; fixed 0; fixed 0 |]))
+             (set cc
+                [| iter i |]
+                (add (get cc [| iter i |]) (get x [| iter i; fixed 1; fixed 0 |]))))
+  in
+  let consumers =
+    match read with
+    | `Init_chain ->
+        let j0 = sym () in
+        [
+          loop_n j0 extent (set e [| iter j0 |] (mul (c 2.) (get b [| iter j0 |])));
+          loop_n j extent
+            (set out [| iter j |] (add (get e [| iter j |]) (add (c 7.) (mul (c 300.) (embed j)))));
+        ]
+    | `Row | `Constant | `Init ->
+        [
+          loop_n j extent
+            (set out [| iter j |] (add (get b [| iter j |]) (add (c 7.) (mul (c 300.) (embed j)))));
+        ]
+  in
+  let llc =
+    List.reduce_exn ~f:seq
+      ([ reduction; zero b; loop_n i2 3 (set b [| iter i2 |] (add (get cc [| iter i2 |]) (c 1.))) ]
+      @ consumers)
+  in
+  let x_cells = Array.init (Tn.num_elems x) ~f:(fun n -> Float.of_int (1 + n)) in
+  let at i k = x_cells.(((i * 2) + k) * stride) in
+  let c_of i =
+    match read with
+    | `Row | `Init | `Init_chain -> at i 0 +. at i 1
+    | `Constant -> at 0 0 +. at 0 1 +. (20. *. Float.of_int i)
+  in
+  let expected =
+    Array.init extent ~f:(fun j ->
+        let b_j = if j < 3 then c_of j +. 1. else 0. in
+        (match read with `Init_chain -> 2. *. b_j | `Row | `Constant | `Init -> b_j)
+        +. 7.
+        +. (300. *. Float.of_int j))
+  in
+  let cand = match read with `Init_chain -> e | `Row | `Constant | `Init -> b in
+  row ~label:tag ~llc ~cand ~out ~seed:[ (x, x_cells) ] ~expected ~verdict:Accepted;
+  let o = optimize ~name:(tag ^ "_strict") llc in
+  let ifs, wheres, _ = census o.LL.llc in
+  (match read with
+  | `Row ->
+      p (tag ^ ": the guard reaches the reduction's update, two Wheres") (wheres = 2 && ifs = 0)
+  | `Constant -> p (tag ^ ": the replay alone is guarded, one Where") (wheres = 1 && ifs = 0)
+  | `Init ->
+      (* The initializer goes under an [If], its value untouched, so it renders as its source store
+         would: a [Where] around it would hide a narrowing read from the init's precision rule. *)
+      p (tag ^ ": the update takes a Where, the initializer an If") (wheres = 2 && ifs = 1)
+  | `Init_chain ->
+      (* The guarded scope is captured in [e]'s template and replayed at [out]: an [If] inside a
+         scope body assigns a local alone, so the template keeps it (Codex review round 2). *)
+      p
+        (tag ^ ": b stays virtual inside e's template, its initializer under an If")
+        (known_virtual o b && ifs = 1));
+  p
+    (tag ^ ": the strict interpreter evaluates what the optimizer left without a fault")
+    (match
+       interpret ~strict:true (interp_memory [ (x, x_cells); (out, blank extent) ]) o.LL.llc
+     with
+    | () -> true
+    | exception Interp_fault msg ->
+        Stdio.eprintf "%s: strict fault: %s (not part of the golden)\n%!" tag msg;
+        false)
+
 (* gh-ocannl-483 made this arm live: the algebraic rewrite tier runs on the raw lowered code BEFORE
    [Low_level.optimize], and [Online_softmax.hoist] declares its cached probability cell as a
    [Declare_local] beside the statement that consumes it. What the walk refuses is the CONSTRUCTOR,
@@ -1825,6 +1941,10 @@ let () =
   case "row_trailing_sub_axis_write" row_trailing_sub_axis_write;
   case "row_partial_frame" row_partial_frame;
   case "row_trailing_sub_axis_read" row_trailing_sub_axis_read;
+  case "row_guarded_scope_read ~read:`Row" (row_guarded_scope_read ~read:`Row);
+  case "row_guarded_scope_read ~read:`Constant" (row_guarded_scope_read ~read:`Constant);
+  case "row_guarded_scope_read ~read:`Init" (row_guarded_scope_read ~read:`Init);
+  case "row_guarded_scope_read ~read:`Init_chain" (row_guarded_scope_read ~read:`Init_chain);
   case "row_hoisted_local" row_hoisted_local;
   case "row_scan_recurrence" row_scan_recurrence;
   case "row_constexpr_cap_exempt" row_constexpr_cap_exempt;

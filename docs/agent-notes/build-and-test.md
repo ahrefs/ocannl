@@ -2855,7 +2855,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   microseconds (gh-ocannl-1964). It raises `Interp_fault` on what a compiled run would swallow: an
   access outside the node, a local read before any assignment, an unwritten cell of a node with no
   entries. Values are f64, so a program keeps them exact in its storage precision. It runs `Where`
-  lazily, so a scope in a discarded arm does not run here though codegen hoists it. It is a test
+  lazily, and a projection evaluates only the operand codegen renders. Codegen hoists a scope's body
+  ahead of the statement, so a scope in a discarded arm runs on a backend though the lazy run skips
+  it: `~strict:true` probes those scopes' addresses (values discarded, no node written, locals
+  restored) and faults on one outside its node (gh-ocannl-2077; `virtual_inliner_oracle`'s
+  `strict_probe_controls` pin the probe's boundary, and both its arms evaluate under it). It does not model `pp_local_defs`'
+  emission order or a blending backend's eager arms. It is a test
   instrument: a test leaning on it pins it to a backend and to a reference outside it, as
   `virtual_inliner_oracle`'s Tier B and replay do.
 - An executed reference must DISCRIMINATE, not merely run: give every producer a value that varies

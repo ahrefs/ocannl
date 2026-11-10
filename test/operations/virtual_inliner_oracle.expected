@@ -30,4 +30,12 @@ comps=1 reduce undecided: some program inlined under a guard: true
 every program kept to the semantics: true
 self-control: a dropped zero is seen: true
 self-control: swapped components are seen: true
+strict probe: scope reading past s in a discarded arm: lazy passes, strict faults on the hoisted scope: true
+strict probe: plain read past s in a discarded arm: lazy passes, strict passes: true
+strict probe: scope guarded inside its own body: lazy passes, strict passes: true
+strict probe: scope in an If body never entered past s: lazy passes, strict passes: true
+strict probe: scope in a loop that never runs: lazy passes, strict passes: true
+strict probe: scope in the discarded arm of an If condition: lazy passes, strict faults on the hoisted scope: true
+strict probe: scope in a projection's unrendered operand: lazy passes, strict passes: true
+strict probe: plain read past s in a projection's unrendered operand: lazy passes, strict passes: true
 a compiled program computes the interpreter's values, in both arms: true
