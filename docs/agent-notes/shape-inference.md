@@ -32,6 +32,18 @@ files.
   `test_default_init_std.ml`). Fixed-index output axes (`=> ...|0`, recognized via their
   `At_least_dim`) must not be equated by the stage-2 singleton-bounds heuristic, so that it
   broadcasts at stage-7.
+- The row singleton arm (`solve_row_ineq`: a recorded `r ⊑ o` re-processed from Stage2 on, each
+  row the other's only bound) is a GUESS, and load-bearing: it is how a parameter whose row only its
+  consumer bounds takes that consumer's row (without it `test_param_shape_error` and
+  `test_default_init_std` regress). A guess waits for the call's fixpoint (gh-ocannl-2039): the arm
+  holds the bare pair and `release_sole_bound` equates it there, unless one row's GLB is open in
+  the other (`<r>.[2] ⊑ o`, an infinite row). Made mid-pass, it refused stores a solution existed
+  for, by where a repeated pair sat in the list. A closing call's fixpoint is final: constraints fed
+  in a later stage-2 call find the pair already equated. Two things it still does not do: fire
+  independently of the repeat (it reads re-processed pairs only, so a repeat can change what closes,
+  never whether the store solves; `test_row_bound_emissions` counts it), and equating every
+  sole-bound pair at the fixpoint instead pre-empts the stage-3 closure guess
+  (`test_row_closure_guess`) and the rank refusals (`test_row_rank_cycle`).
 - Implicit (omitted) row specs are shared and safe-to-guess; an explicit `...` stays strict; row
   variables in kernel slots need the `|` prefix. Symbolic extents (`Row.Sym`, gh-490) are rigid:
   equal only to themselves, materialized at their declared maximum; `Total_elems` against them
