@@ -3008,6 +3008,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2056: a %cd inline declaration reading itself, { x } =: x + 1, compiles and executes.
+
+(test
+ (name cd_self_reference)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules cd_self_reference)
+ (libraries base stdio ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-1873: the debug_fill_fresh_outputs key, which test/config turns on for every test here.
 
 (test

@@ -1,0 +1,12 @@
+csr_ctr: label csr_ctr, 1 output(s)
+{ x } =: x + 1 labels x by its name alone: true
+{ x } =: x + 1 starts from the declared zero: true
+and a second run reads what the first wrote: true
+csr_acc: label csr_acc,csr_t, 1 output(s)
+{ y } =: y + t takes its label hint from t: true
+{ y } =: y + t computes t on the first run: true
+and y + t on the second: true
+csr_node: label csr_node, 1 output(s)
+{ z } =: z.value + 2 labels z by its name alone: true
+{ z } =: z.value + 2 starts from the declared zero: true
+and a second run reads what the first wrote: true

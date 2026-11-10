@@ -149,6 +149,27 @@ let make_vb ~loc ~name ~name_expr ~hint_label ~extra_args =
 let source_ordered_list ~loc ~prefix exprs =
   in_source_order ~loc ~prefix exprs ~f:(Ast_builder.Default.elist ~loc)
 
+(** Whether [expr] names the unqualified identifier [name]. A declared tensor is never its own label
+    hint (gh-ocannl-2056): the declaration is a non-recursive [let name = NTDSL.term ~label ()], so
+    a hint reading [name] -- [{ x } =: x + 1], [{ x } =: x.value + y] -- is unbound in it, or, where
+    an outer [name] is in scope, labels the new tensor after a tensor the assignment does not read.
+*)
+let mentions_ident name expr =
+  let found = ref false in
+  let finder =
+    object
+      inherit Ast_traverse.iter as super
+
+      method! expression e =
+        (match e.pexp_desc with
+        | Pexp_ident { txt = Lident n; _ } when String.equal n name -> found := true
+        | _ -> ());
+        super#expression e
+    end
+  in
+  finder#expression expr;
+  !found
+
 (** The expression argument is of type: [Assignments.t]. *)
 let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
   let setups = lhs :: rhses in
@@ -162,11 +183,13 @@ let assignment ~punned ~lhs ~rhses ?body_for_lhs ?raw_body () =
   in
   let loc = body.pexp_loc in
   let forward_args = List.filter_map setups ~f:(fun { fwd_code_or_noop; _ } -> fwd_code_or_noop) in
+  let rhses_hints = List.filter_map rhses ~f:(fun sup -> sup.pun_hint_tnode) in
   let vbs, body =
     match lhs.filler_typ with
     | No_grad_tensor_intro { name; name_expr; extra_args } -> (
         let good_hints, bad_hints =
-          List.partition_tf ~f:snd @@ List.filter_map rhses ~f:(fun sup -> sup.pun_hint_tnode)
+          List.partition_tf ~f:snd
+          @@ List.filter rhses_hints ~f:(fun (hint, _) -> not (mentions_ident name hint))
         in
         let hint_data = Option.first_some (List.hd good_hints) (List.hd bad_hints) in
         let hint_label = Option.map ~f:fst hint_data in

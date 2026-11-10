@@ -985,6 +985,7 @@ The syntax `%cd` translator needs to accomplish more than a context-free convers
 - For inline declarations of tensors, the translator needs to pick the right other tensor, if any, to enrich the label information of the created tensor. Mechanisms:
   - Prefer tensors from identifiers (or field dereferences), since labels of tensor expressions (creating new tensors) will typically be overly verbose.
   - Filter out escaping variables (identifiers coming from nested function parameters).
+  - Filter out the declared tensor itself (gh-ocannl-2056). `{ x } =: x + 1` reads the tensor it declares, which the declaration's non-recursive `let` has not bound yet where the label is computed, so `x` labels by its name alone; in `{ x } =: x + y`, `y` provides the label.
   - Filter out embedded tensor expressions. In principle we could use them -- we already introduce local bindings to avoid recomputing the expressions -- but this would need pulling out these bindings together with the inline definition and does not seem worth the benefit.
   - When one inline declaration uses another inline declaration on its right-hand-side, recall the other declaration's label-enriching-tensor and use it directly.
 - The argument slots in `Assignments.Accum_binop` and `Assignments.Accum_unop` can be either regular tensor nodes, or merge buffers of tensor nodes. The translator needs to determine that.
