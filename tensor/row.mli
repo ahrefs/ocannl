@@ -158,22 +158,6 @@ val with_transitive_row_emissions : (unit -> 'a) -> 'a
     entries bounded by it, as it did before gh-ocannl-1977: a test's reference, which stores the
     transitive closure of the row bounds. *)
 
-(** gh-ocannl-2024: how far a row's GLB travels along variable-to-variable bounds. [Two_hops], the
-    solver's behaviour: it does not travel by itself, and a solution with axes carries it two hops
-    (gh-ocannl-1977). [Use_site]: it is forwarded into rows that resolve at their use sites and
-    parameters, and such a row takes a closed use site's bound arriving at stage 6. [Transitive]: it
-    is forwarded everywhere, as a dimension's lower bound travels. *)
-type row_glb_transport = Two_hops | Use_site | Transitive
-
-val with_row_glb_transport : row_glb_transport -> (unit -> 'a) -> 'a
-(** Runs the function under the given transport: the comparison's switch, for tests. *)
-
-val row_glb_forwards : unit -> int
-(** The GLBs forwarded along variable-to-variable row bounds since the last reset: zero under
-    [Two_hops]. Process-wide. *)
-
-val reset_row_glb_forwards : unit -> unit
-
 val dim_cycle_visits : unit -> int
 (** The variables the dimension-cycle search of [Dim_ineq] visited since the last reset
     (gh-ocannl-1891): its work counter, process-wide. *)

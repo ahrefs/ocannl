@@ -2603,12 +2603,12 @@
   (pps ppx_here ppx_ocannl ppx_sexp_conv)))
 
 (test
- (name row_glb_transport_executed)
+ (name row_glb_reach_executed)
  (package neural_nets_lib)
  (deps
   ocannl_config
   (env_var OCANNL_BACKEND))
- (modules row_glb_transport_executed)
+ (modules row_glb_reach_executed)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))

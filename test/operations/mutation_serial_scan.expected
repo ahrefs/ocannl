@@ -25,8 +25,6 @@ tensor/row.ml: dim_cycle_visit_count (ref) -- exempt: a work counter of the dime
 tensor/row.ml: unmemoized_cycle_search (ref) -- exempt: a test switch, set only around a test's own run
 tensor/row.ml: unbounded_rank_search (ref) -- exempt: a test switch, set only around a test's own run
 tensor/row.ml: global_template_cache (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
-tensor/row.ml: row_glb_transport (ref) -- exempt: a test switch, set only around a test's own run
-tensor/row.ml: row_glb_forward_count (ref) -- exempt: a work counter for gh-ocannl-2024's comparison
 tensor/row.ml: fresh (unread state) -- exempt
 tensor/row.ml: boundary commit_symbol_roles -- part of the commit: only a successful finish_inference calls it
 tensor/row.ml: boundary drop_symbol_roles -- part of a rewind or session reset, which clears the taint

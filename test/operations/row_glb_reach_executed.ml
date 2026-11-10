@@ -1,18 +1,18 @@
-(* gh-ocannl-2024: executed chains, compared across [Row.row_glb_transport]. A draw reaches its use
-   site through a chain; each case prints the draw's shape and how many distinct values it holds
-   against how many cells its use site has, under each transport. The row-level comparison, where
-   the transports differ, is test/einsum/test_row_glb_transport.ml.
+(* gh-ocannl-2024: the row GLB's two-hop reach, pinned as policy on executed programs. A draw
+   reaches its use site through a chain. Each case prints the draw's shape and how many distinct
+   values it holds against how many cells its use site has. The row-level stores, where the reach
+   shows, are test/einsum/test_row_glb_reach.ml.
 
-   What these pin: the repeats are gh-544's, not the two-hop reach. An operation result closes down
-   to its arguments' shapes and its use site broadcasts it in, so a draw behind [u + 1] or [(u *. 2)
-   *. 2] meets a result that never widened, under every transport. A chain of [stretch] results,
-   each resolving at its use site, fills at any depth under every transport. *)
+   What these pin: an executed repeat is gh-544's, not the two-hop reach. An operation result closes
+   down to its arguments' shapes and its use site broadcasts it in, so a draw behind [u + 1] or [(u
+   *. 2) *. 2] meets a result that never widened. Making a row's GLB travel transitively, or into
+   use-site rows, was built and compared under gh-ocannl-2024 and changed none of these draws. A
+   chain of [stretch] results, each resolving at its use site, fills at any depth. *)
 
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
 open Verdict.Claims
 module Train = Ocannl.Train
-module Row = Ocannl.Row
 
 let context () =
   let ctx = Context.auto () in
@@ -26,13 +26,9 @@ let values n =
 let unique v = List.length (List.dedup_and_sort ~compare:Float.compare (Array.to_list v))
 let cells t = Array.fold (Shape.to_dims t.Tensor.shape) ~init:1 ~f:( * )
 
-let transports : (string * Row.row_glb_transport) list =
-  [ ("two hops", Two_hops); ("use site", Use_site); ("transitive", Transitive) ]
-
-(* The draw's shape, its distinct values, and its use site's cells, under one transport. [build]
-   returns the draw, its use site, and the tensor to run. *)
-let observe transport build =
-  Row.with_row_glb_transport transport @@ fun () ->
+(* The draw's shape, its distinct values, and its use site's cells. [build] returns the draw, its
+   use site, and the tensor to run. *)
+let observe build =
   Tensor.unsafe_reinitialize ();
   let u, use, root = build () in
   Train.set_materialized u.Tensor.value;
@@ -41,13 +37,8 @@ let observe transport build =
 
 let case name ~fills build =
   Verdict.case name @@ fun () ->
-  let seen = List.map transports ~f:(fun (t, transport) -> (t, observe transport build)) in
-  Stdio.printf "%s\n" name;
-  List.iter seen ~f:(fun (t, (shape, n, total)) ->
-      Stdio.printf "  %-10s u = %s, %d distinct values for %d cells\n" t shape n total);
-  let outcomes = List.map seen ~f:snd in
-  p_all (name ^ ": every transport draws the same") outcomes ~f:(Poly.equal (List.hd_exn outcomes));
-  let _, n, total = List.hd_exn outcomes in
+  let shape, n, total = observe build in
+  Stdio.printf "%s\n  u = %s, %d distinct values for %d cells\n" name shape n total;
   if fills then pf "%s: the draw fills its use site" name (n = total)
   else pf "%s: the draw repeats along its use site (gh-544's close-down)" name (n < total)
 

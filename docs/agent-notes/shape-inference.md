@@ -624,17 +624,17 @@ files.
   in a corner, where an alias before a solution reached a third hop (an accident of equation order,
   pinned), and the stage-2 singleton arm fires about 3% more often, since it needs a recorded pair
   and a short list. `Row.with_transitive_row_emissions` is the old walk; compare against it on
-  random stores before touching this. Row GLBs reach two hops, dims all the way. The two
-  ways of closing that gap are built behind `Row.with_row_glb_transport` (gh-ocannl-2024):
-  `Transitive` forwards a GLB along every variable-to-variable bound, and `Use_site` only into
-  resolve-at-use rows and parameters, plus stage 6. Both stay off, and the switch exists for the
-  comparison only, because no executed program in the suite closes differently under either.
-  The executed repeats come from gh-544's close-down of operation results instead
-  (`row_glb_transport_executed`). Both also refuse satisfiable random stores, through
-  `solve_row_ineq`'s equal-variable arm, which refuses `<r>,2 ⊑ r`. Forwarding must
-  count a change of axes modulo variables and projection ids (`same_glb_axes`). The join keeps
-  the incoming side's variable, so without that, resnet_block's diamonds traded two renamed
-  GLBs forever.
+  random stores before touching this. Row GLBs reach two hops, dims all the way, and that is
+  policy (gh-ocannl-2024, pinned by `test_row_glb_reach` and `row_glb_reach_executed`). Both ways
+  of closing the gap, forwarding a GLB along every variable-to-variable bound or only into
+  resolve-at-use rows and parameters, were built and compared (the first commit of
+  staging#1804, removed by its second) and changed no executed program: executed repeats come from
+  gh-544's close-down of operation results. Before reopening it, two traps. `solve_row_ineq`'s
+  equal-variable arm refuses `<r>,2 ⊑ r` ("Infinite number of axes by self-reference") though
+  `r = []` satisfies it, and forwarding reaches that arm on satisfiable stores, so relax it first.
+  And forwarding must count a change of axes modulo variables and projection ids: the GLB join
+  keeps the incoming side's variable and mints a fresh broadcast top, so with `equal_row` as the
+  change test, resnet_block's diamonds traded two renamed GLBs forever.
 - Substitution is indexed (gh-ocannl-1904): a solution visits the entries mentioning its variable
   and, for a dimension solution, the pending ones (`environment`'s doc comment), not the whole
   environment. Every write goes through `set_dim`/`set_row`, which index it: a `Tree_map.add` on
