@@ -1,4 +1,5 @@
 a routine before the fault ran and read back: true
+the wait over the never-ending kernel never returned success: true
 the wait over the killed kernel raised: true
 the report names the kernel: true
 the report carries Metal's error text: true
