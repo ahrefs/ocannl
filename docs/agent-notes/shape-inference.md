@@ -269,6 +269,15 @@ files.
   path, row elimination and `row_conjunction` all go through it, and the closed-row path marks `v`
   as if it were in `divided_by`, or the leftover `has_uniq_constr_unless` would keep it from ever
   closing.
+- A `Strided_var` whose variable is solved to a `Concat` or an `Affine` with a part still open
+  (`a^2`, `2*a`, `a<+k` against a product tie of the same capture) keeps the solved variable: one
+  variable times a coefficient cannot carry `a + 2`, so `Row.subst_row_constraint` substitutes only
+  the divisors and waits, as its stage-1 `Dim` arm does. The wait closes because every later
+  application substitutes through the environment (which sums a concrete extent into a `Dim`), and a
+  closed row's total reaches the variable as a `Dim_eq` whose solution carries to the parts
+  (gh-ocannl-2086, `test/einsum/product_tie_concat_affine.ml`). Nothing sized at all is still a
+  refusal: the stage-6 row closing empties the row before the part is guessed, and the part then
+  cannot fit a total of 1.
 - `divided_by` is a multiset, and a repeat in it is an equation: `n / w` over `[w, ..r..]` leaves
   `n / (w * w)` on `r` (`Row.reduce_row_constraint` appends the consumed variables as they are), and
   the closed-row check takes any number of `divided_by` variables. A shortcut that treats a repeat

@@ -1,0 +1,248 @@
+a concatenation, the part's spec registered first, the row forced first, the part sized before the specs: dims [4], [2], [4]
+a concatenation, the part's spec registered first, the row forced first, the part sized before the specs: the dimension is the row's total: true
+a concatenation, the part's spec registered first, the row forced first, the part sized before the specs: the part is solved: true
+a concatenation, the part's spec registered first, the row forced first, the part sized before the specs: the row keeps its axes: true
+a concatenation, the part's spec registered first, the row forced first, the part sized before the specs: the part reads its cells: true
+a concatenation, the part's spec registered first, the row forced first, the part sized before the specs: the row reads its cells: true
+a concatenation, the part's spec registered first, the row forced first, the part sized after them: dims [4], [2], [4]
+a concatenation, the part's spec registered first, the row forced first, the part sized after them: the dimension is the row's total: true
+a concatenation, the part's spec registered first, the row forced first, the part sized after them: the part is solved: true
+a concatenation, the part's spec registered first, the row forced first, the part sized after them: the row keeps its axes: true
+a concatenation, the part's spec registered first, the row forced first, the part sized after them: the part reads its cells: true
+a concatenation, the part's spec registered first, the row forced first, the part sized after them: the row reads its cells: true
+a concatenation, the part's spec registered first, the row forced first, a closed row of [2; 3]: dims [6], [4], [2; 3]
+a concatenation, the part's spec registered first, the row forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a concatenation, the part's spec registered first, the row forced first, a closed row of [2; 3]: the part is solved: true
+a concatenation, the part's spec registered first, the row forced first, a closed row of [2; 3]: the row keeps its axes: true
+a concatenation, the part's spec registered first, the row forced first, a closed row of [2; 3]: the part reads its cells: true
+a concatenation, the part's spec registered first, the row forced first, a closed row of [2; 3]: the row reads its cells: true
+a concatenation, the part's spec registered first, the row forced first, nothing sized: refused: concat: components exceed the concatenated size
+a concatenation, the part's spec registered first, the row forced first, nothing sized: refused with a shape error: true
+a concatenation, the part's spec registered first, the part forced first, the part sized before the specs: dims [4], [2], [4]
+a concatenation, the part's spec registered first, the part forced first, the part sized before the specs: the dimension is the row's total: true
+a concatenation, the part's spec registered first, the part forced first, the part sized before the specs: the part is solved: true
+a concatenation, the part's spec registered first, the part forced first, the part sized before the specs: the row keeps its axes: true
+a concatenation, the part's spec registered first, the part forced first, the part sized before the specs: the part reads its cells: true
+a concatenation, the part's spec registered first, the part forced first, the part sized before the specs: the row reads its cells: true
+a concatenation, the part's spec registered first, the part forced first, the part sized after them: dims [4], [2], [4]
+a concatenation, the part's spec registered first, the part forced first, the part sized after them: the dimension is the row's total: true
+a concatenation, the part's spec registered first, the part forced first, the part sized after them: the part is solved: true
+a concatenation, the part's spec registered first, the part forced first, the part sized after them: the row keeps its axes: true
+a concatenation, the part's spec registered first, the part forced first, the part sized after them: the part reads its cells: true
+a concatenation, the part's spec registered first, the part forced first, the part sized after them: the row reads its cells: true
+a concatenation, the part's spec registered first, the part forced first, a closed row of [2; 3]: dims [6], [4], [2; 3]
+a concatenation, the part's spec registered first, the part forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a concatenation, the part's spec registered first, the part forced first, a closed row of [2; 3]: the part is solved: true
+a concatenation, the part's spec registered first, the part forced first, a closed row of [2; 3]: the row keeps its axes: true
+a concatenation, the part's spec registered first, the part forced first, a closed row of [2; 3]: the part reads its cells: true
+a concatenation, the part's spec registered first, the part forced first, a closed row of [2; 3]: the row reads its cells: true
+a concatenation, the part's spec registered first, the part forced first, nothing sized: refused: concat: components exceed the concatenated size
+a concatenation, the part's spec registered first, the part forced first, nothing sized: refused with a shape error: true
+a concatenation, the row's spec registered first, the row forced first, the part sized before the specs: dims [4], [2], [4]
+a concatenation, the row's spec registered first, the row forced first, the part sized before the specs: the dimension is the row's total: true
+a concatenation, the row's spec registered first, the row forced first, the part sized before the specs: the part is solved: true
+a concatenation, the row's spec registered first, the row forced first, the part sized before the specs: the row keeps its axes: true
+a concatenation, the row's spec registered first, the row forced first, the part sized before the specs: the part reads its cells: true
+a concatenation, the row's spec registered first, the row forced first, the part sized before the specs: the row reads its cells: true
+a concatenation, the row's spec registered first, the row forced first, the part sized after them: dims [4], [2], [4]
+a concatenation, the row's spec registered first, the row forced first, the part sized after them: the dimension is the row's total: true
+a concatenation, the row's spec registered first, the row forced first, the part sized after them: the part is solved: true
+a concatenation, the row's spec registered first, the row forced first, the part sized after them: the row keeps its axes: true
+a concatenation, the row's spec registered first, the row forced first, the part sized after them: the part reads its cells: true
+a concatenation, the row's spec registered first, the row forced first, the part sized after them: the row reads its cells: true
+a concatenation, the row's spec registered first, the row forced first, a closed row of [2; 3]: dims [6], [4], [2; 3]
+a concatenation, the row's spec registered first, the row forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a concatenation, the row's spec registered first, the row forced first, a closed row of [2; 3]: the part is solved: true
+a concatenation, the row's spec registered first, the row forced first, a closed row of [2; 3]: the row keeps its axes: true
+a concatenation, the row's spec registered first, the row forced first, a closed row of [2; 3]: the part reads its cells: true
+a concatenation, the row's spec registered first, the row forced first, a closed row of [2; 3]: the row reads its cells: true
+a concatenation, the row's spec registered first, the row forced first, nothing sized: refused: concat: components exceed the concatenated size
+a concatenation, the row's spec registered first, the row forced first, nothing sized: refused with a shape error: true
+a concatenation, the row's spec registered first, the part forced first, the part sized before the specs: dims [4], [2], [4]
+a concatenation, the row's spec registered first, the part forced first, the part sized before the specs: the dimension is the row's total: true
+a concatenation, the row's spec registered first, the part forced first, the part sized before the specs: the part is solved: true
+a concatenation, the row's spec registered first, the part forced first, the part sized before the specs: the row keeps its axes: true
+a concatenation, the row's spec registered first, the part forced first, the part sized before the specs: the part reads its cells: true
+a concatenation, the row's spec registered first, the part forced first, the part sized before the specs: the row reads its cells: true
+a concatenation, the row's spec registered first, the part forced first, the part sized after them: dims [4], [2], [4]
+a concatenation, the row's spec registered first, the part forced first, the part sized after them: the dimension is the row's total: true
+a concatenation, the row's spec registered first, the part forced first, the part sized after them: the part is solved: true
+a concatenation, the row's spec registered first, the part forced first, the part sized after them: the row keeps its axes: true
+a concatenation, the row's spec registered first, the part forced first, the part sized after them: the part reads its cells: true
+a concatenation, the row's spec registered first, the part forced first, the part sized after them: the row reads its cells: true
+a concatenation, the row's spec registered first, the part forced first, a closed row of [2; 3]: dims [6], [4], [2; 3]
+a concatenation, the row's spec registered first, the part forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a concatenation, the row's spec registered first, the part forced first, a closed row of [2; 3]: the part is solved: true
+a concatenation, the row's spec registered first, the part forced first, a closed row of [2; 3]: the row keeps its axes: true
+a concatenation, the row's spec registered first, the part forced first, a closed row of [2; 3]: the part reads its cells: true
+a concatenation, the row's spec registered first, the part forced first, a closed row of [2; 3]: the row reads its cells: true
+a concatenation, the row's spec registered first, the part forced first, nothing sized: refused: concat: components exceed the concatenated size
+a concatenation, the row's spec registered first, the part forced first, nothing sized: refused with a shape error: true
+a stride, the part's spec registered first, the row forced first, the part sized before the specs: dims [4], [2], [4]
+a stride, the part's spec registered first, the row forced first, the part sized before the specs: the dimension is the row's total: true
+a stride, the part's spec registered first, the row forced first, the part sized before the specs: the part is solved: true
+a stride, the part's spec registered first, the row forced first, the part sized before the specs: the row keeps its axes: true
+a stride, the part's spec registered first, the row forced first, the part sized before the specs: the part reads its cells: true
+a stride, the part's spec registered first, the row forced first, the part sized before the specs: the row reads its cells: true
+a stride, the part's spec registered first, the row forced first, the part sized after them: dims [4], [2], [4]
+a stride, the part's spec registered first, the row forced first, the part sized after them: the dimension is the row's total: true
+a stride, the part's spec registered first, the row forced first, the part sized after them: the part is solved: true
+a stride, the part's spec registered first, the row forced first, the part sized after them: the row keeps its axes: true
+a stride, the part's spec registered first, the row forced first, the part sized after them: the part reads its cells: true
+a stride, the part's spec registered first, the row forced first, the part sized after them: the row reads its cells: true
+a stride, the part's spec registered first, the row forced first, a closed row of [2; 3]: dims [6], [3], [2; 3]
+a stride, the part's spec registered first, the row forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a stride, the part's spec registered first, the row forced first, a closed row of [2; 3]: the part is solved: true
+a stride, the part's spec registered first, the row forced first, a closed row of [2; 3]: the row keeps its axes: true
+a stride, the part's spec registered first, the row forced first, a closed row of [2; 3]: the part reads its cells: true
+a stride, the part's spec registered first, the row forced first, a closed row of [2; 3]: the row reads its cells: true
+a stride, the part's spec registered first, the row forced first, nothing sized: refused: solved dimensions for axis: incompatible stride
+a stride, the part's spec registered first, the row forced first, nothing sized: refused with a shape error: true
+a stride, the part's spec registered first, the part forced first, the part sized before the specs: dims [4], [2], [4]
+a stride, the part's spec registered first, the part forced first, the part sized before the specs: the dimension is the row's total: true
+a stride, the part's spec registered first, the part forced first, the part sized before the specs: the part is solved: true
+a stride, the part's spec registered first, the part forced first, the part sized before the specs: the row keeps its axes: true
+a stride, the part's spec registered first, the part forced first, the part sized before the specs: the part reads its cells: true
+a stride, the part's spec registered first, the part forced first, the part sized before the specs: the row reads its cells: true
+a stride, the part's spec registered first, the part forced first, the part sized after them: dims [4], [2], [4]
+a stride, the part's spec registered first, the part forced first, the part sized after them: the dimension is the row's total: true
+a stride, the part's spec registered first, the part forced first, the part sized after them: the part is solved: true
+a stride, the part's spec registered first, the part forced first, the part sized after them: the row keeps its axes: true
+a stride, the part's spec registered first, the part forced first, the part sized after them: the part reads its cells: true
+a stride, the part's spec registered first, the part forced first, the part sized after them: the row reads its cells: true
+a stride, the part's spec registered first, the part forced first, a closed row of [2; 3]: dims [6], [3], [2; 3]
+a stride, the part's spec registered first, the part forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a stride, the part's spec registered first, the part forced first, a closed row of [2; 3]: the part is solved: true
+a stride, the part's spec registered first, the part forced first, a closed row of [2; 3]: the row keeps its axes: true
+a stride, the part's spec registered first, the part forced first, a closed row of [2; 3]: the part reads its cells: true
+a stride, the part's spec registered first, the part forced first, a closed row of [2; 3]: the row reads its cells: true
+a stride, the part's spec registered first, the part forced first, nothing sized: refused: solved dimensions for axis: incompatible stride
+a stride, the part's spec registered first, the part forced first, nothing sized: refused with a shape error: true
+a stride, the row's spec registered first, the row forced first, the part sized before the specs: dims [4], [2], [4]
+a stride, the row's spec registered first, the row forced first, the part sized before the specs: the dimension is the row's total: true
+a stride, the row's spec registered first, the row forced first, the part sized before the specs: the part is solved: true
+a stride, the row's spec registered first, the row forced first, the part sized before the specs: the row keeps its axes: true
+a stride, the row's spec registered first, the row forced first, the part sized before the specs: the part reads its cells: true
+a stride, the row's spec registered first, the row forced first, the part sized before the specs: the row reads its cells: true
+a stride, the row's spec registered first, the row forced first, the part sized after them: dims [4], [2], [4]
+a stride, the row's spec registered first, the row forced first, the part sized after them: the dimension is the row's total: true
+a stride, the row's spec registered first, the row forced first, the part sized after them: the part is solved: true
+a stride, the row's spec registered first, the row forced first, the part sized after them: the row keeps its axes: true
+a stride, the row's spec registered first, the row forced first, the part sized after them: the part reads its cells: true
+a stride, the row's spec registered first, the row forced first, the part sized after them: the row reads its cells: true
+a stride, the row's spec registered first, the row forced first, a closed row of [2; 3]: dims [6], [3], [2; 3]
+a stride, the row's spec registered first, the row forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a stride, the row's spec registered first, the row forced first, a closed row of [2; 3]: the part is solved: true
+a stride, the row's spec registered first, the row forced first, a closed row of [2; 3]: the row keeps its axes: true
+a stride, the row's spec registered first, the row forced first, a closed row of [2; 3]: the part reads its cells: true
+a stride, the row's spec registered first, the row forced first, a closed row of [2; 3]: the row reads its cells: true
+a stride, the row's spec registered first, the row forced first, nothing sized: refused: solved dimensions for axis: incompatible stride
+a stride, the row's spec registered first, the row forced first, nothing sized: refused with a shape error: true
+a stride, the row's spec registered first, the part forced first, the part sized before the specs: dims [4], [2], [4]
+a stride, the row's spec registered first, the part forced first, the part sized before the specs: the dimension is the row's total: true
+a stride, the row's spec registered first, the part forced first, the part sized before the specs: the part is solved: true
+a stride, the row's spec registered first, the part forced first, the part sized before the specs: the row keeps its axes: true
+a stride, the row's spec registered first, the part forced first, the part sized before the specs: the part reads its cells: true
+a stride, the row's spec registered first, the part forced first, the part sized before the specs: the row reads its cells: true
+a stride, the row's spec registered first, the part forced first, the part sized after them: dims [4], [2], [4]
+a stride, the row's spec registered first, the part forced first, the part sized after them: the dimension is the row's total: true
+a stride, the row's spec registered first, the part forced first, the part sized after them: the part is solved: true
+a stride, the row's spec registered first, the part forced first, the part sized after them: the row keeps its axes: true
+a stride, the row's spec registered first, the part forced first, the part sized after them: the part reads its cells: true
+a stride, the row's spec registered first, the part forced first, the part sized after them: the row reads its cells: true
+a stride, the row's spec registered first, the part forced first, a closed row of [2; 3]: dims [6], [3], [2; 3]
+a stride, the row's spec registered first, the part forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a stride, the row's spec registered first, the part forced first, a closed row of [2; 3]: the part is solved: true
+a stride, the row's spec registered first, the part forced first, a closed row of [2; 3]: the row keeps its axes: true
+a stride, the row's spec registered first, the part forced first, a closed row of [2; 3]: the part reads its cells: true
+a stride, the row's spec registered first, the part forced first, a closed row of [2; 3]: the row reads its cells: true
+a stride, the row's spec registered first, the part forced first, nothing sized: refused: solved dimensions for axis: incompatible stride
+a stride, the row's spec registered first, the part forced first, nothing sized: refused with a shape error: true
+a window, the part's spec registered first, the row forced first, the part sized before the specs: dims [4], [2], [4]
+a window, the part's spec registered first, the row forced first, the part sized before the specs: the dimension is the row's total: true
+a window, the part's spec registered first, the row forced first, the part sized before the specs: the part is solved: true
+a window, the part's spec registered first, the row forced first, the part sized before the specs: the row keeps its axes: true
+a window, the part's spec registered first, the row forced first, the part sized before the specs: the part reads its cells: true
+a window, the part's spec registered first, the row forced first, the part sized before the specs: the row reads its cells: true
+a window, the part's spec registered first, the row forced first, the part sized after them: dims [4], [2], [4]
+a window, the part's spec registered first, the row forced first, the part sized after them: the dimension is the row's total: true
+a window, the part's spec registered first, the row forced first, the part sized after them: the part is solved: true
+a window, the part's spec registered first, the row forced first, the part sized after them: the row keeps its axes: true
+a window, the part's spec registered first, the row forced first, the part sized after them: the part reads its cells: true
+a window, the part's spec registered first, the row forced first, the part sized after them: the row reads its cells: true
+a window, the part's spec registered first, the row forced first, a closed row of [2; 3]: dims [6], [4], [2; 3]
+a window, the part's spec registered first, the row forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a window, the part's spec registered first, the row forced first, a closed row of [2; 3]: the part is solved: true
+a window, the part's spec registered first, the row forced first, a closed row of [2; 3]: the row keeps its axes: true
+a window, the part's spec registered first, the row forced first, a closed row of [2; 3]: the part reads its cells: true
+a window, the part's spec registered first, the row forced first, a closed row of [2; 3]: the row reads its cells: true
+a window, the part's spec registered first, the row forced first, nothing sized: refused: solved dimensions for axis: incompatible stride
+a window, the part's spec registered first, the row forced first, nothing sized: refused with a shape error: true
+a window, the part's spec registered first, the part forced first, the part sized before the specs: dims [4], [2], [4]
+a window, the part's spec registered first, the part forced first, the part sized before the specs: the dimension is the row's total: true
+a window, the part's spec registered first, the part forced first, the part sized before the specs: the part is solved: true
+a window, the part's spec registered first, the part forced first, the part sized before the specs: the row keeps its axes: true
+a window, the part's spec registered first, the part forced first, the part sized before the specs: the part reads its cells: true
+a window, the part's spec registered first, the part forced first, the part sized before the specs: the row reads its cells: true
+a window, the part's spec registered first, the part forced first, the part sized after them: dims [4], [2], [4]
+a window, the part's spec registered first, the part forced first, the part sized after them: the dimension is the row's total: true
+a window, the part's spec registered first, the part forced first, the part sized after them: the part is solved: true
+a window, the part's spec registered first, the part forced first, the part sized after them: the row keeps its axes: true
+a window, the part's spec registered first, the part forced first, the part sized after them: the part reads its cells: true
+a window, the part's spec registered first, the part forced first, the part sized after them: the row reads its cells: true
+a window, the part's spec registered first, the part forced first, a closed row of [2; 3]: dims [6], [4], [2; 3]
+a window, the part's spec registered first, the part forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a window, the part's spec registered first, the part forced first, a closed row of [2; 3]: the part is solved: true
+a window, the part's spec registered first, the part forced first, a closed row of [2; 3]: the row keeps its axes: true
+a window, the part's spec registered first, the part forced first, a closed row of [2; 3]: the part reads its cells: true
+a window, the part's spec registered first, the part forced first, a closed row of [2; 3]: the row reads its cells: true
+a window, the part's spec registered first, the part forced first, nothing sized: refused: solved dimensions for axis: incompatible stride
+a window, the part's spec registered first, the part forced first, nothing sized: refused with a shape error: true
+a window, the row's spec registered first, the row forced first, the part sized before the specs: dims [4], [2], [4]
+a window, the row's spec registered first, the row forced first, the part sized before the specs: the dimension is the row's total: true
+a window, the row's spec registered first, the row forced first, the part sized before the specs: the part is solved: true
+a window, the row's spec registered first, the row forced first, the part sized before the specs: the row keeps its axes: true
+a window, the row's spec registered first, the row forced first, the part sized before the specs: the part reads its cells: true
+a window, the row's spec registered first, the row forced first, the part sized before the specs: the row reads its cells: true
+a window, the row's spec registered first, the row forced first, the part sized after them: dims [4], [2], [4]
+a window, the row's spec registered first, the row forced first, the part sized after them: the dimension is the row's total: true
+a window, the row's spec registered first, the row forced first, the part sized after them: the part is solved: true
+a window, the row's spec registered first, the row forced first, the part sized after them: the row keeps its axes: true
+a window, the row's spec registered first, the row forced first, the part sized after them: the part reads its cells: true
+a window, the row's spec registered first, the row forced first, the part sized after them: the row reads its cells: true
+a window, the row's spec registered first, the row forced first, a closed row of [2; 3]: dims [6], [4], [2; 3]
+a window, the row's spec registered first, the row forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a window, the row's spec registered first, the row forced first, a closed row of [2; 3]: the part is solved: true
+a window, the row's spec registered first, the row forced first, a closed row of [2; 3]: the row keeps its axes: true
+a window, the row's spec registered first, the row forced first, a closed row of [2; 3]: the part reads its cells: true
+a window, the row's spec registered first, the row forced first, a closed row of [2; 3]: the row reads its cells: true
+a window, the row's spec registered first, the row forced first, nothing sized: refused: solved dimensions for axis: incompatible stride
+a window, the row's spec registered first, the row forced first, nothing sized: refused with a shape error: true
+a window, the row's spec registered first, the part forced first, the part sized before the specs: dims [4], [2], [4]
+a window, the row's spec registered first, the part forced first, the part sized before the specs: the dimension is the row's total: true
+a window, the row's spec registered first, the part forced first, the part sized before the specs: the part is solved: true
+a window, the row's spec registered first, the part forced first, the part sized before the specs: the row keeps its axes: true
+a window, the row's spec registered first, the part forced first, the part sized before the specs: the part reads its cells: true
+a window, the row's spec registered first, the part forced first, the part sized before the specs: the row reads its cells: true
+a window, the row's spec registered first, the part forced first, the part sized after them: dims [4], [2], [4]
+a window, the row's spec registered first, the part forced first, the part sized after them: the dimension is the row's total: true
+a window, the row's spec registered first, the part forced first, the part sized after them: the part is solved: true
+a window, the row's spec registered first, the part forced first, the part sized after them: the row keeps its axes: true
+a window, the row's spec registered first, the part forced first, the part sized after them: the part reads its cells: true
+a window, the row's spec registered first, the part forced first, the part sized after them: the row reads its cells: true
+a window, the row's spec registered first, the part forced first, a closed row of [2; 3]: dims [6], [4], [2; 3]
+a window, the row's spec registered first, the part forced first, a closed row of [2; 3]: the dimension is the row's total: true
+a window, the row's spec registered first, the part forced first, a closed row of [2; 3]: the part is solved: true
+a window, the row's spec registered first, the part forced first, a closed row of [2; 3]: the row keeps its axes: true
+a window, the row's spec registered first, the part forced first, a closed row of [2; 3]: the part reads its cells: true
+a window, the row's spec registered first, the part forced first, a closed row of [2; 3]: the row reads its cells: true
+a window, the row's spec registered first, the part forced first, nothing sized: refused: solved dimensions for axis: incompatible stride
+a window, the row's spec registered first, the part forced first, nothing sized: refused with a shape error: true
+a stride, the part's spec registered first, the row forced first, a closed row of [5]: refused: solved dimensions for axis: incompatible stride
+a stride, the part's spec registered first, the row forced first, a closed row of [5]: refused with a shape error: true
+a concatenation, the part's spec registered first, the row forced first, a closed row of [1]: refused: concat: components exceed the concatenated size
+a concatenation, the part's spec registered first, the row forced first, a closed row of [1]: refused with a shape error: true
+a stride, the row's spec registered first, the row forced first, a closed row of [5]: refused: solved dimensions for axis: incompatible stride
+a stride, the row's spec registered first, the row forced first, a closed row of [5]: refused with a shape error: true
+a concatenation, the row's spec registered first, the row forced first, a closed row of [1]: refused: concat: components exceed the concatenated size
+a concatenation, the row's spec registered first, the row forced first, a closed row of [1]: refused with a shape error: true
