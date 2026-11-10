@@ -5065,6 +5065,36 @@ let get_projections (update_step : update_step) : Idx.projections =
   refuse_stale_projections update_step projections;
   projections
 
+(** [Input_equals_output] equates a fresh shape's input row with its output row. What [unify_row]
+    cannot decide on the spot it returns rather than solves: an unpadded window whose kernel is
+    unsolved, or a window pair held for the Stage2+ fixpoint (gh-ocannl-2038). Those join the active
+    constraints, so the closure solves them with the rest -- or refuses them there, naming this
+    equation as their origin (gh-ocannl-2030). *)
+let deduce_within ~context deduced (result : t) =
+  match deduced with
+  | Not_constrained -> ()
+  | Input_equals_output -> (
+      try
+        let origin =
+          [
+            Row.
+              {
+                lhs_name = result.debug_name;
+                lhs_kind = `Input;
+                rhs_name = result.debug_name;
+                rhs_kind = `Output;
+                operation = Some "input_equals_output";
+              };
+          ]
+        in
+        let deferred, env =
+          Row.unify_row ~stage:Stage2 origin (result.input, result.output) !state
+        in
+        active_constraints := deferred @ !active_constraints;
+        state := env
+      with Row.Shape_error (s, trace) when !with_error_trace ->
+        raise @@ Row.Shape_error (context ^ " / " ^ s, Shape_mismatch [ result ] :: trace))
+
 let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_axes
     ?(deduced = Not_constrained) ~debug_name ~id () =
   let open Row in
@@ -5124,27 +5154,7 @@ let make ?batch_dims ?input_dims ?output_dims ?batch_axes ?input_axes ?output_ax
   in
   let result = of_rows ~batch ~input ~output ~id ~debug_name in
   note_traced_name debug_name;
-  (match deduced with
-  | Not_constrained -> ()
-  | Input_equals_output -> (
-      try
-        let origin =
-          [
-            Row.
-              {
-                lhs_name = result.debug_name;
-                lhs_kind = `Input;
-                rhs_name = result.debug_name;
-                rhs_kind = `Output;
-                operation = Some "input_equals_output";
-              };
-          ]
-        in
-        let more_ineqs, env = Row.unify_row ~stage:Stage2 origin (input, output) !state in
-        assert (List.is_empty more_ineqs);
-        state := env
-      with Shape_error (s, trace) when !with_error_trace ->
-        raise @@ Shape_error ("Input_equals_output / " ^ s, Shape_mismatch [ result ] :: trace)));
+  deduce_within ~context:"Input_equals_output" deduced result;
   result
 
 let shape_spec_to_dims_bio ~spec ~sh_id labels =
@@ -5175,27 +5185,7 @@ let of_spec ?(deduced = Not_constrained) ~debug_name ~id spec =
   let batch, input, output = shape_spec_to_dims_bio ~spec ~sh_id:id @@ axis_labels_of_spec spec in
   let result = of_rows ~batch ~input ~output ~id ~debug_name in
   note_traced_name debug_name;
-  (match deduced with
-  | Not_constrained -> ()
-  | Input_equals_output -> (
-      try
-        let origin =
-          [
-            Row.
-              {
-                lhs_name = result.debug_name;
-                lhs_kind = `Input;
-                rhs_name = result.debug_name;
-                rhs_kind = `Output;
-                operation = Some "input_equals_output";
-              };
-          ]
-        in
-        let more_ineqs, env = Row.unify_row ~stage:Stage2 origin (input, output) !state in
-        assert (List.is_empty more_ineqs);
-        state := env
-      with Row.Shape_error (s, trace) when !with_error_trace ->
-        raise @@ Row.Shape_error ("of spec / " ^ s, Shape_mismatch [ result ] :: trace)));
+  deduce_within ~context:"of spec" deduced result;
   result
 
 let to_string_hum ?(style = Row.Axis_size) (sh : t) =

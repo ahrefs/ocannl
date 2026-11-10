@@ -1,0 +1,10 @@
+o, x -> c, 2*o<+k, output 4,9: 4,9,4,9
+o, x -> c, 2*o<+k: the input is sized by the deferred equation: true
+a, o, 2*a<+j -> d, c, 2*o<+k, output 3,4,9: 3,4,9,3,4,9
+a, o, 2*a<+j -> d, c, 2*o<+k: the input is sized by the deferred equation: true
+2*a -> 3*o, output 12: 12,12
+2*a -> 3*o: the input is sized by the deferred equation: true
+2*a -> 3*o, output 9: refused
+2*a -> 3*o: the closure refuses a non-dividing stride, naming the deduction: true
+x -> 2*o<+k, output 9: refused
+x -> 2*o<+k over 9: an underdetermined window is a shape error: true
