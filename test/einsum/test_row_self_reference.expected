@@ -30,3 +30,10 @@ joint close, deferred [a; b; a^b] against [2; 5; 4] (satisfiable at overlap 1): 
 joint close, before stage 6: 1 constraint(s) waiting
 joint close, refused overlap rolled back: b stays unmarked: true
 joint close, refused overlap rolled back (satisfiable at overlap 1): no error: [3,?] [5] [3]
+same variable, result trailing surplus: [2] >= [] at v = []: true
+same variable, result leading surplus (a pointwise result over [h; w].<c> >= <c>): true
+same variable, result surplus, v = [2] first: [2; 2] >= [2]: true
+same variable, result surplus, v = [3] later: [3; 2] >= [3] refused by its dims: true
+same variable, result surplus, outer overlap 3 against 5 refused by its dims: true
+same variable, operand surplus refused by self-reference: true
+same variable, equation [h; w].<c> = <c> refused by self-reference: true

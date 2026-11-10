@@ -1980,6 +1980,27 @@ let s_row_one_in_entry (v : row_var) ~(value : row) ~(in_ : row_entry) :
       let glb = Option.map glb ~f:(fun in_ -> s_row_one v ~value ~in_) in
       (ineqs0 @ ineqs1 @ ineqs2, Bounds_row { is_in_param; res; opnd; glb; constr; origin })
 
+(* The occurs check's refusal (gh-ocannl-2036): [what] names the relation that no finite value of
+   the row variable both rows share satisfies, [surplus] by how many axes one side exceeds the
+   other. Only an equation gets the einsum hint: an inequality whose result has the surplus is
+   satisfiable, and [solve_row_ineq] defers it instead. *)
+let self_reference_error ?(equation = true) ~rows ~surplus ~what () =
+  let by =
+    if surplus > 0 then Printf.sprintf " (%d more, around the same row variable)" surplus else ""
+  in
+  let hint =
+    if equation then
+      ". Einsum equates each operand with its slot and does not broadcast it, so one tensor \
+       filling two slots that put different numbers of axes around the same ..r.. is refused; to \
+       contract a tensor with its own broadcast, pass one side through a pointwise operation (e.g. \
+       t *. x)"
+    else ""
+  in
+  Shape_error
+    ( "Infinite number of axes by self-reference: " ^ what ^ by
+      ^ ", which no finite shape satisfies" ^ hint,
+      [ Row_mismatch rows ] )
+
 let subst_row env ({ beg_dims; dims; bcast; prov } : t) : t =
   let s_dims = List.map ~f:(subst_dim env) in
   let beg_dims = s_dims beg_dims in
@@ -1995,8 +2016,9 @@ let subst_row env ({ beg_dims; dims; bcast; prov } : t) : t =
           default
       | Some (Solved_row ({ bcast = Row_var v2; _ } as r2)) when equal_row_var v v2 ->
           raise
-          @@ Shape_error
-               ("Infinite number of axes by self-reference", [ Row_mismatch [ default; r2 ] ])
+          @@ self_reference_error ~rows:[ default; r2 ]
+               ~surplus:(List.length r2.beg_dims + List.length r2.dims)
+               ~what:"a row would have to equal itself with more axes" ()
       | Some (Solved_row { beg_dims = more_beg; dims = more_dims; bcast; prov = _ }) -> (
           (* Note: we assume env is idempotent (solved wrt. equalities). *)
           let more_beg = s_dims more_beg in
@@ -3534,7 +3556,9 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
       and beg_dims2_l = l beg_dims2 in
       if beg_dims1_l + dims1_l <> beg_dims2_l + dims2_l then
         raise
-        @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ r1; r2 ] ])
+        @@ self_reference_error ~rows:[ r1; r2 ]
+             ~surplus:(abs (beg_dims1_l + dims1_l - (beg_dims2_l + dims2_l)))
+             ~what:"a row would have to equal itself with more axes" ()
       else if beg_dims1_l <> beg_dims2_l then
         (* Equal total flank lengths but shifted splits: the equation is l1.<v>.r1 = l2.<v>.r2 whose
            surplus flank words rotate through [v]'s value (the word equation x ++ t = s ++ x), so
@@ -3616,8 +3640,9 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                     value )
                 else
                   raise
-                  @@ Shape_error
-                       ("Infinite number of axes by self-reference", [ Row_mismatch orig_rows ])
+                  @@ self_reference_error ~rows:orig_rows
+                       ~surplus:(abs (l beg_dims2 + l r2.dims - (l beg_dims1 + dims1_l)))
+                       ~what:"a row would have to equal itself with more axes" ()
               else
                 let result =
                   unify_suffix result (List.rev beg_dims1) (List.rev beg_dims2) beg_dims_l
@@ -4511,9 +4536,19 @@ let%debug5_sexp solve_row_ineq ~(stage : stage) origin ~(res : t) ~(opnd : t) en
         env )
   | res, opnd when equal_row res opnd -> ([], env)
   | { bcast = Row_var res_v; _ }, { bcast = Row_var opnd_v; _ } when equal_row_var res_v opnd_v ->
-      if res_dims_l + res_beg_dims_l <> opnd_dims_l + opnd_beg_dims_l then
+      let res_l = res_dims_l + res_beg_dims_l and opnd_l = opnd_dims_l + opnd_beg_dims_l in
+      if res_l < opnd_l then
+        (* The operand has more axes than its own result around the variable: [rank res >= rank
+           opnd] fails for every value of it. *)
         raise
-        @@ Shape_error ("Infinite number of axes by self-reference", [ Row_mismatch [ res; opnd ] ])
+        @@ self_reference_error ~rows:[ res; opnd ] ~surplus:(opnd_l - res_l) ~equation:false
+             ~what:"an operand would need more axes than its own broadcast result" ()
+      else if res_l > opnd_l then
+        (* The result has more axes than its operand around the variable (gh-ocannl-2036):
+           satisfiable, e.g. [<v>.[2] >= <v>] at [v = []], where the operand broadcasts into the
+           result's surplus. As in the shifted case below, the residue is a pointwise chain through
+           the variable's value: defer, keeping the outer-anchored overlaps. *)
+        (Row_ineq { res; opnd; origin } :: ineqs, env)
       else if res_dims_l <> opnd_dims_l then
         (* Equal totals but shifted splits around the shared variable: the residue is a pointwise
            chain through the variable's value, so it cannot be finalized here. Defer: if the

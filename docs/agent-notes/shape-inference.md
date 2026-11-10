@@ -23,6 +23,17 @@ files.
   pushes what it returns onto `active_constraints`, never asserts it empty: `deduce_within`
   (`~deduced:Input_equals_output`) defers an unpadded window over an open kernel and a held window
   pair (gh-ocannl-2030, `test/einsum/input_equals_output_deferral.ml`).
+- The occurs check around ONE row variable (the equal-variable arms of `unify_row` and
+  `solve_row_ineq`, gh-ocannl-2036) turns on which side has the surplus axes. An equation with
+  unequal totals, and an inequality whose OPERAND has the surplus, hold for no finite value and
+  raise "Infinite number of axes by self-reference" (`self_reference_error`). An inequality whose
+  RESULT has the surplus is satisfiable (`<v>.[2] >= <v>` at `v = []`): it defers like the shifted
+  case, keeping the outer-anchored overlaps, and the substituted check decides it once `v` is
+  solved or closed. Einsum equates operands with their slots without broadcasting, so one tensor in
+  two slots that put different axes around one `..c..`
+  (`st +* "...|h,w,..c..; ...|..c.. => ...|h" st`) is a true refusal, and `(st *. x) +* ... st` is
+  the program meant. Pinned by `test/einsum/test_row_self_reference` (last block) and
+  `test/operations/self_contraction_occurs`.
 - `Row.Concat` dimensions (block tensors, `^` in specs) are solved as ARITHMETIC SUMS, not
   structural lists: equality lives in `unify_dim` (single-component unwrap, `Concat=Dim`
   subtraction, cancel-common residuals, nested-`Concat` flattening), and the equal-arity

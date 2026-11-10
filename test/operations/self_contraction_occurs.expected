@@ -1,0 +1,7 @@
+the same tensor in both slots is refused by the occurs check: true
+the refusal says einsum does not broadcast its operands: true
+a pointwise result in the narrow slot is refused by the occurs check: true
+the statistic takes x's last axis: [5]: true
+the result is over h: [3]: true
+the statistic's draw is distinct per cell: true
+y against the host contraction: true
