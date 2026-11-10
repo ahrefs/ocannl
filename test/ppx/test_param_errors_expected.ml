@@ -138,7 +138,10 @@ let field_let_bound =
                            "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
           () in
       let __ocannl_body x =
-        let n = List.length dims in (+) ?label:(Some ["field_let_bound"]) x b in
+        let n =
+          Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+            (fun () -> List.length dims) in
+        (+) ?label:(Some ["field_let_bound"]) x b in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"field_let_bound" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -229,7 +232,8 @@ let field_let_rec =
           () in
       let __ocannl_body x =
         let rec n = 3
-        and f y = (+) ?label:(Some ["f"]) y b in f x in
+        and f y = (+) ?label:(Some ["f"]) y b in
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> f x) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"field_let_rec" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -274,8 +278,10 @@ let field_function_case =
                            "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the function case that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
           () in
       let __ocannl_body x =
-        List.fold dims ~init:x
-          ~f:(fun x -> function | n -> (+) ?label:None x b) in
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () ->
+             List.fold dims ~init:x
+               ~f:(fun x -> function | n -> (+) ?label:None x b)) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"field_function_case" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -292,7 +298,11 @@ let field_for_loop =
                            "ppx_ocannl %op: the inline declaration { b } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the for loop that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
           () in
       let __ocannl_body x =
-        for n = 1 to 2 do ignore ((+) ?label:None x b) done; x in
+        for n = 1 to 2 do
+          Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+            (fun () -> ignore ((+) ?label:None x b))
+        done;
+        x in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"field_for_loop" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
