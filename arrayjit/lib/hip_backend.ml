@@ -1102,8 +1102,8 @@ end = struct
       | Fp8_prec _, Fp8_prec _
       | Void_prec, Void_prec ->
           ("", "")
-      (* hip_fp16.h has no [__double2half]; route through float. *)
-      | Double_prec _, Half_prec _ -> ("__float2half((float)(", "))")
+      (* One rounding, not two through float (gh-ocannl-2075): hip_fp16.h has no [__double2half]. *)
+      | Double_prec _, Half_prec _ -> ("ocannl_double_to_half(", ")")
       | Single_prec _, Half_prec _ -> ("__float2half(", ")")
       | Byte_prec _, Half_prec _ -> ("__ushort2half_rn((unsigned short int)", ")")
       | Double_prec _, Uint4x32_prec _ -> ("double_to_uint4x32(", ")")
@@ -1134,6 +1134,7 @@ end = struct
          half <-> fp8 pairs. *)
       | Half_prec _, Bfloat16_prec _ -> ("__float2bfloat16(__half2float(", "))")
       | Bfloat16_prec _, Half_prec _ -> ("__float2half(__bfloat162float(", "))")
+      | Double_prec _, Bfloat16_prec _ -> ("ocannl_double_to_bfloat16(", ")")
       | _, Bfloat16_prec _ -> ("__float2bfloat16((float)(", "))")
       | Bfloat16_prec _, _ -> ("(" ^ typ_of_prec to_ ^ ")(__bfloat162float(", "))")
       (* Through the same funnel as the operator bridges. A helper and not a ternary wrapped around

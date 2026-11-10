@@ -750,6 +750,23 @@ __device__ __forceinline__ double ocannl_shfl_xor(double v, int lane_mask) {
     return (__hip_fp8_e5m2)(y);
 }|},
       [] );
+    (* f64 to half and bfloat16 in one rounding (gh-ocannl-2075), as CUDA's [__double2half] and its
+       bfloat16 conversion are: [hip_fp16.h] has no [__double2half], and a [(float)] on the way to
+       [__float2half] rounds twice. The round-to-odd step is the C table's own template
+       ({!Builtins_cc.double_to_single_round_odd_builtin}, where the argument is), in integer form
+       because fast math makes a float comparison unreliable; the vendor's float conversion finishes
+       it. *)
+    Builtins_cc.double_to_single_round_odd_builtin ~dialect:`Cuda_like;
+    ( "ocannl_double_to_half",
+      {|__device__ __forceinline__ __half ocannl_double_to_half(double x) {
+    return __float2half(double_to_single_round_odd(x));
+}|},
+      [ "double_to_single_round_odd" ] );
+    ( "ocannl_double_to_bfloat16",
+      {|__device__ __forceinline__ __hip_bfloat16 ocannl_double_to_bfloat16(double x) {
+    return __float2bfloat16(double_to_single_round_odd(x));
+}|},
+      [ "double_to_single_round_odd" ] );
   ]
 
 let builtins = Builtins_cc.cuda_like_power_builtins @ builtins
