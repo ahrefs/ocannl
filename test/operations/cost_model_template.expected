@@ -86,7 +86,7 @@ near-limit domain retains a short-circuit RHS and bounded operation price: true
 near-limit false lower guard skips overflowing RHS and returns the init value: true
 the same boundary guard executes its valid matching arm: true
 valid boundary literal permits an exact simplified guard price: true
-out-of-range boundary literal retains short-circuit evaluation and a price bound: true
+out-of-range boundary literal is refused at lowering, naming the store and int32: true
 valid boundary literal executes its matching arm: true
 == recompute_cost through optimize ==
 chain: both links virtual: true

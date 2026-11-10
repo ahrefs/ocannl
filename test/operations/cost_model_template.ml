@@ -441,7 +441,8 @@ let () =
     (same (run 0 "cmt_index_boundary_low") [ [| 37. |] ])
 
 (* Pin literal conversion at signed-32 precision even in a large-model build. The invalid literal is
-   inspected structurally; the preceding executed control covers skipped affine overflow. *)
+   refused by [simplify_llc] itself (gh-ocannl-2085), before any pricing could read it; the
+   preceding executed control covers skipped affine overflow. *)
 let () =
   let ip = Ops.int32 in
   let parameter, bindings =
@@ -460,12 +461,17 @@ let () =
          (LL.Ternop (Ops.Where, (cond, ip), (get input [| fixed 0 |], single), (c 0., single))))
   in
   let limit = (Ir.Interval.dtype_range ip).hi in
-  let safe = simplify limit and unsafe = simplify (limit +. 1.) in
+  let safe = simplify limit in
   let ands code = count_scalar code ~f:(function LL.Binop (Ops.And, _, _) -> true | _ -> false) in
   p "valid boundary literal permits an exact simplified guard price"
     (ands safe = 0 && (CM.analyze safe).CM.flops = 2 && not (CM.analyze safe).CM.flops_approx);
-  p "out-of-range boundary literal retains short-circuit evaluation and a price bound"
-    (ands unsafe = 1 && (CM.analyze unsafe).CM.flops_approx);
+  p "out-of-range boundary literal is refused at lowering, naming the store and int32"
+    (match simplify (limit +. 1.) with
+    | _ -> false
+    | exception LL.Unrepresentable_integer_constant { tn; prec; value; _ } ->
+        Option.exists tn ~f:(Tn.equal out)
+        && Ops.equal_prec prec ip
+        && Float.equal value (limit +. 1.));
   let o =
     optimize ~materialized:[ input; out ] ~static_indices:(Idx.bound_symbols bindings)
       ~name:"cmt_literal_boundary" safe
