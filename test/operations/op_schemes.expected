@@ -57,11 +57,10 @@ and the entailed one is neither traced nor checked: true
 and its own application traces and checks it: true
 a first application in a checked body still validates the patterns it does not take: true
 the session hands out the same ids with schemes on and off: true
-and the same node uids, relative to the run's first node: true
+control: the traces shift the node uids, relative to the run's first node: true
 and the same shape variable ids, relative to the run's start: true
 the loss, the parameters (random initialization included) and their gradients are the same: true
 control (no id neutrality): the traces shift the session's ids: true
-control (no id neutrality): and its node uids: true
 control (no id neutrality): and its shape variable ids: true
 both patterns are traced at (): true
 two option-valued parameters: all four patterns are traced at (): true
@@ -105,7 +104,6 @@ and left the session as it was: true
 the check of an argument conflicting with the reference's binding raises, naming the scheme: true
 and left the session as it was too: true
 the schemed function hands out the session ids its unschemed twin does: true
-and the same node uids: true
 and the same shape variable ids: true
 control (no id neutrality): the trace shifts the session's ids: true
 the refused function was left unschemed twice: true

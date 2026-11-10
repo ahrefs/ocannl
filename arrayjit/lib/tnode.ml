@@ -435,26 +435,18 @@ type t = {
 
 let compare a1 a2 = compare_int a1.uid a2.uid
 
-(* The [uid] counter deliberately lives outside any reinitializable session state. An id-neutral
-   window (the frontend's shape-scheme traces, gh-ocannl-1751) allocates from a reserved range with
-   a counter of its own, never reused either: the nodes it makes are discarded, and the uids the
-   session hands out -- which order nodes and place them in hash tables, and so steer compilation
-   choices -- are then the same whether or not the window ran. *)
-let reserved_uid_base = 1 lsl 40
-let next_uid = ref 0
-let next_reserved_uid = ref reserved_uid_base
-let reserved_uid_depth = ref 0
-
-let fresh_uid () =
-  let counter = if !reserved_uid_depth > 0 then next_reserved_uid else next_uid in
-  let uid = !counter in
-  counter := uid + 1;
-  uid
-
-(** Runs [f] with node uids allocated from the reserved range (see [fresh_uid]). *)
-let with_reserved_uids f =
-  Int.incr reserved_uid_depth;
-  Exn.protect ~f ~finally:(fun () -> Int.decr reserved_uid_depth)
+(* The [uid] counter deliberately lives outside any reinitializable session state: uids are never
+   reused, so a node-keyed cache entry cannot alias a fresh node. Uids are identity, not data: the
+   compiler's choices do not depend on their values or on the gaps between them (gh-ocannl-2053;
+   [flip_order_minting] and [build_order_programs] shift them and compare what compiles), so an
+   id-neutral window (the frontend's shape-scheme traces, gh-ocannl-1751) mints its discarded nodes
+   from this counter too. *)
+let fresh_uid =
+  let next_uid = ref 0 in
+  fun () ->
+    let uid = !next_uid in
+    next_uid := uid + 1;
+    uid
 
 (* Session hooks installed by the tensor frontend (gh-ocannl-1301), so the context API can refuse
    work the frontend no longer stands behind without arrayjit depending on it. [session_gate] runs
