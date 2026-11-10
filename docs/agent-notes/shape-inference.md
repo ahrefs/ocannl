@@ -157,16 +157,18 @@ files.
   `Assignments.to_low_level`); add-family keeps physical halos committed as tensor-node identity
   (padded convs lower offset-free). The padded dim equation requires the input divisible by the
   stride, and a stride-2 window only clips on the right for window ≥ 4. A padded window in the
-  RESULT slot is refused before elaboration (gh-ocannl-1550, `refuse_result_side_padded_window`,
-  called from `einsum_n_constraints` and the `Permute` branch); a padded window's backward writes
-  through the same window but reuses the forward projections, so it never comes through there.
+  RESULT slot is refused before any write (gh-ocannl-1550, `refuse_result_side_padded_window`,
+  run from `propagate_shapes` like `refuse_unsized_kernels` below, so the refusal leaves the
+  session untainted, gh-ocannl-2042); a padded window's backward writes through the same window
+  but reuses the forward projections, so it never comes through there.
   The refusal stays (gh-ocannl-1619, maintainer's call): its message gives the two-step recipe,
   `<+` then a crop by a slice (`"s, p^o^q => s, o"`), executed against PyTorch's
   `ConvTranspose1d` in `result_side_affine_forms` beside the older one-hot-window crop.
 - An unsized padded kernel has two refusals with one message (`Row.unsized_kernel_error`).
   `Shape.refuse_unsized_kernels`, in `propagate_shapes` beside `refuse_discarded_operands`, takes
-  what spec and captures decide, before any write: `get_inequalities` is too late, its einsum
-  branches `unmark_unused` first, which would taint the session (gh-ocannl-1983). It sits on the
+  what spec and captures decide, before any write: `get_inequalities` is too late for any
+  structural refusal, its einsum branches `unmark_unused` first, which would taint the session
+  (gh-ocannl-1983, gh-ocannl-2042). It sits on the
   registration path, so projection derivation never runs it. `to_proj` takes the rest: a capture
   nothing set, and a kernel an axis carries that closure guessed to `1_(bcast_if_1)`. That guess
   used to surface as `different bases` at strides above 1 and pass silently at stride 1, by
