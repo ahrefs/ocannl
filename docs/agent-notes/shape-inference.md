@@ -91,6 +91,14 @@ files.
   `test/operations/capture_per_call.ml`, which assert the reference unsolved after both
   registrations: an operand of fixed size solves it at that step's Stage1 and exercises only the
   solved arm.
+- A capture reference publishes a bare size (`Ir.Indexing.variable_ref.solved_dim`), and projection
+  derivation re-solves each step with it (`projection_sizing_operation`), re-emitted as
+  `get_default_dim`: that refused every capture whose dimension solved to another tag, a free one
+  (closed to `1_(bcast_if_1)`) or a named one (gh-ocannl-2033). `solve_with_sizing` adds those
+  sizes only after a first Stage1 solve, dropping the ones the closed axes already fix at that
+  size, so the size claims no basis there. Do not fix it by carrying the tag on the reference: the
+  tag is per BINDING, and a dim binding product-tied to a later row binding has its own, which the
+  reference never sees (`product_tie_cancellation`'s "nothing sizes" case).
 - `Shape.set_equal` on two row references is `Row_eq` in every solved state (gh-ocannl-1617): its
   Row-Row arm matches on `var` BEFORE the `solved_sym`/`solved_dim` arms. A row reference's
   `solved_dim` is only its product, and it is set early (by `set_dim`, or by

@@ -83,6 +83,13 @@ let test_through_captures () =
       Stdio.printf "an operand met after the row closed: %s %s %s %s\n" (dims_str y1) (dims_str y2)
         (dims_str y3) (dims_str sum);
       all_of_5 "an operand met after the row closed sizes the tied dimension" [ y1; y2; y3; sum ]);
+  (* Nothing sizes the tied dimension: it stays free through the cancellation and closes to 1, a
+     free captured dimension (gh-ocannl-2033). *)
+  case "a tied dimension nothing sizes" (fun () ->
+      let _, y1, y2 = tied () in
+      Stdio.printf "a tied dimension nothing sizes: %s %s\n" (dims_str y1) (dims_str y2);
+      p_all ~min:2 "a tied dimension nothing sizes closes to 1" [ y1; y2 ] ~f:(fun t ->
+          List.equal Int.equal (dims t) [ 1 ]));
   (* Controls: the size is there before the row closes, so the cancellation does not decide them. *)
   case "a row left open" (fun () ->
       let _, y1, y2 = tied () in

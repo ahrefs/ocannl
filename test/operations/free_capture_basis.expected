@@ -1,0 +1,9 @@
+free: 1
+a free captured dimension closes to 1: true
+the free capture computes its operand: true
+named: 3
+a captured rgb dimension is the operand's: true
+the named capture computes its operand: true
+refusal: solved dimensions for axis: different bases
+a named and a default dimension are refused as the second registers: true
+a free and a plain 1 capture in one inference agree: true

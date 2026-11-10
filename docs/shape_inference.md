@@ -477,6 +477,8 @@ The tie between a row and a dimension is not transitive (gh-ocannl-1969). With `
 
 A closure ends a reference's variables, so the reference keeps what it reached: a dimension's value, or a row's axes and their product. The axes of a closed row stand in for it: captured again as a row, or related to another row reference by `set_equal`, it is the same row, not the same product. A concatenated axis of concrete components is its sum there, as everywhere past the operation that wrote it. Two closed row references are compared when `set_equal` is called, by the solver, and a mismatch raises there and changes nothing. A reference whose binding at the closure was a dimension keeps only the number.
 
+Projection derivation re-solves each operation on its closed shapes, and a capture's value comes in there as a size only: it sizes what the closed axes leave open (the split of a concatenated axis, a padded window's kernel) and claims no basis where they fix the dimension at that size (gh-ocannl-2033).
+
 ### Shape schemes
 
 `Tensor.Scheme` (gh-ocannl-404) gives a tensor function a shape *scheme*. This is the explicit, low-level layer; the automatic `%op` integration (gh-ocannl-1751, [syntax extensions](syntax_extensions.md#automatic-shape-schemes)) wraps it in checking mode: a `%op` closure's scheme is traced when the closure is built, and each application checks it, in a rewound window, before the body registers as usual.
