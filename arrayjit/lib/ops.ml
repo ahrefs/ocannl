@@ -1204,7 +1204,8 @@ let c_convert_precision ~from ~to_ =
      parameter guards refuse (gh-ocannl-1768). Value-neutral: the call converted the same way. *)
   | Single_prec _, Bfloat16_prec _ -> ("single_to_bfloat16((float)(", "))")
   | Bfloat16_prec _, Double_prec _ -> ("(double)bfloat16_to_single(", ")")
-  | Double_prec _, Bfloat16_prec _ -> ("single_to_bfloat16((float)", ")")
+  (* One step, not via f32 (gh-ocannl-2075): see [double_to_bfloat16]. *)
+  | Double_prec _, Bfloat16_prec _ -> ("double_to_bfloat16(", ")")
   (* FP8 conversions *)
   | Fp8_prec _, Single_prec _ -> ("fp8_to_single(", ")")
   | Single_prec _, Fp8_prec _ -> ("single_to_fp8((float)(", "))")
@@ -1238,7 +1239,8 @@ let c_convert_precision ~from ~to_ =
   | Half_prec _, Single_prec _ -> ("HALF_TO_FLOAT(", ")")
   | Single_prec _, Half_prec _ -> ("FLOAT_TO_HALF(", ")")
   | Half_prec _, Double_prec _ -> ("(double)HALF_TO_FLOAT(", ")")
-  | Double_prec _, Half_prec _ -> ("FLOAT_TO_HALF((float)", ")")
+  (* One step, not via f32 (gh-ocannl-2075): see [round_to_half]. *)
+  | Double_prec _, Half_prec _ -> ("double_to_half(", ")")
   | ( Half_prec _,
       (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _ | Uint64_prec _) )
     ->
@@ -1311,6 +1313,20 @@ external double_to_fp8 : (float[@unboxed]) -> (int[@untagged])
 (** One-step f64 -> e5m2, for the host side (an OCaml float is a double) and for the C backends'
     [Double_prec] sources. Narrowing via f32 first rounds twice, which disagrees with the GPU fp8
     types for values just off an f32 tie (gh-ocannl-648). *)
+
+external double_to_bfloat16 : (float[@unboxed]) -> (int[@untagged])
+  = "arrayjit_double_to_bfloat16" "arrayjit_double_to_bfloat16_unboxed"
+[@@noalloc]
+(** One-step f64 -> bfloat16, as {!double_to_fp8} is for e5m2 and for the same reason
+    (gh-ocannl-2075): the host's narrowing, and the C backends' [Double_prec] sources'. *)
+
+external round_to_half : (float[@unboxed]) -> (float[@unboxed])
+  = "arrayjit_round_to_half" "arrayjit_round_to_half_unboxed"
+[@@noalloc]
+(** [round_to_half x] is the half nearest [x], rounded once from f64 (gh-ocannl-2075), as the double
+    it exactly is. A half bigarray stores it unchanged, where storing [x] itself would narrow
+    through f32 (OCaml's own float16 conversion), double-rounding [x] if it sits just off an f32
+    tie. *)
 
 external copy_with_padding_c :
   ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->

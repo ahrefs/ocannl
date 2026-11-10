@@ -56,6 +56,7 @@ test/operations/canonical_render.expected [ll] markers ll-assign; re-run by @tes
 test/operations/concat_loop_symbols.expected [derived] beside test/operations/concat_loop_symbols.ml; re-run by @test/operations/runtest-concat_loop_symbols
 test/operations/cost_model_floor.expected [derived] beside test/operations/cost_model_floor.ml; re-run by @test/operations/runtest-cost_model_floor
 test/operations/cpu_mma_companion_coverage.expected [derived] beside test/operations/cpu_mma_companion_coverage.ml; re-run by @test/operations/runtest-cpu_mma_companion_coverage
+test/operations/f64_narrowing_parity.expected [derived] beside test/operations/f64_narrowing_parity.ml; re-run by @test/operations/runtest-f64_narrowing_parity
 test/operations/gpu_lane_reduction.expected [derived] beside test/operations/gpu_lane_reduction.ml; re-run by @test/operations/runtest-gpu_lane_reduction
 test/operations/gpu_serial_lanes.expected [derived] beside test/operations/gpu_serial_lanes.ml; re-run by @test/operations/runtest-gpu_serial_lanes
 test/operations/half_unary_math.expected [derived] beside test/operations/half_unary_math.ml; re-run by @test/operations/runtest-half_unary_math
@@ -161,6 +162,7 @@ test/operations/cpu_vectorized.ml [run by @test/operations/runtest-cpu_vectorize
     "float4_t"
     "reinterpret_cast"
     "vector_size"
+test/operations/f64_narrowing_parity.ml [run by @test/operations/runtest-f64_narrowing_parity; also pins text this scan cannot name: untraced callback, opaque aggregate component, mutation or unseen buffer write]
 test/operations/fission_replay_segmentation.ml [run by @test/operations/runtest-fission_replay_segmentation]
 test/operations/fission_schedule.ml [run by @test/operations/runtest-fission_schedule]
     "#pragma omp parallel for"
@@ -669,6 +671,7 @@ so, listed next, and the goldens' families say which backends a change has to be
 @test/operations/runtest-cpu_scratch_matmul_grid
 @test/operations/runtest-cpu_simd_reduction
 @test/operations/runtest-cpu_vectorized
+@test/operations/runtest-f64_narrowing_parity
 @test/operations/runtest-fission_replay_segmentation
 @test/operations/runtest-fission_schedule
 @test/operations/runtest-fixed_name_temporaries-logged

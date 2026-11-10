@@ -26,6 +26,7 @@ type sweep_buf =
 
 external sweep_init : unit -> unit = "ocannl_bf16_sweep_init"
 external sweep_narrow : int64 -> int64 -> sweep_buf -> unit = "ocannl_bf16_sweep_narrow"
+external sweep_narrow_f64 : int64 -> int64 -> sweep_buf -> unit = "ocannl_bf16_sweep_narrow_f64"
 external has_native : unit -> bool = "ocannl_bf16_has_native"
 external has_convertvector : unit -> bool = "ocannl_bf16_has_convertvector"
 external widen_bits : int -> int64 = "ocannl_bf16_widen_bits"
@@ -49,7 +50,20 @@ let out_records = 11
 let max_records = 8
 let out_reached = out_records + (3 * max_records)
 let reached_words = 1024
-let out_len = out_reached + reached_words
+
+(* The f64 sweep's layout (the F64_* offsets), sharing the record and bitmap sizes. *)
+let f64_rounding = 0
+let f64_sign = 1
+let f64_special = 2
+let f64_f32_exact = 3
+let f64_two_step = 4
+let f64_native = 5
+let f64_reported = 6
+let f64_records = 7
+let f64_reached = f64_records + (3 * max_records)
+
+(* One buffer size for both sweeps, each of which refuses a shorter one. *)
+let out_len = Int.max (out_reached + reached_words) (f64_reached + reached_words)
 let two_pow_32 = 0x1_0000_0000
 let inf_code = 0x7F80
 let quiet_bit = 0x0040
@@ -258,6 +272,63 @@ let () =
     (refuses (fun () -> sweep_narrow (-1L) 1L (fresh_buf ()))
     && refuses (fun () -> sweep_narrow 0L (-1L) (fresh_buf ()))
     && refuses (fun () -> sweep_narrow 0xFFFF_FFFFL 2L (fresh_buf ())));
+
+  (* gh-ocannl-2075: [double_to_bfloat16], f64 narrowed in one rounding, and where there is
+     [__bf16], against the native composition. Mirrors the F64_* offsets in
+     bf16_codec_exhaustive_stubs.c. *)
+  let started = Unix.gettimeofday () in
+  let narrow64 = run sweep_narrow_f64 two_pow_32 in
+  Stdio.eprintf "f64 narrowing sweep: %.1fs; %d domains (not part of the golden)\n"
+    (Unix.gettimeofday () -. started)
+    domains;
+  Array.iter narrow64 ~f:(fun b ->
+      for k = 0 to Int64.to_int_exn b.{f64_reported} - 1 do
+        let base = f64_records + (3 * k) in
+        Stdio.eprintf "f64 narrowing: input 0x%016Lx -> 0x%08Lx (%s)\n" b.{base}
+          b.{base + 1}
+          (reason_name (Int64.to_int_exn b.{base + 2}))
+      done);
+  List.iter
+    [
+      ("misroundings", f64_rounding);
+      ("sign losses", f64_sign);
+      ("infinities or NaNs on the wrong code", f64_special);
+      ("f32-exact disagreements with the f32 entry point", f64_f32_exact);
+      ("native disagreements", f64_native);
+      ("misroundings through f32 (the control)", f64_two_step);
+    ]
+    ~f:(fun (what, i) ->
+      Stdio.eprintf "f64 narrowing: %d %s (not part of the golden)\n" (sum narrow64 i) what);
+  Stdio.printf "  f64 inputs narrowed: %d\n" (4 * two_pow_32);
+  Verdict.p
+    "double_to_bfloat16 rounds every finite f64 input swept to the nearest bf16 code, ties to \
+     even, in one rounding"
+    (sum narrow64 f64_rounding = 0);
+  Verdict.p "double_to_bfloat16 carries the sign of every f64 input over, zeros and NaNs included"
+    (sum narrow64 f64_sign = 0);
+  Verdict.p "double_to_bfloat16 narrows every infinite f64 input to 0x7F80 and every NaN to a NaN"
+    (sum narrow64 f64_special = 0);
+  Verdict.p
+    "double_to_bfloat16 agrees with single_to_bfloat16 on every f32-exact double, NaNs up to \
+     payload"
+    (sum narrow64 f64_f32_exact = 0);
+  Verdict.gated ~aggregation:`Environment ~when_:native ~on
+    "double_to_bfloat16 agrees with its native __bf16 composition on every f64 input swept, NaNs \
+     up to payload"
+    (sum narrow64 f64_native = 0);
+  (* The control: the sweep reaches the inputs double rounding gets wrong, so "no misrounding" above
+     is a claim about them. *)
+  Verdict.p "narrowing through f32 first misrounds some f64 input the sweep reaches"
+    (sum narrow64 f64_two_step > 0);
+  let reached64 =
+    Array.init reached_words ~f:(fun w ->
+        Array.fold narrow64 ~init:0L ~f:(fun acc b -> Int64.bit_or acc b.{f64_reached + w}))
+  in
+  let is_reached64 c =
+    not (Int64.equal 0L (Int64.bit_and reached64.(c / 64) (Int64.shift_left 1L (c % 64))))
+  in
+  Verdict.p_all "narrowing f64 reaches every finite and infinite bf16 code of both signs" codes
+    ~min:0x10000 ~f:(fun c -> c land 0x7FFF > inf_code || is_reached64 c);
 
   (* The format's landmarks, as hex floats so the golden is platform-independent. *)
   Stdio.printf "  smallest subnormal (0x0001): %s\n" (Test_utils.hex_float widened.(0x0001));

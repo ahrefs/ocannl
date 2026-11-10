@@ -3,7 +3,8 @@
    Since the two tables became stdlib-only libraries, every PR compiles them as OCaml; this checks
    the C text inside them too, without a GPU: the helpers that turn a [uint4x32_t] draw into a value
    of each precision (scalar, packed [_vec] and per-[_lane]), the ones that turn a value of each
-   precision back into a [uint4x32_t] counter, and HIP's guards around ROCm's fp8 cast.
+   precision back into a [uint4x32_t] counter, the round-to-odd step HIP narrows f64 through
+   (gh-ocannl-2075), and HIP's guards around ROCm's fp8 cast.
 
    The helpers compared are DERIVED from the tables: every function the CUDA (or HIP) table shares
    by name with the C table is probed, or excluded below with its reason, and a shared name this
@@ -36,6 +37,8 @@ type shape =
   | Lane  (** [uint4x32_to_<prec>_uniform_lane]: a draw and a lane of its [_vec] pack. *)
   | From_u32  (** [uint32_to_<prec>_uniform]: one 32-bit word. *)
   | To_u4 of string  (** [<prec>_to_uint4x32]: a value of [<prec>]. *)
+  | From_f64
+      (** [double_to_single_round_odd] (gh-ocannl-2075): a double, the draw's first two words. *)
   | Excluded of string
   | Unknown
 
@@ -92,16 +95,18 @@ let shape key =
           then To_u4 prec
           else Unknown
       | None -> (
-          match chop_suffix key ~suffix:"_uniform_lane" with
-          | Some stem when List.mem (stem ^ "_uniform_vec") c_keys -> Lane
-          | Some _ -> Unknown
-          | None ->
-              if String.starts_with ~prefix:"uint4x32_to_" key then From_u4
-              else if
-                String.starts_with ~prefix:"uint32_to_" key
-                && String.ends_with ~suffix:"_uniform" key
-              then From_u32
-              else Unknown))
+          if key = "double_to_single_round_odd" then From_f64
+          else
+            match chop_suffix key ~suffix:"_uniform_lane" with
+            | Some stem when List.mem (stem ^ "_uniform_vec") c_keys -> Lane
+            | Some _ -> Unknown
+            | None ->
+                if String.starts_with ~prefix:"uint4x32_to_" key then From_u4
+                else if
+                  String.starts_with ~prefix:"uint32_to_" key
+                  && String.ends_with ~suffix:"_uniform" key
+                then From_u32
+                else Unknown))
 
 let is_function (_, definition, _) =
   not (String.starts_with ~prefix:"typedef" (String.trim definition))
@@ -255,7 +260,7 @@ let probe ~vendor ~prefix key =
     | From_u4 -> Printf.sprintf "%s%s(x)" prefix key
     | Lane -> Printf.sprintf "%s%s(x, lane)" prefix key
     | From_u32 -> Printf.sprintf "%s%s(in[0])" prefix key
-    | To_u4 _ -> Printf.sprintf "%s%s(a)" prefix key
+    | To_u4 _ | From_f64 -> Printf.sprintf "%s%s(a)" prefix key
     | Excluded _ | Unknown -> assert false
   in
   let arg =
@@ -263,6 +268,7 @@ let probe ~vendor ~prefix key =
     | To_u4 prec ->
         let t = Option.get (param_type prec ~vendor) in
         Printf.sprintf "  %s a; memset(&a, 0, sizeof a); memcpy(&a, in, sizeof a);\n" t
+    | From_f64 -> "  double a; memcpy(&a, in, sizeof a);\n"
     | _ -> ""
   in
   Printf.sprintf

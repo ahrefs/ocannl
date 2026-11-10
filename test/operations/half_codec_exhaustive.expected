@@ -16,6 +16,14 @@ the reference decode refuses a code that is not a finite half magnitude: true
 the widening entry points refuse a code outside 16 bits: true
 the sweep refuses a counters buffer too short to hold its results: true
 the sweep refuses a negative base or count: true
+  f64 inputs narrowed: 17179869184
+double_to_half rounds every finite f64 input swept to the nearest half code, ties to even, in one rounding: true
+double_to_half carries the sign of every f64 input over, zeros and NaNs included: true
+double_to_half narrows every infinite f64 input to 0x7C00 and every NaN to a NaN: true
+double_to_half agrees with float_to_half_emulated on every f32-exact double, NaNs up to payload: true
+double_to_half under the emulated converters agrees with its native _Float16 composition on every f64 input swept, NaNs up to payload: true
+narrowing through f32 first misrounds some f64 input the sweep reaches: true
+narrowing f64 reaches every finite and infinite half code of both signs: true
   smallest subnormal (0x0001): 0x1p-24
   largest subnormal (0x03FF): 0x1.ff8p-15
   smallest normal (0x0400): 0x1p-14

@@ -88,17 +88,6 @@ let case ?(when_ = true) name ~expected ~twin run =
       in_legf ~leg "%s: the twin's rounding reaches the value" label (fun claim ->
           p claim Float.(snd (outcome where) = expected)))
 
-(* [case] where the value is the backend's to choose: every placement reads what the materialized
-   twin does. *)
-let agrees_with_materialized ~when_ name ~twin run =
-  let leg = Verdict.leg ~when_ ~on:backend_name () in
-  let outcome = run_placements ~when_ name ~twin run in
-  List.iter placements ~f:(fun (where, _) ->
-      let label = name ^ ", " ^ where in
-      in_legf ~leg "%s: placed as asked" label (fun claim -> p claim (fst (outcome where)));
-      in_legf ~leg "%s: reads what the materialized twin reads" label (fun claim ->
-          p claim Float.(snd (outcome where) = snd (outcome "materialized"))))
-
 let forward ?bindings ?launch_values y ~out_prec =
   Tn.update_prec y.Tensor.value out_prec;
   Train.set_materialized y.Tensor.value;
@@ -118,15 +107,16 @@ let slot prec =
       forward y ~out_prec:prec)
 
 (* gh-ocannl-1956: an f64 master just above the tie between 1 and the next value at [prec], and
-   close enough to it that f32 rounds onto the tie. One step rounds up; through f32, the tie goes to
-   even, 1. Placement must not choose between them. fp8 is one step on every backend with an f64
-   (gh-ocannl-648), so its value is claimed: 1.25, and 3.75 at the store, a tie that goes to 4 where
-   the double rounding's 1 gives 3. A conversion to half or bfloat16 is the backend's own (cc and
-   HIP go through f32, CUDA converts in one step), so those claim the parity. Metal has no f64. *)
+   close enough to it that f32 rounds onto the tie. One step rounds up, to [1 + ulp]; through f32,
+   the tie goes to even, 1. Placement must not choose between them, and neither may the backend:
+   every f64 narrowing rounds once (gh-ocannl-648 for fp8, gh-ocannl-2075 for half and bfloat16), so
+   the value is claimed. At the store, [3 * (1 + ulp)] is [3] and a half ulp of [3], a tie that goes
+   to [3 + 2 ulp(3)] where the double rounding's 1 gives 3. Metal has no f64. *)
 let f64_master prec =
   let name = Ops.prec_string prec ^ " twin of an f64 master" in
   let when_ = (Context.codegen_capabilities (Context.auto ())).Ir.Backend_intf.supports_f64 in
-  let master = 1. +. (2. **. Float.of_int (-Ops.significand_bits prec)) +. (2. **. -40.) in
+  let bits = Ops.significand_bits prec in
+  let master = 1. +. (2. **. Float.of_int (-bits)) +. (2. **. -40.) in
   let twin ~placement = twin_of ~placement ~master_prec:Ops.double ~prec [| master |] in
   let in_single ~label:_ t =
     let%op y = t *. 1.0 in
@@ -136,14 +126,13 @@ let f64_master prec =
     let%op y = t *. 3.0 in
     forward y ~out_prec:prec
   in
-  if Ops.equal_prec prec Ops.fp8 then (
-    case ~when_ (name ^ " read in an f32 slot") ~expected:1.25 ~twin in_single;
-    case ~when_ (name ^ " read in a slot of its own precision") ~expected:4. ~twin in_own_prec)
-  else (
-    agrees_with_materialized ~when_ (name ^ " read in an f32 slot") ~twin in_single;
-    agrees_with_materialized ~when_
-      (name ^ " read in a slot of its own precision")
-      ~twin in_own_prec)
+  case ~when_ (name ^ " read in an f32 slot")
+    ~expected:(1. +. (2. **. Float.of_int (1 - bits)))
+    ~twin in_single;
+  case ~when_
+    (name ^ " read in a slot of its own precision")
+    ~expected:(3. +. (2. **. Float.of_int (3 - bits)))
+    ~twin in_own_prec
 
 (* A cast of a cast rounds twice, each at its own precision: the outer read rounds from what the
    inner one rounded to (gh-ocannl-1975). 1 + 3 * 2^-10 is exact in half and under half a bfloat16

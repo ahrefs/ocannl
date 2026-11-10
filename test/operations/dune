@@ -10702,7 +10702,8 @@
     --force-off
     HAS_NATIVE_FLOAT16
     half_to_float_emulated
-    float_to_half_emulated))))
+    float_to_half_emulated
+    double_to_half))))
 
 (executable
  (name half_codec_exhaustive)
@@ -10750,6 +10751,7 @@
     BF16_CODEC_H
     bfloat16_to_single
     single_to_bfloat16
+    double_to_bfloat16
     OCANNL_VEC_WIDEN_BFLOAT16
     OCANNL_VEC_NARROW_BFLOAT16))))
 
@@ -14692,3 +14694,17 @@
   (env_var OCANNL_BACKEND))
  (modules free_capture_basis)
  (libraries base ocannl stdio arrayjit.verdict))
+
+; gh-ocannl-2075: f64 narrowed to half and bfloat16 rounds once, on the device and through the host's
+; writers, checked against a midpoint oracle over every code boundary.
+
+(test
+ (name f64_narrowing_parity)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules f64_narrowing_parity)
+ (libraries base ocannl stdio arrayjit.utils test_utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
