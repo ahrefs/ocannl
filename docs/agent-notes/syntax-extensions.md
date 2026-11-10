@@ -76,6 +76,16 @@ files.
   declarations are not affected by either: they are lifted and bound in source order ahead of the
   expression. A new builder that splices several effectful expressions into one literal or
   argument list owes `in_source_order`.
+- Application sites (gh-ocannl-2007): the generic application arm of `translate` (and the `|>`
+  arm) wraps every application but a DSL operator's (`is_primitive_op`/`is_operator` heads) as
+  `Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> app)`, which a scheme check inside it
+  reads to name `<file>:<line>`. `__POS__` is filled in by the compiler at the application's
+  location, so the `test/ppx/*_expected.ml` goldens spell no line. An arm that reads the applied
+  function of a translated expression syntactically must undo the wrapper with `strip_at_site`:
+  the inline-declaration initializer does (`add_module_qualifier_to_applied_function` qualifies
+  its head with `NTDSL`; wrapped, `{ w = uniform () }` resolved `TDSL.O.uniform` and failed to
+  type-check). Otherwise the thunk only types the application without its position's expected
+  type and takes it out of tail position; no other `%op` code in the repository noticed.
 - `%cd` composition seams verified by ppx expansion (gh-465, `Train.sgd_one`/`grad_update`): an
   OCaml variable of `Asgns.comp` type in statement position splices verbatim (so a
   programmatically built fragment can sit inside a `%cd` body); an inline declaration `{ x }`

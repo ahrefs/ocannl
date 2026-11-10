@@ -5913,11 +5913,14 @@ module Scheme = struct
 
   (* [results]: [None] relates none of the scheme's results (a check, which has only the
      arguments). *)
-  let instantiate_core ?sabotage ~instance ~bind_refs s ~application ~(args : shape list)
+  let instantiate_core ?sabotage ?site ~instance ~bind_refs s ~application ~(args : shape list)
       ~(results : shape list option) =
     check_untainted ();
     let sabotaged x = Option.exists sabotage ~f:(fun y -> Poly.equal x y) in
-    let prefix = [%string "applying the shape scheme %{s.label} to %{application}: "] in
+    (* Where the application is, when known (gh-ocannl-2007): ["in the %op application at
+       <file>:<line>"] or ["at <file>:<line>"], read after the application's name. *)
+    let located = match site with None -> application | Some site -> application ^ " " ^ site in
+    let prefix = [%string "applying the shape scheme %{s.label} to %{located}: "] in
     let fail msg = raise @@ Row.Shape_error (prefix ^ msg, []) in
     let check_count what expected got =
       if expected <> got then
@@ -5988,7 +5991,7 @@ module Scheme = struct
           lhs_kind = `Output;
           rhs_name = application;
           rhs_kind = `Output;
-          operation = Some [%string "the shape scheme %{s.label} applied to %{application}"];
+          operation = Some [%string "the shape scheme %{s.label} applied to %{located}"];
         }
     in
     let equate rows (sh : shape) =
@@ -6096,9 +6099,9 @@ module Scheme = struct
       let bt = Stdlib.Printexc.get_raw_backtrace () in
       Stdlib.Printexc.raise_with_backtrace (Row.Shape_error (prefix ^ msg, trace)) bt
 
-  let instantiate ?sabotage s ~application ~args ~results =
+  let instantiate ?sabotage ?site s ~application ~args ~results =
     ignore
-      (instantiate_core ?sabotage ~instance:true ~bind_refs:true s ~application ~args
+      (instantiate_core ?sabotage ?site ~instance:true ~bind_refs:true s ~application ~args
          ~results:(Some results)
         : Row.renaming * Row.constraint_origin)
 
@@ -6110,7 +6113,7 @@ module Scheme = struct
     taint := taint0;
     List.iter rows ~f:(fun (sh, batch, input, output) -> set_rows sh ~batch ~input ~output)
 
-  let check ?sabotage s ~application ~args =
+  let check ?sabotage ?site s ~application ~args =
     let globals = capture_globals () and row_globals = Row.capture_globals () and taint0 = !taint in
     let rows =
       List.map
@@ -6121,7 +6124,7 @@ module Scheme = struct
         Exn.protect
           ~f:(fun () ->
             ignore
-              (instantiate_core ?sabotage ~instance:true ~bind_refs:false s ~application ~args
+              (instantiate_core ?sabotage ?site ~instance:true ~bind_refs:false s ~application ~args
                  ~results:None
                 : Row.renaming * Row.constraint_origin))
           ~finally:(fun () -> restore_after_check ~globals ~row_globals ~taint:taint0 rows))

@@ -89,6 +89,7 @@ tensor/tensor.ml: observers (unread state) -- exempt
 tensor/tensor.ml: generation (unread state) -- exempt
 tensor/tensor.ml: mode_override (unread state) -- exempt
 tensor/tensor.ml: warned (unread state) -- exempt
+tensor/tensor.ml: site (unread state) -- exempt
 tensor/tensor.ml: in_checked_body (unread state) -- exempt
 tensor/tensor.ml: recheck_nested (unread state) -- exempt
 tensor/tensor.ml: boundary note_external_handout -- a closed-world act: records that work left the session, so a rewind does not resurrect it; not open inference state

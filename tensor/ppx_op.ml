@@ -529,6 +529,29 @@ let wrap_schemed ~loc ~at_unit ~name ~params (fn : expression) =
     let __ocannl_scheme = [%e make_call] in
     [%e returned]]
 
+(* A function application in [%op] code, run with its source site recorded (gh-ocannl-2007): the
+   shape-scheme check of an application inside it names the line. The DSL's operators are not
+   wrapped; any other application may be (or reach) a schemed [%op] function, which the ppx cannot
+   tell without types. The site is [__POS__] at the application's location, which the compiler fills
+   in: the expansion itself spells no line. *)
+let at_site ~loc app = [%expr Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> [%e app])]
+
+(* [at_site]'s inverse, everywhere in an expression whose applications are no scheme's: an
+   initializer, where [add_module_qualifier_to_applied_function] reads the applied functions -- of
+   the root, and of a conditional's branches, a [let]'s or a sequence's body, and so on. *)
+let strip_at_site =
+  let mapper =
+    object
+      inherit Ast_traverse.map as super
+
+      method! expression e =
+        match super#expression e with
+        | [%expr Tensor.Scheme.For_ppx.at_site [%e? _] (fun () -> [%e? app])] -> app
+        | e -> e
+    end
+  in
+  mapper#expression
+
 let default_scheme_name ~loc ?name () =
   match name with
   | Some name -> Ast_builder.Default.estring ~loc name
@@ -822,8 +845,10 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
                 (no_vbs, None)
             | { pexp_desc = Pexp_extension ({ txt = "oc"; _ }, _); _ } -> (no_vbs, Some first_value)
             | _ ->
+                (* An initializer is no schemed application, and [make_p] reads its applied function
+                   to qualify it: not wrapped. *)
                 let vbs, e = loop first_value in
-                (vbs, Some e)
+                (vbs, Some (strip_at_site e))
           in
           let name = { loc = first_label.loc; txt = tensor_name } in
           let pat, vb = make_vb ~dsl_name ~opt_label ~late ?param_init ~extra_args ~loc name in
@@ -905,7 +930,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       ( vbs,
         [%expr
           let __x = [%e arg] in
-          [%e fn] __x] )
+          [%e at_site ~loc [%expr [%e fn] __x]]] )
   | { pexp_desc = Pexp_apply (fn_expr, args); _ } ->
       (* Smart application handling with unit-parameter heuristic: If there's a unit () argument,
          don't transform args before it *)
@@ -937,7 +962,14 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
                     (vbs, (arg_label, e))))
       in
       let all_vbs = reduce_vbss (vbs_fn :: vbs_args) in
-      (all_vbs, Ast_builder.Default.pexp_apply ~loc e_fn processed_args)
+      let app = Ast_builder.Default.pexp_apply ~loc e_fn processed_args in
+      let operator =
+        match fn_expr.pexp_desc with
+        | Pexp_ident { txt = Lident op_ident; _ } ->
+            is_primitive_op op_ident || is_operator op_ident
+        | _ -> false
+      in
+      (all_vbs, if operator then app else at_site ~loc app)
   | { pexp_desc = Pexp_function (args, constr, body); _ } when is_toplevel -> (
       (* Check if there's a unit parameter or a labeled parameter with label "label" *)
       let rec find_unit acc = function

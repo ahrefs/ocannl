@@ -2110,7 +2110,7 @@ module Scheme = struct
 
   let trace ~label arity f = trace_impl ~label arity f
 
-  let instantiate_impl ?sabotage ?application s ~args ~results =
+  let instantiate_impl ?sabotage ?application ?here s ~args ~results =
     let application =
       match application with
       | Some a -> a
@@ -2118,9 +2118,14 @@ module Scheme = struct
           Int.incr applications;
           [%string "application #%{!applications#Int}"]
     in
-    Shape.Scheme.instantiate ?sabotage s ~application ~args ~results
+    let site =
+      Option.map here ~f:(fun (here : Ppx_here_lib.position) ->
+          [%string "at %{here.pos_fname}:%{here.pos_lnum#Int}"])
+    in
+    Shape.Scheme.instantiate ?sabotage ?site s ~application ~args ~results
 
-  let instantiate ?application s ~args ~results = instantiate_impl ?application s ~args ~results
+  let instantiate ?application ?here s ~args ~results =
+    instantiate_impl ?application ?here s ~args ~results
 
   (* {3 Automatic schemes for [%op] functions (gh-ocannl-1751)} *)
 
@@ -2374,6 +2379,23 @@ module Scheme = struct
     let deferred ~name ~arity body =
       deferred_variants ~name ~optional:(all_required arity) (present_all body)
 
+    (* The innermost application in [%op] code being evaluated (gh-ocannl-2007): the expansion wraps
+       each one in [at_site] with its [__POS__], and a check names it. An application reached from
+       it through a function written outside [%op] is inside its extent too, so the site reads "in
+       the %op application at", not "at". *)
+    let site : (string * int * int * int) option ref = ref None
+    [@@mutation_serial.exempt
+      "the source site of the [%op] application being evaluated, restored by at_site's finally"]
+
+    let at_site pos f =
+      let outer = !site in
+      site := Some pos;
+      Exn.protect ~f ~finally:(fun () -> site := outer)
+
+    let site_phrase () =
+      Option.map !site ~f:(fun (file, line, _, _) ->
+          [%string "in the %op application at %{file}:%{line#Int}"])
+
     let application_name args =
       match args with
       | [] -> "no arguments"
@@ -2408,7 +2430,7 @@ module Scheme = struct
       &&
       ((* Its renamed variables die with it: minted from the reserved range. *)
        Row.with_reserved_vars (fun () ->
-           Shape.Scheme.check scheme ~application:(application_name args)
+           Shape.Scheme.check scheme ~application:(application_name args) ?site:(site_phrase ())
              ~args:(List.map args ~f:(fun t -> t.shape)));
        Shape.note_checked_application ();
        emit (Checked s.label);
@@ -2483,8 +2505,8 @@ module For_testing = struct
 
   let trace_scheme ~sabotage ~label arity f = Scheme.trace_impl ~sabotage ~label arity f
 
-  let instantiate_scheme ~sabotage ?application s ~args ~results =
-    Scheme.instantiate_impl ~sabotage ?application s ~args ~results
+  let instantiate_scheme ~sabotage ?application ?here s ~args ~results =
+    Scheme.instantiate_impl ~sabotage ?application ?here s ~args ~results
 
   let observe_schemes f ~on_event = Scheme.observing f ~on_event
   let set_op_shape_schemes v = Scheme.mode_override := v

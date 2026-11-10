@@ -14073,6 +14073,19 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+;; gh-ocannl-2007: a shape-scheme application error names the source line of the application.
+
+(test
+ (name scheme_application_site)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules scheme_application_site)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ;; gh-ocannl-1803: a window kernel nothing can size is refused at the definition, in agreement
 ;; with projection derivation.
 

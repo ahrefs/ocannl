@@ -1,0 +1,37 @@
+%op:
+  applying the shape scheme residual_block to x in the %op application at test/operations/scheme_application_site.ml:59: dimension comparison for axis: mismatch
+the check names the application's file and line: true
+%op, rendered:
+Shape_error: applying the shape scheme residual_block to x in the %op application at test/operations/scheme_application_site.ml:62: dimension comparison for axis: mismatch
+  conflicting sizes: 4 vs 3
+  failed constraint: 4 ⊑ 3
+    from residual_block (output) with x (output): the shape scheme residual_block applied to x in the %op application at test/operations/scheme_application_site.ml:62
+    from residual_block (output) with (its trace's solution) (output): the trace of the shape scheme residual_block
+    from residual_block (output) with n'1 (output): pointwise_binary
+    from w (input) with n'1 (output): compose
+    from w (input) with n8 (input): pointwise_binary
+    from n8 (input) with n6 (input): pointwise_binary
+    from n6 (batch) with threefry4x32_light (output): Uint4x32_to_prec RESULT total elements
+plain after a refusal:
+  applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
+a plain application's check names no site: true
+%op, fitting: ok
+plain after a success:
+  applying the shape scheme residual_block to x: dimension comparison for axis: mismatch
+a plain application after a returned one names no site: true
+via plain:
+  applying the shape scheme residual_block to x in the %op application at test/operations/scheme_application_site.ml:77: dimension comparison for axis: mismatch
+a plain function's application names the %op application that called it: true
+pipe:
+  applying the shape scheme residual_block to x in the %op application at test/operations/scheme_application_site.ml:81: dimension comparison for axis: mismatch
+a pipe names its line: true
+first application, 3 features: ok
+through:
+  applying the shape scheme mlp_layer to x6 in the %op application at test/operations/scheme_application_site.ml:30: dimension comparison for axis: mismatch
+the body's application names its own line, not the caller's: true
+instantiate ~here:
+  applying the shape scheme needs3 to application #1 at test/operations/scheme_application_site.ml:95: dimension comparison for axis: mismatch
+the instance names [here]'s file and line: true
+instantiate:
+  applying the shape scheme needs3 to application #2: dimension comparison for axis: mismatch
+without [~here], the instance names no site: true

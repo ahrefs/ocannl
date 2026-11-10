@@ -190,7 +190,34 @@ let initialized_expr =
         Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
           (fun () -> __ocannl_body x) in
   f
+let use_kaiming = true
+let initialized_compound =
+  let open! TDSL.O in
+    let cond_w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some
+                        (if use_kaiming
+                         then NTDSL.kaiming normal1 ()
+                         else NTDSL.uniform ())) "cond_w") () in
+    let let_w =
+      (TDSL.param ?more_label:None ?value:None ?values:None
+         ?param_init:(Some (let base = normal1 in NTDSL.kaiming base ()))
+         "let_w") () in
+    let __ocannl_body x =
+      relu
+        ?label:(Some
+                  (List.concat
+                     [["initialized_compound"];
+                     (x.Tensor.value).Ir.Tnode.label]))
+        (( * ) ?label:None cond_w (( * ) ?label:None let_w x)) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"initialized_compound" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
 let () = ignore (y0, y1, y2, a, b, y)
+let () = ignore initialized_compound
 let () = ignore (z, z2, z3)
 let () = ignore (concat_single, concat_pair)
 let () = ignore (initialized_no_unit, initialized_expr)
@@ -214,13 +241,26 @@ let mlp_layer =
           (fun () -> __ocannl_body ~x)
 let _use_layer =
   let open! TDSL.O in
-    let l1 = mlp_layer ~label:["L"] ~hid_dim:3 () in
-    let l2 = mlp_layer ~label:["L2"] ~hid_dim:3 () in fun x -> l1 ~x:(l2 ~x)
+    let l1 =
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> mlp_layer ~label:["L"] ~hid_dim:3 ()) in
+    let l2 =
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> mlp_layer ~label:["L2"] ~hid_dim:3 ()) in
+    fun x ->
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () ->
+           l1
+             ~x:(Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+                   (fun () -> l2 ~x)))
 let _config_layer =
   let open! TDSL.O in
     fun ~label () ->
-      let l = mlp_layer ~label:(label @ ["L"]) ~hid_dim:3 () in
-      let __ocannl_body x = l ~x in
+      let l =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () -> mlp_layer ~label:(label @ ["L"]) ~hid_dim:3 ()) in
+      let __ocannl_body x =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> l ~x) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_config_layer" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -230,10 +270,24 @@ let _config_layer =
 let _three_layer_perceptron =
   let open! TDSL.O in
     fun ~label ~dim1 ~dim2 ~dim3 () ->
-      let l1 = mlp_layer ~label:(label @ ["L1"]) ~hid_dim:dim1 () in
-      let l2 = mlp_layer ~label:(label @ ["L2"]) ~hid_dim:dim2 () in
-      let l3 = mlp_layer ~label:(label @ ["L3"]) ~hid_dim:dim3 () in
-      let __ocannl_body x = l3 ~x:(l2 ~x:(l1 ~x)) in
+      let l1 =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () -> mlp_layer ~label:(label @ ["L1"]) ~hid_dim:dim1 ()) in
+      let l2 =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () -> mlp_layer ~label:(label @ ["L2"]) ~hid_dim:dim2 ()) in
+      let l3 =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () -> mlp_layer ~label:(label @ ["L3"]) ~hid_dim:dim3 ()) in
+      let __ocannl_body x =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () ->
+             l3
+               ~x:(Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+                     (fun () ->
+                        l2
+                          ~x:(Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+                                (fun () -> l1 ~x))))) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_three_layer_perceptron"
           ~arity:1 (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -265,7 +319,8 @@ let _capture_with_unit =
         let b = Shape.get_variable_ref "b" in
         let y = ( * ) ?label:(Some ["y"]) cw x in
         (/.) ?label:(Some ["_capture_with_unit"])
-          (einsum1 ?label:None ~capture_dims:[b] "a, b => a" y) (dim b) in
+          (einsum1 ?label:None ~capture_dims:[b] "a, b => a" y)
+          (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> dim b)) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_capture_with_unit" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -280,7 +335,10 @@ let _capture_siblings =
     let g x =
       let b = Shape.get_variable_ref "b" in
       einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => b" x in
-    fun x -> (+) ?label:(Some ["_capture_siblings"]) (f x) (g x)
+    fun x ->
+      (+) ?label:(Some ["_capture_siblings"])
+        (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> f x))
+        (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> g x))
 let _capture_nested =
   let open! TDSL.O in
     let __ocannl_body x =
@@ -291,7 +349,8 @@ let _capture_nested =
       (+) ?label:(Some
                     (List.concat
                        [["_capture_nested"]; (x.Tensor.value).Ir.Tnode.label]))
-        (einsum1 ?label:None ~capture_dims:[b] "a, b => a" x) (g x) in
+        (einsum1 ?label:None ~capture_dims:[b] "a, b => a" x)
+        (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> g x)) in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_capture_nested" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -307,7 +366,9 @@ let _capture_nested_toplevel =
     let g y =
       let b = Shape.get_variable_ref "b" in
       einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => a" y in
-    g (einsum1 ?label:None ~capture_dims:[b] "a, b, c => a, b" cn)
+    Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+      (fun () ->
+         g (einsum1 ?label:None ~capture_dims:[b] "a, b, c => a, b" cn))
 let _scheme_labelled =
   let open! TDSL.O in
     fun () ->
@@ -325,8 +386,11 @@ let _scheme_labelled =
 let _scheme_tail =
   let open! TDSL.O in
     fun () ->
-      let l = mlp_layer ~label:["tail"] ~hid_dim:2 () in
-      let __ocannl_body x = l ~x in
+      let l =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () -> mlp_layer ~label:["tail"] ~hid_dim:2 ()) in
+      let __ocannl_body x =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> l ~x) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_scheme_tail" ~arity:1
           (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -376,7 +440,8 @@ let _scheme_forwarded =
   let open! TDSL.O in
     fun () ->
       let __ocannl_body ~gamma:(gamma : Tensor.t) x =
-        _scheme_labelled () ~gamma ~beta:gamma x in
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () -> _scheme_labelled () ~gamma ~beta:gamma x) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_scheme_forwarded" ~arity:2
           (function
@@ -433,7 +498,9 @@ let rec _scheme_rec =
     fun () ->
       fun x ->
         if false
-        then _scheme_rec () x
+        then
+          Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+            (fun () -> _scheme_rec () x)
         else
           (+) ?label:(Some ["_scheme_rec"]) x (TDSL.number ?label:None 1.0)
 let _no_unit_optional =
@@ -443,7 +510,8 @@ let _no_unit_optional =
         match scale with
         | None -> x
         | Some s -> ( *. ) ?label:(Some ["y"]) x s in
-      ignore (stride : int);
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> ignore (stride : int));
       (+) ?label:(Some
                     (List.concat
                        [["_no_unit_optional"];
@@ -469,7 +537,9 @@ let _late_gamma =
         (fun () -> __ocannl_body ~gamma x)
 let _late_beta =
   let open! TDSL.O in
-    let __ocannl_body ~beta:(beta : Tensor.t) x = _late_gamma ~gamma:beta x in
+    let __ocannl_body ~beta:(beta : Tensor.t) x =
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> _late_gamma ~gamma:beta x) in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_late_beta" ~arity:2
         (function | beta::x::[] -> __ocannl_body ~beta x | _ -> assert false) in
@@ -486,7 +556,9 @@ let _late_scale =
         x (TDSL.O.(!.) scale)
 let _late_label =
   let open! TDSL.O in
-    fun ~label x -> mlp_layer ~label:("late" :: label) ~hid_dim:2 () ~x
+    fun ~label x ->
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> mlp_layer ~label:("late" :: label) ~hid_dim:2 () ~x)
 let _late_label_result =
   let open! TDSL.O in
     let llw =

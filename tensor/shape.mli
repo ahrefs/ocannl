@@ -689,15 +689,22 @@ module Scheme : sig
       registers at an application fills it there. The hole holds none of the trace's nodes. *)
 
   val instantiate :
-    ?sabotage:sabotage -> t -> application:string -> args:shape list -> results:shape list -> unit
+    ?sabotage:sabotage ->
+    ?site:string ->
+    t ->
+    application:string ->
+    args:shape list ->
+    results:shape list ->
+    unit
   (** Adds the scheme's renamed constraints and the equalities of its boundary rows with [args] and
       [results] (and of its anchored pre-existing shapes with their current rows), solves them at
       Stage1, and registers the boundary shapes and the internal rows with the next closure. Every
-      added constraint carries an origin naming the scheme and [application], so a closure-time
-      failure names them too. Raises [Row.Shape_error] prefixed
-      ["applying the shape scheme <label> to <application>: "]: before anything is written, on an
-      arity mismatch, a boundary or anchored shape discarded by a rewind, or a closure since the
-      trace when the scheme depends on open state no anchored shape holds; after registering
+      added constraint carries an origin naming the scheme and [application] (followed by [site],
+      where the application is in the source, when given: gh-ocannl-2007), so a closure-time failure
+      names them too. Raises [Row.Shape_error] prefixed
+      ["applying the shape scheme <label> to <application>[ <site>]: "]: before anything is written,
+      on an arity mismatch, a boundary or anchored shape discarded by a rewind, or a closure since
+      the trace when the scheme depends on open state no anchored shape holds; after registering
       (tainting the session, as a failed construction does), on a contradiction. The scheme's
       capture inputs are related to the references' current state and bound, to the variable of
       their last binding in the trace, so their solutions are published -- after the Stage1 solve
@@ -705,7 +712,8 @@ module Scheme : sig
       anything is written: the closure forces a draw's coefficient, which only the conversion node
       of the body's own application settles (raised as [Untraceable_scheme] while a trace runs). *)
 
-  val check : ?sabotage:sabotage -> t -> application:string -> args:shape list -> unit
+  val check :
+    ?sabotage:sabotage -> ?site:string -> t -> application:string -> args:shape list -> unit
   (** [instantiate] against [args] alone, relating none of the scheme's results, binding no capture
       reference (its capture inputs are only related to their current state), then puts back
       everything it wrote (the session and solver globals, the taint, the rows of the arguments and

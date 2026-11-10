@@ -493,17 +493,24 @@ module Scheme : sig
       that [f]'s operations bind is an input of the scheme (gh-ocannl-1791): each application
       relates it to the reference's state then, and {!instantiate} binds it, as the body would. *)
 
-  val instantiate : ?application:string -> t -> args:Shape.t list -> results:Shape.t list -> unit
+  val instantiate :
+    ?application:string ->
+    ?here:Ppx_here_lib.position ->
+    t ->
+    args:Shape.t list ->
+    results:Shape.t list ->
+    unit
   (** [instantiate s ~args ~results] adds [s]'s constraints for one application of its function to
       [args] with [results] (fresh, inferred shapes, or the shapes of tensors computing the
       results), without running the function. An argument-dependent shape error raises
-      [Row.Shape_error] prefixed ["applying the shape scheme <label> to <application>: "] and taints
-      the session, as a failed construction does; the constraints carry the application's name, so a
-      failure at the closure names it too. The next closure applies the solution to [args] and
-      [results] and closes them. Valid across closures, unless the scheme depends on open state no
-      shape it used holds (then refused after a closure: trace again). A scheme whose function draws
-      random numbers is refused: the size of a draw's counter is the precision its conversion node
-      settles, and an instance, unlike the function's own application, has none. *)
+      [Row.Shape_error] prefixed ["applying the shape scheme <label> to <application>: "] (with
+      [~here:[%here]], ["... to <application> at <file>:<line>: "]: gh-ocannl-2007) and taints the
+      session, as a failed construction does; the constraints carry the application's name (and
+      [here]), so a failure at the closure names it too. The next closure applies the solution to
+      [args] and [results] and closes them. Valid across closures, unless the scheme depends on open
+      state no shape it used holds (then refused after a closure: trace again). A scheme whose
+      function draws random numbers is refused: the size of a draw's counter is the precision its
+      conversion node settles, and an instance, unlike the function's own application, has none. *)
 
   (** {3 Automatic schemes of [%op] functions (gh-ocannl-1751)}
 
@@ -522,13 +529,18 @@ module Scheme : sig
 
       A shape error that does not depend on the arguments raises at the trace, prefixed
       ["tracing the shape scheme <function>: "]; one that does raises at the application, before the
-      body runs, prefixed ["applying the shape scheme <function> to <arguments>: "]. A trace a
-      scheme cannot carry (setting a capture reference made outside the function, forcing dims, or a
-      body that cannot run on tracers) leaves the function unschemed, as it was before, once its
-      rewind succeeded, and says so on stderr -- once per function and reason in a process
-      (gh-ocannl-1791). A capture reference made outside the function that its operations bind is a
-      scheme input, checked against each application's state of it. Ids are unaffected: traces and
-      checks allocate tensor ids, node uids and shape-variable ids from reserved ranges.
+      body runs, prefixed ["applying the shape scheme <function> to <arguments>: "] -- or, for an
+      application evaluated inside an application written in [%op] code, the innermost such,
+      ["applying the shape scheme <function> to <arguments> in the %op application at <file>:<line>:
+       "] (gh-ocannl-2007). The expansion records that site; an application written in plain OCaml
+      outside any [%op] application has none (OCaml has no caller location), so its message names
+      the function and the arguments only. A trace a scheme cannot carry (setting a capture
+      reference made outside the function, forcing dims, or a body that cannot run on tracers)
+      leaves the function unschemed, as it was before, once its rewind succeeded, and says so on
+      stderr -- once per function and reason in a process (gh-ocannl-1791). A capture reference made
+      outside the function that its operations bind is a scheme input, checked against each
+      application's state of it. Ids are unaffected: traces and checks allocate tensor ids, node
+      uids and shape-variable ids from reserved ranges.
 
       Option-valued tensor parameters (gh-ocannl-1792), annotated [~(p : Tensor.t option)] or
       [?(p : Tensor.t option)]: the function gets one scheme per presence pattern -- which of them
@@ -601,12 +613,18 @@ module Scheme : sig
     val deferred : name:string -> arity:int -> (tensor list -> 'r) -> handle
     (** Traces at the first application: a [%op] function without a [()] stage. *)
 
+    val at_site : string * int * int * int -> (unit -> 'a) -> 'a
+    (** [at_site __POS__ (fun () -> f args)]: an application written in [%op] code, run with its
+        source position recorded for the checks inside it to name (gh-ocannl-2007); the outer one is
+        restored afterwards. *)
+
     val apply : handle -> tensor list -> (unit -> 'a) -> 'a
     (** [apply h args body] (tracing [h]'s scheme first when pending or stale) checks the scheme
-        against [args], then runs [body]. Inside a trace, and when unschemed, only runs [body]. So
-        it does inside the [body] of an application that was checked, whose scheme holds this
-        application's constraints (gh-ocannl-1814), but for tracing the presence patterns of a
-        function on its first application. *)
+        against [args] -- naming the innermost {!at_site} in progress, if any -- then runs [body].
+        Inside a trace, and when unschemed, only runs [body]. So it does inside the [body] of an
+        application that was checked, whose scheme holds this application's constraints
+        (gh-ocannl-1814), but for tracing the presence patterns of a function on its first
+        application. *)
 
     val closure_variants :
       name:string -> optional:string option list -> (tensor option list -> 'r) -> handle
@@ -635,6 +653,7 @@ module For_testing : sig
   val instantiate_scheme :
     sabotage:Shape.Scheme.sabotage ->
     ?application:string ->
+    ?here:Ppx_here_lib.position ->
     Scheme.t ->
     args:Shape.t list ->
     results:Shape.t list ->
