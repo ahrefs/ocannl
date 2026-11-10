@@ -986,6 +986,15 @@ let check_no_fetch_overwrite ?name ctx (comp : Asgns.comp) =
             (match name with None -> "" | Some n -> " (" ^ n ^ ")")
             (String.concat ~sep:"; " conflicts))
 
+(* The literal a write to [tn] would land in: [tn] itself or, through its [\@|] slice views, the
+   parent it is a view of, when that node's values are declared forever equal to its registered
+   host-init data ([Tn.known_host_constant]: a [TDSL.ndarray] marked [host_constant], or a
+   [TDSL.number] with its [Effectively_constant] intent). The one predicate behind the routine
+   refusal {!check_no_literal_write} and the host refusal {!check_host_write_lasts}. *)
+let rec literal_of tn =
+  if Tn.known_host_constant tn then Some tn
+  else Option.bind (Tn.slice_of tn) ~f:(fun (parent, _) -> literal_of parent)
+
 (* gh-ocannl-2104: {!check_host_write_lasts}'s gh-ocannl-2021 rule for a routine write. A literal's
    values are declared forever equal to its registered host-init data ([Tn.known_host_constant]),
    and every consumer of that contract reads the registered values, not the buffer a routine wrote:
@@ -997,14 +1006,10 @@ let check_no_fetch_overwrite ?name ctx (comp : Asgns.comp) =
    computation carries was already refused as fetch-defined (gh-ocannl-1876); this check runs first,
    so a literal is named as one at every size. *)
 let check_no_literal_write ?name (comp : Asgns.comp) =
-  let rec literal tn =
-    if Tn.known_host_constant tn then Some tn
-    else Option.bind (Tn.slice_of tn) ~f:(fun (parent, _) -> literal parent)
-  in
   let conflicts =
     Set.to_list (overwritten comp)
     |> List.filter_map ~f:(fun tn ->
-        Option.map (literal tn) ~f:(fun lit ->
+        Option.map (literal_of tn) ~f:(fun lit ->
             Printf.sprintf "%s%s" (Tn.debug_name tn)
               (if Tn.equal lit tn then "" else Printf.sprintf " (a view of %s)" (Tn.debug_name lit))))
   in
@@ -2681,11 +2686,13 @@ let to_host_all ctx (tns : Tn.t list) : Nd.t list =
    reads has lost its in-kernel fetch (gh-ocannl-633), so a write would stay in its buffer, but the
    literal's values are declared constant: a schedule hoisting it reads the registered ones
    ([Schedule.hoistable_constant]), so the write is refused all the same. {!copy} has its own rule,
-   {!check_copy_lasts}: it moves a node's value between contexts, which may be the fetch's own. A
-   view is left to {!upload}'s refusal, which names the parent to write. Runs before anything of the
-   write happens, so a refused [set_values] leaves the node's host buffer as it was. gh-ocannl-2021:
-   a marked host literal is immutable even without a fetch or a compiled forward: above the fill
-   limit it is Reshape-backed, but hoisting still reads its registered values. *)
+   {!check_copy_lasts}: it moves a node's value between contexts, which may be the fetch's own. Runs
+   before anything of the write happens, so a refused [set_values] leaves the node's host buffer as
+   it was. gh-ocannl-2021: a literal ({!literal_of}, the predicate of the routine refusal too) is
+   immutable even without a fetch or a compiled forward: above the fill limit it is Reshape-backed,
+   but hoisting still reads its registered values, and a [TDSL.number] a routine inlines. A view of
+   a literal is refused as one, naming the literal: writing the parent instead, which {!upload}'s
+   refusal of any other view says, is refused too. *)
 let check_host_write_lasts ~fn ctx (tn : Tn.t) =
   match (Tn.slice_of tn, Map.find ctx.frontier.fetch_defined tn.Tn.uid) with
   | None, Some (id, name) ->
@@ -2701,17 +2708,22 @@ let check_host_write_lasts ~fn ctx (tn : Tn.t) =
                or make it a parameter. A seed for a routine that reads the node before the forward \
                runs goes in before the forward's routine is compiled."
               fn (Tn.debug_name tn) name id)
-  | None, None when tn.Tn.host_constant ->
-      raise
-      @@ Utils.User_error
-           (Printf.sprintf
-              "Context.%s: node %s is a literal with constant host values (gh-ocannl-2021). A \
-               hoisted schedule reads its registered values, so a host write would be silently \
-               ignored, regardless of limit_constant_fill_size or whether a routine is compiled. \
-               Build mutable data with Operation.init or Train.host_scalar, use TDSL.wrap or \
-               TDSL.rebatch for ndarray data, or make it a parameter."
-              fn (Tn.debug_name tn))
-  | _ -> ()
+  | _ -> (
+      match literal_of tn with
+      | None -> ()
+      | Some lit ->
+          raise
+          @@ Utils.User_error
+               (Printf.sprintf
+                  "Context.%s: node %s is %s with constant host values (gh-ocannl-2021). A hoisted \
+                   schedule reads its registered values, and a routine inlines or fetches them, so \
+                   a host write would be silently ignored, regardless of limit_constant_fill_size \
+                   or whether a routine is compiled. Build mutable data with Operation.init or \
+                   Train.host_scalar, use TDSL.wrap or TDSL.rebatch for ndarray data, or make it a \
+                   parameter."
+                  fn (Tn.debug_name tn)
+                  (if Tn.equal lit tn then "a literal"
+                   else "an @| slice view of " ^ Tn.debug_name lit ^ ", a literal")))
 
 (* gh-ocannl-2022: {!check_host_write_lasts}'s rule for a {!copy} into an ordinary buffer. A copy
    into a node [dst]'s lineage fetch-defines lasts only until the routine carrying the fetch next
@@ -2723,15 +2735,20 @@ let check_host_write_lasts ~fn ctx (tn : Tn.t) =
    routine of its own lineage that carries the fetch. A seed, a host write, a copy and a sibling's
    write to the same buffer all drop that entry, and a source compiled with the forward but not run
    still holds what was there before. Accepted regardless: a copy between two contexts binding the
-   same buffer moves nothing, and a [host_constant] literal always holds its registered values
-   (gh-ocannl-2021 refuses host writes to it; its link-time upload leaves no [current_writers]
-   entry). The node's own uid is looked up, a view included: a view that is not an alias is
-   fetch-defined itself, by its slice, and the device path writes its own buffer. Runs before the
-   copy dispatches, so a refused copy allocates, reads and records nothing. *)
+   same buffer moves nothing, and a literal with registered host-init data always holds its
+   registered values (gh-ocannl-2021 refuses host writes to it; its link-time upload leaves no
+   [current_writers] entry). That is {!literal_of}'s contract, [Tn.known_host_constant], on the node
+   itself and only with [Host_inits] data: unlike a write, a copy reads the source's buffer, and
+   only the link-time upload puts the registered values in a buffer no run wrote. A view's buffer is
+   its slice's fetch, and a [TDSL.number] registers no host-init data, so a source compiled with
+   their fetch and not run holds nothing of the literal: those keep the provenance rule. The node's
+   own uid is looked up, a view included: a view that is not an alias is fetch-defined itself, by
+   its slice, and the device path writes its own buffer. Runs before the copy dispatches, so a
+   refused copy allocates, reads and records nothing. *)
 let check_copy_lasts ~src ~dst (tn : Tn.t) =
   match Map.find dst.frontier.fetch_defined tn.Tn.uid with
   | None -> ()
-  | Some _ when tn.Tn.host_constant -> ()
+  | Some _ when Tn.known_host_constant tn && Ir.Host_inits.mem tn -> ()
   | Some (id, name) -> (
       let src_key = buffer_key src tn in
       let no_op =
