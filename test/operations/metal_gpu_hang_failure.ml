@@ -103,21 +103,29 @@ let raised f =
   | exception Failure message -> Some message
   | exception e -> Some (Exn.to_string e)
 
+(* A hard bound on the whole scenario that needs no OCaml code to run: a wait stuck in a native call
+   defers the SIGALRM handler below for as long as it lasts. A separate process sends the default-
+   action SIGTERM, which ends this one and fails the run; [at_exit] retires it on a normal end. *)
+let arm_watchdog ~seconds =
+  let null = Unix.openfile "/dev/null" [ O_RDWR ] 0 in
+  let watchdog =
+    Unix.create_process "/bin/sh"
+      [| "sh"; "-c"; Printf.sprintf "sleep %d; kill -TERM %d" seconds (Unix.getpid ()) |]
+      null null null
+  in
+  Unix.close null;
+  Stdlib.at_exit (fun () -> try Unix.kill watchdog Stdlib.Sys.sigkill with _ -> ())
+
 let scenario () =
+  arm_watchdog ~seconds:(kill_bound_s + 100);
   let before = plain ~first_id:9_000 ~name:"before" ctx in
   let x, o = stalling ~first_id:9_100 ~name:"stalling" in
   let recoveries = recovery_count () in
   let run_ctx, _routine =
     Ll_test.run_routine ~ctx ~name:"stalling" o ~seed:[ (x, Ll_test.blank n) ]
   in
-  (* The wait polls the device between slices of OCaml code, so the handler's exception ends it.
-     Should it not, the default action ends the process a minute later, which fails the run. *)
-  Stdlib.Sys.set_signal Stdlib.Sys.sigalrm
-    (Signal_handle
-       (fun _ ->
-         Stdlib.Sys.set_signal Stdlib.Sys.sigalrm Signal_default;
-         ignore (Unix.alarm 60 : int);
-         raise Still_waiting));
+  (* The wait polls the device between slices of OCaml code, so the handler's exception ends it. *)
+  Stdlib.Sys.set_signal Stdlib.Sys.sigalrm (Signal_handle (fun _ -> raise Still_waiting));
   ignore (Unix.alarm kill_bound_s : int);
   let waited = Unix.gettimeofday () in
   let report, bounded =
@@ -127,10 +135,8 @@ let scenario () =
     | exception Failure message -> (Some message, false)
     | exception e -> (Some (Exn.to_string e), false)
   in
-  (* What follows waits on the device too: a regressed wait there ends the process by the default
-     action, without needing OCaml code to run. *)
+  ignore (Unix.alarm 0 : int);
   Stdlib.Sys.set_signal Stdlib.Sys.sigalrm Signal_default;
-  ignore (Unix.alarm 60 : int);
   let waited = Unix.gettimeofday () -. waited in
   (* The count can trail the failed status; a kernel nobody killed costs the full poll. *)
   let rec rose tries =
