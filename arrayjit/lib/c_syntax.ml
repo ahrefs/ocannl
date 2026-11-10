@@ -4283,11 +4283,13 @@ module C_syntax (B : C_syntax_config) = struct
   (* The precision a [Set_local]'s value renders at, given the precision its local is declared at.
      The reasons are at [pp_ll]'s [Set_local] arm. *)
   let set_local_value_prec ~scope_prec (id : Low_level.scope_id) value =
+    let storage = Lazy.force id.tn.Tn.storage_prec in
     if
       Low_level.scalar_reads_scope ~id value
       || Hash_set.mem rng_scope_ids id || narrowing_cast_scope id
     then scope_prec
-    else comp_prec (Lazy.force id.tn.Tn.storage_prec)
+    else if Low_level.narrowing_read ~scope_prec:storage value then storage
+    else comp_prec storage
 
   (* gh-ocannl-1887: collapse a kept scope where the backend's compute precision makes the collapse
      exact. [simplify_llc] keeps a scope it cannot prove exact without knowing the numerics, which
@@ -6795,15 +6797,18 @@ module C_syntax (B : C_syntax_config) = struct
            residency. A cast is a copy, so its store renders at storage precision
            ([renders_at_store_prec]), and so does its init (gh-ocannl-1956): through [comp_prec], an
            f64 source would round to f32 and then to fp8, where the store's [double_to_fp8] is one
-           step. Where scope and compute precision coincide (the CPU backends, non-accumulator
-           scopes) this is the identity, and the store's narrowing is the part the init does not
-           repeat (gh-ocannl-517), except for a cast, whose residency is its storage precision
-           (gh-ocannl-1866); where an accumulator resides wider than the arithmetic (gh-ocannl-663),
-           it preserves the initializer's own per-assignment rounding — e.g. a virtual bf16 node
-           initialized by [a + b] and then reduced narrows the init to bf16 exactly as its
-           materialized twin's store does, instead of leaking f32 residency into a different source
-           assignment's semantics (Codex P2 round 3 on PR #396; the provenance boundary of
-           gh-ocannl-639's adjacent-accumulations rule). *)
+           step. The same holds for a narrowing init of a scope that also updates itself
+           (gh-ocannl-2076): an accumulator opened by [s =: src] over a wider [src] keeps its wide
+           residency, and its init renders at storage precision, rounding as the materialized store
+           does, then widens exactly into the residency. Where scope and compute precision coincide
+           (the CPU backends, non-accumulator scopes) this is the identity, and the store's
+           narrowing is the part the init does not repeat (gh-ocannl-517), except for a cast, whose
+           residency is its storage precision (gh-ocannl-1866); where an accumulator resides wider
+           than the arithmetic (gh-ocannl-663), it preserves the initializer's own per-assignment
+           rounding — e.g. a virtual bf16 node initialized by [a + b] and then reduced narrows the
+           init to bf16 exactly as its materialized twin's store does, instead of leaking f32
+           residency into a different source assignment's semantics (Codex P2 round 3 on PR #396;
+           the provenance boundary of gh-ocannl-639's adjacent-accumulations rule). *)
         let prec = (scope_prec_of ctx) id in
         let value_prec = set_local_value_prec ~scope_prec:prec id value in
         let volatile_reads =

@@ -1257,7 +1257,11 @@ files.
   before the fix, materializing `batch_x` beside the twins reproduced the fixed code's losses
   bit for bit, while Metal's never moved. Limits: only a read (the next bullet is the policy for
   everything else). An accumulator opened by a narrowing init keeps its
-  residency (the census needs every `Set_local` to be the read). `mixed_prec_twin_rounding` pins all three placements
+  residency (the census needs every `Set_local` to be the read), but the init itself renders at
+  storage precision and widens exactly into it (`set_local_value_prec`, gh-ocannl-2076): before,
+  it rendered at `compute_prec`, so on cc a virtual `s =: src; s =+ ...` started from the unrounded
+  f32 (or f32-rounded f64) source where a materialized one started from its store's rounding;
+  `narrow_accum_init` pins both sources, both slots and all three placements. `mixed_prec_twin_rounding` pins all three placements
   at each narrow precision with exact claims, and `Context.placements` reads what the compile
   resolved; `scope_collapse_rounding`'s cast shapes compare bitwise against a materialized node.
 - **A cast rounds in the expression, and on a tile in the pack** (gh-ocannl-1975). A kept scope hid
