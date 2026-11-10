@@ -193,7 +193,23 @@ let () =
   run_case ~label:"ppx literal, x ++ \"2^o => o\"" ~layout:Trailing ~rows:1 ~src:5 ~dst:3 ~offset:2
     ~mode:Extract (fun x ->
       let%op t = x ++ "2^o => o" in
-      t)
+      t);
+  (* The binary and ternary einsum branches size their captures for projection derivation too
+     (gh-ocannl-2043): [o] is on every operand, but only the captures split [p^o^q]. The extra
+     operands are ones, so the expected values are the unary case's. A capture size reaching the
+     projection equations raised [to_proj: Dim without proj_id]; one lost left [p + q] unsolved. *)
+  let ones n =
+    Tensor.ndarray ~grad_spec:Tensor.Prohibit_grad (Array.create ~len:n 1.) ~batch_dims:[]
+      ~input_dims:[] ~output_dims:[ n ] ()
+  in
+  run_case ~label:"binary einsum, p^o^q; o => o" ~layout:Trailing ~rows:1 ~src:7 ~dst:3 ~offset:1
+    ~mode:Extract (fun x ->
+      TDSL.einsum ~capture_dims:[ capture "p" 1; capture "q" 3 ] "p^o^q; o => o" x (ones 3) ());
+  run_case ~label:"ternary einsum, p^o^q; o; o => o" ~layout:Trailing ~rows:1 ~src:7 ~dst:3
+    ~offset:1 ~mode:Extract (fun x ->
+      Operation.einsum3
+        ~capture_dims:[ capture "p" 1; capture "q" 3 ]
+        "p^o^q; o; o => o" ~grad_spec:Tensor.If_needed x (ones 3) (ones 3) ())
 
 (* A slice inside a concatenation: [1^a; b => a^b] drops the first operand's first cell and
    concatenates the rest with the second operand. [a] occurs only inside concatenated axes, so the
