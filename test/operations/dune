@@ -14568,8 +14568,8 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
-; gh-ocannl-1998: sgd_update refuses a stepped node the loss's forward recomputes, not one the
-; forward builds on.
+; gh-ocannl-1998/2027: Context.run refuses the run of a forward recomputing a node a step meant to
+; last (Asgns.persists), not one the forward builds on; Asgns.sequence a step before its forward.
 
 (test
  (name sgd_computed_node)

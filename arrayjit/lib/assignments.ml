@@ -124,6 +124,9 @@ type comp = {
   accumulation_runs : int Map.M(Tn).t;
       (** The runs one reset spans, for a gradient accumulated into without zeroing it
           (gh-ocannl-1781); absent means one. *)
+  persists : Set.M(Tn).t;
+      (** The nodes whose written value this computation means to last across runs: an optimizer
+          step (gh-ocannl-2027). *)
 }
 [@@deriving sexp_of]
 (** Computations based on assignments. Note: the [arrayjit] library makes use of, but does not
@@ -136,9 +139,20 @@ let no_fragments = Set.empty (module Fragment)
 let no_nodes = Set.empty (module Tn)
 
 let comp ?(owned = no_fragments) ?(requires = no_fragments) ?(zeroes = no_nodes)
-    ?(accumulates = no_nodes) ?(accumulation_runs = Map.empty (module Tn)) ~embedded asgns =
-  { asgns; embedded_nodes = embedded; owned; requires; zeroes; accumulates; accumulation_runs }
+    ?(accumulates = no_nodes) ?(accumulation_runs = Map.empty (module Tn)) ?(persists = no_nodes)
+    ~embedded asgns =
+  {
+    asgns;
+    embedded_nodes = embedded;
+    owned;
+    requires;
+    zeroes;
+    accumulates;
+    accumulation_runs;
+    persists;
+  }
 
+let persisting nodes c = { c with persists = Set.union c.persists (Set.of_list (module Tn) nodes) }
 let to_comp asgns = comp ~embedded:(Set.empty (module Tnode)) asgns
 let empty_comp = to_comp Noop
 
@@ -421,12 +435,68 @@ let refuse_shared_fragments l shared =
            move it first."
           listed)
 
+(* A view's storage as construction records it ([Tn.slice_of], set eagerly): the parent a write
+   through it reaches, taken on trust as [forward_recomputed] takes a view of its own comp. *)
+let rec construction_storage tn =
+  match Tn.slice_of tn with Some (parent, _) -> construction_storage parent | None -> tn
+
+(* gh-ocannl-2027: a member persisting a node, followed by members that together re-establish it
+   without reading it ({!forward_recomputed} over everything after the persisting member, so a value
+   carried through a temporary across members still counts as kept), loses the write within the same
+   run, before any run of a routine could be refused for it. Folded only for a node some later
+   member writes. *)
+let refuse_lost_persists l =
+  if List.exists l ~f:(fun c -> not (Set.is_empty c.persists)) then
+    let members = Array.of_list l in
+    let n = Array.length members in
+    let written =
+      Array.map members ~f:(fun c ->
+          Set.map (module Tn) (collect_written c.asgns) ~f:construction_storage)
+    in
+    let conflicts =
+      List.concat_mapi l ~f:(fun i c ->
+          let later = List.range (i + 1) n in
+          let rest_recomputed =
+            lazy
+              (Set.map
+                 (module Tn)
+                 (forward_recomputed
+                    (to_comp (sequential (List.map later ~f:(fun j -> members.(j).asgns)))))
+                 ~f:construction_storage)
+          in
+          Set.to_list c.persists
+          |> List.filter_map ~f:(fun stepped ->
+              let storage = construction_storage stepped in
+              Option.bind
+                (List.find later ~f:(fun j -> Set.mem written.(j) storage))
+                ~f:(fun first ->
+                  Option.some_if
+                    (Set.mem (Lazy.force rest_recomputed) storage)
+                    (i, stepped, first, storage))))
+    in
+    if not (List.is_empty conflicts) then
+      raise
+      @@ Utils.User_error
+           (Printf.sprintf
+              "Assignments.sequence: a member writes a node meant to last (an optimizer step, \
+               gh-ocannl-2027), and the members after it re-establish it without reading it, so \
+               the write is undone within the same run (members counted from 1): %s. Sequence the \
+               step after the code computing the node (Train.grad_update before Train.sgd_update), \
+               or step what the node is computed from."
+              (String.concat ~sep:"; "
+              @@ List.map conflicts ~f:(fun (i, stepped, first, storage) ->
+                  Printf.sprintf "%s, written by member %d, re-established from member %d on%s"
+                    (Tn.debug_name stepped) (i + 1) (first + 1)
+                    (if Tn.equal stepped storage then "" else " through " ^ Tn.debug_name storage))
+              ))
+
 let sequence l =
   let owned, shared =
     List.fold l ~init:(no_fragments, no_fragments) ~f:(fun (owned, shared) c ->
         (Set.union owned c.owned, Set.union shared (Set.inter owned c.owned)))
   in
   if not (Set.is_empty shared) then refuse_shared_fragments l shared;
+  refuse_lost_persists l;
   {
     asgns = sequential (List.map l ~f:(fun c -> c.asgns));
     embedded_nodes = Set.union_list (module Tn) (List.map l ~f:(fun c -> c.embedded_nodes));
@@ -449,6 +519,7 @@ let sequence l =
                 && not (Map.mem c.accumulation_runs g))
           then 1
           else runs);
+    persists = Set.union_list (module Tn) (List.map l ~f:(fun c -> c.persists));
   }
 
 let collect_neutral_elem (asgns : t) : float option =

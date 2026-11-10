@@ -285,37 +285,42 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
   (* The [%cd] payload is written once and the [update_gate] arms differ only where the gating
      actually changes the emitted assignment. Inline declarations ([{ sgd_delta }], [{ sgd_momentum
      }]) are hoisted by the ppx above the enclosing [match]/[if], so an arm that declares a tensor
-     and an arm that only reads it name the same tensor. *)
-  [%cd
-    ~~(p "param sgd step";
-       (match grad_unscale with
-       (* The binary form: a unary [p.grad =* unscale] would be a Pointwise_un, which does not
-          broadcast the scalar's closed rows against parameters with input axes. *)
-       | Some unscale -> p.grad =: p.grad * unscale ~logic:"."
-       | None -> Asgns.empty_comp);
-       (* Gradients can only be read as direct operands (not inside subexpressions), hence the
-          scaled read is its own statement. *)
-       (match grad_scale with
-       | Some scale ->
-           { sgd_delta } =: p.grad * scale ~logic:".";
-           sgd_delta =+ !.weight_decay *. p
-       | None -> sgd_delta =: p.grad + (!.weight_decay *. p));
-       if Float.(momentum > 0.0) then (
-         (* [=:] reading its own lhs makes the buffer read-before-write: the compiler keeps it on
-            the device, carrying its value from one step to the next (gh-ocannl-793). The first step
-            reads allocation's zero, which [zero_valid] declares correct (gh-ocannl-1966). *)
-         (match update_gate with
-         | None -> { sgd_momentum; zero_valid = true } =: (!.momentum *. sgd_momentum) + sgd_delta
-         | Some gate ->
-             sgd_momentum =: where gate ((!.momentum *. sgd_momentum) + sgd_delta) sgd_momentum);
-         if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
-       (* The final selection covers every path: without momentum it discards the possibly
-          non-finite delta; with momentum the buffer kept its old (finite) value above, and this
-          still zeroes the step so [p] is untouched. *)
-       (match update_gate with
-       | Some gate -> sgd_delta =: where gate sgd_delta 0
-       | None -> Asgns.empty_comp);
-       p =- learning_rate * sgd_delta ~logic:".")]
+     and an arm that only reads it name the same tensor. gh-ocannl-2027: the step is meant to last,
+     whatever the options: [Context.run] refuses a later run of forward code recomputing [p] over
+     it. *)
+  Asgns.persisting [ p.Tensor.value ]
+  @@ [%cd
+       ~~(p "param sgd step";
+          (match grad_unscale with
+          (* The binary form: a unary [p.grad =* unscale] would be a Pointwise_un, which does not
+             broadcast the scalar's closed rows against parameters with input axes. *)
+          | Some unscale -> p.grad =: p.grad * unscale ~logic:"."
+          | None -> Asgns.empty_comp);
+          (* Gradients can only be read as direct operands (not inside subexpressions), hence the
+             scaled read is its own statement. *)
+          (match grad_scale with
+          | Some scale ->
+              { sgd_delta } =: p.grad * scale ~logic:".";
+              sgd_delta =+ !.weight_decay *. p
+          | None -> sgd_delta =: p.grad + (!.weight_decay *. p));
+          if Float.(momentum > 0.0) then (
+            (* [=:] reading its own lhs makes the buffer read-before-write: the compiler keeps it on
+               the device, carrying its value from one step to the next (gh-ocannl-793). The first
+               step reads allocation's zero, which [zero_valid] declares correct
+               (gh-ocannl-1966). *)
+            (match update_gate with
+            | None ->
+                { sgd_momentum; zero_valid = true } =: (!.momentum *. sgd_momentum) + sgd_delta
+            | Some gate ->
+                sgd_momentum =: where gate ((!.momentum *. sgd_momentum) + sgd_delta) sgd_momentum);
+            if nesterov then sgd_delta =+ !.momentum *. sgd_momentum else sgd_delta =: sgd_momentum);
+          (* The final selection covers every path: without momentum it discards the possibly
+             non-finite delta; with momentum the buffer kept its old (finite) value above, and this
+             still zeroes the step so [p] is untouched. *)
+          (match update_gate with
+          | Some gate -> sgd_delta =: where gate sgd_delta 0
+          | None -> Asgns.empty_comp);
+          p =- learning_rate * sgd_delta ~logic:".")]
 
 (* gh-ocannl-1776: a stepped tensor whose value [loss]'s forward code re-establishes with a fetch on
    every run. A [Tensor.term_init] (or literal) leaf with at most [limit_constant_fill_size] values
@@ -331,15 +336,12 @@ let sgd_one ~learning_rate ?(momentum = 0.0) ?(weight_decay = 0.0) ?(nesterov = 
    parent and stays. Shapes may still be open here, so the alias is taken on trust: a view lowering
    to a copy, whose step the next copy undoes, is refused by [Context.compile].
 
-   gh-ocannl-1998: the same trap with a computed node, or a view of one, in [?params]: the forward
-   recomputes it over the step ({!Asgns.forward_recomputed}, which is what tells a recomputation
-   from the running statistic above). Only here: this is the one place that knows the write is meant
-   to last. A routine writing a computed node may be post-processing it, or stepping a value another
-   routine computed once, so [Context.compile] has no such refusal, and a node computed outside
-   [loss]'s forward is not this check's to judge. *)
+   A computed node, or a view of one, is the same trap by recomputation (gh-ocannl-1998), and is not
+   refused here: [sgd_one] marks its step as meant to last ({!Asgns.persisting}), and [Context.run]
+   refuses the forward's run that would undo it (gh-ocannl-2027), across routines too, while a
+   forward run once before the steps stays legal. *)
 let refuse_reestablished ~fn_name loss stepped =
   let fetched = Asgns.forward_fetched loss.Tensor.forward in
-  let recomputed = Asgns.forward_recomputed loss.Tensor.forward in
   Set.iter stepped ~f:(fun p ->
       if Set.mem fetched p.Tensor.value then
         raise
@@ -350,16 +352,6 @@ let refuse_reestablished ~fn_name loss stepped =
                   is a fetch, not data, and a slice of one follows it), which would silently undo \
                   each step. Build an optimized input data-backed, with [Operation.init \
                   ~grad_spec:Require_grad], or make it a parameter",
-               Some p );
-      if Set.mem recomputed p.Tensor.value then
-        raise
-        @@ Tensor.Session_error
-             ( fn_name ^ ": " ^ Tensor.debug_name p
-               ^ " is computed: the loss's forward code recomputes its value on every run without \
-                  reading it (a slice of such a node follows it), which would silently undo each \
-                  step; materializing it changes nothing. Step what it is computed from instead, \
-                  or optimize a data-backed input, with [Operation.init ~grad_spec:Require_grad], \
-                  or a parameter",
                Some p ))
 
 let sgd_update ~learning_rate ?momentum ?weight_decay ?nesterov ?grad_unscale ?grad_scale

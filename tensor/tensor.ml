@@ -1258,6 +1258,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
       (match c.asgns with Asgns.Noop -> true | _ -> false)
       && Set.is_empty c.embedded_nodes && Set.is_empty c.owned && Set.is_empty c.requires
       && Set.is_empty c.zeroes && Set.is_empty c.accumulates && Map.is_empty c.accumulation_runs
+      && Set.is_empty c.persists
     in
     let bprop ti =
       Option.bind ti.diff ~f:(fun diff ->

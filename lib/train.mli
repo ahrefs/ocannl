@@ -180,7 +180,15 @@ val sgd_one :
     it, computed on device — see [Mixed_prec.gated_scaled_update], gh-ocannl-492 task 5), every
     optimizer-state mutation is gated by [Where] {e selection}: on a skipped step the parameter and
     the momentum buffer keep their previous values exactly. Selection, not multiplication — the
-    skipped steps are the ones whose gradients hold [inf]/[nan], and [0 * inf] is [nan]. *)
+    skipped steps are the ones whose gradients hold [inf]/[nan], and [0 * inf] is [nan].
+
+    The step on [p] is marked as meant to last ({!Ir.Assignments.field-persists}, gh-ocannl-2027):
+    [Context.run] refuses a later run of a routine whose forward code recomputes [p] without reading
+    it -- a computed node, or a view of one -- while [p]'s buffer holds a step, since that run would
+    silently undo it, and {!Ir.Assignments.sequence} refuses such a forward sequenced after the
+    step. A forward run once before the steps stays legal, and so does one building on the value (a
+    running statistic). A hand-written [%cd] step states the same with {!Ir.Assignments.persisting}.
+*)
 
 val sgd_update :
   learning_rate:Tensor.t ->
@@ -205,11 +213,10 @@ val sgd_update :
     [Context.compile] (gh-ocannl-1876).
 
     A stepped tensor that [loss]'s forward code recomputes without reading it, a computed node or a
-    view of one, raises [Session_error] too (gh-ocannl-1998): each step would be gone by the next
-    forward. One whose value the forward builds on, a running statistic, is accepted, and so is one
-    computed outside [loss]'s forward, whose step lasts as long as that code does not run again.
-    Stepping a computed node with {!sgd_one} or a hand-written [%cd] update is not refused anywhere:
-    a routine cannot tell a step from post-processing a value. *)
+    view of one (gh-ocannl-1998), is refused by [Context.run], as for {!sgd_one}: from the second
+    run of a routine carrying both the forward and the step, or at the run of a separate forward
+    after a step (gh-ocannl-2027). One computed by a forward run once, before the steps, keeps them.
+*)
 
 val sequential_loop : f:(unit -> unit) -> (Ir.Indexing.static_symbol * int ref) list -> unit
 (** All and only bindings with associated ranges are iterated, with the binding's initial value

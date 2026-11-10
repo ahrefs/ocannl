@@ -55,14 +55,26 @@ files.
   (its link-time upload is no run) and a merge fill are let through. The autotuner's timing restore
   reaches no such node: a hosted constant has no written code and a view
   of a fetched parent no assignment (`timing_state_nodes`).
-- A computed node is the same trap by another route (gh-ocannl-1998): `sgd_update` refuses a stepped
-  node, or a view of one, that the loss's forward recomputes (`Assignments.forward_recomputed`). It
-  is an ordered fold of which incoming values each written node is built from, so a statistic keeps
-  its step through temporaries while a delay line (`y =: s; s =: x`) does not; "has a forward" would
-  refuse a `=+` node, whose step lasts. Executed: `sgd_computed_node.ml`. Only `sgd_update` knows a
-  write is meant to last: `Context.compile` cannot tell a step from post-processing, or a re-run
-  forward from one that ran once, whose steps do last, so bare `sgd_one` and a hand-written step on
-  a computed node go unrefused.
+- A computed node is the same trap by another route (gh-ocannl-1998): a step on a node, or a view
+  of one, that a forward recomputes (`Assignments.forward_recomputed`: an ordered fold of which
+  incoming values each written node is built from, so a statistic keeps its step through
+  temporaries while a delay line, `y =: s; s =: x`, does not; "has a forward" would refuse a `=+`
+  node, whose step lasts). The write's intent rides on the comp (gh-ocannl-2027): `Asgns.persists`,
+  set by `Train.sgd_one` (so `sgd_update`) and by `Asgns.persisting` for a hand-written step. The
+  refusal is at RUN time, not compile: a forward run once before the steps is legal and its routine
+  is the same one, so the compile-time picture cannot tell it from a re-run. `Context.run` refuses,
+  before launch, a routine re-establishing a buffer holding a persisting write's value (the
+  ledger's `persisted`, keyed by concrete buffer, a slice alias by its parent's via `alias_of`)
+  where it carries the node's forward code (owns its `Fwd` fragment) or itself persists the node.
+  So a fused forward-plus-step on a computed node is refused from its second run. A write from
+  outside a run, or a run re-establishing the value without carrying its forward code (an
+  initializer, `init_params ~reinit_all`, a plain `%cd` assignment), replaces it deliberately and
+  clears the mark -- unless it writes only through a view, a part of the buffer; `rollback_execution` undoes a run's marks, and the autotuner's timing restore
+  restores them with the accumulation history. `Asgns.sequence` refuses a step the members after
+  it re-establish (one fold over all of them, so a value carried through a temporary across
+  members is kept), lost within one run; a `%cd` body nests each statement with the rest. Host writes and copies are NOT persisting:
+  a checkpoint restore of computed intermediates, then training, is legal. An unmarked hand-written
+  step is not refused. Executed, with negative controls for each half: `sgd_computed_node.ml`.
 - Training-loop utilities (gh-465, `lib/train.ml`): `Lr_schedule` (host floats; feed via
   `scheduled_learning_rate`'s data-backed `host_scalar` — `set_values` refuses a fetch-defined
   constant, re-fetched each step), `grad_l2_norm`/`clip_by_global_norm` +

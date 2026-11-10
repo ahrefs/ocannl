@@ -24,39 +24,41 @@ classified: accumulating through a view of data builds on the old value: true
 classified: overwriting through a view of data recomputes the parent: true
 classified: a read through a view of the old value is a read of it: true
 a computed node: refused: true
-a computed node: the refusal carries the stepped tensor: true
+a computed node: refused at run 2: true
 a computed node: the refusal names hc: true
-a computed node: the refusal names recomputes: true
+a computed node: the refusal names gh-ocannl-2027: true
 a computed node: the refusal names Operation.init: true
-a computed node, after grad_update: refused: true
-a computed node, after grad_update: the refusal carries the stepped tensor: true
-a computed node, after grad_update: the refusal names hd: true
-a computed node, after grad_update: the refusal names recomputes: true
-a computed node, after grad_update: the refusal names Operation.init: true
 a view of a computed node: refused: true
-a view of a computed node: the refusal carries the stepped tensor: true
-a view of a computed node: the refusal names aliased_view: true
-a view of a computed node: the refusal names recomputes: true
+a view of a computed node: refused at run 2: true
+a view of a computed node: the refusal names hv: true
+a view of a computed node: the refusal names gh-ocannl-2027: true
 a view of a computed node: the refusal names Operation.init: true
+that view is an alias: true
 a view of a view of a computed node: refused: true
-a view of a view of a computed node: the refusal carries the stepped tensor: true
-a view of a view of a computed node: the refusal names nested_view: true
-a view of a view of a computed node: the refusal names recomputes: true
+a view of a view of a computed node: refused at run 2: true
+a view of a view of a computed node: the refusal names hn: true
+a view of a view of a computed node: the refusal names gh-ocannl-2027: true
 a view of a view of a computed node: the refusal names Operation.init: true
+that view is an alias: true
 a copying view of a computed node: refused: true
-a copying view of a computed node: the refusal carries the stepped tensor: true
+a copying view of a computed node: refused at compile: true
 a copying view of a computed node: the refusal names copied_view: true
-a copying view of a computed node: the refusal names recomputes: true
-a copying view of a computed node: the refusal names Operation.init: true
+a copying view of a computed node: the refusal names gh-ocannl-1876: true
 that view cannot alias its parent: true
 a parameter its forward overwrites: refused: true
-a parameter its forward overwrites: the refusal carries the stepped tensor: true
+a parameter its forward overwrites: refused at run 2: true
 a parameter its forward overwrites: the refusal names overwritten: true
-a parameter its forward overwrites: the refusal names recomputes: true
+a parameter its forward overwrites: the refusal names gh-ocannl-2027: true
 a parameter its forward overwrites: the refusal names Operation.init: true
-bare sgd_one on a computed node is undone: run 1: true
-bare sgd_one on a computed node is undone: run 2: true
-bare sgd_one on a computed node is undone: run 3: true
+a step sequenced before its node's forward: refused: true
+a step sequenced before its node's forward: the refusal names hf: true
+a step sequenced before its node's forward: the refusal names member 1: true
+a step sequenced before its node's forward: the refusal names member 2: true
+a step sequenced before its node's forward: the refusal names gh-ocannl-2027: true
+bare sgd_one on a computed node: run 1: true
+bare sgd_one on a computed node: run 2 refused: true
+bare sgd_one on a computed node: the refusal names hb: true
+bare sgd_one on a computed node: the refused run left the step: true
 a node the forward accumulates into: accepted: true
 a node the forward accumulates into: run 1: true
 a node the forward accumulates into: run 2: true
@@ -91,3 +93,45 @@ that view is an alias: true
 a step through a view of a parent computed once lasts: run 1: true
 a step through a view of a parent computed once lasts: run 2: true
 a step through a view of a parent computed once lasts: run 3: true
+a forward re-run after sgd_update: the steps accumulate: true
+a forward re-run after sgd_update: re-running the forward refused: true
+a forward re-run after sgd_update: the refusal names hs: true
+a forward re-run after sgd_update: the refusal names gh-ocannl-2027: true
+a forward re-run after sgd_update: the refused run left the steps: true
+a forward re-run after sgd_one: the steps accumulate: true
+a forward re-run after sgd_one: re-running the forward refused: true
+a forward re-run after sgd_one: the refusal names hs: true
+a forward re-run after sgd_one: the refusal names gh-ocannl-2027: true
+a forward re-run after sgd_one: the refused run left the steps: true
+a forward re-run after a marked hand-written step: the steps accumulate: true
+a forward re-run after a marked hand-written step: re-running the forward refused: true
+a forward re-run after a marked hand-written step: the refusal names hs: true
+a forward re-run after a marked hand-written step: the refusal names gh-ocannl-2027: true
+a forward re-run after a marked hand-written step: the refused run left the steps: true
+an unmarked hand-written step: the steps accumulate: true
+an unmarked hand-written step: a re-run forward undoes them: true
+a late view of a re-run forward's node is an alias: true
+a forward re-run after a step through a late view: the steps accumulate: true
+a forward re-run after a step through a late view: re-running the forward refused: true
+a forward re-run after a step through a late view: the refusal names hr: true
+a forward re-run after a step through a late view: the refusal names gh-ocannl-2027: true
+a forward re-run after a step through a late view: the refused run left the steps: true
+after a host write, the forward re-runs: accepted: true
+after a host write, the forward recomputes: true
+a run replacing the stepped value: true
+after a replacing run, the forward re-runs: accepted: true
+after a replacing run, the forward recomputes: true
+a stepped parameter: true
+re-initializing stepped parameters: accepted: true
+re-initializing stepped parameters restores them: true
+a step after re-initializing: true
+a step kept through a temporary across members: accepted: true
+a step kept through a temporary across members: run 1: true
+a step kept through a temporary across members: run 2: true
+a step kept through a temporary across members: run 3: true
+the replaced part is an alias: true
+a forward re-run after a part of the stepped node was replaced: the steps accumulate: true
+a forward re-run after a part of the stepped node was replaced: re-running the forward refused: true
+a forward re-run after a part of the stepped node was replaced: the refusal names hz: true
+a forward re-run after a part of the stepped node was replaced: the refusal names gh-ocannl-2027: true
+a forward re-run after a part of the stepped node was replaced: the refused run left the steps: true

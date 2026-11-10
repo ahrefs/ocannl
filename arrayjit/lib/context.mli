@@ -429,25 +429,38 @@ val run : ?timing:bool -> t -> routine -> t
     routine and per concrete buffer, so routines contributing once each per reset stay legal; the
     opt-in for deliberate accumulation over [k] micro-steps is [Train.grad_update ~accum_steps:k].
     [~timing:true] (the autotuner's repeated timing dispatches) waives the refusal; its runs still
-    count. *)
+    count.
+
+    And a write meant to last (gh-ocannl-2027, {!Ir.Assignments.field-persists}: an optimizer step).
+    A routine whose computation re-establishes a node's buffer without reading it
+    ({!Ir.Assignments.forward_recomputed}) -- from the node's forward code, which it carries, or
+    over a write it itself means to last -- is refused, with {!Ir.Utils.User_error} naming the node
+    and the stepping routine, while that buffer still holds the value a run wrote meaning it to
+    last: the run would silently undo the step. A forward run before the steps is legal, so this is
+    decided by the runs, not at {!compile}. A write from outside a run ({!from_host}, {!set_values},
+    {!copy}), or a run re-establishing the value without carrying the node's forward code (an
+    initializer, a hand-written assignment), replaces the value deliberately. Keyed by concrete
+    buffer, a slice alias by its parent's. [~timing:true] waives this refusal too. *)
 
 val save_accumulation_history : t -> unit -> unit
 (** [save_accumulation_history ctx] captures the gradient-accumulation history {!run} keeps for
     [ctx]'s lineage (gh-ocannl-1781), and returns the function setting it back. For a caller that
     restores buffers it saved itself -- the autotuner's timing-state restore (gh-ocannl-1621) -- so
-    that the restoring uploads, and the runs they undo, are not taken for a reset. Records of
-    routines or buffers released since the snapshot are not restored. *)
+    that the restoring uploads, and the runs they undo, are not taken for a reset. The writes meant
+    to last (gh-ocannl-2027) are captured with it, for the same reason. Records of routines or
+    buffers released since the snapshot are not restored. *)
 
 val check_runnable : t -> routine -> unit
 (** {!run}'s pre-dispatch validation on its own — poisoned lineage, uninitialized inputs,
     unsatisfied execution dependencies, out-of-range bindings — raising exactly what [run] would,
-    short of its gradient-reset refusal (gh-ocannl-1781), which depends on the run history. All of
-    it precedes the dispatch, so a failure here proves nothing was executed and no device buffer was
-    written. That is the point (gh-ocannl-550): a caller running a routine inside a launch-tagged
-    failure boundary validates through this rather than letting an unattributable failure at
-    [Launch] condemn the lineage for a mistake nothing had yet acted on (gh-ocannl-564). Equivalent
-    to {!check_lineage_runnable} followed by {!check_launch_bindings}; a caller that must treat the
-    two halves differently calls them directly. *)
+    short of its gradient-reset (gh-ocannl-1781) and persisting-write (gh-ocannl-2027) refusals,
+    which depend on the run history. All of it precedes the dispatch, so a failure here proves
+    nothing was executed and no device buffer was written. That is the point (gh-ocannl-550): a
+    caller running a routine inside a launch-tagged failure boundary validates through this rather
+    than letting an unattributable failure at [Launch] condemn the lineage for a mistake nothing had
+    yet acted on (gh-ocannl-564). Equivalent to {!check_lineage_runnable} followed by
+    {!check_launch_bindings}; a caller that must treat the two halves differently calls them
+    directly. *)
 
 val check_lineage_runnable : t -> routine -> unit
 (** The lineage-wide half of {!check_runnable}: poisoned lineage, uninitialized inputs, unsatisfied
