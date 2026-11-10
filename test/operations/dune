@@ -7632,6 +7632,18 @@
  (modules half_index_bound_constant)
  (libraries base ocannl stdio arrayjit.verdict ll_test))
 
+; gh-ocannl-2046: a constant at a narrow float slot is rounded to the slot's precision at lowering,
+; after folding, with integer power exponents exempt; executed on the selected backend.
+
+(test
+ (name narrow_constant_rounding)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_constant_rounding)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
 (test
  (name simplify_const_left_sub)
  (package neural_nets_lib)

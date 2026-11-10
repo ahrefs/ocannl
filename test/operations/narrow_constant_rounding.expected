@@ -1,0 +1,32 @@
+half virtual literal below a tie: the node is inlined: true
+half virtual literal below a tie: reads its rounded value: true
+half virtual literal tie to even below: the node is inlined: true
+half virtual literal tie to even below: reads its rounded value: true
+half virtual literal tie to even above: the node is inlined: true
+half virtual literal tie to even above: reads its rounded value: true
+half virtual literal negative: the node is inlined: true
+half virtual literal negative: reads its rounded value: true
+half virtual literal negative zero: the node is inlined: true
+half virtual literal negative zero: reads its rounded value: true
+half virtual literal subnormal tie: the node is inlined: true
+half virtual literal subnormal tie: reads its rounded value: true
+half virtual literal underflow: the node is inlined: true
+half virtual literal underflow: reads its rounded value: true
+half virtual literal nan: the node is inlined: true
+half virtual literal nan: reads its rounded value: true
+bfloat16 virtual literal below a tie: the node is inlined: true
+bfloat16 virtual literal below a tie: reads its rounded value: true
+bfloat16 virtual literal 0.1: the node is inlined: true
+bfloat16 virtual literal 0.1: reads its rounded value: true
+fp8 virtual literal below a tie: the node is inlined: true
+fp8 virtual literal below a tie: reads its rounded value: true
+fp8 virtual literal 0.1: the node is inlined: true
+fp8 virtual literal 0.1: reads its rounded value: true
+half literal factor: reads its rounded value: true
+half folded factor: reads its rounded value: true
+bfloat16 literal factor: reads its rounded value: true
+bfloat16 folded factor: reads its rounded value: true
+fp8 literal factor: reads its rounded value: true
+fp8 folded factor: reads its rounded value: true
+fp8 integer power: the exponent stays 9: true
+fp8 2 ** 9: reads its rounded value: true

@@ -13,7 +13,15 @@
    visible), and the destination is prefilled before the run (so a store skipped reads wrong).
 
    The control keeps the check honest: the same bound stored as a VALUE into the half node is still
-   refused. *)
+   refused.
+
+   gh-ocannl-2046: the walk that checks a constant also rounds it to its slot's precision, and the
+   check reads the value BEFORE rounding. [70000] rounds to an infinity, which the cutoff passes on
+   purpose (reduction identities, gh-ocannl-547), so checking the rounded value would wave through
+   exactly the literals the check exists for: the value controls, and a virtual half node holding
+   the bound, read by an f32 node, are refused. Just below the cutoff, [16380] is accepted, though
+   it rounds onto it: a half node holding it reads [16384] (half's spacing there is 8, and 16380 is
+   the tie between 16376 and the even 16384). *)
 
 open Base
 module LL = Ir.Low_level
@@ -85,6 +93,35 @@ let check_value_controls () =
              (big, Ops.half),
              (LL.Constant 0., Ops.half) )))
 
+(* A virtual half node holding [c], read into a materialized f32 node. *)
+let virtual_read ~first_id ~label c =
+  let v = Ll_test.node_factory ~prec:Ops.half ~first_id ~dims:[| 1 |] () ("hib_v_" ^ label) in
+  let dst = Ll_test.node_factory ~first_id:(first_id + 1) ~dims:[| 1 |] () ("hib_d_" ^ label) in
+  Ll_test.materialize dst;
+  let at0 = [| Ll_test.fixed 0 |] in
+  let llc =
+    Ll_test.seq (Ll_test.set v at0 (LL.Constant c)) (Ll_test.set dst at0 (Ll_test.get v at0))
+  in
+  match Ll_test.optimize ~materialized:[ dst ] ~name:("hib_" ^ label) llc with
+  | exception Utils.User_error msg -> Error msg
+  | optimized ->
+      Ok (List.hd_exn (Ll_test.execute ~name:("hib_" ^ label) optimized ~seed:[] ~read:[ dst ])).(0)
+
+let check_rounding_order () =
+  p "the bound held by a virtual half node read in an f32 node is refused, not rounded to inf"
+    (match virtual_read ~first_id:2046100 ~label:"virtual" (Float.of_int bound) with
+    | Error msg -> refused_as_fp16 msg
+    | Ok _ -> false);
+  p "a half constant just below the cutoff is accepted, and reads its rounded value 16384"
+    (match virtual_read ~first_id:2046110 ~label:"near" 16380. with
+    | Error msg ->
+        Stdio.prerr_endline ("refusal (not part of the golden): " ^ msg);
+        false
+    | Ok v ->
+        Stdio.eprintf "near the cutoff: reads %h (not part of the golden)\n" v;
+        Float.(v = 16384.))
+
 let () =
   check_guard ();
-  check_value_controls ()
+  check_value_controls ();
+  check_rounding_order ()

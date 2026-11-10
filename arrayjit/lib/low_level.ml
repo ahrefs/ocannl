@@ -6604,7 +6604,8 @@ let simplify_llc static_indices llc =
                 && ((not (Ops.equal_binop op Div)) || Float.(Stdlib.Float.rem c1 c2 = 0.))) ->
         (llsc, prec)
     | Binop (op, (Constant c1, prec1), (Constant c2, prec2)) ->
-        (* Folded in double and rounded once where the constant is rendered. For operands
+        (* Folded in double and rounded once, to its slot's precision by the closing walk at a
+           narrow float (gh-ocannl-2046) and by the literal's parse otherwise. For operands
            representable at the target precision (f32, f16, bf16) that is the target's correctly
            rounded result: 53 >= 2p + 2 bits, so double rounding is innocuous. A constant that is
            not representable there is rounded once after folding, where a kernel would round each
@@ -6733,70 +6734,102 @@ let simplify_llc static_indices llc =
       raise (Unrepresentable_integer_constant { tn; scope; prec = eval; value = c });
     check_fp16 (match scope with Some _ -> scope | None -> tn) ~eval c
   in
+  (* gh-ocannl-2046: a constant is a value of its slot's precision. At a narrow float evaluation
+     precision every GPU renderer converts the literal to it, and a materialized node's store rounds
+     it, while a backend computing that format wider ([narrow_compute_f32] on cc, fp8 on Metal) kept
+     it unrounded in a virtual node or in narrow arithmetic. Rounding here, after every fold, gives
+     every backend and placement the one value, at no run-time cost: a folded constant is rounded
+     once, the fold arm's documented choice, and rounding is idempotent, so a later simplify keeps
+     it. The checks read the UNROUNDED value: a literal past fp16's range rounds to an infinity,
+     which [Ops.exceeds_fp16_cutoff] passes on purpose (reduction identities, gh-ocannl-547). *)
+  let at_slot ~tn ~scope ~eval c =
+    check_constant ~tn ~scope ~eval c;
+    if Ops.is_narrow_float eval then Constant (Ops.round_to_prec eval c) else Constant c
+  in
+  (* An integer exponent of a float power is no value of the slot: [C_syntax.integer_power_doc]
+     renders it as repeated multiplication, so rounding it would change the operator (fp8 [x ** 9]
+     would become [x ** 8]). It is still checked. *)
+  let integer_exponent ~eval c = Ops.is_float eval && Float.is_finite c && Float.is_integer c in
   (* [within] is [Some dest] inside an inlined computation: the refusal still names the statement's
-     destination [dest]. *)
-  let rec check_proc ~within llc =
-    let loop = check_proc ~within in
+     destination [dest]. The walk checks each constant and returns the code with each constant at
+     its slot's value. *)
+  let rec round_proc ~within llc =
+    let loop = round_proc ~within in
     let at_storage tn llsc =
       ignore (Lazy.force tn.Tn.dims);
-      check_float ~tn:(Some tn) ~scope:None ~eval:(Lazy.force tn.Tn.storage_prec) llsc
+      round_float ~tn:(Some tn) ~scope:None ~eval:(Lazy.force tn.Tn.storage_prec) llsc
     in
     match llc with
     | Seq (c1, c2) ->
-        loop c1;
-        loop c2
-    | For_loop { body; _ } -> loop body
-    | Scan_loop { carried; body; _ } ->
-        List.iter carried ~f:(fun c -> at_storage c.prev.tn c.init);
-        loop body
-    | Zero_out _ -> ()
-    | Set { tn; llsc; _ } -> at_storage tn llsc
-    | Set_dynamic { tn; dyn_value = v, p; llsc; _ } ->
-        check_float ~tn:(Some tn) ~scope:None ~eval:p v;
-        at_storage tn llsc
-    | Set_from_vec { tn; vec_unop; arg = arg_scalar, p; _ } ->
-        if Ops.is_homogeneous_prec_vec_unop vec_unop then at_storage tn arg_scalar
-        else check_float ~tn:(Some tn) ~scope:None ~eval:p arg_scalar
+        let c1 = loop c1 in
+        Seq (c1, loop c2)
+    | For_loop ({ body; _ } as for_config) -> For_loop { for_config with body = loop body }
+    | Scan_loop ({ carried; body; _ } as scan_config) ->
+        let carried =
+          List.map carried ~f:(fun c -> { c with init = at_storage c.prev.tn c.init })
+        in
+        Scan_loop { scan_config with carried; body = loop body }
+    | Zero_out _ -> llc
+    | Set ({ tn; llsc; _ } as set) -> Set { set with llsc = at_storage tn llsc }
+    | Set_dynamic ({ tn; dyn_value = v, p; llsc; _ } as set) ->
+        let v = round_float ~tn:(Some tn) ~scope:None ~eval:p v in
+        Set_dynamic { set with dyn_value = (v, p); llsc = at_storage tn llsc }
+    | Set_from_vec ({ tn; vec_unop; arg = arg_scalar, p; _ } as set) ->
+        let arg_scalar =
+          if Ops.is_homogeneous_prec_vec_unop vec_unop then at_storage tn arg_scalar
+          else round_float ~tn:(Some tn) ~scope:None ~eval:p arg_scalar
+        in
+        Set_from_vec { set with arg = (arg_scalar, p) }
     | Set_local (id, llsc) -> (
         match within with
         | Some dest ->
             ignore (Lazy.force id.tn.Tn.dims);
-            check_float ~tn:dest ~scope:(Some id.tn) ~eval:(Lazy.force id.tn.Tn.storage_prec) llsc
-        | None -> at_storage id.tn llsc)
+            Set_local
+              ( id,
+                round_float ~tn:dest ~scope:(Some id.tn)
+                  ~eval:(Lazy.force id.tn.Tn.storage_prec)
+                  llsc )
+        | None -> Set_local (id, at_storage id.tn llsc))
     | If { cond = v, p; body } ->
-        (* A guard feeds no node: only the integer check judges it. *)
-        check_float ~tn:None ~scope:None ~eval:p v;
-        loop body
-    | Tile_mma { fallback; _ } -> loop fallback
-    | Declare_local _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier -> ()
-  and check_float ~tn ~scope ~eval llsc =
-    let loop = check_float ~tn ~scope ~eval in
-    let own (v, p) = check_float ~tn ~scope ~eval:p v in
+        (* A guard feeds no node: the fp16 check passes it, and it is rounded at its own
+           precision. *)
+        let v = round_float ~tn:None ~scope:None ~eval:p v in
+        If { cond = (v, p); body = loop body }
+    | Tile_mma ({ fallback; _ } as tm) -> Tile_mma { tm with fallback = loop fallback }
+    | Declare_local _ | Noop | Comment _ | Staged_compilation _ | Workgroup_barrier -> llc
+  and round_float ~tn ~scope ~eval llsc =
+    let loop = round_float ~tn ~scope ~eval in
+    let own (v, p) = (round_float ~tn ~scope ~eval:p v, p) in
+    let at_eval (v, p) = (loop v, p) in
     match llsc with
-    | Constant c -> check_constant ~tn ~scope ~eval c
-    | Constant_bits _ -> () (* An int64 literal: its integer conversions are defined. *)
-    | Local_scope { body; _ } -> check_proc ~within:(Some tn) body
-    | Ternop (op, v1, (v2, _), (v3, _)) ->
-        if Ops.is_homogeneous_prec_ternop op then loop (fst v1) else own v1;
-        loop v2;
-        loop v3
+    | Constant c -> at_slot ~tn ~scope ~eval c
+    | Constant_bits _ -> llsc (* An int64 literal: its integer conversions are defined. *)
+    | Local_scope ({ body; _ } as opts) ->
+        Local_scope { opts with body = round_proc ~within:(Some tn) body }
+    | Ternop (op, v1, v2, v3) ->
+        let v1 = if Ops.is_homogeneous_prec_ternop op then at_eval v1 else own v1 in
+        let v2 = at_eval v2 in
+        Ternop (op, v1, v2, at_eval v3)
+    | Binop (Ops.ToPowOf, v1, (Constant c, p2)) when integer_exponent ~eval c ->
+        check_constant ~tn ~scope ~eval c;
+        Binop (Ops.ToPowOf, at_eval v1, (Constant c, p2))
     | Binop (op, v1, v2) ->
-        if Ops.is_homogeneous_prec_binop op then (
-          loop (fst v1);
-          loop (fst v2))
-        else (
-          own v1;
-          own v2)
-    | Unop (op, v) -> if Ops.is_homogeneous_prec_unop op then loop (fst v) else own v
+        if Ops.is_homogeneous_prec_binop op then
+          let v1 = at_eval v1 in
+          Binop (op, v1, at_eval v2)
+        else
+          let v1 = own v1 in
+          Binop (op, v1, own v2)
+    | Unop (op, v) -> Unop (op, if Ops.is_homogeneous_prec_unop op then at_eval v else own v)
     (* An index converts from an integer, which is defined: only the fp16 check judges it. *)
     | Embed_index (Indexing.Fixed_idx i) ->
-        check_fp16 (match scope with Some _ -> scope | None -> tn) ~eval (Float.of_int i)
-    | Get_dynamic { dyn_value; _ } -> own dyn_value
-    | Embed_index _ | Get_local _ | Get_merge_buffer (_, _) | Get (_, _) -> ()
+        check_fp16 (match scope with Some _ -> scope | None -> tn) ~eval (Float.of_int i);
+        llsc
+    | Get_dynamic ({ dyn_value; _ } as get) -> Get_dynamic { get with dyn_value = own dyn_value }
+    | Embed_index _ | Get_local _ | Get_merge_buffer (_, _) | Get (_, _) -> llsc
   in
   let result = loop_proc ~ienv:(ienv_of_static_indices static_indices) llc in
-  check_proc ~within:None result;
-  result
+  round_proc ~within:None result
 
 (** Alpha-equivalence comparison for CSE: compare two [scalar_t] trees ignoring concrete [scope_id]
     integers and fresh iterator symbols BOUND WITHIN the compared trees, but verifying

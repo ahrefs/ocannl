@@ -1328,17 +1328,22 @@ files.
   `cpu_vectorized` compares lanes bitwise with a materialized twin at rounding boundaries.
 - **Placement decides a narrow value only where a rendered precision is wider than storage, and that
   is accepted policy** (gh-ocannl-1965; the contract is `docs/precision_inference.md`, *Storage,
-  compute and placement*). A virtual narrow node with arithmetic in its body, a narrow `Constant`
-  and a virtual accumulation have no store, so they stay at `compute_prec` or `accum_prec` of their
-  storage precision; only a store and a `narrowing_read` round. Do not "fix" a virtual-vs-materialized
+  compute and placement*). A virtual narrow node with arithmetic in its body and a virtual
+  accumulation have no store, so they stay at `compute_prec` or `accum_prec` of their storage
+  precision; only a store and a `narrowing_read` round. A narrow `Constant` is not in that list:
+  `simplify_llc`'s closing walk rounds every constant at a narrow-float slot evaluation precision to
+  it (`Ops.round_to_prec`, gh-ocannl-2046), after folding, so it reads the same in either placement
+  on every backend. That walk checks before it rounds (a literal past fp16's range rounds to an
+  infinity, which `exceeds_fp16_cutoff` passes on purpose), and skips an integer `ToPowOf` exponent,
+  which `C_syntax.integer_power_doc` renders as repeated multiplication (rounded, fp8 `x ** 9` would
+  become `x ** 8`); `narrow_constant_rounding` executes all three. Do not "fix" a virtual-vs-materialized
   difference there: it is the gh-ocannl-517 trade, a rounding mode at node boundaries was declined
   (reasons and the measured scale: the issue's reconciled-plan comment), and a value test comparing
   placements on a narrow model has to predict from `compute_prec`/`accum_prec`, as
   `narrow_placement_contract` does for every backend and policy. That test also shows the traps
   in the handles: `narrow_compute_f32=false` restores per-operator arithmetic, not a neutral mode
   (accumulators have their own keys; Metal computes fp8 in f32 regardless); a same-precision
-  `Operation.cast` is an identity, so it rounds nothing; and `Train.every_non_literal_materialized`,
-  arm B of `tune_placements`, skips literals, so a virtual narrow constant stays wide there too.
+  `Operation.cast` is an identity, so it rounds nothing.
   The contract does not explain a difference at f32, or one between schedules of one placement: a
   k-blocked schedule's stored partials are the schedule's (`numerics.mli`).
 - **HIP's wide-f16/bf16 d boundary reads coordinates from the accumulator type, not from a

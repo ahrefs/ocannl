@@ -30,12 +30,15 @@ That leaves one question for placement, the compiler's choice between keeping a 
 | --- | --- | --- |
 | A narrowing read: a narrow node reading a tensor node or virtual node of a precision that does not widen exactly into it, such as a cast twin or a narrow slice of f32 data | rounds | rounds |
 | An RNG draw | storage precision | storage precision |
-| Arithmetic, or a constant | rounds at the store | rounds only where compute precision equals storage |
+| A constant | rounds at lowering | rounds at lowering |
+| Arithmetic | rounds at the store | rounds only where compute precision equals storage |
 | An accumulation | rounds at the store | rounds only where accumulator precision equals storage |
 
 The rows compose. An accumulation opened by a narrowing read, such as `s =: src` followed by `s =+ x` over a narrow `s` and a wider `src`, rounds that read in either placement, and only what the accumulation adds after it stays at accumulator precision (gh-ocannl-2076).
 
-So where a backend computes wider than a node stores, a virtual narrow node has no store, and it keeps the wider value until something downstream rounds. For example, take bf16 inputs `1` and `2^-9`, both exactly representable, summed into a bf16 node and read in an f32 expression. On a backend computing bf16 in f32, a materialized node rounds the sum to `1`, because bf16's spacing at 1 is `2^-7`, while a virtual one hands on `1 + 2^-9`.
+A constant is a value of the precision its slot evaluates it at, so at a narrow float the compiler rounds it while lowering, after folding constant expressions in double (gh-ocannl-2046): every backend and placement reads the same literal, at no run-time cost. Two details. An integer power exponent is an operator parameter, not a value of the slot, so `x **. 9` stays a ninth power at fp8. And `check_half_prec_constants_cutoff` reads the literal before it is rounded, so a literal past fp16's range is refused rather than becoming an infinity. On a backend computing a narrow format wider, a literal too small for the format (an `eps` of `1e-8` at f16) is now 0 there as well, as it already was on the backends computing at storage width.
+
+So where a backend computes wider than a node stores, a virtual narrow node with arithmetic in it has no store, and it keeps the wider value until something downstream rounds. For example, take bf16 inputs `1` and `2^-9`, both exactly representable, summed into a bf16 node and read in an f32 expression. On a backend computing bf16 in f32, a materialized node rounds the sum to `1`, because bf16's spacing at 1 is `2^-7`, while a virtual one hands on `1 + 2^-9`.
 
 The two values come from the same program, and both are correct under this contract. This is the narrow-float counterpart of C's excess precision, as an analogy only: what is promised here is the table above. Particular inputs may still agree, and where they differ no bound on the difference is promised: a rounding can overflow, and later operations can amplify what it would have removed.
 
