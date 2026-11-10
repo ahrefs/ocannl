@@ -1333,8 +1333,10 @@ files.
   precision; only a store and a `narrowing_read` round. A narrow `Constant` is not in that list:
   `simplify_llc`'s closing walk rounds every constant at a narrow-float slot evaluation precision to
   it (`Ops.round_to_prec`, gh-ocannl-2046), after folding, so it reads the same in either placement
-  on every backend. That walk checks before it rounds (a literal past fp16's range rounds to an
-  infinity, which `exceeds_fp16_cutoff` passes on purpose), and skips an integer `ToPowOf` exponent,
+  on every backend. That walk checks the literal before it rounds (a literal past fp16's range
+  rounds to an infinity, which `exceeds_fp16_cutoff` passes on purpose) and the rounded value after
+  (a schedule's re-simplify sees only that one, so a literal rounding onto the cutoff is refused at
+  once rather than there), and skips an integer `ToPowOf` exponent,
   which `C_syntax.integer_power_doc` renders as repeated multiplication (rounded, fp8 `x ** 9` would
   become `x ** 8`); `narrow_constant_rounding` executes all three. Do not "fix" a virtual-vs-materialized
   difference there: it is the gh-ocannl-517 trade, a rounding mode at node boundaries was declined

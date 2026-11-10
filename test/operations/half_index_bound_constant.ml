@@ -19,9 +19,11 @@
    check reads the value BEFORE rounding. [70000] rounds to an infinity, which the cutoff passes on
    purpose (reduction identities, gh-ocannl-547), so checking the rounded value would wave through
    exactly the literals the check exists for: the value controls, and a virtual half node holding
-   the bound, read by an f32 node, are refused. Just below the cutoff, [16380] is accepted, though
-   it rounds onto it: a half node holding it reads [16384] (half's spacing there is 8, and 16380 is
-   the tie between 16376 and the even 16384). *)
+   the bound, read by an f32 node, are refused. The check also reads the rounded value, the one a
+   later simplify (a schedule's) sees, so the verdict cannot change between the two: [16380], below
+   the cutoff (2^14), is the tie between 16376 and the even 16384 (half's spacing there is 8), so it
+   rounds onto the cutoff and is refused, while [16370] rounds to [16368] and is accepted, reading
+   its rounded value. *)
 
 open Base
 module LL = Ir.Low_level
@@ -112,14 +114,18 @@ let check_rounding_order () =
     (match virtual_read ~first_id:2046100 ~label:"virtual" (Float.of_int bound) with
     | Error msg -> refused_as_fp16 msg
     | Ok _ -> false);
-  p "a half constant just below the cutoff is accepted, and reads its rounded value 16384"
-    (match virtual_read ~first_id:2046110 ~label:"near" 16380. with
+  p "a half constant just below the cutoff that rounds onto it is refused"
+    (match virtual_read ~first_id:2046110 ~label:"onto" 16380. with
+    | Error msg -> refused_as_fp16 msg
+    | Ok _ -> false);
+  p "a half constant just below the cutoff that rounds below it is accepted, and reads 16368"
+    (match virtual_read ~first_id:2046120 ~label:"near" 16370. with
     | Error msg ->
         Stdio.prerr_endline ("refusal (not part of the golden): " ^ msg);
         false
     | Ok v ->
         Stdio.eprintf "near the cutoff: reads %h (not part of the golden)\n" v;
-        Float.(v = 16384.))
+        Float.(v = 16368.))
 
 let () =
   check_guard ();

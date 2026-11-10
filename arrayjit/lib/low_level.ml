@@ -6741,10 +6741,17 @@ let simplify_llc static_indices llc =
      every backend and placement the one value, at no run-time cost: a folded constant is rounded
      once, the fold arm's documented choice, and rounding is idempotent, so a later simplify keeps
      it. The checks read the UNROUNDED value: a literal past fp16's range rounds to an infinity,
-     which [Ops.exceeds_fp16_cutoff] passes on purpose (reduction identities, gh-ocannl-547). *)
+     which [Ops.exceeds_fp16_cutoff] passes on purpose (reduction identities, gh-ocannl-547). The
+     fp16 cutoff reads the rounded value too, which is what a later simplify (a schedule's) sees: a
+     literal just below the cutoff can round onto it, and accepting it here would refuse it
+     there. *)
   let at_slot ~tn ~scope ~eval c =
     check_constant ~tn ~scope ~eval c;
-    if Ops.is_narrow_float eval then Constant (Ops.round_to_prec eval c) else Constant c
+    if Ops.is_narrow_float eval then (
+      let rounded = Ops.round_to_prec eval c in
+      check_fp16 (match scope with Some _ -> scope | None -> tn) ~eval rounded;
+      Constant rounded)
+    else Constant c
   in
   (* An integer exponent of a float power is no value of the slot: [C_syntax.integer_power_doc]
      renders it as repeated multiplication, so rounding it would change the operator (fp8 [x ** 9]
