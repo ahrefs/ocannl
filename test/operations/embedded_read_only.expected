@@ -11,3 +11,16 @@ embedded host literal initializes at link and runs: true
 embedded host data is a shared read, not a required input: true
 the shared reader first sees the host initialization: true
 another root writing the embedded shared buffer makes the reader stale: true
+the reference initialized inside the scope draws as the caller-seeded one: true
+the captured seed draws exactly the seed-owning reference after the scope: true
+another captured seed draws differently: true
+an initialized parameter is skipped unchanged after the scope: true
+reinitializing outside the scope replays the captured seed: true
+with no singleton to restore: true
+with an outer singleton of the same integer: true
+after a nested scope restored another singleton: true
+after the scope was left by an exception: true
+after a direct replacement of the singleton: true
+an owned scoped seed draws the same inside and outside the scope: true
+an owned scoped seed of another value draws differently: true
+reinitializing an owned scoped seed replays it: true

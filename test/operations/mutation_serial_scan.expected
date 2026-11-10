@@ -75,6 +75,7 @@ tensor/tensor.ml: handouts.fwd_out (mutable field) -- accounted; kept by rewinds
 tensor/tensor.ml: handouts.bprop_out (mutable field) -- accounted; kept by rewinds: a record of code given to callers, which no rewind takes back
 tensor/tensor.ml: last_closure (ref) -- accounted; kept by rewinds: the last closure's checkpoint: a closure records it, and no rewind restores an older one
 tensor/tensor.ml: discarded_nodes_table (ref) -- accounted; kept by rewinds: a registry of the nodes rewinds discarded, held weakly: rewinds extend it, never restore it
+tensor/tensor.ml: seed_literals (Ephemeron) -- accounted; kept by rewinds: a weak registry of seed literals and their constant fetches: [set_random_seed] extends it, and no rewind restores it -- a discarded seed is refused by the validity check, not by its absence
 tensor/tensor.ml: id_neutral_depth (ref) -- exempt: the nesting of id-neutral windows, restored by their own finally
 tensor/tensor.ml: window_discarded_nodes (ref) -- exempt: scratch of the current id-neutral window, emptied when it ends
 tensor/tensor.ml: default_value_prec (ref) -- exempt: user configuration read when a tensor is built, not inference state

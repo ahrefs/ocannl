@@ -209,5 +209,15 @@ files.
   counter input. `embedded_read_only` pins draws against explicit seed 42, distinguishes seed 0,
   and repeats parameter initialization. Other unwritten embedded read-only nodes are still
   refused by `Context.run`; the seed is accepted because its initializer now writes it, not by
-  an exemption. This repairs the existing singleton special case, not arbitrary captured seeds
-  from an earlier `with_saved_random_seed` scope after the singleton has changed.
+  an exemption. A seed that is no longer the singleton -- captured inside a
+  `with_saved_random_seed` scope since restored, or replaced by `set_random_seed` -- is repaired
+  the same way (gh-ocannl-2119): `set_random_seed` registers every seed literal weakly with its
+  fetch (`seed_literals`), and the outer `init_params` prepends the fetch of each registered seed
+  its program reads (`collect_nodes_guess_output`'s first set) and does not write
+  (`collect_written`), once over the whole program. The rule, not a refusal, because the literal is
+  immutable whichever singleton is current; `embedded_read_only`'s captured-seed cases pin the
+  draws against a caller-seeded reference and a seed-8 control across nested, unwound, replaced
+  and same-integer variants (the registry keys on the seed node, which the kept graph holds, so the
+  owner's liveness does not enter; a `Gc_witness` probe found the dropped owner still reachable
+  before initialization, so it is not a variant). Still unrepaired: a captured seed read only by a
+  forward graph whose code a dropped graph absorbed (`Context` refuses it as uninitialized).
