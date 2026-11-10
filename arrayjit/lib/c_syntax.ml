@@ -3421,14 +3421,7 @@ module C_syntax (B : C_syntax_config) = struct
     let reserved name =
       implementation_reserved name
       || String.is_suffix name ~suffix:"__"
-      ||
-      match String.chop_prefix name ~prefix:"v" with
-      | None -> false
-      | Some rest -> (
-          match String.lsplit2 rest ~on:'_' with
-          | Some (digits, _) ->
-              (not (String.is_empty digits)) && String.for_all digits ~f:Char.is_digit
-          | None -> false)
+      || Low_level.in_scope_local_namespace name
     in
     Low_level.get_ident_within_code ~no_dots:true ~blacklist:ident_blacklist
       ~reserved_prefixes:[ "ocannl_"; "tmma_" ] ~reserved
@@ -4407,8 +4400,8 @@ module C_syntax (B : C_syntax_config) = struct
 
   (* The emitted name of a scope local. One definition, so that the volatility census below names
      the same identifier the declaration carries rather than a second spelling of the convention. *)
-  let scope_local_ident Low_level.{ scope_id; tn } =
-    "v" ^ Int.to_string scope_id ^ "_" ^ get_code_ident tn
+  let scope_local_ident (id : Low_level.scope_id) =
+    Low_level.scope_local_name ~node:(get_code_ident id.tn) id
 
   (* The Metal compiler bug also reaches the localized spelling of a scalar accumulation
      (gh-ocannl-731): instead of a device-memory RMW, the loop updates a scope local and stores it
@@ -4739,9 +4732,7 @@ module C_syntax (B : C_syntax_config) = struct
     | [ { doc; _ } ] -> doc
     | _ -> PPrint.separate PPrint.hardline (List.rev (List.fold sorted ~init:[] ~f:emit))
 
-  let pp_scope_id Low_level.{ scope_id; tn } =
-    let open PPrint in
-    string ("v" ^ Int.to_string scope_id ^ "_" ^ get_code_ident tn)
+  let pp_scope_id id = PPrint.string (scope_local_ident id)
 
   (* {3 Vector-extension accumulator grids (gh-ocannl-468 / gh-ocannl-469)}
 

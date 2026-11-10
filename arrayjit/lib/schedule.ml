@@ -2068,9 +2068,9 @@ let apply_stage ~source ~tile_loops ~shared ~cooperative ~hoisted ~swizzle ~pad_
                     refuse
                       ("Schedule.Stage: the staging anchor " ^ Indexing.symbol_ident anchor
                      ^ " (the deepest loop the staged index of " ^ Tn.debug_name source
-                     ^ " varies with outside tile_loops) is bound inside the body of local scope v"
-                      ^ Int.to_string id.Low_level.scope_id
-                      ^ "_" ^ Tn.debug_name id.Low_level.tn
+                     ^ " varies with outside tile_loops) is bound inside the body of local scope "
+                      ^ Low_level.scope_local_prefix id.Low_level.scope_id
+                      ^ Tn.debug_name id.Low_level.tn
                       ^ ": the loads would land in a scope body, which writes no tensor node, and \
                          hoisted ahead of the scope they could not see the anchor (gh-ocannl-1534) \
                          -- add "
@@ -5367,9 +5367,9 @@ let scope_grammar_message ~op = function
       "Schedule." ^ optop_label op ^ ": leaves the hardware-annotated loop "
       ^ Indexing.symbol_ident loop ^ " ("
       ^ Sexp.to_string (Low_level.sexp_of_axis_type axis)
-      ^ ") inside the body of local scope v"
-      ^ Int.to_string scope.Low_level.scope_id
-      ^ "_" ^ Tn.debug_name scope.Low_level.tn
+      ^ ") inside the body of local scope "
+      ^ Low_level.scope_local_prefix scope.Low_level.scope_id
+      ^ Tn.debug_name scope.Low_level.tn
       ^ " -- a scope body is hoisted out of its position and is in no kernel's hardware-axis table \
          (gh-ocannl-1467)"
   | Impure_scope_body msg -> "Schedule." ^ optop_label op ^ ": leaves an impure scope body: " ^ msg

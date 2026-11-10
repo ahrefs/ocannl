@@ -1,0 +1,33 @@
+register tile, f32 full blocks: the tile renders tensorized: true
+register tile, f32 row and column tails: the tile renders tensorized: true
+register tile, bf16 operands: the tile renders tensorized: true
+vectorized loops: all four loops render the vector form: true
+the probe keeps an unreserved label's name, so it can answer uncovered: true
+register tile, f32 full blocks: every statement takes an allowlisted form: true
+register tile, f32 full blocks: every parameter is a node of the routine: true
+register tile, f32 full blocks: declares node parameters: true
+register tile, f32 row and column tails: every statement takes an allowlisted form: true
+register tile, f32 row and column tails: every parameter is a node of the routine: true
+register tile, f32 row and column tails: declares node parameters: true
+register tile, bf16 operands: every statement takes an allowlisted form: true
+register tile, bf16 operands: every parameter is a node of the routine: true
+register tile, bf16 operands: declares node parameters: true
+vectorized loops: every statement takes an allowlisted form: true
+vectorized loops: every parameter is a node of the routine: true
+vectorized loops: declares node parameters: true
+scope locals: every statement takes an allowlisted form: true
+scope locals: every parameter is a node of the routine: true
+scope locals: declares node parameters: true
+scope locals: declares both scope locals, each reserved: true
+register tile, f32 full blocks: declares fixed temporaries: true
+register tile, f32 row and column tails: declares fixed temporaries: true
+register tile, bf16 operands: declares fixed temporaries: true
+vectorized loops: declares fixed temporaries: true
+every fixed temporary the kernels declare is reserved: true
+control: the added temporaries read as allowlisted declarations: true
+control: the added unreserved temporaries -- plain, of an unknown type, declared by a macro call -- are exactly what comes back uncovered: true
+control: a second declarator is unrecognized: true
+control: a function declaration is unrecognized: true
+control: a macro definition in a kernel is unrecognized: true
+control: a call of a macro that pastes is unrecognized: true
+control: a declaring macro inside an expression is unrecognized: true

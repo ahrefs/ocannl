@@ -291,6 +291,19 @@ files.
   This is not an exhaustive collision guarantee: loop indices (`i<digits>` and their Grid chunk
   names), fixed logging temporaries, and literal `n<digits>_...` labels matching another node's
   disambiguated name remain loud compilation-error gaps.
+- The rules are pinned to what cc DECLARES, not to a list of spellings (gh-ocannl-2102):
+  `test/operations/declared_temporaries.ml` renders register-tiled (f32 full and tail blocks, bf16
+  operands), vectorized and scope-local kernels, reads every declared identifier off their sources
+  with `Generated.declarations`, sets node parameters and loop indices apart, and asks the minter
+  itself (a probe routine with a node labelled after each name) whether each scope local and fixed
+  temporary is reserved. A renderer adding a temporary outside the reserved namespaces fails it;
+  so did the reservation with its `__` suffix and `v<digits>_` rules removed. The reader is a
+  fail-closed allowlist of declaration forms (its boundary heads its section in
+  `test/support/generated.ml`); it also expands statement-level calls of the source's own macros,
+  since the bf16 row widening declares `tmma_ap_<n>__` and `ocannl_rh__` inside
+  `OCANNL_VEC_WIDEN_BFLOAT16_ROWS_X4`. A scope local is spelled only through
+  `Low_level.scope_local_name` / `scope_local_prefix` -- emitters, `.ll` printers, refusal
+  messages -- and the minter reserves `Low_level.in_scope_local_namespace`, the same grammar.
 - A third identifier class is the renderers' own fixed-name temporaries (`vec_result`,
   `new_set_v`, `new_set_local_v`, the register tile's `tmma_*`, the GPU arms' `__mma_*`, the
   vectorized loops' counter-named `vset1__`...). Two statements that declare one, rendered side by

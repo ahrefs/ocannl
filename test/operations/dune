@@ -7720,6 +7720,19 @@
   (alias runtest-fixed_name_temporaries-plain)
   (alias runtest-fixed_name_temporaries-logged)))
 
+; gh-ocannl-2102: the identifiers cc declares in register-tiled, vectorized and scope-local
+; kernels, read off their sources, are node parameters, loop indices, scope locals or names the
+; node-name rules reserve, as the code-name minter itself answers.
+
+(test
+ ; ocannl-backend: cc -- every context is an explicit Context.cpu (); the declarations audited are
+ ; cc's.
+ (name declared_temporaries)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules declared_temporaries)
+ (libraries base ocannl stdio unix arrayjit.verdict ll_test test_utils))
+
 ; gh-ocannl-1636: under debug_log_to_stream_files a logged routine's lines reach its stream file and
 ; nothing reaches stdout, with no capture window opened by the caller.
 
