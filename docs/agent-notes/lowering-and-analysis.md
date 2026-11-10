@@ -499,6 +499,12 @@ files.
   too. A partial write's unwritten segment relies on `Affine.is_surjective`'s per-block producer
   check to keep the neutral init; a reordered or subset LHS `Concat` makes `coordinate` give up, so
   a redundant init can run -- time, never values.
+- **A block's operand count is checked against the op's arity both ways** (gh-ocannl-2088,
+  `loop_accum`): the operands that sit out a block (`Empty_block`) are not there to combine. MORE
+  than the op takes (a concatenation's `Unop Identity` with two operands that can fill one segment)
+  is "Ambiguous indices in concatenation"; FEWER (`x +* "a; b => a^b" y`, `a^c; a^b^c => a^b^c`) is
+  its own refusal naming the block, the missing operand and the two rewrites. Never treat the
+  shortfall as `Empty_block`: the block's cells would keep the result's initialization, silently.
 - **Output loops outside reduction loops is a FORWARD-lowering property only** (gh-ocannl-1151).
   A forward contraction's product space lists the result's axes first, so its lowered nest opens
   every loop the written cell mentions before any loop it does not: matmul, a transposed output, a

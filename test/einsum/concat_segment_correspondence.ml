@@ -224,8 +224,70 @@ let doubling_neighbours () =
         [| 1.; 2.; 0. |]
         ~tol:(fun _ -> 0.))
 
+(* gh-ocannl-2088: a lowering refusal, a [Utils.User_error] carrying [needle] and not [unlike]: each
+   of the two refusals below is checked to be told apart from the other. *)
+let refused_lowering label ~needle ~unlike make =
+  case label (fun () ->
+      Tensor.unsafe_reinitialize ();
+      match make () with
+      | (_ : float array) -> pf "%s: refused" label false
+      | exception Utils.User_error msg ->
+          Stdio.printf "%s: %s\n" label msg;
+          pf "%s: the refusal says why" label
+            (String.is_substring msg ~substring:needle
+            && not (String.is_substring msg ~substring:unlike))
+      | exception e ->
+          Stdio.printf "%s: raised %s\n" label (Exn.to_string e);
+          pf "%s: refused in lowering" label false)
+
+let missing_operand = "take no part in the block"
+let ambiguous = "Ambiguous indices in concatenation"
+
+(* A block of a concatenated axis is one segment's positions. An operand that does not use the
+   segment contributes nothing there, which is what concatenation wants, but a multiplicative einsum
+   needs every operand at every position: with one of them absent there is nothing to multiply, so
+   the block is refused, never left at the result's initialization. These read "Ambiguous indices in
+   concatenation: multiple blocks viable for same position", which is the opposite mistake: more
+   operands than the operation takes, as when two operands of a concatenation can fill one segment.
+   ([p^q; p, q => p^q], the issue's other example, no longer reaches lowering: the spec check
+   refuses a tensor whose axes need both components.) *)
+let operand_shortfall () =
+  refused_lowering "each operand fills one segment of a product, a; b => a^b"
+    ~needle:missing_operand ~unlike:ambiguous (fun () ->
+      values (NTDSL.einsum "a; b => a^b" (vec 2) (vec ~base:10 3) ()));
+  refused_lowering "through %op, x +* \"a; b => a^b\" y" ~needle:missing_operand ~unlike:ambiguous
+    (fun () ->
+      let x = vec 2 and y = vec ~base:10 3 in
+      let%op t = x +* "a; b => a^b" y in
+      values t);
+  refused_lowering "an operand lacking a segment the result lists, a^c; a^b^c => a^b^c"
+    ~needle:missing_operand ~unlike:ambiguous (fun () ->
+      values
+        (NTDSL.einsum
+           ~capture_dims:[ capture "a" 2; capture "b" 1 ]
+           "a^c; a^b^c => a^b^c" (vec 5) (vec ~base:10 6) ()));
+  refused_lowering "two operands viable for one segment of a concatenation, a^b; c => a^b"
+    ~needle:ambiguous ~unlike:missing_operand (fun () ->
+      values
+        (NTDSL.concat
+           ~capture_dims:[ capture "a" 2 ]
+           "a^b; c => a^b"
+           [| vec 5; vec ~base:10 2 |]
+           ()));
+  computes "every operand listing every segment, a^b; a^b => a^b"
+    (fun () ->
+      values
+        (NTDSL.einsum ~capture_dims:[ capture "a" 2 ] "a^b; a^b => a^b" (vec 3) (vec ~base:10 3) ()))
+    ~want:[| 10.; 22.; 36. |];
+  (* A segment no other slot names is a slice, not a block: [3 * 10 + 4 * 11 + 5 * 12]. *)
+  computes "a segment only one operand names, sliced off, a^b; b => "
+    (fun () ->
+      values (NTDSL.einsum ~capture_dims:[ capture "a" 2 ] "a^b; b => " (vec 5) (vec ~base:10 3) ()))
+    ~want:[| 134. |]
+
 let () =
   forward ();
   gradients ();
   doubling ();
-  doubling_neighbours ()
+  doubling_neighbours ();
+  operand_shortfall ()
