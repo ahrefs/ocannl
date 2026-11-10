@@ -1965,6 +1965,20 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2076: an accumulator opened by a narrowing read rounds that read at its own precision
+; under every placement, from an f32 and an f64 source, under each narrow-compute policy.
+
+(test
+ (name narrow_accum_init)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules narrow_accum_init)
+ (libraries base ocannl stdio arrayjit.utils arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
 ; gh-ocannl-544: operation results close down to their arguments' shapes — a use site broadcasts
 ; them in but cannot silently widen them; the [stretch] wrapper requests use-site resolution by
 ; name (also covers the shape-inferred-constant idiom that replaced [0.5 + 0.5]).

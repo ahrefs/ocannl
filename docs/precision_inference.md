@@ -33,6 +33,8 @@ That leaves one question for placement, the compiler's choice between keeping a 
 | Arithmetic, or a constant | rounds at the store | rounds only where compute precision equals storage |
 | An accumulation | rounds at the store | rounds only where accumulator precision equals storage |
 
+The rows compose. An accumulation opened by a narrowing read, such as `s =: src` followed by `s =+ x` over a narrow `s` and a wider `src`, rounds that read in either placement, and only what the accumulation adds after it stays at accumulator precision (gh-ocannl-2076).
+
 So where a backend computes wider than a node stores, a virtual narrow node has no store, and it keeps the wider value until something downstream rounds. For example, take bf16 inputs `1` and `2^-9`, both exactly representable, summed into a bf16 node and read in an f32 expression. On a backend computing bf16 in f32, a materialized node rounds the sum to `1`, because bf16's spacing at 1 is `2^-7`, while a virtual one hands on `1 + 2^-9`.
 
 The two values come from the same program, and both are correct under this contract. This is the narrow-float counterpart of C's excess precision, as an analogy only: what is promised here is the table above. Particular inputs may still agree, and where they differ no bound on the difference is promised: a rounding can overflow, and later operations can amplify what it would have removed.
