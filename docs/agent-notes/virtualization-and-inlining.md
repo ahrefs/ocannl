@@ -971,10 +971,16 @@ files.
   What was order-dependent and is not any more: the padding resets and margin restores of a
   multi-target assignment (`Assignments`, first occurrence instead of a uid sort) and the schedule
   digest's companion sections (by the code walk's node numbers; the hand-built leg of the same
-  test fails on the uid-ordered rendering). What still follows creation order, stated at each site:
-  `Backends.partition_layout_groups` (the layout planners' input order -- the scorer and the
-  allocator must share one key, and a code position is not one), and `compare_program_order`'s
-  fallback and `C_syntax.store_order`'s tail (entries the code never names).
+  test fails on the uid-ordered rendering) and the layout planners' input order
+  (`Backends.partition_layout_groups`, gh-ocannl-2051: `Low_level.layout_order`, first access in
+  the routine's raw `source`, which every schedule copy inherits, so the scorer and every allocator
+  delta derive one order; the same test pins each step node's pool rank and offset, the scored and
+  linked footprints, a 4-byte/64-byte bump pair whose pool size shows the order, and a
+  `buffer_aliasing` arena leg). What still follows creation order, stated at each site:
+  `compare_program_order`'s fallback and `C_syntax.store_order`'s tail (entries the code never
+  names, schedule-minted layout entries among them), and the parameters' layout under
+  `Train.init_params`, whose routine `Tensor.init_params` spells in creation order -- the planners
+  follow that code faithfully.
 - **A candidate whose captured computation contains a `Scan_loop` is refused, and the refusal has
   two doors** (gh-ocannl-696, `test/operations/scan_loop.ml` legs 5 and 5b): `virtual_llc` threads
   `~in_scan` beside `~guarded`, so a per-statement store inside the scan hits `Non_virtual 148` in

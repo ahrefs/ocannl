@@ -7,8 +7,14 @@ conv: control: the changed program computes another loss: true
 conv: every build emits the same source: true
 conv: every build places every node the same: true
 conv: every build's segments digest the same: true
+conv: control: the step lays out nodes of its own: true
+conv: every build lays the step's nodes out at the same pool rank and offset: true
+conv: every build scores the same footprint: true
+conv: every build's link delta is the same: true
+conv: every node the step lays out is ordered by the step's raw code: true
 conv: every build computes the same loss: true
 conv: control: a changed program emits another source, and digests apart: true
+conv: control: a changed program lays out or links differently: true
 transformer: control: the uid shift changes a node-keyed table's iteration order: true
 transformer: control: the shift keeps the nodes' creation order: true
 transformer: control: the reversed build creates its nodes in another order: true
@@ -18,9 +24,30 @@ transformer: control: the changed program computes another loss: true
 transformer: every build emits the same source: true
 transformer: every build places every node the same: true
 transformer: every build's segments digest the same: true
+transformer: control: the step lays out nodes of its own: true
+transformer: every build lays the step's nodes out at the same pool rank and offset: true
+transformer: every build scores the same footprint: true
+transformer: every build's link delta is the same: true
+transformer: every node the step lays out is ordered by the step's raw code: true
 transformer: every build computes the same loss: true
 transformer: control: a changed program emits another source, and digests apart: true
+transformer: control: a changed program lays out or links differently: true
 companions: control: the two builds create the pair in opposite orders: true
 companions: the digest is the same whichever was created first: true
 companions: control: another pipeline depth digests apart: true
 companions: control: another swizzle kind digests apart: true
+bump: control: the two builds create the outputs in opposite orders: true
+bump: control: the outputs share one working pool: true
+bump: the output written first sits at offset 0 in either build: true
+bump: the other output follows at the alignment in either build: true
+bump: the scored working pool is the same in either build, alignment + 64 bytes: true
+bump: the linked working pool is the same in either build, alignment + 64 bytes: true
+bump: both builds compute small = y + y: true
+bump: both builds compute big = x + x: true
+transformer under buffer_aliasing: control: the step's delta is liveness-planned: true
+transformer under buffer_aliasing: control: the step lays out nodes of its own: true
+transformer under buffer_aliasing: every build lays the step's nodes out at the same pool rank and offset: true
+transformer under buffer_aliasing: every build scores the same footprint: true
+transformer under buffer_aliasing: every build's link delta is the same: true
+transformer under buffer_aliasing: every node the step lays out is ordered by the step's raw code: true
+transformer under buffer_aliasing: the reversed build computes the same loss: true

@@ -238,7 +238,9 @@ files.
 - **Read-only in one routine does not make a parameter a device-wide constant** (gh-ocannl-641).
   A host-backed parameter used only as another parameter's initializer input has no executable
   write in that routine. Its `Tnode.context_owned` construction marker keeps it in the working
-  group nevertheless; both allocation and footprint scoring use `partition_layout_groups`.
+  group nevertheless; both allocation and footprint scoring use `partition_layout_groups`, which
+  orders each group by the routine's raw code (`Low_level.layout_order`, gh-ocannl-2051), never by
+  uid.
   Two fresh contexts must retain independent parameter/state edits and resets. The marker changes
   allocation only, not the post-virtualization scalar recompute-price inputs.
 - **Two classes `release` cannot reach, so "bounded" always needs a qualifier.** (a) A constant

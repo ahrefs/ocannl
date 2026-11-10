@@ -464,6 +464,9 @@ let buffer_key ctx tn =
           Option.map (Map.find c.BI.ctx_buffers tn) ~f:(fun loc -> (c.BI.device.device_id, loc)));
     }
 
+let buffer_location ctx tn =
+  Option.map (buffer_key ctx tn) ~f:(fun (_, (loc : BI.buffer_loc)) -> (loc.pool_id, loc.offset))
+
 (* [tn]'s buffer key in [ctx] when that buffer is its device's cached host literal for [tn] -- the
    one kind of buffer independently created roots share (gh-ocannl-1623, [shared_write_tokens]):
    every other constant is cached per root (gh-ocannl-1654, [BI.Constant_key]). *)

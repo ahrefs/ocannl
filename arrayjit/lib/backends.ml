@@ -175,7 +175,7 @@ let plan_alias_spans ~(name : string) ~(limits : hardware_limits) ~(lowered : Lo
    scoring one layout and allocating another would let a plan report itself under budget while
    linking asks for a larger pool. The pieces both pipelines run are shared here rather than agreed
    on by comment: zero-sinking, the segment-store fold-back, the working/constants partition in
-   canonical order, the per-node plan items, and the per-pool cap. *)
+   program order, the per-node plan items, and the per-pool cap. *)
 
 (* The per-pool ceiling: 4 GB for uint32 offsets unless [large_models] lifts it. *)
 let pool_cap () = if Utils.settings.large_models then Int.max_value else 0x1_0000_0000
@@ -272,23 +272,33 @@ let fold_segment_stores ~(into : Low_level.traced_store) (segments : Low_level.o
           if not (Hashtbl.mem into key) then Hashtbl.add_exn into ~key ~data))
 
 (* Partition a traced store's in-context nodes into the (working, constants) layout groups, each in
-   CANONICAL ([Tn.compare], i.e. uid) order -- the one order both the allocator and the scorer lay
-   out (gh-ocannl-498): the planners are order-sensitive (the arena's greedy coloring breaks
-   equal-size ties by input order, and bump packing's alignment padding and cap segmentation depend
-   on the running offset -- sizes 4 then 64 at alignment 32 occupy 96 bytes, reversed 68). Uid order
-   is deterministic and shared; pool ids are minted per segment before any placement, so nothing
-   else depends on enumeration order. It is also the order the nodes were CREATED in, which a uid
-   shift keeps and a program built with its nodes created in another order does not: such a build
-   can lay the same program out differently (gh-ocannl-1974). It stays because the key must be one
-   the scorer (over the union of the scheduled segments' stores) and every allocator delta (over one
-   routine's store, minus what the context holds) agree on, and a position in the code is not: the
-   two see different code. [skip] excludes nodes the caller already holds (the allocator's prior
-   context); slice-alias views own no buffer and are excluded automatically ([is_in_context_force]
-   returns false for them, gh-ocannl-293 293a) -- their materialized parent is laid out like any
-   other node. *)
-let partition_layout_groups ~(plc : Tn.Placements.t) ?(skip = fun (_ : Tn.t) -> false)
-    (store : Low_level.traced_store) :
+   the routine's PROGRAM order ({!Low_level.layout_order}) -- the one order both the allocator and
+   the scorer lay out (gh-ocannl-498): the planners are order-sensitive (the arena's greedy coloring
+   breaks equal-size ties by input order, and bump packing's alignment padding and cap segmentation
+   depend on the running offset -- sizes 4 then 64 at alignment 32 occupy 96 bytes, reversed 68).
+   Pool ids are minted per segment before any placement, so nothing else depends on enumeration
+   order.
+
+   The key is each node's first access in the routine's raw code ([lowered.source]), not its uid
+   (gh-ocannl-2051): uid order is the order the nodes were CREATED in, so the same program built
+   with its nodes created in another order laid out differently (gh-ocannl-1974). A position in the
+   SCHEDULED code would not do either: the scorer lays out the whole routine over the union of its
+   segments' stores, the allocator one segment or the whole routine with those stores folded back,
+   and the two see different code. Every one of those records carries the same raw code, which the
+   schedule transforms inherit unchanged, so they derive one order -- and a delta (the routine minus
+   what [skip] holds) keeps the survivors' relative order under it, as under any total order. Nodes
+   the raw code never touches (schedule-minted constants, entries reached only inside a
+   [Staged_compilation]) come after, in uid order, which for the former is the order this compile
+   minted them in.
+
+   [skip] excludes nodes the caller already holds (the allocator's prior context); slice-alias views
+   own no buffer and are excluded automatically ([is_in_context_force] returns false for them,
+   gh-ocannl-293 293a) -- their materialized parent is laid out like any other node. [store] is
+   [lowered]'s own traced store unless the caller folded segment entries into a copy. *)
+let partition_layout_groups ~(lowered : Low_level.optimized) ?(skip = fun (_ : Tn.t) -> false)
+    ?(store = lowered.Low_level.traced_store) () :
     (Tn.t * Low_level.traced_array) list * (Tn.t * Low_level.traced_array) list =
+  let plc = lowered.Low_level.optimize_ctx.placements in
   let working = ref [] and constants = ref [] in
   Hashtbl.iteri store ~f:(fun ~key ~data:node ->
       if Tn.Placements.is_in_context_force plc key (Site "43:layout-group") && not (skip key) then
@@ -297,8 +307,9 @@ let partition_layout_groups ~(plc : Tn.Placements.t) ?(skip = fun (_ : Tn.t) -> 
           && (node.Low_level.read_only || Tn.Placements.known_constant plc key)
         then constants := (key, node) :: !constants
         else working := (key, node) :: !working);
-  let canonical l = List.sort !l ~compare:(fun (a, _) (b, _) -> Tn.compare a b) in
-  (canonical working, canonical constants)
+  let order = Low_level.layout_order lowered in
+  let in_program_order l = List.sort !l ~compare:(fun (a, _) (b, _) -> order a b) in
+  (in_program_order working, in_program_order constants)
 
 (* Within-pool offsets are padded to [Ops.buffer_alignment] (not just the element size) so that
    every node's buffer -- not only each pool's base -- is SIMD-aligned (gh-ocannl-164); ≤31 bytes of
@@ -347,8 +358,7 @@ let score_footprint ~(facts : backend_facts) ~(limits : hardware_limits)
      mutate the routine's own traced store. *)
   let store = Hashtbl.copy lowered.Low_level.traced_store in
   fold_segment_stores ~into:store segments;
-  let plc = lowered.Low_level.optimize_ctx.placements in
-  let working, constants = partition_layout_groups ~plc store in
+  let working, constants = partition_layout_groups ~lowered ~store () in
   let cap = pool_cap () in
   let bump ~what group =
     let _, segment_sizes =
@@ -1206,7 +1216,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
      probe ([link_delta]) run the SAME plan: the probe asks the device for exactly the pools the
      link would, in the same order, sized and aligned alike. *)
   type group_layout = {
-    gl_group : (Tn.t * Low_level.traced_array) list;  (** Canonical (uid) order. *)
+    gl_group : (Tn.t * Low_level.traced_array) list;
+        (** Program order ([partition_layout_groups]). *)
     gl_constant : bool;
     gl_pools : (int * int) list;  (** [(size_in_bytes, alignment)] per pool, in allocation order. *)
     gl_places : (int * int) list;
@@ -1282,14 +1293,13 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
      their lifetimes are not routine intervals. Constants already allocated on this device (a hit in
      [constant_buffer_cache], possibly from another context tree) resolve directly and are excluded
      from the new slab, so a fresh constant pool holds exactly this device's genuinely-new constants
-     -- no wasted holes. Groups arrive in canonical (uid) order from [partition_layout_groups] --
-     the order [score_footprint] scores, which the order-sensitive planners must see identically
+     -- no wasted holes. Groups arrive in program order from [partition_layout_groups] -- the order
+     [score_footprint] scores, which the order-sensitive planners must see identically
      (gh-ocannl-498). *)
   let plan_delta (context : context) ~alias_spans (lowered : Low_level.optimized) : delta_plan =
     let cap = pool_cap () in
     let working, constants =
-      partition_layout_groups ~plc:lowered.Low_level.optimize_ctx.placements
-        ~skip:(Map.mem context.ctx_buffers) lowered.Low_level.traced_store
+      partition_layout_groups ~lowered ~skip:(Map.mem context.ctx_buffers) ()
     in
     let cached, fresh =
       List.partition_map constants ~f:(fun (key, node) ->
@@ -1372,8 +1382,8 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
      context (freed at its [finalize]); constant pools are deduped per-device via
      [constant_buffer_cache] and outlive the context, until the last release unit binding them is
      released (gh-ocannl-1654, gh-ocannl-1762; [reclaim_constants]). Pool ids and offsets are
-     deterministic across runs: the plan is in canonical order and ids are minted per pool before
-     any placement. The per-pool 4 GB cap (uint32 offsets unless large_models) is enforced by
+     deterministic across runs: the plan is in program order and ids are minted per pool before any
+     placement. The per-pool 4 GB cap (uint32 offsets unless large_models) is enforced by
      {!Backend_utils.plan_pool_segments}. *)
   let%track3_sexp allocate_delta (context : context) ~name
       ~(alias_spans : (Tn.t, int * int) Base.Hashtbl.t option) (lowered : Low_level.optimized) :
@@ -1617,8 +1627,7 @@ module Raise_backend (Device : Lowered_backend) : Backend = struct
     in
     let touched, _ = Schedule.code_footprint lowered.Low_level.llc in
     let working, constants =
-      partition_layout_groups ~plc ~skip:(Map.mem context.ctx_buffers)
-        lowered.Low_level.traced_store
+      partition_layout_groups ~lowered ~skip:(Map.mem context.ctx_buffers) ()
     in
     let size (key, _) = size_in_bytes_of key in
     let sum = List.sum (module Int) ~f:size in
