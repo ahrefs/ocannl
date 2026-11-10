@@ -12,7 +12,7 @@
 # caller passes in, never timeout(1), which macOS does not ship.
 set -u
 
-[ $# -ge 19 ] || {
+[ $# -ge 20 ] || {
   echo "machine-verify-far.sh: run tools/machine-verify.sh, which supplies this procedure's arguments" >&2
   exit 2
 }
@@ -35,11 +35,13 @@ per_test_cap_source=${16}
 device_probe_source=${17}
 test_cap_arg=${18}
 probe_cap=${19}
-shift 19
+cap_explicit=${20}
+shift 20
 # The two bounds of a GPU trip (gh-ocannl-1252), the caller's tools/per-test-cap.sh and
-# tools/device-probe.sh, like the width table: TEST_CAP_DEFAULT, test_cap_reaches_slow and the
-# watcher test_cap_watch; probe_perl and device_probe_sh.
-eval "$per_test_cap_source" && [ -n "${test_cap_watch:-}" ] && [ -n "${TEST_CAP_DEFAULT:-}" ] || {
+# tools/device-probe.sh, like the width table: TEST_CAP_DEFAULT, SLOW_RUN_CAP_DEFAULT,
+# test_cap_reaches_slow and the watcher test_cap_watch; probe_perl and device_probe_sh.
+eval "$per_test_cap_source" && [ -n "${test_cap_watch:-}" ] && [ -n "${TEST_CAP_DEFAULT:-}" ] &&
+  [ -n "${SLOW_RUN_CAP_DEFAULT:-}" ] || {
   echo "machine-verify: cannot evaluate the per-test cap from tools/per-test-cap.sh" >&2
   exit 2
 }
@@ -124,6 +126,20 @@ trap 'exit 143' TERM HUP
 # This is the exact supervisor source the local side passed in; keeping one
 # copy prevents the outer whole-trip and inner command caps from drifting apart.
 capped() { perl -e "$capped_perl" -- "$cap" "$@"; }
+
+# The per-command cap of each operation (gh-ocannl-2106): an explicit --cap bounds every command;
+# by default a --test or --record-golden alias reaching the slow tests -- test_cap_reaches_slow, the
+# classification tools/test-run.sh selects its own slow budget by -- gets SLOW_RUN_CAP_DEFAULT for
+# each command it runs (its build, a golden's re-run and promotion reads), while @check, the width
+# resolution, the device probe and a --run probe (free text, never classified) keep the ordinary one.
+ordinary_cap=$cap
+operation_cap() { # kind value: sets cap for the operation's commands
+  cap=$ordinary_cap
+  if [ -z "$cap_explicit" ] && [ "$1" != run ] && test_cap_reaches_slow "$2" >/dev/null; then
+    cap=$SLOW_RUN_CAP_DEFAULT
+    echo "machine-verify: per-command cap: ${cap}s for $2 (the slow default, SLOW_RUN_CAP_DEFAULT of tools/per-test-cap.sh)"
+  fi
+}
 
 # The per-test cap of the operation running now (with_test_cap), 0 for none, and the shell that
 # runs the watcher beside its command: the `sh -c` is the watcher's resolver, its parent the capped
@@ -305,7 +321,11 @@ else
 fi
 echo "requested backend: ${backend:-none (@check compiles only)}"
 echo "expected optional library: ${expect_lib:-none}"
-echo "per-command cap: ${cap}s"
+if [ -n "$cap_explicit" ]; then
+  echo "per-command cap: ${cap}s (--cap)"
+else
+  echo "per-command cap: ${cap}s (the default; ${SLOW_RUN_CAP_DEFAULT}s for each command of a --test or --record-golden alias reaching @slow)"
+fi
 echo "whole-trip cap: ${trip_cap}s"
 echo "PATH prefix:   /usr/local/cuda/bin:/usr/lib/wsl/lib"
 echo "credential variables: removed inside every opam exec (tools/credential-env.sh)"
@@ -735,6 +755,7 @@ while [ $# -gt 0 ]; do
   kind=$1
   value=$2
   shift 2
+  operation_cap "$kind" "$value"
   case $kind in
     test)
       echo "machine-verify: test alias ($backend): $value"
@@ -825,6 +846,7 @@ while [ $# -gt 0 ]; do
     *) fail "internal unknown operation: $kind" ;;
   esac
   assert_source_state "after $kind $value"
+  cap=$ordinary_cap
 done
 
 assert_source_state "before final certification"

@@ -5254,7 +5254,11 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   owns the four-hour budget shared by test-run batches naming slow aliases and sweep units
   launched with `--slow`. Test-run otherwise defaults to one hour, sweep to 90 minutes.
   Explicit caps win, including 0; `plan` names the cap's source. Selection precedes the
-  supervisor and includes building and resolution. This portable budget also covers individual
+  supervisor and includes building and resolution. `tools/machine-verify.sh` gives the same
+  budget to each command of a `--test`/`--record-golden` alias that `test_cap_reaches_slow`
+  classifies as slow (gh-ocannl-2106); `@check`, the trip's own commands and `--run` probes
+  (free text, never classified) keep its 5400 s, an explicit `--cap` bounds every command, and
+  the six-hour `--trip-cap` still bounds the sum, so two slow aliases in one trip need a larger one. This portable budget also covers individual
   slow aliases; it is not a duration prediction. The former cold Metal sweep unit took about
   10.4 ks before the widen oracle joined at 612 s of action work, leaving roughly an hour
   of headroom at four hours. Parallel action times need not add to wall time. The separate

@@ -159,7 +159,8 @@ if [ "$1" = build ]; then
       # A hung test (gh-ocannl-1252), or a slow one: the alias's action, started as dune starts
       # one -- a child leading its own process group, killed on TERM -- by perl renamed `dune`,
       # since the per-test cap's watcher finds tests as the children of a process named dune.
-      @fixture)
+      # `@fixture/slow-fixture` is the same action under a name reaching the slow tests.
+      @fixture | @fixture/slow-fixture)
         case $MODE in
           hung-test | slow-test)
             [ "$MODE" = hung-test ] && secs=60 || secs=4
@@ -324,9 +325,10 @@ fixture_device() { # absent|present|small|wide -> the path a probe reads
 fixture_reader() { # stand-in name -> its path, or nothing: batch-backends.sh builds the real one
   [ "$READERS" != stand-in ] || printf '%s' "$TMP/bin/$1"
 }
-run_case() { # SUBJECT NAME MODE [verifier args]
+run_case() { # SUBJECT NAME MODE [verifier args]; MV_CAP= omits the --cap 10 every trip gets
   local subject=$1 name=$2 mode=$3
   shift 3
+  [ -z "${MV_CAP-10}" ] || set -- --cap "${MV_CAP-10}" "$@"
   local run=$TMP/runs/$name rc=0
   mkdir -p "$run/worktrees"
   : >"$run/ssh-log"
@@ -369,7 +371,7 @@ run_case() { # SUBJECT NAME MODE [verifier args]
     OCANNL_PRINT_DECIMALS_PRECISION=ambient-secret OCANNL_BACKEND=cuda \
     OPAMSWITCH=caller-switch DUNE_BUILD_DIR=caller-build \
     bash "$subject" loopback "$REF" --backend "$BACKEND" --repo "$run/repo" \
-    --worktree-root "$run/worktrees" --cap 10 --trip-cap 30 "$@" >"$run/stdout" 2>&1 || rc=$?
+    --worktree-root "$run/worktrees" --trip-cap 30 "$@" >"$run/stdout" 2>&1 || rc=$?
   printf '%s\n' "$rc" >"$run/rc"
   # Prove ownership: the original checkout, its dirty file and FETCH_HEAD stay
   # intact. Inspect actual Git registration and filesystem after every outcome.
@@ -729,6 +731,39 @@ report $? 'shim: placement is decided by machine-verify.sh, not by the old name'
 }
 harness_leg_run '7: the deprecated remote-verify.sh name forwards' leg_7
 
+# The per-command cap's slow budget (gh-ocannl-2106) and its oracles: leg 10 runs them, and the
+# negative controls (leg 9) run them against mutants. A trip copy whose SLOW_RUN_CAP_DEFAULT is 2s
+# makes the budget observable: the fake action of `@fixture` and `@fixture/slow-fixture` takes 4s
+# in the slow-test mode, so a kill at 142 is the slow budget applied, and a pass is the ordinary
+# 5400s (or an explicit --cap) applied. Every other bound stays clear of 4s (CPU backend: no
+# per-test cap; the trip cap is 30s).
+shrunk_slow_budget() { # SUBJECT NAME -> the driver of a copy of SUBJECT's tools with a 2s slow budget
+  local from=${1%/*} dir=$TMP/slow-budget/$2
+  mkdir -p "$dir" && cp "$from"/*.sh "$dir/" || return 1
+  sed 's/^SLOW_RUN_CAP_DEFAULT=.*/SLOW_RUN_CAP_DEFAULT=2/' "$from/per-test-cap.sh" >"$dir/per-test-cap.sh" &&
+    grep -qx 'SLOW_RUN_CAP_DEFAULT=2' "$dir/per-test-cap.sh" || return 1
+  printf '%s' "$dir/machine-verify.sh"
+}
+slow_budget_line='^machine-verify: per-command cap: 2s for @fixture/slow-fixture \(the slow default, SLOW_RUN_CAP_DEFAULT of tools/per-test-cap.sh\)$'
+# By default a slow alias's commands get the slow budget, not the ordinary 5400s.
+slow_cap_oracle() {
+  local subject name=$2
+  subject=$(shrunk_slow_budget "$1" "$name") || return 1
+  MV_CAP= run_case "$subject" "$name" slow-test --test @fixture/slow-fixture || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 142 ] && grep -qx 'machine-verify: exit: 142' "$TMP/runs/$name/stdout" &&
+    grep -qE "$slow_budget_line" "$TMP/runs/$name/stdout"
+}
+# An explicit --cap bounds a slow alias too, above the slow budget here.
+explicit_cap_oracle() {
+  local subject name=$2
+  subject=$(shrunk_slow_budget "$1" "$name") || return 1
+  run_case "$subject" "$name" slow-test --test @fixture/slow-fixture --cap 10 || return 1
+  [ "$(cat "$TMP/runs/$name/rc")" = 0 ] &&
+    grep -q "^machine-verify: verified .*commit=$SHA backend=cc" "$TMP/runs/$name/stdout" &&
+    grep -qx 'per-command cap: 10s (--cap)' "$TMP/runs/$name/stdout" &&
+    ! grep -q '^machine-verify: per-command cap: ' "$TMP/runs/$name/stdout"
+}
+
 # The credential probe and its oracles: leg 8 runs them, and the negative
 # controls (leg 9) run them against mutants.
 credential_probe='test -z "${GH_TOKEN+x}${FOO_API_KEY+x}" && test "${FIXTURE_REMOTE_PLAIN:-}" = kept && echo "probe credentials: absent, plain variable kept"'
@@ -895,7 +930,42 @@ expect_rejected 'credential scrub removed (login environment)' "$mutated" creden
   '^fixture: credentials reached dune$'
 expect_rejected 'credential scrub removed (switch environment)' "$mutated" switch_credential_oracle \
   '^fixture: credentials reached dune$'
+# The slow selection cut out: a slow alias keeps the ordinary 5400s and certifies past the budget.
+mutated=$(mutant_pair no-slow-budget far '{ sub(/^    cap=\$SLOW_RUN_CAP_DEFAULT$/, "    cap=$ordinary_cap"); print }') ||
+  { harness_abandon "cannot build the no-slow-budget mutant"; return; }
+expect_rejected 'slow budget not selected' "$mutated" slow_cap_oracle '^machine-verify: verified '
+# The explicit --cap not marked as explicit: the slow budget overrides the caller's cap.
+mutated=$(mutant_pair no-explicit-cap driver '{ sub(/^      cap_explicit=1$/, "      :"); print }') ||
+  { harness_abandon "cannot build the no-explicit-cap mutant"; return; }
+expect_rejected 'explicit --cap ignored for a slow alias' "$mutated" explicit_cap_oracle '^machine-verify: exit: 142$'
 }
 harness_leg_run '9: negative controls: each guard removed loses its oracle' leg_9
+
+leg_10() {
+# Slow test operands get the slow budget (gh-ocannl-2106), as tools/test-run.sh classifies them; an
+# ordinary alias and the trip's own commands keep the 5400s default; an explicit --cap wins.
+slow_cap_oracle "$SRC" slow-cap-default
+report $? 'slow-cap-default: a slow --test alias is bounded by SLOW_RUN_CAP_DEFAULT, not 5400s' \
+  "$TMP/runs/slow-cap-default"
+mv_slow=$(shrunk_slow_budget "$SRC" slow-cap-golden) &&
+  MV_CAP= run_case "$mv_slow" slow-cap-golden slow-test --record-golden @fixture/slow-fixture &&
+  [ "$(cat "$TMP/runs/slow-cap-golden/rc")" = 142 ] &&
+  grep -qE "$slow_budget_line" "$TMP/runs/slow-cap-golden/stdout"
+report $? 'slow-cap-golden: a slow --record-golden alias is bounded by the slow budget too' \
+  "$TMP/runs/slow-cap-golden"
+mv_slow=$(shrunk_slow_budget "$SRC" ordinary-cap-default) &&
+  MV_CAP= run_case "$mv_slow" ordinary-cap-default slow-test --test @fixture &&
+  [ "$(cat "$TMP/runs/ordinary-cap-default/rc")" = 0 ] &&
+  grep -q "^machine-verify: verified .*commit=$SHA backend=cc" "$TMP/runs/ordinary-cap-default/stdout" &&
+  grep -qx 'per-command cap: 5400s (the default; 2s for each command of a --test or --record-golden alias reaching @slow)' \
+    "$TMP/runs/ordinary-cap-default/stdout" &&
+  ! grep -q '^machine-verify: per-command cap: ' "$TMP/runs/ordinary-cap-default/stdout"
+report $? 'ordinary-cap-default: an alias not reaching @slow keeps the ordinary 5400s' \
+  "$TMP/runs/ordinary-cap-default"
+explicit_cap_oracle "$SRC" slow-cap-explicit
+report $? 'slow-cap-explicit: an explicit --cap bounds a slow alias instead of the slow budget' \
+  "$TMP/runs/slow-cap-explicit"
+}
+harness_leg_run '10: the per-command cap'\''s slow budget' leg_10
 
 finish
