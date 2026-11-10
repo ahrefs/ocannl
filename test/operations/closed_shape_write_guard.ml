@@ -78,7 +78,9 @@ let () =
   let ctx =
     refused_unchanged "compiled operand"
       ~close:(fun ctx c -> ignore (Train.forward_once ctx c : Context.t))
-      ~substrings:[ "already committed" ] ~ctx x (kernel "cg_k1")
+      ~substrings:
+        [ "exceeds resolved padding"; "of the operand #"; "cg_x_compiled"; "first compilation" ]
+      ~ctx x (kernel "cg_k1")
   in
   (* (b) A closed operand whose dims were never forced: the closure alone commits it. *)
   let x2 = input "cg_x_closed" in
