@@ -96,3 +96,31 @@ let%op exponent_rebound n x =
   pow [%oc 2.0] + n
 
 let%op stride_unschemed () stride x = x +* "stride*o<+k; k => o" { kernel } [@@ocannl.no_scheme]
+
+(* gh-ocannl-2060: a named einsum form reads the identifiers of its literal spec as an operator
+   does, and an integer-to-float conversion takes an integer. *)
+let%op named_einsum stride x = einsum "stride*o<+k; k => o" x { kernel }
+let%op named_einsum1 stride x = einsum1 "stride*o => o" x
+let%op named_outer_sum dil x = outer_sum "o<+dil*k; k => o" x { kernel }
+let%op named_tropical stride x = tropical "stride*o<+k; k => o" x { kernel }
+let%op named_einmax1 stride x = einmax1 "stride*o => o" x
+let%op named_concat stride x y = concat "stride*a; b => a^b" [%oc [| x; y |]]
+let%op named_concat_sum stride x y = concat_sum "stride*a; b => a^b" [%oc [| x; y |]]
+let%op float_of_int_module n x = x *. !.(Float.of_int n)
+let%op float_of_int_stdlib n x = x *. !.(float_of_int n)
+let%op int_to_float n x = x **. Int.to_float n
+let%op named_after_unit () stride x = einsum1 "stride*o => o" x
+let%op conversion_after_unit () n x = x *. !.(Float.of_int n)
+
+(* Not refused: a labelled parameter (the spec is substituted), one bound before [()], a function
+   that gets no scheme, a name the spec uses only as an axis label, a spec without identifiers
+   (expanded as written), and uses this check does not read -- inside [%oc], a conversion spelled
+   otherwise, an argument of any other function -- which remain type errors at the use. *)
+let%op named_labelled ~stride x = einsum1 "stride*o => o" x
+let%op named_before_unit stride () x = einsum1 "stride*o => o" x
+let%op named_unschemed () stride x = einsum1 "stride*o => o" x [@@ocannl.no_scheme]
+let%op named_axis_label o x = einsum1 "2*o => o" x + o
+let%op named_no_identifier x = einsum1 "o => o" x
+let%op conversion_in_oc n x = x *. !.[%oc Float.of_int n]
+let%op conversion_qualified n x = x *. !.(Stdlib.Float.of_int n)
+let%op forwarded n x = x *. !.(Float.of_string (Int.to_string n))

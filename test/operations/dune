@@ -2165,6 +2165,16 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; ocannl-backend: cc -- `Context.cpu ()` plus Train.forward_once and get_values.
+ (name named_form_spec_identifiers)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules named_form_spec_identifiers)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  ; ocannl-backend: cc -- `Context.cpu ()` plus Train.forward_once and get_values/set_values.
  (name context_host_access)
  (package neural_nets_lib)

@@ -11,9 +11,24 @@ include module type of Einsum_types
 exception Parse_error of string
 (** Exception raised when parsing fails. *)
 
+val binary_operator_functions : (string * string) list
+(** The binary einsum operators, each with the named DSL function it applies ([+*] is [einsum]). *)
+
+val unary_operator_functions : (string * string) list
+(** The unary einsum operators, each with the named DSL function it applies ([++] is [einsum1]). *)
+
+val concat_operator_function : string * string
+(** The concatenation operator and the named DSL function it applies. *)
+
 val binary_operators_with_generated_specs : string list
 val unary_operators_with_generated_specs : string list
 val concat_operator_with_generated_specs : string
+
+val named_spec_functions : string list
+(** The unqualified named DSL functions ([TDSL.O], [NTDSL.O]) whose first positional argument is an
+    einsum specification: the functions the operators apply, and [concat_sum]. The OCANNL PPXs pass
+    a literal first argument of theirs through identifier substitution as they do an operator's spec
+    (gh-ocannl-2060). *)
 
 val operators_with_generated_specs : string list
 (** The unqualified DSL operators whose literal specifications the OCANNL PPXs pass through

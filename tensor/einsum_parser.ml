@@ -10,9 +10,18 @@ include Einsum_types
 
 exception Parse_error of string
 
-let binary_operators_with_generated_specs = [ "+*"; "@^+"; "+++" ]
-let unary_operators_with_generated_specs = [ "++"; "@^^" ]
-let concat_operator_with_generated_specs = "++^"
+let binary_operator_functions = [ ("+*", "einsum"); ("@^+", "tropical"); ("+++", "outer_sum") ]
+let unary_operator_functions = [ ("++", "einsum1"); ("@^^", "einmax1") ]
+let concat_operator_function = ("++^", "concat")
+let binary_operators_with_generated_specs = List.map binary_operator_functions ~f:fst
+let unary_operators_with_generated_specs = List.map unary_operator_functions ~f:fst
+let concat_operator_with_generated_specs = fst concat_operator_function
+
+let named_spec_functions =
+  List.map
+    (binary_operator_functions @ unary_operator_functions @ [ concat_operator_function ])
+    ~f:snd
+  @ [ "concat_sum" ]
 
 let operators_with_generated_specs =
   binary_operators_with_generated_specs @ unary_operators_with_generated_specs

@@ -401,3 +401,161 @@ let stride_unschemed =
              "k";
              " => ";
              "o"]) x kernel
+let named_einsum =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*o<+k; k => o\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let named_einsum1 =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*o => o\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let named_outer_sum =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter dil is taken for a tensor, but the einsum spec \"o<+dil*k; k => o\" reads it as an integer. Label it (~dil), or bind it before a unit parameter: fun dil () ..."]
+let named_tropical =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*o<+k; k => o\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let named_einmax1 =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*o => o\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let named_concat =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*a; b => a^b\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let named_concat_sum =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*a; b => a^b\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let float_of_int_module =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter n is taken for a tensor, but it is the integer that Float.of_int converts. Label it (~n), or bind it before a unit parameter: fun n () ..."]
+let float_of_int_stdlib =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter n is taken for a tensor, but it is the integer that float_of_int converts. Label it (~n), or bind it before a unit parameter: fun n () ..."]
+let int_to_float =
+  let open! TDSL.O in
+    [%ocaml.error
+      "ppx_ocannl %op: the unlabelled parameter n is taken for a tensor, but it is the integer that Int.to_float converts. Label it (~n), or bind it before a unit parameter: fun n () ..."]
+let named_after_unit =
+  let open! TDSL.O in
+    fun () ->
+      [%ocaml.error
+        "ppx_ocannl %op: the unlabelled parameter stride is taken for a tensor, but the einsum spec \"stride*o => o\" reads it as an integer. Label it (~stride), or bind it before a unit parameter: fun stride () ..."]
+let conversion_after_unit =
+  let open! TDSL.O in
+    fun () ->
+      [%ocaml.error
+        "ppx_ocannl %op: the unlabelled parameter n is taken for a tensor, but it is the integer that Float.of_int converts. Label it (~n), or bind it before a unit parameter: fun n () ..."]
+let named_labelled =
+  let open! TDSL.O in
+    fun ~stride x ->
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () ->
+           einsum1
+             (String.concat ~sep:""
+                [Int.to_string stride; "*"; "o"; " => "; "o"]) x)
+let named_before_unit =
+  let open! TDSL.O in
+    fun stride () ->
+      let __ocannl_body x =
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () ->
+             einsum1
+               (String.concat ~sep:""
+                  [Int.to_string stride; "*"; "o"; " => "; "o"]) x) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"named_before_unit" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let named_unschemed =
+  let open! TDSL.O in
+    fun () ->
+      fun stride x ->
+        Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+          (fun () ->
+             einsum1
+               (String.concat ~sep:""
+                  [Int.to_string stride; "*"; "o"; " => "; "o"]) x)
+let named_axis_label =
+  let open! TDSL.O in
+    let __ocannl_body o x =
+      (+) ?label:(Some
+                    (List.concat
+                       [["named_axis_label"];
+                       (o.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+           (fun () -> einsum1 "2*o => o" x))
+        o in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"named_axis_label" ~arity:2
+        (function | o::x::[] -> __ocannl_body o x | _ -> assert false) in
+    fun o x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [o; x]
+        (fun () -> __ocannl_body o x)
+let named_no_identifier =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+        (fun () -> einsum1 "o => o" x) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"named_no_identifier" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let conversion_in_oc =
+  let open! TDSL.O in
+    let __ocannl_body n x =
+      ( *.
+        ) ?label:(Some
+                    (List.concat
+                       [["conversion_in_oc"];
+                       (n.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x (TDSL.O.(!.) ([%oc Float.of_int n])) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"conversion_in_oc" ~arity:2
+        (function | n::x::[] -> __ocannl_body n x | _ -> assert false) in
+    fun n x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [n; x]
+        (fun () -> __ocannl_body n x)
+let conversion_qualified =
+  let open! TDSL.O in
+    let __ocannl_body n x =
+      ( *.
+        ) ?label:(Some
+                    (List.concat
+                       [["conversion_qualified"];
+                       (n.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x (TDSL.O.(!.) (Stdlib.Float.of_int n)) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"conversion_qualified" ~arity:2
+        (function | n::x::[] -> __ocannl_body n x | _ -> assert false) in
+    fun n x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [n; x]
+        (fun () -> __ocannl_body n x)
+let forwarded =
+  let open! TDSL.O in
+    let __ocannl_body n x =
+      ( *.
+        ) ?label:(Some
+                    (List.concat
+                       [["forwarded"];
+                       (n.Tensor.value).Ir.Tnode.label;
+                       (x.Tensor.value).Ir.Tnode.label]))
+        x (TDSL.O.(!.) (Float.of_string (Int.to_string n))) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"forwarded" ~arity:2
+        (function | n::x::[] -> __ocannl_body n x | _ -> assert false) in
+    fun n x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [n; x]
+        (fun () -> __ocannl_body n x)

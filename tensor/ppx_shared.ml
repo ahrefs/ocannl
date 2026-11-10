@@ -618,19 +618,62 @@ let assignment_ops =
 let einsum_binary_ops =
   Hashtbl.of_alist_exn
     (module String)
-    (List.map Einsum_parser.binary_operators_with_generated_specs ~f:(function
-      | "+*" -> ("+*", fun loc -> [%expr einsum])
-      | "@^+" -> ("@^+", fun loc -> [%expr tropical])
-      | "+++" -> ("+++", fun loc -> [%expr outer_sum])
-      | operator -> failwith ("missing PPX binary einsum handler for " ^ operator)))
+    (List.map Einsum_parser.binary_operator_functions ~f:(fun (operator, fn) ->
+         (operator, fun loc -> Ast_builder.Default.evar ~loc fn)))
 
 let einsum_unary_ops =
   Hashtbl.of_alist_exn
     (module String)
-    (List.map Einsum_parser.unary_operators_with_generated_specs ~f:(function
-      | "++" -> ("++", fun loc -> [%expr einsum1])
-      | "@^^" -> ("@^^", fun loc -> [%expr einmax1])
-      | operator -> failwith ("missing PPX unary einsum handler for " ^ operator)))
+    (List.map Einsum_parser.unary_operator_functions ~f:(fun (operator, fn) ->
+         (operator, fun loc -> Ast_builder.Default.evar ~loc fn)))
+
+(** The spec a named einsum form's literal reads at run time (gh-ocannl-2060):
+    [substitute_identifiers_in_einsum_spec]'s expression for the literal [spec], when it is not a
+    literal itself -- the spec has a stride or dilation identifier, or a plain [+] window reading
+    [use_padding]. [None] for a spec that reads no runtime value, or does not parse (it keeps its
+    run-time error). *)
+let named_form_runtime_spec (spec : expression) =
+  match spec.pexp_desc with
+  | Pexp_constant (Pconst_string (spec_str, _, _)) -> (
+      let substituted = substitute_identifiers_in_einsum_spec ~loc:spec.pexp_loc spec_str in
+      match substituted.pexp_desc with
+      | Pexp_constant _ | Pexp_extension _ -> None
+      | _ -> Some substituted)
+  | _ -> None
+
+let is_named_spec_function (fn : expression) =
+  match fn.pexp_desc with
+  | Pexp_ident { txt = Lident name; _ } ->
+      List.mem Einsum_parser.named_spec_functions name ~equal:String.equal
+  | _ -> false
+
+(** The first positional argument of an application of a named einsum form ([einsum], [einsum1],
+    ..., [concat_sum]: [Einsum_parser.named_spec_functions], unqualified): its spec. *)
+let named_form_spec (e : expression) =
+  match e.pexp_desc with
+  | Pexp_apply (fn, args) when is_named_spec_function fn ->
+      List.find_map args ~f:(function Nolabel, a -> Some a | _ -> None)
+  | _ -> None
+
+(** [e] with the literal spec of a named einsum form substituted as an operator's is, when it reads
+    a runtime value ([named_form_runtime_spec]); otherwise [e] itself. Both PPXs apply it to the
+    applications they rebuild or pass through, which keep the spec literal as written. *)
+let substitute_named_form_spec (e : expression) =
+  match e.pexp_desc with
+  | Pexp_apply (fn, args) when is_named_spec_function fn -> (
+      match
+        List.findi args ~f:(fun _ (label, _) -> match label with Nolabel -> true | _ -> false)
+      with
+      | Some (i, (_, spec)) -> (
+          match named_form_runtime_spec spec with
+          | Some substituted ->
+              let args =
+                List.mapi args ~f:(fun j arg -> if j = i then (Nolabel, substituted) else arg)
+              in
+              { e with pexp_desc = Pexp_apply (fn, args) }
+          | None -> e)
+      | None -> e)
+  | _ -> e
 
 let is_primitive_op op_ident =
   List.exists ~f:(Fn.flip Hashtbl.mem op_ident) [ ternary_ops; unary_ops; binary_ops ]
