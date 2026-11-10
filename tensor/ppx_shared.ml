@@ -408,7 +408,7 @@ let collect_pat_idents pat =
     let all pats = Set.union_list (module String) @@ List.map ~f:loop pats in
     match pat.ppat_desc with
     | Ppat_open (_, pat) | Ppat_lazy pat | Ppat_constraint (pat, _) -> loop pat
-    | Ppat_alias (_, ident) -> one ident.txt
+    | Ppat_alias (pat, ident) -> Set.add (loop pat) ident.txt
     | Ppat_var ident -> one ident.txt
     | Ppat_any -> none
     | Ppat_variant (_, None) -> none
@@ -420,7 +420,8 @@ let collect_pat_idents pat =
     | Ppat_interval (_, _) -> none
     | Ppat_record (lpats, _) -> all @@ List.map ~f:snd lpats
     | Ppat_or (p1, p2) -> all [ p1; p2 ]
-    | Ppat_type _ | Ppat_unpack _ | Ppat_exception _ | Ppat_extension _ -> none
+    | Ppat_exception pat -> loop pat
+    | Ppat_type _ | Ppat_unpack _ | Ppat_extension _ -> none
   in
   loop pat
 

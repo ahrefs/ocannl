@@ -39,11 +39,16 @@ files.
   ignored); with `()` the result still gets the binding's name only -- an asymmetry by where each
   is possible, pinned by `test/ppx/test_label_param.ml`, which runs.
 - Refusals that name the fix (gh-ocannl-1987, `test/ppx/test_param_errors.ml`, expansion only):
-  `translate` threads `late`, the parameters bound after the lift point (every parameter of a
-  no-unit toplevel function, and of any function below the toplevel one), and `guard_late`
-  replaces an inline declaration's field or initializer naming one with an error node -- it was
-  OCaml's "Unbound value", or a silent capture of an outer value of that name. A `let` in the
-  body is NOT tracked (`let n = 3 in { b; o = [ n ] }` is still "Unbound value"). And an
+  `translate` threads `late`, the names bound after the lift point (every parameter of a
+  no-unit toplevel function, and of any function below the toplevel one; and, gh-ocannl-2058,
+  every binder of the body: `let` (a `let rec` in its right-hand sides too), `match` and
+  `function` cases, `for` loops -- `late_binder`), and `guard_late` replaces an inline
+  declaration's field or initializer naming one with an error node -- it was OCaml's "Unbound
+  value", or a silent capture of an outer value of that name (a body `let n` shadowing a `~n`
+  bound before `()` read the parameter). Every binder `translate` reaches is below the lift
+  point: only the toplevel function's `()` is one, and `let%op f = let n = .. in fun () ..` makes
+  that function non-toplevel. Constructs `translate` does not descend into (`try`, `lazy`, a
+  constructor's argument, `let*`) leave their declarations unexpanded, so bind nothing. And an
   unlabelled, unannotated parameter with `non_tensor_evidence` (a stride/dilation identifier of
   a literal spec through `Ppx_shared.einsum_spec_identifiers`, the operand of `!.`/`!..`, the
   exponent of `**.`; never when the body rebinds the name) replaces the whole function with an
