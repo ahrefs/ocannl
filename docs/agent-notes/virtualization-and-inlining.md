@@ -68,7 +68,9 @@ files.
   correct throughout. `instantiate_computations` therefore carries the guard into such a body
   (`guard_hoisted`): an assignment whose value has a read that can leave its node -- flat offset
   bounded over the read site's, the replay's and the body's loops -- becomes `Where (guard, value,
-  self-or-0)`, so the read sits in a `?:` of its own and the node stays inlined. Refusing the read
+  self)` where it updates its own local, and goes under `If guard` where it initializes one (a
+  `Where` would hide a narrowing read from `C_syntax.set_local_value_prec`'s init rule), so the read
+  is guarded and the node stays inlined. Refusing the read
   site instead (materializing the producer) was the first fix, and it cost real inlining: on a
   symbol-mention test it materialized `fused_classifier`'s guarded gradients, whose guards cannot
   fail (a multi-component replay guards every component), and with an exact range test it still

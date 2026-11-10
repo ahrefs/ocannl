@@ -2988,12 +2988,12 @@ and read_escapes ~range tn idcs =
 (* gh-ocannl-2077: [guard_hoisted ~range ~cond llsc] puts [cond] -- the guard of the [Where] whose
    arm [llsc] is -- over every read of the operand-position scopes of [llsc] that can leave its node
    ({!scalar_read_escapes}). Their bodies run ahead of the statement whatever the [Where] selects,
-   so an assignment in them whose value has such a read becomes [Set_local (l, Where (cond, value,
-   else))] -- [else] the local itself where the value reads it (a reduction's update, the guarded
-   replay's own shape), [0] otherwise -- and an [If] condition with one becomes [Where (cond, c,
-   0)]. Where [cond] holds, every value is the one the body computed; where it fails, the body's
-   values are the garbage the arm discards, computed from in-range reads. Nested scopes are guarded
-   the same way, so the guard reaches every body codegen hoists. *)
+   so an assignment in them whose value has such a read is guarded: an update reading its own local
+   becomes [Set_local (l, Where (cond, value, l))] (a reduction's update, the guarded replay's own
+   shape), an initializer [If (cond, Set_local (l, value))]; an [If] condition with one becomes
+   [Where (cond, c, 0)]. Where [cond] holds, every value is the one the body computed; where it
+   fails, the body's values are the garbage the arm discards, computed from in-range reads. Nested
+   scopes are guarded the same way, so the guard reaches every body codegen hoists. *)
 let rec guard_hoisted ~range ~(cond : scalar_arg) (llsc : scalar_t) : scalar_t =
   let arg (v, p) = (guard_hoisted ~range ~cond v, p) in
   match llsc with
@@ -3021,8 +3021,16 @@ and guard_body ~range ~cond (llc : t) : t =
           | Get_dynamic { dyn_value = a, _; _ } -> reads_self a
           | Get _ | Get_merge_buffer _ | Embed_index _ | Constant _ | Constant_bits _ -> false
         in
-        let otherwise = if reads_self v then Get_local id else Constant 0. in
-        Set_local (id, Ternop (Ops.Where, cond, (v, prec), (otherwise, prec)))
+        (* An update reading its own local keeps the guarded-replay shape the accumulation analyses
+           recognize. An initializer goes under an [If] instead, its value untouched: an assignment
+           not reading its local renders as its source store would, a narrowing read at storage
+           precision ([C_syntax.set_local_value_prec] reads the value's own shape), and a [Where]
+           around it would hide that read and round the init at compute precision (Codex review of
+           the gh-ocannl-2077 PR). Where the guard fails the local keeps its declaration's zero,
+           which a later read in the body makes codegen emit. *)
+        if reads_self v then
+          Set_local (id, Ternop (Ops.Where, cond, (v, prec), (Get_local id, prec)))
+        else If { cond; body = Set_local (id, v) }
   | If { cond = c, cprec; body } ->
       let c = guard_hoisted ~range ~cond c in
       let c = if escapes c then Ternop (Ops.Where, cond, (c, cprec), (Constant 0., cprec)) else c in

@@ -1673,25 +1673,48 @@ let row_constexpr_cap_exempt () =
    its end where the guard fails -- megabytes past at a wide [x], a SIGBUS on cc at [-O0], volatile
    reads on Metal, the values right throughout. The replay now carries the guard into the body
    ([Low_level.guard_hoisted]): [b] stays inlined, and the strict interpreter, which probes a
-   discarded arm's scopes, holds what the optimizer left to [x]'s bounds. [~replayed_row:false]
-   reads row 0 and adds [10 i], so no read can leave [x] and the body keeps no guard of its own. *)
-let row_guarded_scope_read ~replayed_row () =
+   discarded arm's scopes, holds what the optimizer left to [x]'s bounds. [`Constant] reads row 0
+   and adds [10 i], so no read can leave [x] and the body keeps no guard of its own. [`Init] starts
+   the reduction from a read of [x] rather than a zero: that initializer goes under an [If], its
+   value untouched, where the update takes a [Where]. *)
+let row_guarded_scope_read ~read () =
   let stride = 4 and extent = 8 in
-  let tag = if replayed_row then "gsr_row" else "gsr_const" in
+  let tag = match read with `Row -> "gsr_row" | `Constant -> "gsr_const" | `Init -> "gsr_init" in
   let x = mk ~dims:[| 3; 2; stride |] (tag ^ "_x") and cc = mk ~dims:[| 3 |] (tag ^ "_c") in
   let b = mk ~dims:[| extent |] (tag ^ "_b") and out = mk ~dims:[| extent |] (tag ^ "_out") in
   materialize x;
   materialize out;
   let i = sym () and k = sym () and i2 = sym () and j = sym () in
-  let addend =
-    if replayed_row then get x [| iter i; iter k; fixed 0 |]
-    else add (get x [| fixed 0; iter k; fixed 0 |]) (mul (c 10.) (embed i))
+  let reduction =
+    match read with
+    | `Row ->
+        seq (zero cc)
+          (loop_n i 3
+             (loop_n k 2
+                (set cc
+                   [| iter i |]
+                   (add (get cc [| iter i |]) (get x [| iter i; iter k; fixed 0 |])))))
+    | `Constant ->
+        seq (zero cc)
+          (loop_n i 3
+             (loop_n k 2
+                (set cc
+                   [| iter i |]
+                   (add
+                      (get cc [| iter i |])
+                      (add (get x [| fixed 0; iter k; fixed 0 |]) (mul (c 10.) (embed i)))))))
+    | `Init ->
+        loop_n i 3
+          (seq
+             (set cc [| iter i |] (get x [| iter i; fixed 0; fixed 0 |]))
+             (set cc
+                [| iter i |]
+                (add (get cc [| iter i |]) (get x [| iter i; fixed 1; fixed 0 |]))))
   in
   let llc =
     List.reduce_exn ~f:seq
       [
-        zero cc;
-        loop_n i 3 (loop_n k 2 (set cc [| iter i |] (add (get cc [| iter i |]) addend)));
+        reduction;
         zero b;
         loop_n i2 3 (set b [| iter i2 |] (add (get cc [| iter i2 |]) (c 1.)));
         loop_n j extent
@@ -1701,7 +1724,9 @@ let row_guarded_scope_read ~replayed_row () =
   let x_cells = Array.init (Tn.num_elems x) ~f:(fun n -> Float.of_int (1 + n)) in
   let at i k = x_cells.(((i * 2) + k) * stride) in
   let c_of i =
-    if replayed_row then at i 0 +. at i 1 else at 0 0 +. at 0 1 +. (20. *. Float.of_int i)
+    match read with
+    | `Row | `Init -> at i 0 +. at i 1
+    | `Constant -> at 0 0 +. at 0 1 +. (20. *. Float.of_int i)
   in
   let expected =
     Array.init extent ~f:(fun j ->
@@ -1709,12 +1734,15 @@ let row_guarded_scope_read ~replayed_row () =
   in
   row ~label:tag ~llc ~cand:b ~out ~seed:[ (x, x_cells) ] ~expected ~verdict:Accepted;
   let o = optimize ~name:(tag ^ "_strict") llc in
-  p
-    (tag
-    ^
-    if replayed_row then ": the guard reaches the scope's body, two Wheres"
-    else ": the replay alone is guarded, one Where")
-    (count_where o = if replayed_row then 2 else 1);
+  let ifs, wheres, _ = census o.LL.llc in
+  (match read with
+  | `Row ->
+      p (tag ^ ": the guard reaches the reduction's update, two Wheres") (wheres = 2 && ifs = 0)
+  | `Constant -> p (tag ^ ": the replay alone is guarded, one Where") (wheres = 1 && ifs = 0)
+  | `Init ->
+      (* The initializer goes under an [If], its value untouched, so it renders as its source store
+         would: a [Where] around it would hide a narrowing read from the init's precision rule. *)
+      p (tag ^ ": the update takes a Where, the initializer an If") (wheres = 2 && ifs = 1));
   p
     (tag ^ ": the strict interpreter evaluates what the optimizer left without a fault")
     (match
@@ -1886,8 +1914,9 @@ let () =
   case "row_trailing_sub_axis_write" row_trailing_sub_axis_write;
   case "row_partial_frame" row_partial_frame;
   case "row_trailing_sub_axis_read" row_trailing_sub_axis_read;
-  case "row_guarded_scope_read ~replayed_row:true" (row_guarded_scope_read ~replayed_row:true);
-  case "row_guarded_scope_read ~replayed_row:false" (row_guarded_scope_read ~replayed_row:false);
+  case "row_guarded_scope_read ~read:`Row" (row_guarded_scope_read ~read:`Row);
+  case "row_guarded_scope_read ~read:`Constant" (row_guarded_scope_read ~read:`Constant);
+  case "row_guarded_scope_read ~read:`Init" (row_guarded_scope_read ~read:`Init);
   case "row_hoisted_local" row_hoisted_local;
   case "row_scan_recurrence" row_scan_recurrence;
   case "row_constexpr_cap_exempt" row_constexpr_cap_exempt;
