@@ -16,6 +16,22 @@ type scope_id = Scope_id.t = { tn : Tnode.t; scope_id : int }
 
 val get_scope : Tnode.t -> scope_id
 
+val scope_local_prefix : int -> string
+(** [scope_local_prefix n] is ["v<n>_"]: what a scope local of scope id [n] is spelled behind, ahead
+    of its node's name. The one spelling of the convention: the C-family emitters' declarations and
+    reads ({!scope_local_name} over the node's code name), the [.ll] printers, and every message
+    naming a local (this prefix composed with the node's display name), while the node-name
+    reservation reads it back through {!in_scope_local_namespace} (gh-ocannl-2102). *)
+
+val scope_local_name : node:string -> scope_id -> string
+(** [scope_local_name ~node id] is [scope_local_prefix id.scope_id ^ node], where [node] is
+    [id.tn]'s code name: the identifier the local takes in emitted code. *)
+
+val in_scope_local_namespace : string -> bool
+(** Whether a name is spelled like a scope local: ["v"], one or more digits, ["_"], anything. The
+    code-name minter reserves this namespace, so a node labelled after another node's scope local
+    cannot shadow it (gh-ocannl-2012). Ordinary labels starting [v] are outside it. *)
+
 (** {2 Low-level representation} *)
 
 (** How a loop's iterations map to hardware; see docs/design/axis-types-for-loops.md. [Serial] is an

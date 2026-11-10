@@ -58,6 +58,17 @@ let get_scope =
     Int.incr uid;
     { tn; scope_id = !uid }
 
+let scope_local_prefix n = "v" ^ Int.to_string n ^ "_"
+let scope_local_name ~node (id : scope_id) = scope_local_prefix id.scope_id ^ node
+
+let in_scope_local_namespace name =
+  match String.chop_prefix name ~prefix:"v" with
+  | None -> false
+  | Some rest -> (
+      match String.lsplit2 rest ~on:'_' with
+      | Some (digits, _) -> (not (String.is_empty digits)) && String.for_all digits ~f:Char.is_digit
+      | None -> false)
+
 (** How a loop's iterations map to hardware; see docs/design/axis-types-for-loops.md. [Serial] is an
     ordinary for-loop. [Grid] / [Workgroup] bind the loop index to a GPU grid / workgroup (block,
     threadgroup) hardware index instead of looping; [Workgroup_reduce] is a [Workgroup] axis
@@ -7299,7 +7310,7 @@ let scope_purity_violation_gen (root : [ `Proc of t | `Scalar of scalar_t ]) : s
     | Set_local (id, llsc) ->
         if Option.is_some scope && not (owns owned id) then
           ban (fun () ->
-              "a Set_local of v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn
+              "a Set_local of " ^ scope_local_prefix id.scope_id ^ Tn.debug_name id.tn
               ^ ", a local the body does not own,");
         scalar ~scope ~owned llsc;
         owned
@@ -7508,7 +7519,7 @@ let unbound_local_violation (llc : t) : string option =
   fold ~policy
     ~hooks:{ (hooks ()) with statement; after_statement; scalar; after_scalar }
     ~init:() llc;
-  let local id = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
+  let local (id : scope_id) = scope_local_prefix id.scope_id ^ Tn.debug_name id.tn in
   (* In program order, so the message names the first stranded access. *)
   List.find_map (List.rev !accesses)
     ~f:(fun
@@ -12327,7 +12338,7 @@ and scalar_has_staged (llsc : scalar_t) : bool =
     which only the rotation assigns. *)
 let scan_loop_violation (plc : Tn.Placements.t) (root : t) : string option =
   let exception Malformed of string in
-  let name (id : scope_id) = "v" ^ Int.to_string id.scope_id ^ "_" ^ Tn.debug_name id.tn in
+  let name (id : scope_id) = scope_local_prefix id.scope_id ^ Tn.debug_name id.tn in
   let has_staged = has_staged_compilation in
   (* Every scope id a subtree mentions -- binders, reads and writes -- at any depth. *)
   let rec scope_ids_in (llc : t) : scope_id list =
@@ -12879,7 +12890,7 @@ let to_doc_cstyle ?name ?static_indices () llc =
       base ^^ string ("<" ^ prec_str ^ ">")
     else base
   in
-  let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
+  let doc_local { tn; scope_id } = string (scope_local_prefix scope_id) ^^ doc_ident tn in
 
   let rec doc_of_code c =
     match c with
@@ -13038,7 +13049,7 @@ let to_doc ?name ?static_indices () llc =
       base ^^ string ("<" ^ prec_str ^ ">")
     else base
   in
-  let doc_local { tn; scope_id } = string ("v" ^ Int.to_string scope_id ^ "_") ^^ doc_ident tn in
+  let doc_local { tn; scope_id } = string (scope_local_prefix scope_id) ^^ doc_ident tn in
 
   let rec doc_of_code c =
     match c with
