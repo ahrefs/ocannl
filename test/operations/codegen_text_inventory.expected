@@ -842,6 +842,7 @@ test/operations/gpu_parallel_prefix.ml [through Ll_test.execute; run by @test/op
 test/operations/gpu_serial_lanes.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-gpu_serial_lanes]
 test/operations/gpu_small_leading_axis.ml [through Ll_test.execute; run by @test/operations/runtest-gpu_small_leading_axis]
 test/operations/half_float_power.ml [through Ll_test.execute; run by @test/operations/runtest-half_float_power]
+test/operations/half_index_bound_constant.ml [through Ll_test.execute; run by @test/operations/runtest-half_index_bound_constant]
 test/operations/half_unary_math.ml [through Ll_test.execute; run by @test/operations/runtest-half_unary_math, @test/operations/runtest-half_unary_math-reproducible]
 test/operations/hardware_warp_shuffle.ml [prelowered compile; through Ll_test.execute; run by @test/operations/runtest-hardware_warp_shuffle]
 test/operations/heap_local_arrays.ml [through Ll_test.execute; run by @test/operations/runtest-heap_local_arrays, @test/operations/runtest-heap_local_arrays-outlined]
@@ -970,6 +971,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-gpu_serial_lanes
 @test/operations/runtest-gpu_small_leading_axis
 @test/operations/runtest-half_float_power
+@test/operations/runtest-half_index_bound_constant
 @test/operations/runtest-half_unary_math
 @test/operations/runtest-half_unary_math-reproducible
 @test/operations/runtest-hardware_warp_shuffle

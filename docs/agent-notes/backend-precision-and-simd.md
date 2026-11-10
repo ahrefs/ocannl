@@ -18,7 +18,13 @@ files.
   every backend converts them per IEEE (`__float2half` / `__double2half` / a `(half)` cast). Attention
   masks fill with `Nn_blocks.default_mask_fill` = `-inf` (per-call `?mask_fill` for the one case that
   needs finite: a mask that can cover a whole row, where `-inf - -inf` would give NaN) rather than a
-  large finite magic number, so the fill needs no per-precision tuning.
+  large finite magic number, so the fill needs no per-precision tuning. The check reads each
+  constant at the precision its slot EVALUATES it at (the simplifier's `~eval` discipline,
+  gh-ocannl-1788), and refuses only when that and the written node's storage are both narrow
+  (gh-ocannl-2112): index bounds — `Stage`'s `Where (idx < extent, load, 0)` edge guard and the other
+  `Where`-form fringe guards — compare at `Ops.index_prec ()`, so a half panel past 2^14 cells is not refused.
+  Do not test the annotation instead: `mk_binop` annotates a value `Constant` as `single` whatever
+  slot it sits in, so an annotation reading would exempt every half-node value constant.
 - The `bf16_ops`/`half_ops` convention of picking inputs that are exactly representable in the
   reduced precision, so printed numbers stay backend-uniform, does NOT extend to transcendental
   results: no choice of inputs makes an `exp` output exactly representable, and backend libm
