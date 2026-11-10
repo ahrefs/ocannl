@@ -177,7 +177,7 @@ end = struct
         (** Set by [follow]: the precision the cell held before its first such link. *)
     stated_by_operands : Ops.prec option Lazy.t option;
         (** [make]'s [stated]: memoized when first forced, which happens only as a node in its cone
-            settles. *)
+            settles, and at the latest when this cell settles. *)
   }
 
   let sexp_of_t { value; storage = _; settling = _; unlinked = _; stated_by_operands = _ } =
@@ -190,7 +190,13 @@ end = struct
         storage =
           lazy
             (cell.settling <- true;
-             match cell.value with Default prec | Specified prec | Inferred (lazy prec) -> prec);
+             let prec =
+               match cell.value with Default prec | Specified prec | Inferred (lazy prec) -> prec
+             in
+             (* Settle what the operands state too, so the lazy drops its operand nodes: a settled
+                node must not keep otherwise-dead ancestors alive (gh-ocannl-2028). *)
+             Option.iter stated ~f:(fun l -> ignore (Lazy.force l : Ops.prec option));
+             prec);
         settling = false;
         unlinked = None;
         stated_by_operands = stated;

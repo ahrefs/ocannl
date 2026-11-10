@@ -1265,7 +1265,8 @@ files.
   constrained one resolves it to its own value), so its cell holds the consumer's cell: anything
   such a lazy captures must be nodes, never `Tensor.t` -- capturing the operand tensors in `stated`
   kept dropped consumers' children alive (`reclaimed_consumer_zeroing`'s `deep`, `session_growth`'s
-  scoped seed). `free_op_prec_follows_consumer` pins the matrix and the executed values.
+  scoped seed), and a cell's settling forces its `stated` so a settled node drops its operand nodes
+  (an unforced one kept dead virtual ancestors listed in `moons_demo_variant`'s node headers). `free_op_prec_follows_consumer` pins the matrix and the executed values.
 - **A cast rounds at its own precision, whatever its placement** (gh-ocannl-1866). A narrow scope
   over a read it does not widen exactly (`Low_level.narrowing_read`) is what a virtual `Operation.cast`
   twin lowers to. `simplify_llc` keeps it even in a slot of its own precision, and `C_syntax` pins it
