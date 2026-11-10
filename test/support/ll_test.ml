@@ -813,14 +813,27 @@ let same ?tol got expected =
     keeps its values exact in that precision. Every {!Ir.Ops} operation goes through
     [Ops.interpret_*]; only [Where] is evaluated here, lazily, condition first, because a guarded
     replay's discarded arm can index outside the node ([Low_level.instantiate_computations]'s
-    comment on the then-arm). What it does not model is that codegen hoists a [Local_scope] body
-    ahead of its enclosing statement, so a scope in a discarded arm runs on a backend and not here;
-    scope purity makes that unobservable in value, not in the addresses it touches.
+    comment on the then-arm), and a projection evaluates only the operand it selects, the one
+    codegen renders.
+
+    Codegen also hoists a [Local_scope] body ahead of its enclosing statement
+    ([C_syntax.pp_local_defs]), so a scope in a discarded arm runs on a backend though the lazy
+    evaluation skips it; scope purity makes that unobservable in value, not in the addresses it
+    touches (gh-ocannl-2077). [~strict:true] models the addresses: where a [Where] discards an arm,
+    the bodies of the scopes that arm holds at operand position (through nested [Where] arms and
+    gates, never into a projection's unrendered operand) run as a PROBE, every access bounds-checked
+    and nothing else -- a cell the probe reads unwritten, or a local it reads unassigned, is the
+    garbage a backend discards, the probe writes no node, and the locals are restored after it, so
+    the lazy run's values are unchanged. It does not model the ORDER [pp_local_defs] emits
+    definitions in (purity makes it value-neutral, and a copy of it would be one more emitter to
+    keep in step), nor the value selects a blending backend evaluates both arms of
+    ([Low_level.speculable_select]).
 
     What a compiled run would answer with a garbage value, an undeclared identifier or a silent read
     of a neighbouring cell, this raises {!Interp_fault} on: an access outside the node, a read of a
     local with no assignment, a read of a cell of a node given no entries and not yet written, and a
-    constructor it does not evaluate. *)
+    constructor it does not evaluate; under [~strict:true], also an access outside the node by a
+    hoisted scope of a discarded arm. *)
 
 exception Interp_fault of string
 
@@ -838,12 +851,14 @@ let interp_memory (entries : (Tn.t * float array) list) =
     the code mentions its value, as {!run}'s does. A second call on the same [memory] sees what the
     first left in the nodes, and none of its locals: a routine's locals are its own. An unwritten
     cell is NaN, so a program computing a NaN reads as an unwritten cell; the callers' values stay
-    finite by construction. *)
-let interpret ?(launch = []) memory (llc : LL.t) =
+    finite by construction. [~strict] (default [false]) adds the hoisted-scope probe above. *)
+let interpret ?(launch = []) ?(strict = false) memory (llc : LL.t) =
   let cells tn =
     Hashtbl.find_or_add memory tn ~default:(fun () -> Array.create ~len:(Tn.num_elems tn) Float.nan)
   in
   let locals = Hashtbl.create (module LL.Scope_id) in
+  (* Inside a probe: accesses are checked, values are whatever a backend would discard. *)
+  let probing = ref false in
   let env_of launch =
     List.fold launch
       ~init:(Map.empty (module Idx.Symbol))
@@ -882,7 +897,25 @@ let interpret ?(launch = []) memory (llc : LL.t) =
   let local id =
     match Hashtbl.find locals id with
     | Some v -> v
+    | None when !probing -> 0.
     | None -> interp_fault "a read of a local of %s with no assignment" (Tn.label_name id.LL.tn)
+  in
+  (* The scopes a C-family rendering hoists out of [llsc]: those at operand position, through every
+     arm of a [Where] and a gate, never into the operand a projection does not render; a scope's own
+     nested scopes are its body's, hoisted when the body runs. *)
+  let rec hoisted acc : LL.scalar_t -> LL.scalar_t list = function
+    | LL.Local_scope _ as scope -> scope :: acc
+    | LL.Ternop (_, (a, _), (b, _), (d, _)) -> hoisted (hoisted (hoisted acc a) b) d
+    | LL.Binop (op, (a, _), (b, _)) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Only_first -> hoisted acc a
+        | Ops.Only_second -> hoisted acc b
+        | Ops.Both_operands | Ops.Gated_second -> hoisted (hoisted acc a) b)
+    | LL.Unop (_, (a, _)) -> hoisted acc a
+    | LL.Get_dynamic { dyn_value = v, _; _ } -> hoisted acc v
+    | LL.Get _ | LL.Get_local _ | LL.Embed_index _ | LL.Constant _ | LL.Constant_bits _
+    | LL.Get_merge_buffer _ ->
+        acc
   in
   let rec stmt env : LL.t -> unit = function
     | LL.Noop | LL.Comment _ -> ()
@@ -894,11 +927,13 @@ let interpret ?(launch = []) memory (llc : LL.t) =
           stmt (Map.set env ~key:index ~data:i) body
         done
     | LL.Zero_out tn ->
-        let c = cells tn in
-        Array.fill c ~pos:0 ~len:(Array.length c) 0.
+        if not !probing then
+          let c = cells tn in
+          Array.fill c ~pos:0 ~len:(Array.length c) 0.
     | LL.Set { tn; idcs; llsc; debug = _ } ->
         let v = scalar env llsc in
-        (cells tn).(offset env tn idcs) <- v
+        let off = offset env tn idcs in
+        if not !probing then (cells tn).(off) <- v
     | LL.Set_local (id, llsc) -> Hashtbl.set locals ~key:id ~data:(scalar env llsc)
     | LL.Declare_local { id; needs_init } ->
         if needs_init then Hashtbl.set locals ~key:id ~data:0. else Hashtbl.remove locals id
@@ -915,23 +950,48 @@ let interpret ?(launch = []) memory (llc : LL.t) =
     | LL.Get (tn, idcs) ->
         let off = offset env tn idcs in
         let v = (cells tn).(off) in
-        if Float.is_nan v then
+        if Float.is_nan v && not !probing then
           interp_fault "a read of unwritten cell %d of %s" off (Tn.label_name tn);
-        v
+        if Float.is_nan v then 0. else v
     | LL.Get_local id -> local id
     | LL.Local_scope { id; body; orig_indices = _; mint = _ } ->
         Hashtbl.remove locals id;
         stmt env body;
         local id
     | LL.Ternop (Ops.Where, (cond, _), (a, _), (b, _)) ->
-        if Float.(scalar env cond <> 0.) then scalar env a else scalar env b
+        let taken, discarded = if Float.(scalar env cond <> 0.) then (a, b) else (b, a) in
+        if strict then probe env discarded;
+        scalar env taken
     | LL.Ternop (op, (a, _), (b, _), (d, _)) ->
         Ops.interpret_ternop op (scalar env a) (scalar env b) (scalar env d)
-    | LL.Binop (op, (a, _), (b, _)) -> Ops.interpret_binop op (scalar env a) (scalar env b)
+    | LL.Binop (op, (a, _), (b, _)) -> (
+        match Ops.binop_conditionality op with
+        | Ops.Only_first -> scalar env a
+        | Ops.Only_second -> scalar env b
+        | Ops.Both_operands | Ops.Gated_second ->
+            Ops.interpret_binop op (scalar env a) (scalar env b))
     | LL.Unop (op, (a, _)) -> Ops.interpret_unop op (scalar env a)
     | LL.Constant_bits _ -> interp_fault "a Constant_bits"
     | LL.Get_dynamic _ -> interp_fault "a Get_dynamic"
     | LL.Get_merge_buffer _ -> interp_fault "a Get_merge_buffer"
+  (* Runs the hoisted scopes of a discarded arm for their addresses alone (see [~strict]). *)
+  and probe env discarded =
+    List.iter
+      (List.rev (hoisted [] discarded))
+      ~f:(fun scope ->
+        let saved = Hashtbl.copy locals and was_probing = !probing in
+        probing := true;
+        let restore () =
+          probing := was_probing;
+          Hashtbl.clear locals;
+          Hashtbl.iteri saved ~f:(fun ~key ~data -> Hashtbl.set locals ~key ~data)
+        in
+        match scalar env scope with
+        | _ -> restore ()
+        | exception Interp_fault msg ->
+            restore ();
+            if was_probing then raise (Interp_fault msg)
+            else interp_fault "a hoisted scope of a discarded Where arm: %s" msg)
   in
   stmt (env_of launch) llc
 
