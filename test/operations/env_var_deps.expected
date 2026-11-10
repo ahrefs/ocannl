@@ -320,6 +320,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/operations/dune                     @runtest-resnet_block-origins_cap_0
   test/operations/dune                     @runtest-reusable_tensor_programs
   test/operations/dune                     @runtest-routine_log_dropped_notice
+  test/operations/dune                     @runtest-routine_log_nested_scopes
   test/operations/dune                     @runtest-routine_log_rng_init
   test/operations/dune                     @runtest-routine_log_stream_files
   test/operations/dune                     @runtest-schedule_bench_padded

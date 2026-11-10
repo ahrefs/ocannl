@@ -14405,6 +14405,47 @@
  (deps
   (alias runtest-routine_log_rng_init)))
 
+;; gh-ocannl-2111: routine logging traces a scope definition nested in a Set, Set_dynamic or
+;; Set_from_vec value, a dynamic row and an If condition, once per execution and before the store
+;; reading it; each case also executes against host values. A fresh log directory per run, so the
+;; claims see only this run's lines.
+
+(executable
+ (name routine_log_nested_scopes)
+ (modules routine_log_nested_scopes)
+ (libraries base ocannl stdio arrayjit.verdict ll_test))
+
+(rule
+ (target routine_log_nested_scopes.actual)
+ (package neural_nets_lib)
+ (deps
+  (alias runtest-env_spelling_gate)
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (action
+  (with-stdout-to
+   %{target}
+   (run
+    %{dep:routine_log_nested_scopes.exe}
+    "--ocannl_debug_log_from_routines=true"
+    "--ocannl_log_level=2"
+    "--ocannl_debug_log_to_stream_files=true"
+    "--ocannl_log_main_domain_to_stdout=false"
+    "--ocannl_clean_up_log_files_on_startup=true"
+    "--ocannl_log_file_stem=routine_log_nested_scopes"
+    "--ocannl_build_files_prefix=routine_log_nested_scopes"))))
+
+(rule
+ (alias runtest-routine_log_nested_scopes)
+ (package neural_nets_lib)
+ (action
+  (diff routine_log_nested_scopes.expected routine_log_nested_scopes.actual)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias runtest-routine_log_nested_scopes)))
+
 (test
  (name build_file_descriptors)
  (package neural_nets_lib)

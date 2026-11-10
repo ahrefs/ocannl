@@ -772,9 +772,19 @@ files.
   check. `local_binder_gate` pins refusals and executed in-scope accesses;
   `local_scope_sibling_reads` protects the hoisted-definition ordering boundary.
 
-- A kept scope's assignment logging extends into `Local_scope` definitions in its RHS
-  (gh-ocannl-2065): `C_syntax.pp_scalar` carries `log_set_locals` through operands and dynamic
-  indices from `Set_local`. Such definitions need zero initialization in logged runs because
-  the trace reads the old local before the assignment. `micrograd_demo_logging` pins the nested
-  gradient assignments on each backend; scalar definitions outside a logged scope keep their
-  existing quiet rendering.
+- Routine logging traces every `Local_scope` definition a statement renders, wherever the scope
+  is nested: a `Set_local`'s value (gh-ocannl-2065), a `Set`, `Set_dynamic` or `Set_from_vec`
+  value, a dynamic index, an `If` condition (gh-ocannl-2111). `C_syntax.pp_scalar` carries
+  `log_set_locals` through operands from each of those arms; its quiet default is left only to
+  renderings that drop or refuse local definitions (`debug_float`'s display re-render, the
+  vector paths' uniform operands) and to the SIMD/warp paths that decline under logging. Such
+  definitions need zero initialization in logged runs because the trace reads the old local
+  before the assignment. `routine_log_nested_scopes` executes one nested definition under each
+  arm and claims its trace on every backend; `micrograd_demo_logging` pins the nested gradient
+  assignments in its per-backend log goldens.
+- The serial-reduction localization still declines under routine logging, re-justified by
+  gh-ocannl-2111: it no longer silences the trace, but it would move each step's line from the
+  node's cell (`tn[off]{=old} = new`, under the source assignment's `debug` text) to a
+  codegen-minted scope local, naming the cell only at the closing store. The decline is
+  `Low_level.decide_accum_width`'s `Skip_debug_logging`, shared with `Schedule.Privatize` and the
+  unroll mint, so logged candidates all stay per-step.

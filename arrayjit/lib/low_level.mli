@@ -844,8 +844,9 @@ val peel_accum_nest :
 (** Why {!decide_accum_width} declined a base {!peel_accum_nest} reached. *)
 type accum_skip =
   | Skip_debug_logging
-      (** [debug_log_from_routines]: the per-step [Set] form is kept so the trace survives (a
-          [Local_scope] body renders with [log_set_locals:false]). *)
+      (** [debug_log_from_routines]: the per-step [Set] form is kept so the trace stays
+          node-addressed — each step logs the source assignment and the node's cell, where a
+          localized scope's steps log a codegen-minted local (gh-ocannl-2111). *)
   | Skip_dead_level  (** The level being decided is dead ([to_ < from_]). *)
   | Skip_accum_pinned
       (** The base is an update mentioning an RNG conversion ({!mentions_rng_conversion}): it

@@ -9022,11 +9022,11 @@ let decide_accum_width ~extra_level ~loop_ranges ~index ~from_ ~to_ body =
             Refused_not_a_nest)
   | Some (tn, idcs, base, debug, rebuild) ->
       (* The declines, in the order the serial rendering has always applied them: routine logging
-         keeps the traceable per-step [Set] form; a dead level performs no accesses (the peel's own
-         refusal covers the levels BELOW this one, whose bounds it sees, and this is the same
-         refusal for the level being decided); an update mentioning an RNG conversion renders at
-         storage precision, so localizing it would change the draw, not move it (gh-ocannl-517,
-         gh-ocannl-682). *)
+         keeps the node-addressed per-step [Set] trace (C_syntax.try_localize_serial_reduce says
+         why, gh-ocannl-2111); a dead level performs no accesses (the peel's own refusal covers the
+         levels BELOW this one, whose bounds it sees, and this is the same refusal for the level
+         being decided); an update mentioning an RNG conversion renders at storage precision, so
+         localizing it would change the draw, not move it (gh-ocannl-517, gh-ocannl-682). *)
       let pinned =
         if Utils.debug_log_from_routines () then Some Skip_debug_logging
         else if to_ < from_ then Some Skip_dead_level

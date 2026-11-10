@@ -1080,11 +1080,12 @@ let apply_op (llc : Low_level.t) (op : optop) : Low_level.t =
                invariant autotune's menu depends on (candidates compete on speed, never
                numerics). *)
             let mint =
-              (* Under routine logging the per-iteration [Set] copies ARE the trace: a [Local_scope]
-                 body renders with [log_set_locals:false], so minting the scope would silence every
-                 update. The serial baseline's widening declines under logging for the same reason
-                 (C_syntax.try_localize_serial_reduce), so within a logged regime the unrolled and
-                 serial candidates still agree — both per-step. *)
+              (* Under routine logging the per-iteration [Set] copies ARE the trace: each logs the
+                 source assignment and the node's cell it writes. A minted scope's updates log too
+                 (gh-ocannl-2111), but against a codegen-minted local, naming the cell only at the
+                 closing store. The serial baseline's widening declines under logging for the same
+                 reason (C_syntax.try_localize_serial_reduce), so within a logged regime the
+                 unrolled and serial candidates still agree — both per-step. *)
               if Utils.debug_log_from_routines () then None
               else
                 Low_level.peel_accum_nest ~loop_ranges:(Lazy.force program_ranges) ~free_of:[ axis ]

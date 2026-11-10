@@ -661,9 +661,10 @@ files.
   applied by an earlier `apply` against the same ops in one, the RNG pin and the re-check) and
   `autotune_privatize`'s saved-form claims.
 - **What forces one of the two RMW forms**, i.e. the declines a property test must be able to
-  provoke: `debug_log_from_routines` (a `Local_scope` body renders with `log_set_locals:false`, so
-  localizing would silence the per-iteration trace — the SIMD and tensorized renderings bail under
-  logging for the same reason); an update mentioning an RNG conversion (gh-ocannl-517: the
+  provoke: `debug_log_from_routines` (the per-step `Set` trace names the source assignment and the
+  node's cell each step; a localized scope's steps would log a codegen-minted local instead —
+  gh-ocannl-2111 — and the SIMD and tensorized renderings bail under logging, having no per-lane
+  trace); an update mentioning an RNG conversion (gh-ocannl-517: the
   conversion picks which random bits it consumes from the precision it renders at); and
   `peel_accum_nest`'s structural refusals — a level holding more than one statement, a guard that is
   not `pure_index_guard`, a cell that is not invariant across the peeled levels, an update outside
@@ -822,9 +823,10 @@ files.
   widening is inert wherever `acc_prec` is the identity (f32/f64; GPU backends per their
   residency table above, e.g. f16 there under `Fp16_auto`; `narrow_compute_f32=false` except
   f16-under-`Fp16_wide`; native fp16 under `Fp16_narrow`), and it declines twice more: under
-  `debug_log_from_routines` (a `Local_scope` body renders with `log_set_locals:false`, so the
-  rewrite would silence the per-iteration trace — the per-step `Set` form is the traceable one,
-  and every tensorized rendering already declines under logging), and on updates mentioning an
+  `debug_log_from_routines` (the per-step `Set` form keeps the trace node-addressed: each step
+  logs the source assignment and the node's cell, where the localized scope's would log a
+  codegen-minted local, gh-ocannl-2111; every tensorized rendering already declines under
+  logging), and on updates mentioning an
   RNG conversion (the conversion picks its result type AND which random bits it consumes from the
   precision it renders at, so an f32-precision scope would change the draw, not widen it —
   `narrow_rng_nesting`'s reduced-uniform leg pins this). Two traps for tests in this area: (1) cross-schedule BITWISE parity on
