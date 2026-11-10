@@ -1546,19 +1546,16 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dim
         (* Consuming any axes, even dim-1 ones, means the constrained rows received other shape
            information: reset the identity-reshape preference. *)
         let keep_axis = keep_axis && List.is_empty beg_dims && List.is_empty dims in
-        (* Check if any vars appear in divided_by (multiset intersection) *)
-        let has_common_var =
-          List.exists vars ~f:(fun v -> List.mem divided_by v ~equal:equal_dim_var)
-        in
-        if has_common_var then Unconstrained
-        else
-          let numerator = total_elems_divide numerator d in
-          if total_elems_known_zero numerator then
-            raise
-            @@ Shape_error
-                 ( "reduce_row_constraint: Total_elems constraint failed, shape is too big",
-                   [ Dim_mismatch (beg_dims @ dims) ] )
-          else Total_elems { numerator; divided_by = divided_by @ vars; keep_axis }
+        (* The consumed variables join [divided_by] even when they are already there: it is a
+           multiset, so for [n / w] over [w, ..r..] the rest holds [n / (w * w)]
+           (gh-ocannl-2034). *)
+        let numerator = total_elems_divide numerator d in
+        if total_elems_known_zero numerator then
+          raise
+          @@ Shape_error
+               ( "reduce_row_constraint: Total_elems constraint failed, shape is too big",
+                 [ Dim_mismatch (beg_dims @ dims) ] )
+        else Total_elems { numerator; divided_by = divided_by @ vars; keep_axis }
       with Given_up -> Unconstrained)
   | Exact exact_dims ->
       let beg_len = List.length beg_dims in
@@ -2225,8 +2222,7 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
                      "apply_row_constraint: Total_elems constraint failed: %{denom*d#Int} not \
                       divisible by %{coeff#Int}"],
                    [ Row_mismatch [ r ] ] ))
-    | { beg_dims; dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by; _ }
-      when List.length divided_by <= 1 -> (
+    | { beg_dims; dims; bcast = Broadcastable; _ }, Total_elems { numerator; divided_by; _ } -> (
         try
           (* [beg_dims] participate in the total: block/stack rows carry leading dims there (gh-509:
              a slack-window re-check against a block row must divide by the full product). *)
@@ -2337,7 +2333,7 @@ and apply_row_constraint ~depth stage origin (r : row) (constr : row_constraint)
         | _ ->
             if stored then (extras, env)
             else (Rows_constr { r = [ r ]; constr; origin } :: extras, env))
-    | { bcast = Row_var _; _ }, _ | _, Total_elems _ ->
+    | { bcast = Row_var _; _ }, _ ->
         if stored then (extras, env)
         else
           ( Rows_constr { r = [ r ]; constr; origin } :: extras,

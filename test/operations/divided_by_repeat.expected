@@ -1,0 +1,12 @@
+A repeated variable reduced into the rest of the row:
+[..r2..] in [w, w, ..r2..] keeps the total 12 / (w * w): true
+refusal: Total_elems constraint: 3 not divisible by 6
+12 elements over [w, w, 6] with w = 2 are refused (24 elements): true
+u = 3
+12 elements over [w, w, u] with w = 2 solve u = 3: true
+12 elements over [w, w, 3] with w = 2 are accepted: true
+A closed row against two divided_by variables:
+1 / (w * v) over the empty row solves w = v = 1: true
+1 / (w * v) over the empty row, nothing left to wait on: true
+refusal: Total_elems constraint: 6 not divisible by 4
+6 / (w * w) over a row of 4 is refused: true

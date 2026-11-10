@@ -229,6 +229,13 @@ files.
   path, row elimination and `row_conjunction` all go through it, and the closed-row path marks `v`
   as if it were in `divided_by`, or the leftover `has_uniq_constr_unless` would keep it from ever
   closing.
+- `divided_by` is a multiset, and a repeat in it is an equation: `n / w` over `[w, ..r..]` leaves
+  `n / (w * w)` on `r` (`Row.reduce_row_constraint` appends the consumed variables as they are), and
+  the closed-row check takes any number of `divided_by` variables. A shortcut that treats a repeat
+  as unsolvable (dropping the constraint, or waiting) silently stops enforcing the total: a wrong
+  size passes and a size the total fixes stays unsolved (gh-ocannl-2034; `divided_by_repeat.ml`
+  solves in two calls, as the incremental solver does, since a single call re-reads the original
+  constraint and hides the drop).
 - The packed sampler's round-up total (`Total_elems` over a `Strided_var { round_up = true }`,
   minted by `Uint4x32_to_prec`) has to wait for the same use-site bound, in
   `Row.eliminate_row_constraint`: an arm that settles the counter from the already-closed axes
