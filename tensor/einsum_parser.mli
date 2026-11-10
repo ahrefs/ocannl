@@ -26,9 +26,9 @@ val concat_operator_with_generated_specs : string
 
 val named_spec_functions : string list
 (** The unqualified named DSL functions ([TDSL.O], [NTDSL.O]) whose first positional argument is an
-    einsum specification: the functions the operators apply, and [concat_sum]. The OCANNL PPXs pass
-    a literal first argument of theirs through identifier substitution as they do an operator's spec
-    (gh-ocannl-2060). *)
+    einsum specification: the functions the operators apply, [concat_sum], and the ternary
+    [einsum3], which has no operator. The OCANNL PPXs pass a literal first argument of theirs
+    through identifier substitution as they do an operator's spec (gh-ocannl-2060). *)
 
 val operators_with_generated_specs : string list
 (** The unqualified DSL operators whose literal specifications the OCANNL PPXs pass through

@@ -32,7 +32,7 @@ let () =
   let c =
     Tensor.ndarray ~grad_spec:Tensor.Require_grad [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] ()
   in
-  let tern = Operation.einsum3 "ij;jk;km=>im" ~grad_spec:Prohibit_grad a b c () in
+  let tern = NTDSL.einsum3 "ij;jk;km=>im" a b c () in
   let ctx = Train.forward_once ~output_cd_file:false ctx tern in
   Stdio.printf "einsum3 = %s\n" (fmt_arr (get_vals ctx tern));
 
@@ -69,7 +69,7 @@ let () =
       [| 1.; 0.; 0.; 1.; 0.; 1.; 1.; 0. |]
       ~output_dims:[ 2; 2; 2 ] ()
   in
-  let tern = Operation.einsum3 "bij;bjk;bkm=>bim" ~grad_spec:Prohibit_grad a b c () in
+  let tern = NTDSL.einsum3 "bij;bjk;bkm=>bim" a b c () in
   let ctx = Train.forward_once ~output_cd_file:false ctx tern in
   Stdio.printf "batched einsum3 = %s\n" (fmt_arr (get_vals ctx tern));
 
@@ -216,7 +216,7 @@ let () =
   let b = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
   let c = NTDSL.ndarray [| 1.; 0.; 0.; 1. |] ~output_dims:[ 2; 2 ] () in
   try
-    let _ = Operation.einsum3 "ij;jk=>im" ~grad_spec:If_needed a b c () in
+    let _ = TDSL.einsum3 "ij;jk=>im" a b c () in
     Verdict.fail "expected Shape_error for two-RHS spec in einsum3"
   with Row.Shape_error (msg, _) ->
     Stdio.printf "Negative test (wrong arity): got expected Shape_error: %s\n"

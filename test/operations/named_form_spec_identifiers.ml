@@ -1,7 +1,7 @@
-(* gh-ocannl-2060: under [%op] and [%cd], a named einsum form ([einsum], [einsum1], ...) reads the
-   identifiers of its literal spec as an operator does: a stride or dilation identifier takes its
-   run-time value, a plain [+] window reads [use_padding]. Before, the spec reached the shape solver
-   as written and died with "Invalid stride value (expected integer): stride".
+(* gh-ocannl-2060: under [%op] and [%cd], a named einsum form ([einsum], [einsum1], [einsum3], ...)
+   reads the identifiers of its literal spec as an operator does: a stride or dilation identifier
+   takes its run-time value, a plain [+] window reads [use_padding]. Before, the spec reached the
+   shape solver as written and died with "Invalid stride value (expected integer): stride".
 
    Each named form is checked against the operator form over the same inputs and against the values
    computed by hand. The inputs are distinct integers and the kernel taps 1 and 10, so a wrong
@@ -42,6 +42,12 @@ let%op named_captured ~stride ~d x = einsum1 ~capture_dims:[%oc [ d ]] "stride*o
 (* The same in [%cd]. *)
 let%cd cd_strided ~stride x = einsum1 "stride*o => o" x
 
+(* The ternary [einsum3], which has no operator, over the same window with the kernel read twice:
+   [out.(o) = x.(s*o) + 100 x.(s*o + d)]. *)
+let%op named_tern ~stride ~dil x w = einsum3 "stride*o<+dil*k; k; k => o" x w w
+let%op op_tern ~stride ~dil x w = x +* "stride*o<+dil*k; k => o" (w *. w)
+let%cd cd_tern ~stride ~dil x w = einsum3 "stride*o<+dil*k; k; k => o" x w w
+
 let () =
   let stride = 3 in
   let want = Array.init (n / stride) ~f:(fun o -> xs.(stride * o)) in
@@ -68,6 +74,24 @@ let () =
   p_all2 "einsum agrees with +* on stride and dilation identifiers" named
     (values (op_dilated ~stride ~dil x w))
     ~f:exact
+
+let () =
+  let stride = 2 and dil = 3 in
+  let out = ((n - dil - 1) / stride) + 1 in
+  let want =
+    Array.init out ~f:(fun o ->
+        (taps.(0) *. taps.(0) *. xs.(stride * o))
+        +. (taps.(1) *. taps.(1) *. xs.((stride * o) + dil)))
+  in
+  let named = values (named_tern ~stride ~dil x w) in
+  p_all2 "einsum3 with stride and dilation identifiers computes the dilated window" named want
+    ~f:exact;
+  p_all2 "einsum3 agrees with +* over the squared kernel" named
+    (values (op_tern ~stride ~dil x w))
+    ~f:exact;
+  p_all2 "the %cd einsum3 with stride and dilation identifiers computes the dilated window"
+    (values (cd_tern ~stride ~dil x w))
+    want ~f:exact
 
 let () =
   let use_padding = false in

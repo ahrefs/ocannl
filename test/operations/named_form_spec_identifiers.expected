@@ -3,6 +3,9 @@ einsum1 agrees with ++ on a stride identifier: true
 the %cd einsum1 with a stride identifier computes x.(stride * o): true
 einsum with stride and dilation identifiers computes the dilated window: true
 einsum agrees with +* on stride and dilation identifiers: true
+einsum3 with stride and dilation identifiers computes the dilated window: true
+einsum3 agrees with +* over the squared kernel: true
+the %cd einsum3 with stride and dilation identifiers computes the dilated window: true
 einsum with a plain + window reads use_padding = false: true
 einsum agrees with +* on a plain + window: true
 einsum1 with a capture and a stride identifier computes x.(stride * o): true

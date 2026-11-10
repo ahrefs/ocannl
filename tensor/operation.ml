@@ -1050,6 +1050,7 @@ struct
   let einsum = einsum ~grad_spec
   let outer_sum = outer_sum ~grad_spec
   let einsum1 = einsum1 ~grad_spec
+  let einsum3 = einsum3 ~grad_spec
   let einmax1 = einmax1 ~grad_spec
   let tropical = tropical ~grad_spec
   let concat_sum ?capture_dims ?negated spec = concat_sum ?capture_dims ?negated spec ~grad_spec
@@ -1164,6 +1165,7 @@ struct
     let einsum ?label ?capture_dims spec t1 t2 = einsum ?label ?capture_dims spec t1 t2 ()
     let outer_sum ?label ?capture_dims spec t1 t2 = outer_sum ?label ?capture_dims spec t1 t2 ()
     let einsum1 ?label ?capture_dims spec t1 = einsum1 ?label ?capture_dims spec t1 ()
+    let einsum3 ?label ?capture_dims spec t1 t2 t3 = einsum3 ?label ?capture_dims spec t1 t2 t3 ()
 
     let einmax1 ?label ?capture_dims ?nonoverlapping spec t1 =
       einmax1 ?label ?capture_dims ?nonoverlapping spec t1 ()
