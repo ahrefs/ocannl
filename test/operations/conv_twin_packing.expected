@@ -1,4 +1,5 @@
 input: rounded products have exact partial sums at f32: true
+input: the materialized twin equals the premise's products summed on the host: true
 input: an unrounded read differs from the materialized twin: true
 input: conv seeds request compute-precision packs: true
 input: a serial packed seed executes: true
@@ -11,6 +12,7 @@ input: the compiled kernel reads f32 packed operands: true
 input: packed execution equals the materialized twin bitwise: true
 input: the packed conv renders a register tile: true
 kernel: rounded products have exact partial sums at f32: true
+kernel: the materialized twin equals the premise's products summed on the host: true
 kernel: an unrounded read differs from the materialized twin: true
 kernel: conv seeds request compute-precision packs: true
 kernel: a serial packed seed executes: true
@@ -23,6 +25,7 @@ kernel: the compiled kernel reads f32 packed operands: true
 kernel: packed execution equals the materialized twin bitwise: true
 kernel: the packed conv renders a register tile: true
 both: rounded products have exact partial sums at f32: true
+both: the materialized twin equals the premise's products summed on the host: true
 both: an unrounded read differs from the materialized twin: true
 both: conv seeds request compute-precision packs: true
 both: a serial packed seed executes: true
