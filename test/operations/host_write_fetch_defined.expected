@@ -73,3 +73,49 @@ a host scalar: written after the forward's run: true
 a host scalar: the run computes from it: true
 the host round trip: true
 the node reads as its literal: true
+another root, into a forward compiled and not yet run: the refusal names Context.copy: true
+another root, into a forward compiled and not yet run: the refusal names x_seeded: true
+another root, into a forward compiled and not yet run: the refusal names fwd_seeded: true
+another root, into a forward compiled and not yet run: the refusal names gh-ocannl-1959: true
+another root, into a forward compiled and not yet run: the refusal names Operation.init: true
+another root, into a forward compiled and not yet run: the refusal names gh-ocannl-2022: true
+another root, after the forward's run: the refusal names Context.copy: true
+another root, after the forward's run: the refusal names x_seeded: true
+another root, after the forward's run: the refusal names fwd_seeded: true
+another root, after the forward's run: the refusal names gh-ocannl-1959: true
+another root, after the forward's run: the refusal names Operation.init: true
+another root, after the forward's run: the refusal names gh-ocannl-2022: true
+x reads as the fetch left it, right after the refusal: true
+x after the next run: true
+the forward's result after the next run: true
+a seeded sibling: the refusal names Context.copy: true
+a seeded sibling: the refusal names x_sibcopy: true
+a seeded sibling: the refusal names fwd_sibcopy: true
+a seeded sibling: the refusal names gh-ocannl-1959: true
+a seeded sibling: the refusal names Operation.init: true
+a seeded sibling: the refusal names gh-ocannl-2022: true
+x reads as the fetch left it: true
+compiled with the forward, not run: the refusal names Context.copy: true
+compiled with the forward, not run: the refusal names x_unrun: true
+compiled with the forward, not run: the refusal names fwd_unrun: true
+compiled with the forward, not run: the refusal names gh-ocannl-1959: true
+compiled with the forward, not run: the refusal names Operation.init: true
+compiled with the forward, not run: the refusal names gh-ocannl-2022: true
+x reads as the fetch left it: true
+the same source once its forward ran: true
+the copy brings the fetch's own value: true
+the forward computes from it: true
+a seeded source on another backend: the refusal names Context.copy: true
+a seeded source on another backend: the refusal names x_cross: true
+a seeded source on another backend: the refusal names fwd_cross: true
+a seeded source on another backend: the refusal names gh-ocannl-1959: true
+a seeded source on another backend: the refusal names Operation.init: true
+a seeded source on another backend: the refusal names gh-ocannl-2022: true
+x reads as the fetch left it: true
+a host literal from another backend: true
+the literal reads as its values: true
+a copy from the seeded context sharing the buffer: true
+into a context whose lineage carries no fetch: true
+the copy reads back: true
+a merge-buffer fill: true
+x keeps the fetch's value: true

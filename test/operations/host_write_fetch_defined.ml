@@ -9,8 +9,17 @@
 
    Only a write after the forward is compiled is refused, and these legs pin what stays accepted: a
    seed, which a routine reading the node runs on until the forward's fetch takes over; a sibling's
-   write; a data-backed node, a host scalar and a parameter, whose writes last; and a device copy,
-   which brings the node's own value.
+   write; a data-backed node, a host scalar and a parameter, whose writes last.
+
+   gh-ocannl-2022: a [Context.copy] is a write too. Before, a copy from a source seeded with
+   [set_values] was accepted into a context whose forward fetches the node, read back, and undone by
+   the next run ([x] went 9 10 after the copy, 1 2 after a run). Now it is refused unless it brings
+   the fetch's own value: a source holding no buffer of the node (the host round trip reads the
+   literal or recomputes it), or one whose buffer a run of its own lineage's fetching routine last
+   wrote. The legs pin each refused source -- another root, a sibling, a source compiled with the
+   forward but not run, another backend -- and what stays accepted: that same source once run, the
+   round trip, a copy that moves nothing, a destination without the fetch, a host literal, a
+   merge-buffer fill.
 
    Every value is a small integer and every operation pointwise, so readbacks are exact. *)
 open Base
@@ -42,17 +51,17 @@ let double x =
    same-named routine overwrites the earlier one's debug artifacts. *)
 let routine_of node = "fwd_" ^ String.drop_prefix node 2
 
-let compile_forward ~node ctx t =
-  Context.compile ~name:(routine_of node) ctx (Train.forward t) IDX.empty
+let compile_forward ?(suffix = "") ~node ctx t =
+  Context.compile ~name:(routine_of node ^ suffix) ctx (Train.forward t) IDX.empty
 
 let values ctx t = Context.get_values ctx t.Tensor.value
 let write ctx t = Context.set_values ctx t.Tensor.value [| 9.; 10. |]
 
 (* The refusal, naming the write's entry point, the node, the routine, the issue and the remedy. *)
-let refused name ~fn ~node f =
+let refused ?(also = []) name ~fn ~node f =
   let msg = LC.refusal name f in
   List.iter
-    [ "Context." ^ fn; node; routine_of node; "gh-ocannl-1959"; "Operation.init" ]
+    ([ "Context." ^ fn; node; routine_of node; "gh-ocannl-1959"; "Operation.init" ] @ also)
     ~f:(fun substring -> p (name ^ ": the refusal names " ^ substring) (LC.has msg substring))
 
 let () =
@@ -179,4 +188,97 @@ let () =
       Option.iter
         (LC.accepted "the host round trip" (fun () ->
              Context.copy ~src:(Context.auto ()) ~dst:ctx x.Tensor.value))
-        ~f:(fun ctx -> LC.exact "the node reads as its literal" (values ctx x) [| 1.; 2. |]))
+        ~f:(fun ctx -> LC.exact "the node reads as its literal" (values ctx x) [| 1.; 2. |]));
+  let copy_refused name ~node ~src ~dst t =
+    refused name ~fn:"copy" ~node ~also:[ "gh-ocannl-2022" ] (fun () ->
+        Context.copy ~src ~dst t.Tensor.value)
+  in
+  case "a copy from a seeded source (gh-ocannl-2022)" (fun () ->
+      let x = fetched "x_seeded" in
+      let doubled = double x in
+      let dst, routine = compile_forward ~node:"x_seeded" (Context.auto ()) doubled in
+      let src = write (Context.auto ()) x in
+      copy_refused "another root, into a forward compiled and not yet run" ~node:"x_seeded" ~src
+        ~dst x;
+      let dst = Context.run dst routine in
+      copy_refused "another root, after the forward's run" ~node:"x_seeded" ~src ~dst x;
+      (* Read before any run, which would re-establish whatever a refused copy wrote. *)
+      LC.exact "x reads as the fetch left it, right after the refusal" (values dst x) [| 1.; 2. |];
+      let dst = Context.run dst routine in
+      LC.exact "x after the next run" (values dst x) [| 1.; 2. |];
+      LC.exact "the forward's result after the next run" (values dst doubled) [| 2.; 4. |]);
+  case "a sibling sharing the destination's root" (fun () ->
+      let x = fetched "x_sibcopy" in
+      let root = Context.auto () in
+      let dst, routine = compile_forward ~node:"x_sibcopy" root (double x) in
+      let dst = Context.run dst routine in
+      copy_refused "a seeded sibling" ~node:"x_sibcopy" ~src:(write root x) ~dst x;
+      LC.exact "x reads as the fetch left it" (values dst x) [| 1.; 2. |]);
+  case "a source carrying the fetch" (fun () ->
+      let x = fetched "x_unrun" in
+      let doubled = double x in
+      let dst, routine = compile_forward ~node:"x_unrun" (Context.auto ()) doubled in
+      let dst = Context.run dst routine in
+      (* Seeded, then compiled with the same forward: until that runs, its buffer holds the seed. *)
+      let src, src_routine =
+        compile_forward ~suffix:"_src" ~node:"x_unrun" (write (Context.auto ()) x) doubled
+      in
+      copy_refused "compiled with the forward, not run" ~node:"x_unrun" ~src ~dst x;
+      LC.exact "x reads as the fetch left it" (values dst x) [| 1.; 2. |];
+      let src = Context.run src src_routine in
+      Option.iter
+        (LC.accepted "the same source once its forward ran" (fun () ->
+             Context.copy ~src ~dst x.Tensor.value))
+        ~f:(fun dst ->
+          LC.exact "the copy brings the fetch's own value" (values dst x) [| 1.; 2. |];
+          let dst = Context.run dst routine in
+          LC.exact "the forward computes from it" (values dst doubled) [| 2.; 4. |]));
+  case "a copy across backends" (fun () ->
+      (* [cc] to [multidev_cc]: the host round trip from a source holding a buffer. *)
+      let x = fetched "x_cross" in
+      let dst, routine = compile_forward ~node:"x_cross" (Context.cpu ~threads:4 ()) (double x) in
+      let dst = Context.run dst routine in
+      copy_refused "a seeded source on another backend" ~node:"x_cross"
+        ~src:(write (Context.cpu ()) x)
+        ~dst x;
+      LC.exact "x reads as the fetch left it" (values dst x) [| 1.; 2. |];
+      (* A host literal's buffer holds its registered values in every context: its link-time upload
+         is no run, so this leg is what the host-constant exemption accepts. *)
+      let literal = TDSL.ndarray [| 1.; 2. |] ~label:[ "x_crosslit" ] ~output_dims:[ 2 ] () in
+      Train.set_materialized literal.Tensor.value;
+      let doubled = double literal in
+      let dst, routine = compile_forward ~node:"x_crosslit" (Context.cpu ~threads:4 ()) doubled in
+      let dst = Context.run dst routine in
+      let src, src_routine =
+        compile_forward ~suffix:"_src" ~node:"x_crosslit" (Context.cpu ()) doubled
+      in
+      let src = Context.run src src_routine in
+      Option.iter
+        (LC.accepted "a host literal from another backend" (fun () ->
+             Context.copy ~src ~dst literal.Tensor.value))
+        ~f:(fun dst -> LC.exact "the literal reads as its values" (values dst literal) [| 1.; 2. |]));
+  case "copies that change nothing the fetch re-establishes" (fun () ->
+      (* Compiled from the seeded context, the destination binds its buffer: nothing moves. *)
+      let x = fetched "x_noop" in
+      let seeded = write (Context.auto ()) x in
+      let dst, _ = compile_forward ~node:"x_noop" seeded (double x) in
+      ignore
+        (LC.accepted "a copy from the seeded context sharing the buffer" (fun () ->
+             Context.copy ~src:seeded ~dst x.Tensor.value)
+          : Context.t option);
+      let x = fetched "x_nofetch" in
+      ignore (double x : Tensor.t);
+      Option.iter
+        (LC.accepted "into a context whose lineage carries no fetch" (fun () ->
+             Context.copy ~src:(write (Context.auto ()) x) ~dst:(Context.auto ()) x.Tensor.value))
+        ~f:(fun dst -> LC.exact "the copy reads back" (values dst x) [| 9.; 10. |]);
+      (* The merge buffer is transient storage, not the node. *)
+      let x = fetched "x_merge" in
+      let dst, routine = compile_forward ~node:"x_merge" (Context.auto ()) (double x) in
+      let dst = Context.run dst routine in
+      Option.iter
+        (LC.accepted "a merge-buffer fill" (fun () ->
+             Context.copy ~into_merge_buffer:Copy
+               ~src:(write (Context.auto ()) x)
+               ~dst x.Tensor.value))
+        ~f:(fun dst -> LC.exact "x keeps the fetch's value" (values dst x) [| 1.; 2. |]))

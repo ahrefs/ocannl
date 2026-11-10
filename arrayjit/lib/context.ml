@@ -2498,15 +2498,12 @@ let to_host_all ctx (tns : Tn.t list) : Nd.t list =
    runs ([shared_grad_refusal.ml], [require_grad_leaves.ml]). A materialized literal the routine
    reads has lost its in-kernel fetch (gh-ocannl-633), so a write would stay in its buffer, but the
    literal's values are declared constant: a schedule hoisting it reads the registered ones
-   ([Schedule.hoistable_constant]), so the write is refused all the same. {!copy} does not come
-   here: it moves a node's value between contexts, the fetch's own unless the source was seeded. A
+   ([Schedule.hoistable_constant]), so the write is refused all the same. {!copy} has its own rule,
+   {!check_copy_lasts}: it moves a node's value between contexts, which may be the fetch's own. A
    view is left to {!upload}'s refusal, which names the parent to write. Runs before anything of the
    write happens, so a refused [set_values] leaves the node's host buffer as it was. gh-ocannl-2021:
    a marked host literal is immutable even without a fetch or a compiled forward: above the fill
    limit it is Reshape-backed, but hoisting still reads its registered values. *)
-
-(** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
-    context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let check_host_write_lasts ~fn ctx (tn : Tn.t) =
   match (Tn.slice_of tn, Map.find ctx.frontier.fetch_defined tn.Tn.uid) with
   | None, Some (id, name) ->
@@ -2534,6 +2531,70 @@ let check_host_write_lasts ~fn ctx (tn : Tn.t) =
               fn (Tn.debug_name tn))
   | _ -> ()
 
+(* gh-ocannl-2022: {!check_host_write_lasts}'s rule for a {!copy} into an ordinary buffer. A copy
+   into a node [dst]'s lineage fetch-defines lasts only until the routine carrying the fetch next
+   runs, so it is refused unless it brings the fetch's own value -- then the fetch re-establishes
+   what is already there. Provenance, from what the ledger already keeps: a source holding no buffer
+   of the node is served by the host round trip, which reads its registered host-init values or
+   recomputes it from its own forward, neither of which a host write reaches ([host_buffer] is fresh
+   per write); a source holding one must have it last written ([current_writers]) by a run of the
+   routine of its own lineage that carries the fetch. A seed, a host write, a copy and a sibling's
+   write to the same buffer all drop that entry, and a source compiled with the forward but not run
+   still holds what was there before. Accepted regardless: a copy between two contexts binding the
+   same buffer moves nothing, and a [host_constant] literal always holds its registered values
+   (gh-ocannl-2021 refuses host writes to it; its link-time upload leaves no [current_writers]
+   entry). The node's own uid is looked up, a view included: a view that is not an alias is
+   fetch-defined itself, by its slice, and the device path writes its own buffer. Runs before the
+   copy dispatches, so a refused copy allocates, reads and records nothing. *)
+let check_copy_lasts ~src ~dst (tn : Tn.t) =
+  match Map.find dst.frontier.fetch_defined tn.Tn.uid with
+  | None -> ()
+  | Some _ when tn.Tn.host_constant -> ()
+  | Some (id, name) -> (
+      let src_key = buffer_key src tn in
+      let no_op =
+        Option.is_some src_key
+        && Option.equal (fun a b -> Buffer_key.compare a b = 0) src_key (buffer_key dst tn)
+      in
+      let src_fetch = Map.find src.frontier.fetch_defined tn.Tn.uid in
+      let reason =
+        match (src_key, src_fetch) with
+        | _ when no_op -> None
+        | None, _ -> None
+        | Some key, Some (src_id, src_name) -> (
+            match Map.find src.ledger.current_writers key with
+            | Some (Routine_writer writer) when writer = src_id -> None
+            | _ ->
+                Some
+                  (Printf.sprintf
+                     "the source's buffer of it was not last written by a run of %s (id=%d), the \
+                      routine of the source's lineage carrying the same fetch: it holds a seed, a \
+                      host write or a copy, or the routine has not run since"
+                     src_name src_id))
+        | Some _, None ->
+            Some
+              "the source's lineage carries no fetch of it, so the source's buffer holds a value \
+               the caller put there"
+      in
+      match reason with
+      | None -> ()
+      | Some reason ->
+          raise
+          @@ Utils.User_error
+               (Printf.sprintf
+                  "Context.copy: node %s is fetch-defined in the destination's lineage: routine %s \
+                   (id=%d) carries its forward code, a fetch, so a copy of any other value would \
+                   be silently undone by its next run (gh-ocannl-2022, gh-ocannl-1959), and %s. A \
+                   copy into it is accepted when it brings the fetch's own value: from a context \
+                   holding no buffer of the node, or one whose buffer a run of its own fetching \
+                   routine last wrote. A fetch-defined node -- a Tensor.term_init or literal with \
+                   at most limit_constant_fill_size values, a range, an embedded symbol -- is \
+                   code, not data: build a node whose values move between contexts data-backed, \
+                   with Operation.init or Train.host_scalar, or make it a parameter."
+                  (Tn.debug_name tn) name id reason))
+
+(** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
+    context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
 let upload ctx (tn : Tn.t) (nd : Nd.t) : t =
   check_live ~fn:"from_host" ctx;
   check_node_valid tn;
@@ -2603,6 +2664,11 @@ let copy ?(into_merge_buffer = BI.No) ~src ~dst tn =
   check_node_valid tn;
   check_not_poisoned src;
   check_not_poisoned dst;
+  (* gh-ocannl-2022: before [pair_contexts] and any transfer construction, which may allocate. A
+     merge-buffer fill writes the transient slab, not the node. *)
+  (match into_merge_buffer with
+  | BI.No -> check_copy_lasts ~src ~dst tn
+  | BI.Copy -> ());
   (* The fallback also serves nodes with no device buffer in [src]: [to_host] reads host-init
      literals and recomputes virtual nodes. A merge buffer cannot be filled host-side, so [Copy]
      raises where the fallback would engage. *)
