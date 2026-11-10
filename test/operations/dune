@@ -2020,6 +2020,19 @@
   (pps ppx_here ppx_ocannl)))
 
 (test
+ ; Free nodes follow their consumers' precision (gh-ocannl-2028): structural claims, a double leg
+ ; gated on f64 support, and a half-default leg on every backend.
+ (name free_op_prec_follows_consumer)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules free_op_prec_follows_consumer)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
+
+(test
  (name embedded_read_only)
  (package neural_nets_lib)
  (deps

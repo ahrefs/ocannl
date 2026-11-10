@@ -1,0 +1,27 @@
+noise: the sum is double: true
+noise: the subtraction follows it to double: true
+noise: so does the draw: true
+chain: every node of the free chain is double: true
+narrower consumer: the sum, the noise and the draw stay single: true
+stated operand: the sum is double: true
+stated operand: the subtraction over a single operand stays single: true
+late specification: the sum is double: true
+late specification: the subtraction over the half draw stays half: true
+pinned node: the pinned subtraction stays single: true
+no consumer: a free node settles at the session default: true
+shared (noise, single consumer, double consumer): double single double
+shared: the forcing order does not change the precisions: true
+settled node: the consumer is double: true
+settled node: the settled free node keeps single: true
+gradient: the consumer's gradient is double: true
+gradient: the free node's gradient follows it: true
+gradient: so does the leaf's: true
+double values: every value lies in [-0.5, 0.5): true
+double values: some value of the noise is not f32-representable: true
+double values: the noise pinned single is f32-representable: true
+literal values: (1 + 2^-30) - 1 is exactly 2^-30 beneath a double consumer: true
+large literal: 20000 and 70000 beneath a half consumer are refused under both defaults: true
+large literal: beneath a single consumer under the half default it computes: true
+half default: the noise and the draw follow the single consumer: true
+half default: every value lies in [-0.5, 0.5]: true
+half default: some value of the noise is not f16-representable: true

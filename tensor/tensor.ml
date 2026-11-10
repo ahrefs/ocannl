@@ -1011,7 +1011,20 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
           |> List.reduce ~f:Ir.Ops.promote_prec
           |> Option.value ~default))
   in
+  (* What the operands state (gh-ocannl-2028): a top-down operand only its specified precision, a
+     bottom-up one what it states itself. [None] makes the result free: it follows its consumers. *)
+  let stated_for get =
+    if top_down_prec then None
+    else
+      (* Capture the operands' nodes, not the tensors: an operand's cell can outlive this result
+         through a precision link, and must not keep the operand tensors alive with it. *)
+      let operand_nodes = List.filter_map ordered_ts ~f:get in
+      Some
+        (lazy
+          (List.filter_map operand_nodes ~f:Tn.stated_prec |> List.reduce ~f:Ir.Ops.promote_prec))
+  in
   let delayed_prec = delayed_prec_for !default_value_prec (fun t -> Some t.value) in
+  let stated = stated_for (fun t -> Some t.value) in
   let terminal_logic () =
     let open Shape in
     (* Note: parameters will get their terminal logic set via Shape.set_terminal. *)
@@ -1028,7 +1041,7 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
        (gh-ocannl-333); we register it in [Host_inits] so each context uploads it at link time. *)
     match terminal_op with
     | Some (Shape.Data (Asgns.Broadcast value)) ->
-        let tn = Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding () in
+        let tn = Tn.create ?stated delayed_prec ~id ~label ~unpadded_dims ~padding () in
         Tn.update_memory_mode tn On_device (Site "49:ndarray-backed");
         register_constant_host_init tn [| value |];
         tn
@@ -1048,7 +1061,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
         let tn, init = Tn.create_from_padded ~id ~label ~ndarray:data ~padding () in
         Ir.Host_inits.register tn init;
         tn
-    | Some (Shape.Fetch _) | None -> Tn.create delayed_prec ~id ~label ~unpadded_dims ~padding ()
+    | Some (Shape.Fetch _) | None ->
+        Tn.create ?stated delayed_prec ~id ~label ~unpadded_dims ~padding ()
   in
   note_open_node v;
   let update_infer_prec ti tn prec =
@@ -1057,6 +1071,16 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
        (gh-ocannl-2026); the precision cell itself refuses changing a forced, non-Specified
        precision and counts writes via prec_write_hook. *)
     if not ti.shape.Shape.closed then Tn.update_infer_prec tn prec
+  in
+  (* A free bottom-up operand -- one nothing in its bottom-up dependencies states a precision for --
+     follows this result, promoting and never narrowing (gh-ocannl-2028: gh-ocannl-1967's rule
+     outside the init cone), so it is not computed at the session default beneath a wider consumer.
+     Whether it is free is decided when it settles, so a precision specified after this construction
+     still counts. The same guard as the initializer link: a closed or settled operand takes no
+     link. *)
+  let follow_if_free ti tn prec =
+    if not (ti.shape.Shape.closed || Lazy.is_val tn.Tn.storage_prec) then
+      Tn.follow_prec_if_free tn prec
   in
   let transpose_op =
     match transpose_op with
@@ -1189,6 +1213,8 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
      is registered (gh-ocannl-1301): a construction that fails before that leaves no link on its
      operands, so it does not taint the session. *)
   List.iter top_down_ts ~f:(fun ti -> update_infer_prec ti ti.value v.Tn.storage_prec);
+  List.iter ordered_ts ~f:(fun ti ->
+      if not ti.top_down_prec then follow_if_free ti ti.value v.Tn.storage_prec);
   (* The forward fragment of [t] (gh-ocannl-1724): [(v, Fwd)] plus, through [Asgns.sequence], the
      fragments of the forward-root children embedded above. *)
   let forward =
@@ -1220,10 +1246,11 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
   else
     let get ti = Option.map ti.diff ~f:(fun d -> d.grad) in
     let delayed_prec = delayed_prec_for !default_grad_prec get in
+    let stated = stated_for get in
     let grad_id = session_state.next_id in
     session_state.next_id <- session_state.next_id + 1;
     let g =
-      Tn.create delayed_prec ~id:grad_id ~label:("grad" :: label) ~unpadded_dims
+      Tn.create ?stated delayed_prec ~id:grad_id ~label:("grad" :: label) ~unpadded_dims
         ~padding:(lazy (Shape.to_padding shape))
         ()
     in
@@ -1246,6 +1273,9 @@ let%track7_sexp op ~(label : string list) ?(ternary_op = Shape.Pointwise_tern)
     (* Apply delayed top-down precision updates to parameter gradient subtensors *)
     List.iter top_down_ts ~f:(fun ti ->
         Option.iter ti.diff ~f:(fun d -> update_infer_prec ti d.grad g.Tn.storage_prec));
+    List.iter ordered_ts ~f:(fun ti ->
+        if not ti.top_down_prec then
+          Option.iter ti.diff ~f:(fun d -> follow_if_free ti d.grad g.Tn.storage_prec));
     (* Which operands are backprop roots is settled once, here (gh-ocannl-1804): whether a dropped
        consumer gives a leaf back moves with the GC, and with the nested ops [grad_asn] builds, so a
        second read of the map could embed a gradient whose zeroing the first read skipped. The scan
@@ -1499,9 +1529,10 @@ let%track7_sexp number ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) c 
     | Some axis_basis -> t ~output_axes:[ (axis_basis, 1) ] ()
   in
   Tn.update_memory_mode t.value Effectively_constant (Site "24:literal-constant");
-  (* FIXME: make this always pick a matching precision. *)
-  Ir.Ops.(
-    if exceeds_fp16_cutoff c then Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
+  (* A literal is top-down: it takes its consumer's precision, as every term with no data of its own
+     does (gh-ocannl-2028). Lowering refuses one past [check_half_prec_constants_cutoff] at a <=
+     fp16 slot ([Low_level]'s [check_fp16]), under every session default: the bump to single that
+     stood here fired only under a <= fp16 default, and there it switched that guard off. *)
   t
 
 let%track7_sexp bits ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) i : t =
@@ -1566,10 +1597,7 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?ba
   (match fetch_op with
   | Some (Asgns.Constant _ | Asgns.Constant_fill _) -> register_constant_host_init t.value values
   | _ -> ());
-  let max_abs = Array.fold values ~init:0. ~f:(fun acc v -> Float.(max acc @@ abs v)) in
-  Ir.Ops.(
-    if exceeds_fp16_cutoff max_abs then
-      Tn.update_infer_prec ~only_if:is_up_to_fp16 t.value (lazy single));
+  (* Like [number]'s literal, a dataless one takes its consumer's precision (gh-ocannl-2028). *)
   t
 
 let term_init ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims
