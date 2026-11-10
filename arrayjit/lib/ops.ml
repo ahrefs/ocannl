@@ -1328,6 +1328,23 @@ external round_to_half : (float[@unboxed]) -> (float[@unboxed])
     through f32 (OCaml's own float16 conversion), double-rounding [x] if it sits just off an f32
     tie. *)
 
+(** The value [c] holds at a narrow float precision, as the exact double it is: the host's own
+    narrowing, the one a materialized node's writers apply, rounding to nearest-even with
+    infinities, NaN and the sign of zero kept and an overflow narrowing to infinity. The identity at
+    every other precision: a wide float literal is rounded by the dialect's own parse, and an
+    integer one is the integer refusal's (gh-ocannl-2085). Read by the simplifier's closing walk,
+    which gives a constant its slot's value (gh-ocannl-2046). Each format narrows in one step from
+    f64, as the host writers and the C backends' [Double_prec] sources do (gh-ocannl-648,
+    gh-ocannl-2075). *)
+let round_to_prec prec c =
+  match prec with
+  | Half_prec _ -> round_to_half c
+  | Bfloat16_prec _ -> bfloat16_to_single (double_to_bfloat16 c)
+  | Fp8_prec _ -> fp8_to_single (double_to_fp8 c)
+  | Void_prec | Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _ | Int64_prec _
+  | Uint64_prec _ | Uint4x32_prec _ | Single_prec _ | Double_prec _ ->
+      c
+
 external copy_with_padding_c :
   ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->
   ('a, 'b, Bigarray.c_layout) Bigarray.Genarray.t ->

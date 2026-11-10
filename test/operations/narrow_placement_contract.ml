@@ -1,10 +1,10 @@
 (* gh-ocannl-1965: what placement may change at a narrow precision. The contract is in
-   docs/precision_inference.md: a store rounds, a narrowing read rounds, and virtual narrow
-   arithmetic, a virtual narrow constant and a virtual accumulation have no store, so they stay at
-   the precision they render at. So placement decides a value exactly where that precision is wider
-   than the node's storage (gh-ocannl-517's policy). This pins both directions, on every backend and
-   under each narrow-compute policy: the values agree where the precisions do, and where they do not
-   the virtual form holds exactly the unrounded value.
+   docs/precision_inference.md: a store rounds, a narrowing read rounds, a narrow constant is
+   rounded at lowering (gh-ocannl-2046), and virtual narrow arithmetic and a virtual accumulation
+   have no store, so they stay at the precision they render at. So placement decides a value exactly
+   where that precision is wider than the node's storage (gh-ocannl-517's policy). This pins both
+   directions, on every backend and under each narrow-compute policy: the values agree where the
+   precisions do, and where they do not the virtual form holds exactly the unrounded value.
 
    Whether a precision is wider is the backend's own answer ([Context.codegen_capabilities]), the
    same functions code generation reads, so a claim here predicts from the renderer's precisions and
@@ -99,11 +99,13 @@ let arithmetic prec ~wider =
   in_slots (name ^ " arithmetic") ~prec ~wider ~rounded:1. ~unrounded:(1. +. e) ~node:(fun () ->
       sum_of ~prec ~a:(leaf ~prec "a" 1.) ~e:(leaf ~prec "e" e))
 
-(* A literal has no operator, and is no read of stored data either: its value is off the grid. *)
-let constant prec ~wider =
+(* A literal has no operator, and is no read of stored data either: its value is off the grid. It is
+   a value of its slot's precision, rounded at lowering in either placement (gh-ocannl-2046), so it
+   reads as a node that rounds, whatever the backend computes the format in. *)
+let constant prec =
   let name = Ops.prec_string prec in
   let c = 1. +. excess prec in
-  in_slots (name ^ " constant") ~prec ~wider ~rounded:1. ~unrounded:c ~node:(fun () ->
+  in_slots (name ^ " constant") ~prec ~wider:false ~rounded:1. ~unrounded:c ~node:(fun () ->
       let t = NTDSL.number c in
       Tn.update_prec t.Tensor.value prec;
       t)
@@ -168,7 +170,7 @@ let contract prec =
     (Ops.prec_string (caps.compute_prec prec))
     (Ops.prec_string (caps.accum_prec prec));
   arithmetic prec ~wider;
-  constant prec ~wider;
+  constant prec;
   same_precision_cast prec ~wider;
   narrowing_cast prec;
   reduction prec ~accum_wider

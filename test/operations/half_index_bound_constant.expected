@@ -2,3 +2,6 @@ the guard is not folded away (the loop cannot decide it): true
 the guarded copy matches the host reference, fringe included: true
 the same bound stored as a half VALUE is still refused: true
 the same bound as a half Where ARM is still refused: true
+the bound held by a virtual half node read in an f32 node is refused, not rounded to inf: true
+a half constant just below the cutoff that rounds onto it is refused: true
+a half constant just below the cutoff that rounds below it is accepted, and reads 16368: true

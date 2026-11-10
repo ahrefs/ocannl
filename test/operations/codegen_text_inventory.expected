@@ -866,6 +866,7 @@ test/operations/matmul_interchange.ml [through Ll_test.execute_with_census; run 
 test/operations/metal_gpu_hang_failure.ml [through Ll_test.run_routine; run by @test/operations/slow-metal_gpu_hang_failure]
 test/operations/metal_hang_declines.ml [prelowered compile; run by @test/operations/runtest-metal_hang_declines]
 test/operations/metal_routine_log_delivery.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_routine_log_delivery]
+test/operations/narrow_constant_rounding.ml [through Ll_test.execute; run by @test/operations/runtest-narrow_constant_rounding]
 test/operations/narrow_storage_compute.ml [through Ll_test.link; run by @test/operations/runtest-narrow_storage_compute]
 test/operations/narrow_uniform_bound.ml [through Ll_test.execute; through Ll_test.run; run by @test/operations/runtest-narrow_uniform_bound]
 test/operations/observability_query.ml [through Ll_test.link; run by @test/operations/runtest-observability_query]
@@ -1001,6 +1002,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-matmul_interchange-tf32
 @test/operations/runtest-metal_hang_declines
 @test/operations/runtest-metal_routine_log_delivery
+@test/operations/runtest-narrow_constant_rounding
 @test/operations/runtest-narrow_storage_compute
 @test/operations/runtest-narrow_uniform_bound
 @test/operations/runtest-observability_query
