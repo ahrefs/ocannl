@@ -231,3 +231,4 @@ control: 1 of default = 1 of bcast_if_1 as dims is still refused: true
 one verdict, the same solved outputs, and they derive the input: true
 retried at Stage1, the pair is one held equation, not a growing list: true
 closing sizes the outputs together: o1 = 1, o2 = 2: true
+a nested pair closes together too: x = 1, y = 2: true

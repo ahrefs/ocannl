@@ -2719,7 +2719,9 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
         | None -> ([ held ], env)
         | Some { merge_pairs = false; _ } -> ([ held ], env)
         | Some settling ->
-            let constrs, env' = unify_dim ~stage origin eq env in
+            (* The settling goes along: outputs that are windows themselves reduce to a nested pair,
+               which would wait again without it. *)
+            let constrs, env' = unify_dim ~settling ~stage origin eq env in
             if phys_equal env' env then ([ held ], env)
             else (
               settling.settled <- true;

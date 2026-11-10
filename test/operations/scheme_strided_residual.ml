@@ -1269,4 +1269,19 @@ let () =
       in
       if not ok then
         Stdio.eprintf "closing: o1 %s, o2 %s (not part of the golden)\n" (shown o1) (shown o2);
-      p "closing sizes the outputs together: o1 = 1, o2 = 2" ok)
+      p "closing sizes the outputs together: o1 = 1, o2 = 2" ok;
+      (* Outputs that are windows themselves: the size equation reduces to a nested pair, which
+         relates [y = 2 * x] at closing as well. *)
+      let x = Row.get_var () and y = Row.get_var () in
+      let row : Row.t = { row with dims = [ Var x; Var y ] } in
+      let w s k v = window ~stride:s ~kernel:(dim k) v in
+      let result =
+        finished
+          (staged
+             [ eq (w 2 3 (w 2 3 (Var x))) (w 2 3 (w 1 2 (Var y))); Row.Shape_row (row, origin) ])
+      in
+      p "a nested pair closes together too: x = 1, y = 2"
+        (match result with
+        | Ok env -> (
+            match (tag_of env x, tag_of env y) with Some (1, _), Some (2, _) -> true | _ -> false)
+        | Error _ -> false))
