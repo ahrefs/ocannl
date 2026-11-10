@@ -42,12 +42,6 @@ let safe_force gated =
 
 let is_safe_val = function { value = `Value _; _ } -> true | _ -> false
 
-let safe_map ~upd ~f gated =
-  let unique_id = gated.unique_id ^ "_" ^ upd in
-  match gated.value with
-  | `Value v -> { value = `Value (f v); unique_id }
-  | `Callback callback -> { value = `Callback (fun () -> f (callback ())); unique_id }
-
 let equal_safe_lazy equal_elem g1 g2 =
   match (g1.value, g2.value) with
   | `Value v1, `Value v2 ->

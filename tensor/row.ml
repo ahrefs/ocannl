@@ -953,14 +953,6 @@ let total_elems_divide t d =
         else Range_elems { lo = lo'; hi = hi' }
     | Strided_var sv -> Strided_var { sv with denom = sv.denom * d }
 
-let safe_multiply coeff d = Utils.safe_map ~upd:[%string "*%{d#Int}"] ~f:(( * ) d) coeff
-
-let total_elems_multiply t d =
-  match t with
-  | Num_elems n -> Num_elems (n * d)
-  | Range_elems { lo; hi } -> Range_elems { lo = lo * d; hi = hi * d }
-  | Strided_var sv -> Strided_var { sv with coeff = safe_multiply sv.coeff d }
-
 (* Solve [coeff * var / denom = n] for [var]: exact division normally, ceiling division under
    [round_up]. Returns [None] when the exact division does not divide evenly (the caller reports the
    mismatch), or when the round-up solution would be non-positive. *)
@@ -1601,38 +1593,6 @@ let reduce_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dim
              ( "reduce_row_constraint: Exact constraint failed, shape is too long",
                [ Dim_mismatch (beg_dims @ dims) ] )
       else Exact (List.take (List.drop exact_dims beg_len) (exact_len - beg_len - dims_len))
-
-(* Inverts what [reduce_row_constraint] would do. *)
-let _lift_row_constraint (constr : row_constraint) ~(beg_dims : dim list) ~(dims : dim list) :
-    row_constraint =
-  match constr with
-  | Total_elems { numerator; divided_by; keep_axis } -> (
-      let ds, vars =
-        List.partition_map (beg_dims @ dims) ~f:(function
-          | Dim { d; _ } -> Either.First d
-          | Var v -> Either.Second v
-          | Sym _ -> failwith "NOT IMPLEMENTED YET"
-          | Affine _ -> failwith "NOT IMPLEMENTED YET"
-          | Concat _ -> failwith "NOT IMPLEMENTED YET")
-      in
-      (* Check if all vars are in divided_by - for multiset, need to count occurrences *)
-      let remove_all vars from_list =
-        List.fold vars ~init:(Some from_list) ~f:(fun acc v ->
-            match acc with
-            | None -> None
-            | Some lst ->
-                if List.mem lst v ~equal:equal_dim_var then Some (remove_var v lst) else None)
-      in
-      match remove_all vars divided_by with
-      | None -> Unconstrained
-      | Some remaining ->
-          let d = List.fold ds ~init:1 ~f:( * ) in
-          if d = 1 && List.is_empty vars then constr
-          else
-            Total_elems
-              { numerator = total_elems_multiply numerator d; divided_by = remaining; keep_axis })
-  | Unconstrained -> Unconstrained
-  | Exact exact_dims -> Exact (beg_dims @ exact_dims @ dims)
 
 (** Helper function to convert a list of rows to either a single row or information about multiple
     row variables. Returns Either.First with a single row if there are zero or one row variables.
