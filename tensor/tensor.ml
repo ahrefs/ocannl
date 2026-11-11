@@ -1654,7 +1654,7 @@ let%track7_sexp bits ?(label = []) ?axis_basis ?(grad_spec = Prohibit_grad) i : 
   Tn.update_memory_mode t.value Effectively_constant (Site "24:literal-constant");
   t
 
-let constant_fill ~debug values =
+let constant_fill ?prec ~debug values =
   let n = Array.length values in
   if n = 0 then (None, None)
   else
@@ -1666,12 +1666,15 @@ let constant_fill ~debug values =
       else (None, Some (Asgns.Constant_fill values))
     else if n = 1 then (Some (Asgns.Broadcast values.(0)), None)
     else
-      let nd = Nd.create_array ~debug ~dims:[| n |] ~padding:None !default_value_prec in
+      let nd =
+        Nd.create_array ~debug ~dims:[| n |] ~padding:None
+          (Option.value prec ~default:!default_value_prec)
+      in
       Nd.set_flat_values nd values;
       (Some (Asgns.Reshape nd), None)
 
-let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes
-    ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
+let ndarray ?prec ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?batch_dims
+    ?batch_axes ?input_dims ?output_dims ?input_axes ?output_axes ?deduced () =
   let num_label =
     String.concat ~sep:"," @@ List.map ~f:float_to_label @@ Fn.flip List.take 5
     @@ Array.to_list values
@@ -1683,12 +1686,13 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?ba
   let output_dims =
     Option.first_some output_dims @@ Option.some_if (Option.is_none output_axes) []
   in
-  let init_data, fetch_op = constant_fill ~debug:"Tensor.ndarray" values in
+  let init_data, fetch_op = constant_fill ?prec ~debug:"Tensor.ndarray" values in
   (* Ideally, while the shape is known, the deduced argument will be used for verification. *)
   let t =
     term ?init_data ?fetch_op ~grad_spec ?batch_dims ?batch_axes ~label ?top_down_prec ?input_dims
       ?output_dims ?input_axes ?output_axes ?deduced ()
   in
+  Option.iter prec ~f:(Tn.update_prec t.value);
   Tn.update_memory_mode t.value Effectively_constant (Site "24:literal-constant");
   (* The ndarray-backed path mints the node [On_device] (provenance 49), so the update above cannot
      stick as [Effectively_constant] there; the explicit marker carries the constancy (consumed by
@@ -1703,7 +1707,8 @@ let ndarray ?(grad_spec = Prohibit_grad) values ?(label = []) ?top_down_prec ?ba
   (match fetch_op with
   | Some (Asgns.Constant _ | Asgns.Constant_fill _) -> register_constant_host_init t.value values
   | _ -> ());
-  (* Like [number]'s literal, a dataless one takes its consumer's precision (gh-ocannl-2028). *)
+  (* Like [number]'s literal, an unspecified dataless one takes its consumer's precision
+     (gh-ocannl-2028). *)
   t
 
 let term_init ?grad_spec values ?(label = []) ?top_down_prec ?batch_dims ?batch_axes ?input_dims
