@@ -897,6 +897,21 @@ let axis_map_to_dims_index (type a) ?(default : a option) (idcs : a axis_map) : 
   let (bch, inp, out), (beg_bch, beg_inp, beg_out) = axis_map_to_dims_bio ?default idcs in
   Array.concat [ beg_bch; bch; beg_out; out; beg_inp; inp ]
 
+(* Names a slot introduces, independently of dimension construction and solver bookkeeping. *)
+let slot_names (slot : parsed_axis_labels) =
+  let dims =
+    List.concat_map (Map.data slot.labels) ~f:(function
+      | Label name -> [ name ]
+      | Fixed_index _ -> []
+      | Affine_spec { over_label; conv; _ } ->
+          over_label :: Option.to_list (Option.map conv ~f:(fun c -> c.kernel_label))
+      | Concat_spec components ->
+          List.filter_map components ~f:(function
+            | Concat_label name -> Some name
+            | Concat_size _ -> None))
+  in
+  (dims, List.filter_opt [ slot.bcast_batch; slot.bcast_input; slot.bcast_output ])
+
 let axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env:_ ~f labels =
   let (b_dims, i_dims, o_dims), (beg_b_dims, beg_i_dims, beg_o_dims) =
     axis_map_to_dims_bio labels.labels
@@ -1054,6 +1069,12 @@ let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
 
 let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id ~row_var_env
     ~dim_var_env labels =
+  let dim_names, row_names = slot_names labels in
+  let names_with env names =
+    List.dedup_and_sort ~compare:String.compare (Hashtbl.keys env @ names)
+  in
+  let expected_dims = names_with dim_var_env dim_names in
+  let expected_rows = names_with row_var_env row_names in
   let proj_env_update = ref @@ Row.dim_map_empty in
   let extras = ref [] in
   let f kind = function
@@ -1090,6 +1111,10 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
         Row.Concat (List.map components ~f:(concat_component_dim ~spec:original_spec ~dim_var_env))
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
+  (* Pin the preflight's inventory to the names elaboration actually introduced, without
+     preallocating variables: their creation order is also the diagnostic naming order. *)
+  assert (List.equal String.equal expected_dims (names_with dim_var_env []));
+  assert (List.equal String.equal expected_rows (names_with row_var_env []));
   (!extras, !proj_env_update, result)
 
 type proj_axis_env = Idx.axis_index Row.dim_map [@@deriving sexp]
@@ -4593,21 +4618,10 @@ let refuse_invalid_einsum_spec (update_step : update_step) =
                [ Shape_mismatch error_shapes ] );
       let dim_var_env = Hashtbl.create (module String) in
       let row_var_env = Hashtbl.create (module String) in
-      let dim name = Hashtbl.set dim_var_env ~key:name ~data:() in
       List.iter (rhses @ [ lhs ]) ~f:(fun slot ->
-          List.iter
-            [ slot.bcast_batch; slot.bcast_input; slot.bcast_output ]
-            ~f:(Option.iter ~f:(fun name -> Hashtbl.set row_var_env ~key:name ~data:()));
-          Map.iter slot.labels ~f:(function
-            | Label name -> dim name
-            | Fixed_index _ -> ()
-            | Affine_spec { over_label; conv; _ } ->
-                dim over_label;
-                Option.iter conv ~f:(fun c -> dim c.kernel_label)
-            | Concat_spec components ->
-                List.iter components ~f:(function
-                  | Concat_label name -> dim name
-                  | Concat_size _ -> ())));
+          let dims, rows = slot_names slot in
+          List.iter dims ~f:(fun name -> Hashtbl.set dim_var_env ~key:name ~data:());
+          List.iter rows ~f:(fun name -> Hashtbl.set row_var_env ~key:name ~data:()));
       check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch error_shapes ] dim_var_env
         row_var_env;
       check_capture_labels ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs)
