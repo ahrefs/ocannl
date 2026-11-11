@@ -1,11 +1,19 @@
 open! Base
 open Ocannl.Nn_blocks.DSL_modules
+open Verdict.Claims
+module Train = Ocannl.Train
 module Row = Ocannl.Row
 
-(* gh-ocannl-2154 is a known inference gap, not an unsatisfiable spec. Add the concrete witness to
-   the ORIGINAL registered store with [infer_equal]: these are additional equations, not a
-   replacement of the operations or their constraints. The second case pins the current false
-   refusal, so a design fix can replace it with acceptance and an executed value check. *)
+(* gh-ocannl-2154: a self-contraction followed by a pointwise use, satisfiable but once refused. The
+   first case adds a concrete witness to the ORIGINAL registered store with [infer_equal]: these are
+   additional equations, not a replacement of the operations or their constraints; with ordinary
+   [1_default] singletons in place of the broadcast top the witness is refused. The refusal came
+   from the stage-6 trial of the einsum's balanced mixed-flank residual [[w].<c> = <m>.[a]]: it
+   committed the empty overlap, and the queued closing of p's middle row to its use-site bound
+   [<r>.[4]] (that row shares [st]'s resolve-at-use mark) then refuted it.
+   [Row.solve_closing_stages] replays the closing with that trial one overlap larger; the second
+   case executes what inference now infers, against a host oracle computed from the inferred leaf's
+   own shape and values. *)
 let build () =
   let st = TDSL.uniform () () in
   let x = TDSL.range_of_shape ~output_dims:[ 3; 4; 5 ] () in
@@ -15,89 +23,114 @@ let build () =
   let%op z = y + q in
   (st, p, y, q, z)
 
+let dims t = Array.to_list (Shape.to_dims t.Tensor.shape)
+let show l = "[" ^ String.concat ~sep:";" (List.map l ~f:Int.to_string) ^ "]"
+
+let witness ~one_basis =
+  Tensor.unsafe_reinitialize ();
+  try
+    let st, pt, y, q, z = build () in
+    let scalar = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[] () in
+    let wide =
+      TDSL.range_of_shape ~batch_dims:[] ~input_dims:[]
+        ~output_axes:[ (one_basis, 1); (Row.default_basis, 5) ]
+        ()
+    in
+    let one =
+      TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_axes:[ (one_basis, 1) ] ()
+    in
+    let full = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3; 4; 5 ] () in
+    Shape.infer_equal st.Tensor.shape scalar.Tensor.shape;
+    Shape.infer_equal pt.Tensor.shape wide.Tensor.shape;
+    Shape.infer_equal y.Tensor.shape one.Tensor.shape;
+    Shape.infer_equal q.Tensor.shape full.Tensor.shape;
+    Shape.infer_equal z.Tensor.shape full.Tensor.shape;
+    ignore (Shape.to_dims z.Tensor.shape : int array);
+    Ok
+      (List.map
+         [ (st, []); (pt, [ 1; 5 ]); (y, [ 1 ]); (q, [ 3; 4; 5 ]); (z, [ 3; 4; 5 ]) ]
+         ~f:(fun (t, want) -> (dims t, want)))
+  with Row.Shape_error (msg, trace) -> Error (Shape.error_to_string_hum msg trace)
+
 let () =
   Verdict.case "concrete witness" @@ fun () ->
-  Tensor.unsafe_reinitialize ();
-  let witness =
-    try
-      let st, p, y, q, z = build () in
-      let scalar = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[] () in
-      let wide =
-        TDSL.range_of_shape ~batch_dims:[] ~input_dims:[]
-          ~output_axes:[ (Row.bcast_if_1, 1); (Row.default_basis, 5) ]
-          ()
-      in
-      let one =
-        TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_axes:[ (Row.bcast_if_1, 1) ] ()
-      in
-      let full = TDSL.range_of_shape ~batch_dims:[] ~input_dims:[] ~output_dims:[ 3; 4; 5 ] () in
-      Shape.infer_equal st.Tensor.shape scalar.Tensor.shape;
-      Shape.infer_equal p.Tensor.shape wide.Tensor.shape;
-      Shape.infer_equal y.Tensor.shape one.Tensor.shape;
-      Shape.infer_equal q.Tensor.shape full.Tensor.shape;
-      Shape.infer_equal z.Tensor.shape full.Tensor.shape;
-      ignore (Shape.to_dims z.Tensor.shape : int array);
-      List.map
-        [ (st, []); (p, [ 1; 5 ]); (y, [ 1 ]); (q, [ 3; 4; 5 ]); (z, [ 3; 4; 5 ]) ]
-        ~f:(fun (t, want) -> (Array.to_list (Shape.to_dims t.Tensor.shape), want))
-    with Row.Shape_error (msg, trace) ->
-      Stdio.eprintf "witness refused: %s\n%!" (Shape.error_to_string_hum msg trace);
-      []
+  let accepted =
+    match witness ~one_basis:Row.bcast_if_1 with
+    | Ok shapes -> shapes
+    | Error msg ->
+        Stdio.eprintf "witness refused: %s\n%!" msg;
+        []
   in
-  Verdict.p_all ~min:5 "the original store accepts all five witness shapes" witness
-    ~f:(fun (got, want) -> List.equal Int.equal got want)
+  p_all ~min:5 "the original store accepts all five witness shapes" accepted ~f:(fun (got, want) ->
+      List.equal Int.equal got want);
+  p "control: the witness with ordinary 1_default singletons is refused"
+    (Result.is_error (witness ~one_basis:Row.default_basis))
 
-let has_shape id row = List.mem (Row.row_shapes row) id ~equal:Int.equal
-
-let is_gap_trace ~p_id ~q_id trace =
-  let remaining_equality =
-    List.exists trace ~f:(function
-      | Row.Constraint_failed (Row.Row_eq { r1; r2; origin }) ->
-          has_shape p_id r1 && has_shape q_id r2
-          && List.exists origin ~f:(fun o ->
-              Poly.equal o.lhs_kind `Output && Poly.equal o.rhs_kind `Output
-              && Option.equal String.equal o.operation (Some "remaining rows"))
-      | _ -> false)
-  in
-  let conflicting_remainders =
-    List.exists trace ~f:(function
-      | Row.Row_mismatch
-          [
-            ({ beg_dims = []; dims = [ Dim { d = 4; _ } ]; bcast = Row_var _; _ } as required);
-            ({ beg_dims = []; dims = []; bcast = Broadcastable; _ } as closed);
-          ] ->
-          has_shape q_id required && has_shape p_id closed
-      | _ -> false)
-  in
-  remaining_equality && conflicting_remainders
+(* Right-aligned broadcasting of a row-major tensor of [dims] read at an index of [full]. *)
+let broadcast_offset dims full idx =
+  let skip = List.length full - List.length dims in
+  List.foldi dims ~init:0 ~f:(fun i acc d ->
+      let j = List.nth_exn idx (skip + i) in
+      (acc * d) + if d = 1 then 0 else j)
 
 let () =
-  Verdict.case "known inference gap" @@ fun () ->
+  Verdict.case "inferred and executed" @@ fun () ->
   Tensor.unsafe_reinitialize ();
-  let _, p, _, q, z = build () in
-  let refusal =
-    try
-      ignore (Shape.to_dims z.Tensor.shape : int array);
-      None
-    with Row.Shape_error (msg, trace) -> Some (msg, trace)
-  in
-  Verdict.p "known gap: the inferred program is still refused"
-    (Option.exists refusal ~f:(fun (msg, _) ->
-         String.is_prefix msg ~prefix:"Number of axes mismatch"));
-  Verdict.p "known gap: p's empty remainder conflicts with q's axis-4 remainder"
-    (Option.exists refusal ~f:(fun (_, trace) ->
-         is_gap_trace ~p_id:p.Tensor.shape.id ~q_id:q.Tensor.shape.id trace));
-  (* A different rank mismatch must not satisfy the gap's trace oracle. *)
+  Row.reset_trial_replays ();
+  let st, pt, y, q, z = build () in
+  Train.set_materialized st.Tensor.value;
+  let ctx = Context.auto () in
+  Stdio.eprintf "(not part of the golden) backend: %s\n%!" (Context.backend_name ctx);
+  match Train.forward_once ctx z with
+  | exception Row.Shape_error (msg, trace) ->
+      Stdio.eprintf "refused: %s\n%!" (Shape.error_to_string_hum msg trace);
+      p "the inferred program is accepted" false
+  | ctx ->
+      p "the inferred program is accepted" true;
+      Stdio.printf "inferred shapes: st=%s p=%s y=%s q=%s z=%s\n"
+        (show (dims st))
+        (show (dims pt))
+        (show (dims y))
+        (show (dims q))
+        (show (dims z));
+      p "the closing replayed its balanced-flank choice" (Row.trial_replays () > 0);
+      let sd = dims st and pd = dims pt and zd = dims z in
+      p "p is the contraction's [h; w] over st's row"
+        (List.length pd = List.length sd + 2 && List.equal Int.equal (List.drop pd 2) sd);
+      p "z is x's [3; 4; 5]" (List.equal Int.equal zd [ 3; 4; 5 ]);
+      let s = Context.get_values ctx st.Tensor.value
+      and got = Context.get_values ctx z.Tensor.value in
+      p "the leaf's draw is distinct per cell"
+        (List.length (List.dedup_and_sort ~compare:Float.compare (Array.to_list s)) = Array.length s);
+      (* y[h] sums p[h, w, c] * st[c] = 2 * st[c]^2 over w and c, the same for every h. *)
+      let w = List.nth_exn pd 1 in
+      let y0 = Float.of_int w *. 2. *. Array.fold s ~init:0. ~f:(fun acc v -> acc +. (v *. v)) in
+      (* x is [range_of_shape]: the cell's row-major offset, in z's order. *)
+      let want =
+        List.concat_map (List.range 0 3) ~f:(fun i ->
+            List.concat_map (List.range 0 4) ~f:(fun j ->
+                List.map (List.range 0 5) ~f:(fun k ->
+                    let x = Float.of_int ((((i * 4) + j) * 5) + k) in
+                    y0 +. (2. *. s.(broadcast_offset sd zd [ i; j; k ]) *. x))))
+        |> Array.of_list
+      in
+      Stdio.eprintf "(not part of the golden) z[0..4]: %s\n%!"
+        (String.concat ~sep:" " (List.init 5 ~f:(fun i -> Float.to_string got.(i))));
+      p_close "z against the host oracle y + 2 * st * x" got want ~tol:(fun w ->
+          1e-4 *. Float.max 1. (Float.abs w));
+      ignore (q : Tensor.t)
+
+(* A different rank mismatch stays refused. *)
+let () =
+  Verdict.case "unrelated refusal" @@ fun () ->
   Tensor.unsafe_reinitialize ();
   let leaf = TDSL.range_of_shape ~output_dims:[ 3 ] () in
-  let unrelated =
+  let refused =
     try
       let%op bad = leaf ++ "...|a,b,..r.. => ...|a" in
       ignore (Shape.to_dims bad.Tensor.shape : int array);
       None
-    with Row.Shape_error (msg, trace) -> Some (msg, trace)
+    with Row.Shape_error (msg, _) -> Some msg
   in
-  Verdict.p "control: an unrelated rank refusal does not match the gap"
-    (Option.exists unrelated ~f:(fun (msg, trace) ->
-         String.is_prefix msg ~prefix:"Number of axes mismatch"
-         && not (is_gap_trace ~p_id:leaf.Tensor.shape.id ~q_id:leaf.Tensor.shape.id trace)))
+  p "control: an unrelated rank mismatch is still refused"
+    (Option.exists refused ~f:(String.is_prefix ~prefix:"Number of axes mismatch"))

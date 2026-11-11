@@ -4087,9 +4087,9 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage3 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage4 unsolved local_env in
   let unsolved, local_env = Row.solve_inequalities ~stage:Stage5 unsolved local_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage6a unsolved local_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage6b unsolved local_env in
-  let unsolved, local_env = Row.solve_inequalities ~stage:Stage7 unsolved local_env in
+  let unsolved, local_env =
+    Row.solve_closing_stages ~stages:[ Stage6a; Stage6b; Stage7 ] unsolved local_env
+  in
   refuse_unsolved ~where:"derive_projections" unsolved;
   let local_env = Row.populate_dim_proj_in_solved local_env in
   let rhs, skip_deriving = projected_operands update_step.logic in
@@ -4935,9 +4935,8 @@ let%debug4_sexp finish_inference_body (() : unit) : unit =
   in
   let unsolved, env = Row.solve_inequalities ~stage:Stage4 unsolved env in
   let unsolved, env = Row.solve_inequalities ~stage:Stage5 unsolved env in
-  let unsolved, env = Row.solve_inequalities ~stage:Stage6a unsolved env in
-  let unsolved, env = Row.solve_inequalities ~stage:Stage6b unsolved env in
-  let unsolved, env = Row.solve_inequalities ~stage:Stage7 unsolved env in
+  (* One search over the closing stages' balanced-flank choices (gh-ocannl-2154). *)
+  let unsolved, env = Row.solve_closing_stages ~stages:[ Stage6a; Stage6b; Stage7 ] unsolved env in
   refuse_unsolved ~where:"finish_inference" unsolved;
   let _active_update_steps : update_step list = !active_update_steps in
   List.iter ~f:(apply_env_step ~closure:true env) !active_update_steps;

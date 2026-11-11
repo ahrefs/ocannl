@@ -25,6 +25,10 @@ tensor/row.ml: dim_cycle_visit_count (ref) -- exempt: a work counter of the dime
 tensor/row.ml: unmemoized_cycle_search (ref) -- exempt: a test switch, set only around a test's own run
 tensor/row.ml: unbounded_rank_search (ref) -- exempt: a test switch, set only around a test's own run
 tensor/row.ml: global_template_cache (ref) -- accounted: every write noted or at a boundary; captured by capture_globals
+tensor/row.ml: trial_floors (ref) -- exempt: a solver pass's transient choice floors, set by solve_closing_stages
+tensor/row.ml: trial_count (ref) -- exempt: a solver pass's transient trial index, reset by solve_closing_stages
+tensor/row.ml: trial_log (ref) -- exempt: a solver pass's transient choice log, read by solve_closing_stages
+tensor/row.ml: trial_replay_count (ref) -- exempt: a work counter of closing replays, not inference state
 tensor/row.ml: fresh (unread state) -- exempt
 tensor/row.ml: boundary commit_symbol_roles -- part of the commit: only a successful finish_inference calls it
 tensor/row.ml: boundary drop_symbol_roles -- part of a rewind or session reset, which clears the taint

@@ -3622,6 +3622,31 @@ let restore_globals
 [@@mutation_serial.boundary
   "part of a rewind: puts back the solver's inference sets as a checkpoint captured them"]
 
+(* {2 The balanced-flank trial as a choice point (gh-ocannl-2154)}
+
+   The stage-6 trial of a balanced mixed-flank equation (in [unify_row]) commits the least overlap
+   whose own consequences raise nothing, but a constraint later in the same closing can still refute
+   that overlap where a larger one holds. [solve_closing_stages] vets the choices by replay: each
+   trial a run reaches takes the next index, and starts its first fit at the floor the run gives
+   that index (0 when none); the overlap it commits is logged under the index. A trial's refused
+   overlaps take their nested trials' indices and log entries back with their module-level effects,
+   so indices name the trials of the path the run kept. Outside a [solve_closing_stages] there are
+   no floors and the log is not read. *)
+let trial_floors : int Map.M(Int).t ref = ref (Map.empty (module Int))
+[@@mutation_serial.exempt "a solver pass's transient choice floors, set by solve_closing_stages"]
+
+let trial_count = ref 0
+[@@mutation_serial.exempt "a solver pass's transient trial index, reset by solve_closing_stages"]
+
+let trial_log : (int * int) Map.M(Int).t ref = ref (Map.empty (module Int))
+[@@mutation_serial.exempt "a solver pass's transient choice log, read by solve_closing_stages"]
+
+let trial_replay_count = ref 0
+[@@mutation_serial.exempt "a work counter of closing replays, not inference state"]
+
+let trial_replays () = !trial_replay_count
+let reset_trial_replays () = trial_replay_count := 0
+
 (* Equate two rows, no broadcasting. Does not resolve inequalities. *)
 let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list * _ =
   let solve (ineqs, env) : constraint_ -> constraint_ list * _ = function
@@ -3880,7 +3905,7 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                         assert false
                 in
                 solve (solve ([], env) binding) residual
-              else if is_stage6_up stage then
+              else if is_stage6_up stage then (
                 (* Balanced flanks (s = t): the rank stays ambiguous, so earlier stages defer (the
                    residual reproduces itself verbatim). A solution exists at every overlap k in
                    0..s whose overlap equations begS[k+i] = dimsR[i] (i < s - k) hold: k = 0 is the
@@ -3897,7 +3922,9 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                    behind: its environment is dropped and the module-level inference state is put
                    back ([restore_globals]; fresh ids and the mutation serial only move forward).
                    "Not refused" is not "satisfiable": a constraint the commit defers can still
-                   fail. *)
+                   fail, and one later in the closing can refute the overlap; inside
+                   [solve_closing_stages] the trial is a choice point, which a replay can start at a
+                   larger overlap (gh-ocannl-2154). *)
                 let v2 = match r2.bcast with Row_var v2 -> v2 | Broadcastable -> assert false in
                 let begS = List.drop beg_dims1 beg_dims_l in
                 let commit k =
@@ -3909,17 +3936,28 @@ let%debug5_sexp rec unify_row ~stage origin (eq : t * t) env : constraint_ list 
                   let binding = Row_eq { r1 = row_of_var v2 prov; r2 = value; origin } in
                   solve (solve ([], env) binding) residual
                 in
+                let index = !trial_count in
+                Int.incr trial_count;
+                let record k = trial_log := Map.set !trial_log ~key:index ~data:(k, s) in
                 let rec first_fit k =
-                  if k >= s then commit s
+                  if k >= s then (
+                    record s;
+                    commit s)
                   else
-                    let saved = capture_globals () in
+                    let saved = capture_globals ()
+                    and saved_count = !trial_count
+                    and saved_log = !trial_log in
                     match commit k with
-                    | result -> result
+                    | result ->
+                        record k;
+                        result
                     | exception Shape_error _ ->
                         restore_globals saved;
+                        trial_count := saved_count;
+                        trial_log := saved_log;
                         first_fit (k + 1)
                 in
-                first_fit 0
+                first_fit (Option.value (Map.find !trial_floors index) ~default:0))
               else ([ residual ], env)
           in
           List.fold ~init:(unsolved, env) ~f:solve !ineqs
@@ -6291,6 +6329,70 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
   match stage with
   | Stage5 | Stage6a | Stage6b -> draws_at_quiescence ineqs env
   | _ -> solve ineqs env
+
+(* The bound on a closing's runs: a store whose choices it does not settle in this many is refused
+   with the first run's error. *)
+let max_closing_attempts = 32
+
+(* gh-ocannl-2154: the closing stages as one search over the balanced-flank trials' overlaps (see
+   [trial_floors]). The first run is [solve_inequalities] over [stages] with no floors: today's
+   solver, so a store it accepts returns from it unchanged. When a run raises a [Shape_error], the
+   last trial on its path that committed an overlap short of the principal one is the choice to
+   revise: the next run pins every earlier trial to the overlap it committed (so the runs agree up
+   to that trial, fresh ids aside) and starts that trial one overlap larger. The vectors of
+   committed overlaps increase lexicographically, each trial has finitely many and each run
+   terminates, so the search is finite; [max_closing_attempts] bounds it as well. When no choice is
+   left, or the bound is reached, the first run's error is raised, so a refused store keeps its
+   message. Only a [Shape_error] rejects a run. Between runs, and before raising after a replay, the
+   module-level inference sets are put back as they were before the first run. The search vets an
+   overlap against what these stages derive after it, not against a later refusal
+   ([Shape.refuse_unsolved], lowering), and only the balanced-flank trial is a choice: closing to a
+   GLB, the empty close, window settling and [merge_by_equality] are not revisited. *)
+let solve_closing_stages ~(stages : stage list) ?discardable_vars (ineqs : constraint_ list) env :
+    constraint_ list * environment =
+  let saved_floors = !trial_floors and saved_count = !trial_count and saved_log = !trial_log in
+  let globals = capture_globals () in
+  let run floors =
+    trial_floors := floors;
+    trial_count := 0;
+    trial_log := Map.empty (module Int);
+    List.fold stages ~init:(ineqs, env) ~f:(fun (ineqs, env) stage ->
+        solve_inequalities ~stage ?discardable_vars ineqs env)
+  in
+  let next_floors () =
+    (* The log's entries in index order: the path's trials, with what each committed. *)
+    let path = Map.to_alist !trial_log in
+    match List.rev path |> List.drop_while ~f:(fun (_, (k, s)) -> k >= s) with
+    | [] -> None
+    | (last, (k, _)) :: earlier ->
+        Some
+          (List.fold earlier
+             ~init:(Map.singleton (module Int) last (k + 1))
+             ~f:(fun floors (i, (k, _)) -> Map.set floors ~key:i ~data:k))
+  in
+  let rec search attempt floors first_error =
+    match run floors with
+    | result -> result
+    | exception (Shape_error _ as error) -> (
+        let first = Option.value first_error ~default:error in
+        match next_floors () with
+        | Some floors when attempt < max_closing_attempts ->
+            restore_globals globals;
+            Int.incr trial_replay_count;
+            search (attempt + 1) floors (Some first)
+        | _ ->
+            if attempt > 1 then restore_globals globals;
+            raise first)
+    | exception error ->
+        if attempt > 1 then restore_globals globals;
+        raise error
+  in
+  Exn.protect
+    ~f:(fun () -> search 1 (Map.empty (module Int)) None)
+    ~finally:(fun () ->
+      trial_floors := saved_floors;
+      trial_count := saved_count;
+      trial_log := saved_log)
 
 let rec row_to_bases env =
   let rec f = function

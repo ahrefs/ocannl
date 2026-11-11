@@ -15279,8 +15279,9 @@
 (test
  (name contraction_pointwise_closing)
  (package neural_nets_lib)
- (deps ocannl_config)
- ; ocannl-backend: none -- shape inference only, no context or device execution.
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
  (modules contraction_pointwise_closing)
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess

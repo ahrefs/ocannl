@@ -474,6 +474,86 @@ let () =
   Verdict.p "same variable, equation [h; w].<c> = <c> refused by self-reference"
     (self_reference (solved [ eq (flanked rho ~beg:[ h; w ] ~dims:[]) rho ]))
 
+(* gh-ocannl-2154: the stage-6 trial of a balanced mixed-flank equation commits the least overlap
+   whose own consequences raise nothing, but a closing later in the same stage can refute it. Here
+   the equation's [v2] resolves at its use site [[5]]: Stage6a closes it to that bound, by an
+   equation the [Shape_row] emits in the pass that commits the trial, and the empty overlap leaves
+   [[] = [5]]. [Row.solve_closing_stages] replays the closing with the trial one overlap larger.
+   [plain] is the stage-by-stage fold, which is what the solver did before: the in-test control. *)
+let before_closing constraints =
+  List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5 ] ~init:(constraints, Row.empty_env)
+    ~f:(fun (constraints, env) stage -> Row.solve_inequalities ~stage constraints env)
+
+let closing_stages = [ Row.Stage6a; Stage6b; Stage7 ]
+
+let searched constraints =
+  let constraints, env = before_closing constraints in
+  match Row.solve_closing_stages ~stages:closing_stages constraints env with
+  | _, env -> Ok env
+  | exception Row.Shape_error (msg, trace) -> Error (Shape.error_to_string_hum msg trace)
+
+let plain constraints =
+  let constraints, env = before_closing constraints in
+  match
+    List.fold closing_stages ~init:(constraints, env) ~f:(fun (constraints, env) stage ->
+        Row.solve_inequalities ~stage constraints env)
+  with
+  | _, env -> Ok env
+  | exception Row.Shape_error (msg, trace) -> Error (Shape.error_to_string_hum msg trace)
+
+(* [x].<v> = <v2>.[y], with [v2] resolving at its use site [[5]]; [lead] fixes [x] when given. *)
+let use_site_trial ?lead ~closer_first ~flip () =
+  let v = fresh_rows () and v2 = fresh_rows () in
+  (match v2.bcast with Row_var r -> Row.add_resolve_at_use r | Broadcastable -> ());
+  let x = Option.value lead ~default:(Row.Var (Row.get_var ~name:"x" ())) in
+  let y = Row.Var (Row.get_var ~name:"y" ()) in
+  let lhs = flanked v ~beg:[ x ] ~dims:[] and rhs = flanked v2 ~beg:[] ~dims:[ y ] in
+  let trial = if flip then eq rhs lhs else eq lhs rhs in
+  let closer = Row.Shape_row (v2, origin) in
+  let constraints =
+    (if closer_first then [ closer; trial ] else [ trial; closer ]) @ [ ineq (closed [ 5 ]) v2 ]
+  in
+  (constraints, v, v2)
+
+let () =
+  List.iter [ false; true ] ~f:(fun flip ->
+      let constraints, v, v2 = use_site_trial ~closer_first:true ~flip () in
+      let side = if flip then "flipped" else "as written" in
+      Row.reset_trial_replays ();
+      let o = searched constraints in
+      Verdict.p
+        ("trial refuted by a same-stage closing, " ^ side
+       ^ ": the replay takes overlap 1, v2 = [5], v = [y]")
+        (Option.equal String.equal (axes o v2) (Some "5")
+        && Option.equal String.equal (axes o v) (Some "?")
+        && Row.trial_replays () = 1);
+      let constraints, _, _ = use_site_trial ~closer_first:true ~flip () in
+      Verdict.p
+        ("control, " ^ side ^ ": the stage-by-stage fold refuses it")
+        (Result.is_error (plain constraints)));
+  (* The closer after the equation in the pass: the trial commits first, and the closer finds [v2]
+     solved. Accepted with the empty overlap, by both, with no replay: a store accepted without the
+     search keeps its solution. *)
+  let constraints, _, v2 = use_site_trial ~closer_first:false ~flip:false () in
+  Row.reset_trial_replays ();
+  let o = searched constraints in
+  let constraints', _, v2' = use_site_trial ~closer_first:false ~flip:false () in
+  let o' = plain constraints' in
+  Verdict.p "the closer after the equation: accepted at overlap 0 with no replay, as before"
+    (Option.equal String.equal (axes o v2) (Some "")
+    && Option.equal String.equal (axes o' v2') (Some "")
+    && Row.trial_replays () = 0);
+  (* Every overlap refuted: [x] fixed at 3 cannot meet [5]. The search runs out after one replay and
+     raises the first run's refusal, message and trace as the plain fold gives them. *)
+  let constraints, _, _ = use_site_trial ~lead:(dim 3) ~closer_first:true ~flip:false () in
+  Row.reset_trial_replays ();
+  let o = searched constraints in
+  let constraints', _, _ = use_site_trial ~lead:(dim 3) ~closer_first:true ~flip:false () in
+  let o' = plain constraints' in
+  Verdict.p "every overlap refuted: refused after one replay, with the first run's refusal"
+    ((match (o, o') with Error a, Error b -> String.equal a b | _ -> false)
+    && Row.trial_replays () = 1)
+
 (* gh-ocannl-2154's second refusal: two closed rows with a leading result surplus, [[v].[4; 5] >=
    [3; 4; 5]], align by their flat axis lists. Held to stage 7, the final closing of [v] (the
    [Shape_row]) came first in the pass and guessed it before the operand's 3 bounded it. *)
