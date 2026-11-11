@@ -73,10 +73,23 @@ let () =
       let explicit = TDSL.O.ne ?label:(Some [ "explicit" ]) x y in
       (curried, uncurried, infix, explicit));
   let left = 2 and right = 5 in
-  let got =
-    [%op
-      let max = Int.max in
-      let chosen = max left right in
-      chosen]
-  in
-  p "local integer max retains its OCaml type" (Int.equal got 5)
+  (* Each call is in a translated position, not the untranslated body of [%op let ... in ...]. *)
+  let max = Int.max in
+  let%op chosen = max left right in
+  p "local curried integer max retains its OCaml type" (Int.equal chosen 5);
+  let%op piped = right |> max left in
+  p "local piped integer max retains its OCaml type" (Int.equal piped 5);
+  let max (left, right) = Int.max left right in
+  let chosen = [%op max (left, right)] in
+  p "local tuple integer max retains its OCaml type" (Int.equal chosen 5);
+  let chosen = [%op fst (left, right)] in
+  p "fst keeps its tuple argument" (Int.equal chosen left);
+  let id x = x in
+  let%op chosen = id left in
+  p "local unary id retains its OCaml type" (Int.equal chosen left);
+  let mul3 x y z = x * y * z in
+  let%op chosen = mul3 left right right in
+  p "local curried mul3 retains its OCaml type" (Int.equal chosen 50);
+  let mul3 (x, y, z) = x * y * z in
+  let chosen = [%op mul3 (left, right, right)] in
+  p "local tuple mul3 retains its OCaml type" (Int.equal chosen 50)

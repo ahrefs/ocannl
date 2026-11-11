@@ -46,4 +46,10 @@ ne uncurried equals its infix form: true
 ne uncurried forwards its label: true
 ne explicit equals its infix form: true
 ne explicit forwards its label: true
-local integer max retains its OCaml type: true
+local curried integer max retains its OCaml type: true
+local piped integer max retains its OCaml type: true
+local tuple integer max retains its OCaml type: true
+fst keeps its tuple argument: true
+local unary id retains its OCaml type: true
+local curried mul3 retains its OCaml type: true
+local tuple mul3 retains its OCaml type: true

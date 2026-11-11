@@ -87,6 +87,13 @@ files.
   `%op` accepts also reaches the arm
   `tools/test-typecheck-scan-cases.sh` plants to be rejected through the ppx (its `#project` legs,
   CI's main shard 1), which `affected --harnesses` names for a change to any `tensor/ppx_*.ml`.
+- Primitive-name handling in `%op` uses `Ppx_op.is_op_primitive`, the subset of the shared
+  primitive tables that `Make_DSL.O` binds (gh-ocannl-2057); `%cd` retains the full tables.
+  Other alphabetic names keep their OCaml calls, without tensor labels or tuple-call sugar.
+  A regression probe must put its call in a translated position: `let%op chosen = max x y`
+  reaches the translator, but the body of `[%op let max = Int.max in ...]` stays ordinary OCaml.
+  `test/operations/op_binary_names.ml` executes curried, tuple and piped local calls.
+
 - Evaluation order (gh-ocannl-1869): where `%op` gives a literal a meaning of its own -- a block
   tensor's components, a concat's operand tuple or array, an einsum's capture list -- the expansion runs
   the members in source order (`Ppx_shared.in_source_order` let-binds each one that is not a
