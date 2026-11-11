@@ -15184,3 +15184,15 @@
  (libraries base ocannl stdio arrayjit.utils arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+;; gh-ocannl-2165: scheme checking leaves a whole cc training step's code and placements unchanged.
+
+(test
+ (name scheme_codegen)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ ; ocannl-backend: cc -- fresh children explicitly select cc for source comparison
+ (modules scheme_codegen)
+ (libraries base ocannl stdio unix arrayjit.verdict test_utils fresh_process)
+ (preprocess
+  (pps ppx_here ppx_ocannl)))
