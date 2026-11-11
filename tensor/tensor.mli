@@ -525,10 +525,15 @@ module Scheme : sig
       [~here:[%here]], ["... to <application> at <file>:<line>: "]: gh-ocannl-2007) and taints the
       session, as a failed construction does; the constraints carry the application's name (and
       [here]), so a failure at the closure names it too. The next closure applies the solution to
-      [args] and [results] and closes them. Valid across closures, unless the scheme depends on open
-      state no shape it used holds (then refused after a closure: trace again). A scheme whose
-      function draws random numbers is refused: the size of a draw's counter is the precision its
-      conversion node settles, and an instance, unlike the function's own application, has none. *)
+      [args] and [results] and closes them. It finalizes the scheme's rows but derives no
+      projections for the body's steps, so projection-time refusals do not run: an [Affine] or
+      [Concat] over a [Sym] that cannot be sized, window verification, and shared symbolic
+      iterators. An instance can therefore close where the body's inline application is refused
+      (gh-ocannl-2020). Automatic [%op] schemes are unaffected: their body always runs. Valid across
+      closures, unless the scheme depends on open state no shape it used holds (then refused after a
+      closure: trace again). A scheme whose function draws random numbers is refused: the size of a
+      draw's counter is the precision its conversion node settles, and an instance, unlike the
+      function's own application, has none. *)
 
   (** {3 Automatic schemes of [%op] functions (gh-ocannl-1751)}
 
