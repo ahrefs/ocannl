@@ -15285,3 +15285,13 @@
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+; Precision-cell reachability only: no backend is initialized or executed.
+
+(test
+ (name precision_cell_retention)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ ; ocannl-backend: none -- precision-cell GC witnesses, no execution
+ (modules precision_cell_retention)
+ (libraries base ocannl arrayjit.verdict gc_witness))
