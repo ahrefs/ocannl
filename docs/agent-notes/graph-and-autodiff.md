@@ -250,3 +250,11 @@ files.
   classifies those parents as materialization outputs, so its first set alone misses the edge.
   A hand-built tensor record must keep its declared parameters reachable through `children`;
   initialization refuses an incomplete walk rather than silently omitting an initializer.
+
+- `Tensor.ndarray`, `TDSL.ndarray` and `NTDSL.ndarray` accept `?prec` at construction
+  (gh-ocannl-2173). Above `limit_constant_fill_size` the host array must be allocated at that
+  precision; below it the literal node is explicitly specified before it gains consumers.
+  Omitting `prec` preserves inference for small literals and the session default for data-backed
+  ones. Data-backed nodes retain diagnostic provenance separately from layout commitment, so a
+  conflicting `Tnode.update_prec` explains why the precision was fixed, even after a storage read.
+  `ndarray_prec` executes both paths on cc at double with bits that single ingestion would lose.

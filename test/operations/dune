@@ -2020,6 +2020,23 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2173: both literal-size paths honor an explicit source precision.
+
+(test
+ (name ndarray_prec)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ ; ocannl-backend: cc -- Explicit CPU context exercises double ingestion, unsupported on Metal.
+ (action
+  (run
+   %{test}
+   --ocannl_limit_constant_fill_size=16
+   --ocannl_default_prec=single))
+ (modules ndarray_prec)
+ (libraries base ocannl arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
+
 ; gh-ocannl-2011: data-backed leaves keep their stated precision under a consumer, whether or not it
 ; was read first; a leaf with no data takes top-down precision and refuses a link after a read.
 
