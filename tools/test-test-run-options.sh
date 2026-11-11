@@ -17,7 +17,7 @@
 # header. Leg numbers are the harness's, not this file's: they stayed as they
 # were when it was one file, so a member's are not consecutive.
 #
-# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 107, 103, 94, 119, 95, 96, 98), #hermetic (70).
+# Groups: #group-alive (1, 2-3, 4, 5), #stop (6-8, 67, 101), #queries (39), #options (26-28, 37, 89, 120, 107, 103, 94, 119, 95, 96, 98), #hermetic (70).
 #
 # Legs:
 # 107. capped single-test builds retain stderr before timeout, with plan boundaries.
@@ -1845,6 +1845,121 @@ else
 fi
 }
 harness_leg_run '89: an alias dune does not know is refused before the slot #options' leg_89
+
+# Real Dune distinguishes disabled generated aliases (absent) from disabled
+# explicit rule aliases (listed, but empty). Both must be counted skips.
+leg_120() {
+  shared_through renamed_dune
+  local label="backend-disabled aliases are loud skips; all-disabled and typos refuse" real root rc detail= args want text run probe
+  if ! harness_real_dune; then skip "$label" "$harness_dune_absent"; return; fi
+  real=$harness_dune root=$TMP/disabled-real
+  mkdir -p "$root/tools" "$root/scripts" "$root/al/sub" "$root/al/unmodeled/source" "$root/deleted"
+  cp "$SRC" "$root/tools/test-run.sh"
+  stage_sourced "$root" || { harness_abandon "$stage_error"; return; }
+  printf '(lang dune 3.20)\n' >"$root/dune-project"
+  printf 'let () = ()\n' >"$root/al/generated.ml"
+  cat >"$root/al/dune" <<'DUNE'
+(test (name generated) (enabled_if (<> %{env:OCANNL_BACKEND=cc} metal)))
+(rule (alias explicit) (enabled_if (<> %{env:OCANNL_BACKEND=cc} metal)) (action (progn)))
+(rule (alias active) (action (progn)))
+(rule (alias runtest-active) (action (progn)))
+(rule (alias boolean) (enabled_if (and (not (= %{env:OCANNL_BACKEND=cc} cc)) (or false false))) (action (progn)))
+(rule (alias unknown) (enabled_if (= %{env:ANOTHER=true} true)) (action (progn)))
+(rule (alias shared) (enabled_if (<> %{env:OCANNL_BACKEND=cc} metal)) (action (progn)))
+DUNE
+  printf '(rule (alias shared) (action (progn)))\n' >"$root/al/sub/dune"
+  printf 'payload\n' >"$root/al/unmodeled/source/input.txt"
+  cat >"$root/al/unmodeled/dune" <<'DUNE'
+(rule (alias also) (enabled_if false) (action (progn)))
+(copy_files (alias also) (files source/*.txt))
+DUNE
+  # A deleted tracked dune file must be filtered out of BOTH readers.
+  printf '(rule (alias stale) (action (progn)))\n' >"$root/deleted/dune"
+  GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$root" init -q
+  git -C "$root" add deleted/dune
+  rm -f "$root/deleted/dune"
+  for args in '0|@al/runtest-generated @al/explicit @al/active|disabled aliases skipped: 2' \
+              '2|@al/runtest-generated @al/explicit|nothing ran' \
+              '2|@al/runtest-generated @al/typo @al/active|alias refused: @al/typo' \
+              '0|@al/shared|verdict: pass' \
+              '2|@al/explicit|disabled aliases skipped: 1' \
+              '0|@al/boolean @al/active|disabled aliases skipped: 1' \
+              '0|@al/unknown|verdict: pass' \
+              '0|@al/unmodeled/also|verdict: pass' \
+              '0|--diff-command @al/explicit @al/active @al/explicit|disabled aliases skipped: 1'; do
+    IFS='|' read -r want args text <<<"$args"
+    rc=0
+    # shellcheck disable=SC2086 # these fixture operands intentionally split
+    (cd "$root" && PATH="$(dirname "$real"):$PATH" OCANNL_BACKEND=metal \
+      OCANNL_TOOL_TEST_RUNS="$TMP/disabled-runs" "${BASH:-bash}" tools/test-run.sh run build $args -j 1) >"$TMP/disabled.out" 2>&1 || rc=$?
+    if [ "$rc" != "$want" ] || ! grep -qF "$text" "$TMP/disabled.out"; then
+      detail="$args: exit $rc, wanted $want / $text: $(cat "$TMP/disabled.out")"; break
+    fi
+    if [ "$want" = 0 ] && [ "$args" = '@al/runtest-generated @al/explicit @al/active' ]; then
+      run=$(sed -n 's|^log: *\(.*\)/log$|\1|p' "$TMP/disabled.out")
+      if [ "$(cat "$run/disabled-alias-count")" != 2 ] ||
+         [ "$(cat "$run/disabled-aliases")" != "$(printf '@al/explicit\n@al/runtest-generated')" ] ||
+         ! grep -qF 'disabled alias skipped: @al/explicit' "$TMP/disabled.out" ||
+         ! grep -qF 'disabled alias skipped: @al/runtest-generated' "$TMP/disabled.out" ||
+         grep -q 'generated\|explicit' "$run/cmd"; then
+        detail="skip names/count/record or executed command incorrect: $(cat "$TMP/disabled.out")"; break
+      fi
+    fi
+    if [ "$args" = @al/unmodeled/also ] &&
+       { grep -q 'disabled alias' "$TMP/disabled.out" || [ ! -f "$root/_build/default/al/unmodeled/input.txt" ]; }; then
+      detail="an unmodeled active owner was skipped: $(cat "$TMP/disabled.out")"; break
+    fi
+    if [ "$args" = '--diff-command @al/explicit @al/active @al/explicit' ]; then
+      run=$(sed -n 's|^log: *\(.*\)/log$|\1|p' "$TMP/disabled.out")
+      if ! grep -qF 'build --diff-command @al/explicit @al/active' "$run/cmd"; then
+        detail="an alias-shaped option value was removed: $(cat "$run/cmd")"; break
+      fi
+    fi
+  done
+  if [ -z "$detail" ]; then
+    rc=0
+    (cd "$root" && PATH="$(dirname "$real"):$PATH" OCANNL_BACKEND=cc \
+      OCANNL_TOOL_TEST_RUNS="$TMP/disabled-cc-runs" "${BASH:-bash}" tools/test-run.sh run build \
+      @al/runtest-generated @al/explicit -j 1) >"$TMP/disabled-cc.out" 2>&1 || rc=$?
+    if [ "$rc" != 0 ] || grep -q 'disabled alias' "$TMP/disabled-cc.out"; then
+      detail="cc aliases must run without skips: $(cat "$TMP/disabled-cc.out")"
+    fi
+  fi
+  for probe in '2|repeat 2 build @al/explicit @al/active|disabled alias batch' \
+               '2|repeat 2 build @al/explicit @al/typo|dune knows no such alias' \
+               '2|fresh @al/runtest-generated @al/runtest-active|disabled alias batch' \
+               '0|plan build @al/explicit @al/active|disabled aliases skipped: 1'; do
+    [ -z "$detail" ] || break
+    IFS='|' read -r want args text <<<"$probe"
+    rc=0
+    # shellcheck disable=SC2086 # the fixture command intentionally splits
+    (cd "$root" && PATH="$(dirname "$real"):$PATH" OCANNL_BACKEND=metal \
+      OCANNL_TOOL_TEST_RUNS="$TMP/disabled-lifecycle-runs" "${BASH:-bash}" tools/test-run.sh $args) \
+      >"$TMP/disabled-lifecycle.out" 2>&1 || rc=$?
+    case $args in
+      repeat*)
+        (cd "$root" && PATH="$(dirname "$real"):$PATH" \
+          OCANNL_TOOL_TEST_RUNS="$TMP/disabled-lifecycle-runs" "${BASH:-bash}" tools/test-run.sh wait last) \
+          >>"$TMP/disabled-lifecycle.out" 2>&1 || : ;;
+    esac
+    if [ "$rc" != "$want" ] || ! grep -qF "$text" "$TMP/disabled-lifecycle.out"; then
+      detail="$args: exit $rc, wanted $want / $text: $(cat "$TMP/disabled-lifecycle.out")"
+    fi
+  done
+  if [ -z "$detail" ]; then
+    rc=0
+    (cd "$root" && export PATH="$(dirname "$real"):$PATH" OCANNL_BACKEND=metal \
+      OCANNL_TOOL_TEST_RUNS="$TMP/disabled-start-runs" &&
+      "${BASH:-bash}" tools/test-run.sh start build @al/explicit @al/active &&
+      "${BASH:-bash}" tools/test-run.sh wait last) >"$TMP/disabled-start.out" 2>&1 || rc=$?
+    if [ "$rc" != 0 ] || ! grep -qF 'disabled alias skipped: @al/explicit' "$TMP/disabled-start.out" ||
+       ! grep -qF 'disabled aliases skipped: 1' "$TMP/disabled-start.out"; then
+      detail="start/wait lost its skip digest: $(cat "$TMP/disabled-start.out")"
+    fi
+  fi
+  if [ -z "$detail" ]; then report 0 "$label"; else report 1 "$label" "$detail"; fi
+}
+harness_leg_run '120: backend-disabled aliases skip without voiding a mixed batch #options' leg_120
 
 # Real-Dune cap diagnostics are independent of the alias-refusal leg.
 leg_107() {

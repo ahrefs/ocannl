@@ -222,9 +222,9 @@ HARNESS_LIST
 # --ci-real-dune's legs: `HARNESS<TAB>ERE`, the --only selector of the legs
 # holding HARNESS's real-dune checks (each is checked to PASS, not trusted).
 real_dune_legs() {
-  printf '%s\t%s\n' tools/test-test-run-options.sh '^(89|107):'
+  printf '%s\t%s\n' tools/test-test-run-options.sh '^(89|107|120):'
   printf '%s\t%s\n' tools/test-test-run-digest.sh '^(80b|84|92b):'
-  printf '%s\t%s\n' tools/test-test-run-bisect.sh '^79:'
+  printf '%s\t%s\n' tools/test-test-run-bisect.sh '^(79|121):'
 }
 members() {
   local tier script
