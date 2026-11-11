@@ -15238,3 +15238,11 @@
  (libraries base ocannl stdio arrayjit.verdict)
  (preprocess
   (pps ppx_here ppx_ocannl)))
+
+(test
+ (name round_up_total_termination)
+ (package neural_nets_lib)
+ ; ocannl-backend: none -- incremental Row solver only, no lowering or execution
+ (deps ocannl_config)
+ (modules round_up_total_termination)
+ (libraries base ocannl stdio bounded_run arrayjit.verdict))
