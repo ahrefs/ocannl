@@ -7,6 +7,7 @@ Part of the agent notes; the [index](../agent-notes.md) carries the scope discip
 files.
 
 - Releases use lightweight, un-prefixed git tags (`0.8`, not `v0.8`).
+- `.github/wave-brief.md` is OCANNL's project part for the shipped native-Claude wave template; name it with `project_part` in the wave file.
 - Release prep also writes the release's outcome section in `docs/release-history.md`, including
   what did not land, and re-reads each branch's status in `docs/concerns.md`, which promises that
   review. GitHub milestones own what comes next, so neither file carries a forward plan.
