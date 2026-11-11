@@ -1,6 +1,7 @@
 (* gh-ocannl-2165: checking a shape scheme must leave the training step's emitted source (up to
-   minted identifiers) and placements unchanged. Each mode runs in a fresh process: op_shape_schemes
-   is a module-level lazy. This is a cc codegen test, not a value test. *)
+   minted identifiers) and placements unchanged. Fresh processes exercise the configuration setting
+   itself rather than its test override, and start each compile with fresh id/uid counters. This is
+   a cc codegen test, not a value test. *)
 open Base
 open Ocannl
 open Nn_blocks.DSL_modules
@@ -40,14 +41,14 @@ let emit ~changed =
         | Unschemed _ -> ())
   in
   let ctx = Train.init_params ctx Train.IDX.empty loss in
-  let lowered = Context.lowered_for_decisions ctx comp Train.IDX.empty in
-  let nodes =
-    Hashtbl.keys lowered.LL.traced_store
-    |> List.sort ~compare:(fun a b -> Int.compare a.Tn.id b.Tn.id)
-  in
   let name = "scheme_step" in
   let compiled, routine = Autotune.untuned_compile ~name ctx comp Train.IDX.empty in
-  let source_name = if List.length routine.Context.segments > 1 then name ^ "__seg" else name in
+  let nodes =
+    List.concat_map routine.Context.segments ~f:(fun seg -> Hashtbl.keys seg.LL.traced_store)
+    |> List.dedup_and_sort ~compare:Tn.compare
+    |> List.sort ~compare:(fun a b -> Int.compare a.Tn.id b.Tn.id)
+  in
+  let source_name = if List.length routine.segments > 1 then name ^ "__seg" else name in
   let result =
     {
       source =
@@ -100,6 +101,6 @@ let () =
     if not (same_source off check) then
       Stdio.eprintf "off source:\n%s\ncheck source:\n%s\n%!" off.source check.source;
     p "check and off emit identical normalized training-step source" (same_source off check);
-    p "check and off place every program node identically" (same_placements off check);
+    p "check and off place every compiled node identically" (same_placements off check);
     let changed = observe "check" ~changed:true in
     p "control: changing the SGD rate changes the normalized source" (not (same_source off changed))

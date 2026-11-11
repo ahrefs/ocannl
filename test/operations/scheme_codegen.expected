@@ -2,5 +2,5 @@ control: off neither traces nor checks: true
 control: check traces the shared layer and checks both applications: true
 control: the training step emits source and has placements: true
 check and off emit identical normalized training-step source: true
-check and off place every program node identically: true
+check and off place every compiled node identically: true
 control: changing the SGD rate changes the normalized source: true
