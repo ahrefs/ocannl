@@ -165,7 +165,10 @@ files.
   top before the size claim is checked (pinned in `solved_capture_basis.ml`). A dimension publication records the actual tag even
   when the reference held its size already. `set_equal` between dimensions carries the solved
   tag in either argument order and checks two held tags; any row in the pair keeps only the
-  product (the Row-Row arm still compares rows). This also carries a free source's committed
+  product (the Row-Row arm still compares rows). Two live dimension bindings also retain their
+  `Dim_eq` after numeric forwarding: when one or both references hold only sizes, later basis
+  information must still propagate or conflict across the equality (`solved_capture_basis.ml`'s
+  left/right/both size matrix, in both argument orders). This also carries a free source's committed
   broadcast top: equating it with a plain `1_default` now refuses, where dropping the source tag
   used to accept it. Pins: `solved_capture_basis.ml`. A contradiction that depended on an eager
   numeric kernel size can now defer from registration until closure; the invalid valid-3x3

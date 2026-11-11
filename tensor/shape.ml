@@ -3526,6 +3526,30 @@ let set_equal delayed_ref1 delayed_ref2 =
                 trace ));
     active_constraints := equation :: !active_constraints
   in
+  let equal_live_dims () =
+    match (delayed_ref1.var, delayed_ref2.var) with
+    | `Dim dim_var1, `Dim dim_var2
+      when not (bound_before_closure delayed_ref1 || bound_before_closure delayed_ref2) ->
+        (* Both are dimension variables - create equality constraint *)
+        active_constraints :=
+          Row.Dim_eq
+            {
+              d1 = Row.Var dim_var1;
+              d2 = Row.Var dim_var2;
+              origin =
+                [
+                  {
+                    lhs_name = delayed_ref1.var_ref.ref_label;
+                    lhs_kind = `Output;
+                    rhs_name = delayed_ref2.var_ref.ref_label;
+                    rhs_kind = `Output;
+                    operation = Some "Shape.set_equal Dim-Dim";
+                  };
+                ];
+            }
+          :: !active_constraints
+    | _ -> ()
+  in
   let equal_basis (source : delayed_var_ref) (target : delayed_var_ref) =
     match (source.var, target.var) with `Row _, _ | _, `Row _ -> None | _ -> source.solved_basis
   in
@@ -3552,7 +3576,8 @@ let set_equal delayed_ref1 delayed_ref2 =
         | Some basis, _ -> set_ref_dim ~basis delayed_ref2 dim1
         | None, Some basis -> set_ref_dim ~basis delayed_ref1 dim2
         | None, None -> ());
-        note_numbered ())
+        note_numbered ();
+        equal_live_dims ())
       else
         raise
         @@ Row.Shape_error
@@ -3563,11 +3588,13 @@ let set_equal delayed_ref1 delayed_ref2 =
   | { var_ref = { solved_dim = Some dim; _ }; _ }, delayed_ref2 ->
       (* First is solved, second is not - set the second to match the first *)
       set_ref_dim ?basis:(equal_basis delayed_ref1 delayed_ref2) delayed_ref2 dim;
-      note_numbered ()
+      note_numbered ();
+      equal_live_dims ()
   | delayed_ref1, { var_ref = { solved_dim = Some dim; _ }; _ } ->
       (* Second is solved, first is not - set the first to match the second *)
       set_ref_dim ?basis:(equal_basis delayed_ref2 delayed_ref1) delayed_ref1 dim;
-      note_numbered ()
+      note_numbered ();
+      equal_live_dims ()
   | ( { var_ref = { solved_dim = None; ref_label = ref_label1; _ }; var = _; _ },
       { var_ref = { solved_dim = None; ref_label = ref_label2; _ }; var = `Not_set_yet; _ } )
   | ( { var_ref = { solved_dim = None; ref_label = ref_label1; _ }; var = `Not_set_yet; _ },
@@ -3577,25 +3604,7 @@ let set_equal delayed_ref1 delayed_ref2 =
            ( "set_equal: insufficient information between labels " ^ ref_label1 ^ " and "
              ^ ref_label2,
              [] )
-  | { var = `Dim dim_var1; _ }, { var = `Dim dim_var2; _ } ->
-      (* Both are dimension variables - create equality constraint *)
-      active_constraints :=
-        Row.Dim_eq
-          {
-            d1 = Row.Var dim_var1;
-            d2 = Row.Var dim_var2;
-            origin =
-              [
-                {
-                  lhs_name = delayed_ref1.var_ref.ref_label;
-                  lhs_kind = `Output;
-                  rhs_name = delayed_ref2.var_ref.ref_label;
-                  rhs_kind = `Output;
-                  operation = Some "Shape.set_equal Dim-Dim";
-                };
-              ];
-          }
-        :: !active_constraints
+  | { var = `Dim _; _ }, { var = `Dim _; _ } -> equal_live_dims ()
   | { var = `Dim dim_var; _ }, { var = `Row row_var; _ }
   | { var = `Row row_var; _ }, { var = `Dim dim_var; _ } ->
       (* One is dim var, one is row var - equality via Total_elems constraint *)

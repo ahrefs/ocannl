@@ -46,6 +46,32 @@ let () =
       Shape.set_dim n 3;
       let z = capture n (tagged "rgb") in
       p "a pending size allows a later rgb constraint" (List.equal Int.equal (dims y) [ 3 ] && rgb z));
+  List.iter
+    [ (true, false); (false, true); (true, true) ]
+    ~f:(fun (size_left, size_right) ->
+      List.iter [ false; true ] ~f:(fun swap ->
+          let name =
+            Printf.sprintf "live equality, sizes %b/%b, order %s" size_left size_right
+              (if swap then "reversed" else "forward")
+          in
+          let pair () =
+            let n = Shape.get_variable_ref "n" and m = Shape.get_variable_ref "n" in
+            let _x = capture n (leaf ()) and y = capture m (leaf ()) in
+            if size_left then Shape.set_dim n 3;
+            if size_right then Shape.set_dim m 3;
+            if swap then Shape.set_equal m n else Shape.set_equal n m;
+            ignore (capture n (tagged "rgb") : Tensor.t);
+            (m, y)
+          in
+          case (name ^ ": propagation") (fun () ->
+              let _, y = pair () in
+              p
+                (name ^ ": a later rgb basis propagates across the equality")
+                (List.equal Int.equal (dims y) [ 3 ] && rgb y));
+          case (name ^ ": conflict") (fun () ->
+              let m, _ = pair () in
+              refused (name ^ ": later different bases conflict") (fun () ->
+                  ignore (dims (capture m (tagged "xyz")))))));
   List.iter [ false; true ] ~f:(fun closed ->
       List.iter [ false; true ] ~f:(fun bound ->
           List.iter [ false; true ] ~f:(fun swap ->

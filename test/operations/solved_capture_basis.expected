@@ -1,6 +1,18 @@
 set_dim supplies the size without replacing rgb: true
 a sized capture publishes rgb for a later equality: true
 a pending size allows a later rgb constraint: true
+live equality, sizes true/false, order forward: a later rgb basis propagates across the equality: true
+live equality, sizes true/false, order forward: later different bases conflict: true
+live equality, sizes true/false, order reversed: a later rgb basis propagates across the equality: true
+live equality, sizes true/false, order reversed: later different bases conflict: true
+live equality, sizes false/true, order forward: a later rgb basis propagates across the equality: true
+live equality, sizes false/true, order forward: later different bases conflict: true
+live equality, sizes false/true, order reversed: a later rgb basis propagates across the equality: true
+live equality, sizes false/true, order reversed: later different bases conflict: true
+live equality, sizes true/true, order forward: a later rgb basis propagates across the equality: true
+live equality, sizes true/true, order forward: later different bases conflict: true
+live equality, sizes true/true, order reversed: a later rgb basis propagates across the equality: true
+live equality, sizes true/true, order reversed: later different bases conflict: true
 source open, target unbound, argument order forward: the target is unsolved before set_equal: true
 source open, target unbound, argument order forward: set_equal carries the solved rgb dimension: true
 source open, target unbound, argument order forward: set_equal still refuses another named basis: true
