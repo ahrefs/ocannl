@@ -9,10 +9,11 @@
    Every combination is pinned: the three specs, both registration orders (the dimension's solving
    spec before or after the row's), both forcing orders, and three sizings -- the part set before
    the specs, set after them, or left to a closed row of [2; 3] to determine. A closed row no part
-   fits, and nothing sized at all, are refused with a shape error. Every operand holds its own
-   offsets, so each cell read can be told from the rest, and every value is a small integer, so
-   equality is exact. Claims are about shape closure: every execution context is [Context.cpu
-   ()]. *)
+   fits is refused with a shape error. With nothing sized, affine parts close to 1 before the total
+   sizes the row (gh-ocannl-2159); unsized concat components remain deliberately refused
+   (gh-ocannl-1656). Every operand holds its own offsets, so each cell read can be told from the
+   rest, and every value is a small integer, so equality is exact. Claims are about shape closure:
+   every execution context is [Context.cpu ()]. *)
 
 open Base
 open Ocannl
@@ -41,6 +42,7 @@ type form = {
   spec : string;
   kernel : bool;  (** The spec's window takes a kernel [k], captured and set to 3. *)
   part_of : int -> int;  (** [a] for a given [n]. *)
+  total_of : int -> int;  (** [n] for a given [a]. *)
   reads : int -> float array;  (** The result for a given [a]. *)
 }
 
@@ -51,6 +53,7 @@ let forms =
       spec = "a^2 => a";
       kernel = false;
       part_of = (fun n -> n - 2);
+      total_of = (fun a -> a + 2);
       reads = iota;
     };
     {
@@ -58,6 +61,7 @@ let forms =
       spec = "2*a => a";
       kernel = false;
       part_of = (fun n -> n / 2);
+      total_of = (fun a -> 2 * a);
       reads = (fun a -> Array.init a ~f:(fun i -> Float.of_int (2 * i)));
     };
     {
@@ -65,6 +69,7 @@ let forms =
       spec = "a<+k => a";
       kernel = true;
       part_of = (fun n -> n - 2);
+      total_of = (fun a -> a + 2);
       reads = (fun a -> Array.init a ~f:(fun i -> Float.of_int ((3 * i) + 3)));
     };
   ]
@@ -125,7 +130,12 @@ let pin form ~part_first ~row_first_forced sizing =
       Tensor.unsafe_reinitialize ();
       let y1, y2, y3, v2, v3 = build form ~part_first ~row_first_forced sizing in
       let want_n, want_row =
-        match sizing with Closed_row ds -> (List.fold ds ~init:1 ~f:( * ), ds) | _ -> (4, [ 4 ])
+        match sizing with
+        | Closed_row ds -> (List.fold ds ~init:1 ~f:( * ), ds)
+        | Early | Late -> (4, [ 4 ])
+        | Unsized ->
+            let n = form.total_of 1 in
+            (n, if n = 1 then [] else [ n ])
       in
       let want_a = form.part_of want_n in
       Stdio.printf "%s: dims %s, %s, %s\n" label
@@ -138,9 +148,8 @@ let pin form ~part_first ~row_first_forced sizing =
       pf_close "%s: the part reads its cells" label v2 (form.reads want_a) ~tol:(fun _ -> 0.);
       pf_close "%s: the row reads its cells" label v3 (iota want_n) ~tol:(fun _ -> 0.))
 
-(* A shape error, not a crash: a closed row whose total no value of the part makes, and -- a loud
-   gap, not a wrong value -- nothing sized at all, where the closure empties the row before the part
-   is guessed and then cannot fit the part in a total of 1. *)
+(* A shape error, not a crash: a closed row whose total no value of the part makes, or a concat
+   component whose size no operand or capture determines. *)
 let refused form ~part_first ~row_first_forced sizing ~needle =
   let label = label form ~part_first ~row_first_forced sizing in
   case label (fun () ->
@@ -171,9 +180,23 @@ let () =
               List.iter
                 [ Early; Late; Closed_row [ 2; 3 ] ]
                 ~f:(pin form ~part_first ~row_first_forced);
-              refused form ~part_first ~row_first_forced Unsized
-                ~needle:
-                  (if phys_equal form concatenation then components_exceed else incompatible_stride))));
+              if phys_equal form concatenation then
+                refused form ~part_first ~row_first_forced Unsized
+                  ~needle:"closure does not guess one"
+              else pin form ~part_first ~row_first_forced Unsized)));
+  let plain =
+    {
+      name = "a plain variable";
+      spec = "a => a";
+      kernel = false;
+      part_of = Fn.id;
+      total_of = Fn.id;
+      reads = iota;
+    }
+  in
+  List.iter [ true; false ] ~f:(fun part_first ->
+      List.iter [ true; false ] ~f:(fun row_first_forced ->
+          pin plain ~part_first ~row_first_forced Unsized));
   List.iter [ true; false ] ~f:(fun part_first ->
       refused stride ~part_first ~row_first_forced:true (Closed_row [ 5 ])
         ~needle:incompatible_stride;

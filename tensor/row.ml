@@ -5557,19 +5557,35 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
           | Strided_var { coeff; var; denom; round_up }, [], _
             when is_stage6_up stage
                  && denom % Utils.safe_force coeff = 0
-                 && not (round_up && glb_has_axes) ->
+                 && not (round_up && glb_has_axes) -> (
               (* gh-ocannl-1868: a round-up total (packed uniform) whose use sites give the row
                  variable axes belongs to the GLB arm below, also when the already-closed axes'
                  product [denom] happens to be a multiple of [coeff]: closing the variable empty
                  here left a [28 -> 28] parameter's draw at 28 elements, broadcast along the other
                  axis. *)
-              let d2 = get_default_dim ~d:(denom / Utils.safe_force coeff) () in
-              if dim_var_is_in_param var env then
-                raise
-                @@ Shape_error
-                     ( "You forgot to specify the hidden dimension(s) 3",
-                       [ Dim_mismatch [ Var var ] ] )
-              else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
+              match subst_dim env (Var var) with
+              | (Affine _ | Concat _) as dim when not (Set.is_empty (vars_of_dim dim)) ->
+                  (* gh-ocannl-2159: the numerator already has a value, but its parts still need
+                     closing. Guessing it now can contradict that value. At stage 7 revisit the
+                     total after closing the parts: the stored constraint mentions only [var], so a
+                     part's solution alone need not visit it. *)
+                  if is_stage7 stage then
+                    ( [
+                        Rows_constr { r = [ r ]; constr; origin };
+                        Shape_row
+                          ({ beg_dims = []; dims = [ dim ]; bcast = Broadcastable; prov }, origin);
+                      ],
+                      env )
+                  else keep_constr ()
+              | _ ->
+                  let d2 = get_default_dim ~d:(denom / Utils.safe_force coeff) () in
+                  if dim_var_is_in_param var env then
+                    raise
+                    @@ Shape_error
+                         ( "You forgot to specify the hidden dimension(s) 3",
+                           [ Dim_mismatch [ Var var ] ] )
+                  else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
+              )
           | ( Strided_var { coeff; var; denom; round_up },
               [],
               Some ({ beg_dims = glb_beg; dims = glb_dims; bcast = _; prov = glb_prov } as glb) )

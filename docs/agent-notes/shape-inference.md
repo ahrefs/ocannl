@@ -305,9 +305,11 @@ files.
   the divisors and waits, as its stage-1 `Dim` arm does. The wait closes because every later
   application substitutes through the environment (which sums a concrete extent into a `Dim`), and a
   closed row's total reaches the variable as a `Dim_eq` whose solution carries to the parts
-  (gh-ocannl-2086, `test/einsum/product_tie_concat_affine.ml`). Nothing sized at all is still a
-  refusal: the stage-6 row closing empties the row before the part is guessed, and the part then
-  cannot fit a total of 1.
+  (gh-ocannl-2086, `test/einsum/product_tie_concat_affine.ml`). With nothing sized, stage 6 holds
+  that total while the numerator has open parts (gh-ocannl-2159). Stage 7 closes the parts and
+  re-emits the total: the stored constraint mentions only the numerator variable, so a part's
+  solution need not revisit it. Affine parts default to 1, then their extent sizes the row;
+  concatenation components retain the deliberate refusal to guess (gh-ocannl-1656, above).
 - `divided_by` is a multiset, and a repeat in it is an equation: `n / w` over `[w, ..r..]` leaves
   `n / (w * w)` on `r` (`Row.reduce_row_constraint` appends the consumed variables as they are), and
   the closed-row check takes any number of `divided_by` variables. A shortcut that treats a repeat
