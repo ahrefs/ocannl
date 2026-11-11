@@ -4607,8 +4607,11 @@ replacement for the fleet reservation or `tools/test-run.sh` wrapper.
   their 45-minute ceiling, a cancel that reads like a test hang (the tell: the log stops inside
   `Update apt package index`, before `actions/checkout`). Each copy caps an `apt-get update`
   session with `sudo timeout` (240s, apt's own per-connection timeout and retries inside it), gives
-  a fresh session one more try, and ends within about 9 minutes with an `::error` saying whether it
-  stalled; `ci.yml`'s matrix-job copy carries the rationale. It is inline, not a local action, on
+  a fresh session one more try on `archive.ubuntu.com` / `security.ubuntu.com` after rewriting
+  Azure entries in either Ubuntu source layout (gh-ocannl-2184), and ends within about 9 minutes with an `::error` saying whether it
+  stalled; `ci.yml`'s matrix-job copy carries the rationale. `APT::Update::Error-Mode=any` makes
+  partial index failures trigger the fallback too; a missing Azure source refuses the rewrite
+  explicitly rather than retrying the same mirror. It is inline, not a local action, on
   purpose: a `ci.yml` dispatch with `expected_sha` checks out that commit, which may predate any
   new action under `.github/actions/`, so a step that `uses:` one fails the red-span bisection of
   older commits (the floor that sets: [How far back a dispatch reaches](#how-far-back-a-dispatch-reaches)).

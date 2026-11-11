@@ -51,7 +51,7 @@ jobs:
 
       - name: RL slides
         run: slipshow compile docs/slides-RL-REINFORCE.md -o docs/html/RL-REINFORCE.html
-        
+
       - name: Install pandoc
         uses: pandoc/actions/setup@v1
         with:
@@ -90,13 +90,67 @@ jobs:
       - name: Update apt package index
         # Capped and retried: ci.yml's matrix-job copy says why (gh-ocannl-1809).
         run: |
+          mirror=$(python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
+          paths = (Path("/etc/apt/sources.list.d/ubuntu.sources"), Path("/etc/apt/sources.list"))
+          print(" / ".join(sorted({host for p in paths if p.exists()
+                                   for host in re.findall(r"https?://([^/\s]+)", p.read_text())})))
+          PYTHON
+          )
           for attempt in 1 2; do
+            if [ "$attempt" -eq 2 ]; then
+              # Both source layouts occur on hosted images. Split mixed deb822 suites
+              # so the security pocket uses security.ubuntu.com, including over HTTPS.
+              sudo python3 - <<'PYTHON'
+          from pathlib import Path
+          import re
+
+          host = "azure.archive.ubuntu.com"
+          found = False
+          for path in (Path("/etc/apt/sources.list.d/ubuntu.sources"), Path("/etc/apt/sources.list")):
+              if not path.exists():
+                  continue
+              source = path.read_text()
+              if host not in source:
+                  continue
+              found = True
+              if path.suffix == ".sources":
+                  blocks = []
+                  for block in source.split("\n\n"):
+                      if host not in block:
+                          blocks.append(block)
+                          continue
+                      suites = re.search(r"^Suites: (.+)$", block, re.M)
+                      if not suites:
+                          raise SystemExit(f"::error::Cannot find Suites in {path}'s Azure source")
+                      names = suites[1].split()
+                      for security in (False, True):
+                          selected = [s for s in names if s.endswith("-security") == security]
+                          if selected:
+                              part = re.sub(r"^Suites: .+$", "Suites: " + " ".join(selected), block, flags=re.M)
+                              blocks.append(part.replace(host, "security.ubuntu.com" if security else "archive.ubuntu.com"))
+                  source = "\n\n".join(blocks)
+              else:
+                  source = "\n".join(
+                      line.replace(host, "security.ubuntu.com" if re.search(r"\S+-security(?:\s|$)", line) else "archive.ubuntu.com")
+                      for line in source.split("\n")
+                  )
+              path.write_text(source)
+              print(f"Fallback Ubuntu sources in {path}:\n{source}", flush=True)
+          if not found:
+              raise SystemExit("::error title=apt-get update::Cannot switch mirrors: neither Ubuntu source file contains azure.archive.ubuntu.com")
+          PYTHON
+              mirror="archive.ubuntu.com / security.ubuntu.com"
+            fi
+            echo "apt-get update attempt $attempt of 2 using $mirror"
             rc=0
             sudo timeout --kill-after=15 240 apt-get update -o Acquire::Retries=3 \
-              -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 || rc=$?
+              -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+              -o APT::Update::Error-Mode=any || rc=$?
             [ "$rc" -eq 0 ] && exit 0
             case $rc in 124|137) last="stalled past 240s (apt mirror stall)" ;; *) last="failed with exit $rc" ;; esac
-            echo "::warning title=apt-get update::attempt $attempt of 2 $last"
+            echo "::warning title=apt-get update::attempt $attempt of 2 using $mirror $last"
           done
           echo "::error title=apt-get update::sudo apt-get update did not complete in 2 capped attempts; the last $last. The apt index refresh precedes the change under test: re-run the job."
           exit 1
