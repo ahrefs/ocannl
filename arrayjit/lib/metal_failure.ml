@@ -60,6 +60,22 @@ type command_buffer_failure = {
 
 exception Command_buffer_failed of command_buffer_failure
 
+module For_testing = struct
+  type status = Pending | Error of string option
+
+  (* Like [Resource_fault_injection], scoped to the calling domain: [reap] runs on the host domain
+     doing the wait, never in a Metal completion callback. No override means driver reads. *)
+  let reap_status : (what:string -> status option) Stdlib.Domain.DLS.key =
+    Stdlib.Domain.DLS.new_key (fun () ~what:_ -> None)
+
+  let status_for_reap ~what = Stdlib.Domain.DLS.get reap_status ~what
+
+  let with_reap_status status ~f =
+    let prior = Stdlib.Domain.DLS.get reap_status in
+    Stdlib.Domain.DLS.set reap_status status;
+    Exn.protect ~f ~finally:(fun () -> Stdlib.Domain.DLS.set reap_status prior)
+end
+
 let command_buffer_report { what; error; _ } =
   let error = Option.value error ~default:"Metal gave no error text" in
   Printf.sprintf
