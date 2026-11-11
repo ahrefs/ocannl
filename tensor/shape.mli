@@ -322,6 +322,10 @@ val unsafe_reinitialize : unit -> unit
 
 (** {2 Internal-ish API.} *)
 
+val refuse_unsolved : where:string -> Row.constraint_ list -> unit
+(** Validate the residual constraints of a fully staged solve, as the inference finalizers do.
+    Raises [Row.Shape_error] if any remain, with [where] identifying the finalizer. *)
+
 val set_terminal : is_param:bool -> t -> unit
 (** Mark the shape as terminal, so that its rows can be closed to Greatest Lower Bounds (GLBs). This
     function is only intended for parameters shapes, which would otherwise not be terminal because

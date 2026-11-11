@@ -346,6 +346,13 @@ files.
   size passes and a size the total fixes stays unsolved (gh-ocannl-2034; `divided_by_repeat.ml`
   solves in two calls, as the incremental solver does, since a single call re-reads the original
   constraint and hides the drop).
+- An open row's total over a `Concat` or valid (unpadded) window stays a `Rows_constr` until
+  substitution makes the consumed axes factorable (gh-ocannl-2127). `reduce_row_constraint` raises
+  `Given_up` there; application and elimination keep the whole row and its total, as the closed-row
+  path does. Storing `Unconstrained` on the tail loses the equation between incremental solves.
+  `test/operations/row_total_pending` pins both flanks, every closing stage, a later wrong total
+  and inference of the remaining factor. A total still undecidable at closure is refused by
+  `Shape.refuse_unsolved` with the axis and a sizing remedy.
 - The packed sampler's round-up total (`Total_elems` over a `Strided_var { round_up = true }`,
   minted by `Uint4x32_to_prec`) has to wait for the same use-site bound, in
   `Row.eliminate_row_constraint`: an arm that settles the counter from the already-closed axes

@@ -1134,9 +1134,9 @@ let add_var_used_in_spec_or_compose row =
 let add_var_used_in_pointwise row =
   match row with Row.Row_var v -> Row.add_used_in_pointwise v | _ -> ()
 
-(** Refuses constraints a fully staged solve left unsolved (gh-ocannl-1656). The one known source is
-    a concatenated axis whose components the spec does not size: [p^o^q => o] fixes [p + q], not [p]
-    and [q], so name it with the fix; anything else keeps the plain report of the leftover. *)
+(** Refuses constraints a fully staged solve left unsolved. Name unsized concat components
+    (gh-ocannl-1656) and totals over composite axes (gh-ocannl-2127) with their sizing remedy;
+    anything else keeps the plain report of the leftover. *)
 let refuse_unsolved ~where (unsolved : Row.constraint_ list) =
   if not (List.is_empty unsolved) then
     let concat =
@@ -1156,12 +1156,34 @@ let refuse_unsolved ~where (unsolved : Row.constraint_ list) =
                   (the spec's trailing label list) and Shape.set_dim it, or write its size as an \
                   integer component (e.g. 2^o^1 => o)"],
                [ Row.Dim_mismatch [ c ] ] )
-    | None ->
-        raise
-        @@ Row.Shape_error
-             ( where ^ ": constraints left unsolved: "
-               ^ Sexp.to_string_hum ([%sexp_of: Row.constraint_ list] unsolved),
-               [] )
+    | None -> (
+        let composite_total_axis =
+          List.find_map unsolved ~f:(function
+            | Row.Rows_constr { r; constr = Total_elems _; _ } ->
+                List.find_map r ~f:(fun row ->
+                    List.find (row.Row.beg_dims @ row.dims) ~f:(function
+                      | Row.Concat _ | Row.Affine { conv = Some { use_padding = false; _ }; _ } ->
+                          true
+                      | _ -> false))
+            | _ -> None)
+        in
+        match composite_total_axis with
+        | Some axis ->
+            let axis_text = Row.dim_to_string Axis_size axis in
+            raise
+            @@ Row.Shape_error
+                 ( [%string
+                     "%{where}: the total-elements constraint over axis %{axis_text} cannot be \
+                      divided until its parts are sized. Capture the axis components (the spec's \
+                      trailing label list) and size them with Shape.set_dim, or write explicit \
+                      integer sizes in the spec"],
+                   [ Row.Dim_mismatch [ axis ] ] )
+        | None ->
+            raise
+            @@ Row.Shape_error
+                 ( where ^ ": constraints left unsolved: "
+                   ^ Sexp.to_string_hum ([%sexp_of: Row.constraint_ list] unsolved),
+                   [] ))
 
 (* The refusals ahead of binding [delayed_ref] (gh-ocannl-1655): binding touches the reference,
    which would make one bound before the closure read as open work. *)
