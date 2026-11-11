@@ -23,6 +23,23 @@ r<=o repeated, r=[2], o=[3,2]: refused, the operand has more axes: true
 r<=o repeated, r=[3,2], o=[3]: refused, the aligned axes differ: true
 r<=o and o<=r, r=[3,2], o=[2]: refused, the bounds make them equal: true
 r<=o and o<=r, r=[3,2]: solved, o with it: true
-the dim twin: d1<=d2 recorded, then d1=3, d2=1 in one stage-2 call: 3 1
-the dim twin, the bound repeated first: Shape_error: solved dimensions for axis: different bases
 repeating a recorded bound in the stage-2 call changes no store's outcome: true
+d1<=d2 recorded, then d1=3, d2=1_(bcast_if_1) in one stage-2 call: solved to 3, the top: true
+the same with the bound repeated first: solved alike: true
+the bound repeated between the equations: solved alike: true
+the bound repeated last: solved alike: true
+the equations swapped, the bound repeated first: solved alike: true
+the bound repeated alone in a stage-2 call, then a call per equation: solved alike: true
+d1<=d2 repeated, d1=3, d2=3: solved, equal: true
+d1<=d2 repeated, d1=3: solved, d2 closing above it: true
+d1<=d2 repeated, d1=3, d2=1_(default): refused, a default 1 is no top: true
+d1<=d2 repeated, d1=3, d2=2: refused: true
+d1<=d2 repeated, d1=3_(rgb), d2=3: refused, the bases differ: true
+d1<=d2 and d2<=d1, d1=3, d2=1_(bcast_if_1): refused, the bounds make them equal: true
+d1<=d2 and d2<=d1, d1=3: solved, d2 with it: true
+d1<=d2<=leaf, d1=3: the leaf closes to 3, with or without the repeat, d1=3 early or late: true
+and the repeat changes nothing in how it closes: true
+the dimension sweep solves stores and refuses others: true
+every dimension solution satisfies its store, on ground dimensions: true
+repeating a recorded dimension bound in the stage-2 call changes no store: true
+re-solving the stage-1 steps at stage 2, as the closure does, changes no store: true
