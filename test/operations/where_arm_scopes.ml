@@ -445,6 +445,27 @@ let row_cross_order () =
   values name got [ [| sum2 0 +. (2. *. (sum2 0 +. xs.(0))); sum2 1; 0.; 0. |] ];
   guarded name source x
 
+(* [i < 1 ? (r ? s : 0) : 0], [s] minted before [r]: [r] runs under [i < 1], [s] under [i < 1 && r],
+   whose test reads [r]'s local, so [r] has to run first although [s]'s body does not read it (Codex
+   review of the gh-ocannl-2145 PR). *)
+let row_guard_reads () =
+  let name = "was_guard_reads" in
+  let x = mk "was_guard_reads_x" and out = mk ~dims:[| n |] "was_guard_reads_out" in
+  let llc =
+    loop (fun i ->
+        let _, s = sum_scope x ~at:(off_at ~pass:0 i) in
+        let _, r = sum_scope x ~at:(in_range i) in
+        set_at out (iter i)
+          (where_
+             (lt (embed i) (ic 1))
+             (LL.Ternop
+                (Ops.Where, (add r (mul (c 0.) (embed i)), single), (s, single), (c 0., single)))
+             (c 0.)))
+  in
+  let got, source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| sum2 0; 0.; 0.; 0. |] ];
+  guarded name source x
+
 let () =
   row_then ();
   row_else ();
@@ -459,4 +480,5 @@ let () =
   row_blend ();
   row_gate ();
   row_disjunction ();
-  row_cross_order ()
+  row_cross_order ();
+  row_guard_reads ()

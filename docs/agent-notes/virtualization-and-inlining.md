@@ -76,7 +76,8 @@ files.
   gate) keeps its block behind that operator's own test (the second operand at 1 and at 0 giving
   different results), so its condition is never tested where the operator skipped it. The unconditional definitions render as before, then the
   conditional ones' zero-initialized declarations, then the conditional bodies in ONE dependency
-  order across all their conditions (a body under `(A && B) || (A && C)` can read one under `A`:
+  order (over what each body reads AND what its conditions' tests read: in `A ? (R ? S : 0) : 0`
+  the test of `S` reads `R`) across all their conditions (a body under `(A && B) || (A && C)` can read one under `A`:
   blocks emitted condition by condition read it before it ran, Codex review), consecutive bodies
   under the same conditions sharing one `if`. Under a blend (cc and HIP at a
   float precision, `speculable_select`, whose conditions never mention an index) both arms run by

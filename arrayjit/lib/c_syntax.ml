@@ -3349,11 +3349,12 @@ let with_compiler_options ~compiler ~options ~enrich compile =
     let exn = Option.value (enrich exn ~suffix) ~default:exn in
     Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-type guard_lit = { key : string; test : PPrint.document; holds : bool }
+type guard_lit = { key : string; test : PPrint.document; holds : bool; deps : int list }
 (** One condition a scope definition's execution is under (gh-ocannl-2145): the rendered condition
     [test] of a short-circuiting [Where], and whether the definition sits in its then-arm ([holds])
     or its else-arm. [key] is [test]'s text: a condition is pure and the bodies run before it write
-    only their own locals, so two conditions spelled alike in one statement agree. *)
+    only their own locals, so two conditions spelled alike in one statement agree. [deps]: the scope
+    locals [test] reads, whose definitions must run before it is tested. *)
 
 type scope_def = {
   reads : int list Lazy.t;  (** The locals the body reads. *)
@@ -3414,14 +3415,20 @@ let rec normalize_guards (paths : guard_lit list list) =
 
 (* gh-ocannl-2145: [d_then] and [d_else], the entries of a short-circuiting [Where]'s arms, under
    their condition [cond]. *)
-let guard_arms ~(cond : PPrint.document) d_then d_else =
+let guard_arms ~(cond : PPrint.document) ~(cond_defs : local_def list) d_then d_else =
   if List.is_empty d_then && List.is_empty d_else then []
   else
     let buf = Buffer.create 64 in
     PPrint.ToBuffer.compact buf cond;
     let key = Buffer.contents buf in
     let under holds =
-      List.map ~f:(fun d -> { d with guard = { key; test = cond; holds } :: d.guard })
+      List.map ~f:(fun d ->
+          {
+            d with
+            guard =
+              { key; test = cond; holds; deps = List.map cond_defs ~f:(fun d -> d.scope) }
+              :: d.guard;
+          })
     in
     under true d_then @ under false d_else
 
@@ -3730,7 +3737,7 @@ module C_syntax (B : C_syntax_config) = struct
      operand at [1] and at [0] give different results, spelled in the dialect's own syntax -- so the
      [Where]'s condition is never tested where the operator skipped it. Its other definitions still
      run ahead of the statement. *)
-  let gate_entries prec op e1 d2 =
+  let gate_entries prec op ~d1 e1 d2 =
     if not (List.exists d2 ~f:(fun d -> not (List.is_empty d.guard))) then d2
     else
       let open PPrint in
@@ -3742,7 +3749,9 @@ module C_syntax (B : C_syntax_config) = struct
       in
       let buf = Buffer.create 64 in
       PPrint.ToBuffer.compact buf test;
-      let lit = { key = Buffer.contents buf; test; holds = true } in
+      let lit =
+        { key = Buffer.contents buf; test; holds = true; deps = List.map d1 ~f:(fun d -> d.scope) }
+      in
       List.map d2 ~f:(fun d ->
           if List.is_empty d.guard then d else { d with guard = lit :: d.guard })
 
@@ -3773,7 +3782,7 @@ module C_syntax (B : C_syntax_config) = struct
           match op with
           | Ops.Where when Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ])
             ->
-              d1 @ guard_arms ~cond:e1 d2 d3
+              d1 @ guard_arms ~cond:e1 ~cond_defs:d1 d2 d3
           | _ -> List.concat [ d1; d2; d3 ]
         in
         let expr = ternop_expr prec op ~v1 ~v2 ~v3 e1 e2 e3 in
@@ -3804,7 +3813,7 @@ module C_syntax (B : C_syntax_config) = struct
             in
             let defs =
               match Ops.binop_conditionality op with
-              | Ops.Gated_second when not blended -> d1 @ gate_entries prec op e1 d2
+              | Ops.Gated_second when not blended -> d1 @ gate_entries prec op ~d1 e1 d2
               | _ -> List.concat [ d1; d2 ]
             in
             let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
@@ -3885,7 +3894,7 @@ module C_syntax (B : C_syntax_config) = struct
           let d1, e1 = render v1 in
           let d2, e2 = render v2 in
           match Ops.binop_conditionality op with
-          | Ops.Gated_second -> (d1 @ gate_entries at op e1 d2, e1, e2)
+          | Ops.Gated_second -> (d1 @ gate_entries at op ~d1 e1 d2, e1, e2)
           | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> (d1 @ d2, e1, e2)
         in
         match Ops.binop_integer_valuation op with
@@ -3921,7 +3930,7 @@ module C_syntax (B : C_syntax_config) = struct
             let d2, e2 = render v2 in
             let d3, e3 = render v3 in
             (* A select at an integer precision short-circuits (gh-ocannl-2145). *)
-            ( d1 @ guard_arms ~cond:e1 d2 d3,
+            ( d1 @ guard_arms ~cond:e1 ~cond_defs:d1 d2 d3,
               ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3 )
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 ->
             let d1, e1 = widen v1 in
@@ -4817,8 +4826,9 @@ module C_syntax (B : C_syntax_config) = struct
      ({!normalize_guards}) -- what each of them implies, so no read meets a local its body did not
      set, and a scope both arms need runs unconditionally, as either arm would run it. The
      unconditional definitions render as they always did; then the conditional ones'
-     zero-initialized declarations; then the conditional bodies in one dependency order, each run of
-     them under the same conditions in an [if] over those conditions. *)
+     zero-initialized declarations; then the conditional bodies in one dependency order -- over what
+     each body reads and what the tests of its conditions read -- each run of them under the same
+     conditions in an [if] over those conditions. *)
   let pp_local_defs (local_defs : local_def list) =
     let open PPrint in
     let defs =
@@ -4862,8 +4872,15 @@ module C_syntax (B : C_syntax_config) = struct
         if Hash_set.mem emitted scope then docs
         else (
           Hash_set.add emitted scope;
+          (* What the body reads, and what the tests of its conditions read. *)
+          let guard_deps =
+            List.concat_map (Hashtbl.find_exn guards scope) ~f:(fun path ->
+                List.concat_map path ~f:(fun (l : guard_lit) -> l.deps))
+          in
           let siblings =
-            List.filter_map (Lazy.force def.reads) ~f:(fun r ->
+            List.filter_map
+              (Lazy.force def.reads @ guard_deps)
+              ~f:(fun r ->
                 if Hash_set.mem in_group r then
                   Option.map (Hashtbl.find by_scope r) ~f:(fun d -> (r, d))
                 else None)
