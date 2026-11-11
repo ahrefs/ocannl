@@ -583,6 +583,16 @@ let default_scheme_name ~loc ?name () =
 
 let concat_fn ~loc = Ast_builder.Default.evar ~loc (snd Einsum_parser.concat_operator_function)
 
+(* Positional arguments are counted independently of labels, for calls and pipelines alike. *)
+let concat_rhses_position fn args =
+  match fn.pexp_desc with
+  | Pexp_ident { txt = Lident name; _ }
+    when List.mem Einsum_parser.concat_spec_functions name ~equal:String.equal ->
+      List.filter_mapi args ~f:(fun i (label, _) ->
+          match label with Nolabel -> Some i | _ -> None)
+      |> fun positions -> List.nth positions 1
+  | _ -> None
+
 let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?scheme_name ~opt_label
     ~late ?label expr =
   let loc = expr.pexp_loc in
@@ -594,6 +604,30 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         let vbss, elems = List.unzip (List.map elems ~f:(loop_grouping ?label)) in
         (reduce_vbss vbss, { expr with pexp_desc = Pexp_tuple elems })
     | _ -> loop ?label expr
+  in
+  let preserve_ocaml expr =
+    let preserve =
+      object
+        inherit Ast_traverse.map as super
+
+        method! expression expr =
+          match expr.pexp_desc with
+          | Pexp_extension ({ txt = "oc"; _ }, _) -> snd (loop expr)
+          (* An explicit nested quotation owns its contents and escapes. *)
+          | Pexp_extension _ -> expr
+          | _ -> super#expression expr
+      end
+    in
+    (no_vbs, preserve#expression expr)
+  in
+  let loop_rhses expr =
+    match expr.pexp_desc with
+    | Pexp_array elems ->
+        let vbss, elems = List.unzip (List.map elems ~f:loop_grouping) in
+        ( reduce_vbss vbss,
+          in_source_order ~loc:expr.pexp_loc ~prefix:component_prefix elems ~f:(fun elems ->
+              { expr with pexp_desc = Pexp_array elems }) )
+    | _ -> preserve_ocaml expr
   in
   (* [loop] below a binder of the body: [construct] binds the names of [pat] there. *)
   let loop_under construct pat =
@@ -960,7 +994,15 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       (* The pipeline's function may already have arguments ([einsum1 "ab=>a"], [( + ) y]).
          Classify its source head before translation adds labels or site wrappers. *)
       let operator = is_dsl_application_head fn in
-      let vbs1, arg = loop arg in
+      let vbs1, arg =
+        match fn.pexp_desc with
+        | Pexp_apply (head, args)
+          when Option.equal Int.equal
+                 (concat_rhses_position head (args @ [ (Nolabel, arg) ]))
+                 (Some (List.length args)) ->
+            loop_rhses arg
+        | _ -> loop arg
+      in
       let vbs2, fn = loop fn in
       let vbs = reduce_vbss [ vbs1; vbs2 ] in
       let app = [%expr [%e fn] __x] in
@@ -975,11 +1017,25 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
         List.find_mapi args ~f:(fun i (_, arg_expr) ->
             match arg_expr with [%expr ()] -> Some i | _ -> None)
       in
+      let named_form = is_named_spec_function fn_expr in
+      let rhses_position = concat_rhses_position fn_expr args in
       let vbs_fn, e_fn = loop ?label fn_expr in
       let vbs_args, processed_args =
         List.unzip
         @@ List.mapi args ~f:(fun i (arg_label, arg_expr) ->
+            let capture_argument =
+              named_form
+              &&
+              match arg_label with
+              | Labelled "capture_dims" | Optional "capture_dims" -> true
+              | _ -> false
+            in
             match unit_position with
+            | _ when capture_argument || Option.equal Int.equal rhses_position (Some i) ->
+                let vbs, e =
+                  if capture_argument then preserve_ocaml arg_expr else loop_rhses arg_expr
+                in
+                (vbs, (arg_label, e))
             | Some unit_pos when i < unit_pos ->
                 (* Before unit: preserve as OCaml expression *)
                 (no_vbs, (arg_label, arg_expr))

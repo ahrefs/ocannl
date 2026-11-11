@@ -24,6 +24,9 @@ val binary_operators_with_generated_specs : string list
 val unary_operators_with_generated_specs : string list
 val concat_operator_with_generated_specs : string
 
+val concat_spec_functions : string list
+(** The named concatenation forms, whose second positional argument is an operand array. *)
+
 val named_spec_functions : string list
 (** The unqualified named DSL functions ([TDSL.O], [NTDSL.O]) whose first positional argument is an
     einsum specification: the functions the operators apply, [concat_sum], and the ternary

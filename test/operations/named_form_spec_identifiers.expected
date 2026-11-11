@@ -10,3 +10,20 @@ einsum with a plain + window reads use_padding = false: true
 einsum agrees with +* on a plain + window: true
 einsum1 with a capture and a stride identifier computes x.(stride * o): true
 the capture names the output dimension, n / stride: true
+concat accepts an OCaml operand array: true
+concat_sum accepts an array after labelled capture_dims: true
+concat_sum captures its first operand dimension: true
+einsum1 accepts an optional OCaml capture list: true
+optional capture_dims captures the axis: true
+nested OCaml capture escapes remain accepted: true
+escaped optional capture_dims captures the axis: true
+OCaml operand array escapes remain accepted: true
+operand arrays allow explicit nested tensor quotations: true
+concat translates tensor expressions inside an operand array: true
+piped concat preserves its operand array: true
+piped concat_sum translates operands and preserves captures: true
+piped concat_sum captures its first operand dimension: true
+concat operand operators substitute runtime spec identifiers: true
+concat translates inline parameter declarations in operand arrays: true
+concat inline parameters are reused across calls after unit application: true
+computed concat arrays retain OCaml semantics: true

@@ -16,12 +16,11 @@ let concat_operator_function = ("++^", "concat")
 let binary_operators_with_generated_specs = List.map binary_operator_functions ~f:fst
 let unary_operators_with_generated_specs = List.map unary_operator_functions ~f:fst
 let concat_operator_with_generated_specs = fst concat_operator_function
+let concat_spec_functions = [ snd concat_operator_function; "concat_sum" ]
 
 let named_spec_functions =
-  List.map
-    (binary_operator_functions @ unary_operator_functions @ [ concat_operator_function ])
-    ~f:snd
-  @ [ "concat_sum"; "einsum3" ]
+  List.map (binary_operator_functions @ unary_operator_functions) ~f:snd
+  @ concat_spec_functions @ [ "einsum3" ]
 
 let operators_with_generated_specs =
   binary_operators_with_generated_specs @ unary_operators_with_generated_specs

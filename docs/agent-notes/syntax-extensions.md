@@ -18,9 +18,13 @@ files.
   live (gh-ocannl-2060): a named form's literal first argument is substituted by
   `Ppx_shared.substitute_named_form_spec`, which both PPXs apply to the applications they rebuild
   or pass through, only when the spec reads a runtime value (an identifier, or a plain `+` window's
-  `use_padding`) -- otherwise the call is left as written. Its other arguments get the ordinary
-  `%op` translation: a list or array literal there (`~capture_dims:[ d ]`, `concat`'s `[| x; y |]`)
-  becomes a block tensor, so write it under `[%oc ...]`.
+  `use_padding`) -- otherwise the call is left as written. In `%op`, `~capture_dims` / `?capture_dims` and
+  the second positional argument of `concat` / `concat_sum` keep their container meaning
+  (gh-ocannl-2172): `[ d ]` is an OCaml capture list and `[| x; y |]` is an operand array of `%op`
+  expressions. Literal operand arrays translate each element, including numeric literals, einsum
+  operators and inline declarations, in the enclosing scope; computed arrays stay ordinary OCaml.
+  Direct and piped calls share this rule. Existing `[%oc ...]` escapes still work, including nested
+  capture escapes. Other arguments get the ordinary `%op` translation.
 - `%op` inline-record init expressions (`{ w = kaiming normal1 () }`) are bound under the
   generated `open TDSL.O`, including when there is no unit parameter (gh-511). The no-unit-param
   form is not generative: `let%op f x = ...` closes over ONE shared param created at definition
@@ -84,7 +88,7 @@ files.
   `tools/test-typecheck-scan-cases.sh` plants to be rejected through the ppx (its `#project` legs,
   CI's main shard 1), which `affected --harnesses` names for a change to any `tensor/ppx_*.ml`.
 - Evaluation order (gh-ocannl-1869): where `%op` gives a literal a meaning of its own -- a block
-  tensor's components, a concat's operand tuple, an einsum's capture list -- the expansion runs
+  tensor's components, a concat's operand tuple or array, an einsum's capture list -- the expansion runs
   the members in source order (`Ppx_shared.in_source_order` let-binds each one that is not a
   variable or a constant, but the last; `collect_capture_labels` keeps the written order), so
   ids and capture uids ascend left to right (`test/ppx/test_eval_order.ml`, both compiled and
