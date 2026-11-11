@@ -104,3 +104,56 @@ let () =
         (Context.get_values ctx reduced.value)
         (Array.init 9 ~f:(fun i -> Float.of_int (324 + (9 * i))))
         ~tol:(fun _ -> 0.))
+
+(* A kernel can also be its iterator, or two windows can use each other's kernels as iterators.
+   These stores already close on the base solver: all extents carry the broadcast top explicitly, so
+   guessing the cycle's parts at 1 satisfies sizes AND bases. *)
+let closes_cycle ~mutual ~reverse =
+  Tensor.unsafe_reinitialize ();
+  let x = Row.get_var () and a = Row.get_var () and b = Row.get_var () in
+  let y = if mutual then Row.get_var () else x in
+  let b = if mutual then b else a in
+  let dim v = Row.Var v in
+  let window over kernel =
+    Row.Affine
+      {
+        stride = 2;
+        over = dim over;
+        conv = Some { dilation = 1; kernel = dim kernel; use_padding = false };
+        stride_offset = 0;
+      }
+  in
+  let eq d1 d2 = Row.Dim_eq { d1; d2; origin = [] } in
+  let top = Row.get_bcast_dim ~d:1 () in
+  let vars = if mutual then [ x; y; a; b ] else [ x; a ] in
+  let row : Row.t =
+    {
+      beg_dims = [];
+      dims = List.map vars ~f:dim;
+      bcast = Broadcastable;
+      prov = Row.provenance ~sh_id:(-1) ~kind:`Output;
+    }
+  in
+  let constraints =
+    [ Row.Shape_row (row, []); eq (dim x) (window a b); eq (window a b) top ]
+    @ if mutual then [ eq (dim y) (window b a); eq (window b a) top ] else []
+  in
+  let constraints = if reverse then List.rev constraints else constraints in
+  match
+    List.fold [ Row.Stage1; Stage2; Stage3; Stage4; Stage5; Stage6a; Stage6b; Stage7 ]
+      ~init:(constraints, Row.empty_env) ~f:(fun (held, env) stage ->
+        Row.solve_inequalities ~stage held env)
+  with
+  | held, env ->
+      List.is_empty held
+      && List.for_all vars ~f:(fun v ->
+          match Row.get_dim_from_env env v with
+          | Some (Dim { d = 1; basis; _ }) -> String.equal basis Row.bcast_if_1
+          | _ -> false)
+  | exception Row.Shape_error _ -> false
+
+let () =
+  p_all "a self-dependent kernel still closes, in either constraint order" [ false; true ]
+    ~f:(fun reverse -> closes_cycle ~mutual:false ~reverse);
+  p_all "mutually dependent kernels still close, in either constraint order" [ false; true ]
+    ~f:(fun reverse -> closes_cycle ~mutual:true ~reverse)

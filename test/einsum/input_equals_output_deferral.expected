@@ -14,3 +14,5 @@ x -> 2*o<+2*k, output 9: 9,9
 x -> 2*o<+2*k: the input is sized by the deferred equation: true
 the terminal closes with two axes of 9: true
 each output sums its own nine input offsets: true
+a self-dependent kernel still closes, in either constraint order: true
+mutually dependent kernels still close, in either constraint order: true

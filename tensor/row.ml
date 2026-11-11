@@ -5945,29 +5945,32 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     ?(discardable_vars : dim_var_set = dim_var_set_empty) (ineqs : constraint_ list) env :
     constraint_ list * _ =
   let env = { env with discardable_vars = Set.union discardable_vars env.discardable_vars } in
-  let rec solve ineqs (env : environment) : constraint_ list * _ =
+  let rec solve ?(unblocked_kernels = dim_var_set_empty) ineqs (env : environment) :
+      constraint_ list * _ =
     (* gh-ocannl-2156: a held window equation is a dependency for closing, too. Its plain extent
        waits for the window; against a fixed extent, an open kernel waits for the iterator so kernel
        inference can use it. Recompute after substitution each pass, retaining the closing
        constraints until those equations settle. *)
-    let waiting_on_window waiting extent window =
+    let waiting_on_window (waiting, kernels) extent window =
       match (extent, window) with
       | Var v, Affine { conv = Some { kernel = Var _; use_padding = false; _ }; _ } ->
-          Set.add waiting v
+          (Set.add waiting v, kernels)
       | Dim _, Affine { over; conv = Some { kernel = Var k; use_padding = false; _ }; _ }
         when not (Set.is_empty (vars_of_dim over)) ->
-          Set.add waiting k
-      | _ -> waiting
+          (Set.add waiting k, Set.add kernels k)
+      | _ -> (waiting, kernels)
     in
-    let deferred_dims =
-      if not (is_stage4_up stage) then dim_var_set_empty
+    let deferred_dims, deferred_kernels =
+      if not (is_stage4_up stage) then (dim_var_set_empty, dim_var_set_empty)
       else
-        List.fold ineqs ~init:dim_var_set_empty ~f:(fun waiting -> function
+        List.fold ineqs ~init:(dim_var_set_empty, dim_var_set_empty) ~f:(fun waiting -> function
           | Dim_eq { d1; d2; _ } ->
               let d1 = subst_dim env d1 and d2 = subst_dim env d2 in
               waiting_on_window (waiting_on_window waiting d1 d2) d2 d1
           | _ -> waiting)
     in
+    let deferred_dims = Set.diff deferred_dims unblocked_kernels in
+    let deferred_kernels = Set.diff deferred_kernels unblocked_kernels in
     (* Process a single constraint and return new constraints + updated env *)
     let process_constraint env ineq =
       match ineq with
@@ -6092,12 +6095,18 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
     in
     let at_fixpoint () =
       match if is_stage2_up stage then settle () else None with
-      | Some (ineqs', env) -> solve ineqs' env
-      | None -> (ineqs', env)
+      | Some (ineqs', env) -> solve ~unblocked_kernels ineqs' env
+      | None -> (
+          (* A kernel can also supply its iterator, directly or through other windows. Only at the
+             final fixpoint, when nothing else can close, let one waiting kernel use ordinary
+             closing and retry. Keep that choice through retries, even if it emits no guess. *)
+          match if is_stage7 stage then Set.min_elt deferred_kernels else None with
+          | Some kernel -> solve ~unblocked_kernels:(Set.add unblocked_kernels kernel) ineqs' env
+          | None -> (ineqs', env))
     in
     if List.is_empty ineqs' || List.equal equal_constraint_up_to_origin ineqs' ineqs then
       at_fixpoint ()
-    else solve ineqs' env
+    else solve ~unblocked_kernels ineqs' env
   in
   (* gh-ocannl-1961: what closes a draw's rows reads the environment, which mid-pass lies: a solved
      bound has left its operands' [res] while the [Row_ineq] carrying it is still in the list. So

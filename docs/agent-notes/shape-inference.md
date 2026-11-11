@@ -23,12 +23,12 @@ files.
   pushes what it returns onto `active_constraints`, never asserts it empty: `deduce_within`
   (`~deduced:Input_equals_output`) defers an unpadded window over an open kernel and a held window
   pair (gh-ocannl-2030, `test/einsum/input_equals_output_deferral.ml`).
-- A deferred valid-window equality constrains closing order too (gh-ocannl-2156): its plain
+- A deferred valid-window equality constrains guessing order too (gh-ocannl-2156): its plain
   extent waits for the window, and a kernel inferred from a fixed extent waits for the iterator.
-  `solve_inequalities` recomputes these dependencies after substitution each pass; terminal and
-  `Shape_row` closings retain them even at Stage7. Otherwise `x -> 2*o<+k` over 9 guesses `x` at
-  the broadcast top before `o = 1` can infer `k = 9`. Shape and executed pins:
-  `test/einsum/input_equals_output_deferral.ml`.
+  `solve_inequalities` recomputes these dependencies after substitution; terminal and `Shape_row`
+  closings retain them through Stage7 while known bounds propagate. At a final fixpoint one
+  waiting kernel may use ordinary closing, breaking self-dependencies and cycles of windows.
+  Shape, cycle and executed pins: `test/einsum/input_equals_output_deferral.ml`.
 - The occurs check around ONE row variable (the equal-variable arms of `unify_row` and
   `solve_row_ineq`, gh-ocannl-2036) turns on which side has the surplus axes. An equation with
   unequal totals, and an inequality whose OPERAND has the surplus, hold for no finite value and
