@@ -27,9 +27,11 @@ type arm = Inline_ptx of inline_ptx | Wmma of wmma_kind [@@deriving equal, sexp_
    whole fragment array, which no self-contained statement has, so the per-statement scope never
    resolves to it. Before gh-ocannl-1232 this was a fall-through: the per-statement hook tried the
    inline-PTX arm first and reached wmma only when that declined. - The f16-accumulate wmma triple
-   is gated off under that policy: f16 accumulates width-uniform with [accum_prec] either way. -
-   Uniform f32 computes in tf32 (m16n16k8) only when the policy opts in (gh-ocannl-478); with the
-   policy off there is no arm and the scalar fallback keeps full f32 numerics.
+   is gated off under that policy: the fragment accumulator width follows [accum_prec]. Matching
+   widths do not imply matching narrowing points (gh-ocannl-2151; the f16 census in
+   [test/operations/mma_bf16_seed_parity]). - Uniform f32 computes in tf32 (m16n16k8) only when the
+   policy opts in (gh-ocannl-478); with the policy off there is no arm and the scalar fallback keeps
+   full f32 numerics.
 
    The cases are disjoint except for the guarded uniform-f16 one, which must precede its unguarded
    twin (swapping them is a fatal unused-case warning), so a reordering cannot silently change an

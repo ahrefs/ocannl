@@ -2112,7 +2112,7 @@ module Scheme = struct
           end_id_neutral_window ~label))
 
   (* The trace proper, to run inside a rewound window. *)
-  let trace_core ?sabotage ~label arity f =
+  let trace_core ?sabotage ?site ~label arity f =
     let var_mark = Row.var_mark () in
     (* The tracers' terminal steps are the trace's work, discarded with it: not inline
        registrations. Made after [var_mark], so that their variables are generalized, and before the
@@ -2122,7 +2122,7 @@ module Scheme = struct
           List.init arity ~f:(fun i ->
               term ~grad_spec:Prohibit_grad ~label:[ [%string "%{label}.arg%{i#Int}"] ] ()))
     in
-    Shape.Scheme.trace ?sabotage ~var_mark ~label
+    Shape.Scheme.trace ?sabotage ?site ~var_mark ~label
       ~args:(List.map tracers ~f:(fun t -> t.shape))
       (fun () -> List.map (f tracers) ~f:(fun t -> t.shape))
 
@@ -2311,6 +2311,23 @@ module Scheme = struct
     | true :: _, [] -> assert false
     | false :: pattern, tracers -> None :: spread pattern tracers
 
+  (* The innermost application in [%op] code being evaluated (gh-ocannl-2007): the expansion wraps
+     each one in [at_site] with its [__POS__], and a check names it. An application reached from it
+     through a function written outside [%op] is inside its extent too, so the site reads "in the
+     %op application at", not "at". *)
+  let site : (string * int * int * int) option ref = ref None
+  [@@mutation_serial.exempt
+    "the source site of the [%op] application being evaluated, restored by at_site's finally"]
+
+  let at_site pos f =
+    let outer = !site in
+    site := Some pos;
+    Exn.protect ~f ~finally:(fun () -> site := outer)
+
+  let site_phrase () =
+    Option.map !site ~f:(fun (file, line, _, _) ->
+        [%string "in the %op application at %{file}:%{line#Int}"])
+
   let trace_slot h s =
     if not (Shape.can_checkpoint ()) then
       (* Tainted, or mid-construction: the body itself reports what it reports, as without a scheme.
@@ -2322,8 +2339,8 @@ module Scheme = struct
       with_id_neutral ~label (fun () ->
           let ck = checkpoint ~label () in
           match
-            trace_core ~label:s.label (List.count s.pattern ~f:Fn.id) (fun ts ->
-                h.body (spread s.pattern ts))
+            trace_core ?site:(site_phrase ()) ~label:s.label (List.count s.pattern ~f:Fn.id)
+              (fun ts -> h.body (spread s.pattern ts))
           with
           | scheme ->
               rewind ck;
@@ -2407,22 +2424,7 @@ module Scheme = struct
     let deferred ~name ~arity body =
       deferred_variants ~name ~optional:(all_required arity) (present_all body)
 
-    (* The innermost application in [%op] code being evaluated (gh-ocannl-2007): the expansion wraps
-       each one in [at_site] with its [__POS__], and a check names it. An application reached from
-       it through a function written outside [%op] is inside its extent too, so the site reads "in
-       the %op application at", not "at". *)
-    let site : (string * int * int * int) option ref = ref None
-    [@@mutation_serial.exempt
-      "the source site of the [%op] application being evaluated, restored by at_site's finally"]
-
-    let at_site pos f =
-      let outer = !site in
-      site := Some pos;
-      Exn.protect ~f ~finally:(fun () -> site := outer)
-
-    let site_phrase () =
-      Option.map !site ~f:(fun (file, line, _, _) ->
-          [%string "in the %op application at %{file}:%{line#Int}"])
+    let at_site = at_site
 
     let application_name args =
       match args with

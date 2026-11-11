@@ -368,6 +368,14 @@ files.
   `compute_prec` leave `Half_prec` alone, so `vec_ext_typ` mints a `HALF_T` vector and the lane
   count doubles. The middle state is why the probe is not a boolean: seeding and the cost model
   must not expect a lane-count win where only the type exists.
+- **A half expression can evaluate wider than its C type** (gh-ocannl-2137), but cc's
+  `FLOAT_TO_HALF` at every half operator removes that excess precision even without a local.
+  `cc_half_excess_precision` probes the configured compiler under the kernel flags with contraction
+  off: `(1 + 2^-11) - 1` classifies its evaluation method, then half inputs
+  `a = b = 1 + 2^-10`, `c = -(1 + 2^-9)` distinguish the raw expression's one rounding (2^-20)
+  from a kept half local's two (0). Method-gated claims cover native and excess evaluation; the
+  executed narrow-compute cc expression must give 0 under either. GCC may omit
+  `__FLT16_EVAL_METHOD__`; the executed probe, not that macro's absence, decides the leg.
 - The fp16 FMA is where parity nearly breaks: `fmaf` on `_Float16` operands promotes to float and
   rounds **twice**, while `__builtin_elementwise_fma` on an fp16 vector rounds once. The scalar
   rendering and the vector rendering's per-lane fallback therefore both go through one builtin
@@ -869,8 +877,8 @@ files.
   fallback on every backend; the codegen-minted scope registers itself there. The per-backend
   table: CUDA widens bf16→f32 (its mma legs hold f32 per-lane registers whole-k — NVIDIA has no
   bf16 accumulate) and fp8→f32; HIP widens fp8, and bf16 unless `Bf16_narrow` (gh-ocannl-1051;
-  before it bf16 stayed narrow, width-uniform with gfx11's bf16-accumulate WMMA — the serial and
-  mma legs still move together, now both wide); Metal widens fp8 (`compute_prec`), and bf16 unless
+  before it bf16 stayed narrow alongside gfx11's bf16-accumulate WMMA; matching residency did not
+  guarantee matching rounding points); Metal widens fp8 (`compute_prec`), and bf16 unless
   `Bf16_narrow` (gh-ocannl-2029); cc's likewise
   (the CPU accumulator IS a compute intermediate). Since gh-ocannl-680 every backend's `accum_prec`
   additionally widens f16→f32 under `Numerics.Fp16_wide` — see the dedicated bullet below.
@@ -895,7 +903,8 @@ files.
   `Numerics.fp16_mode`: `Fp16_auto` keeps each backend's structural residency — CPU computes f16 in
   f32 under `narrow_compute_f32`, GPUs keep storage-width f16 accumulators mirroring the
   f16-accumulate triple every backend seeds — so `auto` changes nothing numerically vs. the old
-  default, but the uniformity is now POLICY rather than a coincidence of seeding. `Fp16_narrow`
+  default, but residency is now POLICY rather than a consequence of seeding; matching widths do
+  not imply matching narrowing points (the f16 census below). `Fp16_narrow`
   (`true`) is unchanged gh-516 opt-in. `Fp16_wide` (`false` — note the repurposing: an explicit
   old-style `false` now REQUESTS strict wide) gives f16 accumulators f32 residency on every
   backend, `narrow_compute_f32=false` included: each backend's `accum_prec` widens `Half`, and the
@@ -1049,17 +1058,51 @@ files.
   `simdgroup_multiply_accumulate` sums each 8-deep k block in f32 and rounds to bf16 once per block
   (an intrinsic k-blocked schedule, whether the fragment stays resident or is reloaded each block),
   while the serial `bfloat` loop compiles to a per-step FMA rounded to bf16; f16's tile and serial
-  loop are both per-step half FMAs, bitwise equal, which is why only bf16 split. The
+  loop on this M4 Max are both per-step half FMAs, bitwise equal, which is why only bf16 split. The
   `simdgroup_float8x8`-over-bfloat arm is an f32 FMA chain in k order whose partials equal the
   serial f32 accumulation bitwise (mixed signs, k up to 256), so Metal's `Bf16_auto` now resolves
   wide through `Metal_mma.bf16_accum_wide` (HIP's gh-ocannl-1051 shape), and every seeded bf16
   `mma-gpu` tile equals the serial rendering bitwise under the default; `Bf16_narrow` keeps the
   narrow pair and is value-changing there by construction. The narrow characterization claims are
-  M4-class evidence for this note, not a contract: re-probe on other Apple GPU families before
+  M4 Max evidence for this note, not a contract: re-probe on other Apple GPU families before
   generalizing. A probe that separates the models needs inputs whose PRODUCTS and f32 partials are
   exact (multiples of 1/32 with at most 7 significant bits over k <= 32 here) so per-step,
   per-block and once-narrowed predictions are exact and pairwise distinct; the test derives that
   premise. A wide-vs-narrow timing A/B on Metal bf16 was not run (no speed claim).
+- **The f16 tensor-unit narrowing census is measured per backend and family** (gh-ocannl-2151),
+  in `test/operations/mma_bf16_seed_parity`. The narrow arm (`Fp16_narrow`) is compared with three
+  exact host predictions: rounding per k step, per native intrinsic block, or once at the final
+  store. One block and four blocks distinguish the block model from the final-store model.
+  The positive operands vary with both indices; `Ll_test.exact_partials` derives that their
+  products share a sign and their f32 partials are exact, excluding gfx11's signed-cancellation
+  residue. The Dune action pins `fp_contract=true`, so serial twins use explicit FMAs: without
+  that pin the original k=16 HIP serial twin differed from its FMA model in 49 cells.
+  On gfx1151, HIP rejects all three baseline models. Its measured model rounds per pair of products, with
+  even output rows visiting k=0..15 and odd rows k=8..15,0..7 within each native 16-deep block;
+  the row is the intrinsic output row (the fixture's row tiles have even height). This ordered
+  pair model matches all 2048 cells over both depths, while omitting the odd-row permutation
+  misses 244 cells at k=16 and 250 at k=64. These are observations on normal, same-sign data,
+  not vendor guarantees about hidden accumulator formats or untested devices. The serial FMA
+  rounds per step on the three measured devices. Runtime policy is unchanged: current CUDA/HIP
+  `Fp16_auto`/`Fp16_narrow` residency alone does not make a tensorized schedule bitwise equal to
+  the serial rendering. No speed claim or default-policy change follows from this probe.
+  The test reads the executing device family once from `Context.static_properties` and selects
+  expectations from `measured_f16_models`. Missing f16 MMA capability skips the tensor-unit leg;
+  an unregistered family with that capability runs and reports model mismatches on stderr, but
+  skips the family-model assertion by name. Intrinsic rendering and explicit serial FMA rounding
+  remain contracts on every f16-MMA-capable GPU. The ordered-pair host premise runs on every
+  16-deep fixture, including cc and CUDA.
+
+| Backend and family | Intrinsic | Probed k | Matching f16 narrowing model |
+| --- | --- | --- | --- |
+| CUDA RTX 5070 Ti Laptop, sm_120 | WMMA | 16, 64 | Nearest-even once per 16-deep block. |
+| HIP Radeon 8060S, gfx1151, unified memory | rocWMMA | 16, 64 | Nearest-even per ordered pair; odd rows exchange the two 8-term halves within each 16-deep block. |
+| Metal M4 Max | simdgroup | 8, 32 | Nearest-even per k step, matching the serial FMA. |
+| Metal M4 Pro | simdgroup | Unmeasured | Unmeasured. |
+| Metal M1 | simdgroup | Unmeasured | Unmeasured. |
+| Metal M2 | simdgroup | Unmeasured | Unmeasured. |
+| Metal M3 | simdgroup | Unmeasured | Unmeasured. |
+
 - **What a numerics mode RESOLVES to per backend is cache identity by derivation** (gh-ocannl-1117).
   `Schedule_cache.numerics_tag` hashes the configured mode; what the mode means on a backend is a
   second fact, and it moved once with the mode unchanged (HIP's `Bf16_auto`, gh-ocannl-1051).
@@ -1649,7 +1692,9 @@ files.
 - **Where a gfx11 WMMA sum is inexact, only the f16 accumulator rounds to nearest even**
   (gh-ocannl-1509 on gfx1151, gh-ocannl-1658 on gfx1102, every row alike; the probe's rounding
   cases, two nonzero products per cell so the sum is the one rounding, report each arm's mode
-  beside the recorded one). The bf16 accumulator
+  beside the recorded one). This identifies the final rounding mode, not every intermediate
+  narrowing point: the f16 ordered-pair census above rejects one nearest-even rounding per
+  16-term intrinsic block. The bf16 accumulator
   rounds TOWARD ZERO (515 -> 512, 518 -> 516; a mixed-sign f32 residue `1 - 2^-24` comes back
   `1 - 2^-8`), which is why the narrow bf16 arm drifts below its reference (the `Bf16_wide` bullet
   above). Both f32 accumulators behave as an adder with one guard bit and no sticky bit:

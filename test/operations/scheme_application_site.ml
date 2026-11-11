@@ -120,3 +120,56 @@ let () =
             Tensor.Scheme.instantiate s ~args:[ x4.shape ] ~results:[ result () ])
       in
       p "without [~here], the instance names no site" (names_no_site msg))
+
+(* gh-ocannl-2164: a contradiction independent of [x] fails while tracing at [()]. *)
+let%op bad_definition ~width () x = x + ({ left = 0.; o = [ width ] } + { right = 0.; o = [ 4 ] })
+
+let () =
+  Tensor.unsafe_reinitialize ();
+  Verdict.case "a trace failure at closure construction names the application" (fun () ->
+      let line = ref 0 in
+      let msg =
+        attempt "trace in %op" (fun () ->
+            line := Stdlib.__LINE__ + 1;
+            ignore ([%op bad_definition ~width:3 ()] : Tensor.t -> Tensor.t))
+      in
+      p "the trace names the closure construction's file and line"
+        (names_site msg ~expected:(in_op !line));
+      p "the trace starts with its phase and function"
+        (Option.exists msg ~f:(fun msg ->
+             String.is_prefix msg ~prefix:"tracing the shape scheme bad_definition in "));
+      let msg =
+        attempt "trace in plain OCaml" (fun () ->
+            ignore (bad_definition ~width:3 () : Tensor.t -> Tensor.t))
+      in
+      p "a plain trace after a refusal names no site"
+        (Option.exists msg ~f:(fun msg ->
+             String.is_prefix msg ~prefix:"tracing the shape scheme bad_definition: ")));
+  Verdict.case "a definition check preserves the trace's application site" (fun () ->
+      let msg, line =
+        let line = ref 0 in
+        let msg =
+          attempt "definition check" (fun () ->
+              ignore
+                (Tensor.Scheme.check_definition ~name:"bad_definition" (fun () ->
+                     line := Stdlib.__LINE__ + 1;
+                     ignore ([%op bad_definition ~width:2 ()] : Tensor.t -> Tensor.t))))
+        in
+        (msg, !line)
+      in
+      p "the definition check names the closure construction's file and line"
+        (names_site msg ~expected:(in_op line));
+      p "the error retains the definition-check context"
+        (Option.exists msg ~f:(fun msg ->
+             String.is_prefix msg ~prefix:"checking the definition bad_definition: ")))
+
+let%op bad_deferred x = x + ([ 1.; 2.; 3. ] + [ 1.; 2.; 3.; 4. ])
+
+let () =
+  Verdict.case "a deferred trace names its first application" (fun () ->
+      let x = input "deferred_x" [ 3 ] in
+      let line, msg =
+        (Stdlib.__LINE__, attempt "deferred trace" (tensor (fun () -> [%op bad_deferred x])))
+      in
+      p "the deferred trace names the first application's file and line"
+        (names_site msg ~expected:(in_op line)))

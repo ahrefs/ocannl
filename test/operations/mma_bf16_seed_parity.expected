@@ -1,3 +1,6 @@
+device properties select measured models, including missing fields: true
+measured families require f16 tensor-unit capability before selecting their model: true
+unmeasured families select no model even when tensor units are available: true
 every partial sum of these operands is exact in f32, at every k this file contracts: true
 k = 8: the per-step model differs from the once-narrowed one on these inputs: true
 k = 32: the per-step, per-block and once-narrowed models pairwise differ on these inputs: true
@@ -21,3 +24,17 @@ default policy, bf16: every seeded tile that ran equals the serial rendering bit
 default policy, f16: some seeded tile renders the simdgroup intrinsics: true
 default policy, f16: every seeded tile that ran equals the serial rendering bitwise: true
 Metal's capabilities fingerprint under Bf16_auto equals Bf16_wide's and differs from Bf16_narrow's: true
+f16 one-block: every product and partial is exact in f32, with one-sign products: true
+f16 one-block: per-step differs from both wider models: true
+f16 one-block: per-block equals once only for a single block: true
+f16 one-block: HIP ordered pairs differ from all three baseline models: true
+f16 one-block: the narrow tile renders tensor-unit intrinsics: true
+f16 one-block: the serial loop equals the per-step model: true
+f16 one-block: the tensor unit equals the measured family model: true
+f16 four-block: every product and partial is exact in f32, with one-sign products: true
+f16 four-block: per-step differs from both wider models: true
+f16 four-block: per-block equals once only for a single block: true
+f16 four-block: HIP ordered pairs differ from all three baseline models: true
+f16 four-block: the narrow tile renders tensor-unit intrinsics: true
+f16 four-block: the serial loop equals the per-step model: true
+f16 four-block: the tensor unit equals the measured family model: true

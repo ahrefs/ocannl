@@ -4052,39 +4052,11 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
                         constr = constr2;
                         origin;
                       }) )
-      | ( Some
-            (Bounds_dim
-               {
-                 is_in_param = _;
-                 res = _;
-                 opnd = [ opnd1 ];
-                 glb = None;
-                 constr = constr1;
-                 origin = origin1;
-                 _;
-               }),
-          Some
-            (Bounds_dim
-               {
-                 is_in_param = _;
-                 res = [ res2 ];
-                 opnd = _;
-                 glb = None;
-                 constr = constr2;
-                 origin = origin2;
-                 _;
-               }) )
-        when is_stage2_up stage && equal_dim_var opnd_v opnd1 && equal_dim_var res_v res2
-             &&
-             match (constr1, constr2) with
-             | At_least_dim _, _ | _, At_least_dim _ -> false
-             | _ -> true ->
-          let origin = merge_origins origin (merge_origins origin1 origin2) in
-          (* A heuristic to reduce template variables coming from e.g. einsum notation expansion.
-             Vars carrying [At_least_dim] (fixed-index slots such as [=> ...|0]) are excluded: they
-             prefer resolving to the minimal dimension (broadcast into consumers), and equating them
-             with a consumer's axis would irreversibly adopt the consumer's dimension instead. *)
-          ([ Dim_eq { d1 = opnd; d2 = res; origin } ], env)
+      (* No arm equates two dimensions because each is the other's only bound (gh-ocannl-2141), as
+         none does for rows (gh-ocannl-2126). That guess strengthened [res ⊑ opnd] into an equality
+         a solution need not satisfy ([3 ⊑ 1_(bcast_if_1)] holds unequal), and since it matched only
+         an edge already recorded, it fired only on a re-processed bound: whether a store solved
+         depended on whether a bound was repeated. A lower bound travels the chain by itself. *)
       | ( Some (Bounds_dim { res = ress; origin = origin1; _ }),
           Some (Bounds_dim { res = recorded; _ }) )
       (* A recorded edge passed this search when it was added, and repeating it adds no path: a
