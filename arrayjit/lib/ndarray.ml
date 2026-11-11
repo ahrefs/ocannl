@@ -182,6 +182,16 @@ let[@inline] float_to_uint64 v =
 
 exception Unrepresentable_integer_value of { prec : Ops.prec; value : float }
 
+let () =
+  Stdlib.Printexc.register_printer (function
+    | Unrepresentable_integer_value { prec; value } ->
+        Some
+          (Printf.sprintf
+             "Ndarray: cannot write %h to %s: supply a finite value whose truncation toward zero \
+              fits the integer range"
+             value (Ops.prec_string prec))
+    | _ -> None)
+
 (* The half-open interval is a cheap, allocation-free sufficient check. At its boundaries (including
    fractions truncating onto an endpoint), use the same rule as device constants. *)
 let[@inline] check_integer_value prec lo hi value =
@@ -191,7 +201,7 @@ let[@inline] check_integer_value prec lo hi value =
 
 let[@inline] checked_byte v =
   check_integer_value Ops.byte 0. 256. v;
-  Char.of_int_exn (Int.of_float_unchecked v)
+  Char.unsafe_of_int (Int.of_float_unchecked v)
 
 let[@inline] checked_uint16 v =
   check_integer_value Ops.uint16 0. 65536. v;

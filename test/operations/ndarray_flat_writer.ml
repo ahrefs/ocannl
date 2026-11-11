@@ -243,8 +243,8 @@ let () =
               Float.nan;
               Float.infinity;
               Float.neg_infinity;
-              (if Float.equal lo 0. then -1. else lo *. 2.);
-              (if Float.(hi < 4294967296.) then hi +. 1. else hi *. 2.);
+              (if Float.(lo >= -2147483648.) then lo -. 1. else Float.one_ulp `Down lo);
+              (if Float.(hi < 4294967296.) then hi +. 1. else Float.one_ulp `Up hi);
             ]
           in
           p_all
@@ -255,8 +255,14 @@ let () =
               let nd = fresh prec ~dims:[| 1 |] ~pads:None in
               match write nd value with
               | () -> false
-              | exception Nd.Unrepresentable_integer_value { prec = got; value = v } ->
-                  Ops.equal_prec prec got && Float.(equal value v || (is_nan value && is_nan v))
+              | exception (Nd.Unrepresentable_integer_value { prec = got; value = v } as exn) ->
+                  let message = Stdlib.Printexc.to_string exn in
+                  Ops.equal_prec prec got
+                  && Float.(equal value v || (is_nan value && is_nan v))
+                  && String.is_substring message ~substring:("to " ^ Ops.prec_string prec ^ ":")
+                  && String.is_substring message ~substring:(Printf.sprintf "%h" value)
+                  && String.is_substring message ~substring:"finite value"
+                  && String.is_substring message ~substring:"truncation toward zero"
               | exception _ -> false));
       p_all
         (Ops.prec_string prec ^ " host fills preserve endpoints and truncated fractions")
