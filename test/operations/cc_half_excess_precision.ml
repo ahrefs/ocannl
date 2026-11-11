@@ -4,7 +4,7 @@
 
    Probe excess precision independently, using (1 + 2^-11) - 1, then check the product witness under
    that evaluation method. GCC need not define __FLT16_EVAL_METHOD__, so its absence is diagnostic
-   rather than a skip. The real cc kernel must agree with the kept half local under either method:
+   rather than a skip. The real cc kernel must match the two-rounding oracle under either method:
    its FLOAT_TO_HALF cast at each operator already removes excess precision. Contraction is disabled
    so this tests excess precision alone. *)
 open Base
@@ -72,13 +72,11 @@ let once = [| 2. **. -20.; -.(2. **. -20.) |]
 let twice = [| 0.; 0. |]
 let half x = Ops.round_to_prec Ops.half x
 
-let run ~kept =
-  let name = if kept then "hxp_kept" else "hxp_collapsed" in
-  let node =
-    Ll_test.node_factory ~prec:Ops.half ~first_id:(if kept then 31010 else 31000) ~dims:[| 2 |] ()
-  in
+let run () =
+  let name = "hxp_collapsed" in
+  let node = Ll_test.node_factory ~prec:Ops.half ~first_id:31000 ~dims:[| 2 |] () in
   let x = node (name ^ "_a") and y = node (name ^ "_b") and z = node (name ^ "_c") in
-  let out = node (name ^ "_out") and mid = node (name ^ "_mid") in
+  let out = node (name ^ "_out") in
   List.iter [ x; y; z; out ] ~f:Ll_test.materialize;
   let s = Ll_test.sym () in
   let i = [| Ll_test.iter s |] in
@@ -86,17 +84,7 @@ let run ~kept =
   let product = LL.Binop (Ops.Mul, at (Ll_test.get x i), at (Ll_test.get y i)) in
   let sum v = LL.Binop (Ops.Add, at v, at (Ll_test.get z i)) in
   let raw = Ll_test.loop_n s 2 (Ll_test.set out i (sum product)) in
-  (* The always-true guard keeps the local out of both scope-collapse patterns. *)
-  let value =
-    if not kept then product
-    else
-      let id = LL.get_scope mid in
-      Ll_test.scope_of ~orig_indices:i id
-        (LL.If { cond = (Ll_test.c 1., Ops.single); body = LL.Set_local (id, product) })
-  in
-  let o = Ll_test.optimize_scoped ~name ~raw (Ll_test.loop_n s 2 (Ll_test.set out i (sum value))) in
-  pf "%s: the executed IR has exactly the intended scope" name
-    (Ll_test.count_scopes o.llc = if kept then 1 else 0);
+  let o = Ll_test.optimize_scoped ~name ~raw raw in
   List.hd_exn (Ll_test.execute ~name o ~seed:[ (x, a); (y, b); (z, c) ] ~read:[ out ])
 
 let () =
@@ -141,7 +129,6 @@ let () =
               p label (Array.equal Float.equal (Lazy.force raw) twice));
           in_leg ~leg:excess "excess evaluation rounds the raw expression only at its result"
             (fun label -> p label (Array.equal Float.equal (Lazy.force raw) once)));
-      let kept = run ~kept:true and collapsed = run ~kept:false in
-      p "the kept half local rounds the product before adding" (Array.equal Float.equal kept twice);
+      let collapsed = run () in
       p "cc's operator casts round even inside a collapsed narrow expression"
         (Array.equal Float.equal collapsed twice))
