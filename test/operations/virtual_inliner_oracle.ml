@@ -25,9 +25,10 @@
    The virtual arm answers for faults a compiled run would swallow, too: [Interp_fault] is a
    finding. Both arms evaluate under [~strict:true], so a scope the code hoists out of a discarded
    [Where] arm is held to its node's bounds as well (gh-ocannl-2077; [strict_probe_controls] pin the
-   probe). The [src=reduce] family makes [src] itself a virtual two-term reduction over a
-   materialized input: scopes then sit inside the replay's guarded arms throughout the table,
-   including out-of-range substitutions the inliner must protect with [guard_hoisted].
+   probe; [virtual_rejection_boundary]'s [row_guarded_scope_read] pins the inliner's arm guard). The
+   [src=reduce] family makes [src] itself a virtual two-term reduction over a materialized input:
+   scopes then sit inside the replay's guarded arms throughout the table, including out-of-range
+   substitutions the inliner must protect with [guard_hoisted].
 
    Tier B is the anchor. An interpreter agreeing only with itself would prove nothing, so a sample
    across the outcome buckets also compiles and runs on the selected backend, in both arms, against
@@ -37,9 +38,9 @@
    programs whose descriptor contains it and checks nothing, for a finding printed on stderr;
    [--widen] lifts the pools below, for someone changing the inliner. Both are for a direct run of
    the built executable from [_build/default/test/operations], which finds [ocannl_config] there;
-   [--widen] also has an alias of its own, [@test/operations/slow-virtual_inliner_oracle-widen] (10
-   to 16 minutes on one core), which the daily sweep's [cc-oracle-widen] unit builds
-   (tools/sweep.sh) and [tools/test-run.sh affected] names to a change reaching the inliner. *)
+   [--widen] also has an alias of its own, [@test/operations/slow-virtual_inliner_oracle-widen],
+   which the daily sweep's [cc-oracle-widen] unit builds (tools/sweep.sh) and [tools/test-run.sh
+   affected] names to a change reaching the inliner. *)
 
 open Base
 open Ll_test
@@ -525,6 +526,15 @@ let has_guarded_scope os =
         | _ -> ());
       !found)
 
+let anchor_key ?outcome prog =
+  let layouts = prog.comps.(0).write.layout ^ "/" ^ prog.read_accesses.(0).layout in
+  String.concat ~sep:" " ([ family prog ] @ Option.to_list outcome @ [ layouts ])
+
+let sorted_values tbl =
+  Hashtbl.to_alist tbl
+  |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
+  |> List.map ~f:snd
+
 let check_program prog =
   let want = replay prog in
   let tally outcome =
@@ -532,12 +542,8 @@ let check_program prog =
     match prog.standing with
     | Inherited -> ()
     | Undecided | Declared ->
-        let layouts = prog.comps.(0).write.layout ^ "/" ^ prog.read_accesses.(0).layout in
         ignore
-          (Hashtbl.add anchors
-             ~key:(String.concat ~sep:" " [ family prog; outcome; layouts ])
-             ~data:prog
-            : [ `Ok | `Duplicate ])
+          (Hashtbl.add anchors ~key:(anchor_key ~outcome prog) ~data:prog : [ `Ok | `Duplicate ])
   in
   let judge label thunk =
     match thunk () with
@@ -549,19 +555,21 @@ let check_program prog =
     | exception Interp_fault msg -> finding prog (label ^ " faulted: " ^ msg)
     | exception e -> finding prog (label ^ " raised: " ^ Exn.to_string e)
   in
-  let no_read b os =
+  let note_guarded_scope os =
     if prog.nested_src && has_guarded_scope os then (
       Hashtbl.incr guarded_scope_programs (family prog);
       match prog.standing with
       | Inherited -> ()
       | Undecided | Declared ->
           ignore
-            (Hashtbl.add guarded_anchors
-               ~key:
-                 (family prog ^ " " ^ prog.comps.(0).write.layout ^ "/"
-                ^ prog.read_accesses.(0).layout)
-               ~data:prog
-              : [ `Ok | `Duplicate ]));
+            (Hashtbl.add guarded_anchors ~key:(anchor_key prog) ~data:prog : [ `Ok | `Duplicate ]))
+  in
+  let no_read b os =
+    if prog.nested_src then (
+      if not (known_virtual (List.last_exn os) b.src) then
+        finding prog "the declared virtual source lost its placement";
+      if List.exists os ~f:(fun o -> count_get o b.src > 0) then
+        finding prog "the declared virtual source left a read");
     if known_virtual (List.last_exn os) b.x && List.exists os ~f:(fun o -> count_get o b.x > 0) then
       finding prog "a virtual node left a read"
   in
@@ -575,6 +583,7 @@ let check_program prog =
       | os ->
           tally (outcome_of b os);
           no_read b os;
+          note_guarded_scope os;
           judge "virtual arm" (fun () -> evaluate prog b os);
           judge "materialized arm" (fun () ->
               if prog.nested_src then
@@ -603,6 +612,7 @@ let check_program prog =
       | os ->
           tally (outcome_of b os);
           no_read b os;
+          note_guarded_scope os;
           judge "virtual arm" (fun () -> evaluate prog b os))
 
 (* [--only <substring>]: print the raw and optimized code of the programs whose descriptor contains
@@ -913,16 +923,7 @@ let run_anchor i prog =
   matches twin && (refused || matches virtual_arm)
 
 let tier_b () =
-  let candidates =
-    Hashtbl.to_alist anchors
-    |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
-    |> List.map ~f:snd
-  in
-  let nested =
-    Hashtbl.to_alist guarded_anchors
-    |> List.sort ~compare:(fun (a, _) (b, _) -> String.compare a b)
-    |> List.map ~f:snd
-  in
+  let candidates = sorted_values anchors and nested = sorted_values guarded_anchors in
   let ordinary = List.filter candidates ~f:(fun p -> not p.nested_src) in
   let sample limit xs =
     let step = Int.max 1 (List.length xs / limit) in
