@@ -1,0 +1,55 @@
+add curried equals its infix form: true
+add curried forwards its label: true
+add uncurried equals its infix form: true
+add uncurried forwards its label: true
+add explicit equals its infix form: true
+add explicit forwards its label: true
+sub curried equals its infix form: true
+sub curried forwards its label: true
+sub uncurried equals its infix form: true
+sub uncurried forwards its label: true
+sub explicit equals its infix form: true
+sub explicit forwards its label: true
+mul curried equals its infix form: true
+mul curried forwards its label: true
+mul uncurried equals its infix form: true
+mul uncurried forwards its label: true
+mul explicit equals its infix form: true
+mul explicit forwards its label: true
+div curried equals its infix form: true
+div curried forwards its label: true
+div uncurried equals its infix form: true
+div uncurried forwards its label: true
+div explicit equals its infix form: true
+div explicit forwards its label: true
+lt curried equals its infix form: true
+lt curried forwards its label: true
+lt uncurried equals its infix form: true
+lt uncurried forwards its label: true
+lt explicit equals its infix form: true
+lt explicit forwards its label: true
+le curried equals its infix form: true
+le curried forwards its label: true
+le uncurried equals its infix form: true
+le uncurried forwards its label: true
+le explicit equals its infix form: true
+le explicit forwards its label: true
+eq curried equals its infix form: true
+eq curried forwards its label: true
+eq uncurried equals its infix form: true
+eq uncurried forwards its label: true
+eq explicit equals its infix form: true
+eq explicit forwards its label: true
+ne curried equals its infix form: true
+ne curried forwards its label: true
+ne uncurried equals its infix form: true
+ne uncurried forwards its label: true
+ne explicit equals its infix form: true
+ne explicit forwards its label: true
+local curried integer max retains its OCaml type: true
+local piped integer max retains its OCaml type: true
+local tuple integer max retains its OCaml type: true
+fst keeps its tuple argument: true
+local unary id retains its OCaml type: true
+local curried mul3 retains its OCaml type: true
+local tuple mul3 retains its OCaml type: true

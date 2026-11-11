@@ -541,13 +541,53 @@ let wrap_schemed ~loc ~at_unit ~name ~params (fn : expression) =
     let __ocannl_scheme = [%e make_call] in
     [%e returned]]
 
+(* The shared primitive tables also serve [%cd]. Restrict their [%op] entries to names [Make_DSL.O]
+   binds; the other alphabetic names remain ordinary OCaml functions. *)
+let is_op_primitive name =
+  is_primitive_op name
+  && List.mem
+       [
+         "+";
+         "-";
+         "*";
+         "<";
+         "<=";
+         "=";
+         "<>";
+         "add";
+         "sub";
+         "mul";
+         "div";
+         "lt";
+         "le";
+         "eq";
+         "ne";
+         "relu";
+         "sat01";
+         "exp";
+         "log";
+         "log2";
+         "sin";
+         "cos";
+         "sqrt";
+         "recip";
+         "recip_sqrt";
+         "neg";
+         "tanh";
+         "not";
+         "uint4x32_to_prec_uniform1";
+         "where";
+         "fma";
+       ]
+       name ~equal:String.equal
+
 (* A pipeline can supply the last argument to a partial application. Both application arms classify
    the same source head, before translation adds labels or site wrappers. *)
 let rec is_dsl_application_head fn =
   is_named_spec_function fn
   ||
   match fn.pexp_desc with
-  | Pexp_ident { txt = Lident op_ident; _ } -> is_primitive_op op_ident || is_operator op_ident
+  | Pexp_ident { txt = Lident op_ident; _ } -> is_op_primitive op_ident || is_operator op_ident
   | Pexp_apply (head, _) -> is_dsl_application_head head
   | _ -> false
 
@@ -988,7 +1028,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
         ([%e? expr2], [%e? expr3])]
-    when Hashtbl.mem binary_ops op_ident ->
+    when is_op_primitive op_ident && Hashtbl.mem binary_ops op_ident ->
       let e1 = [%expr [%e op] ?label:[%e opt_expr ~loc label]] in
       let vbs2, e2 = loop expr2 in
       let vbs3, e3 = loop expr3 in
@@ -996,7 +1036,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ } as op]
         ([%e? expr2], [%e? expr3], [%e? expr4])]
-    when Hashtbl.mem ternary_ops op_ident ->
+    when is_op_primitive op_ident && Hashtbl.mem ternary_ops op_ident ->
       let e1 = [%expr [%e op] ?label:[%e opt_expr ~loc label]] in
       let vbs2, e2 = loop expr2 in
       let vbs3, e3 = loop expr3 in
@@ -1457,7 +1497,7 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let vbs, body = loop ?label body in
       (vbs, { expr with pexp_desc = Pexp_letmodule (name, module_expr, body) })
   | { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }
-    when is_primitive_op op_ident || is_operator op_ident ->
+    when is_op_primitive op_ident || is_operator op_ident ->
       (* FIXME: this heuristic is hacky... *)
       (no_vbs, [%expr [%e expr] ?label:[%e opt_expr ~loc label]])
   | expr -> (no_vbs, expr)

@@ -1174,6 +1174,14 @@ struct
     let ( >= ) ?label t1 t2 = le ?label t2 t1 ()
     let ( = ) ?label t1 t2 = eq ?label t1 t2 ()
     let ( <> ) ?label t1 t2 = ne ?label t1 t2 ()
+    let add ?label t1 t2 = add ?label t1 t2 ()
+    let sub ?label t1 t2 = sub ?label t1 t2 ()
+    let mul ?label t1 t2 = pointmul ?label t1 t2 ()
+    let div ?label t1 t2 = pointdiv ?label t1 t2 ()
+    let lt ?label t1 t2 = lt ?label t1 t2 ()
+    let le ?label t1 t2 = le ?label t1 t2 ()
+    let eq ?label t1 t2 = eq ?label t1 t2 ()
+    let ne ?label t1 t2 = ne ?label t1 t2 ()
     let embed_self_id = embed_self_id
 
     let einsum ?label ?capture_dims ?spec_source spec t1 t2 =

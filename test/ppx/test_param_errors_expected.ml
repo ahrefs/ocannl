@@ -375,7 +375,7 @@ let exponent_rebound =
                        [["exponent_rebound"];
                        (n.Tensor.value).Ir.Tnode.label;
                        (x.Tensor.value).Ir.Tnode.label]))
-        (pow ?label:None 2.0) n in
+        (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> pow 2.0)) n in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"exponent_rebound" ~arity:2
         (function | n::x::[] -> __ocannl_body n x | _ -> assert false) in
