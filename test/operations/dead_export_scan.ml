@@ -92,7 +92,6 @@ let exempt_zero_reference_exports =
     "Operation.add";
     "Operation.centered_uniform1_param_init";
     "Operation.centered_uniform_param_init";
-    "Operation.compose_op_of_spec";
     "Operation.concat";
     "Operation.concat_sum";
     "Operation.cos";

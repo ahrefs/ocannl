@@ -15,7 +15,7 @@ let no_grad2 ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp
 
 let init_then_sum =
   Tensor.binop
-    ~compose_op:(Shape.Einsum ("a; ab => a", []))
+    ~compose_op:(Ocannl.Operation.compose_op_of_spec ~spec:"a; ab => a" ())
     ~op_asn:init_then_sum_asn ~grad_asn:no_grad2 ~op_label:"init_sum"
     ~grad_spec:Tensor.Prohibit_grad
 
