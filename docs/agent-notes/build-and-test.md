@@ -2935,6 +2935,12 @@ in the `tools/*.sh` scripts (gh-ocannl-1111) and in the string literals of the O
   what has no host-reachable buffer of its own: a `Local` node, a schedule-minted partial.
   `fresh_output_fill` pins the contract and holds `test/config` to it; the mutant tables are in
   lukstafi/ocannl-staging's gh-1873 and gh-1966 PR bodies.
+- Host-side exactness premises share an index reader with initialization: wrap the value function
+  in `Ll_test.operand ~b ~o ~i`, which checks rank and bounds against `b @ o @ i` before
+  evaluating it (gh-ocannl-2176). This catches out-of-bounds permutations, not in-bounds ones:
+  also compare the premise's host sums with the executed reference, as `conv_twin_packing`,
+  `masked_persistent_fragment` and `schedule_coalesce` do. Hand-seeded readers check against the
+  node's actual dimensions before flattening; a flat offset alone can alias another valid cell.
 - A test operand minted from a FLATTENED offset stops discriminating at sizes that divide its
   modulus, and does it while still looking right: `(row * stride + col) mod p` collapses to
   `col mod p` whenever `p` divides the row stride, so every row becomes identical. That makes a

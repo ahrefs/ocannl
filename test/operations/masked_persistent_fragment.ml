@@ -262,8 +262,14 @@ let executed_claims ~leg ~tag ~d_prec ~want (runs : executed list Lazy.t) =
 (* --- The f16 x f16 -> f32 matmul: 40 x 40 x 40, which no 16- or 32-row block divides. The operands
    are small nonnegative integers, exact in f16. --- *)
 let n = 40
-let ma_f = Ll_test.weighted ~weights:[| 7; 3 |] ~modulus:4 ~offset:1. ~stride:1.
-let mb_f = Ll_test.weighted ~weights:[| 5; 11 |] ~modulus:7 ~offset:0. ~stride:1.
+
+let ma_f =
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
+    (Ll_test.weighted ~weights:[| 7; 3 |] ~modulus:4 ~offset:1. ~stride:1.)
+
+let mb_f =
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
+    (Ll_test.weighted ~weights:[| 5; 11 |] ~modulus:7 ~offset:0. ~stride:1.)
 
 let make_matmul ~d_prec tag =
   let a = NTDSL.init ~l:(tag ^ "a") ~prec:half ~i:[ n ] ~o:[ n ] ~f:ma_f () in
@@ -277,8 +283,16 @@ let make_matmul ~d_prec tag =
 let rows = 6
 let ic = 8
 let oc = 20
-let cx_f = Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:5 ~offset:0. ~stride:1.
-let ck_f = Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:4 ~offset:0. ~stride:1.
+
+let cx_f =
+  Ll_test.operand ~b:[ 2 ]
+    ~o:[ rows + 2; rows + 2; ic ]
+    ~i:[]
+    (Ll_test.weighted ~weights:[| 1; 1; 2; 3 |] ~modulus:5 ~offset:0. ~stride:1.)
+
+let ck_f =
+  Ll_test.operand ~b:[] ~o:[ oc ] ~i:[ 3; 3; ic ]
+    (Ll_test.weighted ~weights:[| 2; 1; 1; 3 |] ~modulus:4 ~offset:0. ~stride:1.)
 
 let make_conv tag =
   let x = NTDSL.init ~l:(tag ^ "x") ~prec:half ~b:[ 2 ] ~o:[ rows + 2; rows + 2; ic ] ~f:cx_f () in
@@ -296,7 +310,9 @@ let make_conv tag =
    block, the persistent fragment narrows it once per tile. Both references are computed on the host
    for each seed's own k block, exactly (integers below 2^24 in the f64 chain, rounded to f16 by
    integer arithmetic). --- *)
-let nb_f = Ll_test.weighted ~weights:[| 13; 5 |] ~modulus:61 ~offset:40. ~stride:1.
+let nb_f =
+  Ll_test.operand ~b:[] ~o:[ n ] ~i:[ n ]
+    (Ll_test.weighted ~weights:[| 13; 5 |] ~modulus:61 ~offset:40. ~stride:1.)
 
 let make_narrow tag =
   let a = NTDSL.init ~l:(tag ^ "a") ~prec:half ~i:[ n ] ~o:[ n ] ~f:ma_f () in
@@ -391,23 +407,30 @@ let () =
 
   (* Every partial sum of both f32 reductions is exact whatever the association, so each correct
      rendering returns the reference's bits. *)
-  p_all "matmul: every partial sum is exact in f32"
-    (Ll_test.matmul_products ~m:n ~n ~k:n ma_f mb_f)
-    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
-  p_all "conv: every partial sum is exact in f32"
-    (Ll_test.reduction_cells ~out:[| 2; rows; rows; oc |] ~over:[| 3; 3; ic |] (fun o r ->
-         cx_f [| o.(0); o.(1) + r.(0); o.(2) + r.(1); r.(2) |]
-         *. ck_f [| o.(3); r.(0); r.(1); r.(2) |]))
-    ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits Ir.Ops.single));
+  let mm_products = Ll_test.matmul_products ~m:n ~n ~k:n ma_f mb_f in
+  let cv_products =
+    Ll_test.reduction_cells ~out:[| 2; rows; rows; oc |] ~over:[| 3; 3; ic |] (fun o r ->
+        cx_f [| o.(0); o.(1) + r.(0); o.(2) + r.(1); r.(2) |]
+        *. ck_f [| o.(3); r.(0); r.(1); r.(2) |])
+  in
   List.iter
-    [ ("mm", make_matmul ~d_prec:single); ("cv", make_conv) ]
-    ~f:(fun (tag, make) ->
+    [ ("mm", make_matmul ~d_prec:single, mm_products); ("cv", make_conv, cv_products) ]
+    ~f:(fun (tag, make, products) ->
+      p_all
+        (tag ^ ": every partial sum is exact in f32")
+        products
+        ~f:(Ll_test.exact_partials ~sig_bits:(Ir.Ops.significand_bits single));
       let lowering =
         Ll_test.captured_lowering ~name:(tag ^ "_probe") (Train.forward (make (tag ^ "p")))
       in
       let seeds = seeds_of ~d_prec:single lowering in
       structural_claims tag seeds;
       let want = reference ~make tag in
+      p_all2
+        (tag ^ ": the executed reference equals the premise's host sums")
+        (Lazy.force want)
+        (Array.of_list (List.map products ~f:(List.sum (module Float) ~f:Fn.id)))
+        ~f:Float.equal;
       executed_claims ~leg:f32_leg ~tag ~d_prec:single ~want (lazy (execute ~tag ~make seeds)))
 
 let () = narrow_claims ()

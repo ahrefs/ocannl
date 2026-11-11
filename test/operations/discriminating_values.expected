@@ -36,3 +36,6 @@ grain_exponent is the weight of the lowest set bit, and none for zero: true
 schedule_mma_matmul's bf16 operands keep every cell exact in bf16: true
 their cycle recentred on zero is refused at bf16: true
 and it is the sign that refuses it: the magnitudes still fit bf16: true
+operand accepts batch/output/input coordinates: true
+operand refuses wrong rank and every out-of-bounds coordinate: true
+operand catches the staging#1908 kh/ic/oc permutation: true

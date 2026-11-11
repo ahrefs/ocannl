@@ -38,10 +38,14 @@ let window = 3
 (* Index order: batch, then output axes (rows, columns, channels) for the input; output axis (out
    channel), then input axes (kh, kw, in channel) for the kernel. *)
 let x_values =
-  Ll_test.weighted ~weights:[| 1; 2; 3; 5 |] ~modulus:7 ~offset:1.000244140625 ~stride:0.125
+  Ll_test.operand ~b:[ batch ]
+    ~o:[ rows + window - 1; rows + window - 1; ic ]
+    ~i:[]
+    (Ll_test.weighted ~weights:[| 1; 2; 3; 5 |] ~modulus:7 ~offset:1.000244140625 ~stride:0.125)
 
 let k_values =
-  Ll_test.weighted ~weights:[| 1; 3; 2; 4 |] ~modulus:5 ~offset:1.000244140625 ~stride:0.125
+  Ll_test.operand ~b:[] ~o:[ oc ] ~i:[ window; window; ic ]
+    (Ll_test.weighted ~weights:[| 1; 3; 2; 4 |] ~modulus:5 ~offset:1.000244140625 ~stride:0.125)
 
 let half x = Ir.Ops.half_to_single (Ir.Ops.single_to_half x)
 
