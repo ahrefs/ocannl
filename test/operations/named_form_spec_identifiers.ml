@@ -149,3 +149,48 @@ let () =
     (values (named_nested_op x w))
     (Array.append (Array.map xs ~f:(fun x -> 2. *. x)) taps)
     ~f:exact
+
+let%op named_scalar_rhs x w = concat "a; b => a^b" [| x *. 2; w |]
+let%op named_pipe_rhs x w = [| x; w |] |> concat "a; b => a^b"
+let%op named_pipe_sum ~d x w = [| x *. 2; w |] |> concat_sum ~capture_dims:[ d ] "a; b => a^b"
+let%op named_rhs_stride ~stride x w = concat "a; b => a^b" [| x ++ "stride*a => a"; w |]
+
+let%op named_inline_rhs () x = concat "a; b => a^b" [| x; { part = [ 3.; 4. ] } |]
+[@@ocannl.no_scheme]
+
+let () =
+  let doubled = Array.map xs ~f:(fun x -> 2. *. x) in
+  p_all2 "concat translates tensor expressions inside an operand array"
+    (values (named_scalar_rhs x w))
+    (Array.append doubled taps) ~f:exact;
+  p_all2 "piped concat preserves its operand array"
+    (values (named_pipe_rhs x w))
+    (Array.append xs taps) ~f:exact;
+  let d = Shape.get_variable_ref "a" in
+  p_all2 "piped concat_sum translates operands and preserves captures"
+    (values (named_pipe_sum ~d x w))
+    (Array.append doubled taps) ~f:exact;
+  p "piped concat_sum captures its first operand dimension"
+    (Option.equal Int.equal d.var_ref.solved_dim (Some n));
+  p_all2 "concat operand operators substitute runtime spec identifiers"
+    (values (named_rhs_stride ~stride:3 x w))
+    (Array.append (Array.init (n / 3) ~f:(fun i -> xs.(3 * i))) taps)
+    ~f:exact;
+  let f = named_inline_rhs () in
+  (* Concat's current gradient builder requires gradients on every operand when any has one. *)
+  let input = Tensor.term_init xs ~grad_spec:Tensor.Require_grad ~output_dims:[ n ] () in
+  let first = f input and second = f input in
+  p_all2 "concat translates inline parameter declarations in operand arrays" (values first)
+    (Array.append xs [| 3.; 4. |])
+    ~f:exact;
+  p_all2 "concat inline parameters are reused across calls after unit application"
+    (Set.to_array first.Tensor.params)
+    (Set.to_array second.Tensor.params)
+    ~f:phys_equal
+
+let%op named_computed_rhs x w = concat "a; b => a^b" (Array.map [| x; w |] ~f:Fn.id)
+
+let () =
+  p_all2 "computed concat arrays retain OCaml semantics"
+    (values (named_computed_rhs x w))
+    (Array.append xs taps) ~f:exact

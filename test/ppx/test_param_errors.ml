@@ -104,8 +104,8 @@ let%op named_einsum1 stride x = einsum1 "stride*o => o" x
 let%op named_outer_sum dil x = outer_sum "o<+dil*k; k => o" x { kernel }
 let%op named_tropical stride x = tropical "stride*o<+k; k => o" x { kernel }
 let%op named_einmax1 stride x = einmax1 "stride*o => o" x
-let%op named_concat stride x y = concat "stride*a; b => a^b" [%oc [| x; y |]]
-let%op named_concat_sum stride x y = concat_sum "stride*a; b => a^b" [%oc [| x; y |]]
+let%op named_concat stride x y = concat "stride*a; b => a^b" [| x; y |]
+let%op named_concat_sum stride x y = concat_sum "stride*a; b => a^b" [| x; y |]
 let%op float_of_int_module n x = x *. !.(Float.of_int n)
 let%op float_of_int_stdlib n x = x *. !.(float_of_int n)
 let%op int_to_float n x = x **. Int.to_float n
