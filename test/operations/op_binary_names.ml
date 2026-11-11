@@ -12,7 +12,9 @@ let check name build =
       let curried, uncurried, infix, explicit = build x y in
       List.iter [ curried; uncurried; infix; explicit ] ~f:(fun t ->
           Train.set_materialized t.Tensor.value);
-      let%op combined = curried + uncurried + infix + explicit in
+      let combined =
+        TDSL.O.(( + ) ~label:[ "op_binary_" ^ name ] (curried + uncurried + infix) explicit)
+      in
       let ctx = Train.forward_once (Context.cpu ()) combined in
       let values t = Context.get_values ctx t.Tensor.value in
       let want = values infix in
