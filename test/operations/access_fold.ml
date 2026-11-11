@@ -308,6 +308,60 @@ let () =
   let tie_after = LL.read_charge ~self:out (where_ (at a) (at d_) (add (at b) (at e_))) in
   p "arms that tie only after expansion keep both alternatives"
     (alts_eq (LL.resolve_charge ~blends:false ~expand tie_after) [ [ a; d_; e_ ]; [ a; b; e_ ] ]);
+  (* gh-ocannl-2128: the alternatives a consumer joins its own loads with are every MAXIMAL path,
+     the narrower arm included -- read beside [b] and [c_], [{a,d_}] becomes the wider one. *)
+  let alts sc =
+    LL.resolve_alternatives ~blends:false
+      ~expand:(fun acc q -> [ Set.add acc q ])
+      (LL.read_charge ~self:out sc)
+  in
+  p "a short-circuiting Where keeps its narrower arm as an alternative"
+    (alts_eq (alts (where_ (at a) (add (at b) (at c_)) (at d_))) [ [ a; b; c_ ]; [ a; d_ ] ]);
+  p "an arm contained in the other is dropped: it can never be the wider one"
+    (alts_eq (alts (where_ (at a) (add (at b) (at c_)) (at b))) [ [ a; b; c_ ] ]);
+  p
+    "a consumer overlapping the wider arm is charged the narrower one: the widest join, not the \
+     wider arm"
+    (let p_ = mk "p" and w = mk "w" in
+     let dep = alts (where_ (at a) (add (at b) (at c_)) (at d_)) in
+     let expand acc q =
+       if Tn.equal q p_ then List.map dep ~f:(Set.union acc) else [ Set.add acc q ]
+     in
+     let charge = LL.read_charge ~self:out (add (at p_) (add (at b) (add (at c_) (at w)))) in
+     alts_eq (LL.resolve_alternatives ~blends:false ~expand charge) [ [ a; b; c_; d_; w ] ]);
+  (* The growth bound: k successive selects with disjoint arms have 2^k paths, all of one width,
+     none containing another. Past [max_fanin_alternatives] the beam merges its tail into a union,
+     so it keeps at most that many, every exact path inside a kept one, and the result is a function
+     of the sets: the same with every select's predicate inverted and arms swapped. *)
+  let cap = LL.max_fanin_alternatives in
+  let n_sel = Int.ceil_log2 cap + 1 in
+  let selects =
+    List.init n_sel ~f:(fun s ->
+        let n = Printf.sprintf "%d" s in
+        (mk ("cond" ^ n), mk ("then" ^ n), mk ("else" ^ n)))
+  in
+  let spelled ~inverted =
+    List.map selects ~f:(fun (c, t, e) ->
+        if inverted then where_ (not_ (at c)) (at e) (at t) else where_ (at c) (at t) (at e))
+    |> List.reduce_exn ~f:add
+  in
+  let exact_paths =
+    List.fold selects
+      ~init:[ Set.empty (module Tn) ]
+      ~f:(fun paths (c, t, e) ->
+        List.concat_map paths ~f:(fun path ->
+            [ Set.add (Set.add path c) t; Set.add (Set.add path c) e ]))
+  in
+  let plain = alts (spelled ~inverted:false) and inverted = alts (spelled ~inverted:true) in
+  p "the selects' exact paths outnumber the cap, so the bound is exercised"
+    (List.length exact_paths > cap);
+  p "past the cap the alternatives number at most max_fanin_alternatives" (List.length plain <= cap);
+  p_all "every exact path lies inside a kept alternative: the cap only over-charges" exact_paths
+    ~f:(fun path -> List.exists plain ~f:(fun kept -> Set.is_subset path ~of_:kept));
+  p_all "no kept alternative contains another" plain ~f:(fun s ->
+      List.count plain ~f:(fun s' -> Set.is_subset s ~of_:s') = 1);
+  p "the capped alternatives do not depend on how the selects are spelled"
+    (List.equal Set.equal plain inverted);
   p "the setter's own reads and merge-buffer reads are no contributors"
     (set_eq (ev (add (at out) (LL.Get_merge_buffer (a, [| fixed 0 |])))) []);
   p "a gather charges its index and its table"

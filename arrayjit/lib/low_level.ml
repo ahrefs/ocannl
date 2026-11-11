@@ -958,12 +958,9 @@ type traced_array = {
           inline-fanin guard (gh-573): a read of a cell executes one setter's computation, so the
           guard takes the per-setter maximum, not the union — a Block/concat node written by one
           range-guarded setter per component costs one component per read. The per-setter maximum is
-          kept as tied alternatives for this node's per-read charge and unioned only for downstream
-          expansion. It is chosen before downstream unions, so a consumer overlapping a narrower
-          alternative but not a maximum can be undercounted — accepted: an exact treatment is
-          combinatorial across multi-setter dependencies, and both error directions of this
-          heuristic prior are benign (a miss reproduces the pre-guard placement, which stays a
-          [`Materialize] flip candidate with a fanin-charged cost). *)
+          this node's per-read charge; downstream, every setter's alternatives, narrower ones
+          included, are joined with the consumer's own loads (gh-ocannl-2128), beside the union of
+          the tied maxima as a floor — bounded by {!max_fanin_alternatives}. *)
   mutable inline_fanin : int;
       (** The transitive inline fan-in the guard computed for this node under the current
           placements: the number of distinct materialized nodes the node's fully-inlined computation
@@ -1618,28 +1615,61 @@ let read_charge_of_proc ~(self : Tn.t) (code : t) : read_charge =
    continues every alternative through every arm, and only the widest survive each step,
    deduplicated and in {!Set.compare_direct} order -- a function of the program's sets, never of arm
    order. That also keeps a later select's charge from depending on which tie an earlier one took.
-   Each alternative is a path some visit runs, all of one cardinality (the per-read charge); exact
-   for a single select per path, across several a greedy beam. k successive tied selects can hold
-   2^k alternatives; no bound is applied (value selects, not statement guards, would have to tie).
-   The admission ([speculable]) is judged before inlining and at the arms' own annotations, while
-   the renderer judges it after virtualization at the select's compute precision (and HIP keeps [?:]
-   over a NaN literal): the difference errs only toward the union -- inlining can add an index to a
-   condition or a gather to an arm, never remove one -- the materializing direction the guard takes
-   for undecided dependencies too. *)
-let resolve_charge ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
-  let widest alts =
-    let width = List.fold alts ~init:0 ~f:(fun w s -> Int.max w (Set.length s)) in
-    List.filter alts ~f:(fun s -> Set.length s = width)
-    |> List.dedup_and_sort ~compare:Set.compare_direct
-  in
+
+   gh-ocannl-2128: the beam keeps every MAXIMAL alternative, not only the widest: a narrower path
+   can be the widest once a consumer joins its own loads ([where m (x+y) z] read beside [x], [y] and
+   [w] costs 5 on the cells taking [z], where the wider arm costs 4). Pruning to the antichain under
+   inclusion is exact -- [A ⊆ B] implies [A ∪ X ⊆ B ∪ X], so a dominated set never wins later -- and
+   {!resolve_alternatives} returns it; {!resolve_charge} keeps its widest members. The growth is
+   bounded by {!max_fanin_alternatives}: past it the narrowest tail is unioned into one alternative,
+   a superset of real paths, which can only over-charge (the materializing direction). Each
+   alternative is otherwise a path some visit runs. The admission ([speculable]) is judged before
+   inlining and at the arms' own annotations, while the renderer judges it after virtualization at
+   the select's compute precision (and HIP keeps [?:] over a NaN literal): the difference errs only
+   toward the union -- inlining can add an index to a condition or a gather to an arm, never remove
+   one -- the materializing direction the guard takes for undecided dependencies too. *)
+let max_fanin_alternatives = 8
+
+(* By cardinality descending, then [Set.compare_direct]: a function of the sets, never of their
+   order. A set is dominated only by a strictly larger one or an equal one, both earlier. *)
+let compare_alternatives a b =
+  match Int.compare (Set.length b) (Set.length a) with 0 -> Set.compare_direct a b | c -> c
+
+let antichain alts =
+  List.dedup_and_sort alts ~compare:compare_alternatives
+  |> List.fold ~init:[] ~f:(fun kept s ->
+      if List.exists kept ~f:(fun k -> Set.is_subset s ~of_:k) then kept else s :: kept)
+  |> List.rev
+
+(* The antichain, at most {!max_fanin_alternatives} long, and whether the cap merged a tail. *)
+let cap_alternatives alts =
+  let alts = antichain alts in
+  if List.length alts <= max_fanin_alternatives then (alts, false)
+  else
+    let kept, rest = List.split_n alts (max_fanin_alternatives - 1) in
+    (antichain (List.fold rest ~init:(Set.empty (module Tn)) ~f:Set.union :: kept), true)
+
+let widest_alternatives alts =
+  let width = List.fold alts ~init:0 ~f:(fun w s -> Int.max w (Set.length s)) in
+  List.filter alts ~f:(fun s -> Set.length s = width)
+  |> List.dedup_and_sort ~compare:Set.compare_direct
+
+let resolve_alternatives ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
+  let prune alts = fst (cap_alternatives alts) in
   let rec go alts c =
-    let alts = widest (List.map alts ~f:(fun acc -> Set.fold c.loads ~init:acc ~f:expand)) in
+    let alts =
+      Set.fold c.loads ~init:alts ~f:(fun alts q ->
+          prune (List.concat_map alts ~f:(fun acc -> expand acc q)))
+    in
     List.fold c.selects ~init:alts ~f:(fun alts s ->
         if blends && s.speculable then List.fold s.arms ~init:alts ~f:go
         else if List.is_empty s.arms then alts
-        else widest (List.concat_map s.arms ~f:(go alts)))
+        else prune (List.concat_map s.arms ~f:(go alts)))
   in
   go [ Set.empty (module Tn) ] c
+
+let resolve_charge ~blends ~expand (c : read_charge) : Set.M(Tn).t list =
+  widest_alternatives (resolve_alternatives ~blends ~expand:(fun acc q -> [ expand acc q ]) c)
 
 (** The contributors of one evaluation of [llsc], each charged as itself: {!resolve_charge} of
     {!read_charge}, every tied widest alternative. *)
@@ -11202,10 +11232,15 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
      one setter's computation; tied maxima are unioned only for downstream expansion (Block/concat
      range-guarded setters, each component under an index-only guard no backend blends). Within a
      setter a value select is charged as the backend renders it (gh-ocannl-1775, {!resolve_charge}
-     in [max_expansion] below): the union of its arms where it blends; where it short-circuits, the
-     arm whose reads are the most AFTER transitive expansion (gh-ocannl-1874) -- an arm loading one
-     virtual node can replay more than an arm loading three materialized ones; tied arms, like tied
-     setters, are each a per-read charge and unioned downstream (gh-ocannl-2098).
+     and {!resolve_alternatives} in [max_expansion] below): the union of its arms where it blends;
+     where it short-circuits, the arm whose reads are the most AFTER transitive expansion
+     (gh-ocannl-1874) -- an arm loading one virtual node can replay more than an arm loading three
+     materialized ones; tied arms, like tied setters, are each a per-read charge and unioned
+     downstream (gh-ocannl-2098). A dependency passes downstream its ALTERNATIVES, narrower setters
+     and arms included, and a consumer is charged the maximum over them joined with its own loads
+     (gh-ocannl-2128): a narrower arm can be the wider one once the consumer's loads overlap the
+     other. The union of the tied maxima stays an alternative (a floor: no charge is below the
+     one-set reading's), and the lists are bounded by {!max_fanin_alternatives}.
 
      A cycle of nodes still headed for inlining (gh-ocannl-1962) has no bottom to start from: a node
      with several setters can read, in one of them, a node reading the cells another of its setters
@@ -11296,33 +11331,42 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
       |> List.iter ~f:(fun tn -> if not (Hashtbl.mem index tn) then ignore (visit tn : int));
       List.rev !finished
     in
-    let memo = Hashtbl.create (module Tnode) in
+    (* Each node's alternatives (gh-ocannl-2128): the load sets one read of one of its cells can
+       run, an antichain under inclusion ({!resolve_alternatives}). *)
+    let memo : (Tn.t, Set.M(Tn).t list) Hashtbl.t = Hashtbl.create (module Tnode) in
     let expand ~inside acc p =
-      if not (entered p) then Set.add acc p
-      else if inside p then acc
-      else Set.union acc (Hashtbl.find_exn memo p)
+      if not (entered p) then [ Set.add acc p ]
+      else if inside p then [ acc ]
+      else List.map (Hashtbl.find_exn memo p) ~f:(Set.union acc)
     in
-    (* Per-setter maximum over the per-setter charges (see [setter_reads]), each resolved under the
-       backend's reading of a select with every load expanded first, so a short-circuiting select is
-       charged by its arms' expansions (gh-ocannl-1874). Keep all equal maxima -- across setters
-       (gh-ocannl-2047) and across a short-circuiting select's tied arms (gh-ocannl-2098) -- so
-       commuting independent setters or respelling a select cannot change a downstream union, while
-       the node's own charge stays per-read: the union of ties can be wider than any one of them. *)
+    let union_all = List.fold ~init:(Set.empty (module Tnode)) ~f:Set.union in
+    (* Over the per-setter charges (see [setter_reads]), each resolved under the backend's reading
+       of a select with every load expanded first, so a short-circuiting select is charged by its
+       arms' expansions (gh-ocannl-1874): every setter's alternatives, the narrower ones included,
+       so a consumer is charged the maximum over them joined with its own loads (gh-ocannl-2128),
+       and the equal widest -- across setters (gh-ocannl-2047) and across a short-circuiting
+       select's tied arms (gh-ocannl-2098) -- whose union stays a floor of what goes downstream, so
+       commuting independent setters or respelling a select cannot change it. The node's own charge
+       stays per-read: the union of ties can be wider than any one of them. *)
     let max_expansion charges =
       (* An absent side contributes no loads to a local/inherited pair. *)
       List.fold charges
-        ~init:(0, [ Set.empty (module Tnode) ])
-        ~f:(fun (width, best) charge ->
-          (* Every tied widest arm alternative of the charge, all of one cardinality
-             (gh-ocannl-2098): they join the setter ties, unioned downstream like them. *)
+        ~init:(0, [ Set.empty (module Tnode) ], [ Set.empty (module Tnode) ])
+        ~f:(fun (width, best, all) charge ->
           let alts =
-            resolve_charge ~blends:blends_value_selects
+            resolve_alternatives ~blends:blends_value_selects
               ~expand:(expand ~inside:(fun _ -> false))
               charge
           in
-          let n = Set.length (List.hd_exn alts) in
-          if n > width then (n, alts) else if n = width then (width, alts @ best) else (width, best))
-      |> snd
+          let wide = widest_alternatives alts in
+          let n = Set.length (List.hd_exn wide) in
+          let width, best =
+            if n > width then (n, wide)
+            else if n = width then (width, wide @ best)
+            else (width, best)
+          in
+          (width, best, alts @ all))
+      |> fun (_, best, all) -> (best, all)
     in
     List.iter components ~f:(fun members ->
         let s, fanin =
@@ -11330,29 +11374,38 @@ let decide_placements ~blends_value_selects (optim_ctx : optimize_ctx) traced_st
           | [ tn ]
             when Option.is_none (Hashtbl.find traced_store tn) && List.is_empty (inherited_reads tn)
             ->
-              (Set.singleton (module Tnode) tn, 1)
+              ([ Set.singleton (module Tnode) tn ], 1)
           | [ tn ] ->
-              let local = max_expansion (setter_reads tn) in
-              let inherited = max_expansion (inherited_reads tn) in
-              (* A read replays one local setter and one inherited component. Preserve their
-                 per-read maximum for this node's cap and price, but pass the union of all tied
-                 contributors downstream: choosing one pair would reintroduce order dependence. *)
-              let fanin =
-                List.fold local ~init:0 ~f:(fun widest a ->
-                    List.fold inherited ~init:widest ~f:(fun widest b ->
-                        max widest (Set.length (Set.union a b))))
+              let local_best, local = max_expansion (setter_reads tn) in
+              let inherited_best, inherited = max_expansion (inherited_reads tn) in
+              (* A read replays one local setter and one inherited component: the pairs' unions are
+                 the alternatives, and the widest is this node's per-read charge, taken before the
+                 cap merges any tail (a concat of nine single-source slices still costs 1). The
+                 union of all tied contributors stays a floor downstream (gh-ocannl-2047,
+                 gh-ocannl-2098): choosing one tied pair would reintroduce order dependence. *)
+              let pairs =
+                List.concat_map local ~f:(fun a -> List.map inherited ~f:(fun b -> Set.union a b))
               in
-              let s = List.fold (local @ inherited) ~init:(Set.empty (module Tnode)) ~f:Set.union in
-              (s, fanin)
+              let fanin = List.fold pairs ~init:0 ~f:(fun w s -> max w (Set.length s)) in
+              let floor = union_all (local_best @ inherited_best) in
+              let alts, capped = cap_alternatives (floor :: pairs) in
+              (* gh-ocannl-2171: whether a test hits a fan-in tie or a narrower alternative is a
+                 grep of this line. *)
+              if Utils.settings.log_level > 1 && List.length alts > 1 then
+                Stdio.eprintf "fan-in alternatives: %s keeps %d (own charge %d%s)\n%!"
+                  (Tn.debug_name tn) (List.length alts) fanin
+                  (if capped then ", capped" else "");
+              (alts, fanin)
           | _ ->
               let members_set = Set.of_list (module Tnode) members in
               let s =
                 List.fold members
                   ~init:(Set.empty (module Tnode))
                   ~f:(fun acc tn ->
-                    Set.fold (charge_loads tn) ~init:acc ~f:(expand ~inside:(Set.mem members_set)))
+                    Set.fold (charge_loads tn) ~init:acc ~f:(fun acc p ->
+                        union_all (expand ~inside:(Set.mem members_set) acc p)))
               in
-              (s, Set.length s)
+              ([ s ], Set.length s)
         in
         List.iter members ~f:(fun tn -> Hashtbl.set memo ~key:tn ~data:s);
         List.iter members ~f:(fun tn ->
