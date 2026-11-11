@@ -82,7 +82,11 @@ let run_row ~name ~inputs ~outputs llc =
 (* The kernel lines reading [x], and whether each sits inside an [if] or [else] block. *)
 let reads_of source x =
   let lines = Array.of_list (String.split_lines source) in
-  let ident = Generated.node_ident ~facts (List.hd_exn x.Tn.label) ^ "[" in
+  (* A read indexes the node's identifier, directly or through a cast (Metal's volatile reads). *)
+  let ident = Generated.node_ident ~facts (List.hd_exn x.Tn.label) in
+  let reads l =
+    String.is_substring l ~substring:(ident ^ "[") || String.is_substring l ~substring:(ident ^ ")[")
+  in
   let conditional_blocks =
     Generated.brace_intervals lines
     |> List.filter ~f:(fun (opening, _) ->
@@ -90,8 +94,7 @@ let reads_of source x =
         String.is_prefix l ~prefix:"if (" || String.is_prefix l ~prefix:"} else {")
   in
   List.filter_mapi (Array.to_list lines) ~f:(fun j l ->
-      if String.is_substring l ~substring:ident then
-        Some (List.exists conditional_blocks ~f:(fun (o, c) -> o < j && j < c))
+      if reads l then Some (List.exists conditional_blocks ~f:(fun (o, c) -> o < j && j < c))
       else None)
 
 let guarded name source x =
@@ -320,7 +323,12 @@ let row_blend () =
   values name got [ Array.init n ~f:(fun i -> if Float.(mask.(i) < 0.5) then sum2 i else 7.) ];
   let source = Generated.main_logic (Generated.read name) in
   let blends = Ir.Backend_intf.renders_on_host_pool facts || String.equal backend_name "hip" in
-  if blends then unguarded name source x else guarded name source x
+  (* One claim name on every backend: the golden is backend-uniform. *)
+  let claim =
+    name ^ ": the arm's reads follow the select's rendering, blended or short-circuited"
+  in
+  if blends then p_none claim (reads_of source x) ~f:Fn.id
+  else p_all claim (reads_of source x) ~f:Fn.id
 
 let () =
   row_then ();
