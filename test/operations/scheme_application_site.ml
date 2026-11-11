@@ -81,18 +81,26 @@ let () =
       let line, msg = (Stdlib.__LINE__, attempt "pipe" (tensor (fun () -> [%op x |> block]))) in
       p "a pipe names its line" (names_site msg ~expected:(in_op line)));
   Verdict.case "a named einsum form is its operator's spelling" (fun () ->
-      (* A named form is no application the expansion records, as its operator is not: a type
-         constraint passes its operand through untranslated, so the application inside it is checked
-         in the frame around the einsum, here none, in either spelling. *)
+      (* Both einsum spellings leave the constrained operand's application responsible for its own
+         site. A type annotation must not suppress that application's frame. *)
+      let named_line = ref 0 and operator_line = ref 0 in
       let named =
         attempt "named form"
-          (tensor (fun () -> [%op einsum1 "...|a => ...|a" (block x : Tensor.t)]))
+          (tensor (fun () ->
+               named_line := Stdlib.__LINE__ + 1;
+               [%op einsum1 "...|a => ...|a" (block x : Tensor.t)]))
       in
       let operator =
-        attempt "operator" (tensor (fun () -> [%op (block x : Tensor.t) ++ "...|a => ...|a"]))
+        attempt "operator"
+          (tensor (fun () ->
+               operator_line := Stdlib.__LINE__ + 1;
+               [%op (block x : Tensor.t) ++ "...|a => ...|a"]))
       in
       p "both spellings are refused" (Option.is_some named && Option.is_some operator);
-      p "the two spellings report the same site" (Option.equal String.equal named operator));
+      p "the named form's constrained operand names its own application site"
+        (names_site named ~expected:(in_op !named_line));
+      p "the operator's constrained operand names its own application site"
+        (names_site operator ~expected:(in_op !operator_line)));
   Verdict.case "an application in an unschemed function's body names that line" (fun () ->
       let layer = mlp_layer ~hid:4 () in
       ignore (attempt "first application, 3 features" (tensor (fun () -> layer x)) : string option);
