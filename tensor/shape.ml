@@ -5681,8 +5681,9 @@ module Scheme = struct
         (Hashtbl.add_multi seen ~key:sh.id ~data:sh;
          true))
 
-  let trace ?sabotage ~var_mark ~label ~(args : shape list) (f : unit -> shape list) =
+  let trace ?sabotage ?site ~var_mark ~label ~(args : shape list) (f : unit -> shape list) =
     let sabotaged x = Option.exists sabotage ~f:(fun y -> Poly.equal x y) in
+    let located = match site with None -> label | Some site -> label ^ " " ^ site in
     let constraints_mark = !active_constraints in
     let steps_mark = !active_update_steps in
     let instances_mark = !active_instances in
@@ -5902,7 +5903,7 @@ module Scheme = struct
     | Row.Shape_error (msg, trace) ->
         let bt = Stdlib.Printexc.get_raw_backtrace () in
         Stdlib.Printexc.raise_with_backtrace
-          (Row.Shape_error ([%string "tracing the shape scheme %{label}: %{msg}"], trace))
+          (Row.Shape_error ([%string "tracing the shape scheme %{located}: %{msg}"], trace))
           bt
     | Untraceable_scheme msg ->
         let bt = Stdlib.Printexc.get_raw_backtrace () in
