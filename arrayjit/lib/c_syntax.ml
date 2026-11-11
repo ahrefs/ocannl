@@ -4886,20 +4886,36 @@ module C_syntax (B : C_syntax_config) = struct
     let guard_back_edge () =
       let state = Hashtbl.create (module Int) in
       let found = ref None in
-      let rec visit s =
+      (* [stack]: the walk's active definitions, innermost first, each with whether it was reached
+         through a test ([`Test]) or a body ([`Body]) of the one below it. *)
+      let rec visit ~stack s =
         if Option.is_none !found && not (Hashtbl.mem state s) then (
           Hashtbl.set state ~key:s ~data:`Active;
-          List.iter (Lazy.force (Hashtbl.find_exn by_scope s).reads) ~f:(fun r ->
-              if r <> s && is_conditional r then visit r);
-          List.iter (guard_deps s) ~f:(fun r ->
-              if is_conditional r then
-                match Hashtbl.find state r with
-                | Some `Active -> if Option.is_none !found then found := Some (s, r)
-                | Some `Done -> ()
-                | None -> visit r);
+          let edge kind r =
+            if Option.is_none !found && r <> s && is_conditional r then
+              match Hashtbl.find state r with
+              | Some `Done -> ()
+              | None -> visit ~stack:((s, kind) :: stack) r
+              | Some `Active ->
+                  if
+                    (* A cycle, closed by this edge from [s] to [r]: cut the innermost test edge on
+                       it. Body edges alone never close one (scope purity; hand-built cycles render
+                       as they read). *)
+                    Poly.equal kind `Test
+                  then found := Some (s, r)
+                  else
+                    let rec back child = function
+                      | (parent, `Test) :: _ when child <> r -> found := Some (parent, child)
+                      | (parent, _) :: rest when child <> r -> back parent rest
+                      | _ -> ()
+                    in
+                    back s stack
+          in
+          List.iter (Lazy.force (Hashtbl.find_exn by_scope s).reads) ~f:(edge `Body);
+          List.iter (guard_deps s) ~f:(edge `Test);
           Hashtbl.set state ~key:s ~data:`Done)
       in
-      List.iter sorted ~f:(fun (s, _) -> if is_conditional s then visit s);
+      List.iter sorted ~f:(fun (s, _) -> if is_conditional s then visit ~stack:[] s);
       !found
     in
     (* Such a cycle is cut where it is found: the definition's conditions stop before the first test

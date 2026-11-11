@@ -491,6 +491,27 @@ let row_guard_cycle () =
   let got, _source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
   values name got [ [| xs.(2) +. xs.(3); 0.; 0.; xs.(3) +. xs.(4) |] ]
 
+(* [(i < 1 ? s : 0) ? r : 0], [r] minted first, [s] copying [r]'s local: [r]'s conditions test [s],
+   whose body reads [r], a cycle closed through a body (Codex review of the gh-ocannl-2145 PR). *)
+let row_mixed_cycle () =
+  let name = "was_mixed_cycle" in
+  let x = mk "was_mixed_cycle_x" and out = mk ~dims:[| n |] "was_mixed_cycle_out" in
+  let llc =
+    loop (fun i ->
+        let r, sr = sum_scope x ~at:(in_range i) in
+        let vs = local_node () in
+        let s_id = LL.get_scope vs in
+        let ss =
+          scope_of s_id
+            (seq
+               (LL.Set_local (s_id, LL.Get_local r))
+               (LL.Set_local (s_id, mul (LL.Get_local s_id) (c 1.))))
+        in
+        set_at out (iter i) (where_ (where_ (lt (embed i) (ic 1)) ss (c 0.)) sr (c 0.)))
+  in
+  let got, _source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| sum2 0; 0.; 0.; 0. |] ]
+
 let () =
   row_then ();
   row_else ();
@@ -507,4 +528,5 @@ let () =
   row_disjunction ();
   row_cross_order ();
   row_guard_reads ();
-  row_guard_cycle ()
+  row_guard_cycle ();
+  row_mixed_cycle ()

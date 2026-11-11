@@ -77,8 +77,9 @@ files.
   different results), so its condition is never tested where the operator skipped it. The unconditional definitions render as before, then the
   conditional ones' zero-initialized declarations, then the conditional bodies in ONE dependency
   order (over what each body reads AND what its conditions' tests read: in `A ? (R ? S : 0) : 0`
-  the test of `S` reads `R`; a cycle of such tests, which CSE sharing independent scopes makes, is
-  cut by stopping one definition's conditions before the test reading the other) across all their
+  the test of `S` reads `R`; a cycle through such a test, closed by another test or by a body, which CSE
+  sharing or hand-built sibling reads make, is cut at its innermost test edge by stopping that
+  definition's conditions before the test) across all their
   conditions (a body under `(A && B) || (A && C)` can read one under `A`:
   blocks emitted condition by condition read it before it ran, Codex review), consecutive bodies
   under the same conditions sharing one `if`. Under a blend (cc and HIP at a
