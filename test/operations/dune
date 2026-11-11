@@ -3728,6 +3728,16 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+(test
+ ; ocannl-backend: cc -- tests DSL wiring through executed CPU tensor operations.
+ (name op_binary_names)
+ (package neural_nets_lib)
+ (deps ocannl_config)
+ (modules op_binary_names)
+ (libraries base ocannl stdio arrayjit.verdict)
+ (preprocess
+  (pps ppx_ocannl)))
+
 (library
  (name operations_tutorials)
  (package neural_nets_lib)

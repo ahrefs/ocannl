@@ -87,7 +87,7 @@ The `%oc` extension expects a single expression and returns it unchanged. Use ca
 
 ## Primitive operations
 
-To accomodate stylistic preferences, OCANNL supports both curried and uncurried syntaxes for primitive operation application. Binary operators are associated with infix operators, in addition to having alphabetic identifiers. This stems from the following restriction: in the `%cd` syntax, the assignment is always an infix operator, and it needs to pick the accumulation operation.
+To accomodate stylistic preferences, OCANNL supports both curried and uncurried syntaxes for primitive operation application. Binary operators have infix and alphabetic identifiers. In `%op`, alphabetic names are available for the binary operations its `O` module provides: `add`, `sub`, `mul`, `div`, `lt`, `le`, `eq`, and `ne` (`mul` and `div` are pointwise). The remaining binary primitive names in the table below are `%cd`-only. This stems from the following restriction: in the `%cd` syntax, the assignment is always an infix operator, and it needs to pick the accumulation operation.
 
 In `%op`, the uncurried form `op (a, b)` or `op (a, b, c)` of a binary or ternary primitive operation is the curried call `op a b` or `op a b c`: `where (c, x, y)` is `where c x y`, and `( + ) (x, y)` is `x + y`. The operands are `%op` expressions, so they can hold inline declarations. The identifier must be one the DSL's `O` module binds, as for the curried form.
 
