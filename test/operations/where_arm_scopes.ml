@@ -90,12 +90,33 @@ let reads_of source x =
   let conditional_blocks =
     Generated.brace_intervals lines
     |> List.filter ~f:(fun (opening, _) ->
-        let l = String.strip lines.(opening) in
+        (* The line an [if] test wrapped onto: back to its statement's first line. *)
+        let ends_statement j =
+          let l = String.rstrip lines.(j) in
+          List.exists [ ";"; "{"; "}" ] ~f:(fun suffix -> String.is_suffix l ~suffix)
+        in
+        let rec first j = if j > 0 && not (ends_statement (j - 1)) then first (j - 1) else j in
+        let l = String.strip lines.(first opening) in
         String.is_prefix l ~prefix:"if (" || String.is_prefix l ~prefix:"} else {")
   in
   List.filter_mapi (Array.to_list lines) ~f:(fun j l ->
       if reads l then Some (List.exists conditional_blocks ~f:(fun (o, c) -> o < j && j < c))
       else None)
+
+(* [guarded], except for the statement storing [out], whose expression short-circuits its reads. *)
+let guarded_but_store name source x ~out =
+  let store = Generated.node_ident ~facts (List.hd_exn out.Tn.label) ^ "[" in
+  (* Drop the store statement, from its first line to the one ending it. *)
+  let _, lines =
+    List.fold (String.split_lines source) ~init:(false, []) ~f:(fun (in_store, acc) l ->
+        let in_store = in_store || String.is_substring l ~substring:store in
+        if in_store then (not (String.is_suffix (String.rstrip l) ~suffix:";"), acc)
+        else (false, l :: acc))
+  in
+  p_all
+    (name ^ ": every read of " ^ Tn.debug_name x ^ " ahead of the store sits under its conditions")
+    (reads_of (String.concat ~sep:"\n" (List.rev lines)) x)
+    ~f:Fn.id
 
 let guarded name source x =
   p_all
@@ -330,6 +351,55 @@ let row_blend () =
   if blends then p_none claim (reads_of source x) ~f:Fn.id
   else p_all claim (reads_of source x) ~f:Fn.id
 
+(* [relu_gate(1 - i, w)], [w] a [Where] whose condition reads [x] at [far * i]: the gate shuts at [i
+   >= 1], where the condition must not be tested at all, so the [Where]'s block sits inside the
+   gate's own test (Codex review of the gh-ocannl-2145 PR). The index in the condition keeps it from
+   blending. *)
+let row_gate () =
+  let name = "was_gate" in
+  let x = mk "was_gate_x" and out = mk ~dims:[| n |] "was_gate_out" in
+  let llc =
+    loop (fun i ->
+        let _, s = sum_scope x ~at:(off_at ~pass:0 i) in
+        let cond =
+          cmp_at single Ops.Cmplt (c 0.5)
+            (add (get x [| aff [ (far, i) ] 0 |]) (mul (c 0.) (embed i)))
+        in
+        set_at out (iter i)
+          (binop Ops.Relu_gate
+             (binop Ops.Sub (c 1.) (embed i))
+             (LL.Ternop (Ops.Where, (cond, single), (s, single), (c 3., single)))))
+  in
+  let got, source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| sum2 0; 0.; 0.; 0. |] ];
+  guarded_but_store name source x ~out
+
+(* [(i < 2 ? (i < 1 ? s : 0) : 0) + (i < 3 ? (i < 1 ? s' : 0) : 0)], [s'] alpha-equal to [s]: the
+   CSE shares one definition between the two paths, which runs under their disjunction -- the common
+   prefix of the two would be no condition at all, dropping the [i < 1] both share (Codex review of
+   the gh-ocannl-2145 PR). *)
+let row_disjunction () =
+  let name = "was_disjunction" in
+  let x = mk "was_disjunction_x" and out = mk ~dims:[| n |] "was_disjunction_out" in
+  let llc =
+    loop (fun i ->
+        let v = local_node () in
+        let _, s = sum_scope ~v x ~at:(off_at ~pass:0 i)
+        and _, s' = sum_scope ~v x ~at:(off_at ~pass:0 i) in
+        let below k = lt (embed i) (ic k) in
+        set_at out (iter i)
+          (add
+             (where_ (below 2) (where_ (below 1) s (c 0.)) (c 0.))
+             (where_ (below 3) (where_ (below 1) s' (c 0.)) (c 0.))))
+  in
+  let llc = LL.eliminate_common_subexpressions llc in
+  p
+    (name ^ ": the CSE shares the definition between the paths")
+    (count_scalar llc ~f:(function LL.Get_local _ -> true | _ -> false) >= 1);
+  let got, source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| 2. *. sum2 0; 0.; 0.; 0. |] ];
+  guarded name source x
+
 let () =
   row_then ();
   row_else ();
@@ -341,4 +411,6 @@ let () =
   row_unconditional_reader ();
   row_hoist_arms ();
   row_hoist_unconditional ();
-  row_blend ()
+  row_blend ();
+  row_gate ();
+  row_disjunction ()

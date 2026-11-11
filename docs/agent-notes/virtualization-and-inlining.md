@@ -67,10 +67,14 @@ files.
   correct throughout. So `pp_local_defs` renders a short-circuiting select's arm definitions under
   its condition (gh-ocannl-2145): each `local_def` carries the conditions of its occurrence, a
   `Get_local` at operand position is a use carrying its own, and a definition runs under the
-  longest condition prefix its occurrences, its uses and (to a fixpoint) the definitions reading it
-  share. A scope both arms need, or one the scalar CSE reads outside the arm (it keeps the first
-  alpha-equal copy and turns later ones into `Get_local`), runs unconditionally, as the program
-  needs it there anyway. The unconditional definitions render as before, then the conditional ones'
+  disjunction of the conditions of its occurrences, its uses and (to a fixpoint) the definitions
+  reading it (`normalize_guards` absorbs a path another is a prefix of and merges two differing in
+  the last polarity; a common prefix instead would drop the replay guard two differently-nested
+  CSE'd uses share). A scope both arms need, or one the scalar CSE reads outside the arm (it keeps
+  the first alpha-equal copy and turns later ones into `Get_local`), runs unconditionally, as the
+  program needs it there anyway. A `Where` under a short-circuiting gated operator (`&&`, `||`, a
+  gate) keeps its block behind that operator's own test (the second operand at 1 and at 0 giving
+  different results), so its condition is never tested where the operator skipped it. The unconditional definitions render as before, then the conditional ones'
   zero-initialized declarations, then `if (c) {..} else {..}` blocks. Under a blend (cc and HIP at a
   float precision, `speculable_select`, whose conditions never mention an index) both arms run by
   contract, so nothing is guarded and no branch is added; a gate's operand keeps its hoisted

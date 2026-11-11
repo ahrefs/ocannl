@@ -3372,14 +3372,45 @@ type local_def = { scope : int; guard : guard_lit list; def : scope_def option }
 
 let has_definitions (defs : local_def list) = List.exists defs ~f:(fun d -> Option.is_some d.def)
 
-let common_guard (a : guard_lit list) (b : guard_lit list) =
-  let rec go acc a b =
-    match (a, b) with
-    | x :: a, y :: b when String.equal x.key y.key && Bool.equal x.holds y.holds ->
-        go (x :: acc) a b
-    | _ -> List.rev acc
+let equal_lit (x : guard_lit) (y : guard_lit) =
+  String.equal x.key y.key && Bool.equal x.holds y.holds
+
+let equal_guard = List.equal equal_lit
+
+(* gh-ocannl-2145: the conditions a definition runs under, as a disjunction of [paths] (each a
+   conjunction, outermost first), simplified: a path another one is a prefix of is absorbed, and two
+   paths differing only in their last condition's polarity merge into their common prefix. [[[]]] is
+   unconditional. *)
+let rec normalize_guards (paths : guard_lit list list) =
+  let paths =
+    List.fold paths ~init:[] ~f:(fun acc p ->
+        if List.mem acc p ~equal:equal_guard then acc else acc @ [ p ])
   in
-  go [] a b
+  let rec is_prefix a b =
+    match (a, b) with
+    | [], _ -> true
+    | x :: a, y :: b -> equal_lit x y && is_prefix a b
+    | _, [] -> false
+  in
+  let absorbed =
+    List.filter paths ~f:(fun p ->
+        not (List.exists paths ~f:(fun q -> (not (equal_guard p q)) && is_prefix q p)))
+  in
+  let complementary p q =
+    match (List.rev p, List.rev q) with
+    | x :: rp, y :: rq ->
+        String.equal x.key y.key && Bool.equal x.holds (not y.holds) && equal_guard rp rq
+    | _ -> false
+  in
+  match
+    List.find_map absorbed ~f:(fun p ->
+        Option.map (List.find absorbed ~f:(complementary p)) ~f:(fun q -> (p, q)))
+  with
+  | None -> absorbed
+  | Some (p, q) ->
+      let prefix = List.drop_last_exn p in
+      normalize_guards
+        (prefix :: List.filter absorbed ~f:(fun r -> not (equal_guard r p || equal_guard r q)))
 
 (* gh-ocannl-2145: [d_then] and [d_else], the entries of a short-circuiting [Where]'s arms, under
    their condition [cond]. *)
@@ -3693,6 +3724,28 @@ module C_syntax (B : C_syntax_config) = struct
         | _, None, _ -> group (B.binop_syntax prec op e1 e2))
     | _ -> group (B.binop_syntax prec op e1 e2)
 
+  (* gh-ocannl-2145: a short-circuiting gated operator ([Ops.Gated_second]: the gates, [&&], [||])
+     evaluates its second operand only where its own test selects it. The definitions there that run
+     under a [Where]'s condition keep that condition behind the operator's test -- that the second
+     operand at [1] and at [0] give different results, spelled in the dialect's own syntax -- so the
+     [Where]'s condition is never tested where the operator skipped it. Its other definitions still
+     run ahead of the statement. *)
+  let gate_entries prec op e1 d2 =
+    if not (List.exists d2 ~f:(fun d -> not (List.is_empty d.guard))) then d2
+    else
+      let open PPrint in
+      let lit c = string (B.constant_literal prec c) in
+      let test =
+        parens (B.binop_syntax prec op e1 (lit 1.))
+        ^^ string " != "
+        ^^ parens (B.binop_syntax prec op e1 (lit 0.))
+      in
+      let buf = Buffer.create 64 in
+      PPrint.ToBuffer.compact buf test;
+      let lit = { key = Buffer.contents buf; test; holds = true } in
+      List.map d2 ~f:(fun d ->
+          if List.is_empty d.guard then d else { d with guard = lit :: d.guard })
+
   let pp_scalar_op_at ~operand (prec : Ops.prec) (vcomp : Low_level.scalar_t) :
       local_def list * PPrint.document =
     let open PPrint in
@@ -3743,7 +3796,17 @@ module C_syntax (B : C_syntax_config) = struct
             in
             let d1, e1 = operand ps.(0) v1 in
             let d2, e2 = operand ps.(1) v2 in
-            let defs = List.concat [ d1; d2 ] in
+            let blended =
+              match op with
+              | Ops.Relu_gate | Ops.Satur01_gate ->
+                  Option.is_some (blend_for prec ~cond:v1 ~arms:[ (v2, prec) ])
+              | _ -> false
+            in
+            let defs =
+              match Ops.binop_conditionality op with
+              | Ops.Gated_second when not blended -> d1 @ gate_entries prec op e1 d2
+              | _ -> List.concat [ d1; d2 ]
+            in
             let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
             (defs, expr))
     (* gh-ocannl-1975: at exactly [t], never [comp_prec t], which on a wide-compute backend rounds
@@ -3818,23 +3881,25 @@ module C_syntax (B : C_syntax_config) = struct
         | Follows_operands | Truth | Integer_only | Projection | Integer_table -> table ())
     | Binop (op, (v1, _), (v2, _)) -> (
         let any = fv v1 || fv v2 in
-        let both render =
+        let both ~at render =
           let d1, e1 = render v1 in
           let d2, e2 = render v2 in
-          (d1 @ d2, e1, e2)
+          match Ops.binop_conditionality op with
+          | Ops.Gated_second -> (d1 @ gate_entries at op e1 d2, e1, e2)
+          | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> (d1 @ d2, e1, e2)
         in
         match Ops.binop_integer_valuation op with
         | Real_valued ->
-            let defs, e1, e2 = both widen in
+            let defs, e1, e2 = both ~at:f widen in
             (defs, binop_expr ~blend:false f op ~v1 ~v2 e1 e2)
         | Follows_operands when any ->
-            let defs, e1, e2 = both widen in
+            let defs, e1, e2 = both ~at:f widen in
             (defs, binop_expr ~blend:false f op ~v1 ~v2 e1 e2)
         | Truth when any ->
-            let defs, e1, e2 = both widen in
+            let defs, e1, e2 = both ~at:f widen in
             (defs, convert_doc ~from:f ~to_:p (binop_expr ~blend:false f op ~v1 ~v2 e1 e2))
         | Integer_only when any ->
-            let defs, e1, e2 = both narrow in
+            let defs, e1, e2 = both ~at:p narrow in
             (defs, binop_expr p op ~v1 ~v2 e1 e2)
         | Projection -> (
             match Ops.binop_conditionality op with
@@ -4747,13 +4812,15 @@ module C_syntax (B : C_syntax_config) = struct
      the only one whose text moves. A cycle needs hand-built IR, and renders as it reads: a C
      compiler's undeclared identifier. *)
   (* gh-ocannl-2145: a definition from a short-circuiting [Where]'s arm runs under that arm's
-     condition. Each runs under the longest condition prefix its occurrences, the reads of its local
-     at operand position and (to a fixpoint) the definitions reading it share -- the weakest guard
-     each of them implies, so no read meets a local its body did not set, and a scope both arms need
-     runs unconditionally, as either arm would run it. The unconditional definitions render as they
-     always did; then the conditional ones' zero-initialized declarations, then [if]/[else] blocks
-     over their bodies, each block's own definitions ahead of its nested blocks. A body reads only
-     definitions under a prefix of its own conditions, so the order within a block suffices. *)
+     condition. Each runs under the disjunction of the conditions of its occurrences, of the reads of
+     its local at operand position and (to a fixpoint) of the definitions reading it
+     ({!normalize_guards}) -- what each of them implies, so no read meets a local its body did not
+     set, and a scope both arms need runs unconditionally, as either arm would run it. The
+     unconditional definitions render as they always did; then the conditional ones'
+     zero-initialized declarations; then the definitions under several conjunctions, each in an [if]
+     over their disjunction; then [if]/[else] blocks over the rest, each block's own definitions
+     ahead of its nested blocks. A body reads only definitions run at least as often as itself, so
+     these orders suffice. *)
   let pp_local_defs (local_defs : local_def list) =
     let open PPrint in
     let defs =
@@ -4762,26 +4829,38 @@ module C_syntax (B : C_syntax_config) = struct
     let sorted = List.dedup_and_sort defs ~compare:(fun (a, _) (b, _) -> Int.compare a b) in
     let by_scope = Hashtbl.create (module Int) in
     List.iter sorted ~f:(fun (scope, def) -> Hashtbl.set by_scope ~key:scope ~data:def);
-    let guard = Hashtbl.create (module Int) in
+    (* Each definition's conditions, a disjunction ({!normalize_guards}). *)
+    let guards = Hashtbl.create (module Int) in
     List.iter local_defs ~f:(fun d ->
-        if Hashtbl.mem by_scope d.scope then
-          Hashtbl.update guard d.scope ~f:(function
-            | None -> d.guard
-            | Some g -> common_guard g d.guard));
+        if Hashtbl.mem by_scope d.scope then Hashtbl.add_multi guards ~key:d.scope ~data:d.guard);
+    Hashtbl.map_inplace guards ~f:normalize_guards;
+    let equal_paths a b =
+      List.length a = List.length b && List.for_all a ~f:(fun p -> List.mem b p ~equal:equal_guard)
+    in
     let changed = ref true in
     while !changed do
       changed := false;
       List.iter sorted ~f:(fun (scope, def) ->
-          let g = Hashtbl.find_exn guard scope in
+          let g = Hashtbl.find_exn guards scope in
           List.iter (Lazy.force def.reads) ~f:(fun r ->
-              match Hashtbl.find guard r with
+              match Hashtbl.find guards r with
               | Some gr when r <> scope ->
-                  let gr' = common_guard gr g in
-                  if List.length gr' < List.length gr then (
-                    Hashtbl.set guard ~key:r ~data:gr';
+                  let gr' = normalize_guards (gr @ g) in
+                  if not (equal_paths gr gr') then (
+                    Hashtbl.set guards ~key:r ~data:gr';
                     changed := true)
               | _ -> ()))
     done;
+    (* A definition under one conjunction sits in the [if]/[else] blocks; one under several, in a
+       block of its own testing their disjunction. *)
+    let guard = Hashtbl.create (module Int) in
+    let disjunctive = Hash_set.create (module Int) in
+    Hashtbl.iteri guards ~f:(fun ~key ~data ->
+        match data with
+        | [ path ] -> Hashtbl.set guard ~key ~data:path
+        | _ ->
+            Hash_set.add disjunctive key;
+            Hashtbl.set guard ~key ~data:[]);
     let depth scope = List.length (Hashtbl.find_exn guard scope) in
     (* The definitions [group], in ascending scope id except that one follows the sibling
        definitions of [group] its body reads (gh-ocannl-1895). *)
@@ -4798,15 +4877,18 @@ module C_syntax (B : C_syntax_config) = struct
                   Option.map (Hashtbl.find by_scope r) ~f:(fun d -> (r, d))
                 else None)
           in
-          doc def :: List.fold siblings ~init:docs ~f:emit)
+          doc scope def :: List.fold siblings ~init:docs ~f:emit)
       in
       List.rev (List.fold group ~init:[] ~f:emit)
     in
-    let unconditional, conditional = List.partition_tf sorted ~f:(fun (s, _) -> depth s = 0) in
+    let disjunctive_defs, sorted' =
+      List.partition_tf sorted ~f:(fun (s, _) -> Hash_set.mem disjunctive s)
+    in
+    let unconditional, conditional = List.partition_tf sorted' ~f:(fun (s, _) -> depth s = 0) in
     let root =
       match unconditional with
       | [ (_, def) ] -> [ def.decl ^^ hardline ^^ def.body ]
-      | _ -> ordered unconditional ~doc:(fun def -> def.decl ^^ hardline ^^ def.body)
+      | _ -> ordered unconditional ~doc:(fun _ def -> def.decl ^^ hardline ^^ def.body)
     in
     let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in
     (* The blocks of the definitions [group], whose first [level] conditions are the enclosing
@@ -4839,11 +4921,32 @@ module C_syntax (B : C_syntax_config) = struct
                 ^^ string " else "
                 ^^ block (blocks (level + 1) arm_else))
       in
-      separate hardline (ordered here ~doc:(fun def -> def.body) @ nested)
+      separate hardline (ordered here ~doc:(fun _ def -> def.body) @ nested)
     in
+    let conjunction path =
+      separate (string " && ")
+        (List.map path ~f:(fun (l : guard_lit) ->
+             if l.holds then parens l.test else string "!" ^^ parens (parens l.test)))
+    in
+    (* A disjunctive definition reads only definitions run at least as often: unconditional ones, or
+       disjunctive ones, ordered here. *)
+    let disjunctive_docs =
+      ordered disjunctive_defs ~doc:(fun scope def ->
+          let test =
+            separate (string " || ")
+              (List.map (Hashtbl.find_exn guards scope) ~f:(fun path -> parens (conjunction path)))
+          in
+          string "if (" ^^ test ^^ string ") " ^^ block def.body)
+    in
+    let guarded = disjunctive_defs @ conditional in
     let conditional_docs =
-      if List.is_empty conditional then []
-      else List.map conditional ~f:(fun (_, def) -> def.zeroed_decl) @ [ blocks 0 conditional ]
+      if List.is_empty guarded then []
+      else
+        List.map
+          (List.sort guarded ~compare:(fun (a, _) (b, _) -> Int.compare a b))
+          ~f:(fun (_, def) -> def.zeroed_decl)
+        @ disjunctive_docs
+        @ if List.is_empty conditional then [] else [ blocks 0 conditional ]
     in
     separate hardline (root @ conditional_docs)
 

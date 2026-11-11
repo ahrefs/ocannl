@@ -22,3 +22,8 @@ was_hoist_uncond: the shared definition is hoisted: true
 was_hoist_uncond: the values are the closed form's: true
 was_blend: the values are the closed form's: true
 was_blend: the arm's reads follow the select's rendering, blended or short-circuited: true
+was_gate: the values are the closed form's: true
+was_gate: every read of was_gate_x ahead of the store sits under its conditions: true
+was_disjunction: the CSE shares the definition between the paths: true
+was_disjunction: the values are the closed form's: true
+was_disjunction: every read of was_disjunction_x sits under its condition: true
