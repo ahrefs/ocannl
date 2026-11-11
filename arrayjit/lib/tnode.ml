@@ -144,8 +144,7 @@ module Prec_cell : sig
   (** [follow] of a float cell by a consumer's precision, which the cell takes only if it is free
       ({!stated} is [None]) and the consumer's precision is a float, both decided when the cell
       settles (gh-ocannl-2028); otherwise the link promotes by the cell's own value, changing
-      nothing. The consumer must own the lazy: this reverse link holds it weakly rather than
-      retaining the consumer's dependencies (gh-ocannl-2170). *)
+      nothing. *)
 
   val bottom_up : t -> Ops.prec
   (** The precision a consumer promoting from its operands reads: the storage precision, except for
@@ -194,8 +193,8 @@ end = struct
              let prec =
                match cell.value with Default prec | Specified prec | Inferred (lazy prec) -> prec
              in
-             (* Settle what the operands state too, so the lazy drops its operand nodes: a settled
-                node must not keep otherwise-dead ancestors alive (gh-ocannl-2028). *)
+             (* Settle what the operands state too, so the lazy drops its operand precision cells: a
+                settled node must not keep otherwise-dead ancestors alive (gh-ocannl-2028). *)
              Option.iter stated ~f:(fun l -> ignore (Lazy.force l : Ops.prec option));
              prec);
         settling = false;
@@ -307,18 +306,10 @@ end = struct
     let own =
       match cell.value with Default prec | Specified prec -> lazy prec | Inferred prec -> prec
     in
-    (* A consumer owns its storage lazy; the reverse inference edge must not own the consumer's
-       operands after its graph is dropped (gh-ocannl-2170). Keep the lazy, rather than the tensor,
-       weakly: a retained value node or compiled program still needs this precision constraint. *)
-    let target = Stdlib.Weak.create 1 in
-    Stdlib.Weak.set target 0 (Some link);
     follow ~only_if:Ops.is_float ~name cell
       (lazy
-        (match Stdlib.Weak.get target 0 with
-        | None -> Lazy.force own
-        | Some link ->
-            let prec = Lazy.force link in
-            if Ops.is_float prec && Option.is_none (stated cell) then prec else Lazy.force own))
+        (let target = Lazy.force link in
+         if Ops.is_float target && Option.is_none (stated cell) then target else Lazy.force own))
 
   let bottom_up cell =
     match (cell.value, cell.unlinked) with
