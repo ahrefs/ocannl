@@ -6,11 +6,9 @@
    in the candidate's assignment indices ([track_symbol] / [reverse_node_map]). A reduction loop
    BELOW that point rides along inside the stored subtree, which is what makes the ordinary [x[t] +=
    a[s]] shape inlineable at all (and what [virtualize_max_inline_reduction] prices). A repetition
-   loop ABOVE it does not ride along, and when the index map mentions no symbol at all — a
-   fixed-index accumulator — no loop is ever a capture site, so the entire reduction is outside the
-   stored statement. The fix threads the enclosing loops down the walk and rejects such a candidate
-   as [Non_virtual 147] at store time; this is the [For_loop] half of the defect gh-ocannl-651 fixed
-   for [If].
+   loop ABOVE it does not ride along. Symbol-free maps now capture at their outermost enclosing loop
+   (gh-ocannl-2149), provided it writes only that node; every reduction iteration then rides along.
+   The enclosing-loop refusal remains necessary for output-indexed captures.
 
    Two positive controls guard the other direction, because a rejection is always SOUND and the only
    way this fix can be wrong is by rejecting too much: the ordinary inner-reduction shape must still
@@ -66,14 +64,7 @@ let case_repetition_above () =
     (Option.equal Tn.equal_provenance (rejection_code o x)
        (Some (Tn.Site "147:enclosing-repetition-loop")))
 
-(* === Case 2: no capture point at all ===
-
-   A symbol-free index map makes no loop a capture site, so the reduction loop is outside the stored
-   statement entirely. The array-reduction spelling of this shape ([x[0] += a[s]]) is rejected by an
-   unrelated arm — the sibling read [a[s]] escapes the captured statement, [Non_virtual 9] — so the
-   case that reaches here accumulates a value the reduction symbol does not enter. Reading the
-   accumulator ONCE is what gets past the visit cap; a second read site would trip it, and the cap
-   is flippable policy rather than a legality guarantee. *)
+(* === Case 2: a symbol-free map captures its entire reduction (gh-ocannl-2149). === *)
 let case_symbol_free_map () =
   let x = mk ~dims:[| 1 |] "ucl_sf_x" and out = mk ~dims:[| 1 |] "ucl_sf_out" in
   materialize out;
@@ -81,14 +72,47 @@ let case_symbol_free_map () =
   let llc =
     seq (zero x)
       (seq
-         (loop_n s n (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (c 1.))))
+         (loop_n s n (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (tick s))))
          (set out [| fixed 0 |] (get x [| fixed 0 |])))
   in
-  let o = both ~label:"symbol_free_map" ~llc ~cand:x ~out ~seed:[] ~expected:[| 4. |] in
-  p "symbol-free index map: candidate rejected (stays non-virtual)" (known_non_virtual o x);
-  p "symbol-free index map: rejected as Non_virtual 147"
-    (Option.equal Tn.equal_provenance (rejection_code o x)
-       (Some (Tn.Site "147:enclosing-repetition-loop")))
+  let o = both ~label:"symbol_free_map" ~llc ~cand:x ~out ~seed:[] ~expected:[| 10. |] in
+  p "symbol-free index map: candidate virtual" (known_virtual o x);
+  p "symbol-free index map: no array read survives" (count_get o x = 0)
+
+(* Empty-rank scalar with TWO reduction loops: selecting the innermost binder would lose an outer
+   iteration. The tag varies with both symbols and is clear of the zero init. *)
+let case_nested_scalar () =
+  let x = mk ~dims:[||] "ucl_scalar" and out = mk ~dims:[||] "ucl_scalar_out" in
+  materialize out;
+  let i = sym () and j = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n i n (loop_n j 3 (set x [||] (add (get x [||]) (tag i j)))))
+         (set out [||] (get x [||])))
+  in
+  let o = both ~label:"nested_scalar" ~llc ~cand:x ~out ~seed:[] ~expected:[| 204. |] in
+  p "nested scalar: candidate virtual" (known_virtual o x);
+  p "nested scalar: no array read survives" (count_get o x = 0)
+
+(* Two sequential fixed-index captures must append to the zero component, rather than superseding
+   each other or replaying an update twice. Both producers vary with their own symbol. *)
+let case_sequential_reductions () =
+  let x = mk ~dims:[| 1 |] "ucl_seq_x" and out = mk ~dims:[| 1 |] "ucl_seq_out" in
+  materialize out;
+  let i = sym () and j = sym () in
+  let llc =
+    seq (zero x)
+      (seq
+         (loop_n i n (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (tick i))))
+         (seq
+            (loop_n j 3 (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (ramp 11. j))))
+            (set out [| fixed 0 |] (get x [| fixed 0 |]))))
+  in
+  (* (1 + 2 + 3 + 4) + (11 + 12 + 13) = 46. *)
+  let o = both ~label:"sequential_reductions" ~llc ~cand:x ~out ~seed:[] ~expected:[| 46. |] in
+  p "sequential reductions: candidate virtual" (known_virtual o x);
+  p "sequential reductions: no array read survives" (count_get o x = 0)
 
 (* === Case 3 (positive control): the ordinary inner reduction still inlines ===
 
@@ -141,6 +165,8 @@ let case_width_one_enclosing () =
 let () =
   case "repetition_above" case_repetition_above;
   case "symbol_free_map" case_symbol_free_map;
+  case "nested_scalar" case_nested_scalar;
+  case "sequential_reductions" case_sequential_reductions;
   case "inner_reduction" case_inner_reduction;
   case "width_one_enclosing" case_width_one_enclosing;
   Stdio.printf "%!"

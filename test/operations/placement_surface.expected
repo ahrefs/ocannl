@@ -7,7 +7,6 @@ it does not contain the decoy us: true
 no site is eligible under default placements (empty disablement): true
 cost ranking:
   us           materialize -> inline cost 256
-  n12          inline      -> materialize cost 144
   relu_t2      inline      -> materialize cost 17
   mc           inline      -> materialize cost 16  [enablement]
   mbs          materialize -> inline cost 8  [enablement]
@@ -15,7 +14,6 @@ cost ranking:
 enablement ranking:
   mc           inline      -> materialize cost 16  [enablement]
   us           materialize -> inline cost 256
-  n12          inline      -> materialize cost 144
   relu_t2      inline      -> materialize cost 17
   d2           inline      -> materialize cost 1
   mbs          materialize -> inline cost 8  [enablement]

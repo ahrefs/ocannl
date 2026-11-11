@@ -10,9 +10,15 @@ guard_interior: the two placements agree: true
 repetition_above_capture: rejected at store time as 147:enclosing-repetition-loop: true
 repetition_above_capture: executed values are the reference: true
 repetition_above_capture: the two placements agree: true
-reduction_symbol_free: rejected at store time as 147:enclosing-repetition-loop: true
+reduction_symbol_free: inlined: true
 reduction_symbol_free: executed values are the reference: true
 reduction_symbol_free: the two placements agree: true
+symbol_free_intermediate_observer: rejected at store time as 10:escaping-index-symbol: true
+symbol_free_intermediate_observer: executed values are the reference: true
+symbol_free_intermediate_observer: the two placements agree: true
+symbol_free_local_observer: rejected at store time as 10:escaping-index-symbol: true
+symbol_free_local_observer: executed values are the reference: true
+symbol_free_local_observer: the two placements agree: true
 two_setters_one_subtree: rejected at store time as 4:lhs-idcs-differ: true
 two_setters_one_subtree: executed values are the reference: true
 two_setters_one_subtree: the two placements agree: true

@@ -126,11 +126,14 @@ let () =
   let%op y2 = relu x2 in
   let%op x3 = a3 *. b3 in
   let%op y3 = relu x3 in
-  (* Equal-cost candidates rank in program order (gh-ocannl-1777), and OCaml builds an application's
-     arguments right to left, so the branch summed LAST is computed first: written this way round,
-     the code runs branch 1, then 2, then 3, and the chain meets each twin pair back to back, its
-     first member first. *)
-  let%op loss = y3 ++ "ij => 0" + (y2 ++ "ij => 0") + (y1 ++ "ij => 0") in
+  (* Keep aggregation placement fixed: this fixture spends its flip budget on the branch nodes and
+     their twins, rather than on the newly legal fixed-index reduction flips. Explicit bindings
+     retain branch 1, then 2, then 3 in program order for equal-cost candidates. *)
+  let%op r1 = y1 ++ "ij => 0" in
+  let%op r2 = y2 ++ "ij => 0" in
+  let%op r3 = y3 ++ "ij => 0" in
+  List.iter [ r1; r2; r3 ] ~f:(fun r -> Train.set_materialized r.Tensor.value);
+  let%op loss = r3 + r2 + r1 in
   let comp = Train.forward loss in
   (* The surface, as the chain reads it. *)
   let surface = Autotune.placement_surface (Context.auto ()) comp Ir.Indexing.Empty in

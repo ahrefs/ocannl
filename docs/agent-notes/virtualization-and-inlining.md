@@ -329,13 +329,20 @@ files.
 - **The same question for loops: a candidate is captured at the outermost `For_loop` whose index
   occurs in its assignment indices** (`track_symbol` / `reverse_node_map`), so a reduction loop
   BELOW that point is part of the stored computation (the ordinary `x[t] += a[s]`, priced by
-  `virtualize_max_inline_reduction`) while a repetition loop ABOVE it is not — and a symbol-free
-  (all-`Fixed_idx`) index map has no capture site at all. Such a candidate is rejected as
-  `Non_virtual 147` (gh-ocannl-674); width-1 loops stay exempt, since replaying one iteration once
-  is exact. Two arms hide most of this shape and neither is a guarantee: an array reduction
-  `x[0] += a[s]` is rejected because the sibling read escapes (`Non_virtual 9`), and an accumulator
-  read more than `virtualize_max_visits` times is capped (`1:visit-cap`) — a flippable policy
-  prior, decided in `decide_placements` before any legality question is asked.
+  `virtualize_max_inline_reduction`) while a repetition loop ABOVE it is not,
+  and is rejected as `Non_virtual 147` (gh-ocannl-674); width-1 loops stay exempt,
+  since replaying one iteration once is exact. A symbol-free index map instead captures at the
+  outermost enclosing loop when its statements are only that node's assignment nests
+  (gh-ocannl-2149), so all reduction/repetition binders ride along, including those of an extent-1
+  init-then-accumulate node. `virtual_extent_one` pins the original DSL case against extent 2 and
+  materialization; `reduction_symbol_free` in `virtual_rejection_boundary` pins the
+  iterator-dependent sum. A shared loop stays refused: a sibling buffer or statement-local setter
+  can observe an intermediate sum, which replaying the entire loop would replace by the final sum
+  (`symbol_free_intermediate_observer`, `symbol_free_local_observer`).
+  Each registration carries `fixed_index_capture`, so this body restriction applies only to the
+  new fallback. Indexed captures keep their prior rule, including raw specialization probes with
+  nested scope writes (`prelowered_seam` phase 6); `write_index_mentions` omits those scalar bodies.
+  The visit and reduction caps still apply before legality.
 - **A committed-virtual node has no fallback, so nothing commits one ahead of the walk**
   (gh-ocannl-1690, gh-ocannl-1735): a `Non_virtual` against a node already `Virtual` cannot decline
   to materialization — `Tn.Placements.update` raises "already virtual", at store time and at
@@ -353,12 +360,13 @@ files.
   original `Non_virtual` code and the virtual decision's provenance instead of the placement
   collision. The decision may be declared intent or an earlier routine's commitment. This is a
   store-time refusal, so it advises materialization rather than the read-site remedy of filling
-  cells; `declared_uninlinable_rejection` retains that advice for consumption-time refusals. A symbol-free reduction into `x[0]` whose value embeds the reduced iterator refuses
+  cells; `declared_uninlinable_rejection` retains that advice for consumption-time refusals. An outer
+  repetition index embedded below an output-index capture refuses
   as `10:escaping-index-symbol` (`virtual_store_refusal` in
   `virtual_rejection_boundary.ml`). The oracle recognizes the diagnostic's `rejection <code>:`
-  phrase, not a bare code (the raw collision contains that too); its store-time census needs both
-  `10:escaping-index-symbol` and `51:affine-not-injective`. Restoring the raw placement update makes
-  the narrowed oracle fail with unrecognized refusals.
+  phrase, not a bare code (the raw collision contains that too). The boundary pins the escaping
+  symbol diagnostic, and the oracle still exercises `51:affine-not-injective`; restoring the raw
+  placement update makes the oracle fail with unrecognized refusals.
 - **A fixed-index producer position is guarded only over a proved fallback** (gh-ocannl-1735,
   gh-ocannl-1795). On an extent-1 coordinate a producer `Fixed_idx 0` read at a symbolic index is
   the same cell (`same_unit_cell`, no guard). On a wider one `instantiate_computations` guards

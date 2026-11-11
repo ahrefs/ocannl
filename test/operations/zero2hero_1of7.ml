@@ -469,10 +469,10 @@ let%expect_test "2D neuron virtual" =
                    7.00e-1
                   #9 grad_+_v
                    1.00
-       #6 * unknown            │#4 b non-emb
-       <unobservable: Local>   │ 6.70
-       #7 grad_*               │#5 grad_b
-        1.00                   │ 1.00
+             #6 *              │#4 b non-emb
+              -6.00            │ 6.70
+             #7 grad_*         │#5 grad_b
+              1.00             │ 1.00
     #0 w non-emb │#2 x non-emb │
      -3.00  1.00 │ 2.00  0.00  │
     #1 grad_w    │#3 grad_x    │

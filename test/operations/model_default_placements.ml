@@ -2,15 +2,13 @@
    [model_default_placements] = N > 0 branch-and-bounds over the top-N flip candidates of the
    decision surface before compiling, scoring each vector's hermetic lowering with the same
    selection that scores the pipelines, and applying the winning vector via the context-level
-   placement decisions. The dune rule pins the cc backend, [model_default_placements=2], and a
+   placement decisions. The dune rule pins the cc backend, [model_default_placements=4], and a
    compute-bound envelope (peak_flops 1e9, peak_bandwidth 1e12).
 
-   gh-ocannl-1093: the lowered surface also carries the two scalar reductions' [`Inline] flips,
-   which the virtualizer refuses (their operand reads escape the setter a store captures) and which
-   therefore carry the traced proxy, the 64-cell extent — priced above [y]'s modeled one exp per
-   read. They are marked refused ([fa_refused], the virtualizer's own verdict, checked here against
-   a compile that prefers them inline) and never ranked, so a cut of 2 is the whole ranked surface:
-   before, the two refused flips took both of its slots and the pick could not reach [y].
+   gh-ocannl-2149: the two capped scalar reductions now have legal, modeled Inline flips. The ranked
+   surface keeps them, and a cut of four includes them plus the two pointwise candidates. The test
+   checks those flips against lowering with inline preferred, then checks that the whole-surface
+   model argmin still reaches the profitable materialization of y.
 
    The graph makes a placement flip the model-argmin deterministically: [y = exp u] is read by two
    consumer statements yet stays policy-virtual, so both consumers replay the exp and the surface
@@ -66,27 +64,26 @@ let () =
      List.concat_map cands ~f:(fun fc -> List.map fc.LL.fc_alternatives ~f:(fun fa -> (fc, fa)))
    in
    let refused = List.filter (flips lowered) ~f:(fun (_, fa) -> Option.is_some fa.LL.fa_refused) in
-   p "the lowered surface carries the two scalar reductions' refused flips" (List.length refused = 2);
-   p_all "each refused flip is an Inline flip" refused ~f:(fun (_, fa) ->
-       LL.equal_reading fa.LL.fa_flip `Inline);
-   (* The refusal is the virtualizer's verdict: preferring the flip inline, the compile still
-      materializes the node, under the provenance the alternative carries. *)
-   p_all "each refusal is the virtualizer's verdict on the flip preferred inline" refused
-     ~f:(fun (fc, fa) ->
+   let reductions =
+     List.filter (flips lowered) ~f:(fun (fc, fa) ->
+         Tn.num_elems fc.LL.fc_tn = 1 && LL.equal_reading fa.LL.fa_flip `Inline)
+   in
+   p "the lowered surface carries the two scalar reductions' legal flips"
+     (List.length reductions = 2);
+   p_all "each scalar reduction is modeled and has no refusal" reductions ~f:(fun (_, fa) ->
+       fa.LL.fa_modeled && Option.is_none fa.LL.fa_refused);
+   p_all "each scalar reduction serves its preferred Inline reading" reductions ~f:(fun (fc, _) ->
        let o =
          Context.lowered_for_decisions ~inline:[ fc.LL.fc_tn ] (Context.auto ()) comp
            Ir.Indexing.Empty
        in
-       Tn.Placements.known_non_virtual o.LL.optimize_ctx.placements fc.LL.fc_tn
-       && Option.equal String.equal fa.LL.fa_refused
-            (Option.map (Tn.Placements.get o.LL.optimize_ctx.placements fc.LL.fc_tn)
-               ~f:(fun (_, prov) -> Tn.provenance_to_string (Tn.leading_provenance prov))));
+       Tn.Placements.known_virtual o.LL.optimize_ctx.placements fc.LL.fc_tn);
    p_none "no flip on the ranked surface is refused" (flips surface.Autotune.ps_candidates)
      ~f:(fun (_, fa) -> Option.is_some fa.LL.fa_refused);
    p "the ranked surface keeps every flip not refused"
      (List.length (flips surface.Autotune.ps_candidates)
      = List.length (flips lowered) - List.length refused);
-   p "the ranked surface drops the nodes whose only flip is refused"
+   p "the ranked surface keeps every node with an eligible flip"
      (List.length surface.Autotune.ps_candidates
      = List.count lowered ~f:(fun fc ->
          List.exists fc.LL.fc_alternatives ~f:(fun fa -> Option.is_none fa.LL.fa_refused))));

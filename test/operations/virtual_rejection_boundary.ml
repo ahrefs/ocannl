@@ -234,9 +234,8 @@ let row_repetition_above () =
     ~expected:(Array.create ~len:n 2.)
     ~verdict:(Rejected (Store, Ir.Tnode.Site "147:enclosing-repetition-loop"))
 
-(* Same defect with no capture point at all: a symbol-free index map means no loop is ever a capture
-   site, so the whole reduction is outside the stored statement. The sibling-read arm ([Non_virtual
-   9]) covers this for a reduction over an ARRAY; a reduction over a constant reaches here. *)
+(* gh-ocannl-2149: a symbol-free index map now captures at the outermost enclosing loop, retaining
+   the whole reduction. The producer varies with its iterator, clear of the zero init. *)
 let row_reduction_symbol_free () =
   let x = mk ~dims:[| 1 |] "rsf_x" and out = mk ~dims:[| 1 |] "rsf_out" in
   materialize out;
@@ -244,11 +243,57 @@ let row_reduction_symbol_free () =
   let llc =
     seq (zero x)
       (seq
-         (loop_n s n (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (c 1.))))
+         (loop_n s n (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (tick s))))
          (set out [| fixed 0 |] (get x [| fixed 0 |])))
   in
-  row ~label:"reduction_symbol_free" ~llc ~cand:x ~out ~seed:[] ~expected:[| 4. |]
-    ~verdict:(Rejected (Store, Ir.Tnode.Site "147:enclosing-repetition-loop"))
+  row ~label:"reduction_symbol_free" ~llc ~cand:x ~out ~seed:[] ~expected:[| 10. |]
+    ~verdict:Accepted
+
+(* Capturing a scalar's whole loop must not make a sibling observe the final sum at each iteration:
+   the original program exposes a different prefix after each update. *)
+let row_symbol_free_observer () =
+  let x = mk ~dims:[| 1 |] "sfo_x" and out = mk "sfo_out" in
+  materialize out;
+  let k = sym () in
+  let llc =
+    seq (zero x)
+      (loop_n k n
+         (seq
+            (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (tick k)))
+            (set out [| iter k |] (get x [| fixed 0 |]))))
+  in
+  (* Reach legality even though this accumulator is read once per reduction iteration. *)
+  let settings = Ir.Low_level.virtualize_settings in
+  let saved = settings.max_visits in
+  settings.max_visits <- Int.max_value;
+  Exn.protect
+    ~finally:(fun () -> settings.max_visits <- saved)
+    ~f:(fun () ->
+      row ~label:"symbol_free_intermediate_observer" ~llc ~cand:x ~out ~seed:[]
+        ~expected:[| 1.; 3.; 6.; 10. |]
+        ~verdict:(Rejected (Store, Ir.Tnode.Site "10:escaping-index-symbol"));
+      (* A statement-local accumulator is also an observer: sum the prefixes in a register, then
+         expose that sum after the loop. A census of tensor-buffer writers alone misses it. *)
+      let local_tn = mk ~dims:[| 1 |] "sfo_local"
+      and local_out = mk ~dims:[| 1 |] "sfo_local_out" in
+      virtualize local_tn;
+      materialize local_out;
+      let id = LL.get_scope local_tn in
+      let llc =
+        seq (declare_local id)
+          (seq
+             (LL.Set_local (id, c 0.))
+             (seq (zero x)
+                (seq
+                   (loop_n k n
+                      (seq
+                         (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (tick k)))
+                         (LL.Set_local (id, add (LL.Get_local id) (get x [| fixed 0 |])))))
+                   (set local_out [| fixed 0 |] (LL.Get_local id)))))
+      in
+      row ~label:"symbol_free_local_observer" ~llc ~cand:x ~out:local_out ~seed:[]
+        ~expected:[| 20. |]
+        ~verdict:(Rejected (Store, Ir.Tnode.Site "10:escaping-index-symbol")))
 
 (* Two setters at different index maps WITHIN one captured subtree. The per-invocation index map is
    what [Non_virtual 4] compares, so this rejects while the same two setters as separate statements
@@ -1833,21 +1878,22 @@ let row_scan_recurrence () =
     ~expected:[| 1.; 3.; 6.; 10. |]
     ~verdict:(Rejected (Store, Ir.Tnode.Site "148:scan-recurrence"))
 
-(* A symbol-free reduction captures the setter without its enclosing loop. Its value still names
-   that loop, so storage must refuse before a read site is considered. *)
+(* The outer repetition loop is above the output-index capture. Its embedded index escapes, so
+   storage must refuse before a read site is considered. *)
 let virtual_store_refusal () =
   let check ~committed =
     let label = if committed then "committed" else "declared" in
-    let x = mk ~dims:[| 1 |] (label ^ "_store_x") in
+    let x = mk (label ^ "_store_x") in
     let ctx = Ir.Low_level.empty_optimize_ctx () in
     if committed then
       (* Seed a lineage decision without declaring the node itself virtual. *)
       Ir.Tnode.Placements.update ctx.placements x Virtual (Site "40:scalar-constexpr")
     else virtualize x;
     let decided_by = if committed then "40:scalar-constexpr" else "99:test-setup" in
-    let k = sym () in
+    let k = sym () and j = sym () in
     let llc =
-      seq (zero x) (loop_n k 2 (set x [| fixed 0 |] (add (get x [| fixed 0 |]) (tick k))))
+      seq (zero x)
+        (loop_n k 2 (loop_n j n (set x [| iter j |] (add (get x [| iter j |]) (tick k)))))
     in
     match optimize_in ctx ~name:(label ^ "_store_refusal") llc with
     | _ -> p (label ^ " store: refuses an escaping reduction") false
@@ -1881,6 +1927,7 @@ let () =
   case "row_guarded_interior" row_guarded_interior;
   case "row_repetition_above" row_repetition_above;
   case "row_reduction_symbol_free" row_reduction_symbol_free;
+  case "row_symbol_free_observer" row_symbol_free_observer;
   case "row_two_setters_one_subtree" row_two_setters_one_subtree;
   case "row_escaping_read" row_escaping_read;
   case "row_escaping_setter" row_escaping_setter;

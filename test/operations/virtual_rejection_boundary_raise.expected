@@ -3,6 +3,7 @@ row_guarded_enclosing: the case ran to completion (raised Failure("injected by -
 row_guarded_interior: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_repetition_above: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_reduction_symbol_free: the case ran to completion (raised Failure("injected by --raise-every-row")): false
+row_symbol_free_observer: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_two_setters_one_subtree: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_escaping_read: the case ran to completion (raised Failure("injected by --raise-every-row")): false
 row_escaping_setter: the case ran to completion (raised Failure("injected by --raise-every-row")): false

@@ -75,7 +75,12 @@ let () =
   (* The decoy half: us is policy-virtual, read broadcast by every row of w. *)
   let%op us = u *. 2.0 in
   let%op d2 = w +* "ij; j => ij" us in
-  let%op total = t2 ++ "ij => 0" + (d2 ++ "ij => 0") in
+  (* The fixture ranks the mma-site nodes against the decoy. Hold aggregation placement fixed so
+     legal scalar-reduction flips do not compete for that deliberately tiny budget. *)
+  let%op dsum = d2 ++ "ij => 0" in
+  let%op tsum = t2 ++ "ij => 0" in
+  List.iter [ dsum; tsum ] ~f:(fun t -> Train.set_materialized t.Tensor.value);
+  let%op total = tsum + dsum in
   let comp = named "ps" (Train.forward total) in
   let ctx = Context.auto () in
   (* gh-ocannl-1430: on cc the surface segments its mma sites as cc's own seeders do, so it reads
