@@ -1,3 +1,9 @@
+initialization refuses parameters absent from the tensor graph: true
+initialization order preserves fixed-program random draws bit for bit: true
+independent parameters initialize in forward operand order: true
+initializer dependencies precede readers despite reversed forward access: true
+slice initializer regression exercises copies: true
+slice parent initialization precedes every copying reader: true
 conv: control: the uid shift changes a node-keyed table's iteration order: true
 conv: control: the shift keeps the nodes' creation order: true
 conv: control: the reversed build creates its nodes in another order: true
@@ -9,6 +15,8 @@ conv: every build places every node the same: true
 conv: every build's segments digest the same: true
 conv: control: the step lays out nodes of its own: true
 conv: every build lays the step's nodes out at the same pool rank and offset: true
+conv: control: initialization lays out every parameter: true
+conv: every build lays parameters out at the same pool rank and offset: true
 conv: every build scores the same footprint: true
 conv: every build's link delta is the same: true
 conv: every node the step lays out is ordered by the step's raw code: true
@@ -26,6 +34,8 @@ transformer: every build places every node the same: true
 transformer: every build's segments digest the same: true
 transformer: control: the step lays out nodes of its own: true
 transformer: every build lays the step's nodes out at the same pool rank and offset: true
+transformer: control: initialization lays out every parameter: true
+transformer: every build lays parameters out at the same pool rank and offset: true
 transformer: every build scores the same footprint: true
 transformer: every build's link delta is the same: true
 transformer: every node the step lays out is ordered by the step's raw code: true
@@ -47,6 +57,8 @@ bump: both builds compute big = x + x: true
 transformer under buffer_aliasing: control: the step's delta is liveness-planned: true
 transformer under buffer_aliasing: control: the step lays out nodes of its own: true
 transformer under buffer_aliasing: every build lays the step's nodes out at the same pool rank and offset: true
+transformer under buffer_aliasing: control: initialization lays out every parameter: true
+transformer under buffer_aliasing: every build lays parameters out at the same pool rank and offset: true
 transformer under buffer_aliasing: every build scores the same footprint: true
 transformer under buffer_aliasing: every build's link delta is the same: true
 transformer under buffer_aliasing: every node the step lays out is ordered by the step's raw code: true

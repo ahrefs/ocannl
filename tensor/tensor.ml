@@ -627,25 +627,122 @@ let iter_embedded ~f t =
   Set.iter ~f t.forward.embedded_nodes;
   Option.iter t.diff ~f:(fun diff -> Set.iter ~f diff.backprop.embedded_nodes)
 
+(** Kahn-style topological layering of code fragments (gh-461). Each item comes tagged with the
+    nodes it [needs] from its siblings and the nodes it [provides] to them; an item stays blocked
+    while any still-unemitted item provides something it needs, and the ready items are emitted as a
+    layer preserving their relative order. [on_cycle] is called with the remaining items when a
+    layer comes out empty; it is expected to raise, since a fragment-level dependency cycle would
+    need statement-level interleaving to schedule correctly, which is not supported: any
+    whole-fragment order would read some values before they are computed. *)
+let topo_layers (type a) (tagged : (a * tn_set * tn_set) list)
+    ~(on_cycle : (a * tn_set * tn_set) list -> a list) : a list =
+  let rec order acc remaining =
+    match remaining with
+    | [] -> List.concat @@ List.rev acc
+    | _ ->
+        let blocked_by (_, needs, _) =
+          List.exists remaining ~f:(fun (_, _, provides) ->
+              not (Set.is_empty (Set.inter needs provides)))
+        in
+        let ready, blocked = List.partition_tf remaining ~f:(Fn.non blocked_by) in
+        if List.is_empty ready then on_cycle remaining
+        else order (List.map ready ~f:(fun (item, _, _) -> item) :: acc) blocked
+  in
+  order [] tagged
+
+(* Program order for initialization: first statement touching a parameter in the forward code, with
+   operand order in the tensor graph breaking ties (including parameters with no executable access,
+   such as host-backed initializers). Neither order consults a node id. *)
+let params_in_program_order (t : t) =
+  if Set.length t.params <= 1 then Set.to_list t.params
+  else
+    let by_node =
+      Set.fold t.params
+        ~init:(Map.empty (module Tn))
+        ~f:(fun acc p -> Map.set acc ~key:p.value ~data:p)
+    in
+    let seen = Hash_set.create (module Tn) in
+    let rec visit acc sub =
+      if Hash_set.mem seen sub.value then acc
+      else (
+        Hash_set.add seen sub.value;
+        match Map.find by_node sub.value with
+        | Some p -> p :: acc
+        | None -> List.fold sub.children ~init:acc ~f:(fun acc c -> visit acc c.subtensor))
+    in
+    let params = List.rev (visit [] t) in
+    if List.length params <> Set.length t.params then
+      invalid_arg "Tensor.init_params: parameter set and tensor children disagree";
+    let positions = Hashtbl.create (module Tn) in
+    ignore
+      (Asgns.fold_leaves t.forward.asgns ~init:0 ~f:(fun pos leaf ->
+           let read, output = Asgns.collect_nodes_guess_output leaf in
+           Set.iter (Set.union read output) ~f:(fun tn ->
+               if not (Hashtbl.mem positions tn) then Hashtbl.set positions ~key:tn ~data:pos);
+           pos + 1)
+        : int);
+    let position p = Option.value (Hashtbl.find positions p.value) ~default:Int.max_value in
+    List.stable_sort params ~compare:(fun a b -> Int.compare (position a) (position b))
+
 let%debug7_sexp rec init_params_body ?skip (t : t) : Asgns.comp =
   let more_embedded = ref @@ Set.empty (module Tn) in
   let params : t list =
-    Set.to_list t.params
-    |> (match skip with
-      | None -> Fn.id
-      | Some skip -> List.filter ~f:(fun p -> not (Map.mem skip p.value)))
-      (* Compare to ordered_ts in op -- we need to sort to avoid computed-after-use bugs! *)
-    |> List.sort ~compare:(fun p1 p2 -> Int.ascending p1.value.id p2.value.id)
+    params_in_program_order t
+    |>
+    match skip with
+    | None -> Fn.id
+    | Some skip -> List.filter ~f:(fun p -> not (Map.mem skip p.value))
+  in
+  (* The general query treats a slice parent as an output to materialize, not a read. A copying
+     slice still needs its parent's writer before it, even when a sibling initializer owns it. *)
+  let initializer_reads asgns =
+    Asgns.fold_leaves asgns
+      ~init:(fst (Asgns.collect_nodes_guess_output asgns))
+      ~f:(fun reads -> function
+        | Fetch { fetch_op = Slice { sliced; _ }; _ } -> Set.add reads sliced | _ -> reads)
+  in
+  let fragments =
+    List.map params ~f:(fun param ->
+        if Set.is_empty param.params then param.forward.asgns
+        else
+          let comp = init_params_body ?skip param in
+          more_embedded := Set.union !more_embedded comp.Asgns.embedded_nodes;
+          Asgns.Seq (comp.Asgns.asgns, param.forward.asgns))
+  in
+  (* A seed fetch owned by the first-created parameter is not a dependency between draws. Strip the
+     literals the fragments read before ordering; [with_seed_fetches] restores them once on the
+     whole program. Unread literal outputs keep their writes. *)
+  let seed_reads =
+    List.fold fragments
+      ~init:(Set.empty (module Tn))
+      ~f:(fun reads asgns -> Set.union reads (initializer_reads asgns))
+  in
+  let rec strip_seed_fetches = function
+    | Asgns.Fetch { array; fetch_op = Constant_bits _; _ }
+      when Set.mem seed_reads array && Weak_discards.mem seed_literals array ->
+        Asgns.Noop
+    | Asgns.Seq (a, b) -> Asgns.Seq (strip_seed_fetches a, strip_seed_fetches b)
+    | Asgns.Block_comment (comment, body) -> Asgns.Block_comment (comment, strip_seed_fetches body)
+    | leaf -> leaf
+  in
+  let fragments =
+    List.map fragments ~f:(fun asgns ->
+        let asgns = strip_seed_fetches asgns in
+        let provides = Asgns.collect_written asgns in
+        let needs = Set.diff (initializer_reads asgns) provides in
+        (asgns, needs, provides))
+  in
+  (* A parameter initializer can read another parameter or a shared intermediate whose defining code
+     belongs to a sibling initializer. Dependency order wins over forward first access. *)
+  let fragments =
+    topo_layers fragments ~on_cycle:(fun _ ->
+        invalid_arg "Tensor.init_params: parameter initializer fragments have a dependency cycle")
   in
   let asgns =
     Asgns.Block_comment
       ( "init params for " ^ Tn.label_name t.value,
-        List.fold_right params ~init:Asgns.Noop ~f:(fun param acc ->
-            if Set.is_empty param.params then Asgns.Seq (param.forward.asgns, acc)
-            else
-              let comp = init_params_body ?skip param in
-              more_embedded := Set.union !more_embedded comp.Asgns.embedded_nodes;
-              Seq (Seq (comp.Asgns.asgns, param.forward.asgns), acc)) )
+        List.fold_right fragments ~init:Asgns.Noop ~f:(fun fragment acc ->
+            Asgns.Seq (fragment, acc)) )
   in
   let embedded_nodes =
     List.fold params ~init:!more_embedded ~f:(fun acc p ->
@@ -871,29 +968,6 @@ let raw_accum ~initialize_neutral ~accum ~(t : t) ~(lhs_is_grad : bool) ~shape_l
       projections = projections.projections;
       projections_debug = projections.projections_debug;
     }
-
-(** Kahn-style topological layering of code fragments (gh-461). Each item comes tagged with the
-    nodes it [needs] from its siblings and the nodes it [provides] to them; an item stays blocked
-    while any still-unemitted item provides something it needs, and the ready items are emitted as a
-    layer preserving their relative order. [on_cycle] is called with the remaining items when a
-    layer comes out empty; it is expected to raise, since a fragment-level dependency cycle would
-    need statement-level interleaving to schedule correctly, which is not supported: any
-    whole-fragment order would read some values before they are computed. *)
-let topo_layers (type a) (tagged : (a * tn_set * tn_set) list)
-    ~(on_cycle : (a * tn_set * tn_set) list -> a list) : a list =
-  let rec order acc remaining =
-    match remaining with
-    | [] -> List.concat @@ List.rev acc
-    | _ ->
-        let blocked_by (_, needs, _) =
-          List.exists remaining ~f:(fun (_, _, provides) ->
-              not (Set.is_empty (Set.inter needs provides)))
-        in
-        let ready, blocked = List.partition_tf remaining ~f:(Fn.non blocked_by) in
-        if List.is_empty ready then on_cycle remaining
-        else order (List.map ready ~f:(fun (item, _, _) -> item) :: acc) blocked
-  in
-  order [] tagged
 
 type grad_spec = Require_grad | Prohibit_grad | If_needed [@@deriving sexp, equal, variants]
 

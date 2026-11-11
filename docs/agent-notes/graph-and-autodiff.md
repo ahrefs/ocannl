@@ -232,3 +232,21 @@ files.
   reader carries two fetches of one literal: both harmless, pinned by `forward_seed_fetch` against
   a reference that reads the seed from its owner's lineage. A raw `t.forward` given to
   `Context.compile` bypasses the handout and gets no fetch.
+
+- Parameter initialization order follows the program (gh-ocannl-2158): `init_params` orders
+  fragments by dependency, with first forward-statement access and tensor operand order breaking
+  ties. The shared `topo_layers` helper also orders forward/backprop fragments. A seed fetch can
+  live inside the first-created parameter, so initialization strips read seed literals before
+  ordering the draws and the shared `with_seed_fetches` restores their prologue once afterwards;
+  unread literal outputs keep their writes. Otherwise that accidental dependency would keep
+  creation order in the parameter pool offsets. No node or counter is reminted:
+  `build_order_programs` pins fixed-graph
+  random draws bit for bit against separately initialized parameters, executed shared-initializer
+  dependencies (including copying slices), and held-parameter offsets across reversed
+  conv/transformer builds (including `buffer_aliasing`). Reversing graph construction still changes
+  node-keyed random counters;
+  cross-build loss comparisons therefore keep the fixture's label-keyed parameter uploads.
+  The dependency query adds slice-parent reads explicitly: `collect_nodes_guess_output` instead
+  classifies those parents as materialization outputs, so its first set alone misses the edge.
+  A hand-built tensor record must keep its declared parameters reachable through `children`;
+  initialization refuses an incomplete walk rather than silently omitting an initializer.

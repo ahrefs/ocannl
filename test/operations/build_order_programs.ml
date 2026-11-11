@@ -97,9 +97,8 @@ type outcome = {
   hash_order : string list;
   param_labels : string list;
   layout : string list;
-      (** ["<label> <pool rank> <offset>"] of every node the step's own link laid out, sorted. The
-          parameters are not among them: [Train.init_params] laid them out, in the initialization
-          routine's code order, which [Tensor.init_params] spells in creation order. *)
+      (** ["<label> <pool rank> <offset>"] of every node the step's own link laid out, sorted. *)
+  param_layout : string list;  (** Held parameters, laid out by initialization. *)
   fresh : int;  (** How many store nodes the step's own link laid out. *)
   unpositioned : string list;
       (** The step's newly laid out nodes its raw code never accesses: their layout order falls back
@@ -185,6 +184,7 @@ let observe ?(scheduled = false) ~name ~mint ~rev make =
       hash_order = List.map nodes ~f:label;
       param_labels = List.map params ~f:label;
       layout = layout_of ctx fresh;
+      param_layout = layout_of ctx params;
       fresh = List.length fresh;
       unpositioned =
         (let positions = LL.first_access_positions lowered.LL.source in
@@ -220,6 +220,17 @@ let layout_claims name ~base ~rest =
     (base.fresh > 0 && List.length base.layout = base.fresh);
   p_all (name ^ ": every build lays the step's nodes out at the same pool rank and offset") rest
     ~f:(fun (_, o) -> List.equal String.equal o.layout base.layout);
+  p
+    (name ^ ": control: initialization lays out every parameter")
+    ((not (List.is_empty base.param_labels))
+    && List.length base.param_layout = List.length base.param_labels);
+  List.iter rest ~f:(fun (what, o) ->
+      if not (List.equal String.equal o.param_layout base.param_layout) then
+        eprintf "%s: the %s build's parameter layout differs:\n%s\n----\n%s\n" name what
+          (String.concat ~sep:"\n" base.param_layout)
+          (String.concat ~sep:"\n" o.param_layout));
+  p_all (name ^ ": every build lays parameters out at the same pool rank and offset") rest
+    ~f:(fun (_, o) -> List.equal String.equal o.param_layout base.param_layout);
   p_all (name ^ ": every build scores the same footprint") rest ~f:(fun (_, o) ->
       String.equal o.scored base.scored);
   p_all (name ^ ": every build's link delta is the same") rest ~f:(fun (_, o) ->
@@ -285,6 +296,112 @@ let check name make ~changed =
     (name ^ ": control: a changed program lays out or links differently")
     ((not (List.equal String.equal other.layout base.layout))
     || not (String.equal other.linked base.linked))
+
+(* Hand-built tensor records must keep the state set reachable through the operand graph. *)
+let () =
+  Tensor.unsafe_reinitialize ();
+  let first = TDSL.param "unreachable_first" ~value:1. () in
+  let second = TDSL.param "unreachable_second" ~value:2. () in
+  let root = NTDSL.number 0. in
+  let malformed = { root with Tensor.params = Set.union first.params second.params } in
+  p "initialization refuses parameters absent from the tensor graph"
+    (match Tensor.init_params malformed with
+    | _ -> false
+    | exception Invalid_argument msg ->
+        String.equal msg "Tensor.init_params: parameter set and tensor children disagree")
+
+(* Same graph, same seed and counters: initializing its two draws together in forward order must
+   agree bit for bit with initializing each separately in creation order. *)
+let () =
+  Tensor.unsafe_reinitialize ();
+  Tensor.set_random_seed ~seed:42 ();
+  let first_draw = TDSL.param "init_first" ~output_dims:[ 8 ] () in
+  let second_draw = TDSL.param "init_second" ~output_dims:[ 8 ] () in
+  let%op out = second_draw + first_draw in
+  let together = Tensor.init_params out in
+  let separate =
+    Ir.Assignments.sequence [ Tensor.init_params first_draw; Tensor.init_params second_draw ]
+  in
+  let evaluate name comp nodes =
+    let base = Context.auto () in
+    let ctx, routine = Context.compile ~name base comp IDX.empty in
+    let ctx = Context.run ctx routine in
+    let values = List.map nodes ~f:(Context.get_values ctx) in
+    Context.release ctx;
+    Context.release base;
+    values
+  in
+  let actual = evaluate "bop_init_program" together [ first_draw.value; second_draw.value ] in
+  let reference = evaluate "bop_init_creation" separate [ first_draw.value; second_draw.value ] in
+  p_all "initialization order preserves fixed-program random draws bit for bit"
+    (List.zip_exn actual reference) ~f:(fun (a, b) -> Array.equal Float.equal a b);
+  let writes =
+    Ir.Assignments.fold_leaves together.asgns ~init:[] ~f:(fun acc leaf ->
+        Set.to_list (Ir.Assignments.collect_written leaf) @ acc)
+    |> List.rev
+  in
+  let position node = fst (List.findi_exn writes ~f:(fun _ n -> Tn.equal n node)) in
+  p "independent parameters initialize in forward operand order"
+    (position second_draw.value < position first_draw.value);
+  Tensor.unsafe_reinitialize ();
+  let source = TDSL.param "init_source" ~output_dims:[ 8 ] () in
+  let shared = NTDSL.pointmul source (NTDSL.number 2.) () in
+  let first = TDSL.param "init_owner" ~param_init:(NTDSL.add shared (NTDSL.number 1.)) () in
+  let second = TDSL.param "init_reader" ~param_init:(NTDSL.add shared (NTDSL.number 3.)) () in
+  let%op out = second + first in
+  let values =
+    evaluate "bop_init_dependencies" (Tensor.init_params out)
+      [ source.value; first.value; second.value ]
+  in
+  match values with
+  | [ source; first; second ] ->
+      p_all "initializer dependencies precede readers despite reversed forward access"
+        (List.zip_exn [ first; second ] [ 1.; 3. ])
+        ~f:(fun (actual, bias) ->
+          Verdict.within "initializer value" actual
+            (Array.map source ~f:(fun x -> (2. *. x) +. bias))
+            ~tol:(fun _ -> 1e-6))
+  | _ -> assert false
+
+(* Slice parents are materialization outputs of collect_nodes_guess_output, but still execution
+   dependencies. A precision mismatch forces copies so reading before the owner cannot hide behind
+   aliasing the buffer the owner later fills. *)
+let () =
+  Verdict.case "slice initializer dependencies" (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let index, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+      let data =
+        NTDSL.init ~l:"init_slice_data" ~prec:Ir.Ops.single ~b:[ 2 ] ~o:[ 8 ]
+          ~f:(fun i -> Float.of_int ((10 * i.(0)) + i.(1) + 1))
+          ()
+      in
+      let shared = NTDSL.pointmul data (NTDSL.number 2.) () in
+      let first = TDSL.param "init_slice_owner" ~param_init:(NTDSL.slice index shared) () in
+      let second = TDSL.param "init_slice_reader" ~param_init:(NTDSL.slice index shared) () in
+      List.iter [ first; second ] ~f:(fun t -> Tn.update_prec t.Tensor.value Ir.Ops.half);
+      let%op out = second + first in
+      let base = Context.auto () in
+      let ctx, routine =
+        Context.compile ~name:"bop_init_slices" base (Tensor.init_params out) bindings
+      in
+      IDX.find_exn routine.bindings index := 1;
+      let init_ctx = Context.run ctx routine in
+      p_all "slice initializer regression exercises copies" [ first; second ] ~f:(fun t ->
+          not (Ir.Assignments.slice_alias_eligible ~array:t.Tensor.value ~sliced:shared.value));
+      Train.set_materialized out.value;
+      let ctx, forward =
+        Context.compile ~name:"bop_init_slices_value" init_ctx (Tensor.consume_forward_code out)
+          bindings
+      in
+      IDX.find_exn forward.bindings index := 1;
+      let ctx = Context.run ctx forward in
+      p "slice parent initialization precedes every copying reader"
+        (Array.equal Float.equal
+           (Context.get_values ctx out.value)
+           (Array.init 8 ~f:(fun i -> Float.of_int (44 + (4 * i)))));
+      Context.release ctx;
+      Context.release init_ctx;
+      Context.release base)
 
 let () =
   check "conv" (conv ~channels:(3, 2)) ~changed:(conv ~channels:(2, 3));
