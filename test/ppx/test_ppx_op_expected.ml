@@ -921,3 +921,58 @@ let _pipe_partial =
     fun x y ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [x; y]
         (fun () -> __ocannl_body x y)
+let _constrained_call =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
+         (fun () -> initialized_no_unit x) : Tensor.t) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_constrained_call" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _constrained_op =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      ((relu
+          ?label:(Some
+                    (List.concat
+                       [["_constrained_op"]; (x.Tensor.value).Ir.Tnode.label]))
+          x : Tensor.t) : Tensor.t) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_constrained_op" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let _constrained_inline =
+  let open! TDSL.O in
+    fun () ->
+      let constrained_w =
+        (TDSL.param ?more_label:None ?value:None ?values:None
+           ?param_init:None "constrained_w") () in
+      let __ocannl_body x =
+        (((+) ?label:(Some ["_constrained_inline"])) x constrained_w : 
+        Tensor.t) in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"_constrained_inline" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let _constrained_block =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      stack
+        ?label:(Some
+                  (List.concat
+                     [["_constrained_block"];
+                     (x.Tensor.value).Ir.Tnode.label])) `Output
+        [|(stack ?label:None `Input [|x;x|] : Tensor.t)|] in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_constrained_block" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)

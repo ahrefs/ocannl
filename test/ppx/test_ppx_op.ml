@@ -188,3 +188,10 @@ let%op _pipe_layer x = x |> initialized_no_unit
    operations. *)
 let%op _direct_partial x y = _direct_add y x
 let%op _pipe_partial x y = x |> _direct_add y
+
+(* gh-ocannl-2175: annotations retain ordinary application sites, DSL labels, operator expansion and
+   lifted inline declarations. Numeric axis annotations keep their special meaning. *)
+let%op _constrained_call x = (initialized_no_unit x : Tensor.t)
+let%op _constrained_op x = ((relu x : Tensor.t) : Tensor.t)
+let%op _constrained_inline () x = (( + ) (x, { constrained_w }) : Tensor.t)
+let%op _constrained_block x = [ ((x, x) : Tensor.t) ]

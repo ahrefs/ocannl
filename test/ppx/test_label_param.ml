@@ -96,3 +96,11 @@ let () =
   claim "?(label = ...) given" (late_default ~label:[ "G" ] x) ([ "+"; "late_default"; "G" ] @ lx);
   claim "~label after the tensor" (late_after x ~label:[ "A" ])
     (([ "relu"; "late_after" ] @ lx) @ [ "A" ])
+
+(* gh-ocannl-2175: a type constraint preserves translation and the result label. *)
+let%op constrained_relu x = (relu x : Tensor.t)
+
+let () =
+  let x = TDSL.range ~label:[ "constrained_input" ] 3 in
+  claim "type-constrained application" (constrained_relu x)
+    ([ "relu"; "constrained_relu" ] @ label x)

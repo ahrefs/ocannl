@@ -50,3 +50,5 @@ without (): the inline declaration: it does not carry L: true
 ?(label = ...) given: the label is as stated: true
 ~label after the tensor: [relu; late_after; 0...2; x; A]
 ~label after the tensor: the label is as stated: true
+type-constrained application: [relu; constrained_relu; 0...2; constrained_input]
+type-constrained application: the label is as stated: true

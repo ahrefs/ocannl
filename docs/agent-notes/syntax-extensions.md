@@ -161,3 +161,8 @@ files.
   trigger: `"ab, => ab,"` must not reach Shape as `"ab => ab"`. Dynamic coefficient or padding
   substitutions retain an affine marker. `capture_multichar_hint` closes the documented repair's
   shape and checks both its captured dimension and rank (gh-ocannl-2163).
+
+- Type constraints in `%op` (gh-ocannl-2175) preserve translation of their expression, including
+  result labels, application sites, inline declarations and block-element context. The earlier
+  numeric-literal and tensor-container constraints remain axis-basis annotations; `[%oc ...]`
+  still opts out explicitly.
