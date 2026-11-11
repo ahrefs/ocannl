@@ -939,13 +939,26 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       (* TODO: this is a workaround for optional arguments spoiling type inference. We should
          consider removing ?label arguments from Make_DSL.O -- not sure what benefit we get from
          them. Then consider removing this case, but maybe not... *)
+      (* The pipeline's function may already have arguments ([einsum1 "ab=>a"], [( + ) y]).
+         Classify its source head before translation adds labels or site wrappers. *)
+      let rec is_dsl_call fn =
+        is_named_spec_function fn
+        ||
+        match fn.pexp_desc with
+        | Pexp_ident { txt = Lident op_ident; _ } ->
+            is_primitive_op op_ident || is_operator op_ident
+        | Pexp_apply (head, _) -> is_dsl_call head
+        | _ -> false
+      in
+      let operator = is_dsl_call fn in
       let vbs1, arg = loop arg in
       let vbs2, fn = loop fn in
       let vbs = reduce_vbss [ vbs1; vbs2 ] in
+      let app = [%expr [%e fn] __x] in
       ( vbs,
         [%expr
           let __x = [%e arg] in
-          [%e at_site ~loc [%expr [%e fn] __x]]] )
+          [%e if operator then app else at_site ~loc app]] )
   | { pexp_desc = Pexp_apply (fn_expr, args); _ } ->
       (* Smart application handling with unit-parameter heuristic: If there's a unit () argument,
          don't transform args before it *)

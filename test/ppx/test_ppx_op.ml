@@ -171,3 +171,14 @@ let%op _curried_where c x y = where c x y
 let%op _uncurried_fma x = fma (x, { uf_w }, { uf_b })
 let%op _uncurried_plus x y = ( + ) (x, y *. { up_w })
 let%op _uncurried_nested c x y = where (( < ) (x, y), relu x, fma (c, x, y))
+
+(* gh-ocannl-2174: pipeline calls use the same application-site policy as direct calls. DSL
+   operations stay in tail position; ordinary functions retain the site wrapper. *)
+let%op _direct_relu x = relu x
+let%op _pipe_relu x = x |> relu
+let%op _direct_add x y = y + x
+let%op _pipe_add x y = x |> ( + ) y
+let%op _direct_einsum1 x = einsum1 "ab=>a" x
+let%op _pipe_einsum1 x = x |> einsum1 "ab=>a"
+let%op _direct_layer x = initialized_no_unit x
+let%op _pipe_layer x = x |> initialized_no_unit
