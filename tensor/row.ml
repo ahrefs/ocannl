@@ -2775,11 +2775,15 @@ let visit_rows_for_row_solution env v ~value =
    open takes the first tag whose consequences [fits] accepts, and [settled] says one did
    (gh-ocannl-1968). With [merge_pairs], a window pair with both outputs open applies its size
    equation instead (gh-ocannl-2038); that pass comes only after no open tag would settle, since a
-   tag settled first can solve one output and leave the pair to the solved arms, which are exact. *)
+   tag settled first can solve one output and leave the pair to the solved arms, which are exact.
+   [checkpoint] captures the module-level inference state and returns what puts it back
+   ([capture_globals]/[restore_globals], defined below [unify_dim]): a refused tag leaves no trace
+   (gh-ocannl-2129). *)
 type settling = {
   mutable settled : bool;
   merge_pairs : bool;
   fits : constraint_ list -> environment -> bool;
+  checkpoint : unit -> unit -> unit;
 }
 
 let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : constraint_ list * _ =
@@ -2824,17 +2828,26 @@ let%track6_sexp rec unify_dim ?settling ~stage origin (eq : dim * dim) env : con
      a nested window can rule it out, so it goes first and the rest follow. A candidate must bind
      something: one waiting on a nested window's kernel settles nothing, and this equation stays
      with it. The last candidate needs no vetting, since the solver will say what is wrong with it.
-     A deferral leaves the environment as it was. *)
+     A deferral leaves the environment as it was. A refused candidate -- one binding nothing, one
+     [fits] refuses, one raising before the next is tried -- also leaves the module-level inference
+     state as it was: its solve can share a use-site mark across a [Var = Var] merge before it fails
+     (gh-ocannl-2129). *)
   let settle_open bases ~solve =
     match settling with
     | None -> ([ held ], env)
     | Some settling -> (
         let attempt ~vet basis =
+          let restore = settling.checkpoint () in
           match solve basis with
-          | constrs, env' when not (phys_equal env' env) ->
-              if vet then Option.some_if (settling.fits constrs env') (constrs, env')
-              else Some (constrs, env')
-          | _ -> None
+          | constrs, env'
+            when (not (phys_equal env' env)) && ((not vet) || settling.fits constrs env') ->
+              Some (constrs, env')
+          | _ ->
+              restore ();
+              None
+          | exception (Shape_error _ as e) when vet ->
+              restore ();
+              raise e
         in
         let rec first_fit = function
           | [] -> assert false
@@ -4254,16 +4267,23 @@ let%track5_sexp solve_dim_ineq ~(stage : stage) origin ~(res : dim) ~(opnd : dim
              inequality, leaving the bound un-demoted, using the same idiom as the
              [discardable_vars] concat case); at stage 4+ commit the unification (the GLB stays
              [glb2], i.e. [res = glb2]) and force [res = opnd], threading the unification's own
-             constraints through alongside. *)
+             constraints through alongside. The attempt's module-level effects (a use-site mark
+             shared across a [Var = Var] merge, say) go with its environment: put back on a refusal,
+             and on a postponement, which drops [env'] (gh-ocannl-2129). *)
           let merge_by_equality () =
+            let saved = capture_globals () in
             match
               try `Ok (unify_dim ~stage origin (res, glb2) env) with Shape_error _ -> `Failed
             with
-            | `Failed -> demote ()
+            | `Failed ->
+                restore_globals saved;
+                demote ()
             | `Ok (more, env') ->
                 if is_stage4_up stage then
                   commit ~glb:glb2 ~extra:(Dim_eq { d1 = opnd; d2 = glb2; origin } :: more) env'
-                else ([ Dim_ineq { res; opnd; from_ = Sexp.List []; origin } ], env)
+                else (
+                  restore_globals saved;
+                  ([ Dim_ineq { res; opnd; from_ = Sexp.List []; origin } ], env))
           in
           match (res, glb2) with
           | Dim _, Dim _ when equal_dim res glb2 ->
@@ -6016,20 +6036,34 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
        closing stages need its size. One at a time, in that a choice can solve another window
        (gh-ocannl-1968). Stage1 waits: its constraints are still arriving. A window pair with both
        outputs open relates their sizes only once no open tag settles (gh-ocannl-2038). *)
+    (* The probe vetting a candidate discards its environment, so its module-level effects go too,
+       whatever its verdict; likewise an equation that settles nothing is dropped and stays held
+       (gh-ocannl-2129). The probe reads the candidate's own consequences only: vetting against the
+       other held constraints as well changed no verdict over held windows, and made four
+       consistently refused concatenation systems order-dependent (gh-ocannl-2129's search). *)
     let rec settle_window ~merge_pairs kept = function
       | [] -> None
       | (Dim_eq { d1; d2; origin } as held) :: rest ->
-          let fits constrs env =
-            match solve constrs env with _ -> true | exception Shape_error _ -> false
+          let checkpoint () =
+            let saved = capture_globals () in
+            fun () -> restore_globals saved
           in
-          let settling = { settled = false; merge_pairs; fits } in
+          let fits constrs env =
+            let restore = checkpoint () in
+            Exn.protect ~finally:restore ~f:(fun () ->
+                match solve constrs env with _ -> true | exception Shape_error _ -> false)
+          in
+          let settling = { settled = false; merge_pairs; fits; checkpoint } in
+          let restore = checkpoint () in
           let more, env =
             try unify_dim ~settling ~stage origin (d1, d2) env
             with Shape_error (s, trace) ->
               raise @@ Shape_error (s, Constraint_failed held :: trace)
           in
           if settling.settled then Some (List.rev_append kept (more @ rest), env)
-          else settle_window ~merge_pairs (held :: kept) rest
+          else (
+            restore ();
+            settle_window ~merge_pairs (held :: kept) rest)
       | held :: rest -> settle_window ~merge_pairs (held :: kept) rest
     in
     let ineqs', env = List.fold ineqs ~init:([], env) ~f in

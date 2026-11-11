@@ -351,6 +351,23 @@ files.
   the module-level sets, not only drop its environment: `unify_dim` shares a use-site mark across a
   `Var = Var` merge before a later pair conflicts. Every pair the old check refuted, `unify_dim`
   refuses too, so a store accepted before keeps its overlap.
+- **Every trial solve keeps its module-level effects exactly when it keeps its environment**
+  (gh-ocannl-2129). The trial sites: the mixed-flank overlaps above; `solve_dim_ineq`'s
+  `merge_by_equality`, rolled back on a refusal (demotion) and on a postponement below stage 4,
+  which drops `env'`; `settle_open`'s refused candidates, through the `settling` record's
+  `checkpoint` (`settle_open` sits inside `unify_dim`, above `capture_globals`); the `fits` probe,
+  whose environment is always discarded; and `settle_window`'s equation that settled nothing. A
+  leak is silent: a mark shared inside a refused merge closed a bound variable to its GLB (7)
+  instead of 1 (`test/einsum/test_trial_rollback`). Not rewound: fresh ids and the mutation serial
+  (forward-only), transient flags cleared on raise, test switches and work counters. A new trial
+  site goes through `capture_globals`, and a new inference set joins it (`mutation_serial_scan`).
+- Vetting a window's candidate against every other held constraint (gh-ocannl-2129's second part)
+  was tried and NOT landed. Over 16730 systems of windows, bounds, shared kernels, window pairs
+  and concatenations, in every order, it changed only four verdicts, each from refused in every
+  order to order-dependent. With no concatenation involved, no system was order-dependent with or
+  without it. The 96 order-dependent systems that do exist on the base all mix a window with
+  concatenations of tagged components: that is the concatenation arithmetic's basis handling, not
+  vetting.
 - That spurious axis is also how a shape defect reaches the SCHEDULER, which is where it actually
   got noticed: `Tensorize`'s role check rejects an operand mentioning the third micro symbol, and
   `Stage`'s insertion point L\* is "the deepest loop carrying an outer-part symbol", so an operand
