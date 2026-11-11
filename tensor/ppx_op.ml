@@ -710,9 +710,10 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let vbs2, e2 = loop expr2 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       ( reduce_vbss [ vbs1; vbs2 ],
-        [%expr
-          [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-            ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
+        with_spec_source ~spec_str ~spec
+          [%expr
+            [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+              ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
@@ -722,9 +723,10 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let vbs2, e2 = loop expr2 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       ( reduce_vbss [ vbs1; vbs2 ],
-        [%expr
-          [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-            ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
+        with_spec_source ~spec_str ~spec
+          [%expr
+            [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+              ?label:[%e opt_expr ~loc label] [%e spec] [%e e1] [%e e2]] )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
@@ -743,9 +745,10 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let vbs1, e1 = loop expr1 in
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       ( vbs1,
-        [%expr
-          [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
-            ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]] )
+        with_spec_source ~spec_str ~spec
+          [%expr
+            [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
+              ?label:[%e opt_expr ~loc label] [%e spec] [%e e1]] )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
@@ -764,9 +767,10 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       ( vbs1,
         in_source_order ~loc ~prefix:component_prefix rhses ~f:(fun rhses ->
-            [%expr
-              [%e concat_fn ~loc] ?label:[%e opt_expr ~loc label] [%e spec]
-                [%e Ast_builder.Default.pexp_array ~loc rhses]]) )
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e concat_fn ~loc] ?label:[%e opt_expr ~loc label] [%e spec]
+                  [%e Ast_builder.Default.pexp_array ~loc rhses]]) )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
@@ -788,10 +792,11 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let combined_vbs = reduce_vbss [ vbs1; capture_vbs ] in
       ( combined_vbs,
         in_source_order ~loc ~prefix:component_prefix rhses ~f:(fun rhses ->
-            [%expr
-              [%e concat_fn ~loc] ?label:[%e opt_expr ~loc label]
-                ~capture_dims:[%e capture_dims_expr] [%e spec]
-                [%e Ast_builder.Default.pexp_array ~loc rhses]]) )
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e concat_fn ~loc] ?label:[%e opt_expr ~loc label]
+                  ~capture_dims:[%e capture_dims_expr] [%e spec]
+                  [%e Ast_builder.Default.pexp_array ~loc rhses]]) )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
@@ -805,10 +810,11 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       let combined_vbs = reduce_vbss [ vbs1; vbs2; capture_vbs ] in
       ( combined_vbs,
-        [%expr
-          [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-            ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec] [%e e1]
-            [%e e2]] )
+        with_spec_source ~spec_str ~spec
+          [%expr
+            [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+              ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec] [%e e1]
+              [%e e2]] )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
@@ -822,10 +828,11 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       let combined_vbs = reduce_vbss [ vbs1; vbs2; capture_vbs ] in
       ( combined_vbs,
-        [%expr
-          [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-            ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec] [%e e1]
-            [%e e2]] )
+        with_spec_source ~spec_str ~spec
+          [%expr
+            [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+              ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec] [%e e1]
+              [%e e2]] )
   | [%expr
       [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
         [%e? expr1]
@@ -837,9 +844,10 @@ let rec translate ~dsl_name ~num_configs ~is_toplevel ?(in_block = false) ?schem
       let spec = substitute_identifiers_in_einsum_spec ~loc spec_str in
       let combined_vbs = reduce_vbss [ vbs1; capture_vbs ] in
       ( combined_vbs,
-        [%expr
-          [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
-            ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec] [%e e1]]
+        with_spec_source ~spec_str ~spec
+          [%expr
+            [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
+              ?label:[%e opt_expr ~loc label] ~capture_dims:[%e capture_dims_expr] [%e spec] [%e e1]]
       )
   | { pexp_desc = Pexp_record ([], _); _ } ->
       (* Empty record - not a tensor definition *)

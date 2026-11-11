@@ -1285,9 +1285,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-                [%e spec] [%e res1.expr] [%e res2.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                  [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -1305,9 +1306,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-                [%e spec] [%e res1.expr] [%e res2.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                  [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -1327,9 +1329,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-                ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                  ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -1349,9 +1352,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
-                ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_binary_ops op_ident loc]
+                  ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr] [%e res2.expr]];
           array_opt_of_code = None;
         }
     | [%expr
@@ -1377,7 +1381,8 @@ let translate ?ident_label (expr : expression) : result =
           res1 with
           typ = Tensor;
           expr =
-            [%expr [%e Hashtbl.find_exn einsum_unary_ops op_ident loc] [%e spec] [%e res1.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr [%e Hashtbl.find_exn einsum_unary_ops op_ident loc] [%e spec] [%e res1.expr]];
         }
     | [%expr
         [%e? { pexp_desc = Pexp_ident { txt = Lident op_ident; _ }; _ }]
@@ -1393,9 +1398,10 @@ let translate ?ident_label (expr : expression) : result =
           typ = Tensor;
           slot = res1.slot;
           expr =
-            [%expr
-              [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
-                ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr]];
+            with_spec_source ~spec_str ~spec
+              [%expr
+                [%e Hashtbl.find_exn einsum_unary_ops op_ident loc]
+                  ~capture_dims:[%e capture_dims_expr] [%e spec] [%e res1.expr]];
           array_opt_of_code = None;
         }
     | [%expr [%e? expr1].grad] -> (
@@ -1689,7 +1695,7 @@ let translate ?ident_label (expr : expression) : result =
                       or einsum notation for a custom contraction"
                      bin_op bin_op
             | _ -> [%expr Shape.Compose]
-          else [%expr Shape.Einsum ([%e logic], [%e capture_dims])]
+          else [%expr Shape.Einsum (Shape.einsum_spec [%e logic], [%e capture_dims])]
         in
         let _, bin_op = binary_op bin_op in
         let res =
@@ -1726,7 +1732,7 @@ let translate ?ident_label (expr : expression) : result =
                   semantics (the +c term is re-added on every reduction iteration) are ambiguous \
                   under contraction; use '.' or '@' for fma"
                  spec
-          else [%expr Shape.Einsum_tern ([%e logic], [%e capture_dims])]
+          else [%expr Shape.Einsum_tern (Shape.einsum_spec [%e logic], [%e capture_dims])]
         in
         let _, tern_op = ternary_op tern_op in
         let res =
@@ -1760,7 +1766,7 @@ let translate ?ident_label (expr : expression) : result =
           let loc = s_loc in
           if String.equal spec "." then [%expr Shape.Pointwise_un]
           else if String.equal spec "T" then [%expr Shape.Transpose]
-          else [%expr Shape.Permute ([%e logic], [%e capture_dims])]
+          else [%expr Shape.Permute (Shape.einsum_spec [%e logic], [%e capture_dims])]
         in
         let _, un_op = Hashtbl.find_exn unary_ops unop_ident loc in
         let res =

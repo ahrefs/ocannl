@@ -41,7 +41,7 @@ let test_variable_capture =
         ~capture_dims:[[%ocaml.error
                          "ppx_ocannl: repeated variable capture 'a'"];
                       a;
-                      b] "a, b => b, a" x in
+                      b] "ab=>ba" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"test_variable_capture" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -64,7 +64,7 @@ let test_mixed =
         ?label:(Some
                   (List.concat
                      [["test_mixed"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[a; b] "a, b; b, c => a, c" x b in
+        ~capture_dims:[a; b] "ab;bc=>ac" x b in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"test_mixed" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -81,7 +81,7 @@ let test_capture_shadows_outer_param =
       let __ocannl_body x =
         let c = Shape.get_variable_ref "c" in
         (+) ?label:(Some ["test_capture_shadows_outer_param"]) p
-          (einsum1 ?label:None ~capture_dims:[c] "a, c => a" x) in
+          (einsum1 ?label:None ~capture_dims:[c] "ac=>a" x) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure
           ~name:"test_capture_shadows_outer_param" ~arity:1

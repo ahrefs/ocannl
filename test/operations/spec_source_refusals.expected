@@ -1,0 +1,46 @@
+%op unary, arity:
+  Invalid permutation spec (expected one argument): ab; c => a
+%op unary, arity: cites the source spec: true
+%op unary, arity: does not cite the re-rendered spec: true
+%op binary, a result concatenation no operand names:
+  einsum spec "ab; c => a^b": no operand names a component of the concatenated result axis a^b, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+%op binary, a result concatenation no operand names: cites the source spec: true
+%op binary, a result concatenation no operand names: does not cite the re-rendered spec: true
+%op block, a result concatenation no operand names:
+  einsum spec "ab; c => a^b": no operand names a component of the concatenated result axis a^b, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+%op block, a result concatenation no operand names: cites the source spec: true
+%op block, a result concatenation no operand names: does not cite the re-rendered spec: true
+%cd unary, a result concatenation no operand names:
+  einsum spec "ab => a^b": no operand names a component of the concatenated result axis a^b, so nothing says what its segments hold. To write part of the axis, name the segment (a => 2^a^3 writes a between two skipped segments); to repeat a reduced operand in every cell, use a plain axis and size it (x ++ "a => b" ["b"], then Shape.set_dim b 5)
+%cd unary, a result concatenation no operand names: cites the source spec: true
+%cd unary, a result concatenation no operand names: does not cite the re-rendered spec: true
+%op fixed index into a parameter, at closure:
+  Unresolved parameter dimension: a parameter axis is sized only by a fixed-index output axis of einsum spec "...|hw => ...|00". A fixed index bounds an axis from below (here: at least 1) but does not determine its size; reduce the axis away instead of fixing an index, or specify the parameter's dimension explicitly
+%op fixed index into a parameter, at closure: cites the source spec: true
+%op fixed index into a parameter, at closure: does not cite the re-rendered spec: true
+%op binary, a stride identifier at 0:
+  affine axis `0*o<+k` in einsum spec "stride*o<+k; k => o" has stride 0, which must be at least 1: at 0 every position of its label would map to the same cell
+%op binary, a stride identifier at 0: cites the source spec: true
+%op binary, a stride identifier at 0: does not cite the re-rendered spec: true
+%op binary, a padding-less window reading use_padding:
+  result-side padded window `i=+k` in einsum spec "s, i; k => s, i+k" is not supported: a padded (=+) window on the result is a padded transposed convolution, which OCANNL does not implement in one step. Build it in two: the full transposed convolution, with the result-side window unpadded (<+; its result extent is stride*(n-1) + the dilated kernel extent for an operand extent n), then a crop of `padding` cells at its start and `padding - output_padding` at its end (PyTorch's ConvTranspose arguments), written as a slice of a concatenated axis: "s, p^o^q => s, o" with the components p = padding and q = padding - output_padding captured and set (Shape.set_dim), or written as integer components ("s, 2^o^1 => s, o"); when output_padding > padding, slice only the start and pad the end with the output_padding - padding extra zero cells by a replacement ("s, a => s, a^r"); see docs/syntax_extensions.md. With stride 1, dilation 1 and an odd kernel size, the padded window on an operand with the kernel reversed (e.g. "s, o=+k; k => s, o") is the same map in one step.
+%op binary, a padding-less window reading use_padding: cites the source spec: true
+%op binary, a padding-less window reading use_padding: does not cite the re-rendered spec: true
+%op block, a stride identifier at 0:
+  affine axis `0*a` in einsum spec "stride*a; b => a^b" has stride 0, which must be at least 1: at 0 every position of its label would map to the same cell
+%op block, a stride identifier at 0: cites the source spec: true
+%op block, a stride identifier at 0: does not cite the re-rendered spec: true
+%op named einsum1, a stride identifier at 0:
+  affine axis `0*o` in einsum spec "stride*o => o" has stride 0, which must be at least 1: at 0 every position of its label would map to the same cell
+%op named einsum1, a stride identifier at 0: cites the source spec: true
+%op named einsum1, a stride identifier at 0: does not cite the re-rendered spec: true
+%op named einsum3, a stride identifier at 0:
+  affine axis `0*i` in einsum spec "stride*i; i; i => i" has stride 0, which must be at least 1: at 0 every position of its label would map to the same cell
+%op named einsum3, a stride identifier at 0: cites the source spec: true
+%op named einsum3, a stride identifier at 0: does not cite the re-rendered spec: true
+direct Operation call:
+  Invalid permutation spec (expected one argument): ab; c => a
+direct Operation call: cites the source spec: true
+computed spec:
+  Invalid permutation spec (expected one argument): a, b; c => a
+computed spec: cites the source spec: true

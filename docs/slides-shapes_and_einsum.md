@@ -291,7 +291,7 @@ is still being designed—the natural `[rhs1; rhs2]` conflicts with block tensor
 >     g2 =+ where (t = t1 + t2) (v1 *. g) 0
 >   in
 >   Tensor.binop
->     ~compose_op:(Shape.Einsum (spec, capture_dims))
+>     ~compose_op:(Shape.Einsum (Shape.einsum_spec spec, capture_dims))
 >     ~op_asn ~grad_asn ~label:("@^=>*" :: label)
 > ```
 

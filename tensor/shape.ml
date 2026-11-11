@@ -618,17 +618,27 @@ let refuse_closed_unsolved_ref ?(as_row = false) ~operation (r : delayed_var_ref
               variable. Capture it afresh in an operation of the open work."],
            [] )
 
+type einsum_spec = { exec : string; source : string option } [@@deriving equal, sexp_of]
+
+let einsum_spec ?source exec =
+  let source =
+    match source with Some s when not (String.equal s exec) -> Some s | Some _ | None -> None
+  in
+  { exec; source }
+
+let spec_text { exec; source } = Option.value source ~default:exec
+
 type compose_type =
   | Pointwise_bin
   | Compose
-  | Einsum of string * delayed_var_ref list
+  | Einsum of einsum_spec * delayed_var_ref list
   | Defined_by_cd_logic
 [@@deriving sexp_of, equal]
 
 type transpose_type =
   | Transpose
   | Pointwise_un
-  | Permute of string * delayed_var_ref list
+  | Permute of einsum_spec * delayed_var_ref list
   | Batch_slice of Idx.static_symbol
   | Uint4x32_to_prec of Ir.Ops.prec Lazy.t
   | Defined_by_cd_logic
@@ -641,20 +651,25 @@ type ternary_type =
   | Pointwise_tern
   | Compose_accumulate
   | Defined_by_cd_logic
-  | Einsum_tern of string * delayed_var_ref list
+  | Einsum_tern of einsum_spec * delayed_var_ref list
 [@@deriving sexp_of, equal]
 
-let einsum_of_spec spec =
+let einsum_of_spec ?text spec =
   try Einsum_parser.einsum_of_spec spec
   with Einsum_parser.Parse_error msg ->
-    raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ spec ^ " error: " ^ msg)
+    let shown =
+      match text with
+      | Some text when not (String.equal text spec) -> text ^ " (evaluated as: " ^ spec ^ ")"
+      | _ -> spec
+    in
+    raise @@ Utils.User_error ("Shape.einsum_of_spec: while parsing: " ^ shown ^ " error: " ^ msg)
 
 type logic =
   | Broadcast of compose_type * t * t
   | Transpose of transpose_type * t
   | Broadcast_tern of ternary_type * t * t * t
   | Terminal of { is_param : bool; logic : terminal_type }
-  | Block of { spec : string; delayed_vars : delayed_var_ref list; rhses : t list }
+  | Block of { spec : einsum_spec; delayed_vars : delayed_var_ref list; rhses : t list }
 [@@deriving equal, sexp_of]
 
 let logic_to_spec = function
@@ -667,7 +682,7 @@ let logic_to_spec = function
   | Transpose (Permute (spec, _), _)
   | Block { spec; _ }
   | Broadcast_tern (Einsum_tern (spec, _), _, _, _) ->
-      spec
+      spec_text spec
   | Transpose (Transpose, _) -> "T"
   | Transpose (Batch_slice _, _) -> "@|"
   | Transpose (Uint4x32_to_prec _, _) -> "U4x32"
@@ -1068,7 +1083,7 @@ let affine_dim_of_spec ~spec ~dim_var_env axis_spec =
       Row.Affine { stride = stride_int; over = over_dim; conv; stride_offset }
   | Label _ | Fixed_index _ | Concat_spec _ -> invalid_arg "affine_dim_of_spec: not an affine axis"
 
-let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id ~row_var_env
+let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~spec_text ~sh_id ~row_var_env
     ~dim_var_env labels =
   let dim_names, row_names = slot_names labels in
   let names_with env names =
@@ -1093,11 +1108,11 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
           Row.Dim_constr
             {
               d;
-              constr = At_least_dim { d_min = i + 1; sites = [ { spec = original_spec; kind } ] };
+              constr = At_least_dim { d_min = i + 1; sites = [ { spec = spec_text; kind } ] };
               origin =
                 [
                   {
-                    lhs_name = original_spec;
+                    lhs_name = spec_text;
                     lhs_kind = kind;
                     rhs_name = "einsum_slot_spec_to_dims_bio";
                     rhs_kind = kind;
@@ -1107,9 +1122,9 @@ let einsum_slot_spec_to_dims_bio ?(fixed_index = `Pin_var) ~original_spec ~sh_id
             }
           :: !extras;
         d
-    | Affine_spec _ as axis_spec -> affine_dim_of_spec ~spec:original_spec ~dim_var_env axis_spec
+    | Affine_spec _ as axis_spec -> affine_dim_of_spec ~spec:spec_text ~dim_var_env axis_spec
     | Concat_spec components ->
-        Row.Concat (List.map components ~f:(concat_component_dim ~spec:original_spec ~dim_var_env))
+        Row.Concat (List.map components ~f:(concat_component_dim ~spec:spec_text ~dim_var_env))
   in
   let result = axes_spec_to_dims_bio ~sh_id ~row_var_env ~dim_var_env ~f labels in
   (* Pin the preflight's inventory to the names elaboration actually introduced, without
@@ -1404,14 +1419,14 @@ let split_capture_label_hint ~spec ~dim_var_env label =
 
 (* Check the whole capture list before binding any reference. Also used by the read-only spec
    preflight, whose environments contain names only. *)
-let check_capture_labels ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs =
+let check_capture_labels ~(spec : einsum_spec) ~dim_var_env ~row_var_env ~error_shapes dim_refs =
   List.iter dim_refs ~f:(fun delayed_ref ->
       let label = delayed_ref.var_ref.ref_label in
       if not (Hashtbl.mem dim_var_env label || Hashtbl.mem row_var_env label) then
         raise
         @@ Row.Shape_error
-             ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec
-               ^ split_capture_label_hint ~spec ~dim_var_env label,
+             ( "Variable " ^ label ^ " not found in environments for spec: " ^ spec_text spec
+               ^ split_capture_label_hint ~spec:spec.exec ~dim_var_env label,
                [ Shape_mismatch error_shapes ] ))
 
 (** Shared helper: bind each [delayed_var_ref] to the dim/row variable resolved for its label in
@@ -1443,7 +1458,7 @@ let bind_delayed_vars_to_envs ~for_projections ~spec ~dim_var_env ~row_var_env ~
   if not for_projections then
     List.iter dim_refs ~f:(fun delayed_ref ->
         let label = delayed_ref.var_ref.ref_label in
-        check_before_binding ~where:[%string "in spec \"%{spec}\""] ~error_shapes
+        check_before_binding ~where:[%string "in spec \"%{spec_text spec}\""] ~error_shapes
           ~is_row:((not (Hashtbl.mem dim_var_env label)) && Hashtbl.mem row_var_env label)
           delayed_ref);
   List.concat_map dim_refs ~f:(fun delayed_ref ->
@@ -1542,7 +1557,7 @@ let unsized_padded_kernels ~spec ~(dim_refs : delayed_var_ref list) =
     | _ -> None)
   |> List.dedup_and_sort ~compare:String.compare
 
-(** The spec and captures of an einsum-family logic. *)
+(** The spec (execution text and source) and captures of an einsum-family logic. *)
 let einsum_of_logic = function
   | Transpose (Permute (spec, dim_refs), _)
   | Broadcast (Einsum (spec, dim_refs), _, _)
@@ -1564,27 +1579,29 @@ let einsum_of_logic = function
     Returns [(proj_env, bio_lhs, bio_rhs_list, inequalities)] where [bio_lhs] and [bio_rhs_list] are
     the batch/input/output row triples for the LHS and each RHS — needed by [Block] to compute
     discardable vars. *)
-let einsum_n_constraints ?projection_sizing ~spec ~(rhs_slots : (parsed_axis_labels * t) list)
-    ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label ~arg_label_prefix ~(error_shapes : t list)
-    ?(lhs_constraints_first = false) () =
+let einsum_n_constraints ?projection_sizing ~(spec : einsum_spec)
+    ~(rhs_slots : (parsed_axis_labels * t) list) ~(cur_sh : t) ~ls_lhs ~dim_refs ~result_label
+    ~arg_label_prefix ~(error_shapes : t list) ?(lhs_constraints_first = false) () =
   let row_var_env = Hashtbl.create (module String) in
   let dim_var_env = Hashtbl.create (module String) in
+  let einsum_spec = spec in
+  let spec = spec_text einsum_spec in
   let rhs_results =
     List.mapi rhs_slots ~f:(fun idx (ls_rhs, (sh : t)) ->
         let extras, proj_env, bio =
-          einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env ~dim_var_env
-            ls_rhs
+          einsum_slot_spec_to_dims_bio ~spec_text:spec ~sh_id:sh.id ~row_var_env ~dim_var_env ls_rhs
         in
         (idx, sh, extras, proj_env, bio))
   in
   let extras_lhs, proj_env_lhs, ((b_lhs, i_lhs, o_lhs) as bio_lhs) =
-    einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:(cur_sh : t).id ~row_var_env
-      ~dim_var_env ls_lhs
+    einsum_slot_spec_to_dims_bio ~spec_text:spec ~sh_id:(cur_sh : t).id ~row_var_env ~dim_var_env
+      ls_lhs
   in
   check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch error_shapes ] dim_var_env
     row_var_env;
   let extras_dim_refs =
-    capture_constraints ?projection_sizing ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs
+    capture_constraints ?projection_sizing ~spec:einsum_spec ~dim_var_env ~row_var_env ~error_shapes
+      dim_refs
   in
   let proj_env =
     let combine ~key:_ _ _ = assert false in
@@ -2269,12 +2286,13 @@ let%debug4_sexp get_inequalities ?projection_sizing
             Row_eq { r1 = cur_sh.input; r2 = sh.input; origin = get_origin `Input };
             Row_eq { r1 = cur_sh.output; r2 = sh.output; origin = get_origin `Output };
           ] )
-  | Transpose (Permute (spec, dim_refs), sh) ->
+  | Transpose (Permute (einsum_spec, dim_refs), sh) ->
+      let spec = spec_text einsum_spec in
       unmark_unused sh.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh.input.bcast;
       let ls_rhs, ls_lhs =
-        match einsum_of_spec spec with
+        match einsum_of_spec ~text:spec einsum_spec.exec with
         | [ ls_rhs ], ls_lhs -> (ls_rhs, ls_lhs)
         | _ ->
             raise
@@ -2286,18 +2304,17 @@ let%debug4_sexp get_inequalities ?projection_sizing
       let dim_var_env = Hashtbl.create (module String) in
 
       let extras_rhs, proj_env_rhs, (b_rhs, i_rhs, o_rhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env ~dim_var_env
-          ls_rhs
+        einsum_slot_spec_to_dims_bio ~spec_text:spec ~sh_id:sh.id ~row_var_env ~dim_var_env ls_rhs
       in
       let extras_lhs, proj_env_lhs, (b_lhs, i_lhs, o_lhs) =
-        einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
+        einsum_slot_spec_to_dims_bio ~spec_text:spec ~sh_id:cur_sh.id ~row_var_env ~dim_var_env
           ls_lhs
       in
       check_dim_row_var_name_clash ~spec
         ~error_trace:[ Shape_mismatch [ cur_sh; sh ] ]
         dim_var_env row_var_env;
       let extras_dim_refs =
-        capture_constraints ?projection_sizing ~spec ~dim_var_env ~row_var_env
+        capture_constraints ?projection_sizing ~spec:einsum_spec ~dim_var_env ~row_var_env
           ~error_shapes:[ cur_sh; sh ] dim_refs
       in
       let proj_env =
@@ -2458,14 +2475,15 @@ let%debug4_sexp get_inequalities ?projection_sizing
                  ];
              };
          ]
-  | Broadcast (Einsum (spec, dim_refs), sh1, sh2) ->
+  | Broadcast (Einsum (einsum_spec, dim_refs), sh1, sh2) ->
+      let spec = spec_text einsum_spec in
       unmark_unused sh1.id;
       unmark_unused sh2.id;
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       add_var_used_in_spec_or_compose sh1.input.bcast;
       add_var_used_in_spec_or_compose sh2.input.bcast;
       let ls_rhs1, ls_rhs2, ls_lhs =
-        match einsum_of_spec spec with
+        match einsum_of_spec ~text:spec einsum_spec.exec with
         | [ ls_rhs1; ls_rhs2 ], ls_lhs -> (ls_rhs1, ls_rhs2, ls_lhs)
         | _ ->
             raise
@@ -2474,19 +2492,20 @@ let%debug4_sexp get_inequalities ?projection_sizing
                    [ Shape_mismatch [ cur_sh; sh1; sh2 ] ] )
       in
       let proj_env, _, _, inequalities =
-        einsum_n_constraints ?projection_sizing ~spec
+        einsum_n_constraints ?projection_sizing ~spec:einsum_spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2) ]
           ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2 ]
           ~lhs_constraints_first:true ()
       in
       (proj_env, dim_var_set_empty, inequalities)
-  | Block { spec; delayed_vars; rhses } ->
+  | Block { spec = einsum_spec; delayed_vars; rhses } ->
+      let spec = spec_text einsum_spec in
       List.iter rhses ~f:(fun sh -> unmark_unused sh.id);
       add_var_used_in_spec_or_compose cur_sh.input.bcast;
       List.iter rhses ~f:(fun sh -> add_var_used_in_spec_or_compose sh.input.bcast);
       let ls_rhses, ls_lhs =
-        match einsum_of_spec spec with
+        match einsum_of_spec ~text:spec einsum_spec.exec with
         | ls_rhses, ls_lhs when List.length ls_rhses = List.length rhses -> (ls_rhses, ls_lhs)
         | _ ->
             raise
@@ -2496,9 +2515,10 @@ let%debug4_sexp get_inequalities ?projection_sizing
                    [ Shape_mismatch (cur_sh :: rhses) ] )
       in
       let proj_env, (b_lhs, i_lhs, o_lhs), bio_rhs_list, inequalities =
-        einsum_n_constraints ?projection_sizing ~spec ~rhs_slots:(List.zip_exn ls_rhses rhses)
-          ~cur_sh ~ls_lhs ~dim_refs:delayed_vars ~result_label:"Block RESULT"
-          ~arg_label_prefix:"Block ARGUMENT" ~error_shapes:(cur_sh :: rhses) ()
+        einsum_n_constraints ?projection_sizing ~spec:einsum_spec
+          ~rhs_slots:(List.zip_exn ls_rhses rhses) ~cur_sh ~ls_lhs ~dim_refs:delayed_vars
+          ~result_label:"Block RESULT" ~arg_label_prefix:"Block ARGUMENT"
+          ~error_shapes:(cur_sh :: rhses) ()
       in
       (* Compute discardable_vars for concat semantics: variables allowed to be 0. *)
       let rhs_shapes : Row.t list list =
@@ -2514,7 +2534,8 @@ let%debug4_sexp get_inequalities ?projection_sizing
       in
       let discardable_vars = Set.union discardable_from_rhs discardable_from_lhs in
       (proj_env, discardable_vars, inequalities)
-  | Broadcast_tern (Einsum_tern (spec, dim_refs), sh1, sh2, sh3) ->
+  | Broadcast_tern (Einsum_tern (einsum_spec, dim_refs), sh1, sh2, sh3) ->
+      let spec = spec_text einsum_spec in
       unmark_unused sh1.id;
       unmark_unused sh2.id;
       unmark_unused sh3.id;
@@ -2523,7 +2544,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
       add_var_used_in_spec_or_compose sh2.input.bcast;
       add_var_used_in_spec_or_compose sh3.input.bcast;
       let ls_rhs1, ls_rhs2, ls_rhs3, ls_lhs =
-        match einsum_of_spec spec with
+        match einsum_of_spec ~text:spec einsum_spec.exec with
         | [ ls_rhs1; ls_rhs2; ls_rhs3 ], ls_lhs -> (ls_rhs1, ls_rhs2, ls_rhs3, ls_lhs)
         | _ ->
             raise
@@ -2532,7 +2553,7 @@ let%debug4_sexp get_inequalities ?projection_sizing
                    [ Shape_mismatch [ cur_sh; sh1; sh2; sh3 ] ] )
       in
       let proj_env, _, _, inequalities =
-        einsum_n_constraints ?projection_sizing ~spec
+        einsum_n_constraints ?projection_sizing ~spec:einsum_spec
           ~rhs_slots:[ (ls_rhs1, sh1); (ls_rhs2, sh2); (ls_rhs3, sh3) ]
           ~cur_sh ~ls_lhs ~dim_refs ~result_label:"Broadcast RESULT"
           ~arg_label_prefix:"Broadcast ARGUMENT" ~error_shapes:[ cur_sh; sh1; sh2; sh3 ] ()
@@ -3096,16 +3117,19 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
   in
   let spec, dim_refs, ls_rhs_list, ls_lhs, rhs_shapes =
     match logic with
-    | Broadcast (Einsum (spec, dim_refs), sh1, sh2) -> (
-        match einsum_of_spec spec with
+    | Broadcast (Einsum (es, dim_refs), sh1, sh2) -> (
+        let spec = spec_text es in
+        match einsum_of_spec ~text:spec es.exec with
         | [ ls1; ls2 ], ls_lhs -> (spec, dim_refs, [ ls1; ls2 ], ls_lhs, [ sh1; sh2 ])
         | _ -> invalid ("invalid binary einsum spec: " ^ spec) [ cur_sh; sh1; sh2 ])
-    | Transpose (Permute (spec, dim_refs), sh1) -> (
-        match einsum_of_spec spec with
+    | Transpose (Permute (es, dim_refs), sh1) -> (
+        let spec = spec_text es in
+        match einsum_of_spec ~text:spec es.exec with
         | [ ls1 ], ls_lhs -> (spec, dim_refs, [ ls1 ], ls_lhs, [ sh1 ])
         | _ -> invalid ("invalid permutation spec: " ^ spec) [ cur_sh; sh1 ])
-    | Broadcast_tern (Einsum_tern (spec, dim_refs), sh1, sh2, sh3) -> (
-        match einsum_of_spec spec with
+    | Broadcast_tern (Einsum_tern (es, dim_refs), sh1, sh2, sh3) -> (
+        let spec = spec_text es in
+        match einsum_of_spec ~text:spec es.exec with
         | [ ls1; ls2; ls3 ], ls_lhs -> (spec, dim_refs, [ ls1; ls2; ls3 ], ls_lhs, [ sh1; sh2; sh3 ])
         | _ -> invalid ("invalid ternary einsum spec: " ^ spec) [ cur_sh; sh1; sh2; sh3 ])
     | _ ->
@@ -3127,7 +3151,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
   let constraints = ref [] in
   let elaborate ~label ls (sh : t) =
     let extras, _proj_env, ((b, i, o) as bio) =
-      einsum_slot_spec_to_dims_bio ~original_spec:spec ~sh_id:sh.id ~row_var_env ~dim_var_env ls
+      einsum_slot_spec_to_dims_bio ~spec_text:spec ~sh_id:sh.id ~row_var_env ~dim_var_env ls
     in
     let row_eq kind r1 r2 =
       Row.Row_eq
@@ -3163,7 +3187,7 @@ let product_space_shape ~(shape : t) ~(logic : logic) : t =
      regardless of their extent. The constrained elaboration above must not use [`Unit_dim]: it
      would pin the operation's actual fixed-index result axes. *)
   let _, _, (b_lhs, i_lhs, o_lhs) =
-    einsum_slot_spec_to_dims_bio ~fixed_index:`Unit_dim ~original_spec:spec ~sh_id:cur_sh.id
+    einsum_slot_spec_to_dims_bio ~fixed_index:`Unit_dim ~spec_text:spec ~sh_id:cur_sh.id
       ~row_var_env ~dim_var_env ls_lhs
   in
   (* Contracted axes, from the parsed spec: labels (including convolution constituents and
@@ -4081,7 +4105,7 @@ let%debug4_sexp derive_projections (update_step : update_step) : unit =
      get_inequalities provides indexing information that is lost after substitution. *)
   let proj_eqs : Row.proj_equation list =
     Row.get_proj_equations
-      ?spec:(Option.map (einsum_of_logic update_step.logic) ~f:fst)
+      ?spec:(Option.map (einsum_of_logic update_step.logic) ~f:(fun (es, _) -> spec_text es))
       (terminal_rows_for_inputs @ ineqs)
       proj_axis_env local_env
   in
@@ -4642,8 +4666,9 @@ let propagate_inline (update_step : update_step) : unit =
 (* Read names directly from the parsed slots: building rows here would itself write the solver's
    used-in-spec and safe-to-guess sets. No capture may be bound until all labels pass. *)
 let refuse_invalid_einsum_spec (update_step : update_step) =
-  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, dim_refs) ->
-      let rhses, lhs = einsum_of_spec spec in
+  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (einsum_spec, dim_refs) ->
+      let spec = spec_text einsum_spec in
+      let rhses, lhs = einsum_of_spec ~text:spec einsum_spec.exec in
       let operands = fst (projected_operands update_step.logic) in
       let error_shapes = update_step.shape :: operands in
       let expected, kind, count =
@@ -4669,24 +4694,26 @@ let refuse_invalid_einsum_spec (update_step : update_step) =
           List.iter rows ~f:(fun name -> Hashtbl.set row_var_env ~key:name ~data:()));
       check_dim_row_var_name_clash ~spec ~error_trace:[ Shape_mismatch error_shapes ] dim_var_env
         row_var_env;
-      check_capture_labels ~spec ~dim_var_env ~row_var_env ~error_shapes dim_refs)
+      check_capture_labels ~spec:einsum_spec ~dim_var_env ~row_var_env ~error_shapes dim_refs)
 
 (* {!refuse_result_side_padded_window} over the step's result slot. *)
 let refuse_result_side_padded_windows (update_step : update_step) =
-  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, _) ->
-      let _, ls_lhs = einsum_of_spec spec in
+  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (einsum_spec, _) ->
+      let spec = spec_text einsum_spec in
+      let _, ls_lhs = einsum_of_spec ~text:spec einsum_spec.exec in
       refuse_result_side_padded_window ~spec
         ~error_shapes:(update_step.shape :: fst (projected_operands update_step.logic))
         ls_lhs)
 
 (* What projection derivation would refuse at every closure (gh-ocannl-1803). *)
 let refuse_unsized_kernels (update_step : update_step) =
-  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, dim_refs) ->
+  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (einsum_spec, dim_refs) ->
       Option.iter
-        (List.hd (unsized_padded_kernels ~spec ~dim_refs))
+        (List.hd (unsized_padded_kernels ~spec:einsum_spec.exec ~dim_refs))
         ~f:(fun name ->
           let v = Row.get_var ~name () in
-          raise @@ Row.unsized_kernel_error ~spec ~use_padding:true v (Row.Var v)))
+          raise
+          @@ Row.unsized_kernel_error ~spec:(spec_text einsum_spec) ~use_padding:true v (Row.Var v)))
 
 (** The concatenations of a spec that have no meaning, whatever the shapes (gh-ocannl-2017). A
     concatenated axis is one axis of alternatives: a position lies in one segment, and an integer
@@ -4718,8 +4745,9 @@ let refuse_unsized_kernels (update_step : update_step) =
       by position (in [Assignments]), and two swapped width-1 operands would swap silently. Other
       einsums multiply their operands, which may share a segment. *)
 let refuse_meaningless_concats (update_step : update_step) =
-  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (spec, _) ->
-      let ls_rhs_list, ls_lhs = einsum_of_spec spec in
+  Option.iter (einsum_of_logic update_step.logic) ~f:(fun (einsum_spec, _) ->
+      let spec = spec_text einsum_spec in
+      let ls_rhs_list, ls_lhs = einsum_of_spec ~text:spec einsum_spec.exec in
       let refuse msg =
         raise
         @@ Row.Shape_error

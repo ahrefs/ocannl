@@ -163,7 +163,7 @@ let no_grad2 ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Asgns.empty_comp
 
 let einmin1 spec =
   Tensor.unop
-    ~transpose_op:(Shape.Permute (spec, []))
+    ~transpose_op:(Shape.Permute (Shape.einsum_spec spec, []))
     ~op_asn:min1_asn ~grad_asn:no_grad1 ~op_label:"@-=>" ~grad_spec:Tensor.Prohibit_grad
 
 let einmax1 = NTDSL.einmax1
@@ -171,7 +171,7 @@ let einmax1 = NTDSL.einmax1
 (* [Operation.tropical] and its [Min] mirror, with no gradient to generate. *)
 let window2 op_asn spec =
   Tensor.binop
-    ~compose_op:(Shape.Einsum (spec, []))
+    ~compose_op:(Shape.Einsum (Shape.einsum_spec spec, []))
     ~op_asn ~grad_asn:no_grad2 ~op_label:"win" ~grad_spec:Tensor.Prohibit_grad
 
 let routine = ref 0

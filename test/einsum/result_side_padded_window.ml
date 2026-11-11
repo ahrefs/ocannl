@@ -148,8 +148,8 @@ let run_refusals () =
           (kernel ()) (kernel ()) ()
       in
       forward r);
-  (* The [++^] ppx re-renders the concatenation as [c ^ d] in the spec it passes on. *)
-  refused "block" ~window:"s=+k" ~spec:"s, c; s, d => s=+k, c ^ d" (fun () ->
+  (* The [++^] ppx passes the literal on as written (gh-ocannl-2163). *)
+  refused "block" ~window:"s=+k" ~spec:"s, c; s, d => s=+k, c^d" (fun () ->
       let a = operand () in
       let b = operand () in
       let%op r = (a, b) ++^ "s, c; s, d => s=+k, c^d" in
@@ -169,7 +169,8 @@ let run_refusals () =
       let w = kernel () in
       let%op r = a +* "i, ..r..; k => i=+k, ..r.." w in
       forward r);
-  refused "legacy + with use_padding = true" ~window:"i=+k" ~spec:"s, i; k => s, i=+k" (fun () ->
+  (* The spec reads [use_padding] at run time: Shape parses [i=+k] and quotes the source. *)
+  refused "legacy + with use_padding = true" ~window:"i=+k" ~spec:"s, i; k => s, i+k" (fun () ->
       let use_padding = true in
       let a = operand () in
       let w = kernel () in

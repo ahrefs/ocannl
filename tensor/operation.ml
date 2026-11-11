@@ -45,14 +45,16 @@ module Initial_NTDSL = struct
 end
 
 (** Helper to compute compose_op: if spec is provided, use Einsum; otherwise use Pointwise_bin. *)
-let compose_op_of_spec ?spec ?(capture_dims = []) () : Shape.compose_type =
-  match spec with None -> Pointwise_bin | Some s -> Einsum (s, capture_dims)
+let compose_op_of_spec ?spec ?spec_source ?(capture_dims = []) () : Shape.compose_type =
+  match spec with
+  | None -> Pointwise_bin
+  | Some s -> Einsum (Shape.einsum_spec ?source:spec_source s, capture_dims)
 
 (** Helper to compute transpose_op: if spec is provided, use Permute; otherwise use Pointwise_un. *)
 let transpose_op_of_spec ?spec ?(capture_dims = []) () : Shape.transpose_type =
-  match spec with None -> Pointwise_un | Some s -> Permute (s, capture_dims)
+  match spec with None -> Pointwise_un | Some s -> Permute (Shape.einsum_spec s, capture_dims)
 
-let add ?spec ?(capture_dims = []) =
+let add ?spec ?spec_source ?(capture_dims = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:+ v1 + v2 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~projections =
@@ -60,7 +62,7 @@ let add ?spec ?(capture_dims = []) =
     g2 =+ g
   in
   Tensor.binop ~op_label:"+"
-    ~compose_op:(compose_op_of_spec ?spec ~capture_dims ())
+    ~compose_op:(compose_op_of_spec ?spec ?spec_source ~capture_dims ())
     ~op_asn ~grad_asn
 
 let sub ?spec ?(capture_dims = []) =
@@ -82,10 +84,10 @@ let mul compose_op ~op_asn =
   in
   Tensor.binop ~compose_op ~op_asn ~grad_asn
 
-let pointmul ?spec ?(capture_dims = []) =
+let pointmul ?spec ?spec_source ?(capture_dims = []) =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:+ v1 * v2 in
-  mul (compose_op_of_spec ?spec ~capture_dims ()) ~op_asn ~op_label:"*."
+  mul (compose_op_of_spec ?spec ?spec_source ~capture_dims ()) ~op_asn ~op_label:"*."
 
 (* N1: AxB, N2 BxC, v: AxC, A: output of N1, B: input/output of N1/N2, C: input of N2. Although the
    matrix algebra would require that we insert additional transposes in gradient multiplies: AxB =
@@ -395,7 +397,7 @@ let uint4x32_to_prec_uniform1 ?grad_spec =
          broadcast axes (few unique values in inferred-shape params). The batch and input rows are
          left implicit (shared context ellipsis), so they remain safe to close to empty rows when
          nothing constrains them. *)
-        ~transpose_op:(Permute ("..b.. => ..b..", []))
+        ~transpose_op:(Permute (Shape.einsum_spec "..b.. => ..b..", []))
         ~op_asn ~grad_asn ?grad_spec (* Modifying the label would cause identifier pollution. *)
         ?label ~top_down_prec:true t1 ?batch_dims ?batch_axes ?input_dims ?output_dims ?input_axes
         ?output_axes ?deduced ()
@@ -563,7 +565,9 @@ let fma ~grad_spec t1 t2 t3 =
 let where ?spec ?(capture_dims = []) ~grad_spec t1 t2 t3 =
   let module NTDSL = NTDSL_before_div in
   let ternary_op =
-    match spec with None -> Shape.Pointwise_tern | Some s -> Shape.Einsum_tern (s, capture_dims)
+    match spec with
+    | None -> Shape.Pointwise_tern
+    | Some s -> Shape.Einsum_tern (Shape.einsum_spec s, capture_dims)
   in
   let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =:+ where v1 v2 v3 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
@@ -577,10 +581,10 @@ let where ?spec ?(capture_dims = []) ~grad_spec t1 t2 t3 =
 
     Note that ["a,b->c"] from [numpy] is ["a;b=>c"] in OCANNL, since ["->"] is used to separate the
     input and the output axes. *)
-let einsum ?(capture_dims = []) spec = pointmul ~spec ~capture_dims
+let einsum ?(capture_dims = []) ?spec_source spec = pointmul ~spec ?spec_source ~capture_dims
 
 (** Like [einsum], but adds instead than multiplying the resulting values. *)
-let outer_sum ?(capture_dims = []) spec = add ~spec ~capture_dims
+let outer_sum ?(capture_dims = []) ?spec_source spec = add ~spec ?spec_source ~capture_dims
 
 (** Ternary einsum: contracts three tensors under a three-RHS spec [rhs1 ; rhs2 ; rhs3 => lhs]. The
     forward pass computes [v[lhs] =+ mul3(v1[rhs1], v2[rhs2], v3[rhs3])] over the product space of
@@ -590,7 +594,7 @@ let outer_sum ?(capture_dims = []) spec = add ~spec ~capture_dims
     the full product space (O(N⁴) for N-dimensional operands), which is less efficient than a binary
     chain (O(N³)). Use ternary einsum for patterns where all three operands share reduction axes,
     e.g. bilinear forms. *)
-let einsum3 ?(capture_dims = []) spec =
+let einsum3 ?(capture_dims = []) ?spec_source spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~t ~t1 ~t2 ~t3 ~projections = v =:+ mul3 v1 v2 v3 in
   let%cd grad_asn ~t:_ ~g ~t1 ~t2 ~t3 ~projections =
@@ -599,7 +603,7 @@ let einsum3 ?(capture_dims = []) spec =
     g3 =+ mul3 v1 v2 g
   in
   Tensor.ternop ~op_label:"einsum3"
-    ~ternary_op:(Shape.Einsum_tern (spec, capture_dims))
+    ~ternary_op:(Shape.Einsum_tern (Shape.einsum_spec ?source:spec_source spec, capture_dims))
     ~op_asn ~grad_asn
 
 (** Similar to the explicit mode of [numpy.einsum], the unary variant. Can permute axes, extract
@@ -607,13 +611,15 @@ let einsum3 ?(capture_dims = []) spec =
 
     Note that ["a->c"] from [numpy] is ["a=>c"] in OCANNL, since ["->"] is used to separate the
     input and the output axes. *)
-let einsum1 ?(capture_dims = []) spec =
+let einsum1 ?(capture_dims = []) ?spec_source spec =
   let module NTDSL = Initial_NTDSL in
   let%cd op_asn ~t ~t1 ~projections = v =:+ v1 in
   let%cd grad_asn ~t:_ ~g ~t1 ~projections = g1 =+ g in
-  Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"=>"
+  Tensor.unop
+    ~transpose_op:(Shape.Permute (Shape.einsum_spec ?source:spec_source spec, capture_dims))
+    ~op_asn ~grad_asn ~op_label:"=>"
 
-let concat_sum ?(capture_dims = []) ?(negated = false) spec ?grad_spec rhses =
+let concat_sum ?(capture_dims = []) ?(negated = false) ?spec_source spec ?grad_spec rhses =
   let op = if negated then Ir.Ops.Neg else Ir.Ops.Identity in
   let op_asn ~t ~projections =
     let rhses = Array.map rhses ~f:(fun rhs -> Asgns.Node rhs.Tensor.value) in
@@ -641,7 +647,8 @@ let concat_sum ?(capture_dims = []) ?(negated = false) spec ?grad_spec rhses =
            projections_debug = projections.Tensor.projections_debug;
          }
   in
-  Tensor.blockop ~op_label:"++^" ~spec ~delayed_vars:capture_dims ~op_asn ~grad_asn ?grad_spec rhses
+  Tensor.blockop ~op_label:"++^" ~spec ?spec_source ~delayed_vars:capture_dims ~op_asn ~grad_asn
+    ?grad_spec rhses
 
 let concat = concat_sum
 
@@ -703,7 +710,7 @@ end
     1.8-2.6x on the non-overlapping conv-pooling benchmarks. Outside the asserted domain the cheap
     gate is last-write-wins across colliding windows, i.e. wrong — the flag is a contract, not a
     heuristic; when in doubt keep the default. *)
-let einmax1 ?(capture_dims = []) ?(nonoverlapping = false) spec =
+let einmax1 ?(capture_dims = []) ?(nonoverlapping = false) ?spec_source spec =
   let module NTDSL = struct
     include Initial_NTDSL
     module O = NDO_before_einmax1
@@ -731,7 +738,9 @@ let einmax1 ?(capture_dims = []) ?(nonoverlapping = false) spec =
       in
       grad_asn
   in
-  Tensor.unop ~transpose_op:(Shape.Permute (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>"
+  Tensor.unop
+    ~transpose_op:(Shape.Permute (Shape.einsum_spec ?source:spec_source spec, capture_dims))
+    ~op_asn ~grad_asn ~op_label:"@^=>"
 
 (** This generalizes the tropical matrix multiplication to arbitrary indices combinations.
 
@@ -749,7 +758,7 @@ let einmax1 ?(capture_dims = []) ?(nonoverlapping = false) spec =
     specialization, not a semantics choice (1.8-2.6x on the non-overlapping conv-pooling
     benchmarks). Outside it the cheap gate is wrong (last-write-wins collisions, misattributed g2);
     when in doubt keep the default. *)
-let tropical ?(capture_dims = []) ?(nonoverlapping = false) spec =
+let tropical ?(capture_dims = []) ?(nonoverlapping = false) ?spec_source spec =
   let module NTDSL = struct
     include Initial_NTDSL
     module O = NDO_before_einmax1
@@ -788,7 +797,9 @@ let tropical ?(capture_dims = []) ?(nonoverlapping = false) spec =
       in
       grad_asn
   in
-  Tensor.binop ~compose_op:(Shape.Einsum (spec, capture_dims)) ~op_asn ~grad_asn ~op_label:"@^=>+"
+  Tensor.binop
+    ~compose_op:(Shape.Einsum (Shape.einsum_spec ?source:spec_source spec, capture_dims))
+    ~op_asn ~grad_asn ~op_label:"@^=>+"
 
 (** A fully-shape-inferred tensor that is initialized with the offset of each cell. *)
 let offsets = Tensor.term ~fetch_op:Range_over_offsets ?init_data:None
@@ -1053,8 +1064,13 @@ struct
   let einsum3 = einsum3 ~grad_spec
   let einmax1 = einmax1 ~grad_spec
   let tropical = tropical ~grad_spec
-  let concat_sum ?capture_dims ?negated spec = concat_sum ?capture_dims ?negated spec ~grad_spec
-  let concat ?capture_dims ?negated spec = concat ?capture_dims ?negated spec ~grad_spec
+
+  let concat_sum ?capture_dims ?negated ?spec_source spec =
+    concat_sum ?capture_dims ?negated ?spec_source spec ~grad_spec
+
+  let concat ?capture_dims ?negated ?spec_source spec =
+    concat ?capture_dims ?negated ?spec_source spec ~grad_spec
+
   let stack axis rhses = stack axis rhses ~grad_spec
   let offsets = offsets ~grad_spec
   let range = range ~grad_spec
@@ -1162,22 +1178,30 @@ struct
     let ( = ) ?label t1 t2 = eq ?label t1 t2 ()
     let ( <> ) ?label t1 t2 = ne ?label t1 t2 ()
     let embed_self_id = embed_self_id
-    let einsum ?label ?capture_dims spec t1 t2 = einsum ?label ?capture_dims spec t1 t2 ()
-    let outer_sum ?label ?capture_dims spec t1 t2 = outer_sum ?label ?capture_dims spec t1 t2 ()
-    let einsum1 ?label ?capture_dims spec t1 = einsum1 ?label ?capture_dims spec t1 ()
-    let einsum3 ?label ?capture_dims spec t1 t2 t3 = einsum3 ?label ?capture_dims spec t1 t2 t3 ()
 
-    let einmax1 ?label ?capture_dims ?nonoverlapping spec t1 =
-      einmax1 ?label ?capture_dims ?nonoverlapping spec t1 ()
+    let einsum ?label ?capture_dims ?spec_source spec t1 t2 =
+      einsum ?label ?capture_dims ?spec_source spec t1 t2 ()
 
-    let tropical ?label ?capture_dims ?nonoverlapping spec t1 t2 =
-      tropical ?label ?capture_dims ?nonoverlapping spec t1 t2 ()
+    let outer_sum ?label ?capture_dims ?spec_source spec t1 t2 =
+      outer_sum ?label ?capture_dims ?spec_source spec t1 t2 ()
 
-    let concat_sum ?label ?capture_dims ?negated spec rhses =
-      concat_sum ?label ?capture_dims ?negated spec rhses ()
+    let einsum1 ?label ?capture_dims ?spec_source spec t1 =
+      einsum1 ?label ?capture_dims ?spec_source spec t1 ()
 
-    let concat ?label ?capture_dims ?negated spec rhses =
-      concat ?label ?capture_dims ?negated spec rhses ()
+    let einsum3 ?label ?capture_dims ?spec_source spec t1 t2 t3 =
+      einsum3 ?label ?capture_dims ?spec_source spec t1 t2 t3 ()
+
+    let einmax1 ?label ?capture_dims ?spec_source ?nonoverlapping spec t1 =
+      einmax1 ?label ?capture_dims ?spec_source ?nonoverlapping spec t1 ()
+
+    let tropical ?label ?capture_dims ?spec_source ?nonoverlapping spec t1 t2 =
+      tropical ?label ?capture_dims ?spec_source ?nonoverlapping spec t1 t2 ()
+
+    let concat_sum ?label ?capture_dims ?spec_source ?negated spec rhses =
+      concat_sum ?label ?capture_dims ?spec_source ?negated spec rhses ()
+
+    let concat ?label ?capture_dims ?spec_source ?negated spec rhses =
+      concat ?label ?capture_dims ?spec_source ?negated spec rhses ()
 
     let stack ?label axis rhses = stack axis rhses ?label ()
     let offsets ?label () = offsets ?label ()

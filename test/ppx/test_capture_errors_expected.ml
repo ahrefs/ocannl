@@ -8,7 +8,7 @@ let unary =
       einsum1
         ?label:(Some
                   (List.concat [["unary"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[ab] "a, b => a" x in
+        ~capture_dims:[ab] "ab => a" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"unary" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -24,7 +24,7 @@ let digit =
       einsum1
         ?label:(Some
                   (List.concat [["digit"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[f0] "f, 0 => f, 0" x in
+        ~capture_dims:[f0] "f0 => f0" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"digit" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -57,7 +57,7 @@ let missing =
       einsum1
         ?label:(Some
                   (List.concat [["missing"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[c] "a, b => a" x in
+        ~capture_dims:[c] "ab => a" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"missing" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -76,7 +76,7 @@ let binary =
                      [["binary"];
                      (x.Tensor.value).Ir.Tnode.label;
                      (y.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[missing] "a, b; b, c => a, c" x y in
+        ~capture_dims:[missing] "ab; bc => ac" x y in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"binary" ~arity:2
         (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
@@ -95,7 +95,7 @@ let mixfix =
                      [["mixfix"];
                      (x.Tensor.value).Ir.Tnode.label;
                      (y.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[missing] "a, b; b, c => a, c" x y in
+        ~capture_dims:[missing] "ab; bc => ac" x y in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"mixfix" ~arity:2
         (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
@@ -114,7 +114,7 @@ let concat =
                      [["concat"];
                      (x.Tensor.value).Ir.Tnode.label;
                      (y.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[missing] "a; b => a ^ b" [|x;y|] in
+        ~capture_dims:[missing] "a; b => a^b" [|x;y|] in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"concat" ~arity:2
         (function | x::y::[] -> __ocannl_body x y | _ -> assert false) in
@@ -127,7 +127,7 @@ let cd_unary =
       let ab =
         [%ocaml.error
           "ppx_ocannl: capture label \"ab\" is absent from einsum spec \"ab => a\"; a multi-letter capture label needs multichar mode: write `ab,` and separate the other axes with commas"] in
-      Tensor.consume_forward_code (einsum1 ~capture_dims:[ab] "a, b => a" x)
+      Tensor.consume_forward_code (einsum1 ~capture_dims:[ab] "ab => a" x)
 let cd_binary =
   let open! NTDSL.O in
     fun x y ->
@@ -135,7 +135,7 @@ let cd_binary =
         [%ocaml.error
           "ppx_ocannl: capture label \"missing\" is absent from einsum spec \"ab; bc => ac\"; a multi-letter capture label needs multichar mode: write `missing,` and separate the other axes with commas"] in
       Tensor.consume_forward_code
-        (einsum ~capture_dims:[missing] "a, b; b, c => a, c" x y)
+        (einsum ~capture_dims:[missing] "ab; bc => ac" x y)
 let cd_mixfix =
   let open! NTDSL.O in
     fun x y ->
@@ -143,7 +143,7 @@ let cd_mixfix =
         [%ocaml.error
           "ppx_ocannl: capture label \"missing\" is absent from einsum spec \"ab; bc => ac\"; a multi-letter capture label needs multichar mode: write `missing,` and separate the other axes with commas"] in
       Tensor.consume_forward_code
-        (einsum ~capture_dims:[missing] "a, b; b, c => a, c" x y)
+        (einsum ~capture_dims:[missing] "ab; bc => ac" x y)
 let rows =
   let open! TDSL.O in
     let __ocannl_body x =
@@ -184,7 +184,7 @@ let window =
       einsum1
         ?label:(Some
                   (List.concat [["window"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[o; k]
+        ~capture_dims:[o; k] ~spec_source:"stride*o<+dilation*k => o"
         (String.concat ~sep:""
            [Int.to_string stride;
            "*";
@@ -206,8 +206,7 @@ let segments =
         ?label:(Some
                   (List.concat
                      [["segments"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[left; middle; right] "left ^ middle ^ right => middle"
-        x in
+        ~capture_dims:[left; middle; right] "left^middle^right => middle" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"segments" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -259,7 +258,7 @@ let coefficient =
         ?label:(Some
                   (List.concat
                      [["coefficient"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[stride]
+        ~capture_dims:[stride] ~spec_source:"stride*o<+k => o"
         (String.concat ~sep:""
            [Int.to_string stride; "*"; "o"; "<"; "+"; "k"; " => "; "o"]) x in
     let __ocannl_scheme =
@@ -279,7 +278,7 @@ let dilation_coefficient =
                   (List.concat
                      [["dilation_coefficient"];
                      (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[dilation]
+        ~capture_dims:[dilation] ~spec_source:"o<+dilation*k => o"
         (String.concat ~sep:""
            ["o"; "<"; "+"; Int.to_string dilation; "*"; "k"; " => "; "o"]) x in
     let __ocannl_scheme =
@@ -309,8 +308,9 @@ let logic_unary =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Transpose
-                              ((Shape.Permute ("a^c => a^b^c", [missing])),
-                                (x.Tensor.shape)))
+                              ((Shape.Permute
+                                  ((Shape.einsum_spec "a^c => a^b^c"),
+                                    [missing])), (x.Tensor.shape)))
               ~rhs:(Ir.Assignments.Unop
                       {
                         op = Ir.Ops.Identity;
@@ -341,7 +341,8 @@ let logic_binary =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Broadcast
-                              ((Shape.Einsum ("a; a => a", [a])),
+                              ((Shape.Einsum
+                                  ((Shape.einsum_spec "a; a => a"), [a])),
                                 (x.Tensor.shape), (y.Tensor.shape)))
               ~rhs:(Ir.Assignments.Binop
                       {
@@ -375,7 +376,8 @@ let logic_binary_tuple =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Broadcast
-                              ((Shape.Einsum ("a; a => a", [a])),
+                              ((Shape.Einsum
+                                  ((Shape.einsum_spec "a; a => a"), [a])),
                                 (x.Tensor.shape), (y.Tensor.shape)))
               ~rhs:(Ir.Assignments.Binop
                       {
@@ -414,7 +416,8 @@ let logic_ternary =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Broadcast_tern
-                              ((Shape.Einsum_tern ("a; a; a => a", [a])),
+                              ((Shape.Einsum_tern
+                                  ((Shape.einsum_spec "a; a; a => a"), [a])),
                                 (x.Tensor.shape), (y.Tensor.shape),
                                 (z.Tensor.shape)))
               ~rhs:(Ir.Assignments.Ternop
@@ -456,7 +459,8 @@ let logic_ternary_tuple =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Broadcast_tern
-                              ((Shape.Einsum_tern ("a; a; a => a", [a])),
+                              ((Shape.Einsum_tern
+                                  ((Shape.einsum_spec "a; a; a => a"), [a])),
                                 (x.Tensor.shape), (y.Tensor.shape),
                                 (z.Tensor.shape)))
               ~rhs:(Ir.Assignments.Ternop
@@ -488,7 +492,8 @@ let logic_unary_parens =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Transpose
-                              ((Shape.Permute ("a => a", [a])),
+                              ((Shape.Permute
+                                  ((Shape.einsum_spec "a => a"), [a])),
                                 (x.Tensor.shape)))
               ~rhs:(Ir.Assignments.Unop
                       {
@@ -514,7 +519,8 @@ let logic_empty =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Transpose
-                              ((Shape.Permute ("a => a", [])),
+                              ((Shape.Permute
+                                  ((Shape.einsum_spec "a => a"), [])),
                                 (x.Tensor.shape)))
               ~rhs:(Ir.Assignments.Unop
                       {

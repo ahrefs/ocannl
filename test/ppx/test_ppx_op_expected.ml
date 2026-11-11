@@ -91,7 +91,7 @@ let z2 =
     let hey8 =
       (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
          "hey8") () in
-    einsum ?label:(Some ["z2"])
+    einsum ?label:(Some ["z2"]) ~spec_source:"stride*a+dilation*b,;b=>a,"
       (String.concat ~sep:""
          [Int.to_string stride;
          "*";
@@ -115,7 +115,7 @@ let z3 =
     let hey10 =
       (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
          "hey10") () in
-    einsum ?label:(Some [])
+    einsum ?label:(Some []) ~spec_source:"i, s*a+d*bc; bc => i, a, c"
       (String.concat ~sep:""
          ["i";
          ", ";
@@ -140,7 +140,7 @@ let concat_single =
     let hey11 =
       (TDSL.param ?more_label:None ?value:None ?values:None ?param_init:None
          "hey11") () in
-    concat ?label:(Some ["concat_single"]) "i => i" [|hey11|]
+    concat ?label:(Some ["concat_single"]) "i=>i" [|hey11|]
 let concat_pair =
   let open! TDSL.O in
     let hey12 =
@@ -151,7 +151,7 @@ let concat_pair =
          "hey13") () in
     let i = Shape.get_variable_ref "i" in
     let j = Shape.get_variable_ref "j" in
-    concat ?label:(Some ["concat_pair"]) ~capture_dims:[i; j] "i; j => i ^ j"
+    concat ?label:(Some ["concat_pair"]) ~capture_dims:[i; j] "i; j => i^j"
       [|hey12;hey13|]
 let initialized_no_unit =
   let open! TDSL.O in
@@ -306,7 +306,7 @@ let _capture_no_unit =
         ?label:(Some
                   (List.concat
                      [["_capture_no_unit"]; (x.Tensor.value).Ir.Tnode.label]))
-        ~capture_dims:[b] "a, b => a" x in
+        ~capture_dims:[b] "ab => a" x in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_capture_no_unit" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in
@@ -323,7 +323,7 @@ let _capture_with_unit =
         let b = Shape.get_variable_ref "b" in
         let y = ( * ) ?label:(Some ["y"]) cw x in
         (/.) ?label:(Some ["_capture_with_unit"])
-          (einsum1 ?label:None ~capture_dims:[b] "a, b => a" y)
+          (einsum1 ?label:None ~capture_dims:[b] "ab => a" y)
           (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> dim b)) in
       let __ocannl_scheme =
         Tensor.Scheme.For_ppx.closure ~name:"_capture_with_unit" ~arity:1
@@ -335,10 +335,10 @@ let _capture_siblings =
   let open! TDSL.O in
     let f x =
       let b = Shape.get_variable_ref "b" in
-      einsum1 ?label:(Some ["f"]) ~capture_dims:[b] "a, b => a" x in
+      einsum1 ?label:(Some ["f"]) ~capture_dims:[b] "ab => a" x in
     let g x =
       let b = Shape.get_variable_ref "b" in
-      einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => b" x in
+      einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "ab => b" x in
     fun x ->
       (+) ?label:(Some ["_capture_siblings"])
         (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> f x))
@@ -349,11 +349,11 @@ let _capture_nested =
       let b = Shape.get_variable_ref "b" in
       let g y =
         let b = Shape.get_variable_ref "b" in
-        einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => a" y in
+        einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "ab => a" y in
       (+) ?label:(Some
                     (List.concat
                        [["_capture_nested"]; (x.Tensor.value).Ir.Tnode.label]))
-        (einsum1 ?label:None ~capture_dims:[b] "a, b => a" x)
+        (einsum1 ?label:None ~capture_dims:[b] "ab => a" x)
         (Tensor.Scheme.For_ppx.at_site Stdlib.__POS__ (fun () -> g x)) in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_capture_nested" ~arity:1
@@ -369,10 +369,9 @@ let _capture_nested_toplevel =
     let b = Shape.get_variable_ref "b" in
     let g y =
       let b = Shape.get_variable_ref "b" in
-      einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "a, b => a" y in
+      einsum1 ?label:(Some ["g"]) ~capture_dims:[b] "ab => a" y in
     Tensor.Scheme.For_ppx.at_site Stdlib.__POS__
-      (fun () ->
-         g (einsum1 ?label:None ~capture_dims:[b] "a, b, c => a, b" cn))
+      (fun () -> g (einsum1 ?label:None ~capture_dims:[b] "abc => ab" cn))
 let _scheme_labelled =
   let open! TDSL.O in
     fun () ->
@@ -640,6 +639,7 @@ let _late_stride =
         ?label:(Some
                   (List.concat
                      [["_late_stride"]; (x.Tensor.value).Ir.Tnode.label]))
+        ~spec_source:"stride*o<+k; k => o"
         (String.concat ~sep:""
            [Int.to_string stride;
            "*";
@@ -659,6 +659,7 @@ let _unit_stride =
            ?param_init:None "us_kernel") () in
       let __ocannl_body x =
         einsum ?label:(Some ["_unit_stride"])
+          ~spec_source:"stride*o<+k; k => o"
           (String.concat ~sep:""
              [Int.to_string stride;
              "*";
@@ -1022,7 +1023,7 @@ let _constrained_capture =
                    (List.concat
                       [["_constrained_capture"];
                       (x.Tensor.value).Ir.Tnode.label])) ~capture_dims:
-         [b] "a, b => a" y : Tensor.t) in
+         [b] "ab => a" y : Tensor.t) in
     let __ocannl_scheme =
       Tensor.Scheme.For_ppx.deferred ~name:"_constrained_capture" ~arity:1
         (function | x::[] -> __ocannl_body x | _ -> assert false) in

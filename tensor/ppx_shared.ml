@@ -315,17 +315,12 @@ let substitute_identifiers_in_einsum_spec ~loc str_input =
     @ (if parsed.implicit_input then [] else input_segments @ [ estring ~loc "->" ])
     @ output_segments
   in
-  (* Fold the segments into one literal when every one of them is a literal, so the common case
-     costs nothing at run time. *)
+  (* A spec that reads no runtime value is emitted as written (gh-ocannl-2163): Shape parses it with
+     the same parser, exactly as a direct call's, and its refusals then quote what the user wrote,
+     not a comma-separated re-rendering. Only a spec with a runtime substitution is rebuilt. *)
   let concat_segments segments =
     match Option.all (List.map segments ~f:string_literal) with
-    | Some literals ->
-        let rendered = String.concat literals in
-        (* A trailing comma can be the only multichar trigger: [ab, => ab,] must not become [ab =>
-           ab]. With no runtime substitutions, the already-parsed source is safe to keep. Dynamic
-           substitutions retain a [*] or a window marker, so they cannot lose the mode. *)
-        estring ~loc
-          (if is_multichar str_input && not (is_multichar rendered) then str_input else rendered)
+    | Some _ -> estring ~loc str_input
     | None -> [%expr String.concat ~sep:"" [%e elist ~loc segments]]
   in
   (* Try to parse as einsum spec *)
@@ -661,9 +656,27 @@ let named_form_spec (e : expression) =
       List.find_map args ~f:(function Nolabel, a -> Some a | _ -> None)
   | _ -> None
 
+(** [e], an application of an einsum-family function to the spec [spec] built from the literal
+    [spec_str], with [~spec_source:spec_str] added before its positional arguments when [spec] reads
+    a runtime value (gh-ocannl-2163): Shape quotes the source in its messages, and parses [spec]. A
+    spec emitted as the literal itself, or a parse error, needs nothing. *)
+let with_spec_source ~spec_str ~(spec : expression) (e : expression) =
+  match (spec.pexp_desc, e.pexp_desc) with
+  | (Pexp_constant _ | Pexp_extension _), _ -> e
+  | _, Pexp_apply (fn, args) ->
+      let loc = spec.pexp_loc in
+      let labelled, positional =
+        List.split_while args ~f:(fun (label, _) ->
+            match label with Nolabel -> false | Labelled _ | Optional _ -> true)
+      in
+      let source = (Labelled "spec_source", Ast_builder.Default.estring ~loc spec_str) in
+      { e with pexp_desc = Pexp_apply (fn, labelled @ (source :: positional)) }
+  | _ -> e
+
 (** [e] with the literal spec of a named einsum form substituted as an operator's is, when it reads
-    a runtime value ([named_form_runtime_spec]); otherwise [e] itself. Both PPXs apply it to the
-    applications they rebuild or pass through, which keep the spec literal as written. *)
+    a runtime value ([named_form_runtime_spec]); with its [~spec_source] ({!with_spec_source});
+    otherwise [e] itself. Both PPXs apply it to the applications they rebuild or pass through, which
+    keep the spec literal as written. *)
 let substitute_named_form_spec (e : expression) =
   match e.pexp_desc with
   | Pexp_apply (fn, args) when is_named_spec_function fn -> (
@@ -671,13 +684,14 @@ let substitute_named_form_spec (e : expression) =
         List.findi args ~f:(fun _ (label, _) -> match label with Nolabel -> true | _ -> false)
       with
       | Some (i, (_, spec)) -> (
-          match named_form_runtime_spec spec with
-          | Some substituted ->
+          match (named_form_runtime_spec spec, spec.pexp_desc) with
+          | Some substituted, Pexp_constant (Pconst_string (spec_str, _, _)) ->
               let args =
                 List.mapi args ~f:(fun j arg -> if j = i then (Nolabel, substituted) else arg)
               in
-              { e with pexp_desc = Pexp_apply (fn, args) }
-          | None -> e)
+              with_spec_source ~spec_str ~spec:substituted
+                { e with pexp_desc = Pexp_apply (fn, args) }
+          | _ -> e)
       | None -> e)
   | _ -> e
 

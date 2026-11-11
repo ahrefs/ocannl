@@ -228,7 +228,7 @@ let prod_window spec t1 t2 =
   let%cd op_asn ~t ~t1 ~t2 ~projections = v =:* v1 + v2 in
   let grad_asn ~t:_ ~g:_ ~t1:_ ~t2:_ ~projections:_ = Ir.Assignments.empty_comp in
   Tensor.binop ~op_label:"ck_prod_window"
-    ~compose_op:(Shape.Einsum (spec, []))
+    ~compose_op:(Shape.Einsum (Shape.einsum_spec spec, []))
     ~op_asn ~grad_asn ~grad_spec:Tensor.Prohibit_grad t1 t2 ()
 
 (* The tensor's own accumulation: its forward code ends with it, after its operands' code. *)
