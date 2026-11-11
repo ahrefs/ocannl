@@ -338,17 +338,17 @@ let retained_handles () =
   Tensor.rewind_to_last_closure ();
   p "a root handed out after a %cd embedding stays handed out across a rewind"
     (not (Tensor.is_fwd_root y2));
-  (* Inference-set writes count as mutations: a spec failing inside the solver's constraint
-     derivation over an open operand, after marking its row variable, taints. *)
+  (* A spec-only name clash is refused before inference-set writes (gh-ocannl-2162), so the
+     unrelated construction below needs no rewind. *)
   let%op xo = { xo = 0.5 } in
   let failure = outcome (fun () -> TDSL.einsum1 "..a.. a => a" xo ()) in
-  pf "a spec failing after marking an open operand's row (%s) taints the session"
+  pf "a spec-only name clash (%s) leaves the session usable"
     (match failure with Error _ -> "it fails" | Ok () -> "it did not fail")
     (Result.is_error failure
     &&
     match outcome (fun () -> NTDSL.O.relu (leaf "rw_after" [| 1. |])) with
-    | Error msg -> String.is_substring msg ~substring:tainted
-    | Ok () -> false);
+    | Error _ -> false
+    | Ok () -> true);
   Tensor.rewind_to_last_closure ();
   (* A [%cd] assignment to the gradient of a tensor that has none is refused BEFORE its step is
      registered: no phantom step constrains the open target afterwards. *)
