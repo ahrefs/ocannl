@@ -477,6 +477,23 @@ files.
   last element, so a side effect in its predicate runs backwards): both sides reversed alike, which
   the pairwise solving could not see, while `same_unit_cell` read a wide coordinate at a unit axis
   (`row_trailing_sub_axis_write`).
+  The `src=reduce` family (gh-ocannl-2146) makes the complex value's source a virtual
+  two-term reduction of a materialized `[4; 4; 2]` input, discriminating along all three axes;
+  replay computes it independently and the materialized twin computes both producers. It crosses
+  core writes with every read, with and without zero, in all three standings. This adds 120258
+  programs to the default census (342732 to 462990); on mac-studio enumeration was 20.5 s before
+  and 31.9 to 36.1 s after, the whole expanded action 48.5 s including compiled anchors (correctness
+  runs, not isolated timing). Each standing must retain at least 100 programs with scopes in
+  `Where` arms, and eight compiled anchors come specifically from those programs. Disabling
+  `instantiate_computations`' call to `guard_hoisted` in scratch commit `02ab095966c8d9e847848ccd94f5c12bd34e1d23`
+  gave 2869 strict address faults, all in this family: 901 undecided, 984 declared, 984 inherited,
+  across axes/axes, axes/flat, axes/trail, flat/axes, flat/flat and flat/trail layout pairs. One
+  reproducible descriptor in every standing is `2x2 src=reduce
+  P0=store:axes[t;s]{s:1..1,t:1..1}:src R0=flat[_;u+1]{u:0..2} Z;P0;R0`:
+  the discarded arm's scope reads offset -6 of the 32-cell input. These are the generated
+  guarded-arm scopes for the renderer work in gh-ocannl-2145; `--only` selects descriptors for
+  inspection without changing the grammar. The expanded `--widen` run checked 9333622 programs
+  with no findings in 767.7 s of enumeration, inside a 1200 s batch cap.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps
