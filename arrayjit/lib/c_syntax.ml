@@ -3349,12 +3349,13 @@ let with_compiler_options ~compiler ~options ~enrich compile =
     let exn = Option.value (enrich exn ~suffix) ~default:exn in
     Stdlib.Printexc.raise_with_backtrace exn backtrace
 
-type guard_lit = { key : string; test : PPrint.document; holds : bool }
+type guard_lit = { key : string; test : PPrint.document; holds : bool; anywhere : bool }
 (** One condition a scope definition's execution is under (gh-ocannl-2145): the rendered condition
     [test] of a short-circuiting [Where], and whether the definition sits in its then-arm ([holds])
     or its else-arm. [key] is [test]'s text: a condition is pure and the bodies run before it write
     only their own locals, so two conditions spelled alike in one statement agree. A condition
-    reading a scope local is never one: see {!guard_arms}. *)
+    reading a scope local is never one: see {!guard_arms}. [anywhere]: [test] can be evaluated in
+    any iteration -- it reads no memory and no local, and divides nothing. *)
 
 type scope_def = {
   reads : int list Lazy.t;  (** The locals the body reads. *)
@@ -3419,15 +3420,34 @@ let rec normalize_guards (paths : guard_lit list list) =
    nothing: its arms' definitions stay under the conditions around it. Testing it ahead of the
    statement would make the definitions' order depend on their tests' reads too, and CSE sharing
    makes those cycle (Codex review of the gh-ocannl-2145 PR, rounds 2-6). *)
-let guard_arms ~(cond : PPrint.document) ~(cond_defs : local_def list) d_then d_else =
-  if (List.is_empty d_then && List.is_empty d_else) || not (List.is_empty cond_defs) then
-    d_then @ d_else
+let rec evaluable_anywhere (s : Low_level.scalar_t) =
+  match s with
+  | Constant _ | Constant_bits _ | Embed_index _ -> true
+  | Get _ | Get_dynamic _ | Get_merge_buffer _ | Get_local _ | Local_scope _ -> false
+  | Binop ((Ops.Div | Ops.Mod), _, _) -> false
+  | Binop (_, (a, _), (b, _)) -> evaluable_anywhere a && evaluable_anywhere b
+  | Ternop (_, (a, _), (b, _), (c, _)) ->
+      evaluable_anywhere a && evaluable_anywhere b && evaluable_anywhere c
+  | Unop (_, (a, _)) -> evaluable_anywhere a
+
+(* Under a test that guards nothing, the entries keep only the nested conditions that can be tested
+   in any iteration: one reading memory may rely on the enclosing test that no longer precedes it
+   (Codex review of the gh-ocannl-2145 PR, round 7). *)
+let only_anywhere entries =
+  List.map entries ~f:(fun d ->
+      { d with guard = List.filter d.guard ~f:(fun (l : guard_lit) -> l.anywhere) })
+
+let guard_arms ~(cond : PPrint.document) ~(v1 : Low_level.scalar_t) ~(cond_defs : local_def list)
+    d_then d_else =
+  if List.is_empty d_then && List.is_empty d_else then []
+  else if not (List.is_empty cond_defs) then only_anywhere (d_then @ d_else)
   else
     let buf = Buffer.create 64 in
     PPrint.ToBuffer.compact buf cond;
     let key = Buffer.contents buf in
+    let anywhere = evaluable_anywhere v1 in
     let under holds =
-      List.map ~f:(fun d -> { d with guard = { key; test = cond; holds } :: d.guard })
+      List.map ~f:(fun d -> { d with guard = { key; test = cond; holds; anywhere } :: d.guard })
     in
     under true d_then @ under false d_else
 
@@ -3736,10 +3756,9 @@ module C_syntax (B : C_syntax_config) = struct
      operand at [1] and at [0] give different results, spelled in the dialect's own syntax -- so the
      [Where]'s condition is never tested where the operator skipped it. Its other definitions still
      run ahead of the statement. *)
-  let gate_entries prec op ~d1 e1 d2 =
-    (* As in {!guard_arms}, a test reading a scope local guards nothing. *)
-    if (not (List.exists d2 ~f:(fun d -> not (List.is_empty d.guard)))) || not (List.is_empty d1)
-    then d2
+  let gate_entries prec op ~v1 ~d1 e1 d2 =
+    if not (List.exists d2 ~f:(fun d -> not (List.is_empty d.guard))) then d2
+    else if not (List.is_empty d1) then (* As in {!guard_arms}. *) only_anywhere d2
     else
       let open PPrint in
       let lit c = string (B.constant_literal prec c) in
@@ -3750,7 +3769,9 @@ module C_syntax (B : C_syntax_config) = struct
       in
       let buf = Buffer.create 64 in
       PPrint.ToBuffer.compact buf test;
-      let lit = { key = Buffer.contents buf; test; holds = true } in
+      let lit =
+        { key = Buffer.contents buf; test; holds = true; anywhere = evaluable_anywhere v1 }
+      in
       List.map d2 ~f:(fun d ->
           if List.is_empty d.guard then d else { d with guard = lit :: d.guard })
 
@@ -3781,7 +3802,7 @@ module C_syntax (B : C_syntax_config) = struct
           match op with
           | Ops.Where when Option.is_none (blend_for prec ~cond:v1 ~arms:[ (v2, prec); (v3, prec) ])
             ->
-              d1 @ guard_arms ~cond:e1 ~cond_defs:d1 d2 d3
+              d1 @ guard_arms ~cond:e1 ~v1 ~cond_defs:d1 d2 d3
           | _ -> List.concat [ d1; d2; d3 ]
         in
         let expr = ternop_expr prec op ~v1 ~v2 ~v3 e1 e2 e3 in
@@ -3812,7 +3833,7 @@ module C_syntax (B : C_syntax_config) = struct
             in
             let defs =
               match Ops.binop_conditionality op with
-              | Ops.Gated_second when not blended -> d1 @ gate_entries prec op ~d1 e1 d2
+              | Ops.Gated_second when not blended -> d1 @ gate_entries prec op ~v1 ~d1 e1 d2
               | _ -> List.concat [ d1; d2 ]
             in
             let expr = binop_expr prec op ~v1 ~v2 e1 e2 in
@@ -3893,7 +3914,7 @@ module C_syntax (B : C_syntax_config) = struct
           let d1, e1 = render v1 in
           let d2, e2 = render v2 in
           match Ops.binop_conditionality op with
-          | Ops.Gated_second -> (d1 @ gate_entries at op ~d1 e1 d2, e1, e2)
+          | Ops.Gated_second -> (d1 @ gate_entries at op ~v1 ~d1 e1 d2, e1, e2)
           | Ops.Both_operands | Ops.Only_first | Ops.Only_second -> (d1 @ d2, e1, e2)
         in
         match Ops.binop_integer_valuation op with
@@ -3929,7 +3950,7 @@ module C_syntax (B : C_syntax_config) = struct
             let d2, e2 = render v2 in
             let d3, e3 = render v3 in
             (* A select at an integer precision short-circuits (gh-ocannl-2145). *)
-            ( d1 @ guard_arms ~cond:e1 ~cond_defs:d1 d2 d3,
+            ( d1 @ guard_arms ~cond:e1 ~v1 ~cond_defs:d1 d2 d3,
               ternop_expr ~blend:false arms_prec op ~v1 ~v2 ~v3 e1 e2 e3 )
         | Follows_operands, _ when fv v1 || fv v2 || fv v3 ->
             let d1, e1 = widen v1 in

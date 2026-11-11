@@ -539,6 +539,46 @@ let row_value_test_range () =
   values name got [ [| sum2 0 +. sum2 0; 0.; 0.; 0. |] ];
   guarded name source x
 
+(* [r ? (x[far * i] > 0.5 ? s : 0) : 0], [r] true at [i = 0] only: the test of [r]'s value guards
+   nothing, and the nested condition, which reads [x] where only [r] protects it, stays out of every
+   test ahead of the statement (Codex review of the gh-ocannl-2145 PR, round 7). *)
+let row_value_test_nested () =
+  let name = "was_value_test_nested" in
+  let x = mk "was_value_test_nested_x" and out = mk ~dims:[| n |] "was_value_test_nested_out" in
+  let llc =
+    loop (fun i ->
+        let vr = local_node () in
+        let r = LL.get_scope vr in
+        let sr =
+          scope_of r
+            (seq
+               (LL.Set_local (r, c 0.))
+               (LL.Set_local (r, add (LL.Get_local r) (cmp_at single Ops.Cmplt (embed i) (c 1.)))))
+        in
+        let _, sc = sum_scope x ~at:(in_range i) in
+        let truth v = add v (mul (c 0.) (embed i)) in
+        let inner = cmp_at single Ops.Cmplt (c 0.5) (truth (get x [| aff [ (far, i) ] 0 |])) in
+        set_at out (iter i)
+          (LL.Ternop
+             ( Ops.Where,
+               (truth sr, single),
+               (LL.Ternop (Ops.Where, (inner, single), (sc, single), (c 0., single)), single),
+               (c 0., single) )))
+  in
+  let got, source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| sum2 0; 0.; 0.; 0. |] ];
+  (* The far read: only in the statement's own short-circuiting expression. *)
+  let store = Generated.node_ident ~facts (List.hd_exn out.Tn.label) ^ "[" in
+  let far_text = Int.to_string far in
+  let _, ahead =
+    List.fold (String.split_lines source) ~init:(false, []) ~f:(fun (in_store, acc) l ->
+        let in_store = in_store || String.is_substring l ~substring:store in
+        if in_store then (not (String.is_suffix (String.rstrip l) ~suffix:";"), acc)
+        else (false, l :: acc))
+  in
+  p_none (name ^ ": no test ahead of the statement reads x where only the value test protects it")
+    ahead ~f:(fun l -> String.is_substring l ~substring:far_text)
+
 let () =
   row_then ();
   row_else ();
@@ -557,4 +597,5 @@ let () =
   row_guard_reads ();
   row_guard_cycle ();
   row_mixed_cycle ();
-  row_value_test_range ()
+  row_value_test_range ();
+  row_value_test_nested ()

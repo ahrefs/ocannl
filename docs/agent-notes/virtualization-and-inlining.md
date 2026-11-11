@@ -79,7 +79,9 @@ files.
   order across all their conditions (a body under `(A && B) || (A && C)` can read one under `A`),
   consecutive bodies under the same conditions sharing one `if`. A condition reading a scope local
   (a test of a computed value, never an index guard) guards nothing: its arms stay under the
-  conditions around it, the index guards after it included. Letting such tests guard made the
+  conditions around it, the nested conditions that can be tested anywhere (no memory, no
+  local, no division: index guards) included, the others dropped, since they may rely on the test
+  that no longer precedes them. Letting such tests guard made the
   definitions' order depend on their tests' reads, which CSE sharing turns into cycles, and cutting
   those dropped index guards (Codex review, rounds 2-6). Under a blend (cc and HIP at a
   float precision, `speculable_select`, whose conditions never mention an index) both arms run by
