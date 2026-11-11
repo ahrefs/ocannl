@@ -5121,8 +5121,8 @@ let can_guess_dim_to_one env has_uniq_constr_unless =
           | Some (Bounds_dim { has_uniq_constr_unless = Some _; _ }) -> true
           | _ -> false)
 
-let%debug5_sexp rec close_dim_terminal ?(deferred_dims = dim_var_set_empty) ~(stage : stage)
-    ~is_param origin env (dim : dim) : constraint_ list =
+let%debug5_sexp rec close_dim_terminal ~deferred_dims ~(stage : stage) ~is_param origin env
+    (dim : dim) : constraint_ list =
   match dim with
   | Dim _ | Sym _ -> []
   | Var v -> (
@@ -5178,14 +5178,14 @@ let is_safe_to_guess v =
   Set.mem !safe_to_guess v
   || (Set.mem !used_in_pointwise v && not (Set.mem !used_in_spec_or_compose v))
 
-let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~glb (rows : row list)
-    (constr : row_constraint) env : constraint_ list * environment =
+let%track5_sexp rec eliminate_rows_constraint ~deferred_dims ~depth stage origin ~glb
+    (rows : row list) (constr : row_constraint) env : constraint_ list * environment =
   if depth > 4 then ([ Rows_constr { r = rows; constr; origin } ], env)
   else
     match rows_to_row_or_vars rows with
     | Either.First single_row ->
-        eliminate_row_constraint ~depth:(depth + 1) stage origin ~terminal:false ~glb single_row
-          constr env
+        eliminate_row_constraint ~deferred_dims ~depth:(depth + 1) stage origin ~terminal:false ~glb
+          single_row constr env
     | Either.Second (all_dims, row_vars) -> (
         let rev_row_vars = List.rev row_vars in
         match
@@ -5290,21 +5290,23 @@ let%track5_sexp rec eliminate_rows_constraint ~depth stage origin ~glb (rows : r
                           })
                   in
                   let ineqs, env =
-                    eliminate_rows_constraint ~depth:(depth + 1) stage origin ~glb rows constr env
+                    eliminate_rows_constraint ~deferred_dims ~depth:(depth + 1) stage origin ~glb
+                      rows constr env
                   in
                   (other_eqs @ ineqs, env)
                 else (other_eqs @ [ Rows_constr { r = rows; constr; origin } ], env))
         | _ -> ([ Rows_constr { r = rows; constr; origin } ], env))
 
-and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (r : row)
-    (constr : row_constraint) env : constraint_ list * environment =
+and eliminate_row_constraint ~deferred_dims ~depth stage origin ~terminal ~(glb : row option)
+    (r : row) (constr : row_constraint) env : constraint_ list * environment =
   let keep_constr () =
     let ineqs, env = apply_row_constraint ~depth stage origin r constr env in
     List.fold ineqs ~init:([], env) ~f:(fun (ineqs, env) ineq ->
         match ineq with
         | Rows_constr { r = rows; constr; origin } ->
             let ineqs', env =
-              eliminate_rows_constraint ~depth:(depth + 1) stage origin ~glb:None rows constr env
+              eliminate_rows_constraint ~deferred_dims ~depth:(depth + 1) stage origin ~glb:None
+                rows constr env
             in
             (ineqs @ ineqs', env)
         | ineq -> ([ ineq ], env))
@@ -5466,7 +5468,8 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                   match ineq with
                   | Rows_constr { r = rows; constr; origin } ->
                       let ineqs', env =
-                        eliminate_rows_constraint ~depth stage origin ~glb:None rows constr env
+                        eliminate_rows_constraint ~deferred_dims ~depth stage origin ~glb:None rows
+                          constr env
                       in
                       (ineqs @ ineqs', env)
                   | ineq -> ([ ineq ], env))
@@ -5550,11 +5553,14 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                         Set.to_list (vars_of_dim dim)
                         |> List.concat_map ~f:(fun v ->
                             match find_dim env.dim_env v with
+                            | None when Set.mem deferred_dims v -> []
                             | None ->
                                 refuse_concat_component_guess env v;
                                 let d = if Set.mem env.discardable_vars v then 0 else 1 in
                                 [ Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d (); origin } ]
-                            | Some _ -> close_dim_terminal ~stage ~is_param:false origin env (Var v))
+                            | Some _ ->
+                                close_dim_terminal ~deferred_dims ~stage ~is_param:false origin env
+                                  (Var v))
                         |> List.filter ~f:(function Dim_eq _ -> true | _ -> false)
                     | _ -> []
                   in
@@ -5574,11 +5580,19 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                     let pending, env = apply_equations part_eqs env in
                     let constr = subst_row_constraint stage env constr in
                     let more, env =
-                      eliminate_row_constraint ~depth:(depth + 1) stage origin ~terminal ~glb:None
-                        (subst_row env r) constr env
+                      eliminate_row_constraint ~deferred_dims ~depth:(depth + 1) stage origin
+                        ~terminal ~glb:None (subst_row env r) constr env
                     in
                     let more, env = apply_equations more env in
                     (pending @ more, env)
+                  else if
+                    is_stage7 stage
+                    && not (Set.is_empty (Set.inter deferred_dims (vars_of_dim dim)))
+                  then
+                    (* Keep an explicit revisit until the window settles. Storing the constraint
+                       alone can lose that visit; appending a fresh [Shape_row] on every retry
+                       prevents cyclic windows from reaching the final fixpoint. *)
+                    ([ Rows_constr { r = [ r ]; constr; origin } ], env)
                   else if is_stage7 stage then
                     ( [
                         Rows_constr { r = [ r ]; constr; origin };
@@ -5594,6 +5608,7 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
                     @@ Shape_error
                          ( "You forgot to specify the hidden dimension(s) 3",
                            [ Dim_mismatch [ Var var ] ] )
+                  else if Set.mem deferred_dims var then keep_constr ()
                   else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
               )
           | ( Strided_var { coeff; var; denom; round_up },
@@ -5658,7 +5673,7 @@ let entry_for_closing env v =
       Some (Bounds_row { bounds with glb = None })
   | entry -> entry
 
-let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
+let%track5_sexp close_row_terminal ~deferred_dims ~(stage : stage) ~is_param origin env
     ({ beg_dims; dims; bcast; prov } as _r : row) : constraint_ list =
   let suffix () = List.map dims ~f:(fun d -> Terminal_dim (is_param, d, origin)) in
   (* TODO: can this be simplified? Should we return the environment? *)
@@ -5689,7 +5704,8 @@ let%track5_sexp close_row_terminal ~(stage : stage) ~is_param origin env
           let ineqs, _env =
             (* This is the constraint on the row variable, not on the original row. *)
             try
-              eliminate_row_constraint ~depth:0 stage origin r1 ~terminal:true ~glb:None constr env
+              eliminate_row_constraint ~deferred_dims ~depth:0 stage origin r1 ~terminal:true
+                ~glb:None constr env
             with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r1 ] :: trace)
           in
           (* FIXME: at which stage should we drop the terminal row? *)
@@ -5776,7 +5792,7 @@ let unresolved_param_dim_error env v trace =
           Dim_mismatch [ Var v ] :: trace )
   | _ -> Shape_error ("You forgot to specify the hidden dimension(s) 5", trace)
 
-let%track5_sexp process_shape_row ?(deferred_dims = dim_var_set_empty) ~(stage : stage) origin env
+let%track5_sexp process_shape_row ~deferred_dims ~(stage : stage) origin env
     ({ beg_dims; dims; bcast; prov } as r : row) : constraint_ list * _ =
   let final = is_stage7 stage in
   let rec finalize_dim_bounds = function
@@ -5813,7 +5829,17 @@ let%track5_sexp process_shape_row ?(deferred_dims = dim_var_set_empty) ~(stage :
     | Var _ -> true
   in
   let process_dims dims = List.concat_map dims ~f:finalize_dim_bounds in
-  let pending_window = not (Set.is_empty (Set.inter deferred_dims (dim_vars_of_row r))) in
+  (* A row product can be waiting on a dimension which is absent from its physical axes. *)
+  let pending_dims =
+    match bcast with
+    | Row_var v -> (
+        match find_row env.row_env v with
+        | Some (Bounds_row { constr; _ }) ->
+            Set.union (dim_vars_of_row r) (row_constraint_dim_vars constr)
+        | _ -> dim_vars_of_row r)
+    | Broadcastable -> dim_vars_of_row r
+  in
+  let pending_window = not (Set.is_empty (Set.inter deferred_dims pending_dims)) in
   match bcast with
   | Broadcastable ->
       let keep =
@@ -5868,7 +5894,9 @@ let%track5_sexp process_shape_row ?(deferred_dims = dim_var_set_empty) ~(stage :
           (keep @ (Row_eq { r1; r2 = glb; origin } :: dim_eqs), env)
       | Some (Bounds_row { glb; constr; _ }) ->
           let ineqs, env =
-            try eliminate_row_constraint ~depth:0 stage origin r1 ~terminal:false ~glb constr env
+            try
+              eliminate_row_constraint ~deferred_dims ~depth:0 stage origin r1 ~terminal:false ~glb
+                constr env
             with Shape_error (s, trace) -> raise @@ Shape_error (s, Row_mismatch [ r1 ] :: trace)
           in
           (keep @ ineqs @ dim_eqs, env)
@@ -6024,7 +6052,8 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
           let substituted_rows = List.map rows ~f:(subst_row env) in
           let (more_ineqs : constraint_ list), env =
             if is_stage3_up stage then
-              eliminate_rows_constraint ~depth:0 stage origin ~glb:None substituted_rows constr env
+              eliminate_rows_constraint ~deferred_dims ~depth:0 stage origin ~glb:None
+                substituted_rows constr env
             else apply_rows_constraint ~depth:0 ~stage origin substituted_rows constr env
           in
           (more_ineqs, env)
@@ -6042,7 +6071,7 @@ let%debug4_sexp solve_inequalities ~(stage : stage)
           (* Terminal (leaf and parameter) rows resolve at their use sites — protect them from the
              close-down default of [process_shape_row] (gh-ocannl-544). *)
           (match r.bcast with Row_var v -> add_resolve_at_use v | Broadcastable -> ());
-          let more_ineqs = close_row_terminal ~stage ~is_param origin env r in
+          let more_ineqs = close_row_terminal ~deferred_dims ~stage ~is_param origin env r in
           (more_ineqs, env)
       | Shape_row (r, origin) ->
           process_shape_row ~deferred_dims ~stage origin env @@ subst_row env r

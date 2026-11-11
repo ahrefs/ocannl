@@ -494,3 +494,51 @@ a stride, the row's spec registered first, the row forced first, a closed row of
 a stride, the row's spec registered first, the row forced first, a closed row of [5]: refused with a shape error: true
 a concatenation, the row's spec registered first, the row forced first, a closed row of [1]: refused: concat: components exceed the concatenated size
 a concatenation, the row's spec registered first, the row forced first, a closed row of [1]: refused with a shape error: true
+deferred window cyclic plain product, row registered first, part forced first: the window part sizes the product: true
+deferred window cyclic plain product, row registered first, part forced first: the part reads its strided cells: true
+deferred window cyclic plain product, row registered first, part forced first: the row reads every cell: true
+deferred window cyclic plain product, row registered first, row forced first: the window part sizes the product: true
+deferred window cyclic plain product, row registered first, row forced first: the part reads its strided cells: true
+deferred window cyclic plain product, row registered first, row forced first: the row reads every cell: true
+deferred window cyclic plain product, part registered first, part forced first: the window part sizes the product: true
+deferred window cyclic plain product, part registered first, part forced first: the part reads its strided cells: true
+deferred window cyclic plain product, part registered first, part forced first: the row reads every cell: true
+deferred window cyclic plain product, part registered first, row forced first: the window part sizes the product: true
+deferred window cyclic plain product, part registered first, row forced first: the part reads its strided cells: true
+deferred window cyclic plain product, part registered first, row forced first: the row reads every cell: true
+deferred window cyclic composite product, row registered first, part forced first: the window part sizes the product: true
+deferred window cyclic composite product, row registered first, part forced first: the part reads its strided cells: true
+deferred window cyclic composite product, row registered first, part forced first: the row reads every cell: true
+deferred window cyclic composite product, row registered first, row forced first: the window part sizes the product: true
+deferred window cyclic composite product, row registered first, row forced first: the part reads its strided cells: true
+deferred window cyclic composite product, row registered first, row forced first: the row reads every cell: true
+deferred window cyclic composite product, part registered first, part forced first: the window part sizes the product: true
+deferred window cyclic composite product, part registered first, part forced first: the part reads its strided cells: true
+deferred window cyclic composite product, part registered first, part forced first: the row reads every cell: true
+deferred window cyclic composite product, part registered first, row forced first: the window part sizes the product: true
+deferred window cyclic composite product, part registered first, row forced first: the part reads its strided cells: true
+deferred window cyclic composite product, part registered first, row forced first: the row reads every cell: true
+deferred window fixed plain product, row registered first, part forced first: the window part sizes the product: true
+deferred window fixed plain product, row registered first, part forced first: the part reads its strided cells: true
+deferred window fixed plain product, row registered first, part forced first: the row reads every cell: true
+deferred window fixed plain product, row registered first, row forced first: the window part sizes the product: true
+deferred window fixed plain product, row registered first, row forced first: the part reads its strided cells: true
+deferred window fixed plain product, row registered first, row forced first: the row reads every cell: true
+deferred window fixed plain product, part registered first, part forced first: the window part sizes the product: true
+deferred window fixed plain product, part registered first, part forced first: the part reads its strided cells: true
+deferred window fixed plain product, part registered first, part forced first: the row reads every cell: true
+deferred window fixed plain product, part registered first, row forced first: the window part sizes the product: true
+deferred window fixed plain product, part registered first, row forced first: the part reads its strided cells: true
+deferred window fixed plain product, part registered first, row forced first: the row reads every cell: true
+deferred window fixed composite product, row registered first, part forced first: the window part sizes the product: true
+deferred window fixed composite product, row registered first, part forced first: the part reads its strided cells: true
+deferred window fixed composite product, row registered first, part forced first: the row reads every cell: true
+deferred window fixed composite product, row registered first, row forced first: the window part sizes the product: true
+deferred window fixed composite product, row registered first, row forced first: the part reads its strided cells: true
+deferred window fixed composite product, row registered first, row forced first: the row reads every cell: true
+deferred window fixed composite product, part registered first, part forced first: the window part sizes the product: true
+deferred window fixed composite product, part registered first, part forced first: the part reads its strided cells: true
+deferred window fixed composite product, part registered first, part forced first: the row reads every cell: true
+deferred window fixed composite product, part registered first, row forced first: the window part sizes the product: true
+deferred window fixed composite product, part registered first, row forced first: the part reads its strided cells: true
+deferred window fixed composite product, part registered first, row forced first: the row reads every cell: true

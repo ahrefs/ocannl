@@ -25,11 +25,13 @@ files.
   pair (gh-ocannl-2030, `test/einsum/input_equals_output_deferral.ml`).
 - A deferred valid-window equality constrains guessing order too (gh-ocannl-2156): its plain
   extent waits for the window, and a kernel inferred from a fixed extent waits for the iterator.
-  `solve_inequalities` recomputes these dependencies after substitution; terminal and `Shape_row`
-  closings retain them through Stage7 while known bounds propagate and unsized parameters still
-  refuse. At a final fixpoint one waiting dim may close, preferring a kernel; this breaks cycles
-  with or without a fixed extent.
-  Shape, cycle and executed pins: `test/einsum/input_equals_output_deferral.ml`.
+  `solve_inequalities` recomputes these dependencies after substitution and threads them through
+  terminal, `Shape_row` and row-constraint closing (the composite-part close too, gh-ocannl-2159).
+  A blocked composite total keeps one explicit revisit, without appending a fresh shape closer
+  on each retry: duplicate closers can prevent a cyclic window from reaching the final fixpoint.
+  Known bounds propagate and unsized parameters still refuse; at a final fixpoint one waiting dim
+  may close, preferring a kernel, to break cycles with or without a fixed extent. Shape, cycle and
+  executed pins: `input_equals_output_deferral.ml` and `product_tie_concat_affine.ml` in `test/einsum/`.
 - The occurs check around ONE row variable (the equal-variable arms of `unify_row` and
   `solve_row_ineq`, gh-ocannl-2036) turns on which side has the surplus axes. An equation with
   unequal totals, and an inequality whose OPERAND has the surplus, hold for no finite value and

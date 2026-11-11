@@ -225,3 +225,73 @@ let () =
         ~needle:incompatible_stride;
       refused concatenation ~part_first ~row_first_forced:true (Closed_row [ 1 ])
         ~needle:components_exceed)
+
+(* gh-ocannl-2156 / staging#1929: [n = 2*a] is the numerator of an open row's product tie.
+   Separately [a] equals an open window whose extent is fixed at 9, or whose kernel is [a]. The
+   fixed extent must settle before guessing the part; the cycle must reach the final fallback. *)
+let deferred_window_product ~fixed_extent ~composite ~part_first ~row_first_forced =
+  let label =
+    Printf.sprintf "deferred window %s %s product, %s registered first, %s forced first"
+      (if fixed_extent then "fixed" else "cyclic")
+      (if composite then "composite" else "plain")
+      (if part_first then "part" else "row")
+      (if row_first_forced then "row" else "part")
+  in
+  case label (fun () ->
+      Tensor.unsafe_reinitialize ();
+      let n = Shape.get_variable_ref "n" in
+      let q = NTDSL.einsum1 ~capture_dims:[ n ] "n => n" (open_operand "window_product_q") () in
+      let part () =
+        let a = NTDSL.einsum1 (if composite then "2*a => a" else "a => a") q () in
+        if not fixed_extent then (
+          let same_extent = NTDSL.einsum1 "2*o<+x => x" a () in
+          Shape.infer_equal a.Tensor.shape same_extent.Tensor.shape;
+          same_extent)
+        else
+          let sh = Shape.of_spec ~debug_name:"product_window" ~id:(-1) "-> 2*o<+k" in
+          Shape.infer_equal a.Tensor.shape sh;
+          Shape.infer_equal sh
+            (Shape.make ~batch_dims:[] ~output_dims:[ 9 ] ~debug_name:"extent9" ~id:(-1) ());
+          Shape.propagate_shapes
+            (Shape.make_update_step ~shape:sh
+               ~logic:(Shape.Terminal { is_param = false; logic = Fetch (Constant 0.) })
+               ~neutral_elem:None);
+          a
+      in
+      let row () =
+        NTDSL.einsum1 ~capture_dims:[ n ] "..n.. => ..n.." (open_operand "window_product_row") ()
+      in
+      let a, r =
+        if part_first then
+          let a = part () in
+          (a, row ())
+        else
+          let r = row () in
+          (part (), r)
+      in
+      let va, vr =
+        if row_first_forced then
+          let vr = values r in
+          (values a, vr)
+        else
+          let va = values a in
+          (va, values r)
+      in
+      let stride = if composite then 2 else 1 in
+      let size = if fixed_extent then 9 else 1 in
+      let total = stride * size in
+      pf "%s: the window part sizes the product" label
+        (List.equal Int.equal (dims a) [ size ]
+        && List.equal Int.equal (dims q) [ total ]
+        && List.equal Int.equal (dims r) (if total = 1 then [] else [ total ]));
+      pf_close "%s: the part reads its strided cells" label va
+        (Array.init size ~f:(fun i -> Float.of_int (stride * i)))
+        ~tol:(fun _ -> 0.);
+      pf_close "%s: the row reads every cell" label vr (iota total) ~tol:(fun _ -> 0.))
+
+let () =
+  List.iter [ false; true ] ~f:(fun fixed_extent ->
+      List.iter [ false; true ] ~f:(fun composite ->
+          List.iter [ false; true ] ~f:(fun part_first ->
+              List.iter [ false; true ] ~f:(fun row_first_forced ->
+                  deferred_window_product ~fixed_extent ~composite ~part_first ~row_first_forced))))
