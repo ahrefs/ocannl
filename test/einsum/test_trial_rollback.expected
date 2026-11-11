@@ -1,0 +1,9 @@
+control: a variable marked itself closes to its bound of 7: true
+refused at stage 4: [a; c; 5] against [b; 3] demotes the operand: true
+and b, merged with the marked a inside the refused attempt, stays unmarked: true
+so it closes as with nothing marked: true
+postponed below stage 4: [a; c] against [b; d], a solved before the merge applies: true
+and b, merged with the marked a inside the postponed attempt, stays unmarked: true
+so it closes as with nothing marked: true
+two constraints: windows, bounds, a shared kernel, a window pair: true
+three open windows, shared kernels or pairs: true
