@@ -4817,10 +4817,8 @@ module C_syntax (B : C_syntax_config) = struct
      ({!normalize_guards}) -- what each of them implies, so no read meets a local its body did not
      set, and a scope both arms need runs unconditionally, as either arm would run it. The
      unconditional definitions render as they always did; then the conditional ones'
-     zero-initialized declarations; then the definitions under several conjunctions, each in an [if]
-     over their disjunction; then [if]/[else] blocks over the rest, each block's own definitions
-     ahead of its nested blocks. A body reads only definitions run at least as often as itself, so
-     these orders suffice. *)
+     zero-initialized declarations; then the conditional bodies in one dependency order, each run of
+     them under the same conditions in an [if] over those conditions. *)
   let pp_local_defs (local_defs : local_def list) =
     let open PPrint in
     let defs =
@@ -4851,17 +4849,10 @@ module C_syntax (B : C_syntax_config) = struct
                     changed := true)
               | _ -> ()))
     done;
-    (* A definition under one conjunction sits in the [if]/[else] blocks; one under several, in a
-       block of its own testing their disjunction. *)
-    let guard = Hashtbl.create (module Int) in
-    let disjunctive = Hash_set.create (module Int) in
-    Hashtbl.iteri guards ~f:(fun ~key ~data ->
-        match data with
-        | [ path ] -> Hashtbl.set guard ~key ~data:path
-        | _ ->
-            Hash_set.add disjunctive key;
-            Hashtbl.set guard ~key ~data:[]);
-    let depth scope = List.length (Hashtbl.find_exn guard scope) in
+    let unconditional, conditional =
+      List.partition_tf sorted ~f:(fun (s, _) ->
+          match Hashtbl.find_exn guards s with [ [] ] -> true | _ -> false)
+    in
     (* The definitions [group], in ascending scope id except that one follows the sibling
        definitions of [group] its body reads (gh-ocannl-1895). *)
     let ordered group ~doc =
@@ -4881,72 +4872,44 @@ module C_syntax (B : C_syntax_config) = struct
       in
       List.rev (List.fold group ~init:[] ~f:emit)
     in
-    let disjunctive_defs, sorted' =
-      List.partition_tf sorted ~f:(fun (s, _) -> Hash_set.mem disjunctive s)
-    in
-    let unconditional, conditional = List.partition_tf sorted' ~f:(fun (s, _) -> depth s = 0) in
     let root =
       match unconditional with
       | [ (_, def) ] -> [ def.decl ^^ hardline ^^ def.body ]
       | _ -> ordered unconditional ~doc:(fun _ def -> def.decl ^^ hardline ^^ def.body)
     in
     let block doc = lbrace ^^ nest 2 (hardline ^^ doc) ^^ hardline ^^ rbrace in
-    (* The blocks of the definitions [group], whose first [level] conditions are the enclosing
-       blocks'. *)
-    let rec blocks level group =
-      let here, deeper = List.partition_tf group ~f:(fun (s, _) -> depth s = level) in
-      let lit (s, _) = List.nth_exn (Hashtbl.find_exn guard s) level in
-      let keys =
-        List.fold deeper ~init:[] ~f:(fun keys d ->
-            let l = lit d in
-            if List.exists keys ~f:(fun (k : guard_lit) -> String.equal k.key l.key) then keys
-            else l :: keys)
-        |> List.rev
-      in
-      let nested =
-        List.map keys ~f:(fun (k : guard_lit) ->
-            let arm holds =
-              List.filter deeper ~f:(fun d ->
-                  let l = lit d in
-                  String.equal l.key k.key && Bool.equal l.holds holds)
-            in
-            match (arm true, arm false) with
-            | [], arm_else ->
-                string "if (!(" ^^ k.test ^^ string ")) " ^^ block (blocks (level + 1) arm_else)
-            | arm_then, [] ->
-                string "if (" ^^ k.test ^^ string ") " ^^ block (blocks (level + 1) arm_then)
-            | arm_then, arm_else ->
-                string "if (" ^^ k.test ^^ string ") "
-                ^^ block (blocks (level + 1) arm_then)
-                ^^ string " else "
-                ^^ block (blocks (level + 1) arm_else))
-      in
-      separate hardline (ordered here ~doc:(fun _ def -> def.body) @ nested)
+    let literal ~alone (l : guard_lit) =
+      if not l.holds then string "!" ^^ parens l.test else if alone then l.test else parens l.test
     in
-    let conjunction path =
-      separate (string " && ")
-        (List.map path ~f:(fun (l : guard_lit) ->
-             if l.holds then parens l.test else string "!" ^^ parens (parens l.test)))
+    let test paths =
+      match paths with
+      | [ [ l ] ] -> literal ~alone:true l
+      | _ ->
+          separate (string " || ")
+            (List.map paths ~f:(fun path ->
+                 parens (separate (string " && ") (List.map path ~f:(literal ~alone:false)))))
     in
-    (* A disjunctive definition reads only definitions run at least as often: unconditional ones, or
-       disjunctive ones, ordered here. *)
-    let disjunctive_docs =
-      ordered disjunctive_defs ~doc:(fun scope def ->
-          let test =
-            separate (string " || ")
-              (List.map (Hashtbl.find_exn guards scope) ~f:(fun path -> parens (conjunction path)))
-          in
-          string "if (" ^^ test ^^ string ") " ^^ block def.body)
+    (* The conditional definitions in one dependency order across all their conditions -- a body
+       reads only definitions run at least as often as itself, wherever their conditions place them
+       -- and consecutive ones under the same conditions share one [if]. A conjunction tests its
+       conditions outermost first, so [&&] evaluates each only where the enclosing ones hold. *)
+    let groups =
+      List.fold
+        (ordered conditional ~doc:(fun scope def -> (Hashtbl.find_exn guards scope, def)))
+        ~init:[]
+        ~f:(fun acc (paths, def) ->
+          match acc with
+          | (paths', defs) :: rest when equal_paths paths paths' -> (paths', def :: defs) :: rest
+          | _ -> (paths, [ def ]) :: acc)
+      |> List.rev_map ~f:(fun (paths, defs) -> (paths, List.rev defs))
     in
-    let guarded = disjunctive_defs @ conditional in
     let conditional_docs =
-      if List.is_empty guarded then []
+      if List.is_empty conditional then []
       else
-        List.map
-          (List.sort guarded ~compare:(fun (a, _) (b, _) -> Int.compare a b))
-          ~f:(fun (_, def) -> def.zeroed_decl)
-        @ disjunctive_docs
-        @ if List.is_empty conditional then [] else [ blocks 0 conditional ]
+        List.map conditional ~f:(fun (_, def) -> def.zeroed_decl)
+        @ List.map groups ~f:(fun (paths, defs) ->
+            string "if (" ^^ test paths ^^ string ") "
+            ^^ block (separate hardline (List.map defs ~f:(fun def -> def.body))))
     in
     separate hardline (root @ conditional_docs)
 

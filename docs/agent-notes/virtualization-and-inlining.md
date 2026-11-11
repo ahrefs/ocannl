@@ -74,8 +74,11 @@ files.
   the first alpha-equal copy and turns later ones into `Get_local`), runs unconditionally, as the
   program needs it there anyway. A `Where` under a short-circuiting gated operator (`&&`, `||`, a
   gate) keeps its block behind that operator's own test (the second operand at 1 and at 0 giving
-  different results), so its condition is never tested where the operator skipped it. The unconditional definitions render as before, then the conditional ones'
-  zero-initialized declarations, then `if (c) {..} else {..}` blocks. Under a blend (cc and HIP at a
+  different results), so its condition is never tested where the operator skipped it. The unconditional definitions render as before, then the
+  conditional ones' zero-initialized declarations, then the conditional bodies in ONE dependency
+  order across all their conditions (a body under `(A && B) || (A && C)` can read one under `A`:
+  blocks emitted condition by condition read it before it ran, Codex review), consecutive bodies
+  under the same conditions sharing one `if`. Under a blend (cc and HIP at a
   float precision, `speculable_select`, whose conditions never mention an index) both arms run by
   contract, so nothing is guarded and no branch is added; a gate's operand keeps its hoisted
   definitions too (a value test, never a range guard). `hoist_cross_statement_cse` lifts a shared

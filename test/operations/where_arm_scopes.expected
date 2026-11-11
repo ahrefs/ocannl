@@ -27,3 +27,5 @@ was_gate: every read of was_gate_x ahead of the store sits under its conditions:
 was_disjunction: the CSE shares the definition between the paths: true
 was_disjunction: the values are the closed form's: true
 was_disjunction: every read of was_disjunction_x sits under its condition: true
+was_cross_order: the values are the closed form's: true
+was_cross_order: every read of was_cross_order_x sits under its condition: true

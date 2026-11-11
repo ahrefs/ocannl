@@ -574,7 +574,8 @@ test/operations/vec_signed_zero.ml [run by @test/operations/runtest-vec_signed_z
     "tmma_as_0__, tmma_as_0__"
     "vector_size"
     "vunif"
-test/operations/where_arm_scopes.ml [run by @test/operations/runtest-where_arm_scopes; also pins text this scan cannot name: untraced callback]
+test/operations/where_arm_scopes.ml [run by @test/operations/runtest-where_arm_scopes; also pins text this scan cannot name: untraced callback, forwarded parameter, opaque aggregate component, mutation or unseen buffer write]
+    " && "
 test/operations/workgroup_memory_accounting.ml [run by @test/operations/runtest-workgroup_memory_accounting; also pins text this scan cannot name: untraced callback]
 
 == support helpers pinning emitted text for their callers ==

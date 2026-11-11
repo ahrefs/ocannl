@@ -87,20 +87,33 @@ let reads_of source x =
   let reads l =
     String.is_substring l ~substring:(ident ^ "[") || String.is_substring l ~substring:(ident ^ ")[")
   in
+  (* A statement's first line, back from line [j] over the lines it wrapped from. *)
+  let ends_statement j =
+    let l = String.rstrip lines.(j) in
+    List.exists [ ";"; "{"; "}" ] ~f:(fun suffix -> String.is_suffix l ~suffix)
+  in
+  let rec first j = if j > 0 && not (ends_statement (j - 1)) then first (j - 1) else j in
+  (* A read in an [if] test after a [&&]: the test evaluates it only where the conditions ahead of
+     it hold. *)
+  let behind_conjunction j =
+    let f = first j in
+    let text = String.concat ~sep:" " (List.init (j - f + 1) ~f:(fun k -> lines.(f + k))) in
+    String.is_prefix (String.strip lines.(f)) ~prefix:"if ("
+    &&
+    match (String.substr_index text ~pattern:" && ", String.substr_index text ~pattern:ident) with
+    | Some conj, Some read -> conj < read
+    | _ -> false
+  in
   let conditional_blocks =
     Generated.brace_intervals lines
     |> List.filter ~f:(fun (opening, _) ->
-        (* The line an [if] test wrapped onto: back to its statement's first line. *)
-        let ends_statement j =
-          let l = String.rstrip lines.(j) in
-          List.exists [ ";"; "{"; "}" ] ~f:(fun suffix -> String.is_suffix l ~suffix)
-        in
-        let rec first j = if j > 0 && not (ends_statement (j - 1)) then first (j - 1) else j in
         let l = String.strip lines.(first opening) in
         String.is_prefix l ~prefix:"if (" || String.is_prefix l ~prefix:"} else {")
   in
   List.filter_mapi (Array.to_list lines) ~f:(fun j l ->
-      if reads l then Some (List.exists conditional_blocks ~f:(fun (o, c) -> o < j && j < c))
+      if reads l then
+        Some
+          (List.exists conditional_blocks ~f:(fun (o, c) -> o < j && j < c) || behind_conjunction j)
       else None)
 
 (* [guarded], except for the statement storing [out], whose expression short-circuits its reads. *)
@@ -400,6 +413,38 @@ let row_disjunction () =
   values name got [ [| 2. *. sum2 0; 0.; 0.; 0. |] ];
   guarded name source x
 
+(* [i < 2 ? r + (i < 1 ? s : 0) + (i <= 0 ? s' : 0) : 0], [s'] alpha-equal to [s], both reading
+   [r]'s local: [s] runs under [(i < 2 && i < 1) || (i < 2 && i <= 0)], [r] under [i < 2], which
+   absorbs both, and [s] must still run after [r] (Codex review of the gh-ocannl-2145 PR). *)
+let row_cross_order () =
+  let name = "was_cross_order" in
+  let x = mk "was_cross_order_x" and out = mk ~dims:[| n |] "was_cross_order_out" in
+  let llc =
+    loop (fun i ->
+        let r, sr = sum_scope x ~at:(in_range i) in
+        let vs = local_node () in
+        let s_scope () =
+          let id = LL.get_scope vs in
+          scope_of id
+            (seq
+               (LL.Set_local (id, LL.Get_local r))
+               (LL.Set_local (id, add (LL.Get_local id) (get x [| aff [ (far, i) ] 0 |]))))
+        in
+        let s = s_scope () and s' = s_scope () in
+        set_at out (iter i)
+          (where_
+             (lt (embed i) (ic 2))
+             (add sr
+                (add
+                   (where_ (lt (embed i) (ic 1)) s (c 0.))
+                   (where_ (le (embed i) (ic 0)) s' (c 0.))))
+             (c 0.)))
+  in
+  let llc = LL.eliminate_common_subexpressions llc in
+  let got, source = run_row ~name ~inputs:[ x ] ~outputs:[ out ] llc in
+  values name got [ [| sum2 0 +. (2. *. (sum2 0 +. xs.(0))); sum2 1; 0.; 0. |] ];
+  guarded name source x
+
 let () =
   row_then ();
   row_else ();
@@ -413,4 +458,5 @@ let () =
   row_hoist_unconditional ();
   row_blend ();
   row_gate ();
-  row_disjunction ()
+  row_disjunction ();
+  row_cross_order ()
