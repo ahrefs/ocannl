@@ -164,6 +164,5 @@ files.
 
 - Type constraints in `%op` (gh-ocannl-2175) preserve translation of their expression, including
   result labels, application sites, inline declarations, scheme opt-outs and block-element context.
-  The earlier
-  numeric-literal and tensor-container constraints remain axis-basis annotations; `[%oc ...]`
+  Numeric-literal and tensor-container annotations keep their axis-basis meaning; `[%oc ...]`
   still opts out explicitly.

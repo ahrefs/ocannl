@@ -201,3 +201,11 @@ let%op rec _constrained_rec =
 
 let%op _constrained_optout = (fun () x -> relu x : unit -> Tensor.t -> Tensor.t)
 [@@ocannl.no_scheme]
+
+(* Constraints compose with wrapper traversal and per-callback dimension captures. *)
+let%op _constrained_lazy x = lazy (relu x : Tensor.t)
+let ( let* ) x f = f x
+
+let%op _constrained_capture x =
+  let* y = x in
+  (y ++ "ab => a" [ "b" ] : Tensor.t)

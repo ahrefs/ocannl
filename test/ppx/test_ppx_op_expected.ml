@@ -995,3 +995,37 @@ let _constrained_optout =
   let open! TDSL.O in
     (((fun () -> fun x -> relu ?label:(Some ["_constrained_optout"]) x : 
     unit -> Tensor.t -> Tensor.t))[@ocannl.no_scheme ])
+let _constrained_lazy =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      lazy
+        (relu
+           ?label:(Some
+                     (List.concat
+                        [["_constrained_lazy"];
+                        (x.Tensor.value).Ir.Tnode.label])) x : Tensor.t) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_constrained_lazy" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
+let ( let* ) x f = f x
+let _constrained_capture =
+  let open! TDSL.O in
+    let __ocannl_body x =
+      let* y = x
+       in
+      let b = Shape.get_variable_ref "b" in
+      (einsum1
+         ?label:(Some
+                   (List.concat
+                      [["_constrained_capture"];
+                      (x.Tensor.value).Ir.Tnode.label])) ~capture_dims:
+         [b] "a, b => a" y : Tensor.t) in
+    let __ocannl_scheme =
+      Tensor.Scheme.For_ppx.deferred ~name:"_constrained_capture" ~arity:1
+        (function | x::[] -> __ocannl_body x | _ -> assert false) in
+    fun x ->
+      Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+        (fun () -> __ocannl_body x)
