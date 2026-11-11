@@ -5529,19 +5529,72 @@ and eliminate_row_constraint ~depth stage origin ~terminal ~(glb : row option) (
           | Strided_var { coeff; var; denom; round_up }, [], _
             when is_stage6_up stage
                  && denom % Utils.safe_force coeff = 0
-                 && not (round_up && glb_has_axes) ->
+                 && not (round_up && glb_has_axes) -> (
               (* gh-ocannl-1868: a round-up total (packed uniform) whose use sites give the row
                  variable axes belongs to the GLB arm below, also when the already-closed axes'
                  product [denom] happens to be a multiple of [coeff]: closing the variable empty
                  here left a [28 -> 28] parameter's draw at 28 elements, broadcast along the other
                  axis. *)
-              let d2 = get_default_dim ~d:(denom / Utils.safe_force coeff) () in
-              if dim_var_is_in_param var env then
-                raise
-                @@ Shape_error
-                     ( "You forgot to specify the hidden dimension(s) 3",
-                       [ Dim_mismatch [ Var var ] ] )
-              else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
+              match subst_dim env (Var var) with
+              | (Affine _ | Concat _) as dim
+                when denom = Utils.safe_force coeff && not (Set.is_empty (vars_of_dim dim)) ->
+                  (* gh-ocannl-2159: do not force a composite with open parts to 1. Larger totals
+                     keep the exact-solving path below: known row axes can size the parts. Close
+                     free affine parts here, before operation results close at stage 6b. Revisit the
+                     total explicitly: its stored form mentions only [var], so a part's solution
+                     alone need not visit it. *)
+                  let part_eqs =
+                    match dim with
+                    | Affine _ ->
+                        Set.to_list (vars_of_dim dim)
+                        |> List.concat_map ~f:(fun v ->
+                            match find_dim env.dim_env v with
+                            | None ->
+                                refuse_concat_component_guess env v;
+                                let d = if Set.mem env.discardable_vars v then 0 else 1 in
+                                [ Dim_eq { d1 = Var v; d2 = get_bcast_dim ~d (); origin } ]
+                            | Some _ -> close_dim_terminal ~stage ~is_param:false origin env (Var v))
+                        |> List.filter ~f:(function Dim_eq _ -> true | _ -> false)
+                    | _ -> []
+                  in
+                  if not (List.is_empty part_eqs) then
+                    (* Apply both moves before the next shape in this pass can close: merely
+                       emitting the equations lets a consumer see the still-open row. *)
+                    let apply_equations eqs env =
+                      List.fold eqs ~init:([], env) ~f:(fun (pending, env) eq ->
+                          let more, env =
+                            match eq with
+                            | Dim_eq { d1; d2; origin } -> unify_dim ~stage origin (d1, d2) env
+                            | Row_eq { r1; r2; origin } -> unify_row ~stage origin (r1, r2) env
+                            | _ -> ([ eq ], env)
+                          in
+                          (pending @ more, env))
+                    in
+                    let pending, env = apply_equations part_eqs env in
+                    let constr = subst_row_constraint stage env constr in
+                    let more, env =
+                      eliminate_row_constraint ~depth:(depth + 1) stage origin ~terminal ~glb:None
+                        (subst_row env r) constr env
+                    in
+                    let more, env = apply_equations more env in
+                    (pending @ more, env)
+                  else if is_stage7 stage then
+                    ( [
+                        Rows_constr { r = [ r ]; constr; origin };
+                        Shape_row
+                          ({ beg_dims = []; dims = [ dim ]; bcast = Broadcastable; prov }, origin);
+                      ],
+                      env )
+                  else keep_constr ()
+              | _ ->
+                  let d2 = get_default_dim ~d:(denom / Utils.safe_force coeff) () in
+                  if dim_var_is_in_param var env then
+                    raise
+                    @@ Shape_error
+                         ( "You forgot to specify the hidden dimension(s) 3",
+                           [ Dim_mismatch [ Var var ] ] )
+                  else ([ Dim_eq { d1 = Var var; d2; origin }; no_further_axes ~guess:true () ], env)
+              )
           | ( Strided_var { coeff; var; denom; round_up },
               [],
               Some ({ beg_dims = glb_beg; dims = glb_dims; bcast = _; prov = glb_prov } as glb) )
