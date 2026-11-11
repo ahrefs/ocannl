@@ -78,9 +78,9 @@ files.
   group only when some member sits outside every `Where` arm, since its lifted body runs
   unconditionally. `Access_fold` keeps `gated` through a `Where` arm's scope bodies (its `arm`
   flag; a gate's still clears it), which the prologue's gated-node decline and the cost floor read.
-  `instantiate_computations` also still carries the guard into such a body (`guard_hoisted`): an
-  assignment whose value has a read that can leave its node becomes `Where (guard, value, self)`
-  where it updates its own local, and goes under `If guard` where it initializes one. Refusing the
+  This retired the inliner's own protection (gh-ocannl-2077's `guard_hoisted`, which carried the
+  guard into such a body as `Where (guard, value, self)` or `If guard`, and the scope-body `If`
+  acceptance at store time it needed); the replay's guard is again the only one. Refusing the
   read site instead (materializing the producer) was the first fix of gh-ocannl-2077, and it cost
   real inlining (`fused_classifier`'s guarded gradients, `virtual_chain_fanin`'s cycle).
   `where_arm_scopes` pins the renderer on hand-built IR, every backend, each protection with a row
@@ -491,16 +491,15 @@ files.
   at least 100 programs with scopes in `Where` arms. Eight of the 32 compiled anchors come
   specifically from those programs; the ordinary families share the other 24. The census and
   correctness-run durations before and after the extension are recorded in staging#1924.
-  To repeat its negative control, disable the call to `guard_hoisted` in
-  `instantiate_computations`' call-site condition while retaining the helper definitions (removing
-  the call entirely leaves them unused, a fatal warning). The expanded table then reports about
-  2.9 thousand strict address faults, all in `src=reduce`, across axes/axes, axes/flat, axes/trail,
-  flat/axes, flat/flat and flat/trail layout pairs in every standing. One reproducible descriptor
-  in every standing is `2x2 src=reduce
-  P0=store:axes[t;s]{s:1..1,t:1..1}:src R0=flat[_;u+1]{u:0..2} Z;P0;R0`:
-  the discarded arm's scope reads offset -6 of the 32-cell input. These are the generated
-  guarded-arm scopes for the renderer work in gh-ocannl-2145; `--only` selects descriptors for
-  inspection without changing the grammar.
+  Its negative control is the strict probe of before gh-ocannl-2145, which ran every discarded
+  arm's scopes (codegen hoisted them then), over the inliner without `guard_hoisted`: the table
+  reports 2,869 strict address faults, all in `src=reduce`, across axes/axes, axes/flat,
+  axes/trail, flat/axes, flat/flat and flat/trail layout pairs in every standing (staging PR for
+  gh-ocannl-2145). One reproducible descriptor in every standing is `2x2 src=reduce
+  P0=store:axes[t;s]{s:1..1,t:1..1}:src R0=flat[_;u+1]{u:0..2} Z;P0;R0`: the discarded arm's scope
+  reads offset -6 of the 32-cell input. Codegen now renders those scopes under the guard, which
+  `where_arm_scopes` pins on hand-built IR; `--only` selects descriptors for inspection without
+  changing the grammar.
 - **Where a virtualization candidate is refused is readable off its placement PROVENANCE, and four
   phases write into the same table** (gh-ocannl-658, pinned row by row in
   `test/operations/virtual_rejection_boundary.ml`): `decide_placements` applies the heuristic caps

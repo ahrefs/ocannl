@@ -247,7 +247,7 @@ trailing_sub_axis_read: the two placements agree: true
 gsr_row: inlined: true
 gsr_row: executed values are the reference: true
 gsr_row: the two placements agree: true
-gsr_row: the guard reaches the reduction's update, two Wheres: true
+gsr_row: the replay alone is guarded, one Where: true
 gsr_row: the strict interpreter evaluates what the optimizer left without a fault: true
 gsr_const: inlined: true
 gsr_const: executed values are the reference: true
@@ -257,12 +257,12 @@ gsr_const: the strict interpreter evaluates what the optimizer left without a fa
 gsr_init: inlined: true
 gsr_init: executed values are the reference: true
 gsr_init: the two placements agree: true
-gsr_init: the update takes a Where, the initializer an If: true
+gsr_init: the replay alone is guarded, one Where: true
 gsr_init: the strict interpreter evaluates what the optimizer left without a fault: true
 gsr_chain: inlined: true
 gsr_chain: executed values are the reference: true
 gsr_chain: the two placements agree: true
-gsr_chain: b stays virtual inside e's template, its initializer under an If: true
+gsr_chain: b stays virtual inside e's template, its scope unguarded: true
 gsr_chain: the strict interpreter evaluates what the optimizer left without a fault: true
 hoisted_local: rejected at store time as 19:declare-local: true
 hoisted_local: executed values are the reference: true

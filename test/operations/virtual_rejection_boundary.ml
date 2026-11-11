@@ -1664,19 +1664,21 @@ let row_constexpr_cap_exempt () =
         ~expected:(Array.init n ~f:(fun i -> 8. +. Float.of_int i))
         ~verdict:Accepted)
 
-(* gh-ocannl-2077: a guard over a scope's read -- an acceptance row, both sides of where the guard
-   is carried into a scope. [b] is zeroed, then written as [b[i] = c[i] + 1] for [i < 3] only,
-   though it spans [extent]; [c[i] = sum_k x[i, k, 0]] is a virtual reduction, so [b]'s template
-   holds [c]'s scope, which cannot collapse. Inlining [b] at [out[j] = b[j] + 7 + 300 j] guards the
-   replay with [j < 3], and the replay reads [x] at row [j] inside that scope. Codegen emits a
-   scope's body ahead of the statement, outside the [?:], so before the fix the body read [x] past
-   its end where the guard fails -- megabytes past at a wide [x], a SIGBUS on cc at [-O0], volatile
-   reads on Metal, the values right throughout. The replay now carries the guard into the body
-   ([Low_level.guard_hoisted]): [b] stays inlined, and the strict interpreter, which probes a
-   discarded arm's scopes, holds what the optimizer left to [x]'s bounds. [`Constant] reads row 0
-   and adds [10 i], so no read can leave [x] and the body keeps no guard of its own. [`Init] starts
-   the reduction from a read of [x] rather than a zero: that initializer goes under an [If], its
-   value untouched, where the update takes a [Where]. *)
+(* gh-ocannl-2077 / gh-ocannl-2145: a guard over a scope's read -- an acceptance row. [b] is zeroed,
+   then written as [b[i] = c[i] + 1] for [i < 3] only, though it spans [extent]; [c[i] = sum_k x[i,
+   k, 0]] is a virtual reduction, so [b]'s template holds [c]'s scope, which cannot collapse.
+   Inlining [b] at [out[j] = b[j] + 7 + 300 j] guards the replay with [j < 3], and the replay reads
+   [x] at row [j] inside that scope. Codegen once emitted a scope's body ahead of the statement,
+   outside the [?:], so the body read [x] past its end where the guard fails -- megabytes past at a
+   wide [x], a SIGBUS on cc at [-O0], volatile reads on Metal, the values right throughout. The
+   inliner carried the guard into the body for a while ([guard_hoisted], gh-ocannl-2077); now
+   codegen renders the arm's scope under the guard ([C_syntax.pp_local_defs]), so the replay's own
+   guard is the only one, [b] stays inlined, the compiled values are right, and the strict
+   interpreter, which probes only an arm a backend may blend, holds what the optimizer left to [x]'s
+   bounds. [`Constant] reads row 0 and adds [10 i], so no read can leave [x]. [`Init] starts the
+   reduction from a read of [x] rather than a zero, and [`Init_chain] replays the guarded scope
+   inside [e]'s template: the boundary initializer cases, which need no guard of their own
+   either. *)
 let row_guarded_scope_read ~read () =
   let stride = 4 and extent = 8 in
   let tag =
@@ -1757,19 +1759,12 @@ let row_guarded_scope_read ~read () =
   let o = optimize ~name:(tag ^ "_strict") llc in
   let ifs, wheres, _ = census o.LL.llc in
   (match read with
-  | `Row ->
-      p (tag ^ ": the guard reaches the reduction's update, two Wheres") (wheres = 2 && ifs = 0)
-  | `Constant -> p (tag ^ ": the replay alone is guarded, one Where") (wheres = 1 && ifs = 0)
-  | `Init ->
-      (* The initializer goes under an [If], its value untouched, so it renders as its source store
-         would: a [Where] around it would hide a narrowing read from the init's precision rule. *)
-      p (tag ^ ": the update takes a Where, the initializer an If") (wheres = 2 && ifs = 1)
+  | `Row | `Constant | `Init ->
+      p (tag ^ ": the replay alone is guarded, one Where") (wheres = 1 && ifs = 0)
   | `Init_chain ->
-      (* The guarded scope is captured in [e]'s template and replayed at [out]: an [If] inside a
-         scope body assigns a local alone, so the template keeps it (Codex review round 2). *)
       p
-        (tag ^ ": b stays virtual inside e's template, its initializer under an If")
-        (known_virtual o b && ifs = 1));
+        (tag ^ ": b stays virtual inside e's template, its scope unguarded")
+        (known_virtual o b && ifs = 0));
   p
     (tag ^ ": the strict interpreter evaluates what the optimizer left without a fault")
     (match
