@@ -1005,6 +1005,10 @@ let translate ?ident_label (expr : expression) : result =
       in
       match rhs.pexp_desc with
       | Pexp_apply (({ pexp_desc = Pexp_ident { txt = Lident op; _ }; _ } as fn), args)
+      | Pexp_apply
+          ( ({ pexp_desc = Pexp_apply ({ pexp_desc = Pexp_ident { txt = Lident op; _ }; _ }, _); _ }
+             as fn),
+            args )
         when Hashtbl.mem unary_ops op || Hashtbl.mem binary_ops op || Hashtbl.mem ternary_ops op
         -> (
           match attach rhs with

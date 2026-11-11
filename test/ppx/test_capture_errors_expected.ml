@@ -472,15 +472,15 @@ let logic_ternary_tuple =
 let logic_unary_parens =
   let open! NTDSL.O in
     fun tgt x ->
-      let nondiff__for_rhs1 = (id x) ~logic:"a => a" ["a"] in
+      let a = Shape.get_variable_ref "a" in
       Ir.Assignments.sequence
         (let __cd_fwd1 =
            if Tensor.is_fwd_root tgt
            then Tensor.take_forward_code tgt
            else Ir.Assignments.empty_comp in
          let __cd_fwd2 =
-           if Tensor.is_fwd_root nondiff__for_rhs1
-           then Tensor.take_forward_code nondiff__for_rhs1
+           if Tensor.is_fwd_root x
+           then Tensor.take_forward_code x
            else Ir.Assignments.empty_comp in
          [__cd_fwd1;
          __cd_fwd2;
@@ -488,14 +488,13 @@ let logic_unary_parens =
            (Tensor.raw_accum ~initialize_neutral:false ~accum:Ir.Ops.Arg2
               ~t:tgt ~lhs_is_grad:false
               ~shape_logic:(Shape.Transpose
-                              (Shape.Pointwise_un,
-                                (nondiff__for_rhs1.Tensor.shape)))
+                              ((Shape.Permute ("a => a", [a])),
+                                (x.Tensor.shape)))
               ~rhs:(Ir.Assignments.Unop
                       {
                         op = Ir.Ops.Identity;
                         rhs =
-                          (Tensor.buffer_of ~is_grad:false ~is_merge:false
-                             nondiff__for_rhs1)
+                          (Tensor.buffer_of ~is_grad:false ~is_merge:false x)
                       }))])
 let logic_empty =
   let open! NTDSL.O in

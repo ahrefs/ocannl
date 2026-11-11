@@ -3,6 +3,7 @@ a dropped first segment, a^b^c => b^c: true
 a dropped segment and a reorder, a^b^c => c^a: true
 a written middle segment left at zero, a^c => a^b^c: true
 %cd captures concat sizes and preserves the untouched sentinel: true
+%cd parenthesized primitive captures preserve the untouched sentinel: true
 a written segment between reordered ones, a^c => c^b^a: true
 a segment replaced by a zero segment of another size, a^b^c => a^d^c: true
 an integer segment dropped, a^2^c => a^c: true
