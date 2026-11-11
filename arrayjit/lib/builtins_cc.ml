@@ -280,8 +280,9 @@ let double_to_single_round_odd_builtin ~dialect =
 
 (* gh-ocannl-2147: keep every integer bit until the bf16 rounding decision. A double intermediate
    still loses +/-1 around midpoints beyond 2^53. Share the bit codec with HIP; only linkage and the
-   reinterpretation of its result differ. Unsigned subtraction obtains the magnitude even for
-   INT64_MIN, without signed overflow. *)
+   reinterpretation of its result differ. Both tables use project-prefixed helper names to avoid
+   vendor header collisions. Unsigned subtraction obtains the magnitude even for INT64_MIN, without
+   signed overflow. *)
 let integer_bfloat16_builtins ~dialect =
   let prefix =
     match dialect with
@@ -289,9 +290,9 @@ let integer_bfloat16_builtins ~dialect =
     | `Cuda_like -> "__device__ __forceinline__"
   in
   [
-    ( "uint64_to_bfloat16_bits",
+    ( "ocannl_uint64_to_bfloat16_bits",
       Printf.sprintf
-        {|%s unsigned short uint64_to_bfloat16_bits(unsigned long long x) {
+        {|%s unsigned short ocannl_uint64_to_bfloat16_bits(unsigned long long x) {
   if (x == 0) return 0;
   unsigned long long top = x;
   unsigned int e = 0;
@@ -310,15 +311,15 @@ let integer_bfloat16_builtins ~dialect =
 }|}
         prefix,
       [] );
-    ( "int64_to_bfloat16_bits",
+    ( "ocannl_int64_to_bfloat16_bits",
       Printf.sprintf
-        {|%s unsigned short int64_to_bfloat16_bits(long long x) {
+        {|%s unsigned short ocannl_int64_to_bfloat16_bits(long long x) {
   unsigned long long magnitude = (unsigned long long)x;
   if (x < 0) magnitude = 0ull - magnitude;
-  return (unsigned short)(uint64_to_bfloat16_bits(magnitude) | (x < 0 ? 0x8000u : 0u));
+  return (unsigned short)(ocannl_uint64_to_bfloat16_bits(magnitude) | (x < 0 ? 0x8000u : 0u));
 }|}
         prefix,
-      [ "uint64_to_bfloat16_bits" ] );
+      [ "ocannl_uint64_to_bfloat16_bits" ] );
   ]
 
 let builtins =

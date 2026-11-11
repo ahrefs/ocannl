@@ -1137,8 +1137,10 @@ end = struct
       | Double_prec _, Bfloat16_prec _ -> ("ocannl_double_to_bfloat16(", ")")
       | (Byte_prec _ | Uint16_prec _ | Int32_prec _ | Uint32_prec _), Bfloat16_prec _ ->
           ("ocannl_double_to_bfloat16((double)(", "))")
-      | Int64_prec _, Bfloat16_prec _ -> ("__ushort_as_bfloat16(int64_to_bfloat16_bits(", "))")
-      | Uint64_prec _, Bfloat16_prec _ -> ("__ushort_as_bfloat16(uint64_to_bfloat16_bits(", "))")
+      | Int64_prec _, Bfloat16_prec _ ->
+          ("__ushort_as_bfloat16(ocannl_int64_to_bfloat16_bits(", "))")
+      | Uint64_prec _, Bfloat16_prec _ ->
+          ("__ushort_as_bfloat16(ocannl_uint64_to_bfloat16_bits(", "))")
       | _, Bfloat16_prec _ -> ("__float2bfloat16((float)(", "))")
       | Bfloat16_prec _, _ -> ("(" ^ typ_of_prec to_ ^ ")(__bfloat162float(", "))")
       (* Through the same funnel as the operator bridges. A helper and not a ternary wrapped around

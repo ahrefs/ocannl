@@ -96,8 +96,8 @@ let shape key =
           then To_u4 prec
           else Unknown
       | None -> (
-          if key = "int64_to_bfloat16_bits" then From_integer "long long"
-          else if key = "uint64_to_bfloat16_bits" then From_integer "unsigned long long"
+          if key = "ocannl_int64_to_bfloat16_bits" then From_integer "long long"
+          else if key = "ocannl_uint64_to_bfloat16_bits" then From_integer "unsigned long long"
           else if key = "double_to_single_round_odd" then From_f64
           else
             match chop_suffix key ~suffix:"_uniform_lane" with

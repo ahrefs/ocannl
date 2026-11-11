@@ -71,11 +71,12 @@ let () =
   check Ops.int64 62 true;
   check Ops.uint64 63 false;
   List.iter [ Ops.int64; Ops.uint64 ] ~f:(fun prec ->
-      edge prec
-        (Ops.prec_string prec ^ "_small")
-        0
-        [| 0.; 1.; 2.; 127.; 128.; 255.; 256.; 257.; 259.; 511.; 65535. |]
-        [| 0.; 1.; 2.; 127.; 128.; 255.; 256.; 256.; 260.; 512.; 65536. |]);
+      let bases = [| 0.; 1.; 2.; 127.; 128.; 255.; 256.; 257.; 259.; 511.; 65535. |] in
+      let want = [| 0.; 1.; 2.; 127.; 128.; 255.; 256.; 256.; 260.; 512.; 65536. |] in
+      let signed_values xs =
+        if Ops.equal_prec prec Ops.int64 then Array.append xs (Array.map xs ~f:Float.neg) else xs
+      in
+      edge prec (Ops.prec_string prec ^ "_small") 0 (signed_values bases) (signed_values want));
   edge Ops.int64 "int64_min" 0 [| Float.ldexp (-1.) 63 |] [| Float.ldexp (-1.) 63 |];
   edge Ops.int64 "int64_max" 1023 [| Float.ldexp 1. 63 -. 1024. |] [| Float.ldexp 1. 63 |];
   edge Ops.uint64 "uint64_max" 2047 [| Float.ldexp 1. 64 -. 2048. |] [| Float.ldexp 1. 64 |];
