@@ -14,7 +14,10 @@
    once, outside the loss's forward. 5. Across routines: a forward re-run after the steps, refused
    through each way of marking them (an unmarked step is not), after a replacing run and after a
    partial replacement through a view; accepted after a host write and on re-initialization; a step
-   carried through a temporary, however grouped. *)
+   carried through a temporary, however grouped. 6. A host write meant to last ([Context.set_values
+   ~persist:true], gh-ocannl-2155): a forward over it refused, compiled before or after; a reader
+   accepted; cleared by a non-persisting write and by a checkpoint restore; kept by the timing-state
+   restore and by a step taking it over; no host-write refusal bypassed. *)
 
 open Base
 open Stdio
@@ -581,6 +584,118 @@ let replaced_values () =
   | exception Utils.User_error msg ->
       Verdict.p ("re-initializing stepped parameters: accepted (refused: " ^ msg ^ ")") false
 
+(* ----- 6. A host write meant to last (gh-ocannl-2155) ----- *)
+
+(* [hs = x *. 2], [[2, 4]], computed by a forward routine of its own and run once. *)
+let seeded_forward ~tag =
+  let x = leaf ~l:("xp" ^ tag) [| 1.; 2. |] in
+  let%op hs = x *. 2 in
+  Train.set_materialized hs.Tensor.value;
+  let ctx, fwd = Train.to_routine (Context.auto ()) IDX.empty (Train.forward hs) in
+  (Context.run ctx fwd, fwd, hs)
+
+let seed = [| 5.; 7. |]
+let persist ctx hs = Context.set_values ~persist:true ctx hs.Tensor.value seed
+
+(* The forward refused over the seed, which it leaves; [by] is the origin the refusal names. *)
+let seed_kept name ~ctx ~fwd ~hs ~by =
+  (match Context.run ctx fwd with
+  | _ -> Verdict.p (name ^ ": the forward refused") false
+  | exception Utils.User_error msg ->
+      eprintf "%s: %s (not part of the golden)\n" name msg;
+      Verdict.p (name ^ ": the forward refused") true;
+      List.iter [ "hs"; "gh-ocannl-2027"; by ] ~f:(fun substring ->
+          Verdict.p (name ^ ": the refusal names " ^ substring) (String.is_substring msg ~substring)));
+  matches (name ^ ": the seed kept") (values ctx hs) seed
+
+let forward_recomputes name ~ctx ~fwd ~hs =
+  match Context.run ctx fwd with
+  | ctx ->
+      Verdict.p (name ^ ": the forward accepted") true;
+      matches (name ^ ": the forward recomputes") (values ctx hs) [| 2.; 4. |]
+  | exception Utils.User_error msg ->
+      Verdict.p (name ^ ": the forward accepted (refused: " ^ msg ^ ")") false
+
+let persisting_host_write () =
+  let by_host = "Context.set_values ~persist:true" in
+  (* Refused, and again: the run leaves the mark. *)
+  let ctx, fwd, hs = seeded_forward ~tag:"a" in
+  let ctx = persist ctx hs in
+  seed_kept "a persisting seed" ~ctx ~fwd ~hs ~by:by_host;
+  seed_kept "a persisting seed, a second attempt" ~ctx ~fwd ~hs ~by:by_host;
+  (* No blanket refusal: a routine reading the seed runs, and reads it. *)
+  let out = NTDSL.term ~label:[ "outp" ] () in
+  let ctx, read = Context.compile ~name:"read_seed" ctx [%cd out =: hs] IDX.empty in
+  (match Context.run ctx read with
+  | ctx ->
+      Verdict.p "a reader of a persisting seed: accepted" true;
+      matches "a reader of a persisting seed reads it" (values ctx out) seed
+  | exception Utils.User_error msg ->
+      Verdict.p ("a reader of a persisting seed: accepted (refused: " ^ msg ^ ")") false);
+  (* Cleared by a non-persisting write, the default and an explicit [~persist:false] alike. *)
+  forward_recomputes "after a default write over the seed" ~fwd ~hs
+    ~ctx:(Context.set_values ctx hs.Tensor.value [| 1.; 1. |]);
+  let ctx, fwd, hs = seeded_forward ~tag:"b" in
+  forward_recomputes "after a ~persist:false write over the seed" ~fwd ~hs
+    ~ctx:(Context.set_values ~persist:false (persist ctx hs) hs.Tensor.value [| 1.; 1. |]);
+  (* A forward compiled after the seed: refused at its run all the same. *)
+  let x = leaf ~l:"xpc" [| 1.; 2. |] in
+  let%op hs = x *. 2 in
+  Train.set_materialized hs.Tensor.value;
+  let ctx = persist (Context.auto ()) hs in
+  let ctx, fwd = Train.to_routine ctx IDX.empty (Train.forward hs) in
+  seed_kept "a forward compiled after the seed" ~ctx ~fwd ~hs ~by:by_host;
+  (* A checkpoint restore replaces the seed deliberately: it carries no intent to last. *)
+  let ctx, fwd, hs = seeded_forward ~tag:"c" in
+  let ctx = persist ctx hs in
+  let t_set = Set.singleton (module Tn) hs.Tensor.value in
+  let path = Stdlib.Filename.temp_file "sgd_computed_node_persist" ".ckpt" in
+  Persistence.save ~ctx ~appending:false t_set path;
+  let ctx = Persistence.restore ~ctx t_set path in
+  Stdlib.Sys.remove path;
+  matches "a checkpoint restore of the seed" (values ctx hs) seed;
+  forward_recomputes "after a checkpoint restore of the seed" ~ctx ~fwd ~hs;
+  (* The timing-state restore brings the mark back with the accumulation history. *)
+  let ctx, fwd, hs = seeded_forward ~tag:"d" in
+  let ctx = persist ctx hs in
+  let restore_history = Context.save_accumulation_history ctx in
+  let ctx = Context.set_values ctx hs.Tensor.value seed in
+  restore_history ();
+  seed_kept "a persisting seed, its history restored" ~ctx ~fwd ~hs ~by:by_host;
+  (* An optimizer step on the seed takes the mark over: the forward stays refused. *)
+  let ctx, fwd, hs = seeded_forward ~tag:"e" in
+  let ctx = persist ctx hs in
+  let%op l = hs *. hs in
+  let ctx, step =
+    Context.compile ~name:"step_seed" ctx
+      (Asgns.sequence [ Train.grad_update l; sgd ~params:(one hs) l ])
+      IDX.empty
+  in
+  let ctx = Context.run ctx step in
+  let stepped = Array.map seed ~f:(fun v -> v -. (lr *. 2. *. v)) in
+  matches "a step on a persisting seed" (values ctx hs) stepped;
+  (match Context.run ctx fwd with
+  | _ -> Verdict.p "a step on a persisting seed: the forward refused" false
+  | exception Utils.User_error msg ->
+      Verdict.p "a step on a persisting seed: the forward refused" true;
+      Verdict.p "a step on a persisting seed: the refusal names the step"
+        (String.is_substring msg ~substring:"routine step_seed"));
+  (* The flag bypasses no host-write refusal: an [\@|] slice view is refused with or without it. *)
+  let batch_n, bindings = IDX.get_static_symbol ~static_range:2 IDX.empty in
+  let p = rows ~l:"pp" in
+  let%op hp = p *. 2 in
+  Train.set_materialized hp.Tensor.value;
+  let ctx, _ = Train.to_routine (Context.auto ()) IDX.empty (Train.forward hp) in
+  let%op view = hp @| batch_n in
+  let outv = NTDSL.term ~label:[ "outpv" ] () in
+  let ctx, _ = Context.compile ~name:"read_view" ctx [%cd outv =: view] bindings in
+  match Context.set_values ~persist:true ctx view.Tensor.value [| 1.; 2. |] with
+  | _ -> Verdict.p "a persisting write to a slice view: refused" false
+  | exception Utils.User_error msg ->
+      Verdict.p "a persisting write to a slice view: refused" true;
+      Verdict.p "a persisting write to a slice view: refused as a slice view"
+        (String.is_substring msg ~substring:"slice view")
+
 let kept_through_members () =
   (* A step followed by a copy out to a temporary and back: the code after the step carries its
      value, so it lasts, however the members are grouped -- flat, or the copy-out grouped with the
@@ -648,5 +763,6 @@ let () =
   computed_once ();
   separate_forward_rerun ();
   replaced_values ();
+  persisting_host_write ();
   kept_through_members ();
   partial_replacement ()

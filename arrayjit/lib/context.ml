@@ -195,8 +195,9 @@ type execution_ledger = {
           ({!Asgns.field-persists}) and the ones its forward code re-establishes without reading
           them (gh-ocannl-2027), resolved at link. Absent for a routine with none. *)
   mutable persisted : persist_mark Map.M(Buffer_key).t;
-      (** For each buffer whose value a run wrote meaning it to last, that write (gh-ocannl-2027),
-          until a write from outside a run ([record_external_writes]) replaces the value
+      (** For each buffer whose value a run, or a host write ({!set_values} [~persist:true],
+          gh-ocannl-2155), wrote meaning it to last, that write (gh-ocannl-2027), until a
+          non-persisting write from outside a run ([record_external_writes]) replaces the value
           deliberately. A run of a routine whose forward code re-establishes it is refused instead,
           and a run of any other routine does not supersede it: whether a write covers the whole
           buffer is not known here. Keeps the stepping routine's name: its value outlives the
@@ -223,7 +224,10 @@ and accumulation_undo = {
 (* gh-ocannl-2027: a buffer and its node's name, as [persist_roles] records it. *)
 and persist_buffer = { pb_key : Buffer_key.t; pb_name : string }
 and persist_roles = { pr_persists : persist_buffer list; pr_recomputes : persist_buffer list }
-and persist_mark = { pm_routine_id : int; pm_routine : string }
+
+(* Who wrote a value to last: a run of a routine, or a host write (gh-ocannl-2155) -- no routine, so
+   no routine id. *)
+and persist_mark = Run_mark of { pm_routine_id : int; pm_routine : string } | Host_mark of string
 
 and persist_undo = {
   pu_key : Buffer_key.t;
@@ -1396,7 +1400,13 @@ let poisoned_failure ctx =
            name (Exn.to_string exn)))
 
 let check_not_poisoned ctx = Option.iter (poisoned_failure ctx) ~f:raise
-let equal_persist_mark a b = a.pm_routine_id = b.pm_routine_id
+
+(* Asked only of the mark a run left ([pu_after], a [Run_mark]): a host mark set since is never that
+   mark, so a rollback leaves it. *)
+let equal_persist_mark a b =
+  match (a, b) with
+  | Run_mark a, Run_mark b -> a.pm_routine_id = b.pm_routine_id
+  | Run_mark _, Host_mark _ | Host_mark _, _ -> false
 
 (** Undoes [run]'s optimistic execution marking for a routine whose failure is known not to have
     written device buffers, so the next candidate does not inherit a dependency that never ran. *)
@@ -1632,15 +1642,21 @@ let check_persisted_writes ctx routine roles =
             "Context.run: routine %s (id=%d) recomputes, from its forward code and without reading \
              them, nodes whose buffers hold a value written to last (gh-ocannl-2027): %s. Running \
              it would silently undo that write -- an optimizer step on a computed node never \
-             accumulates. Step what the node is computed from instead, or optimize a data-backed \
-             input (Operation.init ~grad_spec:Require_grad) or a parameter; a forward that is to \
-             run once must run before the steps. To discard the steps deliberately, replace the \
-             value first: Context.set_values, Context.from_host or Context.copy."
+             accumulates, a seed meant to last is lost. Step what the node is computed from \
+             instead, or optimize a data-backed input (Operation.init ~grad_spec:Require_grad) or \
+             a parameter; a forward that is to run once must run before the steps or the seed. To \
+             discard the value deliberately, replace it first with a non-persisting write: \
+             Context.set_values (without ~persist:true), Context.from_host or Context.copy."
             routine.name routine.routine_id
             (String.concat ~sep:"; "
                (List.map undone ~f:(fun (pb, mark) ->
-                    Printf.sprintf "%s (written to last by routine %s (id=%d))" pb.pb_name
-                      mark.pm_routine mark.pm_routine_id))))
+                    match mark with
+                    | Run_mark { pm_routine; pm_routine_id } ->
+                        Printf.sprintf "%s (written to last by routine %s (id=%d))" pb.pb_name
+                          pm_routine pm_routine_id
+                    | Host_mark fn ->
+                        Printf.sprintf "%s (written to last by Context.%s ~persist:true)" pb.pb_name
+                          fn))))
 
 (* [run]'s record of a routine's persisting writes, with the undo [rollback_execution] applies. *)
 let record_persisted ledger routine roles =
@@ -1651,7 +1667,8 @@ let record_persisted ledger routine roles =
     ledger.persisted <- Map.change ledger.persisted pu_key ~f:(fun _ -> pu_after)
   in
   List.iter roles.pr_persists ~f:(fun pb ->
-      set pb.pb_key (Some { pm_routine_id = routine.routine_id; pm_routine = routine.name }));
+      set pb.pb_key
+        (Some (Run_mark { pm_routine_id = routine.routine_id; pm_routine = routine.name })));
   Hashtbl.set ledger.persist_undo ~key:routine.routine_id ~data:!undo
 
 let save_accumulation_history ctx =
@@ -1852,8 +1869,12 @@ let mark_initialized ctx nodes =
    destination nodes. Future routines compiled from the returned context must observe the external
    value, not wait for an older writer that the caller deliberately replaced; likewise an older
    unexecuted reader cannot impose a WAR edge on a write that already happened. The merge-buffer
-   frontier is separate storage and is deliberately unaffected. *)
-let record_external_writes ctx nodes =
+   frontier is separate storage and is deliberately unaffected.
+
+   [~persist:fn] (gh-ocannl-2155): the write means its value to last -- [Context.fn ~persist:true]
+   -- so it marks the buffer as a run's persisting write would, instead of only clearing the
+   mark. *)
+let record_external_writes ?persist ctx nodes =
   Set.iter nodes ~f:(fun tn ->
       Option.iter (buffer_key ctx tn) ~f:(fun key ->
           ctx.ledger.current_writers <- Map.remove ctx.ledger.current_writers key;
@@ -1863,6 +1884,11 @@ let record_external_writes ctx nodes =
           (* gh-ocannl-2027: and a deliberate replacement of a value written to last. *)
           ctx.ledger.persisted <- Map.remove ctx.ledger.persisted key;
           ctx.ledger.written_buffers <- Set.add ctx.ledger.written_buffers key);
+      Option.iter persist ~f:(fun fn ->
+          Option.iter
+            (buffer_key ctx (persist_storage tn))
+            ~f:(fun key ->
+              ctx.ledger.persisted <- Map.set ctx.ledger.persisted ~key ~data:(Host_mark fn)));
       Option.iter (shared_constant_key ctx tn) ~f:(fun key ->
           ignore (mint_write_token ctx.ledger key : token_undo)));
   let frontier =
@@ -2804,7 +2830,7 @@ let check_copy_lasts ~src ~dst (tn : Tn.t) =
 
 (** Uploads the host buffer [nd] into [tn]'s device buffer, allocating it if needed, and returns a
     context in which [tn] is marked initialized (so a subsequent {!run} reading [tn] succeeds). *)
-let upload ctx (tn : Tn.t) (nd : Nd.t) : t =
+let upload ?persist ctx (tn : Tn.t) (nd : Nd.t) : t =
   check_live ~fn:"from_host" ctx;
   check_node_valid tn;
   check_not_poisoned ctx;
@@ -2848,7 +2874,7 @@ let upload ctx (tn : Tn.t) (nd : Nd.t) : t =
             (c, ()));
       }
   in
-  record_external_writes (derive ctx wrapped) (Set.singleton (module Tn) tn)
+  record_external_writes ?persist (derive ctx wrapped) (Set.singleton (module Tn) tn)
 
 let from_host ctx (tn : Tn.t) (nd : Nd.t) : t =
   check_live ~fn:"from_host" ctx;
@@ -3030,7 +3056,7 @@ let get_values ctx (tn : Tn.t) : float array =
   let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
   Nd.retrieve_flat_values ?padding nd
 
-let set_values ctx (tn : Tn.t) (values : float array) : t =
+let set_values ?(persist = false) ctx (tn : Tn.t) (values : float array) : t =
   (* Before [host_buffer] forces the node's dims: [from_host] checks only after (gh-ocannl-1505). *)
   check_live ~fn:"set_values" ctx;
   check_node_valid tn;
@@ -3038,7 +3064,7 @@ let set_values ctx (tn : Tn.t) (values : float array) : t =
   let nd = host_buffer tn in
   let padding = Option.map ~f:fst (Lazy.force tn.Tn.padding) in
   Nd.set_flat_values ?padding nd values;
-  upload ctx tn nd
+  upload ?persist:(Option.some_if persist "set_values") ctx tn nd
 
 let get_value ctx (tn : Tn.t) (idx : int array) : float =
   let nd = to_host ctx tn in
