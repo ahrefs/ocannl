@@ -1153,7 +1153,7 @@ struct
     let ( !@ ) = embed_symbol
     let dim = embed_dim
     let ( - ) ?label t1 t2 = sub ?label t1 t2 ()
-    let ( ~- ) ?label t = pointmul ?label (number (-1.)) t ()
+    let ( ~- ) ?label t = neg ?label t ()
     let ( /. ) ?label t1 t2 = pointdiv ?label t1 t2 ()
     let ( @| ) ?label t1 idx = slice ?label idx t1 ()
     let exp ?label t = exp ?label t ()

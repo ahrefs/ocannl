@@ -44,15 +44,35 @@ uint32 a + c above the range, with the fp16 cutoff off: refused, naming the node
 int64 a + c above the range, with the fp16 cutoff off: refused, naming the node, the precision and the value: true
 uint64 a + c above the range, with the fp16 cutoff off: refused, naming the node, the precision and the value: true
 byte where with the default mask fill: refused, naming the node, the precision and the value: true
-byte ~- over an unsigned tensor: refused, naming the node, the precision and the value: true
+byte ~- wrapping row 0: accepted: true
+byte ~- wrapping row 0 gives modular negation per cell: true
+byte ~- wrapping row 0 agrees with subtraction from zero: true
+byte ~- wrapping row 1: accepted: true
+byte ~- wrapping row 1 gives modular negation per cell: true
+byte ~- wrapping row 1 agrees with subtraction from zero: true
 uint16 where with the default mask fill: refused, naming the node, the precision and the value: true
-uint16 ~- over an unsigned tensor: refused, naming the node, the precision and the value: true
+uint16 ~- wrapping row 0: accepted: true
+uint16 ~- wrapping row 0 gives modular negation per cell: true
+uint16 ~- wrapping row 0 agrees with subtraction from zero: true
+uint16 ~- wrapping row 1: accepted: true
+uint16 ~- wrapping row 1 gives modular negation per cell: true
+uint16 ~- wrapping row 1 agrees with subtraction from zero: true
 int32 where with the default mask fill: refused, naming the node, the precision and the value: true
 uint32 where with the default mask fill: refused, naming the node, the precision and the value: true
-uint32 ~- over an unsigned tensor: refused, naming the node, the precision and the value: true
+uint32 ~- wrapping row 0: accepted: true
+uint32 ~- wrapping row 0 gives modular negation per cell: true
+uint32 ~- wrapping row 0 agrees with subtraction from zero: true
+uint32 ~- wrapping row 1: accepted: true
+uint32 ~- wrapping row 1 gives modular negation per cell: true
+uint32 ~- wrapping row 1 agrees with subtraction from zero: true
 int64 where with the default mask fill: refused, naming the node, the precision and the value: true
 uint64 where with the default mask fill: refused, naming the node, the precision and the value: true
-uint64 ~- over an unsigned tensor: refused, naming the node, the precision and the value: true
+uint64 ~- wrapping row 0: accepted: true
+uint64 ~- wrapping row 0 gives modular negation per cell: true
+uint64 ~- wrapping row 0 agrees with subtraction from zero: true
+uint64 ~- wrapping row 1: accepted: true
+uint64 ~- wrapping row 1 gives modular negation per cell: true
+uint64 ~- wrapping row 1 agrees with subtraction from zero: true
 single where with the default mask fill keeps its infinity: true
 byte the top endpoint minus a gives the truncated value per cell: true
 byte the bottom endpoint plus a gives the truncated value per cell: true

@@ -520,9 +520,11 @@ files.
   statement's destination, through inlined scopes; `scope` is the innermost scope, which at byte
   and uint16 is the inlined literal's own node (a promoted integer scope does not collapse). User
   routes it closes: a literal in `%op`, `where … Nn_blocks.default_mask_fill` at an integer
-  precision (it read 0 in the masked cell on cc), and the library's `~-` over an unsigned tensor
-  (`number (-1.) *. t`). `Constant_bits` and fixed indices convert from integers, defined in C, so
-  are not judged. The slot-precision threading is the fp16 check's (gh-ocannl-2112), shared by the
+  precision (it read 0 in the masked cell on cc). Unary `~-` uses the existing `Neg` primitive
+  (gh-ocannl-2143), so unsigned tensors wrap just like `0. - a`, without an out-of-range `-1.`
+  constant; `integer_constant_range` executes zero, small values and upper-range values at every
+  unsigned precision. Floating negation and its gradient use the same primitive. `Constant_bits`
+  and fixed indices convert from integers, defined in C, so are not judged. The slot-precision threading is the fp16 check's (gh-ocannl-2112), shared by the
   one walk; the integer check runs first, so a byte constant past the fp16 cutoff gets the typed
   refusal. A uint4x32 operand (Threefry, the uniform-lane conversions) is evaluated at its own
   uint4x32 annotation, as `loop_scalar` does, and uint4x32 is no scalar integer precision, so it is

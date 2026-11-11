@@ -452,7 +452,7 @@ let%expect_test "cos(x)" =
     |}]
 
 let%expect_test "neg(x)" =
-  let%op f x = neg x in
+  let%op f x = ~-x in
   let plot_box = plot_unop ~f () in
   PrintBox_text.output Stdio.stdout plot_box;
   [%expect
