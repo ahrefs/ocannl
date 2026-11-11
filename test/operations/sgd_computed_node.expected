@@ -131,6 +131,40 @@ a stepped parameter: true
 re-initializing stepped parameters: accepted: true
 re-initializing stepped parameters restores them: true
 a step after re-initializing: true
+a persisting seed: the forward refused: true
+a persisting seed: the refusal names hs: true
+a persisting seed: the refusal names gh-ocannl-2027: true
+a persisting seed: the refusal names Context.set_values ~persist:true: true
+a persisting seed: the seed kept: true
+a persisting seed, a second attempt: the forward refused: true
+a persisting seed, a second attempt: the refusal names hs: true
+a persisting seed, a second attempt: the refusal names gh-ocannl-2027: true
+a persisting seed, a second attempt: the refusal names Context.set_values ~persist:true: true
+a persisting seed, a second attempt: the seed kept: true
+a reader of a persisting seed: accepted: true
+a reader of a persisting seed reads it: true
+after a default write over the seed: the forward accepted: true
+after a default write over the seed: the forward recomputes: true
+after a ~persist:false write over the seed: the forward accepted: true
+after a ~persist:false write over the seed: the forward recomputes: true
+a forward compiled after the seed: the forward refused: true
+a forward compiled after the seed: the refusal names hs: true
+a forward compiled after the seed: the refusal names gh-ocannl-2027: true
+a forward compiled after the seed: the refusal names Context.set_values ~persist:true: true
+a forward compiled after the seed: the seed kept: true
+a checkpoint restore of the seed: true
+after a checkpoint restore of the seed: the forward accepted: true
+after a checkpoint restore of the seed: the forward recomputes: true
+a persisting seed, its history restored: the forward refused: true
+a persisting seed, its history restored: the refusal names hs: true
+a persisting seed, its history restored: the refusal names gh-ocannl-2027: true
+a persisting seed, its history restored: the refusal names Context.set_values ~persist:true: true
+a persisting seed, its history restored: the seed kept: true
+a step on a persisting seed: true
+a step on a persisting seed: the forward refused: true
+a step on a persisting seed: the refusal names the step: true
+a persisting write to a slice view: refused: true
+a persisting write to a slice view: refused as a slice view: true
 a step kept through a temporary across members: accepted: true
 a step kept through a temporary across members: run 1: true
 a step kept through a temporary across members: run 2: true

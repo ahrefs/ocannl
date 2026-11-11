@@ -72,8 +72,11 @@ files.
   `alias_of`). Only a write from outside a run (`set_values`, `from_host`, `copy`) clears the mark:
   a routine's write may cover only a part of the buffer (a view, a concat projection), so a run
   never supersedes it; `rollback_execution` undoes a run's marks, and the autotuner's timing
-  restore restores them with the accumulation history. Host writes and copies are NOT persisting:
-  a checkpoint restore of computed intermediates, then training, is legal. An unmarked hand-written
+  restore restores them with the accumulation history. Host writes and copies are NOT persisting
+  by default: a checkpoint restore of computed intermediates, then training, is legal. The opt-in
+  is `Context.set_values ~persist:true` (gh-ocannl-2155, that entry point only): a host-origin mark
+  (`Host_mark`, no routine id, so a rollback never matches it) under the same run refusal, cleared
+  like a run's by any non-persisting outside write, a checkpoint restore included. An unmarked hand-written
   step is not refused. Executed, with negative controls: `sgd_computed_node.ml`.
 - Training-loop utilities (gh-465, `lib/train.ml`): `Lr_schedule` (host floats; feed via
   `scheduled_learning_rate`'s data-backed `host_scalar` — `set_values` refuses a fetch-defined

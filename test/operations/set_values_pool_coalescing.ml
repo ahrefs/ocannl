@@ -535,7 +535,7 @@ end
 let () = Stdio.printf "host uploads\n"
 
 module Host = Suite (struct
-  let put = Context.set_values
+  let put ctx tn values = Context.set_values ctx tn values
 end)
 
 let () = Stdio.printf "device copies\n"

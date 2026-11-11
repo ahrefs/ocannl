@@ -437,18 +437,21 @@ val run : ?timing:bool -> t -> routine -> t
     refused, with {!Ir.Utils.User_error} naming the node and the stepping routine, while that buffer
     still holds the value a run wrote meaning it to last: the run would silently undo the step. A
     forward run before the steps is legal, so this is decided by the runs; {!compile} refuses the
-    one case the runs need not decide, a routine re-establishing a node it itself persists. Only a
-    write from outside a run ({!from_host}, {!set_values}, {!copy}) replaces the value deliberately:
-    whether another routine's write covers the whole buffer is not asked. Keyed by concrete buffer,
-    a slice alias by its parent's. [~timing:true] waives this refusal too. *)
+    one case the runs need not decide, a routine re-establishing a node it itself persists. A host
+    write meant to last, {!set_values} [~persist:true] (gh-ocannl-2155), is refused over the same
+    way. Only a non-persisting write from outside a run ({!from_host}, {!set_values}, {!copy})
+    replaces the value deliberately: whether another routine's write covers the whole buffer is not
+    asked. Keyed by concrete buffer, a slice alias by its parent's. [~timing:true] waives this
+    refusal too. *)
 
 val save_accumulation_history : t -> unit -> unit
 (** [save_accumulation_history ctx] captures the gradient-accumulation history {!run} keeps for
     [ctx]'s lineage (gh-ocannl-1781), and returns the function setting it back. For a caller that
     restores buffers it saved itself -- the autotuner's timing-state restore (gh-ocannl-1621) -- so
     that the restoring uploads, and the runs they undo, are not taken for a reset. The writes meant
-    to last (gh-ocannl-2027) are captured with it, for the same reason. Records of routines or
-    buffers released since the snapshot are not restored. *)
+    to last (gh-ocannl-2027), a persisting host write's included (gh-ocannl-2155), are captured with
+    it, for the same reason. Records of routines or buffers released since the snapshot are not
+    restored. *)
 
 val check_runnable : t -> routine -> unit
 (** {!run}'s pre-dispatch validation on its own — poisoned lineage, uninitialized inputs,
@@ -806,9 +809,24 @@ val get_values : t -> Ir.Tnode.t -> float array
     side of the read allocates the result array and a constant number of heap words more
     ({!Ir.Ndarray.retrieve_flat_values}). *)
 
-val set_values : t -> Ir.Tnode.t -> float array -> t
+val set_values : ?persist:bool -> t -> Ir.Tnode.t -> float array -> t
 (** Sets all (unpadded) values of the node via an on-demand host-to-device transfer, returning a
-    context in which the node is marked initialized. Refuses what {!from_host} refuses. *)
+    context in which the node is marked initialized. Refuses what {!from_host} refuses, with or
+    without [~persist].
+
+    [~persist:true] (gh-ocannl-2155; default [false]) means the value to last, as an optimizer step
+    does (gh-ocannl-2027): from then on {!run} refuses, before launch, every routine of the lineage
+    whose forward code re-establishes the node's buffer without reading it -- compiled before the
+    write or after -- instead of letting it silently overwrite the seed. Nothing else is refused: a
+    routine reading the node, or building on it, runs. Like any write from outside a run, it resets
+    the buffer's gradient accumulation (gh-ocannl-1781) and supersedes its compiled access history.
+    The protection is the buffer's, and lasts until a non-persisting write from outside a run
+    replaces the value: [set_values] without [~persist:true], {!from_host}, {!set_value} or {!copy}
+    -- and so a checkpoint restore, which uploads through {!from_host} and carries no such intent --
+    or the buffer is released. A later persisting write keeps it, and a run of a routine persisting
+    the node (an optimizer step on the seed) takes it over. A routine's run never clears it,
+    whatever it writes. {!save_accumulation_history}'s restorer restores it. Only this entry point
+    takes the flag. *)
 
 val get_value : t -> Ir.Tnode.t -> int array -> float
 (** Retrieves a single value at the given index via an on-demand device-to-host transfer. *)
