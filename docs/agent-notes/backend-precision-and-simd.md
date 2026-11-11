@@ -1056,7 +1056,7 @@ files.
   wide through `Metal_mma.bf16_accum_wide` (HIP's gh-ocannl-1051 shape), and every seeded bf16
   `mma-gpu` tile equals the serial rendering bitwise under the default; `Bf16_narrow` keeps the
   narrow pair and is value-changing there by construction. The narrow characterization claims are
-  M4-class evidence for this note, not a contract: re-probe on other Apple GPU families before
+  M4 Max evidence for this note, not a contract: re-probe on other Apple GPU families before
   generalizing. A probe that separates the models needs inputs whose PRODUCTS and f32 partials are
   exact (multiples of 1/32 with at most 7 significant bits over k <= 32 here) so per-step,
   per-block and once-narrowed predictions are exact and pairwise distinct; the test derives that
@@ -1069,24 +1069,31 @@ files.
   products share a sign and their f32 partials are exact, excluding gfx11's signed-cancellation
   residue. The Dune action pins `fp_contract=true`, so serial twins use explicit FMAs: without
   that pin the original k=16 HIP serial twin differed from its FMA model in 49 cells.
-  HIP rejects all three baseline models. Its measured model rounds per pair of products, with
+  On gfx1151, HIP rejects all three baseline models. Its measured model rounds per pair of products, with
   even output rows visiting k=0..15 and odd rows k=8..15,0..7 within each native 16-deep block;
   the row is the intrinsic output row (the fixture's row tiles have even height). This ordered
   pair model matches all 2048 cells over both depths, while omitting the odd-row permutation
   misses 244 cells at k=16 and 250 at k=64. These are observations on normal, same-sign data,
   not vendor guarantees about hidden accumulator formats or untested devices. The serial FMA
-  rounds per step on all three measured devices. Runtime policy is unchanged: current CUDA/HIP
+  rounds per step on the three measured devices. Runtime policy is unchanged: current CUDA/HIP
   `Fp16_auto`/`Fp16_narrow` residency alone does not make a tensorized schedule bitwise equal to
   the serial rendering. No speed claim or default-policy change follows from this probe.
+  The test reads the executing device family once from `Context.static_properties` and selects
+  expectations from `measured_f16_models`. Missing f16 MMA capability skips the tensor-unit leg;
+  an unregistered family with that capability runs and reports model mismatches on stderr, but
+  skips the family-model assertion by name. Intrinsic rendering and explicit serial FMA rounding
+  remain contracts on every f16-MMA-capable GPU. The ordered-pair host premise runs on every
+  16-deep fixture, including cc and CUDA.
 
 | Backend and family | Intrinsic | Probed k | Matching f16 narrowing model |
 | --- | --- | --- | --- |
 | CUDA RTX 5070 Ti Laptop, sm_120 | WMMA | 16, 64 | Nearest-even once per 16-deep block. |
 | HIP Radeon 8060S, gfx1151, unified memory | rocWMMA | 16, 64 | Nearest-even per ordered pair; odd rows exchange the two 8-term halves within each 16-deep block. |
 | Metal M4 Max | simdgroup | 8, 32 | Nearest-even per k step, matching the serial FMA. |
-| Metal M1 | simdgroup | Unmeasured | Unmeasured; this fleet has no M1 GPU. |
-| Metal M2 | simdgroup | Unmeasured | Unmeasured; this fleet has no M2 GPU. |
-| Metal M3 | simdgroup | Unmeasured | Unmeasured; this fleet has no M3 GPU. |
+| Metal M4 Pro | simdgroup | Unmeasured | Unmeasured. |
+| Metal M1 | simdgroup | Unmeasured | Unmeasured. |
+| Metal M2 | simdgroup | Unmeasured | Unmeasured. |
+| Metal M3 | simdgroup | Unmeasured | Unmeasured. |
 
 - **What a numerics mode RESOLVES to per backend is cache identity by derivation** (gh-ocannl-1117).
   `Schedule_cache.numerics_tag` hashes the configured mode; what the mode means on a backend is a
