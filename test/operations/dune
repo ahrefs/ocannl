@@ -13616,6 +13616,17 @@
  (preprocess
   (pps ppx_here ppx_ocannl)))
 
+; gh-ocannl-2139: deterministic failed-buffer observation in Metal's reap, over finite work.
+
+(test
+ (name metal_reap_failure)
+ (package neural_nets_lib)
+ (deps
+  ocannl_config
+  (env_var OCANNL_BACKEND))
+ (modules metal_reap_failure)
+ (libraries base arrayjit.context arrayjit.ir arrayjit.verdict ll_test))
+
 ; gh-ocannl-2134: a timing wait that outlives its host-side bound is a typed wait_bound decline that
 ; ends the search (injected through a wrapped driver, on any backend); a GPU leg runs the healthy
 ; control through the device's own bounded wait.

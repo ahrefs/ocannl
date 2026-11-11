@@ -138,20 +138,29 @@ let rec reap ?deadline runner =
   let oldest_failed = ref None in
   runner.in_flight <-
     List.filter runner.in_flight ~f:(fun tracked ->
+        let status, error =
+          match Metal_failure.For_testing.error_for_reap ~what:tracked.what with
+          | Some error -> (Me.CommandBuffer.Status.Error, error)
+          | None ->
+              let status = Me.CommandBuffer.get_status tracked.buffer in
+              let error =
+                match status with Error -> Me.CommandBuffer.get_error tracked.buffer | _ -> None
+              in
+              (status, error)
+        in
         Me.CommandBuffer.Status.(
-          match Me.CommandBuffer.get_status tracked.buffer with
+          match status with
           | Completed -> false
           | Error ->
-              oldest_failed := Some tracked;
+              oldest_failed := Some (tracked, error);
               true
           | NotEnqueued | Enqueued | Committed | Scheduled -> true));
   match (runner.failure, !oldest_failed) with
-  | None, Some failed ->
+  | None, Some (failed, error) ->
       let now = Unix.gettimeofday () in
       let deadline = Option.value deadline ~default:(now +. victim_grace_seconds) in
       if (List.last_exn runner.in_flight).seq = failed.seq || Float.(now >= deadline) then
-        let { what; runs_kernels; buffer; _ } = failed in
-        let error = Me.CommandBuffer.get_error buffer in
+        let { what; runs_kernels; _ } = failed in
         runner.failure <- Some { Metal_failure.what; runs_kernels; error; first_report = true }
       else (
         Unix.sleepf 0.001;

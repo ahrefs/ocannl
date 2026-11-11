@@ -68,6 +68,18 @@ val command_buffer_report : command_buffer_failure -> string
 (** ["Metal: the command buffer of <what> failed: <error>. The device takes no more work in this
      process."], the same for the first report and every later one. *)
 
+module For_testing : sig
+  val with_reap_error : (what:string -> string option option) -> f:(unit -> 'a) -> 'a
+  (** Scoped, domain-local command-buffer observation seam for [Metal_backend.reap]. The callback
+      sees the tracked work's name. [None] reads the real driver status; [Some error] substitutes
+      status [Error] and its error text ([Some None] means no text). Only finite, normally submitted
+      work is needed. The runner's resulting failure stays latched after this scope ends. Restores
+      the prior callback on return or exception; does not alter Metal's actual command buffers. *)
+
+  val error_for_reap : what:string -> string option option
+  (** Backend-side read of the test seam; [None] outside a test scope. *)
+end
+
 val gpu_hang_stage : string
 (** ["gpu_hang"]: the [Backend_rejected] stage of a kernel the GPU watchdog killed. *)
 

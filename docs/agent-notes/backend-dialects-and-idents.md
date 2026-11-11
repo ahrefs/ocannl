@@ -440,6 +440,15 @@ files.
   that ran kernels, can classify as the candidate's hang (scheduling-and-autotune.md, *Failure phases
   and lineage containment*, gh-ocannl-2089): every later raise carries the same text but is the
   device's state, so a text match alone would charge the hang to every later candidate.
+- The report path also has a deterministic test (gh-ocannl-2139): `metal_reap_failure` submits a
+  finite kernel, then `Metal_failure.For_testing.with_reap_error` substitutes its observed status
+  and error in `Metal_backend.reap`. The domain-local callback is scoped and restored on exception;
+  it changes no real command buffer, and the failure it produces stays latched on the runner.
+  This covers the first typed report, the backend's `gpu_hang` classification, and rejection of
+  later reads and fresh lineages on every Metal test run, independently of the OS watchdog. It
+  does not establish that macOS kills a hung kernel or that the driver reports the injected text;
+  those remain the real-stall probe's job. The error substring stays the captured driver token
+  until ocaml-metal exposes error codes and domains.
 - Whether macOS kills a kernel that never ends is not the backend's to decide, and it varies
   (gh-ocannl-2082). On mac-studio (M4 Max, macOS 27.2) the watchdog killed the test's kernel about
   3 s in on 2026-11-07. A day later, on both mac-studio and macbook-pro, the same test sat in

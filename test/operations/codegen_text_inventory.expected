@@ -871,6 +871,7 @@ test/operations/local_scope_sibling_reads.ml [prelowered compile; through Ll_tes
 test/operations/matmul_interchange.ml [through Ll_test.execute_with_census; run by @test/operations/runtest-matmul_interchange, @test/operations/runtest-matmul_interchange-tf32]
 test/operations/metal_gpu_hang_failure.ml [through Ll_test.run_routine; run by @test/operations/slow-metal_gpu_hang_failure]
 test/operations/metal_hang_declines.ml [prelowered compile; run by @test/operations/runtest-metal_hang_declines]
+test/operations/metal_reap_failure.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_reap_failure]
 test/operations/metal_routine_log_delivery.ml [through Ll_test.run_routine; run by @test/operations/runtest-metal_routine_log_delivery]
 test/operations/minted_name_labels.ml [through Ll_test.run_routine; run by @test/operations/runtest-minted_name_labels-logged, @test/operations/runtest-minted_name_labels-plain]
 test/operations/narrow_constant_rounding.ml [through Ll_test.execute; run by @test/operations/runtest-narrow_constant_rounding]
@@ -1014,6 +1015,7 @@ test/operations/zero_run_reorder.ml [prelowered compile; run by @test/operations
 @test/operations/runtest-matmul_interchange
 @test/operations/runtest-matmul_interchange-tf32
 @test/operations/runtest-metal_hang_declines
+@test/operations/runtest-metal_reap_failure
 @test/operations/runtest-metal_routine_log_delivery
 @test/operations/runtest-minted_name_labels-logged
 @test/operations/runtest-minted_name_labels-plain

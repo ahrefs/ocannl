@@ -1,0 +1,9 @@
+the uninjected routine ran and read back: true
+reap observed the submitted kernel: true
+the wait raised the first typed report for a kernel buffer: true
+the report names the observed kernel and carries the driver text: true
+the first report is an Expected gpu_hang decline at Sync: true
+the first report is an Expected gpu_hang decline at Launch: true
+reading the output raised the same report: true
+a fresh lineage on the same device raised the same report: true
+later reports are marked as repeats and stay unclassified: true
