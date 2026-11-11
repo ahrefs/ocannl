@@ -124,3 +124,10 @@ let%op named_no_identifier x = einsum1 "o => o" x
 let%op conversion_in_oc n x = x *. !.[%oc Float.of_int n]
 let%op conversion_qualified n x = x *. !.(Stdlib.Float.of_int n)
 let%op forwarded n x = x *. !.(Float.of_string (Int.to_string n))
+
+(* Newly traversed binders still cannot supply a hoisted declaration. *)
+let%op field_try_case () x = try x with Failure n -> x + { caught; label = [ n ] }
+
+let%op field_letop () x =
+  let* n = [%oc 3] and* m = [%oc 4] in
+  x + { first; o = [ n ] } + { second; o = [ m ] }

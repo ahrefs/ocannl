@@ -394,6 +394,7 @@ Ambient environment gates, by dune file and every alias whose build runs one:
   test/ppx/dune                            @runtest-env_spelling_gate
   test/ppx/dune                            @runtest-test_compose_logic_err-ppx
   test/ppx/dune                            @runtest-test_eval_order-ppx
+  test/ppx/dune                            @runtest-test_nested_op-ppx
   test/ppx/dune                            @runtest-test_param_errors-ppx
   test/ppx/dune                            @runtest-test_ppx_name_conflict-ppx
   test/ppx/dune                            @runtest-test_ppx_op-ppx

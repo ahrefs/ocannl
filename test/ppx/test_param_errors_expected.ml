@@ -549,3 +549,46 @@ let forwarded =
     fun n x ->
       Tensor.Scheme.For_ppx.apply __ocannl_scheme [n; x]
         (fun () -> __ocannl_body n x)
+let field_try_case =
+  let open! TDSL.O in
+    fun () ->
+      let caught =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "caught")
+           ~label:([%ocaml.error
+                     "ppx_ocannl %op: the inline declaration { caught } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the try case that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        try x
+        with | Failure n -> (+) ?label:(Some ["field_try_case"]) x caught in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_try_case" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
+let field_letop =
+  let open! TDSL.O in
+    fun () ->
+      let first =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "first")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { first } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let operator that binds n. Bind n before the unit parameter -- fun ~n () ... -- or outside %op"]))
+          () in
+      let second =
+        ((TDSL.param ?more_label:None ?value:None ?values:None
+            ?param_init:None "second")
+           ~output_dims:([%ocaml.error
+                           "ppx_ocannl %op: the inline declaration { second } is created where the enclosing () is applied (without a unit parameter: when the function is defined), outside the let operator that binds m. Bind m before the unit parameter -- fun ~m () ... -- or outside %op"]))
+          () in
+      let __ocannl_body x =
+        let* n = 3
+        and* m = 4 in
+        (+) ?label:(Some ["field_letop"]) ((+) ?label:None x first) second in
+      let __ocannl_scheme =
+        Tensor.Scheme.For_ppx.closure ~name:"field_letop" ~arity:1
+          (function | x::[] -> __ocannl_body x | _ -> assert false) in
+      fun x ->
+        Tensor.Scheme.For_ppx.apply __ocannl_scheme [x]
+          (fun () -> __ocannl_body x)
