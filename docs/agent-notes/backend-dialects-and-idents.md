@@ -731,3 +731,9 @@ configuration.
   so the same teardown first destroys the `hipGraphExec`s graph-captured routines still cache
   (gh-ocannl-1445, backend-memory.md). CUDA stays without it: the driver reports nothing and cudajit
   (0.8.0) exposes no eager `Stream.destroy`. `test/operations/exit_stream_teardown` pins both.
+
+- A rank-zero packed uniform draw consumes lane zero of its full random block and stores it at
+  flat offset zero, the same prefix as a singleton draw (gh-ocannl-2153). `Set_from_vec`'s indices
+  can therefore be empty; its store and routine logging share the element-offset renderer.
+  `uniform_rank_zero` executes the compose that closes an unconstrained draw to rank zero and
+  compares materialized and virtual draws against `uniform1`'s first lane.
